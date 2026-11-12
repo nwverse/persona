@@ -1,4 +1,4 @@
-// A session's Git, read-only (docs/apple/ios.md "Git", iOS GitPane): branch, upstream ↑↓ and stashes; the changes with
+// A session's Git, read-only (docs/apple/ios.md "Information architecture", iOS GitPane): branch, upstream ↑↓ and stashes; the changes with
 // their diffs (staged / unstaged when a file has both); the history, older pages on demand, each commit's message and
 // per-file diffs.
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -26,12 +26,12 @@ import { REVIEW_FEATURE } from "../../lib/session-review";
 import { useFsLive } from "../../lib/use-fs-live";
 import { Button, copyText, cx, IconButton, Loading, Spinner, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
-import { PanelHeader } from "../SidePanel";
+import { PanelHeader } from "../../ui/PanelHeader";
 import { CompareView, compareKind } from "./files/CompareView";
 import { DiffLines } from "./files/DiffLines";
 import { BackHeader, Empty, GitBadge, Segmented } from "./files/parts";
 import { formatDate, t } from "../../i18n";
-import { BranchesView, CommitBox, PushButton, StageAll, StageBox, StashesView, useGitWrite, type GitWriter } from "./GitWrite";
+import { BranchesView, CommitBox, PullButton, PushButton, StageAll, StageBox, StashesView, useGitWrite, type GitWriter } from "./GitWrite";
 import { PRCard, PRCreateView, PRView, useGitPR } from "./GitPR";
 
 // `at`: a line to show and mark when the view opens (a comment card's click, lib/comments.ts openSpot)
@@ -70,14 +70,20 @@ export function GitPanel({ mid, sid, cwd, at, onClose }: { mid: string; sid: str
   // The writes (#6121), on a hub that has them: each answers the status as it is after it.
   const writable = useStore((s) => s.features.includes("git_write"));
   const reviews = useStore((s) => s.features.includes(REVIEW_FEATURE));
-  const writer = useGitWrite(base, cwd, (s) => {
-    if (head.current !== s.head?.hash) {
-      setOlder([]);
-      setNoMore(false);
-    }
-    head.current = s.head?.hash;
-    setStatus(s);
-  });
+  const writer = useGitWrite(
+    base,
+    cwd,
+    (s) => {
+      if (head.current !== s.head?.hash) {
+        setOlder([]);
+        setNoMore(false);
+      }
+      head.current = s.head?.hash;
+      setStatus(s);
+    },
+    // a refusal may have changed the tree (a stash apply that stopped on conflicts): read it again, quietly
+    () => setLive((n) => n + 1),
+  );
   // The branch's pull request (#6121), read through gh on that computer.
   const pr = useGitPR(base, cwd, status, writable);
 
@@ -174,7 +180,7 @@ export function GitPanel({ mid, sid, cwd, at, onClose }: { mid: string; sid: str
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
           {status?.is_repo ? (
             <div className="px-3 pt-3 pb-6 sm:px-4" style={{ animation: "fade-in 160ms ease-out both" }}>
-              <Summary s={status} writer={writable ? writer : undefined} onBranches={() => push({ kind: "branches" })} onStashes={() => push({ kind: "stashes" })} />
+              <Summary s={status} writer={writable ? writer : undefined} puller={writer} onBranches={() => push({ kind: "branches" })} onStashes={() => push({ kind: "stashes" })} />
               {writable && <PRCard s={status} pr={pr} onOpen={() => push({ kind: "pr" })} onCreate={() => push({ kind: "prCreate" })} />}
               <Changes s={status} writer={writable ? writer : undefined} onOpen={(f) => push({ kind: "diff", file: f, staged: isStaged(f) && !hasUnstaged(f) })} onReview={reviews ? () => openPanel({ kind: "review", mid, sid, cwd, scope: "uncommitted" }) : undefined} />
               {writable && status.files.length > 0 && <CommitBox s={status} writer={writer} />}
@@ -249,7 +255,8 @@ function SyncChip({ dir, n }: { dir: "up" | "down"; n: number }) {
   );
 }
 
-function Summary({ s, writer, onBranches, onStashes }: { s: GitStatus; writer?: GitWriter; onBranches: () => void; onStashes: () => void }) {
+/** The branch against its upstream. `writer` is there on a hub with `git_write`; `puller` always (Pull needs no feature). */
+function Summary({ s, writer, puller, onBranches, onStashes }: { s: GitStatus; writer?: GitWriter; puller: GitWriter; onBranches: () => void; onStashes: () => void }) {
   const ahead = s.ahead ?? 0,
     behind = s.behind ?? 0;
   const branch = s.branch || t("session-gitpanel.detached_head");
@@ -267,11 +274,13 @@ function Summary({ s, writer, onBranches, onStashes }: { s: GitStatus; writer?: 
         )}
         {ahead > 0 && <SyncChip dir="up" n={ahead} />}
         {behind > 0 && <SyncChip dir="down" n={behind} />}
+        <PullButton s={s} writer={puller} />
         {writer && <PushButton s={s} writer={writer} />}
       </div>
       <div className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[12px] text-ink-3">
         <span className="truncate">{s.upstream ? s.upstream : t("session-gitpanel.no_upstream")}</span>
-        {s.upstream && !ahead && !behind && <span>· {t("session-gitpanel.in_sync")}</span>}
+        {s.upstream && s.gone && <span title={t("session-gitpanel.upstream_gone_hint")}>· {t("session-gitpanel.upstream_gone")}</span>}
+        {s.upstream && !s.gone && !ahead && !behind && <span>· {t("session-gitpanel.in_sync")}</span>}
         {writer ? (
           <button type="button" onClick={onStashes} className="whitespace-nowrap hover:text-ink hover:underline" title={t("session-gitpanel.stashes_hint")}>
             · {(s.stashes ?? 0) > 0 ? t("session-gitpanel.stashes", { count: s.stashes ?? 0 }) : t("session-gitwrite.stashes")}

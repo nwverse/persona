@@ -43,7 +43,11 @@ internal fun InteractionPanel(
     terminalHelp: Boolean = true,
     onDiscardLocal: ((Interaction) -> Unit)? = null,
 ) {
-    var selected by rememberSaveable { mutableStateOf(0) }
+    // The card in view, by its id: cards come and go around it (answered on another device, expired, one sorted in
+    // front), and an index would put another card in its place under the same Allow (#4165). [selectedAt] is where it
+    // was, so that when it leaves, the card that took its place is shown.
+    var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedAt by rememberSaveable { mutableIntStateOf(0) }
     var full by rememberSaveable { mutableStateOf(false) }
     var all by remember { mutableStateOf(false) }
     LaunchedEffect(LocalChatLinkOpening.current) { full = false; all = false }
@@ -51,8 +55,10 @@ internal fun InteractionPanel(
     LaunchedEffect(full, all) { onOverlay(full || all) }
     DisposableEffect(Unit) { onDispose { onOverlay(false) } }
     if (requests.isEmpty()) return
-    val index = selected.coerceIn(0, requests.lastIndex)
+    val index = requestIndex(requests, selectedId, selectedAt)
     val request = requests[index]
+    SideEffect { selectedId = request.id; selectedAt = index }
+    fun select(at: Int) { requests.getOrNull(at)?.let { selectedId = it.id; selectedAt = at } }
     val body: @Composable (Boolean) -> Unit = { complete ->
         key(request.id, request.dialog?.rev, complete) {
             RequestEditor(request, machine, busyId != null, request.id in uncertainIds, complete,
@@ -92,9 +98,11 @@ internal fun InteractionPanel(
         },
         headline = request.headline.text(), expires = RequestExpiry.label(request.expiresAt, now)?.text(),
         modifier = Modifier.heightIn(max = maxHeight), position = index + 1 to requests.size,
-        onPrevious = { selected = index - 1 }, onNext = { selected = index + 1 }, onList = { all = true },
+        onPrevious = { select(index - 1) }, onNext = { select(index + 1) }, onList = { all = true },
         collapsed = collapsed, onCollapsedChange = onCollapsedChange, onExpand = { full = true },
         headerActions = closeCard,
+        // an approval says it waits for the user, in the chat as on the web and iOS (#4883)
+        kicker = if (request.kind == "permission" && !request.isSecretRun) stringResource(DecisionKind.Tool.labelRes) else null,
     ) {
         if (!full && !all) body(false)
     }
@@ -110,11 +118,15 @@ internal fun InteractionPanel(
     if (all) JSheet(onDismiss = { all = false }, title = stringResource(R.string.chat_request_list_title)) {
         LazyColumn(Modifier.fillMaxWidth().heightIn(max = maxHeight), contentPadding = PaddingValues(bottom = 16.dp)) {
             itemsIndexed(requests, key = { _, interaction -> interaction.id }) { i, interaction ->
-                JRow(interaction.headline.text(), value = "${i + 1}", onClick = { selected = i; all = false; full = true })
+                JRow(interaction.headline.text(), value = "${i + 1}", onClick = { select(i); all = false; full = true })
             }
         }
     }
 }
+
+/** Where the card [selectedId] is now; once it has left, the card at its old place [selectedAt] (the last when that is past the end). */
+internal fun requestIndex(requests: List<Interaction>, selectedId: String?, selectedAt: Int): Int =
+    requests.indexOfFirst { it.id == selectedId }.takeIf { it >= 0 } ?: selectedAt.coerceIn(0, requests.lastIndex.coerceAtLeast(0))
 
 @Composable
 internal fun InteractionForm(
@@ -145,6 +157,7 @@ internal fun InteractionForm(
     }
     val expired = RequestExpiry.expired(interaction.expiresAt, now)
     var password by rememberTransientSecret(interaction.id, clearWhen = expired || uncertain)
+    var fieldValues by rememberTransient(interaction.id, clearWhen = expired || uncertain, empty = emptyMap<String, String>())
     // A session whose source cannot approve (blockedReason) shows the request but answers nothing, not even "Handle on computer".
     val blocked = blockedReason != null
     val context = AnswerContext(state = if (expired || uncertain || readOnly || linkVisible || blocked) "unknown" else "pending", sending = busy,
@@ -155,7 +168,7 @@ internal fun InteractionForm(
         val result = AnswerBuilder.build(interaction, action, value, context)
         if (!result.allowed) return
         if (result.resolution == null) update(result.draft)
-        else { password = ""; onAnswer(action, result.draft, planRead) }
+        else { password = ""; fieldValues = emptyMap(); onAnswer(action, result.draft, planRead) }
     }
     fun enabled(action: AnswerAction) = AnswerBuilder.build(interaction, action, draft, context).allowed
     val questions = interaction.questions.orEmpty()
@@ -179,6 +192,12 @@ internal fun InteractionForm(
                 canRun = AnswerBuilder.build(interaction, AnswerAction.Allow, AnswerDraft(password = password), context).allowed,
                 onDecline = { act(AnswerAction.Deny) }, onRun = { act(AnswerAction.Allow, AnswerDraft(password = password)) },
                 // Room between the dock's divider and the field's label.
+                modifier = Modifier.padding(top = Tokens.Space.s))
+            // A card with fields (#4641): its form, Deny and Fill In & Allow, no Always.
+            else if (interaction.hasFieldsForm) PermissionFieldsActions(interaction.fields.orEmpty(), fieldValues, { fieldValues = it }, editable,
+                canDeny = enabled(AnswerAction.Deny),
+                canAllow = AnswerBuilder.build(interaction, AnswerAction.Allow, draft.copy(values = fieldValues), context).allowed,
+                onDeny = { act(AnswerAction.Deny) }, onAllow = { act(AnswerAction.Allow, draft.copy(values = fieldValues)) },
                 modifier = Modifier.padding(top = Tokens.Space.s)) else {
                 // "Always" is Claude's, or another agent's when its TUI says what it would allow (as on iOS).
                 DecisionButtons(
@@ -189,10 +208,6 @@ internal fun InteractionForm(
                 )
                 interaction.alwaysScopeDetail?.takeIf { interaction.offersAlways }?.let {
                     Text(stringResource(R.string.chat_request_always_allows, it.text()), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
-                }
-                // Allow needs its fields filled in, which this app has no form for yet (#4987).
-                if (interaction.needsFieldValues) {
-                    Text(stringResource(R.string.chat_request_fields_elsewhere), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
                 }
             }
             "plan" -> {
@@ -207,12 +222,16 @@ internal fun InteractionForm(
                     style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
             }
             "question" -> if (question != null) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                // As on iOS (needsFooter): one single-choice question is answered by tapping an option, so it has no
+                // pages to turn; its only footer is a Submit for the "Other answer" text, once there is some.
+                if (questions.size > 1 || question.multiSelect) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     JTextButton(stringResource(R.string.chat_question_previous), { update(draft.copy(page = draft.page - 1)) }, enabled = draft.page > 0 && editable)
                     val spokenPage = stringResource(R.string.chat_question_position, draft.page + 1, questions.size)
                     Text("${draft.page + 1} / ${questions.size}", Modifier.padding(top = Tokens.Space.m).semantics { contentDescription = spokenPage })
                     val action = if (draft.page == questions.lastIndex) AnswerAction.Submit else AnswerAction.Advance
                     JTextButton(stringResource(if (draft.page == questions.lastIndex) R.string.chat_question_submit else R.string.chat_question_next), { act(action) }, enabled = enabled(action))
+                } else if (!draft.other[question.question].isNullOrBlank()) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    JTextButton(stringResource(R.string.chat_question_submit), { act(AnswerAction.Submit) }, enabled = enabled(AnswerAction.Submit))
                 }
             }
             "elicitation" -> ElicitationActions(interaction, draft, editable, ::act)
@@ -221,6 +240,8 @@ internal fun InteractionForm(
                     enabled = editable && password.isNotEmpty())
             } else {
                 // The options read as "n of total"; "Say it in the chat instead" is a separate button, not one of them.
+                // A multi-select dialog ticks these and sends them together with the submit row, below.
+                val multi = interaction.dialog?.multi == true
                 val plain = options.filter { it.kind != ScreenOptionKind.Chat }
                 fun positionOf(option: ParsedScreenOption) = plain.indexOfFirst { it === option } + 1 to plain.size
                 options.forEach { option ->
@@ -230,13 +251,18 @@ internal fun InteractionForm(
                     // The terminal's "chat about this" hands the question back to the conversation (iOS "Say it in the chat instead").
                     if (option.kind == ScreenOptionKind.Chat) JButton(stringResource(R.string.chat_screen_chat_instead), { act(AnswerAction.ScreenOption, value) },
                         kind = JButtonKind.Secondary, size = JButtonSize.Small, icon = PhIcons.ChatCircle, enabled = allowed)
-                    else {
+                    // A multi-select dialog's free text is its field in the body, not a row to tick.
+                    else if (!(multi && option.kind == ScreenOptionKind.TypeSomething)) {
                         val display = AnswerBuilder.display(option.label)
                         DecisionOption(numberedOption(option.key, display.text), { act(AnswerAction.ScreenOption, value) },
-                            detail = option.detail, recommended = display.recommended, selected = draft.option == option.key, enabled = allowed,
-                            position = positionOf(option))
+                            detail = option.detail, recommended = display.recommended,
+                            selected = if (multi) option.key in draft.selected else draft.option == option.key,
+                            enabled = allowed, multiSelect = multi, position = positionOf(option), fullText = full)
                     }
                 }
+                if (multi) JButton(interaction.dialog?.submit?.takeIf(String::isNotBlank)
+                    ?: stringResource(R.string.chat_question_submit), { act(AnswerAction.ScreenSubmit) },
+                    enabled = enabled(AnswerAction.ScreenSubmit))
             }
         }
     }
@@ -269,9 +295,10 @@ internal fun InteractionForm(
                     JTextButton(stringResource(if (showInput) R.string.chat_permission_hide_input else R.string.chat_permission_show_input), { showInput = !showInput })
                     if (showInput) JCodeBlock(input.toString())
                 }
-                JTextField(draft.message, { if (it.length <= 4000) update(draft.copy(message = it)) },
+                // A card with fields is denied plainly, as on iOS: its form is the only thing to type into (#4641).
+                if (!interaction.hasFieldsForm) JTextField(draft.message, { if (it.length <= 4000) update(draft.copy(message = it)) },
                     label = stringResource(R.string.chat_permission_deny_reason), modifier = Modifier.fillMaxWidth(), enabled = editable)
-                if (draft.message.isNotEmpty()) Text(stringResource(R.string.chat_permission_clear_reason), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
+                if (draft.message.isNotEmpty() && !interaction.hasFieldsForm) Text(stringResource(R.string.chat_permission_clear_reason), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
             }
             "plan" -> {
                 if (full) ChatMarkdown(interaction.plan.orEmpty())
@@ -303,7 +330,7 @@ internal fun InteractionForm(
                     DecisionOption(numberedOption("${index + 1}", display.text), { act(AnswerAction.PickOption, draft.copy(optionIndex = index)) },
                         detail = option.description, recommended = display.recommended,
                         selected = option.label in draft.picks[question.question].orEmpty(), enabled = editable,
-                        multiSelect = question.multiSelect, position = index + 1 to question.options.size)
+                        multiSelect = question.multiSelect, position = index + 1 to question.options.size, fullText = full)
                 }
                 var otherOpen by rememberSaveable(interaction.id, question.question) { mutableStateOf(false) }
                 if (otherOpen || question.question in draft.other) {

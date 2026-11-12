@@ -9,16 +9,18 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/extension/sandbox"
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/identity"
-	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/screen"
+	"github.com/nwverse/persona/server/internal/shellcmd"
 )
 
 // Starting a Codex from the phone (docs/integrations/codex.md "Starting from the phone"). A Codex launcher (plain `codex`, or an alias whose
@@ -110,11 +112,50 @@ func codexOwnProcess(argv []string) string {
 	return ""
 }
 
+// A managed launcher's -- can precede every caller argument. Defer injection until Launch has assembled its argv.
+const codexBypassEnv = "PERSONA_CODEX_BYPASS_PERMISSIONS"
+
+func codexBypassArgs(argv []string) []string {
+	end := slices.Index(argv, "--")
+	if end < 0 {
+		end = len(argv)
+	}
+	for i := 0; i < end; i++ {
+		if argv[i] == "--dangerously-bypass-approvals-and-sandbox" || argv[i] == "--yolo" {
+			return argv
+		}
+		if codexValueFlags[argv[i]] {
+			i++
+		}
+	}
+	return slices.Insert(slices.Clone(argv), end, "--dangerously-bypass-approvals-and-sandbox")
+}
+
 // startCodex starts a Codex launcher in a new tab with the first message and returns its session once the thread is
-// known.
-func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launcher string, argv []string, prompt, ws, tabName string) (*proto.Session, error) {
-	if strings.TrimSpace(prompt) == "" {
-		return nil, refusal("codex_needs_prompt", "新建 Codex 会话要连第一条消息一起发：Codex 收到第一条消息才建会话。", nil)
+// known. With no message it returns the waiting row once Codex's input box is up (codex_waiting.go).
+func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launcher string, argv []string, prompt, ws, tabName, mode string) (*proto.Session, error) {
+	waiting := strings.TrimSpace(prompt) == ""
+	if waiting {
+		prompt = ""
+	}
+	if mode == "bypassPermissions" {
+		if managed, ok := n.managedLauncher(launcher); ok && len(argv) >= 3 && slices.Equal(argv[:3], []string{n.bin, "launch", launcher}) {
+			// Only this wrapper executes managed Args; a same-name shell alias takes precedence.
+			args := append(slices.Clone(managed.Args), argv[3:]...)
+			if len(codexBypassArgs(args)) != len(args) {
+				if slices.Contains(managed.Args, "--") {
+					argv = append([]string{codexBypassEnv + "=1"}, argv...)
+				} else {
+					argv = codexBypassArgs(argv)
+				}
+			}
+		} else {
+			argv = codexBypassArgs(argv)
+		}
+	}
+	key := cwd + "\x00" + launcher
+	if err := n.closeAbandonedCodex(ctx, key); err != nil {
+		return nil, err
 	}
 	if codexOnRemote(argv) {
 		// A launcher on an explicit app-server (--remote) sends no directory unless told one.
@@ -148,22 +189,63 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 		delete(n.codexStarting, pane)
 		n.mu.Unlock()
 	}()
-	shells := paneShells(ctx)
+	shells := paneShells(ctx, created)
 	cmd := n.agentCommand(shellQuote(n.bin)+" codex-start "+shellQuote(file), shellQuote, shells...) // agentenv.go
 	began := time.Now()
-	time.Sleep(300 * time.Millisecond)                                           // the fresh shell loads ~/.zshrc; typed input is buffered either way
+	if err := n.settleShell(ctx, pane); err != nil { // the fresh shell at rest first (shellsettle.go, #2570)
+		return nil, n.startTabFailed(ctx, launch, created, ws, "", err)
+	}
 	done, err := n.runAgentCommand(ctx, launch, created, ws, "", cmd, shells...) // typedstart.go
 	if err != nil {
 		return nil, err
 	}
 	defer done()
-	id, err := n.waitCodexThread(ctx, pane, cwd, prompt, began)
+	var id string
+	if waiting {
+		err = n.waitCodexBox(ctx, pane)
+		if errors.Is(err, errCodexBoxLate) {
+			// Codex runs but its box has not come up yet: the row all the same, and its tab stays. Nothing is queued in it
+			// that could run later; the first message waits for the box itself (codexBoxFor).
+			n.logf("codex %s: its input box did not come within %s; offering the row anyway", pane, codexStartWait)
+			err = nil
+		}
+	} else {
+		id, err = n.waitCodexThread(ctx, pane, cwd, prompt, began)
+	}
 	if err != nil {
-		screen, _ := n.readPane(ctx, pane, "recent-unwrapped", 30)
-		return nil, fmt.Errorf("%v\n%s", err, lastLines(screen, 12))
+		shown, _ := n.readPane(ctx, pane, "recent-unwrapped", 30)
+		if strings.TrimSpace(shown) == "" { // a screen Codex draws from the top of a tall pane: the bottom rows are blank
+			shown, _ = n.readPane(ctx, pane, "visible", 30)
+		}
+		start := codexAbandonedStart{launch: launch, created: created, workspace: ws}
+		cleanupErr := closeCodexStart(ctx, start)
+		if cleanupErr != nil {
+			n.mu.Lock()
+			if n.codexAbandoned == nil {
+				n.codexAbandoned = map[string][]codexAbandonedStart{}
+			}
+			n.codexAbandoned[key] = append(n.codexAbandoned[key], start)
+			n.mu.Unlock()
+		}
+		message := fmt.Sprintf("%v\n%s", err, lastLines(shown, 12))
+		if cleanupErr != nil {
+			return nil, &rpc.Error{Code: proto.CodeAgentStartStalled, Message: message + "\n" + cleanupErr.Error()}
+		}
+		var coded *rpc.Error
+		if errors.As(err, &coded) {
+			return nil, &rpc.Error{Code: coded.Code, Message: message, Data: coded.Data}
+		}
+		return nil, fmt.Errorf("%w\n%s", err, lastLines(shown, 12))
+	}
+	if waiting {
+		return n.openCodexWait(ctx, pane, cwd, launcher, mode, began), nil
 	}
 	n.bindPane(pane, id)
-	n.state.put(id, sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: began.UTC()})
+	st := sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: began.UTC()}
+	if mode == "plan" {
+		st.AppMode = mode
+	}
+	n.state.put(id, st)
 	_ = n.refreshHosts(ctx)
 	a, ok := n.agent(id)
 	if !ok {
@@ -217,17 +299,25 @@ func (n *Node) waitCodexThread(ctx context.Context, pane, cwd, prompt string, be
 				}
 			}
 		}
-		text, err := n.readPane(ctx, pane, "recent", 40)
+		// The screen without the blank rows under it: Codex 0.167 draws its trust dialog from the top of the pane, and in
+		// a pane 51 rows tall the last 40 "recent" rows were all blank (#2351).
+		text, err := n.readPane(ctx, pane, "visible", screen.DialogLines)
 		if err != nil {
 			continue
 		}
 		if i := strings.LastIndex(text, codexStartError); i >= 0 {
 			return "", errors.New(strings.TrimSpace(strings.SplitN(text[i:], "\n", 2)[0]))
 		}
-		switch {
-		case codexTrustRE.MatchString(text):
-			_ = n.sendKeys(ctx, pane, "enter") // the selected option is trust and continue
-		case strings.Contains(text, "Update available") && strings.Contains(text, "Skip"):
+		if keys := codexTrustKeys(text); keys != nil {
+			_ = n.sendKeys(ctx, pane, keys...)
+			select { // the dialog goes before the next look, which would otherwise answer it again
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(time.Second):
+			}
+			continue
+		}
+		if strings.Contains(text, "Update available") && strings.Contains(text, "Skip") {
 			if d := screen.ParseDialog(text); d != nil {
 				for _, o := range d.Options {
 					if o.Label == "Skip" {
@@ -237,12 +327,45 @@ func (n *Node) waitCodexThread(ctx context.Context, pane, cwd, prompt string, be
 			}
 		}
 	}
-	return "", fmt.Errorf("Codex 已经在电脑上的新标签里打开了，但 %d 秒内没认出它这次的会话（第一条消息还没进它的会话记录）：在电脑上看看那个标签", int(codexStartWait.Seconds()))
+	message := fmt.Sprintf("Codex 已经在电脑上的新标签里打开了，但 %d 秒内没认出它这次的会话（第一条消息还没进它的会话记录）", int(codexStartWait.Seconds()))
+	if agent, err := n.paneAgent(ctx, pane); err == nil && agent != nil && agent.Agent == "codex" {
+		return "", &rpc.Error{Code: proto.CodeAgentStartStalled, Message: message}
+	}
+	return "", errors.New(message)
 }
 
-// codexTrustRE is Codex's folder trust dialog with "trust and continue" selected (0.163: "› 1. Trust and continue";
-// 0.153: "› 1. Yes, continue"): enter picks it.
-var codexTrustRE = lazyre.New(`(?m)^\s*›\s*1\.\s+(?:Trust and continue|Yes, continue)\s*$`)
+// codexTrustKeys are the keys that answer Codex's folder trust dialog by trusting the folder, nil when the screen does
+// not show that dialog with its cursor. The dialog is known by its question asking about trust (0.163 and 0.167 "Trust
+// this folder?", 0.153 "Do you trust the contents of this directory?"), and the option to pick by what it says
+// ("Trust and continue", "Yes, continue"), not by its number or the other option's label: 0.167 has "2. Back to Agent
+// Command Center" where 0.163 had "2. Quit". The cursor is walked to it and enter picks it. Only the question counts:
+// an approval's command above its "Yes, proceed" may say trust too.
+func codexTrustKeys(text string) []string {
+	d := screen.ParseDialog(text)
+	if d == nil || d.Cursor == "" || !strings.Contains(strings.ToLower(d.Question), "trust") {
+		return nil
+	}
+	cur, trust := -1, -1
+	for i, o := range d.Options {
+		if o.Key == d.Cursor {
+			cur = i
+		}
+		if l := strings.ToLower(o.Label); trust < 0 && (strings.HasPrefix(l, "trust") || strings.HasPrefix(l, "yes")) {
+			trust = i
+		}
+	}
+	if cur < 0 || trust < 0 {
+		return nil
+	}
+	var keys []string
+	for i := cur; i < trust; i++ {
+		keys = append(keys, "down")
+	}
+	for i := cur; i > trust; i-- {
+		keys = append(keys, "up")
+	}
+	return append(keys, "enter")
+}
 
 // codexThreadStart is when a rollout's thread began (its session_meta) and the text of its first user message ("" when
 // there is none yet).
@@ -323,7 +446,7 @@ func CodexStart(args []string) error {
 	if f.Agent != "" {
 		env = append(withoutEnv(env, []string{herdrAgentEnv}), herdrAgentEnv+"="+f.Agent)
 	}
-	for len(words) > 0 && assignRe.MatchString(words[0]) {
+	for len(words) > 0 && shellcmd.AssignRe.MatchString(words[0]) {
 		env = append(env, words[0])
 		words = words[1:]
 	}

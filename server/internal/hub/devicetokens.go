@@ -50,6 +50,10 @@ type principal struct {
 	Extension string
 	Scopes    []string
 	Manager   string
+	// extHash, an extension token's hash: what it relays is kept under it, with Manager (relayID), which that manager
+	// names when it drops the token (extwire.HubTokenRevoked). extAt: when the hub asked the managers whose it is.
+	extHash string
+	extAt   time.Time
 	// extOpens, extScope: an extension's token opens the request's route (the manager said), else the scope it lacks.
 	extOpens bool
 	extScope string
@@ -92,6 +96,10 @@ const tokenCacheFor = 30 * time.Second
 
 const tokenRevokedFor = 5 * time.Minute
 
+// codeTokenStoreUnavailable (503): the token store did not answer, so there is no verdict on the token: not counted,
+// and not a 401, which apps read as their credential being revoked.
+const codeTokenStoreUnavailable = "token_store_unavailable"
+
 // isRevoked requires t.mu. The database remains the authority after this window.
 func (t *devTokens) isRevoked(id string) bool {
 	at, ok := t.revokedIDs[id]
@@ -110,40 +118,52 @@ func hashToken(tok string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// authenticate maps a bearer token to its principal; ok false for an unknown or revoked one.
+// authenticate maps a bearer token to its principal; ok false for an unknown or revoked one, and for one the token
+// store could not look up.
 func (h *Hub) authenticate(ctx context.Context, tok string) (principal, bool) {
+	p, ok, _ := h.lookupToken(ctx, tok)
+	return p, ok
+}
+
+// lookupToken is authenticate with the reason a token is not accepted: err is set when the token store did not answer,
+// which says nothing of the token, so the caller must not treat it as revoked (#3217).
+func (h *Hub) lookupToken(ctx context.Context, tok string) (principal, bool, error) {
 	if tok == "" {
-		return principal{}, false
+		return principal{}, false, nil
 	}
 	if subtle.ConstantTimeCompare([]byte(tok), []byte(h.cfg.Token)) == 1 {
-		return principal{Role: roleFull}, true
+		return principal{Role: roleFull}, true, nil
 	}
 	if strings.HasPrefix(tok, extTokenPrefix) { // the manager made it and says whose it is (extensions_link.go)
 		p, ok, _, _, _ := h.authorizeExtension(ctx, tok, nil)
-		return p, ok
+		return p, ok, nil
 	}
 	if h.store == nil {
-		return principal{}, false
+		return principal{}, false, nil
 	}
 	if strings.HasPrefix(tok, "jx_") { // a code pairing another hub (peer_pair.go)
-		return h.peerPairPrincipal(ctx, tok)
+		p, ok := h.peerPairPrincipal(ctx, tok)
+		return p, ok, nil
 	}
 	hash := hashToken(tok)
 	if strings.HasPrefix(tok, "jp_") {
 		pt, err := h.store.PairTokenByHash(ctx, hash)
-		if err != nil || pt == nil {
-			return principal{}, false
+		if err != nil {
+			return principal{}, false, err
+		}
+		if pt == nil {
+			return principal{}, false, nil
 		}
 		// Revoking the paired device expires this row, ending its redemption grace too.
 		until := pairExpires(pt)
 		if !time.Now().Before(until) {
-			return principal{}, false
+			return principal{}, false, nil
 		}
 		role := roleFull
 		if pt.MachineID != "" {
 			role = roleLinkPair
 		}
-		return principal{ID: "pair_" + hash, Role: role, PairHash: hash, PairExpires: until, Machine: pt.MachineID}, true
+		return principal{ID: "pair_" + hash, Role: role, PairHash: hash, PairExpires: until, Machine: pt.MachineID}, true, nil
 	}
 	t := &h.devtok
 	t.mu.Lock()
@@ -156,7 +176,7 @@ func (h *Hub) authenticate(ctx context.Context, tok string) (principal, bool) {
 	if !hit || time.Since(c.at) > tokenCacheFor {
 		dt, err := h.store.DeviceTokenByHash(ctx, hash)
 		if err != nil {
-			return principal{}, false
+			return principal{}, false, err
 		}
 		c = cachedToken{at: time.Now(), used: time.Now()}
 		if dt != nil {
@@ -165,7 +185,7 @@ func (h *Hub) authenticate(ctx context.Context, tok string) (principal, bool) {
 		t.mu.Lock()
 		if c.p != nil && t.isRevoked(c.p.ID) {
 			t.mu.Unlock()
-			return principal{}, false
+			return principal{}, false, nil
 		}
 		if t.cache == nil {
 			t.cache, t.touched = map[string]cachedToken{}, map[string]time.Time{}
@@ -188,13 +208,13 @@ func (h *Hub) authenticate(ctx context.Context, tok string) (principal, bool) {
 		t.mu.Unlock()
 	}
 	if c.p == nil {
-		return principal{}, false
+		return principal{}, false, nil
 	}
 	t.mu.Lock()
 	// A cache hit may have been copied just before revoked cleared it.
 	if t.isRevoked(c.p.ID) {
 		t.mu.Unlock()
-		return principal{}, false
+		return principal{}, false, nil
 	}
 	if t.touched == nil {
 		t.touched = map[string]time.Time{}
@@ -224,7 +244,7 @@ func (h *Hub) authenticate(ctx context.Context, tok string) (principal, bool) {
 			_ = h.store.TouchDeviceToken(ctx, id)
 		}(c.p.ID)
 	}
-	return *c.p, true
+	return *c.p, true, nil
 }
 
 // answerReads and answerWrites are all an answer-only device may do: what the watch app does and has done, no more. A
@@ -232,8 +252,10 @@ func (h *Hub) authenticate(ctx context.Context, tok string) (principal, bool) {
 // its method. Something new the watch needs goes here.
 var (
 	answerReads = lazyre.New(`^/api/v1/(machines|sessions|sessions/archived|interactions|inbox|workspace-board|workspaces|sessions/[^/]+/[^/]+/items|` +
-		`extensions/-/(widgets|shortcuts))$`)
-	// The watch draws extensions' widgets on its faces and runs their shortcuts (docs/extensions/extensions.md "System-level places").
+		`extensions/-/(widgets|shortcuts)|personas/nwverse/pet/[A-Za-z0-9_-][A-Za-z0-9._-]*\.(json|png))$`)
+	// The watch draws extensions' widgets on its faces and runs their shortcuts (docs/extensions/extensions.md "System-level placements").
+	// It also fetches the built-in Milk Frog's art for its row and face, and only that: pet/ of the nwverse package
+	// (docs/apple/persona.md "The Milk Frog on the watch"), not another package or an uploaded look.
 	answerWrites = lazyre.New(`^/api/v1/(interactions/[^/]+/(resolve|choose)|sessions/[^/]+/[^/]+/(messages|seen|interrupt)|` +
 		`inbox/[^/]+/(done|reply|draft|suggestion)|extensions/[^/]+/-/(widget|shortcut)/[^/]+)$`)
 	answerPuts = lazyre.New(`^/api/v1/devices/[^/]+/widgets$`)
@@ -473,6 +495,7 @@ func (h *Hub) revoked(id string) {
 			delete(h.wokeAt, deviceID)
 		}
 	}
+	delete(h.rings.devices, id) // its kept notify events (notifyring.go)
 	var gone []*client
 	for c := range h.clients {
 		if c.device == id {

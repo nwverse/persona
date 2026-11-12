@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"runtime"
 	"strings"
@@ -17,8 +20,10 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/managerconf"
+	"github.com/nwverse/persona/server/internal/memtrim"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -36,7 +41,7 @@ type BusOptions struct {
 	Token      string // the assistant's bus token (jb_…)
 	HTTPClient *http.Client
 	Version    string        // this build's, for the hub's roster
-	Deploy     string        // how it was started: "child" (the hub's), "external"
+	Deploy     string        // how it was started: "child" (the hub's), DeployService, "external", "docker"
 	Backoff    time.Duration // before dialing again, doubling to a minute (zero: the protocol's 1 s; tests shorten it)
 	Logf       func(format string, args ...any)
 	// Devices is the manager's own connections to the computers (devices.go); nil: the hub has them (tests).
@@ -69,6 +74,9 @@ type BusHub struct {
 	legacySaid bool
 	svc        *Service
 	ctx        context.Context // Serve's
+	// httpH serves the hub's http.request for httpOf (httpHandler), under mu.
+	httpH  http.Handler
+	httpOf *Service
 
 	// helloed is closed once the first hello's answer is kept (setHello): the hub's calls and events can come in on
 	// their own goroutines before that answer is, and what they need of it (the hub's kb settings, its machines)
@@ -116,11 +124,16 @@ func NewBusHub(o BusOptions) *BusHub {
 		Cancels: map[string]bool{assistantwire.MethodApp: true},
 		Hub:     o.Hub, Token: o.Token, HTTPClient: o.HTTPClient, Logf: o.Logf, Backoff: o.Backoff,
 		StopWhenRevoked: o.StopWhenRevoked, StopWhenRejected: o.StopWhenRejected,
-		HelloMethod: assistantwire.MethodHello,
+		// The hub's own manager (its child, or the built-in one's service dialing the hub's local address) is on the
+		// hub's machine: compressing its messages saves no network, and costs both ends the compressor's state.
+		Uncompressed: o.Deploy == "child" || o.Deploy == DeployService && id == assistantwire.AssistantID && loopbackHub(o.Hub),
+		HelloMethod:  assistantwire.MethodHello,
 		HelloParams: func() any {
 			return map[string]any{"id": id, "host": host, "os": runtime.GOOS, "arch": runtime.GOARCH,
 				"deploy": o.Deploy, "version": o.Version, "capabilities": []string{assistantwire.CapabilityConfigOwn, assistantwire.CapabilityAgentSessionArchives,
-					assistantwire.CapabilityAgentSessionArchiveClose, assistantwire.CapabilityMachinesOwn}}
+					assistantwire.CapabilityAgentSessionArchiveClose, assistantwire.CapabilityAgentNaming, assistantwire.CapabilityMachinesOwn,
+					assistantwire.CapabilityMeetingAttendance, assistantwire.CapabilityMeetingConversation, assistantwire.CapabilityMeetingPhotos, assistantwire.CapabilityRecordingDay,
+					devicewire.SharingCapability}}
 		},
 		OnHello: b.onHello,
 		// A node's tool call that its caller stopped waiting for ends at the hub too (fleet_tools.go).
@@ -136,6 +149,19 @@ func NewBusHub(o BusOptions) *BusHub {
 		},
 	}
 	return b
+}
+
+// loopbackHub says the hub's URL is this machine's loopback address.
+func loopbackHub(hub string) bool {
+	u, err := url.Parse(hub)
+	if err != nil {
+		return false
+	}
+	if u.Hostname() == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(u.Hostname())
+	return ip != nil && ip.IsLoopback()
 }
 
 // Run keeps the connection to the hub up and serves it with svc, and runs svc's own work (its schedule) from when it
@@ -228,7 +254,15 @@ func (b *BusHub) onHello(res json.RawMessage) error {
 				svc.Resync(context.WithoutCancel(ctx))
 			}
 		}()
-		go svc.channelsReconnected(context.WithoutCancel(ctx)) // the conversations the channels follow (channels.go)
+		// The inbox's "Needs you" count, which the hub keeps of this connection only (inbox_store.go): what is stored
+		// is read now if nothing read it yet, so the roster has the number before the first round.
+		go func() {
+			if b.client.Wait(ctx) == nil && svc.inboxReady(context.WithoutCancel(ctx)) == nil {
+				svc.tellInboxNeedsYou()
+			}
+		}()
+		// The conversations the channels follow (channels_handler.go).
+		go svc.channelsReconnected(context.WithoutCancel(ctx))
 		// Turns the hub sent as it connected can be taken before this answer is kept (events come on their own
 		// goroutine): without the hub's kb settings they could not be filed and wait — now they can.
 		go svc.kbFileWaiting(context.WithoutCancel(ctx))
@@ -432,6 +466,22 @@ func (b *BusHub) service() *Service {
 	return b.svc
 }
 
+// httpHandler serves the hub's http.request for s: s's routes, with the machines' and the nodes' routes that are the
+// manager's in front (devices.go, fleet_routes.go). Built once per service, not per request: the two ServeMuxes and
+// their twenty routes were 0.1 ms and 33 KB of every relayed request. Their handlers read everything when they run.
+func (b *BusHub) httpHandler(s *Service) http.Handler {
+	d := b.opts.Devices
+	if d == nil {
+		return s
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.httpOf != s || b.httpH == nil {
+		b.httpH, b.httpOf = s.fleetHandler(d.Handler(s)), s
+	}
+	return b.httpH
+}
+
 func (b *BusHub) request(ctx context.Context, method string, params json.RawMessage) (any, error) {
 	b.waitHello(ctx)
 	s := b.service()
@@ -447,11 +497,8 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 		if err := decode(&p); err != nil {
 			return nil, err
 		}
-		var h http.Handler = s
-		if d := b.opts.Devices; d != nil {
-			h = s.fleetHandler(d.Handler(s)) // the machines' and the nodes' routes that are the manager's (devices.go, fleet_routes.go)
-		}
-		return serveHTTP(ctx, h, p, s.lang)
+		defer memtrim.AfterLarge(len(p.Body)) // a large upload's buffers go back to the system after it
+		return serveHTTP(ctx, b.httpHandler(s), p, s.lang)
 	case assistantwire.MethodTools:
 		return map[string]any{"tools": s.Tools(ctx)}, nil
 	case assistantwire.MethodTool:
@@ -499,9 +546,14 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 		if err := decode(&p); err != nil {
 			return nil, err
 		}
+		ctx, note := withLauncherNote(ctx)
 		params, err := s.SendParams(ctx, p)
 		if err != nil {
+			s.appSendRefused(p.MachineID, p.SessionID, err) // the hub sends nothing: no ConversationSent (north_star.go)
 			return nil, err
+		}
+		if *note != "" {
+			return map[string]any{"params": params, "launcher_note": *note}, nil
 		}
 		return map[string]any{"params": params}, nil
 	case assistantwire.MethodRename:
@@ -567,6 +619,9 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 	}
 	if d := b.opts.Devices; d != nil {
 		if out, ok, err := d.Request(ctx, method, params); ok { // devices.* (devices.go)
+			if err == nil && method == devicewire.MethodCall {
+				s.nodeCallDone(ctx, params) // an effort set on a conversation with a model pick (model_pick.go)
+			}
 			return out, err
 		}
 	}
@@ -580,6 +635,18 @@ func serveHTTP(ctx context.Context, s http.Handler, p assistantwire.HTTPRequest,
 	if p.Query != "" {
 		target += "?" + p.Query
 	}
+	if p.Caller != nil {
+		ctx = devicewire.WithCaller(ctx, *p.Caller)
+	}
+	if p.ShareAuthority != nil {
+		ctx = devicewire.WithShareAuthority(ctx, *p.ShareAuthority)
+	}
+	if p.HandoffApprover != nil { // set by the hub only, never from a header (secret_handoff.go there)
+		ctx = assistantwire.WithHandoffApprover(ctx, *p.HandoffApprover)
+	}
+	if p.Human { // the same: a new conversation a person's own app opens (start.go's route)
+		ctx = assistantwire.WithHumanStart(ctx)
+	}
 	r, err := http.NewRequestWithContext(ctx, p.Method, target, bytes.NewReader(p.Body))
 	if err != nil {
 		return assistantwire.HTTPResponse{}, &rpc.Error{Code: bus.CodeInvalidParams, Message: err.Error()}
@@ -589,6 +656,9 @@ func serveHTTP(ctx context.Context, s http.Handler, p assistantwire.HTTPRequest,
 		r.Header = http.Header{}
 	}
 	r.ContentLength = int64(len(p.Body))
+	if len(p.Body) > 0 { // in memory already: the large routes decode it where it is (decodeLargeBody)
+		r.Body = newRelayedBody(p.Body)
+	}
 	r = withRequestLang(r) // what the routes write for people reads in it too (i18n.From)
 	w := &recorder{header: http.Header{}, lang: func() i18n.Lang {
 		if l := i18n.FromRequest(r); l != "" {
@@ -603,15 +673,16 @@ func serveHTTP(ctx context.Context, s http.Handler, p assistantwire.HTTPRequest,
 	if w.status == 0 {
 		w.status = http.StatusOK
 	}
-	return assistantwire.HTTPResponse{Status: w.status, Header: w.header, Body: w.body.Bytes()}, nil
+	return assistantwire.HTTPResponse{ShareAuthority: w.shareAuthority, Status: w.status, Header: w.header, Body: w.body.Bytes()}, nil
 }
 
 // recorder keeps a response to send back whole.
 type recorder struct {
-	header http.Header
-	status int
-	body   bytes.Buffer
-	lang   func() i18n.Lang // the request's language, read only when an error is written (i18n.Carrier)
+	shareAuthority *devicewire.ShareAuthority
+	header         http.Header
+	status         int
+	body           bytes.Buffer
+	lang           func() i18n.Lang // the request's language, read only when an error is written (i18n.Carrier)
 }
 
 // Lang is the language apierr writes an i18n.Message in.
@@ -622,7 +693,13 @@ func (w *recorder) Lang() i18n.Lang {
 	return w.lang()
 }
 
-func (w *recorder) Header() http.Header { return w.header }
+func (w *recorder) SetShareAuthority(a devicewire.ShareAuthority) { w.shareAuthority = &a }
+func (w *recorder) Header() http.Header                           { return w.header }
+
+// Grow makes room for n more bytes of body: a route that knows its answer's size and writes it in pieces
+// (writeInboxItems) then fills one buffer instead of growing it step by step.
+func (w *recorder) Grow(n int) { w.body.Grow(n) }
+
 func (w *recorder) Write(p []byte) (int, error) {
 	if w.status == 0 {
 		w.status = http.StatusOK
@@ -703,6 +780,12 @@ func (b *BusHub) event(ctx context.Context, ev busEvent) error {
 			return err
 		}
 		go s.StartEnded(context.WithoutCancel(ctx), p)
+	case assistantwire.EventConversationSent:
+		var p ConversationSent
+		if err := decode(&p); err != nil {
+			return err
+		}
+		go s.ConversationSent(context.WithoutCancel(ctx), p)
 	case assistantwire.EventInteractionResolved:
 		var p InteractionResolved
 		if err := decode(&p); err != nil {
@@ -805,4 +888,33 @@ func (b *BusHub) event(ctx context.Context, ev busEvent) error {
 		return fmt.Errorf("unknown event")
 	}
 	return nil
+}
+
+// HubBuild is what the running hub says it is: its version and the commit it was built from (GET /api/v1/health, from
+// where the assistant reaches it; a public address does not say either, which reads as "").
+func (b *BusHub) HubBuild(ctx context.Context) (version, commit string, err error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(b.opts.Hub, "/")+"/api/v1/health", nil)
+	if err != nil {
+		return "", "", err
+	}
+	c := b.opts.HTTPClient
+	if c == nil {
+		c = &http.Client{Timeout: 10 * time.Second}
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		return "", "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", "", fmt.Errorf("health answered %d", resp.StatusCode)
+	}
+	var h struct {
+		Version string `json:"version"`
+		Commit  string `json:"commit"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&h); err != nil {
+		return "", "", err
+	}
+	return h.Version, h.Commit, nil
 }

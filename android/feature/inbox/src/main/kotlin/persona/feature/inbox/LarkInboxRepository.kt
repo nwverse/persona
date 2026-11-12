@@ -3,6 +3,7 @@ package persona.feature.inbox
 import persona.core.contracts.api.ConnectionState
 import persona.core.contracts.api.LarkConversationTransport
 import persona.core.contracts.api.LarkInvalidation
+import persona.core.contracts.api.ManagerPins
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Mutex
@@ -18,11 +19,14 @@ class LarkInboxRepository(
     private val invalidations: Flow<LarkInvalidation>,
     private val cache: LarkWindowCache,
     private val localMessages: ((String) -> Flow<List<LarkMessage>>)? = null,
-    private val onMessages: suspend (String, List<JsonObject>) -> Unit = { _, _ -> },
+    /** A verified window's rows, with the manager its chat is read as. */
+    private val onMessages: suspend (String, List<JsonObject>, String?) -> Unit = { _, _, _ -> },
 ) : InboxRepository by base {
     private val confirmedReads = MutableStateFlow<Set<InboxMessageRead>>(emptySet())
     override val messageReads: StateFlow<Set<InboxMessageRead>> = confirmedReads.asStateFlow()
-    private class Window(val transport: LarkConversationTransport, val feed: String, val around: Long?) {
+    /** [manager]: the one the chat is read as (the opening page's pin), on its reads, pictures and threads; null: the default. */
+    private class Window(val transport: LarkConversationTransport, val feed: String, val around: Long?, val manager: String?) {
+        val source = LarkContentSource(transport, manager)
         val state = MutableStateFlow(LarkConversation(loading = true))
         val lock = Mutex()
         var raw = emptyList<JsonObject>()
@@ -30,6 +34,8 @@ class LarkInboxRepository(
         var newer: String? = null
         var readPosition = -1L
         val readIds = mutableSetOf<String>()
+        /** A topic group (#576): read as its topics (`topic=1`), from the inbox row or the hub's own page. */
+        @Volatile var topic = false
     }
     private val windows = mutableMapOf<String, Window>()
     private val readers = mutableMapOf<Window, Int>()
@@ -54,15 +60,17 @@ class LarkInboxRepository(
 
     override fun conversation(feedId: String, startPosition: Long?): Flow<LarkConversation> = transports.flatMapLatest { transport ->
         if (transport == null) flowOf(LarkConversation(failure = LarkFailure.NotPaired)) else channelFlow {
+            val manager = pinnedManager(feedId)
             val w = synchronized(windows) {
                 windows.entries.removeAll { it.value.transport !== transport }
-                windows[feedId]?.takeIf { it.around == startPosition } ?: Window(transport, feedId, startPosition).also { windows[feedId] = it }
+                windows[feedId]?.takeIf { it.around == startPosition && it.manager == manager }
+                    ?: Window(transport, feedId, startPosition, manager).also { windows[feedId] = it }
             }
             synchronized(windows) { readers[w] = (readers[w] ?: 0) + 1; released.remove(w) }
             try {
             launch {
                 w.lock.withLock {
-                    if (w.raw.isEmpty()) cache.read(transport.scope, feedId, startPosition)?.let { saved ->
+                    if (w.raw.isEmpty()) cache.read(w.source.scope, feedId, startPosition)?.let { saved ->
                         val rows = saved.messages()
                         val positions = rows.mapNotNull { it.number("position") }
                         if (startPosition == null || positions.isNotEmpty() && startPosition in positions.min()..positions.max()) {
@@ -82,8 +90,9 @@ class LarkInboxRepository(
                 val pending = if (!state.hasNewer) messages.filter { it.position == null && it.clientId != null }
                     .filterNot { local -> state.messages.any { it.id == local.id || it.clientId == local.clientId } } else emptyList()
                 val row = inbox.records.firstOrNull { it.feedId == feedId }
+                if (row?.isTopic == true) w.topic = true
                 state.copy(title = row?.item?.title ?: state.title, messages = state.messages + pending,
-                    isGroup = row?.isGroup ?: state.isGroup, isTopic = row?.isTopic ?: state.isTopic)
+                    isGroup = row?.isGroup ?: state.isGroup, isTopic = if (w.topic) true else row?.isTopic ?: state.isTopic)
             }.collect { send(it) }
             } finally { synchronized(windows) {
                 val users = (readers[w] ?: 1) - 1
@@ -123,6 +132,13 @@ class LarkInboxRepository(
     private fun transport() = requireNotNull(transports.value) { "Not paired" }
 
     /**
+     * The manager the calling page reads the chat [feedId] as (its ManagerPins); null: the default, pinned or not, so a
+     * default's page shares its window with the unpinned ones.
+     */
+    private suspend fun pinnedManager(feedId: String) =
+        currentCoroutineContext()[ManagerPins]?.manager(listOf("lark", "conversations", feedId))?.takeIf { it.isNotEmpty() }
+
+    /**
      * A hub without "Pinned messages" answers 404 / 405 with no code of its own: it needs an update (iOS `chatPinRequest`).
      * The hub's own codes for a switched account and an unknown result read as those failures.
      */
@@ -140,7 +156,8 @@ class LarkInboxRepository(
 
     override suspend fun larkChatPins(feedId: String, accountId: String?, cursor: String?): LarkChatPinsPage {
         val transport = transport()
-        val page = larkPinsPage(pinRequest { transport.larkChatPins(feedId, accountId, cursor) }) { larkMessage(it, transport, feedId) }
+        val manager = pinnedManager(feedId)
+        val page = larkPinsPage(pinRequest { transport.larkChatPins(feedId, accountId, cursor) }) { larkMessage(it, transport, feedId, manager) }
         if (page.accountId.isBlank() || accountId != null && page.accountId != accountId) throw LarkPinFailure(LarkPinFailure.Kind.AccountChanged)
         return page
     }
@@ -152,7 +169,8 @@ class LarkInboxRepository(
         val message = target?.get("message") as? JsonObject
         if (body.text("account_id") != accountId || message == null || message.text("id") != messageId)
             throw LarkPinFailure(LarkPinFailure.Kind.AccountChanged)
-        return LarkPinTarget(larkMessage(message, transport, feedId), (target["root"] as? JsonObject)?.let { larkMessage(it, transport, feedId) })
+        val manager = pinnedManager(feedId)
+        return LarkPinTarget(larkMessage(message, transport, feedId, manager), (target["root"] as? JsonObject)?.let { larkMessage(it, transport, feedId, manager) })
     }
 
     override suspend fun larkChangePin(feedId: String, messageId: String, pinId: String?, accountId: String?) {
@@ -229,7 +247,14 @@ class LarkInboxRepository(
 
     private class WindowGap : Exception()
     private suspend fun fetch(w: Window, around: Long? = null, before: String? = null, after: String? = null): JsonObject {
-        val page = w.transport.messages(w.feed, around, before, after)
+        // A topic group lists its topics, pages backward only (`topic=1`); one the hub says is a topic group is read again so.
+        if (w.topic && after == null) return w.source.read { w.transport.topics(w.feed, before) }
+        val page = w.source.read { w.transport.messages(w.feed, around, before, after) }
+        if (page.flag("topic") && after == null) {
+            w.topic = true
+            w.state.update { it.copy(isTopic = true) }
+            return w.source.read { w.transport.topics(w.feed, before) }
+        }
         val sync = page.cursor("sync_state") ?: page.cursor("syncState")
         if (sync == "gap") throw WindowGap()
         check(sync == null || sync == "complete") { "Window is not authoritative" }
@@ -241,7 +266,7 @@ class LarkInboxRepository(
         val sync = page.cursor("sync_state") ?: page.cursor("syncState")
         if (verified && sync != null && sync != "complete") {
             if (sync == "gap" && !revision) {
-                val latest = w.transport.messages(w.feed)
+                val latest = w.source.read { w.transport.messages(w.feed) }
                 install(w, latest, latest.messages(), verified = true, revision = true)
                 return
             }
@@ -252,14 +277,14 @@ class LarkInboxRepository(
         w.raw = rows.associateBy { it.text("id") }.values.sortedBy { it.number("position") ?: Long.MAX_VALUE }
         w.older = page.cursor("older_cursor")
         w.newer = page.cursor("newer_cursor")
-        w.state.update { it.copy(messages = w.raw.map { row -> larkMessage(row, w.transport, w.feed).let { message ->
+        w.state.update { it.copy(messages = w.raw.map { row -> larkMessage(row, w.transport, w.feed, w.manager).let { message ->
             if (InboxMessageRead(w.transport.scope, w.feed, message.id, message.position ?: -1) in confirmedReads.value) message.copy(isRead = true) else message
         } }, loading = false,
             hasOlder = page.flag("has_older"), hasNewer = page.flag("has_newer"), loadingOlder = false, loadingNewer = false,
             verified = verified, error = null, failure = null, windowRevision = it.windowRevision + if (revision) 1 else 0) }
         if (verified) {
-            onMessages(w.feed, w.raw)
-            try { cache.write(w.transport.scope, w.feed, w.around, JsonObject(page + ("messages" to JsonArray(w.raw)))) }
+            onMessages(w.feed, w.raw, w.manager)
+            try { cache.write(w.source.scope, w.feed, w.around, JsonObject(page + ("messages" to JsonArray(w.raw)))) }
             catch (e: CancellationException) { throw e }
             catch (_: Exception) { /* A disk failure must not discard the verified network window. */ }
         }
@@ -289,9 +314,11 @@ class LarkInboxRepository(
 
     override suspend fun markVisible(feedId: String, messages: List<LarkMessage>): Boolean {
         val readLock = synchronized(windows) { readLocks.getOrPut(feedId) { Mutex() } }
+        // The caller's copy of the chat: two managers listing it have the same messages, and the read goes as the window's manager.
+        val manager = pinnedManager(feedId)
         return readLock.withLock {
             val w = synchronized(windows) { (listOfNotNull(windows[feedId]) + readers.keys).distinct().firstOrNull { candidate ->
-                candidate.feed == feedId && owns(candidate) && candidate.state.value.verified && messages.all { message ->
+                candidate.feed == feedId && candidate.manager == manager && owns(candidate) && candidate.state.value.verified && messages.all { message ->
                     candidate.state.value.messages.any { it.id == message.id && it.position == message.position }
                 }
             } } ?: return@withLock false
@@ -306,7 +333,7 @@ class LarkInboxRepository(
             val ids = visible.filter { !it.mine && !it.isRead && it.id !in w.readIds &&
                 InboxMessageRead(w.transport.scope, feedId, it.id, it.position!!) !in confirmedReads.value }.map { it.id }
             if (highest.position == w.readPosition && ids.isEmpty()) return@withLock true
-            w.transport.markRead(feedId, highest.position, highest.badgeCount, ids)
+            w.source.read { w.transport.markRead(feedId, highest.position, highest.badgeCount, ids) }
             if (!owns(w)) return@withLock false
             w.readPosition = highest.position; w.readIds += ids
             val opened = synchronized(windows) { (listOf(w) + readers.keys).distinct().filter { it.feed == feedId && owns(it) } }

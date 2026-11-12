@@ -33,6 +33,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/secretkey"
+	"github.com/nwverse/persona/server/internal/subscriptions"
 	"github.com/nwverse/persona/server/internal/update"
 )
 
@@ -90,6 +91,8 @@ type Options struct {
 	AssistantMachine func() string
 	// AssistantTools are the assistant's tools now (a connector's tool may not shadow one).
 	AssistantTools func() []proto.Tool
+	// LauncherReferences are the model providers' keys that hold references, for their providers' details (nil: none).
+	LauncherReferences func(ctx context.Context) []LauncherReference
 	// Lang and Timezone are the user's language and zone ("" when not known).
 	Lang     func() i18n.Lang
 	Timezone func() string
@@ -97,8 +100,14 @@ type Options struct {
 
 // Manager is the extensions, connectors and bots as the manager runs them.
 type Manager struct {
+	// handoffRulesMu: one change of the hand-off rules at a time (secret_handoff_rules.go).
+	handoffRulesMu sync.Mutex
+	// inboxReads are each source's latest read by the Inbox, for the Inbox Sources pages (inbox_sources.go).
+	inboxReads sourceReads
 	// errReports: the error reports' pipeline (error_reports.go).
 	errReports errorReports
+	// iphoneTurns: one iphone_do at a time per iPhone, across conversations (iphone.go, iphoneTurn).
+	iphoneTurns sync.Map
 	// serving: the requests the hub relayed to the extensions being served now, a WebSocket (a voice call, an
 	// extension's live view) for as long as it is open (Serving).
 	serving atomic.Int64
@@ -113,24 +122,30 @@ type Manager struct {
 
 	ctx context.Context
 
-	mail          Mail
-	connectors    *connector.Registry
-	connectorsOff map[string]bool
-	migrated      sync.Map
-	media         mediaCache
-	recalls       recallLocks
-	extensions    *extensions
-	extTokens     extTokens
-	legacyCalls   legacyCalls
-	uiPages       pageSessions
-	uiDelivery    pageDelivery
-	agents        *agents.Service
-	bots          botHub
-	channels      channelsHub
-	chans         struct{ in inbound }
-	inbox         inboxSources
-	larkDefault   larkDefault
-	admin         struct {
+	mail               Mail
+	connectors         *connector.Registry
+	imessageSettingsMu imessageContextLock
+	imessageArchive    imessageArchiveFence
+	imessageAIPending  atomic.Bool
+	subs               *subscriptions.Service // source subscriptions (subscriptions.go); nil until Run
+	connectorsOff      map[string]bool
+	migrated           sync.Map
+	media              mediaCache
+	recalls            recallLocks
+	extensions         *extensions
+	hostCLIMu          sync.Mutex
+	hostCLIState       *hostCLIState
+	extTokens          extTokens
+	legacyCalls        legacyCalls
+	uiPages            pageSessions
+	uiDelivery         pageDelivery
+	agents             *agents.Service
+	bots               botHub
+	channels           channelsHub
+	chans              struct{ in inbound }
+	inbox              inboxSources
+	larkDefault        larkDefault
+	admin              struct {
 		extensions extensionGate
 		now        func() time.Time // the admin UI's clock (tests move it)
 	}
@@ -159,6 +174,12 @@ type Manager struct {
 	// read. Tests put another in its place.
 	ruleStore userRuleStore
 	userRules userRules
+
+	// images are the pictures extensions serve through the hub (extension_images.go).
+	images imageProxy
+
+	// droppedWait is noticeDropped's first wait between two tries, doubled after each.
+	droppedWait time.Duration
 }
 
 // New is the manager of opts; nothing runs until Run.
@@ -186,6 +207,8 @@ func New(opts Options) *Manager {
 	h.ruleStore = &settingRuleStore{h: h}
 	h.byID = map[string]*Machine{}
 	h.started = make(chan struct{})
+	h.extTokens.dropped = h.tellHubDropped
+	h.droppedWait = time.Second
 	return h
 }
 

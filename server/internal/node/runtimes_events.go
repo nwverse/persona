@@ -1,6 +1,7 @@
 package node
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -89,7 +90,8 @@ func (n *Node) runtimeEvent(h *runtimeConn, event string, params json.RawMessage
 }
 
 // normalizeRuntimeSessions keeps the sessions a runtime may list (valid ids, once each) and fills what the apps expect:
-// the agent and its label, the space kind (the runtime's id).
+// the agent and its label, the space kind (the runtime's id). It works in place: the rows kept are list's first ones,
+// in list's own array, the rest cleared, so list is the caller's to give up.
 func normalizeRuntimeSessions(h *runtimeConn, list []proto.Session) []proto.Session {
 	h.mu.Lock()
 	rt, agent, label, caps, daemon := h.hello.Runtime, h.hello.Agent, h.hello.Name, h.hello.Caps, h.daemon != ""
@@ -104,7 +106,7 @@ func normalizeRuntimeSessions(h *runtimeConn, list []proto.Session) []proto.Sess
 	if !caps.Send {
 		readOnly = label + " 没有开放从手机发消息"
 	}
-	seen := map[string]bool{}
+	seen := make(map[string]bool, len(list))
 	panes := map[string]string{}
 	defer func() {
 		h.mu.Lock()
@@ -116,7 +118,7 @@ func normalizeRuntimeSessions(h *runtimeConn, list []proto.Session) []proto.Sess
 		}
 		h.mu.Unlock()
 	}()
-	out := make([]proto.Session, 0, len(list))
+	out := list[:0] // row i is written at or before i, after it was read
 	for _, s := range list {
 		if !runtimeIDRe.MatchString(s.SessionID) || seen[s.SessionID] {
 			continue
@@ -124,6 +126,12 @@ func normalizeRuntimeSessions(h *runtimeConn, list []proto.Session) []proto.Sess
 		seen[s.SessionID] = true
 		s.MachineID, s.State, s.PendingInteractions = "", "", 0 // the hub's to fill
 		s.StartedByPersona, s.Assistant = false, false
+		// Of the hierarchy (docs/protocol/protocol.md "Session hierarchy") the runtime says when the session began
+		// (started_at); what it folds under and the rollup are the manager's, the parent a blocked child asks for the
+		// node's (below), from what a daemon's own node named (daemons.go) when the row names no other.
+		asking := s.AskingParentSessionID()
+		s.SetFold("", "", nil)
+		s.SetAskingParentSessionID("")
 		if s.Agent == "" {
 			s.Agent = agent
 		}
@@ -139,12 +147,14 @@ func normalizeRuntimeSessions(h *runtimeConn, list []proto.Session) []proto.Sess
 		// sending, interrupting, answering cards and every terminal control on capabilities, the hub guards sends.
 		// What a runtime declared, never more: no terminal, no attach, cards always answerable (they are its own asks).
 		s.SourceKind, s.SourceInstanceID, s.SourceThreadID, s.ParentThreadID = proto.SourceRuntime, rt, "", ""
-		if rt == paseoRuntimeID {
-			s.Host = proto.EnginePaseo // an engine host, though no terminal (#2576)
+		if rt == paseoRuntimeID || rt == cindyRuntimeID {
+			s.Host = rt // an engine host, though no terminal (#2576)
 		} else {
 			s.Host = ""
 		}
-		s.Capabilities = &proto.SessionCapabilities{Read: true, Send: caps.Send, Interrupt: caps.Interrupt, Approve: true}
+		s.Capabilities = &proto.SessionCapabilities{Read: true, Send: caps.Send, Interrupt: caps.Interrupt, Approve: true,
+			Close: &caps.Close, Modes: proto.CanModes(runtimeModes(caps.Modes, rt, s)),
+			Model: proto.CanModes(caps.Modes && caps.Model && !strings.Contains(s.SessionID, subagentSep))}
 		s.ReadOnlyReason, s.Attached, s.CodexRoute, s.CodexRouteNote = readOnly, false, "", ""
 		// The pane is the engine's to show (pi.go joins it with the engine's pane), not part of the runtime's row.
 		if s.PaneID != "" && validPane(s.PaneID) {
@@ -152,7 +162,19 @@ func normalizeRuntimeSessions(h *runtimeConn, list []proto.Session) []proto.Sess
 		}
 		s.PaneID, s.TabID, s.WorkspaceID = "", "", ""
 		switch s.Status {
-		case proto.StatusWorking, proto.StatusBlocked, proto.StatusDone, proto.StatusIdle, proto.StatusOffline:
+		case proto.StatusWorking, proto.StatusDone, proto.StatusIdle, proto.StatusOffline:
+		case proto.StatusBlocked:
+			// A session another one started (is_subagent, parent_session_id) that waits for the user is a row of its
+			// own while it does (#4494): the apps that fold every child away (iOS, Android, older web) leave out no
+			// session that needs the user, whichever rows they count. Its parent is named again once it was answered.
+			// Meanwhile asking_parent_session_id names it (#5120): the apps that show children as cards in their
+			// parent's chat keep the card, and its question, there.
+			parent := s.ParentSessionID
+			if parent == "" && s.RootSessionID != s.SessionID {
+				parent = s.RootSessionID
+			}
+			s.SetAskingParentSessionID(cmp.Or(parent, asking))
+			s.IsSubagent, s.ParentSessionID, s.RootSessionID = false, "", ""
 		default:
 			s.Status = proto.StatusUnknown
 		}
@@ -166,6 +188,7 @@ func normalizeRuntimeSessions(h *runtimeConn, list []proto.Session) []proto.Sess
 		runtimeWork(&s)
 		out = append(out, s)
 	}
+	clear(list[len(out):]) // the rows left out hold no strings
 	return out
 }
 
@@ -284,11 +307,22 @@ func (n *Node) runtimeAsk(ctx context.Context, h *runtimeConn, params json.RawMe
 }
 
 // runtimeHealth: the card's session is in the health space (its cwd or the row's), where every write is confirmed
-// (docs/assistant/health.md "Outgoing").
+// (docs/assistant/health.md "Outbound"). A directory inside the space counts: a tool's `cd` may have left either there
+// (identity.InHealthSpace, #2368).
 func runtimeHealth(h *runtimeConn, ix proto.Interaction) bool {
-	if identity.SpaceOf(ix.Cwd) == identity.SpaceHealth {
+	if identity.InHealthSpace(ix.Cwd) {
 		return true
 	}
 	s, ok := h.row(ix.SessionID)
-	return ok && (s.Space == identity.SpaceHealth || identity.SpaceOf(s.Cwd) == identity.SpaceHealth)
+	return ok && (s.Space == identity.SpaceHealth || identity.InHealthSpace(s.Cwd))
+}
+
+// runtimeModes is a runtime row's modes capability: the runtime declared caps.modes (the node refuses session.modes
+// otherwise, runtimes_calls.go), the row is not a subagent's, and its agent takes Claude Code's modes (claude: Orca,
+// Paseo's Claude providers) or is the runtime's own (agy). Paseo has no agent of its own: its bridge calls every agent
+// other than Claude Code and Codex "paseo" (integrations/paseo/lib/map.js appAgent), and refuses a permission mode for
+// any of them that is not Claude (bridge.js modes). So a Paseo row running Codex, opencode or any other agent gets none.
+func runtimeModes(declared bool, rt string, s proto.Session) bool {
+	own := s.Agent == rt && rt != paseoRuntimeID
+	return declared && !strings.Contains(s.SessionID, subagentSep) && (s.Agent == "claude" || own)
 }

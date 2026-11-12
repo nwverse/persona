@@ -1,4 +1,4 @@
-// Package devices is the manager's side of the user's computers (docs/server/machines.md "Who connects the computers"): it connects each one —
+// Package devices is the manager's side of the user's computers (docs/server/machines.md "Who connects to computers"): it connects each one —
 // the hub machine's own node as a child process, ssh, tailcat, a Persona Link that dialed the hub (relayed to the
 // manager as it is), a connector of kind service, a member hub's computer through that hub — keeps it connected, and
 // holds what is known of it: online, node.info, its sessions and their revs, warm start across restarts, the engine,
@@ -24,6 +24,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
+	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -78,7 +79,7 @@ type Options struct {
 	// machine: its own ways).
 	DialNode func(machine string) func(context.Context) (net.Conn, error)
 	// Event takes a node's event (and a session list the manager passes on again) before the hub would: what is the
-	// manager's of it (the interactions, the sessions' states, the pushes: docs/server/machines.md "Who handles the computers' events"); false:
+	// manager's of it (the interactions, the sessions' states, the pushes: docs/server/machines.md "Who handles computer events"); false:
 	// the hub does not get it. nil: every event goes to the hub.
 	Event func(machine, event string, params json.RawMessage) (forward bool)
 	// Detached: a machine's node connection ended (not for another one taking over): what waited on it ends.
@@ -97,6 +98,8 @@ type Options struct {
 type Devices struct {
 	opts Options
 	logf func(format string, args ...any)
+
+	transfers transfers // computer to computer file transfers running or just over (transfer.go)
 
 	mu    sync.Mutex
 	cfg   devicewire.Config
@@ -121,12 +124,19 @@ type Devices struct {
 	byID      map[string]*Machine
 	warm      *savedWarm // taken at start, for the machines when they come
 
-	fleet    fleet
-	tailcat  tailcatDialer
-	engines  engineChoices
-	links    linkSet
-	stopping atomic.Bool
-	workers  sync.WaitGroup
+	fleet   fleet
+	tailcat tailcatDialer
+	engines engineChoices
+	// clipboard: the machines the user turned clipboard sharing on for (clipboard.go).
+	clipboard clipboardSwitches
+	// fileTransfer: the machines the user turned file transfer on for (transfer_settings.go).
+	fileTransfer fileTransferSwitches
+	links        linkSet
+	stopping     atomic.Bool
+	workers      sync.WaitGroup
+
+	// attention: the assistant's latest "Needs you" summary for Persona Link (attention.go); nil before the first.
+	attention atomic.Pointer[link.Attention]
 
 	cfgChanged chan struct{} // closed when the hub's handover changes (meshWait)
 
@@ -138,13 +148,24 @@ type Devices struct {
 	reportMu  sync.Mutex
 	reportDue chan struct{}
 	lastSent  string // the last devices.state sent (stateKey), to send only changes
+	// desktopsRep is the desktops reporter (presence.go); ring is closed at the next delivery or confirmation, for
+	// LinkRang.
+	desktopsRep desktopsReporter
+	ringMu      sync.Mutex
+	ring        chan struct{}
 
 	packages nodePackages // the node builds for the machines' platforms (packages.go)
 
 	metrics metricsBook // the machines' monitoring (metrics.go)
 	usage   usageBook   // their token usage (metrics.go)
-	// usageWrites: the usage notifications to store, in order (usage.go's usageLoop).
+	// usageWrites: the usage notifications to store, in order (usage.go's usageLoop); usageWait: how long it takes the
+	// ones that come after one to store them together (usageGather as New found it).
 	usageWrites chan usageWrite
+	usageWait   time.Duration
+	// metricWrites: the samples to store (metrics.go's writeMetrics); metricsWait: how long it waits for a tick's other
+	// samples (metricsGather as New found it).
+	metricWrites chan db.MachineSample
+	metricsWait  time.Duration
 
 	usageWin usageWindowsHub // subscription rate-limit windows across machines (usagewindows.go, #2432)
 	usageGW  usageGateways   // the account-pool gateways that add accounts to it (usagegateways.go, #2595)
@@ -160,7 +181,8 @@ func New(o Options) *Devices {
 		o.Logf = func(string, ...any) {}
 	}
 	d := &Devices{opts: o, logf: o.Logf, gotCh: make(chan struct{}), ready: make(chan struct{}), byID: map[string]*Machine{}, ownWait: ownListWait,
-		reportDue: make(chan struct{}, 1), usageWrites: make(chan usageWrite, 1024), reqPrefix: strconv.FormatInt(time.Now().UnixNano(), 36)}
+		reportDue: make(chan struct{}, 1), usageWrites: make(chan usageWrite, 1024), usageWait: usageGather,
+		metricWrites: make(chan db.MachineSample, metricsQueue), metricsWait: metricsGather, reqPrefix: strconv.FormatInt(time.Now().UnixNano(), 36)}
 	// The account-pool gateways' usage windows (usagegateways.go, #2595): manager.json's usage section as it is now.
 	var usage UsageConfig
 	if o.ConfigFile != "" {
@@ -195,7 +217,16 @@ func (d *Devices) Run(ctx context.Context) error {
 	go d.probeServices(mctx)
 	go d.measureLoop(mctx)
 	go d.metricsLoop(mctx)
+	if st := d.metricsStore(); st != nil {
+		d.workers.Add(1) // waited for below: what came before the machines stopped is stored
+		go func() {
+			defer d.workers.Done()
+			d.writeMetrics(mctx, st)
+		}()
+	}
 	go d.usageLoop(mctx)
+	d.workers.Add(1)
+	go func() { defer d.workers.Done(); d.runShareIngestion(mctx) }()
 	go d.usageGW.run(ctx) // the account-pool gateways (usagegateways.go)
 	// The hub's hand-over, or after ownListWait the manager's own list (ownlist.go) until it comes.
 	wait := time.NewTimer(d.ownWait)
@@ -261,6 +292,10 @@ func (d *Devices) Configure(cfg devicewire.Config) {
 	if was := linkSays(old); was != linkSays(cfg) {
 		d.links.sendEndpoints(d.linkEndpoints)
 	}
+	// The summary carries the web address, and a computer gets it only once confirmed and not a work computer
+	// (attentionFor: pending, machines[].trust, a member's records), an empty one otherwise. A computer that has
+	// the latest gets nothing.
+	d.spreadAttention()
 	if member := cfg.Mesh != nil && cfg.Mesh.Member; member != wasMember {
 		// The hub joined a group (its computers are the center's to connect now: let them go at once) or became its
 		// center (connect them again, its own and the members').
@@ -356,6 +391,20 @@ func (d *Devices) startMachines(ctx context.Context) {
 			for id := range old.watched { // what the hub watches is watched again on the new connection
 				m.watched[id], m.lastSeq[id] = true, old.lastSeq[id]
 			}
+			// So are the manager's own follows (Follow: a channel's turn), and a follow the old node did not take
+			// stays unsettled: the assistant keeps its mark and never asks again.
+			for id := range old.followed {
+				if m.followed == nil {
+					m.followed = map[string]bool{}
+				}
+				m.followed[id], m.lastSeq[id] = true, old.lastSeq[id]
+				if old.unsettled[id] {
+					if m.unsettled == nil {
+						m.unsettled = map[string]bool{}
+					}
+					m.unsettled[id] = true
+				}
+			}
 			old.mu.Unlock()
 		} else {
 			d.applyWarmLocked(m)
@@ -397,6 +446,13 @@ func (d *Devices) startMachines(ctx context.Context) {
 			defer d.workers.Done()
 			m.run(m.ctx)
 		}()
+		if m.cfg.Kind == kindService {
+			d.workers.Add(1)
+			go func() {
+				defer d.workers.Done()
+				m.attentionLoop(m.ctx)
+			}()
+		}
 	}
 	d.readyOnce.Do(func() { close(d.ready) })
 	d.changed()
@@ -451,6 +507,7 @@ func (d *Devices) report(all bool) {
 	default:
 		return // the machines are not made yet; the first report follows when they are (startMachines)
 	}
+	defer d.requestDesktops(all) // a change of computers or of who may count goes with it, after it (presence.go)
 	d.reportMu.Lock()
 	defer d.reportMu.Unlock()
 	st := d.states()
@@ -582,12 +639,27 @@ func (d *Devices) Call(ctx context.Context, p devicewire.NodeCall) (json.RawMess
 	if len(params) == 0 {
 		params = json.RawMessage(`{}`)
 	}
+	if refusesHandoff(p.Method, params) {
+		return nil, errHandoffRefused
+	}
 	m.noteWatch(p.Method, params)
 	if p.Method == "session.unwatch" && m.follows(params) {
 		return json.RawMessage(`{}`), nil // the manager still follows it: the node keeps sending its items
 	}
+	var receipt, preparation string
+	var prepareErr error
+	params, receipt, preparation, prepareErr = d.prepareShareCall(ctx, p, params)
+	if prepareErr != nil {
+		d.observeCreationCall(p, nil, nil, preparation, prepareErr)
+		return nil, wireError(prepareErr)
+	}
+	if refusesHandoff(p.Method, params) { // and on what actually goes (prepareShareCall re-marshals it)
+		return nil, errHandoffRefused
+	}
 	var out json.RawMessage
 	err := m.call(ctx, p.Method, params, &out)
+	d.observeCreationCall(p, params, out, preparation, err)
+	d.finishShareCall(ctx, p, receipt, out, err)
 	m.noteOpened(p.Method, params, err)
 	if err != nil {
 		return nil, wireError(err)
@@ -657,15 +729,51 @@ func (d *Devices) Reconnect(id string) error {
 func (d *Devices) List() []Summary {
 	out := []Summary{}
 	for _, m := range d.machinesNow() {
-		m.mu.Lock()
-		s := Summary{ID: m.cfg.ID, Name: m.name(), Kind: m.cfg.Kind, SSHHost: m.cfg.SSHHost, Home: m.info.Home,
-			DataDir: m.info.DataDir, Online: m.online}
-		m.mu.Unlock()
-		s.Trust = d.machineTrust(m)
-		s.Reachable = m.reachable()
-		out = append(out, s)
+		out = append(out, d.summaryOf(m))
 	}
 	return out
+}
+
+// summaryOf is one machine as List has it.
+func (d *Devices) summaryOf(m *Machine) Summary {
+	m.mu.Lock()
+	s := Summary{ID: m.cfg.ID, Name: m.name(), Kind: m.cfg.Kind, SSHHost: m.cfg.SSHHost, Home: m.info.Home,
+		DataDir: m.info.DataDir, Online: m.online || m.warmLocked(time.Now())}
+	m.mu.Unlock()
+	s.Trust = d.machineTrust(m)
+	s.Reachable = m.reachable()
+	return s
+}
+
+// Summary is List's entry for the machine id names (an entry another one absorbed: that one's), false when List has
+// none: the first listed machine with Canonical(id) as its id, found without the summaries of the others (their trust
+// reads every path's configuration). The fleet asks for one machine on every list a node sends.
+func (d *Devices) Summary(id string) (Summary, bool) {
+	m := d.listed(d.Canonical(id))
+	if m == nil {
+		return Summary{}, false
+	}
+	return d.summaryOf(m), true
+}
+
+// listed is the first of machinesNow with this id, read in place rather than from a copy of the list; nil when none
+// has it.
+func (d *Devices) listed(id string) *Machine {
+	f := &d.fleet
+	f.mu.Lock()
+	order := f.order // replaced whole by a regroup, never written into
+	f.mu.Unlock()
+	if order == nil {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		order = d.entries
+	}
+	for _, m := range order {
+		if m.cfg.ID == id {
+			return m
+		}
+	}
+	return nil
 }
 
 // View is one machine with what its node said of itself (node.info), and its sessions as the node listed them.
@@ -681,7 +789,7 @@ func (d *Devices) Views() []View {
 	for _, m := range d.machinesNow() {
 		m.mu.Lock()
 		v := View{Summary: Summary{ID: m.cfg.ID, Name: m.name(), Kind: m.cfg.Kind, SSHHost: m.cfg.SSHHost, Home: m.info.Home,
-			DataDir: m.info.DataDir, Online: m.online}, Info: m.info, Sessions: slices.Clone(m.sessions)}
+			DataDir: m.info.DataDir, Online: m.online || m.warmLocked(time.Now())}, Info: m.info, Sessions: slices.Clone(m.sessions)}
 		m.mu.Unlock()
 		v.Trust = d.machineTrust(m)
 		v.Reachable = m.reachable()
@@ -716,6 +824,19 @@ type Summary struct {
 
 // Has reports whether id is one of the machines (an entry another one absorbed included).
 func (d *Devices) Has(id string) bool { return d.machineByID(id) != nil }
+
+// NodeAnnounced reports whether machine id's node is connected and announced capability in its handshake, never
+// assumed for an older node: the assistant checks secret_env before it shows a hand-off card.
+func (d *Devices) NodeAnnounced(id, capability string) bool {
+	m := d.machineByID(id)
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	info, connected := m.info, m.peer != nil
+	m.mu.Unlock()
+	return connected && info.Protocol > 0 && slices.Contains(info.Capabilities, capability)
+}
 
 // CallNode is a call to a machine's node from the manager itself (the assistant's device.call): errors as the
 // hub's were (apierr.ErrOffline, rpc.ErrClosed, the node's *rpc.Error).
@@ -818,6 +939,7 @@ func (d *Devices) Follow(ctx context.Context, machine, session string, on bool) 
 		m.followed[session] = true
 	} else {
 		delete(m.followed, session)
+		m.forgetSeqLocked(session)
 	}
 	m.mu.Unlock()
 	var err error
@@ -862,3 +984,12 @@ func (w *wrapped) Error() string   { return w.message.Error() }
 func (w *wrapped) Unwrap() []error { return []error{w.message, w.err} }
 
 func explain(message, err error) error { return &wrapped{message: message, err: err} }
+
+// A hand-off is the manager's own, after its card (CallNode, in this process): never the hub's or another manager's
+// to ask for (Devices.Call), so nobody else can stage values or start an Agent with them.
+var errHandoffRefused = &rpc.Error{Code: devicewire.CodeHandoffRefused, Message: "secret hand-offs are made only by the manager that connects this computer"}
+
+// refusesHandoff: a hub-relayed call that would stage values or start with a ticket.
+func refusesHandoff(method string, params json.RawMessage) bool {
+	return method == proto.MethodSecretStage || devicewire.IsSessionStart(method) && startHasSecretTicket(params)
+}

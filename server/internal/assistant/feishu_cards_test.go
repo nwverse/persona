@@ -113,7 +113,7 @@ func TestSwitchBindsPressedCard(t *testing.T) {
 // The agents card's "Start new agent" button posts the same form /start builds (startAgentCard), quoting the
 // pressed list card, and starts nothing itself (#5438).
 func TestStartFormCallbackPostsStartCard(t *testing.T) {
-	s, f, _, _ := startCardHub(t)
+	s, f, posts, _ := startCardHub(t)
 	ctx := context.Background()
 	var a feishubot.CardAction
 	a.Action.Value = map[string]any{"a": "start_form"}
@@ -122,18 +122,12 @@ func TestStartFormCallbackPostsStartCard(t *testing.T) {
 	if r.Toast == nil || r.Toast.Content != i18n.T("", "assistant-feishu_cards.start_form_opening") {
 		t.Fatalf("toast %+v", r.Toast)
 	}
-	var post map[string]any
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if ps := f.appParams(AppFeishu, FeishuPost); len(ps) > 0 {
-			post = ps[0]
-			break
-		}
-		time.Sleep(2 * time.Millisecond)
+	waitForForm(t, posts, "the start form was not posted")
+	ps := f.appParams(AppFeishu, FeishuPost)
+	if len(ps) != 1 {
+		t.Fatalf("posted %d start forms, want one", len(ps))
 	}
-	if post == nil {
-		t.Fatal("the start form was not posted")
-	}
+	post := ps[0]
 	if replyTo, _ := post["reply_to"].(string); replyTo != "om_agents" {
 		t.Fatalf("the form replies to %q, want the pressed list card", replyTo)
 	}
@@ -199,11 +193,11 @@ func (f *fakeHub) agentCount() int { // successful session.start calls only (the
 	return f.agents
 }
 
-// startSlotHeld reports whether mid's dedup slot is still taken (test only).
-func (s *Service) startSlotHeld(mid string) bool {
+// pressSlotHeld reports whether message mid's button kind slot is still taken (test only).
+func (s *Service) pressSlotHeld(mid, kind string) bool {
 	s.fbot.mu.Lock()
 	defer s.fbot.mu.Unlock()
-	_, ok := s.fbot.startAt[mid+"start"]
+	_, ok := s.fbot.pressAt[mid+kind]
 	return ok
 }
 
@@ -295,10 +289,10 @@ func TestStartCardFailedStartLetsNextPressThrough(t *testing.T) {
 		t.Fatal("the failure note was not sent")
 	}
 	deadline := time.Now().Add(2 * time.Second) // the note lands before the slot is released
-	for s.startSlotHeld("om_card1") && time.Now().Before(deadline) {
+	for s.pressSlotHeld("om_card1", "start") && time.Now().Before(deadline) {
 		time.Sleep(2 * time.Millisecond)
 	}
-	if s.startSlotHeld("om_card1") {
+	if s.pressSlotHeld("om_card1", "start") {
 		t.Fatal("the failed start kept its dedup slot")
 	}
 	if got := f.agentCount(); got != 0 {
@@ -351,7 +345,7 @@ func TestStartCardLateFailureKeepsNewerSlot(t *testing.T) {
 	}
 	// The first start's failure arrives late; it owns the old timestamp and must not delete the newer slot.
 	s.forgetStartCard(mid, first)
-	if !s.startSlotHeld(mid) {
+	if !s.pressSlotHeld(mid, "start") {
 		t.Fatal("the late failure released the second press's slot")
 	}
 	// Inside the restored window a third press is therefore still swallowed.
@@ -359,6 +353,83 @@ func TestStartCardLateFailureKeepsNewerSlot(t *testing.T) {
 	if blocked, _ := s.startCardPressed(mid); !blocked {
 		t.Fatal("third press was not deduped: the late failure had dropped the newer slot")
 	}
+}
+
+// pressStartForm presses the agents card's "Start new agent" button on message mid, as Lark delivers a press, and
+// checks the toast the owner gets for it.
+func pressStartForm(t *testing.T, s *Service, mid string) {
+	t.Helper()
+	var a feishubot.CardAction
+	a.Action.Value = map[string]any{"a": "start_form"}
+	a.Context.MessageID = mid
+	want := i18n.T("", "assistant-feishu_cards.start_form_opening")
+	if r := s.botCardAction(context.Background(), &a, ""); r.Toast == nil || r.Toast.Content != want {
+		t.Fatalf("press of %s: toast %+v, want %q", mid, r.Toast, want)
+	}
+}
+
+// waitForForm is a start form posted (posts is startCardHub's).
+func waitForForm(t *testing.T, posts chan struct{}, why string) {
+	t.Helper()
+	select {
+	case <-posts:
+	case <-time.After(2 * time.Second):
+		t.Fatal(why)
+	}
+}
+
+// A press of the agents card's "Start new agent" delivered twice (a double tap, or the hub resending a call it gave
+// up on) opens one form: the second press gets the same toast and posts nothing, as the /start button does. A press
+// of another list card is another press and opens its own form (#3789).
+func TestStartFormPressOpensOneForm(t *testing.T) {
+	s, _, posts, _ := startCardHub(t)
+
+	pressStartForm(t, s, "om_agents")
+	pressStartForm(t, s, "om_agents") // the same press again: a second tap, or the hub's resend
+	waitForForm(t, posts, "the start form was not posted")
+	// The swallowed press posts from no goroutine of its own, so nothing of it can land later either.
+	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-posts:
+		t.Fatal("the duplicate press posted a second start form")
+	default:
+	}
+
+	pressStartForm(t, s, "om_agents2")
+	waitForForm(t, posts, "a press of another list card posted no start form")
+}
+
+// After the form window, pressing the same card again opens another form: the guard covers a press delivered twice,
+// not the owner asking for a new form a moment later.
+func TestStartFormPressAgainAfterWindow(t *testing.T) {
+	s, _, posts, _ := startCardHub(t)
+
+	pressStartForm(t, s, "om_agents")
+	waitForForm(t, posts, "the first start form was not posted")
+	botFormWindow = 0
+	t.Cleanup(func() { botFormWindow = 10 * time.Second })
+	pressStartForm(t, s, "om_agents")
+	waitForForm(t, posts, "a press after the window posted no start form")
+}
+
+// A start form that could not be posted says so and frees its press slot: the owner can press the same button again
+// instead of getting "Opening the start form" and nothing after it (#3789).
+func TestStartFormFailedPostFreesThePress(t *testing.T) {
+	s, f, posts, says := startCardHub(t)
+	f.answerApp(AppFeishu, FeishuPost, func(json.RawMessage) (any, error) { return nil, errors.New("the app is down") })
+
+	pressStartForm(t, s, "om_agents")
+	select {
+	case <-says:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the owner was not told that the start form could not be opened")
+	}
+	f.answerApp(AppFeishu, FeishuPost, func(json.RawMessage) (any, error) {
+		posts <- struct{}{}
+		return map[string]any{"message_id": "om_form"}, nil
+	})
+	pressStartForm(t, s, "om_agents") // a retry press of the same card, right away
+	waitForForm(t, posts, "the retry press posted no start form: the failed one kept its slot")
 }
 
 // cardButtons is every button of a card's button rows (top level), by its text: what pressing it answers.
@@ -438,5 +509,104 @@ func TestFeishuPermissionCardOffersAlwaysOnlyWhereItWorks(t *testing.T) {
 	bare := proto.Interaction{ID: "ix_p4", MachineID: "server", Kind: proto.IxPermission, ToolName: "Bash"}
 	if bs := cardButtons(t, s.interactionCard(ctx, bare)); len(bs) != 2 || bs[always] != nil {
 		t.Fatalf("a card without a conversation: %v", bs)
+	}
+
+	// The manager's word wins (#3590): its own card in a conversation, which nothing would keep, offers none; one it
+	// remembers offers it even for an agent that would not.
+	yes, no := true, false
+	own := claude
+	own.ID, own.ToolName, own.AlwaysHonored = "ix_p6", "iphone_do", &no
+	if bs := cardButtons(t, s.interactionCard(ctx, own)); len(bs) != 2 || bs[always] != nil {
+		t.Fatalf("the manager's own card offers 本会话总是允许: %v", bs)
+	}
+	kept := runtime
+	kept.ID, kept.AlwaysHonored = "ix_p7", &yes
+	if v, ok := cardButtons(t, s.interactionCard(ctx, kept))[always]; !ok || v["always"] != "1" {
+		t.Fatalf("a remembered card lost 本会话总是允许: %v", v)
+	}
+}
+
+// cardMarkdown is a card's first Markdown element: the text it draws first.
+func cardMarkdown(t *testing.T, c *feishubot.Card) string {
+	t.Helper()
+	var m struct {
+		Body struct {
+			Elements []map[string]any `json:"elements"`
+		} `json:"body"`
+	}
+	if err := json.Unmarshal([]byte(c.JSON()), &m); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range m.Body.Elements {
+		if e["tag"] == "markdown" {
+			s, _ := e["content"].(string)
+			return s
+		}
+	}
+	t.Fatalf("no Markdown block on the plan card: %s", c.JSON())
+	return ""
+}
+
+// A plan too long for its card is cut at a line break, and a code block the cut lands in is closed, so the clipped
+// note after it reads as text, not as the code's last line. A plan that fits is shown as it is.
+func TestFeishuPlanCardClipClosesItsCodeBlock(t *testing.T) {
+	s := newTestService(t, newFakeHub())
+	ctx := i18n.With(context.Background(), i18n.En)
+	note := i18n.T(i18n.En, "assistant-feishu_cards.plan_clipped")
+	planCard := func(plan string) string {
+		return cardMarkdown(t, s.interactionCard(ctx, proto.Interaction{ID: "ix_plan", Kind: proto.IxPlan, Plan: plan}))
+	}
+	line := strings.Repeat("step ", 19) + "done\n" // 100 runes
+	// prose is n runes of whole lines.
+	prose := func(n int) string {
+		p := strings.Repeat(line, n/100)
+		if r := n % 100; r > 0 {
+			p += strings.Repeat("x", r-1) + "\n"
+		}
+		return p
+	}
+	var code strings.Builder
+	for i := range 200 {
+		fmt.Fprintf(&code, "\tfmt.Println(%d) // line %d of the change\n", i, i)
+	}
+	withCode := func(n int) string { return prose(n) + "```go\n" + code.String() + "```\n\nThen run the tests.\n" }
+
+	for _, c := range []struct{ name, plan string }{
+		{"cut inside the code block", withCode(4800)},
+		{"cut right after the opener", withCode(4990)},
+		{"cut in the middle of a prose line", "1. Intro\n" + strings.Repeat(line, 60)},
+	} {
+		md := planCard(c.plan)
+		head, ok := strings.CutSuffix(md, note)
+		if !ok {
+			t.Fatalf("%s: the clipped note is not last: %q", c.name, md[max(0, len(md)-200):])
+		}
+		if n := len([]rune(head)); n > maxPlanRunes {
+			t.Fatalf("%s: %d runes of plan, over %d", c.name, n, maxPlanRunes)
+		}
+		fences := 0
+		for _, l := range strings.Split(head, "\n") {
+			if strings.HasPrefix(l, "```") {
+				fences++
+			}
+		}
+		if fences%2 != 0 {
+			t.Fatalf("%s: %d fence lines, so the note shows as code: %q", c.name, fences, md[max(0, len(md)-200):])
+		}
+		body := strings.TrimSuffix(head, "\n```") // the close the cut adds to a code block
+		if !strings.HasPrefix(c.plan, body) || c.plan[len(body)] != '\n' {
+			t.Fatalf("%s: not cut at one of the plan's line breaks: %q", c.name, head[max(0, len(head)-120):])
+		}
+	}
+
+	short := "1. Change `cache.go`\n```go\nx := 1\n```\n2. Test it\n"
+	if md := planCard(short); md != feishubot.CardMarkdown(short) {
+		t.Fatalf("a short plan changed: %q", md)
+	}
+	if full := prose(maxPlanRunes); planCard(full) != feishubot.CardMarkdown(full) {
+		t.Fatal("a plan of exactly maxPlanRunes runes was clipped")
+	}
+	if head, ok := strings.CutSuffix(planCard(strings.Repeat("\n", 6000)), note); !ok || len([]rune(head)) > maxPlanRunes {
+		t.Fatalf("a plan of line breaks: %d runes, note last %v", len([]rune(head)), ok)
 	}
 }

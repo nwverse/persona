@@ -78,6 +78,34 @@ func TestManagedEnvUnchangedForOldLaunchers(t *testing.T) {
 	}
 }
 
+// A provider stored with a trailing /v1 before the hub dropped it on saving (#4886) still launches against
+// <base>/v1/messages, as its Test connection did; Codex and agy bases are not ANTHROPIC_BASE_URL and keep theirs.
+func TestManagedEnvDropsATrailingV1FromMessagesBases(t *testing.T) {
+	for _, c := range []struct {
+		l         proto.ManagedLauncher
+		key, want string
+	}{
+		{proto.ManagedLauncher{Name: "a", BaseURL: "https://gw.example.com/v1", APIKey: "sk-test-1"}, "ANTHROPIC_BASE_URL", "https://gw.example.com"},
+		{proto.ManagedLauncher{Name: "a", BaseURL: "https://gw.example.com/team/v1", Model: "m1"}, "ANTHROPIC_BASE_URL", "https://gw.example.com/team"},
+		{proto.ManagedLauncher{Name: "a", Kind: "api", API: "messages", BaseURL: "https://gw.example.com/v1"}, "ANTHROPIC_BASE_URL", "https://gw.example.com"},
+		{proto.ManagedLauncher{Name: "a", Agent: "omp", BaseURL: "https://gw.example.com/v1"}, "ANTHROPIC_BASE_URL", "https://gw.example.com"},
+		{proto.ManagedLauncher{Name: "a", Agent: "codex", API: "messages", BaseURL: "https://api.example.com/v1"}, "OPENAI_BASE_URL", "https://api.example.com/v1"},
+		{proto.ManagedLauncher{Name: "a", Agent: "agy", BaseURL: "https://gemini.example.com/v1"}, "GOOGLE_GEMINI_BASE_URL", "https://gemini.example.com/v1"},
+	} {
+		if got := envValue(managedEnv(c.l), c.key); got != c.want {
+			t.Errorf("%+v: %s=%q, want %q", c.l, c.key, got, c.want)
+		}
+		if c.key == "ANTHROPIC_BASE_URL" {
+			if got := managedSettingsEnv(c.l)[c.key]; got != c.want {
+				t.Errorf("settings env %+v: %s=%q, want %q", c.l, c.key, got, c.want)
+			}
+			if got := providerEnv(c.l, "", "", true)[c.key]; got != c.want {
+				t.Errorf("main conversation %+v: %s=%q, want %q", c.l, c.key, got, c.want)
+			}
+		}
+	}
+}
+
 func TestProviderEnv(t *testing.T) {
 	const gw = "https://gw.example.com"
 	models := []proto.ProviderModel{
@@ -130,13 +158,18 @@ func TestProviderEnv(t *testing.T) {
 		{"compact from window", base, "small", "", false, want{"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "128000"}},
 		{"compact set", with(func(l *proto.ManagedLauncher) { l.CompactWindow = 150000 }), "", "", false,
 			want{"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "150000"}},
-		{"compact main fixed", with(func(l *proto.ManagedLauncher) { l.CompactWindow = 150000 }), "", "", true,
-			want{"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "200000"}},
-		{"effort given wins", with(func(l *proto.ManagedLauncher) { l.Effort = "medium" }), "", "max", false,
-			want{"CLAUDE_CODE_EFFORT_LEVEL": "max"}},
-		{"effort of provider", with(func(l *proto.ManagedLauncher) { l.Effort = "medium" }), "", "", false,
-			want{"CLAUDE_CODE_EFFORT_LEVEL": "medium"}},
-		{"effort of model", base, "small", "", false, want{"CLAUDE_CODE_EFFORT_LEVEL": "low"}},
+		{"compact main follows the launcher", with(func(l *proto.ManagedLauncher) { l.CompactWindow = 150000 }), "", "", true,
+			want{"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "150000"}},
+		{"compact main from window", base, "small", "", true, want{"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "128000"}},
+		{"compact main: unknown model, none", base, "other", "", true,
+			want{"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "-", "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "-"}},
+		{"effort of provider not in env", with(func(l *proto.ManagedLauncher) { l.Effort = "medium" }), "", "", false,
+			want{"CLAUDE_CODE_EFFORT_LEVEL": "-"}},
+		{"effort of model not in env", base, "small", "", false, want{"CLAUDE_CODE_EFFORT_LEVEL": "-"}},
+		{"effort pinned by env", with(func(l *proto.ManagedLauncher) { l.Env = "CLAUDE_CODE_EFFORT_LEVEL=high" }), "", "", false,
+			want{"CLAUDE_CODE_EFFORT_LEVEL": "high"}},
+		{"effort pinned by env ignored for main", with(func(l *proto.ManagedLauncher) { l.Env = "CLAUDE_CODE_EFFORT_LEVEL=high" }), "", "", true,
+			want{"CLAUDE_CODE_EFFORT_LEVEL": "-"}},
 		{"headers", with(func(l *proto.ManagedLauncher) { l.Headers = "X-Test: v1" }), "", "", false,
 			want{"ANTHROPIC_CUSTOM_HEADERS": "X-Test: v1"}},
 		{"no headers", base, "", "", false, want{"ANTHROPIC_CUSTOM_HEADERS": "-"}},
@@ -169,12 +202,84 @@ func TestProviderEnv(t *testing.T) {
 	}
 }
 
+// An explicit tier, small or subagent model with a window of 1M or more in the provider's models gets [1m]: Claude
+// Code runs it with the 1M window only then, and drops the marker before calling the gateway (#5149). One between 200K
+// and 1M stays unmarked: marked, Claude Code would count it as 1M, and nothing per model holds it to its size.
+func TestProviderEnvExplicitModelsGetTheirOwnWindow(t *testing.T) {
+	models := []proto.ProviderModel{
+		{ID: "std", ContextWindow: 200000}, {ID: "small", ContextWindow: 128000}, {ID: "mid", ContextWindow: 400000},
+		{ID: "wide", ContextWindow: 1000000}, {ID: "wider", ContextWindow: 2000000},
+	}
+	vars := []struct {
+		key string
+		set func(*proto.ManagedLauncher, string)
+	}{
+		{"ANTHROPIC_DEFAULT_OPUS_MODEL", func(l *proto.ManagedLauncher, m string) { l.OpusModel = m }},
+		{"ANTHROPIC_DEFAULT_SONNET_MODEL", func(l *proto.ManagedLauncher, m string) { l.SonnetModel = m }},
+		{"ANTHROPIC_DEFAULT_FABLE_MODEL", func(l *proto.ManagedLauncher, m string) { l.FableModel = m }},
+		{"ANTHROPIC_DEFAULT_HAIKU_MODEL", func(l *proto.ManagedLauncher, m string) { l.HaikuModel = m }},
+		{"ANTHROPIC_SMALL_FAST_MODEL", func(l *proto.ManagedLauncher, m string) { l.SmallModel = m }},
+		{"CLAUDE_CODE_SUBAGENT_MODEL", func(l *proto.ManagedLauncher, m string) { l.SubagentModel = m }},
+	}
+	for _, c := range []struct{ name, model, want string }{
+		{"1M window", "wide", "wide[1m]"},
+		{"over 1M", "wider", "wider[1m]"},
+		{"between 200K and 1M", "mid", "mid"},
+		{"marked already", "wide[1m]", "wide[1m]"},
+		{"marked, listed without a window", "other[1m]", "other[1m]"},
+		{"200K", "std", "std"},
+		{"under 200K", "small", "small"},
+		{"no window known", "other", "other"},
+	} {
+		for _, v := range vars {
+			for _, session := range []string{"std", "wide"} {
+				// A launcher provider: an API one has no small or subagent model to save.
+				l := proto.ManagedLauncher{Name: "p", BaseURL: "https://gw.example.com", APIKey: "sk-test-k",
+					Model: session, Models: models}
+				v.set(&l, c.model)
+				env := providerEnv(l, "", "", false)
+				if got := env[v.key]; got != c.want {
+					t.Errorf("%s, session model %s: %s=%q, want %q", c.name, session, v.key, got, c.want)
+				}
+				if want := map[string]string{"std": "std", "wide": "wide[1m]"}[session]; env["ANTHROPIC_MODEL"] != want {
+					t.Errorf("%s, %s set: ANTHROPIC_MODEL=%q, want %q", c.name, v.key, env["ANTHROPIC_MODEL"], want)
+				}
+			}
+		}
+	}
+	// The Haiku tier follows an explicit small model by that model's window, and a tier left empty the session's model.
+	l := proto.ManagedLauncher{Name: "p", BaseURL: "https://gw.example.com", APIKey: "sk-test-k", Model: "std",
+		Models: models, SmallModel: "wide", SonnetModel: "small"}
+	env := providerEnv(l, "", "", false)
+	for k, want := range map[string]string{
+		"ANTHROPIC_MODEL": "std", "ANTHROPIC_DEFAULT_HAIKU_MODEL": "wide[1m]", "ANTHROPIC_SMALL_FAST_MODEL": "wide[1m]",
+		"ANTHROPIC_DEFAULT_SONNET_MODEL": "small", "ANTHROPIC_DEFAULT_OPUS_MODEL": "std", "CLAUDE_CODE_SUBAGENT_MODEL": "std",
+	} {
+		if env[k] != want {
+			t.Errorf("small model wide: %s=%q, want %q", k, env[k], want)
+		}
+	}
+	// A session started on another model: the empty tiers follow it, the explicit ones keep their own. A session model
+	// between 200K and 1M is still marked, its window held by the process's compact window and context limit.
+	for _, c := range []struct{ session, model, sonnet string }{{"wider", "wider[1m]", "small"}, {"mid", "mid[1m]", "small"}} {
+		env = providerEnv(l, c.session, "", false)
+		for k, want := range map[string]string{
+			"ANTHROPIC_MODEL": c.model, "ANTHROPIC_DEFAULT_OPUS_MODEL": c.model, "ANTHROPIC_DEFAULT_SONNET_MODEL": c.sonnet,
+			"ANTHROPIC_DEFAULT_HAIKU_MODEL": "wide[1m]",
+		} {
+			if env[k] != want {
+				t.Errorf("session on %s: %s=%q, want %q", c.session, k, env[k], want)
+			}
+		}
+	}
+}
+
 func TestProviderEnvClear(t *testing.T) {
 	in := []string{"ANTHROPIC_BASE_URL=x", "ANTHROPIC_CUSTOM_HEADERS=h", "CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1",
 		"CLAUDE_CODE_EFFORT_LEVEL=max", "CLAUDE_CODE_MAX_CONTEXT_TOKENS=1", "CLAUDE_CODE_AUTO_COMPACT_WINDOW=1",
 		"API_TIMEOUT_MS=1", "HTTP_PROXY=p", "HTTPS_PROXY=p", "NO_PROXY=n", "PATH=/bin", "HOME=/h",
 		"CLAUDE_CODE_DISABLE_ARTIFACT=1", "API_TIMEOUT_MS_EXTRA=1"}
-	got := withoutProviderEnv(in)
+	got := withoutEnv(in, providerEnvClear)
 	if want := []string{"HTTP_PROXY=p", "HTTPS_PROXY=p", "NO_PROXY=n", "PATH=/bin", "HOME=/h", "CLAUDE_CODE_DISABLE_ARTIFACT=1",
 		"API_TIMEOUT_MS_EXTRA=1"}; !slices.Equal(got, want) {
 		t.Fatalf("got %q, want %q", got, want)
@@ -222,19 +327,26 @@ func TestSetManagedKeepsMessagesProviders(t *testing.T) {
 	}
 }
 
+// An assistant conversation keeps its own thinking level; its compact window is the launcher's, as an agent's (#3066).
 func TestMainConversationKeepsItsOwnWindowAndLevel(t *testing.T) {
 	l := proto.ManagedLauncher{Name: "p", Kind: "api", BaseURL: "https://gw.example.com", APIKey: "sk-test-k", Effort: "high",
 		Models: []proto.ProviderModel{{ID: "big", ContextWindow: 1000000}}}
 	main := providerEnv(l, "big", "max", true)
-	if main["ANTHROPIC_MODEL"] != "big[1m]" || main["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] != "200000" {
+	if main["ANTHROPIC_MODEL"] != "big[1m]" || main["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] != "1000000" {
 		t.Fatalf("main: %v", main)
 	}
 	// it switches its level while it runs (apply_flag_settings): an environment variable would win over that
 	if _, ok := main["CLAUDE_CODE_EFFORT_LEVEL"]; ok {
 		t.Fatalf("main conversation got a thinking level env: %v", main)
 	}
-	if agent := providerEnv(l, "big", "", false); agent["CLAUDE_CODE_EFFORT_LEVEL"] != "high" || agent["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] != "1000000" {
+	if agent := providerEnv(l, "big", "", false); agent["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] != "1000000" {
 		t.Fatalf("agent: %v", agent)
+	} else if _, ok := agent["CLAUDE_CODE_EFFORT_LEVEL"]; ok {
+		t.Fatalf("agent got a thinking level env: %v", agent)
+	}
+	pinnedL := proto.ManagedLauncher{Name: "p", Kind: "api", Env: "CLAUDE_CODE_EFFORT_LEVEL=high"}
+	if pinnedAgent := providerEnv(pinnedL, "", "", false); pinnedAgent["CLAUDE_CODE_EFFORT_LEVEL"] != "high" {
+		t.Fatalf("pinned agent: %v", pinnedAgent)
 	}
 	// what is pinned over the user's settings leaves the per-start decisions to the start's environment
 	pinned := pinnedEnv(providerEnv(l, "big", "", false))
@@ -247,8 +359,8 @@ func TestMainConversationKeepsItsOwnWindowAndLevel(t *testing.T) {
 }
 
 func TestLaunchKeepsTheAssistantsOwnWindowAndLevel(t *testing.T) {
-	clear := []string{"ANTHROPIC_*", "CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_CODE_EFFORT_LEVEL"}
-	env := []string{"ANTHROPIC_MODEL=m", "CLAUDE_CODE_AUTO_COMPACT_WINDOW=1000000", "CLAUDE_CODE_EFFORT_LEVEL=high"}
+	clear := []string{"ANTHROPIC_*", "CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_CODE_EFFORT_LEVEL", "CLAUDE_CONFIG_DIR"}
+	env := []string{"ANTHROPIC_MODEL=m", "CLAUDE_CODE_AUTO_COMPACT_WINDOW=1000000", "CLAUDE_CODE_EFFORT_LEVEL=high", "CLAUDE_CONFIG_DIR=/tmp/provider-profile"}
 	c, e := launchEnvFor(clear, env, true)
 	if !slices.Equal(c, []string{"ANTHROPIC_*"}) || !slices.Equal(e, []string{"ANTHROPIC_MODEL=m"}) {
 		t.Fatalf("assistant: %v %v", c, e)

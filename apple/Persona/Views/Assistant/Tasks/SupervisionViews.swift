@@ -63,7 +63,8 @@ struct ReviewChecklist: View {
     }
 }
 
-/// One criterion: met (a check), missing (a cross) or not reviewed yet (a clock), with its evidence or gap below.
+/// One criterion: met (a check), missing (a cross), not reviewed yet (a clock) or added after a standing acceptance and
+/// not checked (a dash), with its evidence or gap below.
 private struct CriterionRow: View {
     var item: ReviewCheckItem
 
@@ -96,6 +97,7 @@ private struct CriterionRow: View {
         case .met: Theme.Icon.done
         case .missing: Theme.Icon.unmet
         case .open: Theme.Icon.time
+        case .unchecked: Theme.Icon.notChecked
         }
     }
 
@@ -103,7 +105,7 @@ private struct CriterionRow: View {
         switch item.mark {
         case .met: Theme.positive
         case .missing: Theme.danger
-        case .open: .secondary
+        case .open, .unchecked: .secondary
         }
     }
 
@@ -112,6 +114,7 @@ private struct CriterionRow: View {
         case .met: String(localized: "Met")
         case .missing: String(localized: "Missing")
         case .open: String(localized: "Not reviewed yet")
+        case .unchecked: String(localized: "Not checked")
         }
     }
 }
@@ -172,12 +175,9 @@ struct ReviewFeedLine: View {
     }
 }
 
-/// A supervised task's agent reported to Persona (feed kind `report`: a question, a block, a finish): who, what it said
-/// in a bubble (newlines kept), and its evidence below. On the left, as the agent's words, not the user's.
+/// A supervised task's agent reported to Persona (feed kind `report`: a question, a block, a finish): who and what it said
+/// in a bubble (newlines kept). Evidence remains in the feed data, not appended to the agent's words.
 struct ReportFeedLine: View {
-    /// At most this many evidence lines, like the web.
-    static let evidenceShown = 8
-
     var item: FeedItem
     var taskTitle: String
     private var store: TasksStore { .shared }
@@ -196,7 +196,7 @@ struct ReportFeedLine: View {
             }
             .buttonStyle(.plain)
             .disabled(item.ref.flatMap { store.todos[$0] } == nil)
-            Text(ReviewText.reportLine(kind: kind, text: item.text ?? "", step: item.step, steps: item.steps))
+            Text(ExchangeText.linked(ReviewText.reportLine(kind: kind, text: ExchangeText.withoutHeadingMarks(item.text ?? ""), step: item.step, steps: item.steps)))
                 .font(Theme.Font.body)
                 .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -204,18 +204,6 @@ struct ReportFeedLine: View {
                 .padding(.horizontal, Theme.Space.m)
                 .padding(.vertical, Theme.Space.s)
                 .background(Theme.Fill.chip, in: .rect(cornerRadius: Theme.Radius.bubble, style: .continuous))
-            let evidence = item.evidence.prefix(Self.evidenceShown)
-            if !evidence.isEmpty {
-                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                    ForEach(Array(evidence.enumerated()), id: \.offset) { _, e in
-                        Text("· \(e)").lineLimit(1).truncationMode(.middle)
-                    }
-                }
-                .font(Theme.Font.caption)
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-                .padding(.leading, Theme.Space.xs)
-            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.trailing, Theme.Space.xxl)

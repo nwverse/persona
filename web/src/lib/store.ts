@@ -2,17 +2,19 @@ import { compatibleEnvelope, setCompatibilityFeatures } from "./compatibility";
 // App-wide state: what the hub pushes over the WebSocket (machines, sessions, interactions), plus the assistant.
 // Views read it with useStore(selector); per-session item streams go to listeners (ChatView subscribes).
 
-import { chosenManager, defaultKnown, defaultManager, fromShownManager, noteConversation, onDefaultManager, onManagerChoice, shownManager } from "./manager-choice";
+import { chosenManager, defaultKnown, defaultManager, fromShownManager, noteConversation, noteItemManager, onDefaultManager, onManagerChoice, shownManager } from "./manager-choice";
 import { BASE } from "./base";
-import { discardFeedCache, feedCacheScope, readFeedCache } from "./feed-cache";
+import { mainConversationMachine, clearMemoryPages, discardFeedCache, feedCacheScope, readFeedCache } from "./feed-cache";
 import { useRef, useSyncExternalStore } from "react";
 import { agentsChanged, refreshAgentPrefs, refreshAgentSessions, resetAgents, setAgentListMode } from "./agents";
-import { onRuntimeChanges, runtimeIdentity, runtimeRemoval, runtimeSessions, SESSIONS_LOOKUP_FEATURE } from "./runtime-list";
+import { onRuntimeChanges, runtimeIdentity, runtimeRemoval, runtimeSessions, SESSIONS_LOOKUP_FEATURE, SESSIONS_PAGE_COUNTS_FEATURE, setRuntimePageCounts } from "./runtime-list";
 import { sameValue } from "./stable-lines";
 import { SESSIONS_LIST_FEATURE, type ListCounts } from "./session-list";
+import { SESSIONS_HIERARCHY_FEATURE } from "./child-sessions";
 import { applySessionDelta, SESSIONS_DELTA_FEATURE, sessionRefreshed, sessionSnapshot } from "./sessions-delta";
 import { dueMarks, heldRows, liveMarks, markOver, newMark, nextDue, unansweredMarks, type SeenMark, type SeenMarks } from "./seen-outbox";
-import { api, ApiError, CLIENT_FEATURES, CLIENT_PLATFORM, CLIENT_VERSION, errorText, getToken, sessionPath } from "./api";
+import { probeEdge } from "./edge-auth";
+import { api, ApiError, CLIENT_FEATURES, CLIENT_PONG_TIMEOUT, CLIENT_PLATFORM, CLIENT_VERSION, errorText, getToken, sessionPath } from "./api";
 import { currentLanguage } from "../i18n";
 import type { AgentMutes } from "./agent-groups";
 import { stateOf } from "./format";
@@ -22,12 +24,15 @@ import type { AssistantInfo, Interaction, Item, Machine, MeshHub, Session } from
 import type { Resolution } from "./answered";
 import { answersIn, type DelegatedAnswer, type Reanswer } from "./delegate";
 import type { AgentLaunch } from "./new-agent";
-import { isSpacesSupported, type Todo } from "./todos";
+import { isSpacesSupported, makeSessionLookup, type SessionLookup, type Todo } from "./todos";
 import { releaseAttachments } from "./attachments";
 import { dropElicitationDraft } from "./elicitation";
 import type { OutboxEntry } from "./outbox";
 import { NO_LINK, RESTARTING_MS, type ConnLink } from "./connection";
 import { setOfflineProbe } from "./feedback";
+import { readDirectionTree } from "./direction-names";
+import { unnamedTaskConversations } from "./background-supervisor";
+import { directionTreeAwaitsHello } from "./direction-tree";
 import { afterEvent, afterHello, graceUntil, isResumed, NO_CURSOR, RESTART_FAST_MS, retryDelay, shownConn, wsQuery, type Drop, type EventCursor } from "./reconnect";
 
 export type Conn = "connecting" | "online" | "offline";
@@ -63,6 +68,9 @@ export interface State {
   /** Compact list rows never overwrite a chat's complete details in sessions. */
   sessionSummaries: Session[];
   sessionCounts: ListCounts | null;
+  /** List rows of open tasks' agents the Agents window does not hold, by runtimeIdentity (#3274): the list's deltas
+   *  for them and an exact lookup for one no list has, so a task's state never reads a missing agent as stopped. */
+  taskRows: Record<string, Session>;
   /** Finished agents this page marked seen that the hub has not recorded yet, by runtimeIdentity (lib/seen-outbox.ts):
    *  the rows in `sessions` and `sessionSummaries` are held seen meanwhile, the paged list's rows by the row itself. */
   seen: SeenMarks;
@@ -101,6 +109,7 @@ let state: State = {
   sessions: {},
   sessionSummaries: [],
   sessionCounts: null,
+  taskRows: {},
   seen: {},
   interactions: [],
   answered: {},
@@ -208,7 +217,106 @@ onRuntimeChanges((upsert, remove) => {
   const known = new Set(Object.values(state.sessions).flat().map(runtimeIdentity));
   const updates = runtimeSessions.isSummary() ? [] : upsert.filter((row) => known.has(runtimeIdentity(row)));
   applyCompleteSessions(updates, remove);
+  keepTaskRows(upsert, remove.map(runtimeRemoval));
 });
+
+/** The runtime identities of the open tasks' agents. */
+function openTaskAgents(): Set<string> {
+  const out = new Set<string>();
+  for (const todo of state.todos) {
+    if (todo.done_at) continue;
+    for (const a of todo.agents ?? []) if (!a.released_at) out.add(runtimeIdentity({ machine_id: a.machine_id, session_id: a.session_id } as Session));
+  }
+  return out;
+}
+
+/** Keeps the list's newest rows of open tasks' agents (`taskRows`), whether the Agents window holds them or not. */
+function keepTaskRows(upsert: Session[], remove: string[] = []) {
+  const agents = openTaskAgents();
+  let rows = state.taskRows;
+  const change = () => { if (rows === state.taskRows) rows = { ...rows }; };
+  for (const row of upsert) {
+    const id = runtimeIdentity(row);
+    if (agents.has(id) && rows[id] !== row) { change(); rows[id] = row; }
+  }
+  for (const id of remove) if (id in rows) { change(); delete rows[id]; }
+  for (const id of Object.keys(rows)) if (!agents.has(id)) { change(); delete rows[id]; }
+  if (rows !== state.taskRows) set({ taskRows: rows });
+}
+
+/** `base`, and for an agent it does not have, the list's row of an open task's agent (`taskRows`). */
+export function withTaskRows(base: SessionLookup, rows: Record<string, Session>): SessionLookup {
+  return (mid, sid) => base(mid, sid) ?? rows[runtimeIdentity({ machine_id: mid, session_id: sid } as Session)];
+}
+
+/** How a task's agents are now, for its status, card and pill (#3274): the newest of the list's row (the Agents window or
+ *  `taskRows`, which the list's deltas keep current) and the chat's complete row, which stops being refreshed once its
+ *  chat closes. The complete row stands while it says the same about the agent's state, for its subagents and steps. */
+export function taskSessionLookup(s: Pick<State, "sessions" | "sessionSummaries" | "taskRows">): SessionLookup {
+  const full = makeSessionLookup(s.sessions);
+  const listed = withTaskRows(s.sessionSummaries.length ? makeSessionLookup(s.sessionSummaries) : () => undefined, s.taskRows);
+  return (mid, sid) => {
+    const detail = full(mid, sid);
+    const row = listed(mid, sid);
+    if (!row || !detail || row === detail) return row ?? detail;
+    if ((detail.rev ?? 0) > (row.rev ?? 0)) return detail;
+    // New summaries carry all the tray's live work metadata. A same-state update can change counts/phase/progress
+    // without changing work or pending cards; never let an older open-chat snapshot hide it.
+    if (row.background_tasks_count !== undefined) return row;
+    const same = row.state === detail.state && !!row.background_working === !!detail.background_working
+      && (row.pending_interactions ?? 0) === (detail.pending_interactions ?? 0) && sameValue(row.work, detail.work);
+    return same ? detail : row;
+  };
+}
+
+const taskRowsAsked = new Set<string>();
+/** An open task's agent that no list row or chat detail has (outside the Agents window and quiet since it loaded): one
+ *  exact lookup for it (`sessions_lookup`), then the list's deltas keep it (#3274). */
+async function lookUpTaskAgents() {
+  if (!state.features.includes(SESSIONS_LOOKUP_FEATURE)) return;
+  const listed = new Set(state.sessionSummaries.map(runtimeIdentity));
+  const missing = [...openTaskAgents()].filter((id) => !taskRowsAsked.has(id) && !listed.has(id) && !(id in state.taskRows)
+    && !(state.sessions[JSON.parse(id)[0]] ?? []).some((s) => runtimeIdentity(s) === id));
+  for (const id of missing.slice(0, 20)) {
+    taskRowsAsked.add(id);
+    const [mid, sid] = JSON.parse(id) as [string, string];
+    const params = new URLSearchParams({ summary: "1", limit: "1", machine_id: mid, session_id: sid });
+    try {
+      const page = await api<{ sessions?: Session[] }>(`/sessions?${params}`);
+      const row = page?.sessions?.[0];
+      if (row && runtimeIdentity(row) === id) keepTaskRows([row]);
+    } catch {
+      taskRowsAsked.delete(id); // asked again with the next todos or connection
+    }
+  }
+}
+
+const cardRowsAsked = new Set<string>();
+let cardRowsFor: Interaction[] | null = null;
+/** A child session's card (`folded_under`, #5120) whose session no list holds: a paging hub leaves child sessions out of
+ *  the Agents list's pages (`roots`). One exact lookup for its row (`sessions_lookup`) puts it among the row hints, so the
+ *  card can be answered wherever it shows (the main chat's Needs you, the Inbox), not only on its parent's open page. */
+async function lookUpCardSessions() {
+  if (state.interactions === cardRowsFor || !state.features.includes(SESSIONS_LOOKUP_FEATURE)) return;
+  cardRowsFor = state.interactions;
+  const missing = new Set(state.interactions.filter((ix) => ix.folded_under && ix.session_id && !getSession(ix.machine_id, ix.session_id))
+    .map((ix) => runtimeIdentity({ machine_id: ix.machine_id, session_id: ix.session_id } as Session)));
+  for (const id of [...missing].filter((x) => !cardRowsAsked.has(x)).slice(0, 20)) {
+    cardRowsAsked.add(id);
+    const [mid, sid] = JSON.parse(id) as [string, string];
+    const params = new URLSearchParams({ summary: "1", limit: "1", machine_id: mid, session_id: sid });
+    try {
+      const page = await api<{ sessions?: Session[] }>(`/sessions?${params}`);
+      const row = page?.sessions?.[0];
+      if (row && runtimeIdentity(row) === id) {
+        rememberSessionRow(row);
+        notify(); // what reads getSession for the card (can it be answered) reads it again
+      }
+    } catch {
+      cardRowsAsked.delete(id); // asked again with the next change of the cards or connection
+    }
+  }
+}
 
 /** A clicked filtered row may not belong to the unfiltered first page. Keep a small hint until exact lookup finishes. */
 export function rememberSessionRow(row: Session) {
@@ -289,6 +397,8 @@ export const subscribe = (l: () => void) => {
     listeners.delete(l);
   };
 };
+// a child session's card may need its row looked up (lookUpCardSessions): checked as the cards change
+subscribe(() => void lookUpCardSessions());
 
 export function useStore<T>(select: (s: State) => T): T {
   const last = useRef<{ v: T } | null>(null);
@@ -363,11 +473,15 @@ export interface ItemsEvent {
   from_seq?: number;
   backlog?: boolean;
   more_after?: boolean;
+  /** Only on a replay counted back from the end (a subscribe without since_seq): whether older items exist. */
+  has_more?: boolean;
 }
 
 type SessionListener = {
   items?: (e: ItemsEvent) => void;
   delta?: (text: string) => void;
+  /** The hub's `revs` event: the transcript grew to this rev; the list's row keeps the rev it had (lib/stale-page.ts). */
+  rev?: (rev: number) => void;
   reconnected?: () => void;
 };
 const sessionListeners = new Map<string, Set<SessionListener>>();
@@ -458,15 +572,17 @@ export function connect() {
   socketChanged(false);
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   socketToken = getToken();
+  directionTreeAwaitsHello(true); // its hello reads the direction tree: the screens wait for that read
   const sock = new WebSocket(`${proto}//${location.host}${BASE}/api/v1/ws?${wsQuery(socketToken, cursor, [SESSIONS_LIST_FEATURE, SESSIONS_DELTA_FEATURE, SESSION_LIVE_FEATURE, "extension_ui_stream_v1", "persona_contracts_v1"])}`);
   ws = sock;
   restartNotice = false;
   // an attempt does not move offline back to connecting: the pill stays on one phase while the hub is down instead of
   // flipping at every backoff tick (the app's ConnectionTitle); shownConn decides it when the attempt fails
   sock.onopen = () => {
+    socketOpenedAt = Date.now(); // a direction tree read since then serves this hello (lib/direction-tree.ts)
     // the interface language: this connection's text, and the user's language for pushes and the assistant (docs/protocol/i18n.md)
     // and what it can render: MCP forms and links come only to a socket that says so
-    sock.send(JSON.stringify({ type: "client_hello", platform: CLIENT_PLATFORM, version: CLIENT_VERSION, features: CLIENT_FEATURES, locale: currentLanguage() }));
+    sock.send(JSON.stringify({ type: "client_hello", platform: CLIENT_PLATFORM, version: CLIENT_VERSION, features: CLIENT_FEATURES, locale: currentLanguage(), heartbeat: { pong_timeout: CLIENT_PONG_TIMEOUT } }));
     retry = 0;
     fastTries = 0;
     lastMessage = Date.now();
@@ -495,11 +611,16 @@ export function connect() {
     }
   };
   sock.onclose = (ev) => {
+    if (ws === sock) directionTreeAwaitsHello(false); // no hello: whoever waited for the tree reads it now
     if (ws !== sock) return;
+    const wasLive = authenticatedSocket === sock;
     ws = null;
     setCompatibilityFeatures([]);
     socketChanged(false);
     if (stopped) return;
+    // an attempt that never got a hello carries no status: ask the hub once whether a sign-in layer in front of it has
+    // expired (lib/edge-auth.ts); a socket that was live just dropped, and its reconnect attempt is the one to ask about
+    if (!wasLive && !restartNotice && ev.code !== 1001) void probeEdge();
     const now = Date.now();
     const restart = restartNotice || ev.code === 1001;
     // the drop starts while online; a restart announced on a later attempt stretches its grace
@@ -593,6 +714,27 @@ if (typeof window !== "undefined") {
   window.addEventListener("offline", () => set({ link: { ...state.link, networkUp: false } }));
 }
 
+/** The tree read again: its leaders become the assistant's (a new one not listed yet: the assistant is read again). */
+/** When the socket last opened. */
+let socketOpenedAt = 0;
+
+async function followDirections(changed = false) {
+  if (pageOf() !== "") return; // the tree is the default assistant's (docs/protocol/protocol.md)
+  const ids = await readDirectionTree(changed, changed ? undefined : socketOpenedAt);
+  const a = state.assistant;
+  if (!ids || !a) return;
+  const known = new Set(a.conversations.map((c) => c.session_id));
+  if (ids.some((id) => !known.has(id))) void refreshAssistant().catch(() => {});
+  else if (JSON.stringify(ids) !== JSON.stringify((a.leaders ?? []).filter((id) => id !== a.main))) set({ assistant: { ...a, leaders: ids } });
+}
+
+const helloHooks = new Set<() => void>();
+/** Runs `f` on every hello (lib/new-version.ts asks for the shell then); loaded after the first screen, so it is not in it. */
+export function onHello(f: () => void): () => void {
+  helloHooks.add(f);
+  return () => void helloHooks.delete(f);
+}
+
 // The assistant's live updates about the page itself rather than one conversation: only the shown manager's count.
 const PAGE_EVENTS = new Set(["assistant_schedule"]);
 
@@ -600,6 +742,7 @@ function onMessage(msg: Record<string, unknown>) {
   cursor = msg.type === "hello" ? afterHello(cursor, msg) : afterEvent(cursor, msg);
   switch (msg.type) {
     case "hello": {
+      helloHooks.forEach((f) => f()); // e.g. a hub that came back may serve a new web build (lib/new-version.ts)
       setCompatibilityFeatures(Array.isArray(msg.features) ? msg.features as string[] : []);
       const mesh = (msg.mesh as { hubs?: MeshHub[] } | undefined)?.hubs;
       set({
@@ -614,19 +757,33 @@ function onMessage(msg: Record<string, unknown>) {
       const summaryMode = state.features.includes(SESSIONS_LOOKUP_FEATURE);
       if (runtimeSessions.isSummary() !== summaryMode) listedFull.clear();
       runtimeSessions.setSummary(summaryMode);
+      // a hub that folds child sessions (#5120): the Agents list and its counts leave them out, each parent counted once
+      runtimeSessions.setRoots(state.features.includes(SESSIONS_HIERARCHY_FEATURE));
+      setRuntimePageCounts(state.features.includes(SESSIONS_PAGE_COUNTS_FEATURE));
       setAgentListMode(state.features.includes(SESSIONS_LIST_FEATURE));
+      taskRowsAsked.clear();
+      cardRowsAsked.clear();
+      cardRowsFor = null;
+      void lookUpTaskAgents();
       // subscriptions are per connection: chats resubscribe from what they have either way
       sessionListeners.forEach((ls) => ls.forEach((l) => l.reconnected?.()));
       // a seen sent over the socket that went may be lost with it
       resendSeen();
       // resumed: the hub replays every broadcast missed since the cursor, nothing needs refetching
       if (!isResumed(msg)) {
+        void followDirections(); // the direction tree again: a `directions` may have been missed while away
         void refresh();
         void refreshAgentSessions();
         void refreshAgentPrefs();
       }
+      directionTreeAwaitsHello(false); // after followDirections started its read: those waiting share it
       break;
     }
+    case "directions":
+      // the direction tree changed (#4352): a leader made or ended anywhere, a name, a task's state. The sidebar's 常驻
+      // follow at once (#4331: a sixth leader stayed hidden until a reload); a read already out may predate the change
+      void followDirections(true);
+      break;
     case "hub_restarting":
       restartNotice = true; // the close that follows is a restart: retry at once, stay quiet longer
       break;
@@ -683,6 +840,14 @@ function onMessage(msg: Record<string, unknown>) {
       sessionListeners.get(key(e.machine_id, e.session_id))?.forEach((l) => l.items?.(e));
       break;
     }
+    case "revs": {
+      // Transcripts that grew while their rows' other fields stayed: only an open chat uses it, to notice a lost push.
+      const mid = msg.machine_id as string;
+      for (const [sid, rev] of Object.entries((msg.revs as Record<string, unknown> | undefined) ?? {})) {
+        if (typeof rev === "number") sessionListeners.get(key(mid, sid))?.forEach((l) => l.rev?.(rev));
+      }
+      break;
+    }
     case "agents.prefs":
       void refreshAgentPrefs();
       break;
@@ -690,7 +855,7 @@ function onMessage(msg: Record<string, unknown>) {
       agentsChanged(Array.isArray(msg.session_ids) ? (msg.session_ids as string[]) : []);
       break;
     case "todos":
-      void refreshTodos();
+      todosPushed();
       break;
     case "delta":
       sessionListeners.get(key(msg.machine_id as string, msg.session_id as string))?.forEach((l) => l.delta?.(msg.text as string));
@@ -811,6 +976,8 @@ export function upsertSession(s: Session) {
   const next = i < 0 ? [...list, s] : list.map((x, j) => {
     if (j !== i) return x;
     const merged = { ...x, ...s };
+    merged.background_working = s.background_working;
+    merged.background_waiting = s.background_waiting;
     // An optimistic action can start from getSession's summary fallback. A later complete info response must
     // drop its scalar summary markers, or they keep overriding the complete task arrays indefinitely.
     if (typeof s.waiting !== "boolean") {
@@ -818,17 +985,38 @@ export function upsertSession(s: Session) {
       delete merged.background_count;
       delete merged.running_subagents;
       delete merged.running_workflows;
+      delete merged.background_tasks_count;
+      delete merged.workflow_progress;
+      merged.background = s.background;
+      merged.subagents = s.subagents;
+      merged.workflows = s.workflows;
+    } else {
+      // A summary is a complete projection: omitted zero counts and a disappeared run clear the previous one.
+      merged.background_count = s.background_count ?? 0;
+      merged.running_subagents = s.running_subagents ?? 0;
+      merged.running_workflows = s.running_workflows ?? 0;
+      merged.background_tasks_count = s.background_tasks_count;
+      merged.workflow_progress = s.workflow_progress;
     }
     return merged;
   });
   set({ sessions: { ...state.sessions, [s.machine_id]: next }, ...syncAssistant(s.machine_id, [s]) });
 }
 
+/** The conversations the assistant was read again for (unnamedTaskConversations): once each, whatever it answered. */
+const askedForUnnamed = new Set<string>();
+
 // The assistant's conversations are sessions on its machine too: the change that keeps the copy in `assistant`
 // current, to go with the sessions' own (one update, not two).
 function syncAssistant(mid: string, list: Session[]): Partial<State> {
   const a = state.assistant;
   if (!a || a.machine_id !== mid) return {};
+  // a background supervisor the hub made since the assistant was read (#5082): read again, so it is the built-in one
+  const unnamed = unnamedTaskConversations(a, list).filter((id) => !askedForUnnamed.has(id));
+  if (unnamed.length) {
+    unnamed.forEach((id) => askedForUnnamed.add(id));
+    void refreshAssistant().catch(() => {});
+  }
   let changed = false;
   const convs = a.conversations.map((c) => {
     const s = list.find((x) => x.session_id === c.session_id);
@@ -1067,7 +1255,13 @@ function applyTodos(todos: PromiseSettledResult<{ todos: Todo[] }>, fresh: () =>
   if (!fresh()) return; // a later answer is in place, or this one belongs to a login reset() ended
   if (todos.status === "fulfilled") {
     const list = todos.value.todos ?? [];
-    return set({ todos: list, todosSupported: true, todosLoaded: true, todosError: null, spacesSupported: computeSpacesSupported(list) });
+    for (const t of list) {
+      if (t.manager) noteItemManager(`/todos/${encodeURIComponent(t.id)}`, t.manager);
+    }
+    set({ todos: list, todosSupported: true, todosLoaded: true, todosError: null, spacesSupported: computeSpacesSupported(list) });
+    keepTaskRows([]);
+    void lookUpTaskAgents();
+    return;
   }
   const reason = todos.reason;
   if (reason instanceof ApiError && reason.status === 404) return set({ todosSupported: false, todosLoaded: true, todosError: null, spacesSupported: false });
@@ -1084,14 +1278,39 @@ export function setSpacesSupported(supported: boolean) {
 
 /** Puts a todo the hub just answered in place of the one we have (a retried task shows starting at once). */
 export function putTodo(todo: Todo) {
+  // A confirmed write is newer than every list read that is still in flight.
+  todosAsked.forget();
+  if (todo.manager) noteItemManager(`/todos/${encodeURIComponent(todo.id)}`, todo.manager);
   set({ todos: state.todos.map((t) => (t.id === todo.id ? { ...t, ...todo } : t)) });
 }
 
 /** Takes a todo the hub just deleted out of the list at once; a /todos answer asked for before the delete is older
  *  and must not put it back. */
 export function dropTodo(id: string) {
+  noteItemManager(`/todos/${encodeURIComponent(id)}`, undefined);
   todosAsked.forget();
   set({ todos: state.todos.filter((t) => t.id !== id) });
+}
+
+// A push that says the to-dos changed ({"type":"todos"}, a task's feed item) comes in bursts: the hub sends one per write,
+// and a supervised task's report, stage and links land within the same second. Every GET /todos is the whole list (tens
+// of KB on a busy hub), so pushes read it one at a time: one that lands while such a read is out asks for one more read
+// after it, however many land meanwhile. What this page itself just changed still reads at once (refreshTodos).
+let pushedRead = false;
+let pushedAgain = false;
+
+export function todosPushed() {
+  if (pushedRead) {
+    pushedAgain = true;
+    return;
+  }
+  pushedRead = true;
+  void refreshTodos().finally(() => {
+    pushedRead = false;
+    if (!pushedAgain) return;
+    pushedAgain = false;
+    todosPushed();
+  });
 }
 
 export async function refreshTodos() {
@@ -1113,7 +1332,7 @@ export async function refreshAssistant() {
     const assistant = { ...a, conversations: a.conversations ?? [] };
     const scope = feedCacheScope();
     const cached = readFeedCache(scope);
-    if (cached && (cached.manager ?? "") === from && (cached.machineID !== assistant.machine_id || cached.sessionID !== assistant.main)) discardFeedCache(scope);
+    if (cached && (cached.manager ?? "") === from && (cached.machineID !== mainConversationMachine(assistant) || cached.sessionID !== assistant.main)) discardFeedCache(scope);
     assistantByManager.set(cacheKey(), assistant);
     // its conversations' own requests (feed, stop…) go to it, whichever manager the page shows later
     // (the default's are not noted: with no header the hub finds their manager itself)
@@ -1136,9 +1355,10 @@ const assistantByManager = new Map<string, AssistantInfo>();
 /** The assistant page asked for: "" the default's (no header goes, whichever manager the default turns out to be),
  *  else the manager picked on it. */
 const pageOf = () => chosenManager() ?? "";
-/** Where the page's answer is kept: under its manager once the roster's default is known; "" before (the default's,
- *  whose id is not known yet), moved under the default's id when it is. */
-const cacheKey = () => (defaultKnown() ? shownManager() : "");
+/** Where the page's answer is kept: under its manager, the one picked (kept across reloads, so it may be there before
+ *  the roster is read) or the default once the roster said which that is; "" before (the default's, whose id is not
+ *  known yet), moved under the default's id when it is. */
+const cacheKey = () => chosenManager() ?? (defaultKnown() ? defaultManager() : "");
 
 // The manager whose page is drawn (null: the default's, before the roster said which that is).
 let drawnPage = { page: pageOf(), manager: null as string | null };
@@ -1280,6 +1500,7 @@ export function reset() {
   endedHere.clear();
   // a /todos or /assistant answer still on its way belongs to the old login
   todosAsked.forget();
+  pushedAgain = false; // the next login reads its own list
   assistantAsked.forget();
   assistantByManager.clear();
   // and so do the pins and mutes of a refresh() or a failed save still on its way
@@ -1290,8 +1511,12 @@ export function reset() {
   sessionsPushed.clear();
   resetAgents();
   rowHints.clear();
+  taskRowsAsked.clear();
+  cardRowsAsked.clear();
+  cardRowsFor = null;
   listedFull.clear();
   runtimeSessions.reset();
+  clearMemoryPages();
   clearTimeout(seenTimer);
   seenTimer = undefined;
   Object.values(state.launches).forEach((launch) => releaseAttachments(launch.attachments));
@@ -1300,6 +1525,7 @@ export function reset() {
     sessions: {},
   sessionSummaries: [],
   sessionCounts: null,
+    taskRows: {},
     seen: {},
     interactions: [],
     answered: {},

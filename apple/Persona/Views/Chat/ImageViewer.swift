@@ -24,7 +24,7 @@ struct ViewerImage: Identifiable, Hashable {
     }
 }
 
-/// The one full-screen image viewer of the app (docs/apple/ios.md「图片查看器」), as Photos shows a picture: a round back
+/// The one full-screen image viewer of the app (docs/apple/ios.md「Information architecture」), as Photos shows a picture: a round back
 /// button, the title in a capsule and a ⋯ menu on top; a strip of thumbnails when there are several, then Share · the
 /// main actions in a capsule (Save, Markup, Info) · Copy at the bottom. The page's own color behind it; a tap hides the
 /// bars and the backdrop turns black. Pinch / double-tap zoom, swipe between images, pull down to close (the picture
@@ -97,8 +97,8 @@ struct ImageViewer: View {
         }
         .sheet(item: $openedFile) { ref in FileViewer(ref: ref) }
         .fullScreenCover(item: Binding(get: { editing.map(EditTarget.init) }, set: { if $0 == nil { editing = nil } })) { t in
-            ImageEditor(image: t.image, doneTitle: String(localized: "Add to Message")) { edited in
-                attach?(edited)
+            ImageEditor(EditedImage(source: t.image), doneTitle: String(localized: "Add to Message")) { edited in
+                attach?(edited.result)
                 Haptics.success()
                 AppModel.shared.toast = Toast(String(localized: "Added to the message. Add a few words and send."), style: .success)
                 dismiss()

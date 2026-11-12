@@ -1,12 +1,12 @@
 import Foundation
 import SwiftUI
 
-/// The assistant's cards in a reply (docs/extensions/extensions.md「助手的卡片」): a ```persona-view block holds a View or one
+/// The assistant's cards in a reply (docs/extensions/extensions.md「Assistant cards: `persona-view` and `persona-card`」): a ```persona-view block holds a View or one
 /// component, a ```persona-card block (#886, the older way) one card that becomes components by the rules every app
 /// shares (`sdk/go/wire/personacard.go`). Both are drawn by the renderer the extensions' views are drawn by, with nothing
-/// to use (no actions, fields, search, filter or more); links open as usual. Anything the app cannot draw (unknown,
-/// broken or still-streaming JSON, a card without what it needs) stays the code block it is, so nothing is lost on an
-/// older app, the web or Android.
+/// to use (no actions, fields, search, filter or more); links open as usual. A persona-card that parses but cannot be
+/// drawn (a type the app does not know yet, a card without what it needs) is shown in words (#3397); anything else the
+/// app cannot draw (unknown, broken or still-streaming JSON) stays the code block it is, so nothing is lost.
 enum AssistantCardBlock {
     static let viewLanguage = "persona-view"
     static let cardLanguage = "persona-card"
@@ -33,6 +33,22 @@ enum AssistantCardBlock {
     }
 
     static func handles(_ language: String?) -> Bool { language == viewLanguage || language == cardLanguage }
+
+    /// A ```persona-card this app cannot draw (a type it does not know yet, like `ring` on an older app, or one without
+    /// what its type needs) in words: its title and one "label: value unit" line per number, never its JSON. Nil when
+    /// the block does not parse or says nothing, so it stays the code block it is.
+    static func words(language: String?, _ text: String) -> CardWords? {
+        guard language == cardLanguage, let data = text.data(using: .utf8),
+              let card = try? JSONDecoder().decode(ExtensionPersonaCard.self, from: data) else { return nil }
+        let w = card.words()
+        return w.title == nil && w.lines.isEmpty ? nil : w
+    }
+}
+
+/// A card in words: its title and a line per number.
+nonisolated struct CardWords: Equatable {
+    var title: String?
+    var lines: [String]
 }
 
 nonisolated extension ExtensionView {
@@ -55,11 +71,18 @@ nonisolated extension ExtensionPersonaCard {
     /// The card as the apps draw it, nil when they cannot (it stays a code block): `sdk/go/wire/personacard.go`'s rules,
     /// held to `schema/extension/examples/persona-card/` by the tests.
     func view() -> ExtensionView? {
-        let parts = (segments ?? []) + (rest.map { [$0] } ?? [])
-        let sum = parts.reduce(0) { $0 + $1.value }
+        var parts = (segments ?? []) + (rest.map { [$0] } ?? [])
+        var sum = parts.reduce(0) { $0 + $1.value }
         switch type {
         case ExtensionPersonaCardKind.stat: guard value != nil else { return nil }
         case ExtensionPersonaCardKind.stackedBar: guard !parts.isEmpty, sum > 0, parts.allSatisfy({ $0.value >= 0 }) else { return nil }
+        case ExtensionPersonaCardKind.ring:
+            // What the total leaves over the parts is a part of its own, last.
+            if let t = total?.value, t > sum {
+                parts.append(ExtensionCardPart(label: String(localized: "Remaining", comment: "Chart card: what the total leaves over the parts"), value: t - sum))
+                sum = t
+            }
+            guard parts.count >= 2, sum > 0, parts.allSatisfy({ $0.value >= 0 }) else { return nil }
         case ExtensionPersonaCardKind.line: guard (points ?? []).count >= 2 else { return nil }
         case ExtensionPersonaCardKind.bar: guard !(points ?? []).isEmpty else { return nil }
         default: return nil
@@ -90,6 +113,21 @@ nonisolated extension ExtensionPersonaCard {
             for p in parts {
                 s.items.append(.row(ExtensionRowComponent(title: p.label, subtitle: Self.nonEmpty(p.note), value: Self.amount(p.value, u))))
             }
+        case ExtensionPersonaCardKind.ring:
+            var u = unit, whole = sum
+            if let t = self.total { u = Self.nonEmpty(t.unit) ?? unit; whole = t.value }
+            var shown = parts
+            if parts.count > 8 {
+                shown = Array(parts.prefix(7)) + [ExtensionCardPart(label: String(localized: "Other", comment: "Chart series: the remaining items"),
+                                                                    value: parts.dropFirst(7).reduce(0) { $0 + $1.value })]
+            }
+            let center = Self.amount(whole, u)
+            s.items.append(.chart(ExtensionChartComponent(kind: ExtensionChartKind.donut,
+                                                          series: [ExtensionChartSeries(points: shown.map { ExtensionChartPoint(label: $0.label, value: $0.value, display: Self.amount($0.value, u)) })],
+                                                          unit: Self.nonEmpty(u), detail: Self.nonEmpty(note), center: center.count <= 20 ? center : nil)))
+            for p in parts {
+                s.items.append(.row(ExtensionRowComponent(title: p.label, subtitle: Self.nonEmpty(p.note), value: Self.amount(p.value, u))))
+            }
         default: // line, bar
             if let v = value { s.items.append(.metric(ExtensionMetricComponent(label: String(localized: "Current", comment: "Chart card: the current value"), value: Self.amount(v, unit)))) }
             let pts = (points ?? []).suffix(120).map { ExtensionChartPoint(label: $0.label, value: $0.value, display: Self.amount($0.value, unit)) }
@@ -98,6 +136,26 @@ nonisolated extension ExtensionPersonaCard {
                                                           detail: Self.nonEmpty(note))))
         }
         return ExtensionView(sections: [s])
+    }
+
+    /// The card in words, whatever its type: the subtitle, the value, each part and point as "label: value unit",
+    /// the total, then the note.
+    func words() -> CardWords {
+        var lines: [String] = []
+        if let sub = Self.nonEmpty(subtitle) { lines.append(sub) }
+        if let v = value { lines.append(Self.amount(v, unit)) }
+        let partUnit = Self.nonEmpty(total?.unit) ?? unit
+        for p in (segments ?? []) + (rest.map { [$0] } ?? []) {
+            lines.append(Self.line(p.label, Self.amount(p.value, partUnit)))
+        }
+        for p in points ?? [] { lines.append(Self.line(p.label, Self.amount(p.value, unit))) }
+        if let t = total { lines.append(Self.line(String(localized: "Total"), Self.amount(t.value, partUnit))) }
+        if let n = Self.nonEmpty(note) { lines.append(n) }
+        return CardWords(title: Self.nonEmpty(title), lines: lines)
+    }
+
+    private static func line(_ label: String, _ amount: String) -> String {
+        label.isEmpty ? amount : String(localized: "\(label): \(amount)")
     }
 
     private static func nonEmpty(_ s: String?) -> String? { s?.isEmpty == false ? s : nil }
@@ -142,5 +200,22 @@ struct AssistantViewCard: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .card(padding: Theme.Space.m)
             .accessibilityIdentifier("assistant-view-card")
+    }
+}
+
+/// A ```persona-card the app cannot draw, in words (`AssistantCardBlock.words`): the title, then a line per number.
+struct AssistantCardWords: View {
+    var title: String?
+    var lines: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            if let title { Text(title).font(Theme.Font.sectionHeader).foregroundStyle(.secondary) }
+            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in Text(line).font(Theme.Font.body) }
+        }
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .card(padding: Theme.Space.m)
+        .accessibilityIdentifier("assistant-card-words")
     }
 }

@@ -8,10 +8,11 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/devices"
+	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// The assistant is the chief manager, and the user's computers are its (docs/server/machines.md "Who connects the computers"): its process
+// The assistant is the chief manager, and the user's computers are its (docs/server/machines.md "Who connects to computers"): its process
 // connects them itself (internal/devices), the hub only relays to it. This file is how the bus connection (bus.go)
 // takes the hub's devices.* calls and events to that layer, and how the assistant's own calls to a machine go to it
 // directly instead of round the hub.
@@ -35,6 +36,9 @@ type Devices interface {
 	// another one absorbed: that one), its sessions as its node listed them, when its node's connection began, the
 	// token usage.
 	List() []devices.Summary
+	// Summary is List's entry for the machine id names (Canonical(id)'s), false when List has none: one machine,
+	// without building the others.
+	Summary(id string) (devices.Summary, bool)
 	// MachineResources returns the retained system and latest sample, including a stale sample's timestamp.
 	MachineResources(id string) (*proto.Machine, *proto.MetricSample, *bool)
 	Canonical(id string) string
@@ -46,8 +50,19 @@ type Devices interface {
 	Session(id, session string) (proto.Session, bool)
 	ConnectedAt(id string) time.Time
 	Usage() assistantwire.UsageSummary
+	// CapacitySnapshot is the account-pool capacity view for scheduling (proto.CapacitySnapshot): how many
+	// subscription accounts of each upstream provider are schedulable now and when the nearest one recovers.
+	// Read-only, from the manager's in-memory caches; the zero value when no pool is configured.
+	CapacitySnapshot(ctx context.Context) proto.CapacitySnapshot
 	// Follow has the node send the manager a session's items and text as they are made (on), or stop.
 	Follow(ctx context.Context, machine, session string, on bool) error
+	// SetAttention hands over Persona Link's "Needs you" summary (fleet_attention.go) on every look; it goes on to the
+	// computers only when it changed.
+	SetAttention(a link.Attention)
+	// LinkRang waits, within one deadline and while ctx lasts, for one of the manager's Persona Link desktops to have
+	// confirmed it handed card's notification to Notification Center: false at once while there is none
+	// (notifyInteraction).
+	LinkRang(ctx context.Context, card string, within time.Duration) bool
 }
 
 // localDeviceCall is a device.call the manager answers itself: a node's method on a machine it has. The hub still
@@ -84,6 +99,9 @@ func (s *Service) NodeAnswer(ctx context.Context, machine, method string, params
 		Ack       []assistantwire.ViewErrorReceipt `json:"ack"`
 	}
 	switch method {
+	case NodeLaunchersPull: // a provider's secrets for this computer (models_launchers_scope.go): the connection's machine decides
+		out, err := s.pullLauncher(ctx, machine, params)
+		return out, true, err
 	case "assistant.model":
 		_ = json.Unmarshal(params, &p)
 		if !s.assistantCaller(ctx, machine, p.SessionID) {

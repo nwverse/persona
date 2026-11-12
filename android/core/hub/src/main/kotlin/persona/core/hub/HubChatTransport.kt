@@ -62,8 +62,10 @@ class HubChatTransport internal constructor(
         counts: Boolean = false,
     ): String {
         val url = path("sessions").apply {
-            addQueryParameter("summary", "1")
-            addQueryParameter("limit", "50")
+            // A complete-membership view holds whole rows (`summary=0`), read in the largest pages the hub allows.
+            val complete = filter.requiresCompleteMembership && !counts
+            addQueryParameter("summary", if (complete) "0" else "1")
+            addQueryParameter("limit", if (complete) "200" else "50")
             if (counts) addQueryParameter("counts", "1")
             filter.state?.let { addQueryParameter("state", it) }
             filter.machineId?.let { addQueryParameter("machine_id", it) }
@@ -185,11 +187,15 @@ class HubChatTransport internal constructor(
             ?.let { runCatching { JsonCodec.parseToJsonElement(it) as? JsonObject }.getOrNull() }
             ?.get(name)?.let { it as? JsonPrimitive }?.takeIf { it.isString }?.content?.takeIf { it.isNotEmpty() }
 
-        /** The connection lost the request (refused, reset, timed out, or a proxy said the hub is not there). */
+        /**
+         * The connection lost the request (refused, reset, timed out), or something in front of the hub answered
+         * 502/503/504 for it. The hub's own errors carry a `code` or say what was `delivered` (503 `assistant_offline`,
+         * a node that did not answer): those are answers, not gaps, as the web's `isTransient` (#2768).
+         */
         internal fun cutOff(failure: HubFailure) = when (failure.status) {
             null -> failure.kind in setOf(HubError.ConnectionRefused, HubError.Unreachable, HubError.Timeout,
                 HubError.Transport, HubError.NoNetwork, HubError.AddressNotFound)
-            502, 503, 504 -> true
+            502, 503, 504 -> failure.code.isNullOrEmpty() && failure.delivered == null
             else -> false
         }
     }

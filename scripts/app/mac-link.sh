@@ -27,18 +27,21 @@ build() {
   for a in "${archs[@]}"; do
     local goarch=$a
     [ "$a" = x86_64 ] && goarch=amd64
-    (cd server && GOOS=darwin GOARCH=$goarch CGO_ENABLED=0 go build -buildvcs=false -trimpath \
+    (cd server && GOOS=darwin GOARCH=$goarch CGO_ENABLED=0 go build -buildvcs=false -tags "$(cat build-tags.txt)" -trimpath \
       -ldflags "-s -w -X main.version=$version" -o "$OUT/persona-link-$a" ./cmd/persona-link)
     helpers+=("$OUT/persona-link-$a")
     # The resident node the app sets up when this Mac has none (persona-link node install --node-bin, docs/operations/link.md):
     # the device's own program.
-    (cd server && GOOS=darwin GOARCH=$goarch CGO_ENABLED=0 go build -buildvcs=false -trimpath \
+    (cd server && GOOS=darwin GOARCH=$goarch CGO_ENABLED=0 go build -buildvcs=false -tags "$(cat build-tags.txt)" -trimpath \
       -ldflags "-s -w -X main.version=$version" -o "$OUT/persona-node-$a" ./cmd/persona-node)
     nodes+=("$OUT/persona-node-$a")
   done
   rm -rf "$APP"
   mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Helpers"
   cp "$bin" "$APP/Contents/MacOS/PersonaLink"
+  # The String Catalog's resource bundle (Package.swift), in Contents/Resources where an app's Bundle.module looks.
+  mkdir -p "$APP/Contents/Resources"
+  cp -R "$OUT/dd/Build/Products/Release/PersonaLink_PersonaLink.bundle" "$APP/Contents/Resources/"
   # xcodebuild links the package with the SDK version left at the deployment target (vtool -show-build: sdk 15.0),
   # and macOS keeps an app linked against an old SDK in the old look: a square, bordered menu bar panel instead of
   # the system's own on macOS 26 and later. Record the SDK it was really built against.

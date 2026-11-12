@@ -38,7 +38,7 @@ struct WorkspaceSidebarStatus: View {
     var body: some View {
         Group {
             if workspace.sidebarUnread {
-                Image(systemName: Theme.Icon.workspaceUnread).font(Theme.WorkspaceSidebar.meta)
+                ThemedIcon(Theme.Icon.notification).font(Theme.WorkspaceSidebar.meta)
                     .foregroundStyle(Theme.WorkspaceSidebar.unread)
             } else {
                 StatusDot(state: workspace.sidebarState, size: Theme.Size.dot)
@@ -63,6 +63,9 @@ struct WorkspaceSidebarCard<AgentContent: View, Actions: View>: View {
     var selectAgent: (SessionKey) -> Void = { _ in }
     var appeared: (Session) -> Void = { _ in }
     var agentIdentifier = "agents.row"
+    /// An agent's subtasks (`CodexTasks`: a Codex chat's subagents, the agents a runtime's agent created): listed under
+    /// it, a level in. The list's rows are the others'.
+    var subtasks: (Session) -> [Session] = { _ in [] }
     var ordered: ([Session]) -> [Session]
     @ViewBuilder var agent: (Session) -> AgentContent
     @ViewBuilder var actions: (RepoTree.Worktree, Session?) -> Actions
@@ -110,9 +113,9 @@ struct WorkspaceSidebarCard<AgentContent: View, Actions: View>: View {
                 VStack(alignment: .leading, spacing: Theme.Space.sm) {
                     if workspace.sessions.count > 1 {
                         agentDisclosure
-                        if agentOpen { ForEach(ordered(workspace.sessions)) { agentRow($0) } }
+                        if agentOpen { ForEach(ordered(workspace.sessions)) { withSubtasks($0) } }
                     } else {
-                        ForEach(workspace.sessions) { agentRow($0) }
+                        ForEach(workspace.sessions) { withSubtasks($0) }
                     }
                     if !workspace.children.isEmpty {
                         Button { toggle(workspace.childrenFoldID) } label: {
@@ -130,7 +133,7 @@ struct WorkspaceSidebarCard<AgentContent: View, Actions: View>: View {
                                              parentWorkspace: workspace.workspace ?? parentWorkspace, selectedSession: selectedSession,
                                              selectedWorkspace: selectedWorkspace, folded: folded, toggle: toggle,
                                              open: open, selectAgent: selectAgent, appeared: appeared, agentIdentifier: agentIdentifier,
-                                             ordered: ordered, agent: agent, actions: actions)
+                                             subtasks: subtasks, ordered: ordered, agent: agent, actions: actions)
                     }
                 }.padding(.leading, Theme.WorkspaceSidebar.childInset)
             }
@@ -150,6 +153,12 @@ struct WorkspaceSidebarCard<AgentContent: View, Actions: View>: View {
     private func openWorktree() {
         if let first = ordered(workspace.sessions).first { selectAgent(first.key) }
         else if let target = workspace.workspace { open(target) }
+    }
+
+    /// An agent's row, and a Codex chat's subagents under it, a level in.
+    @ViewBuilder private func withSubtasks(_ session: Session) -> some View {
+        agentRow(session)
+        ForEach(subtasks(session)) { task in agentRow(task).padding(.leading, Theme.WorkspaceSidebar.childInset) }
     }
 
     /// The Agent row and the title/branch control receive their worktree actions from the same factory.
@@ -196,7 +205,7 @@ struct WorkspaceSidebarCard<AgentContent: View, Actions: View>: View {
                 } else if target.workspaceKind == "git" {
                     Label {
                         Text(String(localized: "Detached HEAD") + (target.head.isEmpty ? "" : " @ " + String(target.head.prefix(7))))
-                    } icon: { Image(systemName: Theme.Icon.gitBranch) }
+                    } icon: { ThemedIcon(Theme.Icon.gitBranch) }
                         .font(Theme.WorkspaceSidebar.meta).foregroundStyle(Theme.cautionText).lineLimit(1)
                         .padding(.horizontal, Theme.Space.xs).padding(.vertical, Theme.Space.xxs)
                         .background(Theme.caution.opacity(0.06), in: .rect(cornerRadius: Theme.WorkspaceSidebar.chipRadius))
@@ -206,7 +215,7 @@ struct WorkspaceSidebarCard<AgentContent: View, Actions: View>: View {
                     Text((target.cwd as NSString).lastPathComponent).font(Theme.WorkspaceSidebar.meta).foregroundStyle(Theme.WorkspaceSidebar.muted).lineLimit(1)
                 }
                 Spacer(minLength: 0)
-                Image(systemName: Theme.Icon.workspaceHost).font(Theme.WorkspaceSidebar.meta)
+                ThemedIcon(Theme.Icon.workspaceHost).font(Theme.WorkspaceSidebar.meta)
                     .rotationEffect(Theme.WorkspaceSidebar.hostRotation)
                     .foregroundStyle(Theme.WorkspaceSidebar.muted)
                     .accessibilityLabel(target.available ? target.source : String(localized: "This computer is offline"))
@@ -307,7 +316,7 @@ struct WorkspaceAgentRow: View {
 
     @ViewBuilder private var title: some View {
         if session.state == .unread || session.state == .idle {
-            Image(systemName: Theme.Icon.success).font(Theme.WorkspaceSidebar.meta).foregroundStyle(Theme.WorkspaceSidebar.success)
+            ThemedIcon(Theme.Icon.success).font(Theme.WorkspaceSidebar.meta).foregroundStyle(Theme.WorkspaceSidebar.success)
         } else { StatusDot(state: session.state, size: Theme.Size.dotS) }
         AgentMark(session, side: Theme.Size.markXS)
         Text(session.displayTitle).font(session.state == .unread ? Theme.Font.labelStrong : Theme.WorkspaceSidebar.agent)
@@ -444,3 +453,259 @@ struct RepoMenuItems: View, Equatable {
         }
     }
 }
+
+/// Moves a row that is not one of the tree's lines (an agent's, a tab's, Show All) in by `level` of By Repository's
+/// levels on iOS (#2531, #3753), outside whatever the row draws (a state card, a capsule); elsewhere nothing.
+struct TreeIndent: ViewModifier {
+    /// 0: not in the tree, left as it is.
+    var level: Int
+
+    func body(content: Content) -> some View {
+        #if os(iOS)
+        if level > 0 { content.modifier(RepoTreeIndent(level: level)) } else { content }
+        #else
+        content
+        #endif
+    }
+}
+
+/// A row of the Agents list that is one button, on iOS: a line of By Repository's structure, a fold, Show All, a tab's
+/// row. A plain button takes taps on its label alone, so the button is made the whole row (#3753): the row keeps only
+/// the sides of `edges` (nil: the grouped list's own), and the room it had above and below is the label's
+/// (`ButtonRowLabel`; `RepoTreeLine` has its own), at least a finger's height. The Mac and Apple Vision Pro keep `edges`,
+/// and so does a row that is not one (`on` false: a link, a button in the list's own style, which are their whole row).
+struct ButtonRowInsets: ViewModifier {
+    var edges: EdgeInsets?
+    var on = true
+
+    func body(content: Content) -> some View {
+        #if os(iOS)
+        if !on {
+            content.listRowInsets(edges)
+        } else if let edges {
+            content.listRowInsets(EdgeInsets(top: Theme.Space.flush, leading: edges.leading, bottom: Theme.Space.flush, trailing: edges.trailing))
+        } else {
+            content.listRowInsets(.vertical, Theme.Space.flush)
+        }
+        #else
+        content.listRowInsets(edges)
+        #endif
+    }
+}
+
+/// The label of a `ButtonRowInsets` row on iOS: the room `edges` gave the row above and below (the grouped list's:
+/// `room`), at least a finger's height, the row's whole width. Elsewhere, or `on` false, the label as it is.
+struct ButtonRowLabel: ViewModifier {
+    var edges: EdgeInsets?
+    var on = true
+    /// Above and below a row's words where the grouped list set the row's edges.
+    static let room = Theme.Space.m
+
+    @ViewBuilder func body(content: Content) -> some View {
+        #if os(iOS)
+        if on {
+            content
+                .padding(.top, edges?.top ?? Self.room)
+                .padding(.bottom, edges?.bottom ?? Self.room)
+                .modifier(TouchHeight())
+        } else {
+            content
+        }
+        #else
+        content
+        #endif
+    }
+}
+
+/// On iOS at least a finger's height and the width it is given, all of it hit (#3753): a heading or a row that is a
+/// button and draws less. The Mac and Apple Vision Pro keep their sizes.
+struct TouchHeight: ViewModifier {
+    var alignment: Alignment = .center
+
+    func body(content: Content) -> some View {
+        #if os(iOS)
+        content
+            .tapTargetHeight(alignment: alignment)
+            .frame(maxWidth: .infinity, alignment: Alignment(horizontal: .leading, vertical: alignment.vertical))
+            .contentShape(.rect)
+        #else
+        content
+        #endif
+    }
+}
+
+#if os(iOS)
+// MARK: - By Repository on iOS (#2531)
+
+/// A line of By Repository's structure on iOS (a repository's header, a worktree's line, a fold's): `level` levels in
+/// (a repository's header is 0), its mark in the tree's column so marks line up level by level. At least a finger's
+/// height (#3753), with `Theme.Tree.rowPadding` above and below its words: the row adds no room of its own, so the
+/// whole row is the line to tap. Levels follow the text size as `scaledFrame` does (capped, `Theme.sizeScale`).
+struct RepoTreeLine<Mark: View, Content: View>: View {
+    var level: Int
+    @ViewBuilder var mark: Mark
+    @ViewBuilder var content: Content
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    var body: some View {
+        HStack(spacing: Theme.Space.s) {
+            mark.scaledFrame(width: Theme.Tree.column)
+            content
+        }
+        .padding(.leading, Theme.Tree.indent * Theme.sizeScale(typeSize) * CGFloat(level))
+        .padding(.vertical, Theme.Tree.rowPadding)
+        .tapTargetHeight()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(.rect)
+    }
+}
+
+/// Moves a row that is not one of the tree's lines (an agent's, a tab's, Show All) in by `level` of its levels.
+struct RepoTreeIndent: ViewModifier {
+    var level: Int
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.leading, Theme.Tree.indent * Theme.sizeScale(typeSize) * CGFloat(level))
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// The wash over the line of the agent (or worktree) open beside the list: on the card's color, as the line's whole
+/// background replaces the card's.
+struct RepoTreeSelected: View {
+    var body: some View {
+        ZStack {
+            Theme.groupedCard
+            Theme.Tree.selected
+        }
+    }
+}
+
+/// A repository's header: its folder, its name and the chevron that turns as it folds. Its actions (the space's pin,
+/// mute, rename, to-do; Mark All as Seen) are its long-press menu: no ⋯ or list mark of its own.
+struct RepoCardHeader: View {
+    var name: String
+    var folded: Bool
+
+    var body: some View {
+        RepoTreeLine(level: 0) {
+            ThemedIcon(Theme.Icon.folder).font(Theme.Font.secondary).foregroundStyle(.secondary)
+        } content: {
+            HStack(spacing: Theme.Space.s) {
+                Text(name).font(Theme.Font.bodyStrong).foregroundStyle(Color.primary).lineLimit(1)
+                Spacer(minLength: 0)
+                FoldChevron(folded: folded)
+            }
+        }
+    }
+}
+
+/// A worktree's line: ⌂ for the main checkout (with its Primary badge), the branch mark for the others, its name and,
+/// small, what the name does not say (its branch, Detached HEAD, another repository's name); at the end how many agents
+/// (Idle when nothing goes on) and the chevron that turns as it opens.
+struct RepoWorktreeLine: View {
+    var name: String
+    var main: Bool
+    var count: Int
+    var quiet: Bool
+    var open: Bool
+    var level: Int
+    /// Its branch, or the repository a child from another project is in; `caution`: Detached HEAD.
+    var detail: String? = nil
+    var caution = false
+    /// Its computer is out of reach (a worktree the host lists).
+    var offline = false
+    var showChevron = true
+
+    var body: some View {
+        RepoTreeLine(level: level) {
+            ThemedIcon(main ? Theme.Icon.home : Theme.Icon.gitBranch).font(Theme.Font.caption).foregroundStyle(.secondary)
+        } content: {
+            HStack(spacing: Theme.Space.s) {
+                Text(name).font(Theme.Font.secondaryMedium).foregroundStyle(quiet || offline ? Color.secondary : Color.primary)
+                    .lineLimit(1).layoutPriority(1)
+                if main {
+                    Chip(text: String(localized: "workspace.primary", defaultValue: "Primary"), look: .neutral, compact: true).fixedSize()
+                }
+                if let detail {
+                    Text(detail).font(Theme.Font.caption).foregroundStyle(caution ? Theme.cautionText : Color.secondary).lineLimit(1)
+                }
+                Spacer(minLength: Theme.Space.xs)
+                // None of its own but some under it (its child worktrees say how many): no count.
+                if let tally {
+                    Text(tally).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1).fixedSize()
+                }
+                if showChevron { FoldChevron(folded: !open) }
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel([main ? String(localized: "Main worktree") : String(localized: "Worktree"), name, detail ?? "",
+                             offline ? String(localized: "This computer is offline") : "", tally ?? "",
+                             showChevron ? (open ? String(localized: "Expanded") : String(localized: "Collapsed [Readiness Card ee6046]")) : ""]
+            .filter { !$0.isEmpty }
+            .joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label")))
+        .accessibilityAddTraits(.isButton)
+    }
+
+    /// Idle, or how many agents it has; nothing for none of its own while something goes on under it.
+    private var tally: String? { quiet ? String(localized: "Idle") : count > 0 ? String(localized: "\(count) agents") : nil }
+}
+
+/// A worktree's idle agents behind one quiet line: "N idle · their tabs" and a chevron; or, opened, the line that folds
+/// them again (`title`).
+struct RepoIdleLine: View {
+    var sessions: [Session]
+    var level: Int
+    /// Opened: what folds them again ("Hide N Idle").
+    var title: String? = nil
+
+    var body: some View {
+        RepoTreeLine(level: level) {
+            ThemedIcon(title == nil ? Theme.Icon.idleFold : Theme.Icon.collapse).font(Theme.Font.caption).foregroundStyle(.tertiary)
+        } content: {
+            HStack(spacing: Theme.Space.xs) {
+                Text(title ?? words).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+                Spacer(minLength: 0)
+                if title == nil { ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.captionStrong).foregroundStyle(.tertiary) }
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title ?? String(localized: "Show \(sessions.count) idle agents"))
+        .accessibilityAddTraits(.isButton)
+    }
+
+    /// "2 idle · review · research".
+    private var words: String {
+        ([String(localized: "\(sessions.count) idle")] + sessions.prefix(3).map { $0.slotLabel ?? $0.displayTitle }).joined(separator: " · ")
+    }
+}
+
+/// The worktrees nested under a worktree (Orca's child worktrees, #3075), behind one line as a worktree's: their count,
+/// their agents' state counts and the chevron.
+struct RepoChildrenLine: View {
+    var count: Int
+    var open: Bool
+    var group: SpaceGroup
+    var level: Int
+
+    var body: some View {
+        RepoTreeLine(level: level) {
+            ThemedIcon(Theme.Icon.childSpaces).font(Theme.Font.caption).foregroundStyle(.secondary)
+        } content: {
+            HStack(spacing: Theme.Space.s) {
+                Text("\(count) child worktrees").font(Theme.Font.secondaryMedium).foregroundStyle(Color.primary).lineLimit(1)
+                Spacer(minLength: Theme.Space.xs)
+                StateCounts(group: group)
+                FoldChevron(folded: !open)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel([String(localized: "\(count) child worktrees"), StateCounts.spoken(group),
+                             open ? String(localized: "Expanded") : String(localized: "Collapsed [Readiness Card ee6046]")].filter { !$0.isEmpty }
+            .joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label")))
+        .accessibilityAddTraits(.isButton)
+    }
+}
+#endif

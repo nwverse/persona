@@ -8,19 +8,23 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/herdr"
 	"github.com/nwverse/persona/server/internal/host"
-	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/procinfo"
 )
 
 // The environment the engines give a pane's processes, naming the pane (node/host*.go set and read the same names).
 const (
-	HerdrPaneEnv      = "HERDR_PANE_ID"   // classic herdr
-	HerdrCorePaneEnv  = "HC_TERMINAL_ID"  // herdr-core (Herdr App)
-	OrcaPaneEnv       = "ORCA_PANE_KEY"   // Orca
-	OrcaLegacyPaneEnv = "ORCA_AGENT_PANE" // older Orca
+	HerdrPaneEnv      = "HERDR_PANE_ID"     // classic herdr
+	HerdrSessionEnv   = "HERDR_SESSION"     // classic herdr: the named session the pane is in (none: the default server)
+	HerdrSocketEnv    = "HERDR_SOCKET_PATH" // classic herdr: its server's socket, in the session's directory
+	HerdrCorePaneEnv  = "HC_TERMINAL_ID"    // herdr-core (Herdr App)
+	OrcaPaneEnv       = "ORCA_PANE_KEY"     // Orca
+	OrcaLegacyPaneEnv = "ORCA_AGENT_PANE"   // older Orca
+	TernPaneEnv       = "TERN_PANE"         // Tern
 )
 
 // GlobalHookFlag marks the report-only entries the node puts in the user's own Claude Code settings
@@ -33,11 +37,13 @@ const GlobalHookFlag = "--persona-global"
 const HomeFlag = "--persona-home"
 
 // HookPane is the pane a hook runs in, from its environment, as a stored PaneRef: herdr's HERDR_PANE_ID as it always
-// was, else herdr-core's HC_TERMINAL_ID ("herdr-core:t7"), else Orca's ORCA_PANE_KEY (or its older ORCA_AGENT_PANE:
-// "orca:<tabId>:<leafId>"); "" in none.
+// was in the default server, qualified with its session in a named one ("@<session>:w4:p1", herdr.PaneOf, #2196),
+// else herdr-core's HC_TERMINAL_ID ("herdr-core:t7"), else Orca's ORCA_PANE_KEY (or its older ORCA_AGENT_PANE:
+// "orca:<tabId>:<leafId>"), else Tern's TERN_PANE ("tern:<block>"); "" in none. A node whose own herdr server is a
+// named session writes its panes the other way round and translates (node ownPane).
 func HookPane(getenv func(string) string) string {
 	if p := getenv(HerdrPaneEnv); p != "" {
-		return p
+		return herdr.PaneOf(p, herdr.EnvSession(getenv), "")
 	}
 	if t := getenv(HerdrCorePaneEnv); t != "" {
 		return host.PaneRef{Kind: host.HerdrCore, ID: t}.String()
@@ -46,6 +52,9 @@ func HookPane(getenv func(string) string) string {
 		if k := getenv(v); k != "" {
 			return host.PaneRef{Kind: host.Orca, ID: k}.String()
 		}
+	}
+	if b := getenv(TernPaneEnv); b != "" {
+		return host.PaneRef{Kind: host.Tern, ID: b}.String()
 	}
 	return ""
 }
@@ -68,6 +77,9 @@ func RunHook(ctx context.Context, args []string, stdin io.Reader, stdout io.Writ
 		ReportHook(ctx, input, HookPane(os.Getenv))
 		return
 	}
+	if len(args) > 0 && args[0] == CuaOnlyFlag && !runsCua(input) {
+		return // an Agent's Bash command that does not run cua-driver: nothing to ask the node
+	}
 	if isDisplay(input) {
 		Display(ctx, input)
 		return
@@ -77,6 +89,24 @@ func RunHook(ctx context.Context, args []string, stdin io.Reader, stdout io.Writ
 		return
 	}
 	_, _ = stdout.Write(append(out, '\n'))
+}
+
+// CuaOnlyFlag marks the Bash hook of the Agents Persona starts on a Mac (node/doctor.go): only a command that
+// mentions cua-driver goes to the node's gate (node/cua_gate.go, #4349); any other returns at once, so the Agent's
+// Bash never waits on the node, not even while it restarts.
+const CuaOnlyFlag = "--cua-only"
+
+// runsCua: the hook is a Bash PreToolUse whose command mentions cua-driver.
+func runsCua(input json.RawMessage) bool {
+	var in struct {
+		Event     string `json:"hook_event_name"`
+		Tool      string `json:"tool_name"`
+		ToolInput struct {
+			Command string `json:"command"`
+		} `json:"tool_input"`
+	}
+	return json.Unmarshal(input, &in) == nil && in.Event == "PreToolUse" && in.Tool == "Bash" &&
+		strings.Contains(in.ToolInput.Command, "cua-driver")
 }
 
 // Hook hands a Claude Code hook's input to the node and returns what the hook should print (nil: let the TUI decide).
@@ -198,11 +228,23 @@ func ClaudeDir(home string) string {
 	return filepath.Join(home, ".claude")
 }
 
-// sessionIDRe is what a Claude Code session id looks like (a UUID).
-var sessionIDRe = lazyre.New(`^[0-9a-fA-F-]{8,64}$`)
-
-// ValidSessionID says whether id looks like a Claude Code session id (the node's validID too).
-func ValidSessionID(id string) bool { return sessionIDRe.MatchString(id) }
+// ValidSessionID says whether id looks like a Claude Code session id (a UUID; the node's validID too): 8 to 64 hex
+// digits and hyphens, as `^[0-9a-fA-F-]{8,64}$` says. Every character it allows is one byte, so counting bytes is
+// counting characters. A loop, not that regexp: the session list checks each row's id every second, and the match
+// was about 8% of a resting node's CPU.
+func ValidSessionID(id string) bool {
+	if len(id) < 8 || len(id) > 64 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		switch c := id[i]; {
+		case '0' <= c && c <= '9', 'a' <= c && c <= 'f', 'A' <= c && c <= 'F', c == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
 
 // ReadClaudeSessionID reads the session id out of a claude's sessions/<pid>.json ("" when missing or invalid).
 func ReadClaudeSessionID(path string) string {

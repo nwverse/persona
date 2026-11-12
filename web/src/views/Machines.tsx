@@ -2,6 +2,7 @@
 // (feature machines_add) adds one from here, and a computer waiting to be confirmed (trust pending) says so on its card.
 import { memo, useCallback, useEffect, useId, useState } from "react";
 import { t as tr } from "../i18n";
+import { foldRows } from "../lib/folded-rows";
 import { canAddComputer, isPending, machineErrorText, neverConnected } from "../lib/add-computer";
 import { api, enc, errorText } from "../lib/api";
 import { readinessChanged } from "../lib/readiness";
@@ -10,7 +11,8 @@ import { hubLabel, routeText } from "../lib/mesh";
 import { machineDeployment } from "../lib/machine-deploy";
 import { classifyConnection } from "../lib/node-health";
 import { href, navigate, onLinkClick, type Route } from "../lib/router";
-import { groupByManager, offlineManagerOf, useRoster } from "../lib/managers";
+import { currentRoster, managerOrder, multiManager, offlineManagerOf, useRoster } from "../lib/managers";
+import { defaultManager, withManager } from "../lib/manager-choice";
 import { useStore } from "../lib/store";
 import { documentPage, visiblePoll } from "../lib/visible-poll";
 import type { Machine, MachineMetrics, MetricPoint, Session } from "../lib/types";
@@ -20,15 +22,14 @@ import { Empty } from "./assistant/parts";
 import { AddComputer, type PendingComputer } from "./machines/AddComputer";
 import { HelpDialog } from "./assistant/Readiness";
 import { MachineDeploy } from "./machines/MachineDeploy";
-import { ManagerHeading } from "./ManagerParts";
+import { useScopedMachines } from "../lib/current-assistant";
 import { t } from "../i18n";
 import { addTokens, formatTokens, hitRate, percentText, totalTokens, type UsageTokens } from "../lib/tokens";
 
 export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
-  const machines = useStore((s) => s.machines);
-  // with several managers, each one's computers under its name (docs/assistant/managers.md "Clients"); one: as before
+  // with several assistants, the current one's computers (docs/assistant/managers.md "Clients"); one: as before
+  const machines = useScopedMachines();
   const roster = useRoster();
-  const groups = groupByManager(machines, roster, (m) => m.manager);
   const loaded = useStore((s) => s.loaded);
   const canAdd = useStore((s) => canAddComputer(s.features));
   const [adding, setAdding] = useState<{ again: PendingComputer | null } | null>(null);
@@ -40,10 +41,27 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
 
   useEffect(() => {
     let dead = false;
-    const load = () =>
-      api<{ machines: MachineMetrics[] }>("/metrics")
-        .then((r) => !dead && (setMetrics(r.machines ?? []), setError("")))
-        .catch((e) => !dead && setError(errorText(e)));
+    const previous = new Map<string, MachineMetrics[]>();
+    const load = async () => {
+      const roster = currentRoster();
+      const ids = multiManager(roster) ? managerOrder(roster).filter((m) => m.online).map((m) => m.id) : [defaultManager()];
+      const results = await Promise.allSettled(ids.map((id) => api<{ machines: MachineMetrics[] }>(withManager("/metrics", id))));
+      if (dead) return;
+      const failed = results.find((r) => r.status === "rejected");
+      if (failed && results.every((r) => r.status === "rejected")) {
+        setError(errorText(failed.reason));
+        return;
+      }
+      const merged = new Map<string, MachineMetrics>();
+      results.forEach((r, i) => {
+        if (r.status === "fulfilled") previous.set(ids[i], r.value.machines ?? []);
+        for (const m of previous.get(ids[i]) ?? []) {
+          if (!merged.has(m.machine_id)) merged.set(m.machine_id, m);
+        }
+      });
+      setMetrics([...merged.values()]);
+      setError("");
+    };
     // Right away and every 10 s while the tab is shown; a hidden tab asks nothing and loads again when shown.
     const stop = visiblePoll(() => void load(), 10_000, documentPage);
     return () => {
@@ -110,9 +128,7 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
               </Empty>
             </div>
           )}
-          {(groups ?? [{ manager: null, items: machines }]).map((g) => [
-            g.manager && <ManagerHeading key={`h:${g.manager.id}`} manager={g.manager} count={g.items.length} className="pt-1 md:col-span-2" />,
-            ...g.items.map((m) => (
+          {machines.map((m) => (
               <MachineCard
                 key={m.id}
                 m={m}
@@ -127,8 +143,7 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                 onAddAgain={addAgain}
                 managerOffline={offlineManagerOf(roster, m)?.name}
               />
-            )),
-          ])}
+          ))}
         </div>
       </div>
       <AddComputer open={!!adding} again={adding?.again} onClose={() => setAdding(null)} />
@@ -156,7 +171,8 @@ type CardProps = {
 // another computer leaves its props and its counts as they were, so it (and its Stat, Spark, MachineDeploy) does not
 // render again. Nor does a machines push that only moved last_seen on (sameCard).
 const MachineCard = memo(function MachineCard({ m, index, metrics: mm, hub, route, canAdd, answering, onReconnect, onAnswer, onAddAgain, managerOffline }: CardProps) {
-  const [agents, working] = useStore((s) => (m.online ? agentCounts(s.sessions[m.id]) : NO_AGENTS));
+  // each parent once, in its folded state: its child sessions are not agents of their own here either (#5120)
+  const [agents, working] = useStore((s) => (m.online ? agentCounts(s.sessions[m.id] && foldRows(s.sessions[m.id])) : NO_AGENTS));
   const l = mm?.latest;
   const memPct = l?.mem_used && l.mem_total ? (l.mem_used / l.mem_total) * 100 : undefined;
   const diskPct = l?.disk_used && l.disk_total ? (l.disk_used / l.disk_total) * 100 : undefined;

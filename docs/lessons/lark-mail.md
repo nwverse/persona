@@ -1,6 +1,6 @@
 # Lessons: Lark and mail
 
-Pitfalls, odd behavior and the trade-offs made at the time (originally in `CLAUDE.md` ("Lessons"); index in `docs/lessons/README.md`). Put new lessons in the matching section; if none fits, start a new one.
+Pitfalls, odd behavior and the trade-offs made at the time (originally in `CLAUDE.md`; index in `docs/lessons/README.md`). Put new lessons in the matching section; if none fits, start a new one.
 
 ## Sending attachments
 
@@ -29,6 +29,8 @@ When mainline hides the send button for an empty composer, attachment drafts sti
 
 ## Messages and documents
 
+- An all-account mail search must fail when any account fails, even if another supplies results; otherwise older HTTP, tool and subscription clients accept an incomplete page as complete. Keep cancellation distinct, and do not put upstream error details or credentials into the aggregate error (#4462). Verify the actual callers with two independent loopback IMAP servers, including retry after repair and a healthy empty result.
+
 - Lark message rendering copies the Lark gateway's web client (`docs/apple/ios.md` ("Lark message rendering")): the hub forwards `parts` unchanged and only rewrites media URLs to `/api/v1/lark/media/`;
   to read the gateway's source, clone its upstream repository (the address is in the notes of the extension that connects Lark; the hub machine only has the deployed build).
 - For personal Agent sources, look at the hub's `GET /api/v1/agents` first: when no Lark gateway is configured, or only the Lark CLI is, it returns `{"sources":[]}` and the sessions endpoint returns `{"sessions":[]}`, both HTTP 200; the Lark CLI doesn't provide a personal Agent bridge.
@@ -55,14 +57,15 @@ When mainline hides the send button for an empty composer, attachment drafts sti
 - A full mail parse can fill missing envelope recipients from the raw `To` header (#6172). Update derived fields on the parsed message; copying the original summary back erases that fallback. Test an empty envelope recipient list and preserve populated-envelope precedence.
 - Build a mail server's dial address with `serverAddr`, never `fmt.Sprintf("%s:%d")`: a server set as an IPv6 literal (`2001:db8::1`, with or without brackets) needs brackets before the port; `2001:db8::1:993` is no address, for the dialer or in the `CONNECT` line to the Google proxy.
 - SMTPUTF8 is declared on `MAIL FROM` for the whole envelope, recipients included: a server that implements RFC 6531 refuses a non-ASCII address in `RCPT TO` unless `MAIL FROM` declared it, even when the sender's address is ASCII.
-- Check the capabilities the server advertises before using IMAP extensions: QQ Mail doesn't advertise LIST-EXTENDED and simply never answers a `LIST` with `RETURN`, so you can only wait for the timeout (`docs/extensions/mail.md` ("Caveats")).
-- A server answering "search succeeded, 0 results" doesn't mean there really are none: 163 returns 0 for any keyword `SEARCH` (`TEXT`, `BODY`, `SUBJECT`, `FROM`, Chinese or English, with or without `CHARSET UTF-8`); only conditions like `ALL` and dates work (tested 2026-11-03). So when a keyword search returns 0, match headers locally (`docs/extensions/mail.md` ("Search")); tests simulate this kind of server with `blindSearch`.
+- Check the capabilities the server advertises before using IMAP extensions: QQ Mail doesn't advertise LIST-EXTENDED and simply never answers a `LIST` with `RETURN`, so you can only wait for the timeout (`docs/extensions/mail.md` ("Known limitations")).
+- A server answering "search succeeded, 0 results" doesn't mean there really are none: 163 returns 0 for any keyword `SEARCH` (`TEXT`, `BODY`, `SUBJECT`, `FROM`, Chinese or English, with or without `CHARSET UTF-8`); only conditions like `ALL` and dates work (tested 2026-11-03). So when a keyword search returns 0, match headers locally (`docs/extensions/mail.md` ("Known limitations")); tests simulate this kind of server with `blindSearch`.
 - 163 is also slow to fetch, slower and more erratic the older the mail: 200 summaries per page, 4 seconds for the newest page, 6 to 20 seconds after that, over 20 seconds for the page around message 1000 (tested 2026-11-03). One IMAP operation gets only 20 seconds (`withConn`), so finding headers and fetching summaries must be done in small batches, with time counted from the start of the operation, connecting included (#858); batches of 500 with time counted from the start of the scan time out.
 - A cursor kept by UID must also record UIDVALIDITY: after the server rebuilds / migrates a mailbox, UIDs are renumbered from the start (RFC 3501 2.3.1.1), new mail's UIDs are all smaller than the old cursor, and comparing UIDs alone archives nothing until the new UIDs pass the old maximum.
   The cursor also can't jump straight to "the max UID of the newest page": if more than a page arrives between two runs, the ones in the middle are never read. The knowledge base's mail archiving (`extmgr/mail_connector.go`) now records `<account>#v`;
   when a page doesn't reach the old cursor it records the gap (`#f` < UID < `#h`) and fills it page by page; when UIDVALIDITY changes it starts again from the newest page and only takes mail later than the newest archived one (`#t`) (#2633).
+- Resetting the UID cursor alone does not change knowledge-base receipt identity: a reused UID from the same sender can be skipped as already archived. Keep old decimal IDs until a known validity change, then persist a per-inbox epoch and include both that epoch and validity in IDs. The validity distinguishes another change before the first checkpoint is published; the epoch distinguishes later changes after checkpoints. A missing or zero validity cannot prove a change, and an already advanced old cursor cannot recover a lost message. Older writers ignore the epoch and are not safe to mix with the new writer. The existing timestamp filter and newest-page restart remain separate limits.
 - @mentions of me and comments to me in Lark docs / sheets / Base don't go into the IM chat list (there's no "Docs Assistant" chat); they're only in the Lark gateway's document notification center
-  `documents/notifications`, and the card only says "who mentioned you", not which row: you have to read the sheet and look for "@name" yourself (`docs/assistant/inbox.md` ("Docs")).
+  `documents/notifications`, and the card only says "who mentioned you", not which row: you have to read the sheet and look for "@name" yourself (`docs/assistant/inbox.md` ("Docs: mentions in sheets, bases, and documents")).
   In sheets, `sheet/edit` on a cell with a dropdown always reports `DOCUMENT_EDIT_UNSUPPORTED`; change the value with `choose` in `sheet/structure`; Base `base/edit`'s
   `expect` fingerprint must be computed from the current value (`BaseCell.Fingerprint`), and the id format of person fields differs from the userId `accounts` gives (can't be written, can be read).
   Tests only use demo docs you created yourself (link in an environment variable); don't touch real sheets the user gave you.

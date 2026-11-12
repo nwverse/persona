@@ -5,7 +5,8 @@
 // hub (no `assistant_readiness`) keeps the page as it was.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadPages } from "../../lib/lazy-page";
 import type { Machine } from "../../lib/types";
 import type { Readiness } from "../../lib/readiness";
 
@@ -29,6 +30,7 @@ const { resetReadiness, actionLabel } = await import("../../lib/readiness");
 const { getState } = await import("../../lib/store");
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+beforeAll(() => loadPages(), 60_000);
 
 const setup: Readiness = {
   version: 1,
@@ -192,6 +194,11 @@ describe("the main conversation's readiness", () => {
     expect(card?.textContent).toContain("详情");
     // the draft is back in the box, not lost
     expect(textarea().value).toBe("你好");
+    // the same neutral error notice as a model error over the composer (#5313), and its ✕ puts it away
+    expect(card?.hasAttribute("data-error-notice")).toBe(true);
+    expect(card?.className).not.toContain("bg-red-tint");
+    act(() => card!.querySelector<HTMLButtonElement>('[aria-label="关闭错误提示"]')!.click());
+    expect(host.querySelector('[data-testid="readiness-failure"]')).toBeNull();
   });
 
   it("adds a computer in place where the hub lets this device add one", async () => {

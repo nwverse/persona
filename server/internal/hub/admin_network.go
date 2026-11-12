@@ -58,6 +58,7 @@ func (h *Hub) adminNetworkView(r *http.Request) map[string]any {
 		"endpoints":      h.endpointList(),
 		"security": map[string]any{
 			"trusted_cidrs": trusted, "allow_public_plaintext": h.cfg.Security.AllowPublicPlaintext,
+			"plaintext_loopback_only": h.cfg.Security.PlaintextLoopbackOnly,
 		},
 		"admin": map[string]any{
 			"access": scope.access, "cidrs": cidrs, "session_hours": file.sessionLifetime(), "from_env": scope.fromEnv,
@@ -121,19 +122,19 @@ func (h *Hub) adminNetworkRoutes(mux *http.ServeMux) {
 			return
 		}
 		err = editHubJSON(h.cfg.dir, func(o *jsonObject) error {
-			admin, err := o.object("admin")
+			admin, err := o.Object("admin")
 			if err != nil {
 				return err
 			}
-			if err := admin.set("access", cfg.Access); err != nil {
+			if err := admin.Set("access", cfg.Access); err != nil {
 				return err
 			}
 			if cfg.Access == accessCIDRs {
-				if err := admin.set("cidrs", cfg.CIDRs); err != nil {
+				if err := admin.Set("cidrs", cfg.CIDRs); err != nil {
 					return err
 				}
 			}
-			o.setObject("admin", admin)
+			o.SetObject("admin", admin)
 			return nil
 		})
 		if err != nil {
@@ -202,32 +203,32 @@ func (h *Hub) adminNetworkRoutes(mux *http.ServeMux) {
 		}
 		err := editHubJSON(h.cfg.dir, func(o *jsonObject) error {
 			if in.PublicURL != nil {
-				if err := o.set("public_url", *in.PublicURL); err != nil {
+				if err := o.Set("public_url", *in.PublicURL); err != nil {
 					return err
 				}
 			}
 			if in.TLSListen == nil && in.Advertise == nil {
 				return nil
 			}
-			public, err := o.object("public")
+			public, err := o.Object("public")
 			if err != nil {
 				return err
 			}
 			if in.TLSListen != nil {
 				if *in.TLSListen == "" {
-					public.del("tls_listen")
-				} else if err := public.set("tls_listen", *in.TLSListen); err != nil {
+					public.Del("tls_listen")
+				} else if err := public.Set("tls_listen", *in.TLSListen); err != nil {
 					return err
 				}
 			}
 			if in.Advertise != nil {
 				if len(advertise) == 0 {
-					public.del("advertise")
-				} else if err := public.set("advertise", advertise); err != nil {
+					public.Del("advertise")
+				} else if err := public.Set("advertise", advertise); err != nil {
 					return err
 				}
 			}
-			o.setObject("public", public)
+			o.SetObject("public", public)
 			return nil
 		})
 		if err != nil {

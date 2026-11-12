@@ -5,16 +5,17 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 usage() {
   printf '%s\n' \
-    'Usage: scripts/ci/android.sh [--lane full|lint-build|test-core|test-feature-0|test-feature-1|test-platform-app] [--profile]' \
+    'Usage: scripts/ci/android.sh [--lane full|lint-build-test-0|test-1] [--profile]' \
     '       scripts/ci/android.sh --help' \
     'Requires Bash, Python 3, timeout (or gtimeout), JAVA_HOME pointing to JDK 21,' \
     'and ANDROID_HOME (or ANDROID_SDK_ROOT) pointing to an installed Android SDK.' \
     'SDK setup: sdkmanager "platforms;android-37.0" "build-tools;37.0.0" "platform-tools"' \
     'Accept SDK licenses using sdkmanager --licenses if required by your SDK tools.' \
     'Toolchain versions are read from android/gradle/libs.versions.toml.' \
-    'No arguments runs the original complete verification. lint-build owns checker tests,' \
-    'translation/token checks, all-module lint and the debug APK; test lanes partition' \
-    'every included module using its all-variant test lifecycle task.' \
+    'No arguments runs the original complete verification. lint-build-test-0 owns checker tests,' \
+    'translation/token checks, all-module lint, the debug APK and feature test shard 0; test-1' \
+    'runs core, feature shard 1, platform and app tests. Together the two lanes run every' \
+    'included module once using its all-variant test lifecycle task.' \
     '--profile writes Gradle timing reports to android/build/reports/profile/.' \
     'No instrumentation/device tests or release signing.' \
     'ANDROID_CI_TIMEOUT_SECONDS: timeout per check (default 3600; kill grace 30s).' \
@@ -39,7 +40,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 case $LANE in
-  full|lint-build|test-core|test-feature-0|test-feature-1|test-platform-app) ;;
+  full|lint-build-test-0|test-1) ;;
   *) usage >&2; exit 2 ;;
 esac
 
@@ -121,14 +122,20 @@ run_check() {
   fi
 }
 
-if [[ $LANE == full || $LANE == lint-build ]]; then
+# The checker tests and resource checks run in the lane that runs lint.
+if [[ $LANE == full || $LANE == lint-build-test-0 ]]; then
   cd "$ROOT/scripts/ci"
   run_check 'Android shard coverage tests' python3 -B test_android_shards.py
   cd "$ROOT/scripts/app"
   run_check 'translation checker tests' python3 -B test_android_i18n_check.py
   run_check 'token checker tests' python3 -B test_android_token_baseline.py
+  run_check 'slot order checker tests' python3 -B test_android_slot_order.py
   run_check 'translation resources and literal baseline' python3 -B android_i18n_check.py
   run_check 'design token baseline' python3 -B android_token_baseline.py
+  run_check 'design-system slot order' python3 -B android_slot_order.py
+  run_check 'generated design tokens' python3 -B "$ROOT/scripts/assets/gen_tokens.py" --check \
+    --kotlin "$ROOT/android/core/designsystem/src/main/kotlin/persona/core/designsystem/Tokens.kt"
+  run_check 'icon meanings' python3 -B "$ROOT/scripts/assets/gen_icon_meanings.py" --check
 fi
 
 cd "$ROOT/android"

@@ -82,6 +82,10 @@ type MachineConfig struct {
 	// computer whose claude is logged in under a profile directory rather than ~/.claude (#1459); "~/" is the remote
 	// home. Unset, claude uses its default. Launchers (a ~/.zshrc alias, a managed one) keep their own.
 	ClaudeStartDir string `json:"claude_start_dir,omitempty"`
+	// InboxDir is where files sent to this machine to keep land (dest=inbox, phone to computer and computer to
+	// computer, docs/protocol/file-transfer.md): "~/" is the remote home, or an absolute folder in it. Unset,
+	// proto.DefaultInboxDir. The node refuses a folder the phone may not write to.
+	InboxDir string `json:"inbox_dir,omitempty"`
 }
 
 // NodePackagesConfig is where the manager fetches the node builds for the computers that the hub has none of its own
@@ -89,6 +93,16 @@ type MachineConfig struct {
 // publisher's), "" the hub build's own update URL, "off" never; Proxy an http://[user:pass@]host:port proxy for it
 // (internal/netproxy; "" direct, the environment's proxies are not used).
 type NodePackagesConfig struct {
+	URL   string `json:"url,omitempty"`
+	Proxy string `json:"proxy,omitempty"`
+}
+
+// UpdateConfig is where the hub looks for its own releases (docs/operations/hub-update.md "Update source"): URL a
+// release's download directory (latest.json and the files it lists, e.g. a GitHub repository's
+// releases/latest/download) in place of the one the build was made with; "" that one. Proxy an
+// http://[user:pass@]host:port proxy for the update's checks and downloads only (internal/netproxy); "" the
+// environment's, as before.
+type UpdateConfig struct {
 	URL   string `json:"url,omitempty"`
 	Proxy string `json:"proxy,omitempty"`
 }
@@ -139,16 +153,23 @@ func (p AssistantProfile) ServiceBound() bool {
 // HTMLViewsOn is assistant.html_views with its default (on); it means nothing while PersonaView is off.
 func (p AssistantProfile) HTMLViewsOn() bool { return p.HTMLViews == nil || *p.HTMLViews }
 
+type SharingConfig struct {
+	PublicOrigin string `json:"public_origin,omitempty"`
+	// IngressKey authenticates only loopback sharing-ingress peer IPs, never content or management access.
+	IngressKey string `json:"ingress_key,omitempty"`
+}
+
 type Config struct {
 	// AutoUpdateNodes explicitly opts into fleet upgrades after Hub updates and node reconnects.
 	AutoUpdateNodes bool `json:"auto_update_nodes,omitempty"`
 	// Name is what people see this hub as (hubName); empty: its machine's host name.
 	Name string `json:"name,omitempty"`
 	// ShutdownTimeoutSeconds bounds the entire shutdown, including pool closure (default 8; policy, not a latency measurement).
-	ShutdownTimeoutSeconds int    `json:"shutdown_timeout_seconds,omitempty"`
-	Listen                 string `json:"listen"`
-	Token                  string `json:"token"`
-	PublicURL              string `json:"public_url"`
+	ShutdownTimeoutSeconds int            `json:"shutdown_timeout_seconds,omitempty"`
+	Listen                 string         `json:"listen"`
+	Token                  string         `json:"token"`
+	PublicURL              string         `json:"public_url"`
+	Sharing                *SharingConfig `json:"sharing,omitempty"`
 	// DatabaseURL points at the Postgres container (scripts/deploy/deploy.sh creates it and fills this in).
 	DatabaseURL string `json:"database_url"`
 	// The manager's own sections (managerconf.Moved: the connectors, extensions, bots, mail sign-ins, Lark, usage
@@ -171,6 +192,8 @@ type Config struct {
 	Tailcat TailcatConfig `json:"tailcat,omitempty"`
 	// NodePackages is where node builds the hub has none of come from.
 	NodePackages NodePackagesConfig `json:"node_packages,omitzero"`
+	// Update is where the hub's own releases come from, and through which proxy (selfupdate_source.go).
+	Update UpdateConfig `json:"update,omitzero"`
 	// Mesh tunes the links to other hubs (docs/server/mesh.md, config_mesh.go).
 	Mesh MeshConfig `json:"mesh,omitempty"`
 	// Link tunes the heartbeat with the computers' Persona Links (config_link.go, docs/operations/link.md "Heartbeat").
@@ -255,7 +278,7 @@ func LoadConfig() (*Config, error) {
 
 // runningHubConfig is hub.json for the commands that only talk to the hub running on this machine (pair, peer,
 // manager-code, assistant-token). It never writes, not even the state directory: a hub.json one of them made would make
-// a later `persona-hub setup` take this machine for a hub that has already run (setup.go, config).
+// a later `persona-hub setup` take this machine for a hub that has already run (setup_config.go, config).
 func runningHubConfig() (*Config, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -270,8 +293,12 @@ var (
 		"the hub with persona-hub setup (or personad hub setup)")
 )
 
-// readConfigFile is <dir>/hub.json over the defaults, with the environment's overrides. It never writes: a missing file
-// is errNoHubJSON, one without a token errNoHubToken (LoadConfig fills both in).
+// readConfigFile is <dir>/hub.json over the defaults, with the environment's overrides. It never writes content: a
+// missing file is errNoHubJSON, one without a token errNoHubToken (LoadConfig fills both in). A file copied in by
+// hand keeps cp's 0644, so on every read it is made the owner's only the way tunnel.readJSON does: the file holds the
+// master token and the database password, and every load path (the hub's start and the commands that only talk to a
+// running hub) goes through here. On Windows POSIX permission bits do not apply, so the mode checks in the callers'
+// tests are gated on GOOS.
 func readConfigFile(dir string) (*Config, error) {
 	path := filepath.Join(dir, "hub.json")
 	b, err := os.ReadFile(path)
@@ -280,6 +307,11 @@ func readConfigFile(dir string) (*Config, error) {
 	}
 	if err != nil {
 		return nil, err
+	}
+	if fi, err := os.Stat(path); err == nil && fi.Mode().Perm()&0o077 != 0 {
+		if err := os.Chmod(path, 0o600); err != nil {
+			return nil, fmt.Errorf("%s is readable by others and cannot be made private: %w", path, err)
+		}
 	}
 	cfg := defaultConfig()
 	cfg.Token = "" // the file's, never one made up here
@@ -290,7 +322,7 @@ func readConfigFile(dir string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
-	if _, ok := raw.get("token"); !ok {
+	if _, ok := raw.Get("token"); !ok {
 		return nil, fmt.Errorf("%s has no token: %w", path, errNoHubToken)
 	}
 	for _, machine := range cfg.Machines {
@@ -318,11 +350,11 @@ var errHubJSONKept = errors.New("hub.json kept as it is")
 // meantime is kept.
 func initConfigFile(dir string) error {
 	err := editHubJSON(dir, func(o *jsonObject) error {
-		if _, ok := o.get("token"); ok {
+		if _, ok := o.Get("token"); ok {
 			return errHubJSONKept
 		}
 		if _, err := os.Stat(filepath.Join(dir, "hub.json")); err == nil {
-			return o.set("token", randomHex(24)) // as defaultConfig makes it
+			return o.Set("token", randomHex(24)) // as defaultConfig makes it
 		} else if !os.IsNotExist(err) {
 			return err
 		}

@@ -101,7 +101,7 @@ func TestKBConnectorReadCanSubmitPosts(t *testing.T) {
 	e := kbEng(t, h.s)
 	done := make(chan struct{})
 	go func() {
-		h.s.kbCollectItems(context.Background(), e)
+		h.s.kbCollectItems(context.Background(), e, false)
 		close(done)
 	}()
 	select {
@@ -131,7 +131,7 @@ func TestKBForgetWaitsForItemCollection(t *testing.T) {
 	e.ModelFor = nil
 	collected := make(chan struct{})
 	go func() {
-		s.kbCollectItems(context.Background(), e)
+		s.kbCollectItems(context.Background(), e, false)
 		close(collected)
 	}()
 	<-entered

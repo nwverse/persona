@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -148,7 +149,10 @@ func (s *Service) taskWorking(ctx context.Context, mid, sid string) {
 	s.tasks.mu.Lock()
 	s.tasks.working[t.ID] = time.Now()
 	s.tasks.mu.Unlock()
+	s.interruptsSoon()          // an interrupted receipt of it reads resumed now (interruptions.go)
+	s.clearTaskCheck(ctx, t.ID) // it judged the work before this turn (task_check.go)
 	s.setTaskStage(ctx, t.ID, "develop", "")
+	s.taskPlanApproval()
 	if t.Supervision != nil {
 		s.supervisedWorking(ctx, t)
 	}
@@ -161,8 +165,42 @@ type receiptBody struct {
 	PR      string         `json:"pr,omitempty"`
 	Machine string         `json:"machine,omitempty"`
 	Review  *receiptReview `json:"review,omitempty"`
+	// Criteria: a done receipt's list of its brief's criteria as they stood when the agent stopped (#3822,
+	// briefCriteriaNow): met or not met as the supervision ledger tracks them (#3635: the agent's reports and the
+	// reviews), unchecked while pending there, or dropped by a scope change.
+	// Absent without a brief or criteria. CriteriaMore: how many the list left out.
+	Criteria     []BriefCriterion `json:"criteria,omitempty"`
+	CriteriaMore int              `json:"criteria_more,omitempty"`
+	// Reroute names the machine a flexible task was moved off and where it landed, with the health-check reason;
+	// absent when it ran where it was asked (#2271).
+	Reroute *PlanReroute `json:"reroute,omitempty"`
 	// Error: what the model service answered when the turn was cut off (interrupted), for the card's detail.
 	Error string `json:"error,omitempty"`
+	// Interrupted receipts only (interruptions.go): Cause is the kind of error, Group the receipt heading the batch this
+	// one joined (empty on a head), Resolution how its task was dealt with since (worked out on every read), Batch the
+	// batch on its head.
+	Cause      string        `json:"cause,omitempty"`
+	Group      string        `json:"group,omitempty"`
+	Resolution string        `json:"resolution,omitempty"`
+	Batch      *receiptBatch `json:"batch,omitempty"`
+}
+
+// rerouteOfTask resolves the recorded machine reroute for the plan task that runs todoID: nil when the task has no
+// plan, the plan no longer holds it, or it was never moved (#2271).
+func (s *Service) rerouteOfTask(ctx context.Context, todoID, planID string) *PlanReroute {
+	if planID == "" {
+		return nil
+	}
+	p, err := s.loadPlan(ctx, planID)
+	if err != nil || p == nil {
+		return nil
+	}
+	for i := range p.Tasks {
+		if p.Tasks[i].TodoID == todoID {
+			return p.Tasks[i].Reroute
+		}
+	}
+	return nil
 }
 
 type receiptReview struct {
@@ -177,15 +215,30 @@ const interruptedSummary = assistantwire.InterruptedSummary
 // Not kept in a package variable: that would read the catalogs whenever personad starts, a hook too (#1308).
 func silentTurnErrorIn(l i18n.Lang) string { return i18n.T(l, "assistant-tasks.silent_turn") }
 
-var prLink = lazyre.New(`https://github\.com/[\w.-]+/[\w.-]+/pull/\d+`)
+var prLink = lazyre.New(`https://github\.com/[\w.-]+/[\w.-]+/pull/\d+|https://[^/\s<>"()]+/(?:[^/\s<>"()]+/)+merge_requests/\d+\b`)
 
 // taskTurnEnded: one of the task's agents (sid on machine) ended a turn. Once none of them works or waits for the
 // user any more, the conversation gets a receipt (once per stretch of work), and the todo is closed if the judge
 // finds the work finished.
 func (s *Service) taskTurnEnded(ctx context.Context, machine, sid string) {
 	time.Sleep(s.settleDelay(ctx)) // a turn that ends to ask, or goes on at once, is not the end
+	s.taskTurnSettled(ctx, machine, sid)
+}
+
+// taskTurnSettled is taskTurnEnded once the turn stayed still: after its sleep, or afterSettle's timer.
+func (s *Service) taskTurnSettled(ctx context.Context, machine, sid string) {
+	if s.meetingTurnNow(machine, sid) {
+		return // a meeting's batch: never the task's progress, report or completion (meeting_turns.go)
+	}
 	t, ok := s.taskOf(ctx, machine, sid)
 	if !ok {
+		// An agent Persona started that is on no todo becomes a task once a turn of it did work (#3617, agent_tasks.go).
+		if t, ok = s.agentTaskAtTurnEnd(ctx, machine, sid); !ok {
+			return
+		}
+	}
+	if current, ok := s.todoNow(t.ID); ok && (current.Cancelled() || current.AgentAborted(machine, sid)) {
+		s.logf("task %s: cancelled or agent %s/%s aborted: skipping turn end", t.ID, machine, sid)
 		return
 	}
 	agents, reached := s.taskAgentsReached(ctx, t)
@@ -249,9 +302,7 @@ func (s *Service) taskTurnEnded(ctx context.Context, machine, sid string) {
 		where := [2]string{cut.MachineID, cut.SessionID}
 		body := receiptBody{Title: t.Title, State: "interrupted", Summary: i18n.T(s.lang(cctx), "assistant-tasks.interrupted"), Machine: name,
 			Error: clip(strings.TrimSpace(cut.TurnError), 300)}
-		if _, err := s.appendFeed(cctx, t.Origin, feedReceipt, t.ID, body); err != nil {
-			s.logf("task %s: receipt: %v", t.ID, err)
-		}
+		s.appendInterrupted(cctx, t, body, false)
 		s.taskNotice(cctx, t, name, "interrupted", "", body.Error)
 		s.taskReport(t, reportInterrupted, name, where, body.Error, nil)
 		return
@@ -276,7 +327,7 @@ func (s *Service) taskTurnEnded(ctx context.Context, machine, sid string) {
 		if latest, ok := s.session(cctx, last.MachineID, last.SessionID); ok &&
 			(latest.Status != last.Status || latest.Rev != last.Rev || latest.LastText != last.LastText || !latest.UpdatedAt.Equal(last.UpdatedAt)) &&
 			s.takeTaskAnswerRetry(machine, sid) {
-			go s.taskTurnEnded(context.WithoutCancel(ctx), machine, sid)
+			s.afterSettle(context.WithoutCancel(ctx), s.taskTurnSettled, machine, sid)
 		}
 		return
 	}
@@ -288,9 +339,7 @@ func (s *Service) taskTurnEnded(ctx context.Context, machine, sid string) {
 		l := s.lang(cctx)
 		body := receiptBody{Title: t.Title, State: "interrupted", Summary: i18n.T(l, "assistant-tasks.interrupted"), Machine: name,
 			Error: silentTurnErrorIn(l)}
-		if _, err := s.appendFeed(cctx, t.Origin, feedReceipt, t.ID, body); err != nil {
-			s.logf("task %s: receipt: %v", t.ID, err)
-		}
+		s.appendInterrupted(cctx, t, body, true)
 		s.taskNotice(cctx, t, name, "interrupted", "", body.Error)
 		s.taskReport(t, reportInterrupted, name, where, body.Error, nil)
 		return
@@ -300,7 +349,12 @@ func (s *Service) taskTurnEnded(ctx context.Context, machine, sid string) {
 	if _, answer := turnExchange(items); answer != "" {
 		text = answer
 	}
-	body := receiptBody{Title: t.Title, State: "done", Summary: clipMarkdown(text, 600), Machine: name}
+	if current, ok := s.todoNow(t.ID); !ok || current.Cancelled() || current.AgentAborted(machine, sid) {
+		s.logf("task %s: cancelled or agent %s/%s aborted: not issuing done receipt", t.ID, machine, sid)
+		return
+	}
+	body := receiptBody{Title: t.Title, State: "done", Summary: clipMarkdown(text, 600), Machine: name,
+		Reroute: s.rerouteOfTask(cctx, t.ID, t.PlanID)}
 	// Persona follows up on a supervised stop through sigReview or sigIdle after judgment; the receipt need not wait.
 	// needs_user waits on the user instead. Read the latest todo in case it changed while reading the reply.
 	if current, ok := s.todoNow(t.ID); ok && current.DoneAt == nil {
@@ -310,6 +364,13 @@ func (s *Service) taskTurnEnded(ctx context.Context, machine, sid string) {
 				state = "awaiting"
 			}
 			body.Review = &receiptReview{State: state, Criteria: len(v.DoneWhen)}
+		}
+	}
+	if current, ok := s.todoNow(t.ID); ok {
+		if list := s.briefCriteriaNow(current); len(list) > briefCriteriaMost {
+			body.Criteria, body.CriteriaMore = list[:briefCriteriaMost], len(list)-briefCriteriaMost
+		} else {
+			body.Criteria = list
 		}
 	}
 	if body.Summary == "" {
@@ -322,10 +383,8 @@ func (s *Service) taskTurnEnded(ctx context.Context, machine, sid string) {
 		s.logf("task %s: receipt: %v", t.ID, err)
 	}
 	s.taskNotice(cctx, t, name, "done", "", clipMarkdown(text, 1500))
-	stage, pr := stageOf(text)
-	s.setTaskStage(cctx, t.ID, stage, pr)
-	if stageIndex(stage) >= stageIndex("deploy") {
-		go s.askAcceptance(t, last.MachineID, last.SessionID, text) // the user tries it (acceptance.go)
+	if s.advanceTaskReply(cctx, t, last.MachineID, last.SessionID, text) {
+		go s.askAcceptance(t, last.MachineID, last.SessionID, text) // verified, by the supervising assistant or the user (acceptance.go)
 	}
 	s.taskReport(t, reportDone, name, [2]string{last.MachineID, last.SessionID}, text, nil)
 	s.autoFinishTask(t, since, worked) // the work may be finished: then the todo is done (done.go)
@@ -360,6 +419,27 @@ func (s *Service) taskTurnEndedAfter(ctx context.Context, machine, sid string, a
 // routeToTask sends text straight to the agent of task todoID that most needs it, and keeps it in the conversation as
 // the user's (no from: a task card's Message, or a decision the owner made in Lark).
 func (s *Service) routeToTask(ctx context.Context, conversation, todoID, text string) (FeedItem, error) {
+	return s.routeToTaskChecked(ctx, conversation, todoID, text, nil)
+}
+
+// routeToTaskChecked lets automatic decisions recheck their task after slow session/device lookups.
+// Direct user messages retain routeToTask's ability to reuse a completed task's agent.
+func (s *Service) routeToTaskChecked(ctx context.Context, conversation, todoID, text string, guard func(Todo) bool) (FeedItem, error) {
+	return s.routeToTaskAs(ctx, conversation, todoID, text, "", guard)
+}
+
+// routedRelay marks a routed item the hub wrote for the owner (`relay`): an answer of theirs it put into words for the
+// task's agent (a recommendation taken, an option chosen, a reply to a card), as opposed to what they typed to the
+// task themselves. The apps draw both as the owner's; where a task came from reads only the latter (decision.go).
+const routedRelay = "answer"
+
+// relayToTask is routeToTaskChecked for what the hub words on the owner's behalf (routedRelay).
+func (s *Service) relayToTask(ctx context.Context, conversation, todoID, text string, guard func(Todo) bool) (FeedItem, error) {
+	return s.routeToTaskAs(ctx, conversation, todoID, text, routedRelay, guard)
+}
+
+// routeToTaskAs is routeToTaskChecked; relay marks the routed item it leaves ("": the owner's own words).
+func (s *Service) routeToTaskAs(ctx context.Context, conversation, todoID, text, relay string, guard func(Todo) bool) (FeedItem, error) {
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return FeedItem{}, err
 	}
@@ -374,20 +454,45 @@ func (s *Service) routeToTask(ctx context.Context, conversation, todoID, text st
 	if len(agents) == 0 {
 		return FeedItem{}, i18n.Err("assistant-tasks.route_no_agent")
 	}
-	c := pickTaskAgent(agents)
+	live, last := liveTaskAgents(agents)
+	if len(live) == 0 { // every agent has stopped (read-only, #4754): the user's message starts a new one (tasks_successor.go)
+		if relay != "" {
+			return FeedItem{}, i18n.Err("assistant-tasks.route_agents_stopped")
+		}
+		started, err := s.startTaskSuccessor(ctx, t, last, text)
+		if err != nil {
+			return FeedItem{}, err
+		}
+		return s.appendFeed(ctx, conversation, feedRouted, todoID, map[string]string{"text": text,
+			"new_agent": started.SessionID, "new_agent_machine": started.MachineID})
+	}
+	c := pickTaskAgent(live)
 	if _, ok := s.device(ctx, c.MachineID); !ok {
 		return FeedItem{}, i18n.Err("assistant-tasks.route_offline")
 	}
-	// An agent closed after its task was done (tasks_close.go) is resumed first: that can take minutes, and goes
-	// on when the phone stops waiting, as a send from the chat does.
+	// An offline row a node before #4754 lists is resumed first: that can take minutes, and goes on when the phone
+	// stops waiting, as a send from the chat does.
 	wait := 90 * time.Second
 	if c.Status == proto.StatusOffline {
 		wait = 5 * time.Minute
 	}
 	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), wait)
 	defer cancel()
+	if guard != nil {
+		cur, ok := s.todoNow(todoID)
+		if !ok {
+			return FeedItem{}, db.ErrTodoNotFound
+		}
+		if !guard(cur) {
+			return FeedItem{}, db.ErrTodoCompleted
+		}
+	}
 	if err := s.call(sctx, c.MachineID, DeviceSessionSend, map[string]any{"session_id": c.SessionID, "text": text}, nil); err != nil {
 		return FeedItem{}, err
 	}
-	return s.appendFeed(sctx, conversation, feedRouted, todoID, map[string]string{"text": text})
+	body := map[string]string{"text": text}
+	if relay != "" {
+		body["relay"] = relay
+	}
+	return s.appendFeed(sctx, conversation, feedRouted, todoID, body)
 }

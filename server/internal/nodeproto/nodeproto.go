@@ -8,6 +8,13 @@
 // difference is only an upgrade hint.
 package nodeproto
 
+// EventRestarting announces a planned resident exec; CodeRestarting refuses a request before it starts.
+// Both are optional: older managers ignore the event and newer managers never replay an ambiguous dropped call.
+const (
+	EventRestarting = "node.restarting"
+	CodeRestarting  = "node_restarting"
+)
+
 // PersonaContracts is the optional bidirectional naming capability. It does not
 // change the node protocol floor or become a required capability.
 const PersonaContracts = "persona_contracts_v1"
@@ -37,6 +44,9 @@ const (
 	// ModelConfiguration: assistant.send / assistant.warm / session.start / session.send take a launcher's model and
 	// model_fingerprint (docs/assistant/model-config.md). Older nodes said so with node.info's model_configuration.
 	ModelConfiguration = "model_configuration"
+	// AssistantConfigDir: assistant.send / assistant.warm / session.send honor an explicit
+	// config_dir and preserve the selected Claude profile when resuming a conversation.
+	AssistantConfigDir = "assistant_config_dir"
 	// NodeUpdate: the node.update.* methods (docs/operations/node-update.md). Whether an update can run right now is still
 	// node.info's node_update / node_update_reason.
 	NodeUpdate = "node_update"
@@ -61,6 +71,18 @@ const (
 	// SecretRun: secret.run, commands the user approved on the password card run with the password they typed on
 	// their stdin (docs/assistant/assistant.md "Password card"). A node on Windows announces it and refuses the run.
 	SecretRun = "secret_run"
+	// SecretEnv: secret.stage and session.start's secret_ticket, values the user approved on the hand-off card put
+	// in one Agent start's environment (docs/extensions/secret-providers.md "The hand-off to one Agent run").
+	SecretEnv = "secret_env"
+	// Clipboard: clipboard.get / clipboard.set and node.info's clipboard (docs/operations/clipboard.md).
+	Clipboard = "clipboard"
+	// LauncherSwitch: session.modes takes launcher, a switch of a running Claude Code Agent to another launcher that
+	// its next session.send carries out (docs/integrations/claude-integration.md "Switching a running Agent to another
+	// provider"). A node without it would drop launcher and apply the model on the launcher the Agent runs on.
+	LauncherSwitch = "launcher_switch"
+	// ModelHTTP: model.http, a direct-API model request an API connection sends through this computer
+	// (docs/assistant/model-config.md "Sending through a computer").
+	ModelHTTP = "model_http"
 )
 
 // Error codes in the manager's answers to a resident node's replayed notifications (a notify with spool_id,
@@ -85,4 +107,10 @@ const (
 )
 
 // Announced is what a node built from this code announces.
-var Announced = []string{PersonaContracts, ManagerUpdateInventory, Sessions, ModelConfiguration, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun}
+var Announced = []string{ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, Sessions, ModelConfiguration, AssistantConfigDir, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP}
+
+// ShareProjection is the bounded complete-source sharing projection, not light Items.
+const ShareProjection = "share_projection.v1"
+
+// CreationReceipt preserves opaque creation IDs on every ordinary new-start path.
+const CreationReceipt = "creation_receipt.v1"

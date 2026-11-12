@@ -1,0 +1,59 @@
+{
+ "apple/Persona/App/AgentsScrollProbe.swift": {
+  "AgentsScrollSampler": 1
+ },
+ "apple/Persona/DesignSystem/ShellComposerBar.swift": {
+  "ComposerHold": 1,
+  "Dictation": 1
+ },
+ "apple/Persona/Views/Chat/ChatView.swift": {
+  "ChatActions": 1,
+  "ChatFullPage": 1,
+  "ChatScratch": 1
+ },
+ "apple/Persona/Views/Chat/PromptComposer.swift": {
+  "Dictation": 1
+ },
+ "apple/Persona/Views/Chats/ChatsView.swift": {
+  "AgentsFeed": 1,
+  "PersonalAgentEntryModel": 1
+ },
+ "apple/Persona/Views/Inbox/Lark/LarkChatView.swift": {
+  "LarkChatBook": 1,
+  "LarkChatOutbox": 1
+ },
+ "apple/Persona/Views/Inbox/Lark/LarkConversationsView.swift": {
+  "LarkConversationScroll": 1
+ },
+ "apple/Persona/Views/NewChat/NewChatView.swift": {
+  "NewAgentAttachments": 1
+ },
+ "apple/Persona/Views/Session/SessionPanes.swift": {
+  "KeyStream": 1,
+  "TerminalUploads": 1
+ },
+ "apple/Persona/Views/Settings/ConnectDeviceView.swift": {
+  "ConnectDeviceModel": 1
+ },
+ "apple/Persona/Views/Settings/ModelConfigurationView.swift": {
+  "ModelConfigurationModel": 2
+ },
+ "apple/Persona/Views/Settings/SavedPlacesView.swift": {
+  "PlaceSuggestions": 1
+ },
+ "apple/Persona/Views/Settings/SettingsView.swift": {
+  "IPhoneConsentModel": 1
+ },
+ "apple/Persona/Views/Shell/ShellView.swift": {
+  "ShellState": 1
+ },
+ "apple/Persona/Views/Todos/TodoDetailView.swift": {
+  "Dictation": 1
+ },
+ "apple/Persona/Views/Todos/TodosView.swift": {
+  "Dictation": 1
+ },
+ "apple/PersonaWatch/PersonaWatchApp.swift": {
+  "WatchModel": 1
+ }
+}

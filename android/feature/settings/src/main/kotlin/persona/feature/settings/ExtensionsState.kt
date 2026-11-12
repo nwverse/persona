@@ -2,13 +2,21 @@ package persona.feature.settings
 
 import android.content.res.Resources
 import persona.core.contracts.MachineComputer
+import persona.core.contracts.pushManager
+import persona.core.contracts.api.AssistantManagerChoice
+import persona.core.contracts.api.ManagerRoster
 import persona.core.contracts.api.HubExtension
+import persona.core.contracts.api.HubLauncher
 import persona.core.contracts.api.ExtensionConfigRejected
 import persona.core.contracts.api.ExtensionAuth
 import persona.core.contracts.api.ExtensionDetail
 import persona.core.contracts.api.ExtensionField
 import persona.core.contracts.api.ExtensionHasDependents
+import persona.core.contracts.api.ExtensionFailedMember
+import persona.core.contracts.api.ExtensionPartialUninstall
+import persona.core.contracts.api.ExtensionRemoval
 import persona.core.contracts.api.ExtensionManagement
+import persona.core.contracts.api.unpinned
 import persona.core.contracts.api.ExtensionNodeState
 import persona.core.contracts.api.ExtensionPermission
 import persona.core.contracts.api.ExtensionUpgrade
@@ -66,6 +74,33 @@ internal object ExtensionText {
     }
 
     /** What asking before switching off [name]'s dependents with it says (#5192); unnamed when only an operation's error_code said so (#5611). */
+    /**
+     * What an uninstall says when it is done (#1154): with its members, how many went with it as the hub counted them
+     * ([removal]); null after an operation, which ends only once every member is gone; none from a hub that doesn't say.
+     */
+    fun uninstalled(res: Resources, name: String, members: Boolean, removal: ExtensionRemoval? = null, stepped: Boolean = false): String {
+        if (!members) return res.getString(R.string.settings_ext_uninstalled, name)
+        if (stepped) return res.getString(R.string.settings_ext_uninstalled_with_members, name)
+        val removed = removal?.removedMembers ?: return res.getString(R.string.settings_ext_uninstalled_members_unknown, name)
+        return res.getQuantityString(R.plurals.settings_ext_uninstalled_members, removed.size, name, removed.size)
+    }
+
+    /**
+     * The partial-uninstall dialog's lines: what went, what didn't (with the hub's reason) and what wasn't tried, each
+     * member by its name in [names] (its id when the name isn't known).
+     */
+    fun partial(res: Resources, partial: PackPartial, name: String, names: Map<String, String> = emptyMap()): String {
+        val separator = res.getString(R.string.settings_ext_list_separator)
+        fun named(id: String) = names[id] ?: id
+        return buildList {
+            add(res.getString(R.string.settings_ext_partial_text, name))
+            if (partial.removed.isNotEmpty()) add(res.getString(R.string.settings_ext_partial_removed, partial.removed.joinToString(separator, transform = ::named)))
+            if (partial.failed.isNotEmpty()) add(res.getString(R.string.settings_ext_partial_failed,
+                partial.failed.joinToString(separator) { f -> if (f.error.isBlank()) named(f.id) else res.getString(R.string.settings_ext_partial_failed_item, named(f.id), f.error) }))
+            if (partial.remaining.isNotEmpty()) add(res.getString(R.string.settings_ext_partial_remaining, partial.remaining.joinToString(separator, transform = ::named)))
+        }.joinToString("\n\n")
+    }
+
     fun cascade(res: Resources, ask: ExtensionCascade, name: String): String =
         if (ask.names.isEmpty()) res.getString(R.string.settings_ext_dependents_unnamed, name)
         else res.getString(R.string.settings_ext_dependents_text, ask.names.joinToString(res.getString(R.string.settings_ext_list_separator)), name)
@@ -142,7 +177,9 @@ internal object ExtensionText {
 
     /** The "Upgrades" group's line under a newer version: what happens to it (the web's upgradeDetail). */
     fun upgradeDetail(res: Resources, u: ExtensionUpgrade): String = when (u.state) {
-        "needs_permission" -> morePermissions(res, u.addedPermissions.orEmpty())
+        // A rename is confirmed for the ID change, not for permissions (#2511).
+        "needs_permission" -> if (u.renameTo != null) u.detail?.takeIf { it.isNotBlank() } ?: res.getString(R.string.settings_ext_upgrade_rename, u.id, u.renameTo)
+            else morePermissions(res, u.addedPermissions.orEmpty())
         "waiting_idle" -> res.getString(R.string.settings_ext_upgrade_waiting_idle)
         "available" -> res.getString(R.string.settings_ext_upgrade_available)
         "off" -> res.getString(R.string.settings_ext_upgrade_off)
@@ -155,8 +192,20 @@ internal object ExtensionText {
         else -> ""
     }
 
-    /** The auto-upgrade switch as shown: off while it is paused (the extension switched off), else the extension's own. */
-    fun autoUpgradeShown(e: HubExtension): Boolean = e.autoUpgradePaused == null && (e.autoUpgrade ?: true)
+    /** The persisted preference is distinct from the reason automatic upgrades are paused. */
+    fun autoUpgradeShown(e: HubExtension): Boolean = e.autoUpgrade ?: false
+
+    /**
+     * The Auto-upgrade footer: why the switch does not apply now, by the hub's `auto_upgrade_paused` (docs/extensions/extensions.md);
+     * a reason this app does not know says only that it is paused, not that the extension is off (#1895).
+     */
+    @androidx.annotation.StringRes
+    fun upgradeFooter(e: HubExtension): Int = when (e.autoUpgradePaused) {
+        null -> R.string.settings_ext_upgrade_footer
+        "disabled" -> R.string.settings_ext_upgrade_paused_footer
+        "market_removed" -> R.string.settings_ext_upgrade_market_removed_footer
+        else -> R.string.settings_ext_upgrade_paused_other_footer
+    }
 
     /** When the line asks something of the user, what its button says (it opens the upgrade in the market); null otherwise. */
     fun upgradeAction(res: Resources, u: ExtensionUpgrade): String? = when (u.state) {
@@ -250,6 +299,49 @@ internal object ExtensionMachines {
         (selected.filter { it != id } + listOfNotNull(id.takeIf { on })).takeIf { it.isNotEmpty() }?.let { JsonArray(it.map(::JsonPrimitive)) }
 }
 
+/** One choice of a field picking one machine or launcher (#2448): the value saved, its label, and whether the hub has it. */
+internal data class PickerChoice(val value: String, val label: String, val missing: Boolean = false)
+
+/**
+ * A string field of format machine or launcher as a choice of the hub's (docs/extensions/extensions.md "Configuration: the
+ * form subset"), as iOS and the web draw it: machines of the field's systems by name, launchers not hidden by their name
+ * (a display name before it), and a value naming none of them first, marked, to be changed. Null: not such a field, or
+ * the launchers are not in (it is typed instead).
+ */
+internal object ExtensionPickers {
+    fun choices(res: Resources, field: ExtensionField, current: String?, machines: List<ExtensionMachine>, launchers: List<HubLauncher>?): List<PickerChoice>? {
+        val out = when {
+            field.picksMachine -> {
+                val os = field.os.orEmpty()
+                machines.filter { os.isEmpty() || it.os in os }.map { PickerChoice(it.id, it.name.ifBlank { it.id }) }
+            }
+            field.picksLauncher -> launchers?.filter { !it.hidden }?.map { l ->
+                val shown = l.displayName?.trim().orEmpty()
+                PickerChoice(l.name, if (shown.isNotEmpty() && shown != l.name) "$shown (${l.name})" else l.name)
+            } ?: return null
+            else -> return null
+        }
+        if (current.isNullOrEmpty() || out.any { it.value == current }) return out
+        val missing = res.getString(if (field.picksMachine) R.string.settings_ext_machine_missing else R.string.settings_ext_launcher_missing, current)
+        return listOf(PickerChoice(current, missing, missing = true)) + out
+    }
+
+    /** A whole number one step down or up from [current] (else the default, else the minimum, else 0), within the field's bounds. */
+    fun stepped(field: ExtensionField, current: Long?, up: Boolean): Long {
+        val from = current ?: (field.fallback as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull()?.toLong() ?: field.minimum?.let { kotlin.math.ceil(it).toLong() } ?: 0L
+        var next = if (up) from + 1 else from - 1
+        field.minimum?.let { next = maxOf(next, kotlin.math.ceil(it).toLong()) }
+        field.maximum?.let { next = minOf(next, kotlin.math.floor(it).toLong()) }
+        return next
+    }
+
+    /** Whether a step that way is left within the field's bounds. */
+    fun canStep(field: ExtensionField, current: Long?, up: Boolean): Boolean {
+        val c = current ?: return true
+        return if (up) field.maximum?.let { c < it } ?: true else field.minimum?.let { c > it } ?: true
+    }
+}
+
 /** The configuration being edited, by dotted path ("proxy.host"); an empty group goes with its last value. */
 internal object ExtensionDraft {
     fun value(draft: JsonObject, path: List<String>): JsonElement? {
@@ -309,9 +401,18 @@ internal data class ExtensionListState(
 internal object ExtensionChanges {
     private val changes = MutableSharedFlow<ExtensionManagement>(extraBufferCapacity = 8)
 
-    fun changed(api: ExtensionManagement) { changes.tryEmit(api) }
+    fun changed(api: ExtensionManagement) { changes.tryEmit(api.unpinned) }
 
-    fun of(api: ExtensionManagement): Flow<Unit> = changes.filter { it === api }.map { }
+    fun of(api: ExtensionManagement): Flow<Unit> = changes.filter { it === api.unpinned }.map { }
+}
+
+/**
+ * Whose an extension, a page or a list's item is: the manager it names, else the default manager (the hub answers what
+ * names none from it). Compared with a push's [pushManager] (#1834).
+ */
+internal object ExtensionOwners {
+    fun of(manager: String?): String = manager?.takeIf { it.isNotBlank() } ?: default
+    val default: String get() = AssistantManagerChoice.current.value.defaultId.ifBlank { ManagerRoster.ASSISTANT_MANAGER }
 }
 
 /** Settings › Extensions: the list. */
@@ -330,14 +431,29 @@ internal class ExtensionListModel(private val api: ExtensionManagement, private 
         finally { mutable.update { it.copy(loading = false) } }
     }
 
-    /** Follows the hub's `extension_auth` pushes while the list is open. */
+    /** Follows the hub's `extension_auth` pushes while the list is open: each changes its own manager's copy (#1834). */
     suspend fun watchAuth() = api.authUpdates.collect { event ->
-        mutable.update { s -> s.copy(extensions = s.extensions?.map { if (it.id == event.extension) it.copy(auth = event.auth) else it }) }
+        mutable.update { s ->
+            s.copy(extensions = s.extensions?.map {
+                if (it.id == event.extension && ExtensionOwners.of(it.manager) == pushManager(event.manager)) it.copy(auth = event.auth) else it
+            })
+        }
     }
 }
 
+internal data class ExtensionSettingsUpdates(
+    val checking: Boolean = false,
+    val checked: Boolean = false,
+    val candidate: persona.core.contracts.api.CatalogExtension? = null,
+    val error: String? = null,
+    val globalAuto: Boolean? = null,
+)
+
 internal data class ExtensionState(
     val detail: ExtensionDetail? = null,
+    /** A failed canonical read retains the page but blocks lifecycle writes until a successful retry. */
+    val loadFailed: Boolean = false,
+    val updates: ExtensionSettingsUpdates = ExtensionSettingsUpdates(),
     /** The configuration being edited; saved as a whole (PUT replaces it). */
     val draft: JsonObject = JsonObject(emptyMap()),
     /** What number fields hold as typed, by path, until saved. */
@@ -353,10 +469,12 @@ internal data class ExtensionState(
     val error: String? = null,
     /** The hub would switch others off with it (409 `has_dependents`): asked before going on with `cascade`. */
     val cascade: ExtensionCascade? = null,
+    /** The pack's members were partly uninstalled (#1154): said in a dialog. */
+    val partial: PackPartial? = null,
 ) {
     val editable: Boolean get() = detail?.readOnly == false
     val dirty: Boolean get() = detail != null && (draft != detail.config || numberProblems.isNotEmpty())
-    val canSave: Boolean get() = dirty && numberProblems.isEmpty() && !saving && !busy
+    val canSave: Boolean get() = editable && dirty && numberProblems.isEmpty() && !saving && !busy && !loading && !loadFailed && !updates.checking
 
     fun value(path: List<String>): JsonElement? = ExtensionDraft.value(draft, path)
 
@@ -364,17 +482,60 @@ internal data class ExtensionState(
 }
 
 /** The dependents named by `has_dependents`; [keepData] is the removal asked about, null switching it off. */
-internal data class ExtensionCascade(val names: List<String>, val keepData: Boolean? = null)
+internal data class ExtensionCascade(val names: List<String>, val keepData: Boolean? = null, val members: Boolean = false)
+
+/** A pack's uninstall that stopped part way (409 `partial_uninstall`, #1154): the pack is still installed, nothing was put back. */
+internal data class PackPartial(val removed: List<String>, val failed: List<ExtensionFailedMember>, val remaining: List<String>) {
+    companion object {
+        fun of(e: ExtensionPartialUninstall) = PackPartial(e.removed, e.failed, e.remaining)
+    }
+}
 
 /** Settings › Extensions › one: its switch, its form (a draft saved as a whole), its secrets. */
-internal class ExtensionModel(private val api: ExtensionManagement, private val id: String, private val res: Resources) {
+internal class ExtensionModel(
+    private val api: ExtensionManagement, private val id: String, private val res: Resources,
+    /** Whose extension the page shows (several managers); null: the default's. */
+    private val manager: String? = null,
+) {
     private val mutable = MutableStateFlow(ExtensionState())
     val state = mutable.asStateFlow()
 
     suspend fun load() {
         if (state.value.loading) return
         mutable.update { it.copy(loading = true) }
-        try { run { api.extension(id) } } finally { mutable.update { it.copy(loading = false) } }
+        try {
+            val loaded = run { api.extension(id) }
+            mutable.update { it.copy(loadFailed = !loaded) }
+            if (loaded && state.value.detail?.let { ExtensionSettingsCapabilities(it).automatic } == true) {
+                val global = try { api.autoUpgrades() } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { null }
+                mutable.update { it.copy(updates = it.updates.copy(globalAuto = global)) }
+            }
+        } finally { mutable.update { it.copy(loading = false) } }
+    }
+
+    /** Read-only catalog refresh and canonical detail reload; never submits the configuration draft. */
+    suspend fun checkForUpdates() {
+        val before = state.value
+        val detail = before.detail ?: return
+        val capabilities = ExtensionSettingsCapabilities(detail)
+        val market = capabilities.market ?: return
+        if (!capabilities.check || before.busy || before.saving || before.loading || before.loadFailed || before.updates.checking) return
+        mutable.update { it.copy(updates = it.updates.copy(checking = true, checked = false, candidate = null, error = null)) }
+        try {
+            val catalog = api.catalog(market = market, refresh = true)
+            val source = catalog.markets.firstOrNull { it.id == market }
+            if (source == null || !source.error.isNullOrBlank()) throw IllegalStateException(res.getString(R.string.settings_extension_market_unavailable))
+            // A renamed extension is in its market under its new ID (#2511).
+            val candidate = catalog.extensions.firstOrNull { it.market == market && it.id == id }
+                ?: catalog.extensions.firstOrNull { it.market == market && it.renameFrom == id }
+                ?: throw IllegalStateException(res.getString(R.string.settings_extension_market_missing))
+            val loaded = run { api.extension(id) }
+            mutable.update { it.copy(loadFailed = !loaded) }
+            if (!loaded) throw IllegalStateException(state.value.error.orEmpty())
+            mutable.update { it.copy(updates = it.updates.copy(checked = true, candidate = candidate)) }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Exception) { mutable.update { it.copy(updates = it.updates.copy(error = failureReasonText(error).resolve(res))) } }
+        finally { mutable.update { it.copy(updates = it.updates.copy(checking = false)) } }
     }
 
     suspend fun setEnabled(on: Boolean, cascade: Boolean = false) = busy { run { api.setEnabled(id, on, cascade) } }
@@ -383,13 +544,17 @@ internal class ExtensionModel(private val api: ExtensionManagement, private val 
     suspend fun confirmCascade(): Boolean {
         val ask = state.value.cascade ?: return false
         mutable.update { it.copy(cascade = null) }
-        return if (ask.keepData == null) setEnabled(false, cascade = true) else uninstall(ask.keepData, cascade = true)
+        return if (ask.keepData == null) setEnabled(false, cascade = true) else uninstall(ask.keepData, cascade = true, members = ask.members)
     }
+
+    fun dismissPartial() = mutable.update { it.copy(partial = null) }
 
     fun dismissCascade() = mutable.update { it.copy(cascade = null) }
 
-    /** Follows the hub's `extension_auth` pushes for this extension while the page is open (#4507). */
-    suspend fun watchAuth() = api.authUpdates.collect { event -> if (event.extension == id) setAuth(event.auth) }
+    /** Follows the hub's `extension_auth` pushes for this extension while the page is open (#4507), its manager's only (#1834). */
+    suspend fun watchAuth() = api.authUpdates.collect { event ->
+        if (event.extension == id && ExtensionOwners.of(manager) == pushManager(event.manager)) setAuth(event.auth)
+    }
 
     /** The sign-in as the hub says it is now (a push, signing out). */
     fun setAuth(auth: ExtensionAuth) = mutable.update { s ->
@@ -445,7 +610,7 @@ internal class ExtensionModel(private val api: ExtensionManagement, private val 
      */
     suspend fun saveNow(path: List<String>, value: JsonElement?): Boolean {
         val saved = state.value.detail?.config ?: return false
-        if (state.value.busy || state.value.saving) return false
+        if (state.value.busy || state.value.saving || state.value.loading || state.value.loadFailed || state.value.updates.checking) return false
         mutable.update { it.copy(busy = true, error = null, draft = ExtensionDraft.set(it.draft, path, value)) }
         return try {
             val detail = api.setConfig(id, ExtensionDraft.compact(ExtensionDraft.set(saved, path, value)))
@@ -461,17 +626,28 @@ internal class ExtensionModel(private val api: ExtensionManagement, private val 
         } finally { mutable.update { it.copy(busy = false) } }
     }
 
-    /** Removes an extension installed from a market; its data folder stays when [keepData]. */
-    suspend fun uninstall(keepData: Boolean, cascade: Boolean = false): Boolean {
-        if (state.value.busy || state.value.saving) return false
-        mutable.update { it.copy(busy = true, error = null) }
+    /** What the last uninstall that went through removed (its members, #1154). */
+    var removal: ExtensionRemoval? = null
+        private set
+
+    /**
+     * Removes an extension installed from a market; its data folder stays when [keepData]. [members]: a pack's installed
+     * members too (`members=1`, #1154); some gone and some not is said in [ExtensionState.partial].
+     */
+    suspend fun uninstall(keepData: Boolean, cascade: Boolean = false, members: Boolean = false): Boolean {
+        if (state.value.busy || state.value.saving || state.value.loading || state.value.loadFailed || state.value.updates.checking) return false
+        mutable.update { it.copy(busy = true, error = null, partial = null) }
         return try {
-            api.uninstall(id, keepData, cascade)
+            removal = api.uninstall(id, keepData, cascade, members)
             ExtensionChanges.changed(api)
             true
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (refused: ExtensionHasDependents) {
-            mutable.update { it.copy(cascade = ExtensionCascade(refused.dependents.map { d -> d.label }, keepData)) }
+            mutable.update { it.copy(cascade = ExtensionCascade(refused.dependents.map { d -> d.label }, keepData, members)) }
+            false
+        } catch (partial: ExtensionPartialUninstall) {
+            mutable.update { it.copy(partial = PackPartial.of(partial)) }
+            ExtensionChanges.changed(api)
             false
         } catch (error: Exception) {
             mutable.update { it.copy(error = res.getString(R.string.settings_ext_not_removed, failureReasonText(error).resolve(res))) }
@@ -480,7 +656,7 @@ internal class ExtensionModel(private val api: ExtensionManagement, private val 
     }
 
     private suspend fun busy(block: suspend () -> Boolean): Boolean {
-        if (state.value.busy || state.value.saving) return false
+        if (state.value.busy || state.value.saving || state.value.loading || state.value.loadFailed || state.value.updates.checking) return false
         mutable.update { it.copy(busy = true) }
         return try { block().also { if (it) ExtensionChanges.changed(api) } } finally { mutable.update { it.copy(busy = false) } }
     }
@@ -496,6 +672,7 @@ internal class ExtensionModel(private val api: ExtensionManagement, private val 
             val follow = saved || !it.dirty
             it.copy(
                 detail = detail, error = null,
+                updates = if (it.detail?.extension?.version != detail.extension.version) it.updates.copy(checked = false, candidate = null) else it.updates,
                 draft = if (follow) detail.config else it.draft,
                 numberText = if (follow) emptyMap() else it.numberText,
                 numberProblems = if (follow) emptyMap() else it.numberProblems,

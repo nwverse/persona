@@ -34,6 +34,9 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PhIcons
@@ -56,6 +59,8 @@ enum class DecisionKind(@StringRes val labelRes: Int, val icon: PhIcon) {
  * brief an ink-on-neutral card; the board a neutral strip with a thin amber edge that expands in
  * place — collapsed it shows [summary] and [quickActions], tapping it opens the [body] and [actions].
  * [onOpen] opens the conversation (glass and brief: tapping the card; board: the "Open" action).
+ * [note] says why the quick actions cannot be used (the hub is out of reach, the computer must approve): the board shows it
+ * above them while collapsed, where the [body] that says it otherwise is not drawn (#2483).
  */
 @Composable
 fun DecisionCard(
@@ -67,6 +72,7 @@ fun DecisionCard(
     expires: String? = null,
     summary: String? = null,
     advice: String? = null,
+    note: String? = null,
     expandedByDefault: Boolean = true,
     onOpen: (() -> Unit)? = null,
     quickActions: (@Composable RowScope.() -> Unit)? = null,
@@ -136,6 +142,7 @@ fun DecisionCard(
                         onOpen?.let { Spacer(Modifier.height(4.dp)); JTextButton(stringResource(R.string.designsystem_decision_open_chat), it, icon = PhIcons.ArrowSquareOut) }
                     } else {
                         summary?.let { Spacer(Modifier.height(8.dp)); Text(it, style = type.code, color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                        note?.let { Spacer(Modifier.height(Tokens.Space.s)); Text(it, style = type.caption, color = palette.cautionText) }
                         quickActions?.let { Spacer(Modifier.height(10.dp)); Row(horizontalArrangement = Arrangement.spacedBy(6.dp), content = it) }
                     }
                 }
@@ -202,12 +209,16 @@ fun DecisionDock(
     onCollapsedChange: ((Boolean) -> Unit)? = null,
     onExpand: (() -> Unit)? = null,
     headerActions: (@Composable () -> Unit)? = null,
+    /** One line over the headline saying what the request waits for ("Waiting for your approval", #4883), as the web's
+     *  and iOS's cards do; null draws the dock as before. */
+    kicker: String? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
     val style = PersonaTheme.style
     val header: @Composable () -> Unit = {
+        kicker?.let { Text(it, style = type.caption, color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis) }
         Row(verticalAlignment = Alignment.CenterVertically) {
             when (style) {
                 AppStyle.Glass -> JStatusDot(Status.NeedsYou, size = 8.dp)
@@ -312,6 +323,8 @@ fun MarkerText(text: String, style: TextStyle, modifier: Modifier = Modifier) {
  * One answer to choose. The [recommended] one stands out by its label, icon and outline,
  * not a second solid action or a colored backing. A [multiSelect] option is read as a checkbox (ticked or not), otherwise as a
  * radio button; [position] ("current" of "total") is read after the label so a screen reader hears how many there are.
+ * The label keeps to 2 lines and the [detail] to 3, unless [fullText] (a full-page view, where an option must be readable
+ * in full before it is picked).
  */
 @Composable
 fun DecisionOption(
@@ -324,6 +337,7 @@ fun DecisionOption(
     enabled: Boolean = true,
     multiSelect: Boolean = false,
     position: Pair<Int, Int>? = null,
+    fullText: Boolean = false,
 ) {
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
@@ -331,6 +345,7 @@ fun DecisionOption(
     val shape = RoundedCornerShape(when (style) { AppStyle.Glass -> 18.dp; AppStyle.Brief -> 16.dp; AppStyle.Board -> 8.dp })
     val recommendedLabel = stringResource(R.string.designsystem_decision_recommended)
     val separator = stringResource(R.string.designsystem_separator)
+    val haptics = rememberHaptics()
     val spoken = position?.let { (current, total) ->
         listOfNotNull(label, detail, recommendedLabel.takeIf { recommended },
             stringResource(R.string.designsystem_decision_option_position, current, total)).joinToString(separator)
@@ -342,7 +357,7 @@ fun DecisionOption(
     }
     Row(
         modifier.fillMaxWidth().heightIn(min = 52.dp).clip(shape).background(fill).border(if (selected) 2.dp else 1.dp, border, shape)
-            .clickable(enabled = enabled, role = if (multiSelect) Role.Checkbox else Role.RadioButton, onClick = onClick)
+            .clickable(enabled = enabled, role = if (multiSelect) Role.Checkbox else Role.RadioButton, onClick = haptics.tapped(onClick))
             .semantics {
                 if (multiSelect) toggleableState = ToggleableState(selected) else this.selected = selected
                 spoken?.let { contentDescription = it }
@@ -351,8 +366,8 @@ fun DecisionOption(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(label, style = type.label, color = ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            detail?.let { Text(it, style = type.caption.copy(fontWeight = FontWeight.Normal), color = palette.ink2, maxLines = 3, overflow = TextOverflow.Ellipsis) }
+            Text(label, style = type.label, color = ink, maxLines = if (fullText) Int.MAX_VALUE else 2, overflow = TextOverflow.Ellipsis)
+            detail?.let { Text(it, style = type.caption.copy(fontWeight = FontWeight.Normal), color = palette.ink2, maxLines = if (fullText) Int.MAX_VALUE else 3, overflow = TextOverflow.Ellipsis) }
         }
         if (selected) { Spacer(Modifier.width(8.dp)); JIcon(PhIcons.CheckCircle, null, size = 20.dp, tint = palette.accent, selected = true) }
         else if (recommended) {
@@ -364,6 +379,99 @@ fun DecisionOption(
     }
 }
 
+/** A single action line. Alternatives move into a menu before their labels would be truncated. */
+@Composable
+fun DecisionActions(primary: JAction?, alternatives: List<JAction>, overflowLabel: String, modifier: Modifier = Modifier, busy: Boolean = false) {
+    // Pressing an answer is felt; its result plays its own (DESIGN_SYSTEM.md 4.3).
+    val haptics = rememberHaptics()
+    @Suppress("NAME_SHADOWING") val primary = primary?.let { haptics.tapped(it) }
+    @Suppress("NAME_SHADOWING") val alternatives = alternatives.map { haptics.tapped(it) }
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    val type = PersonaTheme.type.labelSmall
+    val size = JButtonSize.Small
+    var menu by remember { mutableStateOf(false) }
+    BoxWithConstraints(modifier.fillMaxWidth()) {
+        val actions = alternatives + listOfNotNull(primary)
+        val labels = actions.sumOf { measurer.measure(it.label, style = type, maxLines = 1, softWrap = false).size.width }
+        val required = with(density) { (size.padding * (actions.size * 2) + Tokens.Space.s * (actions.size - 1).coerceAtLeast(0)).toPx() } + labels
+        val overflow = required > with(density) { maxWidth.toPx() }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
+            if (overflow && alternatives.isNotEmpty()) Box {
+                JIconButton(PhIcons.DotsThree, overflowLabel, { menu = true }, enabled = !busy)
+                JMenu(menu && !busy, { menu = false }, alternatives.map { it.copy(enabled = it.enabled && !busy) })
+            } else alternatives.forEach { action ->
+                JButton(action.label, action.onClick, kind = JButtonKind.Secondary, size = size, enabled = action.enabled && !busy)
+            }
+            primary?.let { action ->
+                JButton(action.label, action.onClick, Modifier.weight(1f, fill = false), size = size, enabled = action.enabled && !busy)
+            }
+        }
+    }
+}
+
+/** How many of [options] (their widths, in order) fit in [available] beside what follows them, each [gap] apart: the first always. */
+internal fun fittingOptions(options: List<Float>, available: Float, gap: Float): Int {
+    var left = available
+    var count = 0
+    for (width in options) {
+        if (count > 0 && width > left) break
+        left -= width + gap
+        count++
+    }
+    return count.coerceAtLeast(if (options.isEmpty()) 0 else 1)
+}
+
+/**
+ * The answers of a decision on its row (#3804): [options] as buttons on one line, the first (the recommended one) the
+ * only solid one, as many as fit and the first always (alone and still too wide, its label is cut short, never
+ * wrapped); then [other], a quiet button that opens the task to answer in words; then a menu with the options that did
+ * not fit and [more] (the answers that are no option), under a rule when both are there. [busy] is an answer on its
+ * way: nothing can be pressed.
+ */
+@Composable
+fun DecisionAnswers(options: List<JAction>, other: JAction, more: List<JAction>, overflowLabel: String,
+    modifier: Modifier = Modifier, busy: Boolean = false) {
+    val haptics = rememberHaptics()
+    @Suppress("NAME_SHADOWING") val options = options.map { haptics.tapped(it) }
+    @Suppress("NAME_SHADOWING") val other = haptics.tapped(other)
+    @Suppress("NAME_SHADOWING") val more = more.map { haptics.tapped(it) }
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    val type = PersonaTheme.type.labelSmall
+    val size = JButtonSize.Small
+    var menu by remember { mutableStateOf(false) }
+    BoxWithConstraints(modifier.fillMaxWidth()) {
+        val gap = with(density) { Tokens.Space.s.toPx() }
+        val minimum = with(density) { Tokens.MinTouch.android.toPx() }
+        fun button(label: String, padding: Dp) =
+            (measurer.measure(label, style = type, maxLines = 1, softWrap = false).size.width + with(density) { (padding * 2).toPx() }).coerceAtLeast(minimum)
+        val widths = options.map { button(it.label, size.padding) }
+        // the quiet button and, when anything is behind it, the menu's button stay whatever the options take
+        val tail = button(other.label, QuietButtonPadding) + gap
+        val room = with(density) { maxWidth.toPx() } - tail
+        // without fixed answers the menu exists only for the options that do not fit: leave room for it only then
+        val all = fittingOptions(widths, room, gap)
+        val fit = if (more.isEmpty() && all == options.size) all else fittingOptions(widths, room - minimum - gap, gap)
+        val hidden = options.drop(fit)
+        val items = hidden + more.mapIndexed { index, action -> if (index == 0 && hidden.isNotEmpty()) action.copy(separatorBefore = true) else action }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
+            options.take(fit).forEachIndexed { index, action ->
+                JButton(action.label, action.onClick, Modifier.weight(1f, fill = false), kind = if (index == 0) JButtonKind.Primary else JButtonKind.Secondary,
+                    size = size, enabled = action.enabled && !busy)
+            }
+            JButton(other.label, other.onClick, kind = JButtonKind.Quiet, size = size, enabled = other.enabled && !busy)
+            if (items.isNotEmpty()) Box {
+                JIconButton(PhIcons.DotsThree, overflowLabel, { menu = true }, enabled = !busy)
+                JMenu(menu && !busy, { menu = false }, items.map { it.copy(enabled = it.enabled && !busy) })
+            }
+        }
+    }
+}
+
+/** The horizontal padding of a quiet [JButton], whatever its size. */
+private val QuietButtonPadding = 8.dp
+
 /**
  * The answer buttons of a decision: [secondary] on the left, [primary] on the right, [more] as quiet buttons
  * underneath. On the board the primary is wider.
@@ -371,6 +479,10 @@ fun DecisionOption(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun DecisionButtons(primary: JAction, modifier: Modifier = Modifier, secondary: JAction? = null, more: List<JAction> = emptyList(), busy: Boolean = false) {
+    val haptics = rememberHaptics()
+    @Suppress("NAME_SHADOWING") val primary = haptics.tapped(primary)
+    @Suppress("NAME_SHADOWING") val secondary = secondary?.let { haptics.tapped(it) }
+    @Suppress("NAME_SHADOWING") val more = more.map { haptics.tapped(it) }
     val wide = if (PersonaTheme.style == AppStyle.Board) 1.5f else 1f
     Column(modifier.fillMaxWidth()) {
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -380,6 +492,48 @@ fun DecisionButtons(primary: JAction, modifier: Modifier = Modifier, secondary: 
         // Several secondary choices (a plan's "Approve and run automatically" and "Confirm each step") wrap to a second line instead of squeezing.
         if (more.isNotEmpty()) FlowRow(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.Center) {
             more.forEach { JTextButton(it.label, it.onClick, enabled = it.enabled && !busy) }
+        }
+    }
+}
+
+/**
+ * A reply draft has one primary Send and two reversible secondary choices. Stack at large text or narrow widths. [edit]
+ * (a message card on Glass, iOS `MessageCard`): Edit / Done beside Send, which opens the draft for typing.
+ */
+@Composable
+fun DraftDecisionButtons(send: JAction, later: JAction, dismiss: JAction, modifier: Modifier = Modifier,
+    busy: Boolean = false, sendModifier: Modifier = Modifier, laterModifier: Modifier = Modifier, dismissModifier: Modifier = Modifier,
+    edit: JAction? = null, editModifier: Modifier = Modifier) {
+    val haptics = rememberHaptics()
+    @Suppress("NAME_SHADOWING") val send = haptics.tapped(send)
+    @Suppress("NAME_SHADOWING") val later = haptics.tapped(later)
+    @Suppress("NAME_SHADOWING") val dismiss = haptics.tapped(dismiss)
+    @Suppress("NAME_SHADOWING") val edit = edit?.let { haptics.tapped(it) }
+    BoxWithConstraints(modifier.fillMaxWidth()) {
+        val stacked = LocalDensity.current.fontScale >= 1.3f || maxWidth < 320.dp
+        Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+            if (edit != null && !stacked) Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+                JButton(send.label, send.onClick, sendModifier.weight(1f), kind = JButtonKind.Primary,
+                    size = JButtonSize.Large, enabled = send.enabled && !busy, loading = busy)
+                JButton(edit.label, edit.onClick, editModifier, kind = JButtonKind.Secondary, size = JButtonSize.Large,
+                    enabled = edit.enabled && !busy)
+            } else {
+                JButton(send.label, send.onClick, sendModifier.fillMaxWidth(), kind = JButtonKind.Primary,
+                    size = JButtonSize.Large, enabled = send.enabled && !busy, loading = busy)
+                if (edit != null) JButton(edit.label, edit.onClick, editModifier.fillMaxWidth(), kind = JButtonKind.Secondary,
+                    size = JButtonSize.Large, enabled = edit.enabled && !busy)
+            }
+            if (stacked) {
+                JButton(later.label, later.onClick, laterModifier.fillMaxWidth(), kind = JButtonKind.Secondary,
+                    size = JButtonSize.Large, enabled = later.enabled && !busy)
+                JButton(dismiss.label, dismiss.onClick, dismissModifier.fillMaxWidth(), kind = JButtonKind.Secondary,
+                    size = JButtonSize.Large, enabled = dismiss.enabled && !busy)
+            } else Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+                JButton(later.label, later.onClick, laterModifier.weight(1f), kind = JButtonKind.Secondary,
+                    size = JButtonSize.Large, enabled = later.enabled && !busy)
+                JButton(dismiss.label, dismiss.onClick, dismissModifier.weight(1f), kind = JButtonKind.Secondary,
+                    size = JButtonSize.Large, enabled = dismiss.enabled && !busy)
+            }
         }
     }
 }

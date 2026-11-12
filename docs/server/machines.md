@@ -11,7 +11,7 @@ Each computer's OS, current load and curves for the past 24 hours. The node coll
 | App | `apple/Persona/Views/Machines/` (`MachinesView`, `MachineDetailView`, `MetricCharts`, `OSBadge`), model `apple/Shared/MachineMetrics.swift` |
 | Inspect local samples / overhead | `personad sysmon [n]`: prints system info and n+1 samples (one every 10 seconds, n ≤ 8640, one day); final line gives actual sample count, collection duration and personad CPU (Ctrl-C stops immediately) |
 
-## Who connects to computers (2026-11-04)
+## Who connects to computers
 
 Product decision: **computers belong to the manager, which connects to them itself**; the hub sees no computers directly, so the bus has nothing to gate between computers and manager (physical separation). During migration there is only one manager, the chief manager (assistant process `personad assistant`), holding all computers.
 
@@ -28,6 +28,8 @@ Product decision: **computers belong to the manager, which connects to them itse
   kind link (Persona Link still connects to the hub address, forwarded unchanged to the manager; below), and computers reached through member hubs in the linked group (routing, de-duplication and path changes in manager `paths.go`; the hub opens and relays streams through another hub).
 - Per-computer state: online, `node.info`, session list and revs, sessions watched by Apps (repeat `session.watch` after node reconnection, resuming from the last item), warm start, engine (settings `machine_engines`), herdr auto-start, Claude config directories (and blocked ones),
   sessions the node must list regardless of inactivity (assistant profile `keep`; when the assistant snapshot arrives, tell each node, `SetKeep`), node updates (`node.deploy.<id>`), node `state.put` / `state.load` (table `node_sessions`).
+  A `state.put` or `claude.dirs` write runs on that node connection's read loop, so its store calls get at most 10 seconds (`nodeStoreWait`); then the write is logged and dropped. A `claude.dirs` can wait longer for a `PUT …/claude-dirs/blocked` running at the same time, which holds the same lock for its own store calls.
+  Nothing retries a dropped write: the node puts a session's state only when it changes, not on reconnect (`state.load` copies the hub's rows to the node, not back), so a node restarted before then (after an update, say) loses that session's record (launcher, cwd, pane, whether Persona started it); it reports its Claude config directories again only when it sees one it had not seen since it started, or one is unblocked.
   Existing keys and tables stay; no data migration.
 - Manager-owned routes (`devicewire.Routes`, forwarded by hub as `http.request` like assistant routes): `POST …/reconnect`, `PUT …/engine`, `GET/PUT …/herdr`, `POST …/herdr/start`, `POST …/deploy`, `GET …/claude-dirs`, `PUT …/claude-dirs/blocked`; also subscription quota `GET /api/v1/usage/windows` (`devicewire.UsageRoutes`) and admin quota-source page (`AdminUsageRoutes`, forwarded only from admin, `docs/server/usage-windows.md`, "Who owns this").
 - Node requests: answers `state.load`, assistant requests (`assistant.model`, `assistant.context`) and computer-event requests (`interaction.create`, `assistant.lark`, `lark.sent`, `mcp.tools`, `mcp.call`; "Who handles computer events" below) in-process; passes the rest (`notify`: `personad notify` on computers) to hub (`devices.request`).
@@ -46,7 +48,7 @@ Product decision: **computers belong to the manager, which connects to them itse
   The manager deadline is shortened by one tenth, at most 500 milliseconds, so its timeout arrives first; calls without deadlines (plugin `nodes.call`) aren't given one. Failures after dispatch—node disconnect, deadline or bus disconnect—mean "may have executed":
   message results are `unknown`, and the same message isn't resent (same as when hub directly connected to node); only definite non-dispatch (offline, manager absent) counts as not sent.
 - Hub self-update confirmation that previously online computers all reconnected, and subsequent node updates through the manager, use reported `connected` (actual node connection), not App-visible online (also true during warm start after manager restart).
-- Every new manager-hub handshake ends both sides of forwarded streams and terminals opened through the previous connection: hub closes its side (terminal ends with "Can’t reach the assistant right now. Try again later", reopened by App), manager closes node-side `stream.close` / `terminal.unwatch`, avoiding abandoned port connections and terminal frames after hub restart.
+- Every new manager-hub handshake ends both sides of forwarded streams (`port.dial`, `plugin.node.dial`, `preview.open`) and terminals opened through the previous connection: hub closes its side (terminal ends with "Can’t reach the assistant right now. Try again later", reopened by App), manager closes node-side `stream.close` / `terminal.unwatch`, avoiding abandoned port connections, preview browser tabs and terminal frames after hub restart.
   Hub asks the new connection to rewatch App-visible sessions, at most 8 concurrently; a slow computer doesn't block others.
 - On node connection, the manager first asks the hub for its part (`devices.connected`): additions to `node.configure` (Codex settings) and immediately subsequent sends (managed launchers, remembered messages), then asks for the session list. Hub also starts its own on-connect work (monitoring system info); Cua / ego state, extension programs on computers, connectors and extension Agent filtering added to `node.configure` belong to manager extensions (2026-11-05, `docs/extensions/extensions.md`, "Who owns what"), even while hub is away.
   Every new manager-hub connection repeats this step for each connected computer.
@@ -93,13 +95,13 @@ Observable differences from before:
 - With `assistant.external` (manager on another computer), that computer makes connections: its SSH config, tailcat key, `node --stdio` binary and node update packages are used;
   hub restart doesn't restart it (computers stay connected), but for the second or two before it reconnects to the bus, hub shows machines from hub.json as offline.
 
-## Who handles computer events (2026-11-05)
+## Who handles computer events
 
 Computers belong to the manager, and so does everything they send: the hub's existing code moved unchanged into the manager (`server/internal/assistant/fleet*.go`, monitoring in `server/internal/devices/metrics.go`); the hub only forwards and delivers.
 
 | Manager responsibility | Code |
 | --- | --- |
-| Interactions: waiting for `interaction.create`, resumable cards (retain for 3 minutes after node disconnect for hook reclaim; recover from `interactions` after manager restart, without another push on reclaim), expiry, always allow for session, screen cards (read, keypress, recheck), Codex cards, plans answered in terminal, history table, assistant questions/cards, questions from hub-owned features (`fleet.ask`: sending mail, Cua apps, persona_settings) | `fleet_ix.go` |
+| Interactions: waiting for `interaction.create`, resumable cards (retain for 3 minutes after node disconnect for hook reclaim; recover from `interactions` after manager restart, without another push on reclaim), expiry, always allow for session, screen cards (read, keypress, recheck), Codex cards, plans answered in terminal, history table, assistant questions/cards, questions from hub-owned features (`fleet.ask`: sending mail, Cua apps, persona_settings) | `fleet_ix.go`, `fleet_ix_screen.go`, `fleet_ix_codex.go`, `fleet_ix_terminal.go`, `fleet_ix_own.go` |
 | Session lists: unified state, background tasks, model errors, seen (`session_seen`), state start time, to-do / quiet / work state / channel markers / assistant-chat titles | `fleet.go`, `fleet_sessions.go`, `fleet_seen.go`, `fleet_work.go`, `fleet_text.go` |
 | Push decisions: waiting and filtering for done notifications (seen, muted, answered through a channel, Inbox twin, notify_user already pushed, no duplicate push for one Stop), card notifications | `fleet_push.go` |
 | Live Activity content (FleetState) and Dynamic Island counts | `fleet_live.go` |
@@ -113,7 +115,7 @@ Computers belong to the manager, and so does everything they send: the hub's exi
 - Keep manager-provided session lists per machine (`fleet.sessions`, machine `sessions`), pending interactions (`fleet.interaction` / `fleet.interaction_resolved`, replaced in full by `fleet.interactions` after each handshake), and Live Activity content (`fleet.live`). App `GET /api/v1/sessions`, `GET /api/v1/interactions`, connection snapshots and pushed events use these; while manager is absent, use the last copy.
 - Deliver pushes: manager decides content (`notify.request`, `kind` `assistant` / `done` / `input` / `reply` / `decide`); hub selects devices according to their settings, localizes to device language, sends through APNs / relay, sends `notify` to `ws_notify` Apps, and informs extensions (`agent.finished`, `agent.needs_you`). Live Activity delivery cadence (per-device intervals, start/end) also belongs to hub; content is computed by manager.
 - Forward App answer, history, seen and monitoring routes to manager (`http.request`): `POST /api/v1/interactions/{id}/resolve` (hub first checks answer-only devices), `GET /api/v1/interactions/history` (hub supplies `X-Persona-Elicitation` for App MCP-form support), `POST /api/v1/sessions/{mid}/{sid}/seen`, `GET /api/v1/metrics`, `GET /api/v1/machines/{id}/metrics`, `GET /api/v1/usage`.
-- Tell manager about Apps: any MCP-form-capable App (`fleet.clients`), WebSocket `seen` (`fleet.seen`), mute changes (`fleet.mutes`).
+- Tell manager about Apps: an MCP-form-capable App connected, or a phone registered to be pushed MCP forms (`fleet.clients`), WebSocket `seen` (`fleet.seen`), mute changes (`fleet.mutes`).
 - Run what still belongs to hub for manager: phone tools (`app.call phone`: list tools, run on connected phones, silent push wake-up when needed). Connector / Cua / ego tools, extension descriptions for write-action cards, lark-cli settings and owner actions for channel card answers belong to manager extensions (`internal/extmgr`, queried directly in-process and cancelled when node stops waiting; `docs/extensions/extensions.md`, "Who owns what").
 
 While manager is away: lists and cards use the last copy; answering, seen, history and monitoring return `503 assistant_offline`; nothing is lost. On return, it first hands full interaction and session lists to hub, then hooks reclaim resumable cards (same card, no new push).
@@ -151,7 +153,7 @@ The first sample lacks CPU and network rates (need two readings); fields are omi
 | Load | First column of `/proc/loadavg` | `sysctl vm.loadavg` (binary struct loadavg) | None (Windows has no load average), omitted |
 | Memory | Used = MemTotal − MemAvailable (page cache available, like `free` available); old kernels without MemAvailable use free + buffers + cached. In a container (the v2 `memory.max` / v1 `memory.limit_in_bytes` under `/sys/fs/cgroup` has a limit below MemTotal) the total is that limit and used = usage − inactive_file (like `docker stats` and `kubectl top`): without lxcfs, `/proc/meminfo` in a container is the host's; the system info's memory uses the same limit | Resident `vm_stat 10`: used = anonymous pages − purgeable + wired + compressor size, matching Activity Monitor **Memory Used** (App Memory + Wired Memory + Compressed); file cache available | `GlobalMemoryStatusEx`: used = total − available (standby-list file cache is available, like Linux MemAvailable) |
 | Swap | SwapTotal − SwapFree | `sysctl vm.swapusage` | Page files: sum size and used amount from `NtQuerySystemInformation(SystemPageFileInformation)` |
-| Network | Physical-interface receive/send byte differences in `/proc/net/dev` / elapsed time | Physical-interface differences from routing socket `NET_RT_IFLIST2` (`if_msghdr2` 64-bit counters) / elapsed time | InOctets / OutOctets from `GetIfEntry2Ex`, physical-interface differences / elapsed time; eligible interfaces listed once a minute (~7 ms to list, ~0.2 ms to read counters), discard sample when set changes |
+| Network | Physical-interface receive/send byte differences in `/proc/net/dev` / elapsed time; in a container's own network namespace, where every interface is virtual, the interfaces the name keeps (eth0, not lo); discard sample when set changes | Physical-interface differences from routing socket `NET_RT_IFLIST2` (`if_msghdr2` 64-bit counters) / elapsed time | InOctets / OutOctets from `GetIfEntry2Ex`, physical-interface differences / elapsed time; eligible interfaces listed once a minute (~7 ms to list, ~0.2 ms to read counters), discard sample when set changes |
 | Disk | Sum `statfs` for local block devices in `/proc/self/mountinfo` (`/dev/…`, excluding loop and read-only squashfs / iso9660 images, counting bind mounts of a device once): data disks often mount at `/data00`, so `/` alone makes a 5 TB machine show 118 GB. A mount whose root is not `/` (one directory of a device) is skipped, except `/` itself and btrfs subvolumes: in a container, Kubernetes / Docker bind directories of the host's data disk in (an emptyDir on `/tmp`, `/etc/hosts`), and that disk is shared by every container on the host; without mountinfo it falls back to `/proc/self/mounts`; used = total blocks − free blocks, total = used + ordinary-user available (like df) | `statfs("/System/Volumes/Data")` (`/` is a read-only system snapshot, only a few GB) | Sum `GetDiskFreeSpaceEx` for fixed drives actually on disks (`GetDriveType` = `DRIVE_FIXED`, volume has a positive-length disk extent, each volume once); used = total − free, total = used + user available (like df); excludes network, USB, optical and sync-client virtual drives such as Google Drive (claims FAT32 fixed drive and copies C capacity, but disk extent length is 0); drive letters listed once a minute |
 
 Why macOS starts two resident processes: builds use `CGO_ENABLED=0`, so Mach calls such as `host_statistics` are unavailable; `vm.page_*` sysctls lack anonymous-page and compressor counts.
@@ -166,15 +168,20 @@ Count only traffic actually leaving the machine. Virtual interfaces are either l
 - **Linux**: exclude `/sys/class/net/<name>` links into `/sys/devices/virtual/net/`. The kernel puts software interfaces there: lo, docker0, veth*, br-*,
   virbr*, tun* (TUN proxies), tailscale0, wg*, bond / VLAN (member interfaces still count, without duplication). Real interfaces, including VM virtio, live under buses and count.
   Without `/sys`, exclude name prefixes (`sysmon.virtualName`: lo, docker, br-, veth, virbr, tailscale, tun, tap, wg, zt, cni, flannel, cali, etc.).
+  The names also decide when `/sys` calls every interface virtual: in a container's own network namespace (Docker, Kubernetes) eth0 is one end of a veth pair,
+  and its traffic is the container's own; counting nothing would draw a flat 0.
 - **macOS**: Ethernet type (IFT_ETHER), `en*` name, non-loopback only: Wi-Fi, wired Ethernet, Thunderbolt. Exclude utun* (Tailscale, VPN, TUN proxies),
   bridge* (Thunderbolt bridge, member en* already counted), awdl / llw (AirDrop), anpi, gif, stf, ap.
 - **Windows**: only `MIB_IF_ROW2` with `HardwareInterface` set and `FilterInterface` unset: Wi-Fi, Ethernet, USB tethering.
   Tailscale (wintun), VPN adapters, Hyper-V / WSL vEthernet, Wi-Fi Direct virtual adapters, Bluetooth PAN and loopback are software interfaces and excluded;
   filter layers atop physical interfaces (WFP, QoS) duplicate counters and are excluded too.
 
-If counters decrease between readings (interface vanished or counters reset), discard that sample instead of drawing a huge spike.
+If counters decrease between readings (interface vanished or counters reset), discard that sample instead of drawing a huge spike. Linux and Windows also
+discard it when the set of counted interfaces changes: a newcomer brings its bytes since boot.
 
-### Overhead (measured 2026-10-30, `personad sysmon 30`)
+### Overhead
+
+Measured with `personad sysmon 30` (2026-10-30):
 
 | Machine | Collection time | personad CPU | Other |
 | --- | --- | --- | --- |
@@ -188,6 +195,9 @@ Five minutes after node starts, it logs average duration once (`metrics: a sampl
 ## Storage and retention
 
 On receipt, the manager retains the latest sample in memory (Dashboard **Now**, not current if older than 30 seconds) and writes it to `machine_metrics` (raw `step = 10` row).
+The nodes sample on the same wall-clock tick, so one writer stores a tick's samples of every machine in one transaction (`db.InsertMetrics`: one commit and one WAL flush, not one a machine).
+It writes once every machine that sent in the last 30 seconds has sent this tick's, at most 2 seconds after the first (a single machine's sample is written at once); one machine's bad sample does not cost the others theirs.
+Samples wait in a queue of 1024; when Postgres is that far behind, a sample is dropped with a log line. A stopping manager still writes what it has, for at most 2 seconds.
 
 The main assistant's read-only `machines_list` tool combines the trusted machine list with the manager's last system information and sample, working agent count, recent failing launchers and node version status. It reports the list's completeness and excluded count; machines that belong to another manager or are not trusted are not exposed. Connection, session and launcher records have separate availability: an empty failure list means no recent failure is recorded, not that every launcher was checked. Values whose source is missing, ambiguous, offline, stale or has a future timestamp are null with a reason. Samples over 30 seconds old retain their age but are not current; a sample from before the current connection is not current either. System information is the last reported information and may persist while offline; memory and disk availability follow the collection definitions above, and disk is an aggregate rather than necessarily the work directory's filesystem. Node builds that differ cannot be ordered by their identifiers, so a different build alone is not called outdated. The tool returns facts without ranking machines.
 Every minute `metricsLoop`:
@@ -220,6 +230,7 @@ How many tokens each machine runs, for the Machines page's cards and charts (the
   its input includes the cached part, which is counted as cache read (input minus cached as input); Codex has no cache write (always 0); reasoning tokens are in its output.
   Cache hit rate = cache read / (input + cache write + cache read).
 - **Storage** (`devices/usage.go`, `db/usage.go`): the manager keeps the last 26 hours in memory (the island, the cards) and writes every notification to `machine_usage` in order, from one goroutine.
+  Each node reports on a 10-second tick of its own, so while another machine has written in the last 25 seconds, the notifications that come within 5 seconds of one go in one transaction with it (`db.PutUsages`, in order; if Postgres rejects one, each goes under a savepoint of its own); a single busy machine's are written at once.
   A bucket is its minute's whole total, so a later one replaces it; a node's whole window (`full`, after it connects) first deletes the machine's minute rows of that window, so what the node
   counts now is the record (an older node's rows without a launcher do not stay next to the new ones). Each minute the minute rows older than 27 hours are summed into one row per 10 minutes
   (`step = 600`) and rows older than 7 days and an hour are deleted. About 1 to 3 rows a machine and minute (one per model and launcher in use), 10,000 to 30,000 rows a machine for the week.
@@ -298,8 +309,9 @@ Follow dataviz rules:
 
 ## Doctor: what this computer can do (#2429)
 
-The web Machines page has **What this computer can do** (modeled on Moshi's Doctor page), presenting `personad node doctor` results (`docs/integrations/claude-integration.md`, "Doctor") by feature, not a string of check names.
+The web Machines page has **What this computer can do** (modeled on Moshi's Doctor page), presenting `personad node doctor` results (`docs/integrations/claude-integration.md`, "Self-check") by feature, not a string of check names.
 iOS / Mac machine detail (#3018, `apple/Persona/Views/Machines/NodeHealthSection.swift`, grouping in `NodeHealthModel.swift`'s `NodeHealth`) places it after Engine. Grouping, states and copy match web; changing one requires updating the other.
+The native Mac app is frozen ([mac.md](../apple/mac.md)): it shows this section through the shared iOS view and gets no Mac-only changes for it.
 
 - **Fetch**: hub routes `GET /api/v1/machines/{mid}/doctor` (read-only) and `POST …/doctor/fix` (rewrite Persona-generated files, recheck and return a new report) are **`full` devices only** (reports contain paths and user hook commands; fix writes files). Node RPC: `node.doctor` (read-only unless `{"fix":true}`), `node.doctor.fix` (`node/doctor_rpc.go`); checks run in node with CLI `RunDoctor`, same `DoctorReport` JSON. Hub GET never passes `fix` to node.
 - **Group by feature** (`FEATURES` in `web/src/lib/node-health.ts`): phone approval cards (`node.sock`, claude / assistant settings and hooks, `command-paths`), state and notifications (`node.sock`, `command-paths`), terminal and engine (`herdr`), MCP tools (`node.sock`, `mcp.json`, `command-paths`), skills (`agent-plugin`, `claude-version`), runtime integrations (`runtime.sock`).
@@ -327,7 +339,7 @@ when only the name changed (`sameConfig` ignores it) and tells the link (`endpoi
 See `docs/protocol/protocol.md`: `GET /api/v1/metrics` (Machines), `GET /api/v1/machines/{id}/metrics?range=1h|6h|24h` (detail), `GET /api/v1/machines/{id}/usage?range=1h|24h|7d` (token usage),
 node → manager `metrics` event, `system` in `node.info` / `Machine`; hub forwards these routes unchanged to manager (`devicewire.MetricsRoutes`, `503 assistant_offline` if absent).
 
-## Verification
+## Tests
 
 - Go: `sysmon` fixtures (/proc/stat, meminfo, net/dev, os-release, cpuinfo, vm_stat, iostat, sw_vers, system_profiler in `testdata/`),
   `db.TestMachineMetrics` (downsampling, weighted averages, no points in gaps, cleanup), `devices.TestMetricGaps` (gap markers); `./scripts/test/test-server.sh`.

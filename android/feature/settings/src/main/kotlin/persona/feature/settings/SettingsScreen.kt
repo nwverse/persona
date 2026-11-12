@@ -11,12 +11,14 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.lifecycle.Lifecycle
@@ -52,8 +54,9 @@ fun SettingsScreen(
     onBack: (() -> Unit)? = null,
     /** Opens a page by key (one AI use of "Model configuration"); without it such pages open inside this one. */
     onNavigate: ((androidx.navigation3.runtime.NavKey) -> Unit)? = null,
+    onClose: (() -> Unit)? = null,
 ) {
-    SettingsContent(services.bound(), initialPage, onPhoneData, onDemo, onExitDemo, onOpen, onBack, onNavigate)
+    SettingsContent(services.bound(), initialPage, onPhoneData, onDemo, onExitDemo, onOpen, onBack, onNavigate, onClose)
 }
 
 @Composable
@@ -66,8 +69,11 @@ private fun SettingsContent(
     onOpen: ((SettingsPage) -> Unit)?,
     onBack: (() -> Unit)?,
     onNavigate: ((androidx.navigation3.runtime.NavKey) -> Unit)?,
+    onClose: (() -> Unit)?,
 ) {
-    var page by rememberSaveable(initialPage) { mutableStateOf(initialPage) }
+    var page by rememberSaveable(initialPage) { mutableStateOf(settingsPageFromInitialPage(initialPage)?.toInitialPage() ?: initialPage) }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var parents by rememberSaveable { mutableStateOf(emptyList<String>()) }
     var purposeManager by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
     var purpose by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
     var extension by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
@@ -75,9 +81,28 @@ private fun SettingsContent(
     var connectorManager by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
     var channel by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
     var manager by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
+    /** `ssh:<hub id>` or `proxy:<hub id>`: a hub's tunnel page under Settings › Hubs. */
+    var tunnelPage by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
+    var pairingDiagnostics by rememberSaveable(initialPage) { mutableStateOf(false) }
     // Model providers's own steps when they open in place: one provider, adding one, importing from ~/.zshrc.
     var provider by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
     var providerStep by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
+    // The first group's pages read and write the current assistant's settings alone (docs/assistant/managers.md "Clients").
+    val assistant = currentAssistant()
+    val mine = services.forCurrentAssistant()
+    // The assistant the first group's pages are of, for the pages they open (null: a hub without a roster, the default's).
+    val owner = assistant.takeIf { it.roster != null }?.id
+    // A switch while one of its pages is open here goes back to the list: no page shows one assistant's settings once
+    // another is current (the shell closes such pages it opened itself).
+    var shownFor by rememberSaveable(initialPage) { mutableStateOf(assistant.id) }
+    LaunchedEffect(assistant.id) {
+        if (shownFor == assistant.id) return@LaunchedEffect
+        shownFor = assistant.id
+        if (initialPage == "settings" && isAssistantSettingsPage(page)) {
+            page = "settings"; parents = emptyList(); purpose = null; purposeManager = null; extension = null; extensionManager = null
+            connectorManager = null; channel = null; provider = null; providerStep = null
+        }
+    }
     val desktops = services.desktops?.collectAsState()?.value.orEmpty()
     val context = LocalContext.current
     // Read here: the settings list below is a LazyColumn builder, where composition locals cannot be read.
@@ -103,12 +128,13 @@ private fun SettingsContent(
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         if (!services.demo) scope.launch { updateController.check() }
     }
-    val extensionService = services.extensions.takeUnless { services.demo }
+    val extensionService = mine.extensions.takeUnless { services.demo }
     val extensionsAvailable by remember(extensionService) { extensionService?.available ?: kotlinx.coroutines.flow.flowOf(false) }.collectAsState(false)
-    var extensionSummary by remember { mutableStateOf<String?>(null) }
-    val connectorsService = services.connectors.takeUnless { services.demo }
-    var mailAccounts by remember { mutableStateOf<List<MailAccount>?>(null) }
-    var larkStatus by remember { mutableStateOf<LarkStatus?>(null) }
+    // Each assistant's own: a switch never shows the last one's count, not even while the new one's is read (or fails).
+    var extensionSummary by remember(assistant.id) { mutableStateOf<String?>(null) }
+    val connectorsService = mine.connectors.takeUnless { services.demo }
+    var mailAccounts by remember(assistant.id) { mutableStateOf<List<MailAccount>?>(null) }
+    var larkStatus by remember(assistant.id) { mutableStateOf<LarkStatus?>(null) }
     val larkChats = LocalLarkFeatures.current.chats
     val translationPrefs = services.translation?.prefs?.collectAsState()?.value
     val translationValue = when {
@@ -116,7 +142,7 @@ private fun SettingsContent(
         translationPrefs.enabled -> TranslationPrefs.languageName(translationPrefs.target)
         else -> stringResource(R.string.settings_off)
     }
-    var hubConnectors by remember { mutableStateOf<List<HubConnector>>(emptyList()) }
+    var hubConnectors by remember(assistant.id) { mutableStateOf<List<HubConnector>>(emptyList()) }
     val phoneOn = remember(page) {
         listOf(
             Manifest.permission.READ_CONTACTS,
@@ -127,9 +153,9 @@ private fun SettingsContent(
         }
     }
     // The row's count, read again whenever the settings list is shown or the hub reconnects.
-    LaunchedEffect(extensionService, extensionsAvailable, page, connection) {
+    LaunchedEffect(extensionService, extensionsAvailable, page, connection, assistant.id) {
         if (extensionService == null || !extensionsAvailable || page != "settings" || connection != ConnectionState.Online) return@LaunchedEffect
-        extensionSummary = try { ExtensionText.listSummary(context.resources, extensionService.extensions()) }
+        extensionSummary = try { ExtensionText.listSummary(context.resources, extensionService.extensions().filter { assistant.owns(it.manager) }) }
         catch (error: CancellationException) { throw error } catch (_: Exception) { extensionSummary }
     }
     // Extensions' UI slots (docs/extensions/extensions.md "UI slots"): read again whenever the settings list shows.
@@ -139,11 +165,11 @@ private fun SettingsContent(
     LaunchedEffect(slots, page, connection) {
         if (slots != null && page == "settings" && connection == ConnectionState.Online) slots.load()
     }
-    val channelService = services.channels.takeUnless { services.demo }
+    val channelService = mine.channels.takeUnless { services.demo }
     val channelsAvailable by remember(channelService) { channelService?.available ?: kotlinx.coroutines.flow.flowOf(false) }.collectAsState(false)
-    var channelList by remember { mutableStateOf<List<HubChannel>?>(null) }
+    var channelList by remember(assistant.id) { mutableStateOf<List<HubChannel>?>(null) }
     // Like "Extensions"': read again whenever the settings list is shown or the hub reconnects.
-    LaunchedEffect(channelService, channelsAvailable, page, connection) {
+    LaunchedEffect(channelService, channelsAvailable, page, connection, assistant.id) {
         if (channelService == null || !channelsAvailable || page != "settings" || connection != ConnectionState.Online) return@LaunchedEffect
         channelList = try { channelService.channels() }
         catch (error: CancellationException) { throw error } catch (_: Exception) { channelList }
@@ -157,23 +183,33 @@ private fun SettingsContent(
         catch (error: CancellationException) { throw error } catch (_: Exception) { hubUpdateStatus }
     }
     LaunchedEffect(hubUpdates) { hubUpdates?.events?.collect { hubUpdateStatus = it } }
-    LaunchedEffect(connectorsService, page, connection, larkChats) {
-        if (connectorsService == null || page != "settings" || connection != ConnectionState.Online) return@LaunchedEffect
+    LaunchedEffect(connectorsService, page, connection, larkChats, assistant.id) {
+        if (connectorsService == null || page != "connectors" || connection != ConnectionState.Online) return@LaunchedEffect
         try {
             mailAccounts = runCatching { connectorsService.mailAccounts() }.getOrNull()
             // Lark's status is the Lark extension's (`/api/v1/lark/status`): only asked while the hub has it.
             larkStatus = if (larkChats) runCatching { connectorsService.larkStatus() }.getOrNull() else null
-            hubConnectors = runCatching { connectorsService.connectors(all = true) }.getOrDefault(emptyList())
+            // The current assistant's alone: a merged list (a hub that answers every manager's) is filtered by each one's stamp.
+            hubConnectors = runCatching { connectorsService.connectors(all = true) }.getOrDefault(emptyList()).filter { assistant.owns(it.manager) }
         } catch (_: Exception) {}
     }
     val back: () -> Unit = onBack ?: {
-        if (page == "mail-add") page = "mail"
-        else page = "settings"
+        if (parents.isNotEmpty()) {
+            page = parents.last()
+            parents = parents.dropLast(1)
+        } else page = when {
+            page == "mail-add" -> "mail"
+            page in setOf("sent", "connectors/sent", "phone", "mail", "feishu", "feishu-bot") || page.startsWith("connector/") -> "connectors"
+            else -> "settings"
+        }
     }
     BackHandler(page != "settings" && onBack == null, onBack = back)
     val detailKey = LocalDetailKey.current
     fun open(destination: SettingsPage) {
-        if (onOpen != null) onOpen(destination) else page = destination.toInitialPage()
+        if (onOpen != null) onOpen(destination) else {
+            parents = parents + page
+            page = destination.toInitialPage()
+        }
     }
     val deviceFeedback: @Composable () -> Unit = {
         deviceState.message?.let { JNotice(it.text(), status = Status.NeedsYou) }
@@ -181,51 +217,137 @@ private fun SettingsContent(
             scope.launch { deviceController.disconnect() }
         }
     }
-    when (page) {
+    val connectorItems: LazyListScope.() -> Unit = {
+        val connectorRows = connectorRows(hubConnectors, lark = larkChats)
+        fun connectorPosition(row: ConnectorRow) = GroupPosition.of(connectorRows.indexOf(row), connectorRows.size)
+        item {
+            JGroupItem(connectorPosition(ConnectorRow.Phone)) {
+                JRow(
+                    selected = detailKey == SettingsPageRoute(SettingsPage.PhoneData),
+                    title = stringResource(R.string.settings_diag_phone),
+                    leadingIcon = PhIcons.DeviceMobile,
+                    subtitle = stringResource(R.string.settings_row_phone_subtitle),
+                    value = ConnectorText.device(phoneOn),
+                    onClick = { if (onOpen == null && onPhoneData != null) onPhoneData() else open(SettingsPage.PhoneData) },
+                )
+            }
+        }
+        item {
+            JGroupItem(connectorPosition(ConnectorRow.Mail)) {
+                JRow(
+                    selected = detailKey == SettingsPageRoute(SettingsPage.Mail),
+                    title = stringResource(R.string.settings_row_mail),
+                    leadingIcon = PhIcons.EnvelopeSimple,
+                    subtitle = stringResource(R.string.settings_row_mail_subtitle),
+                    value = ConnectorText.mail(mailAccounts),
+                    onClick = { open(SettingsPage.Mail) },
+                )
+            }
+        }
+        if (ConnectorRow.Lark in connectorRows) item {
+            JGroupItem(connectorPosition(ConnectorRow.Lark)) {
+                JRow(
+                    selected = detailKey == SettingsPageRoute(SettingsPage.Feishu),
+                    title = stringResource(R.string.settings_row_lark),
+                    leadingIcon = PhIcons.ChatCircleDots,
+                    subtitle = stringResource(R.string.settings_row_lark_subtitle),
+                    value = ConnectorText.lark(larkStatus),
+                    onClick = { open(SettingsPage.Feishu) },
+                )
+            }
+        }
+        connectorRows.filterIsInstance<ConnectorRow.Hub>().forEach { row ->
+            val c = row.connector
+            item {
+                JGroupItem(connectorPosition(row)) {
+                    JRow(
+                        title = connectorTitle(c, hubConnectors, LocalManagerRoster.current),
+                        leadingIcon = PhIcons.PlugsConnected,
+                        subtitle = listOfNotNull(c.account, c.via).joinToString(" · ").ifEmpty { ConnectorText.state(c) },
+                        value = ConnectorText.summary(c),
+                        onClick = {
+                            onNavigate?.invoke(persona.core.navigation.ConnectorRoute(c.id, c.manager)) ?: run {
+                                connectorManager = c.manager
+                                page = "connector/${c.id}"
+                            }
+                        },
+                    )
+                }
+            }
+        }
+        item {
+            SettingsCaption(
+                stringResource(R.string.settings_connectors_caption),
+                Modifier.padding(horizontal = pagePadding, vertical = Tokens.Space.s),
+            )
+        }
+        // The host-owned ledger entry follows every connector, as on the web (#2521).
+        if (services.sent != null && !services.demo) item {
+            JGroupItem(GroupPosition.Single, Modifier.padding(top = Tokens.Space.s)) {
+                JRow(selected = detailKey == SettingsPageRoute(SettingsPage.Sent), title = stringResource(R.string.settings_sent_title),
+                    leadingIcon = PhIcons.PaperPlaneTilt, subtitle = stringResource(R.string.settings_sent_subtitle), onClick = { open(SettingsPage.Sent) })
+            }
+        }
+    }
+    // The first group's pages while the current assistant is offline (several assistants): what it has can't be read or
+    // changed now, so they say so, as its inbox and to-dos do, rather than look empty or failed (docs/assistant/managers.md).
+    if (assistant.offline != null && isAssistantSettingsPage(page)) AssistantOfflinePage(page, assistant, back) else when (page) {
+        "connectors" -> JListPage(title = stringResource(R.string.settings_section_connectors), onBack = back, content = connectorItems)
         "pair" -> PairingScreen(services.pairing, services.sessions, onReady = back,
-            onDiagnostics = { open(SettingsPage.Diagnostics) }, diagnostics = services.diagnostics, onBack = back,
+            onDiagnostics = { pairingDiagnostics = true }, diagnostics = services.diagnostics, onBack = back,
             footer = { onDemo?.let { Action(stringResource(R.string.settings_try_demo), onClick = it) }; deviceFeedback() },
             machines = services.machines.takeUnless { services.demo }, attempts = services.pairingAttempts,
-            mainReadiness = services.readiness.takeUnless { services.demo })
+            mainReadiness = services.readiness.takeUnless { services.demo }, skipWelcome = true)
         "capsule" -> CapsuleSettingsPage(services.capsule, back)
-        "claude" -> ClaudeSettingsPage(services.sessions, services.machines.takeUnless { services.demo }, back)
-        "codex" -> ClaudeSettingsPage(services.sessions, services.machines.takeUnless { services.demo }, back, AgentSettingsKind.Codex)
+        // The current assistant's computers alone: their Claude Code / Codex settings.
+        "claude" -> ClaudeSettingsPage(services.sessions, services.machines.takeUnless { services.demo }, back, owns = { assistant.ownsOn(it.id, it.manager) })
+        "codex" -> ClaudeSettingsPage(services.sessions, services.machines.takeUnless { services.demo }, back, AgentSettingsKind.Codex,
+            owns = { assistant.ownsOn(it.id, it.manager) })
         "models" -> purpose?.let { id -> ModelPurposePage(services.models.takeUnless { services.demo }, id, onBack = { purpose = null },
                 providers = services.providers.takeUnless { services.demo }, manager = purposeManager) }
             ?: ModelConfigurationPage(services.models.takeUnless { services.demo }, back,
                 onPurpose = { id, owner -> onNavigate?.invoke(persona.core.navigation.ModelPurposeRoute(id, owner)) ?: run { purposeManager = owner; purpose = id } },
-                providers = services.providers.takeUnless { services.demo })
+                providers = services.providers.takeUnless { services.demo }, onProviders = { open(SettingsPage.Providers) })
         "plugins" -> extension?.let { id -> ExtensionPage(services.extensions.takeUnless { services.demo }, id, onBack = { extension = null },
                 manager = extensionManager,
                 machines = services.sessions.machines,
-                onUpgrade = onNavigate?.let { navigate -> { market, ext -> navigate(persona.core.navigation.ExtensionCatalogRoute(market, ext)) } }) }
-            ?: ExtensionsPage(services.extensions.takeUnless { services.demo }, back,
+                launchers = services.providers.takeUnless { services.demo }?.let { p -> { p.launchers() } },
+                onUpgrade = onNavigate?.let { navigate -> { market, ext -> navigate(persona.core.navigation.ExtensionCatalogRoute(market, ext, manager = extensionManager)) } }) }
+            ?: ExtensionsPage(mine.extensions.takeUnless { services.demo }, back,
                 onExtension = { id, manager -> onNavigate?.invoke(persona.core.navigation.ExtensionRoute(id, manager = manager)) ?: run { extension = id; extensionManager = manager } },
                 onMarket = onNavigate?.let { navigate -> { navigate(persona.core.navigation.ExtensionMarketRoute) } })
         "channels" -> channel?.let { id -> ChannelPage(channelService, id, onBack = { channel = null }, onOpen = onNavigate) }
             ?: ChannelsPage(channelService, back,
                 onChannel = { id -> onNavigate?.invoke(persona.core.navigation.ChannelRoute(id)) ?: run { channel = id } },
-                onMarketExtension = onNavigate?.let { navigate -> { market, id -> navigate(persona.core.navigation.ExtensionCatalogRoute(market, id)) } })
-        "ready", "notify" -> {
-            val preferences: LazyListScope.() -> Unit =
-                if (page == "notify") NotificationPreferences(deviceController, paired && services.deviceSettings != null,
-                    desktops, onDesktops = { open(SettingsPage.Desktops) }) else ({})
+                // Installed for the current assistant, whose channels these are.
+                onMarketExtension = onNavigate?.let { navigate -> { market, id -> navigate(persona.core.navigation.ExtensionCatalogRoute(market, id, manager = owner)) } })
+        "ready", "notify", "notification-background" -> {
+            val preferences = NotificationPreferences(deviceController, paired && services.deviceSettings != null,
+                desktops, onDesktops = { open(SettingsPage.Desktops) })
             ReadinessScreen(services.sessions, services.diagnostics,
-                notificationsOnly = page == "notify", showTitle = page == "notify",
-                readiness = services.readiness.takeUnless { services.demo }, onNavigate = onNavigate,
+                backgroundOnly = true, titleOverride = stringResource(R.string.settings_notification_background_title),
+                readiness = null, onNavigate = onNavigate,
                 onDiagnostics = { open(SettingsPage.Diagnostics) }, onDone = back, onBack = back,
-                header = preferences, footer = {
-                    if (page == "notify") SettingsCaption(stringResource(R.string.settings_notify_system_footer), Modifier.padding(vertical = Tokens.Space.s))
+                header = NotificationBackgroundHeader(services.capsule, { open(SettingsPage.Capsule) },
+                    stringResource(R.string.settings_notification_background_checks_header), preferences), footer = {
+                    SettingsCaption(stringResource(R.string.settings_notify_system_footer), Modifier.padding(vertical = Tokens.Space.s))
                     deviceFeedback()
                 })
+        }
+        "agent-settings" -> JListPage(title = stringResource(R.string.settings_home_agents), onBack = back) {
+            val entries = listOf(SettingsPage.ClaudeCode to R.string.settings_row_claude, SettingsPage.Codex to R.string.settings_row_codex,
+                SettingsPage.Triage to R.string.settings_triage_title)
+            itemsIndexed(entries) { index, (destination, title) -> JGroupItem(GroupPosition.of(index, entries.size)) {
+                JRow(stringResource(title), onClick = { open(destination) })
+            } }
         }
         "desktops" -> DesktopsPage(deviceController, services.desktops.takeUnless { services.demo }, paired && services.deviceSettings != null, back)
         "storage" -> StoragePage(back, services.clearCacheFiles, footer = deviceFeedback)
         "providers" -> {
-            val providerService = services.providers.takeUnless { services.demo }
+            val providerService = mine.providers.takeUnless { services.demo }
             when {
                 providerStep == "add" && providerService != null -> NewProviderPage(providerService, onBack = { providerStep = null }, onSaved = { providerStep = null },
-                    readiness = services.readiness)
+                    readiness = services.readiness, machines = machines)
                 providerStep == "import" && providerService != null -> ProviderImportPage(providerService, machines, onBack = { providerStep = null }, onDone = { providerStep = null })
                 provider != null -> ProviderDetailPage(providerService, provider!!, machines, onBack = { provider = null })
                 else -> ProvidersPage(providerService, machines, back,
@@ -240,16 +362,22 @@ private fun SettingsContent(
             devices = services.deviceSettings.takeUnless { services.demo }, machines = machines) }
             ?: ManagersPage(services.managers.takeUnless { services.demo }, back,
                 onManager = { id -> onNavigate?.invoke(persona.core.navigation.ManagerRoute(id)) ?: run { manager = id } })
-        "sent" -> SentAsYouPage(services.sent.takeUnless { services.demo }, back,
+        "sent", "connectors/sent" -> SentAsYouPage(mine.sent.takeUnless { services.demo }, back,
             // A chat opens by its ids in the hub's group, as every other page's link to one does.
             onChat = onNavigate?.let { navigate -> { machine, session -> navigate(persona.core.navigation.ChatRoute(machine, session)) } })
         "hub-update" -> HubUpdatePage(hubUpdates, machines, back, online = connection == ConnectionState.Online, onMachine = onNavigate)
-        "hubs" -> HubsScreen(services.hubs ?: HubGroups.None, services.addHub?.let { { page = "hubs-add" } }, back, deviceFeedback)
+        "hubs" -> tunnelPage?.takeIf { services.tunnels != null }?.let { opened ->
+            if (opened.startsWith("access:")) HubAccessPage(services.tunnels!!, opened.substringAfter(':'), onBack = { tunnelPage = null })
+            else HubTunnelPage(services.tunnels!!, opened.substringAfter(':'),
+                if (opened.startsWith("ssh:")) TunnelKind.Ssh else TunnelKind.Proxy, onBack = { tunnelPage = null })
+        } ?: HubsScreen(services.hubs ?: HubGroups.None, services.addHub?.let { { page = "hubs-add" } }, back, deviceFeedback,
+            tunnels = services.tunnels, onTunnel = { hubId, kind -> tunnelPage = (if (kind == TunnelKind.Ssh) "ssh:" else "proxy:") + hubId },
+            onAccess = { hubId -> tunnelPage = "access:$hubId" })
         // Adding a hub is the pairing page with an adding service; it returns to the hub list.
         "hubs-add" -> PairingScreen(services.addHub ?: services.pairing, services.sessions,
-            onReady = { page = "hubs" }, onDiagnostics = { open(SettingsPage.Diagnostics) }, diagnostics = services.diagnostics,
+            onReady = { page = "hubs" }, onDiagnostics = { pairingDiagnostics = true }, diagnostics = services.diagnostics,
             onBack = { page = "hubs" }, skipWelcome = true, attempts = services.pairingAttempts)
-        "diag" -> DiagnosticsScreen(services, onBack = back, footer = deviceFeedback)
+        "diag" -> DiagnosticsScreen(services, onBack = back, onPairing = { open(SettingsPage.Pairing) }, footer = deviceFeedback)
         "style" -> JListPage(title = stringResource(R.string.settings_style_title), onBack = back) {
             item { AppearanceSettings() }
             item { deviceFeedback() }
@@ -259,202 +387,18 @@ private fun SettingsContent(
             item { PersonaSettings(demo = services.demo) }
             item { deviceFeedback() }
         }
-        "about" -> JListPage(title = stringResource(R.string.settings_about_persona), onBack = back) {
+        "about" -> JListPage(title = stringResource(R.string.settings_home_about), onBack = back) {
             item { AboutSettingsPage() }
-            item { deviceFeedback() }
-        }
-        "phone" -> JListPage(title = stringResource(R.string.settings_phone_data_title), onBack = back) {
-            item { JNotice(stringResource(R.string.settings_phone_data_notice)) }
-            item { SettingsCaption(stringResource(R.string.settings_phone_data_caption), Modifier.padding(vertical = Tokens.Space.m)) }
-            item { Action(stringResource(R.string.settings_phone_data_manage)) { PhoneReadiness.open(context, listOf(appDetails)) } }
-            item { deviceFeedback() }
-        }
-        "translate" -> TranslationSettingsPage(services.translation.takeUnless { services.demo }, services.models.takeUnless { services.demo },
-            connectorsService, onBack = back, pickingAtStart = TranslationPreview.take(),
-            onModel = { onNavigate?.invoke(persona.core.navigation.ModelPurposeRoute("translate")) ?: run { purpose = "translate"; page = "models" } })
-        "triage" -> TriageSettingsPage(services.triage.takeUnless { services.demo }, services.models.takeUnless { services.demo }, onBack = back,
-            onModel = { onNavigate?.invoke(persona.core.navigation.ModelPurposeRoute("agent.triage")) ?: run { purpose = "agent.triage"; page = "models" } })
-        "mail" -> MailAccountsPage(connectorsService, onBack = back, onAdd = { page = "mail-add" })
-        "feishu-bot" -> FeishuBotPage(services.feishuBot.takeUnless { services.demo }, back)
-        "mail-add" -> AddMailAccountPage(connectorsService, onBack = { page = "mail" }, onAdded = { page = "mail" })
-        "feishu" -> FeishuConnectorPage(connectorsService, onBack = back, onAgentModel = {
-            onNavigate?.invoke(persona.core.navigation.ModelPurposeRoute("lark.agent")) ?: run { purpose = "lark.agent"; page = "models" }
-        })
-        // "Messages" has its own page, as on iOS: "Hand to Persona", its steps on the Mac, "Conversations" (MessagesConnector.kt).
-        else -> if (page == "connector/imessage") {
-            MessagesConnectorPage(connectorsService, onBack = back)
-        } else if (page.startsWith("connector/")) {
-            HubConnectorPage(connectorsService, connectorId = page.removePrefix("connector/"), onBack = back, manager = connectorManager)
-        } else JListPage(title = stringResource(R.string.settings_title)) {
-            if (services.demo) {
-                item { JNotice(stringResource(R.string.settings_demo_notice), title = stringResource(R.string.settings_demo_mode)) }
-                onExitDemo?.let { exit ->
-                    item { JButton(stringResource(R.string.settings_demo_connect), exit, Modifier.fillMaxWidth().padding(top = Tokens.Space.m)) }
-                }
-            }
-            // The extensions' cards and nav pages head the list; they open by key, so only with a navigation host.
-            if (onNavigate != null) extensionSlotItems(slotsState, slotCards,
-                selected = { place -> detailKey == persona.core.navigation.ExtensionUiRoute(place.extension, place.id, place.title.ifBlank { place.id }) },
-                onOpen = { place -> onNavigate(persona.core.navigation.ExtensionUiRoute(place.extension, place.id, place.title.ifBlank { place.id })) })
-            item {
-                HubCard(name = "Persona hub", connected = paired && connection == ConnectionState.Online,
-                    statusText = if (paired) connection.label() else stringResource(R.string.settings_not_paired),
-                    facts = if (paired) machines.count { it.online }.let { online ->
-                        listOf(stringResource(R.string.settings_hub_computers_online) to pluralStringResource(R.plurals.settings_hub_computers_count, online, online),
-                            stringResource(R.string.settings_hub_address) to (services.hubAddress ?: stringResource(R.string.settings_not_provided)))
-                    } else emptyList(),
-                    busy = connection in setOf(ConnectionState.Connecting, ConnectionState.Updating),
-                    modifier = Modifier.padding(top = Tokens.Space.m), onClick = { open(SettingsPage.Diagnostics) })
-            }
-            item { JSectionHeader(stringResource(R.string.settings_section_connection)) }
-            // The hub list is the one row a single hub group adds to settings (docs/android/android.md"Multiple hubs").
-            // Hub version (docs/operations/hub-update.md"In the app") follows it while there is a real hub (not demo mode).
-            val managersRow = services.managers != null && !services.demo
-            val hubRows = (if (services.hubs != null) 1 else 0) + (if (hubUpdates != null) 1 else 0) + (if (managersRow) 1 else 0)
-            if (services.hubs != null) item { JGroupItem(GroupPosition.of(0, 3 + hubRows)) { JRow(selected = detailKey == SettingsPageRoute(SettingsPage.Hubs), title = stringResource(R.string.settings_row_hubs), leadingIcon = PhIcons.HardDrives, subtitle = stringResource(R.string.settings_row_hubs_subtitle), onClick = { open(SettingsPage.Hubs) }) } }
-            if (hubUpdates != null) item { JGroupItem(GroupPosition.of(hubRows - 1 - (if (managersRow) 1 else 0), 3 + hubRows)) { JRow(selected = detailKey == SettingsPageRoute(SettingsPage.HubUpdate), title = stringResource(R.string.settings_row_hub_update), leadingIcon = PhIcons.ArrowsClockwise, subtitle = stringResource(R.string.settings_row_hub_update_subtitle), value = HubUpdateText.summary(hubUpdateStatus), onClick = { open(SettingsPage.HubUpdate) }) } }
-            // Managers (docs/assistant/managers.md): the hub's roster of assistants, after its version.
-            if (managersRow) item { JGroupItem(GroupPosition.of(hubRows - 1, 3 + hubRows)) { JRow(selected = detailKey == SettingsPageRoute(SettingsPage.Managers) || detailKey is persona.core.navigation.ManagerRoute, title = stringResource(R.string.settings_managers_title), leadingIcon = PhIcons.UserCircle, subtitle = stringResource(R.string.settings_managers_hint), onClick = { open(SettingsPage.Managers) }) } }
-            item { JGroupItem(GroupPosition.of(hubRows, 3 + hubRows)) { JRow(selected = detailKey == SettingsPageRoute(SettingsPage.Pairing), title = stringResource(R.string.settings_row_pairing), leadingIcon = PhIcons.QrCode, subtitle = stringResource(R.string.settings_row_pairing_subtitle), onClick = { open(SettingsPage.Pairing) }) } }
-            item { JGroupItem(GroupPosition.of(hubRows + 1, 3 + hubRows)) { JRow(selected = detailKey == SettingsPageRoute(SettingsPage.Devices), title = stringResource(R.string.settings_devices_title), leadingIcon = PhIcons.DeviceMobile, subtitle = stringResource(R.string.settings_row_devices_subtitle), onClick = { open(SettingsPage.Devices) }) } }
-            item { JGroupItem(GroupPosition.of(hubRows + 2, 3 + hubRows)) { JRow(selected = detailKey == SettingsPageRoute(SettingsPage.Diagnostics), title = stringResource(R.string.settings_diag_title), leadingIcon = PhIcons.Gauge, subtitle = stringResource(R.string.settings_row_diag_subtitle), onClick = { open(SettingsPage.Diagnostics) }) } }
-            item { JSectionHeader(stringResource(R.string.settings_section_notifications)) }
-            val capsuleRows = if (services.capsule != null) 1 else 0
-            val desktopRow = desktops.isNotEmpty() && !services.demo
-            val notifyRows = capsuleRows + 2 + if (desktopRow) 1 else 0
-            if (services.capsule != null) item { JGroupItem(GroupPosition.of(0, notifyRows)) {
-                val mode by services.capsule.mode.collectAsState()
-                JRow(title = stringResource(R.string.settings_capsule_title), leadingIcon = PhIcons.ChatCircle, value = CapsuleSettingsText.label(mode),
-                    subtitle = stringResource(R.string.settings_row_capsule_subtitle), selected = detailKey == SettingsPageRoute(SettingsPage.Capsule),
-                    onClick = { open(SettingsPage.Capsule) })
-            } }
-            // "Persona on Mac is signed in" while a desktop app is connected (iOS shows it over the Agents list).
-            item { JGroupItem(GroupPosition.of(capsuleRows, notifyRows)) { JRow(selected = detailKey == SettingsPageRoute(SettingsPage.Notifications), title = stringResource(R.string.settings_ready_notifications), leadingIcon = PhIcons.BellSimple, subtitle = stringResource(R.string.settings_row_notifications_subtitle), onClick = { open(SettingsPage.Notifications) }) } }
-            item { JGroupItem(GroupPosition.of(capsuleRows + 1, notifyRows)) { JRow(selected = detailKey == SettingsPageRoute(SettingsPage.Readiness), title = stringResource(R.string.settings_row_background), leadingIcon = PhIcons.BatteryCharging, subtitle = stringResource(R.string.settings_row_background_subtitle), onClick = { open(SettingsPage.Readiness) }) } }
-            if (desktopRow) item { DesktopPresenceRow(desktops, deviceState.preferences?.muteWhileDesktop == true,
-                selected = detailKey == SettingsPageRoute(SettingsPage.Desktops), GroupPosition.of(capsuleRows + 2, notifyRows), onClick = { open(SettingsPage.Desktops) }) }
-            // Inbox chats open natively (left / right bubbles, reply composer) unless switched to the extension's page.
-            if (appStyleStore != null) {
-                item { JSectionHeader(stringResource(R.string.settings_update_v7_native_section)) }
-                item { JGroupItem(GroupPosition.Single) {
-                    val nativeInboxChats by appStyleStore.nativeInboxChats.collectAsState()
-                    JSwitchRow(stringResource(R.string.settings_update_v7_native_title), nativeInboxChats, appStyleStore::setNativeInboxChats,
-                        subtitle = stringResource(R.string.settings_update_v7_native_subtitle))
-                } }
-            }
-            item { JSectionHeader("AI") }
-            // iOS's order: "Model providers", "Model configuration", "Assistant" (a page of the Persona tab, so only with a navigation host), then the uses.
-            val assistantRow = onNavigate != null
-            val aiRows = if (assistantRow) 5 else 4
-            item { JGroupItem(GroupPosition.of(0, aiRows)) { JRow(selected = detailKey == SettingsPageRoute(SettingsPage.Providers), title = stringResource(R.string.settings_providers_title), leadingIcon = PhIcons.Cpu, subtitle = stringResource(R.string.settings_row_providers_subtitle), onClick = { open(SettingsPage.Providers) }) } }
-            item { JGroupItem(GroupPosition.of(1, aiRows)) { JRow(selected = detailKey == SettingsPageRoute(SettingsPage.ModelConfig), title = stringResource(R.string.settings_row_models), leadingIcon = PhIcons.Brain, subtitle = stringResource(R.string.settings_row_models_subtitle), onClick = { open(SettingsPage.ModelConfig) }) } }
-            if (assistantRow) item { JGroupItem(GroupPosition.of(2, aiRows)) { JRow(selected = detailKey == persona.core.navigation.AssistantSettingsRoute, title = stringResource(R.string.settings_row_assistant), leadingIcon = PhIcons.Sparkle, subtitle = stringResource(R.string.settings_row_assistant_subtitle), onClick = { onNavigate?.invoke(persona.core.navigation.AssistantSettingsRoute) }) } }
-            val translationAt = if (assistantRow) 3 else 2
-            item { JGroupItem(GroupPosition.of(translationAt, aiRows)) { JRow(selected = detailKey == SettingsPageRoute(SettingsPage.Translation), title = stringResource(R.string.settings_translation_title), leadingIcon = PhIcons.Translate, subtitle = stringResource(R.string.settings_row_translation_subtitle), value = translationValue, onClick = { open(SettingsPage.Translation) }) } }
-            item { JGroupItem(GroupPosition.of(translationAt + 1, aiRows)) { JRow(selected = detailKey == SettingsPageRoute(SettingsPage.Triage), title = stringResource(R.string.settings_triage_title), leadingIcon = PhIcons.ListChecks, subtitle = stringResource(R.string.settings_row_triage_subtitle), onClick = { open(SettingsPage.Triage) }) } }
-            // Extension management and conversation channels are independent hub capabilities.
-            if (extensionsAvailable) {
-                item { JSectionHeader(stringResource(R.string.settings_section_extensions)) }
-                item { JGroupItem(GroupPosition.Single) { JRow(selected = detailKey == SettingsPageRoute(SettingsPage.Extensions), title = stringResource(R.string.settings_section_extensions), leadingIcon = PhIcons.PuzzlePiece, subtitle = stringResource(R.string.settings_row_extensions_subtitle), value = extensionSummary, onClick = { open(SettingsPage.Extensions) }) } }
-            }
-            item { JSectionHeader(stringResource(R.string.settings_section_computers)) }
-            item { JGroupItem(GroupPosition.of(0, 2)) { JRow(selected = detailKey == SettingsPageRoute(SettingsPage.ClaudeCode), title = stringResource(R.string.settings_row_claude), leadingIcon = PhIcons.TerminalWindow, subtitle = stringResource(R.string.settings_row_claude_subtitle), onClick = { open(SettingsPage.ClaudeCode) }) } }
-            item { JGroupItem(GroupPosition.of(1, 2)) { JRow(selected = detailKey == SettingsPageRoute(SettingsPage.Codex), title = stringResource(R.string.settings_row_codex), leadingIcon = PhIcons.Code, subtitle = stringResource(R.string.settings_row_codex_subtitle), onClick = { open(SettingsPage.Codex) }) } }
-            if (channelsAvailable) {
-                item { JSectionHeader(stringResource(R.string.settings_section_channels)) }
-                item {
-                    ChannelsSettingsRow(channelList, GroupPosition.Single,
-                        selected = detailKey == SettingsPageRoute(SettingsPage.Channels), onClick = { open(SettingsPage.Channels) })
-                }
-            }
-            item { JSectionHeader(stringResource(R.string.settings_section_connectors)) }
-            val connectorRows = connectorRows(hubConnectors, lark = larkChats)
-            fun connectorPosition(row: ConnectorRow) = GroupPosition.of(connectorRows.indexOf(row), connectorRows.size)
-            item {
-                JGroupItem(connectorPosition(ConnectorRow.Phone)) {
-                    JRow(
-                        selected = detailKey == SettingsPageRoute(SettingsPage.PhoneData),
-                        title = stringResource(R.string.settings_diag_phone),
-                        leadingIcon = PhIcons.DeviceMobile,
-                        subtitle = stringResource(R.string.settings_row_phone_subtitle),
-                        value = ConnectorText.device(phoneOn),
-                        onClick = { if (onOpen == null && onPhoneData != null) onPhoneData() else open(SettingsPage.PhoneData) },
-                    )
-                }
-            }
-            item {
-                JGroupItem(connectorPosition(ConnectorRow.Mail)) {
-                    JRow(
-                        selected = detailKey == SettingsPageRoute(SettingsPage.Mail),
-                        title = stringResource(R.string.settings_row_mail),
-                        leadingIcon = PhIcons.EnvelopeSimple,
-                        subtitle = stringResource(R.string.settings_row_mail_subtitle),
-                        value = ConnectorText.mail(mailAccounts),
-                        onClick = { open(SettingsPage.Mail) },
-                    )
-                }
-            }
-            if (ConnectorRow.Lark in connectorRows) item {
-                JGroupItem(connectorPosition(ConnectorRow.Lark)) {
-                    JRow(
-                        selected = detailKey == SettingsPageRoute(SettingsPage.Feishu),
-                        title = stringResource(R.string.settings_row_lark),
-                        leadingIcon = PhIcons.ChatCircleDots,
-                        subtitle = stringResource(R.string.settings_row_lark_subtitle),
-                        value = ConnectorText.lark(larkStatus),
-                        onClick = { open(SettingsPage.Feishu) },
-                    )
-                }
-            }
-            connectorRows.filterIsInstance<ConnectorRow.Hub>().forEach { row ->
-                val c = row.connector
-                item {
-                    JGroupItem(connectorPosition(row)) {
-                        JRow(
-                            title = connectorTitle(c, hubConnectors, LocalManagerRoster.current),
-                            leadingIcon = PhIcons.PlugsConnected,
-                            subtitle = listOfNotNull(c.account, c.via).joinToString(" · ").ifEmpty { ConnectorText.state(c) },
-                            value = ConnectorText.summary(c),
-                            onClick = {
-                                onNavigate?.invoke(persona.core.navigation.ConnectorRoute(c.id, c.manager)) ?: run {
-                                    connectorManager = c.manager
-                                    page = "connector/${c.id}"
-                                }
-                            },
-                        )
-                    }
-                }
-            }
-            item {
-                SettingsCaption(
-                    stringResource(R.string.settings_connectors_caption),
-                    Modifier.padding(horizontal = pagePadding, vertical = Tokens.Space.s),
-                )
-            }
-            // What Persona sent in the user's name through the connectors (#5278, docs/extensions/connectors.md "Sent as the user"), right after them.
-            if (services.sent != null && !services.demo) item {
-                JGroupItem(GroupPosition.Single, Modifier.padding(top = Tokens.Space.s)) {
-                    JRow(selected = detailKey == SettingsPageRoute(SettingsPage.Sent), title = stringResource(R.string.settings_sent_title),
-                        leadingIcon = PhIcons.PaperPlaneTilt, subtitle = stringResource(R.string.settings_sent_subtitle), onClick = { open(SettingsPage.Sent) })
-                }
-            }
-            item { JSectionHeader(stringResource(R.string.settings_section_appearance)) }
-            item { JGroupItem(GroupPosition.of(0, 3)) { JRow(selected = detailKey == SettingsPageRoute(SettingsPage.Persona), title = stringResource(R.string.settings_avatar_title), leadingIcon = PhIcons.Robot, value = if (LocalPersonaPack.current != null) LocalPersonaName.current else LocalPersonaDesign.current.title, onClick = { open(SettingsPage.Persona) }) } }
-            item { JGroupItem(GroupPosition.of(1, 3)) { JRow(selected = detailKey == SettingsPageRoute(SettingsPage.Appearance), title = stringResource(R.string.settings_style_title), leadingIcon = PhIcons.SquaresFour, value = PersonaTheme.style.label, onClick = { open(SettingsPage.Appearance) }) } }
-            item { JGroupItem(GroupPosition.of(2, 3)) { LanguageRow(selected = detailKey == SettingsPageRoute(SettingsPage.Language), onClick = { open(SettingsPage.Language) }) } }
-            item { JSectionHeader(stringResource(R.string.settings_section_about)) }
-            item { JGroupItem(GroupPosition.of(0, 3)) { JRow(selected = detailKey == SettingsPageRoute(SettingsPage.About), title = stringResource(R.string.settings_section_about), leadingIcon = PhIcons.Info, subtitle = stringResource(R.string.settings_row_about_subtitle), onClick = { open(SettingsPage.About) }) } }
-            item { JGroupItem(GroupPosition.of(1, 3)) { StorageRow(selected = detailKey == SettingsPageRoute(SettingsPage.Storage), onClick = { open(SettingsPage.Storage) }) } }
-            item { JGroupItem(GroupPosition.of(2, 3)) {
+            item { JGroupItem(GroupPosition.Single, Modifier.padding(top = Tokens.Space.m)) {
                 JRow(stringResource(R.string.settings_update_check), value = when {
                     busy -> stringResource(R.string.settings_update_checking)
                     installing -> stringResource(R.string.settings_update_installing)
                     update != null -> stringResource(R.string.settings_update_found)
                     services.demo -> stringResource(R.string.settings_demo_mode)
-                    else -> updateMessage?.let { stringResource(it).trimEnd('。', '.') } ?: stringResource(R.string.settings_update_check_hint)
-                },
-                    enabled = !services.demo && !busy && !installing, onClick = ::checkUpdate)
+                    else -> updateMessage?.let { stringResource(it) } ?: stringResource(R.string.settings_update_check_hint)
+                }, enabled = !services.demo && !busy && !installing, onClick = ::checkUpdate)
             } }
+            if (!services.demo) item { AppUpdateRecovery(updateController) }
             if (update != null || updateMessage != null) item {
                 JCard(Modifier.padding(top = Tokens.Space.m)) {
                     Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
@@ -467,22 +411,65 @@ private fun SettingsContent(
                     }
                 }
             }
-            if (paired) item {
-                JButton(stringResource(R.string.settings_disconnect_forget), { confirmDisconnect = true },
-                    Modifier.fillMaxWidth().padding(top = Tokens.Space.xl), kind = JButtonKind.Destructive, enabled = !deviceState.busy)
-            }
             item { deviceFeedback() }
         }
+        "phone" -> JListPage(title = stringResource(R.string.settings_phone_data_title), onBack = back) {
+            item { JNotice(stringResource(R.string.settings_phone_data_notice)) }
+            item { SettingsCaption(stringResource(R.string.settings_phone_data_caption), Modifier.padding(vertical = Tokens.Space.m)) }
+            item { Action(stringResource(R.string.settings_phone_data_manage)) { PhoneReadiness.open(context, listOf(appDetails)) } }
+            item { deviceFeedback() }
+        }
+        "translate" -> TranslationSettingsPage(services.translation.takeUnless { services.demo }, services.models.takeUnless { services.demo },
+            services.connectors.takeUnless { services.demo }, onBack = back, pickingAtStart = TranslationPreview.take(),
+            onModel = { onNavigate?.invoke(persona.core.navigation.ModelPurposeRoute("translate")) ?: run { purposeManager = null; purpose = "translate"; page = "models" } })
+        "triage" -> TriageSettingsPage(mine.triage.takeUnless { services.demo }, mine.models.takeUnless { services.demo }, onBack = back,
+            onModel = { onNavigate?.invoke(persona.core.navigation.ModelPurposeRoute("agent.triage", owner)) ?: run {
+                purposeManager = owner; purpose = "agent.triage"; page = "models" } })
+        "mail" -> MailAccountsPage(connectorsService, onBack = back, onAdd = { page = "mail-add" })
+        "feishu-bot" -> FeishuBotPage(mine.feishuBot.takeUnless { services.demo }, back)
+        "mail-add" -> AddMailAccountPage(connectorsService, onBack = { page = "mail" }, onAdded = { page = "mail" })
+        "feishu" -> FeishuConnectorPage(connectorsService, onBack = back, onAgentModel = {
+            // The model of the current assistant's agent there, as the page's connector is that one's.
+            onNavigate?.invoke(persona.core.navigation.ModelPurposeRoute("lark.agent", owner)) ?: run { purposeManager = owner; purpose = "lark.agent"; page = "models" }
+        })
+        // "Messages" has its own page, as on iOS: "Hand to Persona", its steps on the Mac, "Conversations" (MessagesConnector.kt).
+        else -> if (page == "connector/imessage") {
+            MessagesConnectorPage(connectorsService, onBack = back)
+        } else if (page.startsWith("connector/")) {
+            HubConnectorPage(connectorsService, connectorId = page.removePrefix("connector/"), onBack = back, manager = connectorManager)
+        } else SettingsHomePage(
+            services, searchQuery, { searchQuery = it }, extensionsAvailable, extensionSummary, channelsAvailable, channelList,
+            connection, translationValue, hubUpdateStatus,
+            when {
+                busy -> stringResource(R.string.settings_update_checking)
+                installing -> stringResource(R.string.settings_update_installing)
+                update != null -> stringResource(R.string.settings_update_found)
+                else -> null
+            }, detailKey, ::open, onNavigate, onClose, onDemo, onExitDemo,
+            slots = {
+                if (onNavigate != null && (assistant.roster == null || assistant.id == assistant.roster?.defaultManagerId)) extensionSlotItems(slotsState, slotCards,
+                    selected = { place -> detailKey == persona.core.navigation.ExtensionUiRoute(place.extension, place.id, place.title.ifBlank { place.id }) },
+                    onOpen = { place -> onNavigate(persona.core.navigation.ExtensionUiRoute(place.extension, place.id, place.title.ifBlank { place.id })) })
+            }, footer = {
+                if (paired) JButton(stringResource(R.string.settings_disconnect_forget), { confirmDisconnect = true },
+                    Modifier.fillMaxWidth().padding(top = Tokens.Space.section), kind = JButtonKind.Destructive, enabled = !deviceState.busy)
+                deviceFeedback()
+            },
+        )
     }
-    // Register after child pages so routed back also takes precedence over the pairing wizard's local steps.
-    if (onBack != null) BackHandler(page != "settings", onBack = onBack)
+    // Routed Back leaves a page in one step. Pairing handles its own steps before returning to Settings or Hubs.
+    if (onBack != null) BackHandler(page != "settings" && page != "pair" && page != "hubs-add", onBack = onBack)
     // An AI use opened inside "Model configuration" (no navigation host) closes before the page does.
     BackHandler(page == "models" && purpose != null) { purpose = null }
     BackHandler(page == "plugins" && extension != null) { extension = null }
     BackHandler(page == "channels" && channel != null) { channel = null }
     BackHandler(page == "managers" && manager != null) { manager = null }
     BackHandler(page == "providers" && (provider != null || providerStep != null)) { if (providerStep != null) providerStep = null else provider = null }
-    BackHandler(page == "hubs-add") { page = "hubs" }
+    BackHandler(page == "hubs" && tunnelPage != null) { tunnelPage = null }
+    if (pairingDiagnostics && (page == "pair" || page == "hubs-add")) {
+        val close = { pairingDiagnostics = false }
+        JFullScreen(onDismiss = close) { DiagnosticsScreen(services, onBack = close, footer = deviceFeedback) }
+    }
     if (confirmDisconnect) JDialog(
         onDismiss = { confirmDisconnect = false }, title = stringResource(R.string.settings_disconnect_title),
         text = stringResource(R.string.settings_disconnect_text),
@@ -506,6 +493,10 @@ fun ReadinessScreen(
     readiness: AssistantReadinessSource? = null,
     /** Opens a step's page ("Model providers", "Machines"); null during the first checklist, whose buttons then open help only. */
     onNavigate: ((androidx.navigation3.runtime.NavKey) -> Unit)? = null,
+    onLater: (() -> Unit)? = null,
+    /** Ordinary device settings reuse the checks, without finishing or dismissing first-run setup. */
+    backgroundOnly: Boolean = false,
+    titleOverride: String? = null,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -537,16 +528,16 @@ fun ReadinessScreen(
     var testMessage by remember { mutableStateOf<Int?>(null) }
     val machines by sessions.machines.collectAsState()
     fun refresh() { scope.launch {
-        val detected = system ?: withContext(Dispatchers.IO) { PhoneReadiness.system() }
+        val detected = system ?: withContext(Dispatchers.IO) { detectedPhoneSystem(context) }
         system = detected
         items = PhoneReadiness.items(context, detected)
         if (detected.name == PhoneReadiness.HyperOS) { delay(1_000); items = PhoneReadiness.items(context, detected) }
     } }
     val machinesSeen = machines.joinToString(",") { "${it.id}:${it.online}" }
-    LaunchedEffect(readinessOn, machinesSeen) { if (readinessOn && !notificationsOnly) loadMain() }
+    LaunchedEffect(readinessOn, machinesSeen) { if (readinessOn && !notificationsOnly && !backgroundOnly) loadMain() }
     val notifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { refresh() }
     val localNetwork = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { refresh() }
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { refresh(); if (readinessOn && !notificationsOnly) scope.launch { loadMain() } }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { refresh(); if (readinessOn && !notificationsOnly && !backgroundOnly) scope.launch { loadMain() } }
     LaunchedEffect(Unit) {
         refresh()
         try { sessions.refresh() } catch (error: CancellationException) { throw error } catch (_: Exception) { }
@@ -575,9 +566,10 @@ fun ReadinessScreen(
         }
         onDone()
     }
-    JListPage(title = stringResource(if (notificationsOnly) R.string.settings_ready_notifications else R.string.settings_ready_title), onBack = onBack, largeTitle = showTitle && onBack == null) {
+    val title = titleOverride ?: stringResource(if (notificationsOnly) R.string.settings_ready_notifications else R.string.settings_ready_title)
+    val checklist: LazyListScope.() -> Unit = {
         header()
-        val mainSteps = main?.takeIf { readinessOn && !notificationsOnly }
+        val mainSteps = main?.takeIf { readinessOn && !notificationsOnly && !backgroundOnly }
         if (mainSteps != null) {
             item("main-header") { JSectionHeader(stringResource(R.string.settings_ready_main_header)) }
             item("main-steps") {
@@ -640,7 +632,7 @@ fun ReadinessScreen(
         }
         if (!notificationsOnly) {
             // The hub's computer step says it for the beginner; the per-machine versions stay for older hubs.
-            if (mainSteps == null) {
+            if (mainSteps == null && !backgroundOnly) {
                 item { JSectionHeader(stringResource(R.string.settings_section_computers), count = machines.size) }
                 if (machines.isEmpty()) item { JEmptyState(stringResource(R.string.settings_ready_no_machines), stringResource(R.string.settings_ready_no_machines_detail)) }
                 itemsIndexed(machines) { index, machine ->
@@ -669,7 +661,7 @@ fun ReadinessScreen(
                     }
                 }
             }
-            items(listOf("machines" to R.string.settings_ready_machines_check, "lock-test" to R.string.settings_lock_test_title, "cellular-test" to R.string.settings_ready_cellular_test)) { (id, title) ->
+            items(listOfNotNull(if (backgroundOnly) null else "machines" to R.string.settings_ready_machines_check, "lock-test" to R.string.settings_lock_test_title, "cellular-test" to R.string.settings_ready_cellular_test)) { (id, title) ->
                 val skipped = remember(id, revision) { records.skipped(id) }
                 if (skipped) SettingsCaption(stringResource(R.string.settings_ready_skipped_item, stringResource(title)))
             }
@@ -678,14 +670,23 @@ fun ReadinessScreen(
         item {
             Column(Modifier.padding(vertical = Tokens.Space.m), verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
                 testMessage?.let { JNotice(stringResource(it)) }
-                SettingsCaption(stringResource(R.string.settings_ready_skip_note))
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+                if (!backgroundOnly) SettingsCaption(stringResource(R.string.settings_ready_skip_note))
+                if (!backgroundOnly) FlowRow(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
                     Action(stringResource(R.string.settings_ready_skip_rest), enabled = items.isNotEmpty(), onClick = { finish(later = true) })
                     JButton(stringResource(R.string.settings_done), { finish(later = false) }, size = JButtonSize.Small, enabled = items.isNotEmpty())
                 }
                 footer()
             }
         }
+    }
+    if (onLater == null) {
+        JListPage(title, onBack = onBack, largeTitle = showTitle && onBack == null,
+            scrollUnderBottom = notificationsOnly, content = checklist)
+    } else CompositionLocalProvider(
+        LocalRootBack provides null, LocalRootLeading provides pairingTitleInset, LocalHomeChrome provides null,
+    ) {
+        JListPage(title, largeTitle = false, actions = { JTextButton(stringResource(R.string.settings_ready_set_up_later), onLater) },
+            scrollUnderBottom = false, content = checklist)
     }
     mainHelp?.let { help ->
         ReadinessHelpDialog(help, main?.machine?.name, onDismiss = { mainHelp = null }, onAction = { action ->
@@ -714,9 +715,33 @@ private fun OnboardingContent(services: SettingsServices, onDone: () -> Unit) {
         return
     }
     var diagnostics by rememberSaveable { mutableStateOf(false) }
-    BackHandler { if (diagnostics) diagnostics = false else onDone() }
+    BackHandler(onBack = onDone)
+    ReadinessScreen(services.sessions, services.diagnostics, notificationsOnly = false, showTitle = false,
+        onDiagnostics = { diagnostics = true }, onDone = onDone, onBack = null, onLater = onDone,
+        readiness = services.readiness.takeUnless { services.demo })
     if (diagnostics) {
-        DiagnosticsScreen(services, onBack = { diagnostics = false })
-    } else ReadinessScreen(services.sessions, services.diagnostics, notificationsOnly = false, showTitle = false,
-        onDiagnostics = { diagnostics = true }, onDone = onDone, onBack = onDone, readiness = services.readiness.takeUnless { services.demo })
+        val close = { diagnostics = false }
+        JFullScreen(onDismiss = close) { DiagnosticsScreen(services, onBack = close) }
+    }
+}
+
+/** One of the first group's pages ([page]) while [assistant] is offline: its title and [JAssistantOffline]. */
+@Composable
+private fun AssistantOfflinePage(page: String, assistant: persona.core.contracts.api.CurrentAssistant, onBack: () -> Unit) {
+    val title = when (settingsPageFromInitialPage(page)) {
+        SettingsPage.Providers -> R.string.settings_providers_title
+        SettingsPage.ModelConfig -> R.string.settings_home_models
+        SettingsPage.AgentSettings -> R.string.settings_home_agents
+        SettingsPage.Triage -> R.string.settings_triage_title
+        SettingsPage.Extensions -> R.string.settings_section_extensions
+        SettingsPage.Channels -> R.string.settings_src_channels_title
+        SettingsPage.ClaudeCode -> R.string.settings_row_claude
+        SettingsPage.Codex -> R.string.settings_row_codex
+        SettingsPage.Mail -> R.string.settings_src_mail_title
+        SettingsPage.Feishu -> R.string.settings_src_lark_title
+        SettingsPage.FeishuBot -> R.string.settings_feishu_bot_title
+        SettingsPage.Sent -> R.string.settings_sent_title
+        else -> R.string.settings_section_connectors
+    }
+    JListPage(title = stringResource(title), onBack = onBack) { item("offline") { JAssistantOffline(assistant) } }
 }

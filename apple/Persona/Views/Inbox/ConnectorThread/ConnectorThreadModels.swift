@@ -1,6 +1,6 @@
 import Foundation
 
-// A connector's inbox thread as a conversation (GET /api/v1/connectors/{id}/thread, docs/protocol/protocol.md「连接器 API」):
+// A connector's inbox thread as a conversation (GET /api/v1/connectors/{id}/thread, docs/protocol/protocol.md「Connector API」):
 // a page of messages at a time, newest page first, their pictures through the hub, a reply through the connector's
 // action (the user's own: not put to the gate). Telegram's chats draw as bubbles (ConnectorThreadView); GitHub's pull requests and issues
 // as GitHub's thread (its own page), by `ThreadChat.kind`.

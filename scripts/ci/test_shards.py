@@ -16,6 +16,29 @@ server = load("server-shards")
 python = load("python-tests")
 
 
+class ServerShardCommandTests(unittest.TestCase):
+    node = ["example/server/internal/node", "example/server/internal/node/sub"]
+
+    def test_the_node_shard_runs_internal_node_in_its_partitions_beside_its_other_packages(self):
+        runs = server.commands(self.node, "node", "/tmp/db.json", ["^(TestA|TestC)$", "^(TestB)$"])
+        self.assertEqual(len(runs), 3)
+        for run in runs:
+            self.assertEqual(run[run.index("go"):run.index("go") + 7],
+                             ["go", "test", "-json", "-p", "1", "-count=1", "-timeout=10m"])
+            self.assertIn("/tmp/db.json", run)
+        self.assertEqual(runs[0][-1], "example/server/internal/node/sub")
+        self.assertEqual([run[-3:] for run in runs[1:]], [["-run", "^(TestA|TestC)$", "./internal/node"],
+                                                          ["-run", "^(TestB)$", "./internal/node"]])
+
+    def test_other_shards_and_a_node_shard_without_the_package_stay_one_process(self):
+        self.assertEqual(len(server.commands(["example/server/internal/hub"], "managers", "/tmp/db.json")), 1)
+        self.assertEqual(len(server.commands(["example/server/internal/node/sub"], "node", "/tmp/db.json")), 1)
+
+    def test_internal_node_never_runs_without_its_partitions(self):
+        with self.assertRaises(ValueError):
+            server.commands(self.node, "node", "/tmp/db.json", ())
+
+
 class ShardTests(unittest.TestCase):
     def test_every_server_package_is_selected_once(self):
         packages = ["example/server/internal/" + name for name in
@@ -58,8 +81,13 @@ class ShardTests(unittest.TestCase):
 """
         self.assertIn(setup, workflow)
         self.assertLess(workflow.index(setup), workflow.index("      - name: Server checks"))
-        for filename in ("ci.yml", "runtimes-test.yml"):
-            self.assertIn("bun-version: '1.4.2'", (ROOT / ".github/workflows" / filename).read_text())
+        workflow = (ROOT / ".github/workflows/runtimes-test.yml").read_text()
+        setup = """      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.2'
+"""
+        self.assertIn(setup, workflow)
+        self.assertLess(workflow.index(setup), workflow.index("      - name: Runtime and SDK checks"))
         source_packages = ["example/server/internal/extension/denohost", "example/server/internal/extmgr"]
         self.assertEqual(server.select_packages(source_packages, "other"), source_packages)
 
@@ -69,9 +97,19 @@ class ShardTests(unittest.TestCase):
         self.assertIn("fail-fast: false", workflow)
         self.assertIn('scripts/ci/server.sh "$CI_SERVER_SHARD"', workflow)
         script = (ROOT / "scripts/ci/server.sh").read_text()
-        for label in ("Go formatting", "Server vet", "Server build", "Windows node build and vet", "Go SDK tests"):
+        for label in ("Go formatting", "Server vet", "Server build", "Windows node build and vet", "Go SDK tests",
+                      "Server programs with build-tags.txt", "Tunnel tests with build-tags.txt"):
             self.assertIn(label, script)
         self.assertIn('lane="${1:-all}"', script)
+
+    def test_server_go_cache_is_saved_only_by_main_dispatches(self):
+        # actions/cache saves on every ref; branch entries pushed main's out of the 10 GB repository cache.
+        workflow = (ROOT / ".github/workflows/server-test.yml").read_text()
+        self.assertNotIn("actions/cache@", workflow)
+        self.assertEqual(workflow.count("actions/cache/save@v4"), 1)
+        save = workflow.split("- name: Save shard Go caches", 1)[1]
+        self.assertIn("if: success() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'", save)
+        self.assertIn("key: ${{ steps.go-cache.outputs.cache-primary-key }}", save)
 
 
 if __name__ == "__main__":

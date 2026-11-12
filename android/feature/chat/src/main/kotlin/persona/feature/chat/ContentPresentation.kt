@@ -4,7 +4,6 @@ import persona.core.designsystem.resolve
 import android.content.res.Resources
 import androidx.annotation.StringRes
 import persona.core.contracts.Item
-import persona.core.contracts.Workflow
 import persona.core.domain.lines.ChatLine
 import persona.core.domain.MessageContext
 import persona.core.domain.decodeXmlEntities
@@ -19,15 +18,13 @@ import kotlinx.serialization.json.*
 /** Presentation options can be supplied by either chat host without changing wire items. */
 data class ChatRenderStyle(
     val collapseThoughts: Boolean = false,
-    /** The work line stays one sentence (Persona's own chat): no live steps under it, the plan as a plain step. */
+    /** Persona's compact summary and plain plan steps; all chat types collapse execution by default. */
     val compactToolSummary: Boolean = false,
     val hideThoughts: Boolean = false,
-    /** A running work line is open, its steps listed as they arrive, and folds when the turn ends (#1614, [WorkOpenState]). */
-    val openLiveWork: Boolean = false,
 ) {
     companion object {
         val Agent = ChatRenderStyle()
-        val Assistant = ChatRenderStyle(collapseThoughts = true, compactToolSummary = true, hideThoughts = true, openLiveWork = true)
+        val Assistant = ChatRenderStyle(collapseThoughts = true, compactToolSummary = true, hideThoughts = true)
     }
 }
 
@@ -109,20 +106,73 @@ internal fun keepLineBreaks(text: String): String = softBreak.replace(text, "$1 
 private val softBreak = Regex("([^\n])\n(?=[^\n])")
 
 /** A reply's Markdown to parse ahead: the cache key and the text [MessageContent] draws under it. */
-internal data class MarkdownText(val key: String, val text: String)
+internal data class MarkdownText(val key: String, val text: String) {
+    private val asked by lazy { PathLinks.asked(text) }
+    @Volatile private var linked: Pair<Set<String>, String>? = null
+
+    /**
+     * What the row parses [text] as (ChatMarkdownBody): with the paths [paths] knows to be there as links, when the page
+     * opens paths (null: it does not, or has no files pane). The same source under the same key, so the row finds this
+     * parse instead of parsing again.
+     */
+    fun source(paths: PathPresence?): String {
+        if (paths == null) return text
+        val linkable = asked.filterTo(LinkedHashSet(), paths::linkable)
+        linked?.takeIf { it.first == linkable }?.let { return it.second }
+        return PathLinks.markdown(text, linkable).also { linked = linkable to it }
+    }
+}
 
 /**
  * The Markdown of a conversation's replies (at most [limit] of them), with the keys and the text the rows draw (a cut
  * text without the hub's mark): first the latest turn's, which an unread conversation opens on, then the earlier ones,
  * newest first.
  */
-internal fun markdownPrewarm(items: List<Item>, limit: Int = 80): Pair<List<MarkdownText>, List<MarkdownText>> {
-    val replies = items.filter { it.kind == "text" && it.role == "assistant" }.takeLast(limit)
-    val lastUser = items.lastOrNull { it.role == "user" && it.kind == "text" }
-    fun texts(item: Item) = messageParts(item.text.orEmpty().let { if (item.fullSize != null) cutText(it) else it }, item.from)
+internal fun markdownPrewarm(items: List<Item>, limit: Int = 80): Pair<List<MarkdownText>, List<MarkdownText>> =
+    MarkdownPrewarm(limit).split(items)
+
+/**
+ * [markdownPrewarm] from one call to the next. While a reply streams only the conversation's last item changes, and
+ * splitting every reply again on each delta costs more than the delta: with the items before the last as they were, and
+ * the last the same row (its text aside), only the last one's parts are split again.
+ */
+internal class MarkdownPrewarm(private val limit: Int = 80) {
+    private var items: List<Item> = emptyList()
+    private var latest: List<MarkdownText> = emptyList()
+    private var earlier: List<MarkdownText> = emptyList()
+    /** Where the last item's texts are: at the end of [latest] (1), at the start of [earlier] (2), nowhere (0); and how many. */
+    private var lastSide = 0
+    private var lastCount = 0
+
+    @Synchronized fun split(items: List<Item>): Pair<List<MarkdownText>, List<MarkdownText>> {
+        val before = this.items
+        this.items = items
+        val last = items.lastOrNull()
+        val was = before.lastOrNull()
+        val same = last != null && was != null && before.size == items.size && last.id == was.id && last.seq == was.seq &&
+            last.role == was.role && last.kind == was.kind && (0 until items.size - 1).all { before[it] == items[it] }
+        if (same && lastSide != 0) {
+            val texts = texts(last)
+            if (lastSide == 1) latest = latest.subList(0, latest.size - lastCount) + texts
+            else earlier = texts + earlier.subList(lastCount, earlier.size)
+            lastCount = texts.size
+        }
+        if (same) return latest to earlier
+        val replies = items.filter { it.kind == "text" && it.role == "assistant" }.takeLast(limit)
+        val lastUser = items.lastOrNull { it.role == "user" && it.kind == "text" }
+        fun newer(item: Item) = lastUser == null || chatItemOrder.compare(item, lastUser) > 0
+        val (newer, older) = replies.partition(::newer)
+        // The last item, when it is a reply, is the last of its side.
+        val lastTexts = replies.lastOrNull()?.takeIf { it === last }?.let(::texts)
+        lastSide = if (lastTexts == null) 0 else if (newer(last!!)) 1 else 2
+        lastCount = lastTexts?.size ?: 0
+        latest = if (lastSide == 1) newer.dropLast(1).flatMap(::texts) + lastTexts!! else newer.flatMap(::texts)
+        earlier = if (lastSide == 2) lastTexts!! + older.asReversed().drop(1).flatMap(::texts) else older.asReversed().flatMap(::texts)
+        return latest to earlier
+    }
+
+    private fun texts(item: Item) = messageParts(item.text.orEmpty().let { if (item.fullSize != null) cutText(it) else it }, item.from)
         .mapIndexedNotNull { index, part -> (part as? MessagePart.Text)?.let { MarkdownText("${item.id}/$index", it.text) } }
-    val (latest, earlier) = replies.partition { lastUser == null || chatItemOrder.compare(it, lastUser) > 0 }
-    return latest.flatMap(::texts) to earlier.asReversed().flatMap(::texts)
 }
 
 /**
@@ -252,8 +302,8 @@ internal fun planProgress(todos: List<TodoEntry>): PlanProgress {
 }
 
 /**
- * The plan a work line draws (web `planSteps`): its latest TodoWrite of two or more items, with them. Every other
- * TodoWrite of the line (older updates, an empty list that clears it) is not drawn.
+ * The full plan card a work line draws: its latest TodoWrite of two or more items. Older updates remain ordinary
+ * tool steps in the expanded trace.
  */
 internal data class LinePlan(val id: String, val todos: List<TodoEntry>, val failed: Boolean)
 
@@ -266,64 +316,16 @@ internal fun latestPlan(steps: List<WorkItem>): LinePlan? = steps.asReversed().f
 /** Where the newest plan card is drawn: its line ([lineId]) and the plan. */
 internal data class PlanAnchor(val lineId: String, val plan: LinePlan)
 
-/**
- * The newest plan card the list draws ([lines] newest first, as the page lists them): an open work line's plan step,
- * or a running line's peek ([compact]: Persona's own chat draws no peek). What the "Step N/M" pill scrolls back to.
- */
-internal fun latestPlanLine(lines: List<ChatLine>, plans: Map<String, LinePlan?>, compact: Boolean): PlanAnchor? {
+/** The newest visible plan step. Collapsed work has no preview card to scroll back to. */
+internal fun latestPlanLine(lines: List<ChatLine>, plans: Map<String, LinePlan?>): PlanAnchor? {
     for (line in lines) {
         when (line) {
             is ChatLine.Step -> plans[line.groupId]?.takeIf { it.id == line.step.id }?.let { return PlanAnchor(line.id, it) }
-            is ChatLine.Work -> if (line.live && !compact && !line.open) workPeek(line.steps).plan?.let { return PlanAnchor(line.id, it) }
             else -> Unit
         }
     }
     return null
 }
-
-/** What a running work line shows under its header (web #1990 `previewSteps`): the latest plan, and the newest steps. */
-internal data class WorkPeek(val plan: LinePlan?, val steps: List<WorkItem>)
-
-/**
- * The newest [limit] tool calls and thoughts of a running line, oldest first; the agent's words, notices, folds,
- * subagent calls (Task / Agent) and the Workflow calls in [cards] (drawn as their runs' cards, #3435) are not steps here.
- * Reading the same file again within one run of reads shows once. The plan is not one of the steps: the latest TodoWrite
- * of two or more items is pinned above them.
- */
-internal fun workPeek(steps: List<WorkItem>, limit: Int = 5, cards: Set<String> = emptySet()): WorkPeek {
-    val plan = latestPlan(steps)
-    val out = mutableListOf<WorkItem>()
-    val seen = mutableSetOf<String>()
-    for (step in steps.asReversed()) {
-        if (out.size >= limit) break
-        when (step) {
-            is WorkItem.Thought -> if (step.item.kind == "thinking" && !step.item.text.isNullOrBlank()) out += step
-            is WorkItem.Tool -> {
-                val item = step.call.use.item
-                if (item.toolName == "TodoWrite" || item.toolName == "Task" || item.toolName == "Agent") continue
-                if (item.toolName == "Workflow" && item.toolUseId in cards) continue
-                val read = if (item.toolName == "Read") toolPath(item) else null
-                if (item.toolName != "Read") seen.clear()
-                else if (read != null && !seen.add(read)) continue
-                out += step
-            }
-            else -> Unit
-        }
-    }
-    return WorkPeek(plan, out.asReversed())
-}
-
-/**
- * The runs a work line's Workflow calls launched, in the order of the calls, among [runs] (the session's runs by the
- * call that launched them, #3435): those calls draw their runs' cards. A call whose run the hub does not list (an older
- * hub, a run over a day old, one not read yet) is not here: it stays a row.
- */
-internal fun workflowCalls(steps: List<WorkItem>, runs: Map<String, Workflow>): List<Workflow> = steps.mapNotNull { step ->
-    (step as? WorkItem.Tool)?.call?.use?.item?.takeIf { it.toolName == "Workflow" }?.toolUseId?.let(runs::get)
-}
-
-/** A thought as one line in a running line's peek (web ThinkingLine): its words with the line breaks folded; [empty] when it has none. */
-internal fun thoughtLine(text: String, empty: String): String = text.trim().replace(Regex("\\s+"), " ").ifEmpty { empty }
 
 /** What a tool call does, as the word on its step ([label]) and as the running line's "Reading x" ([running], with the title). */
 internal enum class ToolVerb(@StringRes val label: Int, @StringRes val running: Int) {
@@ -368,8 +370,10 @@ internal fun toolPresentation(res: Resources, item: Item): ToolPresentation {
         "AskUserQuestion" -> ToolVerb.Ask
         else -> ToolVerb.Use
     }
-    // Persona's own tools, the computer's and the phone's have words of their own (iOS ToolPresentation.verb).
-    val named = if (kind == ToolVerb.Use) persona.core.domain.namedToolVerb(name)?.resolve(res) else null
+    // Persona's own tools, the computer's and the phone's have words of their own (iOS ToolPresentation.verb); any
+    // other reads its name in words, another server's MCP tool as "GitHub · Create issue" (#2986), never "Use".
+    val named = if (kind == ToolVerb.Use && name.isNotEmpty())
+        persona.core.domain.namedToolVerb(name)?.resolve(res) ?: persona.core.domain.toolWords(name) else null
     val verb = named ?: res.getString(kind.label)
     val path = input?.string("file_path") ?: input?.string("notebook_path")
     if (!path.isNullOrBlank()) {
@@ -396,37 +400,79 @@ internal fun toolPresentation(res: Resources, item: Item): ToolPresentation {
 internal fun WorkItem.Folded.stepCount(): Int = item.fold?.let { it.tools + it.thoughts } ?: 1
 
 /**
- * The words on a work line. A running one says what it is doing and, given [now], how long it has run (R1, ticking
- * every second like iOS's "Working 39 s"). With [peek] its latest steps show under it, so it only says
- * "Working…"; the time is a leaf of its own beside it (web #1990).
+ * A single execution summary: current action, step count and elapsed time while running, result counts when done.
+ * [waiting]: the turn waits on you (a question, a plan or a permission to answer, [turnWaitsOnYou]), so a running line says
+ * what the header says, "Waiting for you", with no time: nothing is at work.
  */
-internal fun workSummary(res: Resources, line: ChatLine.Work, recordedDuration: Long?, now: Instant? = null, peek: Boolean = false): String {
-    val count = line.steps.sumOf { if (it is WorkItem.Folded) it.stepCount() else 1 }
-    if (line.live && peek) return res.getString(R.string.chat_work_working_ellipsis)
+internal fun workSummary(res: Resources, line: ChatLine.Work, recordedDuration: Long?, now: Instant? = null,
+    waiting: Boolean = false): String {
+    if (line.live && waiting) return res.getString(R.string.chat_chrome_status_needs_you)
+    // As iOS's work line (#4339 C5): while it runs, the step it is on ("Reading a.kt +2 · 39 s"), else "Working 39 s ·
+    // Tools 2 · Thinking 1"; done, "Tools 3 · Thinking 1 · 1m 20s".
+    val counts = workCounts(res, line.steps)
     if (line.live) {
-        val current = line.steps.lastOrNull()
-        val working = res.getString(R.string.chat_work_working)
-        val action = when (current) {
-            is WorkItem.Tool -> if (current.call.running)
-                toolPresentation(res, current.call.use.item).running(res) else working
-            is WorkItem.Thought -> if (current.item.kind == "thinking") res.getString(R.string.chat_work_thinking) else working
-            else -> working
+        val elapsed = now?.let { n -> line.start?.let { workDuration(res, java.time.Duration.between(it, n).seconds) } }
+        workNow(res, line.steps)?.let { (words, more) ->
+            val lead = if (more > 0) " +$more" else ""
+            return if (elapsed == null) words + lead else "$words$lead · $elapsed"
         }
-        val running = if (count > 0) res.getString(R.string.chat_work_step, action, count) else action
-        val elapsed = now?.let { line.durationText(it)?.resolve(res) }.orEmpty()
-        return if (elapsed.isEmpty()) running else res.getString(R.string.chat_work_elapsed, running, elapsed)
+        return (listOf(elapsed?.let { res.getString(R.string.chat_work_working_for, it) } ?: res.getString(R.string.chat_work_working)) + counts)
+            .joinToString(" · ")
     }
-    val seconds = recordedDuration?.takeIf { it >= 0 }
-    val duration = seconds?.let { when {
-        it < 60 -> res.getString(R.string.chat_work_seconds, it)
-        it < 3600 -> res.getString(R.string.chat_work_minutes, it / 60)
-        else -> res.getString(R.string.chat_work_hours_minutes, it / 3600, it % 3600 / 60)
-    } }
-    var summary = res.getQuantityString(R.plurals.chat_work_done_steps, count, count)
-    if (duration != null) summary = res.getString(R.string.chat_work_took, summary, duration)
+    val parts = counts + listOfNotNull(recordedDuration?.takeIf { it >= 0 }?.let { workDuration(res, it) })
+    var summary = if (parts.isEmpty()) res.getString(R.string.chat_work_done) else parts.joinToString(" · ")
     if (line.knownFailedTools > 0)
         summary = res.getQuantityString(R.plurals.chat_work_failed, line.knownFailedTools, summary, line.knownFailedTools)
     if (line.unresolvedTools > 0)
         summary = res.getQuantityString(R.plurals.chat_work_unresolved, line.unresolvedTools, summary, line.unresolvedTools)
     return summary
+}
+
+/** "Tools 3", "Thinking 1", "Replies 1": what a work line did, a fold counted as what it stands for (iOS `WorkSummary`). */
+internal fun workCounts(res: Resources, steps: List<WorkItem>): List<String> {
+    val tools = steps.sumOf { it.tools }
+    val thoughts = steps.sumOf { it.thoughts }
+    val replies = steps.count { it is WorkItem.Narration }
+    return listOfNotNull(tools.takeIf { it > 0 }?.let { res.getString(R.string.chat_work_tools, it) },
+        thoughts.takeIf { it > 0 }?.let { res.getString(R.string.chat_work_thoughts, it) },
+        replies.takeIf { it > 0 }?.let { res.getString(R.string.chat_work_replies, it) })
+}
+
+/** A work line's time as iOS writes it (`WorkLine.duration`): "39 s", "2 min", "1m 20s", "1 hr 5 min". */
+internal fun workDuration(res: Resources, seconds: Long): String {
+    val s = seconds.coerceAtLeast(0)
+    return when {
+        s < 60 -> res.getString(R.string.chat_work_seconds, s)
+        s < 3600 -> if (s % 60 == 0L) res.getString(R.string.chat_work_minutes, s / 60) else res.getString(R.string.chat_work_minutes_seconds, s / 60, s % 60)
+        else -> res.getString(R.string.chat_work_hours_minutes, s / 3600, s % 3600 / 60)
+    }
+}
+
+/** The tools that keep the books rather than do the work: never what the running line names (iOS `WorkNow.quiet`). */
+private val QuietWorkTools = setOf("TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "ToolSearch")
+
+/**
+ * What a running line names (iOS `WorkNow`, #2987): the newest of the calls still running, in its running words, and how
+ * many run beside it; with none running, the latest step (a call, or a thought's first line). Null when the newest
+ * work is folded away or there is no step yet: the line says its counts.
+ */
+internal fun workNow(res: Resources, steps: List<WorkItem>): Pair<String, Int>? {
+    fun base(tool: WorkItem.Tool) = persona.core.domain.toolBaseName(tool.call.use.item.toolName.orEmpty())
+    val running = steps.takeLastWhile { it is WorkItem.Tool && it.call.running }.filterIsInstance<WorkItem.Tool>().filter { base(it) !in QuietWorkTools }
+    if (running.isNotEmpty()) {
+        if (running.size > 1 && running.all { base(it) == "Read" }) return res.getString(R.string.chat_work_reading_files, running.size) to 0
+        return toolPresentation(res, running.last().call.use.item).running(res) to running.size - 1
+    }
+    for (step in steps.asReversed()) when (step) {
+        is WorkItem.Tool -> if (base(step) !in QuietWorkTools) return toolPresentation(res, step.call.use.item).running(res) to 0
+        is WorkItem.Thought -> if (step.item.item.kind != "notice") {
+            val first = step.item.item.text.orEmpty().lineSequence().map(String::trim).firstOrNull(String::isNotEmpty)
+                ?.removeSurrounding("**")
+            return (first ?: res.getString(R.string.chat_work_thinking)) to 0
+        }
+        is WorkItem.Folded -> return null
+        // Words between the steps: not a step the agent took.
+        is WorkItem.Narration -> Unit
+    }
+    return null
 }

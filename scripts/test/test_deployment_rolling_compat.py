@@ -206,16 +206,9 @@ class DeploymentRollingCompatibilityTests(unittest.TestCase):
             self.assertTrue((profile / "bin/personad").is_file())
             self.assertFalse((home / '.persona').exists())
 
-    def test_artifact_aliases_are_byte_identical_and_command_aliases_do_not_loop(self):
+    def test_command_aliases_do_not_loop(self):
         with tempfile.TemporaryDirectory() as directory:
             directory = Path(directory)
-            for prefix in ("personad-", "persona-link-", "personad-wechat-"):
-                file = directory / (prefix + "linux-amd64.gz")
-                file.write_bytes(gzip.compress(b"fixture-program", mtime=0))
-            identity.artifact_aliases(directory)
-            for file in directory.glob("person*.gz"):
-                old = file.name.replace("personad-", FORMER + "d-", 1).replace("persona-link-", FORMER + "-link-", 1)
-                self.assertEqual((directory / old).read_bytes(), file.read_bytes())
             executable(directory / "personad", "#!/bin/sh\nexit 0\n")
             identity.command_aliases(directory)
             identity.command_aliases(directory)
@@ -261,8 +254,8 @@ class DeploymentRollingCompatibilityTests(unittest.TestCase):
                     state = home / "state with spaces"
                     binaries = state / "bin"
                     binaries.mkdir(parents=True)
-                    current = binaries / "personad-wechat"
-                    old = binaries / (FORMER + "d-wechat")
+                    current = binaries / "personad-examplechat"
+                    old = binaries / (FORMER + "d-examplechat")
                     if layout == "old":
                         executable(old, "#!/bin/sh\nprintf old\n")
                     elif layout == "loop":
@@ -270,13 +263,14 @@ class DeploymentRollingCompatibilityTests(unittest.TestCase):
                     current.symlink_to(old.name)
                     script = r'''set -eu
 LDFLAGS=fixture
+TAGS=fixture
 PERSONA_HUB_SSH=unused
 is_here() { [ "$MODE" = local ]; }
 state_root() { printf '%s' "$PERSONA_HOME"; }
-go() { printf '#!/bin/sh\nprintf new\n' > bin/personad-wechat-linux-amd64; chmod 755 bin/personad-wechat-linux-amd64; }
+go() { printf '#!/bin/sh\nprintf new\n' > bin/personad-examplechat-linux-amd64; chmod 755 bin/personad-examplechat-linux-amd64; }
 persona_alias_binaries() { python3 ../scripts/persona_identity.py --alias-binaries "$1"; }
 remote_state() { eval "$2"; }
-''' + function + 'install_program fixture linux-amd64 personad-wechat\n'
+''' + function + 'install_program fixture linux-amd64 personad-examplechat\n'
                     env = environment(home)
                     env.update(MODE=mode, PERSONA_HOME=str(state))
                     result = subprocess.run(["bash", "--noprofile", "--norc"], input=script,

@@ -54,22 +54,46 @@ nonisolated struct RepoPlace: Equatable, Sendable {
         self.init(repo: String(path), name: Self.baseName(String(path)), worktree: String(path), main: true)
     }
 
+    /// Where the node placed it in git (#1805): its project (`repo_root`, else the working tree itself) and working
+    /// tree; nil from an older node, which leaves the inference above.
+    static func git(_ s: Session) -> RepoPlace? {
+        let worktree = trimmed(s.worktree)
+        guard !worktree.isEmpty else { return nil }
+        let root = trimmed(s.repoRoot)
+        let repo = root.isEmpty ? worktree : root
+        return RepoPlace(repo: repo, name: baseName(repo), worktree: worktree, main: worktree == repo)
+    }
+
+    /// A session's place: the node's when it says, else from its working directory.
+    static func of(_ s: Session) -> RepoPlace { git(s) ?? RepoPlace(cwd: s.cwd, repoRoot: s.repoRoot) }
+
+    private static func trimmed(_ path: String?) -> String {
+        var path = Substring(path ?? "")
+        while path.hasSuffix("/") { path = path.dropLast() }
+        return String(path)
+    }
+
     private static func baseName(_ path: String) -> String {
         path.split(separator: "/" as Character).last.map(String.init) ?? ""
     }
 }
 
-/// By Repository (docs/apple/ios.md「Agents 的分组」): every agent under its machine, its repository (`RepoPlace`) and the
+/// By Repository (docs/apple/ios.md「Information architecture」): every agent under its machine, its repository (`RepoPlace`) and the
 /// working tree in it, as Orca's projects with the machine above them. Plain data, unit-tested apart from the list
 /// (`AgentRepoTreeTests`); the list orders the agents inside a tree (`AgentListOrder`).
 nonisolated struct RepoTree {
     struct Worktree: Identifiable, Sendable {
         /// Its fold id.
         var id: String
+        /// Its branch when the node says (#1805), else its folder's name (the main checkout: the repository's). A linked
+        /// tree goes by the name its host gave the place instead, when its sessions agree on one (#4768, `hostPlaceName`);
+        /// its id does not change with the name.
         var name: String
         var path: String
         var main: Bool
         var sessions: [Session]
+        /// The branch checked out there, when the node says (#1805).
+        var branch: String? = nil
         /// The spaces its host directly nests under it (Orca's `parent_space_id`); each keeps its own children and
         /// its own「N 个子项」fold, so deeper levels remain under their actual parent.
         var children: [Worktree] = []
@@ -111,8 +135,11 @@ nonisolated struct RepoTree {
         /// The main checkout first, then by name.
         var worktrees: [Worktree]
         var sessions: [Session] { worktrees.flatMap(\.treeSessions) }
-        /// Only its main checkout, nothing nested under it: its agents sit right under it, with no working-tree level.
-        var flat: Bool { worktrees.count == 1 && worktrees[0].main && worktrees[0].children.isEmpty && !worktrees[0].catalog }
+        /// Only its main checkout, nothing nested under it and no branch the node named: its agents sit right under it,
+        /// with no working-tree level. A named branch keeps its level (#1805: machine → project → branch → agents).
+        var flat: Bool {
+            worktrees.count == 1 && worktrees[0].main && worktrees[0].children.isEmpty && !worktrees[0].catalog && worktrees[0].branch == nil
+        }
         var structured: Bool { worktrees.contains { $0.catalog || !$0.children.isEmpty } }
     }
 
@@ -224,7 +251,8 @@ nonisolated struct RepoTree {
         for key in nodes.keys.filter({ parentOf[$0] == nil }).sorted(by: beforeNode) {
             let n = nodes[key]!
             guard var w = tree(key) else { continue }
-            let place = RepoPlace(cwd: n.path, repoRoot: n.sessions.first?.repoRoot)
+            // The node's git place when it sends one (#1805), else the path inference.
+            let place = n.sessions.first.flatMap(RepoPlace.git) ?? RepoPlace(cwd: n.path, repoRoot: n.sessions.first?.repoRoot)
             let metadata = n.workspace
             let addressProject = metadata?.sourceID.components(separatedBy: "::")
             let projectID = metadata?.projectID.flatMap { $0.isEmpty ? nil : $0 }
@@ -239,8 +267,11 @@ nonisolated struct RepoTree {
             if let path = metadata?.projectPath, !path.isEmpty { repo.path = path }
             w.main = metadata?.isMain ?? place.main
             if !n.catalog {
+                // Orca's sidebar and git name a working tree by its branch.
+                let branch = n.sessions.first?.branch.flatMap { $0.isEmpty ? nil : $0 }
                 w.id = "tree/" + n.machine.path + "/" + place.worktree
-                w.name = place.worktree == place.repo ? repo.name : place.worktree.split(separator: "/").last.map(String.init) ?? ""
+                w.name = branch ?? (place.worktree == place.repo ? repo.name : place.worktree.split(separator: "/").last.map(String.init) ?? "")
+                w.branch = branch
                 w.path = place.worktree
             }
             if let i = repo.worktrees.firstIndex(where: { $0.id == w.id }) {
@@ -254,24 +285,39 @@ nonisolated struct RepoTree {
             Dictionary(repo.worktrees.enumerated().map { ($0.element.path, $0.offset) }, uniquingKeysWith: { a, _ in a })
         }
         for s in loose {
-            let place = RepoPlace(cwd: s.cwd, repoRoot: s.repoRoot)
+            let place = RepoPlace.of(s)
             let key = s.machineRef.path + "/" + place.repo
             if repos[key] == nil {
                 repos[key] = Repo(id: "repo/" + key, machine: s.machineRef,
                                   name: place.name.isEmpty ? unnamed : place.name, path: place.repo, worktrees: [])
             }
             // Preserve the projection's linear accumulation for large inventories.
-            if let i = worktreeIndices[key]?[place.worktree] { repos[key]!.worktrees[i].sessions.append(s) }
-            else {
-                let name = place.worktree == place.repo ? repos[key]!.name : place.worktree.split(separator: "/").last.map(String.init) ?? ""
+            let branch = s.branch.flatMap { $0.isEmpty ? nil : $0 }
+            if let i = worktreeIndices[key]?[place.worktree] {
+                repos[key]!.worktrees[i].sessions.append(s)
+                // Orca's sidebar and git name a working tree by its branch.
+                if repos[key]!.worktrees[i].branch == nil, !repos[key]!.worktrees[i].catalog, let branch {
+                    repos[key]!.worktrees[i].branch = branch
+                    repos[key]!.worktrees[i].name = branch
+                }
+            } else {
+                let folder = place.worktree == place.repo ? repos[key]!.name : place.worktree.split(separator: "/").last.map(String.init) ?? ""
                 let index = repos[key]!.worktrees.count
-                repos[key]!.worktrees.append(Worktree(id: "tree/" + s.machineRef.path + "/" + place.worktree, name: name,
-                                                    path: place.worktree, main: place.main, sessions: [s]))
+                repos[key]!.worktrees.append(Worktree(id: "tree/" + s.machineRef.path + "/" + place.worktree, name: branch ?? folder,
+                                                    path: place.worktree, main: place.main, sessions: [s], branch: branch))
                 worktreeIndices[key, default: [:]][place.worktree] = index
             }
         }
         var hosts: [MachineRef: [Repo]] = [:]
         for var repo in repos.values {
+            // A linked tree takes the name its host gave it (#4768, as the web's and Android's By Repository), its branch
+            // staying on it and its id its path. The main checkout keeps its name: several workspaces can share it. So
+            // does a tree with an Orca agent in it (every tree Orca places has one), which Orca names.
+            for i in repo.worktrees.indices {
+                let w = repo.worktrees[i]
+                guard !w.main, !w.sessions.contains(where: { $0.spaceKind == "orca" }), let name = hostPlaceName(w.sessions) else { continue }
+                repo.worktrees[i].name = name
+            }
             repo.worktrees.sort { a, b in
                 if a.catalog && b.catalog, let ai = a.workspace?.index, let bi = b.workspace?.index, ai != bi { return ai < bi }
                 return a.main != b.main ? a.main : before(a.name, a.path, b.name, b.path)
@@ -281,6 +327,30 @@ nonisolated struct RepoTree {
         return hostOrder(Set(hosts.keys), machines: machines).map { ref in
             Host(ref: ref, repos: hosts[ref, default: []].sorted { before($0.name, $0.id, $1.name, $1.id) })
         }
+    }
+
+    /// The name the host gave the place `sessions` run in (the web's `hostPlaceName`, Android's `AgentRepos.kt`: Paseo sends
+    /// its workspace's title as `slot_name`, with no `slot_id`), when every session that gives one gives the same; two
+    /// different names name nothing, and a session without one neither votes nor blocks. A `slot_name` beside a
+    /// `slot_id` is a tab's label (herdr), which names no working tree.
+    static func hostPlaceName(_ sessions: [Session]) -> String? {
+        var name: Substring?
+        for i in sessions.indices {
+            guard let own = trimmedOrNil(sessions[i].slotName), trimmedOrNil(sessions[i].slotID) == nil else { continue }
+            if let name, name != own { return nil }
+            name = own
+        }
+        return name.map(String.init)
+    }
+
+    /// The text without the white space around it (as the web's `trim()`), nil when nothing is left. Cheap for the usual
+    /// text with none around it: the list builds the tree for every change.
+    private static func trimmedOrNil(_ text: String?) -> Substring? {
+        guard let text else { return nil }
+        var t = Substring(text)
+        while t.first?.isWhitespace == true { t.removeFirst() }
+        while t.last?.isWhitespace == true { t.removeLast() }
+        return t.isEmpty ? nil : t
     }
 
     /// `refs` in `machines`' order (the hub's); one it does not list goes last, by its path.

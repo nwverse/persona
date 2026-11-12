@@ -1,0 +1,5 @@
+{
+  "disabled": "File transfer is off for {name}. Turn it on in that computer's settings.",
+  "need_enabled": "enabled is required.",
+  "read_only": "Only a signed-in device can change this."
+}

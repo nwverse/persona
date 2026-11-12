@@ -11,7 +11,7 @@ import (
 	"github.com/nwverse/persona/server/internal/extwire"
 )
 
-// The api extension point (docs/extensions/extensions.md "App API"): a plugin serves a part of the app's API under
+// The api extension point (docs/extensions/extensions.md "App endpoints"): a plugin serves a part of the app's API under
 // /api/v1/<prefix>/ on its HTTP side. The hub authenticates the request, then hands it over: before its own routes for
 // a prefix being moved out of the hub (migratablePrefixes: the plugin's wins), after them otherwise (a plugin cannot
 // take the hub's own API). It adds the plugin's features to the hub's and passes its events (api.broadcast) to the
@@ -85,6 +85,11 @@ func (h *Manager) features() []string {
 	// Transport support is independent of installed pages or source activation.
 	// Client opt-in, native context and authorization remain separate gates.
 	out = append(out, extwire.FeatureUIStream)
+	if h.subscriptionsShown() {
+		out = append(out, subscriptionsFeature)    // /api/v1/subscriptions, once they deliver (subscriptions.go)
+		out = append(out, subscriptionPushFeature) // and a device's own push source (#3848)
+		out = append(out, inboxSourcesFeature)     // and the pages as Inbox Sources (#5278)
+	}
 	if len(h.extensions.messagingSources()) > 0 && !slices.Contains(out, messagingFeature) {
 		out = append(out, messagingFeature)
 	}

@@ -23,11 +23,17 @@ const (
 	HerdrCore = "herdr-core"
 	// Botmux is botmux, the Feishu topic ↔ AI CLI bridge: a pane is a botmux session, its id the session id.
 	Botmux = "botmux"
+	// Tern is Tern, Stencil's multiplexing terminal: a pane is a Tern block, its id the block's number (what Tern puts in
+	// the block's processes as TERN_PANE).
+	Tern = "tern"
+	// Tmux is a tmux server the user opened: a pane is tmux's own id ("%11"), read and typed into through the tmux
+	// command. No space, slot or agent comes from it: a session running there is listed by claudebg.go (#2562).
+	Tmux = "tmux"
 )
 
 // Kinds are the host kinds a stored pane may be prefixed with; the list is fixed, not what a machine registers, so
 // a stored pane means the same everywhere.
-var Kinds = []string{Herdr, Orca, HerdrCore, Botmux}
+var Kinds = []string{Herdr, Orca, HerdrCore, Botmux, Tern, Tmux}
 
 // Host is what every terminal host provides. Pane ids in what it returns (Agent.PaneID, Created.Pane) are PaneRefs
 // of its own kind; the PaneRefs it is given are always of its kind.
@@ -57,7 +63,8 @@ type Host interface {
 	// PaneProcesses are the pids of a pane's foreground processes, claude first.
 	PaneProcesses(ctx context.Context, pane PaneRef) ([]int, error)
 	// PaneEnv is the environment variable that names the pane in the processes running in it ("HERDR_PANE_ID"): its
-	// value is the host's pane id (PaneRef.ID).
+	// value is the host's pane id (PaneRef.ID) — for classic herdr, in its own server; a named session's panes are
+	// qualified with the session the process's HERDR_SESSION names (herdr.PaneOf, node envPane) first.
 	PaneEnv() string
 }
 
@@ -201,7 +208,7 @@ type FocusState struct {
 }
 
 // Focuser moves and reports the focus a host shares among its clients (herdr: pane.focus, and the focus events with
-// the snapshot's focused_* ids). The web's full herdr view follows it and moves it (docs/integrations/terminal.md "Focus sync").
+// the snapshot's focused_* ids). The web's full herdr view follows it and moves it (docs/integrations/terminal.md "Focus synchronization").
 type Focuser interface {
 	// Focused is what the host shows now; Pane is empty when the host does not say.
 	Focused(ctx context.Context) (FocusState, error)
@@ -317,7 +324,8 @@ type Agent struct {
 	AgentStatus   string
 	Cwd           string
 	ForegroundCwd string
-	// PaneID is the pane as a PaneRef string (String): a herdr pane id as is.
+	// PaneID is the pane as a PaneRef string (String): a herdr pane id as is ("@<session>:<id>" for a named herdr
+	// session's, herdr.QualifyID).
 	PaneID string
 	// TabID, WorkspaceID: the host's slot and space ids.
 	TabID       string
@@ -426,6 +434,8 @@ type Created struct {
 	SpaceID string // set by CreateSpace
 	SlotID  string
 	Pane    PaneRef
+	// Shell is the shell actually opened by the host, when reported by its launch API.
+	Shell string
 	// Path and Branch: the checkout CreateWorktree made, when the host chose them rather than taking the asked ones
 	// (Orca puts it under its own workspace directory); empty when they are the asked ones.
 	Path, Branch string

@@ -98,6 +98,53 @@ class SessionSourceTest {
         assertFalse(claude.copy(paneId = null).canTypeClaudeCommands)
     }
 
+    @Test fun onlyClaudeInAPaneSteersItsQueue() {
+        val claude = session("""{"session_id":"s","status":"working","pane_id":"w1:p1"}""")
+        assertTrue(claude.steersQueue)
+        assertTrue(claude.copy(agent = "claude").steersQueue)
+        // Send now is Claude Code's own key in its terminal: no pane, another agent, Persona or a source can't take it.
+        assertFalse(claude.copy(paneId = null).steersQueue)
+        assertFalse(claude.copy(paneId = " ").steersQueue)
+        assertFalse(claude.copy(agent = "codex").steersQueue)
+        assertFalse(claude.copy(agent = "traex").steersQueue)
+        assertFalse(claude.copy(assistant = true).steersQueue)
+        assertFalse(claude.copy(sourceKind = "claude_cli", capabilities = SessionCapabilities(read = true, send = true)).steersQueue)
+    }
+
+    @Test fun modeCapabilityHidesUnsupportedClaude() {
+        val desktop = session(
+            """{"session_id":"desktop","status":"working","agent":"claude","source_kind":"claude_desktop",""" +
+                """"capabilities":{"read":true,"send":true,"modes":false}}""",
+        )
+        assertTrue(desktop.canSend)
+        assertFalse(desktop.canChangeModes)
+
+        // An older hub omits modes: keep the old agent-based behavior rather than treating absence as a refusal.
+        val oldDesktop = session(
+            """{"session_id":"old-desktop","status":"working","agent":"claude","source_kind":"claude_desktop",""" +
+                """"capabilities":{"read":true,"send":true}}""",
+        )
+        assertTrue(oldDesktop.canChangeModes)
+    }
+
+    @Test fun modeCapabilityShowsSupportedRuntime() {
+        val orca = session(
+            """{"session_id":"orca","status":"working","agent":"claude","source_kind":"runtime",""" +
+                """"capabilities":{"read":true,"send":true,"modes":true}}""",
+        )
+        assertTrue(orca.canChangeModes)
+        val agy = orca.copy(sessionId = "agy", agent = "agy")
+        assertTrue(agy.canChangeModes)
+        assertFalse(agy.copy(status = "offline").canChangeModes)
+        assertFalse(agy.copy(capabilities = agy.capabilities!!.copy(send = false)).canChangeModes)
+
+        val oldAgy = session(
+            """{"session_id":"old-agy","status":"working","agent":"agy","source_kind":"runtime",""" +
+                """"capabilities":{"read":true,"send":true}}""",
+        )
+        assertFalse(oldAgy.canChangeModes)
+    }
+
     @Test fun codexOnItsAppServerChangesItsEffortOnly() {
         val live = session(
             """{"session_id":"opaque","source_kind":"codex_app_server","agent":"codex","status":"idle","effort":"high",""" +

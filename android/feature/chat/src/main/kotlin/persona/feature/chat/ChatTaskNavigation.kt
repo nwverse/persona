@@ -8,7 +8,7 @@ internal data class TaskRecordTarget(val rowId: String? = null, val expandGroup:
 
 /** Resolve again after expansion: merged turns acquire different work-group keys. */
 internal fun taskRecordTarget(lines: List<ChatLine>, itemId: String, sourceSeq: Int? = null): TaskRecordTarget? =
-    recordTarget(lines) { it.containsTaskRecord(itemId, sourceSeq) } ?: lines.firstOrNull { it.holds(itemId) }?.let { TaskRecordTarget(rowId = it.id) }
+    recordTarget(lines) { it.containsTaskRecord(itemId, sourceSeq) } ?: lines.firstOrNull { it.holds(itemId) }?.let { TaskRecordTarget(rowId = it.contentKey) }
 
 /**
  * The call with this tool_use_id (a background task's notice: "Jump to the step that started it"), opening the work line it is in first.
@@ -35,7 +35,7 @@ private fun recordTarget(lines: List<ChatLine>, matches: (WorkItem) -> Boolean):
 }
 
 private fun WorkItem.containsTaskRecord(id: String, sourceSeq: Int?): Boolean = when (this) {
-    is WorkItem.Tool -> call.use.id == id || call.result?.id == id
+    is WorkItem.Tool -> call.use.id == id || call.results.any { it.id == id }
     is WorkItem.Thought -> item.id == id
     is WorkItem.Narration -> item.id == id
     is WorkItem.Folded -> if (sourceSeq == null) item.item.fold?.tasks.orEmpty().any { it.sourceItemId == id }

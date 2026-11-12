@@ -16,6 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/shellcmd"
 )
 
 // What a ~/.zshrc launcher really sets, for its page in Settings › Models: reading the function's text misses everything a
@@ -93,11 +94,17 @@ type Probe struct {
 	Args  []string
 	Env   map[string]string
 	File  string
+	// Shell is the shell's environment before the launcher ran (what ~/.zshrc exports for everything); nil when it
+	// was not seen (a wrapper script read from its text).
+	Shell map[string]string
+	// Unset are the variables of Shell the agent did not get (`env -u NAME`, `unset NAME` in the launcher), sorted.
+	Unset []string
 }
 
 func parseProbe(out string) (Probe, bool) {
 	p := Probe{Env: map[string]string{}}
 	base := map[string]string{}
+	p.Shell = base
 	found := false
 	pairs := func(s string, into map[string]string) {
 		for _, kv := range strings.Split(s, "\x00") {
@@ -106,6 +113,7 @@ func parseProbe(out string) (Probe, bool) {
 			}
 		}
 	}
+	envSeen := false
 	sc := bufio.NewScanner(strings.NewReader(out))
 	sc.Buffer(make([]byte, 1<<20), 8<<20)
 	for sc.Scan() {
@@ -123,9 +131,18 @@ func parseProbe(out string) (Probe, bool) {
 			pairs(strings.TrimPrefix(rest, "base "), base)
 		case strings.HasPrefix(rest, "env "):
 			pairs(strings.TrimPrefix(rest, "env "), p.Env)
+			envSeen = true
 		case strings.HasPrefix(rest, "file "):
 			p.File = strings.TrimPrefix(rest, "file ")
 		}
+	}
+	if envSeen {
+		for k := range base {
+			if _, ok := p.Env[k]; !ok {
+				p.Unset = append(p.Unset, k)
+			}
+		}
+		sort.Strings(p.Unset)
 	}
 	for k, v := range p.Env {
 		if old, ok := base[k]; ok && old == v {
@@ -167,7 +184,7 @@ func (n *Node) launcherProbeCached(ctx context.Context, name string) proto.Launc
 
 // launcherProbe runs the probe on this machine (a login shell, so ~/.zshrc defines the launcher).
 func (n *Node) launcherProbe(ctx context.Context, name string, args ...string) (Probe, error) {
-	if !nameRe.MatchString(name) {
+	if !shellcmd.NameRe.MatchString(name) {
 		return Probe{}, fmt.Errorf("invalid launcher %q", name)
 	}
 	if path := n.scriptLauncher(ctx, name); path != "" {
@@ -187,7 +204,7 @@ func (n *Node) launcherProbe(ctx context.Context, name string, args ...string) (
 	if p.File != "" { // a file on PATH the list does not have as a wrapper script (yet): read, never run
 		sp, err := scriptProbe(p.File, args)
 		if err != nil {
-			return Probe{}, err
+			return p, err
 		}
 		return withSettingsEnv(sp, n.home), nil
 	}

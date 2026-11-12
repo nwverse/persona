@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -27,11 +29,25 @@ func TestClassifyLauncherError(t *testing.T) {
 		`ERROR codex_models_manager: No Trae auth token available for Trae model fetch`:         errKindAuth,
 		`error: unknown option '--plugin-dir'`:                                                  errKindCLIOutdated,
 		`Claude Code version 2.0.1 is no longer supported, please update`:                       errKindCLIOutdated,
-		`zsh: command not found: work`:                                                          errKindOther,
+		`Claude Code 还没完成首次引导（hasCompletedOnboarding 未置为 true）：请在这台机器的终端里运行一次 claude`:                                                                             errKindOnboarding,
+		`claude did not become ready within 1m0s of starting: this machine's Claude Code has not completed its first-run setup (hasCompletedOnboarding is unset)`: errKindOnboarding,
+		`zsh: command not found: work`: errKindOther,
 	} {
 		if got := classifyLauncherError(text); got != want {
 			t.Errorf("%q: %s, want %s", text, got, want)
 		}
+	}
+}
+
+// First-run setup is a person's job: an onboarding failure never starts an automatic repair, however many probes
+// failed in a row; periodic and on-demand checks clear it once the setup is finished.
+func TestOnboardingFailureNeverRepairs(t *testing.T) {
+	r := LauncherHealth{Kind: errKindOnboarding, Fails: 5}
+	if r.repairNow() {
+		t.Fatal("an onboarding failure must never enter auto repair")
+	}
+	if (LauncherHealth{Kind: errKindOnboarding}).repairNow() {
+		t.Fatal("an onboarding failure must not repair on its first failure either")
 	}
 }
 
@@ -107,22 +123,163 @@ func TestLauncherHealthRoundAndDetour(t *testing.T) {
 	if len(f.starts) != 1 || f.starts[0]["cwd"] != "/Users/me/code/app" || !strings.Contains(res, "runs on box instead") {
 		t.Fatalf("start %v: %s", f.starts, res)
 	}
-	var route struct {
+	// `work` is the configured default, so it stays with its blocked record: the next Start uses it.
+	var kept struct {
 		Launchers []launcherWithHealth `json:"launchers"`
 	}
-	body := getJSON(t, s, "/api/v1/machines/l4/launchers")
-	if err := json.Unmarshal(body, &route); err != nil || len(route.Launchers) == 0 || route.Launchers[0].Health == nil || route.Launchers[0].Health.State != healthBlocked {
-		t.Fatalf("picker: %s", body)
+	if err := json.Unmarshal(getJSON(t, s, "/api/v1/machines/l4/launchers"), &kept); err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(kept.Launchers, func(l launcherWithHealth) bool { return l.Name == "work" })
+	if i < 0 || kept.Launchers[i].Health == nil || kept.Launchers[i].Health.State != healthBlocked {
+		t.Fatalf("the configured default lost its reason: %+v", kept.Launchers)
 	}
 	if body := getJSON(t, s, "/api/v1/launchers/health?state=blocked"); !strings.Contains(string(body), `"machine":"l4"`) || strings.Contains(string(body), `"machine":"box"`) {
 		t.Fatalf("health: %s", body)
 	}
 
-	// Fixed by hand: the next check (forced here) makes it usable again.
+	// Fixed by hand: the next check (forced here) makes it usable again, and the picker offers it again.
 	delete(f.checks, "l4/work")
 	postJSON(t, s, "/api/v1/launchers/health/check?machine=l4&launcher=work")
 	if r := healthState(s, "l4", "work"); r.State != healthOK || r.BlockedReason != "" || r.Fails != 0 {
 		t.Fatalf("after the fix: %+v", r)
+	}
+	if names := launcherNamesAt(t, s, "/api/v1/machines/l4/launchers"); !slices.Contains(names, "work") {
+		t.Fatalf("picker still hides the fixed launcher: %v", names)
+	}
+}
+
+// pointDefaultAt makes name the launcher Model settings › Agents runs with no pick, and makes sure the machine lists
+// it: every other launcher is then one the pickers may hide.
+func pointDefaultAt(t *testing.T, s *Service, f *fakeHub, name string) {
+	t.Helper()
+	f.mu.Lock()
+	if !slices.ContainsFunc(f.launcherList, func(l proto.Launcher) bool { return l.Name == name }) {
+		f.launcherList = append(f.launcherList, proto.Launcher{Name: name})
+	}
+	f.mu.Unlock()
+	setModel(t, s, "agent.new", ModelBinding{Provider: "launcher." + name})
+}
+
+// A launcher that is not the configured default is hidden while its latest check fails, and comes back when one passes.
+func TestPickerHidesAFailedLauncherThatIsNotTheDefault(t *testing.T) {
+	s, f := launcherHealthHub(t)
+	pointDefaultAt(t, s, f, "other")
+	f.mu.Lock()
+	f.checks["l4/work"] = proto.LauncherCheck{Error: `API Error: 401 invalid api key`}
+	f.mu.Unlock()
+	s.healthRound(context.Background(), true)
+	if names := launcherNamesAt(t, s, "/api/v1/machines/l4/launchers"); slices.Contains(names, "work") {
+		t.Fatalf("picker offers a launcher that failed its check: %v", names)
+	}
+	delete(f.checks, "l4/work")
+	postJSON(t, s, "/api/v1/launchers/health/check?machine=l4&launcher=work")
+	if names := launcherNamesAt(t, s, "/api/v1/machines/l4/launchers"); !slices.Contains(names, "work") {
+		t.Fatalf("picker still hides the launcher that works again: %v", names)
+	}
+}
+
+// launcherNamesAt is what GET path offers, in order.
+func launcherNamesAt(t *testing.T, s *Service, path string) []string {
+	t.Helper()
+	var body struct {
+		Launchers []launcherWithHealth `json:"launchers"`
+	}
+	raw := getJSON(t, s, path)
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatalf("%s: %v", path, err)
+	}
+	names := make([]string, 0, len(body.Launchers))
+	for _, l := range body.Launchers {
+		names = append(names, l.Name)
+	}
+	return names
+}
+
+// A launcher never checked is offered as before (#4437): no result is not a failure, and the checks are off unless the
+// manager turns them on.
+func TestLauncherPickerKeepsWhatWasNeverChecked(t *testing.T) {
+	s, f := launcherHealthHub(t)
+	f.mu.Lock()
+	f.launcherList = append(f.launcherList, proto.Launcher{Name: "fresh"})
+	f.mu.Unlock()
+	// No round yet: nothing has a record, and none is hidden.
+	if names := launcherNamesAt(t, s, "/api/v1/machines/server/launchers"); !slices.Contains(names, "fresh") {
+		t.Fatalf("picker hides a launcher never checked: %v", names)
+	}
+	if r, ok := s.launcherHealth(context.Background(), "server", "fresh"); ok {
+		t.Fatalf("never checked, yet a record: %+v", r)
+	}
+}
+
+// A health store that cannot be read hides nothing: the records are read lazily, so a hub that just restarted (or a
+// database that is briefly away) must not empty the pickers (#4437).
+func TestLauncherPickerHidesNothingWhenTheRecordsCannotBeRead(t *testing.T) {
+	st := &memStore{}
+	s, f := launcherHealthHubOn(t, func(t *testing.T, f *fakeHub) *Service { return newServiceOn(t, f, st) })
+	pointDefaultAt(t, s, f, "other")
+	f.checks["l4/work"] = proto.LauncherCheck{Error: `API Error: 400 Bare Claude model name cannot be routed`}
+	s.healthRound(context.Background(), true)
+	if names := launcherNamesAt(t, s, "/api/v1/machines/l4/launchers"); slices.Contains(names, "work") {
+		t.Fatalf("picker offers a launcher recorded as blocked: %v", names)
+	}
+
+	st.failKey(launchersHealthKey, errors.New("database is restarting"))
+	restarted, rf := launcherHealthHubOn(t, func(t *testing.T, f *fakeHub) *Service { return newServiceOn(t, f, st) })
+	pointDefaultAt(t, restarted, rf, "other") // the fixture's own creation pointed it back at work
+	if names := launcherNamesAt(t, restarted, "/api/v1/machines/l4/launchers"); !slices.Contains(names, "work") {
+		t.Fatalf("an unreadable store hid the launcher: %v", names)
+	}
+}
+
+// A managed provider whose setting cannot be read is not a launcher that was deleted: a message must not be refused as
+// launcher_missing on a failed read (#4437).
+func TestUnreadableProviderListIsNotALauncherDeletion(t *testing.T) {
+	st := &memStore{}
+	f := newFakeHub().withMachine()
+	f.launcherList = []proto.Launcher{{Name: "work"}}
+	s := newServiceOn(t, f, st)
+	ctx := context.Background()
+	if err := s.putSetting(ctx, launchersManagedKey, []storedLauncher{{Name: "gw", BaseURL: "http://127.0.0.1:1", Model: "m"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, state := s.readinessLauncher(ctx, "server", "gw"); state != launcherThere {
+		t.Fatalf("a configured managed launcher is not seen: %d", state)
+	}
+	st.failKey(launchersManagedKey, errors.New("database is restarting"))
+	if _, state := s.readinessLauncher(ctx, "server", "gw"); state != launcherUnknownHere {
+		t.Fatalf("an unreadable provider list was read as a deletion: %d", state)
+	}
+}
+
+// The launcher the configuration runs with no pick stays listed even when its latest check failed, with its record:
+// the next start will use it, and the form must be able to say why it may fail instead of going silent (#4437).
+func TestPickerKeepsTheConfiguredDefaultWithItsReason(t *testing.T) {
+	s, _ := launcherHealthHub(t)
+	s.healthRound(context.Background(), true)
+	var body struct {
+		Launchers []launcherWithHealth `json:"launchers"`
+		Default   map[string]string    `json:"default"`
+	}
+	raw := getJSON(t, s, "/api/v1/machines/l4/launchers")
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Default["provider"] != "work" {
+		t.Fatalf("the fixture's default is not work: %s", raw)
+	}
+	var kept *launcherWithHealth
+	for i, l := range body.Launchers {
+		if l.Name == "work" {
+			kept = &body.Launchers[i]
+		}
+	}
+	if kept == nil || kept.Health == nil || kept.Health.State != healthBlocked || kept.Health.Kind != errKindModelRoute {
+		t.Fatalf("the configured default lost its reason: %s", raw)
+	}
+	// The same machine's main-chat list has no such default, so the failed launcher is hidden there.
+	if names := launcherNamesAt(t, s, "/api/v1/machines/l4/launchers?purpose=assistant"); slices.Contains(names, "work") {
+		t.Fatalf("the main chat's list offers the launcher that failed: %v", names)
 	}
 }
 
@@ -248,7 +405,7 @@ func TestLauncherHealthMovesPlannedTasks(t *testing.T) {
 	f.checks["server/work"] = proto.LauncherCheck{Error: "90 秒内没有回答"}
 	ctx := context.Background()
 	s.healthRound(ctx, true)
-	res, err := s.toolTaskPlan(ctx, "conv9", json.RawMessage(`{"tasks":[{"title":"修 CI","prompt":"修 CI","machine":"l4","cwd":"~/code/app","launcher":"work",
+	res, err := s.toolTaskPlan(ctx, "conv9", json.RawMessage(`{"tasks":[{"title":"修 CI","permission":"bypassPermissions","prompt":"修 CI","machine":"l4","cwd":"~/code/app","launcher":"work",
 		"readonly":false,"user_requested":false,"machine_policy":"flexible","why":"代码在那"}]}`))
 	if err != nil {
 		t.Fatal(err)
@@ -260,6 +417,211 @@ func TestLauncherHealthMovesPlannedTasks(t *testing.T) {
 	}
 	if task := p.Tasks[0]; task.Machine != "box" || task.Cwd != "/Users/me/code/app" || !strings.Contains(task.Why, "failed its health check on l4") {
 		t.Fatalf("task: %+v", task)
+	}
+}
+
+func TestAgentStartDetourRecomputesLauncherPermission(t *testing.T) {
+	s, f := launcherHealthHub(t)
+	f.zshrc = map[string][]proto.Launcher{
+		"l4":     {{Name: "work", Agent: "claude"}},
+		"server": {{Name: "work", Agent: "codex"}},
+		"box":    {{Name: "work", Agent: "claude"}},
+	}
+	ctx := context.Background()
+	s.healthRound(ctx, true) // l4/work is blocked, so the start moves to box.
+	res, err := s.runTool(ctx, "server", "conv9", "agent_start", json.RawMessage(`{"machine":"l4","cwd":"/home/me/code/app","prompt":"修 CI"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res, "runs on server instead") || len(f.starts) != 1 {
+		t.Fatalf("start was not detoured: %v, %s", f.starts, res)
+	}
+	if got := f.starts[0]["permission_mode"]; got != nil {
+		t.Fatalf("detour to Codex inherited Claude permission %v", got)
+	}
+}
+
+// A start aimed at a machine whose launcher has a failing record probes that machine once on the spot: when the
+// launcher works now (fixed since the record), the record is cleared and the start stays on the asked machine (#2018).
+func TestLauncherHealthRecheckClearsStaleRecord(t *testing.T) {
+	s, f := launcherHealthHub(t)
+	ctx := context.Background()
+	s.healthRound(ctx, true) // l4/work fails and is blocked
+	if r := healthState(s, "l4", "work"); !r.unusable() {
+		t.Fatalf("seed record: %+v", r)
+	}
+	delete(f.checks, "l4/work") // the launcher was fixed after the record was written
+	n := len(f.checked)
+	res, err := s.runTool(ctx, "server", "conv9", "agent_start", json.RawMessage(`{"machine":"l4","cwd":"/home/me/code/app","prompt":"修 CI"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.checked) != n+1 || f.checked[n] != "l4/work" {
+		t.Fatalf("on-demand check: %v", f.checked[n:])
+	}
+	if r := healthState(s, "l4", "work"); r.State != healthOK || r.Fails != 0 || r.Source != "check" {
+		t.Fatalf("record not cleared: %+v", r)
+	}
+	if len(f.starts) != 1 || f.starts[0]["cwd"] != "/home/me/code/app" {
+		t.Fatalf("the start did not stay on l4: %v", f.starts)
+	}
+	if strings.Contains(res, "runs on") {
+		t.Fatalf("the start was rerouted: %s", res)
+	}
+}
+
+// An on-demand probe that still fails leaves the record untouched and the start reroutes as before; a second start
+// within healthRecheckThrottle trusts that answer and does not probe again. A machine that cannot answer the probe
+// gives no result and reroutes the same way.
+func TestLauncherHealthRecheckThrottleAndFailure(t *testing.T) {
+	s, f := launcherHealthHub(t)
+	ctx := context.Background()
+	f.checks["server/work"] = proto.LauncherCheck{Error: "90 秒内没有回答"} // box is the only healthy alternative
+	s.healthRound(ctx, true)
+	before := healthState(s, "l4", "work")
+	n := len(f.checked)
+	res, err := s.runTool(ctx, "server", "conv9", "agent_start", json.RawMessage(`{"machine":"l4","cwd":"/home/me/code/app","prompt":"修 CI"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.checked) != n+1 || f.checked[n] != "l4/work" {
+		t.Fatalf("on-demand check: %v", f.checked[n:])
+	}
+	if len(f.starts) != 1 || f.starts[0]["cwd"] != "/Users/me/code/app" || !strings.Contains(res, "runs on box instead") {
+		t.Fatalf("not rerouted: starts %v, answer %s", f.starts, res)
+	}
+	if r := healthState(s, "l4", "work"); r.CheckedAt != before.CheckedAt || r.Fails != before.Fails || r.State != before.State {
+		t.Fatalf("the failed probe changed the record: before %+v, after %+v", before, r)
+	}
+
+	// Throttled: the next start does not probe again but still reroutes.
+	n = len(f.checked)
+	if _, err := s.runTool(ctx, "server", "conv10", "agent_start", json.RawMessage(`{"machine":"l4","cwd":"/home/me/code/app","prompt":"再修"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.checked) != n {
+		t.Fatalf("probed again within the throttle: %v", f.checked[n:])
+	}
+	if len(f.starts) != 2 {
+		t.Fatalf("starts: %v", f.starts)
+	}
+
+	// The node can no longer answer: the probe gives no result and the detour still moves the start to a healthy one.
+	l4 := f.devices[1]
+	f.mu.Lock()
+	delete(f.sessions, "l4")
+	f.mu.Unlock()
+	s.health.mu.Lock()
+	delete(s.health.recheckAt, healthKey("l4", "work"))
+	s.health.mu.Unlock()
+	if _, got, checked := s.recheckLauncherNow(ctx, "l4", "work"); !checked || got {
+		t.Fatalf("want no answer from the gone machine, got checked=%v got=%v", checked, got)
+	}
+	alt, _, moved := s.healthDetour(ctx, l4, "work")
+	if !moved || alt.ID != "box" {
+		t.Fatalf("unreachable detour: moved=%v alt=%s", moved, alt.ID)
+	}
+}
+
+// Records a probe cannot settle are not rechecked on the spot: a subscription usage limit (the request would be
+// refused too) and a launcher missing from the terminal's shell (the probe's login shell runs it fine).
+func TestLauncherHealthRecheckSkipsSpecialRecords(t *testing.T) {
+	s, f := launcherHealthHub(t)
+	ctx := context.Background()
+	s.recordHealth(ctx, "l4", "work", healthResult{err: "usage limit reached", source: "check"})
+	if r := healthState(s, "l4", "work"); r.Kind != errKindUsageLimit {
+		t.Fatalf("seed usage_limit: %+v", r)
+	}
+	n := len(f.checked)
+	if _, note, moved := s.healthDetour(ctx, f.devices[1], "work"); !moved || !strings.Contains(note, "usage limit") {
+		t.Fatalf("usage limit detour: moved=%v note=%q", moved, note)
+	}
+	if len(f.checked) != n {
+		t.Fatalf("a usage limit was probed: %v", f.checked[n:])
+	}
+
+	editHealth(s, "l4", "work", func(r *LauncherHealth) {
+		r.State, r.Kind, r.BlockedReason = healthBlocked, errKindNotInTerminal, "the new tab's shell (bash) has no command work"
+	})
+	n = len(f.checked)
+	if _, note, moved := s.healthDetour(ctx, f.devices[1], "work"); !moved || !strings.Contains(note, errKindNotInTerminal) {
+		t.Fatalf("terminal detour: moved=%v note=%q", moved, note)
+	}
+	if len(f.checked) != n {
+		t.Fatalf("a terminal-shell record was probed: %v", f.checked[n:])
+	}
+}
+
+// Two starts for the same failing launcher at once run one on-demand probe; the second waits for its answer.
+func TestLauncherHealthRecheckSingleFlight(t *testing.T) {
+	s, f := launcherHealthHub(t)
+	ctx := context.Background()
+	s.recordHealth(ctx, "l4", "work", healthResult{err: "broken", source: "check"})
+	delete(f.checks, "l4/work") // the probe now succeeds; the stale record is what is wrong
+	release, entered := make(chan struct{}), make(chan struct{})
+	f.onCheck = func(*fakeHub) {
+		close(entered)
+		<-release
+	}
+	type answer struct {
+		res     healthResult
+		got     bool
+		checked bool
+	}
+	answers := make(chan answer, 2)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		r, g, c := s.recheckLauncherNow(context.Background(), "l4", "work")
+		answers <- answer{r, g, c}
+	}()
+	<-entered
+	waitFor(t, "the in-flight probe", func() bool {
+		s.health.mu.Lock()
+		n := len(s.health.recheck)
+		s.health.mu.Unlock()
+		return n == 1
+	})
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		r, g, c := s.recheckLauncherNow(context.Background(), "l4", "work")
+		answers <- answer{r, g, c}
+	}()
+	// Both callers must be parked in recheckLauncherNow before the probe is allowed to finish, or the second one
+	// could arrive after the cleanup and take the throttle branch instead of joining the probe.
+	waitFor(t, "the second caller to join the probe", func() bool {
+		s.health.mu.Lock()
+		rc := s.health.recheck[healthKey("l4", "work")]
+		joined := rc != nil && rc.waiters >= 1
+		s.health.mu.Unlock()
+		return joined
+	})
+	close(release)
+	wg.Wait()
+	for i := 0; i < 2; i++ {
+		a := <-answers
+		if !a.checked || !a.got || !a.res.ok {
+			t.Fatalf("caller %d got %+v", i, a)
+		}
+	}
+	s.health.mu.Lock()
+	left := len(s.health.recheck)
+	s.health.mu.Unlock()
+	if left != 0 {
+		t.Fatalf("in-flight entries left: %d", left)
+	}
+	f.mu.Lock()
+	probes := 0
+	for _, c := range f.checked {
+		if c == "l4/work" {
+			probes++
+		}
+	}
+	f.mu.Unlock()
+	if probes != 1 {
+		t.Fatalf("probes ran: %d", probes)
 	}
 }
 
@@ -295,6 +657,8 @@ func TestLauncherHealthIgnoresRefusedStarts(t *testing.T) {
 		&rpc.Error{Code: "codex_needs_prompt", Message: "新建 Codex 会话要连第一条消息一起发"},
 		&rpc.Error{Code: proto.CodeNodeOutdated, Message: "node too old"},
 		&rpc.Error{Code: "ultracode_unsupported", Message: "Claude Code 版本太旧"},
+		&rpc.Error{Code: "readonly_unsupported", Message: "This launcher cannot enforce read-only mode"},
+		&rpc.Error{Code: proto.CodeDirectoryUntypable, Message: "a directory name with a tab"},
 	} {
 		s.recordStartFailure(ctx, "l4", "work", err)
 		if r, ok := s.launcherHealth(ctx, "l4", "work"); ok {
@@ -315,7 +679,7 @@ func TestLauncherHealthIgnoresRefusedStarts(t *testing.T) {
 	f.mu.Lock()
 	f.failStart = &rpc.Error{Message: "directory /home/me/nope does not exist"}
 	f.mu.Unlock()
-	s.startPlanTask("plan_x", "conv1", 0, PlanTask{Title: "修 CI", Prompt: "修 CI", Machine: "l4", Cwd: "/home/me/nope", Launcher: "work"}, false)
+	s.startPlanTask("plan_x", "conv1", 0, PlanTask{Title: "修 CI", Prompt: "修 CI", Machine: "l4", Cwd: "/home/me/nope", Launcher: "work", Permission: "bypassPermissions"}, false)
 	f.mu.Lock()
 	starts := append([]map[string]any(nil), f.starts...)
 	checked := len(f.checked)
@@ -325,5 +689,23 @@ func TestLauncherHealthIgnoresRefusedStarts(t *testing.T) {
 	}
 	if r, ok := s.launcherHealth(ctx, "l4", "work"); ok {
 		t.Fatalf("recorded: %+v", r)
+	}
+}
+
+// The main chat's menu follows the same rule as New Agent's (#4437): a launcher whose latest check failed is not
+// offered there either, and comes back with a passing one.
+func TestMainChatPickerHidesWhatFailed(t *testing.T) {
+	s, f := launcherHealthHub(t)
+	pointDefaultAt(t, s, f, "other")
+	setModel(t, s, "assistant", ModelBinding{Provider: "launcher.other"})
+	s.healthRound(context.Background(), true)
+	const main = "/api/v1/machines/l4/launchers?purpose=assistant"
+	if names := launcherNamesAt(t, s, main); slices.Contains(names, "work") {
+		t.Fatalf("the main chat's menu offers the launcher that failed: %v", names)
+	}
+	delete(f.checks, "l4/work")
+	postJSON(t, s, "/api/v1/launchers/health/check?machine=l4&launcher=work")
+	if names := launcherNamesAt(t, s, main); !slices.Contains(names, "work") {
+		t.Fatalf("the main chat's menu still hides the fixed launcher: %v", names)
 	}
 }

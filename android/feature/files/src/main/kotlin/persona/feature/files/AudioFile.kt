@@ -29,7 +29,7 @@ import java.security.MessageDigest
 import java.util.Base64
 import java.util.Locale
 
-/** Audio in the file viewer (docs/android/android.md "File viewer", web `ui/Media.tsx`): what the player knows to open. */
+/** Audio in the file viewer (docs/android/android.md "Files and Git in chat", web `ui/Media.tsx`): what the player knows to open. */
 internal object AudioFiles {
     private val extensions = setOf("mp3", "m4a", "aac", "wav", "ogg", "oga", "opus", "flac", "amr", "3gp", "mid", "midi")
 

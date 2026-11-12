@@ -6,6 +6,7 @@ package extmgr
 // machine that is away: it is brought in line when it is back. The node runs them (node/plugins.go).
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -289,7 +290,7 @@ func putNodePackage(ctx context.Context, m *Machine, prog proto.PluginNodeProgra
 // nodeInit is the initialize p's program on a computer gets: the configuration, and only the secrets its manifest
 // sends to computers (node.secrets); no hub token (no hub_api on computers, plan "Decisions").
 func (ps *extensions) nodeInit(ctx context.Context, p *extension.Extension) (json.RawMessage, error) {
-	all, err := ps.reg.Secrets(ctx, p.Record.ID)
+	all, err := ps.programSecrets(ctx, p.Record.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -334,6 +335,11 @@ func (ps *extensions) nodeIdentityCurrent(id string, revision int64) bool {
 // checkRenameNodeCapabilities runs before the source guard takes its market lock.
 // A configured legacy/offline node must not leave the old run active after the
 // public identity commits, or require a destructive old-wire sync to retire it.
+// A picked machine ID that is not one of the hub's computers (removed, or left
+// from before the hub moved) is skipped: the fleet lists offline computers too,
+// so no node with that ID can connect, and if one is added again under it,
+// syncExtensionNodes never sends an old node a destructive sync (#2510).
+// The refusal names the computers to bring online or update.
 func (h *Manager) checkRenameNodeCapabilities(ctx context.Context, p *extension.Extension) error {
 	if p == nil {
 		return i18n.Err("extension-identity.invalid")
@@ -341,21 +347,49 @@ func (h *Manager) checkRenameNodeCapabilities(ctx context.Context, p *extension.
 	if !p.Record.Enabled || p.Manifest.NodeProgram() == nil {
 		return nil
 	}
+	var unreachable, outdated machineList
 	for _, id := range h.extensions.nodeMachines(p) {
 		m := h.machineByID(id)
-		if m == nil || !m.isOnline() {
-			return i18n.Err("extension-identity.node_required")
+		if m == nil {
+			h.logf("extension %s: %s in its computers is not one of the hub's computers; the identity change skips it", p.Record.ID, id)
+			continue
+		}
+		m.mu.Lock()
+		name := cmp.Or(m.cfg.Name, m.cfg.ID)
+		m.mu.Unlock()
+		if !m.isOnline() {
+			unreachable = append(unreachable, name)
+			continue
 		}
 		probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		var capability proto.PluginNodeIdentityReply
 		err := m.call(probeCtx, "plugin.node.identity", proto.PluginNodeIdentityRequest{}, &capability)
 		cancel()
-		if err != nil || !capability.Supported {
-			return i18n.Err("extension-identity.node_required")
+		switch {
+		case err == nil && capability.Supported:
+		case err == nil || nodeOutdated(err):
+			outdated = append(outdated, name)
+		default: // timed out or dropped: not known to be old
+			unreachable = append(unreachable, name)
 		}
+	}
+	if len(unreachable) > 0 {
+		return i18n.Err("extension-identity.node_unreachable", i18n.Args{"machines": unreachable, "count": len(unreachable)})
+	}
+	if len(outdated) > 0 {
+		return i18n.Err("extension-identity.node_outdated", i18n.Args{"machines": outdated})
 	}
 	return nil
 }
+
+// machineList is computers named in a message, listed the way its language lists things.
+type machineList []string
+
+func (l machineList) Text(lang i18n.Lang) string {
+	return strings.Join(l, i18n.T(lang, "extension-identity.list_separator"))
+}
+
+func (l machineList) Error() string { return l.Text(i18n.Default) }
 
 func commitNodeIdentities(ctx context.Context, m *Machine, slots []proto.PluginNodeIdentity) error {
 	var supported proto.PluginNodeIdentityReply

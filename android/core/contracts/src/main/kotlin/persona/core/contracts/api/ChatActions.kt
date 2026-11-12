@@ -8,7 +8,10 @@ sealed interface ChatAction {
     data object Interrupt : ChatAction
     data class Rename(val title: String) : ChatAction
     data class Mute(val muted: Boolean) : ChatAction
-    data class Modes(val permissionMode: String? = null, val effort: String? = null) : ChatAction
+    /** [ultracode]: Claude Code's ultracode switch, sent on its own (docs/protocol/protocol.md "Claude Code ultracode"). */
+    data class Modes(val permissionMode: String? = null, val effort: String? = null, val ultracode: Boolean? = null,
+        /** Take the after-resume ultracode notice away (`ultracode_dismiss_lost`, #582). */
+        val dismissUltracodeLost: Boolean? = null) : ChatAction
     data object Close : ChatAction
     /** Join a Codex app-server thread live (POST …/attach); only for a session whose capabilities offer it. */
     data object Attach : ChatAction
@@ -37,6 +40,15 @@ interface ChatActions {
         throw UnsupportedOperationException("Queued message management unavailable")
 
     /**
+     * "Send now" (`docs/protocol/protocol.md`, POST …/queue/send-now): the agent takes everything queued at once instead of at its next step,
+     * through Claude Code's own send-now, which the node presses (a command it runs goes on in the background, a reply it
+     * writes starts again with the messages). Only for `Session.steersQueue`. Refusals are 409 with a `code`
+     * (nothing_queued, send_now_unsupported, send_now_unrecognized, send_now_in_doubt, node_outdated) and the hub's words
+     * for it in the reader's language. Not idempotent: a failure is reported, never retried.
+     */
+    suspend fun sendQueuedNow(session: Session): Unit = throw UnsupportedOperationException("Send now unavailable")
+
+    /**
      * "Branch to new chat" (#2137, POST …/fork): the node copies the conversation up to the end of [atItemId]'s turn (a reply's
      * transcript item, `<uuid>#<n>`) into a new session on the same machine; returns its session id. Only for
      * `Session.canFork`. Not idempotent: a failure is reported, never retried.
@@ -52,6 +64,14 @@ interface ChatActions {
 
     /** What the node reads from the session's transcript (GET …/info). */
     suspend fun info(session: Session): SessionInfo = throw UnsupportedOperationException("Session info unavailable")
+
+    /**
+     * "Back to the configured model" after a refusal fallback (#2528, POST …/restore-model, no body): the node closes a
+     * Persona conversation's idle headless process so its next start uses the configured model. Sends no message; the
+     * session's next push carries `model_restore`. Refusals are 409 with a `code` (restore_busy, restore_unsupported,
+     * restore_nothing, restore_unknown, restore_gone, node_outdated). Not retried.
+     */
+    suspend fun restoreModel(session: Session): Unit = throw UnsupportedOperationException("Restore model unavailable")
 }
 
 /** What "Rewind to here" restores: the conversation alone, or the files changed after the message too. */

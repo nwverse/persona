@@ -1,15 +1,17 @@
 import SwiftUI
 
 /// Settings › Extensions: every plugin of the hub's (built in, from hub.json, installed on the hub's machine), its state, and
-/// the way to its page. Extensions are installed on the hub's side only (docs/extensions/extensions.md「安装」): with `personad plugin` on
+/// the way to its page. Extensions are installed on the hub's side only (docs/extensions/extensions.md「Install, upgrade, roll back, uninstall」): with `personad plugin` on
 /// its machine or in its admin UI (/admin); the footer says how.
 struct ExtensionsView: View {
+    @Environment(AppModel.self) private var app
     @State private var page = ExtensionsModel()
     @State private var cardLink: LinkTarget?
+    @State private var settingsSlots: ExtensionSlots?
 
     var body: some View {
         SettingsForm {
-            // Extension Market (docs/extensions/extensions.md「扩展市场」): only with a hub that has markets; first,
+            // Extension Market (docs/extensions/extensions.md「Extension marketplace」): only with a hub that has markets; first,
             // above the installed ones (#5017).
             if page.markets {
                 Section {
@@ -22,28 +24,18 @@ struct ExtensionsView: View {
                     .bareListRow()
                 }
             }
-            #if os(macOS)
-            // The plugins' overview cards (docs/extensions/extensions.md「UI 插槽」): the Mac has no Overview, they lead the installed ones (their
-            // pages are in the sidebar). The iPhone has them on Settings itself.
-            ExtensionCardsSection(link: $cardLink)
-            #endif
+            if let settingsSlots {
+                #if os(macOS)
+                ExtensionCardsSection(link: $cardLink, slots: settingsSlots)
+                #else
+                ExtensionSlotsSettingsSection(link: $cardLink, slots: settingsSlots)
+                #endif
+            }
             if let plugins = page.plugins, plugins.isEmpty {
                 Section {
                     EmptyStateView(symbol: Theme.Icon.plugins, title: String(localized: "No Extensions"),
                                    message: String(localized: "Install extensions in the hub's admin page (/admin) or on the hub machine with personad extension install, then turn them on and set them up here."))
                         .listRowBackground(Color.clear)
-                }
-            } else if let groups = page.groups {
-                // Several managers (docs/assistant/managers.md "Grouping"): each one's under its name, the default first.
-                ForEach(groups) { group in
-                    Section {
-                        Group { rows(group.items) }
-                            .bareListRow()
-                    } header: {
-                        ManagerHeading(manager: group.manager, count: group.items.count)
-                    } footer: {
-                        if group.id == groups.last?.id { footer }
-                    }
                 }
             } else if let plugins = page.plugins {
                 Section {
@@ -72,21 +64,23 @@ struct ExtensionsView: View {
         }
         .accessibilityIdentifier("extensions-list")
         .themedPage()
-        #if os(macOS)
         .pluginLinks($cardLink)
-        #endif
+        .extensionPushes(settingsSlots?.cardPages ?? [])
         .overlay { if page.plugins == nil && page.loading { ProgressView() } }
         .detailTitle(String(localized: "Extensions"))
         .navigationBarTitleDisplayMode(.inline)
-        .task { await page.load() }
-        #if os(macOS)
-        .task { await ExtensionSlots.shared.reload() }
-        #endif
+        .task(id: "\(app.assistantManagerID ?? "")|\(app.managersRevision)|\(app.settingsPath.count)|\(app.config?.url.absoluteString ?? "")") { await page.load() }
+        .task(id: "\(app.assistantManagerID ?? "")|\(app.config?.url.absoluteString ?? "")") {
+            let scope = AssistantSettingsRequestScope(app)
+            let slots = ExtensionSlots(deps: .init(api: { scope.api(app) }, connection: { app.socket(scope.group) }),
+                                       manager: scope.manager)
+            settingsSlots = slots
+            await slots.reload()
+        }
         .refreshable {
             await page.load()
-            await ExtensionSlots.shared.reload()
+            await settingsSlots?.reload()
         }
-        .onChange(of: AppModel.shared.managersRevision) { Task { await page.load() } }
     }
 
     /// The rows of a list, each opening its manager's copy: an id is listed once per manager (each one's built-ins).
@@ -113,7 +107,7 @@ private struct ExtensionRowLabel: View {
 
     var body: some View {
         if AppStyle.current.usesBeautifulUI {
-            SettingsRow(title: plugin.name, symbol: Theme.Icon.plugins, tint: ExtensionStateDot.tone(plugin), value: ExtensionText.summary(plugin, auth: auth))
+            SettingsRow(title: plugin.name, symbol: Theme.Icon.plugins, tint: ExtensionStateDot.tone(plugin), value: ExtensionText.summary(plugin, auth: auth), iconURL: plugin.iconURL)
         } else {
             LabeledContent {
                 HStack(spacing: Theme.Space.sm) {
@@ -124,7 +118,11 @@ private struct ExtensionRowLabel: View {
                 Label {
                     Text(plugin.name).lineLimit(1)
                 } icon: {
-                    ThemedIcon(Theme.Icon.plugins)
+                    if ExtensionImageCache.url(plugin.iconURL) != nil {
+                        ExtensionLogo(url: plugin.iconURL, side: Theme.Size.iconL)
+                    } else {
+                        ThemedIcon(Theme.Icon.plugins)
+                    }
                 }
             }
         }
@@ -132,7 +130,7 @@ private struct ExtensionRowLabel: View {
 }
 
 /// A line of a plugin's Update section: what, and below it what happens (in the caution colour when it needs the user).
-private struct ExtensionUpgradeLine: View {
+struct ExtensionUpgradeLine: View {
     var title: String
     var detail: String
     var attention: Bool
@@ -173,19 +171,28 @@ private struct ExtensionStateDot: View {
 struct ExtensionDetailView: View {
     @State private var page: ExtensionModel
     @State private var editingSecret: ExtensionSecret?
+    /// An Always rule the user asked to remove: confirmed first.
+    @State private var removingRule: HandoffRule?
     @State private var declarations = ExtensionTextContributions()
     @State private var connectorInbox: ExtensionConnectorsModel
+    /// Its connectors' source subscriptions (#2041): the entry row's counts, nil while it is hidden.
+    @State private var subscriptions: SubscriptionCounts?
     @Environment(\.scenePhase) private var phase
 
     @State private var signIn: ExtensionSignInModel
     private var authStore: ExtensionAuthStore { .shared }
+    /// Its updates and the managers: the page's, not a row's (`ExtensionSettingsPageWork`, #2988).
+    @State private var lifecycle: ExtensionSettingsLifecycle
+    @State private var roster: ManagerRoster?
 
     /// `manager`: another manager's copy (docs/assistant/managers.md "Grouping"): everything the page reads and changes is
     /// that manager's, and so are the pages and connectors it opens. nil: the default manager's.
     init(id: String, manager: String? = nil) {
+        let manager = manager ?? AppModel.shared.assistantManagerID
         _page = State(initialValue: ExtensionModel(id: id, manager: manager))
         _signIn = State(initialValue: ExtensionSignInModel(id: id, manager: manager))
         _connectorInbox = State(initialValue: ExtensionConnectorsModel(manager: manager))
+        _lifecycle = State(initialValue: ExtensionSettingsLifecycle(id: id, manager: manager))
     }
 
     /// Its sign-in, with a hub that has them (#4507): the latest of the page's and the pushes'.
@@ -210,51 +217,20 @@ struct ExtensionDetailView: View {
         SettingsForm {
             header
             if let d = page.detail {
-                if let auth {
-                    ExtensionAuthSection(auth: auth, enabled: d.plugin.enabled ?? true, model: signIn)
+                ExtensionSettingsView(page: page, lifecycle: lifecycle, roster: roster, detail: d,
+                                      hasConfiguration: hasConfiguration(d)) {
+                    configuration(d)
+                } advancedInformation: {
+                    contributions(d)
+                    dependencies(d)
+                    permissions(d)
                 }
-                if d.readOnly {
-                    Section {
-                        Text("This extension is set in its manager's manager.json; change its switch and settings there, then restart the manager.").font(Theme.Font.label).foregroundStyle(.secondary)
-                    }
-                } else {
-                    Section {
-                        Toggle(isOn: Binding(get: { d.plugin.enabled ?? true }, set: { on in Task { await page.setEnabled(on) } })) {
-                            Text("Enabled").lineLimit(1)
-                        }
-                        .disabled(page.changingEnabled || page.saving || page.changingContribution != nil)
-                        .accessibilityIdentifier("plugin-enabled")
-                    } footer: {
-                        Text("When off, it stops running and the connectors and other things it provides turn off too; its settings and secrets stay.")
-                    }
-                }
-                if d.plugin.autoUpgrade != nil { upgrades(d.plugin) }
-                pages(d)
-                connectorSections(d)
-                if !d.readOnly && !d.form.isEmpty { form(d) }
-                if !d.readOnly && !d.secrets.isEmpty { secrets(d) }
-                contributions(d)
-                dependencies(d)
-                permissions(d)
-                about(d)
             }
         }
+        .modifier(ExtensionSettingsPageWork(page: page, lifecycle: lifecycle, roster: $roster))
         .themedPage()
         .detailTitle(page.detail?.plugin.name ?? String(localized: "Extensions"))
         .navigationBarTitleDisplayMode(.inline)
-        .pageToolbar {
-            if page.detail?.readOnly == false && !(page.detail?.form.isEmpty ?? true) {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button {
-                        Task { await page.save() }
-                    } label: {
-                        if page.saving { ProgressView() } else { Text("Save").lineLimit(1) }
-                    }
-                    .disabled(!page.canSave)
-                    .accessibilityIdentifier("plugin-save")
-                }
-            }
-        }
         .confirmationDialog("Also Turn Off Extensions That Depend on It?", isPresented: Binding(
             get: { page.disableConfirmation != nil },
             set: { if !$0 { page.disableConfirmation = nil } }), titleVisibility: .visible) {
@@ -268,9 +244,21 @@ struct ExtensionDetailView: View {
             // Closed by clearing the item it is shown for, so the page and the sheet cannot disagree about whether it is
             // open (tapping the same secret again must open it).
             ExtensionSecretSheet(secret: secret, save: { await page.setSecret(secret.name, value: $0) },
+                              saveReference: { await page.setSecretReference(secret.name, reference: $0) },
                               clear: { await page.clearSecret(secret.name) }, close: { editingSecret = nil })
         }
+        .confirmationDialog(String(localized: "Remove this rule?"), isPresented: Binding(get: { removingRule != nil }, set: { if !$0 { removingRule = nil } }),
+                            titleVisibility: .visible, presenting: removingRule) { rule in
+            Button(role: .destructive) { Task { await page.removeHandoffRule(rule.id) } } label: { Text("Remove [Handoff Rule]").lineLimit(1) }
+                .accessibilityIdentifier("handoff-rule-remove-confirm")
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("The next time an Agent asks for it, you approve it again.")
+        }
         .task { await page.load() }
+        // A launcher field's choices (format launcher): the hub asks every machine for them, so apart from the page.
+        .task(id: page.detail?.plugin.id) { await page.loadLaunchersIfNeeded() }
+        .subscriptionCounts($subscriptions, enabled: page.manager == nil) { [id = page.id] in $0.extensionID == id }
         // Again when the connector's page closes (its switch may have changed there) or the extension is switched.
         // Also once paired (opened at launch, before the hub's address is known) or paired to another hub.
         .task(id: ConnectorSectionsKey(ids: connectorIDs, depth: AppModel.shared.settingsPath.count,
@@ -280,7 +268,7 @@ struct ExtensionDetailView: View {
         .tabActiveTask(id: ExtensionTextSource(group: AppModel.shared.hub?.group ?? "", features: AppModel.shared.hubFeatures,
                                                hub: AppModel.shared.api?.config.url.absoluteString, active: phase == .active)) {
             guard phase == .active else { return }
-            await declarations.refreshWhileActive(api: AppModel.shared.api)
+            await declarations.refreshWhileActive(api: AppModel.shared.api?.manager(page.manager))
         }
         .refreshable { await page.load() }
         // What the page read is the hub's latest word on the sign-in too; an install that ended waiting for a sign-in
@@ -301,8 +289,7 @@ struct ExtensionDetailView: View {
     @ViewBuilder private var header: some View {
         Section {
             HStack(spacing: Theme.Space.m) {
-                Image(systemName: Theme.Icon.plugins).resizable().scaledToFit().foregroundStyle(Theme.accent)
-                    .scaledFrame(width: Theme.Size.wellM, height: Theme.Size.wellM)
+                ExtensionLogo(url: page.detail?.plugin.iconURL)
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                     Text(page.detail?.plugin.name ?? page.id).font(Theme.Font.heading).lineLimit(1)
                     HStack(spacing: Theme.Space.sm) {
@@ -338,52 +325,54 @@ struct ExtensionDetailView: View {
     private var stateText: String {
         guard let p = page.detail?.plugin else { return page.loading ? String(localized: "Loading… [File Viewer 86b6d0]") : String(localized: "Couldn't load [Connector Thread Models 153e20]") }
         // Another manager's copy says whose it is (the default's page is as before).
-        return [ExtensionText.state(p), p.version, ExtensionText.source(p.source), page.managerName].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+        return [ExtensionText.state(p), page.managerName].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
-    /// A market plugin's upgrades (docs/extensions/extensions.md「自动升级」): its own switch, its newer version (opening the market's
-    /// upgrade when it waits for the user) or what happened last.
-    @ViewBuilder private func upgrades(_ p: HubExtension) -> some View {
-        // Switched off, the extension is not upgraded: its switch shows off and waits (the hub keeps it) until it is on.
-        let paused = p.autoUpgradePaused != nil
-        Section {
-            Toggle(isOn: Binding(get: { ExtensionText.autoUpgradeShown(p) }, set: { on in Task { await page.setAutoUpgrade(on) } })) {
-                Text("Auto-Update").lineLimit(1)
+    private func hasConfiguration(_ d: HubExtensionDetail) -> Bool {
+        auth != nil || !d.ui.isEmpty || !connectorInbox.connectors.isEmpty || d.readOnly || !d.form.isEmpty || !d.secrets.isEmpty
+            || VoiceTimbreSection.shows(d.plugin, manager: page.manager)
+    }
+
+    @ViewBuilder private func configuration(_ d: HubExtensionDetail) -> some View {
+        if let auth {
+            ExtensionAuthSection(auth: auth, enabled: d.plugin.enabled ?? true, model: signIn)
+        }
+        // The voice extension: the voice this device's calls speak with (#2411), whoever's settings the rest are.
+        if VoiceTimbreSection.shows(d.plugin, manager: page.manager) {
+            VoiceTimbreSection(extensionID: d.plugin.id, group: AppModel.shared.api?.group ?? "")
+        }
+        if d.readOnly {
+            Section {
+                Text("This extension is set in its assistant's manager.json; change its switch and settings there, then restart the assistant.")
+                    .font(Theme.Font.label).foregroundStyle(.secondary)
             }
-            .disabled(paused)
-            .accessibilityIdentifier("plugin-auto-upgrade")
-            if let u = p.upgrade {
-                if let action = ExtensionText.upgradeAction(u) {
-                    NavigationLink(value: SettingsPage.marketExtension(market: u.market, id: u.id)) {
-                        // The action stays at the end of the row however long what it asks for is.
-                        HStack(spacing: Theme.Space.m) {
-                            ExtensionUpgradeLine(title: String(localized: "New Version \(u.to) [Extensions Views fc9053]"), detail: ExtensionText.upgradeDetail(u),
-                                              attention: u.state == "needs_permission" || u.state == "skipped")
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            Text(action).foregroundStyle(Theme.accent).lineLimit(1).fixedSize()
+        }
+        pages(d)
+        if d.plugin.enabled ?? true {
+            SubscriptionsEntrySection(counts: subscriptions, state: SubscriptionsUI.state(extension: d.plugin.id))
+        }
+        connectorSections(d)
+        if !d.readOnly && !d.form.isEmpty { form(d) }
+        if !d.readOnly && !d.secrets.isEmpty { secrets(d) }
+        SecretProviderSections(users: d.secretUsers, rules: d.handoffRules, editable: !d.readOnly) { removingRule = $0 }
+        if !d.readOnly && !d.form.isEmpty {
+            Section {
+                FormAction {
+                    Button { Task { await page.save() } } label: {
+                        Group {
+                            if page.saving { ProgressView() } else { Text("Save").lineLimit(1) }
                         }
+                        .formActionWidth()
                     }
-                    .accessibilityIdentifier("plugin-upgrade")
-                } else {
-                    ExtensionUpgradeLine(title: String(localized: "New Version \(u.to) [Extensions Views fc9053]"), detail: ExtensionText.upgradeDetail(u), attention: false)
-                        .accessibilityIdentifier("plugin-upgrade")
+                    .themedButton(prominent: true)
+                    .disabled(!page.canSave)
+                    .accessibilityIdentifier("plugin-save")
                 }
-            } else if let n = p.upgradeNote, let text = ExtensionText.upgradeNote(n) {
-                ExtensionUpgradeLine(title: text, detail: n.at.formatted(.relative(presentation: .named)), attention: n.kind == "rolled_back")
-                    .accessibilityIdentifier("plugin-upgrade-note")
-            }
-        } header: {
-            SettingsHeading(String(localized: "Update [Extension Market Views 94996c]"))
-        } footer: {
-            if paused {
-                Text("Auto-update is paused while this extension is off. Turn it back on and your auto-update setting applies again.")
-            } else {
-                Text("When the market has a new version, it installs while the extension is idle, and asks you first if it wants more permissions. If it doesn't start after installing, it goes back to the previous version.")
             }
         }
     }
 
-    /// The pages it draws (docs/extensions/extensions.md「声明式 UI」), a row each.
+    /// The pages it draws (docs/extensions/extensions.md「Declarative UI」), a row each.
     @ViewBuilder private func pages(_ d: HubExtensionDetail) -> some View {
         // The extension's own sign-in page is for apps without the Sign In section.
         let ui = auth?.page.map { page in d.ui.filter { $0.id != page } } ?? d.ui
@@ -480,7 +469,16 @@ struct ExtensionDetailView: View {
                             .foregroundStyle(s.set || s.required != true ? Color.secondary : Theme.caution)
                             .lineLimit(1)
                     } label: {
-                        Label { Text(s.title).lineLimit(1) } icon: { ThemedIcon(Theme.Icon.credentials) }
+                        Label {
+                            VStack(alignment: .leading, spacing: Theme.Space.lines) {
+                                Text(s.title).lineLimit(1)
+                                // what a provider's reference names, under the secret's title
+                                if let r = s.reference {
+                                    Text(verbatim: r.title?.isEmpty == false ? r.title! : r.reference)
+                                        .font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+                                }
+                            }
+                        } icon: { ThemedIcon(Theme.Icon.credentials) }
                     }
                 }
                 .foregroundStyle(Color.primary)
@@ -544,7 +542,7 @@ struct ExtensionDetailView: View {
         if let members = d.extensionPack, !members.isEmpty {
             Section {
                 ForEach(members, id: \.id) { member in
-                    LabeledContent(member.id, value: member.version ?? "")
+                    ExtensionPackMemberRow(line: ExtensionPackMemberLine(member, name: page.memberNames[member.id]))
                 }
             } header: { SettingsHeading(String(localized: "Pack Members")) }
         }
@@ -570,46 +568,18 @@ struct ExtensionDetailView: View {
         }
     }
 
-    @ViewBuilder private func about(_ d: HubExtensionDetail) -> some View {
-        Section {
-            if let v = d.plugin.version, !v.isEmpty { LabeledContent("Version", value: v) }
-            if let v = d.previousVersion, !v.isEmpty { LabeledContent("Previous Version", value: v) }
-            if let s = ExtensionText.source(d.plugin.source) { LabeledContent("Source", value: s) }
-            if let o = d.origin, !o.isEmpty {
-                LabeledContent("Installed From") { Text(o).lineLimit(2).truncationMode(.middle).textSelection(.enabled) }
-            }
-            if let p = d.publisher, !p.isEmpty { LabeledContent("Publisher", value: p) }
-
-            if let h = d.homepage, let url = URL(string: h) {
-                Link(destination: url) { Label("Website", systemImage: Theme.Icon.openExternal).lineLimit(1) }
-            }
-            ForEach(ExtensionAuthText.warnings(d.plugin.warnings, shown: auth), id: \.self) { w in
-                Label { Text(w).font(Theme.Font.label) } icon: { ThemedIcon(Theme.Icon.error).foregroundStyle(Theme.caution) }
-            }
-        } header: {
-            SettingsHeading(String(localized: "About"))
-        }
-        // The command-line programs this version runs with (#4507), the machine's own marked.
-        if let tools = d.plugin.tools, !tools.isEmpty {
-            Section {
-                ForEach(tools) { t in
-                    LabeledContent(ExtensionAuthText.toolName(t), value: ExtensionAuthText.toolVersion(t))
-                        .accessibilityIdentifier("plugin-tool-\(t.name)")
-                }
-            } header: {
-                SettingsHeading(String(localized: "Command line"))
-            }
-        }
-    }
 }
 
 /// One field of a plugin's form, by its type: a text field, a number, a switch, a choice, a list of texts or of
 /// choices. Its title above, its description and the hub's word on it below.
 private struct ExtensionFieldRow: View {
+    @Environment(AppModel.self) private var model
     var field: ExtensionField
     var path: [String]
     @Bindable var page: ExtensionModel
     var templates: [ExtensionTextTemplate]
+    /// A switch with x-confirm waiting on its alert before it is turned on.
+    @State private var asking = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
@@ -620,24 +590,36 @@ private struct ExtensionFieldRow: View {
                     set: { page.set($0.isEmpty ? nil : .string($0), at: path) }), templates: templates)
             }
             if let text = field.description, !text.isEmpty {
-                Text(text).font(Theme.Font.label).foregroundStyle(.secondary)
+                Text(text).font(Theme.Font.label).foregroundStyle(.secondary).accessibilityIdentifier(identifier)
             }
             if let e = page.fieldError(path) {
-                Text(e).font(Theme.Font.label).foregroundStyle(Theme.danger)
+                Text(e).font(Theme.Font.label).foregroundStyle(Theme.danger).accessibilityIdentifier(identifier)
             }
         }
         .padding(.vertical, Theme.Space.xxs)
-        .accessibilityIdentifier("plugin-field-\(path.joined(separator: "."))")
+        // On the whole row, except for a list of machines: there it would replace its machines' own (their setup links,
+        // #2446), so the list puts it on its title and switches itself.
+        .modifier(ExtensionFieldIdentifier(id: field.items?.format == "machine" ? nil : identifier))
     }
+
+    private var identifier: String { "plugin-field-\(path.joined(separator: "."))" }
 
     private var title: String { field.required == true && field.default == nil ? String(localized: "\(field.label) (required)") : field.label }
 
     @ViewBuilder private var control: some View {
         switch field.type {
         case "boolean":
-            Toggle(isOn: Binding(get: { page.value(path)?.bool ?? field.default?.bool ?? false },
-                                 set: { page.set(.bool($0), at: path) })) {
+            // With x-confirm, turning it on asks first, in the machine switches' alert (#3215); Turn On only edits the draft.
+            Toggle(isOn: Binding(get: { page.value(path)?.bool ?? field.default?.bool ?? false }, set: { on in
+                if on, let ask = field.confirm, !ask.isEmpty { asking = true } else { page.set(.bool(on), at: path) }
+            })) {
                 Text(title).lineLimit(2)
+            }
+            .alert("Turn On “\(field.label)”?", isPresented: $asking) {
+                Button("Cancel", role: .cancel) {}
+                Button(String(localized: "action.turnOn", defaultValue: "Turn On")) { page.set(.bool(true), at: path) }
+            } message: {
+                Text(field.confirm ?? "")
             }
         case "array":
             if field.items?.format == "machine" {
@@ -653,10 +635,27 @@ private struct ExtensionFieldRow: View {
                 } label: {
                     Text(title).lineLimit(2)
                 }
+            } else if field.picksMachine {
+                // The page's hub's machines (the app's first group), as the machine switches list them.
+                ExtensionChoicePicker(title: title, placeholder: placeholder, path: path, page: page,
+                                      choices: ExtensionPickerChoice.machines(field, current: page.value(path)?.string,
+                                                                              machines: AssistantSettingsRequestScope(group: model.hub?.group ?? "", manager: page.manager, roster: model.managerRoster)
+                                                                                .machines(model).map { ($0.id, $0.name, $0.os) }))
+            } else if field.picksLauncher, let launchers = page.launchers {
+                ExtensionChoicePicker(title: title, placeholder: placeholder, path: path, page: page,
+                                      choices: ExtensionPickerChoice.launchers(current: page.value(path)?.string, launchers: launchers))
             } else if field.type == "integer" || field.type == "number" {
                 labeled {
-                    TextField(placeholder, text: numberBinding)
-                        .keyboardType(field.type == "integer" ? .numberPad : .decimalPad)
+                    HStack(spacing: Theme.Space.s) {
+                        TextField(placeholder, text: numberBinding)
+                            .keyboardType(field.type == "integer" ? .numberPad : .decimalPad)
+                        if field.type == "integer" {
+                            // A step at a time within its bounds (#2385); typing still works for a far value.
+                            Stepper(value: stepperBinding, in: stepperRange) { Text(title) }
+                                .labelsHidden()
+                                .fixedSize()
+                        }
+                    }
                 }
             } else {
                 labeled {
@@ -665,6 +664,10 @@ private struct ExtensionFieldRow: View {
                         .keyboardType(field.format == "uri" ? .URL : field.format == "email" ? .emailAddress : .default)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                    if field.picksLauncher, page.loadingLaunchers {
+                        // Typed until the hub's launchers are in (or if they can't be read).
+                        Text("Loading launchers…").font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
+                    }
                 }
             }
         }
@@ -691,6 +694,20 @@ private struct ExtensionFieldRow: View {
         return String(localized: "Not set")
     }
 
+    /// The stepper's value: what is set, else the default, else the lowest it may be. A step drops what was typed.
+    private var stepperBinding: Binding<Double> {
+        let key = path.joined(separator: ".")
+        return Binding(get: { page.value(path)?.double ?? field.default?.double ?? field.minimum ?? 0 }, set: { n in
+            page.numberText[key] = nil
+            page.set(.number(n.rounded()), at: path)
+        })
+    }
+
+    private var stepperRange: ClosedRange<Double> {
+        let low = field.minimum ?? -1_000_000_000
+        return low...max(low, field.maximum ?? 1_000_000_000)
+    }
+
     /// A number as typed: kept as text until it reads as one (ExtensionModel.numberProblems), then the value.
     private var numberBinding: Binding<String> {
         let key = path.joined(separator: ".")
@@ -702,11 +719,40 @@ private struct ExtensionFieldRow: View {
     }
 }
 
+/// One of the hub's machines or launchers by name (format machine / launcher on a string, #2385), Not set first; saved
+/// with the rest of the form.
+private struct ExtensionChoicePicker: View {
+    var title: String
+    var placeholder: String
+    var path: [String]
+    @Bindable var page: ExtensionModel
+    var choices: [ExtensionPickerChoice]
+
+    var body: some View {
+        Picker(selection: Binding(get: { page.value(path)?.string ?? "" }, set: { page.set($0.isEmpty ? nil : .string($0), at: path) })) {
+            Text(placeholder).tag("")
+            ForEach(choices) { c in Text(c.label).tag(c.value) }
+        } label: {
+            Text(title).lineLimit(2)
+        }
+    }
+}
+
+/// A field's accessibility identifier on all of a row, or on none of it (`nil`: its parts carry it).
+private struct ExtensionFieldIdentifier: ViewModifier {
+    var id: String?
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if let id { content.accessibilityIdentifier(id) } else { content }
+    }
+}
+
 /// A list of the hub's machines (schema format machine, docs/extensions/extensions.md): a switch per machine of the systems the field
 /// names, by its name and how it is, in effect at once (`ExtensionModel.saveNow`), the same setting as where else it
 /// shows (the Control Computer switch on a Mac's page). A value that names no machine still shows, to be turned off.
 private struct ExtensionMachineSwitches: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.splitPush) private var splitPush
     var field: ExtensionField
     var title: String
     var path: [String]
@@ -719,9 +765,10 @@ private struct ExtensionMachineSwitches: View {
     /// The page's hub's machines (the app's first group), of the systems asked for.
     private var machines: [Machine] {
         let os = field.items?.os ?? []
-        return model.machines.filter { $0.group.isEmpty && (os.isEmpty || os.contains($0.os ?? "")) }
+        return AssistantSettingsRequestScope(group: model.hub?.group ?? "", manager: page.manager, roster: model.managerRoster)
+            .machines(model).filter { os.isEmpty || os.contains($0.os ?? "") }
     }
-    private var unknown: [String] { items.filter { id in !model.machines.contains { $0.group.isEmpty && $0.id == id } } }
+    private var unknown: [String] { items.filter { id in !machines.contains { $0.id == id } } }
     /// A plugin for operating computers (extension point computer) or their browsers (browser): the rows say how Cua
     /// Driver or ego lite is there too.
     private var computers: Bool { page.detail?.plugin.contributes?["computer"] != nil }
@@ -729,20 +776,14 @@ private struct ExtensionMachineSwitches: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
-            Text(title).font(Theme.Font.labelStrong).foregroundStyle(.secondary).lineLimit(2)
+            Text(title).font(Theme.Font.labelStrong).foregroundStyle(.secondary).lineLimit(2).accessibilityIdentifier(identifier)
             if machines.isEmpty && unknown.isEmpty {
                 Text(field.items?.os == ["darwin"] ? String(localized: "This hub doesn't have a Mac yet.") : String(localized: "This hub doesn't have any machines yet."))
-                    .font(Theme.Font.secondary).foregroundStyle(.secondary)
+                    .font(Theme.Font.secondary).foregroundStyle(.secondary).accessibilityIdentifier(identifier)
             }
             ForEach(machines) { m in
                 row(m.id, name: m.name, status: nodeStatus(m) ?? (browsers ? Self.browserStatus(m) : Self.status(m, computers: computers)))
-                if computers || browsers {
-                    NavigationLink(value: MachineDetailRoute(m.ref)) {
-                        Label("Set Up [Extensions Views 1224]", systemImage: Theme.Icon.settings)
-                            .font(Theme.Font.label).lineLimit(1)
-                    }
-                    .accessibilityIdentifier("extension-machine-setup-\(m.id)")
-                }
+                if computers || browsers { setUp(m) }
             }
             ForEach(unknown, id: \.self) { id in
                 row(id, name: id, status: String(localized: "Can't find this machine"))
@@ -759,6 +800,24 @@ private struct ExtensionMachineSwitches: View {
             Text(field.confirm ?? "")
         }
     }
+
+    /// Its machine page, where the plugin is set up there. A button pushing that page alone: the Macs share one row, and
+    /// links in one row all open at once, every Mac's page on one tap (#2446).
+    @ViewBuilder private func setUp(_ m: Machine) -> some View {
+        let label = Label("Set Up [Extensions Views 1224]", systemImage: Theme.Icon.settings).font(Theme.Font.label).lineLimit(1)
+        Group {
+            if let splitPush {
+                Button { splitPush.push(MachineDetailRoute(m.ref)) } label: { label }
+            } else {
+                NavigationLink(value: MachineDetailRoute(m.ref)) { label }
+            }
+        }
+        .buttonStyle(.borderless)
+        .accessibilityIdentifier("extension-machine-setup-\(m.id)")
+    }
+
+    /// The field's identifier, on its title and switches (the row leaves it to them: a setup link keeps its own).
+    private var identifier: String { "plugin-field-\(path.joined(separator: "."))" }
 
     /// The field picking where the plugin's program runs: a machine switched on says how the program is there.
     private func nodeStatus(_ m: Machine) -> String? {
@@ -787,6 +846,7 @@ private struct ExtensionMachineSwitches: View {
             }
         }
         .disabled(page.saving)
+        .accessibilityIdentifier(identifier)
     }
 
     /// Online / Offline, then how ego lite is on it (Ready is the switch worth turning on).
@@ -896,24 +956,60 @@ private struct ExtensionListField: View {
 private struct ExtensionSecretSheet: View {
     var secret: ExtensionSecret
     var save: (String) async -> ExtensionSecretSave
+    /// Saves a provider's reference in its place, where the hub takes one (`extension_secret_references`).
+    var saveReference: (String) async -> ExtensionSecretSave
     var clear: () async -> Void
     var close: () -> Void
+    @Environment(AppModel.self) private var model
     @State private var value = ""
+    /// A provider's reference (op://vault/item/field) in place of the value: on for a secret that holds one.
+    @State private var byReference: Bool
     @State private var busy = false
+
+    init(secret: ExtensionSecret, save: @escaping (String) async -> ExtensionSecretSave,
+         saveReference: @escaping (String) async -> ExtensionSecretSave, clear: @escaping () async -> Void, close: @escaping () -> Void) {
+        self.secret = secret
+        self.save = save
+        self.saveReference = saveReference
+        self.clear = clear
+        self.close = close
+        _byReference = State(initialValue: secret.reference != nil)
+        _value = State(initialValue: secret.reference?.reference ?? "")
+    }
     /// The hub's words when the extension refused what was typed (#5906): shown under the field, which keeps it.
     @State private var refusal: String?
 
     var body: some View {
         NavigationStack {
             List {
+                if model.hubFeatures.hasExtensionFeature("secret_references") {
+                    Section {
+                        Toggle(isOn: $byReference) { Text("Use a Reference").lineLimit(1) }
+                            .onChange(of: byReference) { _, on in value = on ? (secret.reference?.reference ?? "") : "" }
+                            .accessibilityIdentifier("plugin-secret-use-reference")
+                    }
+                }
                 Section {
-                    SecretField(secret.set ? String(localized: "Enter a new value to replace it") : String(localized: "Enter"), filled: String(localized: "Filled in; tap Save [Extension Market Views 94348c]"), text: $value, identifier: "plugin-secret-value")
+                    if byReference {
+                        // The placeholder is a reference's shape, the same in every language.
+                        TextField(String(localized: "Use a Reference"), text: $value, prompt: Text(verbatim: "op://vault/item/field"))
+                            .font(Theme.Font.code)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .accessibilityIdentifier("plugin-secret-reference")
+                    } else {
+                        SecretField(secret.set ? String(localized: "Enter a new value to replace it") : String(localized: "Enter"), filled: String(localized: "Filled in; tap Save [Extension Market Views 94348c]"), text: $value, identifier: "plugin-secret-value")
+                    }
                     if let refusal {
                         Text(refusal).font(Theme.Font.label).foregroundStyle(Theme.danger).textSelection(.enabled)
                             .accessibilityIdentifier("plugin-secret-refused")
                     }
                 } footer: {
-                    Text(secret.description?.isEmpty == false ? secret.description! : String(localized: "Stored on the hub and given only to this extension."))
+                    if byReference {
+                        Text("Its provider gives the value whenever this extension needs it. Persona keeps only the reference.")
+                    } else {
+                        Text(secret.description?.isEmpty == false ? secret.description! : String(localized: "Stored on the hub and given only to this extension."))
+                    }
                 }
                 if secret.set {
                     Section {
@@ -937,7 +1033,7 @@ private struct ExtensionSecretSheet: View {
                     Button {
                         Task {
                             busy = true
-                            switch await save(value) {
+                            switch await (byReference ? saveReference(value) : save(value)) {
                             case .saved:
                                 value = ""
                                 refusal = nil
@@ -959,5 +1055,74 @@ private struct ExtensionSecretSheet: View {
         #if os(macOS)
         .macSheet()
         #endif
+    }
+}
+
+/// A secret provider's page (docs/extensions/secret-providers.md): the settings that hold its references, each the
+/// user's standing approval, and its Always rules for hand-offs to Agents, each removable after a confirm (the page's
+/// `removingRule`). Nothing shows for an extension that is no provider.
+private struct SecretProviderSections: View {
+    @Environment(AppModel.self) private var model
+    var users: [ExtensionSecretUser]
+    var rules: [HandoffRule]
+    var editable: Bool
+    var remove: (HandoffRule) -> Void
+
+    var body: some View {
+        if !users.isEmpty {
+            Section {
+                ForEach(users) { u in
+                    VStack(alignment: .leading, spacing: Theme.Space.lines) {
+                        Text(verbatim: label(u)).lineLimit(1)
+                        Text(verbatim: u.reference).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                    }
+                    .accessibilityElement(children: .combine)
+                }
+            } header: {
+                SettingsHeading(String(localized: "Used By"))
+            } footer: {
+                Text("These settings take their values from this provider. Saving a setting lets it keep taking its value.")
+            }
+        }
+        if !rules.isEmpty {
+            Section {
+                ForEach(rules) { r in
+                    VStack(alignment: .leading, spacing: Theme.Space.lines) {
+                        Text("\(r.launcher) on \(machineName(r.machine)) [Handoff Rule]").lineLimit(1)
+                        Text(verbatim: r.reference).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("handoff-rule")
+                    // Row actions as everywhere (DESIGN_SYSTEM 3.4): a swipe and the same in the context menu, and a
+                    // named action for VoiceOver; the page confirms before anything goes.
+                    .swipeActions(edge: .trailing) {
+                        if editable {
+                            Button(role: .destructive) { remove(r) } label: { Text("Remove [Handoff Rule]") }
+                        }
+                    }
+                    .contextMenu {
+                        if editable {
+                            Button(role: .destructive) { remove(r) } label: { Text("Remove [Handoff Rule]") }
+                        }
+                    }
+                    .accessibilityAction(named: Text("Remove [Handoff Rule]")) { if editable { remove(r) } }
+                }
+            } header: {
+                SettingsHeading(String(localized: "Always for Agents"))
+            } footer: {
+                Text("An Agent with this launcher on this computer gets the value without asking, when you start it yourself. Swipe a rule to remove it.")
+            }
+        }
+    }
+
+    private func machineName(_ id: String) -> String { model.machines.first { $0.id == id }?.name ?? id }
+
+    private func label(_ u: ExtensionSecretUser) -> String {
+        if u.kind == "launcher" {
+            let name = u.launcherName ?? u.launcher ?? ""
+            return u.machine.map { String(localized: "\(name) key on \(machineName($0))") } ?? String(localized: "\(name) key")
+        }
+        return "\(u.extensionName ?? u.extension ?? "") › \(u.secretTitle ?? u.secret ?? "")"
     }
 }

@@ -63,6 +63,9 @@ struct AgentTally: Equatable {
 /// a build unlike the hub's with Redeploy. The machine list is live; the metrics refresh every 10 s while the page is
 /// on screen and the app is in front. A tap opens the machine.
 struct MachinesView: View {
+    var settingsScope = false
+    @State private var settingsContext: AssistantSettingsRequestScope?
+    @State private var settingsMachines: [Machine] = []
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var phase
     @Environment(\.tabIsActive) private var inFront
@@ -75,7 +78,7 @@ struct MachinesView: View {
 
     var body: some View {
         // Behind another section (the Mac keeps the page, `MacPageStack`): as they are now, not followed push by push.
-        let machines = model.machines(inFront: inFront)
+        let machines = settingsScope ? settingsMachines : model.machines(inFront: inFront)
         let agents = MachineDetailView.agentsByMachine(model, inFront: inFront)
         let tallies = Dictionary(machines.map { ($0.ref, AgentTally(agents[$0.ref] ?? [])) }, uniquingKeysWith: { a, _ in a })
         let alerts = Dictionary(machines.map { ($0.ref, alertLevel($0)) }, uniquingKeysWith: { a, _ in a })
@@ -141,6 +144,14 @@ struct MachinesView: View {
             }
         }
         .addComputerSheet($adding)
+        .task {
+            if settingsScope {
+                settingsContext = AssistantSettingsRequestScope(model)
+                updateSettingsMachines()
+            }
+        }
+        .onChange(of: model.machines) { if settingsScope { updateSettingsMachines() } }
+        .onChange(of: model.managerRoster) { if settingsScope { updateSettingsMachines() } }
         .refreshable {
             // The requests hit different endpoints and write separate state, so start them together: one slow
             // hub must not keep the others waiting (nor the refresh spinner).
@@ -176,6 +187,12 @@ struct MachinesView: View {
             await UsageWindowsStore.shared.poll(model)
         }
         #endif
+    }
+
+    private func updateSettingsMachines() {
+        guard var context = settingsContext else { return }
+        if context.group == model.hub?.group { context.roster = model.managerRoster }
+        settingsMachines = context.machines(model.machines)
     }
 
     /// The cards, what needs a look first.
@@ -245,8 +262,10 @@ struct MachinesView: View {
     private func loadMetrics() async {
         // Every group at once, and only those whose link is up: a hub out of reach held the others' numbers back by its
         // requests' 30 s every round (#4705). One that is not asked keeps its last numbers.
-        let apis = Dictionary(model.groupIDs.compactMap { g in model.api(g).map { (g, $0) } }, uniquingKeysWith: { a, _ in a })
-        let asked = HubFanOut.asked(model.groupIDs.filter { apis[$0] != nil }) { model.socket($0)?.looksConnected == true }
+        let context = settingsContext ?? AssistantSettingsRequestScope(model)
+        let groups = settingsScope ? [context.group] : model.groupIDs
+        let apis = Dictionary(groups.compactMap { g in model.api(g).map { (g, settingsScope ? $0.manager(context.manager) : $0) } }, uniquingKeysWith: { a, _ in a })
+        let asked = HubFanOut.asked(groups.filter { apis[$0] != nil }) { model.socket($0)?.looksConnected == true }
         await HubFanOut.run(asked, fetch: { g in try await apis[g]!.metricsOverview() }) { g, result in
             switch result {
             case .success(let fresh):
@@ -326,6 +345,11 @@ struct MachineCard: View {
                 // Sized before the stretching part above: second in line, the values (which may shrink to fit) came
                 // out smaller than in a card of their own.
                 .layoutPriority(1)
+            } else if let manager = model.offlineManager(of: machine, group: machine.group) {
+                // Offline with its manager on a hub with several (#1919): the hub's words would blame the computer.
+                Text("Its assistant “\(manager.name)” is offline. It comes back online once the assistant is back.")
+                    .font(Theme.Font.label).foregroundStyle(Color.secondary).lineLimit(3)
+                    .accessibilityIdentifier("machine.managerOffline")
             } else if let lines = AddComputerText.machineLines(machine) {
                 // A known error_code in words (docs/assistant/onboarding.md 5.3), or the hub's error read in plain words with
                 // the raw one under it; the whole of it is on its page (Details).
@@ -605,6 +629,7 @@ struct DeployRow: View {
 
     var body: some View {
         let busy = machine.deploying == true || starting
+        let canDeploy = NodeHealth.canDeploy(machine)
         HStack(spacing: Theme.Space.m) {
             Label(text(busy), systemImage: busy ? Theme.Icon.retry : Theme.Icon.errorFilled)
                 .font(Theme.Font.label)
@@ -618,13 +643,17 @@ struct DeployRow: View {
                 }
             }
             .themedButton()
-            .disabled(busy)
+            .disabled(busy || !canDeploy)
             .accessibilityLabel(busy ? String(localized: "Deploying") : String(localized: "Redeploy"))
         }
     }
 
     private func text(_ busy: Bool) -> String {
-        if busy { return String(localized: "Installing the hub's Persona build on this computer…") }
+        if busy {
+            if machine.deploying == true, let phase = MachineDeployPhase.of(machine) { return phase.message }
+            return String(localized: "Installing the hub's Persona build on this computer…")
+        }
+        if !NodeHealth.canDeploy(machine), let reason = NodeHealth.deployReason(machine) { return reason }
         if let e = machine.deployError, !e.isEmpty { return String(localized: "Last deploy failed: \(e)") }
         return String(localized: "Persona on this computer isn't from the same deploy as the hub")
     }

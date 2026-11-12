@@ -1,12 +1,20 @@
 # Lessons: macOS
 
-Pitfalls, unusual behavior, and the decisions made at the time (formerly in `CLAUDE.md`, “Lessons”; see `docs/lessons/README.md` for the index). Add new lessons to the relevant section, or create one if none fits.
+Pitfalls, unusual behavior, and the decisions made at the time (formerly in `CLAUDE.md`; see `docs/lessons/README.md` for the index). Add new lessons to the relevant section, or create one if none fits.
+
+- A profile-free ad-hoc Mac test app still has its sandbox (#2092). `macSnapshot` can exit normally but report failure
+  when its output points to an external temporary directory. Keep the sandbox, render into that synthetic app's own
+  container temporary directory, then copy the PNG out. Inspect both appearances: an opened audit input under glass
+  was unreadable in the dark offscreen capture; a standard message-box background and explicit primary text restored
+  its legibility without changing the normal chat or removing sandbox protections.
 
 - Separate test execution results from merge policy (2026-11-08, #1124). After preparing profile-free snapshot entitlements, real local Mac tests returned xcodebuild exit zero, but strict xcresult inspection found 437 Passed cases and one Skipped old-hub opt-in case. That is not a green Mac lane. By maintainer decision, Mac temporarily does not block merging: run it independently in parallel with the required iOS/Watch/HTML lane, preserve its red/green result and strict guard, and exclude only the Mac job from the aggregator's dependency graph. Do not use `continue-on-error`, change rulesets or claim skipped integrations passed. Cache and further parallelization work belongs to #1214.
 
 - Native page readiness does not mean remote images have decoded, and top/bottom pairs can omit the middle of a long list (2026-11-08, #1149). The first five-style native matrix captured some thumbnail placeholders after its fixed 600 ms settle. Capture mode now observes completion of the actual renderer's image task (no substitute prefetch or injected image), waits at most 30 seconds for the snapshot's HTTPS avatar/thumbnail URLs, and records the decoded URLs. Only the shared fixture's reserved `.invalid` failure image is excluded. For previously omitted overview/home/list content, capture overlapping 75%-viewport tiles through the actual scroll end, bounded to 64 advances. The manifest validator rejects missing images, scroll gaps and incomplete final positions. Preserve original incomplete images; recapture only the affected groups and actually inspect the supplements before calling visual comparison passed.
 
 - Ad-hoc signing alone does not make a Mac test host runnable (2026-11-08, #1124). The hosted Xcode 26.0.1 test host was signed with `CODE_SIGNING_ALLOWED=YES` and `CODE_SIGN_IDENTITY=-`, yet LaunchServices returned Runningboard error 5 / POSIX 162 before any test started. Its signature still claimed profile-authorized push, time-sensitive notification and shared Keychain permissions. A controlled local executable passed `codesign --verify` but was killed before `main` with each permission individually; `amfid` reported `AppleMobileFileIntegrityError -424`, “The file is adhoc signed but contains restricted entitlements”. Removing exactly those permissions while keeping the sandbox and all other permissions made the probe run. Newer local Xcode can reject the same configuration earlier with “requires a provisioning profile”; do not misreport that as a reproduced hosted launch error. Keep shipping entitlements in the unsigned app/extension build and change only disposable snapshot entitlements for profile-free offline tests. Do not disable signing, sandboxing, hardened-runtime settings, assertions or result guards, and do not infer hosted success from a newer local compiler.
+
+- XcodeGen rewrites generated entitlements from `project.yml` (#2556). Prepare profile-free entitlements in the disposable snapshot **after** the last `xcodegen generate`; regenerating afterward restores restricted permissions and the next ad-hoc build fails with “requires a provisioning profile”. Keep the source checkout's shipping entitlements unchanged.
 
 - An `.overlay(alignment: .top)` whose content is several views puts them in a stack of its own, centered (2026-11-07). The Mac chat's row over the conversation (`macChrome`: goal, ports, workflows, subagents) had a page-filling `Color.clear.hidden()` beside it to hold a sheet, so the row was drawn in the middle of the page, over the conversation; the workflow section made it obvious. Give the overlay one view (here a `VStack` holding the row, with the sheet on it): it is as tall as its content and the overlay's alignment applies. Snapshots and the live window lay out the same; logging `frame(in: .global)` from `onGeometryChange` settles which is wrong without screen capture.
 
@@ -39,7 +47,7 @@ Pitfalls, unusual behavior, and the decisions made at the time (formerly in `CLA
   Write same-name AppKit types for UIKit views under `apple/Mac/`; add only `#if os(iOS)` to iOS files. Like the app, the Mac target defaults to MainActor isolation: Compat pure-data types and `NSImage` helpers used by decoding threads must be `nonisolated`.
 - Do not put a page's split navigation (`SplitNavigation`, the iOS Persona page's `NavigationSplitView`) inside another `NavigationSplitView`'s detail column. The inner detail column lays out as if the outer sidebar is still ahead of it,
   shifting the entire chat right by one sidebar width and clipping the composer (2026-10-31). The Mac shell's six-item sidebar is a column in an HStack.
-- When a Mac is locked, `screencapture` captures only the lock screen. Use `scripts/app/mac_shot.sh` for screenshots (the app renders its own PNG with `cacheDisplay`; `docs/apple/mac.md`, “Build, run, screenshots”).
+- When a Mac is locked, `screencapture` captures only the lock screen. Use `scripts/app/mac_shot.sh` for screenshots (the app renders its own PNG with `cacheDisplay`; `docs/apple/mac.md`, “Build, run, screenshot”).
   It cannot render frosted glass / Liquid Glass; SwiftUI `List` rows must be redrawn separately. In dark mode, List-row text uses light-scheme colors; whether this is a screenshot issue is still unconfirmed.
   Use `-macAppearance` for light/dark mode; `-AppleInterfaceStyle Dark` does not work as a launch argument.
 - Running `Persona.app/Contents/MacOS/Persona` directly accepts launch arguments (`-demo.on YES -tab dev`…); unsigned Debug builds are not sandboxed and may write `/tmp`. With `open`, use `open -n Persona.app --args -demo.on YES …` to pass arguments (without `--args` they are lost, tested 2026-11-02).
@@ -49,7 +57,7 @@ Pitfalls, unusual behavior, and the decisions made at the time (formerly in `CLA
 - Mac's push entitlement is `com.apple.developer.aps-environment`, not iOS's `aps-environment`. Enabling push on the App ID suffices (iPhone and Mac use the same UNIVERSAL App ID). The archive has `development`, changed to `production` on App Store export. Locally built unsigned versions have no entitlements in their signatures, so they receive only local notifications, not remote pushes (2026-11-02, `docs/apple/mac.md`, “Remote push (Mac)”).
 - To share keychain entries with extensions, macOS `SecItem` queries need `kSecUseDataProtectionKeychain: true`. Without it, they use the old file keychain, where `kSecAttrAccessGroup` has no effect: entries belong only to the creating app and extensions cannot read them (iOS always uses the data-protection keychain, so the same code works on the phone). This affected Mac's push private key (`PushCrypto`, #432); the app-only `Keychain.swift` still uses the file keychain and was unchanged.
 - Shared pages using scroll views such as `pin.list` get `UIScrollView` on iOS and `NSScrollView` on Mac (`ChatPin+Mac.swift`). Mac lacks `isTracking`, `isDragging`, and `isDecelerating`; isolate these with `#if os(iOS)` or add equivalents in `Mac/Compat/`.
-  On 2026-11-02, #243 added `pin.list?.isTracking` in `ChatView` and tested only iOS, breaking `PersonaMac` compilation on master (found by the terminal lane). After changing shared pages in `apple/Persona/Views`, also build `PersonaMac` before merging (`docs/apple/mac.md`, “Build, run, screenshots”).
+  On 2026-11-02, #243 added `pin.list?.isTracking` in `ChatView` and tested only iOS, breaking `PersonaMac` compilation on master (found by the terminal lane). After changing shared pages in `apple/Persona/Views`, also build `PersonaMac` before merging (`docs/apple/mac.md`, “Build, run, screenshot”).
 - Without `app.bundle_id` in build configuration (`~/.config/persona/config.json`), `PERSONA_BUNDLE_ID` in `Config.xcconfig` is empty, but xcodebuild still says BUILD SUCCEEDED.
   Info.plist then lacks `CFBundleIdentifier`, and the Mac app crashes on startup at `UNUserNotificationCenter.current()` in `applicationDidFinishLaunching` (SIGABRT, 2026-11-02).
   For a local-only Mac build that will not ship, override with `PERSONA_BUNDLE_ID=<any reverse-domain identifier>` on xcodebuild, without changing configuration.
@@ -308,6 +316,18 @@ Each page has its own `NSHostingView`, with `isHidden` set while inactive. Pitfa
   Real-window screenshots in the default glass style show a color band too, but offscreen screenshots may render both colors alike and cannot establish that no issue exists. Clay reproduces reliably in light and dark mode. Mac `AssistantSidebar` now fills its whole column with the same token,
   without changing row selection/hover or iOS. Check title, group headers, unselected rows, and bottom empty space together, and also inspect a style with a colored page background.
 
+## Markdown table anchors in a flipped chat scroll view (#4235)
+
+MarkdownUI's table-cell bounds preferences can feed a layout loop in the Mac's flipped chat scroll view. Keep
+the Mac table's widths independent of viewport geometry: measure the current content once, cap long columns
+with `TablePlan.scrollCap`, and let the table scroll horizontally. Draw cell backgrounds and borders with ordinary
+overlays rather than MarkdownUI's anchor-based table decorations. Preserve the delimiter row's alignment,
+tabular digits and inline attributes; only the second row is a delimiter, since headers and data may themselves
+contain only dashes or colons. Cache inline parsing alongside measurement and invalidate both when content changes.
+
+This removes the table-specific preference path; it does not establish that every long-chat scrolling hang has
+the same cause. Recheck scrolling, folding and layout separately with synthetic long conversations.
+
 ## Native extension showcase capture (2026-11-08, #1149)
 
 - A native page's inline search row must not duplicate the Mac toolbar's search field. The real shared-list screenshots exposed both after native confirmation/search hosting was introduced. Preserve the inline control on iOS and the existing Mac toolbar control; do not redesign either platform.
@@ -327,3 +347,23 @@ Each page has its own `NSHostingView`, with `isHidden` set while inactive. Pitfa
   light mode; only `NSColor`-backed colors (`secondaryLabelColor`) came out as written. The real window draws glass with vibrancy, which the
   offscreen copy does not have. A shot of a glass note (the resume line over the composer, `FailureNote`…) that looks unreadable is not evidence
   either way: check it in a style with solid surfaces (`-ui.style lark`, the same layout and text styles) or in a real window when the Mac is unlocked.
+
+## Screen Sharing leaves requests for part of the screen unanswered (2026-11-11, #3067)
+
+- RFB lets a client ask for updates of a rectangle only, which looks like a free saving when the view is zoomed in or
+  shows one display. macOS's Screen Sharing (26.6) doesn't honor it: while the bench page played a canvas video,
+  incremental requests for the page's part, the video's own box, a full-width band starting at y 300 or 340, or the
+  screen's left 1850 of 1920 columns got no updates for 5 s, and asked for the page's part the page's switch to its
+  typing scene never arrived either. Requests from the top that cover nearly all of it (1919 × 1080, 1920 × 884)
+  worked. An earlier check only asked for a strip where nothing seemed to change and read the silence as "nothing to send".
+- Asking for part of the screen would freeze a zoomed-in picture, so the app always asks for the whole framebuffer.
+  Before relying on a server behavior, trace the case that must work (the area containing the change):
+  `vncbench trace -trace-area page|stage|x,y,w,h` prints each request and each update's painted box.
+
+## Screen Sharing answers a request sent early later (2026-11-11, #3067)
+
+- Sending the next FramebufferUpdateRequest before the current update is read looks like it saves a round trip.
+  On macOS's Screen Sharing it doesn't: asked for as each update starts, it goes quiet for up to 2 s whenever the
+  request arrives while it is still writing a big update; asked for early only after a single rectangle of at most
+  64 KB, typed text still came back later (p50 374 ms against 215 for stop-and-wait over a 25 ms, 30 Mbit/s link,
+  slower in all 5 interleaved pairs, median +81 ms). The app asks for the next update once one is in (`RFBFrameTests.nextUpdateIsAskedOnceAnUpdateIsIn`).

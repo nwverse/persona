@@ -22,9 +22,9 @@ import (
 // The hub is the communication center only: clients <-> manager, hub <-> hub, connections, pairing / auth, admin,
 // push delivery and relays. Business (the assistant, inbox, todos, usage, boards, extensions, devices' data) is the
 // manager's (internal/assistant, internal/devices, internal/extmgr). These tests pin the hub's surface so new business
-// lands in the manager instead (docs/server/architecture.md "The hub is only the communication center").
+// lands in the manager instead (docs/server/architecture.md "The hub is only a communication center").
 
-const guardDoc = "see docs/server/architecture.md「hub 只做沟通中心」"
+const guardDoc = "see docs/server/architecture.md「The hub is only a communication center」"
 
 const modulePath = "github.com/nwverse/persona/server/"
 
@@ -78,7 +78,7 @@ func readList(t *testing.T, name string) []string {
 // The routes the hub answers itself (registered with a literal pattern in this package, minus the manager's it
 // relays) are exactly testdata/hub_routes_allowed.txt.
 func TestHubAnswersOnlyItsOwnRoutes(t *testing.T) {
-	relayed := slices.Concat(assistantwire.Routes, assistantwire.InboxRoutes, devicewire.Routes, devicewire.MetricsRoutes, extwire.Routes)
+	relayed := slices.Concat(assistantwire.Routes, assistantwire.InboxRoutes, devicewire.Routes, devicewire.ShareRoutes, devicewire.MetricsRoutes, extwire.Routes)
 	own := map[string]string{} // pattern -> file
 	for name, f := range hubSources(t) {
 		ast.Inspect(f, func(n ast.Node) bool {
@@ -127,7 +127,7 @@ func TestHubDoesNotImportTheManager(t *testing.T) {
 	forbidden := []string{ // anywhere in the hub's dependencies
 		"internal/agents", "internal/ai", "internal/assistant", "internal/assistantskills", "internal/connector",
 		"internal/devices", "internal/extmgr", "internal/extension/host", "internal/feishubot", "internal/kb",
-		"internal/lark", "internal/mail", "internal/mcpserver", "internal/node", "internal/office", "internal/wechat",
+		"internal/lark", "internal/mail", "internal/mcpserver", "internal/node", "internal/office",
 		"plugins",
 		"internal/tunnel", // tailcat: the manager dials the computers, with its own key (files_guard_test.go)
 	}

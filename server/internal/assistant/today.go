@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -13,7 +14,7 @@ import (
 )
 
 // The "Today" card at the top of the day in an assistant conversation, and the kinds of tasks the user lets start
-// without asking (docs/assistant/unified-entry.md "The shape of a chat", decision 1).
+// without asking (docs/assistant/unified-entry.md "Chat structure", decision 1).
 
 // todayBody is what the "Today" card shows: built from what the assistant can read already, no model in between.
 type todayBody struct {
@@ -72,10 +73,14 @@ const feedToday = "today" // ref: the user's date; body: todayBody
 
 // ensureToday is the conversation's "Today" card for the user's day: the one already there, or a new one.
 func (s *Service) ensureToday(ctx context.Context, conversation string) (FeedItem, bool, error) {
+	// One caller at a time per conversation: the first chat open of the day often comes from two devices or tabs at
+	// once, and assistant_feed has no unique key to stop both from appending a card. The others then find this one's.
+	s.tasks.todayLocks.acquire(conversation)
+	defer s.tasks.todayLocks.release(conversation)
 	loc := s.location(ctx)
 	now := time.Now().In(loc)
-	day := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
-	date := day.Format("2006-01-02")
+	day := dayStart(now)
+	date := now.Format("2006-01-02")
 	items, err := s.feedItems(ctx, conversation, day.Add(-time.Second))
 	if err != nil {
 		return FeedItem{}, false, err
@@ -133,17 +138,18 @@ func (s *Service) ensureToday(ctx context.Context, conversation string) (FeedIte
 			switch taskState(t, s.taskAgents(ctx, t)) {
 			case "needs_you", "interrupted":
 				body.Waiting = append(body.Waiting, todayTask{ID: t.ID, Title: t.Title})
-			case "working":
+			case "working", "waiting": // waiting on its background work or a wake-up is still under way (#3274)
 				body.Working++
 			}
 		}
 	}
-	if cal := s.snapshotCalendar(ctx, now); cal != nil {
+	live := s.connectorSnapshots(ctx) // one ask for the meetings and the chats
+	if cal := snapshotCalendar(live, now); cal != nil {
 		for _, e := range cal.Events {
 			body.Meetings = append(body.Meetings, todayMeeting{Start: e.Start, End: e.End, Title: e.Title})
 		}
 	}
-	if chats := s.snapshotChats(ctx); chats != nil {
+	if chats := snapshotChats(live); chats != nil {
 		for _, c := range chats.AtMe {
 			body.AtMe = append(body.AtMe, todayChat{Name: c.Name, Unread: c.Unread, Preview: c.Preview})
 		}
@@ -152,6 +158,19 @@ func (s *Service) ensureToday(ctx context.Context, conversation string) (FeedIte
 	body.Failed, body.FailedTotal = s.todayFailures(ctx, conversation, since, loc)
 	it, err := s.appendFeedAt(ctx, conversation, feedToday, date, body, day)
 	return it, true, err
+}
+
+// dayStart is the first instant of now's calendar day in now's location. Where the clocks jump forward at midnight
+// (America/Santiago, America/Havana, America/Asuncion), that midnight does not exist and time.Date answers 23:00 the
+// evening before; the day then begins at the jump, 01:00.
+func dayStart(now time.Time) time.Time {
+	y, m, d := now.Date()
+	t := time.Date(y, m, d, 0, 0, 0, 0, now.Location())
+	if t.Day() != d {
+		_, end := t.ZoneBounds()
+		return end
+	}
+	return t
 }
 
 // todayFailures is what did not go through since since (#4124), newest first: the conversation's tasks whose agent did
@@ -211,32 +230,53 @@ type todayDone struct {
 
 // trustKind is a remembered kind of task (trustKey), as the settings page lists it.
 type trustKind struct {
-	Key      string `json:"key"`
-	Machine  string `json:"machine"`
-	Cwd      string `json:"cwd"`
-	Readonly bool   `json:"readonly"`
+	Key       string `json:"key"`
+	Machine   string `json:"machine"`
+	Cwd       string `json:"cwd"`
+	Readonly  bool   `json:"readonly"`
+	Ambiguous bool   `json:"ambiguous,omitempty"`
 }
 
-func (s *Service) trustList(ctx context.Context) []trustKind {
+func (s *Service) trustList(ctx context.Context) ([]trustKind, error) {
+	have, err := s.trustedKindsErr(ctx)
+	if err != nil {
+		return nil, err
+	}
 	out := []trustKind{}
-	for k := range s.trustedKinds(ctx) {
+	for k := range have {
 		parts := strings.Split(k, "|")
-		if len(parts) != 3 {
+		if len(parts) < 3 {
 			continue
 		}
-		out = append(out, trustKind{Key: k, Machine: parts[0], Cwd: parts[1], Readonly: parts[2] == "read"})
+		if len(parts) == 3 {
+			out = append(out, trustKind{Key: k, Machine: parts[0], Cwd: parts[1], Readonly: parts[2] == "read"})
+			continue
+		}
+		// A legacy machine ID or a directory can contain '|'. Neither side of the separator is recoverable from the
+		// key alone. A path-escaped identifier retains the whole key in older clients' lastPathComponent titles;
+		// it is not a resolved directory.
+		mode := parts[len(parts)-1]
+		if mode == "read" || mode == "edit" {
+			out = append(out, trustKind{Key: k, Cwd: url.PathEscape(k), Readonly: mode == "read", Ambiguous: true})
+		}
 	}
 	slices.SortFunc(out, func(a, b trustKind) int { return strings.Compare(a.Key, b.Key) })
-	return out
+	return out, nil
 }
 
-// forgetTrust stops a kind from starting without asking; false when it was not remembered.
+// forgetTrust stops a kind from starting without asking; false when it was not remembered. A failed read is an
+// error, never an empty list written back.
 func (s *Service) forgetTrust(ctx context.Context, key string) (bool, error) {
 	st := s.store()
 	if st == nil {
 		return false, errors.New("no store")
 	}
-	have := s.trustedKinds(ctx)
+	s.tasks.trustMu.Lock()
+	defer s.tasks.trustMu.Unlock()
+	have, err := s.trustedKindsErr(ctx)
+	if err != nil {
+		return false, err
+	}
 	if !have[key] {
 		return false, nil
 	}
@@ -263,7 +303,12 @@ func (s *Service) todayRoutes() {
 		apierr.WriteJSON(w, map[string]any{"item": it, "new": made})
 	})
 	s.handle("GET /api/v1/task-trust", func(w http.ResponseWriter, r *http.Request) {
-		apierr.WriteJSON(w, map[string]any{"kinds": s.trustList(r.Context())})
+		kinds, err := s.trustList(r.Context())
+		if err != nil {
+			apierr.Write(w, http.StatusServiceUnavailable, err)
+			return
+		}
+		apierr.WriteJSON(w, map[string]any{"kinds": kinds})
 	})
 	s.handle("DELETE /api/v1/task-trust", func(w http.ResponseWriter, r *http.Request) {
 		if !fullRole(r) {

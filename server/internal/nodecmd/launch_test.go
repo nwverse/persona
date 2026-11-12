@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/compat"
 )
 
 // silentNode listens on the node socket under home like a node that is stuck: it takes connections and reads the
@@ -59,6 +61,11 @@ func shortHome(t *testing.T) string {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(home) })
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	current, legacy := compat.EnvNames("PERSONA_HOME")
+	t.Setenv(current, "")
+	t.Setenv(legacy, "")
 	return home
 }
 
@@ -74,7 +81,7 @@ func TestLaunchGivesUpOnANodeThatDoesNotAnswer(t *testing.T) {
 
 	stopped := false
 	start := time.Now()
-	err := runLaunch(func() { stopped = true }, "foo", nil)
+	err := runLaunch(func() { stopped = true }, "", "foo", nil)
 	if took := time.Since(start); took > 5*time.Second {
 		t.Fatalf("launch took %s with a %s limit", took, LaunchNodeWait)
 	}
@@ -104,8 +111,31 @@ func TestLaunchWithoutANodeIsNotATimeout(t *testing.T) {
 	home := shortHome(t)
 	t.Setenv("HOME", home)
 	t.Setenv("PERSONA_HOME", "")
-	err := runLaunch(func() {}, "foo", nil)
+	err := runLaunch(func() {}, "", "foo", nil)
 	if err == nil || strings.Contains(err.Error(), "did not answer") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// `launch --ticket <t> <launcher>` and `launch --ticket <t> -- claude …` (node/secretenv.go); without the flag, as
+// before.
+func TestLaunchTicket(t *testing.T) {
+	for _, c := range []struct {
+		args         []string
+		ticket, rest string
+		bad          bool
+	}{
+		{args: []string{"gw", "--model", "m"}, rest: "gw --model m"},
+		{args: []string{"--ticket", "t1", "gw", "-p"}, ticket: "t1", rest: "gw -p"},
+		{args: []string{"--ticket", "t1", "--", "claude", "--session-id", "x"}, ticket: "t1", rest: "-- claude --session-id x"},
+		{args: []string{"--ticket", "t1"}, bad: true},
+		{args: []string{"--ticket", "", "gw"}, bad: true},
+		{args: []string{"--ticket", "t1", "--"}, bad: true},
+		{args: []string{"--", "claude"}, bad: true},
+	} {
+		ticket, rest, err := launchTicket(c.args)
+		if c.bad != (err != nil) || ticket != c.ticket || strings.Join(rest, " ") != c.rest {
+			t.Errorf("%q: %q %q %v", c.args, ticket, rest, err)
+		}
 	}
 }

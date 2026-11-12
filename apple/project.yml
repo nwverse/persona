@@ -15,7 +15,7 @@ options:
     watchOS: "10.0"
     macOS: "26.0"
     visionOS: "26.0"
-  # The String Catalogs' source language: the Chinese text is the key (docs/apple/ios.md「界面语言」). The Info.plists say
+  # The String Catalogs' source language: the Chinese text is the key (docs/apple/ios.md「Interface language」). The Info.plists say
   # CFBundleDevelopmentRegion en, so a language the app does not have falls back to English (docs/protocol/i18n.md).
   developmentLanguage: en
   createIntermediateGroups: true
@@ -25,13 +25,18 @@ packages:
     from: 2.4.1
   BeautifulUI:
     path: Packages/BeautifulUI
-  # The SSH tunnel to the hub (docs/operations/network.md「经 SSH 隧道连 hub」): the iOS and Mac apps only, not the watch.
+  # The SSH tunnel to the hub (docs/operations/network.md「Connecting to hub through SSH」): the iOS and Mac apps only, not the watch.
   PersonaSSH:
     path: Packages/PersonaSSH
   # The logic that needs no UI, its tests run with `swift test` (#2095, docs/operations/testing.md「PersonaKit」): the iOS, Mac and
   # Vision apps, not the watch or widgets.
   PersonaKit:
     path: Packages/PersonaKit
+  # The composer's glow while a reply is generating (Settings › Appearance › Glow While Replying, `ComposerGlow`): the iOS
+  # app only. Mac and Vision compile the same sources and skip it with `#if os(iOS) && canImport`.
+  MarqueeGlow:
+    url: https://github.com/szupzj18/MarqueeGlow
+    exactVersion: 0.1.0 # pinned: a new release is taken on purpose, not by the next package resolve
 settings:
   base:
     SWIFT_VERSION: "6.0"
@@ -74,6 +79,7 @@ targets:
       - package: BeautifulUI
       - package: PersonaSSH
       - package: PersonaKit
+      - package: MarqueeGlow
     entitlements:
       path: Persona/Resources/Persona.entitlements
       properties:
@@ -90,7 +96,7 @@ targets:
         # there (LiveActivityController.forgetKeychainLook): the extension could never read it on a phone.
         keychain-access-groups: ["$(AppIdentifierPrefix)$(PERSONA_BUNDLE_ID)", "$(AppIdentifierPrefix)$(PERSONA_BUNDLE_ID).push", "$(AppIdentifierPrefix)$(PERSONA_BUNDLE_ID).look"]
         # Shared with the widget extension: the persona the Live Activity draws and a package's pictures, as files
-        # (docs/apple/live-activity.md「形象」). group.<bundle id> unless config.json app.app_group says otherwise; registered in
+        # (docs/apple/live-activity.md「Avatar」). group.<bundle id> unless config.json app.app_group says otherwise; registered in
         # the developer account and put on both App IDs (docs/operations/release.md「App Group」).
         com.apple.security.application-groups: ["$(PERSONA_APP_GROUP)"]
     settings:
@@ -115,7 +121,7 @@ targets:
         # The commit stamp below reads the repository's .git, which the script sandbox does not let it see.
         ENABLE_USER_SCRIPT_SANDBOXING: NO
         # The in-app tunnel core, device builds only and only when config.json app.tunnel_core names one
-        # (scripts/persona_config.py, docs/operations/network.md「经 App 内隧道连 hub」); empty otherwise.
+        # (scripts/persona_config.py, docs/operations/network.md「Connecting to hub through an in-app tunnel」); empty otherwise.
         "SWIFT_INCLUDE_PATHS[sdk=iphoneos*]": "$(inherited) $(PERSONA_TUNNEL_INCLUDE)"
         "OTHER_LDFLAGS[sdk=iphoneos*]": "$(inherited) $(PERSONA_TUNNEL_LDFLAGS)"
     # Which commit a build is (Settings › About › Build): stamped into the built Info.plist on every build, before signing;
@@ -150,7 +156,10 @@ targets:
         # iPad: every orientation (Split View and Stage Manager need it).
         UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown,
                                                 UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
-        UIBackgroundModes: [remote-notification, audio]
+        # processing: all-day recording's catch-up (docs/assistant/day-recap.md), a BGProcessingTask that transcribes and
+        # uploads what the watch sent while the phone sat in the background, run while charging (RecordingDayCatchUp).
+        UIBackgroundModes: [remote-notification, audio, processing]
+        BGTaskSchedulerPermittedIdentifiers: [persona.recording.day-catchup]
         # CarPlay (docs/apple/carplay.md): the voice conversation scene. Only CarPlay is declared; the phone window stays SwiftUI's own.
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
@@ -174,17 +183,24 @@ targets:
         # The hub is usually reached over plain HTTP inside a private network (docs/operations/config.md).
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
-        NSCameraUsageDescription: "Persona uses the camera to scan the pairing QR code printed by `personad hub pair`, for example when you first connect to your hub."
+        NSCameraUsageDescription: "Persona uses the camera to scan the pairing QR code printed by `personad hub pair`, and to take a photo you add to a chat or a meeting, for example a whiteboard during a meeting."
         NSFaceIDUsageDescription: "Persona asks for Face ID before it types a Mac's remembered password on that Mac's lock screen, when you tap One-Tap Unlock on the Mac's page."
         NSContactsUsageDescription: "Persona lets Claude look up your contacts when you ask, for example to find a colleague's phone number or email before drafting a message."
-        NSCalendarsFullAccessUsageDescription: "Persona lets Claude read and add calendar events when you ask, for example to check whether you are free on Friday afternoon or to book a meeting."
+        # The iPhone system integrations (docs/apple/phone-tools.md, #2278 / #2284 / #2285).
+        NSAlarmKitUsageDescription: "Persona sets alarms and timers only when you ask and approve it on your iPhone, for example to wake you at 6:40 or to start a 25-minute focus timer."
+        NSAppleMusicUsageDescription: "Persona plays Apple Music when you ask, for example a playlist for focused work, and can pause or skip what the Music app is playing."
+        NSHomeKitUsageDescription: "Persona controls your Home accessories and scenes only when you ask and approve each change on your iPhone, for example to turn off the living room light."
+        # Home's tools are offered only in a build signed with the HomeKit capability: YES there, with the
+        # com.apple.developer.homekit entitlement (docs/apple/phone-tools.md "Home"). Empty: no Home tools.
+        PersonaHomeKit: $(PERSONA_HOMEKIT)
+        NSCalendarsFullAccessUsageDescription: "Persona lets Claude read and add calendar events when you ask, for example to check whether you are free on Friday afternoon or to book a meeting. It also names a meeting recording after the event happening now."
         NSCalendarsWriteOnlyAccessUsageDescription: "Persona adds events to your calendar when you ask Claude to, for example to save a meeting it scheduled for you."
         NSRemindersFullAccessUsageDescription: "Persona lets Claude read and create reminders when you ask, for example to add “review the PR” to your Today list."
         NSLocationWhenInUseUsageDescription: "Persona shares your current location with Claude only when you ask, for example to find what time it is where you are or which office you are in."
-        NSHealthShareUsageDescription: "Persona lets Claude read health summaries when you ask, for example how many steps you walked this week or how long you slept last night."
+        NSHealthShareUsageDescription: "Persona lets Claude read health summaries when you ask, for example how many steps you walked this week or how long you slept last night. With rolling recording on, Persona also checks heart rate, HRV, steps, workouts and the moods you log, on your iPhone only, to keep the minutes around them."
         # Asked when Claude saves a health sample (phone_health_write_sample); App Store processing also wants it with the HealthKit entitlement.
         NSHealthUpdateUsageDescription: "Persona saves health data only after you approve it on your iPhone, one entry at a time, for example a weight or last night's sleep you told Claude about."
-        NSPhotoLibraryUsageDescription: "Persona lets Claude look at recent photos when you ask, for example to read a screenshot you took or describe a whiteboard photo."
+        NSPhotoLibraryUsageDescription: "Persona shows your recent photos under the + button so you can attach them to a message, and lets Claude look at recent photos when you ask, for example to read a screenshot you took."
         NSPhotoLibraryAddUsageDescription: "Persona saves images Claude produces to your library when you ask, for example a chart it generated."
         NSMicrophoneUsageDescription: "Persona records audio when you start a recording or dictate a message, for example a meeting or a spoken note. Recordings are transcribed on your iPhone and only the text is saved to the knowledge base on your hub; the audio stays on your iPhone. In a voice conversation you start — on the phone or in CarPlay — your voice is streamed through your hub to the realtime speech service it is set up with, only while the conversation is open."
         NSSpeechRecognitionUsageDescription: "Persona turns your voice into text when you hold the mic button, for example to dictate a reply to Claude."
@@ -299,6 +315,7 @@ targets:
     dependencies:
       - target: PersonaVisionShare
       - target: PersonaVisionNotify
+      - target: PersonaVisionWidgets
       - package: MarkdownUI
       - package: BeautifulUI
       - package: PersonaSSH
@@ -310,6 +327,7 @@ targets:
         # Time-sensitive pushes break through Focus on Apple Vision Pro too (the iPhone's #1572, the Mac's #1655); the
         # bundle id is the iPhone's, so asc_signing.py's USERNOTIFICATIONS_TIMESENSITIVE covers it.
         com.apple.developer.usernotifications.time-sensitive: true
+        com.apple.security.application-groups: ["$(PERSONA_APP_GROUP)"]
         keychain-access-groups: ["$(AppIdentifierPrefix)$(PERSONA_BUNDLE_ID)", "$(AppIdentifierPrefix)$(PERSONA_BUNDLE_ID).push"]
     settings:
       base:
@@ -347,6 +365,7 @@ targets:
         PersonaGettingStartedURL: $(PERSONA_GETTING_STARTED_URL)
         PersonaPushKeychainGroup: $(DEVELOPMENT_TEAM).$(PERSONA_BUNDLE_ID).push
         LSApplicationCategoryType: public.app-category.productivity
+        PersonaAppGroup: $(PERSONA_APP_GROUP)
         UIApplicationSupportsIndirectInputEvents: true
         # Several windows: one per conversation opened on its own (VisionScenes).
         UIApplicationSceneManifest:
@@ -390,6 +409,7 @@ targets:
       - path: Shared/ExtensionSystemLink.swift
       - path: Shared/ExtensionSurfaceStore.swift
       - path: Shared/ExtensionSurfaceClient.swift
+      - path: Shared/CloudflareAccess.swift
       - path: Shared/RequestClientMetadata.swift
       - path: Shared/ExtensionSurfaceEntities.swift
       - path: Shared/ExtensionSurfaceView.swift
@@ -397,7 +417,7 @@ targets:
       - path: Shared/Design/ExtensionSurfaceTokens.swift
       # The persona's face (the app's PersonaAvatar draws it too), on the activity's leading side.
       - path: Shared/Design/PersonaFace.swift
-      # The app's String Catalog and interface language (docs/apple/ios.md「界面语言」).
+      # The app's String Catalog and interface language (docs/apple/ios.md「Interface language」).
       - path: Shared/Localization
     entitlements:
       path: PersonaWidgets/PersonaWidgets.entitlements
@@ -464,9 +484,9 @@ targets:
     sources:
       - path: PersonaShare
         excludes: ["*.plist", "*.entitlements"]
-      # The app's String Catalog and interface language (docs/apple/ios.md「界面语言」).
-      - path: Shared/Localization
-      - path: Shared/NativeStateMigration.swift
+      # The app's hub client, models and design system, as the watch has them (HubStore, APIClient, Theme), with the
+      # String Catalog and interface language (docs/apple/ios.md「Interface language」).
+      - path: Shared
     entitlements:
       path: PersonaShare/PersonaShare.entitlements
       properties:
@@ -478,7 +498,7 @@ targets:
         PRODUCT_MODULE_NAME: PersonaShare
         PRODUCT_NAME: PersonaShare
         INFOPLIST_FILE: PersonaShare/Info.plist
-        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) NATIVE_MIGRATION_STORAGE_ONLY"
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) NATIVE_MIGRATION_STORAGE_ONLY SHARE_EXTENSION"
         TARGETED_DEVICE_FAMILY: "1,2"
         CODE_SIGN_STYLE: Automatic
         GENERATE_INFOPLIST_FILE: NO
@@ -492,8 +512,7 @@ targets:
     sources:
       - path: PersonaShare
         excludes: ["*.plist", "*.entitlements"]
-      - path: Shared/Localization
-      - path: Shared/NativeStateMigration.swift
+      - path: Shared
     entitlements:
       path: PersonaShare/PersonaVisionShare.entitlements
       properties:
@@ -504,7 +523,7 @@ targets:
         PRODUCT_MODULE_NAME: PersonaShare
         PRODUCT_NAME: PersonaShare
         INFOPLIST_FILE: PersonaShare/Info.plist
-        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) NATIVE_MIGRATION_STORAGE_ONLY"
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) NATIVE_MIGRATION_STORAGE_ONLY SHARE_EXTENSION"
         CODE_SIGN_STYLE: Automatic
         GENERATE_INFOPLIST_FILE: NO
         SKIP_INSTALL: YES
@@ -577,6 +596,9 @@ targets:
       - path: Shared
       # What the watch face's Milk Frog draws, for the debug preview of it (-openWatchItem complication).
       - path: PersonaWatchWidgets/PetComplicationView.swift
+      # The All-Day Recording complication's view, for its debug preview (-openWatchItem allday-complication). Its
+      # snapshot (Shared/Recording/AllDaySnapshot.swift) comes with Shared.
+      - path: PersonaWatchWidgets/AllDayComplicationView.swift
     dependencies:
       - target: PersonaWatchWidgets
     entitlements:
@@ -597,7 +619,8 @@ targets:
           - CFBundleURLSchemes: [persona]
         WKCompanionAppBundleIdentifier: $(PERSONA_BUNDLE_ID)
         UIBackgroundModes: [audio]
-        NSMicrophoneUsageDescription: "Persona records audio you start on Apple Watch, for example a meeting or a spoken note, then transfers it to your iPhone for on-device transcription; only the text is saved to the knowledge base on your hub."
+        # Also PersonaWatch/InfoPlist.xcstrings (en identical, zh-Hans, ja).
+        NSMicrophoneUsageDescription: "Persona records audio you start on Apple Watch, for example a meeting, a spoken note, or your whole day with All-Day Recording. The audio goes to your iPhone and is transcribed there; only the text is saved to the knowledge base on your hub, which can write a recap of your day from it."
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
     settings:
@@ -610,6 +633,52 @@ targets:
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         CODE_SIGN_STYLE: Automatic
         GENERATE_INFOPLIST_FILE: NO
+  PersonaVisionWidgets:
+    type: app-extension
+    platform: visionOS
+    sources:
+      - path: PersonaVisionWidgets
+      - path: Shared/Generated/ExtensionWire.swift
+      - path: Shared/JSONValue.swift
+      - path: Shared/NativeStateMigration.swift
+      - path: Shared/HubNaming.swift
+      - path: Shared/ExtensionUIContext.swift
+      - path: Shared/ExtensionSystemAPI.swift
+      - path: Shared/ExtensionSystemLink.swift
+      - path: Shared/ExtensionSurfaceStore.swift
+      - path: Shared/ExtensionSurfaceClient.swift
+      - path: Shared/CloudflareAccess.swift
+      - path: Shared/RequestClientMetadata.swift
+      - path: Shared/ExtensionSurfaceEntities.swift
+      - path: Shared/ExtensionSurfaceView.swift
+      - path: Shared/ExtensionSystemWidget.swift
+      - path: Shared/Design/ExtensionSurfaceTokens.swift
+      - path: Shared/Localization
+    entitlements:
+      path: PersonaVisionWidgets/PersonaVisionWidgets.entitlements
+      properties:
+        com.apple.security.application-groups: ["$(PERSONA_APP_GROUP)"]
+    info:
+      path: PersonaVisionWidgets/Info.plist
+      properties:
+        CFBundleName: PersonaWidgets
+        CFBundleDisplayName: Persona
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleDevelopmentRegion: en
+        PersonaAppGroup: $(PERSONA_APP_GROUP)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(PERSONA_BUNDLE_ID).liveactivity
+        PRODUCT_MODULE_NAME: PersonaWidgets
+        PRODUCT_NAME: PersonaWidgets
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: NO
+        SKIP_INSTALL: YES
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) WIDGET_EXTENSION"
   PersonaWatchWidgets:
     type: app-extension
     platform: watchOS
@@ -624,6 +693,7 @@ targets:
       - path: Shared/ExtensionSystemLink.swift
       - path: Shared/ExtensionSurfaceStore.swift
       - path: Shared/ExtensionSurfaceClient.swift
+      - path: Shared/CloudflareAccess.swift
       - path: Shared/RequestClientMetadata.swift
       - path: Shared/ExtensionSurfaceEntities.swift
       - path: Shared/ExtensionSurfaceView.swift
@@ -631,6 +701,8 @@ targets:
       - path: Shared/Design/ExtensionSurfaceTokens.swift
       # The Milk Frog on the watch face (docs/apple/persona.md): what the watch app wrote into the watch App Group.
       - path: Shared/WatchPetSnapshot.swift
+      # The All-Day Recording complication: the state the watch app wrote into the watch App Group.
+      - path: Shared/Recording/AllDaySnapshot.swift
       - path: Shared/Design/WatchFaceTokens.swift
       - path: Shared/Localization
     entitlements:
@@ -681,19 +753,26 @@ targets:
     sources:
       - path: PersonaMacTests
       # Shared logic the Mac runs as is: the same tests, run against the Mac build (docs/apple/mac.md「验收清单」).
+      - path: PersonaTests/ExtensionArtworkTests.swift
       - path: PersonaTests/HeadingMenuTests.swift
       - path: PersonaTests/CalmAttentionTests.swift
       - path: PersonaTests/IntentsTests.swift
       - path: PersonaTests/KnowledgeTests.swift
       - path: PersonaTests/MachineMetricsTests.swift
       - path: PersonaTests/MachineConcernTests.swift
+      - path: PersonaTests/PortForwarderTests.swift
       - path: PersonaTests/AddComputerModelTests.swift
       - path: PersonaTests/NotificationActionsTests.swift
       - path: PersonaTests/NotifyPrefsTests.swift
+      - path: PersonaTests/SentSettingsNavigationTests.swift
+      - path: PersonaTests/SentModelTests.swift
+      - path: PersonaTests/ConnectorRowTests.swift
       - path: PersonaTests/NativeStateMigrationTests.swift
       - path: PersonaTests/PushCryptoTests.swift
       - path: PersonaTests/UsageWindowsTests.swift
       - path: PersonaTests/SessionListTests.swift
+      - path: PersonaTests/AssistantTrayActivityTests.swift
+      - path: PersonaTests/AssistantEntriesFixtureTests.swift
       - path: PersonaTests/AgentListFallbackTests.swift
       - path: PersonaTests/AgentRepoTreeTests.swift
       - path: PersonaTests/AgentListOrderTests.swift
@@ -709,7 +788,21 @@ targets:
       - path: PersonaTests/PersonaSelectionTests.swift
       - path: PersonaTests/ExtensionStreamTreeTests.swift
       - path: PersonaTests/ExtensionPageStreamTests.swift
+      - path: PersonaTests/ExtensionSettingsLifecycleTests.swift
+      - path: PersonaTests/ExtensionUpgradeTests.swift
       - path: PersonaTests/DelegateTests.swift
+      - path: PersonaTests/GitReadFailureTests.swift
+      - path: PersonaTests/ChatSupervisionLinesTests.swift
+      - path: PersonaTests/SubagentResultTests.swift
+      - path: PersonaTests/SubagentDeliveryTests.swift
+      - path: PersonaTests/SupervisionTests.swift
+      - path: PersonaTests/BriefCardTests.swift
+      - path: PersonaTests/TodoDecisionCompletionTests.swift
+      - path: PersonaTests/TaskSheetExpandTests.swift
+      - path: PersonaTests/DispatchedTasksTests.swift
+      - path: PersonaTests/MessageCardStateTests.swift
+      - path: PersonaTests/MessageDraftActionsTests.swift
+      - path: PersonaTests/DraftFeedCursorTests.swift
       - path: PersonaTests/FakeHub.swift
     dependencies:
       - target: PersonaMac
@@ -726,6 +819,11 @@ targets:
     platform: macOS
     sources:
       - path: PersonaUITests/ExtensionStreamUITests.swift
+      - path: PersonaUITests/SupervisionRoundUITests.swift
+      - path: PersonaUITests/SentNavigationUITests.swift
+      - path: PersonaUITests/ReportEvidenceUITests.swift
+      - path: PersonaUITests/AssistantTrayActivityUITests.swift
+      - path: PersonaUITests/MessageCardStateUITests.swift
       - path: PersonaUITests/UITestStyle.swift
     dependencies:
       - target: PersonaMac
@@ -761,7 +859,7 @@ schemes:
       config: Debug
     test:
       targets: [PersonaTests, PersonaUITests]
-      # The tests' expectations and the pixel / layout baselines are the Chinese UI (docs/apple/ios.md「界面语言」).
+      # The tests' expectations and the pixel / layout baselines are the Chinese UI (docs/apple/ios.md「Interface language」).
       language: zh-Hans
       region: CN
   PersonaWatch:

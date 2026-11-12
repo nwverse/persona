@@ -31,6 +31,8 @@ import java.io.File
 @Config(sdk = [35], qualifiers = "en-w400dp-h1200dp-xhdpi")
 class ModelManagerScopeShotsTest {
     @get:Rule val rule = createComposeRule()
+    @org.junit.Before fun start() = AssistantManagerChoice.choose("hub", null, "assistant")
+    @org.junit.After fun reset() = AssistantManagerChoice.reset()
 
     @Test fun bothProviderEntryPointsKeepTheVisibleModelOwner() {
         var style by mutableStateOf(AppStyle.Glass)
@@ -64,8 +66,9 @@ class ModelManagerScopeShotsTest {
             }
         }
         rule.waitForIdle()
-        rule.onAllNodesWithText("Work").onLast().performClick()
-        rule.onNodeWithContentDescription("New model provider").performClick()
+        rule.runOnIdle { AssistantManagerChoice.pick("work") } // the sidebar's switcher picks Work
+        rule.onNodeWithText("Advanced").performClick()
+        rule.onNodeWithText("Add provider").performClick()
         rule.waitForIdle()
         assertEquals(listOf("work"), owners)
         rule.onNodeWithText("Work").assertExists()
@@ -100,7 +103,11 @@ class ModelManagerScopeShotsTest {
         val api = object : ModelConfiguration {
             private suspend fun record(operation: String) { calls += operation to currentCoroutineContext()[RequestManager]?.id }
             override suspend fun catalog(): ModelCatalog { record("catalog"); return ModelCatalog(listOf(purpose)) }
-            override suspend fun purpose(id: String): ModelPurposeDetail { record("purpose"); return ModelPurposeDetail(purpose) }
+            override suspend fun purpose(id: String): ModelPurposeDetail {
+                // The catalog page's own question (#5084), asked for whichever assistant it shows: this hub has no such use.
+                if (id == BackgroundSupervisor.PURPOSE) throw ModelPurposeNotFound(id)
+                record("purpose"); return ModelPurposeDetail(purpose)
+            }
             override suspend fun save(purpose: ModelPurpose, draft: ModelConfigurationDraft): ModelPurposeSave {
                 record("save"); return ModelPurposeSave.Saved(ModelPurposeDetail(purpose))
             }
@@ -128,7 +135,7 @@ class ModelManagerScopeShotsTest {
         for (look in AppStyle.entries) for (night in listOf(false, true)) {
             style = look; dark = night
             Snapshot.sendApplyNotifications(); rule.waitForIdle()
-            rule.onAllNodesWithText("Work").onLast().performClick()
+            rule.runOnIdle { AssistantManagerChoice.pick("work") } // the sidebar's switcher picks Work
             rule.waitForIdle()
             capture("catalog")
             rule.onNodeWithText("Agents").performClick()
@@ -139,7 +146,7 @@ class ModelManagerScopeShotsTest {
             rule.waitForIdle()
             assertEquals("save" to "work", calls.last { it.first == "save" })
         }
-        assertTrue(calls.contains("catalog" to "assistant"))
+        assertTrue(calls.contains("catalog" to null)) // the default's names none
         assertTrue(calls.contains("catalog" to "work"))
         assertTrue(calls.filter { it.first == "purpose" || it.first == "save" }.all { it.second == "work" })
     }

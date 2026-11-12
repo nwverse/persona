@@ -162,7 +162,7 @@ type readinessStart struct {
 
 // claudeSeen is a machine's Claude Code as its node's self-check found it.
 type claudeSeen struct {
-	known   bool   // the node answered with a claude-version check
+	known   bool   // the node answered with a claude-version check that says what it found (not "unanswered")
 	version string // "" when it could not read one
 	at      time.Time
 }
@@ -418,13 +418,14 @@ func (s *Service) readinessQuick(ctx context.Context, within time.Duration) *Rea
 	return last
 }
 
-// readinessBlocks: the step keeps the main conversation from answering (mode setup). A rate limit passes by itself.
+// readinessBlocks: the step keeps the main conversation from answering (mode setup). A rate limit passes by itself;
+// a session refusal fallback says nothing about the configured model a new conversation will use.
 func readinessBlocks(st ReadinessStep) bool {
 	switch st.State {
 	case StepTodo:
 		return true
 	case StepProblem:
-		return st.Code != proto.TurnErrorRateLimited
+		return st.Code != proto.TurnErrorRateLimited && st.Code != proto.TurnErrorModelFallbackUnavailable
 	}
 	return false
 }
@@ -470,9 +471,7 @@ func (s *Service) readinessMain(ctx context.Context, machine, main string) (prot
 			if text, kind := turnError(sess); text != "" && sess.TurnError == "" {
 				sess.TurnError, sess.TurnErrorKind = text, kind
 			}
-			if sess.TurnError != "" && sess.TurnErrorCode == "" {
-				sess.TurnErrorCode = turnErrorCode(sess.TurnError)
-			}
+			sess.TurnErrorCode = sessionTurnErrorCode(sess)
 			return sess, true
 		}
 	}
@@ -498,7 +497,7 @@ func (s *Service) readinessModel(ctx context.Context, lang i18n.Lang, d Device, 
 	if hasMain && (main.Launcher == "" || main.Launcher == launcher) {
 		switch {
 		case main.TurnError != "":
-			ev = append(ev, readinessEvidence{at: main.UpdatedAt, text: main.TurnError})
+			ev = append(ev, readinessEvidence{at: main.UpdatedAt, text: main.TurnError, code: sessionTurnErrorCode(main)})
 		case answeredWell(main):
 			ev = append(ev, readinessEvidence{at: main.UpdatedAt, ok: true})
 		}
@@ -562,11 +561,26 @@ func (s *Service) readinessModel(ctx context.Context, lang i18n.Lang, d Device, 
 				action, alt = "edit_provider", "test_assistant"
 			case proto.TurnErrorModelRoute:
 				alt = "test_assistant"
+			case proto.TurnErrorModelFallbackUnavailable:
+				action = "" // recovery is a new conversation or the TUI's /model, neither is a model-settings action
 			}
 			st := s.readinessStep(lang, StepModel, StepProblem, code, d.Name, launcher, action)
 			st.Machine = d.ID
 			if alt != "" {
 				st.AltActions = []ReadinessAction{{ID: alt}}
+			}
+			if code == proto.TurnErrorNotLoggedIn {
+				// The machine may already have other launchers (a signed-in Codex, a gateway alias from ~/.zshrc):
+				// offer switching the main chat to one before steering to an API key (#4355). Their sign-in state is
+				// not probed — the list is the offer.
+				if n := s.otherLaunchers(ctx, d.ID, launcher); n > 0 {
+					st.AltActions = append(st.AltActions, ReadinessAction{ID: "main_chat_model"})
+					name := d.Name
+					if name == "" {
+						name = i18n.T(lang, "assistant-readiness.this_computer")
+					}
+					st.Detail = i18n.T(lang, "assistant-readiness.model_not_logged_in_switch_detail", i18n.Args{"machine": name})
+				}
 			}
 			return st, false
 		}
@@ -659,7 +673,11 @@ func (s *Service) readinessFirst(ctx context.Context, lang i18n.Lang, d Device, 
 		return ReadinessStep{ID: StepFirstMessage, State: StepOK}
 	}
 	if hasMain && main.TurnErrorCode != "" {
-		return s.readinessStep(lang, StepFirstMessage, StepProblem, main.TurnErrorCode, d.Name, "", "test_assistant")
+		action := "test_assistant"
+		if main.TurnErrorCode == proto.TurnErrorModelFallbackUnavailable {
+			action = ""
+		}
+		return s.readinessStep(lang, StepFirstMessage, StepProblem, main.TurnErrorCode, d.Name, "", action)
 	}
 	return s.readinessStep(lang, StepFirstMessage, StepTodo, codeNeverTried, d.Name, "", "test_assistant")
 }
@@ -761,14 +779,35 @@ const (
 	launcherGone
 )
 
+// otherLaunchers counts machine's launchers other than launcher: what the main chat could switch to. Any doubt
+// (the machine is slow to answer, the list failed) is zero: the offer is made only from a list that is there.
+func (s *Service) otherLaunchers(ctx context.Context, machine, launcher string) int {
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	list, err := s.machineLaunchers(cctx, machine)
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, l := range list {
+		if l.Name != launcher {
+			n++
+		}
+	}
+	return n
+}
+
 // readinessLauncher looks launcher up among what machine can start: the agent it starts ("" Claude Code; a runtime's
 // assistant launcher counts as not Claude Code) and whether it is there.
 func (s *Service) readinessLauncher(ctx context.Context, machine, launcher string) (string, int) {
 	// A managed launcher runs Claude Code through personad launch, and so does a direct API provider speaking Messages
 	// (its gateway, #2455); other direct API protocols cannot start Claude.
-	if slices.ContainsFunc(s.storedLaunchers(ctx), func(l storedLauncher) bool {
+	if i := slices.IndexFunc(s.storedLaunchers(ctx), func(l storedLauncher) bool {
 		return l.Name == launcher && !(l.Kind == "api" && !messagesAPI(l.API))
-	}) {
+	}); i >= 0 {
+		if s.scopeReason(s.storedLaunchers(ctx)[i], machine) != "" {
+			return "", launcherGone // out of this computer's device scope (models_launchers_scope.go): it does not run here
+		}
 		return "", launcherThere
 	}
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -779,6 +818,12 @@ func (s *Service) readinessLauncher(ctx context.Context, machine, launcher strin
 	}
 	i := slices.IndexFunc(list, func(l proto.Launcher) bool { return l.Name == launcher })
 	if i < 0 {
+		if _, known := s.storedLaunchersKnown(ctx); !known {
+			// machineLaunchers adds the managed providers from that same read: with the read failed the list only has
+			// what the node found in its shell, and a missing name says nothing about a configured launcher. Refusing
+			// the message as launcher_missing here would tell the user their provider was deleted when it was not.
+			return "", launcherUnknownHere
+		}
 		return "", launcherGone
 	}
 	if list[i].Assistant {
@@ -833,6 +878,7 @@ func (s *Service) askClaudeVersion(machine string, done chan struct{}) {
 		Checks []struct {
 			Name   string `json:"name"`
 			Status string `json:"status"`
+			State  string `json:"state"`
 			Detail string `json:"detail"`
 		} `json:"checks"`
 	}
@@ -842,7 +888,10 @@ func (s *Service) askClaudeVersion(machine string, done chan struct{}) {
 	} else {
 		for _, c := range rep.Checks {
 			if c.Name == "claude-version" {
-				seen.known = true
+				// "unanswered" (node.ClaudeVersionUnanswered): the shell found claude but no version came this time
+				// (a busy machine's 10 s ran out). That says nothing about whether it is installed: unknown, asked
+				// again after readinessClaudeRetry, never claude_missing.
+				seen.known = c.State != "unanswered"
 				if m := doctorVersion.FindStringSubmatch(c.Detail); m != nil {
 					seen.version = m[1]
 				}

@@ -99,12 +99,6 @@ export function searchSent(candidates: SentEntry[], query: string, max: number =
 
 // ── ↑ / ↓ recall ─────────────────────────────────────────────────────────────
 
-/** Where the arrow keys are: `index` into the history (oldest first) of the message in the box, -1 when the box holds
- *  something else. */
-export interface Recall {
-  index: number;
-}
-
 /** Whether ↑ / ↓ walk the history: the box is empty or still shows the message it recalled. A multi-line message
  *  keeps the arrows for its own lines until the caret is on the first (↑) or the last (↓) one. */
 export function canRecall(o: { draft: string; shown: string | null; dir: "up" | "down"; firstLine: boolean; lastLine: boolean }): boolean {
@@ -120,6 +114,14 @@ export function recallStep(length: number, index: number, dir: "up" | "down"): n
   if (dir === "up") return index < 0 ? length - 1 : Math.max(0, index - 1);
   if (index < 0) return -1;
   return index + 1 >= length ? -1 : index + 1;
+}
+
+/** Where the walk stands while the box shows a message being edited, untouched (#4503). If that message was sent from
+ *  here, it stands on that entry (usually the newest). Otherwise it stands just past the newest. Either way the next ↑
+ *  goes to an older message than the one being edited, and ↓ goes back to an empty box. */
+export function recallIndexOf(list: SentEntry[], text: string): number {
+  for (let i = list.length - 1; i >= 0; i--) if (list[i].text === text) return i;
+  return list.length;
 }
 
 // ── keys ─────────────────────────────────────────────────────────────────────

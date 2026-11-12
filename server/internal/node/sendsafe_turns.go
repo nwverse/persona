@@ -65,6 +65,12 @@ func (n *Node) inputTurn(ctx context.Context, id string) (unlock func(), err err
 		leave()
 		return nil, err
 	}
+	// A launcher switch under way, maybe on the last connection's Node (switch_share.go): after it, on the agent it
+	// started, or on the one it brought back.
+	if err := n.switches().wait(ctx, id); err != nil {
+		leave()
+		return nil, err
+	}
 	unlock = n.typing.lock(id)
 	leave()
 	return unlock, nil
@@ -96,6 +102,24 @@ func (t *typingLocks) lock(id string) func() {
 	t.mu.Unlock()
 	l.Lock()
 	return l.Unlock
+}
+
+// tryLock is lock without waiting: ok is false when another holds it.
+func (t *typingLocks) tryLock(id string) (unlock func(), ok bool) {
+	t.mu.Lock()
+	if t.locks == nil {
+		t.locks = map[string]*sync.Mutex{}
+	}
+	l := t.locks[id]
+	if l == nil {
+		l = &sync.Mutex{}
+		t.locks[id] = l
+	}
+	t.mu.Unlock()
+	if !l.TryLock() {
+		return nil, false
+	}
+	return l.Unlock, true
 }
 
 func (t *typingLocks) typed(pane, text string) {

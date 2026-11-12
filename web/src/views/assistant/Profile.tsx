@@ -3,6 +3,8 @@
 // groups: "On its own", "About you", "Runs on") and what it can reach.
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../../lib/api";
+import { conversationPage } from "../../lib/conversation-page";
+import { shownManager } from "../../lib/manager-choice";
 import { navigate } from "../../lib/router";
 import { dayLabel, hm, untilLabel, upcoming, type Task } from "../../lib/routines";
 import { useStore } from "../../lib/store";
@@ -13,6 +15,7 @@ import { Group, Pill } from "../settings/SettingsParts";
 import { PersonaAvatar, PersonaPicker, usePersona } from "./Persona";
 import { t } from "../../i18n";
 import { stateName } from "../../lib/state-labels";
+import { useScopedMachines } from "../../lib/current-assistant";
 
 const REACH: { text: string; icon: IconName }[] = [
   { text: t("assistant-profile.reach_agents"), icon: "layers" },
@@ -26,6 +29,8 @@ export function Profile({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const persona = usePersona();
   const assistant = useStore((s) => s.assistant);
   const machines = useStore((s) => s.machines);
+  // what it can work on: the current assistant's computers (docs/assistant/managers.md "The current assistant")
+  const own = useScopedMachines();
   const working = useStore((s) => (s.assistant?.conversations ?? []).some((c) => c.state === "working"));
   const [tasks, setTasks] = useState<Task[] | null>(null);
   const nowMs = useNow(30_000);
@@ -39,14 +44,14 @@ export function Profile({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   // "" (no computer yet) is not a name: "Runs on" then says there is none rather than leaving a gap
   const machineName = machine?.name || assistant?.machine_id || (assistant ? "" : t("assistant-profile.hub_machine"));
   const next = tasks ? upcoming(tasks, 3) : [];
-  const reach = [{ text: machines.length ? t("assistant-profile.reach_machines", { machines: machines.map((m) => m.name).join(t("assistant-profile.list_separator")) }) : t("assistant-profile.reach_hub_computers"), icon: "machine" as IconName }, ...REACH];
+  const reach = [{ text: own.length ? t("assistant-profile.reach_machines", { machines: own.map((m) => m.name).join(t("assistant-profile.list_separator")) }) : t("assistant-profile.reach_hub_computers"), icon: "machine" as IconName }, ...REACH];
 
   return (
     <div className="flex h-full flex-col">
       <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3 sm:px-4">
         <IconButton icon="sidebar" label={t("assistant-profile.sidebar")} onClick={onToggleSidebar} className="lg:hidden" />
         <h1 className="min-w-0 flex-1 truncate text-[14px] font-semibold text-ink">{persona.name}</h1>
-        {assistant?.main && <IconButton icon="chat" label={t("assistant-profile.main_chat")} onClick={() => navigate({ name: "persona", sid: assistant.main })} />}
+        {assistant?.main && <IconButton icon="chat" label={t("assistant-profile.main_chat")} onClick={() => navigate(conversationPage(assistant.main!, assistant.machine_id, shownManager()))} />}
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-[760px] px-5 py-8 sm:px-8" style={{ animation: `fade-up 320ms ${EASE} both` }}>

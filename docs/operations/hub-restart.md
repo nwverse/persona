@@ -5,9 +5,9 @@ Requirement: **when the server restarts, clients notice nothing at all**. Issue 
 
 Goal: in a normal deployment, no client shows a disconnect notice, no message is lost, and no running chat is interrupted.
 
-## Current state (verified 2026-11-04, before the change, master `2fe55f92`)
+## Before the change
 
-Code locations refer to the current files and functions (checked 2026-11-06; after `2fe55f92`, machine connections (spawning nodes, disconnect handling) moved from hub/machine.go and hub/machine_conn.go to `devices/`; `hub/machine.go` still exists, and `onEvent`, which forwards node events, stayed there); the behavior described is still that before the change.
+Verified on 2026-11-04 against master `2fe55f92`, before the work below. Code locations refer to the current files and functions (checked 2026-11-06; after `2fe55f92`, machine connections (spawning nodes, disconnect handling) moved from hub/machine.go and hub/machine_conn.go to `devices/`; `hub/machine.go` still exists, and `onEvent`, which forwards node events, stayed there); the behavior described is still that before the change.
 
 ### What a restart does
 
@@ -93,7 +93,7 @@ The manager's and the node's run entries (`managercli.Assistant`, `manager run`,
 `hub-systemd.sh` writes both units: the first time (or when the address changes) it stops the service once to hand the port to the socket (only this once is there a ~1 s gap); after that it always just runs `restart personad`.
 `TimeoutStopSec=20` (headroom beyond the 8 s shutdown budget).
 
-### Blue-green switching: the hub's edge (`internal/hubedge`, 2026-11-06)
+### Blue-green switching: the hub's edge (`internal/hubedge`)
 
 Modeled on an account-pool relay gateway's approach: a resident edge process holds the port, with two slots behind it. The trigger was a problem reproduced on Linux on 2026-11-05: when self-update `syscall.Exec`'d the new binary in place, the listening socket passed by systemd was lost.
 `LISTEN_FDS` was cleared at startup, and the fd duplicated by `net.FileListener` had close-on-exec set, so the new process had to `bind` itself while the port was still held by `personad.socket`; it exited with `address already in use`,
@@ -159,7 +159,7 @@ Previously clients received a string of "machine offline" and "interaction ended
 
 ### Machines and sessions (`devices/warm.go`; on the hub side `startDevices` in `hub/devices_reports.go`)
 
-Since 2026-11-04 computers are connected by the manager ([machines.md](../server/machines.md) ("Who connects computers")): the manager is a child process of the hub and also receives SIGTERM when the hub stops.
+Since 2026-11-04 computers are connected by the manager ([machines.md](../server/machines.md) ("Who connects to computers")): the manager is a child process of the hub and also receives SIGTERM when the hub stops.
 It first hands the `NodeInfo` and session lists of the machines online at this moment to its next process (its own settings `hub.warm_machines`, plus each machine's engines `engines`), then disconnects them (without reporting them offline).
 When the hub shuts down it waits for the manager to exit (as it used to wait for node connections, within the shutdown budget).
 
@@ -191,11 +191,25 @@ The assistant's claude no longer belongs to a single hub connection:
   deltas from the 1–2 seconds without a hub cannot be sent, so after takeover one complete current text is sent instead (a delta is "the full text so far" anyway).
 - Monitor and background commands are child processes of claude, and they keep running as long as claude does, so they **continue automatically after a hub restart** and wake the chat as usual when they finish.
   `recoverAssistantTasks` only sends "just restarted" when the chat process is really gone (for example, the node itself restarted).
-- **The node updating itself** (a deployment swapped the binary): `deploy.sh` now uses `node-launchd.sh restart-idle`, which sends SIGHUP to the node's main process only
-  (`systemctl --user kill -s HUP --kill-who=main`; on the Mac `launchctl kill SIGHUP`). The node waits until no chat is answering or waiting on background tasks,
-  stops idle chat processes, and `exec`s the new binary (same PID, invisible to systemd / launchd). Idle chats `--resume` on their next message. Old resident nodes do not understand SIGHUP; they simply exit and are restarted, like the old `restart`.
+- **The node updating itself** (a deployment swapped the binary): `deploy.sh` uses `node-launchd.sh restart-idle`, which sends SIGHUP to the node's main process only
+  (`systemctl --user kill -s HUP --kill-who=main`; on the Mac `launchctl kill SIGHUP`). The node checks the replacement, then waits until no chat or admitted RPC is busy.
+  It reaps idle chat processes **while Attach still serves**, including the SIGKILL fallback. Immediately before exec it announces `node.restarting` and fences
+  the manager's old requests with `state.load {restart_barrier:true}`: the manager stops sending new calls and acknowledges only after its pending replies arrived.
+  Calls refused before execution with `node_restarting`, or suspended before writing, wait and retry; an ambiguous `rpc.ErrDropped` is never replayed.
+  The attach listener and run lock are handed through exec as close-on-exec descriptors made inheritable only under the fork lock. The replacement consumes and seals
+  the PID-bound descriptor ticket, validates the socket/lock identity, and accepts the same socket's queued connections. Existing connections still reconnect in this
+  stage; it is not the later slot prepare/commit handover. The PID stays the same, and idle chats `--resume` on their next message. Older resident nodes without this
+  handover still follow their previous restart behavior. `node-update-check` advertises `resident_handover: true` only where descriptor handover is supported.
+  A running resident refuses a replacement without it before teardown; uploaded legacy candidates are rejected before installation or watchdog startup.
+  Startup rollback can still exec a legacy image, but first releases its listener and run lock because no connection has been served yet.
+  If an announcement or its cancellation cannot be confirmed, the resident closes that physical peer to force a reconnect instead of leaving a late event
+  able to suspend a still-live manager. A reply already published before closure is returned as its known result, not an ambiguous dropped write.
 
 Machines without a resident node (where the hub starts `node --stdio` directly over ssh and it handles everything itself) behave as before: a hub restart still interrupts chats, and background tasks still get "just restarted".
+  The node stops them itself: when its connection ends, `Serve` returns only once every assistant process (and the warm spare) has exited, those ignoring SIGTERM killed after 5 s (`stopAtConnectionEnd`, `stopAndWait`).
+  On the hub machine the manager ends that node by closing its stdin, not with a kill, and kills it only after 10 s (`localNodeStopGrace` in `server/internal/devices/machine.go`).
+  Before #4259 a blue-green switch SIGKILLed it: its Claude processes, each leading its own process group, went on beside the ones the next node resumed for the same conversations,
+  and that node refused them the assistant's tools. `scripts/deploy/hub-systemd.sh` says so after a switch on a machine with no resident node (no `node-attach.sock`).
 
 ### Clients tolerate short disconnects
 
@@ -213,11 +227,16 @@ The shared client approach (done on web and Android; for iOS / Mac see the issue
 ### Nodes and extensions
 
 - node: between the local resident node and the hub there is only a relay; after a hub restart it reconnects within 0.2 s and takes over the chats; ssh computers still reconnect in 2–8 s, hidden from clients by the warm start.
-- A node that disconnects and comes right back (a resident node `exec`ing a new binary while idle takes about 2 s, the relay process is replaced): the running hub keeps showing that machine unchanged for **5 s**
-  (`reconnectGrace`, `detach` in the manager's `devices/conn.go`); if it comes back nothing is reported, and only if it is still gone after 5 s is it shown offline as before. persona-link computers are the exception: a dropped link means the computer left, so they go offline at once.
-- While a resident node is `exec`ing, its socket file still exists but nobody listens: `Relay` in `node --stdio` waits up to 8 s on "connection refused" (`dialResident`)
-  instead of taking the connection itself, which would land the assistant's chats in the hub's cgroup again. Without a socket file (no resident node installed) it handles things itself immediately, as before.
-  Node-side state (session state, background tasks) is in Postgres and loaded with `state.load` after connecting; the hub re-subscribes the subscribed sessions with `session.watch` (`since_seq`).
+- A node that disconnects and comes right back: the running hub keeps showing that machine unchanged for **5 s**
+  (`reconnectGrace`, `detach` in the manager's `devices/conn.go`), without changing that budget. Scheduling uses the same availability rule and calls wait for the
+  reconnect. A planned `node.restarting` announcement avoids failure backoff on the old path; interruptions of the initial engine/node.info handshake retry within
+  its existing 40-second budget instead of producing an immediate offline report. Only an explicit pre-execution `node_restarting` refusal or a call suspended
+  before writing can retry; writes whose result is unknown cannot. A node still absent after the existing grace is genuinely offline. Persona Link computers
+  retain their immediate-offline behavior when their link leaves.
+- A resident reload passes the attach listener and run lock through exec, so the same socket stays listening and reconnects queue in its backlog.
+  Idle-process shutdown happens before that handover, not during its transport gap. Relays also retain the previous bounded refusal/missing-socket retry for older
+  resident nodes; without a socket file (no resident node installed) they serve the connection themselves, as before.
+  Node-side state (session state, background tasks) remains in Postgres and loads with `state.load`; subscriptions resume through `session.watch` (`since_seq`).
 - Interactions (questions, approvals): resumable ones still wait for the hook to reconnect and reclaim them (`resumeGrace`, 3 minutes); shutdown no longer ends them first, broadcasts, then restores them.
 - Extensions, connector programs: still child processes of the hub, restarted with it (login state lives in each extension's own directory, and the new hub launches them as soon as it is up). Requests to an extension fail until it is up, as before;
   the extension status clients see is updated by the new hub's `plugin_ui` pushes and the connection snapshot. Moving extensions out of the hub's cgroup would mean handling old and new hubs connected to the same extension at once; not done this time.
@@ -288,6 +307,13 @@ Socket activation caveats:
 
 ## Verification
 
+- Isolated resident reloads (Linux, Docker, a built test binary):
+  `python3 scripts/test/node_reload_lab.py --binary /tmp/personad-test --iterations 10 --max-gap 1`.
+  The driver creates its own home, hub, resident node and disposable Postgres; it accepts no existing hub address or credentials.
+  It continuously checks the machine's online state and a real node RPC through the hub, confirms a new relay after each SIGHUP,
+  and checks that the attach socket inode stays the same. `--max-gap` bounds observed RPC waiting, including safe retries;
+  signal-to-readiness is reported separately because preflight and idle-process drain happen while the old node still answers.
+  Neither measurement claims that the active connection survives exec. Raw logs stay private; the last line is `PASS` / `FAIL` / `TIMEOUT`.
 - Blue-green switching:
   - `internal/hubedge` tests (Linux / macOS): the test binary plays the slot itself. Covers source addresses, zero failed requests during switching, concurrency across 6 consecutive switches, a new version that cannot start,
     rollback after failed takeover, a slot requesting its own switch, rejection of a wrong build number, rollback of an unconfirmed update, and restart after a crash.
@@ -305,18 +331,8 @@ Socket activation caveats:
     the background command's result came back, and the chat received no "just restarted" message.
   - The last line is `PASS` / `FAIL` / `TIMEOUT` and the numbers.
 
-## Measured results (2026-11-04, this dev machine's hub, after deploying #1617)
-
-Deployment: switched the hub to `personad.socket`, installed the resident node (`personad-node`); that initial switch stopped it for about 1 s. Afterwards:
-
-| Scenario | Result |
-| --- | --- |
-| `hub_restart_seamless.py --restarts 3` (client only) | PASS: 247 health probes, 0 failures (slowest 0.95 s, waiting in the backlog); all 3 reconnects among 4 connections were `resumed` on the same stream, 54 events with no loss or duplicates; client-visible disconnects 0.73–1.01 s (web / Android grace is 8 s, 30 s during restart, so the UI stays unchanged); 1.3–1.6 s per restart including the command |
-| `--restarts 3 --converse --count 300` (a streaming side chat plus a `sleep 75` background command) | PASS: 827 health probes, 0 failures; all 3 reconnects resumed, 121 events with no loss or duplicates, longest disconnect 0.81 s; all 300 answer lines present, the background command finished and reported back, no "just restarted" message in the chat; the node logged "took over 1 running conversations" three times (the same claude process) |
-| Hub logs | Each restart: `event log: continuing stream … at N`, `warm start: 3 machines shown as before`, local node reconnects in 0.2–1 s, the two Macs over ssh in 1–3 s |
-| Resident node idle restart (`node-launchd.sh restart-idle`) | PID unchanged (`exec`), the local node disconnected from the hub for about 2 s, which then broadcast an offline event; the 5 s grace and `dialResident` above were added afterwards (follow-up PR for #1574) |
-
-Before-change comparison (journal of the deployment at 19:30 on 2026-11-04 on the same machine): the port closed for about 1.3 s and connections were refused; the local node and its assistant processes were killed; the two Macs reconnected after 2.4 s and 8 s, showing offline in between.
+After socket activation and the resident node were deployed (#1617), repeated restarts with a streaming side chat passed on a real hub: no failed health probe, every reconnect resumed on the same stream with no lost or duplicated event, and each disconnect lasted about a second, well inside the clients' grace period.
+Before the change a restart refused connections for about 1.3 s and killed the local node's assistant processes. The numbers are in `docs/archive/operations/hub-restart-records.md`.
 
 ## iOS / Mac (#1634)
 

@@ -87,7 +87,7 @@ extension APIClient {
     }
     func deleteMailAccount(_ id: String) async throws { try await delete("/api/v1/mail/accounts/\(id)") }
 
-    /// Outlook's "Sign in with Microsoft" (docs/extensions/mail.md「Outlook 接入方式」): the client ID the user registered in
+    /// Outlook's "Sign in with Microsoft" (docs/extensions/mail.md「Outlook: Sign In with Microsoft」): the client ID the user registered in
     /// Microsoft Entra (kept on the hub) and the redirect URI to register with it.
     struct MicrosoftConfig: Codable, Equatable {
         var configured: Bool
@@ -431,6 +431,7 @@ struct ComposeView: View {
 }
 
 struct MailAccountsView: View {
+    @State private var capturedAPI: APIClient?
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var accounts: [MailAccount] = []
@@ -479,20 +480,25 @@ struct MailAccountsView: View {
             .themedPage()
             .detailTitle(String(localized: "Mail [Mail Views 730752]"))
             .navigationBarTitleDisplayMode(.inline)
-            .sheet(isPresented: $adding, onDismiss: { Task { await load() } }) { AddMailAccountView() }
+            .sheet(isPresented: $adding, onDismiss: { Task { await load() } }) { AddMailAccountView(settingsAPI: capturedAPI ?? model.api?.currentAssistantSettings()) }
             .task { await load() }
             #if DEBUG
             .onAppear { if UserDefaults.standard.bool(forKey: "addMail") { adding = true } }
             #endif
     }
 
-    private func load() async { accounts = (try? await model.api?.mailAccounts()) ?? [] }
+    private func load() async {
+        if capturedAPI == nil { capturedAPI = model.api?.currentAssistantSettings() }
+        guard let api = capturedAPI else { return }
+        accounts = (try? await api.mailAccounts()) ?? []
+    }
 
     /// Deletes the accounts, says why when one could not be (the row comes back with the reload), then reloads.
     private func delete(_ ids: [String]) async {
+        guard let api = capturedAPI else { return }
         for id in ids {
             do {
-                try await model.api?.deleteMailAccount(id)
+                try await api.deleteMailAccount(id)
             } catch {
                 model.show(error)
             }
@@ -567,6 +573,8 @@ struct AccountSignInLabel: View {
 }
 
 struct AddMailAccountView: View {
+    var settingsAPI: APIClient? = nil
+    @State private var capturedAPI: APIClient?
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @Environment(\.webAuthenticationSession) private var webAuth
@@ -594,7 +602,7 @@ struct AddMailAccountView: View {
                         TextField(String(localized: "Gmail address"), text: $form.email).keyboardType(.emailAddress).textInputAutocapitalization(.never).autocorrectionDisabled()
                         SecretField(String(localized: "App password"), filled: String(localized: "Filled in. Tap Connect."), text: $form.password, identifier: "mail.password")
                     } footer: {
-                        Text("Once google.client_id is in the manager's manager.json and the hub restarts, “Sign In with Google” appears here (a one-time setup). Until then, add the account with an app password: turn on 2-Step Verification for the Google account, then create a 16-character password under Google Account › Security › App passwords and enter it here (not your Google password).")
+                        Text("Once google.client_id is in the assistant's manager.json and the hub restarts, “Sign In with Google” appears here (a one-time setup). Until then, add the account with an app password: turn on 2-Step Verification for the Google account, then create a 16-character password under Google Account › Security › App passwords and enter it here (not your Google password).")
                     }
                 } else if form.kind == .gmail {
                     Section {
@@ -653,7 +661,7 @@ struct AddMailAccountView: View {
             .navigationTitle("Add Mail Account")
             .navigationBarTitleDisplayMode(.inline)
             // Ask before offering "Sign in with Google" (#2442); an older hub or a failed read keeps the button.
-            .task { form.gmailAppPassword = (try? await model.api?.googleConfig())?.configured == false }
+            .task { form.gmailAppPassword = (try? await requestAPI()?.googleConfig())?.configured == false }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 if form.request != nil {
@@ -666,9 +674,14 @@ struct AddMailAccountView: View {
         }
     }
 
+    private func requestAPI() -> APIClient? {
+        if capturedAPI == nil { capturedAPI = settingsAPI ?? model.api?.currentAssistantSettings() }
+        return capturedAPI
+    }
+
     /// Gmail: Google's consent page in the system browser, then the hub swaps the code for a refresh token.
     private func signInWithGoogle() async {
-        guard let api = model.api else { return }
+        guard let api = requestAPI() else { return }
         saving = true
         defer { saving = false }
         error = nil
@@ -690,7 +703,7 @@ struct AddMailAccountView: View {
     }
 
     private func save() async {
-        guard let api = model.api, let req = form.request else { return }
+        guard let api = requestAPI(), let req = form.request else { return }
         saving = true
         defer { saving = false }
         do {

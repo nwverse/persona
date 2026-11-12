@@ -1,6 +1,7 @@
-"""The voice mock for iOS's voice mode (voice_mock.py, docs/assistant/voice.md 6.8): /info at protocol 2, the extension in both
-lists, and the protocol 2 script on the socket (ready → captions → run → link → ask → refused → done; interrupt →
-clear; resend), while a protocol 1 start still gets mock_hub.py's old script."""
+"""The voice mock for the iOS and web voice modes (voice_mock.py, docs/assistant/voice.md 6.8, 6.11): /info at protocol 2, the
+extension in both lists, and the protocol 2 script on the socket (ready → captions → run → link → ask → refused → done;
+interrupt → clear; resend; the conversation turning working; the PCM frames it got), while a protocol 1 start still gets
+mock_hub.py's old script."""
 import base64
 import json
 import os
@@ -12,8 +13,8 @@ import sys
 import tempfile
 import time
 import unittest
-from urllib.error import URLError
-from urllib.request import urlopen
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 HUB = Path(__file__).with_name("mock_hub.py")
 TARGET = {"machine_id": "macbook", "session_id": "a1f3c2d4-0000-4000-8000-000000000001"}
@@ -37,10 +38,15 @@ class Socket:
         self.status = int(head.split(b" ")[1])
 
     def send(self, obj):
-        data = json.dumps(obj).encode()
+        self._send(0x81, json.dumps(obj).encode())
+
+    def send_bytes(self, data):
+        self._send(0x82, data)
+
+    def _send(self, first, data):
         mask = os.urandom(4)
         n = len(data)
-        hdr = bytes([0x81]) + (bytes([0x80 | n]) if n < 126 else bytes([0x80 | 126]) + struct.pack(">H", n))
+        hdr = bytes([first]) + (bytes([0x80 | n]) if n < 126 else bytes([0x80 | 126]) + struct.pack(">H", n))
         self.sock.sendall(hdr + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(data)))
 
     def _read(self, n):
@@ -86,7 +92,8 @@ class VoiceMockTests(unittest.TestCase):
             sock.bind(("127.0.0.1", 0))
             cls.port = sock.getsockname()[1]
         cls.log = tempfile.TemporaryFile()
-        env = {"PATH": os.environ.get("PATH", ""), "PORT": str(cls.port), "MOCK_VOICE": "1", "MOCK_VOICE_PACE": "0.1"}
+        env = {"PATH": os.environ.get("PATH", ""), "PORT": str(cls.port), "MOCK_VOICE": "1", "MOCK_VOICE_PACE": "0.1",
+               "MOCK_VOICE_VOICES_DELAY": "0.3", "MOCK_VOICE_SPEAK_SLOW": "0.3"}
         cls.process = subprocess.Popen([sys.executable, "-I", str(HUB)], env=env, stdout=cls.log, stderr=cls.log)
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
@@ -125,6 +132,98 @@ class VoiceMockTests(unittest.TestCase):
         self.assertEqual(self.get("/api/v1/plugins")["plugins"][0]["status"], "running")
         purpose = self.get("/api/v1/model-config/purposes/plugin.voice")["purpose"]
         self.assertEqual(purpose["id"], "plugin.voice")
+
+    def status(self, path):
+        """The status and JSON body of a GET that may fail."""
+        try:
+            with urlopen("http://127.0.0.1:%d%s" % (self.port, path), timeout=3) as r:
+                return r.status, json.load(r)
+        except HTTPError as e:
+            return e.code, json.load(e)
+
+    def test_voices_fail_on_demand(self):
+        # #2411: the pickers' failed, retry and stale states.
+        base = "/api/v1/extensions/voice/voices?model=voice-deep"
+        self.assertEqual(self.status(base + "&mock=fail")[0], 502)
+        code, body = self.status(base + "&mock=stale")
+        self.assertEqual((code, body["stale"], body["default"]), (200, True, "soft"))
+        self.assertEqual(self.status(base + "&mock=none"), (200, {"voices": []}))
+        began = time.monotonic()
+        self.assertEqual(self.status(base + "&mock=slowfail")[0], 502)
+        self.assertGreaterEqual(time.monotonic() - began, 0.3, "slowfail answers late")
+        try:
+            self.assertEqual(self.get("/mock/voice2?voices=fail")["voices_mode"], "fail")
+            self.assertEqual(self.status(base)[0], 502)
+            self.get("/mock/voice2?voices=flaky")
+            self.assertEqual([self.status(base)[0] for _ in range(3)], [502, 502, 200])
+        finally:
+            self.assertEqual(self.get("/mock/voice2?voices=ok")["voices_mode"], "ok")
+        code, body = self.status(base)
+        self.assertEqual((code, "stale" in body), (200, False))
+        self.assertGreaterEqual(self.get("/mock/voice2")["voices"], 7)
+        # The extension's settings page.
+        page = self.get("/api/v1/extensions/voice/-/")
+        self.assertEqual((page["id"], page["kind"], page["status"]), ("voice", "voice", "running"))
+        self.assertTrue(page["form"]["fields"])
+
+    def speak(self, prefix, obj):
+        """POST …/voice/speak: the status, headers and body."""
+        req = Request("http://127.0.0.1:%d%s/voice/speak" % (self.port, prefix), data=json.dumps(obj).encode(), method="POST",
+                      headers={"Content-Type": "application/json", "Authorization": "Bearer mock"})
+        try:
+            with urlopen(req, timeout=10) as r:
+                return r.status, r.headers, r.read()
+        except HTTPError as e:
+            return e.code, e.headers, e.read()
+
+    def test_speak(self):
+        # #5004: a text read aloud, as the built-in extension answers it: the tone at 24 kHz, streamed at about real time.
+        text = {"text": "回归测试由 Bo 负责，周五前完成。", "model": "voice-deep", "voice": "soft", "lang": "zh-CN"}
+        try:
+            state = self.get("/mock/voice2?speak=ok&speak_seconds=0.5")
+            self.assertEqual((state["speak_mode"], state["speak_seconds"]), ("ok", 0.5))
+            self.assertIn("speak", self.get("/api/v1/extensions/voice/info")["features"])
+            began = time.monotonic()
+            code, headers, body = self.speak("/api/v1/extensions", text)
+            took = time.monotonic() - began
+            self.assertEqual((code, headers["Content-Type"], headers["X-Persona-Audio-Rate"]), (200, "audio/pcm", "24000"))
+            self.assertEqual(len(body), 12000 * 2)
+            self.assertTrue(any(body), "a tone, not silence")
+            self.assertGreaterEqual(took, 0.35, "about real time, 100 ms at a time")
+            self.assertEqual(self.get("/mock/voice2")["speaks"][-1], text)
+
+            # The first piece comes long before the last.
+            self.get("/mock/voice2?speak_seconds=1.5")
+            req = Request("http://127.0.0.1:%d/api/v1/plugins/voice/speak" % self.port, data=b'{"text":"hi"}', method="POST",
+                          headers={"Content-Type": "application/json"})
+            began = time.monotonic()
+            with urlopen(req, timeout=10) as r:
+                self.assertEqual(len(r.read(4800)), 4800)
+                first = time.monotonic() - began
+                rest = r.read()
+                self.assertEqual(4800 + len(rest), 36000 * 2)
+            self.assertLess(first, 0.6, "the first 100 ms came as it was made")
+            self.assertGreaterEqual(time.monotonic() - began, 1.2)
+
+            self.get("/mock/voice2?speak=fail")
+            code, _, body = self.speak("/api/v1/extensions", {"text": "hi"})
+            self.assertEqual((code, json.loads(body)["code"]), (502, "upstream_failed"))
+            self.get("/mock/voice2?speak=slow&speak_seconds=0.1")
+            began = time.monotonic()
+            code, _, body = self.speak("/api/v1/extensions", {"text": "hi"})
+            self.assertEqual((code, len(body)), (200, 4800))
+            self.assertGreaterEqual(time.monotonic() - began, 0.3, "slow answers late")
+            self.assertEqual(self.speak("/api/v1/extensions", {"text": " "})[0], 400)
+
+            # An extension from before it: no speak in the features, and no such route.
+            self.get("/mock/voice2?speak=off")
+            self.assertNotIn("speak", self.get("/api/v1/extensions/voice/info")["features"])
+            self.assertEqual(self.speak("/api/v1/extensions", {"text": "hi"})[0], 404)
+            self.assertEqual(self.get("/mock/voice2")["speak_mode"], "off")
+        finally:
+            self.get("/mock/voice2?speak=ok&speak_seconds=3")
+        self.assertEqual([s["text"] for s in self.get("/mock/voice2")["speaks"]][-5:],
+                         [text["text"], "hi", "hi", "hi", " "], "every request, newest last (none while off)")
 
     def test_protocol_2_script(self):
         ws = Socket(self.port, "/api/v1/extensions/voice/ws")
@@ -171,6 +270,36 @@ class VoiceMockTests(unittest.TestCase):
             ws.until(lambda f: f["type"] == "transcript" and f["text"] == "顺便看下 lint", timeout=5)
         finally:
             ws.close()
+
+    def test_conversation_turns_working_and_frames_are_counted(self):
+        idle = {"machine_id": "macbook", "session_id": "a1f3c2d4-0000-4000-8000-000000000006"}
+        state = lambda: next(r["state"] for r in self.get("/api/v1/sessions")["sessions"]
+                             if r["machine_id"] == idle["machine_id"] and r["session_id"] == idle["session_id"])
+        self.assertEqual(state(), "idle")
+        ws = Socket(self.port, "/api/v1/extensions/voice/ws")
+        try:
+            ws.send({"type": "start", "protocol": 2, "target": idle})
+            ws.until(lambda f: f["type"] == "ready")
+            before = self.get("/mock/voice2")
+            for _ in range(3):
+                ws.send_bytes(bytes(640))  # 20 ms of 16 kHz PCM16, all zero (muted)
+            ws.send_bytes(b"\x01\x00" * 320)  # one that is not
+            ws.until(lambda f: f["type"] == "run" and f["state"] == "working")
+            # the hub's own row changed, so its sessions list (and push) says so
+            self.assertEqual(state(), "working")
+            log = self.get("/mock/voice2")
+            self.assertEqual(log["audio"] - before["audio"], 4)
+            self.assertEqual(log["audio_bytes"] - before["audio_bytes"], 2560)
+            self.assertGreaterEqual(log["audio_sizes"].get("640", 0), 4)
+            self.assertEqual(log["audio_silent"] - before["audio_silent"], 3)
+            self.assertEqual(log["pace"], 0.1)  # web/e2e/voice.mjs checks the uplink's rate over 40 s at pace 1
+        finally:
+            ws.close()
+        # closed before its script was done: the conversation goes back to idle for the next call
+        deadline = time.monotonic() + 5
+        while state() != "idle" and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertEqual(state(), "idle")
 
     def test_protocol_1_start_gets_the_old_script(self):
         ws = Socket(self.port, "/api/v1/plugins/voice/ws")

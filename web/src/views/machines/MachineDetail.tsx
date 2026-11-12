@@ -1,7 +1,9 @@
 // Machine details (/machines/<id>, docs/server/machines.md "App", iOS MachineDetailView): one page, the most used on top — how the
 // computer is (online, system, which hub when there are several), its agents by herdr space (a row opens the chat),
 // its values now, CPU / memory / network / load over 1, 6 or 24 hours (hover a chart to read a moment, all follow) and
-// each core now (Linux), the system, the launchers. Its engine (which one the agents come from) follows the agents. A Mac the hub's extension cua is on for gets "Computer control" after that, and "Browser" (ego lite, it
+// each core now (Linux), the system, the launchers. Its engine (which one the agents come from) follows the agents. A Mac the hub's extension cua is on for gets "Computer control" after that, and "Browser" (ego lite) while ego is on.
+// A Mac whose live screen can be shown (showsScreen) gets "View screen" in the top bar, the page's one way to it: it stays in view
+// while the page scrolls, and does not wait for Cua Driver, which the screen does not use.
 import { MoveToManager } from "../ManagerParts";
 import { offlineManagerOf, useRoster } from "../../lib/managers";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -35,12 +37,15 @@ import {
 import { hubLabel, routeText } from "../../lib/mesh";
 import { machineDeployment } from "../../lib/machine-deploy";
 import { classifyConnection } from "../../lib/node-health";
+import { screenPath, showsScreen } from "../../lib/computer";
 import { href, onLinkClick } from "../../lib/router";
 import { getState, refresh, useStore } from "../../lib/store";
-import type { Session } from "../../lib/types";
+import { foldRows } from "../../lib/folded-rows";
+import type { Launcher, Session } from "../../lib/types";
 import { Button, cx, EASE, IconButton, Loading, toast } from "../../ui/atoms";
 import { AgentRow } from "./AgentRow";
 import { Icon } from "../../ui/icons";
+import { ProviderName } from "../../ui/ProviderName";
 import { MetricChart, type ChartSeries } from "./MetricChart";
 import { MachineDeploy } from "./MachineDeploy";
 import { BrowserSection } from "./BrowserSection";
@@ -98,12 +103,7 @@ function RenameMachine({ m, onDone }: { m: DetailMachine; onDone: () => void }) 
   );
 }
 
-interface MachineLauncher {
-  name: string;
-  model?: string;
-  agent?: string;
-  agent_type?: string;
-}
+type MachineLauncher = Pick<Launcher, "name" | "display_name" | "model" | "agent" | "agent_type">;
 
 const NO_SESSIONS: Session[] = [];
 
@@ -115,7 +115,8 @@ function initialRange(): MetricRange {
 export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleSidebar: () => void }) {
   const machines = useStore((s) => s.machines) as DetailMachine[];
   const loaded = useStore((s) => s.loaded);
-  const sessions = useStore((s) => s.sessions[mid] ?? NO_SESSIONS);
+  // a child session folds into its parent (#5120): never an agent of the computer of its own
+  const sessions = useStore((s) => foldRows(s.sessions[mid] ?? NO_SESSIONS));
   const m = machines.find((x) => x.id === mid);
   const online = m?.online ?? false;
   const expectedDisconnect = m ? machineDeployment(m).expectedDisconnect : false;
@@ -123,7 +124,6 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
   const [range, setRangeState] = useState<MetricRange>(initialRange);
   const [data, setData] = useState<{ metrics: DetailMetrics; range: MetricRange; at: number } | null>(null);
   const [failure, setFailure] = useState("");
-  const [hover, setHover] = useState<number | null>(null);
   const [launchers, setLaunchers] = useState<MachineLauncher[] | null>(null);
   const [launcherError, setLauncherError] = useState("");
   const [reconnecting, setReconnecting] = useState(false);
@@ -132,7 +132,6 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
 
   const setRange = (r: MetricRange) => {
     setRangeState(r);
-    setHover(null);
     history.replaceState(history.state, "", r === "1h" ? location.pathname : `${location.pathname}?range=${r}`);
   };
 
@@ -242,7 +241,21 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
   }
 
   return (
-    <Page mid={mid} title={m.name} onToggleSidebar={onToggleSidebar} right={<span className="hidden whitespace-nowrap text-[11.5px] text-ink-3 sm:inline">{range === "1h" ? t("machines-machinedetail.refresh_10s") : t("machines-machinedetail.refresh_1m")}</span>}>
+    <Page
+      mid={mid}
+      title={m.name}
+      onToggleSidebar={onToggleSidebar}
+      right={
+        <>
+          <span className="hidden whitespace-nowrap text-[11.5px] text-ink-3 sm:inline">{range === "1h" ? t("machines-machinedetail.refresh_10s") : t("machines-machinedetail.refresh_1m")}</span>
+          {showsScreen(m) && (
+            <Button icon="monitor" href={screenPath(mid)} title={t("machines-machinedetail.screen_hint")}>
+              {t("machines-machinedetail.screen")}
+            </Button>
+          )}
+        </>
+      }
+    >
       {/* the computer */}
       <section className="overflow-hidden rounded-card bg-surface shadow-card" style={{ animation: `fade-up 420ms ${EASE} both` }}>
         <div className="flex items-start gap-3 px-4 py-3.5">
@@ -387,7 +400,7 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
             </div>
           )
         ) : (
-          <Monitor data={data} range={range} online={online} system={system} hover={hover} onHover={setHover} tz={tz} onRange={setRange} />
+          <Monitor data={data} range={range} online={online} system={system} tz={tz} onRange={setRange} />
         )}
         {data && failure && <p className="mt-2 px-1 text-[11.5px] text-red">{t("machines-machinedetail.refresh_failed", { error: failure })}</p>}
         <p className="mt-2 px-1 text-[11.5px] leading-relaxed text-ink-3">{t("machines-machinedetail.metrics_note")}</p>
@@ -396,7 +409,7 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
       {/* which engine the agents above come from (iOS engineRow) */}
       <EngineSection machine={m} heading={<Heading title={t("machines-machinedetail.engine")} />} />
 
-      {/* what this computer can do for Persona, from the node's self-check (docs/server/machines.md "Self-check") */}
+      {/* what this computer can do for Persona, from the node's self-check (docs/server/machines.md "Doctor: what this computer can do") */}
       <NodeHealth machine={m} heading={<Heading title={t("node-health.title")} />} />
 
       {m.computer && <ComputerSection mid={mid} computer={m.computer} online={online} manager={m.manager} />}
@@ -437,7 +450,8 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
                 const kind = l.agent_type || l.agent || "claude";
                 return (
                   <div key={l.name} className="flex items-center gap-3 px-4 py-2">
-                    <span className="min-w-0 truncate font-mono text-[12.5px] text-ink">{l.name}</span>
+                    {/* a provider's display name, its startup ID beside it (#5029); an rc alias's ID in mono, as before */}
+                    <ProviderName of={l} className="min-w-0 truncate text-[12.5px] text-ink" idClassName="min-w-0 shrink-[2] truncate text-[11.5px] text-ink-3" />
                     {kind !== "claude" && <span className="inline-flex h-5 shrink-0 items-center whitespace-nowrap rounded-full bg-inset px-1.5 text-[11px] font-medium text-ink-2 shadow-hairline">{kind === "codex" ? "Codex" : kind === "traex" ? "TRAEX" : kind}</span>}
                     <span className="flex-1" />
                     {l.model && <span className="shrink-0 truncate font-mono text-[11.5px] text-ink-3">{l.model}</span>}
@@ -499,8 +513,6 @@ function Monitor({
   range,
   online,
   system,
-  hover,
-  onHover,
   tz,
   onRange,
 }: {
@@ -508,32 +520,12 @@ function Monitor({
   range: MetricRange;
   online: boolean;
   system: DetailMachine["system"];
-  hover: number | null;
-  onHover: (t: number | null) => void;
   tz: number;
   onRange: (r: MetricRange) => void;
 }) {
   const { metrics } = data;
-  const r = RANGES[data.range];
-  const t1 = data.at,
-    t0 = t1 - r.secs;
   const live = online ? (metrics.latest ?? undefined) : undefined;
-  const memTotal = live?.mem_total ?? system?.memory ?? 0;
-  const memPct = memPercent(live?.mem_used, live?.mem_total);
-
-  const cpu = useMemo<ChartSeries[]>(() => [{ name: "CPU", color: "var(--accent)", read: (p) => p.cpu, now: live?.cpu }], [live?.cpu]);
-  const mem = useMemo<ChartSeries[]>(() => [{ name: t("machines-machinedetail.memory"), color: "var(--green)", read: (p) => (p.mem !== undefined && memTotal ? (100 * p.mem) / memTotal : undefined), now: memPct }], [memTotal, memPct]);
-  const net = useMemo<ChartSeries[]>(
-    () => [
-      { name: t("machines-machinedetail.download"), color: "var(--orange)", read: (p) => p.rx, now: live?.net_rx },
-      { name: t("machines-machinedetail.upload"), color: "var(--accent)", read: (p) => p.tx, now: live?.net_tx },
-    ],
-    [live?.net_rx, live?.net_tx],
-  );
-  const load = useMemo<ChartSeries[]>(() => [{ name: t("machines-machinedetail.load"), color: "var(--chart-load)", read: (p) => p.load, now: live?.load }], [live?.load]);
-  const cores = system?.cores ?? 0;
   const perCore = coresNow(metrics.latest, online);
-  const common = { points: metrics.points, t0, t1, step: r.step, hover, onHover, tz };
 
   // Nothing in the whole range (offline all along, or just started): one line instead of three empty charts.
   if (isEmpty(metrics.points))
@@ -557,14 +549,64 @@ function Monitor({
   return (
     <>
       {live && <NowTiles s={live} cores={system?.cores} />}
-      <div className={cx("grid grid-cols-1 gap-3 transition-opacity duration-200 md:grid-cols-2", data.range !== range && "opacity-60")}>
-        <MetricChart title="CPU" series={cpu} percent format={percent} axisFormat={(v) => `${v}%`} {...common} />
-        <MetricChart title={memTotal ? t("machines-machinedetail.memory_total", { total: bytesBin(memTotal).replace(/\.00 /, " ") }) : t("machines-machinedetail.memory")} series={mem} percent format={percent} axisFormat={(v) => `${v}%`} {...common} />
-        <MetricChart title={t("machines-machinedetail.network")} series={net} binary format={rate} axisFormat={bytesAxis} {...common} />
-        <MetricChart title={t("machines-machinedetail.load_1m")} series={load} format={loadText} axisFormat={loadAxis} reference={cores > 0 ? { value: cores, label: t("machines-machinedetail.cores", { count: cores }) } : undefined} {...common} />
-      </div>
+      <Charts data={data} range={range} live={live} system={system} tz={tz} />
       {perCore && <CoreBars cores={perCore} />}
     </>
+  );
+}
+
+const percentAxis = (v: number) => `${v}%`;
+
+/** The four charts and the moment they share. The moment lives here, not in the page: a pointer move re-renders these
+ * charts (each only its crosshair and read-out), not the tiles, the cores, the agents or the launchers. */
+function Charts({
+  data,
+  range,
+  live,
+  system,
+  tz,
+}: {
+  data: { metrics: DetailMetrics; range: MetricRange; at: number };
+  range: MetricRange;
+  live: NonNullable<DetailMetrics["latest"]> | undefined;
+  system: DetailMachine["system"];
+  tz: number;
+}) {
+  const { metrics } = data;
+  const r = RANGES[data.range];
+  const t1 = data.at,
+    t0 = t1 - r.secs;
+  const memTotal = live?.mem_total ?? system?.memory ?? 0;
+  const memPct = memPercent(live?.mem_used, live?.mem_total);
+
+  const cpu = useMemo<ChartSeries[]>(() => [{ name: "CPU", color: "var(--accent)", read: (p) => p.cpu, now: live?.cpu }], [live?.cpu]);
+  const mem = useMemo<ChartSeries[]>(() => [{ name: t("machines-machinedetail.memory"), color: "var(--green)", read: (p) => (p.mem !== undefined && memTotal ? (100 * p.mem) / memTotal : undefined), now: memPct }], [memTotal, memPct]);
+  const net = useMemo<ChartSeries[]>(
+    () => [
+      { name: t("machines-machinedetail.download"), color: "var(--orange)", read: (p) => p.rx, now: live?.net_rx },
+      { name: t("machines-machinedetail.upload"), color: "var(--accent)", read: (p) => p.tx, now: live?.net_tx },
+    ],
+    [live?.net_rx, live?.net_tx],
+  );
+  const load = useMemo<ChartSeries[]>(() => [{ name: t("machines-machinedetail.load"), color: "var(--chart-load)", read: (p) => p.load, now: live?.load }], [live?.load]);
+  const cores = system?.cores ?? 0;
+
+  // Picking another range lets go of the moment (React's "adjusting some state when a prop changes").
+  const [hover, setHover] = useState<number | null>(null);
+  const [hoverRange, setHoverRange] = useState(range);
+  if (hoverRange !== range) {
+    setHoverRange(range);
+    setHover(null);
+  }
+  const common = { points: metrics.points, t0, t1, step: r.step, hover, onHover: setHover, tz };
+
+  return (
+    <div className={cx("grid grid-cols-1 gap-3 transition-opacity duration-200 md:grid-cols-2", data.range !== range && "opacity-60")}>
+      <MetricChart title="CPU" series={cpu} percent format={percent} axisFormat={percentAxis} {...common} />
+      <MetricChart title={memTotal ? t("machines-machinedetail.memory_total", { total: bytesBin(memTotal).replace(/\.00 /, " ") }) : t("machines-machinedetail.memory")} series={mem} percent format={percent} axisFormat={percentAxis} {...common} />
+      <MetricChart title={t("machines-machinedetail.network")} series={net} binary format={rate} axisFormat={bytesAxis} {...common} />
+      <MetricChart title={t("machines-machinedetail.load_1m")} series={load} format={loadText} axisFormat={loadAxis} reference={cores > 0 ? { value: cores, label: t("machines-machinedetail.cores", { count: cores }) } : undefined} {...common} />
+    </div>
   );
 }
 

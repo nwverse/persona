@@ -8,6 +8,7 @@ import persona.core.contracts.api.ScheduledTask
 import java.io.IOException
 import java.time.Instant
 import java.time.ZoneId
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
@@ -34,6 +35,8 @@ private class FakeHub(
     /** The write lands but the answer never comes back. */
     var loseAnswer = false
     var failRun: Exception? = null
+    /** When set, a run waits for it before the hub answers (a slow hub). */
+    var runAnswer: CompletableDeferred<Unit>? = null
     var failDelete: Exception? = null
     var deleteLandsAnyway = false
     var reads = 0
@@ -66,6 +69,7 @@ private class FakeHub(
     }
 
     override suspend fun runTask(id: String): SessionKey {
+        runAnswer?.await()
         failRun?.let { throw it }
         started += id
         val task = table.first { it.id == id }
@@ -178,6 +182,33 @@ class ProactiveStoreTest {
         assertTrue(store.state.value.pending.isEmpty())
         assertTrue(store.state.value.shownTasks!!.single().enabled)
         assertEquals(listOf("没保存上：连不上 hub"), messages)
+    }
+
+    @Test fun aFailureAfterThePageIsGoneGoesToTheAppsFeedback() = runTest {
+        val hub = FakeHub(listOf(morning))
+        val unheard = mutableListOf<String>()
+        val store = ProactiveStore(hub, this, say, unheard = { unheard += it })
+        val page = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { store.messages.collect {} }
+        store.refresh()
+        hub.failWrite = IOException("no route")
+        // The switch is flipped and the page is left before the write fails.
+        store.toggle("morning", false)
+        page.cancel()
+        advanceUntilIdle()
+        assertEquals(listOf("没保存上：连不上 hub"), unheard)
+    }
+
+    @Test fun aPageThatIsListeningSaysItItself() = runTest {
+        val hub = FakeHub(listOf(morning))
+        val unheard = mutableListOf<String>()
+        val store = ProactiveStore(hub, this, say, unheard = { unheard += it })
+        val messages = messagesOf(store)
+        store.refresh()
+        hub.failWrite = IOException("no route")
+        store.toggle("morning", false)
+        advanceUntilIdle()
+        assertEquals(listOf("没保存上：连不上 hub"), messages)
+        assertTrue(unheard.isEmpty())
     }
 
     @Test fun aLostAnswerIsNotAFailureWhenTheHubHasTheChange() = runTest {
@@ -361,6 +392,32 @@ class ProactiveStoreTest {
         hub.failRun = IOException("refused")
         assertTrue(store.run("morning").isFailure)
         assertEquals(listOf("没跑起来：连不上 hub"), messages)
+    }
+
+    @Test fun runNowOpensTheConversationOnlyForAPageThatIsStillThere() = runTest {
+        val hub = FakeHub(listOf(morning))
+        val store = ProactiveStore(hub, this, say)
+        val opened = mutableListOf<SessionKey>()
+        val page = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { store.runsToOpen.collect { opened += it } }
+        store.runNow("morning")
+        advanceUntilIdle()
+        assertEquals(listOf(SessionKey("server", "run-morning")), opened)
+
+        // Run now, then the page is left before the hub answers: the run still happens, nothing opens.
+        hub.runAnswer = CompletableDeferred()
+        store.runNow("morning")
+        advanceUntilIdle()
+        page.cancel()
+        hub.runAnswer!!.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(listOf("morning", "morning"), hub.started)
+        assertEquals(listOf(SessionKey("server", "run-morning")), opened)
+
+        // Nor is it kept for the next time the page opens.
+        val again = mutableListOf<SessionKey>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { store.runsToOpen.collect { again += it } }
+        advanceUntilIdle()
+        assertTrue(again.isEmpty())
     }
 
     @Test fun freshForgetsTheTasksOwnConversation() = runTest {

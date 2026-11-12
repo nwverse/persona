@@ -17,7 +17,7 @@ import (
 
 // Claude sessions that run where Persona has no terminal pane: a background session Claude's own daemon runs (/fork,
 // /background: kind "bg"), a session open in Claude's desktop app (entrypoint claude-desktop…), claude in a terminal
-// that herdr, Orca or botmux do not run (entrypoint cli). Each writes sessions/<pid>.json in its config directory with
+// that herdr, Orca, Tern or botmux do not run (entrypoint cli). Each writes sessions/<pid>.json in its config directory with
 // the session it has open, its status (busy / idle / waiting) and, since Claude Code 2.1.29x, its peer inbox
 // (claudepeer.go). They listed as offline while they worked, and a message from the phone was refused (a second
 // claude --resume would write the same transcript, openelsewhere.go). The node lists every live one as running, with
@@ -161,17 +161,40 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool) []proto.
 			Model: m.model, LastText: snippet(m.lastText), UpdatedAt: lastUsed(m, st), Rev: st.Size(), AgentSurface: m.surface,
 		}
 		s.Capabilities, s.ReadOnlyReason = outsideCapabilities(c)
+		// A claude in a tmux pane says where it runs ("tmux":"orc:@11.%11") and no hooks of Persona's run there: the
+		// pane's screen is what its approval shows on, so it gets that screen and the keys into it (#2562).
+		if pane := outsidePane(c); pane != "" {
+			s.PaneID = pane
+			if s.Capabilities == nil {
+				s.Capabilities = &proto.SessionCapabilities{Read: true}
+			}
+			s.Capabilities.Terminal = true
+			// Its own status file says waiting when a dialog has the keyboard, but a build that does not: a resting
+			// claude's screen is read, as for a pane (dialogstatus.go).
+			if status == proto.StatusIdle || status == proto.StatusDone || status == proto.StatusUnknown {
+				if head := n.dialogOn(id, pane); head != "" {
+					s.Status, s.AttentionReason = proto.StatusBlocked, head
+				}
+			}
+		}
 		if status == proto.StatusBlocked {
 			s.AttentionReason = proto.AttentionClaudeComputer
 		}
 		if s.Cwd == "" {
 			s.Cwd = m.cwd
 		}
-		if s.Title == "" {
+		// The transcript's title first, then a name something chose for this claude, then its first message (untitled)
+		// as for any session. The name Claude derives itself only stands in while there is nothing else: it is the
+		// directory's base name and two hex digits, so the sessions of one directory differed by those alone.
+		if s.Title == "" && c.NameSource != "derived" {
 			s.Title = c.Name
 		}
 		untitled(&s, m)
+		if s.Title == "" {
+			s.Title = c.Name
+		}
 		setContext(&s, m)
+		s.ModelFallback = m.modelFallback
 		s.Activity, s.ActivityAt = m.activityOf()
 		s.PermissionMode, s.Effort = n.currentModes(id, m)
 		m.turnErr.set(&s)
@@ -189,18 +212,39 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool) []proto.
 	return out
 }
 
-// outsideCapabilities: read always; send when its peer inbox is one the node can use, with a reason when not.
+// outsideCapabilities: read always; send when its peer inbox is one the node can use, with a reason when not. Never
+// modes: the peer inbox carries messages only, and the session has no pane to drive the TUI's pickers in (setModes).
 func outsideCapabilities(c claudeProc) (*proto.SessionCapabilities, string) {
 	p, has := peerOf(c)
 	switch {
 	case has && peerReachable(p):
-		return &proto.SessionCapabilities{Read: true, Send: true}, ""
+		return &proto.SessionCapabilities{Read: true, Send: true, Modes: proto.CanModes(false)}, ""
 	case c.Kind == "bg":
-		return &proto.SessionCapabilities{Read: true}, claudeBgReadOnly
+		return &proto.SessionCapabilities{Read: true, Modes: proto.CanModes(false)}, claudeBgReadOnly
 	case !has:
-		return &proto.SessionCapabilities{Read: true}, proto.ReadOnlyClaudeNoInbox
+		return &proto.SessionCapabilities{Read: true, Modes: proto.CanModes(false)}, proto.ReadOnlyClaudeNoInbox
 	}
-	return &proto.SessionCapabilities{Read: true}, proto.ReadOnlyClaudeInbox
+	return &proto.SessionCapabilities{Read: true, Modes: proto.CanModes(false)}, proto.ReadOnlyClaudeInbox
+}
+
+// outsidePane is the tmux pane an outside claude runs in, "" when it runs in none (#2562): Claude Code writes the pane
+// down in its own session file, and the process's TMUX names the server that pane belongs to ("" for the default one).
+func outsidePane(c claudeProc) string {
+	socket := ""
+	if paneEnvOfPID != nil {
+		socket = tmuxSocket(paneEnvOfPID(c.pid)[tmuxEnv])
+	}
+	return tmuxPaneOf(c.Tmux, socket)
+}
+
+// outsidePaneOf is the tmux pane a session outside Persona's panes runs in, "" for any other session: where a card's
+// answer goes when no host lists an agent for it (send.go paneFor, panescreen.go screen).
+func (n *Node) outsidePaneOf(id string) string {
+	c, ok := n.outsideClaude(id)
+	if !ok {
+		return ""
+	}
+	return outsidePane(c)
 }
 
 // outsideClaude is the live claude outside Persona's panes that has session id open (outsideSource), ok false when
@@ -285,7 +329,7 @@ func (n *Node) claudeInPane(c claudeProc) bool {
 	if paneEnvOfPID == nil {
 		return false
 	}
-	refs := enginePaneRefs(paneEnvOfPID(c.pid))
+	refs := n.enginePaneRefs(paneEnvOfPID(c.pid))
 	if len(refs) == 0 {
 		return false
 	}
@@ -330,22 +374,32 @@ var outsidePaneGrace = 5 * time.Second
 const paneClaudeForget = time.Minute
 
 // enginePaneRefs are the panes a process's engine pane variables (enginePaneEnvs) name, as the hosts write PaneIDs.
-func enginePaneRefs(env map[string]string) []string {
+func (n *Node) enginePaneRefs(env map[string]string) []string {
 	var out []string
 	add := func(kind, id string) {
 		if id != "" {
 			out = append(out, host.PaneRef{Kind: kind, ID: id}.String())
 		}
 	}
-	if p := env[herdrPaneEnv]; p != "" {
-		out = append(out, p) // herdr's pane ids are stored as they are
+	if p := n.envPane(func(name string) string { return env[name] }); p != "" {
+		out = append(out, p) // herdr's pane ids are stored as they are, a named session's qualified (#2196)
 	}
 	add(host.HerdrCore, env[herdrCorePaneEnv])
 	add(host.Orca, env[orcaPaneEnv])
 	add(host.Orca, env[orcaLegacyPaneEnv])
 	add(host.Botmux, env[botmuxPaneEnv])
+	add(host.Tern, env[ternPaneEnv])
 	return out
 }
 
 // enginePaneEnvs are the variables Persona's engines set in their panes' processes.
-var enginePaneEnvs = []string{herdrPaneEnv, herdrCorePaneEnv, orcaPaneEnv, orcaLegacyPaneEnv, botmuxPaneEnv}
+// herdrSessionEnv and herdrSocketEnv come along to tell which herdr server's pane HERDR_PANE_ID is.
+var enginePaneEnvs = []string{herdrPaneEnv, herdrSessionEnv, herdrSocketEnv, herdrCorePaneEnv, orcaPaneEnv, orcaLegacyPaneEnv,
+	botmuxPaneEnv, ternPaneEnv}
+
+// tmuxEnv is tmux's own variable in a pane's processes: "<socket>,<server pid>,<session index>". Its socket names the
+// server the pane belongs to, which a pane id alone does not (tmuxHost).
+const tmuxEnv = "TMUX"
+
+// paneEnvKeys are the variables read from a process's environment: the engines' pane variables, and the tmux server.
+var paneEnvKeys = append(append([]string{}, enginePaneEnvs...), tmuxEnv)

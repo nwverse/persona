@@ -1,4 +1,4 @@
-// Package apierr writes the JSON bodies of the hub's HTTP API (docs/protocol/protocol.md "Errors"): a result, or an error with a
+// Package apierr writes the JSON bodies of the hub's HTTP API (docs/protocol/protocol.md "Error body"): a result, or an error with a
 // stable code. It is shared by the hub and the services whose requests the hub relays (internal/assistant), so an
 // error reads the same whichever of them answered.
 package apierr
@@ -201,20 +201,31 @@ func LocalizedBody(status int, code string, err error, l i18n.Lang) map[string]a
 }
 
 var rpcFailureKeys = map[string]string{
-	"timeout":                  "rpc-errors.timeout",
-	"node_unreachable":         "rpc-errors.unreachable",
-	"internal":                 "rpc-errors.failed",
-	"input_draft":              "rpc-errors.input_draft",
-	"dialog_open":              "rpc-errors.dialog_open",
+	"timeout":          "rpc-errors.timeout",
+	"node_unreachable": "rpc-errors.unreachable",
+	"internal":         "rpc-errors.failed",
+	"input_draft":      "rpc-errors.input_draft",
+	"dialog_open":      "rpc-errors.dialog_open",
+	// the first message to a Codex opened with no first message (node/codex_waiting.go, #4961)
+	"codex_not_ready":          "rpc-errors.codex_not_ready",
+	"codex_first_text":         "rpc-errors.codex_first_text",
+	"codex_first_unconfirmed":  "rpc-errors.codex_first_unconfirmed",
+	"codex_waiting":            "rpc-errors.codex_waiting",
+	"codex_no_box":             "rpc-errors.codex_no_box",
 	"prompt_changed":           "rpc-errors.prompt_changed",
 	"attach_busy":              "rpc-errors.attach_busy",
 	proto.CodeTerminalNotReady: "rpc-errors.terminal_not_ready",
-	"node_outdated":            "rpc-errors.node_outdated",
-	"assistant_in_doubt":       "rpc-errors.in_doubt",
+	// a start's new tab stopped on its shell (node/shellsettle.go, #2570)
+	proto.CodeShellWaiting:      "rpc-errors.shell_waiting",
+	proto.CodeStartLineRejected: "rpc-errors.start_line_rejected",
+	"node_outdated":             "rpc-errors.node_outdated",
+	"readonly_unsupported":      "rpc-errors.readonly_unsupported",
+	"assistant_in_doubt":        "rpc-errors.in_doubt",
 	// queued messages sent now (#6088)
-	"nothing_queued":       "rpc-errors.nothing_queued",
-	"send_now_unsupported": "rpc-errors.send_now_unsupported",
-	"send_now_in_doubt":    "rpc-errors.in_doubt",
+	"nothing_queued":        "rpc-errors.nothing_queued",
+	"send_now_unsupported":  "rpc-errors.send_now_unsupported",
+	"send_now_unrecognized": "rpc-errors.send_now_unrecognized", // #2467
+	"send_now_in_doubt":     "rpc-errors.in_doubt",
 	// a new agent's worktree (#6115)
 	"not_a_repository":  "rpc-errors.not_a_repository",
 	"not_our_worktree":  "rpc-errors.not_our_worktree",
@@ -227,6 +238,37 @@ var rpcFailureKeys = map[string]string{
 	"peer_too_long":    "rpc-errors.peer_too_long",
 	"peer_unconfirmed": "rpc-errors.peer_unconfirmed",
 	"peer_command":     "rpc-errors.peer_command",
+	// a desktop app session nothing runs, which the app did not open in time (node/claudedesktop_open.go)
+	"desktop_open_failed": "rpc-errors.desktop_open_failed",
+	// the node menus' Git ▸ Pull / Push / Fetch and the Git pane's Pull (#1888); the *_failed ones carry git's words
+	"no_directory":        "rpc-errors.no_directory",
+	"detached_head":       "rpc-errors.detached_head",
+	"no_upstream":         "rpc-errors.no_upstream",
+	"uncommitted_changes": "rpc-errors.uncommitted_changes",
+	"not_fast_forward":    "rpc-errors.not_fast_forward",
+	"push_rejected":       "rpc-errors.push_rejected",
+	"pull_failed":         "rpc-errors.pull_failed",
+	"push_failed":         "rpc-errors.push_failed",
+	"fetch_failed":        "rpc-errors.fetch_failed",
+	// session.modes (node/modes.go, #1843)
+	proto.CodeModesOnComputer: "rpc-errors.modes_on_computer",
+	proto.CodeModesNotRunning: "rpc-errors.modes_not_running",
+	// a message to a stopped agent: read-only, its terminal page's Resume brings it back (node stopped.go, #4754)
+	"agent_stopped": "rpc-errors.agent_stopped",
+	// a start in a directory whose name can't be typed into a terminal (node/hostorca_launch.go)
+	proto.CodeDirectoryUntypable: "rpc-errors.directory_untypable",
+	// a running Agent's switch to another launcher, picked and carried out by the next message (node/launcher_switch.go)
+	proto.CodeSwitchStale:           "rpc-errors.switch_stale",
+	proto.CodeSwitchPickModel:       "rpc-errors.switch_pick_model",
+	proto.CodeSwitchUnderWay:        "rpc-errors.switch_under_way",
+	proto.CodeSwitchUnsupported:     "rpc-errors.switch_unsupported",
+	proto.CodeSwitchLauncherMissing: "rpc-errors.switch_launcher_missing",
+	proto.CodeSwitchOtherAgent:      "rpc-errors.switch_other_agent",
+	proto.CodeSwitchModelLocked:     "rpc-errors.switch_model_locked",
+	proto.CodeSwitchConfigDir:       "rpc-errors.switch_config_dir",
+	proto.CodeSwitchNotStopped:      "rpc-errors.switch_not_stopped",
+	proto.CodeSwitchFailed:          "rpc-errors.switch_failed",
+	proto.CodeSwitchFailedStopped:   "rpc-errors.switch_failed_stopped",
 }
 
 func localizeFailure(body map[string]any, status int, err error, l i18n.Lang) {
@@ -253,7 +295,8 @@ func localizeFailure(body map[string]any, status int, err error, l i18n.Lang) {
 	if key == "" {
 		return
 	}
-	body["error"] = i18n.T(l, key)
+	// a summary that names {reason} carries the original words (git's, for a failed pull or push)
+	body["error"] = i18n.T(l, key, i18n.Args{"reason": original})
 	if _, hasDetail := body["detail"]; !hasDetail && original != body["error"] {
 		body["detail"] = original
 	}
@@ -327,11 +370,25 @@ func explain(body map[string]any, code, message string, l i18n.Lang) {
 	}
 }
 
-// Sentence is the plain words in l of code, one of the refusals the hub words itself (codeActions; "" for any other),
-// by its data: machine_name (else "this computer"), launcher, and of a start the new tab's shell could not run
-// (where "terminal", node/shellmiss.go) what it could not run (missing, kind), that shell (pane_shell) and the shell
-// and rc file the launchers are listed in (launcher_shell, rc_file). What a 409 says, and a session's start_error.
+// Sentence is the plain words in l of code, one of the refusals the hub words itself ("" for any other): a start refused
+// on its request with nothing to name (readonly_unsupported, directory_untypable) as it is, and codeActions' by their
+// data: machine_name (else "this computer"), launcher, and of a start the new tab's shell could not run (where
+// "terminal", node/shellmiss.go) what it could not run (missing, kind), that shell (pane_shell) and the shell and rc
+// file the launchers are listed in (launcher_shell, rc_file). What a 409 says, and a session's start_error.
 func Sentence(l i18n.Lang, code string, data map[string]any) string {
+	switch code {
+	case "readonly_unsupported", proto.CodeDirectoryUntypable: // the request refused, with nothing to name
+		return i18n.T(l, rpcFailureKeys[code])
+	}
+	if code == proto.CodeShellWaiting || code == proto.CodeStartLineRejected { // a start's new tab (node/shellsettle.go, #2570)
+		machine, _ := data["machine_name"].(string)
+		line, _ := data["line"].(string)
+		key := "apierr-apierr." + code
+		if machine == "" {
+			key += "_here"
+		}
+		return i18n.T(l, key, i18n.Args{"machine": machine, "line": line})
+	}
 	if _, ok := codeActions[code]; !ok {
 		return ""
 	}

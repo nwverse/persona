@@ -1,8 +1,13 @@
-// The inline <head> script vite.config.ts's startup-preload plugin writes into index.html. It lives here, with no
-// imports of the client code, so the config can load it and a test can check it against src/i18n/index.ts: the
-// languages it has catalogs for (LANGS) and how it picks one (preferredLanguage) must stay the same as the client's.
+// The inline <head> script vite.config.ts's startup-preload plugin writes into index.html, the brotli copies it
+// writes of the files that script and the page load, and its checks of the startup namespaces and the first screen's
+// size. It lives here, with no imports of the client code, so the config
+// can load it and a test can check it against src/i18n/index.ts: the languages it has catalogs for (LANGS) and how it
+// picks one (preferredLanguage) must stay the same as the client's.
 import { readdirSync, readFileSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { promisify } from "node:util";
+import { brotliCompress, constants, gzip as gzipCompress } from "node:zlib";
 
 /** The languages under `dir` (src/i18n/locales): code → the language subtags its _meta.json matches. Build time only. */
 export function localeDirs(dir: string): Record<string, string[]> {
@@ -53,4 +58,308 @@ export function preloadScript(files: PreloadFiles): string {
   var screen = /^\\/screen\\/[^/]/.test(path);
   [files.catalogs[lang]].concat(files.shared, screen ? files.screen : files.app).forEach(add);
 })();`;
+}
+
+/** The smallest file worth a brotli copy: server/internal/webasset MinSize, below which the hub compresses nothing. */
+export const BROTLI_MIN_SIZE = 1024;
+
+const brotliCompressAsync = promisify(brotliCompress);
+// Quality 11 with the input's size as hint, so the same bytes always give the same copy.
+const brotli = (data: Buffer) =>
+  brotliCompressAsync(data, { params: { [constants.BROTLI_PARAM_QUALITY]: 11, [constants.BROTLI_PARAM_SIZE_HINT]: data.length } });
+
+/**
+ * Writes name.br beside each of `files` (paths below `dir`) of BROTLI_MIN_SIZE bytes or more, when brotli makes it
+ * smaller: quality 11 with the input's size as hint, so the same file always gives the same bytes. The hub sends
+ * these as stored to a browser that takes br (server/internal/hub/web.go serveBrotli); Go has no brotli encoder, so
+ * the build makes them. Returns the files it wrote and their bytes before and after. Build time only.
+ */
+export async function brotliCopies(dir: string, files: string[]): Promise<{ files: number; before: number; after: number }> {
+  const out = { files: 0, before: 0, after: 0 };
+  await Promise.all(files.map(async (file) => {
+    const data = await readFile(join(dir, file));
+    if (data.length < BROTLI_MIN_SIZE) return;
+    const br = await brotli(data);
+    if (br.length >= data.length) return;
+    await writeFile(join(dir, `${file}.br`), br);
+    out.files++;
+    out.before += data.length;
+    out.after += br.length;
+  }));
+  return out;
+}
+
+/**
+ * The most a cold first screen of the client page may weigh, as firstScreenBytes counts it over the page's own files,
+ * the shared and App groups and one language's startup catalog (vite.config.ts startupPreload fails the build past
+ * it): the heaviest language's at #2689 (ja, 559,565 B) plus 3%, and 2,560 B for the sidebar's assistant switcher
+ * (views/AssistantSwitcher.tsx and the current assistant's scope), which every first screen draws, and 512 B for the
+ * launcher chips' stale-pick check and its toast (views/assistant/AssistantChat.tsx, #3895), and 1,024 B for the
+ * interrupted receipts' text and handling (#3903 added 883 B, #3917), and 512 B for adding a computer to the current
+ * assistant (views/machines/AddComputer.tsx's words and its add.manager handling, #3508), and 512 B for the address's manager that conversation requests fall back on (lib/manager-choice.ts routedConversationManager, #3670),
+ * and 1,024 B for the Agent header's permission mode (#3956 added 708 B: its button and tones, the mode menu's question
+ * on leaving Allow all and its disabled Allow all row, their words), and 512 B for the Machines page asking each online
+ * manager for its computers' metrics (#4026 added 254 B over), and 800 B for the Topics kind (#3783: its tab and name, the
+ * shared stylesheet's classes for the topic page and the knowledge map, and its switch in Settings' search; the pages,
+ * their code and words load on demand), and 2,048 B for tool names in words (#2986 added 1,996 B: lib/turns.ts's
+ * subjects of Claude Code's newer tools and other servers' MCP tools named in words, the verbs views/chat/ActionRow.tsx
+ * gives them), and 1,024 B for background rounds in the main conversation (#4314 added about 580 B: lib/turns.ts's
+ * background-round detection and source blocks in an opened round, the folded line's words and Needs you's grouping by
+ * supervisor), and 4,096 B for the authoritative workspace catalog and its direct workspace rows, the first-screen
+ * worktree action words, and shared sticky group controls (PR #3222: 3,605 B over its main baseline), and 1,536 B for
+ * when each session was last active (#4236 added 1,081 B to ja: the sidebar row's age at its end, the paged list's
+ * Active within menu and its folded Earlier group, their words), and 512 B for a Persona chat's queue actions (#4342
+ * added 312 B: views/chat/QueueStrip.tsx's own and relayed rows, the photos a take-back brings back, the Persona Send now
+ * words and the relayed line), and 1,536 B for the refusal fallback (#2528 added 1,115 B to ja: the refusal notice
+ * line, the fallback card above the composer with its way back to the configured model, lib/model-fallback.ts and
+ * lib/refusal-public.ts, their words), and 640 B for holding earlier feed cards off the newest page until their page
+ * loads (#4485 added 520 B to ja: the first-screen feed-page gate), and 64 B for the credential-owner bootstrap
+ * (#4518, allocated in #4597), and 128 B for sending an edit of the last message safely (#4605 added 115 B to ja:
+ * ChatView's wait for Claude's box after the rewind, the send's clear_draft and the give-back of a refused edit), and
+ * 1,664 B for Forward (#3899 added 1,588 B: the action, the forward's card in a sent bubble and over the box, and its
+ * strings; the picker loads on the first Forward), and 1,152 B for task cards (#5030 added 1,105 B to ja: the shared
+ * task card head, a workflow call's card with its progress line and agent strip, the chat's Background dialog opened
+ * from it, the old subagent links' redirect and the background-subtasks line, their words; the subagent card itself
+ * loads when a summary is opened). Then 9,614 B less for the extension view renderer leaving the first screen (#3614:
+ * ViewBody.tsx and what only it imports became a chunk of its own; ja went from 598,940 B on main 52b3fae6f to 589,326 B).
+ * main was already 732 B over its budget at 52b3fae6f (ja 598,940 B against 598,208 B); that overage is kept here, not
+ * new room. And 3,072 B for the composer's model pill (#5032 added 2,600 B to ja, 589,326 B to 591,926 B: the pill, the
+ * session's model lists it reads for its name, the composer card's width modes and their words; the model panel, its
+ * data and its words load on the pill's first tap). And 192 B for provider display names (#5029 added 165 B to ja:
+ * plan task chips name their launcher by the provider's display name through lib/provider-names.ts, the shared cache of
+ * the providers' names and the hook that reads them again after a rename). And 448 B for clearing the main chat's context
+ * (#5095 added 405 B to ja, 593,185 B to 593,590 B: /clear in the main chat's command list, its ⋯ row, the cleared page's
+ * state in lib/main-clear.ts and their words); main was already 595 B over its budget at 286d88fb2 (ja 593,185 B against
+ * 592,590 B), and that overage is kept here, not new room. And 672 B for the main chat's hand-off cards (#5096 added 1,166
+ * B to ja, 593,124 B at 7ff35f2e9 to 594,290 B, 509 B of it in the room left: a card for each dispatched Agent, a task's
+ * or an Agent's page opened from the chat with the chat's place kept, their words; the task side panel and the
+ * dispatched line they replace go, and the way-back strip on the Agent's page loads on its own; #5136: measured first
+ * against 9d3f343d3, which came 17 B short). Then 1,939 B less for the image editor's geometry leaving the first screen
+ * (#5142: ja 594,290 B at 5d97a6e77 to 592,351 B, the 15 B of room kept): the image viewer imported fitRect from
+ * lib/image-edit.ts, which put that whole module, otherwise only the lazy editor's, on the first screen; fitIn and
+ * fitRect now live in lib/image-zoom.ts. And 64 B for the sidebar's Recent count and its Show more (#5146 added 222 B
+ * to ja, 592,153 B at 9534ce535 to 592,375 B, 213 B of it in the room left: lib/sidebar-recent.ts, which the sidebar
+ * reads for how many to list and how far Show more opened it, and the Show more / Show less row; the setting's row and
+ * its words are in the lazy Settings page and the ui-look catalog). And 174 B more for it as merged (#5166): #5161 added
+ * 451 B to ja, not 222 B, 592,153 B at 76b9cf3b4a to 592,604 B at b73f259f71 (505 B with the file names' hashes counted
+ * as a fixed string, so not their noise), which left main 174 B over; the room is 0 B. Take it back down by as much as
+ * the sidebar's Recent code gets lighter. Every number so far is bytes as sent. From #5164 on, firstScreenBytes counts
+ * every built file name's hash in the first screen's code as a fixed string, which is 1,454 B less in every language at
+ * 0554037152 (ja 592,604 B sent, 591,150 B counted; en 589,016 / 587,562 B; zh-Hans 589,854 / 588,400 B): the budget
+ * moved down by the same 1,454 B and kept its 0 B of room. That is no new room; it only stops a change to a lazy chunk or
+ * to strings off the first screen from moving the count (#5145 moved ja 34 B as sent with no first-screen code changed).
+ * And 2,624 B for child sessions folded into their parent (#5120 added 2,596 B to ja as counted, 591,150 B at dc5d1e3a3
+ * to 593,746 B: every list's folding and the parent row's folded state and running line, a child's request counted,
+ * opened and answerable under its parent (the store's lookup of its row), the paged list's roots, the parent chat's
+ * placement of its children's cards, the hook that reads and holds their rows and the old child links' redirect; the
+ * child card and what it reads when opened load with the card). And 256 B for a launcher switch that waits (#5035 added
+ * 77 B to ja as counted, 593,746 B to 593,823 B: the pill's waiting state, the Agent chat sending the switch with the
+ * user's message and keeping the words in the box when it is refused; the panel's switch code and words load with the
+ * panel). And 13 B for the background supervisor (#5082: ja counts 594,043 B with it, built on main at a5747f46b; the
+ * rest of what it adds fits the room main had: lib/background-supervisor.ts, which the sidebar, the conversation menu,
+ * the chat's header and its review line read, the store's re-read of the assistant for a supervisor made since, the
+ * line's reviewer, and its name and "Built-in"; the switch, the model row and their words are in the lazy Settings
+ * page). And 238 B for the work summary's review fixes (#5155: ja counted 594,228 B with them against 594,043 B on main
+ * at 4885b1458, +185 B; 594,241 B merged with main at ebcb0fa62, plus 40 B of room: the duration units back in the
+ * catalogs as CLAUDE.md asks of user-facing words, wordless thoughts left out before grouping, rows spinning while the
+ * exchange runs; the thought row and its parser stay lazy). And 371 B for model quotas, prices and composer usage
+ * (#5176, #5208: ja 594,414 B before #5155's review fixes: the composer's quota and the context meter's model price,
+ * the pill's model-panel handoff and the quota helpers; the panel's prices and quota rows and their words load with
+ * the panel). A Codex opened with no first message (#4961) moved ja as counted by +223 B against b0a4a08b5 (594,241 B
+ * to 594,464 B) and by -80 B against 449a12d7f (593,469 B to 593,389 B), inside the room either way: the waiting chat's
+ * note, its box's placeholder, the page following the pane to the thread the first message began, their words and
+ * the list row's line (New Agent's optional first message is in its lazy dialog). And 498 B for the changed-files card
+ * and the error notices (#5157: ja 595,110 B against 593,659 B on main at f6f07e375, +1,451 B, of which 993 B fit the
+ * room main had, plus 40 B of room: the card at the end of a finished Agent exchange, its count of the exchange's own
+ * edits without drawing their diffs (lib/turn-changes.ts) and of a fold's `changes`, its review and file targets, the
+ * store read of the session's folder, the feed cache's check of `changes`, the shared ErrorNotice the model-error and
+ * usage-limit lines become, their marks and words). And 98 B for the provider wizard's paste and found aliases (#5193:
+ * no first-screen code or words; the lazy wizard's pieces shared through views/settings/ProviderFields.tsx changed how
+ * Rollup names the shared chunks' exports, which renamed App's imports and moved App 138 B as counted, its length
+ * unchanged: ja 595,110 B on main at d7908558d to 595,248 B, 40 B of it in the room main had; take it back when App's
+ * imports are renamed back). From #5331 on, firstScreenBytes also counts the minified names one file imports from
+ * another as one fixed string and each export list as an empty one (placeholderExportNames). A lazy chunk that imported
+ * one more name from a first-screen chunk renamed that chunk's exports and moved the count by hundreds of bytes with no
+ * first-screen code changed: #5310 +255 B, which failed main's build, #5193 +138 B, the two merged -321 B, #5320 +29 B.
+ * Counted so, ja is 589,323 B on main at c7164e477e (595,073 B the old way; en 585,737 B, zh-Hans 586,565 B), and the
+ * same within 1 B at 1c78a837d6, 482f3b93df and 4b72a763c8. The budget is that, with 0 B of room: the 175 B main had,
+ * #5193's 98 B among them, are taken back. And 529 B for the error banner over the composer (#5313: ja 589,852 B
+ * against 589,323 B on main at fc16299dd: which error a chat stopped on and the rules that keep it there or in the chat,
+ * its dismissal kept per conversation, a Retry that did not go bringing it back, the banner scrolled into view in its
+ * box once, the keyboard back to the composer, the notice's ✕ and 28 px buttons, the failure note and the refused-send
+ * card drawn as the same notice, and their words). Raise it on purpose, in the change that needs it.
+ */
+export const FIRST_SCREEN_BUDGET = 589_852;
+
+// The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
+// extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
+const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
+// Where a file's code names another built file ("./api-<hash>.js", "assets/App-<hash>.css"); counted only when the
+// hash is one of the build's, so other code that happens to look like one is left alone.
+const NAMED_HASH = /-([A-Za-z0-9_-]{8})(?=\.)/g;
+/** What firstScreenBytes counts in place of each hash: as long as one, the same for every file. */
+export const HASH_PLACEHOLDER = "00000000";
+
+/** `code` with the hash of each of the build's files it names (`hashes`, nameHashes) replaced by HASH_PLACEHOLDER. */
+export function placeholderHashes(code: string, hashes: ReadonlySet<string>): string {
+  return code.replace(NAMED_HASH, (m, hash: string) => (hashes.has(hash) ? `-${HASH_PLACEHOLDER}` : m));
+}
+
+// A file's import of names from another file, as Rollup writes it (`import{eu as a,j}from"./App-<hash>.js"`, no spaces
+// once minified), and an export list (`export{Yme as eu,…}`, or one that re-exports `from` another file).
+const IMPORT_CLAUSE = /\bimport\s*\{([^{}]*)\}\s*from\s*(["'])([^"']+)\2/g;
+const EXPORT_CLAUSE = /\bexport\s*\{([^{}]*)\}/g;
+// One name in either list: the name, then ` as ` and another name or nothing.
+const SPECIFIER = /^(\s*)([\w$]+)(?:(\s+as\s+)([\w$]+))?(\s*)$/;
+/** What firstScreenBytes counts in place of each name a file imports from another of the build's files. */
+export const EXPORT_NAME_PLACEHOLDER = "_";
+
+/**
+ * `code` with the names it imports from the build's other files (`hashes`, nameHashes) counted as
+ * EXPORT_NAME_PLACEHOLDER, keeping the local names its code uses (`import{eu as a,j}` → `import{_ as a,_ as j}`), and
+ * each of its export lists counted as an empty one (`export{Yme as eu,…}` → `export{}`). Rollup names a chunk's
+ * exports by their place in it, a minified alias each (a, b, …, eu, ev, …), and sorts the list by alias: a lazy chunk
+ * that imports one more name from a first-screen chunk moves every later alias, reorders that list and renames the
+ * imports of every first-screen file reading from it, with the code the same length within a few bytes (#5331). A
+ * list whose entries are not plain names, or an import from a file the build did not write, stays as it is.
+ */
+export function placeholderExportNames(code: string, hashes: ReadonlySet<string>): string {
+  const entries = (list: string) => {
+    const out = list.split(",").map((s) => SPECIFIER.exec(s));
+    return out.every((m) => m !== null) ? (out as RegExpExecArray[]) : null;
+  };
+  return code
+    .replace(IMPORT_CLAUSE, (clause, list: string, _quote: string, from: string) => {
+      const hash = NAME_HASH.exec(from)?.[1];
+      const names = hash && hashes.has(hash) ? entries(list) : null;
+      if (!names) return clause;
+      const counted = names.map(([, lead, name, as, local, trail]) => `${lead}${EXPORT_NAME_PLACEHOLDER}${as ?? " as "}${local ?? name}${trail}`);
+      const open = clause.indexOf("{") + 1; // the list's own brace: nothing before it can hold one
+      return clause.slice(0, open) + counted.join(",") + clause.slice(open + list.length);
+    })
+    .replace(EXPORT_CLAUSE, (clause, list: string) => (entries(list) ? "export{}" : clause));
+}
+
+/** The hashes in the build's file names (`names`); a name without one (sw.js, index.html) has none. */
+export function nameHashes(names: Iterable<string>): Set<string> {
+  const out = new Set<string>();
+  for (const name of names) {
+    const hash = NAME_HASH.exec(name)?.[1];
+    if (hash) out.add(hash);
+  }
+  return out;
+}
+
+/**
+ * What FIRST_SCREEN_BUDGET holds each language's first screen to (`screens`: language → its files, paths below `dir`):
+ * what the built-in hub sends for them to a browser that takes br (each one's brotli copy as brotliCopies makes it, or
+ * the file itself under BROTLI_MIN_SIZE or when brotli does not make it smaller), with every hash of the build's files
+ * (`names`, paths below `dir`) in their code counted as HASH_PLACEHOLDER, and the names they import from each other and
+ * their export lists as placeholderExportNames counts them. A first-screen file names the files it imports and
+ * preloads by their hashes, which change with any change to those files and are close to incompressible: counted as
+ * sent, a change only to a lazy chunk or to strings off the first screen moves the total by tens of bytes either way
+ * (#5164). A lazy chunk that imports one more name from a first-screen chunk renames that chunk's minified exports
+ * and every import of them, which moved the total by hundreds (#5331). Counted this way neither moves it; any other
+ * change to the first screen's code counts as it is sent. Build time only.
+ */
+export async function firstScreenBytes(dir: string, screens: [string, string[]][], names: Iterable<string>): Promise<[string, number][]> {
+  const hashes = nameHashes(names);
+  const sizes = new Map<string, Promise<number>>(); // each file once: the languages share all but their catalog
+  const size = async (file: string) => {
+    // latin1 keeps every byte as it is; the names, hashes and placeholders are ASCII. The export names before the
+    // hashes: an import is recognized by the hash of the file it names.
+    const code = (await readFile(join(dir, file))).toString("latin1");
+    const data = Buffer.from(placeholderHashes(placeholderExportNames(code, hashes), hashes), "latin1");
+    if (data.length < BROTLI_MIN_SIZE) return data.length;
+    return Math.min((await brotli(data)).length, data.length);
+  };
+  const sized = (file: string) => sizes.get(file) ?? sizes.set(file, size(file)).get(file)!;
+  return Promise.all(screens.map(async ([lang, files]): Promise<[string, number]> => [lang, (await Promise.all(files.map(sized))).reduce((sum, n) => sum + n, 0)]));
+}
+
+/** The build's error when any language's first screen (firstScreenBytes) is over `budget`, else undefined. */
+export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_SCREEN_BUDGET): string | undefined {
+  const over = bytes.filter(([, n]) => n > budget);
+  if (!over.length) return undefined;
+  const all = bytes.map(([lang, n]) => `${lang} ${n} B`).join(", ");
+  return `startup-preload: the ${over.map(([lang]) => lang).join(", ")} first screen is over its budget of ${budget} B (${all}; src/startup-preload.ts FIRST_SCREEN_BUDGET, counted by firstScreenBytes)`;
+}
+
+/**
+ * The most the idle tier may send (src/lib/lazy-page.ts: the chunks of each `lazyPage(…, { idle: true })` and what they
+ * import beyond the first screen), in bytes as gzipBytes counts them (vite.config.ts startupPreload fails the build past
+ * it): 29,143 B at #2798 plus 3% (28,085 B at #2880; #2798 moved ModelIdField, which the model popover now shares with
+ * the idle ModelPicker, out of the first screen into a chunk of its own), and 64 B for managing launchers from the
+ * pickers (#4389's controls took the idle tier 8 B over; take it back if those controls get lighter), and 13,113 B for
+ * the extension view renderer (#3614: it left the first screen for the idle tier, which went from 18,615 B to 31,728 B;
+ * 31,802 B after merging main).
+ * Every other lazy page loads on intent, not at idle; raise it on purpose, in the change that needs it.
+ */
+export const IDLE_TIER_BUDGET = 43_194;
+
+const gzip = promisify(gzipCompress);
+
+/** What the built-in hub sends for `files` (paths below `dir`, none with a brotli copy) once the release precompressed
+ *  them (server/internal/webasset): each one gzipped at the best level, or the file itself under BROTLI_MIN_SIZE. Build
+ *  time only. */
+export async function gzipBytes(dir: string, files: string[]): Promise<number> {
+  const sizes = await Promise.all(files.map(async (file) => {
+    const data = await readFile(join(dir, file));
+    return data.length < BROTLI_MIN_SIZE ? data.length : (await gzip(data, { level: 9 })).length;
+  }));
+  return sizes.reduce((sum, n) => sum + n, 0);
+}
+
+// The arguments of the call whose "(" ends just before `from` in `code`, as written and split at its top-level commas;
+// null when it never closes (not a call).
+function callArgs(code: string, from: number): string[] | null {
+  const args: string[] = [];
+  let depth = 0;
+  let start = from;
+  for (let i = from; i < code.length; i++) {
+    const c = code[i];
+    if (c === '"' || c === "'" || c === "`") {
+      for (i++; i < code.length && code[i] !== c; i++) if (code[i] === "\\") i++;
+    } else if ("([{".includes(c)) depth++;
+    else if (")]}".includes(c) && depth-- === 0) return [...args, code.slice(start, i)].filter((a) => a.trim());
+    else if (c === "," && !depth) {
+      args.push(code.slice(start, i));
+      start = i + 1;
+    }
+  }
+  return null;
+}
+
+/**
+ * The modules a source file (`code`) loads at idle: the "x" of each `lazyPage(() => import("x")…, { idle: true })`, as
+ * written, wherever `idle` stands among its options. Throws on a lazyPage marked idle whose loader is written another
+ * way, and on one whose options are not an object literal: either would load at idle without counting against
+ * IDLE_TIER_BUDGET. Build time only.
+ */
+export function idleImports(code: string): string[] {
+  const specs: string[] = [];
+  for (const m of code.matchAll(/(?<!function\s*)\blazyPage\(/g)) { // each call, not lazyPage's own definition
+    const [load, opts] = callArgs(code, m.index + m[0].length) ?? [];
+    if (opts === undefined) continue;
+    const call = `lazyPage(${load.trim().slice(0, 60)}…)`;
+    if (!opts.trim().startsWith("{")) throw new Error(`${call}: write its options as an object literal, so the idle tier's budget sees whether it is idle`);
+    if (!/\bidle\b(?!\s*:\s*false\b)/.test(opts)) continue;
+    const spec = /^\(\s*\)\s*=>\s*import\(\s*(["'])([^"'`]+)\1\s*\)/.exec(load.trim())?.[2];
+    if (!spec) throw new Error(`${call} is idle, but its loader is not \`() => import("…")\`, so the idle tier's budget cannot count it`);
+    specs.push(spec);
+  }
+  return specs;
+}
+
+/**
+ * The client namespaces the first screen's chunks (`code`) name in a key literal ("ns.…", 'ns.…' or `ns.…) that
+ * `startup` (src/i18n/startup-namespaces.json) leaves out, sorted. Their keys could be read before the rest of the
+ * catalog is in (src/i18n/index.ts startI18n), so the build fails on any. Build time only.
+ */
+export function startupNamespaceGaps(code: string[], namespaces: Iterable<string>, startup: Iterable<string>): string[] {
+  const known = new Set(namespaces);
+  const listed = new Set(startup);
+  const gaps = new Set<string>();
+  for (const c of code) for (const [, ns] of c.matchAll(/["'`]([a-z0-9][a-z0-9-]*)\./g)) if (known.has(ns) && !listed.has(ns)) gaps.add(ns);
+  return [...gaps].sort();
 }

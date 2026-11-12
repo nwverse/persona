@@ -5,7 +5,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: scripts-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref_name }}-scripts
+  group: scripts-${{ github.repository }}-${{ github.ref_name }}-scripts
   cancel-in-progress: true
 jobs:
   scripts:
@@ -40,6 +40,14 @@ jobs:
           cache-dependency-path: scripts/ci/requirements.txt
       - name: Install script validation dependencies
         run: python3 -m pip install -r scripts/ci/requirements.txt
+      - name: Expose the Swift toolchain's plist converter
+        run: |
+          swift_bin="$(dirname "$(readlink -f "$(command -v swift)")")"
+          if [ ! -x "$swift_bin/plutil" ] && [ -x /usr/share/swift/usr/bin/plutil ]; then
+            swift_bin=/usr/share/swift/usr/bin
+          fi
+          "$swift_bin/plutil" -help >/dev/null
+          echo "$swift_bin" >> "$GITHUB_PATH"
       - name: Install workflow validator
         run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
       - name: Scripts and docs checks

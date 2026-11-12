@@ -6,7 +6,7 @@ import persona.core.contracts.api.DoctorCheck
 import persona.core.contracts.api.DoctorReport
 
 /*
- * "What this computer can do" (docs/server/machines.md "Self-check", the web's lib/node-health.ts): what `personad node doctor` finds on a computer,
+ * "What this computer can do" (docs/server/machines.md "Doctor: what this computer can do", the web's lib/node-health.ts): what `personad node doctor` finds on a computer,
  * read as features. Each feature stands on a set of the node's checks and takes the worst state among them; the raw
  * list stays one tap away.
  */
@@ -137,7 +137,7 @@ private val Unreachable = Regex(
 @StringRes
 internal fun connectionFailureText(machine: Machine): Int? {
     val text = machine.error.orEmpty()
-    if (machine.online || machine.deploying || text.isBlank()) return null
+    if (machine.online || deploying(machine) || text.isBlank()) return null
     val link = machine.kind == "link" || machine.kind == "service"
     return when {
         AuthFailed.containsMatchIn(text) -> if (link) R.string.machines_offline_auth_link else R.string.machines_offline_auth_ssh

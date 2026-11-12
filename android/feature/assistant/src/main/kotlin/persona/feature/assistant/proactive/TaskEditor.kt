@@ -247,7 +247,7 @@ internal fun TaskEditorPage(
                     else -> R.string.assistant_proactive_run_now_body
                 }),
                     leadingIcon = PhIcons.Play, onClick = ::runNow, enabled = !busy && canSave, chevron = false,
-                    trailing = if (running) ({ JSpinner(Modifier.size(Tokens.Space.xxl)) }) else null)
+                    trailing = if (running) ({ JSpinner(Modifier.size(Tokens.Space.xl)) }) else null)
             }
         }
         if (lastLine != null) item("last") {
@@ -269,7 +269,7 @@ internal fun TaskEditorPage(
             if (more) item("history-more") { MoreRow(pluralStringResource(R.plurals.assistant_proactive_all_times, runs.size, runs.size), GroupPosition(first = false, last = true)) { onAllRuns(task.id) } }
         }
         item("delete") {
-            Spacer(Modifier.height(Tokens.Space.xxl))
+            Spacer(Modifier.height(Tokens.Space.xl))
             JGroupItem(GroupPosition.Single) {
                 JRow(stringResource(R.string.assistant_proactive_delete_routine), leadingIcon = PhIcons.Trash, destructive = true, onClick = { askDelete = true }, enabled = !busy, chevron = false)
             }
@@ -341,7 +341,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.runsWithSection(
 }
 
 /**
- * "Push when done" (docs/assistant/assistant.md "Push when done", iOS pushSection): every run, or only what a run sends with notify_user. Only its
+ * "Push when done" (docs/assistant/assistant.md "Push after running", iOS pushSection): every run, or only what a run sends with notify_user. Only its
  * alerts runs the task in its own conversation, so "Continue the original chat" goes.
  */
 private fun androidx.compose.foundation.lazy.LazyListScope.pushSection(draft: TaskDraft, busy: Boolean, onPush: (String) -> Unit) {
@@ -385,7 +385,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.conversationSection(
                         val freshening = task != null && state.freshening(task.id)
                         JRow(stringResource(R.string.assistant_proactive_fresh), leadingIcon = PhIcons.ChatCircleDots, chevron = false,
                             enabled = !busy && !freshening, onClick = { task?.let { t -> store.launch { fresh(t.id) } } },
-                            trailing = if (freshening) ({ JSpinner(Modifier.size(Tokens.Space.xxl)) }) else null)
+                            trailing = if (freshening) ({ JSpinner(Modifier.size(Tokens.Space.xl)) }) else null)
                     }
                 }
             }

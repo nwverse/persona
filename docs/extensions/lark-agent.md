@@ -1,7 +1,7 @@
 # /agent in Lark
 
 > **Since 2026-11-04 (#1520, extensions step 3, 3c)**: the whole path that connects Lark through the Lark gateway (the App's `/api/v1/lark/…`, the Lark sources of the Inbox and knowledge base, Moments,
-> the assistant's `ol` gate and credentials, /agent, personal Agents) is no longer in the open-source repository; it is provided by the extension that connects Lark (`docs/extensions/extensions.md`, `docs/plans/plan-extensions.md` ("Step 3")).
+> the assistant's `ol` gate and credentials, /agent, personal Agents) is no longer in the open-source repository; it is provided by the extension that connects Lark (`docs/extensions/extensions.md`, `docs/plans/plan-extensions.md` ("Step 3 plan: moving the Lark gateway into an extension")).
 > The behavior described below is provided by the extension unchanged; the hub source files mentioned here (`hub/lark*.go`, the `internal/lark` client…) have been deleted. The open-source version keeps only the official lark-cli, the Lark bot and Lark Mail.
 
 In any Lark conversation (group chat, direct chat, a topic in a topic group, a thread reply in a regular group) or in a document comment, when **I send** a message starting with `/agent`, the hub immediately starts an Agent to handle it.
@@ -33,7 +33,7 @@ When the Lark extension's Agent feature is enabled, either of these triggers can
 
 Document comments still use the prefix trigger, controlled by `agent_trigger_prefix`; self-mentions trigger requests only in chat messages.
 
-## Context handed to the Agent (`larkAgentContext`)
+## Context handed to the Agent
 
 This is the biggest difference from the listener in herdr: a request can come from anywhere and the Agent starts knowing nothing, so the hub gathers context first and puts it in the first message (`<persona-context>` tags):
 
@@ -58,7 +58,8 @@ and the tags collapse into one line next to the bubble, "Context · N items", fo
 
 ## How it runs
 
-- Like the Inbox's AI twin, it is a headless Agent in the assistant's directory (`assistant.send`), so it has all the assistant's tools. New requests open with `purpose: "lark.agent"`: configure its provider / launcher, model, and effort under **Settings › Model configuration › Lark /agent** (`docs/assistant/model-config.md`). With no newly saved override, or after restoring following, it inherits **Agents** (`agent.new`), not the main chat or old `lark_agent.launcher` / extension launcher defaults. Retired per-purpose records remain inert; only new user saves use the independent override namespace (#5921). The resolved launcher, model, and effort are passed to the node before it starts the conversation. Existing topic conversations retain their running settings; saving applies to new `/agent` conversations. The chat appears in the history of the "Persona" tab, where you can open it to see what it looked up; no "done" notification is pushed when it finishes (the result is the reply in Lark).
+- Like the Inbox's AI twin, it is a headless Agent in the assistant's directory (`assistant.send`), so it has all the assistant's tools. New requests open with `purpose: "lark.agent"`: configure its provider / launcher, model, and effort under **Settings › Model configuration › Lark /agent** (`docs/assistant/model-config.md`). With no newly saved override, or after restoring following, it inherits **Agents** (`agent.new`), not the main chat or old `lark_agent.launcher` / extension launcher defaults. Retired per-purpose records remain inert; only new user saves use the independent override namespace (#5921). The resolved launcher, model, and effort are passed to the node before it starts the conversation. Existing topic conversations retain their running settings; saving applies to new `/agent` conversations. The chat appears in the history of the "Persona" tab, under **Auto Chats › Lark /agent** (`origin: lark_agent`, `docs/protocol/protocol.md` "Origin of assistant chats"), where you can open it to see what it looked up; no "done" notification is pushed when it finishes (the result is the reply in Lark).
+  It is named like any other chat, "MMDD | kind | topic" after its first turn: the title the extension gives it ("/agent · <chat> · <request>") shows until then and is only a hint for the model (#3758, `docs/assistant/assistant.md` "Chat titles"). This needs the extension to call the hub with its own scoped token: with the hub's full token the chat counts as the user's and keeps the extension's title.
 - On receiving a request it first reacts to the message with the "OnIt" emoji, and switches it to "DONE" after replying.
 - The Agent submits its answer with the MCP tool `lark_agent_reply` (accepted only from the chat started for that request); the hub sends it with the Lark gateway's `POST /messages/:id/replies`
   (`editorType: markdown`, `replyMode: thread` inside a topic). If the turn ends before the Agent's first reply without calling the tool, the hub sends its last reply paragraph.
@@ -89,16 +90,10 @@ and the tags collapse into one line next to the bubble, "Context · N items", fo
 
 Model selection is stored by the manager through `GET` / `PUT /api/v1/model-config/purposes/lark.agent` (PATCH remains compatible). Read the current revision, save the selected fields, and read back `override` and `effective`. To follow Agents again, send `provider: null`, `model: null`, and `effort: null` with the current revision. This does not authorize sending Lark messages or alter the extension's trigger and reply settings.
 
-The legacy trigger configuration below illustrates the pre-extension shape; its `launcher` field no longer selects a model. Current trigger and machine settings belong to the Lark extension.
-
-```json
-"lark_agent": {
-  "enabled": true,
-  "launcher": "<your strongest launcher>",
-  "prefix": "/agent",
-  "context_messages": 40
-}
-```
+Trigger, machine and reply settings belong to the Lark extension and are kept in the hub's database, not in a file: turn /agent on and choose
+where it runs in **Settings › Extensions › <the Lark extension> › Settings** on any App or the web (its machine and launcher are picked from the hub's lists), or ask the
+assistant ("turn on /agent in Lark"), which changes them through `persona_settings` `extension.<id>` after a confirmation on the phone (`docs/extensions/extensions.md`,
+"Configuration: the form subset", #2385). The old `lark_agent` block in `hub.json` no longer takes effect.
 
 ## /agent in document comments (in the extension; formerly the hub's lark_agent_docs.go)
 

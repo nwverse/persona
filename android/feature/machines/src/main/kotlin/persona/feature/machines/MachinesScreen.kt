@@ -12,7 +12,10 @@ import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import persona.core.contracts.*
 import persona.core.contracts.api.HubManager
 import persona.core.contracts.api.ManagerRoster
@@ -39,8 +42,14 @@ internal fun MachinesScreen(
     var renaming by remember(machineId) { mutableStateOf(false) }
     // The hub renames computers (feature machine_rename); a linked hub's computer is renamed on that hub.
     val renames = MachineRenameFeature in LocalHubFeatures.current
-    val machines by model.sessions.machines.collectAsStateWithLifecycle()
+    val allMachines by model.sessions.machines.collectAsStateWithLifecycle()
     val sessions by model.sessions.sessions.collectAsStateWithLifecycle()
+    // The list is the current assistant's computers (docs/assistant/managers.md "Clients"); one computer's page is
+    // that computer's, whichever assistant it belongs to (a link or a notification opens it as it is).
+    val assistant = currentAssistant()
+    val machines = remember(allMachines, assistant, machineId) {
+        if (machineId != null) allMachines else allMachines.filter { assistant.ownsOn(it.id, it.manager) }
+    }
     val machine = machines.firstOrNull { it.id == machineId }
     val acting = actions?.state?.collectAsStateWithLifecycle()?.value ?: MachineActionsState()
     // An offline machine has no launchers; they are read again when it comes online (after "Reconnect").
@@ -53,7 +62,11 @@ internal fun MachinesScreen(
         if (info != null && showsDeploy(info)) MachineDeployLine(info, info.id in acting.deployStarting, actions?.let { { it.deploy(info.id) } })
     }
     var selection by rememberSaveable(machineId, state.range) { mutableStateOf<Long?>(null) }
-    val metrics = state.dashboard?.machines.orEmpty().associateBy { it.machineId }
+    // The dashboard's are every manager's: only the ones of a listed computer, or of one the list doesn't know at all.
+    val known = remember(allMachines) { allMachines.mapTo(HashSet()) { it.id } }
+    val listed = remember(machines) { machines.mapTo(HashSet()) { it.id } }
+    val metrics = state.dashboard?.machines.orEmpty().filter { it.machineId in listed || it.machineId !in known }
+        .associate { it.machineId to it.live(machines.firstOrNull { m -> m.id == it.machineId }) }
     val ids = (machines.map { it.id } + metrics.keys).distinct()
     val online = ids.count { metrics[it]?.online ?: machines.firstOrNull { m -> m.id == it }?.online ?: false }
     val attention = metrics.values.count { alerts(it.current(state.now), it.system?.cores).isNotEmpty() }
@@ -68,7 +81,18 @@ internal fun MachinesScreen(
         // ego lite is asked again when the page opens, and every few seconds while a job runs or its setup is under way.
         LaunchedEffect(health, machineId, machine?.online, enabled) { if (machine?.online == true && enabled) health.refreshBrowser(machineId) }
         val watching = health.watchesBrowser(machine?.online == true)
-        LaunchedEffect(health, machineId, watching) { if (watching) health.watchBrowser(machineId) { health.watchesBrowser(machine?.online == true) } }
+        // Only while the page is shown: a hidden tab, the app in the background or the screen off asks the hub nothing. Back in front it
+        // asks at once (a job may have ended meanwhile); the first start doesn't, the page-open read or the answer that started the job is fresh.
+        val lifecycle = LocalLifecycleOwner.current.lifecycle
+        LaunchedEffect(health, machineId, watching, lifecycle) {
+            if (!watching) return@LaunchedEffect
+            var stale = !lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+            lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                val readFirst = stale
+                stale = true
+                health.watchBrowser(machineId, readFirst) { health.watchesBrowser(machine?.online == true) }
+            }
+        }
     }
     if (confirmFix && health != null && machineId != null) FixDialog(healthState, { confirmFix = false }) { health.fix(machineId) }
     var addComputerHelp by rememberSaveable { mutableStateOf(false) }
@@ -94,7 +118,9 @@ internal fun MachinesScreen(
         if (state.sessionsFailure) item("sessions-failure") { JNotice(stringResource(R.string.machines_sessions_failure)) }
         if (machineId == null) {
             usageWindows(healthState.usage, java.time.Instant.ofEpochSecond(state.now))
-            if (!state.loading && ids.isEmpty()) item("empty") {
+            // An offline assistant with no computer the hub still keeps: out of reach, not a first run (no Add).
+            if (!state.loading && ids.isEmpty() && assistant.offline != null) item("offline") { JAssistantOffline(assistant) }
+            else if (!state.loading && ids.isEmpty()) item("empty") {
                 JEmptyState(stringResource(if (state.failure == null) R.string.machines_empty_title else R.string.machines_empty_unavailable),
                     stringResource(R.string.machines_empty_body), icon = PhIcons.Desktop,
                     // How to add one (docs/assistant/onboarding.md 4.5), until the phone adds computers itself.
@@ -110,15 +136,9 @@ internal fun MachinesScreen(
                     navigator.navigate(MachineDetailRoute(id))
                 }
             }
-            // Several managers (docs/assistant/managers.md step 4): the computers under the manager they belong to.
-            val byManager = roster?.groups(ids) { id -> machines.firstOrNull { it.id == id }?.manager }
-            if (byManager == null) items(ids, key = { it }, contentType = { "machine" }) { card(it) }
-            else byManager.forEach { group ->
-                item("manager-${group.id}", contentType = "manager") { JManagerHeader(group, count = group.items.size) }
-                items(group.items, key = { "${group.id}:$it" }, contentType = { "machine" }) { card(it) }
-            }
+            items(ids, key = { it }, contentType = { "machine" }) { card(it) }
         } else {
-            val metric = state.history?.metrics ?: MachineMetrics(machineId, machine?.online ?: false, machine?.system)
+            val metric = state.history?.metrics?.live(machine) ?: MachineMetrics(machineId, machine?.online ?: false, machine?.system)
             val system = metric.system ?: machine?.system
             val current = metric.current(state.now)
             val agents = machineSessions(sessions, machineId)
@@ -285,7 +305,7 @@ private fun MachineCard(
                 val plain = if (coded == null && machine != null) connectionFailureText(machine) else null
                 (coded ?: plain)?.let { Text(stringResource(it), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2) }
                 // A computer being redeployed drops on purpose: its error is not news (the deploy line says what is going on).
-                if (coded == null && machine?.deploying != true) machine?.error?.takeIf { it.isNotBlank() }?.let {
+                if (coded == null && machine?.let(::deploying) != true) machine?.error?.takeIf { it.isNotBlank() }?.let {
                     Text(it, style = PersonaTheme.type.caption, color = if (plain != null) PersonaTheme.palette.ink3 else PersonaTheme.palette.ink2)
                 }
             }

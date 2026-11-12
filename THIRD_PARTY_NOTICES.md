@@ -1,5 +1,13 @@
 # Third-party notices
 
+## Password login WebAssembly client
+
+`web/public/pake/client.wasm` uses `github.com/bytemare/opaque` v0.18.0 (MIT),
+its transitive cryptographic dependencies (MIT and BSD), and the Go runtime (BSD).
+The build collects their full license texts in a generated
+`THIRD_PARTY_NOTICES.txt` under the web build's `pake` output, deployed beside the WASM client at
+`/pake/THIRD_PARTY_NOTICES.txt`. The generated notices must accompany binary distributions.
+
 ## Brand marks
 
 `apple/Persona/Resources/Assets.xcassets/Brands` and `apple/PersonaWatch/Assets.xcassets/Brands` hold other products' marks
@@ -182,7 +190,7 @@ DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
 OTHER DEALINGS IN THE FONT SOFTWARE.
 
-## Barlow, Manrope, Sora and Unbounded
+## Barlow, Manrope, Sora, Unbounded and Noto Serif CJK
 
 Fonts under the same SIL Open Font License 1.1 as JetBrains Mono (its full text is above). Each keeps its license file
 beside it.
@@ -192,7 +200,8 @@ beside it.
 | Barlow Semi Condensed | `android/core/designsystem/src/main/res/font/barlow_sc_regular.ttf`, `barlow_sc_medium.ttf`, `barlow_sc_semibold.ttf` | Copyright 2017 The Barlow Project Authors (https://github.com/jpt/barlow) | `android/core/designsystem/src/main/assets/licenses/OFL-barlow.txt` |
 | Manrope | `android/core/designsystem/src/main/res/font/manrope.ttf` | Copyright 2018 The Manrope Project Authors (https://github.com/googlefonts/manrope) | `android/core/designsystem/src/main/assets/licenses/OFL-manrope.txt` |
 | Sora | `android/core/designsystem/src/main/res/font/sora.ttf` | Copyright 2019 The Sora Project Authors (https://github.com/sora-xor/sora-font) | `android/core/designsystem/src/main/assets/licenses/OFL-sora.txt` |
-| Unbounded (the website) | `site/public/fonts/unbounded-latin-500-normal.woff2`, `site/public/fonts/unbounded-latin-800-normal.woff2` | Copyright 2022 The Unbounded Project Authors (https://github.com/googlefonts/unbounded) | `site/public/fonts/OFL-Unbounded.txt` |
+| Unbounded (the website) | `site/public/fonts/unbounded-latin-800-normal.woff2` | Copyright 2022 The Unbounded Project Authors (https://github.com/googlefonts/unbounded) | `site/public/fonts/OFL-Unbounded.txt` |
+| Noto Serif CJK SC Bold (the website's headlines, a subset made by `scripts/assets/make_site_assets.py`) | `site/public/fonts/persona-serif.woff` | Copyright 2017-2022 Adobe (http://www.adobe.com/), with Reserved Font Name 'Source' (https://github.com/notofonts/noto-cjk) | `site/public/fonts/OFL-NotoSerifCJK.txt` |
 
 ## KaTeX, Mermaid and Phosphor Icons
 
@@ -290,6 +299,92 @@ follow the `GlueHandler` and `SSHWrapperHandler` of swift-nio-ssh's `NIOSSHClien
 Copyright (c) Apple Inc. and the SwiftNIO / Swift project authors. Licensed under the Apache License, Version 2.0
 (https://www.apache.org/licenses/LICENSE-2.0); each package's LICENSE.txt and NOTICE.txt apply.
 
+## JSch
+
+The Android app's SSH tunnel to the hub (`android/core/hub/src/main/kotlin/persona/core/hub/tunnel/`,
+docs/operations/network.md) uses JSch (https://github.com/mwiede/jsch, `com.github.mwiede:jsch`), which carries JZlib
+(`com.jcraft.jsch.jzlib`) and jBCrypt (`com.jcraft.jsch.jbcrypt`) inside it. Authors' email addresses are left out of
+the license texts.
+
+JSch:
+
+```text
+Copyright (c) 2002-2015 Atsuhiko Yamanaka, JCraft,Inc.
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+  1. Redistributions of source code must retain the above copyright notice,
+     this list of conditions and the following disclaimer.
+
+  2. Redistributions in binary form must reproduce the above copyright
+     notice, this list of conditions and the following disclaimer in
+     the documentation and/or other materials provided with the distribution.
+
+  3. The names of the authors may not be used to endorse or promote products
+     derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESSED OR IMPLIED WARRANTIES,
+INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL JCRAFT,
+INC. OR ANY CONTRIBUTORS TO THIS SOFTWARE BE LIABLE FOR ANY DIRECT, INDIRECT,
+INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA,
+OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
+EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
+
+JZlib:
+
+```text
+Copyright (c) 2000-2011 ymnk, JCraft,Inc. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+  1. Redistributions of source code must retain the above copyright notice,
+     this list of conditions and the following disclaimer.
+
+  2. Redistributions in binary form must reproduce the above copyright
+     notice, this list of conditions and the following disclaimer in
+     the documentation and/or other materials provided with the distribution.
+
+  3. The names of the authors may not be used to endorse or promote products
+     derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESSED OR IMPLIED WARRANTIES,
+INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL JCRAFT,
+INC. OR ANY CONTRIBUTORS TO THIS SOFTWARE BE LIABLE FOR ANY DIRECT, INDIRECT,
+INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA,
+OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
+EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
+
+jBCrypt:
+
+```text
+Copyright (c) 2006 Damien Miller
+
+Permission to use, copy, modify, and distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+```
+
 ## MarkdownUI and its dependencies
 
 The iOS, Mac and Vision apps link swift-markdown-ui (`apple/project.yml`) to render Markdown, which depends on the
@@ -302,6 +397,17 @@ packages below; its swift-snapshot-testing dependency is only for its own tests 
 | swift-cmark (cmark-gfm) | https://github.com/swiftlang/swift-cmark | BSD-2-Clause, Copyright (c) 2014, John MacFarlane; parts under MIT: houdini (Copyright (C) 2012 Vicent Martí), buffer and chunk ((C) 2012 Github, Inc.), utf8 ((C) 2009 Public Software Group e. V., Berlin, Germany) |
 
 Each package's LICENSE (swift-cmark's COPYING) applies.
+
+## MarqueeGlow
+
+The iOS app links MarqueeGlow (`apple/project.yml`) to draw the composer's glow while a reply is generating
+(`apple/Persona/DesignSystem/ComposerGlow.swift`). It has no dependencies.
+
+| Package | Source | License |
+| --- | --- | --- |
+| MarqueeGlow | https://github.com/szupzj18/MarqueeGlow | MIT, Copyright (c) 2026 ChrisPan |
+
+The package's LICENSE applies.
 
 ## SheetJS
 
@@ -343,32 +449,29 @@ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEM
 COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
 OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-## openclaw-weixin
+## Lucide
 
-`server/plugins/wechat/ilink` (the iLink client for the WeChat bot, docs/extensions/wechat.md) follows the wire behavior of Tencent's
-openclaw-weixin v2.4.6: its API types and calls, the QR authorization, the media AES-128-ECB, and its markdown filter. The Go
-code is written for Persona; nothing of the plugin's runtime is copied.
+The plan card's step marks (`web/src/views/chat/PlanCard.tsx`: circle, circle-check and the in-progress arc) and several
+web icons drawn in `web/src/ui/icons.tsx` (sparkles, corner-down-right, workflow and others its comments name) take their
+path data from Lucide, the icon set cindy uses.
 
-https://github.com/Tencent/openclaw-weixin
+https://github.com/lucide-icons/lucide
 
-Tencent is pleased to support the open source community by making openclaw-weixin available.
+ISC License
 
-Copyright (C) 2026 Tencent.  All rights reserved.
+Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2022 as part of Feather (MIT). All other copyright (c) for Lucide are held by Lucide Contributors 2022.
 
-openclaw-weixin is licensed under the MIT.
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the Software without restriction, including without limitation the
-rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit
-persons to whom the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the
-Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
-WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
-COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
-OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ## cindy
 
@@ -376,8 +479,33 @@ OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 cindy's model registry (`packages/model-providers/catalog/model-registry.json`): for the Claude series and the GLM,
 Kimi, DeepSeek V4, Qwen3, MiniMax, Seed and MiMo models cindy runs on Claude Code, only the id, name, context window,
 thinking levels (low, medium, high, xhigh, max) and default level, as the registry states them, reformatted to a flat
-list. The provider settings (the add-a-provider steps, the connection test and the model list it fetches) follow
-cindy's design. No code is copied.
+list. The provider settings (the add-a-provider steps, the connection test and the model list it fetches) and the web
+chat's subagent and workflow cards (`web/src/views/chat/TaskCard.tsx`, after cindy's `AgentTaskCard`: layout, states and
+wording) and the main chat's hand-off cards with the way-back strip on an Agent's page (`web/src/views/assistant/Handoff.tsx`,
+`web/src/views/chat/HandoffBack.tsx`, after cindy's `SessionHandoffCard` and its return pill: layout, states and wording)
+and a lead's Team side panel (`web/src/views/chat/TeamPanel.tsx`, after cindy's Team tab, `OrcaWorkerPanel` and its worker
+strip: layout, states, wording and when it opens) follow cindy's design. No code is copied for those.
+
+The web chat's work summary follows cindy's chat at the owner's request (2026-11-12): the timeline inside an opened
+summary (`web/src/lib/work-groups.ts`, after `createCompletedWorkGroup` in `messageWorkGroups.ts`), the thought rows
+(`web/src/views/chat/ThinkingRow.tsx`, after `ThinkingActivityRow` in `WorkGroupBlock.tsx`), the tool rows
+(`web/src/views/chat/ActionRow.tsx`, after `AgentActionRow` and `activityRowChrome.ts`) and the durations (`workDuration`,
+after `formatDuration`). Two files are ported from cindy's code with changes: `web/src/lib/thinking-text.ts` (from
+`packages/maker-shared/src/thinkingText.ts`) and `web/src/views/chat/ThinkingText.tsx` (from
+`apps/desktop/src/renderer/components/chat/ThinkingText.tsx`), with tests from cindy's.
+
+The web chat's plan (`web/src/views/chat/PlanCard.tsx`, #5156) is ported from cindy's `TodoListCard.tsx` with changes:
+the inline card that opens in place (`InlinePlanCard`), the pill above the composer with its hover / pinned flyout and
+Close Plan (`TodoListCard`), the progress ring's arithmetic and the in-progress arc's path and sizes.
+
+The changed-files card (`web/src/views/chat/TurnChanges.tsx`, #5157) and the error notice (`web/src/ui/ErrorNotice.tsx`)
+are ported from cindy's `TurnChangesCard.tsx` and `components/ui/error-notice.tsx` with changes: their layout, sizes and
+states; the counting, review targets and fold data are Persona's own.
+
+The web chat's bar under a turn's last reply (`web/src/views/chat/ReplyBar.tsx`, #5314) is ported from cindy's
+`MessageActionBar.tsx` with changes: which reply has it, the order of its actions, its sizes, the linger before it fades
+and when its copy check resets. `web/src/lib/relative-time.ts` is ported from cindy's `hooks/useRelativeTime.ts` with
+changes (the wording of the time and its exact form); the actions behind the buttons are Persona's own.
 
 https://github.com/makecindy/cindy
 

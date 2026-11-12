@@ -43,6 +43,8 @@ internal fun LazyListScope.pickStep(res: Resources, state: NewProviderState, onP
 internal fun LazyListScope.keyStep(
     state: NewProviderState, preset: ProviderPreset, editable: Boolean, onEdit: (NewProviderDraft) -> Unit, onAssign: (Boolean) -> Unit,
     onRetest: () -> Unit, onModel: () -> Unit, more: Boolean, onMore: () -> Unit,
+    /** "Computers" under "More options", on a hub with device scopes. */
+    onComputers: () -> Unit = {},
 ) {
     val draft = state.draft
     item("key-preset") {
@@ -53,7 +55,7 @@ internal fun LazyListScope.keyStep(
     }
     if (!state.hubNames) nameStepField(state, editable, onEdit)
     item("key") {
-        JTextField(draft.apiKey, { onEdit(draft.copy(apiKey = it)) }, Modifier.fillMaxWidth().padding(top = Tokens.Space.m), label = "API Key",
+        JTextField(draft.apiKey, { onEdit(draft.copy(apiKey = it)) }, Modifier.fillMaxWidth().padding(top = Tokens.Space.m), label = "API Key", // i18n-ignore: the field name providers' docs use, same on iOS / web
             placeholder = stringResource(R.string.settings_onb_key_paste), singleLine = true, enabled = editable,
             visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
             supportingText = preset.keyHint?.takeIf { it.isNotBlank() }?.let { stringResource(R.string.settings_onb_key_hint_with, it) }
@@ -66,7 +68,7 @@ internal fun LazyListScope.keyStep(
         }
     }
     item("key-test") { KeyTestStatus(state, preset, onRetest) }
-    if (state.hubNames) item("key-assign") {
+    if (state.hubNames && preset.runsClaude) item("key-assign") {
         val checking = state.readinessPending && state.assignSet == null
         val machine = state.readiness?.machine?.name?.takeIf { it.isNotBlank() }
         val hint = when {
@@ -79,6 +81,9 @@ internal fun LazyListScope.keyStep(
             if (checking) JRow(stringResource(R.string.settings_onb_assign_label), subtitle = hint, subtitleLines = 4, trailing = { JSpinner() })
             else JSwitchRow(stringResource(R.string.settings_onb_assign_label), state.assign, onAssign, subtitle = hint, enabled = editable)
         }
+    }
+    if (state.hubNames && !preset.runsClaude) item("key-direct-note") {
+        JNotice(stringResource(R.string.settings_onb_direct_note), Modifier.padding(top = Tokens.Space.m), status = Status.Idle)
     }
     item("key-more") {
         JGroupItem(GroupPosition.Single, Modifier.padding(top = Tokens.Space.m)) {
@@ -105,6 +110,7 @@ internal fun LazyListScope.keyStep(
             SettingsCaption(preset.modelsError?.takeIf { it.isNotBlank() }?.let { stringResource(R.string.settings_src_provider_models_error, it) }
                 ?: stringResource(R.string.settings_src_provider_model_note), Modifier.padding(horizontal = rowPadding, vertical = Tokens.Space.s))
         }
+        computersRow(state, onComputers)
     }
 }
 
@@ -142,10 +148,12 @@ internal fun LazyListScope.doneStep(state: NewProviderState, added: WizardAdded)
         val summary = assignSummary(added.result, added.asked)
         val machine = state.readiness?.machine?.name?.takeIf { it.isNotBlank() }
         val toMain = added.asked && added.result.assigned?.contains("assistant") == true
+        val direct = state.selected?.runsClaude == false
         JEmptyState(stringResource(R.string.settings_onb_done_title, added.result.title),
-            summary.assigned?.text() ?: stringResource(R.string.settings_onb_done_pick_later), icon = PhIcons.CheckCircle)
+            if (direct) stringResource(R.string.settings_onb_direct_note)
+            else summary.assigned?.text() ?: stringResource(R.string.settings_onb_done_pick_later), icon = PhIcons.CheckCircle)
         summary.kept.forEach { SettingsCaption(it.text(), Modifier.padding(horizontal = rowPadding, vertical = Tokens.Space.xs)) }
-        if (stillNoClaude(added, state.readiness)) {
+        if (!direct && stillNoClaude(added, state.readiness)) {
             val words = when {
                 toMain && machine != null -> stringResource(R.string.settings_onb_done_no_claude, machine)
                 toMain -> stringResource(R.string.settings_onb_done_no_claude_any)
@@ -158,7 +166,7 @@ internal fun LazyListScope.doneStep(state: NewProviderState, added: WizardAdded)
     }
 }
 
-/** What "Now using it: main conversation, new Agents" and each kept category say; [assigned] null when none was asked (or an older hub). */
+/** What "Now using it: main conversation, new agents" and each kept category say; [assigned] null when none was asked (or an older hub). */
 internal data class AssignSummary(val assigned: ResText?, val kept: List<ResText>)
 
 internal fun assignSummary(result: ProviderAdded, asked: Boolean): AssignSummary {

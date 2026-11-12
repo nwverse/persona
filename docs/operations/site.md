@@ -1,10 +1,71 @@
-# Website: hosting, Hong Kong entry point, future split routing
+# Website: home page, hosting, Hong Kong entry point, future split routing
 
 `<site-domain>` is the domain in configured `publish.site_url` (actual value in build configuration and `CLAUDE.local.md`). `<old-domain>` was hardcoded in early builds; since 2026-11-05 (#2389),
 it no longer connects to Worker and redirects the whole site with 301 to the same path on `<site-domain>` ("Old domain" below).
 
 The website (`site/`) is Cloudflare Worker `persona-site`, hosting static pages, public personad downloads (`/dl/`, archives from R2 bucket `persona-dl`; see `docs/operations/release.md`, "Publishing personad"), installer (`/install.sh`),
 and push-relay entry (`/relay/*`, `docs/operations/push-relay.md`). Deploy only through `scripts/release/publish.sh` (`docs/operations/release.md`).
+
+**The Worker's secrets belong to its name.** `RELAY_ORIGIN`, `RELAY_PROXY_SECRET` and `EDGE_SECRET` stay with the old Worker when `name` in
+`site/wrangler.jsonc` changes: the deploy creates a new Worker without them, it takes over `origin.<site-domain>`, and `/relay/*` answers 503
+"push relay not configured" (2026-11-07, #1263). Before renaming, put each secret on the new name (`npx wrangler secret put <NAME> --name <new name>`;
+a secret can't be read back, so take the values from the password manager). `publish.sh` reads `/relay/v1/health` before and after every deploy
+and fails when a relay that was healthy before the deploy no longer is.
+
+## Home page
+
+`site/public/index.html` is the whole home page (#3842): Chinese, CSS and JS inline, no build step. It leads with the
+SuperAgent, the same story as the README, then the demo-mode recording, shared context, linked computers, every
+client, extensions, privacy, getting started, an FAQ and a closing line. The privacy, terms and 404 pages keep their
+own `site/public/style.css`.
+
+- **The hero demo is scripted, with made-up data** (the task, PR numbers, test counts). What it acts out is real: main
+  chat splits a request into Agent tasks that wait for **Start**, answers an Agent's technical question itself and
+  passes a goal decision to the phone (`docs/assistant/assistant.md`). Change the story only along with the product.
+- **Facts follow the README.** When the README's runtimes, clients, extensions or install steps change, change the
+  page in the same PR. No implementation details on the page (paths, process names, databases, engine names): it is
+  for people deciding whether to try Persona; the docs are for the rest.
+- **State colors keep their app meaning**: red needs you, amber working, green done, also for the packets moving on
+  the diagrams.
+- **Assets** come from `scripts/assets/make_site_assets.py`: `site/public/img/recording.webp` (a copy of
+  `docs/assets/readme/hero-dark.zh-CN.webp`), `site/public/img/paper.webp` (the mascot cut from the Apple Vision Pro
+  icon's front layer) and `site/public/fonts/persona-serif.woff`, Noto Serif CJK SC Bold cut down to the characters of
+  `h1`, `h2` and `.hello`. **After editing any of that text, run `python3 scripts/assets/make_site_assets.py serif`**,
+  or the new characters fall back to the visitor's own serif. The source font is not in the repository; the script
+  finds a system copy or takes `--serif-font`.
+- **Motion** only starts with JavaScript; without it every section is visible and static, and with reduced motion
+  the page shows its finished state (the switches on, the underline drawn, no moving packets).
+- **The version in the top bar** is `/dl/VERSION`, written by `scripts/release/publish.sh`; the badge stays hidden
+  when the file is missing.
+- **Light only.** The previous page also had a dark variant; this one follows the app icon's paper in both schemes.
+
+## Extensions page
+
+`/extensions/` (`site/public/extensions/index.html`, #4781) lists the extensions of the official market: icon, name,
+description, version and downloads, most downloaded first, with search (name, id, description, tags) and filters. It
+uses the home page's palette, type and footer; the home page's top bar, extensions section and footer link to it.
+Unlike the home page it follows the system's dark scheme (#4810): every color is a variable at the top of its CSS, and
+`prefers-color-scheme: dark` swaps paper and ink for a warm night set; text on orange and amber and the install card
+keep their colors in both. Add a color as a variable with both values, never as a literal in a rule, or one scheme breaks. Its h1 and h2 are set in the serif too: `make_site_assets.py serif` reads both pages.
+
+- **Data**: the page reads `/extensions/catalog.json`, which `site/extensions.mjs` builds from the market's signed
+  index (`persona-extensions.json` on the market repository's `main`; `EXTENSIONS_CATALOG_URL` overrides it). It keeps
+  only what the page shows, in the edge cache: fresh for 10 minutes, then fetched again, and when GitHub cannot be
+  reached the old copy is served (marked `stale`, the page says so) for up to 30 days. With no copy at all it answers
+  503 and the page offers a retry and the market on GitHub. The signatures are not checked: the page only displays,
+  and a hub checks them before it installs anything.
+- **Only the public market** (#4816): the Worker rejects a catalog whose `generation.repository` is not
+  `nwverse/persona-extensions`, and each extension's source link is its `homepage` only when that points into the
+  repository, otherwise `tree/main/extensions/<id>` there (many manifests declare no homepage).
+- **Optional fields**: `icon_url` (absolute https) and `downloads` (an integer), on an extension or its manifest,
+  `category` / `categories`, and `downloads_updated_at` at the top of the payload. Without counts the page hides its
+  sort control and lists by name; without an icon it draws the name's first character on a tint; without categories
+  it filters by the tags most extensions share.
+- **Icons go through `/extensions/icons/<id>`**: icon hosts such as raw.githubusercontent.com are often unreachable from
+  mainland China, this site is not. The Worker fetches only the `icon_url` the catalog gives that id, passes image types
+  only (at most 512 KB), and sends `nosniff` and a sandboxing CSP so an SVG opened on its own runs nothing here.
+- Both routes are in `run_worker_first` in `site/wrangler.jsonc`: with `not_found_handling` set, a path that is not a
+  static file never reaches the Worker otherwise.
 
 ## Current routing (since 2026-11-04, #1134)
 

@@ -1,6 +1,7 @@
 package sessionlist
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -273,6 +274,63 @@ func TestUnchangedReplaceAndBatchOwnership(t *testing.T) {
 	i.RemoveSource("unknown")
 	if i.Revision() != revision {
 		t.Fatal("no-op removal bumped revision")
+	}
+}
+
+// Items reads the stored items in the order asked, the zero Item for an unknown ID; handing them back unchanged is
+// no change, and changing a returned copy changes nothing stored.
+func TestItemsReadsStoredItems(t *testing.T) {
+	var i Index
+	if got := i.Items([]string{"a"}); len(got) != 1 || !reflect.DeepEqual(got[0], Item{}) {
+		t.Fatalf("empty index: %+v", got)
+	}
+	a, b := testItem("a", 1), testItem("b", 2)
+	i.Replace("owner", []Item{a, b})
+	revision := i.Revision()
+	got := i.Items([]string{"b", "missing", "a"})
+	if !reflect.DeepEqual(got, []Item{b, {}, a}) {
+		t.Fatalf("items: %+v", got)
+	}
+	i.Replace("owner", []Item{got[2], got[0]})
+	if i.Revision() != revision {
+		t.Fatal("stored items handed back bumped the revision")
+	}
+	got[0].State = "idle"
+	if p := mustQuery(t, &i, Options{State: "idle"}); p.Total != 0 || i.Revision() != revision {
+		t.Fatal("a returned copy changed the index")
+	}
+}
+
+// sameItem is reflect.DeepEqual on items: payloads shared, copied, changed, nil or empty, of other types, and each
+// attribute changed alone, times in other zones included.
+func TestSameItemMatchesDeepEqual(t *testing.T) {
+	raw := json.RawMessage(`{"id":"a"}`)
+	base := Item{ID: "a", Machine: "m", UpdatedAt: testTime, SearchText: "text", Full: raw, Summary: raw[:5]}
+	edits := []func(*Item){
+		func(*Item) {},
+		func(i *Item) { i.Full = json.RawMessage(bytes.Clone(raw)) },
+		func(i *Item) { i.Full = json.RawMessage(`{"id":"b"}`) },
+		func(i *Item) { i.Full = raw[:len(raw)-1] },
+		func(i *Item) { i.Full = nil },
+		func(i *Item) { i.Full, i.Summary = json.RawMessage{}, json.RawMessage(nil) },
+		func(i *Item) { i.Full = []byte(raw) },
+		func(i *Item) { i.Full = testPayload{ID: "a", Details: map[string][]string{"k": {"v"}}} },
+		func(i *Item) { i.Summary = raw },
+		func(i *Item) { i.State = "idle" },
+		func(i *Item) { i.PaneSource = "terminal" },
+		func(i *Item) { i.BackgroundWaiting = true },
+		func(i *Item) { i.SearchText += " " },
+		func(i *Item) { i.UpdatedAt = i.UpdatedAt.In(time.FixedZone("demo", 0)) },
+		func(i *Item) { i.UpdatedAt = i.UpdatedAt.Add(time.Nanosecond) },
+	}
+	for n, edit := range edits {
+		for _, a := range []Item{base, {ID: "a", Full: testPayload{ID: "a"}}} {
+			b := a
+			edit(&b)
+			if got, want := sameItem(&a, &b), reflect.DeepEqual(a, b); got != want {
+				t.Fatalf("edit %d: sameItem %v, reflect.DeepEqual %v", n, got, want)
+			}
+		}
 	}
 }
 
@@ -598,5 +656,64 @@ func TestConcurrentQueriesAndReplacement(t *testing.T) {
 	wg.Wait()
 	if len(i.snapshots) > maxSnapshots || len(i.cache) > maxCache || len(i.journal) > maxJournalRevisions || i.journalChanges > maxJournalChanges {
 		t.Fatal("concurrent use exceeded bounds")
+	}
+}
+
+// Manager selects the rows of the batches replaced with that owner, in pages, counts and deltas; the rows of a batch
+// whose owner changes leave the old owner's list as removals and enter the new one's though nothing else of them
+// changed, and a cursor is bound to the filter. A batch replaced with the same owner and rows is no change.
+func TestManagerFilter(t *testing.T) {
+	var index Index
+	at := time.Unix(100, 0)
+	row := func(id, machine string) Item {
+		return Item{ID: id, Machine: machine, State: "idle", UpdatedAt: at, Full: id, Summary: id}
+	}
+	index.ReplaceOwned("ma", "assistant", []Item{row("a1", "ma"), row("a2", "ma")})
+	index.ReplaceOwned("mb", "m-0b0b0b", []Item{row("b1", "mb")})
+	index.Replace("mc", []Item{row("c1", "mc")}) // no owner: in no manager's list
+	page := func(o Options) Page {
+		t.Helper()
+		p, err := index.Query(o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	mine, theirs := page(Options{Manager: "assistant"}), page(Options{Manager: "m-0b0b0b"})
+	if mine.Total != 2 || len(mine.Sessions) != 2 || theirs.Total != 1 || theirs.Sessions[0] != "b1" {
+		t.Fatalf("pages: %+v %+v", mine, theirs)
+	}
+	if all, none := page(Options{}), page(Options{Manager: "m-ffffff"}); all.Total != 4 || none.Total != 0 || len(none.Sessions) != 0 {
+		t.Fatalf("no filter %+v, an owner of nothing %+v", all, none)
+	}
+	counts, err := index.Counts(Options{Manager: "assistant"})
+	if err != nil || counts.Total != 2 || len(counts.Machine) != 1 || counts.Machine["ma"] != 2 {
+		t.Fatalf("counts: %+v %v", counts, err)
+	}
+	first := page(Options{Manager: "assistant", Limit: 1})
+	if !first.HasMore {
+		t.Fatalf("first: %+v", first)
+	}
+	if _, err := index.Query(Options{Manager: "m-0b0b0b", Limit: 1, Cursor: first.NextCursor}); err == nil {
+		t.Fatal("a cursor of one owner's list was taken for another's")
+	}
+	if next := page(Options{Manager: "assistant", Limit: 1, Cursor: first.NextCursor}); next.HasMore || len(next.Sessions) != 1 {
+		t.Fatalf("next: %+v", next)
+	}
+	// The same owner and rows again: no revision.
+	before := index.Revision()
+	index.ReplaceOwned("ma", "assistant", []Item{row("a1", "ma"), row("a2", "ma")})
+	if index.Revision() != before {
+		t.Fatal("an unchanged batch made a revision")
+	}
+	// ma changes owner: nothing else of its rows changed.
+	index.ReplaceOwned("ma", "m-0b0b0b", []Item{row("a1", "ma"), row("a2", "ma")})
+	left := page(Options{Manager: "assistant", Since: mine.Revision})
+	if left.Total != 0 || len(left.Sessions) != 0 || len(left.Remove) != 2 {
+		t.Fatalf("the old owner's delta: %+v", left)
+	}
+	came := page(Options{Manager: "m-0b0b0b", Since: theirs.Revision})
+	if came.Total != 3 || len(came.Sessions) != 2 || len(came.Remove) != 0 {
+		t.Fatalf("the new owner's delta: %+v", came)
 	}
 }

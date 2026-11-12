@@ -1,8 +1,10 @@
 // What the chat hands down to its rows without threading props through every step: the background tasks and their
 // calls (to badge a call that went to the background and name a notice's call), the subagents (their cards), the
 // workflow runs' calls (their cards), the items that came in live (their words fade in), and the key the open / closed
-// state is kept under.
+// state is kept under, and where the child sessions' cards go.
 import { createContext, useContext } from "react";
+import type { ChildPlace } from "../../lib/child-cards";
+import type { ExternalOrigin } from "../../lib/conversation-origins";
 import { emptyTaskIndex, type TaskIndex } from "../../lib/tasks";
 import type { Subagent } from "../../lib/types";
 import { NO_WORKFLOW_CALLS, type WorkflowCalls } from "../../lib/workflows";
@@ -20,9 +22,16 @@ export interface ChatContextValue {
   /** The Workflow calls whose run the hub lists (#3434): they draw the run's card, and a running one stays out of the
    *  folded work. Only which runs there are, not their progress (each card reads that), so it seldom changes. */
   workflowCalls?: WorkflowCalls;
-  /** How the work lines open (work-groups.ts workLineOpen): "assistant" in a Persona conversation, open while the
-   *  exchange runs; "agents" (the default) in a coding agent's chat. */
+  /** Conversation identity; both styles share the collapsed work-line default (#2602). */
   lineStyle?: WorkLineStyle;
+  /** The message an extension opened this conversation with and where it came from (#3758, `externalOpening`). */
+  opening?: { id: string; origin: ExternalOrigin };
+  /** The exchange whose last words carried the closeout the card above the transcript shows (#3612): they are drawn
+   *  without the raw block. Unset while no card is shown. */
+  closeoutSegment?: string;
+  /** The child sessions drawn as cards in this chat (#5120, lib/child-cards.ts), by the exchange each sits in. The same
+   *  map while none moved: a child's own updates redraw only its card. */
+  children?: ReadonlyMap<string, ChildPlace[]>;
 }
 
 export const ChatContext = createContext<ChatContextValue>({ tasks: emptyTaskIndex(), subagents: [], scope: "", workflowCalls: NO_WORKFLOW_CALLS });
@@ -35,7 +44,3 @@ export function useChatContext() {
   return useContext(ChatContext);
 }
 
-/** Items pushed over the WebSocket after the chat subscribed (not the first page, older pages or an unfolded range):
- *  their words fade in once (Markdown's `fade`). A context of its own, read only by the words that may fade: it
- *  changes with each new reply, and in ChatContext it would render every exchange again. */
-export const FreshWords = createContext<ReadonlySet<string> | undefined>(undefined);

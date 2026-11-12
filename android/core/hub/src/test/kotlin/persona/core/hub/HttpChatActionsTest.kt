@@ -61,6 +61,41 @@ class HttpChatActionsTest {
         }
     }
 
+    @Test fun ultracodeGoesAloneAndAQueuedSwitchVerifies() = runBlocking {
+        MockWebServer().use { server ->
+            val actions = actions(server)
+            server.enqueue(MockResponse().setBody("{}"))
+            assertEquals(ChatActionResult.Done, actions.execute(Session("m", "s1"), ChatAction.Modes(ultracode = true)))
+            val request = server.takeRequest()
+            assertEquals("/api/v1/sessions/m/s1/modes", request.path)
+            assertEquals(buildJsonObject { put("ultracode", true) }, JsonCodec.parseToJsonElement(request.body.readUtf8()))
+            // The hub's row: queued, the node still saw it off; an older hub's row has none of the fields (unknown, not off).
+            server.enqueue(MockResponse().setBody("""{"sessions":[{"machine_id":"m","session_id":"s1","ultracode":false,"ultracode_pending":true,"ultracode_note":"等这一轮结束"}]}"""))
+            assertEquals(ChatActionResult.Done, actions.verify(Session("m", "s1"), ChatAction.Modes(ultracode = true)))
+            server.enqueue(MockResponse().setBody("""{"sessions":[{"machine_id":"m","session_id":"s1"}]}"""))
+            assertEquals(ChatActionResult.Unknown, actions.verify(Session("m", "s1"), ChatAction.Modes(ultracode = true)))
+            val old = JsonCodec.decodeFromString<Session>("""{"machine_id":"m","session_id":"s1"}""")
+            assertEquals(Triple<Boolean?, String?, Boolean>(null, null, false), Triple(old.ultracode, old.ultracodeNote, old.ultracodePending))
+            val seen = JsonCodec.decodeFromString<Session>("""{"session_id":"s1","ultracode":false,"ultracode_note":"x","ultracode_pending":true}""")
+            assertEquals(Triple<Boolean?, String?, Boolean>(false, "x", true), Triple(seen.ultracode, seen.ultracodeNote, seen.ultracodePending))
+        }
+    }
+
+    /** #582: the after-resume notice is dismissed with `ultracode_dismiss_lost` and verified by the notice being gone. */
+    @Test fun theAfterResumeNoticeIsDismissed() = runBlocking {
+        MockWebServer().use { server ->
+            val actions = actions(server)
+            server.enqueue(MockResponse().setBody("{}"))
+            assertEquals(ChatActionResult.Done, actions.execute(Session("m", "s1"), ChatAction.Modes(dismissUltracodeLost = true)))
+            assertEquals(buildJsonObject { put("ultracode_dismiss_lost", true) }, JsonCodec.parseToJsonElement(server.takeRequest().body.readUtf8()))
+            server.enqueue(MockResponse().setBody("""{"sessions":[{"machine_id":"m","session_id":"s1","ultracode_lost_at":"2026-11-11T12:00:00Z"}]}"""))
+            assertEquals(ChatActionResult.Unknown, actions.verify(Session("m", "s1"), ChatAction.Modes(dismissUltracodeLost = true)))
+            server.enqueue(MockResponse().setBody("""{"sessions":[{"machine_id":"m","session_id":"s1"}]}"""))
+            assertEquals(ChatActionResult.Done, actions.verify(Session("m", "s1"), ChatAction.Modes(dismissUltracodeLost = true)))
+            assertEquals("2026-11-11T12:00:00Z", JsonCodec.decodeFromString<Session>("""{"session_id":"s","ultracode_lost_at":"2026-11-11T12:00:00Z"}""").ultracodeLostAt)
+        }
+    }
+
     @Test fun forkPostsTheReplyAndReturnsTheNewSession() = runBlocking {
         MockWebServer().use { server ->
             val actions = actions(server)
@@ -164,6 +199,31 @@ class HttpChatActionsTest {
             val failure = runCatching { actions.editQueue(session, emptyList()) }.exceptionOrNull() as HubFailure
             assertEquals("queue_changed", (failure.code).zhAny())
             assertEquals(3, server.requestCount)
+        }
+    }
+
+    @Test fun sendNowPostsTheQueueRouteOnTheSlowClientAndKeepsTheHubsWords() = runBlocking {
+        MockWebServer().use { server ->
+            val http = OkHttpClient.Builder().retryOnConnectionFailure(false).build()
+            val slow = mutableListOf<String>()
+            val actions = HttpChatActions({ path, method, body ->
+                slow += path
+                http.newCall(Request.Builder().url(server.url(path)).method(method, body).build()).execute()
+            }) { _, _, _ -> error("send-now waits for the node: the slow client") }
+            val session = Session(machineId = "m", sessionId = "s/1")
+            server.enqueue(MockResponse().setBody("""{"sent":true}"""))
+            actions.sendQueuedNow(session)
+            val request = server.takeRequest()
+            assertEquals("POST", request.method)
+            assertEquals("/api/v1/sessions/m/s%2F1/queue/send-now", request.path)
+            assertEquals(0L, request.bodySize)
+            assertEquals(listOf("/api/v1/sessions/m/s%2F1/queue/send-now"), slow)
+            server.enqueue(MockResponse().setResponseCode(409).setBody("""{"error":"Nothing is queued any more","code":"nothing_queued","delivered":"none"}"""))
+            val failure = runCatching { actions.sendQueuedNow(session) }.exceptionOrNull() as HubFailure
+            assertEquals("nothing_queued", failure.code)
+            assertEquals(409, failure.status)
+            assertEquals("Nothing is queued any more", failure.message)
+            assertEquals(2, server.requestCount)
         }
     }
 

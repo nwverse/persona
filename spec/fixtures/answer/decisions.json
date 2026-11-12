@@ -239,6 +239,63 @@
       "derived": true
     },
     {
+      "name": "permission_always_not_honored",
+      "description": "管理器说总是允许不会被记住（always_honored 为 false）时不提供总是允许，即使有会话。",
+      "source": [
+        "ios/Persona/Views/Interactions/InteractionViews.swift：Interaction.offersAlways"
+      ],
+      "input": {
+        "profile": "ios_current",
+        "interaction": {
+          "id": "example_request",
+          "machine_id": "example_machine",
+          "session_id": "example_session",
+          "kind": "permission",
+          "tool_name": "iphone_do",
+          "always_honored": false
+        },
+        "operation": {
+          "action": "always",
+          "entry": "conversation"
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "resolution": null
+      },
+      "derived": true
+    },
+    {
+      "name": "permission_always_honored_agent",
+      "description": "管理器说会记住（always_honored 为 true）时，别的 Agent 的卡没有 always_label 也提供总是允许。",
+      "source": [
+        "ios/Persona/Views/Interactions/InteractionViews.swift：Interaction.offersAlways"
+      ],
+      "input": {
+        "profile": "ios_current",
+        "interaction": {
+          "id": "example_request",
+          "machine_id": "example_machine",
+          "session_id": "example_session",
+          "kind": "permission",
+          "agent": "codex",
+          "always_honored": true
+        },
+        "operation": {
+          "action": "always",
+          "entry": "conversation"
+        }
+      },
+      "expected": {
+        "allowed": true,
+        "resolution": {
+          "allow": true,
+          "always": true
+        }
+      },
+      "derived": true
+    },
+    {
       "name": "plan_rejecting_hides_approve",
       "description": "打回编辑状态下批准按钮不显示。",
       "source": [

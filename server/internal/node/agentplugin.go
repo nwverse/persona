@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/identity"
 )
 
@@ -36,9 +37,26 @@ func (n *Node) agentOfficeScript() string {
 	return filepath.Join(n.pluginDir(), "skills", "persona-office", "scripts", "office.sh")
 }
 
+// agentAllowedTools is the --allowedTools of a Claude Agent Persona starts or resumes (claudeCommandLine): its own
+// Persona tools (assistantwire.AgentOwnTools, #4966) under both names the node's mcp.json registers them by, and with
+// the plugin the office skill's script. Like the office rule it is Claude Code's own rule for that process only:
+// sessions the user starts themselves, the machine's Claude settings and every other tool or MCP server are left as
+// they are, and a deny rule of the user's still wins. The phone's tools, the connectors' and dispatch keep their card.
+func (n *Node) agentAllowedTools(plugins bool) string {
+	tools := compat.MCPAllowedToolNames(assistantwire.AgentOwnTools, true)
+	if plugins {
+		tools = append(tools, officeRule(n.agentOfficeScript()))
+	}
+	return strings.Join(tools, ",")
+}
+
 // assistantTools are the assistant's --allowedTools: Persona's tools, and its copy of the office skill's script.
-func (n *Node) assistantTools() string {
-	return assistantAllowedTools + ",mcp__" + compat.MCPServer + "," + officeRule(n.assistantOfficeScript())
+func (n *Node) assistantTools(legacyMCP bool) string {
+	tools := assistantAllowedTools
+	if legacyMCP {
+		tools += ",mcp__" + compat.MCPServer
+	}
+	return tools + "," + officeRule(n.assistantOfficeScript())
 }
 
 func (n *Node) assistantOfficeScript() string {

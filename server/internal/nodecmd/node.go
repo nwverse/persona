@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -26,7 +27,7 @@ import (
 const NodeUsage = `  personad node --stdio     run the node protocol on stdin/stdout (started by the hub over ssh); with a resident
                            node running on this machine, relay to it instead
   personad node --attach    resident node (launchd, in the login session): serves what --stdio relays, so what it
-                           starts can use the login keychain (docs/server/server.md「常驻 node」); set up for tailcat,
+                           starts can use the login keychain (docs/server/server.md「Persistent node」); set up for tailcat,
                            also reachable by the hub over tailcat
   personad node --attach --supervised
                            the same, run by something other than systemd or launchd that starts it again whenever it
@@ -34,7 +35,7 @@ const NodeUsage = `  personad node --stdio     run the node protocol on stdin/st
                            (docs/operations/link.md "Without systemd"). Not for nohup or cron @reboot: nothing restarts those
   personad node tailcat init --hub <key> [--derp-map-url <url>]
                            let the hub reach this machine over tailcat when it cannot ssh here; prints the address
-                           for hub.json (docs/server/server.md「tailcat 打洞」)
+                           for hub.json (docs/server/server.md「Tailcat hole punching」)
   personad node tailcat addr
                            print this machine's tailcat address again
   personad node doctor [--json] [--fix]
@@ -42,7 +43,7 @@ const NodeUsage = `  personad node --stdio     run the node protocol on stdin/st
                            MCP and plugin files match this binary, the programs they run exist, claude's version, the
                            Mac LaunchAgent's ProcessType, and whether what claude reads at start can be read;
                            --fix rewrites Persona's own generated files, and on a Mac writes ProcessType=Interactive
-                           into the LaunchAgent and reloads it (docs/integrations/claude-integration.md「node doctor」)
+                           into the LaunchAgent and reloads it (docs/integrations/claude-integration.md「Self-check」)
   personad node reset-uid   give this computer a new machine uid (~/.persona/machine-uid): for a virtual machine cloned
                            with another's home directory, which hubs would take for that one (docs/server/mesh.md)`
 
@@ -83,6 +84,26 @@ func exitNodeUsage(err error) {
 	os.Exit(2)
 }
 
+// nodeProcs is the most Ps (GOMAXPROCS) the node that serves a hub keeps unless the environment says otherwise. It
+// sleeps most of the time, between a few timers and reads; on a machine with many cores every P Go keeps is one more to
+// wake and search for work on each of those, and more threads and per-P caches held (on a 64-core host with 4 watched
+// sessions: 28 threads against 12, and about 4 MB more resident than with 4).
+const nodeProcs = 4
+
+// capProcs lowers GOMAXPROCS to nodeProcs for `node --stdio` and `node --attach`, unless the GOMAXPROCS environment
+// variable is set (that one wins, as it does for the runtime). A runtime.GOMAXPROCS call stops the runtime's own
+// updates of it (from a container's or cgroup's CPU limit changing later), so it is made only when it lowers it: a
+// machine or container with 4 CPUs or fewer keeps the runtime's value and its updates. The variable is not set, so the
+// agents and programs the node starts keep their own defaults.
+func capProcs() {
+	if os.Getenv("GOMAXPROCS") != "" {
+		return
+	}
+	if runtime.GOMAXPROCS(0) > nodeProcs {
+		runtime.GOMAXPROCS(nodeProcs)
+	}
+}
+
 // residentArgs reads what may follow --attach: --supervised, at most once. Anything else is refused rather than
 // ignored: a mistyped flag would leave the node quietly unable to take updates from the hub.
 func residentArgs(args []string) (supervised bool, err error) {
@@ -95,72 +116,121 @@ func residentArgs(args []string) (supervised bool, err error) {
 	return supervised, nil
 }
 
-// runResident is `personad node --attach`: relays over ssh, and the hub over tailcat when this machine is set up for
-// it. A new binary arriving over tailcat ends it (exit 0): its supervisor starts the new one. supervised: started with
-// --supervised, something other than systemd or launchd restarts it when it exits (nodeupdate.Options).
+// runResident is `personad node --attach`: it serves local/SSH relays and optional tailcat connections.
+// Deployment and update requests drain idle work before exec retains the Unix listener and run lock.
+// supervised describes an external supervisor other than systemd or launchd (nodeupdate.Options).
 func runResident(ctx context.Context, b Build, supervised bool) error {
-	// tailcat stops only after Attach has closed the hub's connection: torn down first, the close would never reach
-	// the hub, which would then take the dead connection for a live one until its pings went unanswered.
-	tctx, tstop := context.WithCancel(context.Background())
-	defer tstop()
+	stop := ctx
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	restart := make(chan struct{})
-	updater := nodeupdate.New(b.Version, func() { close(restart); cancel() }, nodeupdate.Options{Supervised: supervised})
-	node.SetResident(b.Program, b.Version)
+	transport, err := node.OpenResidentTransport()
+	if err != nil {
+		return err
+	}
+	defer transport.Close()
+	requests := make(chan string, 1)
+	askRestart := func(reason string) {
+		select {
+		case requests <- reason:
+		default: // repeated deploys coalesce while waiting for idle work
+		}
+	}
+	updater := nodeupdate.New(b.Version, func() { askRestart("update") }, nodeupdate.Options{Supervised: supervised, RequireResidentHandover: node.ResidentHandoverSupported})
 	defer updater.Close()
 	if updater.RestartRequired() {
-		return syscall.Exec(updater.Executable(), os.Args, os.Environ())
+		check, err := residentReplacementInfo(ctx, updater.Executable(), b.Program)
+		if err != nil {
+			return err
+		}
+		files, err := prepareResidentRecovery(transport, check.ResidentHandover)
+		if err != nil {
+			return err
+		}
+		if files == nil {
+			return syscall.Exec(updater.Executable(), os.Args, os.Environ())
+		}
+		defer files.Close()
+		return files.Exec(updater.Executable(), os.Args, os.Environ())
 	}
+	node.SetResident(b.Program, b.Version)
 	logger := log.New(os.Stderr, "", log.LstdFlags)
-	conns, stopped, err := node.ServeTailcat(tctx, logger, func() {
-		logger.Printf("tailcat: a new personad is installed; exiting so it starts")
-		cancel()
-	})
+	tctx, tstop := context.WithCancel(context.Background())
+	defer tstop()
+	conns, stopped, err := node.ServeTailcat(tctx, logger, func() { askRestart("tailcat update") })
 	if err != nil {
-		logger.Printf("tailcat: %v (serving relays over ssh only)", err) // a broken key file must not stop the node
+		logger.Printf("tailcat: %v (serving relays over ssh only)", err)
 	}
-	// SIGHUP (a deploy: scripts/deploy/node-launchd.sh restart-idle) restarts on the binary now installed, once no
-	// conversation is answering or running background tasks: they go on across hub restarts, not across this one.
-	restartIdle := make(chan struct{})
+	reload := &node.ResidentReload{}
+	handover := make(chan *node.ResidentFiles, 1)
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
 	defer signal.Stop(hup)
+	workerDone := make(chan struct{})
 	go func() {
-		select {
-		case <-hup:
-		case <-ctx.Done():
-			return
-		}
-		logger.Printf("restart asked for: restarting once no conversation is busy")
-		for node.AssistantsBusy() {
+		defer close(workerDone)
+		for {
+			var reason string
 			select {
+			case reason = <-requests:
+			case <-hup:
+				reason = "deployment"
 			case <-ctx.Done():
 				return
-			case <-time.After(5 * time.Second):
 			}
+			if err := checkResidentReplacement(ctx, updater.Executable(), b.Program); err != nil {
+				logger.Printf("resident reload: replacement did not pass preflight; keeping the current node")
+				continue
+			}
+			logger.Printf("restart asked for (%s): draining idle work while attach remains available", reason)
+			if err := reload.Prepare(ctx); err != nil {
+				return
+			}
+			files, err := transport.PrepareExec()
+			if err != nil {
+				reload.Resume()
+				logger.Printf("resident reload: cannot retain the attach listener; keeping the current node")
+				continue
+			}
+			if ctx.Err() != nil {
+				files.Close()
+				return
+			}
+			announce, end := context.WithTimeout(ctx, time.Second)
+			err = reload.Announce(announce)
+			end()
+			if err != nil {
+				files.Close()
+				reload.Resume()
+				reload.CancelAnnouncement()
+				logger.Printf("resident reload: handover was not acknowledged; keeping the current node")
+				continue
+			}
+			handover <- files
+			cancel() // only now: idle work is reaped and the listener/backlog and run lock have retained duplicates
+			return
 		}
-		close(restartIdle)
-		cancel()
 	}()
-	// The runtime socket is the resident node's, not one connection's: runtimes (DSH…) stay connected while the hub
-	// reconnects, and connect before it does (node/runtimehost.go).
-	err = node.Attach(ctx, func() (*node.Node, error) {
+	err = node.AttachWithTransport(ctx, func() (*node.Node, error) {
 		n, err := node.New(b.Version)
 		if err == nil {
 			n.SetUpdater(updater)
+			n.SetResidentReload(reload)
 			n.Program = b.Program
 		}
 		return n, err
-	}, conns, node.NewRuntimeHost(b.Version, ""))
+	}, conns, node.NewRuntimeHost(b.Version, ""), transport)
+	cancel()
+	<-workerDone
 	tstop()
 	<-stopped
 	select {
-	case <-restart:
-		return syscall.Exec(updater.Executable(), os.Args, os.Environ())
-	case <-restartIdle:
-		logger.Printf("restarting on %s", updater.Executable())
-		return syscall.Exec(updater.Executable(), os.Args, os.Environ())
+	case files := <-handover:
+		defer files.Close()
+		if stop.Err() != nil {
+			return nil // an explicit stop wins over a deployment
+		}
+		logger.Printf("restarting on %s with the retained attach listener", updater.Executable())
+		return files.Exec(updater.Executable(), os.Args, os.Environ())
 	default:
 		return err
 	}

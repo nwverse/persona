@@ -38,6 +38,18 @@ interface InboxAssistantTransport {
      */
     suspend fun bulk(items: List<InboxDoneTarget>, action: InboxBulkAction): JsonObject =
         setDone(items, action != InboxBulkAction.Reopen)
+    /**
+     * One page of [manager]'s done history (`GET /api/v1/inbox/done`, #2200; null: the default manager): newest done
+     * first, from after the entry [before] / [beforeId] (both null: the newest), answering `{items, next?: {before, before_id}}`.
+     * A cursor is one manager's, so each is asked on its own. Old hubs: 404.
+     */
+    suspend fun doneHistory(manager: String?, before: String?, beforeId: String?, limit: Int = 50): JsonObject =
+        throw UnsupportedOperationException("Done history unavailable")
+    /**
+     * [manager]'s done items per day (`GET /api/v1/inbox/done/days?tz=&sources=all`, #2967) in time zone [tz] (an IANA
+     * name), answering `{tz, days: [{day, count}]}`, newest first. Old hubs: 404; a zone the hub doesn't know: 400.
+     */
+    suspend fun doneDays(manager: String?, tz: String): JsonObject = throw UnsupportedOperationException("Done days unavailable")
     suspend fun reply(itemId: String?, feedId: String?, text: String, clientId: String): JsonObject
     /** Hands an item to its manager's main chat (`POST /api/v1/inbox/{id}/handoff`), answering `{item, session}`. */
     suspend fun handOff(itemId: String, text: String, clientId: String): JsonObject =
@@ -52,6 +64,11 @@ interface InboxAssistantTransport {
     suspend fun replyMail(itemId: String, text: String, clientId: String, target: MailReplyTarget): JsonObject =
         throw UnsupportedOperationException("Checked mail replies unavailable")
     suspend fun messages(feedId: String, around: Long? = null, before: String? = null, after: String? = null): JsonObject
+    /**
+     * A Feishu topic group's topics (`…/messages?topic=1`, #576 G134), newest page or [before] a cursor (backward paging
+     * only); a transport without the parameter reads the chat as it is.
+     */
+    suspend fun topics(feedId: String, before: String? = null): JsonObject = messages(feedId, before = before)
     /** One Feishu message (`GET /api/v1/lark/messages/{id}`, `{account?, message}`): the outbox confirms delivery with it. */
     suspend fun larkMessage(messageId: String): JsonObject = throw UnsupportedOperationException("Message lookup unavailable")
     suspend fun assistant(): JsonObject
@@ -60,10 +77,33 @@ interface InboxAssistantTransport {
     suspend fun createConversation(main: Boolean, launcher: String): JsonObject =
         throw UnsupportedOperationException("Picking a launcher unavailable")
     /**
+     * The chats of the assistant's [space] (`GET /api/v1/assistant?space=`, docs/assistant/health.md), answering
+     * `{machine_id, conversations}` as [assistant] does. A space is the default manager's: no manager is named.
+     */
+    suspend fun assistantIn(space: String): JsonObject = throw UnsupportedOperationException("Assistant spaces unavailable")
+    /**
+     * A new chat in the assistant's [space] (`POST /api/v1/assistant/conversations` with `space`, never `main`: a space
+     * has no main chat), answering `{session}`.
+     */
+    suspend fun createConversationIn(space: String): JsonObject = throw UnsupportedOperationException("Assistant spaces unavailable")
+    /**
      * [assistant] of one manager (null: the default) whatever the assistant page shows meanwhile (docs/assistant/managers.md
      * step 4): what a message was written for is where it goes.
      */
     suspend fun assistantOf(manager: String?): JsonObject = assistant()
+    /**
+     * The directions of one manager (null: the default), `GET /api/v1/assistant/leaders`: `{leaders: [{id, name, ended?}]}`
+     * (#3519, #3695). A transport without it answers none, and the drawer shows the leaders' titles.
+     */
+    suspend fun assistantLeadersOf(manager: String?): JsonObject = JsonObject(emptyMap())
+    /**
+     * The direction tree of the default manager (`GET /api/v1/assistant/directions/tree`, #4352): `{directions: [{id,
+     * name, secretary?, counts: {working, needs_you, stuck, review}}]}`, the current directions in the leaders' order.
+     * The hub answers it for the default manager alone. A transport without it says so (as an older hub's 404 does), and
+     * the drawer keeps the flat direction rows.
+     */
+    suspend fun directionsTreeOf(manager: String?): JsonObject =
+        throw UnsupportedOperationException("Direction tree unavailable")
     /** [createConversation] for one manager (null: the default), as [assistantOf]. */
     suspend fun createConversationOf(manager: String?, main: Boolean, launcher: String? = null): JsonObject =
         if (launcher == null) createConversation(main) else createConversation(main, launcher)
@@ -100,13 +140,25 @@ interface InboxAssistantTransport {
     suspend fun momentsComments(postId: String): JsonObject = throw UnsupportedOperationException("Moments comments unavailable")
     suspend fun urlPreview(messageId: String, url: String): JsonObject = throw UnsupportedOperationException("URL preview unavailable")
 
-    // Mute (docs/assistant/inbox.md "Mute"): an item's repository, chat or sender, in every source.
+    // Mute (docs/assistant/inbox.md "Muting"): an item's repository, chat or sender, in every source.
     /** `GET /api/v1/inbox/mutes`: `{mutes: [{id, source, source_name, tag, value, name, created_at}]}`. */
     suspend fun inboxMutes(): JsonObject = throw UnsupportedOperationException("Inbox mutes unavailable")
     /** `POST /api/v1/inbox/mutes` `{item_id, tag}`: `{mute, settled}`. */
     suspend fun muteInbox(itemId: String, tag: String): JsonObject = throw UnsupportedOperationException("Inbox mutes unavailable")
     /** `DELETE /api/v1/inbox/mutes/{id}`. */
     suspend fun unmuteInbox(id: String): Unit = throw UnsupportedOperationException("Inbox mutes unavailable")
+
+    // Policies (docs/assistant/inbox.md "Policies"): the tier and AI twin of what an item has under one of its mute options.
+    /** `GET /api/v1/inbox/policies`: `{policies: [{id, source, source_name, tag, value, name, tier?, twin?, created_at, updated_at}]}`. */
+    suspend fun inboxPolicies(): JsonObject = throw UnsupportedOperationException("Inbox policies unavailable")
+    /** `POST /api/v1/inbox/policies` `{item_id, tag, tier, twin}`: `{policy, applied}`; setting neither part removes it. */
+    suspend fun setInboxPolicy(itemId: String, tag: String, tier: String, twin: String): JsonObject =
+        throw UnsupportedOperationException("Inbox policies unavailable")
+    /** `PATCH /api/v1/inbox/policies/{id}` `{tier, twin}`: `{policy, applied}`; setting neither part removes it. */
+    suspend fun updateInboxPolicy(id: String, tier: String, twin: String): JsonObject =
+        throw UnsupportedOperationException("Inbox policies unavailable")
+    /** `DELETE /api/v1/inbox/policies/{id}`. */
+    suspend fun removeInboxPolicy(id: String): Unit = throw UnsupportedOperationException("Inbox policies unavailable")
 
     // A Feishu chat's pinned messages (iOS `LarkChatPins`): reading the list marks the pins read upstream.
     /** `GET /api/v1/lark/conversations/{feed}/pins?limit=50&account_id=&cursor=`. */
@@ -137,4 +189,12 @@ interface AssistantConversations : AssistantRepository {
     suspend fun startConversation(): SessionKey
     /** A new conversation that runs on [launcher], for it alone (iOS StarterComposer's model menu): the default stays. */
     suspend fun startConversation(launcher: String): SessionKey = throw UnsupportedOperationException("Picking a launcher unavailable")
+    /**
+     * The chats of the assistant's [space] ([AssistantSpace]), read from the hub each time: they are never in [assistant]'s
+     * list. Each carries [space] even from a hub that leaves it out of this list.
+     */
+    suspend fun spaceConversations(space: String): List<persona.core.contracts.Session> =
+        throw UnsupportedOperationException("Assistant spaces unavailable")
+    /** A new chat in the assistant's [space], never its main one: what the space's new-chat page sends first starts it. */
+    suspend fun startConversationIn(space: String): SessionKey = throw UnsupportedOperationException("Assistant spaces unavailable")
 }

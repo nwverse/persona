@@ -5,29 +5,32 @@ This doc explains how Lark and email data become a knowledge base with **files a
 (Direction decided 2026-10-30: all data ultimately settles in `.persona`; files first, database for indexing; text retained 365 days, attachments 30 days.)
 Since 2026-11-04 the knowledge base belongs to the manager (the assistant process `personad assistant`); since 2026-11-05 sources (connectors) also belong to the manager and feed the knowledge base in the same process (`server/internal/extmgr`, `docs/extensions/extensions.md` ("Who owns what")); see below.
 
-## Who owns what (2026-11-04)
+## Who owns what
 
-As part of moving hub business logic into managers (`docs/assistant/assistant.md` ("Boundary with the hub")), the entire knowledge base moved into the manager (currently there is just one, the assistant):
+As part of moving hub business logic into managers (`docs/assistant/assistant.md` ("Boundary with hub")), the entire knowledge base moved into the manager (currently there is just one, the assistant):
 
 - **The manager runs the knowledge base** (`server/internal/assistant/kb*.go`): the engine (`server/internal/kb`: archiving, model-based compression and organization, indexing, timezone, people / groups / projects, attaching Moments posts to projects),
-  its loop (every 2 minutes, or 5 seconds after a source has new data), and its state (files in the data directory, the `kb_entities` index table, `handles.key`; same layout as before, only the manager writes).
+  its loop (every 2 minutes, or 5 seconds after a source has new data; its work runs in lanes, "Pipeline" below), and its state (files in the data directory, the `kb_entities` index table, `handles.key`; same layout as before, only the manager writes).
   The assistant's `kb_*` tools, knowledge base in live snapshots, and knowledge directory in the assistant directory's CLAUDE.md are local manager calls (no longer `app.call kb.*`).
 - **Sources** (in the manager's `internal/extmgr` since 2026-11-05; the methods below are unchanged but now called directly in-process, without the bus; attachments also no longer have a 4 MB limit): data delivered by connectors and plugins (chat messages, posts…). The knowledge base asks sources (`app.call connectors.*`, data in and out):
   `connectors.archives` (which connectors to read now: signed in with "Include in knowledge base" on, their polling intervals, other archive names, attachment support; and those with documents / meetings / events),
   `connectors.changes` (a connector's changes since a cursor), `connectors.archive_media` (attachments for a message; when the manager is elsewhere, up to 4 MB, since one bus message must not occupy a slow link longer than a heartbeat; larger ones leave `[附件]` ("[attachment]") on the line), `connectors.items` / `connectors.doc_title` (documents, meetings, events). A connector declaring `history` also offers its older history, read-only: `connectors.history_chats`, `connectors.history` and `connectors.history_anchors` (`docs/protocol/connector-protocol.md` "History").
   **The manager owns the cursor** (`cursors/<connector>.json`, same file as before), which advances only after writing the data. For Moments posts submitted by plugin programs (`posts.*`, `archive.chats`), the hub first checks
   whether "Include in knowledge base" is on, then forwards them unchanged to the manager (`kb.posts_put`, `kb.posts_comments`, `kb.posts_pending`, `kb.archived_chats`).
-- **When the hub's own features need the knowledge base**, they ask the manager over the bus through one hub function, `kbAsk` (`hub/kb.go`; those features are also moving into the manager, becoming local calls afterwards):
-  chat context for the Inbox AI twin (`kb.context`), deleting a source's data (`kb.forget`). Triage after an Agent's turn stops also moved into the assistant (`docs/assistant/agent-work.md` ("Who owns what")); the project owning its directory is read directly in the assistant, no longer via `kb.projects`.
+- **iMessage archive disable**: each read is tagged with its source manager's generation. Before writing a page and its cursor, the assistant obtains a durable commit reservation for that generation; turning "Hand to Persona" off retires the generation and waits for already reserved pages to finish. A successful response therefore follows those commits and excludes late replies, including after an off/on cycle. Previously saved messages remain, and a later enabled round retries from the last committed cursor. The boundary covers archive ingestion, not in-flight read tools or a completed deletion.
+  The manager stores outstanding reservation tokens in its settings and reloads them after an uncertain write before acknowledging cleanup. The assistant journals each reservation's token, generation and exact source/chat pairs under `archive-recovery/` before `Begin`, then advances its begin/settle/end stage. A replacement assistant reloads and retries those records before any new archive read: it aborts pre-admission work, settles an unfinished ingest only for the recorded pairs, or ends post-cursor work without replaying its write. An unreadable journal fails closed instead of looking like no work. A failed ingest can leave a journal that would publish messages during recovery, so its reservation remains held until the journal is settled. Retirement is signaled before waiting on reservation storage, even if the request later fails. A failed or cancelled off request may already have saved the off choice, but does not attest that an already admitted commit has finished; it returns an error until outstanding commits end or the reservation store is readable. If the saved switch cannot be read at startup, the source stays off and retries the choice on a settings refresh or later source pass. An uncertain release or journal recovery is retried on a later archive round. Reservations are not expired automatically: if their owner disappears before confirming completion and no recovery journal identifies the work, disabling can remain blocked for investigation rather than reporting a false success.
+  New managers require the reservation protocol for iMessage; new assistants skip an older manager that does not advertise it. The guarantee assumes one authoritative source manager and writers that use this protocol: it cannot fence work already admitted by an older manager or independent source managers acting on the same data. Current production runs the source manager and assistant together; a synthetic bus relay exercises the remote call protocol, but the current hub does not route these connector calls between independent managers.
+- **The hub itself no longer reads the knowledge base.** The extension manager reaches it through its own `kbAsk` (`server/internal/extmgr/kb.go`): deleting a source's data (`kb.forget`) and the extensions' public `kb.*` calls.
+  Triage after an Agent's turn stops moved into the assistant (`docs/assistant/agent-work.md` ("Responsibilities")), which reads the project owning a directory directly; `kb.context` and `kb.projects` still answer on the bus, but nothing calls them now.
   Events seen by the hub are one-way: new source data (connector live events, enabling "Include in knowledge base", enabling "Hand to Persona" for "Information", `kb.kick`),
   and an Agent finishing a turn (before deciding notifications, `kb.agent_turn`, the project timeline entry).
-- **Models**: the knowledge base uses the manager's model configuration (`kb.compress`, `kb.project`, `kb.items`, `kb.dedupe`, `kb.moments`, defaulted by `kb.ai` in its `manager.json`),
+- **Models**: the knowledge base uses the manager's model configuration (`kb.compress`, `kb.project`, `kb.items`, `kb.dedupe`, `kb.moments`, `kb.topics`, defaulted by `kb.ai` in its `manager.json`),
   resolved at every call, all in one place, `assistant/kb_model.go`.
 - **Where data lives**: by default the manager is a hub child process on the same machine. Its knowledge base is the data directory's `~/.persona/data` (`kb_dir` in its `manager.json` can move it), and its `handles.key` is in its own directory, `~/.persona/managers/assistant/` (copied there once from `~/.persona`, [managers.md](managers.md) ("The built-in manager's own files")).
   Storage **follows the manager's `manager.json`**: its `kb` section (`enabled`, `text_days`, `attachment_days`, `extra_dirs`, and `ai` for the models; `docs/operations/config.md` ("manager.json")). Since 2026-11-06 the hub neither reads it nor hands it over in its handshake response (`docs/protocol/protocol.md` ("Handshake")), except raw, once, to a built-in manager it did not start (`legacy_config`, [managers.md](managers.md) ("Configuration"));
   a manager that runs elsewhere reads the `manager.json` on its own machine. With `enabled: false`, the manager does not open the knowledge base and its sources provide nothing
   (`connectors.archives` is empty; other source methods and plugin posts reply "The knowledge base is off for this manager"); source deletion does not ask the knowledge base.
-  When hub.json sets `assistant.external` (manager elsewhere, `docs/assistant/assistant.md` ("Processes")), the knowledge base is in **that machine's** data directory, and its `kb` section is in the `manager.json` there: the original `data/` on the hub machine stops updating.
+  When hub.json sets `assistant.external` (manager elsewhere, `docs/assistant/assistant.md` ("Process")), the knowledge base is in **that machine's** data directory, and its `kb` section is in the `manager.json` there: the original `data/` on the hub machine stops updating.
   To continue using it, copy the entire directory, and the hub machine's `~/.persona/managers/assistant/handles.key` into the same place on that machine (or into its `~/.persona` before the manager first starts there; otherwise future identity-hint hashes will not match); `extra_dirs` refers to paths on that machine; the index table stays in shared Postgres and need not move.
   The app's knowledge API still goes to the hub, which forwards it unchanged; the interface stays the same. CLAUDE.md still calls it "the directory on the hub" (accurate when the manager is on the hub machine).
 - **When it opens**: on the manager's first need (first loop iteration, tool call or request), requiring all three: the hub's `kb` settings have arrived (handshake),
@@ -58,6 +61,8 @@ The former switches off knowledge ingestion; the latter switches off the connect
 - Archived posts whose `source` is this connector, including their Markdown and metadata; the Moments index is rewritten from the remaining posts.
 - Documents, meetings and events whose `source` is this connector, with their database index rows.
 - References to the removed entities in projects, the connector's archive cursor and deleted chats' history-import state. Affected projects are marked dirty for rewriting from the remaining content.
+- Knowledge points that came from the removed chats, or from project timeline lines the removal dropped ("Topics" below): a point keeps its other sources or goes, a topic left empty is removed
+  (reported under `items` as `topics`, so its index row goes too), and a project whose timeline lost lines is distilled again from its remaining lines.
 
 The deletion result and audit include `chats`, `people`, `posts` and `items` counts; the HTTP result also includes `inbox` (zero for archive-only deletion).
 New connector ingestion records `connector` on chats and people and `source` on items; document links discovered in chats inherit the chat's connector.
@@ -74,10 +79,13 @@ Transcribed text from phone recordings (and watch recordings relayed through the
 - Recording revisions commit metadata, timestamped segments and rendered transcript together. Before replacing any of the three existing files, the store syncs a `.recording-undo.json` snapshot of their accepted bytes (including missing files for a first upload). Removing that journal after all replacements is the commit point. Failed uploads publish no index or change notification and attempt to restore the accepted files; equal revisions remain retryable.
 - Detail, segment, reconciliation, search and summarization readers wait for active replacements and use a coherent accepted snapshot while a journal remains. Writable open restores pending snapshots before returning a store; a recovery error prevents opening or further recording metadata edits. Read-only open refuses an archive requiring recovery. Legacy directories need no migration, and the existing file paths and transcript links stay valid.
 - Recovery assumes one writable store owns the archive directory. Individual file contents are synced before replacement and directory syncing is best effort where supported; subprocess interruption and replacement failures are tested, not arbitrary hardware or filesystem corruption. External filesystem readers must wait for writable recovery if a journal remains: raw files can contain unfinished replacements after interruption or failed restoration. The journal covers upload content, not a transaction with generated summaries, project links or the database index; that index remains rebuildable from files.
-- For completed transcripts (`complete: true`) whose current revision has not been summarized, each manager round selects at most 3 for the model (same purpose as chat compression, `kb.compress`, prompt `prompts/kb/recording.md`; if no model is available, stop this round and retry next round):
+- For completed transcripts (`complete: true`) whose current revision has not been summarized, each manager round makes at most 3 model calls for them, newest first, failed ones included (same purpose as chat compression, `kb.compress`, prompt `prompts/kb/recording.md`). A recording whose summary failed waits 10 minutes, doubled with each failure in a row up to 6 hours, and the next one goes on; a new revision of it is tried at once (#4246; before, the first failure stopped the round and that recording was sent again every round). A paused model connection, or no model set up, stops the round without counting:
   produces a summary, one-line description, title (used if the user has not named it), tags and mentioned projects; projects are linked normally (a "Recording · Title" project timeline entry). At most 24k characters go to the model (keeping the beginning and end).
 - Retention follows assistant setting `recording_days` (default 14 days, independent of `text_days`): each round deletes directories and index rows whose start time predates retention; tombstones are retained equally long.
-- `kb_list` / `kb_get` / `kb_search` and the app's Knowledge page gain the `recordings` category; `kb_get` includes summary, bookmarks and full transcription (up to 12k characters). Recording content cannot be edited via `kb_update` (the phone is authoritative); only tags can change.
+  A recording with minutes is **trimmed** instead (#3780): past `recording_days` its directory keeps only `meta.json` (with `trimmed_at`), `minutes.json`, `minutes.md`, a meeting's `meeting.json` (its private mark and its room, which the manager deletes then; never searched, [meeting-minutes.md](meeting-minutes.md) "Upload fields") and the photos the minutes cite (their files in `attachments/`, their entries in `photos.json` and `photos.md`; [meeting-minutes.md](meeting-minutes.md) "Phase 3: photos"), and everything else (`segments.json`, `transcript.md`, `summary.md`, `live.json`, the other photos, a pending undo journal, which is restored first) is deleted; its index row stays. It is deleted like any other once it started before assistant setting `minutes_days` (forever by default: unset or `0`; otherwise 1–3650 days, never below `recording_days`). With forever, retention never deletes these minutes; the user can still delete the recording and its minutes together. A trimmed recording is still listed, read and searched by its minutes; it takes no upload (`expired`), gets no summary and no new minutes, and its attendance is off. Tombstones keep the `recording_days` window: an upload of anything older is expired anyway (`server/internal/kb/recordings.go`, `PruneRecordings`).
+- `kb_list` / `kb_get` / `kb_search` and the app's Knowledge page gain the `recordings` category; `kb_get` includes summary, bookmarks and any transcription still retained (up to 12k characters). Recording content cannot be edited via `kb_update` (the phone is authoritative); only tags can change.
+- A recording that is a meeting (`kind: meeting`, overlapping a calendar item, or minutes asked for) also gets structured minutes besides the short summary ([meeting-minutes.md](./meeting-minutes.md)): `minutes.json` and `minutes.md` in the same directory, from chunked calls to the same `kb.compress` model, removed with the recording and kept past its transcript until `minutes_days` (above), returned as `detail.minutes`. `kb_get` prints them before the transcript, followed by where each action item stands (a suggestion, or its to-do open, done, cancelled or deleted); `kb_search` and the app search find them, and `kb_search kind=recordings` searches the recordings alone (finding a meeting by its title, the phone's calendar title or the matched calendar item's name). `kb_list` shows the start time of meetings and events as it does for recordings, and `kb_get` on a meeting or event lists the recordings matched to it.
+- An all-day recording (`kind: day`, #4741, [day-recap.md](day-recap.md)) grows by appends (`POST /api/v1/recordings/{id}/segments`) and gets a daily recap instead of a summary or minutes: `recap_notes.json` (notes per hour of its clock, which go with the transcript), `recap.json` and `recap.md` (kept past the transcript like minutes), written by the knowledge base's own recap lane, pushed once a day and told to the evening routine; `kb_get` prints the recap and where its suggested to-dos stand before the transcript (`server/internal/kb/day_recap.go`, `server/internal/assistant/kb_day.go`).
 
 ## Extra notes directories (`kb.extra_dirs`)
 
@@ -111,6 +119,11 @@ and tells it to read their AGENTS.md / CLAUDE.md before reading or writing. Pers
     meta.json               # Name, type (short requirement / long mission), status, members, related chats / docs / meetings / Agent directories
     summary.md              # Goal, current state, next steps, risks, my role
     log.md                  # Timeline: append an entry for each update (date · source · one line)
+    .topics.json            # How far the knowledge points curation read the timeline ("Topics"; bookkeeping, not searched; a chat has one too)
+  topics/<slug>/            # One directory per topic of knowledge points ("Topics" below, #3783)
+    meta.json               # Name, one line, aliases, how many points, the projects and chats they came from, tags
+    points.json             # The points (kind, text, reason, subtopic path, sources, date) and the candidates waiting to be merged; bookkeeping, not searched
+    summary.md              # The points as Markdown by subtopic, written from points.json; searched
   docs/<id>.json            # Documents / meetings / events: title, link, time, tags, linked projects
   meetings/<id>.json
   events/<id>.json
@@ -119,6 +132,12 @@ and tells it to read their AGENTS.md / CLAUDE.md before reading or writing. Pers
     segments.json           # Timestamped segments (start / end in seconds from the beginning)
     transcript.md           # One line per segment, with clock times in the user's timezone; searched by kb_search
     summary.md              # Model summary after transcription completes
+    minutes.json            # Meeting minutes (meeting-minutes.md): structured, each item at a transcript time
+    minutes.md              # The same minutes as Markdown with clock times; searched
+    live.json               # An attended meeting's live sentences and questions (meeting-minutes.md "Attending a meeting"); never searched or shown
+    photos.json             # A meeting's photos (meeting-minutes.md "Phase 3: photos"): their bookkeeping (digests, deletions, the room's queue); never searched
+    photos.md               # A line per listed photo: its number, clock time, caption, recognized text and the room's note; searched
+    attachments/p<n>.jpg    # The photos themselves (or .png); never searched
   recordings/.deleted.json  # Deleted recording UUIDs (tombstones); late uploads within retention return 410
   cursors/<connector>.json  # A connector's archive cursor (bookkeeping, not searched)
   select/<chat id>.json     # The selection's mine-rule context of a chat between daily batches (not searched)
@@ -149,18 +168,45 @@ A value the model writes that doesn't fit is dropped on its own, not with the re
 
 ## Pipeline (manager background, `server/internal/kb`, loop in `assistant/kb.go`)
 
+The loop's work runs in three **lanes** (`assistant/kb_lanes.go`, #4247), each in its own goroutine, so a slow step in one (a meeting's
+minutes, a slow model) no longer holds back the others. Every round (2 minutes, a wake, or 5 seconds after a kick) starts each lane
+that is not still running; a lane that became due while it ran starts again as soon as it ends. The lanes are split by what they write,
+so no two write the same files at once:
+
+- **archive**: steps 1–5 below except knowledge points and minutes, one after another in the order given (the project rewrites see
+  what the same run's compression made due): sources, compression, project rewrites, recordings' summaries and retention, duplicate
+  projects and Moments links, item tagging, pruning. It writes chats, projects, people, recordings' summaries and items.
+- **topics**: knowledge points (step 3b), two distill calls then two merges, two at a time (topics and their sources' marks, under
+  the store's topic lock, a merge applied only while its topic is as it was asked about).
+- **minutes**: meeting minutes from recordings ([meeting-minutes.md](meeting-minutes.md)), whose calls can take many minutes.
+
+Before starting lanes a round only checks, quickly, that the knowledge base is writable and the user's zone readable;
+moving the archive into the user's zone ("Time zones") is the archive lane's first step, so the loop never waits behind a
+lane's writes. The steps' backoffs (a failed source put off, `retryWait`) live with the manager's knowledge base, not the
+engine, so they carry over when the hub's settings change and a new engine is built; a lane already running finishes
+its run with the engine it started with. Each lane run that called the model, or took longer than a round, logs one line: `kb: <lane> lane: <duration>, <n> model call(s),
+<n> failed, <n> put off` (put off: a paused connection, "Upstream rate limits" in [model-config.md](model-config.md)). While the
+assistant is not connected, the knowledge base closes once no lane runs; a lane started goes on to the end of its run, as a round did.
+
 1. **Archive**: every 2 minutes (5 seconds after a Lark live event), inspect the 100 recently active chats in Lark's Messages list, reading only when the list timestamp is newer than the last archive.
-   Fetch incrementally by cursor (`afterPosition`); a newly seen chat starts with its latest 100 messages. Append to that day's `messages/*.md` (dates and times in the user's timezone, see "Timezone" below).
+   Fetch incrementally by cursor (`afterPosition`); a newly seen chat starts with its latest 100 messages. Append to that day's `messages/*.md` (dates and times in the user's timezone, see "Time zones" below).
    Download images / files / rich-text images to `attachments/<date>/` (up to 20 MB each), leaving `[附件](相对路径)` ("attachment; relative path") in the line; record Lark document links in `docs/`.
    Topic groups read only the newest topic page. Every 6 minutes, read each email account's Inbox messages with UID above the last one (40 per page, at most 5 pages per round; with multiple pages, take the newest first, then fill the middle page by page and continue next time if unfinished),
    reading at most 10 full bodies per round (summaries for the rest), into `mail-<account>-<other address>` chats. Cursors are in `cursors/mail.json` (per-account UIDs, plus `<account>#v` for UIDVALIDITY,
    `#t` for the latest archived message time, `#f` / `#h` for unfilled gaps; on UIDVALIDITY change, restart from the newest page and only take messages later than `#t`; before 2026-11-03 it was `mail-cursors.json`, used as fallback when the new file is absent).
+   The existing decimal receipt IDs remain in use until a change between two known, nonzero validity values is observed.
+   After that, `<account>#e` records an identity epoch, and IDs include the epoch, last known validity and UID.
+   A retry keeps the same identity if ingestion succeeded before checkpoint publication; a further known change before publication gets a different identity.
+   Each account's inbox has its own cursor and epoch. An absent prior validity or a zero response cannot establish that a change occurred, so it does not start an epoch or reset the cursor.
+   A cursor already advanced by an older version cannot reconstruct mail previously skipped by a UID collision. A rollback to an older writer is not identity-safe: it ignores the epoch and emits decimal IDs, and may advance the validity without recording the change. Do not run mixed-version archive writers against the same data.
+   The existing later-than-`#t` filter and newest-page restart still limit recovery: same-second or older messages and an oversized renumbered tail are not guaranteed to be archived.
    Connectors (`docs/plans/plan-connectors.md`, implementing `connector.Archive`) read chats with new messages "since last time" by cursor every 10 minutes,
    with cursor `cursors/<connector>.json` and chat id `<connector>-<chat>`. Older history comes in separately ("History import", step 5).
+   Source subscriptions (#2039) are read the same way, one archive per subscription with "Add to knowledge base" on (`connectors.changes` with the subscription's id, a cursor on its held items; [subscriptions.md](../extensions/subscriptions.md) "Destinations").
    - **GitHub**: only PRs / issues involving me (`involves:@me`, last 30 days initially), not entire repositories.
    - One PR / issue per chat, `github-<owner>-<repo>-<number>` (`kind` is `pr` / `issue`), in this order: description (starts with `【标题】`, "[Title]"); comments; reviews (`（review）批准了`, "(review) approved"); inline comments ("(file:line)…").
    - Bots are marked `(bot)`. Each entry is at most 4000 characters. Skip the round when the request quota is low.
-2. **Compress**: once a chat has 50 new messages or has been quiet for 10 minutes, send the old `summary.md` + new messages (up to 24k characters, keeping the latest) to a small model,
+2. **Compress**: once a chat has 50 new messages or has been quiet for 10 minutes, send the old `summary.md` + new messages (up to 24,000 bytes, keeping the latest and cut at a message or line start, or inside a long line at a whole character when the next start would drop more than half of them) to a small model,
    producing a new summary (fixed sections: what this is / progress / to-dos and unresolved issues / about me), one line, tags, mentioned projects and people; write `summary.md` and `meta.json`.
    At most 8 chats per round, most relevant first. Direct-chat / email tags propagate to the other person; a person's `summary.md` is assembled from metadata and direct-chat context without a model call.
    When the model declines the batch (a `refusal` stop reason, e.g. a safety classifier), it would decline it again: the batch is marked covered without a new summary and the chat continues with later messages.
@@ -173,10 +219,13 @@ A value the model writes that doesn't fit is dropped on its own, not with the re
    Aliases collected before these rules are pruned when the knowledge base opens (`PruneProjectAliases`): another unmerged project's name or slug, the project's own name, repeats, generic ones,
    and everything past the first 12 go; names of projects merged into it (directly or through another merged project) stay and do not count. An alias two unmerged projects share stays on both (whose it is cannot be told),
    and projects whose aliases are locked (set by hand) are not touched.
-   Rewrite at most 3 dirty project summaries per round (old summary + latest 40 timeline entries + summaries of up to 8 related chats). Person / chat / project associations are written into each
+   Rewrite dirty project summaries, at most 3 calls per round with failed ones counted (#4246), each from the old summary + latest 40 timeline entries + summaries of up to 8 related chats; a failed one waits like a chat whose compression failed. Person / chat / project associations are written into each
    `meta.json` bidirectionally. Long-term projects (`long`) never revert to short-term.
+3b. **Topics** (#3783, `kb/topic_distill.go`, `kb/topic_merge.go`; "Topics" below): in the topics lane, at most 2 distill calls (new timeline lines or a changed chat summary → candidate
+   knowledge points) and 2 merges (a topic's candidates folded into its points) per run, two calls at a time, while `assistant.kb_topics` is on.
 4. **Documents / meetings / events**: every 30 minutes read Lark calendar (yesterday through 8 days ahead, busy events) and the latest 30 meetings, fill titles for 10 documents (first line of Markdown export),
-   and send new or changed items to the model in batches of 40 for tags and project links.
+   and send new or changed items to the model in batches of 40 for tags and project links, at most 3 calls per round; items left over are tagged in the next rounds without reading the sources again.
+   The items of a batch whose call failed wait like a chat whose compression failed, and the next batch goes on; an item whose title, time or place changed since is tried at once (#4246; before, tagging had no per-round limit and the same failing batch was sent every half hour).
 5. **History import**: the live archive only reads forward from each connector's cursor, so a chat's messages from before it began come in through a separate import
    ("History import" below). The old backfill (`Engine.Backfill`, a few pages backwards per round for the most relevant chats) no longer ran once the knowledge base moved into
    the manager and has been removed; `oldest` / `backfill_done` in old `meta.json` files are still read and otherwise ignored.
@@ -218,8 +267,9 @@ message does not update its old text or attachments. Sources that need to archiv
 
 Ingestion installs `.ingest.json` before replacing any affected day file. It holds complete intended day contents (preserving all original bytes), receipts and chat
 metadata, including both counters. Each file is replaced through a temporary file, flushed and renamed. Recovery repeats those replacements and removes the intent
-only after all succeed. A writable `NewStore` finishes pending intents before returning; `Ingest`, history, compression and archive metadata updates also recover
-before reading counters. Until recovery succeeds, other writes to that chat refuse to overwrite the pending snapshots, timezone conversion waits, and cleanup
+only after all succeed. A writable `NewStore` finishes pending intents before returning; `Ingest`, history, compression, archive metadata updates and hand edits
+of a chat (`kb_update`, the app) also recover before reading counters. A hand edit reads the chat again under the same chat lock and changes only the fields the user
+set, so it never writes back older counters, cursor or last-message time over an ingest that ran meanwhile. Until recovery succeeds, other writes to that chat refuse to overwrite the pending snapshots, timezone conversion waits, and cleanup
 keeps the files. A read-only open refuses an unfinished intent because it cannot repair it. Remove the filesystem obstruction and retry the operation or reopen
 the writable store; retain the intent for recovery. The directory has one owning writer, with concurrent callers serialized by the Store's locks. Operations needing
 both persistence locks acquire metadata before message files, matching project commit's frozen-input check when it reads the timeline.
@@ -258,15 +308,17 @@ not report one never matches its rule.
 
 ### Selection (#1523)
 
-`server/internal/kb/selection.go` is the selection document (`kb.Selection`: `messages`, `docs`, `items`, `history`, the JSON of #1523) and its evaluator, pure and
-table-tested (`selection_test.go` covers every example of the issue). `kb.Defaults()` is what a missing document means; `Validate` / `ParseSelection` refuse
+`server/internal/kb/selection.go` is the selection document (`kb.Selection`: `messages`, `docs`, `items`, `history`, the JSON of #1523), with its validation
+(`selection_validate.go`) and its evaluator for messages and documents (`selection_messages.go`, `selection_docs.go`), pure and table-tested (`selection_test.go`
+covers every example of the issue). `kb.Defaults()` is what a missing document means; `Validate` / `ParseSelection` refuse
 unknown fields and rule names, an `order` that does not hold every rule exactly once, `days` / `attachment_days` / `back_days` outside 1…36500 (null is fine),
 `context` outside 0…200, `include_all` or `context` on another rule, and items without a source, a kind (`chat` / `doc`) or an id, twice, or stored without being read.
 The manager hands the document to the engine (`Engine.Selection`); an engine without one keeps everything as before.
 
+- **Web settings** (#2217): Settings → Knowledge selection targets an explicit manager independently of the chat switcher. Item overrides always precede the movable priority levels. Rules can share a level, split into a separate level, or move up/down. Chat candidates carry their source and chat id; document overrides use the original source/id from the selected document metadata, never its KB filename or display name. Failed/unsupported reads enable no save. Manager and credential changes retire pending work, and observable `kb_selection` events block dirty drafts until an explicit reload. Whole-document PUT has no revision precondition: this warning does not prevent an unobserved concurrent write atomically. Turning a rule off stops new writes; blank document days do not introduce default pruning.
+
 - **Storage and API** (`server/internal/assistant/kb_selection.go`): the manager keeps the document in its settings table under `kb.selection` (as the workflow
-  board's switch), so every client and process agrees; today it is edited through `PUT` below and `kb_history_plan`, and an app settings page (the
-  priority as a sortable list, a per-item picker) is left for a follow-up issue. `GET /api/v1/kb/selection` is the document (the defaults when none was saved);
+  board's switch), so every client and process agrees; the Web app edits it in Settings → Knowledge selection (#2217), and `kb_history_plan` keeps its existing import controls. The Web editor preserves the whole loaded document, including history and optional rule fields. The iPhone and iPad edit it in Settings › Knowledge Selection (`docs/apple/ios.md`, "Knowledge selection"): each change is applied to the document as the hub has it at that moment and saved at once, a document with a version or field the app does not know is shown as unsupported instead of being replaced, and a per-item setting is picked from the chats and documents already in the knowledge base (their `source` and `source_id` / `id`), so a chat of a source without `history_chats` can get one too. Android has no editor yet. `GET /api/v1/kb/selection` is the document (the defaults when none was saved);
   `PUT /api/v1/kb/selection` takes the whole document, validated as above (400 with what is wrong; 403 from a read-only device), stores it, puts it in force at once
   and tells the apps (`kb_selection` event); `GET /api/v1/kb/selection/candidates?source=<connector id>` lists the source's chats (`connectors.history_chats`: id,
   name, kind, flags, estimate, the `source` a per-item setting names, the setting itself, and what the selection reads of it: `whole`, `personal` or `none`). While the
@@ -306,7 +358,7 @@ The manager hands the document to the engine (`Engine.Selection`); an engine wit
   `a+b` for a level's union, `item`). Days null are `kb.text_days`; attachment days null are the source's (`attachment_days_by_source`, else `attachment_days`),
   never more than the line's text days. Chat rules match `kind` and the flags; a chat of a kind no rule knows (mail, issues, pull requests) or of none is outside the
   selection and archived as before. `ReadChat` is the read plan (not read / whole / only around the owner's messages and mentions, and how far back);
-  `ReadPlan.Wider` says a changed plan reads more. `EvaluateDoc` does the same for documents by their signals.
+  `ReadPlan.Wider` says a changed plan reads more. `EvaluateDoc` does the same for documents by their signals (Documents below).
 - **Daily ingestion** (`Engine.Ingest`): every batch goes through the evaluator; only what it stores is written, with its rule's days (a line past them is not
   written). For `mine.context` each chat keeps the last N messages in `select/<chat id>.json` (whole while not stored, the id alone once stored; no identity hints)
   and how many of the next still follow one of the owner's, saved after the commit, so a restart or a replayed batch loses and doubles nothing. Context messages
@@ -324,6 +376,29 @@ The manager hands the document to the engine (`Engine.Selection`); an engine wit
   files and a fuzz target check it, as for merging. Attachments go with the last line that links them (the most attachment days of those lines); a file no line
   links keeps the source's attachment days. Only the days that may differ are read: with every `days` null nothing is read and exactly what the old pruning
   removed goes (`TestPruneSelectedDefaultsPruneAsBefore` over random chats of every kind, with and without a ledger).
+- **Documents** (`CollectItems` in `items.go`, `pruneDocs` in `items_retention.go`): documents are brought in as items as before; the selection only decides
+  which are kept, by the signals each carries (no new reading). `DocSelected` decides a document a source hands over: a per-item `read: false` keeps it out
+  (and its title is not looked up), one without signals is stored as before (its source cannot tell why it concerns the owner), and one with signals is
+  stored when `EvaluateDoc` stores it: a per-item setting first (`read, store`: kept, with its days or else the deciding rule's), then the first level of
+  `docs.order` with a matching signal, stored when one of its matching rules is on (an off rule does not fall through). A document not selected is not
+  written, and one already stored is left untouched. Retention (`DocDays`, in `Engine.Prune`) deletes a document whose time (`at`, else when it was first
+  seen) is past its days, but only days the user set apply: documents had no retention before the selection, so with the defaults (every `days` null) none
+  is deleted, and a deciding rule that is off or has null days, a per-item `read: false` and a document without a matching signal keep it. A per-item
+  setting that stores it with days applies with or without signals. A document that is pinned, locked, tagged to a project or linked from one is kept
+  whatever its days; one past its days that a source still lists is not written again. A document link in a chat (`noteDoc`) writes no stub for a
+  document with a per-item `read: false`, nor for one already past the per-item days the user set. Meetings and events are not decided by the selection.
+
+  What a chat connector can tell about documents and the owner, read-only (only these are offered as rules):
+
+  | Rule | Supported | How a connector tells |
+  | --- | --- | --- |
+  | `comment_mentions` (a comment mentions me) | yes | the documents notification feed's comment and reply cards that mention the owner |
+  | `mentions` (the document mentions me) | yes | the documents notification feed's mention cards |
+  | `authored` (I wrote it) | yes, as "I own it" | the drive's list of the owner's own documents; documents the owner edited but does not own cannot be told apart |
+  | `viewed` (I viewed it) | yes | the recently opened documents list |
+  | I shared it | no | no read-only list of documents shared *by* the owner (the drive's shared view lists those shared *with* them) |
+  | I commented on it | no | the owner's own comments raise no notification, and finding them means reading every document's comments |
+
 - **Safety**: the selection never deletes or rewrites what is stored because a rule was turned off. An off rule only stops new writes; its lines keep `text_days`.
   A per-item `read: false` stops future reads only. Shorter days apply only once the user sets them. A ledger that does not read holds up no write, and that
   chat's lines are kept the most days any rule has.
@@ -432,7 +507,8 @@ reads less needs no approval and applies from the next page.
   3. Once every window is read, each gap between two windows gets one omission line with the number of positions it leaves out, stamped with the older window's newest
      message (its time is all that is known of the gap); the gap below the oldest window gets one stamped a minute before it. None is written above the newest window: those
      messages may be in the live archive.
-  4. A year whose search found nothing is taken as not covered (an index may not reach back that far): in that year only, the chat is read backwards through
+  4. A year whose search found nothing is taken as not covered (an index may not reach back that far), and so is a year whose search did not finish (a later page
+     refused, or `more` with no new cursor), whatever its first pages found: in that year only, the chat is read backwards through
      `AnchorFilter`, starting below the oldest window already read in a newer year when there is one. Years before the conversation began are skipped: unless a window
      reached position 0, one page `around` position 0 says when it began. Without it, a long `text_days` would make every empty year stream the whole chat below its
      windows, the cost a personal read is there to avoid.
@@ -532,7 +608,7 @@ The flow the tool descriptions ask for: list the plan, show it, apply the owner'
 Replies go through `server/internal/i18n/locales/*/assistant-kb_history.json`; with `kb.history` off the tools say so and ask no connector anything. In the health space only
 `kb_history_status` works: the others change what goes into the knowledge base.
 
-### Timezone (2026-11-01)
+### Time zones
 
 Archive dates and times (daily files, each line's "- 15:04", timeline "- 2006-01-02 15:04", Moments timestamps) are in the user's local time. The user's timezone is the one reported by the phone to assistant settings
 (since 2026-11-04 the manager reads its own settings, falling back to its machine's timezone if never reported; previously `Hub.userLocation`). Before, writes used the hub machine's timezone; with the hub in UTC and the user in UTC+8:
@@ -547,7 +623,7 @@ Files record clock times, not timezones, so each file declares its timezone and 
   - Write first to `messages.rezone/`, then swap with `messages/`, so each chat is entirely new or entirely old.
   - Interrupted work resumes next time: before the swap, original files remain untouched; after it, only `messages.old/` needs deletion. The same data is never converted twice.
 - **Timelines:** `log.md`'s heading includes the timezone (`# 时间线 · Asia/Shanghai`, "Timeline"; bare `# 时间线` means the hub's timezone). Rewrite the whole file once.
-- **When to move:** call `Rezone` when the manager starts (before connecting to the hub, `Service.StartKB`) and before each archive round; do not move if the user timezone cannot be read. Once all data is moved, the same timezone does not trigger another traversal.
+- **When to move:** call `Rezone` when the manager opens the knowledge base (`kbOpenLocked` in `assistant/kb.go`) and before each archive round (`kbRound`); do not move if the user timezone cannot be read. Once all data is moved, the same timezone does not trigger another traversal.
   If the phone changes timezone (travel), the next round moves everything to it.
 - **Reads and writes use the same timezone:**
   - Before reading or writing a chat, ensure it is in the current timezone;
@@ -629,6 +705,54 @@ The model may mistake product names in notification emails (each App Store app, 
 and prompts (`server/internal/prompts/kb/`, `docs/assistant/prompts.md`) explicitly exclude notifications, marketing and billing. At startup the manager marks projects sourced only from these chats and never manually tagged as `ignored`:
 no more updates, snapshots or prompts; the app groups them under **Not projects**. Changing their status in tags restores them.
 
+## Deleting a project
+
+A project can be deleted from the web knowledge list (#4412). The delete is soft (`kb/project_trash.go`):
+
+- The project's directory moves to `.trash/<id>/project` in the data dir, so it drops out of lists, search, prompts and the pipeline, which only read `projects/`. Its index rows go.
+- The chats, people and items that named it stop naming it. `.trash/<id>/trash.json` records which ones (`unlinked`, as `<kind>/<id>`), with the slug, the name and `deleted_at`.
+- Restoring moves the directory back, re-adds the project to the recorded entities that still exist, reindexes it and removes the trash entry. A project created with the same slug since then blocks the restore (`409`); nothing is overwritten.
+- Projects merged into it go with it (`.trash/<id>/merged/<slug>`, listed in `merged`) and come back with it, so their unmerge record still points at a project that exists.
+- The trash is never searched, and compression running while a project is deleted doesn't link it again. Documents linked only from a project in the trash are kept by document retention, so a restore finds them.
+- Forgetting a source (`ForgetSource`) removes for good every trash entry that holds something the source brought in (its chats, people, items or posts, or timeline lines it wrote), so a restore can't bring forgotten data back.
+- Merged projects can't be deleted (`404`), and a read-only knowledge base refuses both (`403 kb_read_only`). Nothing else empties the trash yet; entries stay until restored or removed by hand. Entry ids are a timestamp; the slug and name are in `trash.json`.
+- The routes are for full credentials only: an extension's token opens none of them (`extwire.RouteScopes`).
+
+## Topics (#3783)
+
+Projects and chats are filed by where knowledge came from, and their summaries follow fixed status sections (what this is, progress, next steps, risks). They say where a piece of work
+stands, not what the owner knows: how a system works, what was decided and why, the commands and steps that work, the pitfalls already hit. Those facts sit in timeline lines (the main
+chat's progress, each Agent's last words, to-do conclusions) and chat summaries, and compression drops them over time. Topics file them by subject (`kb/topics.go`):
+
+- **A topic** is a subject (a system, a product, an area), `topics/<slug>/`. It holds **knowledge points** under up to two levels of subtopics (`path`). A point has a kind
+  (`concept`, `decision` with its reason, `practice`, `pitfall` with its cause, `fact`, `question` for what is still open), a text of at most 60 characters asked for (200 kept),
+  the entries it came from (`sources`: `projects/<slug>` or `chats/<id>` and the day) and the day it was last confirmed (`when`). `points.json` is the record; `summary.md` is
+  written from it after every change, grouped by subtopic, and is what search and the assistant read.
+- **Distill** (`kb/topic_distill.go`, prompt `kb/topic_distill`): a project is due once its timeline has 8 new lines, or fewer and it has been quiet 30 minutes; a chat (not P3, with
+  real people, `HasPeople`) once its summary changed and it was last distilled more than 12 hours ago. One call takes up to 6 KB of a project's timeline lines from where the last one
+  stopped (each clipped to 600 characters, oldest first), or a chat's summary (clipped to 6 KB, not split), plus the names, aliases and one lines of the 80 biggest topics, and
+  returns at most 12 candidates, each with a topic name and a path. The sizes keep a call's answer well inside its 3-minute deadline also on a model that writes 30–40 tokens a
+  second (#4350: with 12 KB and 25 points a third of the calls ran out of time). A project call that ran out of time, or whose answer did not fit even in twice the room, is tried
+  again (after the usual wait) with half the lines it carried, at least 2, halving again while it keeps failing; a success lifts the cap. A name matching a topic's name or alias (`normName`, as projects match) files it there; a new name opens a topic, at most 4 a call and 150 in all (the
+  rest of that call's points for new topics are dropped and logged). How far a source was read is its mark, `.topics.json` in its directory: a project's line count and the size of
+  `log.md` when it read to the end (an unchanged size means nothing new, and the timeline is not read again), a chat's summary hash. The first pass over existing timelines is the
+  same step from line one, so a knowledge base with long timelines fills in over some rounds.
+- **Merge** (`kb/topic_merge.go`, prompt `kb/topic_merge`): a topic with candidates sends its points and up to 40 candidates; the model answers with edits only, never the whole list,
+  so the answer stays short however big the topic grows: `add` (a new point from some candidates), `update` (attach candidates to an existing point, optionally reworded) or `drop`
+  (outdated, contradicted, or progress rather than knowledge). The engine checks each edit (known point ids, known candidates, kinds, lengths), takes each point's sources and day
+  from the candidates it names, and lets go of candidates no edit names. The answer is applied only if the points and that batch are unchanged since the question (a source forgotten
+  meanwhile changes them; the topic is merged again next round). A topic keeps at most 300 points (the model is asked to stay under it; past 350 the oldest go).
+- **Pinned facts and hand edits**: `pinned` on a topic is read-only input to the merge, which drops points contradicting it. By hand (`kb_update`, `PUT /api/v1/kb/topics/<id>`) a topic's
+  name, `note` (its one line), aliases, tags and pinned facts change and lock as for other kinds; its summary cannot be replaced (it is written from the points).
+- **Failures** wait like a project rewrite's (`retryWait`, in memory) per source and per topic. Both steps use the model use `kb.topics`.
+- **Switch**: `assistant.kb_topics`, on by default (Settings › Knowledge on the web, and Persona's settings tool after the user confirms). Off, neither step calls the model; the topics
+  already written stay readable, and turning it back on continues from the marks.
+- **Reading**: topics list (the most points first), open (`points` in the detail, `links` to the projects and chats they came from), search (`summary.md` and `meta.json`) and change
+  events (`kb.changed` with kind `topics`) like the other kinds, through the app API, the assistant's `kb_list` / `kb_get` / `kb_search` and the extension `kb.*` RPC. `kb.recent`
+  does not include them by default (it is what came in, and topics are derived). The web shows them under Knowledge › Topics and in the knowledge map (`docs/web/web.md`); the iOS
+  and Android apps do not show the kind yet and skip it.
+- **Deleting a source** removes the points that came only from it ("Deleting a connector's saved knowledge" above).
+
 ## Who uses it
 
 - **Persona (main chat and other chats)**: CLAUDE.md describes the layout and requires "keep context flowing"; MCP tools `kb_search` (full text) / `kb_list` (sorted list) /
@@ -682,7 +806,9 @@ Metadata of all six entity types can include `pinned` (user-confirmed facts) and
 
 - Omitted or `null` `tags` keeps the current value; explicit `[]` clears; a nonempty array replaces. After explicit clearing, metadata retains `tags: []`, allowing clients to replace cached tags with the latest empty value.
 - Only explicit updates change `pinned`; an empty string clears it. Compression and project rewrites receive it as read-only input; the model cannot overwrite stored facts. Person corrections also feed related chat compression.
-- Manual writes lock fields touched by default, including person `note`, summaries, project descriptions and associations. Background writes reread current protected fields at write time so corrections made during a model call cannot be overwritten by stale objects.
+- People accept `status: active`, `ignored` (an account excluded from automatic person notes, summaries and new chat/project associations), or `self` (the owner, excluded from external participant rosters). Missing or empty metadata status retains normal active-contact behavior. In updates, omitted or empty status keeps the current value; use `active` to restore a contact. Other nonempty person statuses are rejected before changing fields or links.
+- Historical associations and summaries remain on disk; linked-entity rosters and project deduplication member counts omit ignored/self accounts without deleting those records. `kb.list` for people omits ignored accounts before ranking and pagination, so totals and offsets count only listed people; self accounts remain listed. Ignored accounts can still be explicitly read by ID with `kb.get` and corrected with `kb.update`. This does not synchronize `self` into the separate encrypted `kb.owner` record.
+- Manual writes lock fields touched by default, including person `note` and `status`, summaries, project descriptions and associations. Background writes reread current protected fields at write time so corrections made during a model call cannot be overwritten by stale objects.
 - `lock: false` adds no locks in this update, letting extensions choose continued background maintenance; it does not remove existing locks. Legacy `locked` tag protection remains effective.
 - `remove_people`, `remove_chats`, `remove_projects`, `remove_aliases` remove associations or project aliases, not entities. A batch adds first then removes, so removal wins; existing reverse associations are removed too. `remove_aliases` applies to projects.
 - Automatic deduplication skips manually protected projects and associations. Explicit merging retains existing merge precedence, updates locked reverse associations and concatenates both pinned values; the source remains a merged record with its original protected metadata readable.
@@ -747,9 +873,12 @@ and a disabled knowledge base (`kb.enabled: false`) returns 503 as before.
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /api/v1/kb/{kind}?tag=` | Sorted list (`items`) and common tags (`tags`); kind is projects / chats / people / docs / meetings / events / recordings |
-| `GET /api/v1/kb/{kind}/{id}` | `detail` (meta, summary, project timeline, last 7 days' chat messages); projects also include `agents` |
+| `GET /api/v1/kb/{kind}?tag=` | Sorted list (`items`) and common tags (`tags`); kind is projects / chats / people / docs / meetings / events / recordings / topics (topics: the most points first, `extra` is the count) |
+| `GET /api/v1/kb/{kind}/{id}` | `detail` (meta, summary, project timeline, last 7 days' chat messages, a topic's `points`); projects also include `agents` |
 | `PUT /api/v1/kb/{kind}/{id}` | Edit (fields as in `kb_update`); create a project if absent |
+| `DELETE /api/v1/kb/projects/{id}` | Soft-delete a project ("Deleting a project" above); returns its trash entry (`id`, `kind`, `slug`, `name`, `deleted_at`, `unlinked`); 404 for unknown or merged projects |
+| `GET /api/v1/kb-trash` | Deleted projects, newest first (`items`: trash entries) |
+| `POST /api/v1/kb-trash/{id}/restore` | Put a deleted project and its links back; returns the entry; 404 if there is no such entry, 409 if a project with its slug exists again |
 | `GET /api/v1/kb-search?q=&messages=0` | Full-text search (by line, for older apps; assistant `kb_search` does the same search through bus `kb.search`) |
 | `GET /api/v1/kb-search?q=&results=1` | App search: grouped and sorted by entry (`results`: `entry`, `count`, first 3 `hits` lines, `in_name`), see "Search" below |
 | `GET /api/v1/kb/{kind}/{id}?q=` | Open from search: adds `matches` (every hit in this entry; messages include `day` and two neighboring messages each in `before` / `after`), up to 40 |
@@ -768,6 +897,7 @@ Reworked after feedback on 2026-10-31: "I find results but can't locate them aft
   original and lowercase file content (mtime + size, up to 64 MB total; excess is read every time), and entries of each kind (mtime + size of all JSON files).
   Files and directories changed within 2 seconds are not cached, avoiding invisible same-timestamp rewrites with unchanged size. On synthetic ~33 MB archives (37k files), median warm search ~360 ms → 85 ms, cold ~350 ms → 270 ms (`go test -bench BenchmarkFind ./internal/kb`, median of 5); cache ~35 MB, results identical to uncached (`find_test.go`). 35 MB is a lower bound: the synthetic data has almost no uppercase, so original and lowercase are the same string stored once; files with uppercase (English names, Build, etc.) need both, roughly 2× text size. With uppercase on every line, the same archive reaches the 64 MB cap (36k of 37k files cached, others reread); warm search remains ~85 ms.
 - Find keeps of each file only what a result can show: its first 3 distinct matching lines and a count up to 99 (`hitsPerResult`, `foundCap`); a file whose text folds to itself has its lines matched as written instead of folded one by one. `kb_search` (`Search`) takes the data dir's files from the same cached walk instead of walking the whole directory on every call, so all of `history/` is skipped (its `messages/` too) and a data dir that is a symlink is searched. Results are otherwise identical to the previous code (`find_hits_test.go`, `search_walk_test.go`; `BenchmarkFind/every`, `BenchmarkSearch`).
+- `kb_search` with `kind` (`SearchKind`) reads only that kind's files from the same walk: by entry, those whose name has every word first, then in `kb_list`'s order, and with `messages` only the chats' message days. It never reads the notes directories or the Moments posts. Without `kind`, `Search` keeps its order.
 - Opening a chat from a search (`Matches`) checks each day for all the words through the same cache and reads only the days that have them, instead of reading and folding every day until it has 40 hits. In a 365-day chat of the synthetic archive, a rare word takes ~9 ms → 2 ms right after a Find; a new engine pays one more `stat` per day (~+10-20%, ~9 ms → 10 ms), and a common word that fills the limit within a few days stays ~0.5 ms (`BenchmarkMatches`; results identical to reading every file, `matches_test.go`).
 - Find only counts lines in the files opening an entry shows (`Matches`): profile, timeline and metadata (`summary.md`, `log.md`, `meta.json`; a recording's `transcript.md`), a chat's day files, a doc's JSON. Bookkeeping under an entry (`moments-judged.json`, `handles.json`, any other file) is not searched, so every result with hits shows them once opened (`TestFindAgreesWithMatches`). A limit of zero or less gives no results.
 - Opening an entry shows **Search "term"** at the top: every hit in this entry, with one message before and after each message hit. Tapping opens that day (`KBDayView`), scrolls to and highlights the message, and allows paging to adjacent days.

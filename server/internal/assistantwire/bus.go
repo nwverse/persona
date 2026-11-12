@@ -1,5 +1,7 @@
 package assistantwire
 
+import "github.com/nwverse/persona/server/internal/devicewire"
+
 // ---- the bus ----
 
 // AssistantID is the bus identity the assistant connects as (a manager's token, hub/bustokens.go).
@@ -13,6 +15,8 @@ const (
 	CapabilityConfigOwn = "config.own"
 	// CapabilityAgentSessionArchives: the manager owns recoverable Codex/Claude archives.
 	CapabilityAgentSessionArchives = "agent_session_archives"
+	// CapabilityAgentNaming: ordinary full-user renames record manual intent before node dispatch.
+	CapabilityAgentNaming = "agent_naming.v1"
 	// CapabilityAgentSessionArchiveClose: the manager's archive also takes ?close=1, "Archive and close", which closes
 	// the agent on its computer (session.retire) once archived (docs/protocol/protocol.md "Agent session archives").
 	CapabilityAgentSessionArchiveClose = "agent_session_archive_close"
@@ -20,6 +24,24 @@ const (
 	// of it (devicewire MethodMachinesPut / Remove / Get) once the hub hands it MachinesOwn
 	// (docs/assistant/managers.md "Each manager's computers").
 	CapabilityMachinesOwn = "machines.own"
+	// CapabilityMeetingAttendance: the manager attends recorded meetings (the recordings' attendance fields, …/live,
+	// …/ask and meeting_attendance_default; docs/assistant/meeting-minutes.md "Attending a meeting"). The hub lists the
+	// meeting_attendance feature only while the default manager names it.
+	CapabilityMeetingAttendance = "meeting_attendance"
+	// CapabilityMeetingConversation: the manager takes the meeting conversation's phase 1 (the upload's room and
+	// private, the room conversation, …/ask answered by it, …/just-me, …/private, …/followup, the meeting_live event;
+	// docs/assistant/meeting-minutes.md "Meeting conversation (#3862)"). The hub lists meeting_conversation only while
+	// the default manager names it. A manager that names it names CapabilityMeetingAttendance too.
+	CapabilityMeetingConversation = "meeting_conversation"
+	// CapabilityMeetingPhotos: the manager takes the meeting conversation's phase 3, its photos (…/photos, forwarding
+	// them to the room, the room's notes, citations in the minutes; docs/assistant/meeting-minutes.md "Phase 3:
+	// photos"). The hub lists meeting_photos only while the default manager names it beside
+	// CapabilityMeetingConversation.
+	CapabilityMeetingPhotos = "meeting_photos"
+	// CapabilityRecordingDay: the manager takes all-day recordings and writes their daily recap (the upload's kind
+	// day, POST …/segments, detail.recap, recap_state; #4741). The hub lists the recording_day feature only while the
+	// default manager names it.
+	CapabilityRecordingDay = "recording_day"
 )
 
 // The methods and events, by direction. The assistant's handshake is manager.hello {id, host, os, arch, deploy,
@@ -53,6 +75,10 @@ const (
 
 	// EventStartEnded (StartEnded): how an app's start the node ran before answering went (POST /api/v1/sessions).
 	EventStartEnded = "session.start_ended"
+
+	// EventConversationSent (ConversationSent): how an app's message to one of the assistant's conversations went, as
+	// the hub sent it (the north star's availability, docs/assistant/north-star.md). An older manager ignores it.
+	EventConversationSent = "session.assistant_sent"
 )
 
 // Error codes that cross the bus where a Go error would lose its kind (rpc.Error.Code).
@@ -68,11 +94,27 @@ const (
 	// CodeChatDenied: the hub refused to send into a chat or to reply to a message in one, because the bot may only use
 	// the owner's private chat and the group chats the owner opted in. Nothing was sent.
 	CodeChatDenied = "chat_denied"
+	// CodeMeetingEnded: a message into a meeting's room that ended (docs/assistant/meeting-minutes.md "Messages from
+	// elsewhere"): the hub answers 409 meeting_ended, and the apps write in the follow-up instead.
+	CodeMeetingEnded = "meeting_ended"
+	// CodeLauncherOtherKind: a launcher of another agent kind picked for a message in an existing assistant
+	// conversation (Data: conversation_agent, launcher, launcher_agent, delivered "none"): the hub answers 409, nothing
+	// was sent, and the conversation keeps its agent (docs/assistant/assistant.md, #4662).
+	CodeLauncherOtherKind = "launcher_other_kind"
 )
 
 // HTTPRequest is http.request's params: an app's request on one of Routes, with an escaped URL path (header without
 // the hub's credentials and hop-by-hop headers, the asking device's role in RoleHeader; body as base64).
+// HandoffApprover is set by the hub on a card's answer from a device that may approve a hand-off card; Human on a new
+// conversation a person's own app opens.
 type HTTPRequest struct {
+	Caller          *devicewire.Caller         `json:"caller,omitempty"`
+	ShareAuthority  *devicewire.ShareAuthority `json:"share_authority,omitempty"`
+	HandoffApprover *HandoffApprover           `json:"handoff_approver,omitempty"`
+	// Human is the hub's word that a person's own app opens this conversation (POST /api/v1/assistant/conversations
+	// with a full device's credential, decided as for SendParams.Human): its first message counts as theirs
+	// (WithHumanStart). Set by the hub on that route only, never from the request; an older hub never sends it.
+	Human  bool                `json:"human,omitempty"`
 	Method string              `json:"method"`
 	Path   string              `json:"path"`
 	Query  string              `json:"query,omitempty"`
@@ -82,27 +124,48 @@ type HTTPRequest struct {
 
 // HTTPResponse is http.request's answer, written back to the app unchanged.
 type HTTPResponse struct {
-	Status int                 `json:"status"`
-	Header map[string][]string `json:"header,omitempty"`
-	Body   []byte              `json:"body,omitempty"`
+	ShareAuthority *devicewire.ShareAuthority `json:"share_authority,omitempty"`
+	Status         int                        `json:"status"`
+	Header         map[string][]string        `json:"header,omitempty"`
+	Body           []byte                     `json:"body,omitempty"`
 }
 
 // Routes are the routes the assistant answers (net/http patterns): the hub relays the apps' requests on them as
 // http.request. The assistant registers exactly these (assistant.TestRoutesAreTheWireOnes).
 var Routes = []string{
+	"POST /api/v1/assistant/health/workouts",
 	"GET /api/v1/sessions/archived",
 	"POST /api/v1/sessions/{mid}/{sid}/archive",
 	"POST /api/v1/sessions/{mid}/{sid}/unarchive",
 	"POST /api/v1/assistant/conversations/{id}/archive",
 	"GET /api/v1/assistant/conversations/{id}/always",
+	"GET /api/v1/assistant/standing-authorizations",
+	"GET /api/v1/assistant/north-star",
+	"DELETE /api/v1/assistant/standing-authorizations/{id}",
+	"POST /api/v1/assistant/rule-suggestions/{id}/always",
+	"POST /api/v1/assistant/rule-suggestions/{id}/not-now",
 	"DELETE /api/v1/assistant/conversations/{id}/always/{hash}",
 	"POST /api/v1/assistant/conversations/{id}/unarchive",
 	"POST /api/v1/assistant/conversations/{id}/stop",
 	"GET /api/v1/assistant/reporters",
+	"GET /api/v1/assistant/leaders",
+	"GET /api/v1/assistant/availability",
+	"GET /api/v1/assistant/directions/tree",
+	"GET /api/v1/assistant/directions/offers",
+	"DELETE /api/v1/assistant/directions/offers/{id}",
+	"POST /api/v1/assistant/directions/{id}/start",
+	"POST /api/v1/assistant/directions/{id}/make",
+	"POST /api/v1/assistant/directions/{id}/end",
+	"POST /api/v1/assistant/route/agent",
+	"POST /api/v1/assistant/agents/{mid}/{sid}/supervisor",
+	"PUT /api/v1/assistant/directions/{id}/name",
 	"GET /api/v1/assistant/conversations/{id}/feed",
+	"POST /api/v1/assistant/feed/{id}/dismiss",
+	"POST /api/v1/assistant/feed/{id}/undo-dismiss",
 	"POST /api/v1/assistant/conversations/{id}/route",
 	"POST /api/v1/assistant/conversations/{id}/today",
 	"GET /api/v1/assistant/tasks",
+	"GET /api/v1/assistant/tasks/cron",
 	"POST /api/v1/assistant/tasks",
 	"PUT /api/v1/assistant/tasks/{id}",
 	"DELETE /api/v1/assistant/tasks/{id}",
@@ -121,6 +184,7 @@ var Routes = []string{
 	"DELETE /api/v1/assistant/followups/{id}",
 	"GET /api/v1/task-plans/{id}",
 	"POST /api/v1/task-plans/{id}/start",
+	"POST /api/v1/task-plans/{id}/workspace-preview",
 	"POST /api/v1/task-plans/{id}/dismiss",
 	"GET /api/v1/task-trust",
 	"DELETE /api/v1/task-trust",
@@ -139,6 +203,8 @@ var Routes = []string{
 	"PUT /api/v1/todos/{id}/thread",
 	"DELETE /api/v1/todos/{id}/thread",
 	"POST /api/v1/todos/{id}/accept",
+	"POST /api/v1/todos/{id}/decision-dismiss",
+	"POST /api/v1/todos/{id}/decision-undo-dismiss",
 	"POST /api/v1/later/{id}/handled", // a question that can wait, marked handled (later.go)
 	"POST /api/v1/todos/{id}/done-check",
 	"POST /api/v1/todos/{id}/retry",
@@ -155,7 +221,10 @@ var Routes = []string{
 	"GET /api/v1/assistant/capabilities",
 	"POST /api/v1/assistant/conversations",
 	"POST /api/v1/assistant/conversations/{id}/compact",
+	"PUT /api/v1/assistant/conversations/{id}/model", // the model a conversation's next messages run on (model_pick.go, #5033)
+	"DELETE /api/v1/assistant/conversations/{id}/model",
 	"POST /api/v1/assistant/main/new",
+	"POST /api/v1/assistant/main/clear",
 	"POST /api/v1/assistant/origins/backfill",
 	// The channels (channels.go there, docs/extensions/channels.md "API").
 	"GET /api/v1/channels",
@@ -175,6 +244,9 @@ var Routes = []string{
 	"GET /api/v1/kb/{kind}",
 	"GET /api/v1/kb/{kind}/{id}",
 	"PUT /api/v1/kb/{kind}/{id}",
+	"DELETE /api/v1/kb/projects/{id}",
+	"GET /api/v1/kb-trash",
+	"POST /api/v1/kb-trash/{id}/restore",
 	"GET /api/v1/kb/moments/{id}",
 	"GET /api/v1/kb/chats/{id}/context",
 	"GET /api/v1/kb/chats/{id}/days/{day}",
@@ -187,4 +259,21 @@ var Routes = []string{
 	"PUT /api/v1/recordings/{id}",
 	"DELETE /api/v1/recordings/{id}",
 	"GET /api/v1/recordings",
+	"POST /api/v1/recordings/{id}/minutes",
+	"POST /api/v1/recordings/{id}/minutes/todos",
+	// All-day recordings' appends (kb_day.go there, #4741).
+	"POST /api/v1/recordings/{id}/segments",
+	// Attending a meeting (meeting_live.go there, docs/assistant/meeting-minutes.md "Attending a meeting").
+	"POST /api/v1/recordings/{id}/live",
+	"GET /api/v1/recordings/{id}/live",
+	"POST /api/v1/recordings/{id}/ask",
+	// The meeting conversation (meeting_room.go there, docs/assistant/meeting-minutes.md "Meeting conversation (#3862)").
+	"PUT /api/v1/recordings/{id}/private",
+	"POST /api/v1/recordings/{id}/just-me",
+	"POST /api/v1/recordings/{id}/followup",
+	// Its photos (meeting_photos.go there, "Phase 3: photos").
+	"POST /api/v1/recordings/{id}/photos",
+	"GET /api/v1/recordings/{id}/photos",
+	"GET /api/v1/recordings/{id}/photos/{n}",
+	"DELETE /api/v1/recordings/{id}/photos/{n}",
 }

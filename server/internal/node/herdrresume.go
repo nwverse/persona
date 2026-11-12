@@ -45,12 +45,12 @@ func (n *Node) claudeCommandLine(spec claudeLaunch, args string, q func(string) 
 	if spec.Settings != "" {
 		cmd += " --settings " + q(spec.Settings)
 	}
-	cmd += " --mcp-config " + q(filepath.Join(n.dir, "mcp.json"))
+	cmd += " --mcp-config " + q(filepath.Join(n.dir, "mcp.json")) + " --allowedTools " + q(n.agentAllowedTools(spec.Plugins))
 	if spec.Model != "" {
 		cmd += " --model " + q(spec.Model)
 	}
 	if spec.Plugins {
-		cmd += " --plugin-dir " + q(n.pluginDir()) + " --allowedTools " + q(officeRule(n.agentOfficeScript()))
+		cmd += " --plugin-dir " + q(n.pluginDir())
 	}
 	if spec.Hooks != "" {
 		cmd += " --plugin-dir " + q(spec.Hooks)
@@ -154,7 +154,7 @@ func (n *Node) reportResume(ctx context.Context, h *herdrHost, pane string, spec
 	if agentName == "" {
 		agentName = "claude"
 	}
-	if err := h.c.PaneReportResume(ctx, host.ParsePane(pane).ID, resumeSource, agentName, spec.ID, argv); err != nil {
+	if err := h.PaneReportResume(ctx, host.ParsePane(pane), resumeSource, agentName, spec.ID, argv); err != nil {
 		n.logf("herdr resume: %s (%s): %v", pane, spec.ID, err)
 	}
 }

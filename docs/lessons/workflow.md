@@ -1,6 +1,12 @@
 # Lessons: collaboration and process: multiple Agents changing the repo at once, commits, migration numbers, scripts
 
-Pitfalls, odd behavior and the trade-offs made at the time (formerly in `CLAUDE.md` ("Lessons"); index in `docs/lessons/README.md`). Put new lessons in the matching section; if none fits, start a new one.
+Pitfalls, odd behavior and the trade-offs made at the time (formerly in `CLAUDE.md`; index in `docs/lessons/README.md`). Put new lessons in the matching section; if none fits, start a new one.
+
+- Remote-tracking refs and `FETCH_HEAD` are shared across worktrees (#2705). Another task's fetch can advance
+  `origin/main` between inspection and local commit consolidation, turning an older tree into apparent reversions
+  of unrelated main changes. Capture the full base SHA or fetch into a task-specific ref before integrating or
+  consolidating unpublished commits. Compare against that fixed base and stage only the task's files before pushing;
+  never force-push a published branch or rewrite another task's commits to repair the mismatch.
 
 - Privacy hooks must resolve the tracked default branch, not assume `origin/master` (#733). A new remote branch has an all-zero old SHA, so falling back to that SHA and skipping an unavailable range silently lets its first push through. Test real first pushes to an isolated bare repository, retain existing-ref and deletion controls, and refuse a new branch when no scan base is available.
 
@@ -25,6 +31,11 @@ Pitfalls, odd behavior and the trade-offs made at the time (formerly in `CLAUDE.
   (Cloudflare rejected it with `externally managed DNS records`, publish exited 1, but the script had already uploaded). Run `git fetch` before creating the worktree, and check `git rev-parse HEAD origin/main`
   match before deploying; when publish errors, first check whether the live site already switched to this code, then decide how to fix it.
 - Trimmed Go build metadata can omit linker flags, so a serving-binary verifier must read exact `vcs.revision` and clean-source settings instead of searching for `main.commit` in the flags (#1553). Keep the serving/built binary hash comparison. A hub deployment already publishes its web artifact; acknowledge that only with a matching commit and exact built/installed tree receipt, rather than repeat a stale deploy after main advances.
+- Autorelease incident identity must survive new main commits (#4671): a commit-keyed notification budget still spams
+  when a broken build spans many merges. Hash the target's step/result and diagnostic summary, clear it only on actual
+  recovery, and keep delivery retries separate from action retries. A deploy guard rejecting a checkout missing upstream
+  commits is deferred work, not a failed build; match both its exact diagnostic and exit code. When logs append across
+  retries, inspect only the current attempt's output or an older stale-checkout line can hide a real later failure.
 - Unattended releases need locks shared with manual entry points, not only a worker lock (#1477). Use the hub's existing promotion lock for deployments from every build computer, resolving its state root from the installed service rather than assuming a default directory; use a build-computer release lock through upload and TestFlight processing. A successful upload followed by a processing timeout must resume the same build number, not upload another binary. Hub notification acceptance is not a phone-display receipt; installation acceptance needs an observed notification.
 - Two sessions releasing at once collide on the build number (2026-11-04): both started `release.sh` (without a build number) in the same minute and got the same time-based number `202611040002`;
   the one that finished uploading first went into TestFlight, the later upload was rejected by App Store Connect (`Redundant Binary Upload`, exit 70), and only one archive with that name was left in Organizer.
@@ -32,12 +43,16 @@ Pitfalls, odd behavior and the trade-offs made at the time (formerly in `CLAUDE.
   To retry the rejected one with the same commit without changing the number: first check with `asc_testflight.py status` whether that number is already VALID and the same commit; if so, continue with `wait` / `external`.
 - Multiple agents merging into `main` at once: on a merge or rebase conflict, do not overwrite others' changes with your own old copy of the whole file (on 2026-10-25 one rebase reverted the light-blue bubbles and the notification navigation fix entirely);
   resolve only the conflict hunks, and before pushing check `git diff origin/main...HEAD --stat` for files that are not yours. Before building for TestFlight, confirm `main` is the fixed version.
+- When both sides of a merge add a test at the end of the same file, the conflict block ends inside the braces they share: the lines after `>>>>>>>` close only one of the two functions, so taking ours then theirs leaves the first test unclosed (2026-11-10: a Kotlin test file lost its `}` this way, and only the Android lane's compile caught it). Read the lines right after the block before choosing, and compile every platform whose files the merge touched.
 - Multiple agents changing the same repo in parallel (6 workers on the Lark workplace, see `docs/extensions/feishu.md`): each gets its own worktree + its own cloned simulator; new types get a domain prefix
   (`FeishuSearchXxx`…, otherwise names collide on `main` and the build fails); on merge or rebase conflicts, files outside your own directory always take the `origin/main` version; before pushing check
   that `git diff origin/main --stat` contains only your files (14fe469 once overwrote half the repo with an old copy; 941d067 restored it); when the main working tree has someone else's uncommitted changes,
   do your fix in `git worktree add --detach /tmp/x origin/main`.
 - Database migration numbers are split into ranges per lane (00x1…); before picking a number, check `server/internal/db/migrations/` in every worktree and `schema_migrations` in the `persona_test` database:
   another lane's unmerged migration may already hold the number (2026-10-30, 0051 collided; switched to 0061).
+- Open PRs hold numbers too (`gh pr list --state open --json number,files`), and while a PR waits others merge: #1852's
+  migration went 0443 → 0451 → 0453 in a day. Check the number again right before merging. A data fix that merges under a
+  number databases already recorded never runs there, so keep the code that copes with the old rows as a backstop.
 - A migration already on the default branch is frozen (`scripts/ci/migration_freeze.py`, also from `scripts/check-fast.sh`): editing, deleting or renaming it fails. A comment-only or whitespace-only change passes. Repair an applied migration by adding a new one.
 - On 2026-11-01 `ios/` was renamed to `apple/` (the iOS, watch and macOS Apps and shared code are in the same XcodeGen project): when rebasing an old branch / worktree,
   files newly created under `ios/` must be moved to `apple/` by hand (git follows the rename for changes to existing files).
@@ -79,6 +94,8 @@ SDK synchronization intentionally replaces only the selected SDK subtree (#1471)
 
 ## Hosted CI path aggregation
 
+- Adding a hosted Web input must update the local `check-fast` selector too (#2559); the parity test intentionally fails when attention fixtures are omitted. Legacy JSON fixture members must be composed from their existing compatibility carrier, not repeated in a new test file or allowed by broadening the identifier registry. Fix the source of both failures rather than weakening portable guards.
+
 - Native workflow-level PR path filters leave individually required checks pending when no run is created. Keep one always-triggered
   orchestrator, put filters in a tested selector, call platform workflows through `workflow_call`, and require only its final aggregate.
   The aggregate must verify that every selected workflow succeeded; accepting all `skipped` results can hide an upstream guard failure.
@@ -104,7 +121,7 @@ SDK synchronization intentionally replaces only the selected SDK subtree (#1471)
 
 ## Temporary test hubs
 
-- Historical note (2026-11-03, #277; superseded by the no-compatibility cutover on 2026-11-06): docs call the product Persona, but historical paths, signing profiles, databases / data volumes, protocol fields, bundle IDs, cache keys and source evidence must not be blindly replaced. When docs show `personad` / `~/.persona`, state that the old `personad` / `~/.persona` remain compatible; describe env var precedence only for new entry points that are already implemented; a standalone wording PR is not proof that the runtime migration is done.
+- Historical note (2026-11-03, #277; superseded by the no-compatibility cutover on 2026-11-06): docs call the product Persona, but historical paths, signing profiles, databases / data volumes, protocol fields, bundle IDs, cache keys and source evidence must not be blindly replaced. When docs show `personad` / `~/.persona`, state that the old names remain compatible; describe env var precedence only for new entry points that are already implemented; a standalone wording PR is not proof that the runtime migration is done.
 
 - To verify on a real machine without touching the production hub: on the hub machine, start a copy with a different HOME (`HOME=/tmp/x personad hub`, with another listen port in hub.json
   and a separate database); the `kind: local` machine is a node started from the same binary, and the different HOME keeps it away from the production node's socket and config. Drop the database and delete the directory afterwards.

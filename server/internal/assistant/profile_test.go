@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -78,8 +80,56 @@ func TestPutSettings(t *testing.T) {
 	if p := f.lastSnapshot().Profile; p == nil || p.Main != "m1" || p.Timezone != "Asia/Shanghai" {
 		t.Fatalf("the hub is told: %+v", p)
 	}
+	if code, out := put(`{}`); code != http.StatusOK || out["main_background_folded"] != true {
+		t.Fatalf("main_background_folded default: %d %v", code, out["main_background_folded"])
+	}
+	if code, out := put(`{"main_background_folded":false}`); code != http.StatusOK || out["main_background_folded"] != false {
+		t.Fatalf("main_background_folded off: %d %v", code, out["main_background_folded"])
+	}
 	if code, out := put(`{"main":"-"}`); code != http.StatusOK || out["main"] != nil {
 		t.Fatalf("clear main: %d %v", code, out)
+	}
+}
+
+// A zone picked by hand stays (#1855): before any pick every write lands, as before; once a zone is picked, a
+// device's own sync (a zone without timezone_picked, as every app sent before) leaves it and the answer still says
+// it, while a new pick or going back to the devices' zone (false) lands; the hub's own reading follows.
+func TestPickedTimezoneStays(t *testing.T) {
+	f := newFakeHub().withMachine()
+	f.devices = []Device{{ID: "server", Name: "server", Kind: "local", Home: "/home/me"}}
+	f.hello.Assistant.Machines = []string{"server"}
+	s := newTestService(t, f)
+	put := func(body string) map[string]any {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		s.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/assistant", strings.NewReader(body)))
+		out := map[string]any{}
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil || rec.Code != http.StatusOK {
+			t.Fatalf("%s: %d %s", body, rec.Code, rec.Body.String())
+		}
+		return out
+	}
+	steps := []struct {
+		body, zone string
+		picked     any // the answer's timezone_picked (nil: not there)
+	}{
+		{`{"timezone":"America/New_York"}`, "America/New_York", nil},                     // never picked: a device's sync lands
+		{`{"timezone":"Europe/Berlin","timezone_picked":true}`, "Europe/Berlin", true},   // picked on Android
+		{`{"timezone":"America/New_York"}`, "Europe/Berlin", true},                       // an iPhone's sync: kept
+		{`{"notes":"关于我"}`, "Europe/Berlin", true},                                       // another setting: kept
+		{`{"timezone":"Asia/Tokyo","timezone_picked":true}`, "Asia/Tokyo", true},         // another pick lands
+		{`{"timezone_picked":true}`, "Asia/Tokyo", true},                                 // a pick without a zone keeps it
+		{`{"timezone":"Asia/Shanghai","timezone_picked":false}`, "Asia/Shanghai", false}, // Match phone again
+		{`{"timezone":"America/New_York"}`, "America/New_York", false},                   // the devices' syncs land again
+	}
+	for _, st := range steps {
+		out := put(st.body)
+		if out["timezone"] != st.zone || out["timezone_picked"] != st.picked {
+			t.Fatalf("%s: timezone %v, timezone_picked %v; want %s, %v", st.body, out["timezone"], out["timezone_picked"], st.zone, st.picked)
+		}
+		if got := s.settings(context.Background()).Timezone; got != st.zone {
+			t.Fatalf("%s: the hub reads %s", st.body, got)
+		}
 	}
 }
 
@@ -288,19 +338,18 @@ func TestSettingsTool(t *testing.T) {
 		t.Fatalf("a hub setting: %s", out)
 	}
 	answer := func(allow bool) {
-		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
-			if qs := s.pendingQuestions(); len(qs) == 1 {
-				raw, _ := json.Marshal(proto.Resolution{Allow: &allow})
-				if qs[0].Kind != proto.IxPermission || qs[0].ToolName != "persona_settings" || qs[0].SessionID != "c1" {
-					t.Errorf("card: %+v", qs[0])
-				}
-				if _, err := s.Action(ctx, Action{Op: "answer", InteractionID: qs[0].ID, Answer: raw}); err != nil {
-					t.Error(err)
-				}
-				return
-			}
+		q, ok := awaitCard(s)
+		if !ok {
+			t.Error("no card on the phone")
+			return
 		}
-		t.Error("no card on the phone")
+		raw, _ := json.Marshal(proto.Resolution{Allow: &allow})
+		if q.Kind != proto.IxPermission || q.ToolName != "persona_settings" || q.SessionID != "c1" {
+			t.Errorf("card: %+v", q)
+		}
+		if _, err := s.Action(ctx, Action{Op: "answer", InteractionID: q.ID, Answer: raw}); err != nil {
+			t.Error(err)
+		}
 	}
 	go answer(false)
 	if out := tool(`{"action":"set","key":"assistant.notes","value":"示例备注"}`); !strings.Contains(out, "declined") || s.notes(ctx) != "" {
@@ -315,7 +364,7 @@ func TestSettingsTool(t *testing.T) {
 	}
 	go answer(true)
 	if out := tool(`{"action":"set","key":"assistant.launcher","value":"fast"}`); !strings.Contains(out, "fast") ||
-		modelRecordOf(t, s, "assistant").Binding != (ModelBinding{Provider: "launcher.fast", Model: "chosen", Effort: "high"}) {
+		modelRecordOf(t, s, "assistant").Binding != (ModelBinding{Provider: "launcher.fast"}) {
 		t.Fatalf("launcher: %s %+v", out, modelRecordOf(t, s, "assistant"))
 	}
 	if out := tool(`{"action":"set","key":"assistant.launcher","value":"nope"}`); !strings.Contains(out, "no launcher") {
@@ -323,6 +372,62 @@ func TestSettingsTool(t *testing.T) {
 	}
 	if out := tool(`{"action":"get","key":"assistant.main_tasks_quiet"}`); out != "true" {
 		t.Fatalf("quiet: %s", out)
+	}
+}
+
+// persona_settings' three on/off settings (setBoolSetting): the same value changes nothing and asks nothing; another
+// asks on the phone with the setting's own card, and only an approval saves it; a value that is not a bool is refused.
+func TestBoolSettingsSet(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService(t, newFakeHub().withMachine())
+	s.noBackground = false // assistant.main_supervises_own_tasks is the setting's own, as on a hub
+	tool := func(args string) (string, bool) {
+		r := s.Tool(ctx, ToolCall{Name: "persona_settings", Arguments: json.RawMessage(args), MachineID: "server", SessionID: "c1"})
+		return r.Content[0].Text, r.IsError
+	}
+	word := map[bool]string{true: i18n.T(i18n.Default, "assistant-settings_tool.on"), false: i18n.T(i18n.Default, "assistant-settings_tool.off")}
+	// answer approves (or not) the one card, which must say card.
+	answer := func(allow bool, card string) {
+		q, ok := awaitCard(s)
+		if !ok {
+			t.Error("no card on the phone")
+			return
+		}
+		if q.Summary != card {
+			t.Errorf("card %q, want %q", q.Summary, card)
+		}
+		raw, _ := json.Marshal(proto.Resolution{Allow: &allow})
+		if _, err := s.Action(ctx, Action{Op: "answer", InteractionID: q.ID, Answer: raw}); err != nil {
+			t.Error(err)
+		}
+	}
+	for _, c := range []struct {
+		name string
+		def  bool
+	}{{"main_tasks_quiet", true}, {"start_requested_tasks", true}, {"done_needs_delivery", false}, {"interject_background", false}, {"agent_tasks", false}, {"main_background_folded", true}, {"inbox_signals", false}, {"main_supervises_own_tasks", false}} {
+		key := "assistant." + c.name
+		get := func() string { out, _ := tool(`{"action":"get","key":"` + key + `"}`); return out }
+		set := func(value string) (string, bool) {
+			return tool(`{"action":"set","key":"` + key + `","value":` + value + `}`)
+		}
+		if out := get(); out != fmt.Sprint(c.def) {
+			t.Fatalf("%s default: %s", key, out)
+		}
+		if out, isErr := set(fmt.Sprint(c.def)); isErr || !(strings.Contains(out, "没有变化") || strings.Contains(out, "is unchanged")) || len(s.pendingQuestions()) != 0 {
+			t.Fatalf("%s set to what it is: %s", key, out)
+		}
+		if out, isErr := set(`"yes"`); !isErr || !strings.Contains(out, "true or false") {
+			t.Fatalf("%s set to a string: %s", key, out)
+		}
+		card := i18n.T(i18n.Default, "assistant-settings_tool.change_"+c.name, i18n.Args{"before": word[c.def], "after": word[!c.def]})
+		go answer(false, card)
+		if out, _ := set(fmt.Sprint(!c.def)); !strings.Contains(out, "declined") || get() != fmt.Sprint(c.def) {
+			t.Fatalf("%s declined: %s", key, out)
+		}
+		go answer(true, card)
+		if out, _ := set(fmt.Sprint(!c.def)); !strings.HasPrefix(out, key+" is "+fmt.Sprint(!c.def)) || get() != fmt.Sprint(!c.def) {
+			t.Fatalf("%s approved: %s", key, out)
+		}
 	}
 }
 

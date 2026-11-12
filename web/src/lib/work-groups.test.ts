@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 import { exchangeSteps, segments } from "./turns";
 import type { Item } from "./types";
 import {
-  foldsHoldingCalls,
   nestedLineDefault,
   togglesLiveOverride,
   workLineOpen,
@@ -13,14 +12,11 @@ import {
   explorationSummary,
   groupOpens,
   groupTitle,
-  isDeliveryText,
   isRowStep,
   isWorkflowStep,
+  planCardStep,
   planProgress,
-  planSteps,
   planTodos,
-  previewSteps,
-  thinkingDurations,
   workBlocks,
   workDuration,
   type AgentStatus,
@@ -46,10 +42,13 @@ const tool = (id: string, name = "Bash", at?: number, resultAt?: number, input: 
 
 function blocks(items: Item[], live = false, agentStatus?: (s: ToolStep) => AgentStatus): WorkNode[] {
   const seg = segments(items)[0];
-  return workBlocks(planSteps(exchangeSteps(seg)), { live, turnStart: seg.user?.ts ?? seg.start, agentStatus });
+  void agentStatus;
+  return workBlocks(exchangeSteps(seg), { live, turnStart: seg.user?.ts ?? seg.start });
 }
 
 const idOf = (n: WorkNode) => (n.kind === "step" ? n.step.id.replace(/#\d+$/, "") : n.id);
+/** A timeline's children: a step by its id, an inner group as the ids of its steps. */
+const shape = (n: WorkNode): string | string[] => (n.kind === "step" ? idOf(n) : n.children.map(idOf));
 const topSteps = (ns: WorkNode[]) => ns.filter((n) => n.kind === "step").map(idOf);
 const groups = (ns: WorkNode[]) => ns.filter((n): n is WorkGroupNode => n.kind === "group");
 function folded(ns: WorkNode[], id: string): boolean {
@@ -68,12 +67,12 @@ const briefThenNotify = (body: string): Item[] => [
 ];
 const longPlain = `本轮 7 条有活动，3 条首次亮相。${"逐条核对了改动落在哪些产品面。".repeat(50)}`;
 
-describe("delivered prose stays out of 「已工作」", () => {
-  it("a long text before the closing action stays in the open, the work before it still folds", () => {
+describe("only the final text stays outside execution (#2602)", () => {
+  it("folds long intermediate text along with the tools", () => {
     expect(longPlain.length).toBeGreaterThanOrEqual(600);
     const b = blocks(briefThenNotify(longPlain));
-    expect(topSteps(b)).toEqual(["brief", "wrap"]);
-    expect(folded(b, "brief")).toBe(false);
+    expect(topSteps(b)).toEqual(["wrap"]);
+    expect(folded(b, "brief")).toBe(true);
     expect(folded(b, "th1")).toBe(true);
   });
 
@@ -83,8 +82,8 @@ describe("delivered prose stays out of 「已工作」", () => {
     ["a table", "PR 一览：\n\n| PR | 建议 |\n| --- | --- |\n| #1111 | 放行 |"],
     ["a Markdown image", "图表如下 ![chart](https://example.com/chart.png)"],
     ["an <img>", '缩略图：<img src="https://example.com/thumb.png" width="150">'],
-  ])("so does a short one with %s", (_, body) => {
-    expect(topSteps(blocks(briefThenNotify(body)))).toEqual(["brief", "wrap"]);
+  ])("folds intermediate Markdown with %s", (_, body) => {
+    expect(topSteps(blocks(briefThenNotify(body)))).toEqual(["wrap"]);
   });
 
   it.each([
@@ -100,44 +99,41 @@ describe("delivered prose stays out of 「已工作」", () => {
     expect(folded(b, "brief")).toBe(true);
   });
 
-  it("isDeliveryText", () => {
-    expect(isDeliveryText("")).toBe(false);
-    expect(isDeliveryText("x".repeat(599))).toBe(false);
-    expect(isDeliveryText("x".repeat(600))).toBe(true);
-  });
+
 });
 
 describe("a finished exchange", () => {
-  it("keeps the last words; the steps and words before fold into one timeline with inner groups", () => {
-    const b = blocks([user("u1", 0), think("th1", 5951), say("a1", "我先快速摸一下代码规模和质量证据，再给评价。", 6062), ...tool("b1", "Bash", 6500, 7000), say("a2", "说下我的看法：这是个认真的项目。", 29000)]);
+  it("keeps final text outside and opens to cindy's timeline: narration, each run of work between an inner group", () => {
+    const b = blocks([user("u1", 0), think("th1", 5951), say("a1", "Checking the code.", 6062), ...tool("b1", "Bash", 6500, 7000), say("a2", "Final result.", 29000)]);
     expect(topSteps(b)).toEqual(["a2"]);
     const [outer] = groups(b);
-    expect(outer.id.startsWith("work-summary-")).toBe(true);
-    expect(outer.children.map(idOf).filter((x) => !x.startsWith("work-"))).toEqual(["a1"]);
-    const inner = outer.children.filter((c): c is WorkGroupNode => c.kind === "group");
-    expect(inner).toHaveLength(2);
-    // the first run counts the thinking from your message (6 s), not the 111 ms the block took to arrive
-    expect(inner[0].durationMs).toBe(6062);
-    expect(inner[1].durationMs).toBe(29000 - 6062);
+    expect(outer.children.map(shape)).toEqual([["th1"], "a1", ["b1"]]);
     expect(outer.durationMs).toBe(29000);
-    expect(inner[0].durationMs! + inner[1].durationMs!).toBe(outer.durationMs);
+    expect(outer.live).toBe(false);
+    const [first, second] = groups(outer.children);
+    // the first run from your message to the narration after it; the next from that narration to the answer
+    expect([first.durationMs, second.durationMs]).toEqual([6062, 29000 - 6062]);
+    expect([first.startedAt, second.startedAt]).toEqual([T0, T0 + 6062]);
+    expect([first.live, second.live]).toEqual([false, false]);
+    expect(groupTitle(first)).toBe("已工作 6s");
+    expect(groupTitle(outer)).toBe("已工作 29s");
   });
 
   it("without your message the first run counts from its own step", () => {
     const b = blocks([think("th1", 5951), say("a1", "我先摸一下。", 6062), ...tool("b1", "Bash", 6500, 7000), say("a2", "看法如下。", 29000)]);
-    const inner = groups(b)[0].children.filter((c): c is WorkGroupNode => c.kind === "group");
-    expect(inner[0].durationMs).toBe(111);
+    expect(groups(b)[0].durationMs).toBe(29000 - 5951);
   });
 
-  it("an exchange cut off mid-work (no words after its last step) folds as runs, its words in the open", () => {
+  it("an interrupted exchange keeps its latest text and one completed summary", () => {
     const b = blocks([user("u1", 0), ...tool("t1", "Bash", 1000), say("a1", "接着看。", 2000), ...tool("t2", "Read", 3000)]);
-    expect(b.map((n) => n.kind)).toEqual(["group", "step", "group"]);
+    expect(b.map((n) => n.kind)).toEqual(["group", "step"]);
     expect(groups(b).every((g) => !g.live)).toBe(true);
   });
 
-  it("several words in a row after the last step all stay as the answer", () => {
+  it("only the final text segment stays visible, earlier segments remain inspectable", () => {
     const b = blocks([user("u1", 0), ...tool("t1", "Bash", 1000), say("a1", "第一部分。", 5000), say("a2", "第二部分。", 6000)]);
-    expect(topSteps(b)).toEqual(["a1", "a2"]);
+    expect(topSteps(b)).toEqual(["a2"]);
+    expect(folded(b, "a1")).toBe(true);
   });
 });
 
@@ -150,84 +146,214 @@ describe("while the agent works", () => {
     expect(groupTitle(g)).toBe("正在工作…");
   });
 
-  it("its words stay in the open between runs; only the last run is live", () => {
-    const b = blocks([user("u1", 0), ...tool("t1", "Bash", 1000), say("a1", "先看一下目录。", 2000), ...tool("t2", "Bash", 3000)], true);
-    expect(b.map((n) => (n.kind === "group" ? `g:${n.live}` : idOf(n)))).toEqual(["g:false", "a1", "g:true"]);
+  it("new text replaces earlier text while subsequent tools remain in the same summary", () => {
+    const items = [user("u1", 0), ...tool("t1", "Bash", 1000), say("a1", "First progress.", 2000), ...tool("t2", "Bash", 3000)];
+    const first = blocks(items, true);
+    expect(first.map((n) => n.kind === "group" ? `g:${n.live}` : idOf(n))).toEqual(["g:true", "a1"]);
+    const newer = blocks([...items, say("a2", "Latest progress.", 4000), ...tool("t3", "Bash", 5000)], true);
+    expect(topSteps(newer)).toEqual(["a2"]);
+    expect(groups(newer)).toHaveLength(1);
+    expect(groups(newer)[0].id).toBe(groups(first)[0].id);
+    expect(folded(newer, "a1")).toBe(true);
+    // the latest text is in the slot, not in the summary: the work on both sides of it is one run, the live one
+    expect(groups(newer)[0].children.map(shape)).toEqual([["t1"], "a1", ["t2", "t3"]]);
+    expect(groups(groups(newer)[0].children).map((g) => g.live)).toEqual([false, true]);
   });
 
-  it("shows its newest five steps; more than that opens", () => {
-    const few = groups(blocks([user("u1", 0), ...[1, 2, 3, 4, 5].flatMap((n) => tool(`t${n}`, "Bash", n * 1000, undefined, { command: `echo ${n}` }))], true))[0];
-    expect(previewSteps(few).map((s) => s.id.replace(/#0$/, ""))).toEqual(["t1", "t2", "t3", "t4", "t5"]);
-    expect(groupOpens(few)).toBe(false);
-    const many = groups(blocks([user("u1", 0), ...[1, 2, 3, 4, 5, 6, 7].flatMap((n) => tool(`t${n}`, "Bash", n * 1000, undefined, { command: `echo ${n}` }))], true))[0];
-    expect(previewSteps(many).map((s) => s.id.replace(/#0$/, ""))).toEqual(["t3", "t4", "t5", "t6", "t7"]);
-    expect(groupOpens(many)).toBe(true);
-  });
-
-  it("the preview skips thoughts without words and shows a file read twice once", () => {
-    const g = groups(blocks([user("u1", 0), think("e", 500, ""), ...tool("r1", "Read", 1000, undefined, { file_path: "/a.ts" }), ...tool("r2", "Read", 2000, undefined, { file_path: "/a.ts" })], true))[0];
-    expect(previewSteps(g).map((s) => s.id.replace(/#0$/, ""))).toEqual(["r2"]);
-  });
-
-  it("keeps the latest narration after the tool preview, even after many more calls", () => {
-    const items = [user("u1", 0), think("old", 500, "Reading the code"), think("latest", 1000, "The fix is ready; checking it now"),
-      ...[1, 2, 3, 4, 5, 6, 7].flatMap((n) => tool(`t${n}`, "Bash", 2000 + n * 1000)), think("empty", 10_000, "  ")];
-    const g = groups(blocks(items, true))[0];
-    expect(previewSteps(g).map((s) => s.id.replace(/#0$/, ""))).toEqual(["t4", "t5", "t6", "t7", "latest"]);
+  it("the first running tool can be opened without a preview threshold", () => {
+    const [g] = groups(blocks([user("u1", 0), ...tool("t1", "Bash", 1000)], true));
     expect(groupOpens(g)).toBe(true);
-    expect(folded([g], "old")).toBe(true);
-    expect(folded([g], "latest")).toBe(true);
-
-    const next = groups(blocks([...items, think("new", 11_000, "All checks passed; reviewing the result")], true))[0];
-    expect(previewSteps(next).at(-1)?.id).toBe("new#0");
-    expect(previewSteps(next).filter((s) => s.id === "new#0")).toHaveLength(1);
+    expect(groupOpens({ ...g, children: [] })).toBe(false);
   });
 
-  it("counts a narration pinned from outside the tool window when deciding whether the group opens", () => {
-    const g = groups(blocks([user("u1", 0), think("note", 500), ...[1, 2, 3, 4, 5].flatMap((n) => tool(`t${n}`, "Bash", n * 1000))], true))[0];
-    expect(previewSteps(g)).toHaveLength(5);
-    expect(groupOpens(g)).toBe(true);
-    expect(previewSteps(g, 1).map((s) => s.id)).toEqual(["note#0"]);
+  it("thinking and folded latest_thinking stay in the summary, not the text slot", () => {
+    const thought = think("note", 500, "Checking the example.");
+    const fold = mk("assistant", "fold", 500, { id: "fold:note", fold: { items: 13, tools: 6, thoughts: 1, through_seq: 99, latest_thinking: thought } });
+    const b = blocks([user("u1", 0), fold, say("a1", "Latest text.", 2000), think("new", 3000)], true);
+    expect(topSteps(b)).toEqual(["a1"]);
+    expect(groups(b)[0].children.map(idOf)).toEqual(["fold:note", "new"]);
+    expect(groups(b)[0].children[0]).toMatchObject({ step: { item: fold } });
   });
 
-  it("previews narration from folded history without changing the fold or duplicating it after expansion", () => {
-    const thought = think("note", 500, "Checking the deployment result");
-    const tools = [1, 2, 3, 4, 5, 6].flatMap((n) => tool(`t${n}`, "Bash", n * 1000));
-    const fold = mk("assistant", "fold", 500, { id: "fold:note", fold: { items: 13, tools: 6, thoughts: 1, through_seq: tools.at(-1)!.seq, latest_thinking: thought } });
-    const g = groups(blocks([user("u1", 0), fold], true))[0];
-    expect(previewSteps(g).map((s) => s.id)).toEqual(["note#0"]);
-    expect(g.children).toHaveLength(1);
-    expect(groupOpens(g)).toBe(true);
-    const opened = groups(blocks([user("u2", 0), thought, ...tools], true))[0];
-    expect(previewSteps(opened).filter((s) => s.id === "note#0")).toHaveLength(1);
-    const newer = think("new", 8000, "The deployment is healthy");
-    expect(previewSteps(groups(blocks([user("u3", 0), fold, newer], true))[0]).at(-1)?.id).toBe("new#0");
+  it("streaming supersedes the persisted text without losing it from inspection", () => {
+    const seg = segments([user("u1", 0), say("a1", "Earlier progress.", 1000), ...tool("t1", "Bash", 2000)])[0];
+    const b = workBlocks(exchangeSteps(seg), { live: true, streaming: true, turnStart: seg.user?.ts });
+    expect(topSteps(b)).toEqual([]);
+    expect(folded(b, "a1")).toBe(true);
+  });
+
+  it("the summary keeps its key when the final text arrives and the run ends", () => {
+    const items = [user("u1", 0), ...tool("t1", "Bash", 1000), say("a1", "Progress.", 2000), ...tool("t2", "Bash", 3000)];
+    const running = blocks(items, true);
+    const done = blocks([...items, say("final", "Final result.", 4000)]);
+    expect(groups(done)[0].id).toBe(groups(running)[0].id);
+    expect(topSteps(done)).toEqual(["final"]);
+    expect(folded(done, "a1")).toBe(true);
+  });
+});
+
+// #5155: an opened summary is cindy's timeline (messageWorkGroups.ts createCompletedWorkGroup); the outer line stays as
+// super rule 2 has it.
+describe("the timeline inside a summary", () => {
+  const MIN = 60_000;
+  const turn = () => [user("u1", 0), think("th1", 1000), ...tool("t1", "Read", 2000, 2500, { file_path: "/a.ts" }), say("n1", "Found it.", 3000), ...tool("t2", "Bash", 4000, 6000), think("th2", 6500), ...tool("t3", "Bash", 7000, 9000)];
+  const inner = (b: WorkNode[]) => groups(groups(b)[0].children);
+
+  it("done: narration and inner groups in order, each run's clock between the words around it", () => {
+    const b = blocks([...turn(), say("final", "All done.", 10_000)]);
+    expect(topSteps(b)).toEqual(["final"]);
+    const [outer] = groups(b);
+    expect(outer.children.map(shape)).toEqual([["th1", "t1"], "n1", ["t2", "th2", "t3"]]);
+    expect(inner(b).map((g) => [g.durationMs, g.live])).toEqual([[3000, false], [7000, false]]);
+    // the inner groups read like any finished group: the one that only read says so; the outer line only how long
+    expect(inner(b).map(groupTitle)).toEqual(["已工作 3s · 读取 1 个文件", "已工作 7s"]);
+    expect(groupTitle(outer)).toBe("已工作 10s");
+  });
+
+  it("live: the last run is the live one with its own clock from the narration before it; earlier runs are done", () => {
+    const b = blocks(turn(), true);
+    // the latest words are in the slot: no narration is left in the summary, so it holds the steps directly
+    expect(topSteps(b)).toEqual(["n1"]);
+    expect(groups(b)[0].children.map(shape)).toEqual(["th1", "t1", "t2", "th2", "t3"]);
+    const more = blocks([...turn(), say("n2", "Tests pass; one more check.", 9500), ...tool("t4", "Bash", 10_000)], true);
+    expect(topSteps(more)).toEqual(["n2"]);
+    expect(groups(more)[0].live).toBe(true);
+    expect(groups(more)[0].children.map(shape)).toEqual([["th1", "t1"], "n1", ["t2", "th2", "t3", "t4"]]);
+    expect(inner(more).map((g) => g.live)).toEqual([false, true]);
+    expect(inner(more)[1].startedAt).toBe(T0 + 3000);
+    expect(groupTitle(inner(more)[1])).toBe("正在工作…");
+  });
+
+  it("live, with the latest words after the last run: that run is over, the outer line still works", () => {
+    const b = blocks([...turn(), say("n2", "Checked.", 9500)], true);
+    const [outer] = groups(b);
+    expect(outer.live).toBe(true);
+    expect(outer.children.map(shape)).toEqual([["th1", "t1"], "n1", ["t2", "th2", "t3"]]);
+    expect(inner(b).map((g) => [g.live, g.durationMs])).toEqual([[false, 3000], [false, 6500]]);
+  });
+
+  it("while words stream, the run after the last persisted words is live", () => {
+    const seg = segments([...turn(), say("n2", "Checked.", 9500), ...tool("t4", "Bash", 10_000)])[0];
+    const b = workBlocks(exchangeSteps(seg), { live: true, streaming: true, turnStart: seg.user?.ts });
+    expect(topSteps(b)).toEqual([]);
+    expect(groups(b)[0].children.map(shape)).toEqual([["th1", "t1"], "n1", ["t2", "th2", "t3"], "n2", ["t4"]]);
+    expect(inner(b).map((g) => g.live)).toEqual([false, false, true]);
+  });
+
+  it("without intermediate narration the summary keeps its steps directly (cindy's single level)", () => {
+    const b = blocks([user("u1", 0), think("th1", 1000), ...tool("t1", "Bash", 2000), ...tool("t2", "Read", 3000), say("final", "Done.", 4000)]);
+    expect(groups(b)[0].children.map(shape)).toEqual(["th1", "t1", "t2"]);
+  });
+
+  it("narration only: the words, no inner group", () => {
+    const b = blocks([user("u1", 0), say("n1", "First part.", 1000), say("n2", "Second part.", 2000)]);
+    expect(topSteps(b)).toEqual(["n2"]);
+    expect(groups(b)[0].children.map(shape)).toEqual(["n1"]);
+  });
+
+  it("a text without words is no boundary: it stays in the run around it", () => {
+    const seg = segments([user("u1", 0), ...tool("t1", "Bash", 1000), ...tool("t2", "Bash", 2000), say("n1", "Halfway.", 3000), ...tool("t3", "Bash", 4000), say("final", "Done.", 5000)])[0];
+    const steps = exchangeSteps(seg);
+    const blank = say("blank", "", 1500);
+    steps.splice(1, 0, { kind: "text", id: blank.id, item: blank });
+    const b = workBlocks(steps, { live: false, turnStart: seg.user?.ts });
+    expect(groups(b)[0].children.map(shape)).toEqual([["t1", "blank", "t2"], "n1", ["t3"]]);
+  });
+
+  it("thoughts without words are no steps (cindy draws none): no summary of them alone, no empty inner group, no split run", () => {
+    const only = blocks([user("u1", 0), think("blank", 1000, ""), say("final", "Done.", 3000)]);
+    expect(only.map((n) => (n.kind === "group" ? "g" : idOf(n)))).toEqual(["final"]);
+    expect(blocks([user("u1", 0), think("blank", 1000, "  ")], true)).toEqual([]);
+    const b = blocks([user("u1", 0), ...tool("t1", "Read", 1000), think("x1", 1500, ""), ...tool("t2", "Grep", 2000, undefined, { pattern: "x" }),
+      say("n1", "First.", 3000), think("x2", 3500, ""), say("n2", "Second.", 4000), ...tool("t3", "Bash", 5000), say("final", "Done.", 6000)]);
+    expect(groups(b)[0].children.map(shape)).toEqual([["t1", "t2"], "n1", "n2", ["t3"]]);
+    expect(folded(b, "x1")).toBe(false);
+    // the first run counts from your message as before; the call is still found
+    expect(groups(groups(b)[0].children)[0].durationMs).toBe(3000);
+    expect(groupsHolding(b, "tu-t2")).toEqual([groups(b)[0].id, groups(groups(b)[0].children)[0].id]);
+  });
+
+  it("inner groups keep their keys from live to done and when narration arrives; the outer keeps its own", () => {
+    const identity = "exchange-1";
+    const draw = (items: Item[], live: boolean) => {
+      const seg = segments(items)[0];
+      return workBlocks(exchangeSteps(seg), { live, turnStart: seg.user?.ts, identity });
+    };
+    const before = turn();
+    const more = [say("n2", "More.", 9500), ...tool("t4", "Bash", 10_000)];
+    const final = say("final", "Done.", 11_000);
+    // no narration in the summary yet (n1 is in the slot): one level
+    const first = draw(before, true);
+    const running = draw([...before, ...more], true);
+    const done = draw([...before, ...more, final], false);
+    for (const b of [first, running, done]) expect(groups(b)[0].id).toBe(`work-turn-${identity}`);
+    expect(inner(first)).toEqual([]);
+    expect(inner(running).map((g) => g.id)).toEqual(inner(done).slice(0, 2).map((g) => g.id));
+    // an inner group is known by its first step, as a group always was
+    expect(inner(done)[0].id).toBe(groups(blocks(before.slice(0, 4)))[0].id);
+    expect(new Set(inner(done).map((g) => g.id)).size).toBe(inner(done).length);
+  });
+
+  it("an outer group without the exchange's key does not share its first inner group's", () => {
+    // before a compaction the turn's earlier part has no identity: its outer line is work-…, as it always was
+    const compact = mk("system", "notice", 9500, { id: "cmp", text: "Compacted", compact: { trigger: "auto" } });
+    const b = blocks([...turn(), say("n2", "Saved the context.", 9200), compact, ...tool("t5", "Bash", 10_000), say("final", "Done.", 11_000)]);
+    const outerBefore = groups(b)[0];
+    const [firstRun] = groups(outerBefore.children);
+    expect(outerBefore.id).toMatch(/^work-\d/);
+    expect(firstRun.id).toBe(outerBefore.id.replace("work-", "work-run-"));
+  });
+
+  it("a compaction divider still ends the summary before it; the part after it groups on its own", () => {
+    const compact = mk("system", "notice", 9500, { id: "cmp", text: "Compacted", compact: { trigger: "auto" } });
+    const b = blocks([...turn(), say("n2", "Saved the context.", 9200), compact, ...tool("t5", "Bash", 10_000), say("n3", "Halfway.", 10_500), ...tool("t6", "Bash", 11_000), say("final", "Done.", 12_000)]);
+    expect(b.map((n) => (n.kind === "group" ? "g" : idOf(n)))).toEqual(["g", "n2", "cmp", "g", "final"]);
+    expect(groups(b)[0].children.map(shape)).toEqual([["th1", "t1"], "n1", ["t2", "th2", "t3"]]);
+    expect(groups(b)[1].children.map(shape)).toEqual([["t5"], "n3", ["t6"]]);
+    // the run after the divider counts from it
+    expect(groups(groups(b)[1].children)[0].startedAt).toBe(T0 + 9500);
+  });
+
+  it("an unloaded history gap still splits the turn; neither side's timeline spans it", () => {
+    const b = blocks([user("u1", 0), ...tool("t1", "Bash", MIN), say("n1", "Earlier.", 2 * MIN), ...tool("t2", "Bash", 3 * MIN), say("n1b", "Before the gap.", 4 * MIN), ...tool("t3", "Bash", 50 * MIN), say("n2", "Later.", 51 * MIN), ...tool("t4", "Bash", 52 * MIN), say("final", "Done.", 53 * MIN)]);
+    const gs = groups(b);
+    expect(gs).toHaveLength(2);
+    expect(gs[0].children.map(shape)).toEqual([["t1"], "n1", ["t2"]]);
+    expect(gs[1].children.map(shape)).toEqual([["t3"], "n2", ["t4"]]);
+    for (const g of [...gs, ...gs.flatMap((g) => groups(g.children))]) expect(g.durationMs ?? 0).toBeLessThan(30 * MIN);
+  });
+
+  it("a call in an inner group is found through both groups, outer first", () => {
+    const b = blocks([...turn(), say("final", "All done.", 10_000)]);
+    expect(groupsHolding(b, "tu-t3")).toEqual([groups(b)[0].id, inner(b)[1].id]);
   });
 });
 
 describe("subagents", () => {
   const items = () => [user("u1", 0), ...tool("pre", "Bash", 500), ...tool("task1", "Agent", 1000, 9000, { description: "回归", prompt: "跑回归" }), say("final", "都做完了。", 10000)];
 
-  it("a running one stays in the open, never in a group", () => {
+  // Super rule 2 keeps every tool call in the exchange's one summary, a running subagent's too (cindy keeps a running
+  // one in the open; that waits on an amendment of the rule).
+  it("a running subagent stays inside the execution summary", () => {
     const b = blocks(items(), false, () => "running");
-    expect(topSteps(b)).toEqual(["task1", "final"]);
-    expect(folded(b, "task1")).toBe(false);
+    expect(topSteps(b)).toEqual(["final"]);
+    expect(folded(b, "task1")).toBe(true);
     expect(groups(b).length).toBeGreaterThan(0);
   });
 
-  it("a finished one stays where it was, in the open (#5602: it folded once done and the runs around it joined)", () => {
+  it("a finished subagent stays inside the same summary without changing the key", () => {
     const same = items();
     const running = blocks(same, false, () => "running");
     const done = blocks(same, false, () => "completed");
-    expect(topSteps(done)).toEqual(["task1", "final"]);
-    expect(folded(done, "task1")).toBe(false);
+    expect(topSteps(done)).toEqual(["final"]);
+    expect(folded(done, "task1")).toBe(true);
     // the same groups, with the same keys, either way
     expect(groups(done).map((g) => g.id)).toEqual(groups(running).map((g) => g.id));
   });
 
-  it("a running one in the middle of live work splits the runs around it", () => {
+  it("a subagent card and the tools around it share one summary", () => {
     const b = blocks([user("u1", 0), ...tool("a", "Bash", 500), ...tool("task1", "Agent", 1000), ...tool("b", "Bash", 2000)], true, () => "running");
-    expect(b.map((n) => (n.kind === "group" ? "g" : idOf(n)))).toEqual(["g", "task1", "g"]);
+    expect(b.map((n) => (n.kind === "group" ? "g" : idOf(n)))).toEqual(["g"]);
   });
 });
 
@@ -257,44 +383,95 @@ describe("history gaps", () => {
   });
 });
 
+describe("a work line's time carries on from its running clock (#5119)", () => {
+  const S = 1000;
+  // the mock's tool_turn flow (#3005): a call, its result at 8m 12s, a pause, the answer at 8m 17s
+  const running = () => [user("u1", 0), ...tool("a", "Bash", 2 * S, 492 * S)];
+  const answer = () => say("done", "It was closed by the merge.", 497 * S);
+
+  it("the finished time is never shorter than the running clock showed", () => {
+    const shown: number[] = [];
+    // each tick until the answer is in, then the tick it lands on while the agent is still at work (WorkGroup's Elapsed)
+    for (let tick = 490; tick <= 497; tick++) {
+      const [g] = groups(blocks(running(), true));
+      expect(g.live).toBe(true);
+      shown.push(T0 + tick * S - g.startedAt!);
+    }
+    const [still] = groups(blocks([...running(), answer()], true));
+    expect(still.live).toBe(true);
+    shown.push(T0 + 497 * S - still.startedAt!);
+    const [done] = groups(blocks([...running(), answer()]));
+    expect(done.live).toBe(false);
+    expect(done.durationMs).toBe(497 * S);
+    expect(shown.every((ms) => ms <= done.durationMs!)).toBe(true);
+    expect(workDuration(done.durationMs!)).toBe(workDuration(shown.at(-1)!));
+  });
+
+  it("an exchange stopped before its answer ends at the interrupt", () => {
+    const [g] = groups(blocks([...running(), mk("system", "notice", 495 * S, { id: "stop", text: "已中断" })]));
+    expect(g.durationMs).toBe(495 * S);
+  });
+
+  it("compacted while idle an hour later: the compaction is not part of the time", () => {
+    const b = blocks([...running(), answer(), mk("system", "notice", 3600 * S, { id: "idle", text: "上下文已压缩", compact: { trigger: "idle" } })]);
+    expect(groups(b)[0].durationMs).toBe(497 * S);
+  });
+});
+
 describe("titles and plans", () => {
   it("a group that only read and searched says so", () => {
     const b = blocks([user("u1", 0), ...tool("r1", "Read", 1000, undefined, { file_path: "/a.ts" }), ...tool("r2", "Read", 2000, undefined, { file_path: "/b.ts" }), ...tool("r3", "Read", 2500, undefined, { file_path: "/a.ts" }), ...tool("g", "Grep", 3000, undefined, { pattern: "x" }), say("a", "看完了。", 65_000)]);
     const [g] = groups(b);
     expect(explorationSummary(g)).toBe("读取 2 个文件 · 搜索 1 次");
-    expect(groupTitle(g)).toBe("已工作 1 分 5 秒 · 读取 2 个文件 · 搜索 1 次");
+    expect(groupTitle(g)).toBe("已工作 1m 5s · 读取 2 个文件 · 搜索 1 次");
+  });
+
+  it("one that updated its plan does not, the update drawn as a row or as the card (#5156)", () => {
+    const todos = { todos: [{ content: "Read", status: "completed" }, { content: "Edit", status: "in_progress" }] };
+    const read = (id: string, at: number) => tool(id, "Read", at, undefined, { file_path: `/${id}.ts` });
+    const g = groups(blocks([user("u1", 0), ...read("r1", 1000), ...tool("p", "TodoWrite", 1500, undefined, todos), ...read("r2", 2000), say("a", "好。", 6000)]))[0];
+    expect(explorationSummary(g)).toBe("");
+    expect(groupTitle(g)).toBe("已工作 6s");
+    const one = groups(blocks([user("u1", 0), ...read("r1", 1000), ...tool("p", "TodoWrite", 1500, undefined, { todos: todos.todos.slice(0, 1) }), say("a", "好。", 6000)]))[0];
+    expect(groupTitle(one)).toBe("已工作 6s");
   });
 
   it("one that ran a command does not", () => {
     const g = groups(blocks([user("u1", 0), ...tool("r1", "Read", 1000, undefined, { file_path: "/a.ts" }), ...tool("b", "Bash", 2000), say("a", "好。", 6000)]))[0];
-    expect(groupTitle(g)).toBe("已工作 6 秒");
+    expect(groupTitle(g)).toBe("已工作 6s");
   });
 
-  it("formats durations like cindy, in Chinese units", () => {
-    expect(workDuration(0)).toBe("1 秒");
-    expect(workDuration(6062)).toBe("6 秒");
-    expect(workDuration(65_000)).toBe("1 分 5 秒");
-    expect(workDuration(120_000)).toBe("2 分钟");
-    expect(workDuration(3_900_000)).toBe("1 小时 05 分");
-    expect(workDuration(3_600_000)).toBe("1 小时");
-    expect(workDuration(93_900_000)).toBe("1 天 02 小时 05 分");
+  it("formats durations like cindy's formatSessionDuration: short units under an hour, the language's from one", () => {
+    expect(workDuration(0)).toBe("1s");
+    expect(workDuration(Number.NaN)).toBe("1s");
+    expect(workDuration(6062)).toBe("6s");
+    expect(workDuration(59_499)).toBe("59s");
+    expect(workDuration(65_000)).toBe("1m 5s");
+    expect(workDuration(120_000)).toBe("2m");
+    expect(workDuration(3_599_000)).toBe("59m 59s");
+    expect(workDuration(3_600_000)).toBe("1 小时 0 分");
+    expect(workDuration(3_900_000)).toBe("1 小时 5 分");
+    expect(workDuration(93_900_000)).toBe("1 天 2 小时 5 分");
+    expect(workDuration(86_400_000)).toBe("1 天 0 小时 0 分");
   });
 
-  it("only the latest plan of two or more items draws, in the open", () => {
+  it("a group without its times is Work details", () => {
+    expect(groupTitle({ kind: "group", id: "g", children: [], live: false })).toBe("工作过程");
+  });
+
+  it("keeps every plan update in the manual trace, while planCardStep picks the latest list of two or more for the card", () => {
     const todos = (s: string[]) => ({ todos: s.map((content, i) => ({ content, status: i === 0 ? "completed" : i === 1 ? "in_progress" : "pending" })) });
-    const b = blocks([user("u1", 0), ...tool("p1", "TodoWrite", 1000, undefined, todos(["读", "改"])), ...tool("t", "Bash", 2000), ...tool("p2", "TodoWrite", 3000, undefined, todos(["读", "改", "测"])), ...tool("one", "TodoWrite", 3500, undefined, todos(["单项"])), say("a", "好了。", 4000)]);
-    expect(topSteps(b)).toEqual(["p2", "a"]);
-    const p = b.find((n) => n.kind === "step" && idOf(n) === "p2")!;
-    const t = planTodos((p as { step: ToolStep }).step);
-    expect(planProgress(t)).toEqual({ done: 1, total: 3, current: "改", step: 2, allDone: false });
+    const items = [user("u1", 0), ...tool("p1", "TodoWrite", 1000, undefined, todos(["Read", "Edit"])), ...tool("t", "Bash", 2000), ...tool("p2", "TodoWrite", 3000, undefined, todos(["Read", "Edit", "Test"])), ...tool("one", "TodoWrite", 3500, undefined, todos(["One"])), say("a", "Done.", 4000)];
+    const b = blocks(items);
+    expect(topSteps(b)).toEqual(["a"]);
+    for (const id of ["p1", "p2", "one"]) expect(folded(b, id)).toBe(true);
+    const steps = exchangeSteps(segments(items)[0]);
+    const card = planCardStep(steps);
+    expect(card).toBe("p2#0");
+    const selected = steps.find((s) => s.id === card) as ToolStep;
+    expect(planProgress(planTodos(selected))).toEqual({ done: 1, total: 3, current: "Edit", step: 2, allDone: false });
   });
 
-  it("thoughts take from the step before to when they were written", () => {
-    const seg = segments([user("u1", 0), think("th", 3000, ""), ...tool("t", "Bash", 4000, 9000), think("th2", 12000)])[0];
-    const d = thinkingDurations(seg.steps, seg.user?.ts);
-    expect(d.get("th#0")).toBe(3000);
-    expect(d.get("th2#0")).toBe(3000);
-  });
 });
 
 describe("planProgress", () => {
@@ -373,71 +550,28 @@ describe("workflow calls", () => {
     expect(explorationSummary(g)).toBe("");
   });
 
-  it("stays in the open while the hub lists its run, running or ended; folds like any step once it does not", () => {
+  it("keeps workflow execution inside the same summary, whether live or completed", () => {
     const seg = segments(launch())[0];
-    const steps = planSteps(exchangeSteps(seg));
-    const card = workBlocks(steps, { live: false, turnStart: seg.user?.ts, workflowCard: () => true });
-    expect(folded(card, "wf")).toBe(false);
-    expect(topSteps(card)).toEqual(["wf", "ans"]);
-    expect(folded(card, "grep")).toBe(true);
-    // in a live exchange too: the work before it folds, the card stays
-    const live = workBlocks(steps.slice(0, -1), { live: true, turnStart: seg.user?.ts, workflowCard: () => true });
-    expect(folded(live, "wf")).toBe(false);
-    const row = workBlocks(steps, { live: false, turnStart: seg.user?.ts, workflowCard: () => false });
-    expect(folded(row, "wf")).toBe(true);
-  });
-
-  it("finds the hub's fold that holds a run's call: the one whose span holds when it started", () => {
-    const fold = mk("assistant", "fold", 1000, { id: "fold:x", fold: { items: 4, tools: 2, thoughts: 0, until: iso(3000), through_seq: 9, through_id: "x" } });
-    const seg = segments([user("u2", 0), fold, say("ans2", "Started.", 4000)])[0];
     const steps = exchangeSteps(seg);
-    expect(foldsHoldingCalls(steps, new Map([["tu-wf", T0 + 3000]])).map((f) => f.id)).toEqual(["fold:x#0"]);
-    expect(foldsHoldingCalls(steps, new Map([["tu-wf", T0 + 60_000]]))).toEqual([]); // started after it
-    expect(foldsHoldingCalls(steps, new Map([["tu-wf", NaN]]))).toEqual([]); // the hub does not say when
-    expect(foldsHoldingCalls(steps, new Map())).toEqual([]);
-    // the call is already among the steps: nothing to fetch
-    const open = exchangeSteps(segments(launch())[0]);
-    expect(foldsHoldingCalls(open, new Map([["tu-wf", T0 + 3000]]))).toEqual([]);
-  });
-
-  it("does not take a fold that ended just before the call for the one holding it", () => {
-    // the call at 3.0 s and its result at 3.8 s, in the second fold; the first ended at 2.5 s, within a second of it
-    const first = mk("assistant", "fold", 1000, { id: "fold:a", fold: { items: 3, tools: 1, thoughts: 1, until: iso(2500), through_seq: 3, through_id: "a" } });
-    const words = say("mid", "Now the workflow.", 2600);
-    const second = mk("assistant", "fold", 3000, { id: "fold:b", fold: { items: 4, tools: 2, thoughts: 0, until: iso(3800), through_seq: 9, through_id: "b" } });
-    const steps = exchangeSteps(segments([user("u3", 0), first, words, second, say("ans3", "Started.", 4000)])[0]);
-    expect(foldsHoldingCalls(steps, new Map([["tu-wf", T0 + 3000]])).map((f) => f.id)).toEqual(["fold:b#0"]);
-    // two folds that both hold the instant (one message's lines split by its words): both, not the wrong one
-    const u4 = user("u4", 0);
-    const tie = mk("assistant", "fold", 1000, { id: "fold:c", fold: { items: 3, tools: 1, thoughts: 1, until: iso(3000), through_seq: 5, through_id: "c" } });
-    const mid2 = say("mid2", "Now the workflow.", 3000);
-    const holding = mk("assistant", "fold", 3000, { id: "fold:d", fold: { items: 4, tools: 2, thoughts: 0, until: iso(3800), through_seq: 99, through_id: "d" } });
-    const both = exchangeSteps(segments([u4, tie, mid2, holding, say("ans4", "Started.", 4000)])[0]);
-    expect(foldsHoldingCalls(both, new Map([["tu-wf", T0 + 3000]])).map((f) => f.id)).toEqual(["fold:c#0", "fold:d#0"]);
+    for (const live of [true, false]) {
+      const nodes = workBlocks(steps, { live, turnStart: seg.user?.ts });
+      expect(folded(nodes, "wf")).toBe(true);
+      expect(topSteps(nodes)).toEqual(["ans"]);
+      expect(groups(nodes)).toHaveLength(1);
+    }
   });
 });
 
-describe("workLineOpen (#1614)", () => {
-  it("assistant: open while the exchange runs, unless the reader folded it during the run", () => {
-    expect(workLineOpen({ style: "assistant", turnLive: true, remembered: false })).toBe(true);
-    expect(workLineOpen({ style: "assistant", turnLive: true, remembered: false, liveOverride: false })).toBe(false);
-    expect(workLineOpen({ style: "assistant", turnLive: true, remembered: true, liveOverride: true })).toBe(true);
-  });
-
-  it("assistant: once the exchange ends, the run's toggle is dropped and what is remembered (folded by default) shows", () => {
-    expect(workLineOpen({ style: "assistant", turnLive: false, remembered: false, liveOverride: true })).toBe(false);
-    expect(workLineOpen({ style: "assistant", turnLive: false, remembered: true })).toBe(true);
-    expect(togglesLiveOverride("assistant", true)).toBe(true);
-    expect(togglesLiveOverride("assistant", false)).toBe(false);
-  });
-
-  it("agents: what the reader left it at, running or not", () => {
-    expect(workLineOpen({ style: "agents", turnLive: true, remembered: false })).toBe(false);
-    expect(workLineOpen({ style: "agents", turnLive: true, remembered: true })).toBe(true);
-    expect(workLineOpen({ style: "agents", turnLive: false, remembered: false, liveOverride: true })).toBe(false);
-    expect(togglesLiveOverride("agents", true)).toBe(false);
-    expect(nestedLineDefault("agents")).toBe(false);
-    expect(nestedLineDefault("assistant")).toBe(true);
+describe("workLineOpen (#2602)", () => {
+  it.each(["assistant", "agents"] as const)("%s uses the same collapsed default and manual inspection", (style) => {
+    expect(workLineOpen({ style, turnLive: true, remembered: false })).toBe(false);
+    expect(workLineOpen({ style, turnLive: true, remembered: false, liveOverride: true })).toBe(true);
+    expect(workLineOpen({ style, turnLive: true, remembered: true, liveOverride: false })).toBe(false);
+    expect(workLineOpen({ style, turnLive: false, remembered: false, liveOverride: true })).toBe(false);
+    expect(workLineOpen({ style, turnLive: false, remembered: true })).toBe(true);
+    expect(togglesLiveOverride(style, true)).toBe(true);
+    expect(togglesLiveOverride(style, false)).toBe(false);
+    expect(nestedLineDefault(style)).toBe(true);
   });
 });
 

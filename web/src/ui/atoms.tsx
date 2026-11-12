@@ -12,10 +12,18 @@ import { composing } from "../lib/send-history";
 import { keyboardFrame } from "../lib/viewport";
 import { prefersReducedMotion } from "./stream/motion";
 import { accelLabel, activation, edge, enabled, keyIntent, renameCommit, rowLabel, type MenuItem } from "./menu-model";
-import { NARROW_QUERY, placeMenu, placeSubmenu, SHEET_QUERY, useEscapeClose, useMedia, useModalFocus, type MenuPlace } from "./overlay";
+import { focusables, NARROW_QUERY, placeMenu, placeSubmenu, SHEET_QUERY, useEscapeClose, useMedia, useModalFocus, type MenuPlace } from "./overlay";
 import { STATE_LABEL, stateName } from "../lib/state-labels";
 
 export const EASE = "cubic-bezier(0.23, 1, 0.32, 1)";
+
+/** One sidebar group's content and chevron take the same direction-specific timing from the web motion tokens. */
+export function sidebarFoldMotion(open: boolean) {
+  return {
+    transitionDuration: open ? "var(--sidebar-fold-open)" : "var(--sidebar-fold-close)",
+    transitionTimingFunction: open ? "var(--sidebar-fold-open-ease)" : "var(--sidebar-fold-close-ease)",
+  } as const;
+}
 
 /** Spread on a field holding a secret that is not this site's password (a key, a computer's password): no spell check,
  *  and the 1Password, LastPass and Bitwarden extensions leave it alone. The field sets its own `autoComplete`. */
@@ -79,7 +87,7 @@ export function Loading({ label = t("common.loading") }: { label?: string }) {
 }
 
 /** A state as a word in a pill; `awaiting`: seen and awaiting the user's reply, a quiet pending mark (#5096). */
-export function StatePill({ state, awaiting = false, waiting = false }: { state: AgentState; awaiting?: boolean; /** working only on background commands that wait (#6045) */ waiting?: boolean }) {
+export function StatePill({ state, awaiting = false, waiting = false, dot = true }: { state: AgentState; awaiting?: boolean; /** working only on background commands that wait (#6045) */ waiting?: boolean; /** false beside a dot that already says the state (an Agent's header, #3956): the words alone */ dot?: boolean }) {
   const tone: Record<AgentState, string> = {
     needs_you: "bg-field text-attention",
     working: "bg-field text-orange",
@@ -91,8 +99,8 @@ export function StatePill({ state, awaiting = false, waiting = false }: { state:
   const reply = awaiting && state === "idle";
   const bg = waiting && state === "working";
   return (
-    <span className={`inline-flex h-5 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2 text-[11px] font-medium ${reply ? "bg-field text-green" : bg ? "bg-field text-ink-2" : tone[state]}`} data-bg-waiting={bg || undefined}>
-      {(state === "working" || state === "needs_you") && <StatusMark state={state} size="sm" label={false} waiting={bg} />}
+    <span className={`inline-flex h-5 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2 text-[11px] font-medium ${reply ? "bg-field text-green" : bg ? "bg-field text-ink-2" : tone[state]}`} data-bg-waiting={bg || undefined} data-state-pill="">
+      {dot && (state === "working" || state === "needs_you") && <StatusMark state={state} size="sm" label={false} waiting={bg} />}
       {reply ? stateName("awaits_reply") : bg ? stateName("bg_waiting") : STATE_LABEL[state]}
     </span>
   );
@@ -149,6 +157,9 @@ export function Button({
   busy,
   title,
   href,
+  expanded,
+  testId,
+  size,
 }: {
   children: React.ReactNode;
   tone?: BtnTone;
@@ -161,8 +172,15 @@ export function Button({
   title?: string;
   /** Opens this in a new tab, as a link (noopener, noreferrer: the page gets no handle on this one, nor its address). */
   href?: string;
+  /** A button that shows or hides something: whether it is shown (aria-expanded). */
+  expanded?: boolean;
+  /** `data-testid`, for the tests and screenshot scripts that press it. */
+  testId?: string;
+  /** "sm": 28 px tall (a row of actions inside a card, as the error notice's). A height in `className` does not win
+   *  over the 32 px one here: the classes are joined, not merged, and the stylesheet's order decides. */
+  size?: "sm";
 }) {
-  const base = "inline-flex h-8 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-control px-3 text-[12.5px] font-medium transition-[background-color,color,transform,opacity,filter] duration-150";
+  const base = cx("inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-control px-3 text-[12.5px] font-medium transition-[background-color,color,transform,opacity,filter] duration-150", size === "sm" ? "h-7" : "h-8");
   if (href && !disabled && !busy) {
     // an <a> is never :enabled, so the link has its own hover / press
     const links: Record<BtnTone, string> = {
@@ -173,7 +191,7 @@ export function Button({
       danger: "bg-danger-fill text-white hover:brightness-105",
     };
     return (
-      <a href={href} target="_blank" rel="noopener noreferrer" title={title} onClick={onClick} className={cx(base, "active:scale-[0.96]", links[tone], className)}>
+      <a href={href} target="_blank" rel="noopener noreferrer" title={title} data-testid={testId} onClick={onClick} className={cx(base, "active:scale-[0.96]", links[tone], className)}>
         {icon ? <Icon name={icon} size={14} stroke={2.1} /> : null}
         {children}
       </a>
@@ -194,6 +212,8 @@ export function Button({
       disabled={disabled || busy}
       // the spinner is aria-hidden, so without this a busy button just reads as disabled
       aria-busy={busy || undefined}
+      aria-expanded={expanded}
+      data-testid={testId}
       onClick={onClick}
       className={cx(
         base,
@@ -221,18 +241,22 @@ export function Spinner({ size = 12 }: { size?: number }) {
 /** An on / off switch (role=switch): the knob slides over 200 ms with the design system's ease (reduced motion: at once).
  *  Settings' rows, and the chat's and "New agent"'s ultracode switch (#3428). `className`: added to the track (a place
  *  that needs its grayed state drawn more clearly); without it the switch is as before. */
-export function Switch({ on, onChange, disabled, label, className }: { on: boolean; onChange: (on: boolean) => void; disabled?: boolean; label: string; className?: string }) {
+/** The one on/off switch, iOS-style (#3675): a green or grey track and a white knob with a soft shadow and no ring
+ *  (`--switch-on`, `--switch-off`, `--shadow-knob`). The `switch` class gives it a pill-shaped ring on keyboard focus only. */
+export function Switch({ on, onChange, disabled, label, className, describedBy, title }: { on: boolean; onChange: (on: boolean) => void; disabled?: boolean; label: string; className?: string; describedBy?: string; title?: string }) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={on}
       aria-label={label}
+      aria-describedby={describedBy}
+      title={title}
       disabled={disabled}
       onClick={() => onChange(!on)}
-      className={cx("touch-hit relative inline-flex h-[22px] w-[38px] shrink-0 items-center rounded-full transition-colors duration-200 disabled:opacity-50", on ? "bg-accent" : "bg-hover-2", className)}
+      className={cx("switch touch-hit relative inline-flex h-[22px] w-[38px] shrink-0 items-center rounded-full transition-colors duration-200 disabled:opacity-50", on ? "bg-switch-on" : "bg-switch-off", className)}
     >
-      <span className="absolute left-[2px] size-[18px] rounded-full bg-white shadow-btn transition-transform duration-200" style={{ transform: on ? "translateX(16px)" : "none", transitionTimingFunction: EASE }} />
+      <span aria-hidden className="absolute left-[2px] size-[18px] rounded-full bg-white shadow-knob transition-transform duration-200" style={{ transform: on ? "translateX(16px)" : "none", transitionTimingFunction: EASE }} />
     </button>
   );
 }
@@ -245,8 +269,11 @@ export function Kbd({ children }: { children: React.ReactNode }) {
 /** Folds its children up and down: the grid's row runs between 0fr and 1fr in CSS (no heights measured in JS), with
  *  a fade. `lazy`: the children mount when it opens and stay while it closes, so they go down with the height instead of
  *  vanishing, then unmount (a long trace costs nothing while folded). Once closed, the content is inert. A chat list holds
- *  the clicked row still while the height runs (`anchoredScroll`, #1124). */
-export function Collapse({ open, children, className = "", lazy = false }: { open: boolean; children: React.ReactNode; className?: string; lazy?: boolean }) {
+ *  the clicked row still while the height runs (`anchoredScroll`, #1124). `clipClassName` goes on the box that clips the
+ *  children: padding there is room for what they draw outside themselves (a ring, a shadow) and stays while closed.
+ *  `min-w-0`: the grid's implicit column's `auto` minimum is the item's content-based minimum, so one child that cannot
+ *  break (a long URL) would widen the whole grid past its column — the Inbox list then scrolls sideways (#3262). */
+export function Collapse({ open, children, className = "", clipClassName = "", lazy = false, unclipped = false, sidebarFold = false }: { open: boolean; children: React.ReactNode; className?: string; clipClassName?: string; lazy?: boolean; /** Once open and still, the content isn't clipped: sticky headers inside it stick to the scroller, not to this box. */ unclipped?: boolean; /** Sidebar groups fold by clipping fully visible content, with the shared sidebar timing. */ sidebarFold?: boolean }) {
   const [closing, setClosing] = useState(false);
   const [moving, setMoving] = useState(false);
   // A lazy one's new content is laid out at 0fr first and the row opens a frame later: a long trace's first layout
@@ -275,15 +302,21 @@ export function Collapse({ open, children, className = "", lazy = false }: { ope
     return () => cancelAnimationFrame(f);
   }, [open, laidOut]);
   const shown = open && laidOut;
+  const unclippedNow = unclipped && shown && !moving;
   return (
     <div
-      className={`grid transition-[grid-template-rows,opacity] duration-300 ${className}`}
-      style={{ gridTemplateRows: shown ? "1fr" : "0fr", opacity: shown ? 1 : 0, transitionTimingFunction: EASE, willChange: moving ? "opacity" : undefined }}
+      className={`grid ${sidebarFold && !unclippedNow ? "overflow-hidden [contain:layout_paint]" : ""} ${sidebarFold ? "transition-[grid-template-rows]" : "transition-[grid-template-rows,opacity] duration-300"} ${className}`}
+      style={{
+        gridTemplateRows: shown ? "1fr" : "0fr",
+        opacity: sidebarFold || shown ? 1 : 0,
+        ...(sidebarFold ? sidebarFoldMotion(open) : { transitionTimingFunction: EASE }),
+        willChange: moving ? (sidebarFold ? "grid-template-rows" : "opacity") : undefined,
+      }}
       onTransitionEnd={(e) => e.target === e.currentTarget && e.propertyName === "grid-template-rows" && settle()}
       // inert once closed, not while it closes: switching a long trace inert is a full style pass (34 ms for 650 steps)
       inert={(!open && !moving) || undefined}
     >
-      <div className="min-h-0 overflow-hidden [contain:layout_paint]">{collapseMounted(lazy, open, closing) && children}</div>
+      <div className={`min-h-0 min-w-0 ${!sidebarFold && !unclippedNow ? "overflow-hidden [contain:layout_paint]" : ""} ${clipClassName}`}>{collapseMounted(lazy, open, closing) && children}</div>
     </div>
   );
 }
@@ -307,9 +340,10 @@ interface Sub {
 }
 
 /** A menu next to its anchor (a button, or a row's ⋯), or at the pointer (`point`, a right click). ↑ ↓ move, → opens a
- *  submenu and ← goes back, Enter chooses, Esc closes, a row's letter chooses it, ⌫ chooses the close action. A row
- *  can ask again before it runs (`confirm`), turn into an input (`rename`), open a submenu (`children`) or show its
- *  work and failure inside the menu (`inline`). A menu without those keys is the plain one it always was. */
+ *  submenu and ← goes back, Enter chooses, Esc closes, Tab closes it and moves on, a row's letter chooses it, ⌫
+ *  chooses the close action. A row can ask again before it runs (`confirm`), turn into an input (`rename`), open a
+ *  submenu (`children`) or show its work and failure inside the menu (`inline`). A menu without those keys is the
+ *  plain one it always was. */
 export function Menu({
   items,
   anchor,
@@ -319,6 +353,7 @@ export function Menu({
   side = "bottom",
   width = 208,
   header,
+  container,
 }: {
   items: MenuItem[];
   anchor: HTMLElement | null;
@@ -329,6 +364,9 @@ export function Menu({
   side?: "top" | "bottom";
   width?: number;
   header?: string;
+  /** Where the menu is put instead of the page's body: a full-screen layer above the menus' own (the image editor),
+   *  whose look (its `dark`) the menu then takes. */
+  container?: Element | null;
 }) {
   const id = useId();
   const [subs, setSubs] = useState<Sub[]>([]); // the open submenus: depth d (d ≥ 1) is subs[d - 1]
@@ -341,6 +379,11 @@ export function Menu({
   const asking = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const loads = useRef(0);
   const rows = useRef<(HTMLElement | null)[][]>([]);
+  // What had the focus as the menu opened (its button, a row's ⋯), read on the first render, before a row can take it.
+  const [opener] = useState(() => {
+    const el = document.activeElement as HTMLElement | null;
+    return el && el !== document.body ? el : null;
+  });
   // On a narrow screen Back closes the menu first, like the drawer and the sheets, instead of leaving the page (#5132).
   // A row that opens a sheet or a panel takes the menu's entry over (back-close reuses an entry closed a tick before).
   useCloseOnBack(true, onClose, useMedia(NARROW_QUERY));
@@ -392,9 +435,25 @@ export function Menu({
     (it.children as () => Promise<MenuItem[]>)().then((list) => settle({ items: list }), (e) => settle({ error: errMessage(e) }));
   };
 
+  // A click on a row focuses that row, and the row is gone once the menu closes: a Dialog the row opens notes it as
+  // where the focus goes back, and closing it left the focus on body. From the keyboard the focus never left the
+  // menu's button (the highlight is drawn), so give it back there first: to the opener, else the anchor, else the
+  // anchor's first control (a sidebar row whose ⋯ shows only under the pointer). Only when the focus is still ours:
+  // in this menu, or lost to body.
+  const handBack = () => {
+    const active = document.activeElement;
+    const ours = !active || active === document.body || active.closest("[data-menu]")?.getAttribute("data-menu") === id;
+    if (!ours) return;
+    for (const el of [opener, anchor, ...(anchor ? focusables(anchor) : [])]) {
+      if (!el?.isConnected) continue;
+      el.focus({ preventScroll: true });
+      if (document.activeElement === el) return;
+    }
+  };
   const run = async (depth: number, it: MenuItem) => {
     setConfirming(null);
     setFailure(null);
+    handBack();
     if (!it.inline) {
       void it.onSelect();
       if (!it.submenu && !it.keepOpen) onClose();
@@ -434,6 +493,7 @@ export function Menu({
     setFailure(null);
     try {
       await it.rename!.commit(name);
+      handBack(); // the input had it
       onClose();
     } catch (e) {
       setFailure({ depth, text: errMessage(e) });
@@ -474,10 +534,18 @@ export function Menu({
       const depth = open.length;
       const intent = keyIntent(e, ls[depth], act[depth] ?? -1, depth);
       if (intent.type === "none") return;
+      if (intent.type === "leave") {
+        // the focus is on the menu's button (the highlight is drawn), so the browser's Tab goes on from there; not
+        // stopped either, so a Dialog the menu sits in still keeps Tab inside
+        handBack();
+        return onClose();
+      }
       e.preventDefault();
       e.stopPropagation();
-      if (intent.type === "close") onClose();
-      else if (intent.type === "back") closeSubsTo(depth - 1);
+      if (intent.type === "close") {
+        handBack(); // a row the pointer chose to confirm may have it
+        onClose();
+      } else if (intent.type === "back") closeSubsTo(depth - 1);
       else if (intent.type === "move") setActive(depth, intent.index);
       else choose(depth, intent.index, true);
     };
@@ -520,7 +588,7 @@ export function Menu({
         <MenuPanel key={`${s.from}-${i}`} {...panelProps(i + 1)} place={{ rect: s.rect, width }} loading={s.loading} loadError={s.error} />
       ))}
     </>,
-    document.body,
+    container ?? document.body,
   );
 }
 
@@ -697,6 +765,8 @@ function MenuRow({ item: it, asking, working, refCb, onHover, onChoose }: { item
   const accel = accelLabel(it);
   const detailId = `${useId()}-detail`;
   const label = rowLabel(it, asking ? it.key : null);
+  const detail = asking && it.confirmDetail ? it.confirmDetail : it.detail;
+  const tag = it.tag && <span className="ml-1.5 inline-block rounded-[5px] bg-ai-tint px-1.5 align-[1px] text-[10.5px] leading-[1.5] font-medium whitespace-nowrap text-ai">{it.tag}</span>;
   return (
     <button
       ref={refCb}
@@ -707,28 +777,32 @@ function MenuRow({ item: it, asking, working, refCb, onHover, onChoose }: { item
       aria-haspopup={it.children ? "menu" : undefined}
       aria-keyshortcuts={it.accel}
       aria-checked={it.radio ? Boolean(it.checked) : undefined}
-      aria-describedby={it.detail ? detailId : undefined}
+      aria-describedby={detail ? detailId : undefined}
       onMouseEnter={onHover}
       onClick={onChoose}
       className={cx(
         "relative z-10 flex w-full items-center gap-2 rounded-[6px] px-2 pointer-coarse:min-h-11 text-left text-[12.5px] disabled:opacity-40",
-        it.wrap || it.detail ? "min-h-8 py-1.5" : "h-8",
+        it.wrap || detail ? "min-h-8 py-1.5" : "h-8",
         it.danger ? "text-red" : "text-ink",
         asking && "bg-red-tint font-medium",
+        it.dim && "opacity-55",
       )}
     >
       {it.state && <StatusMark state={it.state} />}
+      {it.lead}
       {it.icon && <Icon name={it.icon} size={14} className={it.danger ? "" : "text-ink-3"} />}
-      {it.detail ? (
+      {detail ? (
         // label over its explanation, both wrapping: the explanation never pushes the label (or the check) off the row
         <span className="min-w-0 flex-1">
-          <span className="block break-words">{label}</span>
-          <span id={detailId} className="mt-0.5 block text-[11.5px] leading-snug break-words text-ink-3">{it.detail}</span>
+          <span className="block break-words">{label}{tag}</span>
+          <span id={detailId} className="mt-0.5 block text-[11.5px] leading-snug break-words text-ink-3">{detail}</span>
         </span>
       ) : (
-        <span className={cx("min-w-0 flex-1", it.wrap ? "break-all" : "truncate", it.mono && "font-mono")}>{label}</span>
+        <span className={cx("min-w-0 flex-1", it.wrap ? "break-all" : "truncate", it.mono && "font-mono")}>{label}{tag}</span>
       )}
       {it.state && <StatePill state={it.state} />}
+      {!working && !!it.badge && <span data-menu-badge aria-hidden={it.badgeLabel ? true : undefined} className="flex h-4.5 min-w-4.5 shrink-0 items-center justify-center rounded-full bg-field px-1 text-[10.5px] font-semibold whitespace-nowrap text-attention tabular-nums">{it.badge > 99 ? "99+" : it.badge}</span>}
+      {!working && !!it.badge && it.badgeLabel && <span className="sr-only">{it.badgeLabel}</span>}
       {working ? <Spinner size={12} /> : it.hint && <span className="shrink-0 text-[11px] text-ink-3">{it.hint}</span>}
       {it.checked !== undefined && <Icon name="check" size={13} stroke={2.5} className={cx("shrink-0", it.checked ? "text-ink" : "invisible")} />}
       {accel && !working && <span aria-hidden className={cx("w-3.5 shrink-0 text-center text-[11px]", it.danger ? "" : "text-ink-3")}>{accel}</span>}
@@ -956,7 +1030,8 @@ export function Dialog({
 // ── toasts ──────────────────────────────────────────────
 
 /** A button on a toast ("Undo"): it runs, and the toast goes. */
-export type ToastAction = { label: string; run: () => void };
+/** `sticky`: stays until it is closed or its button is used (a new version waiting, lib/new-version.ts). */
+export type ToastAction = { label: string; run: () => void; sticky?: boolean };
 /** `leaving`: timed out or closed, playing its exit before it is gone (the stack removes it when that ends). */
 type Toast = { id: number; text: string; tone: "info" | "error" | "ok"; action?: ToastAction; leaving?: boolean };
 let toasts: Toast[] = [];
@@ -1016,7 +1091,7 @@ export function toast(text: string, tone: Toast["tone"] = "info", action?: Toast
   toasts = [...toasts, { id, text: shown.text, tone: shown.tone, action }];
   // One with a button stays long enough to reach it.
   const ms = action ? 6000 : shown.tone === "error" ? 5200 : 2800;
-  toastTimers.set(id, { left: ms, since: Date.now(), handle: toastsPaused ? undefined : setTimeout(() => dropToast(id), ms) });
+  if (!action?.sticky) toastTimers.set(id, { left: ms, since: Date.now(), handle: toastsPaused ? undefined : setTimeout(() => dropToast(id), ms) });
   toastsChanged();
 }
 

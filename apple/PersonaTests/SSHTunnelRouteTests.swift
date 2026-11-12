@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// The app's side of the SSH tunnel (docs/operations/network.md「经 SSH 隧道连 hub」): a routed hub keeps its own address and only
+/// The app's side of the SSH tunnel (docs/operations/network.md「Connecting to hub through SSH」): a routed hub keeps its own address and only
 /// the URLs put on the wire change; pairings saved before keep decoding; picking the way asks the hub's own addresses
 /// first. The tunnel itself is tested against a real sshd in apple/Packages/PersonaSSH.
 @Suite(.serialized)
@@ -61,6 +61,20 @@ struct SSHTunnelRouteTests {
         #expect(!sparse.isUsable)
         #expect(SSHRoute(host: "h", user: "u", hostKey: "SHA256:x").isUsable)
         #expect(SSHRoute(host: "h", port: 2222, user: "u").label == "u@h:2222")
+    }
+
+    @Test func throughTheInAppTunnelIsKeptWithTheRoute() throws {
+        // Saved before the switch: off.
+        #expect(try !JSONDecoder().decode(SSHRoute.self, from: Data(#"{"host":"h","user":"u"}"#.utf8)).viaInAppTunnel)
+        let route = SSHRoute(host: " test-host.example.com", port: 2222, user: "u", hostKey: "SHA256:x", viaInAppTunnel: true)
+        let back = try JSONDecoder().decode(SSHRoute.self, from: JSONEncoder().encode(route))
+        #expect(back == route && back.viaInAppTunnel)
+        // What the core forwards to is the real server (IPv6 in brackets); the key stays this server's.
+        #expect(route.server == "test-host.example.com:2222")
+        #expect(SSHRoute(host: "fd00::1", user: "u").server == "[fd00::1]:22")
+        var other = route
+        other.viaInAppTunnel = false
+        #expect(route.sameServer(other))
     }
 
     @Test func aSingleAddressIsAskedBeforeTheTunnel() async {

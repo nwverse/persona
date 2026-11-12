@@ -3,7 +3,6 @@ package assistant
 import (
 	"context"
 	"fmt"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -14,7 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// The todos and the machines' session lists (sessions.changed, docs/assistant/todos.md "Attaching whole groups and automatically", "Following spawned agents", "herdr marks and reconciling"):
+// The todos and the machines' session lists (sessions.changed, docs/assistant/todos.md "Whole-project linking and automatic linking", "Following spawned agents", "herdr marks and reconciling"):
 // an online agent in a workspace linked to a todo, or spawned by an agent of one, joins it; the herdr panes of the
 // agents that work for open todos carry the persona_todo marks (the node keeps them, todo.sync_session_tokens); the
 // links keep the agents' titles and start errors for when they are gone from the lists. And what the hub shows of the
@@ -22,8 +21,13 @@ import (
 
 // Node methods the todos call through device.call.
 const (
-	deviceTodoTokens    = "todo.sync_session_tokens" // {tokens: {session_id: {name: value}}} → {}
-	deviceSessionRetire = "session.retire"           // {session_id} → {closed} (tasks_close.go)
+	deviceTodoTokens = "todo.sync_session_tokens" // {tokens: {session_id: {name: value}}} → {}
+	// {session_id, close_terminal: true} → {closed}: the user's "Archive and close" (agent_archive_close.go); without
+	// close_terminal a node since #4754 only stops the agent.
+	deviceSessionRetire = "session.retire"
+	// {session_id, retire?} → {stopped}: the agent quits, its terminal stays (tasks_close.go, tasks_idle.go,
+	// supervise_leader.go; node retire.go). A node before #4754 does not know it: a refusal, nothing closed.
+	deviceSessionStop = "session.stop"
 )
 
 // todosSessionsChanged: machine's node sent its session list.
@@ -345,7 +349,7 @@ func (s *Service) nodeConnected(machine string, at time.Time) {
 // tokenSync is one machine's marks: its latest session list, what its node was last told, one send at a time.
 type tokenSync struct {
 	mu       sync.Mutex
-	sessions []proto.Session
+	sessions []tokenRow // nil: no list from its node since the assistant started
 	dirty    bool
 	sending  bool
 	last     map[string]map[string]string
@@ -375,7 +379,7 @@ func (s *Service) syncTodoTokens(machine string, sessions []proto.Session) {
 	ts := s.tokenSyncOf(machine)
 	ts.mu.Lock()
 	if sessions != nil {
-		ts.sessions = slices.Clone(sessions)
+		ts.sessions = tokenRows(sessions)
 	}
 	ts.dirty = true
 	if ts.sending {
@@ -403,7 +407,7 @@ func (s *Service) syncTodoTokens(machine string, sessions []proto.Session) {
 				if err != nil {
 					continue
 				}
-				list = got
+				list = tokenRows(got)
 			}
 
 			expected := s.expectedTodoTokens(machine, list)
@@ -463,10 +467,26 @@ func (s *Service) syncLinkedTodoTokens() {
 	}
 }
 
+// tokenRow is what of a session its marks are worked out from (expectedTodoTokens): a list of these is kept for each
+// machine while the todos are loaded, not a copy of its whole sessions.
+type tokenRow struct {
+	SessionID, Status, PaneID, SpaceKind string
+}
+
+// tokenRows are list's token rows; non-nil for a non-nil list, even an empty one.
+func tokenRows(list []proto.Session) []tokenRow {
+	out := make([]tokenRow, 0, len(list))
+	for i := range list { // by index: a range value copies every (large) session it passes
+		out = append(out, tokenRow{SessionID: list[i].SessionID, Status: list[i].Status, PaneID: list[i].PaneID,
+			SpaceKind: list[i].SpaceKind})
+	}
+	return out
+}
+
 // expectedTodoTokens are the marks of machine's online herdr panes whose agents work for open todos, by session id
 // (#873).
-func (s *Service) expectedTodoTokens(machine string, list []proto.Session) map[string]map[string]string {
-	byID := make(map[string]proto.Session, len(list))
+func (s *Service) expectedTodoTokens(machine string, list []tokenRow) map[string]map[string]string {
+	byID := make(map[string]tokenRow, len(list))
 	for _, c := range list {
 		byID[c.SessionID] = c
 	}
@@ -581,6 +601,9 @@ func (s *Service) quietSessionsLocked(now time.Time) map[[2]string]bool {
 		if t := s.todos.todos[id]; out[key] && t != nil && !t.Quiet {
 			delete(out, key)
 		}
+	}
+	for key := range s.reviewerSessionsLocked() { // a review's reviewer never pushes (supervise_autoreview.go)
+		out[key] = true
 	}
 	return out
 }

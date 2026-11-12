@@ -2,7 +2,7 @@ import Foundation
 import Network
 import Observation
 
-/// What the top of the main screens says about the link to the hub, the way Telegram does it (docs/apple/ios.md「连接状态」):
+/// What the top of the main screens says about the link to the hub, the way Telegram does it (docs/apple/ios.md「Connection status」):
 /// no banner, the title itself turns into a small spinner and Waiting for Network / Connecting… / Updating…, and quietly back.
 @Observable
 final class ConnectionStatus {
@@ -36,7 +36,7 @@ final class ConnectionStatus {
     private(set) var shown: Phase = .online {
         didSet { if shown != oldValue { onShown?(shown) } }
     }
-    /// Told of each new `shown` as it is set (the iPhone shell's floating link pill: docs/apple/shell.md「连接状态和 toast」).
+    /// Told of each new `shown` as it is set (the iPhone shell's floating link pill: docs/apple/shell.md「Connection status and toasts」).
     @ObservationIgnored var onShown: ((Phase) -> Void)?
     private(set) var networkUp = true
     private(set) var catchingUp = false
@@ -51,6 +51,9 @@ final class ConnectionStatus {
 
     /// Every group's socket (docs/protocol/multi-hub.md); one while there is one group.
     @ObservationIgnored var lives: () -> [LiveConnection] = { [] }
+    /// The network is up on another path (Wi-Fi, cellular, a VPN on or off): sockets on a fallback address try the
+    /// preferred one again (AppModel.recheckRoutes).
+    @ObservationIgnored var onPathChange: (() -> Void)?
     @ObservationIgnored private let monitor = NWPathMonitor()
     @ObservationIgnored private var due: Task<Void, Never>?
     /// What each group is still fetching after its reconnect.
@@ -128,7 +131,7 @@ final class ConnectionStatus {
         return catchingUp ? .updating : .online
     }
 
-    /// Several groups (docs/protocol/multi-hub.md「连接状态」): connecting only while none of them is up — one group out of reach
+    /// Several groups (docs/protocol/multi-hub.md「What the user sees」): connecting only while none of them is up — one group out of reach
     /// (a work hub behind a VPN) would otherwise keep every title on Connecting…; the hub list and the group chips say which
     /// one is down. One group: exactly the single-link rule.
     static func phase(network: Bool, links: [(state: LiveConnection.State, stalled: Bool)], catchingUp: Bool) -> Phase {
@@ -189,6 +192,7 @@ final class ConnectionStatus {
                 live.probe() // another interface: the old socket may be dead without knowing it
             }
         }
+        if up && was { onPathChange?() }
         update()
     }
 

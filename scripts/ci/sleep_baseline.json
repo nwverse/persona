@@ -24,7 +24,6 @@
   "server/internal/assistant/conclusion_test.go": 4,
   "server/internal/assistant/fake_test.go": 1,
   "server/internal/assistant/feishu_agent_done_test.go": 4,
-  "server/internal/assistant/feishu_answer_ended_test.go": 3,
   "server/internal/assistant/feishu_board_test.go": 2,
   "server/internal/assistant/feishu_card_back_test.go": 1,
   "server/internal/assistant/feishu_cards_test.go": 5,
@@ -59,7 +58,6 @@
   "server/internal/assistant/machine_trust_test.go": 1,
   "server/internal/assistant/outbox_test.go": 8,
   "server/internal/assistant/owned_question_test.go": 1,
-  "server/internal/assistant/profile_test.go": 1,
   "server/internal/assistant/question_cancel_race_test.go": 1,
   "server/internal/assistant/question_cancel_test.go": 1,
   "server/internal/assistant/quiet_test.go": 9,
@@ -122,7 +120,7 @@
   "server/internal/extmgr/bots_elsewhere_test.go": 4,
   "server/internal/extmgr/bots_pair_feedback_test.go": 3,
   "server/internal/extmgr/bots_test.go": 6,
-  "server/internal/extmgr/bots_topics_test.go": 7,
+  "server/internal/extmgr/bots_topics_test.go": 6,
   "server/internal/extmgr/builtin_reconcile_test.go": 1,
   "server/internal/extmgr/channels_test.go": 2,
   "server/internal/extmgr/computer_tell_order_test.go": 1,
@@ -210,7 +208,7 @@
   "server/internal/link/poke_windows_test.go": 1,
   "server/internal/mail/imap_test.go": 2,
   "server/internal/mail/imaptest_test.go": 1,
-  "server/internal/manager/builtin_service_test.go": 9,
+  "server/internal/manager/builtin_service_test.go": 7,
   "server/internal/manager/manager_test.go": 3,
   "server/internal/managerupdate/controller_test.go": 1,
   "server/internal/mcpserver/mcpserver_test.go": 1,
@@ -323,7 +321,5 @@
   "server/internal/voice/recent_test.go": 5,
   "server/internal/voice/runs_test.go": 18,
   "server/internal/voice/suspend_test.go": 4,
-  "server/internal/voice/voice_test.go": 3,
-  "server/plugins/wechat/sendonce_test.go": 2,
-  "server/plugins/wechat/wechat_test.go": 3
+  "server/internal/voice/voice_test.go": 3
 }

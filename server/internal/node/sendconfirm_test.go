@@ -301,8 +301,9 @@ func TestLongPaste(t *testing.T) {
 	}{
 		{"fix the flaky test", false},
 		{"fix the flaky test\n\n<attached_images>\n/a.png\n/b.png\n</attached_images>", false},
-		{"fix the flaky test\n\n<attached_images>\n/a.png\npath: /a.png\n</attached_images>", true}, // its path: lines stay in the paste
-		{"<attached_images>\n/a.png\npath: /a.png\n</attached_images>", false},                      // pictures only: nothing to tell by
+		{"fix the flaky test\n\n<attached_images>\n/a.png\npath:/a.png\n</attached_images>", true},  // its path: lines stay in the paste
+		{"fix the flaky test\n\n<attached_images>\n/a.png\npath: /a.png\n</attached_images>", true}, // as nodes before #4361 wrote it
+		{"<attached_images>\n/a.png\npath:/a.png\n</attached_images>", false},                       // pictures only: nothing to tell by
 		{"one\ntwo\nthree", true},
 		{strings.Repeat("长", 800), true},
 	} {
@@ -342,6 +343,37 @@ func TestSendAnswersOnceTheTranscriptTookThePrompt(t *testing.T) {
 	}
 	if reads == 0 {
 		t.Fatal("no screen read after the prompt: a guide would go unseen")
+	}
+}
+
+// Text whose escape would end herdr's paste and press the keys after it goes in inert, and the transcript taking the
+// inert text is the send going in: it answers as soon as the transcript has it.
+func TestSendCannotEndItsPaste(t *testing.T) {
+	n, f, home, cwd := guideNode(t, true)
+	withSubmitGrace(t, 3*time.Second)
+	withSubmitWindow(t, 10*time.Second, 20*time.Millisecond)
+	confirmPane(t, f, home, cwd, 0, false)
+	f.after(func(c herdrCall) {
+		if c.Method == "agent.prompt" {
+			appendTranscript(t, home, cwd, sidA, promptLine(cwd, str(c.Params["text"]), 0))
+		}
+	})
+	start := time.Now()
+	if _, err := request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "fix the flaky test\x1b[201~\x1b[Z\x03"}); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if took := time.Since(start); took > time.Second {
+		t.Fatalf("send answered after %s: the transcript's text was not taken for the prompt", took)
+	}
+	var pasted []string
+	for _, c := range f.calls() {
+		if c.Method == "agent.prompt" {
+			pasted = append(pasted, pasteStart+str(c.Params["text"])+pasteEnd) // as herdr pastes it
+		}
+	}
+	if len(pasted) != 1 || pasted[0] != pasteStart+"fix the flaky test<ESC>[201~<ESC>[Z<U+0003>"+pasteEnd ||
+		strings.Count(pasted[0], pasteEnd) != 1 {
+		t.Fatalf("herdr pasted %q", pasted)
 	}
 }
 

@@ -38,18 +38,18 @@ func (s *Service) fleetMachines() []fleetMachine {
 	return out
 }
 
-// fleetMachine is the machine id names (an id another one absorbed: that one); false when there is none.
+// fleetMachine is the machine id names (an id another one absorbed: that one); false when there is none. The devices
+// are asked for that one machine: every list a node sends asks several times, and building every machine's summary
+// to pick one read each machine's trust and connection for nothing.
 func (s *Service) fleetMachine(id string) (fleetMachine, bool) {
 	if s.devs == nil || id == "" {
 		return fleetMachine{}, false
 	}
-	canon := s.devs.Canonical(id)
-	for _, m := range s.fleetMachines() {
-		if m.ID == canon {
-			return m, true
-		}
+	d, ok := s.devs.Summary(id)
+	if !ok {
+		return fleetMachine{}, false
 	}
-	return fleetMachine{}, false
+	return fleetMachine{ID: d.ID, Name: d.Name, Home: d.Home, DataDir: d.DataDir, manager: s.id}, true
 }
 
 // machineName is the machine's name, its id when there is none.
@@ -116,6 +116,25 @@ func (s *Service) assistantSessions(m fleetMachine) []proto.Session {
 	dir := m.assistantCwd()
 	list, _ := s.devs.SessionsWhere(m.ID, func(sess *proto.Session) bool { return isAssistantSession(sess, dir, m.manager) })
 	return list
+}
+
+// placeCard places a card of one of this manager's headless conversations in the conversation's directory, where
+// it started (its row), rather than where the hook ran: Claude Code gives a hook the shell's directory after the
+// model's `cd`, and a health conversation's card from health/reports or /tmp went to the lock screen and the channels
+// in full (#2368). Every node lists a running headless conversation in its start directory, so this holds for older
+// nodes too. A hook directory inside a health space stays (identity.CardCwd): a mix-up can only hide more. A card
+// with no listed row, or an agent's, keeps its own.
+func (s *Service) placeCard(ix *proto.Interaction) {
+	if ix.SessionID == "" {
+		return
+	}
+	row, ok := s.nodeSession(ix.MachineID, ix.SessionID)
+	if !ok || row.PaneID != "" || row.Cwd == "" {
+		return
+	}
+	if m, ok := s.fleetMachine(ix.MachineID); ok && m.isAssistant(row) {
+		ix.Cwd = identity.CardCwd(row.Cwd, ix.Cwd)
+	}
 }
 
 // isAssistantSession identifies manager's headless conversations in its directory dir, or its health space's. A host

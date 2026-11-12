@@ -21,6 +21,13 @@ struct GitPullTests {
         #expect(hub.sent("POST", "/api/v1/machines/mac/git/pull").count == 1)
     }
 
+    /// A deleted upstream (#1884) comes as `gone`; an older node leaves it out.
+    @Test func decodesDeletedUpstream() throws {
+        let gone = #"{"is_repo":true,"branch":"feature","upstream":"origin/feature","gone":true,"ahead":0,"behind":0,"files":[],"stashes":0,"commits":[]}"#
+        #expect(try JSON.decoder.decode(GitStatus.self, from: Data(gone.utf8)).gone == true)
+        #expect(try JSON.decoder.decode(GitStatus.self, from: Data(Self.status.utf8)).gone == nil)
+    }
+
     @Test func reportsUpdatedAndAlreadyCurrent() async throws {
         let hub = FakeHub()
         let model = GitPullModel()
@@ -36,8 +43,9 @@ struct GitPullTests {
 
     @Test func failureIsVisibleAndCanRetry() async throws {
         let hub = FakeHub()
+        // as the hub answers a refusal (#1888): a 409 in the app's language, the node's words as the detail
         hub.on("POST", "/api/v1/machines/mac/git/pull") { _ in
-            throw APIError(status: 502, message: "工作区有未提交的改动")
+            throw APIError(status: 409, message: "工作区有未提交的改动，请先在电脑上提交或 stash，再拉取。", fields: ["code": "uncommitted_changes"])
         }
         let model = GitPullModel()
         let failed = await model.pull(machine: "mac", cwd: "/work/sample", deps: .init(api: hub.client))

@@ -3,6 +3,7 @@ import SwiftUI
 
 // Settings › Appearance (2026-11-01): laid out like Connectors, one row per thing that changes how the app looks
 // (Avatar, Theme Color, Interface Style, Light & Dark on iPhone and iPad), each opening its own page; the first three are apart (docs/apple/ios.md「设计语言」).
+// Glow While Replying is a switch in place, not a page: it is one on/off choice (iOS only, `ComposerGlow`).
 // The home screen icon is the Avatar's, not a row of its own (#3203). Picking anything
 // there rebuilds the whole tree (`AppModel.look`); the settings path lives in AppModel, so the
 // rebuilt app is back on the same page.
@@ -10,15 +11,22 @@ import SwiftUI
 /// The Appearance section of Settings: one row per scene with what it is set to now.
 struct AppearanceSection: View {
     @Environment(AppModel.self) private var model
+    var settingsHome = true
+    #if os(iOS)
+    private let layoutDisplay = AgentListDisplayChoice()
+    #endif
+    @StoredValue(ComposerGlowPrefs.enabledKey) private var composerGlow = false
 
     var body: some View {
         Section {
             Group {
-                NavigationLink(value: SettingsPage.persona) {
-                    SettingsRow(title: String(localized: "Avatar"), symbol: Theme.Icon.avatar, tint: Theme.persona, value: model.persona.cardTitle, look: .oneLine)
+                if settingsHome {
+                    NavigationLink(value: SettingsPage.persona) {
+                        SettingsRow(title: String(localized: "Avatar"), symbol: Theme.Icon.avatar, tint: Theme.persona, value: model.persona.cardTitle, look: .oneLine)
+                    }
+                    .settingsListRow(SettingsPage.persona)
+                    .accessibilityIdentifier("settings-persona")
                 }
-                .settingsListRow(SettingsPage.persona)
-                .accessibilityIdentifier("settings-persona")
                 NavigationLink(value: SettingsPage.themeColor) {
                     SettingsRow(title: String(localized: "Theme Color"), symbol: Theme.Icon.themeColor, tint: Theme.accent, value: model.themeColor.title, look: .oneLine)
                 }
@@ -29,19 +37,21 @@ struct AppearanceSection: View {
                 }
                 .settingsListRow(SettingsPage.style)
                 .accessibilityIdentifier("settings-style")
-                NavigationLink(value: SettingsPage.language) {
-                    SettingsRow(title: String(localized: "Language"), symbol: Theme.Icon.language, tint: Theme.Hue.green,
-                                value: AppLanguage.settingsSummary, look: .oneLine)
+                if settingsHome {
+                    NavigationLink(value: SettingsPage.language) {
+                        SettingsRow(title: String(localized: "Language"), symbol: Theme.Icon.language, tint: Theme.Hue.green,
+                                    value: AppLanguage.settingsSummary, look: .oneLine)
+                    }
+                    .accessibilityIdentifier("settings-language")
                 }
-                .accessibilityIdentifier("settings-language")
                 #if os(iOS)
-                // Persona's conversation on iPhone and iPad (#1666); the Mac and Vision Pro keep their look.
-                NavigationLink(value: SettingsPage.chatLayout) {
-                    SettingsRow(title: String(localized: "New Conversation Layout"), symbol: Theme.Icon.conversation, tint: Theme.Hue.orange,
-                                value: ChatLayoutSettings.shared.on ? String(localized: "On") : String(localized: "Off"), look: .oneLine)
+                // How the Agents list draws its agents on iPhone and iPad (#2530); the Mac and Vision Pro keep their look.
+                NavigationLink(value: SettingsPage.layout) {
+                    SettingsRow(title: String(localized: "Agents List Layout"), symbol: Theme.Icon.listView, tint: Theme.Hue.orange,
+                                value: layoutDisplay.display.title, look: .oneLine)
                 }
-                .settingsListRow(SettingsPage.chatLayout)
-                .accessibilityIdentifier("settings-chat-layout")
+                .settingsListRow(SettingsPage.layout)
+                .accessibilityIdentifier("settings-layout-page")
                 #endif
                 #if os(iOS) || os(visionOS)
                 NavigationLink(value: SettingsPage.colorScheme) {
@@ -51,6 +61,12 @@ struct AppearanceSection: View {
                 .settingsListRow(SettingsPage.colorScheme)
                 .accessibilityIdentifier("settings-scheme")
                 #endif
+                if ComposerGlowPrefs.isAvailable {
+                    SettingsSwitchRow(title: String(localized: "Glow While Replying"),
+                                      detail: String(localized: "Light up the input box while Persona writes a reply"),
+                                      symbol: Theme.Icon.composerGlow, tint: Theme.Hue.purple,
+                                      accessibilityID: "settings-composer-glow", isOn: $composerGlow)
+                }
             }
             .bareListRow()
         } header: {
@@ -76,12 +92,16 @@ struct PersonaSettingsPage: View {
             } footer: {
                 VStack(alignment: .leading, spacing: Theme.Space.s) {
                     Text(model.isDemo ? String(localized: "Demo mode only has the default avatar.") :
-                        String(localized: "Choose Mochi or Milk Frog. Milk Frog downloads from the hub when selected. To use its colors, choose Match Avatar under Theme Color."))
+                        String(localized: "Avatars other than Mochi download from the hub when selected. To use an avatar’s colors, choose Match Avatar under Theme Color."))
+                    if !model.isDemo, model.hubFeatures.contains(AvatarUploadsModel.feature) {
+                        // The hub makes avatars from images (#2405): how to make one, and how to delete one made that way.
+                        Text("New from Photo makes an avatar from an image of your own. To delete one you made, use the delete button in its corner.")
+                    }
                     #if !os(macOS)
                     if let failure = model.appIcon.failure {
                         Text(failure).foregroundStyle(Theme.danger)
                     }
-                    Text("Both avatars use the default Home Screen icon. Older alternate icons reset to the default.")
+                    Text("Every avatar uses the default Home Screen icon. Older alternate icons reset to the default.")
                         // The icon on now, or that the system cannot switch it here (AppIconTests).
                         .accessibilityValue(model.appIcon.available ? model.appIcon.current.rawValue : "unavailable")
                         .accessibilityIdentifier("persona-icon-note")

@@ -27,8 +27,10 @@ import { useStore } from "../../lib/store";
 import { canTryUIStream } from "../../lib/extension-ui-stream-gate";
 import { lazyPage } from "../../lib/lazy-page";
 import { PageBoundary } from "../PageBoundary";
-import { otherManager } from "../../lib/manager-choice";
+import { otherManager, useLinkManager } from "../../lib/manager-choice";
+import type { UIRowControl } from "../../lib/extension-ui-v6";
 import { t } from "../../i18n";
+import { SUBSCRIPTIONS_UI } from "../../lib/subscriptions-ui";
 
 const inputClass =
   "h-8 w-full rounded-control bg-field px-2.5 text-[12.5px] text-ink shadow-inset-field outline-none placeholder:text-ink-3 focus:shadow-[inset_0_0_0_1px_var(--accent)] disabled:opacity-60";
@@ -92,6 +94,8 @@ function useInvalidate(extension: string, ui: string, draw: () => void) {
       if (id && id !== ui) return;
       now();
     });
+    // the subscription pages (#2041): a subscription saved, run or deleted anywhere draws them again
+    const offSubscription = extension === SUBSCRIPTIONS_UI ? onHubEvent("subscription", () => now()) : () => {};
     // a reconnect the hub could not resume: an invalidate missed meanwhile is not replayed (#4954)
     const offHello = onHubEvent("hello", (msg) => !isResumed(msg) && now());
     const shown = () => {
@@ -100,11 +104,26 @@ function useInvalidate(extension: string, ui: string, draw: () => void) {
     document.addEventListener("visibilitychange", shown);
     return () => {
       off();
+      offSubscription();
       offHello();
       clearTimeout(timer);
       document.removeEventListener("visibilitychange", shown);
     };
   }, [extension, ui]);
+}
+
+/** An object without one key (the same object when it does not have it). */
+function without<T>(o: Record<string, T>, k: string): Record<string, T> {
+  if (!(k in o)) return o;
+  const { [k]: _gone, ...rest } = o;
+  return rest;
+}
+
+/** The controls' values to keep showing when the view is drawn: those whose request is still on its way. */
+function keepFlying(c: Record<string, string>, flying: Map<string, unknown>): Record<string, string> {
+  const keys = Object.keys(c);
+  if (keys.every((k) => flying.has(k))) return c;
+  return Object.fromEntries(keys.filter((k) => flying.has(k)).map((k) => [k, c[k]]));
 }
 
 /** Where a pushed page opens when the view cannot hold a stack (a card, a section on another page): the full page. */
@@ -144,7 +163,8 @@ export function ExtensionUI(props: Parameters<typeof LegacyExtensionUI>[0]) {
   if (waitingHello && !legacyNegotiation) return <Loading />;
   // System/embedded slots remain full fitted snapshots. Old hubs keep the exact existing component.
   // Another manager's extension draws over HTTP, which names its manager on each request (docs/assistant/managers.md "Clients").
-  if (legacyNegotiation || !supported || props.embedded || props.compact || otherManager(props.manager)) return <LegacyExtensionUI {...props} />;
+  // The subscription pages (#2041) are the manager's, drawn over HTTP only.
+  if (legacyNegotiation || !supported || props.embedded || props.compact || otherManager(props.manager) || props.extension === SUBSCRIPTIONS_UI) return <LegacyExtensionUI {...props} />;
   return (
     <PageBoundary page={`extension:${props.extension}/${props.ui}`}>
       <Suspense fallback={<Loading />}>
@@ -168,6 +188,7 @@ export function LegacyExtensionUI({
   onWide?: (wide: boolean) => void;
 }) {
   const [stack, setStack] = useState<UIPage[]>(() => [{ ui, ...(firstState ? { state: firstState } : {}) }]);
+  const linkManager = useLinkManager();
   const top = stack[stack.length - 1];
   const [view, setView] = useState<UIView | null>(null);
   const [error, setError] = useState("");
@@ -175,7 +196,12 @@ export function LegacyExtensionUI({
   const [loading, setLoading] = useState(false);
   const [values, setValues] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState("");
-  const [confirming, setConfirming] = useState<{ action: UIAction; destructive: boolean; values?: Record<string, string> } | null>(null);
+  const [confirming, setConfirming] = useState<{ action: UIAction; destructive: boolean; values?: Record<string, string>; control?: { c: UIRowControl; value: string } } | null>(null);
+  // UI version 6: a control's value the user chose, by its name, shown until the extension's answer is drawn; the ones on
+  // their way more than a second (a small spinner); each control's request on its way and the latest change made meanwhile
+  const [controls, setControls] = useState<Record<string, string>>({});
+  const [slow, setSlow] = useState<Record<string, boolean>>({});
+  const flight = useRef(new Map<string, { timer: ReturnType<typeof setTimeout>; queued?: { c: UIRowControl; value: string } }>());
   const [drawnAt, setDrawnAt] = useState(0);
   const [query, setQuery] = useState(""); // the search box as typed
   const stateRef = useRef<string | undefined>(top.state);
@@ -198,6 +224,8 @@ export function LegacyExtensionUI({
     setValues((old) => (keep ? Object.fromEntries(Object.entries(start).map(([k, x]) => [k, old[k] ?? x])) : start));
     stateRef.current = v.state;
     drawnRef.current = true;
+    // a control's choice stays only while its request is on its way: once answered, what the extension draws is shown
+    setControls((c) => keepFlying(c, flight.current));
     if (!keep) setQuery(v.search?.value ?? "");
     setError("");
     setUnsupported(false); // a view drawn is something here
@@ -299,16 +327,18 @@ export function LegacyExtensionUI({
     setBusy(action.id);
     const mine = ++asked.current;
     try {
-      const r = outcome(await actUI(extension, top.ui, action.id, { context, state: stateRef.current, values: sent, manager }), context?.item);
+      const r = outcome(await actUI(extension, top.ui, action.id, { context, state: stateRef.current, values: sent, manager }), context?.item, extension);
       // what it says to do is still done; the view it answers only while nothing was asked since
       const latest = mine === asked.current;
       if (r.view && latest) show(r.view, !!(extra && "q" in extra)); // a search keeps what is typed
       if (r.items && latest) setView((v) => (v ? patchView(v, r.items) : v));
       if (r.toast) toast(r.toast, "ok");
-      if (r.url) openLink(r.url);
+      if (r.url) openLink(r.url, undefined, linkManager);
       if (r.source) onOpenSource?.();
       // an extension's own settings (persona://settings/extensions/<id>) open in the app
       if (r.settings) navigate(r.settings);
+      // the subscription pages' Set Up with … (persona://ask): the text to the assistant's main conversation, which opens
+      if (r.ask) askAssistant(r.ask);
       if (r.push) push(r.push);
       if (r.pop) pop();
       if (r.reload) load();
@@ -341,6 +371,62 @@ export function LegacyExtensionUI({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [extension, pageKey, ctxKey, manager],
   );
+  // UI version 6: a control changed (docs/extensions/extensions.md "UI version 6" "Controls"). The new value shows at once; one
+  // request per control is on its way at a time, a change made meanwhile goes after it (the latest only). The answer's
+  // view or items say what the control is now; an empty answer draws the page again; a failure puts the extension's
+  // last value back and says why. A redraw meanwhile (invalidate, refresh) keeps the user's value until its own answer.
+  const sendControl = async (c: UIRowControl, value: string) => {
+    const entry: { timer: ReturnType<typeof setTimeout>; queued?: { c: UIRowControl; value: string } } = {
+      timer: setTimeout(() => setSlow((x) => ({ ...x, [c.name]: true })), 1000),
+    };
+    flight.current.set(c.name, entry);
+    const at = asked.current;
+    let r: ReturnType<typeof outcome> | null = null;
+    try {
+      r = outcome(await actUI(extension, top.ui, c.action.id, { context, state: stateRef.current, values: { ...c.action.values, [c.name]: value }, manager }), context?.item, extension);
+    } catch (e) {
+      toast(t("settings-extensionview.action_failed", { error: errorText(e) }), "error");
+    }
+    clearTimeout(entry.timer);
+    setSlow((x) => without(x, c.name));
+    flight.current.delete(c.name);
+    // changed again while this one was on its way: the latest goes now, and stays shown
+    if (entry.queued) void sendControl(entry.queued.c, entry.queued.value);
+    else if (!r) setControls((x) => without(x, c.name)); // failed: the extension's last value again
+    if (!r) return;
+    if (r.view && at === asked.current) show(r.view, true);
+    if (r.items) setView((v) => (v ? patchView(v, r.items) : v));
+    if ((r.view || r.items) && !entry.queued) setControls((x) => without(x, c.name));
+    if (r.toast) toast(r.toast, "ok");
+    if (r.url) openLink(r.url, undefined, linkManager);
+    if (r.push) push(r.push);
+    if (r.pop) pop();
+    if (r.reload) load(true);
+  };
+  const applyControl = (c: UIRowControl, value: string) => {
+    setControls((x) => ({ ...x, [c.name]: value }));
+    const on = flight.current.get(c.name);
+    if (on) on.queued = { c, value };
+    else void sendControl(c, value);
+  };
+  const changeControl = (c: UIRowControl, value: string) => {
+    if (c.disabled) return;
+    // asked first when the action says so; cancelled, nothing changed
+    if (c.action.confirm?.trim()) setConfirming({ action: c.action, destructive: false, control: { c, value } });
+    else applyControl(c, value);
+  };
+  useEffect(() => {
+    const live = flight.current;
+    return () => live.forEach((f) => clearTimeout(f.timer));
+  }, []);
+  // a hub picture that does not load may have outlived its token (15 minutes): the page is drawn again, which signs
+  // anew; at most once a minute, so a picture that is gone for good does not keep drawing the page
+  const imageRedraw = useRef(0);
+  const imageFailed = () => {
+    if (Date.now() - imageRedraw.current < 60_000 || busy) return;
+    imageRedraw.current = Date.now();
+    load(true);
+  };
   const [keysOpen, setKeysOpen] = useState(false);
   const isReview = !compact && !embedded && reviewing(view);
   const press = (action: UIAction, destructive = false) => {
@@ -511,6 +597,10 @@ export function LegacyExtensionUI({
             onChoose={choose}
             onMore={more}
             onAct={act}
+            controls={controls}
+            slow={slow}
+            onControl={changeControl}
+            onImageFailed={imageFailed}
           />
           {isReview && (
             <>
@@ -535,9 +625,10 @@ export function LegacyExtensionUI({
               <Button
                 tone={confirming.destructive ? "danger" : "primary"}
                 onClick={() => {
-                  const { action: a, values: v } = confirming;
+                  const { action: a, values: v, control } = confirming;
                   setConfirming(null);
-                  void run(a, v);
+                  if (control) applyControl(control.c, control.value);
+                  else void run(a, v);
                 }}
               >
                 {t("settings-extensionview.ok")}
@@ -545,7 +636,7 @@ export function LegacyExtensionUI({
             </>
           }
         >
-          <p className="text-[13px] leading-relaxed break-words text-ink-2">{confirming.action.confirm}</p>
+          <p className="text-[13px] leading-relaxed whitespace-pre-line break-words text-ink-2">{confirming.action.confirm}</p>
         </Dialog>
       )}
     </div>
@@ -621,4 +712,12 @@ function LauncherSection({ place, launcher, machine }: { place: UIPlace; launche
       <ExtensionUI extension={place.extension} ui={place.id} context={context} embedded onUnsupported={() => setGone(true)} />
     </div>
   );
+}
+
+/** Sends the subscription pages' Set Up with … text to the assistant's main conversation (Ask Persona), loading the
+ *  outbox only then; a conversation that can't start says so. */
+function askAssistant(text: string) {
+  void import("../../lib/outbox")
+    .then((m) => m.askPersona(text))
+    .catch((e: unknown) => toast(t("settings-extensionview.action_failed", { error: errorText(e) }), "error"));
 }

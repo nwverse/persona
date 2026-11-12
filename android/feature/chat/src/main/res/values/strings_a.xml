@@ -22,12 +22,15 @@
     <string name="chat_delivery_dialog_open">Deal with the dialog on the computer first</string>
     <string name="chat_delivery_op_id_reused">This message\'s send ID was already used</string>
     <string name="chat_delivery_invalid">The message isn\'t valid</string>
+    <string name="chat_delivery_out_of_scope">This model provider isn\'t set to run on this computer. Change where it runs in Settings › Model providers.</string>
     <string name="chat_delivery_refused">The computer didn\'t accept this message</string>
     <string name="chat_delivery_delivered_waiting">Delivered, waiting for the chat history</string>
     <string name="chat_delivery_cancel">Cancel send</string>
     <string name="chat_delivery_edit">Edit</string>
     <string name="chat_delivery_retry">Retry</string>
     <string name="chat_delivery_delete">Delete</string>
+    <string name="chat_delivery_deleted">Message deleted</string>
+    <string name="chat_delivery_undo">Undo</string>
     <string name="chat_delivery_discard">Discard</string>
     <string name="chat_delivery_check">Check message</string>
     <string name="chat_delivery_resend_title">Resend this message?</string>
@@ -83,6 +86,8 @@
     <string name="chat_interaction_resolved_elsewhere">Handled on the computer</string>
     <string name="chat_interaction_prompt_changed">The screen changed, so nothing was submitted. Check the new question and choose again.</string>
     <string name="chat_interaction_unknown">Not sure your answer got through. Check the request first.</string>
+    <string name="chat_interaction_refused">The hub didn\'t take this answer. You can answer again.</string>
+    <string name="chat_interaction_refused_reason">The hub didn\'t take this answer: %1$s</string>
     <string name="chat_interaction_already">Answered already</string>
     <string name="chat_interaction_already_with">Answered already: %1$s</string>
     <string name="chat_interaction_ended_expired">This request expired, so the answer wasn\'t delivered</string>
@@ -94,6 +99,7 @@
         <item quantity="other">%1$d more need you · Next: %2$s · %3$s</item>
     </plurals>
     <string name="chat_next_waiting_open">Open the next one</string>
+    <string name="chat_next_waiting_agent">Agent</string>
     <string name="chat_answered_by_assistant">Answered by the assistant</string>
     <string name="chat_answered_unanswered">(No answer)</string>
     <string name="chat_answered_approved">Approved</string>
@@ -247,7 +253,10 @@
         <item quantity="one">Show all (%1$d line)</item>
         <item quantity="other">Show all (%1$d lines)</item>
     </plurals>
-    <string name="chat_todos_progress">%1$d/%2$d to-dos done</string>
+    <plurals name="chat_todos_progress">
+        <item quantity="one">%1$d/%2$d to-do done</item>
+        <item quantity="other">%1$d/%2$d to-dos done</item>
+    </plurals>
     <string name="chat_todos_progress_failed">%1$s, update failed</string>
     <string name="chat_todos_done">Done</string>
     <string name="chat_todos_in_progress">In progress</string>
@@ -259,6 +268,12 @@
     <string name="chat_tasks_since_hours_minutes">%1$d h %2$d min</string>
     <string name="chat_tasks_default_title">Task</string>
     <string name="chat_tasks_routed_to">To “%1$s”</string>
+    <string name="chat_tasks_sent_to">Sent to “%1$s”</string>
+    <string name="chat_tasks_sent_interrupting">Stopped “%1$s” and sent</string>
+    <plurals name="chat_tasks_sent_count">
+        <item quantity="one">%1$d instruction sent</item>
+        <item quantity="other">%1$d instructions sent</item>
+    </plurals>
     <string name="chat_tasks_collapse">Collapse</string>
     <string name="chat_tasks_expand">Expand</string>
     <string name="chat_tasks_expanded">Expanded</string>
@@ -267,6 +282,7 @@
     <string name="chat_tasks_answered_default">Answered</string>
     <string name="chat_tasks_permission_accept_edits">Can edit files</string>
     <string name="chat_tasks_permission_plan">Plan first</string>
+    <string name="chat_tasks_permission_auto">Auto</string>
     <string name="chat_tasks_permission_bypass">Allow all</string>
     <string name="chat_tasks_permission_default">Ask every step</string>
     <plurals name="chat_tasks_plan_started">
@@ -285,7 +301,7 @@
     </plurals>
     <string name="chat_tasks_plan_single">Start it like this</string>
     <string name="chat_tasks_default_model">Default model</string>
-    <string name="chat_tasks_read_only">Read-only</string>
+    <string name="chat_tasks_read_only">Read-only requested</string>
     <string name="chat_tasks_plan_remember">Start ones like these directly next time</string>
     <plurals name="chat_tasks_plan_start_count">
         <item quantity="one">Start %1$d task</item>
@@ -311,13 +327,29 @@
     <string name="chat_tasks_say">Message</string>
     <string name="chat_tasks_restarting">“%1$s” is starting again</string>
     <string name="chat_tasks_restarted">“%1$s” started after a retry</string>
-    <string name="chat_tasks_receipt_failed_title">Didn\'t start: %1$s</string>
-    <string name="chat_tasks_receipt_done_title">Done: %1$s</string>
-    <string name="chat_tasks_receipt_stopped_title">Stopped, not done yet: %1$s</string>
+    <string name="chat_tasks_receipt_failed_title">%1$s didn\'t start</string>
+    <string name="chat_tasks_receipt_done_title">%1$s is done</string>
+    <string name="chat_tasks_receipt_stopped_title">%1$s stopped, not done yet</string>
     <string name="chat_tasks_look">View</string>
     <string name="chat_tasks_finished_line">“%1$s” is done</string>
     <string name="chat_tasks_resumed_line">“%1$s” continued after the interruption</string>
     <string name="chat_tasks_interrupted_title">%1$s was interrupted</string>
+    <string name="chat_tasks_interrupt_pending">Pending</string>
+    <string name="chat_tasks_interrupt_cancelled">Cancelled</string>
+    <string name="chat_tasks_interrupt_rerouted">Dispatched again</string>
+    <string name="chat_tasks_interrupt_resumed">Resumed</string>
+    <string name="chat_tasks_interrupt_accepted">Accepted</string>
+    <string name="chat_tasks_interrupt_done">Done</string>
+    <string name="chat_tasks_interrupt_handled">“%1$s” was interrupted · %2$s</string>
+    <string name="chat_tasks_interrupt_cause_model_error">Model service error</string>
+    <string name="chat_tasks_interrupt_cause_rate_limited">Model service rate limit</string>
+    <string name="chat_tasks_interrupt_cause_auth">Sign-in or key refused</string>
+    <string name="chat_tasks_interrupt_cause_model_route">Unknown model</string>
+    <string name="chat_tasks_interrupt_cause_no_output">Turns with no output</string>
+    <string name="chat_tasks_interrupt_batch">%1$s: %2$d tasks interrupted</string>
+    <string name="chat_tasks_interrupt_batch_on">%1$s on %2$s: %3$d tasks interrupted</string>
+    <string name="chat_tasks_interrupt_counts">→ %1$d handled / %2$d pending</string>
+    <string name="chat_tasks_interrupt_all_handled">→ all handled</string>
     <string name="chat_tasks_quick_reminder">Reminder added</string>
     <string name="chat_tasks_quick_calendar">Added to calendar</string>
     <string name="chat_tasks_quick_on_iphone">On iPhone</string>
@@ -413,7 +445,14 @@
     <string name="chat_work_elapsed">%1$s, %2$s</string>
     <string name="chat_work_seconds">%1$d s</string>
     <string name="chat_work_minutes">%1$d min</string>
-    <string name="chat_work_hours_minutes">%1$d h %2$d min</string>
+    <string name="chat_work_hours_minutes">%1$d hr %2$d min</string>
+    <string name="chat_work_working_for">Working %1$s</string>
+    <string name="chat_work_done">Done</string>
+    <string name="chat_work_tools">Tools %1$d</string>
+    <string name="chat_work_thoughts">Thinking %1$d</string>
+    <string name="chat_work_replies">Replies %1$d</string>
+    <string name="chat_work_minutes_seconds">%1$dm %2$ds</string>
+    <string name="chat_work_reading_files">Reading %1$d files</string>
     <plurals name="chat_work_done_steps">
         <item quantity="one">%1$d step</item>
         <item quantity="other">%1$d steps</item>
@@ -430,6 +469,9 @@
     <string name="chat_work_thought">Thought</string>
     <string name="chat_content_copy">Copy</string>
     <string name="chat_content_show_all">Show all</string>
+    <string name="chat_content_copied">Copied</string>
+    <string name="chat_content_quote_more">Show all</string>
+    <string name="chat_content_quote_less">Show less</string>
     <string name="chat_content_full_text">Full text</string>
     <string name="chat_content_image">Chat image</string>
     <plurals name="chat_content_collapse_steps">
@@ -477,6 +519,7 @@
     <string name="chat_review_title">Done when</string>
     <string name="chat_review_none">No criteria were given</string>
     <string name="chat_review_open">Not reviewed yet</string>
+    <string name="chat_review_unchecked">Not checked</string>
     <string name="chat_review_met">Met</string>
     <string name="chat_review_missing">Missing</string>
     <string name="chat_review_note">Supervisor: %1$s</string>

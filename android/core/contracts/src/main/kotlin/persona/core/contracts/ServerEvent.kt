@@ -153,13 +153,16 @@ data class Pong(
 @KeepGeneratedSerializer
 @Serializable(with = NotifyEventSerializer::class)
 data class NotifyEvent(
-    @WireEnum("interaction", "done", "assistant", "alert", "unknown") val kind: String,
+    /** reply: an Agent still waiting on the user's answer ("Awaiting reply"), laid out as a finished turn's. */
+    @WireEnum("interaction", "done", "assistant", "alert", "reply", "unknown") val kind: String,
     @SerialName("machine_id") val machineId: String,
     @SerialName("session_id") val sessionId: String,
     val title: String = "", val subtitle: String = "", val body: String = "",
     @SerialName("interaction_id") val interactionId: String? = null,
     /** alert: the caller's id; the same one again replaces the earlier alert (#5614). */
     val id: String? = null,
+    /** This device is inside its quiet hours (the prefs' `quiet`): shown, but without a sound. */
+    val quiet: Boolean = false,
 ) : ServerEvent
 
 /**
@@ -179,7 +182,18 @@ data class ExtensionUiEvent(
      * again. Not a badge change: the badge stays.
      */
     val invalidate: Boolean = false,
+    /** The manager that sent it ([pushManager]): none from the assistant the hub starts (docs/assistant/managers.md). */
+    val manager: String? = null,
 ) : ServerEvent
+
+/**
+ * A source subscription was saved, ran or was deleted (#2041, docs/extensions/subscriptions.md "API"): the subscription pages on
+ * screen are drawn again.
+ */
+@KeepGeneratedSerializer
+@Serializable(with = SubscriptionEventSerializer::class)
+data class SubscriptionEvent(val id: String, val connector: String? = null, val revision: Long? = null, val state: String? = null,
+                             val removed: Boolean = false) : ServerEvent
 
 /** The hub's update status changed (docs/operations/hub-update.md "In the app"): `update` is what GET /api/v1/hub/update answers. */
 @KeepGeneratedSerializer
@@ -192,7 +206,7 @@ data class HubUpdateEvent(val update: persona.core.contracts.api.HubUpdateStatus
  */
 @KeepGeneratedSerializer
 @Serializable(with = ExtensionOperationEventSerializer::class)
-data class ExtensionOperationEvent(val operation: persona.core.contracts.api.ExtensionOperation) : ServerEvent
+data class ExtensionOperationEvent(val operation: persona.core.contracts.api.ExtensionOperation, val manager: String? = null) : ServerEvent
 
 /**
  * An extension's sign-in changed (#4507: signed in, out, expired, or the extension said so): only from a hub that says
@@ -200,7 +214,21 @@ data class ExtensionOperationEvent(val operation: persona.core.contracts.api.Ext
  */
 @KeepGeneratedSerializer
 @Serializable(with = ExtensionAuthEventSerializer::class)
-data class ExtensionAuthEvent(val extension: String, val auth: persona.core.contracts.api.ExtensionAuth) : ServerEvent
+data class ExtensionAuthEvent(val extension: String, val auth: persona.core.contracts.api.ExtensionAuth, val manager: String? = null) : ServerEvent
+
+/**
+ * The direction tree changed (#4352, docs/assistant/unified-entry.md "The direction tree"): a to-do, an Agent's session, a direction or
+ * its name moved, so a drawer that is open follows a leader made, ended or renamed on another device at once. No
+ * payload: the clients read `GET /api/v1/assistant/directions/tree` again (the default manager's alone).
+ */
+data object DirectionsEvent : ServerEvent
+
+/**
+ * Whose an extension push is (`extension_ui`, `extension_operation`, `extension_auth`): the hub puts a top-level
+ * `manager` on every manager's but the assistant's it starts, so none is the assistant's (docs/assistant/managers.md,
+ * the same extension id under several managers, #1834).
+ */
+fun pushManager(manager: String?): String = manager?.takeIf { it.isNotBlank() } ?: persona.core.contracts.api.ManagerRoster.ASSISTANT_MANAGER
 
 /**
  * The managers' roster changed (docs/assistant/managers.md: made, renamed, connected, gone): only to an app that asks for the
@@ -240,6 +268,7 @@ object ServerEventSerializer : KSerializer<ServerEvent> {
             "extension_ui_stream" -> ExtensionUiStreamEvent(NativeStreamSchema.parse(obj.toString(), "UIStreamServerEnvelope"))
             "hub_update" -> input.json.decodeFromJsonElement<HubUpdateEvent>(obj)
             "managers" -> ManagersEvent
+            "subscription" -> input.json.decodeFromJsonElement<SubscriptionEvent>(obj)
             "extension_operation" -> input.json.decodeFromJsonElement<ExtensionOperationEvent>(obj).also {
                 require(it.operation.id.isNotEmpty()) { "An operation has its id" }
             }
@@ -257,6 +286,7 @@ object ServerEventSerializer : KSerializer<ServerEvent> {
             "inbox" -> input.json.decodeFromJsonElement<InboxEvent>(obj)
             "todos" -> input.json.decodeFromJsonElement<TodosEvent>(obj)
             "assistant_feed" -> input.json.decodeFromJsonElement<AssistantFeedEvent>(obj)
+            "directions" -> DirectionsEvent
             "task_plan" -> input.json.decodeFromJsonElement<TaskPlanEvent>(obj)
             "assistant_view" -> input.json.decodeFromJsonElement<AssistantViewEvent>(obj)
             "assistant_view_action" -> input.json.decodeFromJsonElement<AssistantViewActionEvent>(obj)
@@ -299,6 +329,7 @@ object ServerEventSerializer : KSerializer<ServerEvent> {
             is ExtensionUiEvent -> "extension_ui" to output.json.encodeToJsonElement(value)
             is HubUpdateEvent -> "hub_update" to output.json.encodeToJsonElement(value)
             ManagersEvent -> "managers" to JsonObject(emptyMap())
+            is SubscriptionEvent -> "subscription" to output.json.encodeToJsonElement(value)
             is ExtensionOperationEvent -> "extension_operation" to output.json.encodeToJsonElement(value)
             is ExtensionAuthEvent -> "extension_auth" to output.json.encodeToJsonElement(value)
             is LockTestEvent -> "lock_test" to output.json.encodeToJsonElement(value)
@@ -310,6 +341,7 @@ object ServerEventSerializer : KSerializer<ServerEvent> {
             is InboxEvent -> "inbox" to output.json.encodeToJsonElement(value)
             is TodosEvent -> "todos" to output.json.encodeToJsonElement(value)
             is AssistantFeedEvent -> "assistant_feed" to output.json.encodeToJsonElement(value)
+            DirectionsEvent -> "directions" to JsonObject(emptyMap())
             is TaskPlanEvent -> "task_plan" to output.json.encodeToJsonElement(value)
             is AssistantViewEvent -> "assistant_view" to output.json.encodeToJsonElement(value)
             is AssistantViewActionEvent -> "assistant_view_action" to output.json.encodeToJsonElement(value)
@@ -342,5 +374,6 @@ object PongSerializer : WireSerializer<Pong>(Pong.generatedSerializer())
 object NotifyEventSerializer : WireSerializer<NotifyEvent>(NotifyEvent.generatedSerializer())
 object ExtensionUiEventSerializer : WireSerializer<ExtensionUiEvent>(ExtensionUiEvent.generatedSerializer())
 object HubUpdateEventSerializer : WireSerializer<HubUpdateEvent>(HubUpdateEvent.generatedSerializer())
+object SubscriptionEventSerializer : WireSerializer<SubscriptionEvent>(SubscriptionEvent.generatedSerializer())
 object ExtensionOperationEventSerializer : WireSerializer<ExtensionOperationEvent>(ExtensionOperationEvent.generatedSerializer())
 object ExtensionAuthEventSerializer : WireSerializer<ExtensionAuthEvent>(ExtensionAuthEvent.generatedSerializer())

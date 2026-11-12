@@ -1,12 +1,24 @@
 package persona.feature.chat
 
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
+import androidx.test.ext.junit.runners.AndroidJUnit4
 import persona.core.contracts.Item
 import persona.core.contracts.JsonCodec
 import persona.core.domain.lines.ChatLine
+import persona.core.domain.lines.ToolCall
+import persona.core.domain.lines.WorkItem
 import org.junit.Assert.*
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.annotation.Config
+import java.time.Instant
 
+@RunWith(AndroidJUnit4::class)
+@Config(sdk = [35], qualifiers = "en")
 class ContentPresentationTest {
+    private val res get() = ApplicationProvider.getApplicationContext<Context>().resources
+
     // A card's answer reads as the user's words "From card"; only the hub's exact trailing tag, only on the user's message.
     @Test fun aCardsAnswerHidesItsTagOnlyOnTheUsersMessage() {
         val text = "选 B：队列去重\n<persona-action view=\"i#0/0\" action=\"choose-b\">{\"values\":{}}</persona-action>"
@@ -68,5 +80,27 @@ class ContentPresentationTest {
         assertEquals(listOf<MessagePart>(MessagePart.Source("worker-1", text)), messageParts(text, from = "worker-1"))
         assertEquals(text, messageModel(text, "worker-1").plain)
         assertEquals("Report is in /tmp/r.md  \nAll checks pass.\n\n- a  \n- b", keepLineBreaks("Report is in /tmp/r.md\nAll checks pass.\n\n- a\n- b"))
+    }
+
+    // A session blocked on you (a plan or a permission to approve) keeps its turn open, but its line says what the header
+    // says: "Waiting for you", no "Working", no time. Not blocked, the running line is unchanged.
+    @Test fun aRunningLineBlockedOnYouSaysWaitingForYouWithNoTime() {
+        val start = Instant.parse("2026-11-09T10:00:00Z")
+        val call = Item("call", kind = "tool_use", toolName = "ExitPlanMode")
+        val line = ChatLine.Work("w", listOf(WorkItem.Tool(ToolCall(call.asLineItem(), null, emptyList()))),
+            live = true, start = start, end = null, open = false)
+        val now = start.plusSeconds(625)
+        val needsYou = res.getString(R.string.chat_chrome_status_needs_you)
+        val waiting = workSummary(res, line, null, now, waiting = true)
+        assertEquals(needsYou, waiting)
+        assertFalse(waiting.contains("Working"))
+        assertFalse(waiting.contains("10 min"))
+        val working = workSummary(res, line, null, now)
+        assertEquals(workSummary(res, line, null, now, waiting = false), working)
+        assertNotEquals(needsYou, working)
+        assertTrue(working, working.endsWith("10m 25s"))
+        // A finished line is a summary whatever the status says.
+        val done = line.copy(live = false, end = now)
+        assertEquals(workSummary(res, done, 625), workSummary(res, done, 625, waiting = true))
     }
 }

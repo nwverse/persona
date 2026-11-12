@@ -29,6 +29,20 @@ struct ProviderWizardTests {
         return try JSON.decoder.decode(LauncherView.self, from: Data(json.utf8))
     }
 
+    /// A direct API connection's Send Through: tested from the computer chosen, saved only when it changed (#4775).
+    @Test func anAPIConnectionSendsThroughAComputer() async throws {
+        let hub = FakeHub()
+        hub.on("POST", "/api/v1/launchers/test", json: #"{"ok":true,"ms":10,"model":"m"}"#)
+        let json = #"{"name":"direct","source":"persona","kind":"api","base_url":"https://api.example.com","model":"m","has_key":true,"via_machine":"laptop"}"#
+        let w = wizard(hub, existing: try JSON.decoder.decode(LauncherView.self, from: Data(json.utf8)))
+        #expect(w.isAPI && w.viaMachine == "laptop" && w.input.viaMachine == nil)
+        await w.runTest()
+        #expect(try body(hub.sent("POST", "/api/v1/launchers/test").first)["via_machine"]?.string == "laptop")
+        w.viaMachine = ""
+        #expect(w.input.viaMachine == "")
+        #expect(try ProviderWizardModel(existing: Self.existing(), deps: .init(api: { hub.client })).input.viaMachine == nil)
+    }
+
     @Test func aNewGatewayGoesThroughTheThreeSteps() async throws {
         let hub = FakeHub()
         hub.on("POST", "/api/v1/launchers/discover", json: Self.discovered)
@@ -391,11 +405,28 @@ struct ProviderWizardTests {
         // Only a web address opens; an extension's preset has no display name and goes by its name.
         #expect(w.presets[1].signup == nil && w.signupPresets.map(\.id) == ["builtin/glm"])
         #expect(!w.presets[2].isBuiltin && w.presets[2].title == "示例网关" && w.presets[2].auth == nil)
-        #expect(!w.presets[3].testable)
+        #expect(w.presets[3].testable && !w.presets[3].runsClaude)
         let view = try JSON.decoder.decode(LauncherView.self, from: Data(#"{"name":"glm","source":"persona","display_name":"智谱 GLM"}"#.utf8))
         #expect(view.displayName == "智谱 GLM" && view.title == "智谱 GLM")
         let older = try JSON.decoder.decode(LauncherView.self, from: Data(#"{"name":"glm","source":"persona"}"#.utf8))
         #expect(older.displayName == nil && older.title == "glm")
+    }
+
+    @Test func whereToGetAModelLeavesOutDirectAPIs() async throws {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/launchers/presets", json: #"""
+        {"presets":[
+          {"id":"builtin/responses","plugin":"builtin","name":"Responses","kind":"api","api":"responses","base_url":"https://api.example.com","signup_url":"https://example.com/signup"},
+          {"id":"builtin/chat","plugin":"builtin","name":"Chat","kind":"api","api":"chat","base_url":"https://api.example.com","signup_url":"https://example.com/signup"},
+          {"id":"builtin/messages","plugin":"builtin","name":"Messages","kind":"api","api":"messages","base_url":"https://api.example.com","signup_url":"https://example.com/signup"},
+          {"id":"builtin/empty","plugin":"builtin","name":"Empty","kind":"api","api":"","base_url":"https://api.example.com","signup_url":"https://example.com/signup"},
+          {"id":"builtin/unknown","plugin":"builtin","name":"Unknown","kind":"api","api":"other","base_url":"https://api.example.com","signup_url":"https://example.com/signup"}]}
+        """#)
+        let w = presetWizard(hub)
+        await w.loadPresets()
+        #expect(w.signupPresets.map(\.id) == ["builtin/messages", "builtin/empty"])
+        #expect(w.presets.map(\.testable) == [true, true, true, true, false])
+        #expect(w.presets.map(\.runsClaude) == [false, false, true, true, false])
     }
 
     @Test func aPresetsKeyIsTestedWithThePresetAndNoModel() async throws {
@@ -418,11 +449,27 @@ struct ProviderWizardTests {
         w.presetModel = "glm-5-air"
         await w.testKey()
         #expect(try body(hub.sent("POST", "/api/v1/launchers/test").last)["model"]?.string == "glm-5-air")
-        // A Responses API cannot be tested: nothing is sent.
+        // A Responses API uses the same key test as Messages and Chat Completions.
         w.presetID = "example-gateway/api"
         w.presetKey = "sk-test-0123456789"
         await w.testKey()
-        #expect(hub.sent("POST", "/api/v1/launchers/test").count == 2 && w.keyTest == nil)
+        #expect(hub.sent("POST", "/api/v1/launchers/test").count == 3 && w.keyTest?.ok == true)
+    }
+
+    @Test func directAPIKeyTestsButNeverAssigns() async throws {
+        let hub = FakeHub()
+        hub.on("POST", "/api/v1/launchers/test", json: #"{"ok":true,"ms":120,"model":"m1"}"#)
+        hub.on("POST", "/api/v1/launchers", json: #"{"launcher":{"name":"api","source":"persona"},"assigned":[],"kept":[]}"#)
+        let w = await loadedPresets(hub)
+        w.presetID = "example-gateway/api"
+        w.presetKey = "sk-test-0123456789"
+        #expect(w.keyTestable)
+        #expect(w.presetInput?.assign == nil)
+        await w.testKey()
+        #expect(w.keyTest?.ok == true && hub.sent("POST", "/api/v1/launchers/test").count == 1)
+        #expect(await w.savePreset())
+        #expect(try body(hub.sent("POST", "/api/v1/launchers").first)["assign"] == nil)
+        #expect(!w.addedAsked)
     }
 
     @Test func aPastedKeyIsTestedByItself() async throws {

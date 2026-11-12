@@ -14,7 +14,7 @@ struct HubUpdateDeps {
     }
 }
 
-/// Settings › hub (docs/operations/hub-update.md「App 里」): the hub's version and channel, checking for and installing a release,
+/// Settings › hub (docs/operations/hub-update.md「In the App」): the hub's version and channel, checking for and installing a release,
 /// what an update waits for, turning auto-update on and off, and the history.
 @Observable final class HubUpdateModel {
     private(set) var status: HubUpdateStatus?
@@ -307,7 +307,7 @@ struct HubSettingsPage: View {
         } header: {
             SettingsHeading(String(localized: "personad on Your Computers"))
         } footer: {
-            Text("After the hub updates, it moves personad on your computers to the same version. For any that didn't update, tap it and choose Redeploy.")
+            Text("After the hub updates, your computers keep their personad version unless auto_update_nodes is on in hub.json. To update one, tap it and choose Redeploy.")
         }
     }
 
@@ -343,7 +343,7 @@ struct HubSettingsPage: View {
     }
 }
 
-/// The one quiet line about the hub over the Agents list, like 「Mac 上的 Persona 已登录」 (docs/operations/hub-update.md「App 里」):
+/// The one quiet line about the hub over the Agents list, like 「Mac 上的 Persona 已登录」 (docs/operations/hub-update.md「In the App」):
 /// Auto-update is on (once), a newer version when auto-update is off, an update under way, one that went back, or that the
 /// hub or the app is too old. No dialog; a tap opens the hub page.
 struct HubNoticeRow: View {

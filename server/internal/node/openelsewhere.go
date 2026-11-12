@@ -41,6 +41,9 @@ type claudeProc struct {
 	Entrypoint string `json:"entrypoint"`
 	Cwd        string `json:"cwd"`
 	Name       string `json:"name"`
+	// NameSource says where Name came from: "derived" is the one Claude Code makes up itself, its directory's base
+	// name and two hex digits ("home-a8"); "user", "peer", "collision", "auto" and "hook" are names something chose.
+	NameSource string `json:"nameSource"`
 	// Kind is "interactive" for a claude in a terminal, "bg" for a background session Claude's daemon runs; Status is
 	// busy, idle or waiting (claudebg.go).
 	Kind   string `json:"kind"`
@@ -55,7 +58,10 @@ type claudeProc struct {
 	// The claude's peer inbox (claudepeer.go): where it listens and the protocol it speaks.
 	MessagingSocketPath string `json:"messagingSocketPath"`
 	PeerProtocol        int    `json:"peerProtocol"`
-	dir                 string // the sessions directory the file is in (its key file is next to it)
+	// Tmux is the pane Claude Code says it runs in ("orc:@11.%11", its session:window.pane), "" for one that is not in
+	// tmux: the approval in such a pane can be answered from the app (#2562).
+	Tmux string `json:"tmux"`
+	dir  string // the sessions directory the file is in (its key file is next to it)
 }
 
 // liveClaudes reads the sessions/<pid>.json of every claude still running, in every config directory, once per pid.

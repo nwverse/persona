@@ -18,6 +18,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/runtimepkg"
@@ -190,11 +192,21 @@ func jsVersion(ctx context.Context, js jsRuntime) (string, error) {
 	return v, nil
 }
 
+// env is base to run js with, in a new slice: ELECTRON_RUN_AS_NODE=1 for an app binary, and never for a node. A node
+// started from an Electron host (an editor's extension host starts its children with it) inherits the variable; it
+// is dropped, or everything the bridge starts would get it too, and an Electron app started from there would run as
+// a bare Node.js.
 func (js jsRuntime) env(base []string) []string {
-	if js.Electron {
-		return append(base, "ELECTRON_RUN_AS_NODE=1")
+	out := make([]string, 0, len(base)+1)
+	for _, kv := range base {
+		if !strings.HasPrefix(kv, "ELECTRON_RUN_AS_NODE=") {
+			out = append(out, kv)
+		}
 	}
-	return base
+	if js.Electron {
+		out = append(out, "ELECTRON_RUN_AS_NODE=1")
+	}
+	return out
 }
 
 // processExecutable is the executable a process of this user runs ("" when it cannot be told).
@@ -363,10 +375,19 @@ var paseoBridgeCommand = func(ctx context.Context, rh *RuntimeHost) (*exec.Cmd, 
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.Command(js.Path, filepath.Join(dir, "paseo", "bridge.mjs"), "--socket", rh.path, "--paseo-home", home)
+	cmd := exec.Command(js.Path, paseoBridgeArgs(dir, rh.path, home)...)
 	cmd.Env = js.env(append(os.Environ(), "PERSONA_RUNTIME_SOCKET="+rh.path))
 	cmd.Dir = dir
 	return cmd, nil
+}
+
+// paseoBridgeArgs is the bridge's command line after the JavaScript runtime. The node's mcp.json (beside the runtime
+// socket) is what the bridge gives each new Agent as its Persona tools, and of those the Agent's own run without a card
+// (--allow-tools: agentAllowedTools without the office rule, which the bridge's Agents do not get).
+func paseoBridgeArgs(dir, socket, home string) []string {
+	return []string{filepath.Join(dir, "paseo", "bridge.mjs"), "--socket", socket, "--paseo-home", home,
+		"--mcp-config", filepath.Join(filepath.Dir(socket), "mcp.json"),
+		"--allow-tools", strings.Join(compat.MCPAllowedToolNames(assistantwire.AgentOwnTools, true), ",")}
 }
 
 // runPaseoBridge runs the bridge once, until it exits or ctx ends (then it is stopped: SIGTERM to its group, SIGKILL

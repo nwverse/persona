@@ -15,7 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
-// Permissions are what a plugin asks for (docs/plans/plan-extensions.md "Permissions"). The vocabulary is closed: a manifest naming
+// Permissions are what a plugin asks for (docs/plans/plan-extensions.md "Key decisions"). The vocabulary is closed: a manifest naming
 // a permission this hub does not know does not install, so nobody is shown one the hub cannot explain.
 type Permissions struct {
 	// Network are the hosts it reaches ("api.example.com", "*.example.com"). Shown and recorded; the hub does not
@@ -45,6 +45,8 @@ type Permissions struct {
 	// AuthRelay: it is handed the authorization links the user's Agents stop at, the ones its contributes.auth_relay
 	// names, to complete them with the account it is signed in with (docs/operations/auth-relay.md).
 	AuthRelay bool `json:"auth_relay,omitempty"`
+	// Storage is installation-scoped logical data, separate from credentials.
+	Storage *StoragePermission `json:"storage,omitempty"`
 }
 
 var hostPattern = lazyre.New(`^(\*\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
@@ -65,6 +67,9 @@ func (p Permissions) validate() error {
 				strings.Join(HubScopes, ", "), ScopeCallPrefix))
 		}
 	}
+	if err := p.Storage.validate(); err != nil {
+		errs = append(errs, err)
+	}
 	return errors.Join(errs...)
 }
 
@@ -73,6 +78,7 @@ func (p Permissions) normalized() Permissions {
 	out := p
 	out.Network = slices.Compact(slices.Sorted(slices.Values(p.Network)))
 	out.Hub = slices.Compact(slices.Sorted(slices.Values(p.Hub)))
+	out.Storage = p.Storage.normalized()
 	return out
 }
 
@@ -80,15 +86,15 @@ func (p Permissions) normalized() Permissions {
 func (p Permissions) FullHub() bool { return p.HubAPI && len(p.Hub) == 0 }
 
 // Covers says whether p grants everything q asks (an upgrade asking for no more needs no new consent). The full token
-// covers every scope; scopes never cover the full token.
+// covers every scope but agents.permission_mode, which only a grant naming it covers; scopes never cover the full token.
 func (p Permissions) Covers(q Permissions) bool {
 	if q.FullHub() && !p.FullHub() || q.LauncherKeys && !p.LauncherKeys || q.GhLogin && !p.GhLogin ||
 		q.UsageGateways && !p.UsageGateways || q.AgentRuntimes && !p.AgentRuntimes || q.ErrorReports && !p.ErrorReports ||
-		q.AuthRelay && !p.AuthRelay {
+		q.AuthRelay && !p.AuthRelay || !p.Storage.covers(q.Storage) {
 		return false
 	}
 	for _, s := range q.Hub {
-		if !p.FullHub() && !slices.Contains(p.Hub, s) {
+		if !(p.FullHub() && InEveryScope(s)) && !slices.Contains(p.Hub, s) {
 			return false
 		}
 	}
@@ -139,9 +145,34 @@ func Digest(m *Manifest) string {
 		Node        *nodeConsent `json:"node,omitempty"`
 		Tools       []string     `json:"tools,omitempty"`
 		SendsAsUser []string     `json:"sends_as_user,omitempty"`
-	}{m.Runtime != nil, m.Permissions.normalized(), m.Topics(), m.Surfaces(), m.NodeProgram().consent(), m.ToolsConsent(), sendsAsUserIDs(m)})
+		// HostIntegrations are existing configured CLI profiles, not downloaded
+		// tools or arbitrary host commands; a new integration needs consent.
+		HostIntegrations []string `json:"host_integrations,omitempty"`
+		// SecretSchemes: supplying secret values is agreed to like a permission (empty for any other extension, so
+		// their digests are what they were).
+		SecretSchemes []string `json:"secret_schemes,omitempty"`
+	}{m.Runtime != nil, m.Permissions.normalized(), m.Topics(), m.Surfaces(), m.NodeProgram().consent(), m.ToolsConsent(), sendsAsUserIDs(m),
+		hostIntegrationConsent(m), sortedSchemes(m)})
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
+}
+
+// hostIntegrationConsent identifies the integration without its version: a
+// compatible version-range change is not a new host capability grant.
+func hostIntegrationConsent(m *Manifest) []string {
+	out := make([]string, 0, len(m.HostIntegrations))
+	for _, h := range m.HostIntegrations {
+		out = append(out, h.ID)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// sortedSchemes are the schemes m's secret_providers claim, sorted: what the digest holds of them.
+func sortedSchemes(m *Manifest) []string {
+	out := slices.Clone(m.Schemes())
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // sendsAsUserIDs are the ids of m's connectors that send as the user, sorted: what the digest holds of them.
@@ -189,6 +220,16 @@ func toolsLine(l i18n.Lang, tools []ToolSpec, title string) PermissionLine {
 		Detail: permissionText(l, "tools_detail", i18n.Args{"tools": strings.Join(what, permissionText(l, "list_separator"))})}
 }
 
+// hostIntegrationLines makes a host CLI grant visible at install/upgrade.
+func hostIntegrationLines(l i18n.Lang, integrations []HostIntegrationSpec, title string) PermissionLine {
+	parts := make([]string, 0, len(integrations))
+	for _, h := range integrations {
+		parts = append(parts, h.ID+" "+h.Version)
+	}
+	return PermissionLine{Key: "host_integrations", Title: title,
+		Detail: permissionText(l, "host_integrations_detail", i18n.Args{"tools": strings.Join(parts, permissionText(l, "list_separator"))})}
+}
+
 // NewTools are m's tools old did not install the same way (a new name, or from somewhere else).
 func NewTools(old, m *Manifest) []ToolSpec {
 	was := old.ToolsConsent()
@@ -215,6 +256,17 @@ func permissionText(l i18n.Lang, key string, args ...i18n.Args) string {
 
 func permissionLine(l i18n.Lang, key string) PermissionLine {
 	return PermissionLine{Key: key, Title: permissionText(l, key+"_title"), Detail: permissionText(l, key+"_detail")}
+}
+
+// secretProviderLine is the line for an extension that supplies the values of references of these schemes
+// (secret_providers): it learns which of its references Persona uses, and for what.
+func secretProviderLine(l i18n.Lang, title string, schemes []string) PermissionLine {
+	shown := make([]string, len(schemes))
+	for i, s := range schemes {
+		shown[i] = s + "://"
+	}
+	return PermissionLine{Key: "secret_provider", Title: permissionText(l, title),
+		Detail: permissionText(l, "secret_provider_detail", i18n.Args{"schemes": strings.Join(shown, permissionText(l, "list_separator"))})}
 }
 
 // nodeRunsCode is the line for a program that runs on the computers the user picks.
@@ -315,8 +367,14 @@ func ExplainWith(l i18n.Lang, m *Manifest, config json.RawMessage) []PermissionL
 	if m.Permissions.ErrorReports {
 		out = append(out, permissionLine(l, "error_reports"))
 	}
+	if grant := m.Permissions.Storage; grant != nil {
+		out = append(out, storageLine(l, grant))
+	}
 	if m.Permissions.AuthRelay {
 		out = append(out, permissionLine(l, "auth_relay"))
+	}
+	if schemes := m.Schemes(); len(schemes) > 0 {
+		out = append(out, secretProviderLine(l, "secret_provider_title", schemes))
 	}
 	if to := m.ContributesTo(); len(to) > 0 {
 		out = append(out, PermissionLine{Key: "contributes_to", Title: permissionText(l, "contributes_title"),
@@ -367,6 +425,9 @@ func ExplainWith(l i18n.Lang, m *Manifest, config json.RawMessage) []PermissionL
 	if len(m.Tools) > 0 {
 		out = append(out, toolsLine(l, m.Tools, permissionText(l, "tools_title")))
 	}
+	if len(m.HostIntegrations) > 0 {
+		out = append(out, hostIntegrationLines(l, m.HostIntegrations, permissionText(l, "host_integrations_title")))
+	}
 	if m.NodeProgram() != nil {
 		out = append(out, nodeLines(l, m.Node, nil)...)
 		if names := nodeSecrets(m, nil); len(names) > 0 {
@@ -391,6 +452,15 @@ func AddedIn(l i18n.Lang, old, m *Manifest) []PermissionLine {
 	if more := NewTools(old, m); len(more) > 0 {
 		out = append(out, toolsLine(l, more, permissionText(l, "tools_more_title")))
 	}
+	var moreIntegrations []HostIntegrationSpec
+	for _, h := range m.HostIntegrations {
+		if !slices.Contains(old.HostIntegrations, h) {
+			moreIntegrations = append(moreIntegrations, h)
+		}
+	}
+	if len(moreIntegrations) > 0 {
+		out = append(out, hostIntegrationLines(l, moreIntegrations, permissionText(l, "host_integrations_title")))
+	}
 	var hosts []string
 	var configured []ConfiguredNetwork
 	for _, h := range m.Permissions.normalized().Network {
@@ -409,10 +479,10 @@ func AddedIn(l i18n.Lang, old, m *Manifest) []PermissionLine {
 	out = append(out, configuredLines(l, m, configured, nil)...)
 	if m.Permissions.FullHub() && !old.Permissions.FullHub() {
 		out = append(out, permissionLine(l, "hub_api"))
-	} else if !m.Permissions.FullHub() && !old.Permissions.FullHub() {
+	} else if !m.Permissions.FullHub() {
 		var more []string
 		for _, s := range m.Permissions.normalized().Hub {
-			if !slices.Contains(old.Permissions.Hub, s) {
+			if !(old.Permissions.FullHub() && InEveryScope(s)) && !slices.Contains(old.Permissions.Hub, s) {
 				more = append(more, s)
 			}
 		}
@@ -435,8 +505,20 @@ func AddedIn(l i18n.Lang, old, m *Manifest) []PermissionLine {
 	if m.Permissions.ErrorReports && !old.Permissions.ErrorReports {
 		out = append(out, permissionLine(l, "error_reports"))
 	}
+	if !old.Permissions.Storage.covers(m.Permissions.Storage) {
+		out = append(out, storageLine(l, m.Permissions.Storage))
+	}
 	if m.Permissions.AuthRelay && !old.Permissions.AuthRelay {
 		out = append(out, permissionLine(l, "auth_relay"))
+	}
+	var schemes []string
+	for _, s := range m.Schemes() {
+		if !slices.Contains(old.Schemes(), s) {
+			schemes = append(schemes, s)
+		}
+	}
+	if len(schemes) > 0 {
+		out = append(out, secretProviderLine(l, "secret_provider_more_title", schemes))
 	}
 	var to []string
 	for _, owner := range m.ContributesTo() {

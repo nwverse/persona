@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -20,6 +21,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
@@ -31,7 +33,9 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
+import persona.core.contracts.api.LeaderCounts
 import persona.core.designsystem.*
+import persona.core.designsystem.icons.PhIcons
 import java.io.File
 import java.time.Instant
 
@@ -77,12 +81,19 @@ class AssistantDrawerShotsTest {
         var mainTapped = false
         var info: AssistantInfo? = null
         var settingsTapped = false
+        var inboxTapped = false
+        var openedPage = ""
         rule.setContent {
             PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
                 Box(Modifier.testTag("shot").width(400.dp).height(1100.dp).background(PersonaTheme.palette.background)) {
                     AssistantDrawer("", {}, groups, active = null, hasMain = groups.main != null,
                         onEnd = null, onMain = { mainTapped = true }, onOpen = { opened = it }, onInfo = { info = it },
-                        onNew = {}, onHome = {}, onSettings = { settingsTapped = true }, onTodos = {}, todoCount = 2)
+                        onNew = {}, onHome = {}, onSettings = { settingsTapped = true }, onTodos = {}, todoCount = 2,
+                        onInbox = { inboxTapped = true }, inboxCount = 5, settingsDot = true,
+                        pages = listOf(
+                            NavItem("machines", "电脑", PhIcons.Desktop, badge = 2),
+                            NavItem("extension", "扩展", PhIcons.PuzzlePiece, dot = true),
+                        ), onPage = { openedPage = it })
                 }
             }
         }
@@ -104,14 +115,23 @@ class AssistantDrawerShotsTest {
         rule.onNodeWithText("Persona").performClick()
         assertTrue(mainTapped)
         assertEquals(null, opened)
-        rule.onNodeWithText("启动器").performClick()
+        rule.onNodeWithText("启动器").performScrollTo().performClick()
         assertEquals(AssistantInfo.Launcher, info)
         rule.onNodeWithText("会话信息").performClick()
         assertEquals(AssistantInfo.Session, info)
         rule.onNodeWithContentDescription("设置").performClick()
         assertTrue(settingsTapped)
+        rule.onNodeWithText("收件箱").performScrollTo().performClick()
+        assertTrue(inboxTapped)
+        // The leader is the 常驻 group; every other chat waits under one row, which opens the list in place (#4331).
+        rule.onNodeWithText("常驻").assertExists()
+        rule.onNodeWithText("周报草稿").assertExists()
+        rule.onAllNodesWithText("整理收件箱").assertCountEquals(0)
+        rule.onNodeWithText("全部对话（2）").performScrollTo().performClick()
+        rule.onNodeWithText("整理收件箱").assertExists()
         for (s in AppStyle.entries) for (d in listOf(false, true)) {
             style = s; dark = d
+            androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
             capture("drawer-${s.name.lowercase()}-${if (d) "dark" else "light"}")
         }
         // No main conversation yet: the same row starts one.
@@ -124,6 +144,42 @@ class AssistantDrawerShotsTest {
         capture("drawer-no-main-glass-light")
     }
 
+    @Test fun navigationPagesAddTrailingChevronsAndKeepBadges() {
+        var opened = ""
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
+                CompositionLocalProvider(LocalHomeDrawer provides true) {
+                    Box(Modifier.width(320.dp).height(800.dp).background(PersonaTheme.palette.background)) {
+                        AssistantDrawer("", {}, ConversationGroups(null, emptyList(), emptyList()), active = null,
+                            hasMain = false, onEnd = null, onMain = {}, onOpen = {}, onInfo = {}, onNew = {}, onHome = {},
+                            onSettings = {}, onInbox = {}, inboxCount = 2, showTodos = false, pages = listOf(
+                                NavItem("machines", "电脑", PhIcons.Desktop, badge = 2),
+                                NavItem("extension", "扩展", PhIcons.PuzzlePiece, badge = 2),
+                            ), onPage = { opened = it })
+                    }
+                }
+            }
+        }
+        rule.onAllNodesWithText("2").assertCountEquals(3)
+        // Inbox has the same badge but no navigation chevron. The final 22 dp are its chevron slot on each page.
+        val withoutChevron = rule.onNodeWithText("收件箱").captureToImage().asAndroidBitmap()
+        for (label in listOf("电脑", "扩展")) {
+            val page = rule.onNodeWithText(label).captureToImage().asAndroidBitmap()
+            assertEquals(withoutChevron.width, page.width)
+            assertEquals(withoutChevron.height, page.height)
+            val trailingStart = page.width - with(rule.density) { 22.dp.toPx() }.toInt()
+            var differentPixels = 0
+            for (x in trailingStart until page.width) for (y in 0 until page.height) {
+                if (page.getPixel(x, y) != withoutChevron.getPixel(x, y)) differentPixels++
+            }
+            assertTrue("$label draws a chevron after its badge", differentPixels > 20)
+        }
+        rule.onNodeWithText("电脑").performClick()
+        assertEquals("machines", opened)
+        rule.onNodeWithText("扩展").performClick()
+        assertEquals("extension", opened)
+    }
+
     @Test fun aConversationsMenuArchivesItButTheMainOnesDoesNot() {
         var archived: Session? = null
         rule.setContent {
@@ -133,6 +189,7 @@ class AssistantDrawerShotsTest {
                     onArchive = { archived = it })
             }
         }
+        rule.onNodeWithText("全部对话（1）").performClick()
         rule.onAllNodesWithContentDescription("对话操作")[0].performClick()
         rule.onNodeWithText("拷贝会话 ID").assertExists()
         rule.onAllNodesWithText("归档").assertCountEquals(0)
@@ -162,44 +219,117 @@ class AssistantDrawerShotsTest {
         rule.onAllNodesWithText("工作中").assertCountEquals(1)
     }
 
-    // #3264: Automatic chats folded (its count, the red count of those waiting for the user) and open (a chip per origin, the
-    // picked origin's conversations), in every style, light and dark.
-    @Test fun drawsTheAutomaticConversations() {
+    // #4331: the leaders, "常驻", under their names, each saying what it has open, in every style, light and dark; every
+    // other chat waits under one All chats row.
+    @Test fun drawsTheLeadersWithTheirCounts() {
         var style by mutableStateOf(AppStyle.Glass)
         var dark by mutableStateOf(false)
-        var open by mutableStateOf(false)
-        val auto = listOf(
-            Session(machineId = "hub", sessionId = "a1", title = "1106 | 收件箱 | 张三问 1013 合了吗", status = "idle", origin = "inbox",
-                updatedAt = minutesAgo(8), lastText = "草稿：已经合入主干。"),
-            Session(machineId = "hub", sessionId = "a2", title = "1106 | 收件箱 | 报销单要补发票", status = "idle", state = "needs_you",
-                origin = "inbox", updatedAt = minutesAgo(40), lastText = "需要你确认：发票抬头用哪个？"),
-            Session(machineId = "hub", sessionId = "a3", title = "1106 | 定时 | 早报", status = "working", origin = "task", updatedAt = minutesAgo(3)),
-            Session(machineId = "hub", sessionId = "a4", title = "1105 | 研究 | 群里的发布计划", status = "idle", origin = "lark_agent", updatedAt = minutesAgo(600)),
-        )
+        val leadA = Session(machineId = "hub", sessionId = "l1", title = "1110 | 探索 | 增长", status = "working",
+            updatedAt = minutesAgo(4), lastText = "正在整理增长实验的数据。")
+        val leadB = Session(machineId = "hub", sessionId = "l2", title = "1110 | 探索 | 支付", status = "idle", updatedAt = minutesAgo(20))
+        val groups = ConversationGroups(main, listOf(leadA, leadB), recent,
+            names = mapOf("l1" to "增长", "l2" to "支付"),
+            counts = mapOf("l1" to LeaderCounts(working = 2, needsYou = 1), "l2" to LeaderCounts(needsYou = 3)))
         rule.setContent {
             PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
-                Box(Modifier.testTag("shot").width(400.dp).height(1300.dp).background(PersonaTheme.palette.background)) {
-                    AssistantDrawer("", {}, ConversationGroups(main, emptyList(), recent, auto), active = null,
-                        hasMain = true, onEnd = null, onMain = {}, onOpen = {}, onInfo = {}, onNew = {}, onHome = {}, onSettings = {},
-                        autoOpen = open, onAutoOpen = { open = it })
+                Box(Modifier.testTag("shot").width(400.dp).height(900.dp).background(PersonaTheme.palette.background)) {
+                    AssistantDrawer("", {}, groups, active = null, hasMain = true, onEnd = null, onMain = {}, onOpen = {},
+                        onInfo = {}, onNew = {}, onHome = {}, onSettings = {})
                 }
             }
         }
-        rule.onNodeWithText("自动对话").assertExists()
-        rule.onAllNodesWithText("1106 | 收件箱 | 张三问 1013 合了吗").assertCountEquals(0) // folded
+        rule.onNodeWithText("常驻").assertExists()
+        rule.onNodeWithText("增长").assertExists()
+        rule.onNodeWithText("在做 2 · 等你 1").assertExists()
+        rule.onNodeWithText("等你 3").assertExists()
         for (s in AppStyle.entries) for (d in listOf(false, true)) {
             style = s; dark = d
-            capture("drawer-auto-folded-${s.name.lowercase()}-${if (d) "dark" else "light"}")
+            androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
+            capture("drawer-leaders-${s.name.lowercase()}-${if (d) "dark" else "light"}")
         }
-        rule.onNodeWithText("自动对话").performClick()
-        assertTrue(open)
-        rule.onNodeWithText("1106 | 收件箱 | 张三问 1013 合了吗").assertExists()
-        rule.onAllNodesWithText("1106 | 定时 | 早报").assertCountEquals(0) // the first origin is picked
+        style = AppStyle.Glass; dark = false
+        rule.onNodeWithText("全部对话（2）").performClick()
+        rule.onNodeWithText("整理收件箱").assertExists()
+        capture("drawer-all-chats-glass-light")
+    }
+
+    // #4922: Recent, the user's own newest chats, between 常驻 and All chats (which still lists everything), in every style,
+    // light and dark; no Recent heading when nothing qualifies.
+    @Test fun drawsRecentBetweenTheLeadersAndAllChats() {
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        val lead = Session(machineId = "hub", sessionId = "l1", title = "1110 | 探索 | 增长", status = "working", updatedAt = minutesAgo(4))
+        val auto = Session(machineId = "hub", sessionId = "a1", title = "收件箱分身", origin = "inbox", status = "idle", updatedAt = minutesAgo(1))
+        val snapshot = persona.core.contracts.api.AssistantSnapshot(main.key, listOf(main, lead, auto) + recent, leaders = listOf("l1"),
+            directionNames = mapOf("l1" to "增长"))
+        var groups by mutableStateOf(conversationGroups(snapshot, "", ConversationWords("新对话", "接力", "接力：%s")))
+        rule.setContent {
+            PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                Box(Modifier.testTag("shot").width(400.dp).height(1300.dp).background(PersonaTheme.palette.background)) {
+                    AssistantDrawer("", {}, groups, active = null, hasMain = true, onEnd = null, onMain = {}, onOpen = {},
+                        onInfo = {}, onNew = {}, onHome = {}, onSettings = {})
+                }
+            }
+        }
+        val top = { text: String -> rule.onNodeWithText(text).fetchSemanticsNode().boundsInRoot.top }
+        rule.onNodeWithText("最近").assertExists()
+        assertTrue("常驻 › 最近 › 全部对话", top("常驻") < top("最近") && top("最近") < top("整理收件箱") && top("周末去哪儿") < top("全部对话（3）"))
+        rule.onNodeWithText("收件箱分身").assertDoesNotExist()
         for (s in AppStyle.entries) for (d in listOf(false, true)) {
             style = s; dark = d
-            capture("drawer-auto-open-${s.name.lowercase()}-${if (d) "dark" else "light"}")
+            androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
+            capture("drawer-recent-${s.name.lowercase()}-${if (d) "dark" else "light"}")
         }
-        rule.onAllNodesWithText("定时任务")[0].performClick() // the chip ("More" has a "Scheduled tasks" row too)
-        rule.onNodeWithText("1106 | 定时 | 早报").assertExists()
+        groups = groups.copy(recent = emptyList())
+        rule.waitForIdle()
+        rule.onNodeWithText("最近").assertDoesNotExist()
+    }
+
+    // #5084: the built-in background supervisor waits under All chats with the chats Persona opened itself, under the
+    // app's name for it, in every style, light and dark; its menu only copies its session id.
+    @Test fun drawsTheBackgroundSupervisorUnderAllChatsWithoutPinArchiveOrEnd() {
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        val scheduled = Session(machineId = "hub", sessionId = "s1", title = "每日早报", origin = "task", originRef = "t1",
+            status = "idle", updatedAt = minutesAgo(50))
+        val background = Session(machineId = "hub", sessionId = "bg", title = "Background supervisor", origin = "task",
+            status = "working", updatedAt = minutesAgo(3), lastText = "登录页修复：三条验收标准都有证据，已验收。")
+        val snapshot = persona.core.contracts.api.AssistantSnapshot(main.key, listOf(main, scheduled, background) + recent,
+            backgroundSupervisor = "bg")
+        val groups = conversationGroups(snapshot, "", ConversationWords("新对话", "接力", "接力：%s", "后台督办"))
+        rule.setContent {
+            PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                Box(Modifier.testTag("shot").width(400.dp).height(1700.dp).background(PersonaTheme.palette.background)) {
+                    AssistantDrawer("", {}, groups, active = null, hasMain = true, onEnd = {}, onMain = {}, onOpen = {},
+                        onInfo = {}, onNew = {}, onHome = {}, onSettings = {}, onArchive = {}, onLeader = {})
+                }
+            }
+        }
+        // not among the user's recent chats; under All chats, which lists it with the scheduled task's conversation
+        rule.onNodeWithText("后台督办").assertDoesNotExist()
+        rule.onNodeWithText("全部对话（4）").performClick()
+        rule.onNodeWithText("后台督办").assertExists()
+        rule.onNodeWithText("每日早报").assertExists()
+        rule.onAllNodesWithText("Background supervisor").assertCountEquals(0)
+        for (s in AppStyle.entries) for (d in listOf(false, true)) {
+            style = s; dark = d
+            androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
+            capture("drawer-background-supervisor-${s.name.lowercase()}-${if (d) "dark" else "light"}")
+        }
+        style = AppStyle.Glass; dark = false
+        rule.waitForIdle()
+        // The rows with a menu, top to bottom: Persona, the two recent chats, then All chats newest first, where the
+        // background supervisor (3 minutes ago) is first.
+        rule.onAllNodesWithContentDescription("对话操作")[3].performClick()
+        rule.onNodeWithText("拷贝会话 ID").assertExists()
+        rule.onAllNodesWithText("设为常驻").assertCountEquals(0)
+        rule.onAllNodesWithText("归档").assertCountEquals(0)
+        rule.onAllNodesWithText("结束…").assertCountEquals(0)
+        rule.onNodeWithText("拷贝会话 ID").performClick()
+        // any other chat there keeps its whole menu
+        rule.onAllNodesWithContentDescription("对话操作")[4].performClick()
+        rule.onNodeWithText("设为常驻").assertExists()
+        rule.onNodeWithText("归档").assertExists()
+        rule.onNodeWithText("结束…").assertExists()
     }
 }

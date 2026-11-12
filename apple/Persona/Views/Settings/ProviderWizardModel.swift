@@ -33,9 +33,14 @@ enum LauncherName {
         var readiness: () -> AssistantReadiness? = { nil }
         /// A readiness read here (the one-message try) for the rest of the app.
         var landReadiness: (AssistantReadiness) -> Void = { _ in }
+        /// The hub's computers (the scope's checklist and its per-computer keys).
+        var machines: () -> [Machine] = { [] }
         @MainActor static var live: Deps {
-            .init(api: { AppModel.shared.api }, features: { AppModel.shared.hubFeatures },
-                  readiness: { AppModel.shared.readiness.current }, landReadiness: { AppModel.shared.readiness.land($0) })
+            let app = AppModel.shared
+            let scope = AssistantSettingsRequestScope(app)
+            return .init(api: { scope.api(app) }, features: { app.hubFeatures },
+                         readiness: { app.readiness.current }, landReadiness: { app.readiness.land($0) },
+                         machines: { scope.machines(app) })
         }
     }
 
@@ -47,7 +52,7 @@ enum LauncherName {
         return r.step("claude")?.state == "ok"
     }
 
-    /// The hub's feature for built-in presets, a name it makes up, `display_name` and `assign` (docs/integrations/launchers.md「内置预设」).
+    /// The hub's feature for built-in presets, a name it makes up, `display_name` and `assign` (docs/integrations/launchers.md「Built-in presets」).
     static let presetsFeature = "builtin_presets"
     /// The uses a provider added in the wizard takes over while they are still at their default (docs/assistant/onboarding.md 5.4).
     static let assignPurposes = ["assistant", "agent.new"]
@@ -120,6 +125,11 @@ enum LauncherName {
     var timeoutMS = ""
     var compactWindow = ""
     var maxContext = ""
+    /// Send Through (an existing direct API connection, #4775): the computer whose node sends its requests, "" the hub.
+    var viaMachine = ""
+    /// Where it runs and when its key travels (#2333, `ProviderComputersPage`): a stored provider's as it opened, else
+    /// the hub's defaults. Only fields that differ from what it opened with are sent (`ProviderScopeForm.fields`).
+    var scope = ProviderScopeForm()
 
     private(set) var testing = false
     private(set) var test: LauncherProbeResult?
@@ -174,7 +184,7 @@ enum LauncherName {
     var presetsFlow: Bool { isNew && deps.features().contains(Self.presetsFeature) }
     var preset: LauncherPreset? { presets.first { $0.id == presetID } }
     /// "Where to get a model": the built-in providers that say where to sign up.
-    var signupPresets: [LauncherPreset] { presets.filter { $0.isBuiltin && $0.signup != nil } }
+    var signupPresets: [LauncherPreset] { presets.filter { $0.isBuiltin && $0.runsClaude && $0.signup != nil } }
     var presetNameProblem: String? { LauncherName.problem(presetName) }
     private var trimmedKey: String { presetKey.trimmingCharacters(in: .whitespacesAndNewlines) }
     /// A key long enough to be worth testing on its own: a test costs a request, so not on every keystroke.
@@ -186,7 +196,7 @@ enum LauncherName {
     /// says the region is blocked (#4526); the user can still turn it on.
     var assign: Bool { assignChoice ?? (!Self.claudeCodeWorks(deps.readiness()) && !regionBlocked) }
     var canSavePreset: Bool {
-        preset != nil && !trimmedKey.isEmpty && presetNameProblem == nil && !keyTesting && !saving
+        preset != nil && !trimmedKey.isEmpty && presetNameProblem == nil && scopeProblem == nil && !keyTesting && !saving
     }
 
     init(existing: LauncherView? = nil, deps: Deps = .live) {
@@ -194,6 +204,7 @@ enum LauncherName {
         self.deps = deps
         guard let e = existing else { return }
         name = e.name
+        viaMachine = e.viaMachine ?? ""
         let url = e.baseURL ?? ""
         kind = url.trimmingCharacters(in: CharacterSet(charactersIn: "/ ")) == Self.anthropicURL ? .anthropic : .custom
         baseURL = kind == .custom ? url : ""
@@ -216,7 +227,18 @@ enum LauncherName {
         timeoutMS = Self.number(e.timeoutMS)
         compactWindow = Self.number(e.compactWindow)
         maxContext = Self.number(e.maxContext)
+        if let s = ProviderScopeForm(view: e) { scope = s }
     }
+
+    /// The Computers row is offered: a stored provider whose hub returned its scope, a new one when the hub takes scopes
+    /// (`launcher_scope`). An older hub sees the wizard as it was, and nothing of the scope is sent.
+    var scopeShown: Bool {
+        if let e = existing { return e.share != nil }
+        return deps.features().contains(ProviderScopeForm.feature)
+    }
+
+    /// Selected Computers with none ticked: the hub would refuse it, so Save waits.
+    var scopeProblem: String? { scopeShown ? scope.problem : nil }
 
     var isNew: Bool { existing == nil }
     var hasStoredKey: Bool { existing?.hasKey == true }
@@ -254,7 +276,7 @@ enum LauncherName {
 
     var canTest: Bool { connectionReady && !testModel.isEmpty && !testing }
 
-    var canSave: Bool { connectionReady && models.contains { $0.id == defaultModel } && proxyProblem == nil && !saving }
+    var canSave: Bool { connectionReady && models.contains { $0.id == defaultModel } && proxyProblem == nil && scopeProblem == nil && !saving }
 
     /// What the models step lists: the picked ones, then the rest of what the gateway serves.
     var choices: [ProviderModel] {
@@ -290,9 +312,17 @@ enum LauncherName {
 
     func model(_ id: String) -> ProviderModel? { models.first { $0.id == id } ?? discovered.first { $0.id == id } }
 
+    /// A direct API connection: what the hub calls itself, so it can send through a computer.
+    var isAPI: Bool { existing?.kind == "api" }
+    /// Send Through's choices: the hub's computers, and the stored one even when the hub no longer lists it.
+    var viaChoices: [(id: String, name: String)] {
+        let list = deps.machines().map { (id: $0.id, name: $0.name) }
+        return viaMachine.isEmpty || list.contains(where: { $0.id == viaMachine }) ? list : list + [(id: viaMachine, name: viaMachine)]
+    }
+
     private var probe: LauncherProbe {
         LauncherProbe(name: existing?.name, baseURL: address, auth: authMode, apiKey: key.isEmpty ? nil : key,
-                      headers: headersValue, model: testModel.isEmpty ? nil : testModel)
+                      headers: headersValue, model: testModel.isEmpty ? nil : testModel, viaMachine: isAPI ? viaMachine : nil)
     }
 
     func runTest() async {
@@ -376,7 +406,7 @@ enum LauncherName {
         let e = existing
         let t = { (s: String) in s.trimmingCharacters(in: .whitespaces) }
         let (proxyValue, noProxyValue) = proxyValues
-        return LauncherInput(name: trimmedName, baseURL: address, model: defaultModel, smallModel: t(smallModel), subagentModel: t(subagentModel),
+        var input = LauncherInput(name: trimmedName, baseURL: address, model: defaultModel, smallModel: t(smallModel), subagentModel: t(subagentModel),
                              customModel: e?.customModel ?? "", customModelName: e?.customModelName ?? "",
                              customModelDescription: e?.customModelDescription ?? "", args: e?.args ?? [],
                              apiKey: key.isEmpty ? nil : key, kind: e?.kind ?? "launcher", api: "messages", auth: authMode,
@@ -384,6 +414,9 @@ enum LauncherName {
                              fableModel: t(fableModel), subagentForce: subagentForce, headers: headersValue, env: envValue, proxy: proxyValue,
                              noProxy: noProxyValue, timeoutMS: Int(t(timeoutMS)) ?? 0, compactWindow: Int(t(compactWindow)) ?? 0,
                              maxContext: Int(t(maxContext)) ?? 0, effort: t(effort))
+        if scopeShown { scope.apply(to: &input, old: e, machines: deps.machines(), kind: input.kind ?? "launcher") }
+        if isAPI, viaMachine != (e?.viaMachine ?? "") { input.viaMachine = viaMachine }
+        return input
     }
 
     /// Saves the provider; false (with `error`) when the hub refused it.
@@ -458,11 +491,14 @@ enum LauncherName {
     var presetInput: LauncherInput? {
         guard let p = preset else { return nil }
         let m = presetModel.trimmingCharacters(in: .whitespaces)
-        return LauncherInput(name: presetName.trimmingCharacters(in: .whitespaces), baseURL: "", model: m == p.defaultModel ? "" : m,
-                             smallModel: "", subagentModel: "", customModel: "", customModelName: "", customModelDescription: "",
-                             args: [], apiKey: trimmedKey, preset: p.id,
-                             displayName: presetDisplayName.trimmingCharacters(in: .whitespaces),
-                             assign: assign ? Self.assignPurposes : nil)
+        let assigning = p.runsClaude && assign
+        var input = LauncherInput(name: presetName.trimmingCharacters(in: .whitespaces), baseURL: "", model: m == p.defaultModel ? "" : m,
+                                  smallModel: "", subagentModel: "", customModel: "", customModelName: "", customModelDescription: "",
+                                  args: [], apiKey: trimmedKey, preset: p.id,
+                                  displayName: presetDisplayName.trimmingCharacters(in: .whitespaces),
+                                  assign: assigning ? Self.assignPurposes : nil)
+        if scopeShown { scope.apply(to: &input, old: nil, machines: deps.machines(), assign: assigning, kind: p.kind) }
+        return input
     }
 
     /// Adds the preset's provider; false (with `error`) when the hub refused it.

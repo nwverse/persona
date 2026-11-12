@@ -12,6 +12,28 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class OperationFeedbackTest {
+    @Test fun knowledgeCodesOverrideServerWordingAndKeepDiagnosticsOutOfFeedback() {
+        for ((code, resource, action) in listOf(
+            Triple("kb_disabled", R.string.designsystem_knowledge_disabled, FailureAction.None),
+            Triple("kb_unavailable", R.string.designsystem_knowledge_unavailable, FailureAction.Retry),
+            Triple("kb_read_only", R.string.designsystem_knowledge_read_only, FailureAction.None),
+        )) {
+            val error = HubFailure(HubError.Server, "Request failed: private diagnostic", status = 503, code = code,
+                retryable = true, requestId = "request-1")
+            val feedback = operationFeedback(error)
+            assertEquals(UiText.Res(resource), feedback.text)
+            assertEquals(feedback.text, failureReasonText(error))
+            assertEquals(action, feedback.action)
+            assertFalse(feedback.offline)
+            assertNull(feedback.hubWords)
+            assertTrue(failureDetail(error).contains("Request: request-1"))
+        }
+        val internal = HubFailure(HubError.Server, "private internal exception", status = 503, code = "internal", requestId = "request-1")
+        assertEquals(operationFeedback(internal).text, failureReasonText(internal))
+        assertFalse(failureDetail(internal).contains("private internal exception"))
+        assertTrue(failureDetail(internal).contains("HTTP 503"))
+    }
+
     @Test fun codeOverridesWordingAndOfflineNoticesAreLimitedPerKind() = runTest {
         val input = HubFailure(HubError.Server, "超时失败", code = "input_draft", delivered = "none", retryable = true)
         val changed = HubFailure(HubError.Server, "完全不同的文字", code = "input_draft", delivered = "none", retryable = true)
@@ -62,5 +84,16 @@ class OperationFeedbackTest {
         assertEquals(R.string.designsystem_readiness_action_add_computer, noMachine.actionLabelRes)
         assertEquals(UiText.Res(R.string.designsystem_feedback_no_machine), noMachine.text)
         assertNull(noMachine.hubWords)
+    }
+
+    /** A provider outside the computer's scope: the hub's own sentence names the provider and the computer, so it is shown. */
+    @Test fun aProviderOutOfScopeShowsTheHubsWords() {
+        val words = "“jv_gw” is not set to run on Laptop."
+        val feedback = operationFeedback(HubFailure(HubError.Server, words, status = 409, code = "launcher_out_of_scope", retryable = false))
+        assertEquals(UiText.Plain(words), feedback.text)
+        assertEquals(FailureAction.EditProvider, feedback.action)
+        // Without words (an older hub, a bare status) the app says it.
+        val bare = operationFeedback(HubFailure(HubError.Server, "HTTP 409", status = 409, code = "launcher_own_service", retryable = false))
+        assertEquals(UiText.Res(R.string.designsystem_feedback_provider_out_of_scope), bare.text)
     }
 }

@@ -10,6 +10,7 @@ struct ModelLauncherRoute: Hashable { var name: String }
 /// claude of each machine — the hidden ones, and how each machine's list came in (offline, timed out, failed).
 struct ModelLaunchersView: View {
     @Environment(AppModel.self) private var model
+    private let requestScope = AssistantSettingsRequestScope(AppModel.shared)
     @State private var launchers: [LauncherView]?
     /// How each machine's list came in; nil from an older hub.
     @State private var sync: [LauncherSync]?
@@ -21,6 +22,10 @@ struct ModelLaunchersView: View {
     @State private var showHidden = false
     /// A Persona launcher swiped to Delete, waiting for the confirmation.
     @State private var pendingDelete: LauncherView?
+    #if DEBUG
+    /// `-openProviderComputers <state>`: a made-up provider's Computers page (`ProviderComputersDemo`).
+    @State private var computersDemo: LauncherView?
+    #endif
 
     /// Name, model, gateway host, or a machine's name.
     private func matches(_ l: LauncherView) -> Bool {
@@ -45,29 +50,7 @@ struct ModelLaunchersView: View {
                 if !query.isEmpty, launchers.isEmpty {
                     ContentUnavailableView.search(text: query).listRowBackground(Color.clear)
                 }
-                if query.isEmpty || !managed.isEmpty { Section {
-                    if managed.isEmpty {
-                        #if os(macOS)
-                        Text("No providers yet. Use “Add Provider…” below to set up the connection type, gateway, key, and default model, then pick one for each use in “Model Configuration”.")
-                            .font(Theme.Font.label).foregroundStyle(.secondary)
-                        #else
-                        Text("No providers yet. Tap + at the top right to set up the connection type, gateway, key, and default model, then pick one for each use in “Model Configuration”.")
-                            .font(Theme.Font.label).foregroundStyle(.secondary)
-                        #endif
-                    }
-                    ForEach(managed) { row($0) }
-                    #if os(macOS)
-                    // In the group it adds to, as a Mac settings pane has its add button (#1223): in the window's toolbar
-                    // the search field took the trailing end and the + went to the window's middle, over the settings list.
-                    HStack {
-                        Spacer(minLength: 0)
-                        Button("Import from ~/.zshrc…") { adding = .importZshrc }.lineLimit(1).formButton()
-                        Button("Add Provider…") { adding = .pick }.lineLimit(1).formButton()
-                    }
-                    #endif
-                } header: { header(String(localized: "Managed by Persona"), managed.count) } footer: {
-                    if !managed.isEmpty { Text("Keys are stored encrypted on the hub and only handed to the computer at launch. They're never written to a file.") }
-                } }
+                managedSections(managed)
                 ForEach(files, id: \.self) { file in
                     let group = byFile[file] ?? []
                     Section {
@@ -156,11 +139,24 @@ struct ModelLaunchersView: View {
         #endif
         #if DEBUG
         // `-openLauncherEditor YES` opens the form Other Connection Types leads to, `-openLauncherEditor preset` on From Extension;
-        // `-openProviderWizard pick|connect|models|import` the provider sheet at that step.
+        // `-openProviderWizard pick|connect|models|import` the provider sheet at that step; `-openProviderComputers
+        // all|selected|none|legacy|keys|api` a made-up provider's Computers page (`new` goes with `-openProviderWizard models`);
+        // `via` an API connection sending through a computer, at Connect.
         .onAppear {
             if UserDefaults.standard.string(forKey: "openLauncherEditor") != nil { adding = .pick }
             if let s = UserDefaults.standard.string(forKey: "openProviderWizard") { adding = ProviderWizardStep(rawValue: s) ?? .pick }
         }
+        .task {
+            guard let s = ProviderComputersDemo.state, s != "new", UserDefaults.standard.string(forKey: "openProviderWizard") == nil else { return }
+            // The made-up provider runs on the hub's computers: wait (3 s at most) for their list.
+            var waited = 0
+            while requestScope.machines(model).isEmpty, waited < 30 {
+                try? await Task.sleep(for: .milliseconds(100))
+                waited += 1
+            }
+            computersDemo = ProviderComputersDemo.launcher(s, machines: requestScope.machines(model))
+        }
+        .sheet(item: $computersDemo) { l in ProviderWizard(existing: l, start: ProviderComputersDemo.state == "via" ? .connect : .models, showComputers: ProviderComputersDemo.state != "via") }
         #endif
         .confirmationDialog("Delete Launcher “\(pendingDelete?.name ?? "")”?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
                             titleVisibility: .visible, presenting: pendingDelete) { l in
@@ -173,6 +169,56 @@ struct ModelLaunchersView: View {
         #if DEBUG
         .onAppear { if let q = UserDefaults.standard.string(forKey: "showModelSearch") { query = q } } // `-showModelSearch glm`
         #endif
+    }
+
+    /// Managed by Persona: one section, or (#2333) one per harness when there are several kinds, the last with the add
+    /// buttons and the footer.
+    @ViewBuilder private func managedSections(_ managed: [LauncherView]) -> some View {
+        let harnesses = ProviderScopeForm.harnessGroups(managed)
+        if harnesses.count > 1 {
+            ForEach(harnesses) { g in
+                Section {
+                    ForEach(g.items) { row($0) }
+                    #if os(macOS)
+                    if g.id == harnesses.last?.id { macAddButtons }
+                    #endif
+                } header: { header(String(localized: "Managed by Persona · \(g.title)"), g.items.count) } footer: {
+                    if g.id == harnesses.last?.id { managedFooter }
+                }
+            }
+        } else if query.isEmpty || !managed.isEmpty { Section {
+            if managed.isEmpty {
+                #if os(macOS)
+                Text("No providers yet. Use “Add Provider…” below to set up the connection type, gateway, key, and default model, then pick one for each use in “Model Configuration”.")
+                    .font(Theme.Font.label).foregroundStyle(.secondary)
+                #else
+                Text("No providers yet. Tap + at the top right to set up the connection type, gateway, key, and default model, then pick one for each use in “Model Configuration”.")
+                    .font(Theme.Font.label).foregroundStyle(.secondary)
+                #endif
+            }
+            ForEach(managed) { row($0) }
+            #if os(macOS)
+            macAddButtons
+            #endif
+        } header: { header(String(localized: "Managed by Persona"), managed.count) } footer: {
+            if !managed.isEmpty { managedFooter }
+        } }
+    }
+
+    #if os(macOS)
+    /// In the group it adds to, as a Mac settings pane has its add button (#1223): in the window's toolbar the search field
+    /// took the trailing end and the + went to the window's middle, over the settings list.
+    private var macAddButtons: some View {
+        HStack {
+            Spacer(minLength: 0)
+            Button("Import from ~/.zshrc…") { adding = .importZshrc }.lineLimit(1).formButton()
+            Button("Add Provider…") { adding = .pick }.lineLimit(1).formButton()
+        }
+    }
+    #endif
+
+    private var managedFooter: some View {
+        Text("Keys are stored encrypted on the hub and only handed to the computer at launch. They're never written to a file.")
     }
 
     /// `-openLauncherEditor` (SecretFieldTests): straight to the older form.
@@ -262,7 +308,7 @@ struct ModelLaunchersView: View {
 
     /// Takes the row out at once, then asks the hub; a failure puts it back and says why.
     private func delete(_ l: LauncherView) async {
-        guard let api = model.api, let i = launchers?.firstIndex(where: { $0.name == l.name }) else { return }
+        guard let api = requestScope.api(model), let i = launchers?.firstIndex(where: { $0.name == l.name }) else { return }
         _ = withAnimation(Theme.Motion.standard) { launchers?.remove(at: i) }
         do {
             try await api.deleteLauncher(l.name)
@@ -276,7 +322,7 @@ struct ModelLaunchersView: View {
 
     /// Moves the row at once, then asks the hub; a failure puts it back and says why.
     private func setHidden(_ l: LauncherView, _ hide: Bool) async {
-        guard let api = model.api, let i = launchers?.firstIndex(where: { $0.name == l.name }) else { return }
+        guard let api = requestScope.api(model), let i = launchers?.firstIndex(where: { $0.name == l.name }) else { return }
         withAnimation(Theme.Motion.standard) { launchers?[i].hidden = hide }
         do {
             if hide { try await api.deleteLauncher(l.name) } else { try await api.restoreLauncher(l.name) }
@@ -294,7 +340,7 @@ struct ModelLaunchersView: View {
     }
 
     private func load() async {
-        guard let api = model.api else { return }
+        guard let api = requestScope.api(model) else { return }
         do {
             (launchers, sync) = try await api.launcherList()
             error = nil
@@ -314,7 +360,7 @@ struct LauncherRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
             HStack(spacing: Theme.Space.sm) {
-                // A display name (「智谱 GLM」, docs/integrations/launchers.md「内置预设」) is a name, not an id; without one, the id as before.
+                // A display name (「智谱 GLM」, docs/integrations/launchers.md「Built-in presets」) is a name, not an id; without one, the id as before.
                 if launcher.title != launcher.name {
                     Text(launcher.title).font(Theme.Font.heading).lineLimit(1)
                 } else {
@@ -345,6 +391,7 @@ struct LauncherRow: View {
 /// masked) on each machine and can be hidden or brought back.
 struct ModelLauncherDetailView: View {
     @Environment(AppModel.self) private var model
+    private let requestScope = AssistantSettingsRequestScope(AppModel.shared)
     @Environment(\.dismiss) private var dismiss
     var name: String
     @State private var launcher: LauncherView?
@@ -354,7 +401,7 @@ struct ModelLauncherDetailView: View {
     @State private var showDefinition = false
     /// Test Availability: per machine, running (nil) or done.
     @State private var checks: [String: LauncherCheck?] = [:]
-    /// What plugins draw on this page (docs/extensions/extensions.md「声明式 UI」), and the link one of them opens.
+    /// What plugins draw on this page (docs/extensions/extensions.md「Declarative UI」), and the link one of them opens.
     @State private var pluginSections: ExtensionLauncherModel?
     @State private var pluginLink: LinkTarget?
 
@@ -397,13 +444,23 @@ struct ModelLauncherDetailView: View {
                         if let d = l.customModelDescription, !d.isEmpty { LabeledContent("Custom Model Description", value: d) }
                     }
                     if let o = l.origin, o.hasPrefix("zshrc:") { mono("Imported From", "~/.zshrc · " + o.dropFirst("zshrc:".count)) }
-                    if let ms = l.models, ms.count > 1 { mono("Available Models", ms.map(\.id).joined(separator: "、")) }
+                    if let ms = l.models, ms.count > 1 { mono("Available Models", ms.map(\.id).joined(separator: String(localized: "、", comment: "Separator between computer names in a list"))) }
                     if l.hasHeaders == true { LabeledContent("Headers", value: String(localized: "Set (hidden)")) }
                     if l.managed { LabeledContent("API Key", value: l.hasKey == true ? String(localized: "Set (hidden)") : String(localized: "Not set")) }
                     if l.managed, l.api != "responses" { LabeledContent("Authentication [Model Launchers View d1ff8f]", value: l.bearerAuth ? "Bearer" : "x-api-key") }
                     if let a = l.args, !a.isEmpty { mono("Extra Arguments", a.joined(separator: " ")) }
                     if let ids = l.machines, !ids.isEmpty {
                         LabeledContent("Computers", value: ids.map { model.machine(model.hubRef($0))?.name ?? $0 }.joined(separator: String(localized: "、", comment: "Separator between computer names in a list")))
+                    }
+                    // A Persona provider's device scope (#2333): where it runs, how its key travels, and which computers
+                    // have a key of their own (never the keys).
+                    if l.managed, l.share != nil {
+                        LabeledContent("Computers", value: ProviderScopeForm.summary(l, name: { model.machine(model.hubRef($0))?.name ?? $0 }))
+                            .accessibilityIdentifier("launcher.scope")
+                        if let keyed = l.keyMachines, !keyed.isEmpty {
+                            LabeledContent("Per-Computer Keys", value: String(localized: "\(keyed.count) computers"))
+                                .accessibilityIdentifier("launcher.machineKeys")
+                        }
                     }
                 }
                 if l.managed {
@@ -480,7 +537,10 @@ struct ModelLauncherDetailView: View {
         .extensionPushes(pluginSections.map { Array($0.models.values) } ?? [])
         .task(id: model.hubFeatures.hasExtensionFeature("manager")) {
             guard model.hubFeatures.hasExtensionFeature("manager") else { return }
-            let sections = pluginSections ?? ExtensionLauncherModel(launcher: name)
+            let scope = requestScope
+            let api = scope.api(model)
+            let sections = pluginSections ?? ExtensionLauncherModel(launcher: name, deps: .init(
+                api: { api }, connection: { model.socket(scope.group) }))
             pluginSections = sections
             await sections.load()
         }
@@ -529,14 +589,13 @@ struct ModelLauncherDetailView: View {
     }
 
     private func check(_ machines: [String]) async {
-        guard let api = model.api else { return }
+        guard let api = requestScope.api(model) else { return }
         for id in machines { checks[id] = .some(nil) }
         await withTaskGroup(of: (String, LauncherCheck).self) { group in
             for id in machines {
                 group.addTask {
-                    let c = (try? await api.checkLauncher(name, machine: id.isEmpty ? nil : id))
-                        ?? LauncherCheck(ok: false, millis: 0, error: String(localized: "The request didn't finish"))
-                    return (id, c)
+                    do { return (id, try await api.checkLauncher(name, machine: id.isEmpty ? nil : id)) }
+                    catch { return (id, LauncherCheck.failed(error)) }
                 }
             }
             for await (id, c) in group { checks[id] = .some(c) }
@@ -546,7 +605,7 @@ struct ModelLauncherDetailView: View {
     }
 
     private func load() async {
-        guard let api = model.api else { return }
+        guard let api = requestScope.api(model) else { return }
         do {
             launcher = try await api.launcher(name)
             error = nil
@@ -556,7 +615,7 @@ struct ModelLauncherDetailView: View {
     }
 
     private func delete() async {
-        guard let api = model.api else { return }
+        guard let api = requestScope.api(model) else { return }
         do {
             try await api.deleteLauncher(name)
             model.launchersChanged()
@@ -566,7 +625,7 @@ struct ModelLauncherDetailView: View {
     }
 
     private func restore() async {
-        guard let api = model.api else { return }
+        guard let api = requestScope.api(model) else { return }
         do {
             try await api.restoreLauncher(name)
             model.launchersChanged()
@@ -579,6 +638,7 @@ struct ModelLauncherDetailView: View {
 /// Add a launcher, or change one Persona keeps.
 struct LauncherEditor: View {
     @Environment(AppModel.self) private var model
+    private let requestScope = AssistantSettingsRequestScope(AppModel.shared)
     @Environment(\.dismiss) private var dismiss
     var existing: LauncherView?
     var saved: () async -> Void
@@ -602,9 +662,12 @@ struct LauncherEditor: View {
     /// From Extension: the providers the hub's plugins offer (only when adding, and only when there are some).
     @State private var presets = LauncherPresetModel()
     @State private var fromExtension = false
+    /// Where it runs and when its key travels (#2333): only on a hub that takes scopes (a stored provider it returned one for).
+    @State private var scope = ProviderScopeForm()
 
     private var isNew: Bool { existing == nil }
     private var usesPreset: Bool { isNew && fromExtension && !presets.presets.isEmpty }
+    private var scopeShown: Bool { existing.map { $0.share != nil } ?? model.hubFeatures.contains(ProviderScopeForm.feature) }
     /// The Responses API always takes the key as Bearer: nothing to choose.
     private var usesResponses: Bool { kind == "api" && protocolName == "responses" }
     /// What was typed in either form (a preset's model is filled in as it loads, so it does not count).
@@ -640,7 +703,8 @@ struct LauncherEditor: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { Task { usesPreset ? await savePreset() : await save() } }.lineLimit(1)
                         .disabled(usesPreset ? !presets.canSave
-                                  : saving || name.isEmpty || baseURL.isEmpty || modelName.isEmpty || (isNew && apiKey.isEmpty))
+                                  : saving || name.isEmpty || baseURL.isEmpty || modelName.isEmpty || (isNew && apiKey.isEmpty)
+                                    || (scopeShown && scope.problem != nil))
                 }
             }
             .task {
@@ -665,6 +729,7 @@ struct LauncherEditor: View {
                 kind = e.kind ?? "launcher"
                 protocolName = e.api ?? "messages"
                 auth = e.bearerAuth ? "bearer" : "api_key"
+                if let s = ProviderScopeForm(view: e) { scope = s }
             }
         }
         #if os(macOS)
@@ -731,6 +796,11 @@ struct LauncherEditor: View {
                     .font(Theme.Font.body.monospaced()).textInputAutocapitalization(.never).autocorrectionDisabled()
             } header: { Text("Extra Arguments (Optional)") } footer: { Text("Added after claude, separated by spaces. Each must start with -.") }
         }
+        if scopeShown {
+            Section {
+                ProviderComputersRow(scope: $scope, old: existing, kind: kind, agent: existing?.agent)
+            } footer: { Text("Which computers can run it and get its key.") }
+        }
         if let error {
             Section { LoadProblem(text: error) }
         }
@@ -748,10 +818,10 @@ struct LauncherEditor: View {
     }
 
     private func save() async {
-        guard let api = model.api else { return }
+        guard let api = requestScope.api(model) else { return }
         saving = true
         defer { saving = false }
-        let input = LauncherInput(name: name.trimmingCharacters(in: .whitespaces), baseURL: baseURL.trimmingCharacters(in: .whitespaces),
+        var input = LauncherInput(name: name.trimmingCharacters(in: .whitespaces), baseURL: baseURL.trimmingCharacters(in: .whitespaces),
                                   model: modelName.trimmingCharacters(in: .whitespaces),
                                   smallModel: kind == "api" ? "" : smallModel.trimmingCharacters(in: .whitespaces),
                                   subagentModel: kind == "api" ? "" : subagentModel.trimmingCharacters(in: .whitespaces),
@@ -761,6 +831,7 @@ struct LauncherEditor: View {
                                   args: kind == "api" ? [] : args.split(whereSeparator: \.isWhitespace).map(String.init),
                                   apiKey: apiKey.isEmpty ? nil : apiKey, kind: kind,
                                   api: kind == "api" ? protocolName : "messages", auth: usesResponses ? "api_key" : auth)
+        if scopeShown { scope.apply(to: &input, old: existing, machines: requestScope.machines(model), kind: kind) }
         do {
             try await api.saveLauncher(input, isNew: isNew)
             model.launchersChanged()

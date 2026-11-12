@@ -127,6 +127,7 @@ type fakeHub struct {
 	context map[string]any    // assistant.context's answer; nil: just a snapshot
 	acks    []json.RawMessage // assistant.context calls that acked view errors
 	mcp     []map[string]any  // the mcp.tools / mcp.call params relayed ("method" says which)
+	onModel func()            // called as assistant.model is asked, before it answers (model_restore_test.go)
 }
 
 func (h *fakeHub) interactions() []proto.Interaction {
@@ -140,7 +141,10 @@ func withFakeHub(t *testing.T, n *Node) *fakeHub {
 	ctx, cancel := context.WithCancel(context.Background())
 	n2hR, n2hW := io.Pipe()
 	h2nR, h2nW := io.Pipe()
-	n.peer = rpc.New("n", n2hW)
+	// The goroutine below serves this peer, not whatever n.peer holds when it runs: a test may put its own hub in
+	// front afterwards (TestCodexRemoteTurnBegunBeforeJoining), and reading the field there would race that write.
+	peer := rpc.New("n", n2hW)
+	n.peer = peer
 	hub := rpc.New("h", h2nW)
 	fh := &fakeHub{answer: func(proto.Interaction) proto.Resolution { yes := true; return proto.Resolution{Allow: &yes} }}
 	hub.OnRequest = func(ctx context.Context, method string, params json.RawMessage) (any, error) {
@@ -167,6 +171,12 @@ func withFakeHub(t *testing.T, n *Node) *fakeHub {
 				SessionID string `json:"session_id"`
 			}
 			_ = json.Unmarshal(params, &p)
+			fh.mu.Lock()
+			onModel := fh.onModel
+			fh.mu.Unlock()
+			if onModel != nil {
+				onModel()
+			}
 			fh.mu.Lock()
 			defer fh.mu.Unlock()
 			if fh.queried == nil {
@@ -214,7 +224,7 @@ func withFakeHub(t *testing.T, n *Node) *fakeHub {
 		fh.mu.Unlock()
 	}
 	go func() { _ = hub.Serve(ctx, n2hR) }()
-	go func() { _ = n.peer.Serve(ctx, h2nR) }()
+	go func() { _ = peer.Serve(ctx, h2nR) }()
 	t.Cleanup(func() { cancel(); _ = n2hW.Close(); _ = h2nW.Close() })
 	return fh
 }
@@ -284,7 +294,8 @@ func TestCodexStartAndTurns(t *testing.T) {
 	}
 	b, _ := json.Marshal(f.sent("thread/start")[0])
 	_ = json.Unmarshal(b, &start)
-	if start.Params.ApprovalPolicy != "untrusted" || start.Params.Sandbox != "workspace-write" || !strings.HasPrefix(start.Params.DeveloperInstructions, "# 记忆") ||
+	// No mode selected: keep the launcher's policy until the app makes an explicit choice below.
+	if start.Params.ApprovalPolicy != "" || start.Params.Sandbox != "" || !strings.HasPrefix(start.Params.DeveloperInstructions, "# 记忆") ||
 		strings.Contains(start.Params.DeveloperInstructions, "snapshot") { // the snapshot goes with each message, not here
 		t.Fatalf("thread/start params %+v", start.Params)
 	}
@@ -742,11 +753,17 @@ func TestCodexGetsRealWritableRoots(t *testing.T) {
 // starts (#2571).
 func TestAssistantCodexTurnError(t *testing.T) {
 	n := codexTestNode(t)
+	probedLaunchers(t, map[string]string{"cx_test": "codex"})
+	models := assistantRecoveryModels
+	assistantRecoveryModels = func(context.Context, *Node, string) (proto.LauncherModels, error) {
+		return proto.LauncherModels{Agent: "codex", Models: []proto.AgentModel{}}, nil // no fallback after the same-model retry
+	}
+	t.Cleanup(func() { assistantRecoveryModels = models })
 	cwd := t.TempDir()
 	p, c, f := newFakeCodex(t, n, cwd)
-	p.id = "proc-err"
+	p.id = testThread
 	c.threadID = testThread
-	n.procs["proc-err"] = p
+	n.procs[testThread] = p
 
 	turn := func(id string) {
 		f.push(map[string]any{"method": "turn/started", "params": map[string]any{"threadId": testThread, "turn": map[string]any{"id": id, "status": "inProgress"}}})
@@ -768,7 +785,7 @@ func TestAssistantCodexTurnError(t *testing.T) {
 	session := func() proto.Session {
 		list := n.assistantSessions()
 		for _, s := range list {
-			if s.SessionID == "proc-err" {
+			if s.SessionID == testThread {
 				return s
 			}
 		}
@@ -777,9 +794,17 @@ func TestAssistantCodexTurnError(t *testing.T) {
 	}
 
 	turn("t1")
-	end("t1", "failed", map[string]any{"message": "unexpected status 503", "codexErrorInfo": map[string]any{"httpConnectionFailed": map[string]any{"httpStatusCode": 503}}})
+	transient := map[string]any{"message": "unexpected status 503", "codexErrorInfo": map[string]any{"httpConnectionFailed": map[string]any{"httpStatusCode": 503}}}
+	f.push(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": testThread,
+		"turn": map[string]any{"id": "t1", "status": "failed", "error": transient}}})
+	waitFor(t, "the same-model Codex retry", func() bool { return len(f.sent("turn/start")) == 1 })
+	if got := f.sent("turn/start"); len(got) != 1 || !strings.Contains(string(got[0].Params), "persona-context") {
+		t.Fatalf("the retry did not resume with hidden context: %+v", got)
+	}
+	turn("t1-retry")
+	end("t1-retry", "failed", transient) // no next model: the second failure is final
 	if s := session(); s.TurnError != "unexpected status 503" || s.TurnErrorKind != proto.TurnErrorTransient {
-		t.Fatalf("failed turn: %q, %q", s.TurnError, s.TurnErrorKind)
+		t.Fatalf("failed turn after its bounded recovery: %q, %q", s.TurnError, s.TurnErrorKind)
 	}
 
 	turn("t2")

@@ -156,6 +156,26 @@ struct InboxEventsTests {
         #expect(InboxEventText.mark(all["lark:oc_demo9:900"]!) == nil) // done
     }
 
+    /// On the iPhone's shell a chain's conversation (the AI's handling, an Agent's) goes over the item with the item's
+    /// manager, and the Persona page and the tab stay as they were; elsewhere the handling one opens on the Persona page
+    /// (#3114).
+    @Test func aChainConversationIsPushedOverTheItemOnTheShell() {
+        let model = AppModel()
+        model.selectedTab = .chats
+        model.openChat = nil
+        let before = model.assistantCurrent
+        let key = SessionKey(machineID: "box", sessionID: "h1")
+        var pushed: [InboxChatRoute] = []
+        InboxEventOpen.session(key, manager: true, owner: "m2", model: model) { pushed.append($0) }
+        InboxEventOpen.session(key, manager: false, owner: nil, model: model) { pushed.append($0) }
+        #expect(pushed == [InboxChatRoute(key: model.inHub(key), manager: "m2"), InboxChatRoute(key: model.inHub(key), manager: nil)])
+        #expect(model.assistantCurrent == before && model.openChat == nil)
+        #expect(model.selectedTab == .chats)
+        InboxEventOpen.session(key, manager: true, owner: nil, model: model)
+        #expect(model.assistantCurrent == model.inHub(key))
+        #expect(model.selectedTab == .assistant)
+    }
+
     @Test func aSuggestionsFirstLineAndButtons() throws {
         #expect(InboxEventText.firstLine("\n  第一行  \n第二行") == "第一行")
         let reply = InboxItem.Suggestion(version: 1, kind: "reply", text: "好")
@@ -176,7 +196,7 @@ struct InboxEventsTests {
         {\(Self.base),"done_at":"2026-11-05T10:00:00Z","done_by":"manager","chain":[
           {"id":"c1","kind":"done","text":"管理者看完，不用管"}]}
         """)
-        #expect(filed.isDone && InboxEventText.doneBy(filed) == "管理者处理了")
+        #expect(filed.isDone && InboxEventText.doneBy(filed) == "助手处理了")
         #expect(InboxEventText.symbol(filed.chain![0]) == Theme.Icon.done && InboxChainTarget.of(filed.chain![0]) == .nothing)
         let mine = try Self.item("{\(Self.base),\"done_at\":\"2026-11-05T10:00:00Z\",\"done_by\":\"user\"}")
         #expect(InboxEventText.doneBy(mine) == nil)

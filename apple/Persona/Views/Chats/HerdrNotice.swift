@@ -1,6 +1,6 @@
 import SwiftUI
 
-// "herdr isn't running on MacBook" with Start, at the top of the Agents list (#1916, docs/integrations/engines.md「herdr 没在运行时」): told
+// "herdr isn't running on MacBook" with Start, at the top of the Agents list (#1916, docs/integrations/engines.md「When herdr is not running」): told
 // before a message to an agent there fails, not after. Only classic herdr (engines herdr and herdr-both): Herdr App's
 // herdr-core has no server for the node to start.
 
@@ -71,8 +71,10 @@ nonisolated struct HerdrFailure: Equatable, Sendable {
 /// Which machines' herdr does not run, read while the Agents list is in front (`AgentsList`), and the starts made
 /// from its rows. Its own object so a read that changes nothing redraws nothing, and a start only redraws its row.
 @Observable final class HerdrWatch {
-    /// How often the list asks while it is in front.
-    static let interval: Duration = .seconds(10)
+    /// How often the list asks while it is in front. It also asks at once when a watched machine comes online or changes
+    /// engine, or the list is uncovered (`key`, `HerdrPolling`), and a Start answers for itself; what is left is herdr
+    /// stopping on its own, which may show a minute late. Every 10 s it was 34 requests a minute with several machines (#4685).
+    static let interval: Duration = .seconds(60)
 
     /// The machines whose herdr is known not to run, as last read.
     private(set) var stopped: Set<MachineRef> = []

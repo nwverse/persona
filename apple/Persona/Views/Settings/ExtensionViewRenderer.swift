@@ -1,13 +1,13 @@
 import SwiftUI
 
-/// An extension's View drawn with the app's design system (docs/extensions/extensions.md「声明式 UI」「UI 版本 3」): each section a
+/// An extension's View drawn with the app's design system (docs/extensions/extensions.md「Declarative UI」「UI 版本 3」): each section a
 /// section of the form (a divider starts another one), each component a row: text, Markdown, a number with what it is,
 /// a bar, a list row (with an icon, an avatar or a thumbnail), a table, a button, a link opened in the app, a field to
 /// fill in, an empty state, a spinner. Tones are the app's role colors. Controls that ask first ask; the ones that
 /// submit take the page's fields along; a section's `more` loads the next part when it is scrolled to. The page's
 /// search field is the hosting page's (`ExtensionPageView`), its filter is drawn here.
 ///
-/// Without a model (the assistant's cards, docs/extensions/extensions.md「助手的卡片」) nothing can be used: rows and buttons do
+/// Without a model (the assistant's cards, docs/extensions/extensions.md「Assistant cards: `persona-view` and `persona-card`」) nothing can be used: rows and buttons do
 /// nothing, fields, search, filter and more are not drawn; links open as usual.
 struct ExtensionViewRenderer: View {
     @Environment(\.assistantHTMLRendering) private var htmlContext
@@ -132,7 +132,7 @@ enum ExtensionUIStyle {
         }
     }
 
-    /// The icon set's names (docs/extensions/extensions.md「新组件」: a row's `icon`, an empty state's, a nav_page's) as the app's
+    /// The icon set's names (docs/extensions/extensions.md「New components」: a row's `icon`, an empty state's, a nav_page's) as the app's
     /// symbols: one meaning each; anything else (and `extension`, `plugin`) is the extensions' own.
     static func icon(_ name: String?) -> String {
         switch name {
@@ -155,6 +155,8 @@ enum ExtensionUIStyle {
         case "tag": Theme.Icon.label
         case "search": Theme.Icon.search
         case "settings": Theme.Icon.settings
+        case "speaker": Theme.Icon.voiceSpeaking
+        case "music": Theme.Icon.music
         default: Theme.Icon.plugins
         }
     }
@@ -178,7 +180,10 @@ struct ExtensionItemRow: View {
         case .metric(let m): metric(m)
         case .progress(let p): progress(p)
         case .row(let r):
-            if let action = r.action, let model {
+            if let control = r.control, control.drawable {
+                // UI version 6: a switch, a slider or a stepper in the row (`ExtensionControlRow`).
+                ExtensionControlRow(row: r, control: control, model: model, link: $link)
+            } else if let action = r.action, let model {
                 ExtensionActionButton(action: action, title: r.title, model: model, link: $link) { ExtensionComponentRowLabel(row: r, model: model, chevron: true) }
                     .foregroundStyle(Color.primary)
             } else {
@@ -226,8 +231,8 @@ struct ExtensionItemRow: View {
                         return await context.onRequest(request, key, version)
                     })
             }
-        // UI version 6's picture, grid and carousel are drawn in #5473; the app still asks for version 5, so the hub
-        // turns them into version 5 components before they get here.
+        // UI version 6's picture, grid and carousel are not drawn yet (#827). Until all of version 6 is, the app asks
+        // for an older version, so the hub turns them into older components before they get here.
         case .divider, .unknown, .image, .grid, .carousel: EmptyView()
         // UI version 4's code-hosting components: a View with them is drawn by the code page (`ExtensionCodePage`, #2961).
         case .header, .breadcrumb, .fileTree, .code, .diff, .commentThread, .composer: EmptyView()
@@ -349,7 +354,7 @@ extension View {
         #endif
     }
 
-    /// The pages `models` ask to push (docs/extensions/extensions.md「页面跳转」), on the navigation stack this page is on; the one
+    /// The pages `models` ask to push (docs/extensions/extensions.md「Page navigation」), on the navigation stack this page is on; the one
     /// that asked draws again when its page closes. Put on the page itself, not a row: a list's rows cannot push.
     func extensionPushes(_ models: [ExtensionViewModel]) -> some View { modifier(ExtensionPushes(models: models)) }
 }

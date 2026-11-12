@@ -5,7 +5,7 @@ vi.hoisted(() => {
   (globalThis as Record<string, unknown>).localStorage = { getItem: (k: string) => kept.get(k) ?? null, setItem: (k: string, v: string) => void kept.set(k, v), removeItem: (k: string) => void kept.delete(k), clear: () => kept.clear() };
 });
 
-import { getPinnedConversations, parsePinned, sidebarConversations, togglePinnedConversation, unpinAllConversations } from "./conversation-pins";
+import { getPinnedConversations, parsePinned, pinOrder, sidebarConversations, splitDirections, togglePinnedConversation, unpinAllConversations } from "./conversation-pins";
 import type { Session } from "./types";
 
 const conv = (id: string, updated: string) => ({ machine_id: "hub", session_id: id, updated_at: updated }) as Session;
@@ -45,9 +45,26 @@ describe("the sidebar's Persona chats", () => {
     expect(recent.map((c) => c.session_id)).toEqual(["b", "d"]);
   });
 
+  it("puts the hub's leaders first in their order, then this browser's pins, then the rest (#3623)", () => {
+    const order = pinOrder(["d", "b"], ["c", "b"]);
+    expect(order).toEqual(["d", "b", "c"]);
+    const { pinned, recent } = sidebarConversations(list, "main", order, 5);
+    expect(pinned.map((c) => c.session_id)).toEqual(["d", "b", "c"]);
+    expect(recent.map((c) => c.session_id)).toEqual(["a"]);
+    expect(pinOrder(undefined, ["c"])).toEqual(["c"]);
+  });
+
   it("keeps the open conversation after the newest ones", () => {
     const { recent } = sidebarConversations(list, "main", [], 2, "a");
     expect(recent.map((c) => c.session_id)).toEqual(["b", "c", "a"]);
+  });
+
+  it("leaves the list as it is when the open one is already shown, is the main one or is gone, and lists all without a main one (#2283)", () => {
+    const ids = (main: string | undefined, current?: string) => sidebarConversations(list, main, [], 2, current).recent.map((c) => c.session_id);
+    expect(ids("main", "b")).toEqual(["b", "c"]);
+    expect(ids("main", "main")).toEqual(["b", "c"]);
+    expect(ids("main", "gone")).toEqual(["b", "c"]);
+    expect(ids(undefined)).toEqual(["main", "b"]);
   });
 
   it("leaves the hub's automatic conversations out of 最近 unless pinned (#3264)", () => {
@@ -61,5 +78,15 @@ describe("the sidebar's Persona chats", () => {
     const { pinned, recent } = sidebarConversations(withOrigins, undefined, ["task"], 5);
     expect(pinned.map((c) => c.session_id)).toEqual(["task"]);
     expect(recent.map((c) => c.session_id)).toEqual(["wechat", "mine", "old"]);
+  });
+});
+
+describe("splitDirections", () => {
+  it("takes the leaders out of the pinned ones, in order, never the main conversation", () => {
+    const s = (session_id: string) => ({ session_id }) as Session;
+    const { directions, pinned } = splitDirections([s("d"), s("b"), s("c")], ["d", "b", "main"], "main");
+    expect(directions.map((c) => c.session_id)).toEqual(["d", "b"]);
+    expect(pinned.map((c) => c.session_id)).toEqual(["c"]);
+    expect(splitDirections([s("c")], undefined, "main").pinned).toHaveLength(1);
   });
 });

@@ -3,31 +3,18 @@ package persona.feature.machines
 import persona.core.contracts.api.UsageAccount
 import persona.core.contracts.api.UsageWindow
 import persona.core.contracts.parseTime
+import persona.core.domain.usage.windowMinutes
 import java.time.Instant
 import kotlin.math.ceil
-import kotlin.math.roundToInt
 
 /*
  * "Subscription limits" (#2432, docs/server/usage-windows.md, the web's lib/usage-windows.ts): the accounts the machines' agents are signed in
- * to, with how much of each window (5h, 7d …) is used, when it starts over and whether use is ahead of an even pace.
+ * to, with how much of each window (5h, 7d …) is used, when it starts over and whether use is ahead of an even pace. The rules
+ * ultracode's quota line shares (window lengths, live accounts, the caution line) are in core/domain's usage/UsageRules.kt.
  */
 
-/** Samples older than this are dropped: a source that went quiet for days says nothing about now. */
-internal const val SAMPLE_MAX_AGE_SECONDS = 3L * 24 * 3600
-/** From this used percentage a bar turns to the caution colour. */
-internal const val WARN_PERCENT = 80.0
 private const val PACE_QUIET_FRACTION = 0.05
 private const val PACE_TOLERANCE = 5.0
-
-/** The window's length in minutes from its label ("5h", "7d", "45m"); the given minutes when the label is not one. */
-internal fun windowMinutes(w: UsageWindow): Int {
-    val m = Regex("^(\\d+(?:\\.\\d+)?)\\s*([mhdw])$", RegexOption.IGNORE_CASE).find(w.label.trim())
-    if (m != null) {
-        val unit = when (m.groupValues[2].lowercase()) { "m" -> 1; "h" -> 60; "d" -> 1440; else -> 10080 }
-        return (m.groupValues[1].toDouble() * unit).roundToInt()
-    }
-    return w.windowMinutes.coerceAtLeast(0)
-}
 
 internal enum class PaceState { Over, Under, On }
 internal data class Pace(val expected: Double, val state: PaceState)
@@ -69,14 +56,6 @@ internal fun resetIn(resetsAt: String?, now: Instant, zone: java.time.ZoneId = j
     return if (days > 0) ResetIn.DaysHours(days, hours % 24) else ResetIn.Hours(hours)
 }
 
-/** The accounts worth showing: samples within three days, windows that have not reset, accounts that still have one. */
-internal fun liveAccounts(accounts: List<UsageAccount>, now: Instant): List<UsageAccount> = accounts.mapNotNull { a ->
-    val sampled = parseTime(a.sampledAt)
-    if (sampled != null && now.epochSecond - sampled.epochSecond > SAMPLE_MAX_AGE_SECONDS) return@mapNotNull null
-    val windows = a.windows.filter { w -> parseTime(w.resetsAt)?.isAfter(now) ?: true }
-    if (windows.isEmpty()) null else a.copy(windows = windows)
-}
-
 /**
  * The used percentage of an account's fullest window. A per-model allowance does not count while the plan's own windows
  * are there: one model running out is not the account running out.
@@ -96,4 +75,15 @@ internal fun planNote(a: UsageAccount): String {
     return if (plan.isNotEmpty() && !a.name.lowercase().contains(plan.lowercase())) plan else ""
 }
 
-internal fun isWarn(percent: Double) = percent >= WARN_PERCENT
+/**
+ * What the gateway could not do (docs/server/usage-windows.md): a key it turned away says where to fix it, since that is not a network
+ * problem (#1902). Null when nothing went wrong or the hub sends a reason this build doesn't know.
+ */
+internal fun problemText(problem: String?): Int? = when (problem) {
+    "rejected" -> R.string.machines_usage_problem_rejected
+    "unreachable" -> R.string.machines_usage_problem_unreachable
+    "failed" -> R.string.machines_usage_problem_failed
+    "error" -> R.string.machines_usage_problem_error
+    else -> null
+}
+

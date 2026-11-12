@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// The sidebar's Auto Chats (#3264, docs/protocol/protocol.md「助手对话的来源」): the conversations Persona opened by itself out of
+/// The sidebar's Auto Chats (#3264, docs/protocol/protocol.md「Origin of assistant chats」): the conversations Persona opened by itself out of
 /// Recent, by source; a hub that never says who opened them lists them as before.
 struct AutoConversationsTests {
     private func session(_ id: String, origin: String? = nil, state: String = "idle", title: String = "") throws -> Session {
@@ -68,5 +68,20 @@ struct AutoConversationsTests {
         #expect(AutoConversationSource.of("extension").name == "扩展")
         #expect(AutoConversationSource.of("whatever") == .other)
         #expect(AutoConversationSource.of("other") == .other)
+    }
+
+    /// External (#3758): only what an extension opened: Lark /agent with Lark's mark, any other extension with the
+    /// extensions symbol; the user's, a channel's, Persona's own and unknown origins are not.
+    @Test func externalIsWhatAnExtensionOpened() {
+        #expect(AutoConversationSource.external("lark_agent") == .larkAgent)
+        #expect(AutoConversationSource.external(" lark_agent ")?.brand == Theme.Brand.lark)
+        #expect(AutoConversationSource.external("extension") == .extensionSource)
+        #expect(AutoConversationSource.external("extension")?.brand == nil)
+        for origin in [nil, "", "user", "channel", "inbox", "task", "spawned", "something_new"] {
+            #expect(AutoConversationSource.external(origin) == nil, "\(origin ?? "nil")")
+        }
+        // The tests run in zh-Hans.
+        #expect(AutoConversationSource.larkAgent.from == "来自 飞书 /agent")
+        #expect(AutoConversationSource.extensionSource.from == "来自扩展")
     }
 }

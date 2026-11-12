@@ -1,7 +1,7 @@
 # Health space (#2691)
 
 Health-related chats are split out of the assistant's main chat into a separate **Health** space: its own entry point, its own chat directory, its own memory.
-The first version is modeled on ChatGPT Health and starts with the hub and the web (#2789); the iOS and Mac entry points then reuse the same APIs (#2901). Android does not have it yet.
+The first version is modeled on ChatGPT Health and starts with the hub and the web (#2789); the iOS and Mac entry points then reuse the same APIs (#2901). Android has a minimal entry (#4329): its health chats and a new health chat page.
 
 ## Why split it out
 
@@ -13,7 +13,7 @@ With a separate directory, Claude Code's per-directory auto memory, CLAUDE.md an
 
 | What ChatGPT Health does | What Persona v1 does | Later |
 | --- | --- | --- |
-| A separate Health entry in the sidebar (desktop) / menu (phone), opening an independent space ([1]) | A separate **Health** entry in the web sidebar, `/health`; **Health** in the iOS and Mac assistant sidebar | Health entry on Android |
+| A separate Health entry in the sidebar (desktop) / menu (phone), opening an independent space ([1]) | A separate **Health** entry in the web sidebar, `/health`; **Health** in the iOS, Mac and Android assistant sidebar | Android: the rest of the Health home (memory, reports, sources) |
 | Health home: recent data and trends, synced records, suggested questions, past health chats, connected accounts ([2]) | `/health` page: a one-line privacy note, data sources (Apple Health / Health Connect via the phone), suggested questions, past health chats, health memory | Recent trend cards on the home page (using the structured cards from #886) |
 | Health memory is stored separately and does not flow back into regular chats; users can view and delete it ([3]) | The Health space has its own directory and its auto memory belongs only to it; viewable and deletable on the web; the main chat's tools cannot see health chats | Give the Health space only health-related tools |
 | Talking about health in a regular chat suggests moving to Health ([4]) | Not done | Suggest "Continue in Health" when the main chat touches on health |
@@ -45,8 +45,10 @@ Sources:
   **Not blocked**: Bash can build the path in any number of ways (`cd .. && cat he*`), so matching command text cannot catch all of them; blocking it fully needs Claude Code's sandbox or OS-level isolation. When the main chat runs on Codex, this rule does not exist yet either.
   The memory API with `?space=health` reads and writes exactly this memory.
 - **node**: node recognizes the Claude project directory that corresponds to the health directory (`isAssistantProject` in `server/internal/node/sessions_offline.go`), and treats health chat transcripts as assistant chats, same as the assistant's.
-- **Which space**: in the session list the hub sends, every health chat carries `space: "health"` (`proto.Session.Space`, filled from cwd in `server/internal/hub/hub.go` and `server/internal/hub/assistant_link.go`);
+  A health chat is listed in the health directory however its model `cd`s (into `reports/`, `/tmp`, anywhere), running and at rest (#2368): Claude Code writes the shell's directory after a `cd` into every transcript line, so the node goes by where the chat started (its start record, else the transcript's first `cwd`, else its project directory's name; `readQuickMetaSince`, `assistantHome`).
+- **Which space**: a chat's space comes from the directory it started in; a `cd` into a subfolder or anywhere else does not move it. In the session list the hub sends, every health chat carries `space: "health"` (`proto.Session.Space`, filled from cwd in `server/internal/assistant/fleet_sessions.go`, `server/internal/assistant/fleet_routes.go` and `server/internal/hub/assistant_link.go`);
   the assistant's own chats do not have this field. To decide which space a chat belongs to, the assistant looks at `space` first and falls back to the directory (`spaceOf` in `server/internal/assistant/health.go`).
+  These classify, so they take the directory itself only (`identity.SpaceOf`, exact). What hides or confirms (below) also counts a directory inside a health space (`identity.InHealthSpace`): there, when in doubt, health is the safe side.
 
 ## API
 
@@ -87,7 +89,7 @@ The decision always depends on the chat's space (the trusted session directory),
 | --- | --- | --- |
 | Push: turn ended, `notify_user`, plan waiting for you to start, scheduled task failed | Only says "New in your health space. Open Persona to see it.", without the body, chat title or task name | `hub/machine.go` `doneAlert`, `assistant/tools.go`, `tasks.go`, `schedule.go` |
 | Phone local notification: `phone_notify` | The hub replaces the title and body with the same localized notice as `notify_user` before forwarding to the phone; no health content reaches the notification | `assistant/fleet_tools.go` `mcpCall`, `assistant/health.go` `healthNotice` |
-| Push for question / authorization cards | The lock screen likewise only says **Health**; the card content is viewed in the App | `hub/push_payload.go` `interactionPayloadIn` (looks at `ix.Cwd`) |
+| Push for question / authorization cards | The lock screen likewise only says **Health**; the card content is viewed in the App. A card is judged by its chat's directory: the node and then the manager place a card of an assistant chat in the chat's directory, not the hook's after a `cd` (`identity.CardCwd`, the manager's `placeCard` covers older nodes), and any directory inside a health space counts as health (`identity.InHealthSpace`, #2368) | `hub/push_payload.go` `interactionPayloadIn` (looks at `ix.Cwd`), `assistant/fleet_machines.go` `placeCard` |
 | Lark bot, plugin channels | Forwarded `notify_user` only says there is a new message; answers in a scheduled task's chat are not mirrored; "all cards" and "all questions" exclude health chat cards (the chat the channel itself is driving works as usual) | `assistant/feishu_cards.go`, `feishu_push.go`, `channels_plugin.go` |
 | `agent_send` / `agent_start` | Confirmed on the phone every time; the card states that once handed over, the record on the other side is not deleted with the Health space | `assistant/health.go` `confirmOutbound` |
 | `task_plan` | Never starts automatically; always waits for the user to tap start on the plan card | `assistant/tasks.go` |
@@ -99,10 +101,26 @@ Explicit reminders created with `phone_reminders_create` keep the user-requested
 
 Known limit: a gate proxy address does not know who calls it. A process in a health conversation could in principle learn the address of another conversation (another process of the same user has an environment that can be read), the same kind of gap as the Bash one under "How directories and memory are isolated": closing it needs the sandbox or OS-level isolation (see "Later").
 
+## Entering Health (#4329)
+
+Entering Health goes straight back to the latest health chat, with its context, as Codex does; **New** starts another. One rule on every client:
+
+- **Has history**: the sidebar's **Health** opens the open (not archived) health chat with the newest last activity (`updated_at`, the order the Health lists already use).
+  The list is `GET /api/v1/assistant?space=health` with the pushed sessions carrying `space: "health"` over it; no endpoint of its own.
+- **No history**: it opens the new health chat page (the Health home: input box, suggested questions, reports, memory, sources, privacy); the first message starts the chat, as **New Chat** does in the main space.
+  A list that cannot be read lands here too, where the list section says why.
+- **New**: a health chat's header has a **New** button that opens the new health chat page, whose **Health Chats** list has every past one; on the web a clock button next to it lists them as a menu as well.
+
+| Client | Where |
+| --- | --- |
+| Web | `/health` resumes and replaces itself (Back skips it); `/health/new` is the new chat page; `views/health/entry.ts` `healthEntry`, header buttons `HealthChatActions` in `views/health/Health.tsx`. Tests: `entry.test.ts`, `Health.conversation.test.tsx` |
+| iOS / Mac | the sidebar's **Health** runs `AssistantView.enterHealth` (`HealthModel.entry`); the top bar's **New Chat** in a health chat pushes the Health page (`HealthModel.newOpensHealth`). `-openAssistantPage health` / `-openShellPage health` still show the page itself. Tests: `HealthModelTests` |
+| Android | the assistant sidebar's **Health** (`HealthEntry.resolve`), see "Android entry point" below |
+
 ## Web entry point
 
-- A separate **Health** item in the sidebar opens `/health`.
-- Home: a one-line privacy note (chats and memory stay in the Health space, data is on your own hub, not a substitute for a doctor), data sources (Apple Health / Health Connect, via the phone's `phone_health_summary` / `phone_health_write_sample`; Persona must be open on the phone and authorized),
+- A separate **Health** item in the sidebar opens `/health`, which resumes the latest health chat ("Entering Health" above).
+- Home (`/health/new`, the new health chat page): a one-line privacy note (chats and memory stay in the Health space, data is on your own hub, not a substitute for a doctor), data sources (Apple Health / Health Connect, via the phone's `phone_health_summary` / `phone_health_write_sample`; Persona must be open on the phone and authorized),
   suggested questions (tap one to start a health chat with it), past health chats, health memory (view, delete).
 - Tapping a chat opens `/health/<id>`, the same chat page as other assistant chats.
 - Health chats no longer appear in the main chat's history list.
@@ -114,12 +132,20 @@ Verification image removed; see the associated PR.
 
 ## iOS and Mac entry points (#2901)
 
-- Entry: a **Health** row below **Knowledge** in the assistant sidebar (in the new shell's drawer it sits between **Knowledge** and **Machines**; in the Mac split-view list it is below **Scheduled Tasks**), pushing the Health page (`apple/Persona/Views/Assistant/HealthView.swift`, shared by iOS and Mac).
+- Entry: a **Health** row below **Knowledge** in the assistant sidebar (in the new shell's drawer it sits between **Knowledge** and **Machines**; in the Mac split-view list it is below **Scheduled Tasks**), opening the latest health chat, or the Health page when there is none ("Entering Health" above; `apple/Persona/Views/Assistant/HealthView.swift`, shared by iOS and Mac).
 - Health page: a one-line note, suggested questions (tap one to start a health chat with it), health chats (`GET /api/v1/assistant?space=health`, merged with pushed ones carrying `space: "health"`; swipe / right-click to archive),
   health memory (pushes the memory page `AssistantMemoryView(space: "health")`; view, edit and delete all carry `?space=health`), data sources, privacy. At the bottom is an input box; sending does `POST /api/v1/assistant/conversations` with `"space":"health"`, never set as the main chat.
 - Health chats that are started or tapped open in the Persona page's chat, the same chat page as other assistant chats; go back to the Health page via **Health** in the sidebar.
 - The sidebar's **Recent**, **Archived** and search do not list health chats (`AssistantLists` splits by `Session.assistantSpace`; health ones are in `AppModel.healthConversations`).
 - Screenshot arguments: `-tab assistant -openAssistantPage health` (new shell: `-openShellPage health`). Unit tests: `PersonaTests/HealthModelTests`.
+
+## Android entry point (#4329)
+
+- Entry: **Health** below **Knowledge** in the assistant drawer (not in demo mode). It opens the latest health chat or, with none, the new health chat page ("Entering Health" above; `feature/assistant/.../HealthEntry.kt`, `AssistantScreen.kt` `openHealth`).
+- New health chat page: the hero line, the input box and the space's past chats (newest first, tap to open). The first message starts the chat with `POST /api/v1/assistant/conversations?space=health` and `"space":"health"`, never `main`. The box takes no files (they would go to the main chat's machine, outside the Health space) and has no launcher picker.
+- In a health chat the top bar's new chat button reads **New health chat** and opens that page. Health chats pushed live (`space: "health"`) stay out of the main chat lists.
+- Requests carry `?space=health` on the URL, so the hub client sends no manager header: the space is the default manager's, as on the web.
+- Tests: `HealthEntryTest`, `HealthEntryScreenTest` (feature/assistant), `InboxAssistantTransportTest.theHealthSpaceListsAndStartsItsChatsByName`, `HubManagerHeaderTest`, `SpaceConversationsTest`.
 
 ## Charts (#3140)
 
@@ -129,14 +155,14 @@ Health answers are mostly a set of numbers, and a chart is faster to read than t
 | --- | --- | --- |
 | Per-day trends over the last 7 days (or longer): steps, sleep, weight, resting heart rate | `line` | Steps over the last 7 days |
 | Calories per meal (comparing a few items, calories burned per workout) | `bar` | Calories per meal today |
-| Daily calorie breakdown (how much each part takes of one total) | `stacked_bar` | Today's calories: breakfast / lunch / dinner / remaining |
+| Daily calorie breakdown (how much each part takes of one total) | `ring` (#3069; a `stacked_bar` card draws one bar and reads poorly for one day) | Today's calories: breakfast / lunch / dinner / remaining |
 | A single key metric | `stat` | Steps today |
 | Details (each food, each item on a lab report) | Markdown table | |
 
-- **Instructions**: in the Health space's CLAUDE.md (`server/internal/prompts/assistant/health_claude_md.md`, "Charts by default when discussing numbers"): pick per the table above, put the conclusion and key numbers in the text with the card after it, at most three cards at a time, and do not fill days with no data with 0.
-  `TestHealthClaudeMDTeachesCharts` checks that all four card types have examples and that every example is a card all clients can draw.
+- **Instructions**: in the Health space's CLAUDE.md (`server/internal/prompts/assistant/health_claude_md.md`, "讲数字默认配图表"): pick per the table above, put the conclusion and key numbers in the text with the card after it, at most three cards at a time, and do not fill days with no data with 0.
+  `TestHealthClaudeMDTeachesCharts` checks that all four card types (`line`, `bar`, `ring`, `stat`) have examples, that none is a `stacked_bar`, and that every example is a card all clients can draw.
 - **Web**: a health chat is the assistant's chat page (`ChatView`); code blocks are drawn as charts via `ui/AssistantCard.tsx` as before, with no separate implementation. What each client draws is governed by the cases in `schema/extension/examples/persona-card/` (web: `lib/assistant-view.test.ts`).
-- **Lark**: cards cannot draw charts, and the JSON in a code block is not an answer either, so before sending, the bot rewrites each `persona-card` as a line or two of numbers (`stat` as one bold number, `line` / `bar` as a ▁▃█ sparkline plus the individual numbers, `stacked_bar` as a small two-column table); see `docs/extensions/bots.md` ("Cards").
+- **Lark**: cards cannot draw charts, and the JSON in a code block is not an answer either, so before sending, the bot rewrites each `persona-card` as a line or two of numbers (`stat` as one bold number, `line` / `bar` as a ▁▃█ sparkline plus the individual numbers, `stacked_bar` / `ring` as a small two-column table); see `docs/extensions/bots.md` ("Cards").
 
 To see it: in the default mock hub (`python3 scripts/mock/mock_hub.py`, numbers are made up), the Health space's three chats "Sleep this week", "Step goal" and "What I ate today" all have charts.
 
@@ -152,7 +178,7 @@ Checkup reports are usually PDFs dozens of pages long. If only the chat history 
   (`proto.UploadDestHealth`). node stores it in the health directory's `reports/` (`originalname-YYYYMMDD-HHMMSS.ext`, 0700 / 0600, never expires; the computer's manager's health space: `health-<id>/` for another manager than the built-in one, `docs/assistant/managers.md` ("Directories on a computer"). Reports uploaded before the computer moved to another manager stay in the previous manager's space there: the new owner does not list them, and they show again if the computer moves back), and the path is inserted into the input box and sent with the message.
   Images are still sent as images (Claude looks at them directly) and are not saved to disk. The main chat cannot read `reports/`: it is inside the health directory denied by #3282.
 - **Record**: the health chat reads the original and writes a same-named `.md` next to it: report date (the exam date printed on the report), institution, type, a table of "Item | Result | Unit | Reference range | Abnormal",
-  values copied as in the original and "illegible" where unreadable, ending with the doctor's conclusions and advice. Photos sent directly in the chat get a record the same way. The procedure is in the health CLAUDE.md ("Data").
+  values copied as in the original and "illegible" where unreadable, ending with the doctor's conclusions and advice. Photos sent directly in the chat get a record the same way. The procedure is in the health CLAUDE.md (`server/internal/prompts/assistant/health_claude_md.md`, "数据").
 - **Compare**: when asked about "the past few years" or "compared with last year", it reads all records under `reports/`, merges the same item ("triglycerides" and "TG") and compares by date, drawn as a `line` card; originals without a record get one first.
 - **No approval every time**: the health chat's `--allowedTools` includes `Edit(//<health dir>/reports/**)` (`healthReportRules` in `node/healthdeny.go`), so writing records does not pop a confirmation on the phone;
   everywhere else in the health directory still asks according to the chat's permission mode. Claude Code matches only `Read` and `Edit` rules by path; `Edit(path)` covers every file-modifying tool, and `Write(path)` never matches,
@@ -162,16 +188,15 @@ Checkup reports are usually PDFs dozens of pages long. If only the chat history 
   photos are still sent as images, and videos still go to the temporary directory. A hub / node older than #4546 returns 400 / "unknown upload destination"; the App reports the upload failed, which goes away after updating the hub.
 - **Entry point (#4656)**: with only the input box's `+`, it is not obvious you can upload, so the Health page has an explicit **Upload a Checkup Report**: on the web below the home input box, on iOS / Mac at the front of **Try Asking**.
   Tapping it picks a PDF or images (images are also uploaded as files, with the original kept in `reports/` as well). Once everything is uploaded, a health chat starts automatically (`views/health/reports.ts`, `FileUploads.startAll`) with the paths in the first message;
-  it still starts if you leave the page mid-upload. To test the whole path: iOS launch argument `-showReportUpload <file name>` (on the mock hub, look for `POST …/files?dest=health` and `POST /api/v1/assistant/conversations`).
+  it still starts if you leave the page mid-upload. To test the whole path: iOS launch argument `-showReportUpload <file name>[,<file name>…]` (on the mock hub, look for `POST …/files?dest=health` and `POST /api/v1/assistant/conversations`); with `-showReportUploadMB <n>` each file is that big and stays on its way a while.
 - **View and delete (#4998)**: **Checkup Reports** on the Health page lists reports in `reports/` (`server/internal/node/healthreports.go`): an original and its same-named `.md` record count as one report; record-only reports (photos sent in chat) count too.
   View the structured record, open the original or delete. Deletion is permanent and removes both original and record; **content already mentioned in chats and health memory is not deleted with them**, as the confirmation explains. Names must identify a single regular file in `reports/`; symlinks, directories and `../` are rejected.
   On the web it is on the home page (`views/health/HealthReports.tsx`); iOS / Mac use a separate page (`HealthReportsView.swift`). An old node returns 409 `node_outdated`, which the page displays. APIs live in `server/internal/devices/healthreports.go`, forwarded by hub (`devicewire.Routes`).
   Screenshot arguments: `-openReportRecord YES` (open the first report's record directly), `-showReportDelete YES` (show delete confirmation directly), both starting from the reports page.
-- Not yet: Android (no Health space entry point yet).
+- Not yet: Android (its Health entry has no reports section and its box takes no files, #4329).
 
 ## Not in v1
 
-- Android entry point: will reuse the APIs above.
 - Packaging the diet-advice extension: another Agent is doing it.
 - Suggesting moving to the Health space when the main chat touches on health.
 - Migrating existing health content discussed in the main chat: not migrated; old memory stays in the assistant directory.
@@ -198,3 +223,27 @@ Checkup reports are usually PDFs dozens of pages long. If only the chat history 
   After changing `health_claude_md.md`, update the golden and review the diff (`docs/assistant/prompts.md`). Charts: `go test ./internal/assistant -run HealthClaudeMDTeachesCharts`, `go test ./internal/feishubot -run PersonaCards`.
 - Web: `cd web && npm test && npm run build`.
 - iOS / Mac: `PersonaTests/HealthModelTests` (lists and memory carry `space`, merging pushes, sidebar does not list health chats, new chats carry `space`); build `Persona` and `PersonaMac`.
+
+## Automatic workout reports (iOS)
+
+Settings → Health → Automatic workout reports is off by default. Enabling it requests
+HealthKit workout and heart-rate read access and records a consent timestamp. Opening
+or foregrounding the app uploads completed workouts lasting at least ten minutes
+whose start is after that timestamp. This version does not provide background
+HealthKit delivery. The device must reconnect to the same paired hub.
+
+Reports appear in the Health space using existing persona-card measurement cards,
+a minute-average heart-rate chart when available, and a brief interpretation. Missing
+measurements are omitted; route coordinates are not uploaded. Pace charts require
+measured splits and are not generated from the aggregate-only payload.
+
+The device atomically stores its HealthKit cursor with a bounded upload outbox.
+Failed uploads are retried on the next foreground visit, except a report the hub
+rejects as invalid (HTTP 400, 413 or 422): the same data gets the same answer, so
+the device drops it and keeps going, and Settings → Health says some workouts were
+skipped. Without that, one bad report would hold back every later workout. The hub
+accepts end times up to a day past its own clock, so ordinary clock drift between
+the phone and the hub is never a rejection. The assistant stores a
+workout UUID receipt in PostgreSQL so retries, restarts, and deletion of an old task
+do not recreate it. Turning the switch off clears the local pending uploads; already
+accepted reports may still complete. Re-enabling starts a new consent window.

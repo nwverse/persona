@@ -1,6 +1,6 @@
 # Lessons: terminal
 
-Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUDE.md`, "Lessons"; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or start a section if none fits.
+Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or start a section if none fits.
 
 - herdr `pane read --source recent` returns at most about 1000 lines (even with a larger --lines), has no offset or scrolling API, and does not persist them: terminal history can only be read in chunks within those 1000 lines; the transcript holds the complete history.
 - For keys that distinguish single tap / quick double tap / hold (terminal key-bar modifiers), do not track press and release with `DragGesture(minimumDistance: 0)`: it misses the second tap of a quick double tap
@@ -70,3 +70,8 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 A correct worktree creation result and a successful Agent reply do not prove that hooks belong to the same container. Check the provider session against Orca’s hook entry: a shared app-server daemon may keep the environment of its first terminal. For local Codex starts in Orca, probe the actual terminal executable and use `--no-daemon` when supported; retain explicit remote and already isolated launchers. Exercise the start helper as a process with old/new flag support, preserve the first prompt as one argument, and verify the live hook’s worktree ID before accepting automatic naming.
 
 - Codex compact layouts can place the model/path status and shortcut hints immediately below the composer with no blank separator. Bound the draft at the paired bottom footer, rather than assuming every indented line belongs to the input. Regress both an empty placeholder and genuine multiline drafts, including draft text that resembles footer hints; a false `input_draft` blocks remote messages, while dropping genuine input risks sending unfinished text.
+- A dialog read off the screen is read at whatever width the pane has, and the phone's terminal takeover narrows it to the phone's columns. Every row that is not part of what is asked (a countdown,
+  a warning) has to be recognised across the rows a narrow pane wraps it onto, or it goes into `rev`: Claude Code's "⚠ … will automatically block this request in 1:53, …" wrapped at 57 columns, its seconds
+  went into `rev`, and every answer was refused once the phone had opened the terminal (#5265). Claude Code also redraws its dialogs differently between builds (2.1.322 puts a `│` before each row of
+  the command, as before the warning). Check a parser change against real captures at several widths (120, 100, 57, 40) and a few seconds apart. Capture them from a throwaway `claude` in a private pty
+  with a VT emulator (pyte), with no Persona hooks and outside herdr: no card reaches anyone's phone, and the screen can be resized at will.

@@ -37,6 +37,7 @@ func (s *Service) triageInbox(ctx context.Context) {
 	b.mu.Unlock()
 	if len(todo) == 0 {
 		b.triaging.Unlock()
+		s.fileFoldersSoon(ctx)
 		s.handInbox(ctx)
 		return
 	}
@@ -59,17 +60,15 @@ func (s *Service) triageInbox(ctx context.Context) {
 			}(it)
 		}
 		wg.Wait()
+		s.fileFoldersSoon(ctx) // where the items go (inbox_folders.go), in its own background pass
 		s.handInbox(ctx)
 	}()
 }
 
-// triageOne asks the model about an item in the list whose content changed; when the model fails the item gets its
+// triage asks the model about an item in the list whose content changed; when the model fails the item gets its
 // fallback tier (and no summary). When its connection is held the item stays untriaged. An item without a fallback
-// (a connector's thing its rules leave to the model) keeps what it shows until a pass gets an answer. True when it
-// changed the item.
-func (s *Service) triageOne(ctx context.Context, it *InboxItem) bool { return s.triage(ctx, it) != nil }
-
-// triage is triageOne returning the change, settled (inbox_rollback.go); nil when the item was left as it was.
+// (a connector's thing its rules leave to the model) keeps what it shows until a pass gets an answer. It returns the
+// change, settled (inbox_rollback.go); nil when the item was left as it was.
 func (s *Service) triage(ctx context.Context, it *InboxItem) *inboxWrite {
 	last, v := s.askTriage(ctx, it, 90*time.Second)
 	if ctx.Err() != nil {
@@ -142,6 +141,11 @@ func (s *Service) askTriage(ctx context.Context, it *InboxItem, timeout time.Dur
 	b.mu.Lock()
 	last, input, rules := it.Last, b.triageInput(it), strings.TrimSpace(it.Rules)
 	b.mu.Unlock()
+	return last, s.triageModel(ctx, input, rules, timeout)
+}
+
+// triageModel asks the triage model about one item's prompt input under rules (its source's; "" the Inbox's).
+func (s *Service) triageModel(ctx context.Context, input, rules string, timeout time.Duration) (v triageVerdict) {
 	if rules == "" {
 		rules = s.inboxConfig(ctx).Rules
 	}
@@ -176,7 +180,7 @@ func (s *Service) askTriage(ctx context.Context, it *InboxItem, timeout time.Dur
 		v.state, v.why = triageFailed, i18n.T(l, "assistant-inbox_triage.failed")
 	}
 	v.err = err
-	return last, v
+	return v
 }
 
 // ruleTier is the fallback tier, without a model: people talking to me need me, groups are FYI, bots and lists are
@@ -294,7 +298,7 @@ type inboxReplyReq struct {
 
 // replySendID names one reply: the app's id for the send when it gave one, else the item, the text and the status
 // moves (the same reply asked again is the same send). Not the message it answers: a retry after new messages came
-// into the item (it stayed open, replyInboxAs) would go out again (#1828), as the derived Feishu clientId is.
+// into the item (it stayed open, replyInboxFrom) would go out again (#1828), as the derived Feishu clientId is.
 func replySendID(id, text, clientID string, changes []DocChange) string {
 	if validClientID(clientID) {
 		return namedClientID("send\n" + id + "\n" + strings.ToLower(clientID))
@@ -311,20 +315,11 @@ func replyInDoubt(err error) bool {
 		errors.As(err, &re) && re.Code == assistantwire.CodeAssistantInDoubt
 }
 
-// replyInbox sends text as the user's reply to the item's source — in the Feishu chat, a document's comments, a
-// Moments (company feed) post (the plugin that took Feishu over), a reply to the newest mail of the thread, a GitHub comment… (the
-// hub sends it) — and files the item as done, unless something new came into it while the reply was out.
-func (s *Service) replyInbox(ctx context.Context, id, text string, changes ...DocChange) (InboxItem, error) {
-	return s.replyInboxAs(ctx, id, text, "", changes...)
-}
-
-// replyInboxAs is replyInbox with the app's own id for the send (client_id): a retry of the same request is sent once.
-// Empty: one derived from the item and the text.
-func (s *Service) replyInboxAs(ctx context.Context, id, text, clientID string, changes ...DocChange) (InboxItem, error) {
-	return s.replyInboxDo(ctx, id, text, clientID, false, true, changes...)
-}
-
-// replyInboxFrom is replyInboxAs; fromCard: it is "Send" on a message card (sendFromCard), which does not reply to an
+// replyInboxFrom sends text as the user's reply to the item's source — in the Feishu chat, a document's comments, a
+// Moments (company feed) post (the plugin that took Feishu over), a reply to the newest mail of the thread, a GitHub
+// comment… (the hub sends it) — and files the item as done, unless something new came into it while the reply was
+// out. clientID is the app's own id for the send (client_id): a retry of the same request is sent once; empty, one is
+// derived from the item and the text. fromCard: it is "Send" on a message card (sendFromCard), which does not reply to an
 // item filed since (errInboxItemDone). Checked with the copy for the reply, so an item filed after sendFromCard
 // looked is not answered and keeps its mark (#4871).
 func (s *Service) replyInboxFrom(ctx context.Context, id, text, clientID string, fromCard bool, changes ...DocChange) (InboxItem, error) {

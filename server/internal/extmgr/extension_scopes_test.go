@@ -33,7 +33,7 @@ func serveScopedExtensionForTest() {
 		defer mu.Unlock()
 		_ = json.NewEncoder(w).Encode(map[string]any{"env": os.Getenv("PERSONA_HUB_TOKEN"), "env_url": os.Getenv("PERSONA_HUB_URL"),
 			"init": init.Token, "url": init.URL, "scopes": init.Scopes, "manager": os.Getenv("PERSONA_MANAGER"),
-			"init_manager": init.Manager})
+			"init_manager": init.Manager, "config": os.Getenv("PERSONA_PLUGIN_CONFIG")})
 	}))
 	_ = pserve.Serve(context.Background(), os.Stdin, os.Stdout, pserve.Program{ID: "scoped", Version: cmp.Or(os.Getenv("PERSONA_TEST_PLUGIN_VERSION"), "1.0.0"),
 		Init: func(_ context.Context, ip extension.InitializeParams, _ *pserve.Hub) (map[string]any, error) {
@@ -58,6 +58,7 @@ func scopedPackageAt(t *testing.T, perms, version string) string {
 	manifest := fmt.Sprintf(`{"manifest_version": 1, "id": "scoped", "name": "Scoped", "version": %q,
 		"engines": {"plugin_protocol": 1}, "runtime": {"command": {%q: "bin/scoped"}, "http": true},
 		"activation_events": ["on_startup"], "contributes": {"api": [{"id": "x", "prefix": "scopedx"}]},
+		"configuration": {"type":"object","properties":{"example":{"type":"string","title":"Example","default":"before-rpc"}}},
 		"permissions": {%s}}`, version, runtime.GOOS+"-"+runtime.GOARCH, perms)
 	_ = os.WriteFile(filepath.Join(dir, extension.ManifestFile), []byte(manifest), 0o644)
 	return dir
@@ -103,6 +104,9 @@ func TestExtensionScopedToken(t *testing.T) {
 	}
 	if got["url"] != hubLocalURL(h.cfg.Listen) || got["manager"] != "" || got["init_manager"] != "" {
 		t.Fatalf("the built-in manager's extension reaches the hub on this machine, and is told no manager: %v", got)
+	}
+	if got["config"] != `{"example":"before-rpc"}` {
+		t.Fatalf("configuration must reach the supervisor before initialize, without secrets: %v", got["config"])
 	}
 
 	// On the hub's own routes the hub asks the manager (extensions.authorize, with the route's pattern on its mux);
@@ -181,6 +185,7 @@ func TestHubScopesConsent(t *testing.T) {
 	scoped := extension.Permissions{Hub: []string{"kb.read"}}
 	full := extension.Permissions{HubAPI: true}
 	both := extension.Permissions{HubAPI: true, Hub: []string{"kb.read"}}
+	mode := extension.Permissions{Hub: []string{extension.ScopeAgentsPermissionMode}}
 	for _, c := range []struct {
 		name      string
 		have, ask extension.Permissions
@@ -193,6 +198,12 @@ func TestHubScopesConsent(t *testing.T) {
 		{"scopes do not cover the full token", scoped, full, false},
 		{"hub_api with scopes is the scopes", scoped, both, true},
 		{"from the full token to hub_api with scopes", full, both, true},
+		{"the full token covers itself", full, full, true},
+		{"the full token does not cover the permission mode", full, mode, false},
+		{"the full token does not cover the permission mode among others", full,
+			extension.Permissions{Hub: []string{"kb.read", extension.ScopeAgentsPermissionMode}}, false},
+		{"the permission mode covers itself", mode, mode, true},
+		{"other scopes do not cover the permission mode", extension.Permissions{Hub: extension.EveryScope()}, mode, false},
 	} {
 		if got := c.have.Covers(c.ask); got != c.covers {
 			t.Errorf("%s: Covers = %v", c.name, got)

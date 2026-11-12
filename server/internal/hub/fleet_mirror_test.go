@@ -11,6 +11,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/devices"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -60,6 +61,16 @@ func (d *mirrorDevices) List() []devices.Summary {
 		out = append(out, s)
 	}
 	return out
+}
+
+func (d *mirrorDevices) Summary(id string) (devices.Summary, bool) {
+	canon := d.Canonical(id)
+	for _, s := range d.List() {
+		if s.ID == canon {
+			return s, true
+		}
+	}
+	return devices.Summary{}, false
 }
 
 func (d *mirrorDevices) MachineResources(string) (*proto.Machine, *proto.MetricSample, *bool) {
@@ -114,6 +125,14 @@ func (d *mirrorDevices) ConnectedAt(id string) time.Time {
 func (d *mirrorDevices) Usage() assistantwire.UsageSummary {
 	return assistantwire.UsageSummary{Machines: []assistantwire.MachineUsage{}}
 }
+
+func (d *mirrorDevices) CapacitySnapshot(context.Context) proto.CapacitySnapshot {
+	return proto.CapacitySnapshot{}
+}
+
+func (d *mirrorDevices) SetAttention(link.Attention) {}
+
+func (d *mirrorDevices) LinkRang(context.Context, string, time.Duration) bool { return false }
 
 // mirrors are the tests' hubs' mirror devices.
 var mirrors sync.Map // *Hub → *mirrorDevices
@@ -175,6 +194,7 @@ func editSessions(m *Machine, edit func([]proto.Session) []proto.Session) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.sessions = edit(m.sessions)
+	m.raws, m.rawsOf = nil, keptList{} // edited in place maybe: no longer what the manager's bytes gave
 }
 
 // nodeAsks is a node's request on m as the manager takes it (devices.Options.Answer): the assistant's own, then the

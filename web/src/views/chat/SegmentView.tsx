@@ -1,34 +1,43 @@
-import { Fragment, memo, type ReactNode, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, Fragment, memo, type ReactNode, useContext, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { clock } from "../../lib/format";
-import { getSession, getState } from "../../lib/store";
-import { agentStatus, subagentFor } from "../../lib/tasks";
+import { stripCloseout } from "../../lib/closeout";
+import { getSession, getState, useStore } from "../../lib/store";
+import { withChildSessions } from "../../lib/child-cards";
+import { agentStatus, isNestedSubagentStep, nestedSubagentStatus, nestingKey, subagentFor, withNestedSubagents } from "../../lib/tasks";
 import { turnImages } from "../../lib/turn-images";
 import { TurnImages } from "./TurnImages";
-import { exchangeSteps, isLoopTick, isOwnMessage, supervisionTool, type Segment, type Step, type UserMessage } from "../../lib/turns";
+import { exchangeSteps, segmentIdentity, isLoopTick, isOwnMessage, type Context, type Segment, type UserMessage } from "../../lib/turns";
 import type { Item } from "../../lib/types";
-import { foldsHoldingCalls, planSteps, thinkingDurations, workBlocks, type ToolStep } from "../../lib/work-groups";
+import { planCardStep, workBlocks, type ToolStep, type WorkNode } from "../../lib/work-groups";
 import { NO_WORKFLOW_CALLS } from "../../lib/workflows";
 import { channelOf, useChannels } from "../../lib/channels";
 import { splitQuotes } from "../../lib/drafts";
 import { EASE } from "../../ui/atoms";
-import { ChannelMark } from "../../ui/ChannelMark";
+import { ChannelMark, OriginMark } from "../../ui/ChannelMark";
+import { externalFrom, type ExternalOrigin } from "../../lib/conversation-origins";
 import { Markdown } from "../../ui/Markdown";
 import { CardConversation, CardItem } from "../../ui/AssistantCard";
 import { cardReply } from "../../lib/assistant-blocks";
 import { InjectedHint, LoopTick, MergedBubble, PeerMessage } from "./Messages";
+import { ModelChangeDivider } from "./ModelChangeDivider";
 import { SourceMessage } from "./SourceMessage";
 import { ContextGroup } from "./ContextGroup";
+import { ForwardBlock } from "./ForwardCard";
 import { AttachedPhotos } from "./AttachedPhotos";
 import { useFullText } from "./FullText";
 import { FileCards, ReplyFiles } from "./FileCards";
+import { ReplyPorts } from "./PortChips";
 import { MessageActions } from "./MessageActions";
 import { QuoteStack } from "./Quote";
 import { PathText } from "../../ui/PathLinks";
 import { Thumb } from "./Steps";
 import { useFoldScroll } from "./fold-scroll";
 import { useChatContext } from "./chat-context";
+import { useFreshWords } from "./fresh-words";
 import { Icon } from "../../ui/icons";
 import { WorkGroup, WorkNodes, type WorkProps } from "./WorkGroup";
+import { TurnChanges, turnChangesHeight } from "./TurnChanges";
+import { turnChanges } from "../../lib/turn-changes";
 import { useCallSeeker } from "./jump";
 import { t } from "../../i18n";
 
@@ -38,18 +47,48 @@ export const BUBBLE_MAX_LINES = 14;
 const CHARS_PER_LINE = 30;
 /** A folded message: ten lines high, scrolling inside (the chat scrolls on at its top and end). */
 const FOLDED = "max-h-[10lh] overflow-y-auto";
+/** Characters to a line of a bubble narrower than any drawn (a phone's holds about 17 wide ones): a message within
+ *  BUBBLE_MAX_LINES even there is short in any bubble, and is not measured. */
+const NARROWEST_CHARS = 10;
 
 /** How many lines a message takes in its bubble, by its text (the bubble measures itself once drawn). */
 export function bubbleLines(text: string, perLine = CHARS_PER_LINE): number {
   return text.split("\n").reduce((n, l) => n + Math.max(1, Math.ceil([...l].length / perLine)), 0);
 }
 
+/** ModelChangeDivider's height as drawn (Chrome, 2026-11-12): its 8 px above and below, the chip's 4 px padding, 1 px
+ *  border and 16.5 px line (11 px text, the inherited 1.5). The exchange's 14 px gap comes on top. */
+export const MODEL_DIVIDER_HEIGHT = 42.5;
+
+/** A finished exchange's height in px before it is first drawn (content-visibility, docs/web/web.md "Long chats"), by
+ *  its text the way bubbleLines counts it: its bubble (folded past BUBBLE_MAX_LINES), its words at 2.5 times the
+ *  bubble's characters to a line (the column is wider, and Markdown's short and blank lines take less than a line), a
+ *  row for each other block, and the model change divider when it has one (`modelChange`). Once drawn it keeps its
+ *  own height. */
+export function segmentHeight(user: UserMessage | undefined, nodes: WorkNode[], modelChange = false): number {
+  // gap: the exchange's blocks stand 14 px apart (`gap-3.5`, cindy's msg-stream-items)
+  const line = 24, gap = 14, row = 28;
+  const lines = user ? bubbleLines(user.text) : 0;
+  let h = user ? (lines > BUBBLE_MAX_LINES ? 10 : lines) * line + 20 + (user.images.length ? 102 : 0) : 0;
+  for (const n of nodes) h += n.kind === "step" && n.step.kind === "text" ? bubbleLines(n.step.item.text ?? "", CHARS_PER_LINE * 2.5) * line : row;
+  if (modelChange) h += MODEL_DIVIDER_HEIGHT;
+  return Math.round(h + gap * Math.max(0, nodes.length + (user ? 1 : 0) + (modelChange ? 1 : 0) - 1));
+}
+
 /** `sendState`: a message not in the transcript yet (a sending bubble, the outbox's), marked for the sync scenarios
  *  (spec/fixtures/sync); the transcript's own bubbles have none. `starting`: the first message of a conversation still
  *  starting (the new-conversation page, #1697): drawn as it will be once sent, without actions (there is nothing yet to
  *  act on) and without "Sending…" (the page says it is preparing). */
-export function UserBubble({ msg, mid, sid, pending, sendState, starting }: { msg: UserMessage; mid: string; sid: string; pending?: boolean; sendState?: "sending" | "sent" | "failed"; starting?: boolean }) {
+/** `onDelete`: a message only on this device (a failed send): its menu ends in Delete, and it has no Rewind (it is not in
+ *  the transcript to go back to). */
+export function UserBubble({ msg, mid, sid, pending, sendState, starting, onDelete }: { msg: UserMessage; mid: string; sid: string; pending?: boolean; sendState?: "sending" | "sent" | "failed"; starting?: boolean; onDelete?: () => void }) {
   const own = isOwnMessage(msg);
+  // the message an extension opened the conversation with (#3758)
+  const { opening } = useChatContext();
+  const openedBy = opening && opening.id === msg.id ? opening.origin : undefined;
+  // forwards (#3899) are cards at the top of the bubble; the other contexts fold in the row above it
+  const forwards = msg.contexts.filter((c) => c.kind === "forward");
+  const contexts = forwards.length ? msg.contexts.filter((c) => c.kind !== "forward") : msg.contexts;
   return (
     <div className="ml-auto flex max-w-[488px] min-w-0 flex-col items-end gap-1.5 pl-[12%]" style={pending ? { animation: `fade-up 300ms ${EASE} both` } : undefined} data-user-bubble data-send-state={sendState} data-items={pending || starting ? undefined : [msg.id, ...msg.images.map((i) => i.id)].join(" ")}>
       {msg.images.length > 0 && (
@@ -60,20 +99,21 @@ export function UserBubble({ msg, mid, sid, pending, sendState, starting }: { ms
         </div>
       )}
       {msg.photos && <AttachedPhotos paths={msg.photos} mid={mid} sid={sid} />}
-      {msg.contexts.length > 0 && <ContextGroup contexts={msg.contexts} />}
+      {contexts.length > 0 && <ContextGroup contexts={contexts} />}
       {msg.files && <FileCards files={msg.files} mid={mid} />}
-      {msg.text &&
+      {(msg.text || forwards.length > 0) &&
         (starting ? (
-          <BubbleText text={msg.text} mid={mid} sid={sid} own={own} />
+          <BubbleText text={msg.text} forwards={forwards} mid={mid} sid={sid} own={own} />
         ) : pending ? (
-          <BubbleText text={msg.text} mid={mid} sid={sid} own={own} pending />
+          <BubbleText text={msg.text} forwards={forwards} mid={mid} sid={sid} own={own} pending />
         ) : (
-          <MessageActions text={msg.text} isUser ts={msg.ts} side messageId={msg.id} className="max-w-full">
-            <BubbleText text={msg.text} ts={msg.ts} mid={mid} sid={sid} own={own} />
+          <MessageActions text={msg.text} isUser ts={msg.ts} side messageId={onDelete ? undefined : msg.id} onDelete={onDelete}
+            images={msg.images} photos={msg.photos} className="max-w-full">
+            <BubbleText text={msg.text} forwards={forwards} ts={msg.ts} mid={mid} sid={sid} own={own} />
           </MessageActions>
         ))}
       {(pending || msg.queued) && <span className="text-[11px] text-ink-3">{pending ? t("chat-segmentview.sending") : t("chat-segmentview.queued")}</span>}
-      {!pending && !starting && <ChannelSource clientMsgId={msg.client_msg_id} />}
+      {!pending && !starting && <ChannelSource clientMsgId={msg.client_msg_id} openedBy={openedBy} />}
     </div>
   );
 }
@@ -81,7 +121,7 @@ export function UserBubble({ msg, mid, sid, pending, sendState, starting }: { ms
 /** The bubble's words, folded to ten lines past fourteen; the fold scrolls (the wheel, a trackpad, a finger), with a
  *  fade at its bottom while there is more (fold-scroll.ts). `pending` (still being sent): dimmed, the same fold. A
  *  leading `> ` block ("Quote") is a folded quote card at its top instead of `>` lines (Quote.tsx). */
-function BubbleText({ text: full, ts, mid, sid, own, pending }: { text: string; ts?: string; mid: string; sid: string; own: boolean; pending?: boolean }) {
+function BubbleText({ text: full, forwards, ts, mid, sid, own, pending }: { text: string; forwards?: Context[]; ts?: string; mid: string; sid: string; own: boolean; pending?: boolean }) {
   const fill = own ? "bg-user-bubble" : "bg-neutral-bubble";
   // a reply sent from a card (in an assistant conversation): its words, without the hub's tag, marked "From a card"
   const fromCard = useContext(CardConversation) ? cardReply(full) : undefined;
@@ -94,6 +134,11 @@ function BubbleText({ text: full, ts, mid, sid, own, pending }: { text: string; 
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el || open) return;
+    // short however narrow: no layout read (opening a long chat read every bubble's, each a forced layout)
+    if (bubbleLines(text, NARROWEST_CHARS) <= BUBBLE_MAX_LINES) {
+      setLong(false);
+      return;
+    }
     // its full height in lines (a fold's scrollHeight is all of it)
     const line = parseFloat(getComputedStyle(el).lineHeight) || 24;
     setLong(el.scrollHeight / line > BUBBLE_MAX_LINES + 0.5);
@@ -119,9 +164,10 @@ function BubbleText({ text: full, ts, mid, sid, own, pending }: { text: string; 
           {t("ui-assistantcard.from_card")}
         </span>
       )}
-      {split ? (
+      {split || forwards?.length ? (
         <div className={`flex max-w-full flex-col gap-1.5 rounded-[12px] ${fill} px-4 py-2.5 text-ink ${pending ? "opacity-60" : ""}`} title={clock(ts)}>
-          <QuoteStack blocks={split.quotes} mid={mid} sid={sid} />
+          {forwards?.map((c, i) => <ForwardBlock key={i} c={c} />)}
+          {split && <QuoteStack blocks={split.quotes} mid={mid} sid={sid} />}
           {words}
         </div>
       ) : (
@@ -138,9 +184,18 @@ function BubbleText({ text: full, ts, mid, sid, own, pending }: { text: string; 
   );
 }
 
-/** "From WeChat" under a message that came from a channel (its client_msg_id is `<channel>-…`, docs/extensions/channels.md). */
-function ChannelSource({ clientMsgId }: { clientMsgId?: string }) {
+/** "From WeChat" under a message that came from a channel (its client_msg_id is `<channel>-…`, docs/extensions/channels.md);
+ *  else, under the message an extension opened the conversation with, "From Lark /agent" / "From an extension" (#3758). */
+function ChannelSource({ clientMsgId, openedBy }: { clientMsgId?: string; openedBy?: ExternalOrigin }) {
   const via = channelOf(clientMsgId, useChannels());
+  if (!via && openedBy) {
+    return (
+      <span data-opened-by={openedBy} className="flex items-center gap-1.5 whitespace-nowrap text-[11px] text-ink-3">
+        <OriginMark origin={openedBy} size={14} decorative />
+        {externalFrom(openedBy)}
+      </span>
+    );
+  }
   if (!via) return null;
   return (
     <span className="flex items-center gap-1.5 whitespace-nowrap text-[11px] text-ink-3">
@@ -155,36 +210,60 @@ function ChannelSource({ clientMsgId }: { clientMsgId?: string }) {
 const ANSWER = "[&_.prose-j]:text-[length:var(--chat-body)]! [&_.prose-j]:leading-[1.6]!";
 
 /** What the agent said, without a bubble, the chat's body size (15, 16 on a phone) / 1.6. `fade`: it just came in, its
- *  words fade in once. Still streaming, it has the same menu (copy what is there so far, quote it).
+ *  words fade in once. Still streaming, it has the same right-click / long-press menu (copy what is there so far, quote
+ *  it); only a finished turn's last reply has the bar under it (`bar`, #5314).
  *  Memo'd: the chat context changes with every streamed item, so each SegmentView re-renders; a finished answer's
  *  props stay the same and it is skipped (#3024). */
-export const Answer = memo(function Answer({ item, streaming, mid, sid, fade }: { item?: Item; streaming?: string; mid?: string; sid?: string; fade?: boolean }) {
+export const Answer = memo(function Answer({ item, streaming, mid, sid, fade, noCloseout, bar, cut }: {
+  item?: Item;
+  streaming?: string;
+  mid?: string;
+  sid?: string;
+  fade?: boolean;
+  /** The card above the transcript shows its closeout (#3612): drawn without the raw block. */
+  noCloseout?: boolean;
+  /** The bar under it (ReplyBar): a finished turn's last reply, never narration in a work summary. */
+  bar?: boolean;
+  /** Its turn ended in a model error or an interruption right after these words (Segment.cut): cindy's line above them. */
+  cut?: boolean;
+}) {
   // a long answer the hub cut for the page: its start, and "View full text" under it
   const full = useFullText(streaming === undefined ? item : undefined, mid, sid);
-  const text = streaming ?? full.text;
+  const text = streaming ?? (noCloseout ? stripCloseout(full.text) : full.text);
   if (!text) return null;
   const cwd = mid && sid ? getSession(mid, sid)?.cwd : undefined;
   if (streaming !== undefined) {
     return (
       <MessageActions text={text}>
         <div className={ANSWER} data-answer="streaming">
-          <Markdown text={text} mid={mid} cwd={cwd} streaming />
+          <Markdown text={text} mid={mid} cwd={cwd} streaming lineBreaks />
         </div>
       </MessageActions>
     );
   }
   return (
-    <MessageActions text={text} ts={item?.ts} itemId={item?.id}>
+    <MessageActions text={text} ts={item?.ts} itemId={item?.id} bar={bar}>
+      {cut && <p className="mb-1 text-[13px] leading-[1.384615] text-ink-2" data-cut-short>{t("chat-messageactions.cut_short")}</p>}
       <div className={ANSWER} data-answer data-items={item?.id}>
         {/* the cards in it are this item's blocks (ui/AssistantCard.tsx): `<item id>/<n>` */}
         <CardItem.Provider value={item?.id ? { id: item.id, text } : null}>
-          <Markdown text={text} mid={mid} cwd={cwd} fade={fade || undefined} />
+          <Markdown text={text} mid={mid} cwd={cwd} fade={fade || undefined} lineBreaks />
         </CardItem.Provider>
       </div>
       {full.more}
       {mid && sid && <ReplyFiles text={text} mid={mid} cwd={cwd} />}
+      {mid && sid && <ReplyPorts text={text} mid={mid} sid={sid} cwd={cwd} />}
     </MessageActions>
   );
+});
+
+/** Freshness reaches only the single visible persisted text, not every paragraph hidden in its execution summary: it
+ *  reads its own id (fresh-words.ts), so a new reply renders these words, not every exchange. `done`: its turn is over,
+ *  so the words have the bar under them (cindy: never while the turn runs). */
+const LatestAnswer = memo(function LatestAnswer({ item, streaming, mid, sid, noCloseout, done, cut }: { item?: Item; streaming?: string; mid: string; sid: string; noCloseout?: boolean; done?: boolean; cut?: boolean }) {
+  const persisted = streaming === undefined ? item?.id : undefined;
+  const fresh = useFreshWords(mid, sid, persisted);
+  return <Answer item={item} streaming={streaming} mid={mid} sid={sid} fade={persisted ? fresh : undefined} noCloseout={noCloseout} bar={Boolean(done && persisted) || undefined} cut={cut} />;
 });
 
 export const SegmentView = memo(function SegmentView({
@@ -197,6 +276,8 @@ export const SegmentView = memo(function SegmentView({
   expandFold,
   beforeWords,
   trace,
+  offscreen,
+  busy,
 }: {
   seg: Segment;
   live: boolean;
@@ -212,33 +293,75 @@ export const SegmentView = memo(function SegmentView({
   beforeWords?: ReactNode;
   /** An opened supervision round shows its original input instead of the injected hint. */
   trace?: boolean;
+  /** A finished exchange before the last two: off screen it is not drawn (the `seg-cv` class), and the chat watches its
+   *  height through this (ChatView `watchSegment`, returning the unwatch) to keep the view still when it changes. */
+  offscreen?: (section: HTMLElement) => () => void;
+  /** The chat's last exchange while the chat is still at work (working, a message of yours on its way or being
+   *  answered): drawn finished for a moment when a send drops the live line, its words get no reply bar yet, so the
+   *  bar does not come and go (#5314). */
+  busy?: boolean;
 }) {
-  const { subagents, scope, workflowCalls = NO_WORKFLOW_CALLS, lineStyle } = useChatContext();
-  const steps = useMemo(() => planSteps(exchangeSteps(seg)), [seg]);
+  const { subagents, tasks, scope, workflowCalls = NO_WORKFLOW_CALLS, lineStyle, closeoutSegment, children } = useChatContext();
+  const own = useMemo(() => exchangeSteps(seg), [seg]);
+  // the subagents its subagents launched, each a card of its own by when it started (#5030); a trace shows the calls only.
+  // Keyed by what places them, not the list: that changes with every subagent's tokens and steps.
+  const nesting = trace ? "" : nestingKey(subagents);
+  // the child sessions that started during this exchange, each a card among its steps (#5120, lib/child-cards.ts)
+  const placed = trace ? undefined : children?.get(seg.id);
+  const steps = useMemo(
+    () => withChildSessions(nesting ? withNestedSubagents(own, subagents) : own, placed),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [own, nesting, placed],
+  );
   const turnStart = seg.user?.ts ?? seg.start;
-  const thinking = useMemo(() => thinkingDurations(steps, turnStart), [steps, turnStart]);
+  // one plan card per exchange, where its latest list was written (cindy); the other updates are rows
+  const plan = useMemo(() => planCardStep(steps), [steps]);
   const p = useMemo<WorkProps>(() => {
-    const agent = (s: ToolStep) => agentStatus(s.result, subagentFor(subagents, s.use), live);
-    return { mid, sid, scope, expandFold, agentStatus: agent, thinking, segment: seg.id, workflowCalls, trace, lineStyle, turnLive: live };
-  }, [mid, sid, scope, expandFold, subagents, live, thinking, seg.id, workflowCalls, trace, lineStyle]);
+    const agent = (s: ToolStep) =>
+      isNestedSubagentStep(s) ? nestedSubagentStatus(subagentFor(subagents, s.use)) : agentStatus(s.result, subagentFor(subagents, s.use), live, s.use.tool_use_id ? tasks.notes.get(s.use.tool_use_id) : undefined);
+    return { mid, sid, scope, expandFold, agentStatus: agent, segment: seg.id, workflowCalls, trace, lineStyle, turnLive: live, plan };
+  }, [mid, sid, scope, expandFold, subagents, tasks, live, seg.id, workflowCalls, trace, lineStyle, plan]);
+  const identity = segmentIdentity(seg);
   const nodes = useMemo(
-    () => workBlocks(steps, { live, turnStart, agentStatus: p.agentStatus, workflowCard: (s) => workflowCalls.known.has(s.use.tool_use_id ?? ""), keepTool: seg.supervision ? (s) => Boolean(supervisionTool(s.use.tool_name)) : undefined }),
-    [steps, live, turnStart, p.agentStatus, workflowCalls, seg.supervision],
+    () => workBlocks(steps, { live, turnStart, streaming: streaming !== undefined, identity }),
+    [steps, live, turnStart, streaming !== undefined, identity],
   );
   useCallSeeker(scope, nodes);
-  useWorkflowFolds(steps, workflowCalls.startedAt, expandFold);
   // the pictures the agent looked at this turn, between its work and its last words
   const images = useMemo(() => turnImages(seg, getState().machines.find((m) => m.id === mid)?.name), [seg, mid]);
-  // a finished exchange's last words (the run of them at its end) come after those pictures
+  // The text slot is fixed during the run and after completion. Streamed text replaces persisted narration.
   let cut = nodes.length;
-  for (let n = nodes[cut - 1]; !live && n?.kind === "step" && n.step.kind === "text"; n = nodes[cut - 1]) cut--;
+  const tail = nodes[cut - 1];
+  if (tail?.kind === "step" && tail.step.kind === "text") cut--;
+  const latest = nodes.at(-1);
+  const latestItem = latest?.kind === "step" && latest.step.kind === "text" ? latest.step.item : undefined;
+  // The card above the transcript shows this exchange's closeout (#3612): its last words are drawn without the raw
+  // block, and not at all when the block was all they said.
+  const noCloseout = closeoutSegment === seg.id && streaming === undefined;
+  const onlyCloseout = noCloseout && Boolean(latestItem?.text?.trim()) && !latestItem?.full_size && stripCloseout(latestItem?.text ?? "") === "";
   const working = live && (streaming === undefined || batchedWords) && !nodes.some((n) => n.kind === "group" && n.live);
   const liveRow = working && <WorkGroup g={{ kind: "group", id: `work-live-${seg.id}`, children: [], live: true, startedAt: Date.parse(turnStart ?? "") || undefined }} p={p} />;
   const imageStrip = images.length > 0 && <TurnImages images={images} mid={mid} sid={sid} cwd={getSession(mid, sid)?.cwd} />;
+  const box = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    const el = box.current;
+    return offscreen && el ? offscreen(el) : undefined;
+  }, [offscreen]);
+  const divided = Boolean(seg.modelChange);
+  // the files this finished Agent exchange changed (cindy's TurnChangesCard): its own edits, never a Persona
+  // conversation's (super rules 0 and 4), never while it runs, never in a supervision trace, and never when the page
+  // starts inside it (no message of the user's): edits before the page would be missing from its counts
+  const counted = !live && !trace && lineStyle === "agents" && Boolean(seg.user);
+  // the session's folder from the store, so the card follows it when it comes in after the transcript
+  const cwd = useStore(() => (counted ? getSession(mid, sid)?.cwd : undefined));
+  const changes = useMemo(() => (counted ? turnChanges(own, cwd) : null), [counted, own, cwd]);
+  const guess = useMemo(() => (offscreen ? ({ "--seg-est": `${segmentHeight(seg.user, nodes, divided) + (changes ? 12 + turnChangesHeight(changes) : 0)}px` } as CSSProperties) : undefined), [offscreen, seg.user, nodes, divided, changes]);
   return (
-    <section className="flex flex-col gap-3" data-segment>
-      {trace && seg.user?.rawInput ? <RawInjectedInput items={seg.user.rawInput} mid={mid} sid={sid} /> : seg.user && (seg.user.source ? <SourceMessage msg={seg.user} mid={mid} sid={sid} /> : seg.user.injected ? <InjectedHint msg={seg.user} sid={sid} /> : seg.user.parts ? <MergedBubble msg={seg.user} mid={mid} sid={sid} /> : seg.user.from ? <PeerMessage msg={seg.user} /> : isLoopTick(seg.user) ? <LoopTick msg={seg.user} /> : <UserBubble msg={seg.user} mid={mid} sid={sid} />)}
-      {/* while the agent works, its live work stays at the bottom */}
+    <section ref={box} className={offscreen ? "seg-cv flex flex-col gap-3.5" : "flex flex-col gap-3.5"} style={guess} data-segment>
+      {trace && seg.user?.rawInput && !seg.user.promptHidden && !seg.user.sourceInTrace ? <RawInjectedInput items={seg.user.rawInput} mid={mid} sid={sid} /> : seg.user && (seg.user.source ? <SourceMessage msg={seg.user} mid={mid} sid={sid} /> : seg.user.injected ? <InjectedHint msg={seg.user} sid={sid} /> : seg.user.parts ? <MergedBubble msg={seg.user} mid={mid} sid={sid} /> : seg.user.from ? <PeerMessage msg={seg.user} /> : isLoopTick(seg.user) ? <LoopTick msg={seg.user} /> : <UserBubble msg={seg.user} mid={mid} sid={sid} />)}
+      {/* the reply below came from another model than the one before it (cindy: after the message that started it) */}
+      {seg.modelChange && <ModelChangeDivider from={seg.modelChange.from} to={seg.modelChange.to} />}
+      {/* Work stays collapsed above the single latest-text slot. */}
       {live && <Fragment key="before-words">{beforeWords}</Fragment>}
       <WorkNodes nodes={nodes.slice(0, cut)} p={p} live={live} fade />
       {/* working with no run of steps going (its words just came, or nothing yet): the live group still shows, under an
@@ -246,9 +369,9 @@ export const SegmentView = memo(function SegmentView({
       {streaming === undefined && liveRow}
       {imageStrip}
       {!live && <Fragment key="before-words">{beforeWords}</Fragment>}
-      <WorkNodes nodes={nodes.slice(cut)} p={p} fade />
-      {streaming !== undefined && <Answer streaming={streaming} mid={mid} sid={sid} />}
       {streaming !== undefined && liveRow}
+      {(latestItem || streaming !== undefined) && !onlyCloseout && <div key="latest-text" data-latest-text><LatestAnswer item={latestItem} streaming={streaming} mid={mid} sid={sid} noCloseout={noCloseout || undefined} done={(!live && !busy) || undefined} cut={(!live && seg.cut) || undefined} /></div>}
+      {changes && <TurnChanges key="turn-changes" changes={changes} mid={mid} sid={sid} cwd={cwd} />}
     </section>
   );
 });
@@ -270,35 +393,4 @@ function RawInjectedText({ item, mid, sid }: { item: Item; mid: string; sid: str
       {full.more}
     </div>
   );
-}
-
-/** After a fold failed to come, the next try waits this long, doubling up to WORKFLOW_FOLD_RETRY_MAX_MS. */
-const WORKFLOW_FOLD_RETRY_MS = 5000;
-const WORKFLOW_FOLD_RETRY_MAX_MS = 60_000;
-
-/** A workflow run's call the hub folded into this exchange's work (the page counted back from the end, #3434): its steps
- *  are fetched, so the run's card comes out of the fold and stays in the open. Kept by this exchange as drawn now, not
- *  for the page: a transcript loaded again (another chat and back, a rewrite) mounts it afresh and brings the same fold
- *  back, which is fetched again. A fold that came is gone from the steps; one that failed is asked for again later. */
-function useWorkflowFolds(steps: Step[], calls: ReadonlyMap<string, number>, expandFold: (f: Item) => Promise<void>) {
-  const folds = useMemo(() => foldsHoldingCalls(steps, calls), [steps, calls]);
-  // asked for (on its way, or come: one that came back empty stays among the steps and is not asked for again)
-  const asked = useRef(new Set<string>());
-  const wait = useRef(WORKFLOW_FOLD_RETRY_MS);
-  const [retry, setRetry] = useState(0);
-  useEffect(() => {
-    for (const f of folds) {
-      if (asked.current.has(f.id)) continue;
-      asked.current.add(f.id);
-      expandFold(f).then(
-        () => void (wait.current = WORKFLOW_FOLD_RETRY_MS),
-        () => {
-          asked.current.delete(f.id);
-          const ms = wait.current;
-          wait.current = Math.min(ms * 2, WORKFLOW_FOLD_RETRY_MAX_MS);
-          window.setTimeout(() => setRetry((n) => n + 1), ms);
-        },
-      );
-    }
-  }, [folds, expandFold, retry]);
 }

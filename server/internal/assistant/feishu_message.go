@@ -107,7 +107,7 @@ func (s *Service) feishuMessage(ev feishubot.MessageEvent, st FeishuStatus, acti
 		content.Text = rest
 	}
 	if !content.Forward && s.acceptReply(ctx, msg.MessageID, content.Text, len(content.Media) > 0, msg.ParentID, msg.RootID) {
-		return // about a "Please verify" card (acceptance.go)
+		return // about a "Please verify" card (acceptance_reply.go)
 	}
 	if !content.Forward && len(content.Media) == 0 && s.botAnswerQuestion(ctx, msg.MessageID, content.Text, action, msg.RootID, msg.ParentID) {
 		return // the answer to the card waiting in this topic (feishu_text_answer.go)
@@ -157,6 +157,9 @@ func (s *Service) resolveBotTarget(ctx context.Context, t botTarget) (resolvedTa
 		}
 		if sess.SourceKind != "" && (sess.Capabilities == nil || !sess.Capabilities.Send) {
 			return resolvedTarget{}, errors.New(i18n.T(l, "assistant-feishu.agent_read_only", i18n.Args{"reason": sess.ReadOnlyReason}))
+		}
+		if stoppedAgent(sess) { // read-only (#4754)
+			return resolvedTarget{}, errors.New(i18n.T(l, "assistant-feishu.agent_stopped"))
 		}
 		return resolvedTarget{machine: d.ID, machineName: d.Name, session: sess, label: agentLabel(sess) + " · " + d.Name}, nil
 	default:
@@ -384,7 +387,7 @@ func (s *Service) botQuote(ctx context.Context, id string) (*prompts.BotQuote, [
 		return nil, nil
 	}
 	it := items[0]
-	c := feishubot.ParseContent(it.MsgType, it.Body.Content, nil)
+	c := feishubot.ParseContent(it.MsgType, it.Body.Content, it.MentionList())
 	who := "Persona"
 	if it.Sender.SenderType == "user" {
 		who = s.botName(ctx, it.Sender.ID)
@@ -408,7 +411,7 @@ func (s *Service) botForward(ctx context.Context, id string) string {
 		if it.UpperMessageID != id {
 			continue
 		}
-		c := feishubot.ParseContent(it.MsgType, it.Body.Content, nil)
+		c := feishubot.ParseContent(it.MsgType, it.Body.Content, it.MentionList())
 		text := c.Text
 		if text == "" {
 			text = "[" + it.MsgType + "]"

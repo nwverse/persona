@@ -13,9 +13,11 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -80,10 +82,43 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "office %s writes a %s file: -o %s\n", kind, ext, *out)
 		return 2
 	}
+	abs, err := filepath.Abs(*out)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	// Never over the input, however -o names it (`office docx notes.docx`, a link, another case of the name): that
+	// would read the document as Markdown and replace it with what that makes.
+	if outInfo, err := os.Stat(abs); err == nil {
+		if inInfo, err := os.Stat(in); err == nil && os.SameFile(inInfo, outInfo) {
+			fmt.Fprintf(stderr, "office %s would write over its input %s: give -o another file\n", kind, in)
+			return 2
+		}
+	}
 	src, err := os.ReadFile(in)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
+	}
+	// An Office file is a zip, never the text these are made from.
+	if bytes.HasPrefix(src, []byte("PK\x03\x04")) {
+		fmt.Fprintf(stderr, "office %s: %s is an Office file, not Markdown, JSON or CSV\n", kind, in)
+		return 2
+	}
+	// An earlier output (a file; a link is replaced, its target never opened) is replaced only if the user may write
+	// it, as writing into it was (cp refuses a read-only file too), and keeps its permissions. The probe does not
+	// truncate, so it changes nothing. It runs after the checks on the input, so their errors come first, and before
+	// the conversion, so a refused output costs no work.
+	var keep *os.FileMode
+	if st, err := os.Lstat(abs); err == nil && st.Mode().IsRegular() {
+		f, err := os.OpenFile(abs, os.O_WRONLY, 0)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		f.Close()
+		perm := st.Mode().Perm()
+		keep = &perm
 	}
 	dir := filepath.Dir(in)
 	if *title == "" {
@@ -106,8 +141,9 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	abs, _ := filepath.Abs(*out)
-	if err := os.WriteFile(abs, data, 0o644); err != nil {
+	// In one step (a temporary file beside it, renamed over it): a write that fails part way, on a full disk say,
+	// leaves the earlier file as it was. A link at -o is replaced, not written through.
+	if err := replaceFile(abs, data, keep); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
@@ -117,6 +153,53 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return printJSON(stdout, stderr, map[string]any{"file": abs, "bytes": len(data), "check": info})
+}
+
+// replaceFile writes path in one step: a temporary file beside it, synced, then renamed over it. A new file gets
+// 0644 less the umask, as os.WriteFile gives it; keep, when set, is the mode of the file it replaces.
+func replaceFile(path string, data []byte, keep *os.FileMode) error {
+	dir, base := filepath.Dir(path), filepath.Base(path)
+	var f *os.File
+	for i := 0; ; i++ {
+		// Named after the file (not hidden), as managerconf.WriteFileAtomic names its own. Not os.CreateTemp: it
+		// makes the file 0600, and a fixed chmod after it would ignore the umask.
+		name := filepath.Join(dir, base+".tmp-"+strconv.FormatUint(rand.Uint64(), 36))
+		var err error
+		if f, err = os.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644); err == nil {
+			break
+		}
+		if !errors.Is(err, os.ErrExist) || i == 99 {
+			return err
+		}
+	}
+	tmp := f.Name()
+	err := func() error {
+		if keep != nil {
+			if err := f.Chmod(*keep); err != nil {
+				return err
+			}
+		}
+		if _, err := f.Write(data); err != nil {
+			return err
+		}
+		return f.Sync()
+	}()
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	// The rename itself must survive a power cut too.
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		d.Close()
+	}
+	return nil
 }
 
 func printJSON(stdout, stderr io.Writer, v any) int {

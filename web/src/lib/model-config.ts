@@ -28,6 +28,8 @@ export interface ModelPurpose {
   name: string;
   group: string;
   kind: "api" | "launcher" | "plugin";
+  /** Read-only execution form; absent for direct API/plugin purposes and older hubs. */
+  launch?: "headless" | "engine";
   parent?: string;
   /** Owning category; a child with nonempty fields can still have its own editable record. */
   category_id?: string;
@@ -95,6 +97,17 @@ export function runtimeChoices(p: ModelPurpose, agent?: string): { id: string; l
 export const modelConfiguration = (manager?: string) => api<ModelConfigurationBody>("/model-config", { headers: manager ? { [MANAGER_HEADER]: manager } : undefined });
 export const modelPurpose = (id: string, manager?: string) => api<ModelPurposeBody>(`/model-config/purposes/${enc(id)}`, { headers: manager ? { [MANAGER_HEADER]: manager } : undefined });
 
+/** The catalog with the background supervisor's purpose in it (#5082, docs/assistant/model-config.md): the hub leaves it
+ *  out of the list it sends every client and answers it by its own id, so the page reads it apart and puts it right after
+ *  Main chat, which it follows. Unchanged when the hub has no such purpose (an older one), lists it itself, or has no
+ *  Main chat row. */
+export function withPurposeAfter(catalog: ModelConfigurationBody, purpose: ModelPurpose | undefined, after: string): ModelConfigurationBody {
+  if (!purpose || catalog.purposes.some((p) => p.id === purpose.id)) return catalog;
+  const at = catalog.purposes.findIndex((p) => p.id === after);
+  if (at < 0) return catalog;
+  return { ...catalog, purposes: [...catalog.purposes.slice(0, at + 1), purpose, ...catalog.purposes.slice(at + 1)] };
+}
+
 export function draftFor(p: ModelPurpose): ModelDraft {
   const runtime = runtimeChoices(p).length ? p.override?.runtime || p.effective?.runtime || "cli" : "";
   return { provider: p.override?.provider ?? "", model: p.override?.model ?? "", effort: p.override?.effort ?? "", runtime };
@@ -106,6 +119,12 @@ export function chooseProvider(draft: ModelDraft, provider: string): ModelDraft 
 
 export function supportsField(p: ModelPurpose, field: Exclude<keyof ModelDraft, "runtime">): boolean {
   return (p.fields ?? ["provider", "model"]).includes(field);
+}
+
+/** A use of Agents the hub lets the user set apart (Lark /agent, the AI twin): it says so with fields of its own, and
+ * follows Agents while they are empty. Other uses of a category have no fields and stay read-only. */
+export function agentsOverride(p: ModelPurpose): boolean {
+  return p.parent === "agent.new" && (p.fields ?? []).some((field) => field === "provider" || field === "model" || field === "effort");
 }
 
 export function modelPatch(p: ModelPurpose, draft: ModelDraft): Record<string, string | number | null> {
@@ -149,15 +168,4 @@ export function modelSummary(p: ModelPurpose, providers: ModelProvider[] = []): 
 /** The main chat's note when it asked for the Agent SDK and runs on the CLI (the session's `runtime_fallback`). */
 export function runtimeFallbackText(reason: string): string {
   return t("lib-model-config.runtime_fallback", { reason: reason.trim() });
-}
-
-export function purposeGroups(purposes: ModelPurpose[], query: string): [string, ModelPurpose[]][] {
-  const q = query.trim().toLocaleLowerCase();
-  const groups = new Map<string, ModelPurpose[]>();
-  for (const p of purposes) {
-    if (q && ![p.name, p.group, p.id, modelSummary(p)].some((s) => s.toLocaleLowerCase().includes(q))) continue;
-    const group = p.group || t("lib-model-config.group_misc");
-    groups.set(group, [...(groups.get(group) ?? []), p]);
-  }
-  return [...groups.entries()];
 }

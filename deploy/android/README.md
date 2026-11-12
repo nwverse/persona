@@ -22,10 +22,11 @@ to this queue authorizes signing for the configured application.
 The publisher independently verifies the APK, certificate and metadata. It uploads
 into a unique staging directory under the Hub's `apps/android`. A filesystem lock
 serializes publication: lower versions and same-version/different-hash packages are
-rejected. A complete content-addressed APK is flushed before atomically replacing
-`latest.json`. Previous APKs are retained. Build, signing or upload failure leaves
-the existing manifest and package usable. Never edit the manifest manually to
-force a downgrade.
+rejected. A complete content-addressed APK and its gzip copy (`<sha256>.apk.gz`,
+checked to decode to the APK; the Hub sends it to downloads that take gzip) are
+flushed before atomically replacing `latest.json`. Previous APKs and their copies
+are retained. Build, signing or upload failure leaves the existing manifest and
+package usable. Never edit the manifest manually to force a downgrade.
 
 ## Build host setup
 

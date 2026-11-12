@@ -14,7 +14,7 @@ import (
 // Workflow progress must reach the hub even when only its journal grows and the main turn stays stopped.
 func TestWorkflowPollPushesJournalProgress(t *testing.T) {
 	n, f, home := herdrNode(t)
-	const cwd = "/tmp/workflow-poll"
+	cwd := pollRepo(t)
 	sess := workflowPollSession(t, n, f, home, cwd, nil)
 	pushes, stop := pollNode(t, n)
 	defer stop()
@@ -37,7 +37,7 @@ func TestWorkflowPollPushesJournalProgress(t *testing.T) {
 // same tool called again included.
 func TestWorkflowPollPushesAgentTools(t *testing.T) {
 	n, f, home := herdrNode(t)
-	const cwd = "/tmp/workflow-poll-tools"
+	cwd := pollRepo(t)
 	call := func(id, tool, input string) string {
 		return edgeReply(id, time.Now().UTC().Format(time.RFC3339), "model-a", `[{"type":"tool_use","id":"`+id+`","name":"`+tool+`","input":`+input+`}]`,
 			`{"input_tokens":10,"output_tokens":1}`)
@@ -70,20 +70,50 @@ func TestWorkflowPollPushesAgentTools(t *testing.T) {
 	}
 }
 
+// A retried agent reaches the hub although no count changes (#2323): the stalled attempt and its retry both run, and
+// neither has called a tool yet, so only the agents' ids tell the lists apart. Clients would keep linking the
+// replaced attempt otherwise.
+func TestWorkflowPollPushesRetriedAgent(t *testing.T) {
+	n, f, home := herdrNode(t)
+	cwd := pollRepo(t)
+	sess := workflowPollSession(t, n, f, home, cwd, nil)
+	pushes, stop := pollNode(t, n)
+	defer stop()
+	ids := func(s proto.Session) string {
+		var out []string
+		for _, a := range s.Workflows[0].Agents {
+			out = append(out, a.ID)
+		}
+		return strings.Join(out, ",")
+	}
+	before := nextWorkflowPush(t, pushes, 5*time.Second)
+	if got := ids(before); got != "a1,a2" {
+		t.Fatalf("initial agents: %s", got)
+	}
+	appendFile(t, filepath.Join(sess, "subagents", "workflows", "wf_poll", "journal.jsonl"),
+		`{"type":"started","key":"v2:first","agentId":"a3","label":"review:first","phase":"Review"}`+"\n")
+	after := nextWorkflowPush(t, pushes, 3*time.Second)
+	w := after.Workflows[0]
+	if got := ids(after); got != "a2,a3" || w.AgentsStarted != 2 || w.AgentsRunning != 2 {
+		t.Fatalf("after the retry: agents %s, %+v", got, w)
+	}
+}
+
 // workflowPollSession is a stopped session of n's whose turn launched the workflow run wf_poll, two agents started;
 // agents are the transcripts of those that have one. It returns the session's directory.
 func workflowPollSession(t *testing.T, n *Node, f *fakeHerdr, home, cwd string, agents map[string]string) string {
 	t.Helper()
 	at := time.Now().Add(-time.Minute)
 	stamp := at.UTC().Format(time.RFC3339)
+	cwdJSON, _ := json.Marshal(cwd)
 	tp := writeTranscript(t, home, cwd, sidA, at,
-		`{"type":"user","timestamp":"`+stamp+`","cwd":"`+cwd+`","message":{"role":"user","content":"Review this project"}}`,
+		`{"type":"user","timestamp":"`+stamp+`","cwd":`+string(cwdJSON)+`,"message":{"role":"user","content":"Review this project"}}`,
 		`{"type":"assistant","uuid":"a1","timestamp":"`+stamp+`","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu1","name":"Workflow","input":{"name":"review"}}]}}`,
 		`{"type":"user","uuid":"u1","timestamp":"`+stamp+`","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu1","content":"Workflow launched in background. Task ID: wt1\nSummary: Review\nRun ID: wf_poll\n"}]}}`,
 		`{"type":"system","subtype":"turn_duration","durationMs":1000,"pendingWorkflowCount":1,"timestamp":"`+stamp+`"}`)
 	sess := strings.TrimSuffix(tp, ".jsonl")
-	writeRun(t, sess, "wf_poll", `{"type":"started","agentId":"a1","label":"review:first","phase":"Review"}`+"\n"+
-		`{"type":"started","agentId":"a2","label":"review:second","phase":"Review"}`+"\n", nil, time.Minute)
+	writeRun(t, sess, "wf_poll", `{"type":"started","key":"v2:first","agentId":"a1","label":"review:first","phase":"Review"}`+"\n"+
+		`{"type":"started","key":"v2:second","agentId":"a2","label":"review:second","phase":"Review"}`+"\n", nil, time.Minute)
 	for id, body := range agents {
 		if err := os.WriteFile(filepath.Join(sess, "subagents", "workflows", "wf_poll", "agent-"+id+".jsonl"), []byte(body), 0o600); err != nil {
 			t.Fatal(err)

@@ -2,7 +2,8 @@
 package sessionorigin
 
 import (
-	"github.com/nwverse/persona/server/internal/host"
+	"strings"
+
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -10,13 +11,15 @@ import (
 // sessionSource rule. SourceKind describes transport, not pane/host origin.
 // Desktop markers take precedence even when a row also carries a terminal pane.
 func Of(s proto.Session) string {
-	if s.SpaceKind == "codex_app" || s.Host == "paseo" || (s.SourceKind == "runtime" && s.SourceInstanceID == "orca") {
+	if s.SpaceKind == "codex_app" || s.Host == "paseo" || s.Host == "cindy" || (s.SourceKind == "runtime" && s.SourceInstanceID == "orca") {
 		return "desktop"
 	}
 	if s.PaneID == "" {
 		return "unknown"
 	}
-	if host.ParsePane(s.PaneID).Kind == host.Botmux {
+	// A stored pane names its host before ":" (host.ParsePane). Read here so the hub, which links this package, does
+	// not link the manager-side host package (depguard).
+	if kind, _, ok := strings.Cut(s.PaneID, ":"); ok && kind == "botmux" {
 		return "feishu"
 	}
 	return "terminal"

@@ -71,7 +71,8 @@ func TestExtensionIdentityCommittedOwnerAliasAndRetiredToken(t *testing.T) {
 	if err := reg.SetSecret(context.Background(), "example-helper", "api_key", "fixture-secret", "test"); err != nil {
 		t.Fatal(err)
 	}
-	if err := reg.SetConfig(context.Background(), "example-helper", json.RawMessage(`{"computers":["configured-node"]}`), "test"); err != nil {
+	// gone-node: picked once, no longer one of the hub's computers; it never blocks the rename (#2510).
+	if err := reg.SetConfig(context.Background(), "example-helper", json.RawMessage(`{"computers":["configured-node","gone-node"]}`), "test"); err != nil {
 		t.Fatal(err)
 	}
 	u := h.extensionUpgrades()
@@ -96,12 +97,21 @@ func TestExtensionIdentityCommittedOwnerAliasAndRetiredToken(t *testing.T) {
 	if code != 200 || rename["rename_from"] != "example-helper" {
 		t.Fatalf("rename preview: %d %+v", code, rename)
 	}
-	// A configured node that cannot be reached must not let the identity commit.
+	// A configured node that cannot be reached must not let the identity commit, and the refusal names it.
+	configured, _ := extensionNodeMachine(t, h, "configured-node", "linux", "amd64", false)
+	configured.mu.Lock()
+	configured.online = false
+	configured.mu.Unlock()
 	code, blocked := call(t, mux, "POST", "/api/v1/extensions/-/install", phone, fmt.Sprintf(`{"preview_id":%q,"permissions_digest":%q}`, rename["preview_id"], rename["permissions_digest"]))
 	if code == 200 || reg.GetExact("example-helper") == nil || reg.GetExact("renamed-helper") != nil {
 		t.Fatalf("unready node allowed identity commit: %d %+v", code, blocked)
 	}
-	_, _ = extensionNodeMachine(t, h, "configured-node", "linux", "amd64", false)
+	if msg, _ := blocked["error"].(string); !strings.Contains(msg, "configured-node") || strings.Contains(msg, "gone-node") {
+		t.Fatalf("refusal does not name only the configured computer: %+v", blocked)
+	}
+	configured.mu.Lock()
+	configured.online = true
+	configured.mu.Unlock()
 	code, rename = call(t, mux, "POST", "/api/v1/extensions/-/catalog/preview", phone, fmt.Sprintf(`{"market":%q,"extension":"renamed-helper"}`, mid))
 	if code != 200 {
 		t.Fatalf("ready rename preview: %d %+v", code, rename)
@@ -233,6 +243,11 @@ type fakeGitHub struct {
 	release string
 	storage string // where release assets redirect to: another host
 	stall   bool   // assets send half and then nothing (a download that stalls)
+	// hold: assets send half, then the rest once it is closed (a slow download); assetGets counts their requests and
+	// assetStops those of them whose client went away while held.
+	hold       chan struct{}
+	assetGets  int
+	assetStops int
 }
 
 func (g *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -245,6 +260,22 @@ func (g *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(r.URL.Path, "/s3/") {
 		g.leaked = g.leaked || auth != ""
 		b := g.assets[strings.TrimPrefix(r.URL.Path, "/s3/")]
+		g.assetGets++
+		if hold := g.hold; hold != nil {
+			g.mu.Unlock()
+			defer g.mu.Lock()
+			_, _ = w.Write(b[:len(b)/2])
+			w.(http.Flusher).Flush()
+			select {
+			case <-hold:
+				_, _ = w.Write(b[len(b)/2:])
+			case <-r.Context().Done():
+				g.mu.Lock()
+				g.assetStops++
+				g.mu.Unlock()
+			}
+			return
+		}
 		if g.stall {
 			g.mu.Unlock()
 			_, _ = w.Write(b[:len(b)/2])

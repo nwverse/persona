@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/screen"
+	"github.com/nwverse/persona/server/internal/shellcmd"
 )
 
 func newUUID() string {
@@ -31,15 +31,20 @@ func newUUID() string {
 // after the directory is reused or created.
 // tabName names the herdr tab (hub picks one from the first message when the user gave none); empty: agent-<n>.
 // newID is the id a new session gets (startAsync picked it already); empty: a fresh one.
-// agentType is the agent the user picked for the launcher (claude, codex, traex); empty: what the launcher runs.
-func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspaceID, mode, effort, tabName, newID, agentType string, options ...modelExecution) (*proto.Session, error) {
+// agentType is the agent the user picked for the launcher (claude, codex, traex, omp); empty: what the launcher runs.
+func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspaceID, mode, effort, tabName, newID, agentType string, options ...modelExecution) (_ *proto.Session, startErr error) {
 	execution := executionOption(options)
 	if err := execution.check(); err != nil {
 		return nil, err
 	}
+	if execution.SecretTicket != "" && resume != "" { // a hand-off goes only to a new start (secretenv.go)
+		return nil, refusal(secretEnvAgentCode, secretEnvAgentText, nil)
+	}
 	if resume != "" && validID(resume) && n.codexPath(resume) != "" && !n.isAssistantSession(resume) {
 		if _, live := n.agent(resume); !live { // a Codex thread nothing runs (codex_resume.go)
-			return n.resumeCodexSession(ctx, resume, launcher, prompt)
+			return n.resumeCodexSession(ctx, resume, launcher, prompt, mode)
+		} else if mode == "plan" {
+			return nil, readonlyStartUnsupported() // CLI flags cannot constrain a process that is already running.
 		}
 	}
 	if resume != "" && n.externalCodex(resume) {
@@ -53,8 +58,49 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	if kind == "" {
 		kind = launcherAgentType(launcher)
 	}
-	if kind != "claude" && kind != "codex" && kind != traexAgent {
+	if kind != "claude" && kind != "codex" && kind != traexAgent && kind != ompAgent {
 		return nil, fmt.Errorf("unsupported agent type %q", kind)
+	}
+	if execution.SecretTicket != "" {
+		if err := n.secretStartProblem(kind, launcher, resume, execution.SecretTicket); err != nil {
+			return nil, err
+		}
+		defer func() { // this start took the ticket: failed, nothing else may fetch its values (secretenv.go)
+			if startErr != nil {
+				n.handoffs().take(execution.SecretTicket, false)
+			}
+		}()
+	}
+	if kind == ompAgent { // start_agent.go: omp's own command, and none of a Claude start's options
+		if launcher != ompAgent {
+			// Only the launcher named omp is known to run omp: another one (a Codex launcher, a provider of no omp
+			// command) would type something else into the pane and get the first message.
+			return nil, fmt.Errorf("omp starts only with the launcher named omp, not %q", launcher)
+		}
+		if execution.Model != "" || mode != "" || effort != "" || wantsUltracode(execution.Ultracode) {
+			return nil, refusal("omp_options", ompOptionsRefusal, nil)
+		}
+		if resume != "" {
+			if a, ok := n.agent(resume); ok {
+				return n.sessionFor(resume, a), nil // already running
+			}
+			// A stopped omp has no session file here yet: refuse rather than guess which conversation to resume.
+			return nil, refusal("omp_resume_unknown", "这个 omp 会话找不到会话文件，请在电脑上恢复，这次没有发送。", nil)
+		}
+	}
+	argv, codex := n.codexLauncher(ctx, launcher)
+	if codex && execution.SecretTicket != "" { // Codex would start without the values (secretenv.go)
+		return nil, refusal(secretEnvAgentCode, secretEnvAgentText, nil)
+	}
+	if mode == "plan" {
+		if codex && kind != traexAgent {
+			if argv, err = n.codexReadonlyArgs(launcher, argv, mode); err != nil {
+				return nil, err
+			}
+		} else if kind != "claude" {
+			// This launcher path has no verified read-only argument mapping.
+			return nil, readonlyStartUnsupported()
+		}
 	}
 	if err := n.checkUltracodeStart(ctx, execution.Ultracode, kind); err != nil {
 		return nil, err
@@ -70,6 +116,10 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	}
 	if resume != "" {
 		if a, ok := n.agent(resume); ok {
+			if mode == "plan" && a.Agent == "codex" {
+				return nil, readonlyStartUnsupported() // A live thread without a local rollout cannot acquire CLI flags either.
+			}
+			n.starts.recovered(resume)
 			return n.sessionFor(resume, a), nil // already running
 		}
 		// A claude still alive on the session (Claude's desktop app, another terminal, suspended there) refuses: two
@@ -86,8 +136,8 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		}
 	}
 
-	// New sessions start in the host the start named, else the default host (herdr-core cannot start them).
-	launch, err := hostCapFor[host.Launcher](n, n.startKind(ctx))
+	// New sessions start in the host the start named, else the default host.
+	launch, err := n.launcherFor(n.startKind(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -96,8 +146,13 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		if ws, err = n.workspaceFor(ctx, launch, cwd); err != nil {
 			return nil, err
 		}
+	} else if _, ok := launch.(*herdrHost); ok {
+		// A start into a workspace it names (a task's worktree) brings back a herdr server that stopped since, as
+		// workspaceFor does for the others: an agent always runs in the engine's terminal (#4754). What herdr then says
+		// is reported as before.
+		_ = n.ensureHerdr(ctx, "start a session in a workspace")
 	}
-	if argv, ok := n.codexLauncher(ctx, launcher); ok && kind != traexAgent { // codex_start.go
+	if codex && kind != traexAgent { // codex_start.go
 		if resume != "" { // a Codex thread is resumed above: this id is not one
 			return nil, refusal(codexResumeRefused, "找不到这个 Codex 会话的记录，没法接着它：请在电脑上恢复（codex resume）。", nil)
 		}
@@ -105,9 +160,10 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 			argv = append(withoutModelArgs(argv), "--model", execution.Model)
 		}
 		if execution.Effort != "" {
-			return nil, errors.New("新建 Codex 的思考强度由其启动器管理，请将此用途的思考强度恢复继承")
+			// The purpose's explicit effort takes precedence over launcher defaults.
+			argv = append(argv, "-c", "model_reasoning_effort="+execution.Effort)
 		}
-		return n.startCodex(ctx, launch, cwd, launcher, argv, prompt, ws, tabName)
+		return n.startCodex(ctx, launch, cwd, launcher, argv, prompt, ws, tabName, mode)
 	}
 	if kind != "claude" { // start_agent.go
 		if mode != "" || effort != "" {
@@ -139,43 +195,63 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	if resume != "" && n.transcriptPath(id) != "" {
 		args = "--resume " + id
 	}
+	planThen := planThenOf(mode, execution.PlanThen)
 	// Persona's hooks: a plugin, or in --settings for a claude that loads none (hooksplugin.go).
 	settings, hooks := n.claudeStartSettings(ctx, launcher, "claude", cwd)
 	spec := claudeLaunch{Launcher: launcher, Settings: settings, Hooks: hooks, Display: n.liveRepliesPlugin(hooks), Model: execution.Model,
 		Plugins: n.claudeLoadsPlugins(ctx)}
 	// herdr told it is Claude (hostherdr.go): a launcher that wraps another binary is otherwise not seen as one. The
 	// node's directory in front, the assistant's environment left out (agentenv.go).
-	shells := paneShells(ctx)
-	cmd := withHerdrAgent(typedHerdrAgent(launch, "claude", shells...), n.claudeCommandLine(spec, args+modeFlags(mode, effort), shellQuote))
+	shells := paneShells(ctx, created)
+	line := n.claudeCommandLine(spec, args+modeFlags(mode, effort)+planThenFlags(mode, planThen), shellQuote)
+	if execution.SecretTicket != "" { // through personad launch --ticket; the spec herdr resumes with keeps none (secretenv.go)
+		line = n.withSecretTicket(line, launcher, execution.SecretTicket, shellQuote)
+	}
+	cmd := withHerdrAgent(typedHerdrAgent(launch, "claude", shells...), line)
 	cmd = n.agentCommand(cmd, shellQuote, shells...)
-	st := sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: time.Now().UTC(), Model: execution.Model, ModelFingerprint: execution.Fingerprint}
+	if cdFirst(ctx) { // a launcher switch in a shell that is not in the conversation's folder (launcher_switch.go)
+		cmd = cdThen(cwd, cmd, shells...)
+	}
+	n.notePaneStart(launcher) // not in the agent sandbox unless a managed launcher (agentsandbox.go)
+	st := sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: time.Now().UTC(), Model: execution.Model, ModelFingerprint: execution.Fingerprint,
+		PlanThen: planThen}
 	if prev, ok := n.state.get(id); ok && resume != "" {
 		if !prev.StartedAt.IsZero() { // a branch (fork.go) has none: it starts now
 			st.StartedAt = prev.StartedAt
 		}
 		st.Ultracode = prev.Ultracode
+		// A switch to another launcher still waits for the next message (launcher_switch.go): a Resume on the launcher
+		// the agent ran on keeps it; the switch's own start leaves it for the switch to clear.
+		st.PendingSwitch = prev.PendingSwitch
 	}
 	n.state.put(id, st)
 	n.noteModes(id, mode, effort) // shown before the first prompt writes them down
-	// Give the fresh shell a moment to load ~/.zshrc; typed input is buffered either way.
-	time.Sleep(300 * time.Millisecond)
+	// The fresh shell at rest first: a question its startup files ask would eat the typed line's head (#2570).
+	if err := n.settleShell(ctx, pane); err != nil {
+		return nil, n.startTabFailed(ctx, launch, created, ws, id, err)
+	}
 	n.beginUltracodeProcess(id, resume != "", true, time.Now())
-	done, err := n.runAgentCommand(ctx, launch, created, ws, id, cmd, shells...) // typedstart.go
+	typed, err := n.typeStart(ctx, launch, created, ws, id, cmd, shells...) // typedstart.go
 	if err != nil {
 		return nil, err
 	}
-	a, err := n.waitReady(ctx, pane, n.probeFor(ctx, id, launcher, shells))
-	done()
-	if err != nil {
-		screen, _ := n.readPane(ctx, pane, "recent-unwrapped", 30)
-		// Close the tab: a claude that comes up after we gave up would sit there unbound, and a retry opens another.
-		n.closeNewTab(ctx, launch, created, ws)
-		if rpcCode(err) != "" { // the tab's shell said why (shellmiss.go): its tail would only repeat the command
-			return nil, err
+	probe := n.probeFor(ctx, id, launcher, shells)
+	probe.typed(typed)
+	a, err := n.waitReady(ctx, pane, probe)
+	if rejected := (*startLineRejected)(nil); errors.As(err, &rejected) {
+		// Nothing of it ran: typed once more as it was, once the shell is at rest again. A second refusal ends the start.
+		n.logf("start %s: %v; typing it again", id, err)
+		err = n.retypeStart(ctx, pane, typed)
+		if err == nil {
+			a, err = n.waitReady(ctx, pane, probe)
 		}
-		return nil, fmt.Errorf("%v\n%s", err, lastLines(screen, 12))
+	}
+	typed.done()
+	if err != nil {
+		return nil, n.startTabFailed(ctx, launch, created, ws, id, err)
 	}
 	n.bindPane(pane, id)
+	n.starts.recovered(id)
 	_ = launch.NameAgent(ctx, created.Pane, "j-"+id[:6])
 	n.holdResume(ctx, launch, pane, id, spec) // herdr's restore resumes it through the launcher (herdrresume.go)
 	// Before the first prompt; never a failed start: Claude is up, and ultracode_note says why it is not on.
@@ -187,7 +263,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 			if rpcCode(err) == screen.DialogOpen {
 				why = lostDialog
 			}
-			log.Printf("start %s: first message held back after ultracode: %v", id, err)
+			n.logf("start %s: first message held back after ultracode: %v", id, err)
 			n.lostFirst.set(id, why, time.Now())
 			prompt = ""
 		}
@@ -202,12 +278,62 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	return n.sessionFor(id, *a), nil
 }
 
+// retypeStart types a start's line again into pane once its shell is at rest (settleShell), after leaving the
+// continuation prompt a cut quote left it at (Ctrl-C).
+func (n *Node) retypeStart(ctx context.Context, pane string, typed *typedStart) error {
+	if err := n.settleShell(ctx, pane); err != nil {
+		return err
+	}
+	if shown, err := n.readPane(ctx, pane, "visible", 60); err == nil && shellContinuation.MatchString(lastLine(shown)) {
+		_ = n.sendKeys(ctx, pane, "ctrl+c")
+		if err := n.settleShell(ctx, pane); err != nil {
+			return err
+		}
+	}
+	return typed.again(ctx)
+}
+
+// startTabFailed is the error of a start that failed in the tab it made, created, and closes the tab: an agent that
+// came up after the start gave up would sit there unbound, and a retry opens another. Two failures keep it for
+// keptStartWait instead, with where it is (withKeptTab): a shell waiting on its startup question (shell_waiting),
+// which someone may answer, and a claude whose own screen stopped before its input box (agent_start_stalled), which
+// someone may look at. A line the shell did not take twice is start_line_rejected. The tab's last lines go with the
+// error: in its data (screen) for a coded one, else after its text.
+func (n *Node) startTabFailed(ctx context.Context, launch host.Launcher, created *host.Created, ws, id string, err error) error {
+	pane := created.Pane.String()
+	shown, _ := n.readPane(ctx, pane, "recent-unwrapped", 30)
+	tail := lastLines(shown, 12)
+	keep := func(e error) error {
+		if adoptedPane(ctx) != nil { // the user's own pane ("Run Agent Here"): theirs to keep, never closed later
+			return e
+		}
+		return withKeptTab(e, pane, n.keepStartTab(launch, created, ws, id))
+	}
+	var stalled *claudeStalled
+	var rejected *startLineRejected
+	switch {
+	case rpcCode(err) == proto.CodeShellWaiting:
+		return keep(err)
+	case errors.As(err, &stalled):
+		return keep(refusal(proto.CodeAgentStartStalled, fmt.Sprintf("%v\n%s", err, tail), map[string]any{"screen": tail}))
+	case errors.As(err, &rejected):
+		n.closeNewTab(ctx, launch, created, ws)
+		return refusal(proto.CodeStartLineRejected, fmt.Sprintf("%v, twice; the tab is closed\n%s", err, tail),
+			map[string]any{"line": rejected.line, "screen": tail})
+	}
+	n.closeNewTab(ctx, launch, created, ws)
+	if rpcCode(err) != "" { // the tab's shell said why (shellmiss.go): its tail would only repeat the command
+		return err
+	}
+	return fmt.Errorf("%w\n%s", err, tail)
+}
+
 // checkStart validates a start's arguments and returns the directory (~ expanded, home when empty) and launcher.
 func (n *Node) checkStart(cwd, launcher, resume, mode, effort string) (string, string, error) {
 	if launcher == "" {
 		launcher = "claude"
 	}
-	if !nameRe.MatchString(launcher) {
+	if !shellcmd.NameRe.MatchString(launcher) {
 		return "", "", fmt.Errorf("invalid launcher %q", launcher)
 	}
 	if resume != "" && !validID(resume) {
@@ -269,6 +395,11 @@ func tabLabel(name string, taken map[string]bool) string {
 
 // workspaceFor reuses the workspace named after the project directory (the user keeps one workspace per project).
 func (n *Node) workspaceFor(ctx context.Context, launch host.Launcher, cwd string) (string, error) {
+	if _, ok := launch.(*herdrCoreHost); ok {
+		// The app's folder identity is resolved on each layout retry. Passing an id here would turn an automatic
+		// choice into an explicit destination and miss a space created concurrently for the same directory.
+		return "", nil
+	}
 	var startErr error
 	if _, ok := launch.(*herdrHost); ok {
 		startErr = n.ensureHerdr(ctx, "start or resume a session") // herdrstart.go
@@ -317,6 +448,9 @@ func (n *Node) sessionFor(id string, a host.Agent) *proto.Session {
 // close quits any Claude running in the machine's engine (started by Persona or by hand) and closes its pane: herdr
 // closes its tab, or in a split tab only its own pane, so the other panes survive; herdr-core ends its terminal.
 func (n *Node) close(ctx context.Context, id string) error {
+	if err := n.switchingRefusal(id); err != nil { // a launcher switch, maybe on the last connection's Node
+		return err
+	}
 	a, ok := n.agent(id)
 	if !ok {
 		if _, mine := n.state.get(id); mine {
@@ -344,12 +478,14 @@ func exitCommand(text string) bool {
 	return false
 }
 
-// exitAgent is a message that only says to quit: typed in, the agent would exit and leave its tab holding a bare
-// shell, and one already closed would be resumed in a new tab just to quit there. A running agent is closed as
-// session.close does (its tab goes with it); one not running is left as it is.
+// exitAgent is a message that only says to quit: a running agent is stopped as session.stop does (its tab stays with
+// the shell, retire.go), and one already stopped is left as it is rather than resumed in a new tab just to quit there.
+// It runs inside send's turn for the session, so it does not take the typing lock again as stop does.
 func (n *Node) exitAgent(ctx context.Context, id string) error {
-	if _, ok := n.agent(id); !ok {
+	a, ok := n.agent(id)
+	if !ok {
 		return nil
 	}
-	return n.close(ctx, id)
+	_, err := n.quitAgent(ctx, id, a.PaneID)
+	return err
 }

@@ -83,7 +83,7 @@ class AppInstallerTest {
         org.robolectric.util.ReflectionHelpers.setField(installer.mySessions.single(), "sealed", true)
         assertThrows(IllegalStateException::class.java) { runBlocking { AppInstaller.install(context, updates, update) } }
         assertEquals(1, downloads)
-        installer.abandonSession(installer.mySessions.single().sessionId)
+        AppInstaller.cancelPending(context, AppInstaller.pendingSessions(context))
         AppInstaller.install(context, updates, update)
         assertEquals(1, downloads)
         assertEquals(1, installer.mySessions.size)
@@ -128,12 +128,12 @@ class AppInstallerTest {
 
     @Test fun interruptedDownloadCleansPartialApk() {
         failDownload = true
-        assertThrows(IOException::class.java) { runBlocking { AppInstaller.install(context, updates, update) } }
+        assertEquals(UpdateStage.Download, assertThrows(AppUpdateFailure::class.java) { runBlocking { AppInstaller.install(context, updates, update) } }.stage)
         assertNoSessionOrTemporaryApk()
     }
 
     @Test fun missingPermissionOrHashNeverDownloads() {
-        assertThrows(IllegalArgumentException::class.java) { runBlocking { AppInstaller.install(context, updates, update.copy(sha256 = null)) } }
+        assertEquals(UpdateStage.Verification, assertThrows(AppUpdateFailure::class.java) { runBlocking { AppInstaller.install(context, updates, update.copy(sha256 = null)) } }.stage)
         pm.setCanRequestPackageInstalls(false)
         assertRejected()
         assertEquals(0, downloads)

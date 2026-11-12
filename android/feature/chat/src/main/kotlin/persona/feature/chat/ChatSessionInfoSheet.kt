@@ -6,9 +6,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import persona.core.contracts.Machine
 import persona.core.contracts.Session
@@ -16,17 +14,16 @@ import persona.core.contracts.SessionInfo
 import persona.core.contracts.parseTime
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
+import persona.core.domain.lines.tokenCount
 import persona.core.domain.sort.resumeCommand
 import java.time.ZoneId
-import java.util.Locale
 import kotlinx.coroutines.CancellationException
 
-/** 950, 12.3k, 1.20M (iOS SessionInfoSheet.tokens). */
-internal fun formatTokens(count: Long): String = when {
-    count >= 1_000_000 -> String.format(Locale.ROOT, "%.2fM", count / 1_000_000.0)
-    count >= 1_000 -> String.format(Locale.ROOT, "%.1fk", count / 1_000.0)
-    else -> "$count"
-}
+/**
+ * A token count in the language of [resources], as the compaction divider counts them ([tokenCount]): 950, 48.2K and
+ * 1.2M in English, 4.8 万 in Chinese, 4.8万 in Japanese.
+ */
+internal fun formatTokens(count: Long, resources: Resources): String = tokenCount(count).resolve(resources)
 
 /** One fact of "Session info"; a null value reads as —. [copy] names what tapping it copies. */
 internal data class SessionInfoRow(val label: String, val value: String?, val copy: String? = null, val onClick: (() -> Unit)? = null)
@@ -43,6 +40,7 @@ internal fun sessionInfoSections(
     info: SessionInfo,
     zone: ZoneId = ZoneId.systemDefault(),
     onOpenTodo: ((String) -> Unit)? = null,
+    features: Set<String> = emptySet(),
 ): List<SessionInfoSection> {
     fun String?.orSession(fallback: String?) = this?.takeIf(String::isNotBlank) ?: fallback?.takeIf(String::isNotBlank)
     val cwd = info.cwd.orSession(session.cwd)
@@ -57,19 +55,21 @@ internal fun sessionInfoSections(
                 SessionInfoRow(res.getString(R.string.chat_info_todo), todo.title, copy = todo.id, onClick = onOpenTodo?.let { { it(todo.id) } })
             )))
         }
-        add(SessionInfoSection(res.getString(R.string.chat_info_run_section), listOf(
+        add(SessionInfoSection(res.getString(R.string.chat_info_run_section), listOfNotNull(
             SessionInfoRow(res.getString(R.string.chat_info_model), info.model.orSession(session.model)),
             SessionInfoRow(res.getString(R.string.chat_info_launcher), info.launcher.orSession(session.launcher)),
             SessionInfoRow(if (session.isClaude) "Claude Code" else session.agentLabel, info.version.orSession(null)),
             SessionInfoRow(res.getString(R.string.chat_info_permission), SessionModes.modeLabel(info.permissionMode.orSession(session.permissionMode), res)),
             SessionInfoRow(res.getString(R.string.chat_info_effort), SessionModes.effortLabel(info.effort.orSession(session.effort), res)),
+            // #582: on / off / unknown, as the node last saw it
+            SessionInfoRow(Ultracode.NAME, Ultracode.infoWord(session, res)).takeIf { Ultracode.infoShown(session, features) },
         )))
         add(SessionInfoSection(res.getString(R.string.chat_info_usage_section), buildList {
-            add(SessionInfoRow(res.getString(R.string.chat_info_context), res.getString(R.string.chat_info_tokens, formatTokens(info.contextTokens))))
+            add(SessionInfoRow(res.getString(R.string.chat_info_context), res.getString(R.string.chat_info_tokens, formatTokens(info.contextTokens, res))))
             if (info.compactions > 0) add(SessionInfoRow(res.getString(R.string.chat_info_compactions),
                 res.getQuantityString(R.plurals.chat_info_compaction_count, info.compactions, info.compactions)))
             add(SessionInfoRow(res.getString(R.string.chat_info_turns), res.getQuantityString(R.plurals.chat_info_turn_count, info.turns, info.turns)))
-            add(SessionInfoRow(res.getString(R.string.chat_info_output), res.getString(R.string.chat_info_tokens, formatTokens(info.outputTokens))))
+            add(SessionInfoRow(res.getString(R.string.chat_info_output), res.getString(R.string.chat_info_tokens, formatTokens(info.outputTokens, res))))
             parseTime(info.startedAt)?.let {
                 add(SessionInfoRow(res.getString(R.string.chat_info_started),
                     LocalizedFormats.format(it, LocalizedFormats.MONTH_DAY_TIME, locale, zone)))
@@ -94,8 +94,7 @@ internal fun ChatSessionInfoSheet(
     onOpenTodo: ((String) -> Unit)? = null,
     onDismiss: () -> Unit,
 ) {
-    val clipboard = LocalClipboardManager.current
-    val feedback = LocalAppFeedback.current
+    val copyText = rememberCopy()
     val res = LocalResources.current
     var info by remember(session.key) { mutableStateOf<SessionInfo?>(null) }
     var error by remember(session.key) { mutableStateOf<String?>(null) }
@@ -119,7 +118,8 @@ internal fun ChatSessionInfoSheet(
         }
         val loaded = info
         when {
-            loaded != null -> sessionInfoSections(res, session, loaded, onOpenTodo = onOpenTodo).filter { it.rows.isNotEmpty() }.forEach { section ->
+            loaded != null -> sessionInfoSections(res, session, loaded, onOpenTodo = onOpenTodo,
+                features = persona.core.designsystem.LocalHubFeatures.current).filter { it.rows.isNotEmpty() }.forEach { section ->
                 JSectionHeader(section.title)
                 section.rows.forEachIndexed { index, row ->
                     JGroupItem(GroupPosition.of(index, section.rows.size)) {
@@ -129,7 +129,7 @@ internal fun ChatSessionInfoSheet(
                             chevron = true, onClick = { onDismiss(); row.onClick.invoke() })
                         else if (copy != null) JRow(row.label, subtitle = value, subtitleLines = 4,
                             trailing = { JIcon(PhIcons.Copy, stringResource(R.string.chat_info_copy_item, copy), tint = PersonaTheme.palette.ink2) }, onClick = {
-                                clipboard.setText(AnnotatedString(value)); feedback?.notice(res.getString(R.string.chat_info_copied_item, copy))
+                                copyText(value, res.getString(R.string.chat_info_copied_item, copy))
                             })
                         else JRow(row.label, value = value)
                     }

@@ -1,4 +1,5 @@
 import BeautifulUI
+import AuthenticationServices
 import SwiftUI
 import VisionKit
 
@@ -10,8 +11,10 @@ struct SettingsView: View {
     @State private var confirmUnpair = false
     @State private var showPair = false
     @State private var storage: Int64?
+    @State private var search = ""
+    @State private var searchResults: [SettingsEntry] = []
     @State private var plugins: [HubExtension]?
-    /// Where links in the plugins' cards open (docs/extensions/extensions.md「UI 插槽」).
+    /// Where links in the plugins' cards open (docs/extensions/extensions.md「UI slots」).
     @State private var pluginLink: LinkTarget?
     @StoredValue(TranslationPrefs.enabledKey) private var translating = false
     @StoredValue(TranslationPrefs.targetKey) private var translateTarget = TranslationPrefs.defaultTarget
@@ -24,7 +27,7 @@ struct SettingsView: View {
         return s.version
     }
 
-    nonisolated private struct SlotsKey: Hashable, Sendable { var source: ExtensionSlots.Source; var depth: Int }
+    nonisolated private struct SlotsKey: Hashable, Sendable { var source: ExtensionSlots.Source; var depth: Int; var revision: Int }
 
     /// Translation's row value: off, or the target language.
     private var translationSummary: String { translating ? TranslationPrefs.name(of: translateTarget) : String(localized: "state.off", defaultValue: "Off") }
@@ -36,213 +39,23 @@ struct SettingsView: View {
         // By value, every page: in the split (iPhone Duo open) they open beside the list, not inside its column.
         SplitNavigation(path: Bindable(model).settingsPath, destinations: SettingsDestinations()) {
             List {
-                Section {
-                    HStack(spacing: Theme.Space.l) {
-                        AppGlyph(size: 54)
-                        VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                            Text("Persona").font(Theme.Font.title)
-                            if model.isDemo {
-                                Text("Demo mode · All data is made up").font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
-                            } else {
-                                if model.isMultiHub {
-                                    // Several groups of hubs: the one the hub-level settings below are about, to pick another.
-                                    HubSwitcher()
-                                } else {
-                                    Text(model.config?.url.absoluteString ?? "").font(Theme.Font.code).foregroundStyle(.secondary).lineLimit(1)
-                                }
-                                HStack(spacing: Theme.Space.sm) {
-                                    Circle().fill(model.live.looksConnected ? Theme.positive : Theme.caution).scaledFrame(width: Theme.Size.dotS, height: Theme.Size.dotS)
-                                    Text(linkState).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
-                                }
-                            }
-                        }
-                    }
-                    .padding(.vertical, Theme.Space.xs)
-                }
-                // Again once the hub's features are in (right after pairing they come after this page asked).
-                .task(id: model.hubFeatures.contains(AssistantReadiness.feature)) {
-                    if !model.isDemo { await model.refreshReadiness(force: false) }
-                }
-                #if os(iOS) || os(visionOS)
-                // On the section that is always there: the plugins' one is empty until they are read.
-                .task(id: SlotsKey(source: ExtensionSlots.source(model), depth: model.settingsPath.count)) {
-                    await ExtensionSlots.shared.reload()
-                }
-                #endif
-
-                // What the main conversation still needs (#4195): N steps left, back to the checklist. Settings may be the
-                // first page that asks (the app opened on it).
-                if !model.isDemo { ChecklistSettingsRow() }
-
-                #if os(iOS) || os(visionOS)
-                // The plugins' cards and pages (docs/extensions/extensions.md「UI 插槽」): at the top, where the main navigation's
-                // entries are on an iPhone (the Mac has them in its sidebar).
-                ExtensionSlotsSettingsSection(link: $pluginLink)
-                #endif
-
-                if model.isDemo {
-                    DemoSection(pair: { showPair = true })
-                }
-
-                AppearanceSection()
-
-                Section {
-                    Group {
-                        NavigationLink(value: ModelLaunchersRoute()) {
-                            SettingsRow(title: String(localized: "Model Providers"), symbol: Theme.Icon.cpu, tint: Theme.Hue.purple)
-                        }
-                        .settingsListRow(ModelLaunchersRoute())
-                        NavigationLink(value: SettingsPage.modelConfiguration) {
-                            SettingsRow(title: String(localized: "Model Settings [Launcher Model Picker 8cbcf7]"), symbol: Theme.Icon.model, tint: Theme.ai)
-                        }
-                        .settingsListRow(SettingsPage.modelConfiguration)
-                        NavigationLink(value: SettingsPage.assistant) {
-                            // No model here: the assistant's model is Model Settings › Main Chat (#1291).
-                            SettingsRow(title: String(localized: "Assistant"), symbol: Theme.Icon.ai, tint: Theme.ai)
-                        }
-                        .settingsListRow(SettingsPage.assistant)
-                        .accessibilityIdentifier("settings-assistant")
-                        NavigationLink(value: SettingsPage.triage) {
-                            SettingsRow(title: String(localized: "Session Triage"), symbol: Theme.Icon.triage, tint: Theme.ai)
-                        }
-                        .settingsListRow(SettingsPage.triage)
-                        .accessibilityIdentifier("settings-triage")
-                        NavigationLink(value: SettingsPage.claude) {
-                            SettingsRow(title: String(localized: "Claude Code Settings"), symbol: Theme.Icon.options, tint: Theme.Hue.orange)
-                        }
-                        .settingsListRow(SettingsPage.claude)
-                        NavigationLink(value: SettingsPage.codex) {
-                            SettingsRow(title: String(localized: "Codex Settings"), symbol: Theme.Icon.options, tint: Theme.Hue.gray)
-                        }
-                        .settingsListRow(SettingsPage.codex)
-                    }
-                    .bareListRow()
-                }
-
-                ChannelsEntryRow()
-
-                ConnectorsSection()
-
-                // What Persona sent in the user's name through the connectors (#5278, docs/extensions/connectors.md "Sent as the user").
-                if !model.isDemo {
+                if search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    assistantSection
+                    deviceSection
+                    hubSection
+                } else {
                     Section {
-                        Group {
-                            NavigationLink(value: SettingsPage.sent) {
-                                SettingsRow(title: String(localized: "Sent as You"), symbol: Theme.Icon.sentAsYou, tint: Theme.Hue.orange)
+                        ForEach(searchResults) { entry in
+                            NavigationLink(value: entry.page) {
+                                SettingsRow(title: entry.title, symbol: entry.symbol, tint: Theme.accent)
                             }
-                            .settingsListRow(SettingsPage.sent)
-                            .accessibilityIdentifier("settings.sent")
+                            .settingsListRow(entry.page)
+                            .accessibilityIdentifier("settings-search-" + entry.id)
                         }
-                        .bareListRow()
-                    }
-                }
-
-                // Extensions (docs/extensions/extensions.md): only with a hub that has the plugin base.
-                if model.hubFeatures.hasExtensionFeature("manager") {
-                    Section {
-                        Group {
-                            NavigationLink(value: SettingsPage.plugins) {
-                                SettingsRow(title: String(localized: "Extensions"), symbol: Theme.Icon.plugins, tint: Theme.Hue.purple,
-                                            value: ExtensionText.listSummary(plugins), look: .oneLine)
-                            }
-                            .settingsListRow(SettingsPage.plugins)
-                            .accessibilityIdentifier("settings-plugins")
+                        if searchResults.isEmpty {
+                            Text("No settings found").foregroundStyle(.secondary)
                         }
-                        .bareListRow()
-                    }
-                    .task(id: model.settingsPath.count) { plugins = (try? await model.api?.plugins()) ?? plugins }
-                }
-
-                Section {
-                    Group {
-                        NavigationLink(value: MachineListRoute()) { MachinesSettingsRow() }
-                        .settingsListRow(MachineListRoute())
-                        NavigationLink(value: SettingsPage.devices) {
-                            SettingsRow(title: String(localized: "Devices"), symbol: Theme.Icon.credentials, tint: Theme.Hue.gray)
-                        }
-                        .settingsListRow(SettingsPage.devices)
-                        NavigationLink(value: SettingsPage.notifications) {
-                            SettingsRow(title: String(localized: "Notifications"), symbol: Theme.Icon.notifications, tint: Theme.needsYou)
-                        }
-                        .settingsListRow(SettingsPage.notifications)
-                        NavigationLink(value: SettingsPage.translation) {
-                            SettingsRow(title: String(localized: "Translation"), symbol: Theme.Icon.translate, tint: Theme.accent, value: translationSummary, look: .oneLine)
-                        }
-                        .settingsListRow(SettingsPage.translation)
-                        NavigationLink(value: SettingsPage.storage) {
-                            SettingsRow(title: String(localized: "Storage"), symbol: "internaldrive", tint: Theme.Hue.gray, value: storage?.storageText ?? "", look: .digits)
-                        }
-                        .settingsListRow(SettingsPage.storage)
-                    }
-                    .bareListRow()
-                }
-
-                #if os(iOS) || os(visionOS)
-                // A Mac pairs with no watch (WatchSync does nothing there): no button that would claim it sent something.
-                if !model.isDemo { watchSection }
-                #endif
-
-                if !model.isDemo {
-                    Section {
-                        Group {
-                            // Every hub paired, by group: add one, rename, disconnect one (docs/protocol/multi-hub.md). Also with
-                            // one hub: it is where a second one is added (the only row the single-hub page gained).
-                            NavigationLink(value: SettingsPage.hubs) {
-                                SettingsRow(title: "hub", symbol: Theme.Icon.hubGroup, tint: Theme.Hue.green,
-                                            value: model.isMultiHub ? String(localized: "\(model.groupIDs.count) Groups") : model.groupName(model.hub?.group ?? ""),
-                                            look: .oneLine)
-                            }
-                            .settingsListRow(SettingsPage.hubs)
-                            .accessibilityIdentifier("settings.hubs")
-                            NavigationLink(value: SettingsPage.hub) {
-                                SettingsRow(title: String(localized: "Hub Version"), symbol: Theme.Icon.server, tint: Theme.Hue.blue, value: hubSummary, look: .oneLine)
-                            }
-                            .settingsListRow(SettingsPage.hub)
-                            .accessibilityIdentifier("settings.hub")
-                            // The hub's managers, each a whole assistant (docs/assistant/managers.md).
-                            NavigationLink(value: SettingsPage.managers) {
-                                SettingsRow(title: String(localized: "Managers"), symbol: Theme.Icon.managers, tint: Theme.ai)
-                            }
-                            .settingsListRow(SettingsPage.managers)
-                            .accessibilityIdentifier("settings.managers")
-                            Button { showPair = true } label: { SettingsRow(title: String(localized: "Pair Again"), symbol: "qrcode.viewfinder", tint: Theme.accent) }
-                                .modifier(SettingsButtonLook())
-                            Button(role: .destructive) { confirmUnpair = true } label: {
-                                SettingsRow(title: model.isMultiHub ? String(localized: "Disconnect All Hubs") : String(localized: "Disconnect and Forget Server"), symbol: Theme.Icon.end, tint: Theme.danger)
-                                    #if os(macOS)
-                                    .foregroundStyle(Theme.danger) // a plain row on the Mac: red says what it does
-                                    #endif
-                            }
-                            .modifier(SettingsButtonLook())
-                        }
-                        .bareListRow()
-                    } header: {
-                        SettingsHeading(String(localized: "Server"))
-                    }
-                }
-
-                Section {
-                    Group {
-                        let version = "\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "") (\(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""))"
-                        // The commit this build was made from (stamped at build time, `project.yml`): which one is on the phone.
-                        let commit = Bundle.main.object(forInfoDictionaryKey: "PersonaCommit") as? String ?? String(localized: "Unknown [Session Modes 4d8c1c]")
-                        if AppStyle.current.usesBeautifulUI {
-                            BUIListRow(String(localized: "Version"), value: version)
-                            BUIListRow(String(localized: "Build")) { EmptyView() } trailing: {
-                                Text(commit).font(Theme.Font.code).foregroundStyle(.secondary).textSelection(.enabled)
-                            }
-                        } else {
-                            LabeledContent("Version", value: version)
-                            LabeledContent("Build") {
-                                Text(commit)
-                                    .font(Theme.Font.code)
-                                    .textSelection(.enabled)
-                            }
-                        }
-                    }
-                    .bareListRow()
-                } header: {
-                    SettingsHeading(String(localized: "About"))
+                    } header: { SettingsHeading(String(localized: "Search Results")) }
                 }
             }
             .accessibilityIdentifier("settings-list")
@@ -254,12 +67,27 @@ struct SettingsView: View {
             .environment(\.macSettingsOpen, model.settingsPath.firstPageOnly)
             #endif
             .themedPage()
+            #if os(macOS)
+            .searchable(text: $search, prompt: Text("Search Settings"))
+            #else
+            .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: Text("Search Settings"))
+            #endif
+            .onChange(of: search) { searchResults = SettingsCatalog.search(search) }
+            .onChange(of: model.assistantManagerID) {
+                model.settingsPath = NavigationPath()
+                plugins = nil
+            }
+            .onChange(of: model.hub?.id) {
+                model.settingsPath = NavigationPath()
+                plugins = nil
+            }
             .pageToolbar {
-                    // As a sheet over the shell (docs/apple/ios.md「新外壳」): ChatGPT's × to close it.
+                    // As a sheet over the shell (docs/apple/ios.md「New shell」): ChatGPT's × to close it.
                     if shell != nil || inSheet {
                         ToolbarItem(placement: .topBarTrailing) {
                             Button { model.shellSettings = false } label: { Label("Close", systemImage: Theme.Icon.close) }
                                 .foregroundStyle(Color.primary)
+                                .keyboardShortcut(.cancelAction) // Esc closes it too: a phone's full-screen cover has no swipe down
                                 .accessibilityIdentifier("settings-close")
                         }
                     }
@@ -282,7 +110,7 @@ struct SettingsView: View {
             .onAppear(perform: openDebugPage)
             #endif
             .confirmationDialog("After disconnecting, you'll need to scan the code to pair again.", isPresented: $confirmUnpair, titleVisibility: .visible) {
-                Button("Disconnect", role: .destructive) { model.unpair() }
+                Button("Disconnect", role: .destructive) { Task { await model.disconnectAll() } }
             }
             .sheet(isPresented: $showPair) { PairView() }
             #if os(iOS) || os(visionOS)
@@ -298,9 +126,114 @@ struct SettingsView: View {
             SplitPlaceholder(symbol: Theme.Icon.settings, title: String(localized: "Settings"), message: String(localized: "Choose an item on the left."))
                 #if os(macOS)
                 // As System Settings: the window opens on the first page, not on an empty pane.
-                .onAppear { if model.settingsPath.isEmpty { model.settingsPath.append(SettingsPage.persona) } }
+                .onAppear { if model.settingsPath.isEmpty && search.isEmpty { model.settingsPath.append(SettingsPage.appearance) } }
                 #endif
         }
+    }
+
+    private var assistantSection: some View {
+        Section {
+            Group {
+                if !model.isDemo { ChecklistSettingsRow(inSection: false) }
+                settingsLink(.models, "Models", Theme.Icon.model, id: "settings-models")
+                settingsLink(.assistant, "Assistant Profile", Theme.Icon.ai, id: "settings-assistant")
+                settingsLink(.channels, "Channels", Theme.Icon.channels, id: "settings-channels")
+                settingsLink(.connectors, "Connectors", Theme.Icon.connectors, id: "settings.connectors")
+                if model.hubFeatures.hasExtensionFeature("manager") {
+                    settingsLink(.plugins, "Extensions", Theme.Icon.plugins, id: "settings-plugins", value: ExtensionText.listSummary(plugins))
+                }
+                #if os(iOS)
+                settingsLink(.knowledgeSelection, "Knowledge Selection", Theme.Icon.knowledge, id: "settings-knowledge-selection")
+                if MeetingAttendees.offered(model) {
+                    settingsLink(.meetings, "Meetings", Theme.Icon.meeting, id: "settings-meetings", value: MeetingAttendees.defaultRole(model).title)
+                }
+                #endif
+                settingsLink(.agents, "Agent", Theme.Icon.options, id: "settings-agents")
+                NavigationLink(value: MachineListRoute()) { MachinesSettingsRow() }
+                    .settingsListRow(MachineListRoute())
+                    .accessibilityIdentifier("settings-machines")
+            }
+            .bareListRow()
+        } header: { SettingsAssistantHeading() }
+        .task(id: model.hubFeatures.contains(AssistantReadiness.feature)) {
+            if !model.isDemo { await model.refreshReadiness(force: false) }
+        }
+        .task(id: SlotsKey(source: ExtensionSlots.source(model), depth: model.settingsPath.count, revision: model.managersRevision)) {
+            guard let api = model.api else { return }
+            let context = api.currentAssistantSettings()
+            let loaded = try? await context.plugins()
+            if model.showsPage(of: api) {
+                plugins = loaded.map { ManagerRoster.settingsItems($0, roster: model.managerRoster, manager: context.managerID, stamped: { $0.manager }) }
+            }
+            #if os(iOS) || os(visionOS)
+            await ExtensionSlots.shared.reload()
+            #endif
+        }
+    }
+
+    private var deviceSection: some View {
+        Section {
+            Group {
+                settingsLink(.appearance, "Appearance & Display", Theme.Icon.style, id: "settings-appearance")
+                settingsLink(.language, "Language & Dictation", Theme.Icon.language, id: "settings-language", value: AppLanguage.settingsSummary)
+                settingsLink(.notifications, "Notifications", Theme.Icon.notifications, id: "settings-notifications")
+                settingsLink(.translation, "Translation", Theme.Icon.translate, id: "settings-translation", value: translationSummary)
+                settingsLink(.storage, "Storage", Theme.Icon.storage, id: "settings-storage", value: storage?.storageText ?? "")
+                #if os(iOS)
+                settingsLink(.health, "Health", Theme.Icon.health, id: "settings-health")
+                NavigationLink(value: SettingsPage.phoneData) {
+                    SettingsRow(title: ConnectorText.device, symbol: Theme.Icon.thisDevice, tint: Theme.accent)
+                }
+                .settingsListRow(SettingsPage.phoneData)
+                .accessibilityIdentifier("settings-phone-data")
+                #endif
+                settingsLink(.about, "About", Theme.Icon.info, id: "settings-about")
+            }
+            .bareListRow()
+        } header: {
+            SettingsHeading(String(localized: "This Device [Settings Scope]"))
+                .accessibilityIdentifier("settings-group-device")
+        } footer: {
+            Text("These settings stay the same when you switch assistants.")
+        }
+    }
+
+    private var hubSection: some View {
+        Section {
+            Group {
+                if model.isDemo {
+                    Button { showPair = true } label: {
+                        SettingsRow(title: String(localized: "Connect My Hub"), symbol: Theme.Icon.scanCode, tint: Theme.accent)
+                    }
+                    .modifier(SettingsButtonLook())
+                    Button(role: .destructive) { model.unpair() } label: {
+                        SettingsRow(title: String(localized: "Exit Demo Mode"), symbol: Theme.Icon.end, tint: Theme.danger)
+                    }
+                    .modifier(SettingsButtonLook())
+                    .accessibilityIdentifier("settings.leaveDemo")
+                } else {
+                    settingsLink(.hubs, "Hub Connection", Theme.Icon.hubGroup, id: "settings.hubs", value: linkState)
+                    settingsLink(.hub, "Hub Version", Theme.Icon.server, id: "settings.hub", value: hubSummary)
+                    settingsLink(.managers, "Assistants", Theme.Icon.managers, id: "settings.managers")
+                }
+                settingsLink(.persona, "Avatar", Theme.Icon.avatar, id: "settings-persona", value: model.persona.cardTitle)
+                settingsLink(.pairing, "Devices & Pairing", Theme.Icon.credentials, id: "settings-pairing")
+            }
+            .bareListRow()
+        } header: {
+            SettingsHeading(String(localized: "Hub"))
+                .accessibilityIdentifier("settings-group-hub")
+        } footer: {
+            Text("These settings stay the same when you switch assistants.")
+        }
+    }
+
+    private func settingsLink(_ page: SettingsPage, _ title: LocalizedStringResource, _ symbol: String, id: String, value: String = "") -> some View {
+        NavigationLink(value: page) {
+            SettingsRow(title: String(localized: title), symbol: symbol, tint: Theme.accent, value: value, look: .oneLine)
+        }
+        .settingsListRow(page)
+        .accessibilityIdentifier(id)
     }
 
     private func measureStorage() {
@@ -329,6 +262,12 @@ struct SettingsView: View {
     private func openDebugPage() {
         guard !Self.debugOpened else { return }
         let d = UserDefaults.standard
+        if let value = d.string(forKey: "openAppearance"), value.hasPrefix("search:") {
+            search = String(value.dropFirst("search:".count))
+            searchResults = SettingsCatalog.search(search)
+            Self.debugOpened = true
+            return
+        }
         // Appended with their own types: a path of AnyHashable finds no destination.
         var p = NavigationPath()
         // `-openExtension…` / `-openMarketExtension`; the `-openPlugin…` names from before Extensions still work (#1859).
@@ -342,11 +281,16 @@ struct SettingsView: View {
         else if d.bool(forKey: "openNotificationSettings") { p.append(SettingsPage.notifications) }
         else if d.string(forKey: "openAssistantPage") != nil { p.append(SettingsPage.assistant) }
         else if d.bool(forKey: "openDevices") { p.append(SettingsPage.devices) }
-        else if d.bool(forKey: "openHubs") || d.bool(forKey: "openSSHTunnel") || d.bool(forKey: "openLocalProxy") {
+        else if d.bool(forKey: "openHubs") || d.bool(forKey: "openSSHTunnel") || d.bool(forKey: "openLocalProxy") || d.bool(forKey: "openCloudflareAccess")
+                    || d.bool(forKey: "openHubAddresses") {
             p.append(SettingsPage.hubs)
             // `-openSSHTunnel YES` / `-openLocalProxy YES`: the first hub's Settings › hub › SSH Tunnel / Local Proxy (screenshots).
             if d.bool(forKey: "openSSHTunnel"), let first = model.registry.hubs.first { p.append(SettingsPage.sshTunnel(first.id)) }
             if d.bool(forKey: "openLocalProxy"), let first = model.registry.hubs.first { p.append(SettingsPage.localProxy(first.id)) }
+            // `-openCloudflareAccess YES`: its Settings › hub › Cloudflare Access.
+            if d.bool(forKey: "openCloudflareAccess"), let first = model.registry.hubs.first { p.append(SettingsPage.cloudflareAccess(first.id)) }
+            // `-openHubAddresses YES`: its Settings › hub › Addresses (`-seedHubAddresses` fills them).
+            if d.bool(forKey: "openHubAddresses"), let first = model.registry.hubs.first { p.append(SettingsPage.hubAddresses(first.id)) }
         }
         else if d.bool(forKey: "openHubUpdate") { p.append(SettingsPage.hub) }
         else if d.bool(forKey: "openManagers") || d.string(forKey: "openManagerPage") != nil || d.bool(forKey: "showManagerCode") {
@@ -354,8 +298,12 @@ struct SettingsView: View {
             p.append(SettingsPage.managers)
             if let id = d.string(forKey: "openManagerPage") { p.append(SettingsPage.manager(id)) }
         }
-        else if d.bool(forKey: "openSentAsYou") { p.append(SettingsPage.sent) }
+        else if d.bool(forKey: "openSentAsYou") { p = SettingsPage.sentPath }
+        else if d.bool(forKey: "openConnectors") { p.append(SettingsPage.connectors) }
         else if d.bool(forKey: "openSkills") { p.append(SettingsPage.skills) }
+        else if let scope = str("openSubscriptions") { // the source subscription pages: `all`, or their first state (#2041)
+            p.append(SettingsPage.subscriptions(state: scope == "all" ? nil : scope))
+        }
         else if flag("openExtensions") || str("openExtension") != nil { // Settings › Extensions (› one (› a page of it))
             p.append(SettingsPage.plugins)
             if let id = str("openExtension") {
@@ -393,9 +341,16 @@ struct SettingsView: View {
         else if d.bool(forKey: "openConnectorBot") { p.append(SettingsPage.feishuBot) }
         else if d.bool(forKey: "openConnectorDevice") { p.append(SettingsPage.phoneData) }
         else if d.bool(forKey: "openTranslationSettings") { p.append(SettingsPage.translation) }
+        else if d.bool(forKey: "openMeetingSettings") { // Settings › Meetings (#2981)
+            #if os(iOS)
+            p.append(SettingsPage.meetings)
+            #endif
+        }
         else if d.bool(forKey: "openTriageSettings") { p.append(SettingsPage.triage) }
-        else if d.string(forKey: "openAppearance") == "chat" { p.append(SettingsPage.chatLayout) } // New Conversation Layout (#1666)
-        else if let a = d.string(forKey: "openAppearance") { // persona (or YES, or icon: the icon is the Avatar's) | color | style | scheme
+        else if d.string(forKey: "openKnowledgeSelection") != nil { p.append(SettingsPage.knowledgeSelection) } // (rule | chat | doc: with that sheet)
+        else if d.string(forKey: "openAppearance") == "layout" { p.append(SettingsPage.layout) } // Layout (#2530)
+        else if d.string(forKey: "openAppearance") == "language" { p.append(SettingsPage.language) } // Language and dictation (#5005)
+        else if let a = d.string(forKey: "openAppearance"), a != "chat" { // persona (or YES, or icon: the icon is the Avatar's) | color | style | scheme
             p.append(a == "color" ? SettingsPage.themeColor : a == "style" ? SettingsPage.style
                      : a == "scheme" ? SettingsPage.colorScheme : SettingsPage.persona)
         }
@@ -408,59 +363,33 @@ struct SettingsView: View {
             p.append(ModelLaunchersRoute())
             if let n = d.string(forKey: "openModelLauncher") { p.append(ModelLauncherRoute(name: n)) }
         }
+        #if os(iOS)
+        if d.bool(forKey: "openWorkoutReports") { p = NavigationPath(); p.append(SettingsPage.health) }
+        #endif
         guard !p.isEmpty else { return }
         Self.debugOpened = true
         model.settingsPath = p
     }
     #endif
 
-    /// The watch's own credentials (got now where there are none yet), never this phone's (#1185).
-    private func syncWatch() async {
-        guard model.isPaired else { return }
-        guard WatchSync.shared.watchAppInstalled else {
-            Haptics.error()
-            model.toast = Toast(String(localized: "No Apple Watch with Persona found. Install it first in the Watch app on your iPhone."), style: .error)
-            return
-        }
-        await model.upgradeCredentials()
-        WatchSync.shared.push(summary: model.watchSummary())
-        if model.watchConfigs().missing?.isEmpty == false {
-            Haptics.error()
-            model.toast = Toast(String(localized: "Couldn't get credentials for the watch. Check your network and try again; if the hub is too old, update it first."), style: .error)
-        } else {
-            Haptics.success()
-            model.toast = Toast(String(localized: "Sent to Apple Watch. Open Persona on your watch."), style: .success)
-        }
-    }
 
-    private var watchSection: some View {
-        Section {
-            Group {
-                Button {
-                    Task { await syncWatch() }
-                } label: {
-                    if AppStyle.current.usesBeautifulUI {
-                        SettingsRow(title: String(localized: "Sync to Apple Watch"), symbol: Theme.Icon.watch, tint: Theme.accent)
-                    } else {
-                        Label("Sync to Apple Watch", systemImage: Theme.Icon.watch).lineLimit(1)
-                    }
-                }
-                .modifier(SettingsButtonLook())
-            }
-            .bareListRow()
-        } footer: {
-            Text("Persona on Apple Watch connects to the hub directly using your iPhone's pairing. If the watch shows “Not Paired”, tap here, or tap “Sync from iPhone” on the watch.")
-        }
-    }
 }
 
 /// The pages of Settings that are not routes of their own elsewhere.
 enum SettingsPage: Hashable {
+    #if os(iOS)
+    case health
+    /// Settings › Meetings (#2981): Persona's default role in a recorded meeting.
+    case meetings
+    #endif
     case persona, themeColor, style, colorScheme, language, assistant, claude, codex, devices, phoneData, mail, feishu, feishuBot, notifications, storage, translation, modelConfiguration
+    case models, agents, appearance, about, pairing, computers
     /// Settings › Session Triage (docs/assistant/agent-work.md「开关」).
     case triage
-    /// Settings › Appearance › New Conversation Layout (#1666, `ChatLayout`).
-    case chatLayout
+    /// Settings › Appearance › Layout (#2530): how the Agents list draws its agents.
+    case layout
+    /// Settings › Knowledge Selection (docs/assistant/knowledge.md "Selection"): what the knowledge base reads and keeps.
+    case knowledgeSelection
     /// Settings › hub: the hubs paired, by group (docs/protocol/multi-hub.md).
     case hubs
     case hub, skills
@@ -471,36 +400,50 @@ enum SettingsPage: Hashable {
     /// the id; nil: the default's).
     case plugins
     case plugin(String, manager: String? = nil)
-    /// A page a plugin draws (placement plugin_page, docs/extensions/extensions.md「声明式 UI」), titled until its View says
+    /// A page a plugin draws (placement plugin_page, docs/extensions/extensions.md「Declarative UI」), titled until its View says
     /// otherwise; `manager`: the plugin's (nil: the default's).
     case pluginPage(plugin: String, ui: String, title: String, manager: String? = nil)
-    /// Settings › Extensions › Extension Market, one plugin of a market, and the markets (docs/extensions/extensions.md「扩展市场」).
+    /// The source subscription pages (#2041, docs/extensions/subscriptions.md "Pages"), drawn by the manager; `state` opens them on
+    /// one extension's or one connector's (`SubscriptionsUI.state`), nil on every subscription.
+    case subscriptions(state: String? = nil)
+    /// Settings › Extensions › Extension Market, one plugin of a market, and the markets (docs/extensions/extensions.md「Extension marketplace」).
     case pluginMarket
     case marketExtension(market: String, id: String)
     case pluginMarkets
     /// Settings › Channels, and one channel by its id (docs/extensions/channels.md).
     case channels
-    case channel(String)
-    /// Settings › hub › SSH Tunnel of one paired hub (its id; docs/operations/network.md「经 SSH 隧道连 hub」).
+    case channel(String, manager: String? = nil)
+    /// Settings › hub › SSH Tunnel of one paired hub (its id; docs/operations/network.md「Connecting to hub through SSH」).
     case sshTunnel(String)
     case inAppTunnel(String)
     /// Settings › hub › Local Proxy of one paired hub (docs/operations/network.md "Connecting to hub through a local SOCKS5 proxy").
     case localProxy(String)
+    /// Settings › hub › Cloudflare Access of one paired hub (docs/operations/network.md "Behind Cloudflare Access").
+    case cloudflareAccess(String)
+    /// Settings › hub › Addresses of one paired hub (#4670, docs/operations/network.md "Client-added candidates").
+    case hubAddresses(String)
     /// Settings › Managers, and one manager by its id (docs/assistant/managers.md).
     case managers
     case manager(String)
-    /// Settings › Sent as You: what Persona sent in the user's name through the connectors (docs/extensions/connectors.md "Sent as the user").
+    /// Settings › Connectors, with individual sources and the sent ledger beneath it.
+    case connectors
+    /// Settings › Connectors › Records sent as you (docs/extensions/connectors.md "Sent as the user").
     case sent
+
+    /// One canonical path for current callers and legacy Sent destinations.
+    static var sentPath: NavigationPath { NavigationPath([SettingsPage.connectors, .sent]) }
 
 }
 
 /// The pages the settings list opens, in either layout (`SplitNavigation`). MachinesView pushes its cards by value
 /// (MachineDetailRoute), and a machine's page its agents (SessionKey).
 private struct SettingsDestinations: ViewModifier {
+    @Environment(AppModel.self) private var model
+
     func body(content: Content) -> some View {
         content
-            .navigationDestination(for: SettingsPage.self) { page(for: $0).splitDetailPage() }
-            .navigationDestination(for: MachineListRoute.self) { _ in MachinesView().splitDetailPage() }
+            .navigationDestination(for: SettingsPage.self) { destination($0).splitDetailPage() }
+            .navigationDestination(for: MachineListRoute.self) { _ in MachinesView(settingsScope: true).splitDetailPage() }
             .navigationDestination(for: ModelLaunchersRoute.self) { _ in ModelLaunchersView().splitDetailPage() }
             .navigationDestination(for: ModelPurposeRoute.self) { r in ModelPurposeEditorView(purposeID: r.id).splitDetailPage() }
             .navigationDestination(for: ModelLauncherRoute.self) { r in ModelLauncherDetailView(name: r.name).splitDetailPage() }
@@ -511,13 +454,37 @@ private struct SettingsDestinations: ViewModifier {
             .extensionPushDestination()
     }
 
+    @ViewBuilder private func destination(_ page: SettingsPage) -> some View {
+        if page.belongsToCurrentAssistant, let manager = model.assistantManagerOffline {
+            SettingsForm {
+                Section { ManagerOfflineNote(manager: manager) }
+            }
+            .themedGroupedPage()
+            .detailTitle(String(localized: "Settings"))
+        } else {
+            self.page(for: page)
+        }
+    }
+
     @ViewBuilder private func page(for page: SettingsPage) -> some View {
         switch page {
+        case .models: ModelConfigurationView()
+        case .agents: SettingsAgentView()
+        case .appearance: AppearanceSettingsPage()
+        case .about: SettingsAboutPage()
+        case .pairing: SettingsPairingPage()
+        case .computers: MachinesView(settingsScope: true)
         case .persona: PersonaSettingsPage()
         case .themeColor: ThemeColorSettingsPage()
         case .style: StyleSettingsPage()
         case .language: LanguageSettingsPage()
-        case .chatLayout: ChatLayoutSettingsPage()
+        #if os(iOS)
+        case .layout: LayoutSettingsPage()
+        case .knowledgeSelection: KnowledgeSelectionView()
+        #else
+        case .layout: EmptyView()
+        case .knowledgeSelection: EmptyView()
+        #endif
         #if os(iOS) || os(visionOS)
         case .colorScheme: ColorSchemeSettingsPage()
         #else
@@ -531,8 +498,12 @@ private struct SettingsDestinations: ViewModifier {
         case .mail: MailAccountsView(inSheet: false)
         case .feishu: FeishuConnectorView()
         case .connector(let id, let manager):
-            if id == "imessage" { MessagesConnectorView(manager: manager) } else { HubConnectorView(id: id, manager: manager) }
+            if id == "imessage" { MessagesConnectorView(manager: manager ?? model.assistantManagerID) } else { HubConnectorView(id: id, manager: manager) }
         case .feishuBot: FeishuBotView()
+        #if os(iOS)
+        case .health: WorkoutReportSettingsView()
+        case .meetings: MeetingSettingsView()
+        #endif
         case .notifications: NotificationSettingsView()
         case .storage: StorageView()
         case .translation: TranslationSettingsView()
@@ -542,19 +513,24 @@ private struct SettingsDestinations: ViewModifier {
         case .sshTunnel(let id): HubSSHTunnelPage(hubID: id)
         case .inAppTunnel(let id): HubInAppTunnelPage(hubID: id)
         case .localProxy(let id): HubLocalProxyPage(hubID: id)
+        case .cloudflareAccess(let id): HubCloudflareAccessPage(hubID: id)
+        case .hubAddresses(let id): HubAddressesPage(hubID: id)
         case .managers: ManagersView()
         case .manager(let id): ManagerDetailView(id: id)
+        case .connectors: ConnectorsView()
         case .sent: SentView()
         case .hub: HubSettingsPage()
         case .skills: SkillsPage()
         case .plugins: ExtensionsView()
         case .plugin(let id, let manager): ExtensionDetailView(id: id, manager: manager)
-        case .pluginPage(let plugin, let ui, let title, let manager): ExtensionPageView(plugin: plugin, ui: ui, title: title, manager: manager)
+        case .pluginPage(let plugin, let ui, let title, let manager): ExtensionPageView(plugin: plugin, ui: ui, title: title, manager: manager ?? model.assistantManagerID)
+        case .subscriptions(let state):
+            ExtensionPageView(plugin: SubscriptionsUI.id, ui: SubscriptionsUI.page, title: String(localized: "Subscriptions [Source Subscriptions]"), state: state, manager: model.assistantManagerID)
         case .pluginMarket: ExtensionMarketView()
         case .marketExtension(let market, let id): MarketExtensionDetailView(market: market, id: id)
         case .pluginMarkets: ExtensionMarketsView()
         case .channels: ChannelsView()
-        case .channel(let id): ChannelDetailView(id: id)
+        case .channel(let id, let manager): ChannelDetailView(id: id, manager: manager)
         }
     }
 
@@ -572,7 +548,7 @@ private struct DemoSection: View {
                 // Rows like the list's other rows on the Mac (#1224 B4): as buttons they were two small gray capsules
                 // at the list's leading edge, the sidebar-style list's own button look.
                 Button(action: pair) {
-                    SettingsRow(title: String(localized: "Connect My Hub…"), symbol: "qrcode.viewfinder", tint: Theme.accent)
+                    SettingsRow(title: String(localized: "Connect My Hub…"), symbol: Theme.Icon.scanCode, tint: Theme.accent)
                 }
                 .modifier(SettingsButtonLook())
                 Button(role: .destructive) { model.unpair() } label: {
@@ -584,9 +560,9 @@ private struct DemoSection: View {
                 #else
                 Button(action: pair) {
                     if AppStyle.current.usesBeautifulUI {
-                        SettingsRow(title: String(localized: "Connect My Hub"), symbol: "qrcode.viewfinder", tint: Theme.accent)
+                        SettingsRow(title: String(localized: "Connect My Hub"), symbol: Theme.Icon.scanCode, tint: Theme.accent)
                     } else {
-                        Label("Connect My Hub", systemImage: "qrcode.viewfinder").lineLimit(1)
+                        Label("Connect My Hub", systemImage: Theme.Icon.scanCode).lineLimit(1)
                     }
                 }
                 .modifier(SettingsButtonLook())
@@ -619,11 +595,15 @@ struct PhoneDataView: View {
     @State private var statuses: [PhoneDataSource: PhoneAuthStatus] = [:]
     @State private var enabled: [PhoneDataSource: Bool] = [:]
     @State private var asking: PhoneDataSource?
+    @StoredValue(ClipboardOffer.enabledKey) private var offerClipboard = false
+    #if os(iOS)
+    @State private var iphoneConsent = IPhoneConsentModel()
+    #endif
 
     var body: some View {
         List {
             Section {
-                ForEach(PhoneDataSource.allCases) { s in
+                ForEach(PhoneDataSource.onThisDevice) { s in
                     HStack(spacing: Theme.Space.m) {
                         SourceIcon(source: s)
                         VStack(alignment: .leading, spacing: Theme.Space.xxs) {
@@ -643,11 +623,30 @@ struct PhoneDataView: View {
             } footer: {
                 Text("Claude can read the data you turn on through phone_* tools; writes such as new events or reminders ask you on the phone first. Turning one on requests system permission; if you denied it before, you'll go to Settings. The hub can reach the phone only while Persona is in the foreground (or just moved to the background). iOS doesn't expose Messages, Notes, or third-party app data.")
             }
+            #if os(iOS)
+            // Being operated by the assistant through a paired Mac (docs/extensions/iphone.md): only while the hub's
+            // extension iphone is on.
+            IPhoneConsentSection(consent: iphoneConsent)
+            // Sending the phone's clipboard to a computer (#3064): offered when the app comes back after copying.
+            Section {
+                Toggle(isOn: $offerClipboard) {
+                    Text("Offer to Send What You Copied") // a switch's title: wraps at large sizes
+                }
+                .accessibilityIdentifier("clipboard-offer")
+            } header: {
+                Text("Clipboard")
+            } footer: {
+                Text("When you come back to Persona after copying something, offers to send it to a computer that shares its clipboard. The clipboard is read only when you tap Send.")
+            }
+            #endif
         }
         .themedPage()
         .navigationTitle(ConnectorText.device)
         .navigationBarTitleDisplayMode(.inline) // like the other connectors' pages
         .task { refresh() }
+        #if os(iOS)
+        .task(id: model.config) { await iphoneConsent.load() } // again once the app has its hub (pairing, switching)
+        #endif
         // Back from the system's Settings, where a permission may have been given or taken away.
         .onChange(of: phase) { _, p in if p == .active { refresh() } }
     }
@@ -657,7 +656,7 @@ struct PhoneDataView: View {
     }
 
     private func refresh() {
-        for s in PhoneDataSource.allCases { statuses[s] = PhoneAuthorization.status(s) }
+        for s in PhoneDataSource.onThisDevice { statuses[s] = PhoneAuthorization.status(s) }
     }
 
     private func set(_ s: PhoneDataSource, _ on: Bool) async {
@@ -771,7 +770,7 @@ struct WelcomeView: View {
     private static let pairHint = String(localized: "Setting up the hub gives you a pairing link; or, on a device that's already connected, open Settings › Devices › Connect a new device and copy the link there")
     #else
     private static let pairTitle = String(localized: "Scan to connect a hub")
-    private static let pairIcon = "qrcode.viewfinder"
+    private static let pairIcon = Theme.Icon.scanCode
     private static let pairHint = String(localized: "Setting up the hub shows a QR code; or, on a device that's already connected, open Settings › Devices › Connect a new device")
     #endif
 
@@ -890,15 +889,22 @@ struct PairView: View {
 
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.webAuthenticationSession) private var webAuth
     var start: Start = .scan
     @State private var url = ""
     @State private var token = ""
-    /// The SSH tunnel set up here, for a hub this device cannot reach directly (docs/operations/network.md「经 SSH 隧道连 hub」).
+    /// The SSH tunnel set up here, for a hub this device cannot reach directly (docs/operations/network.md「Connecting to hub through SSH」).
     @State private var ssh: SSHRoute?
+    /// The hub's Cloudflare Access service token, typed in before pairing (docs/operations/network.md "Behind Cloudflare
+    /// Access"): without it the first request is already sent to Access's login.
+    @State private var accessID = ""
+    @State private var accessSecret = ""
+    @State private var showAccess = false
     #if os(macOS)
     @State private var editingSSH = false
     #endif
     @State private var connecting = false
+    @State private var passwordMode = true
     @State private var error: String?
     @State private var scanning = DataScannerViewController.isSupported && DataScannerViewController.isAvailable
     /// The code was refused as expired or used (401 invalid_token): say so, and offer to scan again.
@@ -910,7 +916,20 @@ struct PairView: View {
     var body: some View {
         NavigationStack {
             Form {
-                if expired {
+                Section {
+                    Picker("Connection method", selection: $passwordMode) {
+                        Text("Password sign-in").tag(true)
+                        Text("Scan or token").tag(false)
+                    }.pickerStyle(.segmented)
+                }
+                if passwordMode {
+                    Section("Password sign-in") {
+                        TextField("HTTPS hub address", text: $url).autocorrectionDisabled()
+                        Text("Enter the connection password set by your administrator in the system sign-in window. Use QR pairing for self-signed certificates.")
+                            .font(Theme.Font.caption).foregroundStyle(.secondary)
+                    }
+                }
+                if !passwordMode && expired {
                     Section {
                         Label("This code has expired or was already used; get a new one", systemImage: Theme.Icon.error)
                             .font(Theme.Font.secondaryStrong).foregroundStyle(Theme.danger)
@@ -919,19 +938,20 @@ struct PairView: View {
                             expired = false
                             error = nil
                             scanning = DataScannerViewController.isSupported && DataScannerViewController.isAvailable
-                        } label: { Label("Scan again", systemImage: "qrcode.viewfinder").lineLimit(1) }
+                        } label: { Label("Scan again", systemImage: Theme.Icon.scanCode).lineLimit(1) }
                         .accessibilityIdentifier("pair.rescan")
                         #endif
                     } footer: {
                         Text("Get a new code on the screen from setting up the hub, or on a connected device in Settings › Devices › Connect a new device.")
                     }
                 }
-                if scanning && !other {
+                if !passwordMode && scanning && !other {
                     Section {
                         QRScanner { code in
                             if let cfg = ServerConfig(pairURL: code) {
                                 url = cfg.url.absoluteString
                                 token = cfg.token
+                                passwordMode = false
                                 scanning = false
                                 Task { await connect() }
                             }
@@ -949,7 +969,7 @@ struct PairView: View {
                         #endif
                     }
                 }
-                if !other {
+                if !passwordMode && !other {
                     Section {
                         Button { withAnimation(Theme.Motion.standard) { showOther = true } } label: {
                             Label("Other ways", systemImage: Theme.Icon.more).lineLimit(1)
@@ -959,10 +979,28 @@ struct PairView: View {
                         Text("Type the address, connect through an SSH tunnel, or make a code with a command on the hub's machine.")
                     }
                 }
-                if other { otherWays }
+                if !passwordMode && other { otherWays }
+                if !passwordMode { accessSection }
                 if let error { Section { Text(error).foregroundStyle(Theme.danger).font(Theme.Font.caption) } }
             }
             .themedPage()
+            #if DEBUG
+            // `-showPairAccess YES`: Cloudflare Access opened (screenshots), its fields from `-seedCloudflareAccess id:secret`;
+            // `-showPairAccess <pairing link>` also pairs with it at once (the Access error, MOCK_CF_ACCESS).
+            .onAppear {
+                let d = UserDefaults.standard
+                guard let s = d.string(forKey: "showPairAccess") else { return }
+                showAccess = true
+                let parts = (d.string(forKey: "seedCloudflareAccess") ?? "").split(separator: ":", maxSplits: 1).map(String.init)
+                if parts.count == 2 { accessID = parts[0]; accessSecret = parts[1] }
+                if let cfg = ServerConfig(pairURL: s) {
+                    url = cfg.url.absoluteString
+                    token = cfg.token
+                    passwordMode = false
+                    Task { await connect() }
+                }
+            }
+            #endif
             #if os(macOS)
             .sheet(isPresented: $editingSSH) {
                 NavigationStack {
@@ -974,7 +1012,7 @@ struct PairView: View {
             .onAppear { if UserDefaults.standard.bool(forKey: "openPairSSH") { editingSSH = true } }
             #endif
             #endif
-            .modifier(PairSheetChrome(url: $url, token: $token, connecting: connecting, connect: { await connect() }))
+            .modifier(PairSheetChrome(url: $url, token: $token, passwordMode: $passwordMode, connecting: connecting, connect: { await connect() }))
         }
     }
 
@@ -1029,12 +1067,27 @@ struct PairView: View {
                     Text("If you use the terminal on the hub's machine: run this line there and it prints a QR code and a pairing link.")
                 }
     }
+
+    /// Cloudflare Access, closed until needed; filled in before scanning or connecting.
+    private var accessSection: some View {
+        Section {
+            DisclosureGroup(isExpanded: $showAccess) {
+                CloudflareAccessFields(clientID: $accessID, clientSecret: $accessSecret, idPrefix: "pair.access")
+            } label: {
+                Label("Cloudflare Access", systemImage: Theme.Icon.cloudflareAccess).lineLimit(1)
+            }
+            .accessibilityIdentifier("pair.access")
+        } footer: {
+            Text("Only for a hub published through Cloudflare Access: the service token's Client ID and Client Secret. Kept with this hub's pairing in the keychain.")
+        }
+    }
 }
 
 /// The pairing sheet's title, Cancel / Connect and the Mac's paste handling, around its form.
 private struct PairSheetChrome: ViewModifier {
     @Binding var url: String
     @Binding var token: String
+    @Binding var passwordMode: Bool
     var connecting: Bool
     var connect: () async -> Void
     @Environment(\.dismiss) private var dismiss
@@ -1051,6 +1104,7 @@ private struct PairSheetChrome: ViewModifier {
                 guard let cfg = ServerConfig(pairURL: typed) else { return }
                 url = cfg.url.absoluteString
                 token = cfg.token
+                passwordMode = false
                 Task { await connect() }
             }
             #endif
@@ -1060,7 +1114,7 @@ private struct PairSheetChrome: ViewModifier {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button { Task { await connect() } } label: { if connecting { ProgressView() } else { Text("Connect [V N C Page a55741]") } }
-                        .disabled(connecting || token.isEmpty || URL(string: url) == nil)
+                        .disabled(connecting || (!passwordMode && token.isEmpty) || url.isEmpty)
                 }
             }
     }
@@ -1092,15 +1146,21 @@ extension AppModel {
 
 extension PairView {
     fileprivate func connect() async {
+        if passwordMode { await passwordLogin(); return }
         guard let u = URL(string: url.trimmingCharacters(in: .whitespaces)) else { return }
         connecting = true
         defer { connecting = false }
         do {
-            try await model.pair(ServerConfig(url: u, token: token.trimmingCharacters(in: .whitespaces)), ssh: ssh)
+            try await model.pair(ServerConfig(url: u, token: token.trimmingCharacters(in: .whitespaces),
+                                              access: HubAccess(clientID: accessID, clientSecret: accessSecret)), ssh: ssh)
             Haptics.success()
             dismiss()
         } catch {
-            if PairError.isExpiredCode(error) {
+            if error is CloudflareAccessError {
+                // Access, not the address: no advice about networks or SSH; its fields open to fill in or correct.
+                self.error = error.localizedDescription
+                showAccess = true
+            } else if PairError.isExpiredCode(error) {
                 // A code already used or out of date (401 invalid_token): not 「invalid token」, and a way to scan again.
                 self.error = nil
                 expired = true
@@ -1115,6 +1175,30 @@ extension PairView {
             }
             if !expired { scanning = DataScannerViewController.isSupported && DataScannerViewController.isAvailable } // scan again
             Haptics.error()
+        }
+    }
+
+    private func passwordLogin() async {
+        connecting = true
+        error = nil
+        defer { connecting = false }
+        do {
+            #if os(macOS)
+            let kind = "desktop"
+            #else
+            let kind = "phone"
+            #endif
+            let flow = try PasswordLoginRequest(address: url, name: UIDevice.current.name, kind: kind)
+            let callback = try await webAuth.authenticate(using: flow.page, callback: .customScheme("persona"),
+                preferredBrowserSession: .ephemeral, additionalHeaderFields: [:])
+            let credential = try await flow.exchange(callback)
+            try await model.pair(ServerConfig(url: flow.server, token: credential.token), deviceID: credential.id)
+            Haptics.success()
+            dismiss()
+        } catch let e as ASWebAuthenticationSessionError where e.code == .canceledLogin {
+            return
+        } catch {
+            if !error.isCancellation { self.error = error.localizedDescription; Haptics.error() }
         }
     }
 }
@@ -1152,164 +1236,23 @@ struct QRScanner: UIViewControllerRepresentable {
 }
 #endif
 
-/// Claude Code's /config options (a whitelist of ~/.claude/settings.json keys) on each machine.
-/// Which agent's settings a page edits: Claude Code's settings.json or Codex's config.toml (the node keeps a whitelist
-/// of each, claudeconfig.go / codexconfig.go).
-enum AgentSettingsKind {
-    case claude, codex
-
-    var title: String { self == .claude ? String(localized: "Claude Code Settings") : String(localized: "Codex Settings") }
-
-    var footer: String {
-        switch self {
-        case .claude: String(localized: "This edits ~/.claude/settings.json on that machine and changes only the settings below. New Claude sessions pick them up; running sessions usually need a restart.")
-        case .codex: String(localized: "This edits ~/.codex/config.toml on that machine and changes only the settings below; everything else in the file (model providers, project trust, and so on) stays as is. New Codex sessions pick them up.")
-        }
-    }
-}
-
-struct ClaudeSettingsView: View {
-    @Environment(AppModel.self) private var model
-    var agent: AgentSettingsKind = .claude
-    /// The machine id, "group|id" for another group of hubs (`MachineRef.path`).
-    @StoredValue("claudeSettings.machine") private var machineID = ""
-    private var ref: MachineRef { MachineRef(path: machineID) }
-    @StoredValue("claudeSettings.applyAll") private var applyAll = true
-    @State private var settings: [APIClient.ClaudeSetting] = []
-    @State private var loading = false
-    @State private var error: String?
-    @State private var strings: [String: String] = [:]
-    /// Live Replies of the machine shown (Claude Code only; nil before it loads, and gone on a hub without it).
-    @State private var liveReplies: LiveRepliesModel?
-
-    var body: some View {
-        SettingsForm {
-            Section {
-                Picker(String(localized: "picker.machine", defaultValue: "Machine"), selection: $machineID) {
-                    ForEach(model.machines.filter(\.online), id: \.ref) { m in Text(m.title).tag(m.ref.path) }
-                }
-                Toggle("Apply to All Online Machines", isOn: $applyAll)
-            } footer: {
-                Text(agent.footer)
-            }
-            if let error {
-                Section { Text(error).foregroundStyle(Theme.danger).font(Theme.Font.caption) }
-            }
-            #if os(macOS)
-            // An empty group draws as a blank gap in a Mac form (while loading, or a machine with nothing to set).
-            if !settings.isEmpty { Section { ForEach(settings) { s in row(s) } } }
-            #else
-            Section {
-                ForEach(settings) { s in row(s) }
-            }
-            #endif
-            if agent == .claude, let live = liveReplies, live.ref == ref, !live.unsupported {
-                LiveRepliesSection(model: live, others: applyAll ? model.machines.filter { $0.online && $0.ref != ref }.map(\.ref) : [])
-            }
-            if agent == .claude, !machineID.isEmpty { ClaudeDirsSection(ref: ref) }
-        }
-        .themedPage()
-        .detailTitle(agent.title)
-        .onAppear { if machineID.isEmpty { machineID = model.hubRef(model.hubMachineID).path } } // first visit: the hub's machine
-        .overlay { if loading && settings.isEmpty { ProgressView() } }
-        .task(id: machineID) { await load() }
-        .task(id: agent == .claude ? machineID : "") { await loadLiveReplies() }
-        .refreshable {
-            await load()
-            await liveReplies?.load()
-        }
-    }
-
-    /// The machine's Live Replies switch, read again whenever another machine is picked.
-    private func loadLiveReplies() async {
-        guard agent == .claude, !machineID.isEmpty else { return }
-        let live = LiveRepliesModel(ref: ref, deps: .live(model))
-        liveReplies = live
-        await live.load()
-    }
-
-    @ViewBuilder private func row(_ s: APIClient.ClaudeSetting) -> some View {
-        let value = s.value ?? s.default
-        VStack(alignment: .leading, spacing: Theme.Space.xs) {
-            switch s.type {
-            case "bool":
-                Toggle(isOn: Binding(get: { value?.bool ?? false }, set: { v in Task { await set(s.key, .bool(v)) } })) {
-                    title(s)
-                }
-            case "enum":
-                Picker(selection: Binding(get: { value?.string ?? "" }, set: { v in Task { await set(s.key, .string(v)) } })) {
-                    ForEach(s.options ?? [], id: \.self) { Text(AgentSettingOptions.name($0, key: s.key)).tag($0) }
-                } label: { title(s) }
-            default:
-                title(s)
-                TextField(s.default?.string.flatMap { $0.isEmpty ? nil : $0 } ?? String(localized: "Not set"),
-                          text: Binding(get: { strings[s.key] ?? value?.string ?? "" }, set: { strings[s.key] = $0 }))
-                    .onSubmit { Task { await set(s.key, .string(strings[s.key] ?? "")) } }
-                    .submitLabel(.done)
-                    #if os(macOS)
-                    .labelsHidden() // a Mac form shows a field's title as its label; here it is the prompt (#1221)
-                    #endif
-            }
-        }
-        .padding(.vertical, Theme.Space.xxs)
-    }
-
-    private func title(_ s: APIClient.ClaudeSetting) -> some View {
-        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-            HStack(spacing: Theme.Space.sm) {
-                Text(s.title)
-                if s.value == nil { Text("Default [Prompt Composer 844b8c]").font(Theme.Font.label).foregroundStyle(.tertiary) }
-            }
-            Text(s.detail).font(Theme.Font.label).foregroundStyle(.secondary)
-        }
-    }
-
-    private func load() async {
-        if model.machine(ref)?.online != true, let first = model.machines.first(where: \.online) { machineID = first.ref.path }
-        let ref = ref
-        guard let api = model.api(ref.group) else { return }
-        loading = true
-        defer { loading = false }
-        do {
-            settings = agent == .claude ? try await api.claudeSettings(machine: ref.id) : try await api.codexSettings(machine: ref.id)
-            error = nil
-        } catch {
-            self.error = error.shown
-        }
-    }
-
-    private func set(_ key: String, _ value: JSONValue) async {
-        // Every online machine of every group of hubs, each through its own group's hub.
-        let targets = applyAll ? model.machines.filter(\.online).map(\.ref) : [ref]
-        var failed: [String] = []
-        for target in targets {
-            guard let api = model.api(target.group) else { continue }
-            do {
-                let list = agent == .claude ? try await api.setClaudeSetting(machine: target.id, key: key, value: value)
-                    : try await api.setCodexSetting(machine: target.id, key: key, value: value)
-                if target == ref { settings = list }
-            } catch {
-                if !error.isCancellation { failed.append(String(localized: "\(model.machine(target)?.title ?? target.id): \(error.localizedDescription)")) }
-            }
-        }
-        if failed.isEmpty {
-            Haptics.success()
-            model.toast = Toast(targets.count > 1 ? String(localized: "Applied to \(targets.count) machines") : String(localized: "Saved"), style: .success)
-        } else {
-            Haptics.error()
-            error = failed.joined(separator: "\n")
-        }
-    }
-}
-
 /// Settings' Machines row: N / M online. Its own view: the page read `model.machines` for it, and a machine's heartbeat (on every
 /// push of a busy hub) drew the whole page and its list again (#1495); now only this row.
 private struct MachinesSettingsRow: View {
     @Environment(AppModel.self) private var model
+    @State private var summary = ""
 
     var body: some View {
-        SettingsRow(title: String(localized: "Machines"), symbol: Theme.Icon.machines, tint: Theme.Hue.blue,
-                    value: String(localized: "\(model.machines.filter(\.online).count) / \(model.machines.count) Online"))
+        SettingsRow(title: String(localized: "Machines"), symbol: Theme.Icon.machines, tint: Theme.Hue.blue, value: summary)
+            .task { update() }
+            .onChange(of: model.machines) { update() }
+            .onChange(of: model.assistantManagerID) { update() }
+            .onChange(of: model.managerRoster) { update() }
+    }
+
+    private func update() {
+        let machines = AssistantSettingsRequestScope(model).machines(model)
+        summary = String(localized: "\(machines.filter(\.online).count) / \(machines.count) Online")
     }
 }
 
@@ -1324,11 +1267,15 @@ struct SettingsRow: View {
     var look: ValueLook = .plain
     /// A brand's own mark (an asset of `Theme.Brand`) in place of the tinted tile, in the BeautifulUI style.
     var brand: String? = nil
+    /// Public catalog artwork; absent artwork preserves the existing row mark.
+    var iconURL: String? = nil
 
     var body: some View {
         if AppStyle.current.usesBeautifulUI {
             BUIListRow(title, value: value.flatMap { $0.isEmpty ? nil : $0 }) {
-                if let brand { SettingsBrandMark(asset: brand) } else { IconTile(symbol, tint: tint) }
+                if let iconURL, ExtensionImageCache.url(iconURL) != nil {
+                    ExtensionLogo(url: iconURL, side: Theme.Size.iconL)
+                } else if let brand { SettingsBrandMark(asset: brand) } else { IconTile(symbol, tint: tint) }
             }
         } else if let value {
             LabeledContent {

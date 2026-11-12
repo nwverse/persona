@@ -1,7 +1,7 @@
 import BeautifulUI
 import SwiftUI
 
-/// One machine (docs/server/machines.md「机器详情」), most used first: how it is (the card of Machines, without its numbers), its
+/// One machine (docs/server/machines.md「App」), most used first: how it is (the card of Machines, without its numbers), its
 /// agents (a tap opens the chat), its values now and CPU / memory / network / load over 1, 6 or 24 hours (hold a chart
 /// to read a moment, all charts follow), the system, the launchers, how the hub reaches it (offline: right under the
 /// card, with Reconnect). The metrics refresh while on screen and the app is in front: every 10 s for the hour, every
@@ -38,16 +38,20 @@ struct MachineDetailView: View {
         #endif
     }
 
-    /// A machine's agents: live ones, not the Chat tab's assistant conversations (the Agents tab leaves those out too).
+    /// A machine's agents: live ones, not the Chat tab's assistant conversations (the Agents tab leaves those out too),
+    /// nor a subtask, which the Agents list folds under the session that started it and does not count unless it needs
+    /// the user (`Session.isNestedSubtask`, as Android's Machines card).
     static func agents(_ model: AppModel, _ ref: MachineRef) -> [Session] {
-        (model.sessionsByMachine[ref] ?? []).filter { $0.status.isLive && !$0.assistant }
+        (model.sessionsByMachine[ref] ?? []).filter(isListed)
     }
 
     /// Every machine's agents (`agents(_:_:)`), for a page that can be kept hidden behind another: watched only in front
     /// (`AppModel.allSessions(inFront:)`).
     static func agentsByMachine(_ model: AppModel, inFront: Bool) -> [MachineRef: [Session]] {
-        Dictionary(grouping: model.allSessions(inFront: inFront).filter { $0.status.isLive && !$0.assistant }, by: \.machineRef)
+        Dictionary(grouping: model.allSessions(inFront: inFront).filter(isListed), by: \.machineRef)
     }
+
+    private static func isListed(_ s: Session) -> Bool { s.status.isLive && !s.assistant && !s.isNestedSubtask }
 
     /// The agents before Show All: with dozens on one machine its charts would be screens away.
     static let agentsShown = 5
@@ -64,57 +68,84 @@ struct MachineDetailView: View {
         let machine = model.machine(ref)
         let system = data?.system ?? machine?.system
         let online = machine?.online ?? data?.online ?? false
-        ScrollView {
-            VStack(alignment: .leading, spacing: Theme.Space.section) {
-                if let machine {
-                    VStack(spacing: Theme.Space.m) {
-                        MachineCard(machine: machine, metrics: data, showsMetrics: false, showsName: false)
-                        // The card says a known error_code in words; the hub's own words stay here.
-                        if AddComputerText.machineProblem(machine.errorCode) != nil, let raw = machine.error, !raw.isEmpty {
-                            problemDetails(raw)
+        ScrollViewReader { scroller in
+            ScrollView {
+                VStack(alignment: .leading, spacing: Theme.Space.section) {
+                    if let machine {
+                        VStack(spacing: Theme.Space.m) {
+                            MachineCard(machine: machine, metrics: data, showsMetrics: false, showsName: false)
+                            // The card says a known error_code in words; the hub's own words stay here.
+                            if AddComputerText.machineProblem(machine.errorCode) != nil, let raw = machine.error, !raw.isEmpty {
+                                problemDetails(raw)
+                            }
+                            // Offline with its manager (the card says so): it comes back with that manager, and Reconnect
+                            // goes through it.
+                            if !online, !machine.isPending, model.offlineManager(of: machine, group: ref.group) == nil {
+                                connection(machine)
+                            }
                         }
-                        if !online, !machine.isPending { connection(machine) }
-                    }
-                    agentsSection(machine)
-                    filesRow(online: online)
-                    if canRename(machine) { renameRow(machine) }
-                    // Its token usage, then how busy it is, then what it can do (#4973).
-                    MachineUsageSection(ref: ref)
-                    VStack(alignment: .leading, spacing: Theme.Space.m) {
-                        heading(String(localized: "Monitor [Message Views fdc390]"))
-                        if let s = data?.latest, online { NowGrid(sample: s, cores: system?.cores) }
-                        SegmentedChoice(String(localized: "Time Range"), MetricRange.allCases.map { ($0, $0.title) }, selection: $range)
-                            .accessibilityIdentifier("metric-range")
-                        charts(system: system)
-                        if let cores = data?.latest?.cores, online, cores.count > 1 { CoreBars(cores: cores) }
-                    }
-                    // The node's self-check by feature (#3018); two rows when everything works.
-                    NodeHealthSection(ref: ref, machine: machine)
-                    if let computer = machine.computer { ComputerSection(ref: ref, computer: computer, online: online) }
-                    if let browser = machine.browser { BrowserSection(ref: ref, browser: browser, online: online) }
-                    if machine.browser?.setUp == true { BrowserLoginsSection(ref: ref, online: online) }
-                    if let system {
+                        agentsSection(machine)
+                        filesRow(online: online)
+                        #if os(iOS)
+                        // Its clipboard and the phone's, both ways (#3064), next to its files: what is handed over to it.
+                        // The phone only for now; the Mac and visionOS apps follow later.
+                        if let clipboard = machine.clipboard {
+                            ClipboardSection(ref: ref, machine: machine, listed: clipboard, online: online).id(Self.clipboardAnchor)
+                        }
+                        #endif
+                        if canRename(machine) { renameRow(machine) }
+                        // Its token usage, then how busy it is, then what it can do (#4973).
+                        MachineUsageSection(ref: ref)
                         VStack(alignment: .leading, spacing: Theme.Space.m) {
-                            heading(String(localized: "System"))
-                            SystemFacts(system: system, machine: machine)
+                            heading(String(localized: "Monitor [Message Views fdc390]"))
+                            if let s = data?.latest, online { NowGrid(sample: s, cores: system?.cores) }
+                            SegmentedChoice(String(localized: "Time Range"), MetricRange.allCases.map { ($0, $0.title) }, selection: $range)
+                                .accessibilityIdentifier("metric-range")
+                            charts(system: system)
+                            if let cores = data?.latest?.cores, online, cores.count > 1 { CoreBars(cores: cores) }
                         }
+                        // The node's self-check by feature (#3018); two rows when everything works.
+                        NodeHealthSection(ref: ref, machine: machine)
+                        if let computer = machine.computer { ComputerSection(ref: ref, computer: computer, online: online) }
+                        if let browser = machine.browser { BrowserSection(ref: ref, browser: browser, online: online) }
+                        if machine.browser?.setUp == true { BrowserLoginsSection(ref: ref, online: online) }
+                        #if os(iOS)
+                        // The iPhones paired with this computer, for the assistant (docs/extensions/iphone.md); the frozen Mac app skips it.
+                        if let iphone = machine.iphone { IPhoneControlSection(ref: ref, iphone: iphone, online: online) }
+                        #endif
+                        if let system {
+                            VStack(alignment: .leading, spacing: Theme.Space.m) {
+                                heading(String(localized: "System"))
+                                SystemFacts(system: system, machine: machine)
+                            }
+                        }
+                        launchersSection(machine)
+                        // What plugins draw for this machine (docs/extensions/extensions.md「UI slots」machine_section).
+                        ExtensionMachineSections(page: plugins, link: $pluginLink)
+                        VStack(alignment: .leading, spacing: Theme.Space.m) {
+                            if online { connection(machine) }
+                            Text("Monitoring history is kept for 24 hours: one point every 10 seconds for the last hour, one a minute before that. Gaps while disconnected aren't joined.")
+                                .font(Theme.Font.label).foregroundStyle(.secondary)
+                                .padding(.horizontal, Theme.Space.xs)
+                        }
+                    } else if model.machines.isEmpty {
+                        ProgressView().frame(maxWidth: .infinity).padding(.vertical, Theme.Space.xxl)
+                    } else {
+                        EmptyStateView(symbol: Theme.Icon.machines, title: String(localized: "Can't find this machine"), message: String(localized: "It's no longer in the hub's configuration."))
                     }
-                    launchersSection(machine)
-                    // What plugins draw for this machine (docs/extensions/extensions.md「UI 插槽」machine_section).
-                    ExtensionMachineSections(page: plugins, link: $pluginLink)
-                    VStack(alignment: .leading, spacing: Theme.Space.m) {
-                        if online { connection(machine) }
-                        Text("Monitoring history is kept for 24 hours: one point every 10 seconds for the last hour, one a minute before that. Gaps while disconnected aren't joined.")
-                            .font(Theme.Font.label).foregroundStyle(.secondary)
-                            .padding(.horizontal, Theme.Space.xs)
-                    }
-                } else if model.machines.isEmpty {
-                    ProgressView().frame(maxWidth: .infinity).padding(.vertical, Theme.Space.xxl)
-                } else {
-                    EmptyStateView(symbol: Theme.Icon.machines, title: String(localized: "Can't find this machine"), message: String(localized: "It's no longer in the hub's configuration."))
                 }
+                .padding(Theme.Space.l)
             }
-            .padding(Theme.Space.l)
+            #if DEBUG
+            // `-openMachineClipboard YES`: the page opens scrolled to Clipboard's top (`bottom`: its end, for the largest
+            // text sizes; screenshots).
+            .task(id: machine?.clipboard != nil) {
+                let at = UserDefaults.standard.string(forKey: "openMachineClipboard")
+                guard machine?.clipboard != nil, at == "YES" || at == "bottom" else { return }
+                try? await Task.sleep(for: .milliseconds(300))
+                scroller.scrollTo(Self.clipboardAnchor, anchor: at == "bottom" ? .bottom : .top)
+            }
+            #endif
         }
         .themedGroupedPage()
         .pluginLinks($pluginLink)
@@ -167,6 +198,8 @@ struct MachineDetailView: View {
             await plugins.load(ref, app: model, redraw: false)
         }
     }
+
+    private static let clipboardAnchor = "machine-clipboard"
 
     nonisolated private struct Poll: Hashable, Sendable { var range: MetricRange; var active: Bool }
     nonisolated private struct ExtensionsKey: Hashable, Sendable { var ref: MachineRef; var slots: Bool }
@@ -227,7 +260,28 @@ struct MachineDetailView: View {
                 .card(padding: 0)
             }
             engineRow(machine)
+            if machine.online { terminalsRow }
         }
+    }
+
+    /// This computer's terminals, plain ones too (#4754): a leaf like the engine row, so a view push is fine here.
+    private var terminalsRow: some View {
+        NavigationLink {
+            TerminalsView(only: ref.path)
+        } label: {
+            HStack(spacing: Theme.Space.s) {
+                ThemedIcon(Theme.Icon.terminal).font(Theme.Font.body).foregroundStyle(Theme.accent).scaledFrame(width: Theme.Size.icon)
+                Text("Terminals").font(Theme.Font.body).lineLimit(1)
+                Spacer(minLength: Theme.Space.s)
+                ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, Theme.Space.l)
+            .padding(.vertical, Theme.Space.m)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("machine.terminals")
+        .card(padding: 0)
     }
 
     /// Which engine's sessions the machine shows (herdr, Herdr App…): it decides the list above.
@@ -249,7 +303,9 @@ struct MachineDetailView: View {
             .buttonStyle(.plain)
             .accessibilityIdentifier("machine.engine")
             .card(padding: 0)
-            Text("Only sessions in the selected engine are shown.").font(Theme.Font.label).foregroundStyle(.secondary)
+            Text(machine.engineHosts?.isEmpty == true ? String(localized: "Shows the desktop apps' sessions.")
+                 : String(localized: "Only sessions in the selected engine are shown."))
+                .font(Theme.Font.label).foregroundStyle(.secondary)
                 .padding(.horizontal, Theme.Space.xs)
         }
     }
@@ -455,8 +511,10 @@ struct MachineDetailView: View {
             return link ? String(localized: "Not connected yet: authentication failed. Pair Persona Link again on this computer, then reconnect")
                 : String(localized: "Not connected yet: authentication failed. Check that this computer's SSH key and account are still valid, then reconnect")
         case .version:
-            return m.map(NodeHealth.canDeploy) == true ? String(localized: "Not connected yet: version mismatch. Redeploy to update the node to the same version as the hub")
-                : String(localized: "Not connected yet: version mismatch. Upgrade the node on this computer so it matches the hub")
+            if m.map(NodeHealth.canDeploy) == true {
+                return String(localized: "Not connected yet: version mismatch. Reconnect first; then Redeploy updates the node to the hub's version")
+            }
+            return String(localized: "Not connected yet: version mismatch. Upgrade the node on this computer so it matches the hub")
         case .timeout:
             return String(localized: "Not connected yet: the connection timed out. The network is unstable or the computer is asleep. Wait for it to wake up or switch networks, then reconnect")
         case .unreachable:

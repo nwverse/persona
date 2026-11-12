@@ -7,8 +7,9 @@ extension InteractionKind {
         switch self {
         case .question: String(localized: "Claude Has a Question")
         case .plan: String(localized: "Plan Awaiting Approval")
-        case .permission: String(localized: "Needs Your Permission")
+        case .permission: String(localized: "Waiting for Your Approval")
         case .screen: String(localized: "Terminal Needs You")
+        case .elicitation: String(localized: "MCP Request")
         }
     }
 
@@ -18,6 +19,7 @@ extension InteractionKind {
         case .plan: Theme.Icon.planFilled
         case .permission: Theme.Icon.waitsForYou
         case .screen: Theme.Icon.terminalFilled
+        case .elicitation: Theme.Icon.mcpForm
         }
     }
 }
@@ -28,15 +30,29 @@ extension Interaction {
     var title: String {
         if toolName == "ask_user" { return String(localized: "Persona Has a Question") }
         if isSecretRun { return secretRunTitle }
+        if kind == .elicitation {
+            return elicitation?.isURL == true ? String(localized: "MCP Link Needs You") : String(localized: "MCP Form Needs You")
+        }
         if let name = agentName {
             switch kind {
             case .question: return String(localized: "\(name) Has a Question")
-            case .permission: return String(localized: "\(name) Needs Your Permission")
+            case .permission: return String(localized: "\(name) Is Waiting for Your Approval")
             default: break
             }
         }
         return kind.title
     }
+
+    /// Whether the card offers Always: as the manager says where it does (`alwaysHonored`, #3590: its own cards keep
+    /// nothing), else on a conversation's card, and on another agent's (Codex) only when it says what always allows.
+    var offersAlways: Bool {
+        if let alwaysHonored { return alwaysHonored }
+        if agentName != nil { return !(alwaysLabel ?? "").isEmpty }
+        return sessionID != ""
+    }
+
+    /// The card's symbol: its kind's, a link for an MCP link.
+    var symbol: String { kind == .elicitation && elicitation?.isURL == true ? Theme.Icon.link : kind.symbol }
 
     /// Describe the actual remembered rule, not just the command or file in this request.
     var alwaysScopeDetail: String? {
@@ -80,20 +96,24 @@ struct InteractionPreviewCard: View {
     var agentLabel = "Claude"
     /// The list's cell is the card (same width and corners as the agents' rows): no chrome of its own.
     var inCell = false
+    /// Under its session's first card in the Agents list (`AgentsNeedsYou`), a card does not repeat the session's place.
+    var showsPlace = true
     var open: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.m) {
             HStack(spacing: Theme.Space.s) {
-                ThemedIcon(interaction.kind.symbol)
+                ThemedIcon(interaction.symbol)
                     .foregroundStyle(StatusPalette.needsYou.dot)
                     .scaledFrame(width: Theme.Size.icon) // one column: the titles line up card to card
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                     Text(title).font(Theme.Font.heading).lineLimit(1)
-                    Text(interaction.placeLine(machine: machine))
-                        .font(Theme.Font.label)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    if showsPlace {
+                        Text(interaction.placeLine(machine: machine))
+                            .font(Theme.Font.label)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
                 Spacer()
                 #if !os(macOS) // a phone's row says it opens; a Mac's list row does not (#2113)
@@ -250,6 +270,7 @@ struct CardFormKeepsEnd: PreferenceKey {
 /// so a long question never hides the conversation it is about.
 struct InteractionPanel: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.dynamicTypeSize) private var typeSize
     var interaction: Interaction
     @State private var collapsed = false
     @State private var formHeight: CGFloat = 0
@@ -320,10 +341,12 @@ struct InteractionPanel: View {
     /// The title, ⋯ and fold; a tap anywhere on it folds the card.
     private var header: some View {
         HStack(spacing: Theme.Space.sm) {
-            ThemedIcon(interaction.kind.symbol)
+            ThemedIcon(interaction.symbol)
                 .font(Theme.Font.labelStrong)
                 .foregroundStyle(StatusPalette.needsYou.dot)
-            Text(panelTitle).font(Theme.Font.labelStrong).foregroundStyle(StatusPalette.needsYou.text).lineLimit(1)
+            // Whole at the largest text sizes too: there the title takes up to three lines (#2970).
+            Text(panelTitle).font(Theme.Font.labelStrong).foregroundStyle(StatusPalette.needsYou.text)
+                .lineLimit(typeSize.isAccessibilitySize ? 3 : 1)
             VoiceAskMark(interaction: interaction) // Asking by Voice (docs/assistant/voice.md 1.2 H)
             if collapsed {
                 Text(previewText).font(Theme.Font.secondary).foregroundStyle(.primary).lineLimit(1)
@@ -373,6 +396,8 @@ struct InteractionPanel: View {
         case .permission:
             if interaction.agentName != nil { AgentPermissionForm(interaction: interaction) } else { PermissionForm(interaction: interaction) }
         case .screen: ScreenForm(interaction: interaction)
+        // One view per card, as the password card: another card in its place starts empty.
+        case .elicitation: ElicitationForm(interaction: interaction).id(interaction.uid)
         }
     }
 
@@ -380,8 +405,9 @@ struct InteractionPanel: View {
         switch interaction.kind {
         case .question: interaction.questions?.first?.question ?? ""
         case .plan: PlanText.title(interaction.plan ?? "")
-        case .permission: interaction.summary ?? ""
+        case .permission: interaction.permissionTarget ?? ""
         case .screen: interaction.screenDialog?.question ?? ""
+        case .elicitation: interaction.elicitation?.message ?? ""
         }
     }
 
@@ -406,9 +432,12 @@ struct QuestionForm: View {
     @State private var page = 0
     @State private var sending = false
     @State private var writing = false
+    /// Several questions (#2970): the review shown before the answers go.
+    @State private var reviewing = false
     @FocusState private var otherFocused: Bool
 
     private var questions: [Question] { interaction.questions ?? [] }
+    private var stepped: Bool { QuestionSteps.enabled(questions) }
 
     var body: some View {
         if AppStyle.current.usesBeautifulUI { BUIQuestionForm(interaction: interaction) } else { plain }
@@ -417,9 +446,21 @@ struct QuestionForm: View {
     @ViewBuilder private var plain: some View {
         VStack(alignment: .leading, spacing: Theme.Space.m) {
             DelegateNotes(interaction: interaction)
-            if questions.indices.contains(page) {
+            if stepped {
+                ScreenSteps(steps: QuestionSteps.steps(questions) { answer(questions[$0]) != nil }, current: reviewing ? nil : page)
+            }
+            if stepped, reviewing {
+                ScreenReview(rows: QuestionSteps.rows(questions, answers: shownAnswers), sending: sending ? "submit" : nil,
+                             back: { withAnimation(Theme.Motion.standard) { reviewing = false } },
+                             submit: { send() })
+            } else if questions.indices.contains(page) {
                 let q = questions[page]
-                if questions.count > 1 || q.header != nil || q.multiSelect {
+                if stepped {
+                    // The capsules carry the header and where it is.
+                    if q.multiSelect {
+                        Text("Select multiple").font(Theme.Font.labelStrong).foregroundStyle(.secondary)
+                    }
+                } else if questions.count > 1 || q.header != nil || q.multiSelect {
                     Text([q.header.flatMap { $0.isEmpty ? nil : $0 },
                           questions.count > 1 ? "\(page + 1)/\(questions.count)" : nil,
                           q.multiSelect ? String(localized: "Select multiple") : nil].compactMap { $0 }.joined(separator: " · "))
@@ -434,7 +475,7 @@ struct QuestionForm: View {
                     .id(page)
                     .transition(.asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity), removal: .opacity))
             }
-            if needsFooter { footer }
+            if needsFooter, !(stepped && reviewing) { footer }
         }
         .onChange(of: page) { _, p in writing = questions.indices.contains(p) && !(other[questions[p].question] ?? "").isEmpty }
     }
@@ -603,11 +644,29 @@ struct QuestionForm: View {
     private var allAnswered: Bool { questions.allSatisfy { answer($0) != nil } }
     private var canAdvance: Bool { questions.indices.contains(page) && answer(questions[page]) != nil }
 
+    /// The answers as the review shows them, by question.
+    private var shownAnswers: [Int: String] {
+        var out: [Int: String] = [:]
+        for (i, q) in questions.enumerated() {
+            out[i] = QuestionSteps.shown(q, picked: picks[q.question, default: []], typed: other[q.question] ?? "")
+        }
+        return out
+    }
+
     private func submit() {
         if !allAnswered {
             if let next = questions.firstIndex(where: { answer($0) == nil }) { withAnimation(Theme.Motion.standard) { page = next } }
             return
         }
+        if stepped, !reviewing { // several questions: the review first
+            otherFocused = false
+            withAnimation(Theme.Motion.standard) { reviewing = true }
+            return
+        }
+        send()
+    }
+
+    private func send() {
         sending = true
         otherFocused = false
         var answers: [String: String] = [:]
@@ -692,6 +751,7 @@ struct PermissionForm: View {
         // One view per card: another card in this place starts with an empty password field (a field still being
         // typed in keeps its UIKit text when only the binding is cleared).
         if interaction.isSecretRun { SecretRunForm(interaction: interaction).id(interaction.id) }
+        else if interaction.isSecretHandoff { SecretHandoffForm(interaction: interaction).id(interaction.id) }
         else if interaction.requiresInput { PermissionInputForm(interaction: interaction) }
         else if AppStyle.current.usesBeautifulUI { BUIPermissionForm(interaction: interaction) } else { plain }
     }
@@ -700,14 +760,18 @@ struct PermissionForm: View {
         VStack(alignment: .leading, spacing: Theme.Space.m) {
             HStack(spacing: Theme.Space.s) {
                 ThemedIcon(ToolPresentation.symbol(interaction.toolName ?? "")).foregroundStyle(Theme.accent)
-                Text(interaction.toolName ?? String(localized: "Tool")).font(Theme.Font.secondaryStrong)
+                Text(interaction.toolDisplayName ?? String(localized: "Tool")).font(Theme.Font.secondaryStrong)
             }
-            Text(interaction.summary ?? interaction.toolInput?.pretty ?? "")
-                .font(Theme.Font.code)
-                .padding(Theme.Space.m)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Theme.codeBackground, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
-                .textSelection(.enabled)
+            if let diff = PermissionDiff(interaction) {
+                PermissionDiffView(diff: diff, key: interaction.id)
+            } else {
+                Text(interaction.permissionSubject ?? "")
+                    .font(Theme.Font.code)
+                    .padding(Theme.Space.m)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Theme.codeBackground, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
+                    .textSelection(.enabled)
+            }
             HStack {
                 Button { Task { await model.resolve(interaction, Resolution(allow: false)) } } label: {
                     Text("Deny").lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity)
@@ -719,7 +783,7 @@ struct PermissionForm: View {
                 .themedButton(prominent: true)
             }
             .controlSize(.large)
-            if interaction.sessionID != "" {
+            if interaction.offersAlways {
                 Button("Always Allow in Session") {
                     Task { await model.resolve(interaction, Resolution(allow: true, always: true)) }
                 }
@@ -740,7 +804,7 @@ struct PermissionForm: View {
     }
 }
 
-/// A Codex / TRAEX approval read off its TUI (docs/integrations/codex.md「提问和审批」): the command or the edits in full, the agent's
+/// A Codex / TRAEX approval read off its TUI (docs/integrations/codex.md「Questions and approvals」): the command or the edits in full, the agent's
 /// reason, Deny / Approve, Always Approve naming what it would allow (only when the TUI offers it), and Deny and Explain: the reason
 /// stops the turn and goes to the agent as its next message.
 struct AgentPermissionForm: View {
@@ -768,12 +832,16 @@ struct AgentPermissionForm: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text(interaction.summary ?? interaction.toolInput?.pretty ?? "")
-                .font(Theme.Font.code)
-                .padding(Theme.Space.m)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Theme.codeBackground, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
-                .textSelection(.enabled)
+            if let diff = PermissionDiff(interaction) {
+                PermissionDiffView(diff: diff, key: interaction.id)
+            } else {
+                Text(interaction.permissionSubject ?? "")
+                    .font(Theme.Font.code)
+                    .padding(Theme.Space.m)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Theme.codeBackground, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
+                    .textSelection(.enabled)
+            }
             HStack {
                 Button { Task { await model.resolve(interaction, Resolution(allow: false)) } } label: {
                     Text("Deny").lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity)
@@ -785,11 +853,15 @@ struct AgentPermissionForm: View {
                 .themedButton(prominent: true)
             }
             .controlSize(.large)
-            if let always = interaction.alwaysLabel, !always.isEmpty {
+            if interaction.offersAlways {
                 Button {
                     Task { await model.resolve(interaction, Resolution(allow: true, always: true)) }
                 } label: {
-                    Text("Always Approve · \(always)").lineLimit(1).minimumScaleFactor(0.8)
+                    if let always = interaction.alwaysLabel, !always.isEmpty {
+                        Text("Always Approve · \(always)").lineLimit(1).minimumScaleFactor(0.8)
+                    } else {
+                        Text("Always Approve").lineLimit(1).minimumScaleFactor(0.8)
+                    }
                 }
                 #if os(macOS)
                 .buttonStyle(.link)
@@ -859,6 +931,8 @@ struct ScreenForm: View {
     @State private var picks: Set<String>?
     @State private var freeText: String?
     @State private var showTerminal = false
+    /// The last multi-select answer of several questions, held for the review shown before it goes (#2970).
+    @State private var holding: Resolution?
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -877,10 +951,60 @@ struct ScreenForm: View {
     }
 
     private func dialog(_ d: ScreenParser.Dialog, screen: String) -> some View {
-        VStack(alignment: .leading, spacing: Theme.Space.m) {
+        // Several questions (#2970): Previous / Next, the step it is on, the review before they go.
+        let stepping = ScreenStepsLogic.enabled && d.steps.count > 1
+        let step = stepping ? model.screenStep(interaction, d) : nil
+        let moving = stepping && model.isMoving(interaction)
+        return VStack(alignment: .leading, spacing: Theme.Space.m) {
             if !d.steps.isEmpty {
-                ScreenSteps(steps: d.steps)
+                ScreenSteps(steps: d.steps, current: step)
             }
+            if stepping, d.review || holding != nil {
+                review(d, moving: moving)
+            } else {
+                question(d, stepping: stepping, step: step, moving: moving)
+            }
+            // A row; at the largest text sizes, where it has no room, one under another, each still on one line.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: Theme.Space.l) {
+                    otherWays(d, stepping: stepping)
+                    Spacer(minLength: 0)
+                    viewTerminal
+                }
+                VStack(alignment: .leading, spacing: Theme.Space.s) {
+                    otherWays(d, stepping: stepping)
+                    viewTerminal
+                }
+            }
+            .font(Theme.Font.captionMedium)
+            .buttonStyle(.plain)
+            .foregroundStyle(Theme.accent)
+        }
+    }
+
+    /// Answering some other way: in the chat, or (on the review) Cancel.
+    @ViewBuilder private func otherWays(_ d: ScreenParser.Dialog, stepping: Bool) -> some View {
+        if let chat = d.options.first(where: { $0.kind == .chat }) {
+            Button { send(chat.key, answer(chat)) } label: {
+                Label("Reply in Chat Instead", systemImage: "bubble.left").lineLimit(1).minimumScaleFactor(0.8)
+            }
+        }
+        if stepping, d.review, holding == nil, let cancel = d.options.dropFirst().first {
+            Button { send(cancel.key, answer(cancel)) } label: { Text("Cancel").lineLimit(1).minimumScaleFactor(0.8) }
+                .accessibilityIdentifier("screen-review-cancel")
+        }
+    }
+
+    /// The whole live terminal of that session, the one Terminal opens in its chat (#563): its keys, its scrolling.
+    private var viewTerminal: some View {
+        Button { Haptics.tap(); showTerminal = true } label: {
+            Label("View Terminal", systemImage: Theme.Icon.terminal).lineLimit(1).minimumScaleFactor(0.8)
+        }
+        .accessibilityIdentifier("screen-card-terminal")
+    }
+
+    /// The question: its options, then Next (a multi-select one's Submit) and Previous.
+    @ViewBuilder private func question(_ d: ScreenParser.Dialog, stepping: Bool, step: Int?, moving: Bool) -> some View {
             if let eyebrow = Self.eyebrow(d) {
                 Text(eyebrow).font(Theme.Font.labelStrong).foregroundStyle(.secondary)
             }
@@ -906,41 +1030,79 @@ struct ScreenForm: View {
                     if i > 0 { Divider().padding(.leading, 50) }
                     switch (opt.kind, d.multi) {
                     case (.typeSomething, true): freeTextRow(opt)
-                    case (.typeSomething, false): typeRow(opt)
+                    case (.typeSomething, false): typeRow(opt, d, step)
                     case (_, true): check(opt, d)
-                    default: choice(opt)
+                    default: choice(opt, d, step)
                     }
                 }
             }
             .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
-            if d.multi { multiFooter(d) }
-            HStack(spacing: Theme.Space.l) {
-                if let chat = d.options.first(where: { $0.kind == .chat }) {
-                    Button { send(chat.key, answer(chat)) } label: {
-                        Label("Reply in Chat Instead", systemImage: "bubble.left").lineLimit(1)
-                    }
-                }
-                Spacer(minLength: 0)
-                // The whole live terminal of that session, the one Terminal opens in its chat (#563): its keys, its scrolling.
-                Button { Haptics.tap(); showTerminal = true } label: {
-                    Label("View Terminal", systemImage: Theme.Icon.terminal).lineLimit(1)
-                }
-                .accessibilityIdentifier("screen-card-terminal")
+            if moving {
+                ScreenMoving()
+            } else if d.multi {
+                multiFooter(d, stepping: stepping, step: step)
+            } else if stepping {
+                stepFooter(d, step)
             }
-            .font(Theme.Font.captionMedium)
-            .buttonStyle(.plain)
-            .foregroundStyle(Theme.accent)
+    }
+
+    /// The review: the terminal's review tab, or the one shown before the last multi-select answer goes.
+    @ViewBuilder private func review(_ d: ScreenParser.Dialog, moving: Bool) -> some View {
+        if moving {
+            ScreenMoving()
+        } else if let held = holding {
+            let last = ScreenAnswerRoute.summary(d, keys: held.options ?? [], text: held.text ?? "")
+            ScreenReview(rows: ScreenStepsLogic.heldRows(d, trail: model.screenTrails[interaction.sessionKey], last: last),
+                         sending: sending == nil ? nil : "submit",
+                         back: { withAnimation(Theme.Motion.standard) { holding = nil } },
+                         submit: { sendStep("multi", held, answer: last, waits: false) })
+        } else {
+            ScreenReview(rows: ScreenStepsLogic.reviewRows(d), sending: sending == "walk" ? "walk" : sending == nil ? nil : "submit",
+                         back: { sendStep("back", Resolution(keys: ["left"]), answer: nil, move: -1) },
+                         submit: {
+                             // Submit answers, the review tab's first option.
+                             if let o = d.options.first { sendStep("submit", answer(o), answer: nil, waits: false) }
+                         },
+                         answer: d.incomplete ? { (row: ScreenReviewRow) in walk(to: row.index) } : nil)
         }
     }
 
-    private func choice(_ opt: ScreenParser.Dialog.Option) -> some View {
+    /// Previous and Next under a single-choice question of several: ← and →. Next once it has an answer (gone back to).
+    private func stepFooter(_ d: ScreenParser.Dialog, _ step: Int?) -> some View {
+        HStack(spacing: Theme.Space.m) {
+            if step.map({ $0 > 0 }) ?? true { previous }
+            Spacer(minLength: 0)
+            Button { sendStep("next", Resolution(keys: ["right"]), answer: nil) } label: {
+                Text("Next [Interaction Views f82c68]").lineLimit(1).padding(.horizontal, Theme.Space.s)
+            }
+            .themedButton(prominent: true)
+            .disabled(!ScreenStepsLogic.hasAnswer(d) || sending != nil)
+            .accessibilityIdentifier("screen-step-next")
+        }
+        .controlSize(.regular)
+    }
+
+    private var previous: some View {
+        Button { sendStep("back", Resolution(keys: ["left"]), answer: nil, move: -1) } label: {
+            Text("Previous [Interaction Views 39b1c2]").lineLimit(1)
+        }
+        .themedButton()
+        .disabled(sending != nil)
+        .accessibilityIdentifier("screen-step-back")
+    }
+
+    private func choice(_ opt: ScreenParser.Dialog.Option, _ d: ScreenParser.Dialog, _ step: Int?) -> some View {
         let (label, recommended) = QuestionForm.display(opt.label)
-        return Button { send(opt.key, answer(opt)) } label: {
+        // A question gone back to: the terminal marks the answer it had (#2970).
+        let picked = ScreenStepsLogic.enabled && opt.checked
+        return Button { pick(opt, d, step) } label: {
             HStack(alignment: .top, spacing: Theme.Space.m) {
                 ZStack {
-                    Circle().fill(sending == opt.key ? Theme.accent : Theme.Fill.chip)
+                    Circle().fill(sending == opt.key || picked ? Theme.accent : Theme.Fill.chip)
                     if sending == opt.key {
                         ProgressView().controlSize(.mini).tint(.white)
+                    } else if picked {
+                        ThemedIcon(Theme.Icon.done).font(Theme.Font.labelHeavy).dynamicTypeSize(...DynamicTypeSize.xxLarge).foregroundStyle(.white)
                     } else {
                         Text(opt.key).font(Theme.Font.labelStrong.monospacedDigit()).foregroundStyle(.secondary)
                     }
@@ -960,12 +1122,19 @@ struct ScreenForm: View {
             .multilineTextAlignment(.leading)
             .padding(.horizontal, Theme.Space.l)
             .padding(.vertical, Theme.Space.m)
-            .background(sending == opt.key ? Theme.Fill.chip : .clear)
+            .background(sending == opt.key || picked ? Theme.Fill.chip : .clear)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
         .disabled(sending != nil)
-        .accessibilityLabel(label + (recommended ? String(localized: ", recommended", comment: "Accessibility suffix: the recommended option") : ""))
+        .accessibilityLabel(label + (recommended ? String(localized: ", recommended", comment: "Accessibility suffix: the recommended option") : "")
+                            + (picked ? String(localized: ", selected", comment: "Accessibility suffix: a selected option") : ""))
+    }
+
+    /// A choice of a question of several: through the trail, by keys when it may be the last answer (#2970).
+    private func pick(_ opt: ScreenParser.Dialog.Option, _ d: ScreenParser.Dialog, _ step: Int?) {
+        guard ScreenStepsLogic.enabled, d.steps.count > 1 else { return send(opt.key, answer(opt)) }
+        sendStep(opt.key, ScreenAnswerRoute.choice(opt, d, step: step, hubRead: interaction.dialog != nil), answer: QuestionForm.display(opt.label).0)
     }
 
     /// The header, and Select multiple for a multi-select question.
@@ -1044,14 +1213,22 @@ struct ScreenForm: View {
     }
 
     /// Submit (Next when another question follows): the ticks and the free text go to the terminal together.
-    private func multiFooter(_ d: ScreenParser.Dialog) -> some View {
+    private func multiFooter(_ d: ScreenParser.Dialog, stepping: Bool, step: Int?) -> some View {
         HStack(spacing: Theme.Space.m) {
+            if stepping, step.map({ $0 > 0 }) ?? true { previous }
             Spacer(minLength: 0)
             Button {
                 focused = false
                 let set = picked(d)
                 let t = typed(d)
-                send("multi", Resolution(text: t.isEmpty ? nil : t, options: d.options.map(\.key).filter(set.contains)))
+                let r = Resolution(text: t.isEmpty ? nil : t, options: d.options.map(\.key).filter(set.contains))
+                if stepping, ScreenStepsLogic.submitsAll(d, current: step) {
+                    withAnimation(Theme.Motion.standard) { holding = r } // the review first: the node submits them all after it
+                } else if stepping {
+                    sendStep("multi", r, answer: ScreenAnswerRoute.summary(d, keys: r.options ?? [], text: t))
+                } else {
+                    send("multi", r)
+                }
             } label: {
                 HStack(spacing: Theme.Space.sm) {
                     if sending == "multi" { ProgressView().controlSize(.small).tint(.white) }
@@ -1066,7 +1243,7 @@ struct ScreenForm: View {
     }
 
     /// "Type something.": a quiet row that turns into a field; sending picks the option, types, presses enter.
-    private func typeRow(_ opt: ScreenParser.Dialog.Option) -> some View {
+    private func typeRow(_ opt: ScreenParser.Dialog.Option, _ d: ScreenParser.Dialog, _ step: Int?) -> some View {
         HStack(alignment: .center, spacing: Theme.Space.m) {
             ThemedIcon(Theme.Icon.edit)
                 .font(Theme.Font.labelStrong).dynamicTypeSize(...DynamicTypeSize.xxLarge)
@@ -1082,7 +1259,11 @@ struct ScreenForm: View {
                     Button {
                         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
                         focused = false
-                        send(opt.key, answer(opt, text: t))
+                        if ScreenStepsLogic.enabled, d.steps.count > 1 {
+                            sendStep(opt.key, ScreenAnswerRoute.typed(opt, text: t, d, step: step, hubRead: interaction.dialog != nil), answer: t)
+                        } else {
+                            send(opt.key, answer(opt, text: t))
+                        }
                     } label: {
                         if sending == opt.key { ProgressView().controlSize(.small) }
                         else { ThemedIcon(Theme.Icon.submit).font(Theme.Font.title).foregroundStyle(Theme.accent) }
@@ -1091,6 +1272,9 @@ struct ScreenForm: View {
                     .disabled(sending != nil)
                     .accessibilityLabel("Send answer")
                 }
+            } else if ScreenStepsLogic.enabled, let typed = opt.text, !typed.isEmpty {
+                Text(verbatim: typed).foregroundStyle(.primary) // a question gone back to: the words it was answered with
+                Spacer(minLength: 0)
             } else {
                 Text("Other answer…").foregroundStyle(.secondary)
                 Spacer(minLength: 0)
@@ -1101,6 +1285,7 @@ struct ScreenForm: View {
         .contentShape(.rect)
         .onTapGesture {
             guard !writing else { return }
+            if ScreenStepsLogic.enabled, text.isEmpty, let typed = opt.text { text = typed }
             withAnimation(Theme.Motion.standard) { writing = true }
             focused = true
         }
@@ -1149,36 +1334,63 @@ struct ScreenForm: View {
             sending = nil
         }
     }
+
+    /// An answer or a key in a dialog of several questions (`AppModel.answerScreen`).
+    private func sendStep(_ key: String, _ r: Resolution, answer: String?, move: Int = 1, waits: Bool = true) {
+        Haptics.tap()
+        sending = key
+        Task {
+            await model.answerScreen(interaction, r, move: move, answer: answer, waits: waits)
+            sending = nil
+        }
+    }
+
+    private func walk(to step: Int) {
+        Haptics.tap()
+        sending = "walk"
+        Task {
+            await model.walkScreen(interaction, to: step)
+            sending = nil
+        }
+    }
 }
 
-/// A multi-question dialog's questions, from the terminal's tab bar: done ones checked, the rest numbered.
+/// A multi-question dialog's questions, from the terminal's tab bar: done ones checked, the rest numbered; the one shown
+/// stands out when the app can tell which it is (#2970).
 struct ScreenSteps: View {
     var steps: [ScreenParser.Dialog.Step]
+    var current: Int?
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: Theme.Space.sm) {
-                ForEach(Array(steps.enumerated()), id: \.offset) { i, s in
-                    HStack(spacing: Theme.Space.xs) {
-                        Group {
-                            if s.done { ThemedIcon(Theme.Icon.done).font(.system(size: 8, weight: .bold)) }
-                            else { Text("\(i + 1)").font(.system(size: 9, weight: .bold).monospacedDigit()) } // type-scale: glyph (a step number in a 16 pt circle)
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: Theme.Space.sm) {
+                    ForEach(Array(steps.enumerated()), id: \.offset) { i, s in
+                        let now = i == current
+                        HStack(spacing: Theme.Space.xs) {
+                            Group {
+                                if s.done { ThemedIcon(Theme.Icon.done).font(.system(size: 8, weight: .bold)) }
+                                else { Text("\(i + 1)").font(.system(size: 9, weight: .bold).monospacedDigit()) } // type-scale: glyph (a step number in a 16 pt circle)
+                            }
+                            .foregroundStyle(s.done || now ? .white : .secondary)
+                            .scaledFrame(width: Theme.Size.mark, height: Theme.Size.mark)
+                            .background(now ? Theme.accent : s.done ? Theme.positive : Color.primary.opacity(0.1), in: .circle)
+                            Text(s.label).lineLimit(1)
                         }
-                        .foregroundStyle(s.done ? .white : .secondary)
-                        .scaledFrame(width: Theme.Size.mark, height: Theme.Size.mark)
-                        .background(s.done ? Theme.positive : Color.primary.opacity(0.1), in: .circle)
-                        Text(s.label).lineLimit(1)
+                        .font(now ? Theme.Font.labelStrong : Theme.Font.labelMedium)
+                        .foregroundStyle(s.done && !now ? .secondary : .primary)
+                        .padding(.leading, Theme.Space.xs).padding(.trailing, Theme.Space.s).padding(.vertical, Theme.Space.xs)
+                        .background(now ? Theme.Fill.chip : Color.primary.opacity(0.05), in: .capsule)
+                        .id(i)
                     }
-                    .font(Theme.Font.labelMedium)
-                    .foregroundStyle(s.done ? .secondary : .primary)
-                    .padding(.leading, Theme.Space.xs).padding(.trailing, Theme.Space.s).padding(.vertical, Theme.Space.xs)
-                    .background(Color.primary.opacity(0.05), in: .capsule)
                 }
             }
+            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+            .stepInSight(current, proxy)
         }
-        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(steps.count) questions, \(steps.filter(\.done).count) answered")
+        .accessibilityLabel(current.map { String(localized: "\(steps.count) questions, \(steps.filter(\.done).count) answered, on question \($0 + 1)") }
+                            ?? String(localized: "\(steps.count) questions, \(steps.filter(\.done).count) answered"))
     }
 }
 
@@ -1312,6 +1524,13 @@ extension ApprovalCardOptions {
 struct BUIQuestionForm: View {
     @Environment(AppModel.self) private var model
     var interaction: Interaction
+    /// Several questions (#2970): the card's answers held for the review, the question the card opens at when it comes
+    /// back, and a new card each time (its answers and page are read once).
+    @State private var held: ApprovalAnswers?
+    @State private var kept = ApprovalAnswers()
+    @State private var startAt = 0
+    @State private var round = 0
+    @State private var sending = false
 
     private var questions: [Question] { interaction.questions ?? [] }
 
@@ -1326,13 +1545,53 @@ struct BUIQuestionForm: View {
         }
     }
 
-    private var card: some View {
-        let picks = Delegated.recommendedLabels(questions, interaction.delegate?.recommend)
-        return ApprovalCard(questions: zip(questions, picks).map { Self.card($0, picks: $1) }, skipLabel: nil, continueLabel: String(localized: "Next [Interaction Views f82c68]"), sendLabel: String(localized: "Submit"),
-                     customPlaceholder: String(localized: "Other answer…"), sentMessage: String(localized: "Sent"), options: .panel()) { answers in
-            Haptics.tap()
-            Task { await model.resolve(interaction, Resolution(answers: Self.answers(answers, questions))) }
+    @ViewBuilder private var card: some View {
+        if QuestionSteps.enabled(questions), let held {
+            // The card's own ↑ n / N ↓ shows where it is; a question skipped with ↓ shows here as not answered, with a
+            // way back to it.
+            ScreenReview(rows: QuestionSteps.rows(questions, answers: Self.shown(held, questions)), sending: sending ? "submit" : nil,
+                         back: { reopen(at: questions.count - 1) },
+                         submit: { send(held) },
+                         answer: { (row: ScreenReviewRow) in reopen(at: row.index) })
+        } else {
+            let picks = Delegated.recommendedLabels(questions, interaction.delegate?.recommend)
+            ApprovalCard(questions: zip(questions, picks).map { Self.card($0, picks: $1) }, startAt: startAt, answers: kept, skipLabel: nil,
+                         continueLabel: String(localized: "Next [Interaction Views f82c68]"), sendLabel: String(localized: "Submit"),
+                         customPlaceholder: String(localized: "Other answer…"), sentMessage: String(localized: "Sent"), options: .panel()) { answers in
+                Haptics.tap()
+                if QuestionSteps.enabled(questions) { // the review first
+                    withAnimation(Theme.Motion.standard) { held = answers; kept = answers }
+                } else {
+                    Task { await model.resolve(interaction, Resolution(answers: Self.answers(answers, questions))) }
+                }
+            }
+            .id(round)
         }
+    }
+
+    /// Back from the review to a question, with every answer as it was.
+    private func reopen(at index: Int) {
+        startAt = index
+        round += 1
+        withAnimation(Theme.Motion.standard) { held = nil }
+    }
+
+    private func send(_ answers: ApprovalAnswers) {
+        sending = true
+        Task {
+            await model.resolve(interaction, Resolution(answers: Self.answers(answers, questions)))
+            sending = false
+        }
+    }
+
+    /// The card's answers as the review shows them, by question.
+    static func shown(_ a: ApprovalAnswers, _ questions: [Question]) -> [Int: String] {
+        var out: [Int: String] = [:]
+        for (n, q) in questions.enumerated() {
+            let picked = Set(q.options.indices.filter { (a.picks[n] ?? []).contains($0) }.map { q.options[$0].label })
+            out[n] = QuestionSteps.shown(q, picked: picked, typed: a.custom[n] ?? "")
+        }
+        return out
     }
 
     /// `picks`: the options the assistant recommends (#544).
@@ -1428,28 +1687,34 @@ struct BUIPlanForm: View {
 
 /// The BeautifulUI style's tool approval: an approval card with the tool and what it will run on top, then Allow /
 /// Always Allow in Session / Deny. A tap sends, as the plain form's buttons do. Typing in the field denies with that reason,
-/// which Claude reads. A Codex card (docs/integrations/codex.md「提问和审批」) offers Approve / Always Approve (what it allows, only when Codex
+/// which Claude reads. A Codex card (docs/integrations/codex.md「Questions and approvals」) offers Approve / Always Approve (what it allows, only when Codex
 /// does) / Deny, with Codex's reason over the command.
 struct BUIPermissionForm: View {
     @Environment(AppModel.self) private var model
     var interaction: Interaction
 
-    private var choices: [ApprovalQuestion.Choice] {
+    private var choices: [ApprovalQuestion.Choice] { Self.choices(interaction) }
+
+    /// Allow (or Approve), Always only where the card offers it (`offersAlways`), Deny.
+    static func choices(_ interaction: Interaction) -> [ApprovalQuestion.Choice] {
         if interaction.agentName != nil {
             var c = [ApprovalQuestion.Choice(String(localized: "Approve [Interaction Views 905819]"))]
-            if let always = interaction.alwaysLabel, !always.isEmpty { c.append(ApprovalQuestion.Choice(String(localized: "Always Approve"), detail: always)) }
+            if interaction.offersAlways {
+                let always = interaction.alwaysLabel.flatMap { $0.isEmpty ? nil : $0 }
+                c.append(ApprovalQuestion.Choice(String(localized: "Always Approve"), detail: always))
+            }
             c.append(ApprovalQuestion.Choice(String(localized: "Deny")))
             return c
         }
         var c = [ApprovalQuestion.Choice(String(localized: "Allow [Notification Actions ce7ef2]"))]
-        if interaction.sessionID != "" { c.append(ApprovalQuestion.Choice(String(localized: "Always Allow in Session"), detail: interaction.alwaysScopeDetail)) }
+        if interaction.offersAlways { c.append(ApprovalQuestion.Choice(String(localized: "Always Allow in Session"), detail: interaction.alwaysScopeDetail)) }
         c.append(ApprovalQuestion.Choice(String(localized: "Deny")))
         return c
     }
 
     var body: some View {
         let choices = choices
-        let tool = interaction.toolName ?? String(localized: "this tool")
+        let tool = interaction.toolDisplayName ?? String(localized: "this tool")
         let ask = interaction.agentName == nil ? String(localized: "Allow \(tool)?") : String(localized: "Approve \(tool)?")
         ApprovalCard(questions: [ApprovalQuestion(ask, choices: choices,
                                                   customPlaceholder: String(localized: "Deny and explain why…"))],
@@ -1472,10 +1737,15 @@ struct BUIPermissionForm: View {
         }
     }
 
-    private var command: some View {
+    /// A file tool's change as the chat draws it (`PermissionDiffView`); any other tool's command or path in a box.
+    @ViewBuilder private var command: some View {
+        if let diff = PermissionDiff(interaction) { PermissionDiffView(diff: diff, key: interaction.id) } else { subject }
+    }
+
+    private var subject: some View {
         HStack(alignment: .top, spacing: Theme.Space.s) {
             ThemedIcon(ToolPresentation.symbol(interaction.toolName ?? "")).foregroundStyle(Theme.accent)
-            Text(interaction.summary ?? interaction.toolInput?.pretty ?? "")
+            Text(interaction.permissionSubject ?? "")
                 .font(Theme.Font.code)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1515,6 +1785,8 @@ struct BUIScreenForm: View {
     @State private var text = ""
     @State private var sending: String?
     @State private var showTerminal = false
+    /// The last multi-select answer of several questions, held for the review shown before it goes (#2970).
+    @State private var holding: Resolution?
 
     var body: some View {
         let screen = interaction.screen ?? ""
@@ -1530,12 +1802,33 @@ struct BUIScreenForm: View {
     private func dialog(_ d: ScreenParser.Dialog, screen: String) -> some View {
         let choices = d.options.filter { $0.kind != .chat && $0.kind != .typeSomething }
         let typing = d.options.first { $0.kind == .typeSomething }
-        // A multi-select question starts from what the computer shows: its ticks and its free text.
-        let shown = d.multi
+        // Several questions (#2970): Previous / Next, the step it is on, the review before they go.
+        let stepping = ScreenStepsLogic.enabled && d.steps.count > 1
+        let step = stepping ? model.screenStep(interaction, d) : nil
+        let moving = stepping && model.isMoving(interaction)
+        // A multi-select question starts from what the computer shows: its ticks and its free text; so does a question
+        // of several gone back to: the answer it had.
+        let shown = d.multi || stepping
             ? ApprovalAnswers(picks: [0: choices.indices.filter { choices[$0].checked }], custom: typing?.text.map { [0: $0] } ?? [:])
             : ApprovalAnswers()
         return VStack(alignment: .leading, spacing: Theme.Space.m) {
-            if !d.steps.isEmpty { BUIScreenSteps(steps: d.steps) }
+            if !d.steps.isEmpty { BUIScreenSteps(steps: d.steps, current: step) }
+            if stepping, d.review || holding != nil {
+                review(d, moving: moving)
+            } else {
+                card(d, choices: choices, typing: typing, shown: shown, stepping: stepping, step: step)
+                if moving {
+                    ScreenMoving()
+                } else if stepping {
+                    steps(d, step)
+                }
+            }
+            bottomRow(d, stepping: stepping)
+        }
+    }
+
+    private func card(_ d: ScreenParser.Dialog, choices: [ScreenParser.Dialog.Option], typing: ScreenParser.Dialog.Option?,
+                      shown: ApprovalAnswers, stepping: Bool, step: Int?) -> some View {
             ApprovalCard(
                 questions: [ApprovalQuestion(
                     d.question.isEmpty ? (d.header ?? "") : d.question, kind: d.multi ? .multiple : .single,
@@ -1546,19 +1839,42 @@ struct BUIScreenForm: View {
                     eyebrow: d.question.isEmpty ? nil : ScreenForm.eyebrow(d),
                     allowsCustom: typing != nil, customPlaceholder: String(localized: "Other answer…"))],
                 answers: shown,
-                skipLabel: nil, sendLabel: d.multi ? (d.submit == "Next" ? String(localized: "Next [Interaction Views f82c68]") : String(localized: "Submit")) : String(localized: "Send"), sentMessage: String(localized: "Sent"),
+                skipLabel: nil,
+                // A question of several goes on to the next one, as in the default style (#2970).
+                sendLabel: d.multi ? (d.submit == "Next" ? String(localized: "Next [Interaction Views f82c68]") : String(localized: "Submit"))
+                    : stepping ? String(localized: "Next [Interaction Views f82c68]") : String(localized: "Send"),
+                sentMessage: String(localized: "Sent"),
                 options: .panel(sending: sending != nil)
             ) { answers in
                 let text = (answers.custom[0] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let hubRead = interaction.dialog != nil
                 if d.multi {
                     // The card holds the whole answer: what is not picked here is unticked at the computer.
                     let picked = Set(answers.picks[0] ?? [])
                     let keys = choices.enumerated().filter { picked.contains($0.offset) }.map(\.element.key)
-                    send("multi", Resolution(text: text.isEmpty ? nil : text, options: keys))
-                } else if let typing, !text.isEmpty {
-                    send(typing.key, answer(typing, text: text))
+                    let r = Resolution(text: text.isEmpty ? nil : text, options: keys)
+                    if stepping, ScreenStepsLogic.submitsAll(d, current: step) {
+                        withAnimation(Theme.Motion.standard) { holding = r } // the review first: the node submits them all after it
+                    } else if stepping {
+                        sendStep("multi", r, answer: ScreenAnswerRoute.summary(d, keys: keys, text: text))
+                    } else {
+                        send("multi", r)
+                    }
+                } else if let typing, !text.isEmpty, text != typing.text {
+                    if stepping {
+                        sendStep(typing.key, ScreenAnswerRoute.typed(typing, text: text, d, step: step, hubRead: hubRead), answer: text)
+                    } else {
+                        send(typing.key, answer(typing, text: text))
+                    }
                 } else if let n = answers.picks[0]?.first, choices.indices.contains(n) {
-                    send(choices[n].key, answer(choices[n]))
+                    if stepping {
+                        sendStep(choices[n].key, ScreenAnswerRoute.choice(choices[n], d, step: step, hubRead: hubRead),
+                                 answer: QuestionForm.display(choices[n].label).0)
+                    } else {
+                        send(choices[n].key, answer(choices[n]))
+                    }
+                } else if stepping, ScreenStepsLogic.hasAnswer(d) {
+                    sendStep("next", Resolution(keys: ["right"]), answer: nil) // the answer it had, unchanged: on to the next
                 }
             } context: { _ in
                 if d.review && d.incomplete {
@@ -1575,23 +1891,79 @@ struct BUIScreenForm: View {
                         .background(Theme.codeBackground, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
                 }
             }
-            HStack(spacing: Theme.Space.l) {
-                if let chat = d.options.first(where: { $0.kind == .chat }) {
-                    Button { send(chat.key, answer(chat)) } label: {
-                        Label("Reply in Chat Instead", systemImage: "bubble.left").lineLimit(1)
-                    }
+    }
+
+    /// Previous under a question of several (←); its own Send goes on to the next.
+    private func steps(_ d: ScreenParser.Dialog, _ step: Int?) -> some View {
+        HStack(spacing: Theme.Space.m) {
+            if step.map({ $0 > 0 }) ?? true {
+                Button { sendStep("back", Resolution(keys: ["left"]), answer: nil, move: -1) } label: {
+                    Text("Previous [Interaction Views 39b1c2]").lineLimit(1)
                 }
-                Spacer(minLength: 0)
-                // The whole live terminal of that session, the one Terminal opens in its chat (#563): its keys, its scrolling.
-                Button { Haptics.tap(); showTerminal = true } label: {
-                    Label("View Terminal", systemImage: Theme.Icon.terminal).lineLimit(1)
+                .themedButton()
+                .accessibilityIdentifier("screen-step-back")
+            }
+            Spacer(minLength: 0)
+        }
+        .controlSize(.regular)
+        .disabled(sending != nil)
+    }
+
+    /// The review: the terminal's review tab, or the one shown before the last multi-select answer goes.
+    @ViewBuilder private func review(_ d: ScreenParser.Dialog, moving: Bool) -> some View {
+        if moving {
+            ScreenMoving()
+        } else if let held = holding {
+            let last = ScreenAnswerRoute.summary(d, keys: held.options ?? [], text: held.text ?? "")
+            ScreenReview(rows: ScreenStepsLogic.heldRows(d, trail: model.screenTrails[interaction.sessionKey], last: last),
+                         sending: sending == nil ? nil : "submit",
+                         back: { withAnimation(Theme.Motion.standard) { holding = nil } },
+                         submit: { sendStep("multi", held, answer: last, waits: false) })
+        } else {
+            ScreenReview(rows: ScreenStepsLogic.reviewRows(d), sending: sending == "walk" ? "walk" : sending == nil ? nil : "submit",
+                         back: { sendStep("back", Resolution(keys: ["left"]), answer: nil, move: -1) },
+                         submit: { if let o = d.options.first { sendStep("submit", answer(o), answer: nil, waits: false) } },
+                         answer: d.incomplete ? { (row: ScreenReviewRow) in walk(to: row.index) } : nil)
+        }
+    }
+
+    private func bottomRow(_ d: ScreenParser.Dialog, stepping: Bool) -> some View {
+            // A row; at the largest text sizes, where it has no room, one under another, each still on one line.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: Theme.Space.l) {
+                    otherWays(d, stepping: stepping)
+                    Spacer(minLength: 0)
+                    viewTerminal
                 }
-                .accessibilityIdentifier("screen-card-terminal")
+                VStack(alignment: .leading, spacing: Theme.Space.s) {
+                    otherWays(d, stepping: stepping)
+                    viewTerminal
+                }
             }
             .font(Theme.Font.captionMedium)
             .buttonStyle(.plain)
             .foregroundStyle(Theme.accent)
+    }
+
+    /// Answering some other way: in the chat, or (on the review) Cancel.
+    @ViewBuilder private func otherWays(_ d: ScreenParser.Dialog, stepping: Bool) -> some View {
+        if let chat = d.options.first(where: { $0.kind == .chat }) {
+            Button { send(chat.key, answer(chat)) } label: {
+                Label("Reply in Chat Instead", systemImage: "bubble.left").lineLimit(1).minimumScaleFactor(0.8)
+            }
         }
+        if stepping, d.review, holding == nil, let cancel = d.options.dropFirst().first {
+            Button { send(cancel.key, answer(cancel)) } label: { Text("Cancel").lineLimit(1).minimumScaleFactor(0.8) }
+                .accessibilityIdentifier("screen-review-cancel")
+        }
+    }
+
+    /// The whole live terminal of that session, the one Terminal opens in its chat (#563): its keys, its scrolling.
+    private var viewTerminal: some View {
+        Button { Haptics.tap(); showTerminal = true } label: {
+            Label("View Terminal", systemImage: Theme.Icon.terminal).lineLimit(1).minimumScaleFactor(0.8)
+        }
+        .accessibilityIdentifier("screen-card-terminal")
     }
 
     /// The raw screen, its keys and a line of text: for anything the dialog reading did not catch.
@@ -1637,25 +2009,58 @@ struct BUIScreenForm: View {
             sending = nil
         }
     }
+
+    /// An answer or a key in a dialog of several questions (`AppModel.answerScreen`).
+    private func sendStep(_ key: String, _ r: Resolution, answer: String?, move: Int = 1, waits: Bool = true) {
+        Haptics.tap()
+        sending = key
+        Task {
+            await model.answerScreen(interaction, r, move: move, answer: answer, waits: waits)
+            sending = nil
+        }
+    }
+
+    private func walk(to step: Int) {
+        Haptics.tap()
+        sending = "walk"
+        Task {
+            await model.walkScreen(interaction, to: step)
+            sending = nil
+        }
+    }
 }
 
 /// A multi-question dialog's questions, from the terminal's tab bar, as status pills: done ones green with a check,
-/// the rest numbered.
+/// the rest numbered; the one shown in the accent when the app can tell which it is (#2970).
 struct BUIScreenSteps: View {
     var steps: [ScreenParser.Dialog.Step]
+    var current: Int?
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: Theme.Space.sm) {
-                ForEach(Array(steps.enumerated()), id: \.offset) { i, s in
-                    BUIPill(s.done ? s.label : "\(i + 1) \(s.label)", tone: s.done ? .green : .neutral,
-                            icon: s.done ? .symbol(Theme.Icon.done) : nil)
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: Theme.Space.sm) {
+                    ForEach(Array(steps.enumerated()), id: \.offset) { i, s in
+                        BUIPill(s.done ? s.label : "\(i + 1) \(s.label)", tone: i == current ? .accent : s.done ? .green : .neutral,
+                                icon: s.done ? .symbol(Theme.Icon.done) : nil)
+                        .id(i)
+                    }
                 }
             }
+            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+            .stepInSight(current, proxy)
         }
-        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(steps.count) questions, \(steps.filter(\.done).count) answered")
+    }
+}
+
+extension View {
+    /// The current step's capsule in sight: at the largest text sizes the row is wider than the card and scrolls, and the
+    /// question it is on may sit past the edge (#2970). When the row fits nothing moves.
+    func stepInSight(_ current: Int?, _ proxy: ScrollViewProxy) -> some View {
+        onAppear { if let current { proxy.scrollTo(current, anchor: .center) } }
+            .onChange(of: current) { _, now in if let now { proxy.scrollTo(now, anchor: .center) } }
     }
 }
 

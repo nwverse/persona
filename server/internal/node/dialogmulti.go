@@ -17,7 +17,7 @@ import (
 // typed as text —, a Submit / Next row under them, then
 // a review tab ("1. Submit answers") once every question is answered. Keys sent together get lost, so it is answered
 // one key at a time, reading the screen again after each: boxes ticked at the computer meanwhile and a cursor
-// anywhere are taken as they are. Measured in docs/integrations/claude-integration.md "Multi-select".
+// anywhere are taken as they are. Measured in docs/integrations/claude-integration.md "Screen cards for multiselect questions".
 
 // dialogStep is how long the TUI gets to take a key before the screen is read again.
 const dialogStep = 350 * time.Millisecond
@@ -99,6 +99,9 @@ func toward(from, to int) string {
 // want checked and the rest not, the free-text field holding text, then Submit / Next; a review tab that follows
 // with every question answered is submitted too. A changed or gone dialog refuses with prompt_changed before any key.
 func (n *Node) dialogMulti(ctx context.Context, id, rev string, want []string, text string) error {
+	if err := n.switchingRefusal(id); err != nil { // a launcher switch, maybe on the last connection's Node
+		return err
+	}
 	defer n.typing.lock(id)()
 	pane, err := n.paneFor(ctx, id)
 	if err != nil {

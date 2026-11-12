@@ -1,12 +1,15 @@
-// "New agent"'s model picker (#794): the models a launcher's agent lists in its own /model menu
-// (GET /machines/{mid}/launchers/{name}/models, node/launcher_models.go), which launcher the picker asks, searching the
-// list, the thinking efforts a pick allows, and what a start sends. A pick is for one start only: nothing is saved.
+// A launcher's models (#794): what its agent lists in its own /model menu (GET /machines/{mid}/launchers/{name}/models,
+// node/launcher_models.go), read by New Agent's model panel (#5104), the chat's and the model settings' pickers; which
+// launcher a picker asks, searching the list, the thinking efforts a pick allows, and what a start sends. A New Agent
+// pick is for one start only: nothing about it is saved on the hub.
 import { MANAGER_HEADER } from "./manager-choice";
 import { t } from "../i18n";
 import { api, ApiError, enc, pastHub } from "./api";
 import { cleanModelId, validModelId } from "./model-id";
 import type { ModelBinding } from "./model-config";
+import type { PanelPrice } from "./model-panel";
 import { EFFORTS } from "./session-actions";
+import { launcherTitle, type Named } from "./provider-names";
 import type { Launcher } from "./types";
 
 export interface AgentModel {
@@ -24,6 +27,8 @@ export interface AgentModel {
   /** An ID the user typed before that ran here, remembered on the hub for this computer and launcher (#1644): listed
    *  after the agent's own, most recent first, with no efforts (not known). It can be forgotten. */
   custom?: boolean;
+  /** Exact catalog reference price in USD per one million tokens, when the hub knows it. */
+  price?: PanelPrice;
 }
 
 export interface LauncherModels {
@@ -45,10 +50,43 @@ export interface LauncherDefault {
   runtime?: string;
 }
 
+/** One of "New agent"'s presets (#2225, docs/assistant/model-profiles.md "Agent presets"): a tier of the model profile in use
+ *  whose launcher this computer starts. Picking it fills launcher, model and effort as picking them by hand would. */
+export interface PickerTier {
+  name: string;
+  launcher: string;
+  /** "" or absent: the launcher's default (the model settings' when the launcher is theirs). */
+  model?: string;
+  effort?: string;
+  /** When to use it. */
+  description?: string;
+}
+
 export interface MachineLaunchers {
   launchers: Launcher[];
   /** Absent from an older hub; null when the purpose is not a launcher use. */
   default?: LauncherDefault | null;
+  /** "New agent" only: absent from an older hub, with no profile in use, or none whose launcher this computer has. */
+  tiers?: PickerTier[];
+  /** The profile the presets come from (they follow its switches). */
+  tiers_profile?: { id: string; name: string };
+  /** `?purpose=assistant` on a hub with `assistant_model_pick` (#5033): what can't run the main chat on this computer, with
+   *  why in the request's language (shown off, not hidden). */
+  unavailable?: UnavailableLauncher[];
+}
+
+/** One of MachineLaunchers.unavailable: a launcher of the computer or a Model provider that can't run assistant chats here. */
+export interface UnavailableLauncher {
+  name: string;
+  display_name?: string;
+  /** launcher | api */
+  kind?: string;
+  agent?: string;
+  /** A direct API's protocol (responses, chat…). */
+  api?: string;
+  /** not_main_chat, api_protocol, launcher_out_of_scope, launcher_own_service */
+  code?: string;
+  reason: string;
 }
 
 /** The launchers on `mid` with the default of `purpose` (the hub's own when absent: "New agent"). */
@@ -58,9 +96,10 @@ export function machineLaunchers(mid: string, opts: { purpose?: string; signal?:
 }
 
 /** A picker's first entry: "Default: <provider> · <model>" from the hub's default, `fallback` naming the launcher when the hub
- *  says nothing (an older hub). */
-export function defaultLabel(d: LauncherDefault | null | undefined, fallback = ""): string {
-  const parts = [d?.provider || fallback, d?.model && modelName({ id: d.model.split("/").pop() || d.model })].filter(Boolean);
+ *  says nothing (an older hub). The provider is a startup ID; `names` titles it (#5029). */
+export function defaultLabel(d: LauncherDefault | null | undefined, fallback = "", names?: readonly Named[]): string {
+  const provider = d?.provider || fallback;
+  const parts = [provider && launcherTitle(provider, names), d?.model && modelName({ id: d.model.split("/").pop() || d.model })].filter(Boolean);
   return parts.length ? t("lib-launcher-models.default_named", { name: parts.join(" · ") }) : t("lib-launcher-models.default");
 }
 
@@ -178,7 +217,8 @@ export function modelDetail(m: AgentModel): string {
   return m.id.toLowerCase() !== (m.name || m.id).toLowerCase() ? m.id : "";
 }
 
-function matches(fields: (string | undefined)[], query: string): boolean {
+/** Whether every word of `query` (any case) is in one of `fields`; an empty query matches. */
+export function matches(fields: (string | undefined)[], query: string): boolean {
   const text = fields.filter(Boolean).join("\n").toLocaleLowerCase();
   return query.toLocaleLowerCase().split(/\s+/).filter(Boolean).every((word) => text.includes(word));
 }
@@ -192,7 +232,8 @@ export function modelRows(models: AgentModel[], query: string, followed: ModelBi
   return { showDefault, rows };
 }
 
-const ALL_EFFORTS = EFFORTS.map((e) => e.id);
+/** Every thinking effort Claude Code takes, weakest first: what a model nobody lists the efforts of is offered. */
+export const ALL_EFFORTS = EFFORTS.map((e) => e.id);
 
 /** The efforts the control offers: the picked model's, with none picked the one that runs ("Model configuration"'s, else the
  *  default entry's). No list to go by (loading, failed, older hub), or "Model configuration"'s model not in it under that id: all
@@ -217,10 +258,23 @@ export function startPicks(o: { agent: string; list: LauncherModels | null | und
   const out: { model?: string; effort?: string } = {};
   const m = o.list?.models.find((x) => x.id === o.model);
   if (m) {
-    if (!m.default && !o.list?.locked) out.model = m.id;
+    // the default entry goes too when the model settings' own model would run instead (a preset picked it, #2225; the
+    // picker's "Default" row picks "")
+    if ((!m.default || (o.followed?.model && o.followed.model !== m.id)) && !o.list?.locked) out.model = m.id;
   } else if (o.model && o.list !== null && typedModelOffered(o.agent, o.list) && validModelId(o.model)) {
     out.model = o.model;
   }
   if (o.effort && takesEffort(o.agent) && effortChoices(o.list, out.model ?? "", o.followed).includes(o.effort)) out.effort = o.effort;
+  return out;
+}
+
+/** What of a preset a start with this launcher's list would not pass on: its model when the launcher fixes its own --model
+ *  or takes no typed ID, its effort when the model doesn't take it. Empty: all of it (or the list is not in yet). */
+export function tierLeftOut(tier: PickerTier, o: { agent: string; list: LauncherModels | null | undefined; followed?: ModelBinding }): string[] {
+  const picks = startPicks({ agent: o.agent, list: o.list, model: tier.model ?? "", effort: tier.effort ?? "", followed: o.followed });
+  const out: string[] = [];
+  // the list's default is what runs with no model sent (startPicks sends it when the model settings would run another)
+  if (tier.model && picks.model !== tier.model && !(o.list?.models.some((m) => m.id === tier.model && m.default) && !o.list?.locked)) out.push(tier.model);
+  if (tier.effort && picks.effort !== tier.effort) out.push(tier.effort);
   return out;
 }

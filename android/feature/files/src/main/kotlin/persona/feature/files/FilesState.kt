@@ -178,7 +178,8 @@ class FilesController(
         if (now.directoryError != null || now.directoryLoading) directory()
         if (now.gitError || now.gitLoading) refreshGit()
         else if (now.moreError || now.moreLoading) { moreJob?.cancel(); mutable.update { it.copy(moreLoading = false) }; more() }
-        if (now.stack.isNotEmpty() && now.content == null && now.diff == null && now.commit == null) reload()
+        // A page already shown (a comparison too) stays as it is: only one that failed or is still on its way is read again.
+        if (now.stack.isNotEmpty() && now.content == null && now.diff == null && now.commit == null && now.compare == null) reload()
     }
 
     /** Into a folder: below the top it extends the breadcrumb; anywhere else it becomes the top. */
@@ -245,7 +246,7 @@ class FilesController(
      */
     fun pull() {
         val snapshot = state.value
-        if (snapshot.pulling || snapshot.git?.upstream == null || snapshot.git.branch == null) return
+        if (snapshot.pulling || snapshot.git?.upstream == null || snapshot.git.gone || snapshot.git.branch == null) return
         // A status or log read in flight would land after the pull and show the branch as it was.
         gitJob?.cancel()
         moreJob?.cancel()

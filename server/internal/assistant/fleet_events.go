@@ -59,7 +59,7 @@ func (s *Service) NodeEvent(machine, event string, params json.RawMessage) bool 
 			s.finishInteraction(p.ID)
 		}
 		return false
-	case "codex.interactions": // the Codex questions and approvals open on this machine (fleet_ix.go)
+	case "codex.interactions": // the Codex questions and approvals open on this machine (fleet_ix_codex.go)
 		s.syncCodexInteractions(machine, params)
 		return false
 	case "hook.event":
@@ -77,6 +77,7 @@ func (s *Service) NodeEvent(machine, event string, params json.RawMessage) bool 
 					s.fleet.mu.Unlock()
 				}
 				s.noteStop(machine, sid, p)
+				s.meetingTurnPrompt(machine, sid, p) // the user's own prompt to an Agent ends its meeting turn (meeting_turns.go)
 			}
 		}
 		// the hub shows it to the apps (hook_event)
@@ -104,12 +105,25 @@ func (s *Service) NodeRequest(ctx context.Context, machine, method string, param
 			return nil, true, err
 		}
 		p.Interaction.MachineID = machine
+		s.placeCard(&p.Interaction)
 		// A write through a skill's gated command (node/larkgate.go): its plugin names what the ids are.
 		if sum, ok := s.assistantSummary(ctx, p.Interaction.ToolName, p.Interaction.Summary); ok {
 			p.Interaction.Summary = sum
 		}
 		r, err := s.nodeInteraction(ctx, p.Interaction)
 		return r, true, err
+	case assistantwire.MethodCloseoutCheck: // a turn that did work ends without a closeout (agents_closeout.go)
+		var p assistantwire.CloseoutCheckRequest
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, true, err
+		}
+		return s.closeoutCheck(ctx, machine, p), true, nil
+	case assistantwire.MethodCloseoutBrief: // a session starts: the closeout's form, up front (agents_closeout_brief.go)
+		var p assistantwire.CloseoutBriefRequest
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, true, err
+		}
+		return s.closeoutStart(ctx, machine, p), true, nil
 	case "assistant.lark":
 		out, err := s.assistantLark(ctx, machine)
 		return out, true, err
@@ -147,6 +161,12 @@ func (s *Service) NodeRequest(ctx context.Context, machine, method string, param
 		}
 		if res, refused := s.guestRefuses(ctx, machine, p.SessionID, p.Name, p.Guest); refused {
 			return res, true, nil
+		}
+		if rec, room, err := s.roomOf(ctx, machine, p.SessionID); err == nil && room {
+			if s.isWorkMachine(machine) {
+				return proto.TextResult("unknown tool "+p.Name, true), true, nil
+			}
+			return s.roomToolCall(ctx, rec, p.Name, p.Args), true, nil // bound to its own recording
 		}
 		return s.mcpCall(ctx, machine, p.SessionID, p.Name, p.Args, p.Assistant), true, nil
 	}

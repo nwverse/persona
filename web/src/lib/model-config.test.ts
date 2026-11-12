@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  chooseProvider, draftFor, modelConfiguration, modelPatch, modelPurpose, modelSummary, providersFor, purposeGroups, runtimeChoices, runtimeFallbackText, saveModelPurpose,
+  agentsOverride, chooseProvider, draftFor, modelConfiguration, modelPatch, modelPurpose, modelSummary, providersFor, runtimeChoices, runtimeFallbackText, saveModelPurpose, withPurposeAfter,
   type ModelProvider, type ModelPurpose,
 } from "./model-config";
+import { executionForm, purposeDescription, purposeGroups } from "./model-config-execution";
 
 const purpose: ModelPurpose = {
   id: "lark.agent", name: "飞书 /agent", group: "对话", kind: "launcher", revision: 3,
@@ -40,11 +41,56 @@ describe("用途配置", () => {
     expect(providersFor({ ...purpose, provider_ids: [] }, providers)).toEqual([]);
   });
   it("groups and searches real purposes without generating skills", () => {
-    const triage = { ...purpose, id: "inbox.triage", name: "分拣", group: "收件箱" };
-    expect(purposeGroups([purpose, triage], "分拣")).toEqual([["收件箱", [triage]]]);
+    const triage: ModelPurpose = { ...purpose, id: "inbox.triage", name: "分拣", group: "收件箱", kind: "api" };
+    expect(purposeGroups([purpose, triage], "分拣")).toEqual([["后台处理 · 直接 API", [triage]]]);
     expect(purposeGroups([purpose, triage], " MAIN ").length).toBe(2);
     expect(purposeGroups([purpose], "技能")).toEqual([]);
     expect(modelSummary(purpose, providers)).toBe("常用启动器 · main · 思考 high");
+  });
+  it("sets apart only the uses of Agents the hub gives fields of their own", () => {
+    for (const id of ["lark.agent", "inbox.agent"]) {
+      expect(agentsOverride({ ...purpose, id, parent: "agent.new" })).toBe(true);
+      expect(agentsOverride({ ...purpose, id, parent: "agent.new", fields: [] })).toBe(false); // an older hub: read-only
+      expect(agentsOverride({ ...purpose, id, parent: "agent.new", fields: undefined })).toBe(false);
+    }
+    expect(agentsOverride({ ...purpose, id: "agent.new" })).toBe(false); // the category itself
+    expect(agentsOverride({ ...purpose, id: "inbox.judge", parent: "inbox.triage" })).toBe(false);
+  });
+});
+
+describe("执行形态", () => {
+  it("orders by kind and launch, with extension API purposes kept under Extensions", () => {
+    const chat: ModelPurpose = { ...purpose, id: "assistant", launch: "headless" };
+    const lark: ModelPurpose = { ...purpose, parent: "agent.new", launch: "headless" };
+    const agents: ModelPurpose = { ...purpose, id: "agent.new", launch: "engine" };
+    const api: ModelPurpose = { ...purpose, id: "kb", kind: "api" };
+    const extension: ModelPurpose = { ...api, id: "extension.example", parent: "kb" };
+    const voice: ModelPurpose = { ...purpose, id: "plugin.voice", kind: "plugin" };
+    expect(purposeGroups([extension, api, agents, voice, chat, lark], "")).toEqual([
+      ["Persona 对话 · 后台进程", [chat, lark]], ["Agents · 交互式", [agents]],
+      ["后台处理 · 直接 API", [api]], ["扩展", [extension, voice]],
+    ]);
+    expect(purposeGroups([chat, agents], "后台进程")).toEqual([["Persona 对话 · 后台进程", [chat]]]);
+    // An older hub's catalog still renders, without trusting its inheritance-group labels.
+    expect(purposeGroups([{ ...chat, launch: undefined }], "")[0][0]).toBe("Persona 对话 · 后台进程");
+    expect(purposeGroups([{ ...lark, launch: undefined }], "")[0][0]).toBe("Persona 对话 · 后台进程");
+  });
+
+  it("keeps form fixed while the provider, runtime, protocol and machine change its backend", () => {
+    const chat: ModelPurpose = { ...purpose, id: "assistant", launch: "headless" };
+    expect(executionForm(chat, providers)).toEqual({ label: "后台进程", backend: "claude -p" });
+    expect(executionForm({ ...chat, effective: { provider: "launcher.codex", runtime: "agentsdk" } }, providers).backend).toBe("codex app-server");
+    expect(executionForm({ ...chat, effective: { runtime: "agentsdk" } }, providers).backend).toBe("Agent SDK");
+    const agent: ModelPurpose = { ...chat, id: "agent.new", launch: "engine" };
+    expect(executionForm(agent, providers)).toEqual({ label: "交互式", backend: "按机器 · claude" });
+    const machine = { id: "box", name: "Computer", online: true, engine_default: "orca" };
+    expect(executionForm({ ...agent, machine_id: "box" }, providers, [machine]).backend).toBe("orca · claude");
+    expect(executionForm(agent, providers, [machine]).backend).toBe("按机器 · claude");
+    for (const [protocol, backend] of [["messages", "Messages"], ["responses", "Responses"], ["chat", "Chat"]] as const) {
+      const direct: ModelPurpose = { ...chat, id: "kb", kind: "api", launch: undefined, effective: { provider: "direct" } };
+      expect(executionForm(direct, [{ id: "direct", name: "Direct", kind: "api", api: protocol }]))
+        .toEqual({ label: "直接 API", backend });
+    }
   });
 });
 
@@ -102,6 +148,32 @@ describe("统一 API 契约", () => {
     await expect(saveModelPurpose(purpose, draft)).rejects.toMatchObject({ status: 409 });
     expect(draft).toEqual({ provider: "strong", model: "main", effort: "high", runtime: "" });
     expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("后台督办的用途 (#5082)", () => {
+  const main: ModelPurpose = { ...purpose, id: "assistant", name: "主对话", launch: "headless" };
+  const agents: ModelPurpose = { ...purpose, id: "agent.new", name: "Agents", launch: "engine" };
+  const supervise: ModelPurpose = { ...purpose, id: "assistant.supervise", name: "后台督办", parent: "assistant", category_id: "assistant", launch: "headless", override: {}, inherited_from: "主对话" };
+
+  it("goes right after Main chat, once, and only when the hub has both", () => {
+    const catalog = { purposes: [main, agents], providers };
+    expect(withPurposeAfter(catalog, supervise, "assistant").purposes.map((p) => p.id)).toEqual(["assistant", "assistant.supervise", "agent.new"]);
+    expect(catalog.purposes).toHaveLength(2); // the hub's answer is left as it was
+    expect(withPurposeAfter(catalog, undefined, "assistant")).toBe(catalog);
+    const listed = { purposes: [main, agents, supervise], providers };
+    expect(withPurposeAfter(listed, supervise, "assistant")).toBe(listed);
+    const noMain = { purposes: [agents], providers };
+    expect(withPurposeAfter(noMain, supervise, "assistant")).toBe(noMain);
+  });
+
+  it("is in Main chat's group and has a sentence saying what it is for; no other purpose has one", () => {
+    const groups = purposeGroups(withPurposeAfter({ purposes: [main, agents], providers }, supervise, "assistant").purposes, "");
+    expect(groups[0][1].map((p) => p.id)).toEqual(["assistant", "assistant.supervise"]);
+    // an older hub's shape (no launch): still with Main chat, by its parent
+    expect(purposeGroups([main, { ...supervise, launch: undefined }, agents], "")[0][1].map((p) => p.id)).toEqual(["assistant", "assistant.supervise"]);
+    expect(purposeDescription(supervise)).toContain("跟进并验收");
+    expect(purposeDescription(main)).toBe("");
   });
 });
 

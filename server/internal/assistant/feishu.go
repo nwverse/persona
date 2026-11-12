@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -118,8 +119,7 @@ type feishuBook struct {
 	status   *FeishuStatus
 	statusAt time.Time
 	now      func() time.Time     // tests
-	cotOff   bool                 // Feishu refused an agent message (feishu_cot.go)
-	startAt  map[string]time.Time // recent /start form presses, for one press one agent (feishu_card_actions.go)
+	pressAt  map[string]time.Time // recent one-shot card presses (the /start card and the start form), for one press one thing (feishu_card_actions.go)
 	// line is closed when the last message taken is through (FeishuMessage): the chat's messages are handled one at
 	// a time, in the order they came.
 	line chan struct{}
@@ -450,7 +450,7 @@ func (s *Service) claimBotMessage(id string) (bool, error) {
 	if !b.loaded {
 		return false, errBotUnread
 	}
-	if id == "" || containsString(b.st.Seen, id) {
+	if id == "" || slices.Contains(b.st.Seen, id) {
 		return false, nil
 	}
 	b.st.Seen = append(b.st.Seen, id)
@@ -459,15 +459,6 @@ func (s *Service) claimBotMessage(id string) (bool, error) {
 }
 
 var errBotUnread = errors.New("the chat's state could not be read")
-
-func containsString(list []string, s string) bool {
-	for _, x := range list {
-		if x == s {
-			return true
-		}
-	}
-	return false
-}
 
 func (s *Service) setBotCurrent(t botTarget) {
 	b := &s.fbot
@@ -519,7 +510,6 @@ func (s *Service) feishuReset() {
 	b.st = botState{Current: botTarget{Kind: targetMain}, Threads: map[string]*botThread{}, Seen: b.st.Seen, Pairing: pairing}
 	b.cards, b.ended = nil, nil
 	b.status = nil
-	b.cotOff = false // paired afresh (maybe another app): agent messages are tried again
 	s.saveBotStateLocked()
 	b.mu.Unlock()
 }
@@ -541,7 +531,7 @@ func (s *Service) FeishuOwner(_ context.Context, p FeishuOwner) {
 		if err != nil {
 			s.feishuUnpaired() // the hub could not be asked: start afresh anyway
 		}
-		if !p.Paired {
+		if !p.Paired || p.Greeted {
 			return
 		}
 		l := s.botLang(ctx)
@@ -626,11 +616,43 @@ func (s *Service) FeishuView(ctx context.Context) FeishuView {
 	b.mu.Lock()
 	s.loadBotLocked(ctx)
 	cur := b.st.Current
-	var v FeishuView
+	// One row per agent, not per thread: every card the bot posts about a conversation is bound to it, so an agent
+	// talked to for a while has dozens of them, and the list would fill with copies of it (the clients key those rows
+	// by session id). The newest thread names the agent, and the agents come newest first.
+	type boundAgent struct {
+		at time.Time
+		a  FeishuAgent
+	}
+	seen := map[[2]string]int{} // machine and session → where its row is
+	var rows []boundAgent
 	for _, t := range b.st.Threads {
-		if t.Target.agent() {
-			v.Agents = append(v.Agents, FeishuAgent{Title: t.Title, MachineID: t.Target.MachineID, SessionID: t.Target.SessionID})
+		if !t.Target.agent() {
+			continue
 		}
+		key := [2]string{t.Target.MachineID, t.Target.SessionID}
+		if i, ok := seen[key]; ok {
+			if t.At.After(rows[i].at) {
+				rows[i].at, rows[i].a.Title = t.At, t.Title
+			}
+			continue
+		}
+		seen[key] = len(rows)
+		rows = append(rows, boundAgent{at: t.At, a: FeishuAgent{Title: t.Title, MachineID: t.Target.MachineID, SessionID: t.Target.SessionID}})
+	}
+	// Newest first, and on the same time (state written by hand or by an older version can carry no time at all) by
+	// session then machine, so two loads never order the rows differently.
+	slices.SortStableFunc(rows, func(x, y boundAgent) int {
+		if c := y.at.Compare(x.at); c != 0 {
+			return c
+		}
+		if c := strings.Compare(x.a.SessionID, y.a.SessionID); c != 0 {
+			return c
+		}
+		return strings.Compare(x.a.MachineID, y.a.MachineID)
+	})
+	var v FeishuView
+	for _, r := range rows {
+		v.Agents = append(v.Agents, r.a)
 	}
 	b.mu.Unlock()
 	v.Target = s.targetLabel(ctx, cur)

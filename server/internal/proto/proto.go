@@ -15,9 +15,11 @@ const (
 // clients that need to know before they try (docs/protocol/protocol.md).
 var Features = []string{
 	nodeproto.PersonaContracts, // bidirectional pre-cutover runtime identities
+	"look_uploads",             // POST /api/v1/looks/uploads, DELETE /api/v1/looks/uploads/{id}: avatars made from an uploaded image
 	"locale",                   // Accept-Language, client_hello.locale and a device's locale pick the language of text for people (docs/protocol/i18n.md)
 	"assistant_compact",        // POST /api/v1/assistant/conversations/{id}/compact, session.compaction
 	"assistant_main_new",       // POST /api/v1/assistant/main/new: archive the main conversation, the next message starts one
+	"assistant_main_clear",     // POST /api/v1/assistant/main/clear: clear the main conversation's context in place (closed, archived, nothing carried)
 	"assistant_start_ops",      // POST /api/v1/assistant/conversations takes X-Persona-Op-Id: one start per op id (#1349)
 	"assistant_readiness",      // GET /api/v1/assistant/readiness, …/readiness/dismiss, warm's readiness (docs/assistant/onboarding.md 5.1)
 	"android_update",           // authenticated Android release metadata and APK downloads
@@ -31,6 +33,8 @@ var Features = []string{
 	"ultracode",                // session-only Claude Code workflow switch, queued changes and resume-loss notices
 	"model_configuration",      // unified per-purpose models and provider selection
 	"typed_models",             // a model ID the launcher's list lacks: starts, POST …/modes, the Persona chat's pick; custom rows, DELETE …/models/custom (#1644)
+	"assistant_model_pick",     // PUT / DELETE /api/v1/assistant/conversations/{id}/model, model_pick on assistant conversations, unavailable on …/launchers?purpose=assistant (#5033)
+	"launcher_switch",          // POST …/modes {launcher, model?, effort?} switches a running Claude Code Agent to another launcher with its next message; Session.pending_switch (#5035)
 	"client_msg_id",            // session.send dedupes retries
 	"client_ops",               // durable operation receipts and read-only status queries
 	"send_refusals",            // 409 dialog_open / input_draft, clear_draft
@@ -43,9 +47,9 @@ var Features = []string{
 	"terminal_scroll",          // terminal_input with scroll: the wheel over a terminal the app drives, to herdr (docs/integrations/terminal.md)
 	"terminal_click",           // terminal_input with click: a tap on a terminal the app drives, a left click there (docs/integrations/terminal.md)
 	"terminal_mouse",           // terminal_input with mouse: press / release / drag / move, a button and modifiers at a cell (docs/integrations/terminal.md "Mouse")
-	"herdr_client",             // WebSocket herdr_open / herdr_input / herdr_resize / herdr_ack / herdr_close: herdr's own client in a PTY for the web, full devices only (docs/integrations/terminal.md "Full herdr view")
-	"herdr_focus",              // WebSocket herdr_focus (browser -> hub) and herdr_focus (hub -> browser): the full herdr view moves herdr's focus and follows it, full devices only (docs/integrations/terminal.md "Linked focus")
-	"terminal_panes",           // GET/POST /api/v1/machines/{mid}/panes, terminal ids "pane:<id>": any pane as a terminal (docs/integrations/terminal.md "Standalone terminals")
+	"herdr_client",             // WebSocket herdr_open / herdr_input / herdr_resize / herdr_ack / herdr_close: herdr's own client in a PTY for the web, full devices only (docs/integrations/terminal.md "Full herdr UI")
+	"herdr_focus",              // WebSocket herdr_focus (browser -> hub) and herdr_focus (hub -> browser): the full herdr view moves herdr's focus and follows it, full devices only (docs/integrations/terminal.md "Focus synchronization")
+	"terminal_panes",           // GET/POST /api/v1/machines/{mid}/panes, terminal ids "pane:<id>": any pane as a terminal (docs/integrations/terminal.md "Standalone terminal")
 	"file_download",            // GET /api/v1/machines/{mid}/file/download
 	"file_stream",              // file?stream=1 (binary described, bytes by Range), file/download?inline=1, sniffed MIME
 	"file_thumb",               // GET /api/v1/machines/{mid}/file/thumb (docs/protocol/protocol.md "File preview")
@@ -75,20 +79,38 @@ var Features = []string{
 	"extension_auto_upgrade",   // /api/v1/extensions/-/upgrades, …/{id}/-/auto-upgrade, extension_upgrade events
 	"extension_market_spec",    // PUT /api/v1/extensions/-/markets/{id} {spec}: a market moves, keeping its id
 	"extension_ui_v3",          // UI version 3 (markdown, table, empty, loading, search, filter, more, push / pop) and extension_ui {invalidate} (docs/extensions/extensions.md "UI version 3")
-	"extension_widgets",        // widgets outside the app: GET /api/v1/extensions/-/widgets, POST …/{id}/-/widget/{ui}, PUT /api/v1/devices/{id}/widgets, extension_widget pushes (docs/extensions/extensions.md "System-level places")
-	"extension_shortcuts",      // extensions' actions in Shortcuts and Siri: GET /api/v1/extensions/-/shortcuts, POST …/{id}/-/shortcut/{sid} (docs/extensions/extensions.md "System-level places")
-	"extension_notify_actions", // notification buttons: POST /api/v1/notify actions / ui / state, aps.category and extension_notification (docs/extensions/extensions.md "System-level places")
+	"extension_widgets",        // widgets outside the app: GET /api/v1/extensions/-/widgets, POST …/{id}/-/widget/{ui}, PUT /api/v1/devices/{id}/widgets, extension_widget pushes (docs/extensions/extensions.md "System-level placements")
+	"extension_shortcuts",      // extensions' actions in Shortcuts and Siri: GET /api/v1/extensions/-/shortcuts, POST …/{id}/-/shortcut/{sid} (docs/extensions/extensions.md "System-level placements")
+	"extension_notify_actions", // notification buttons: POST /api/v1/notify actions / ui / state, aps.category and extension_notification (docs/extensions/extensions.md "System-level placements")
 	"desktops",                 // register_desktop, the desktops event, NotifyPrefs.mute_while_desktop ("Mute phone")
+	"desktops_link",            // ?features=desktops_link (or client_hello): the desktops event lists Persona Link desktops too (docs/protocol/protocol.md "desktops")
 	"sessions_delta",           // ?features=sessions_delta on the WebSocket: a snapshot, then sessions_delta (docs/protocol/protocol.md "Session deltas")
 	"connectors",               // GET /api/v1/connectors (docs/plans/plan-connectors.md)
 	"channels",                 // GET /api/v1/channels and each channel's settings, binding, test (docs/extensions/channels.md)
 	"runtime_cli",              // phone_runtime_cli kept out of the phone's tools, POST /api/v1/phone/runtime-cli (docs/operations/runtime-cli.md)
 	"conversation_origin",      // Session.origin on assistant conversations (docs/protocol/protocol.md "Origin of assistant conversations")
 	"builtin_presets",          // the hub's own provider presets in GET /api/v1/launchers/presets; POST /api/v1/launchers with a preset takes an empty name, display_name and assign (docs/integrations/launchers.md "Built-in presets")
+	"launcher_auto_name",       // POST /api/v1/launchers without a preset takes an empty name; GET /api/v1/machines/{mid}/launchers carries display_name (docs/integrations/launchers.md "Display names")
+	"launcher_import_parse",    // POST /api/v1/launchers/import/parse reads a pasted configuration into provider drafts; GET / POST /api/v1/launchers/import take alias (#5193)
 	"upload_dir",               // POST /api/v1/machines/{mid}/files?dest=dir&dir=&conflict=: into a folder of the home (docs/protocol/protocol.md "Changing files")
 	"file_edit",                // POST /api/v1/machines/{mid}/files/{rename,move,trash,restore} (docs/protocol/protocol.md "Changing files")
+	"launcher_scope",           // a Persona-managed provider's share, scope_machines, delivery, own_service and machine_keys (docs/integrations/launchers.md "Device scope and on-demand delivery")
+	"file_inbox",               // POST /api/v1/machines/{mid}/files?dest=inbox: into the machine's receive folder, kept for good (docs/protocol/file-transfer.md)
+	"file_transfer",            // POST/GET/DELETE /api/v1/files/transfer: computer to computer, run by the manager, file_transfer events (docs/protocol/file-transfer.md)
 	"task_push",                // Task.push on /api/v1/assistant/tasks: "Push when done", every run or only what a run sends (docs/assistant/assistant.md "Push when done")
+	"task_cron",                // repeat "cron" with Task.cron on /api/v1/assistant/tasks, and GET /api/v1/assistant/tasks/cron (docs/assistant/assistant.md "Scheduled tasks")
+
+	// A secret may hold a provider's op://… reference: PUT …/{id}/-/secrets/{name} {reference}; secrets[].reference and
+	// secret_users in the details (docs/extensions/secret-providers.md).
+	"extension_secret_references",
+	// A model provider's key (and a computer's key for it) may be such a reference: api_key_reference /
+	// machine_key_references on POST / PUT /api/v1/launchers, key_reference / machine_key_references in its view.
+	"launcher_secret_references",
 }
+
+// CodeWorktreeUnsupported: worktree.prepare / worktree.create on an engine that has no checkouts (a runtime such as
+// Paseo or Cindy, or a host without checkout support); the message starts with "unsupported".
+const CodeWorktreeUnsupported = "worktree_unsupported"
 
 // Codes of a failed credential.gh_token (hub → node, node/credential.go).
 const (

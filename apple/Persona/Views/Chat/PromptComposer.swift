@@ -1,5 +1,6 @@
 import AVFoundation
 import BeautifulUI
+import OSLog
 import Speech
 import SwiftUI
 
@@ -152,7 +153,7 @@ struct PromptComposer: View {
         if dictation.isListening { stopDictation(); return }
         let base = text.isEmpty || text.last?.isWhitespace == true ? text : text + " "
         Task {
-            if let problem = await dictation.start(update: { heard in text = base + heard }) {
+            if let problem = await dictation.start(hints: [text], update: { heard in text = base + heard }) {
                 AppModel.shared.toast = Toast(problem, style: .error)
             }
         }
@@ -212,31 +213,54 @@ enum PromptItems {
     /// The model menu's last row (#1644): opens the field for a model ID typed by hand (`SessionTypedModelSheet`).
     static let otherModel = PromptModel(id: "persona.typed-model", name: String(localized: "Other Model…"), tag: String(localized: "Type a model ID"))
 
-    /// What a session runs, as its model menu's selection: the alias its model reads as ("claude-opus-…" → opus),
-    /// "default" while nothing is known; any other model (one typed by hand, #1644) is its own ID, so no alias is
-    /// ticked for it and picking Default switches back.
-    static func runningModelID(_ model: String?) -> String {
+    /// What a session runs, as its model menu's selection. With the launcher's list (`RunningModelLists`, #3754): the row
+    /// with that ID, else the alias that stands for it (opus → claude-opus-…; Default last, as nothing was picked then).
+    /// Without it, the fixed aliases: the one its model reads as ("claude-opus-…" → opus). "default" while nothing is
+    /// known; any other model (one typed by hand, #1644) is its own ID, so no row is ticked for it and Default switches back.
+    static func runningModelID(_ model: String?, list: [AgentModel]? = nil) -> String {
         let m = (model ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         // Not a model ID (Claude's `<synthetic>`): nothing known.
         guard ModelID.isValid(m) else { return "default" }
-        return ["opus", "sonnet", "haiku"].first { m.lowercased().contains($0) } ?? m
+        guard let list, !list.isEmpty else {
+            return ["opus", "sonnet", "haiku"].first { m.lowercased().contains($0) } ?? m
+        }
+        if let row = list.first(where: { $0.id.caseInsensitiveCompare(m) == .orderedSame }) { return row.id }
+        if let alias = list.first(where: { !$0.isDefault && $0.resolved == m }) ?? list.first(where: { $0.resolved == m }) {
+            return alias.id
+        }
+        return m
     }
 
-    /// The model a session runs when the aliases don't name it (a typed ID); nil: one of them does, or nothing is known.
-    static func unlistedModel(_ model: String?) -> String? {
-        let id = runningModelID(model)
+    /// The model a session runs when its menu doesn't name it (a typed ID); nil: a row does, or nothing is known.
+    static func unlistedModel(_ model: String?, list: [AgentModel]? = nil) -> String? {
+        let id = runningModelID(model, list: list)
+        if let list, !list.isEmpty { return list.contains { $0.id == id } || id == "default" ? nil : id }
         return claudeModels.contains { $0.id == id } ? nil : id
     }
 
-    /// A running session's model menu: the aliases, then the model it runs when they don't name it, by its ID (the one
-    /// ticked; a menu row has no room for a second line saying it).
-    static func runningModels(_ model: String?) -> [PromptModel] {
-        claudeModels + (unlistedModel(model).map { [PromptModel(id: $0, name: $0, tag: String(localized: "Current"))] } ?? [])
+    /// A running session's model menu: the launcher's list when it has been read (New Agent's rows for that launcher:
+    /// Default, the agent's models with their versions, the IDs typed before, #3754), else the fixed aliases; then the
+    /// model it runs when the menu doesn't name it, by its ID (the one ticked; a menu row has no room for a second line
+    /// saying it).
+    static func runningModels(_ model: String?, list: [AgentModel]? = nil) -> [PromptModel] {
+        let rows = list.flatMap { $0.isEmpty ? nil : $0.map { PromptModel(id: $0.id, name: menuName($0), tag: $0.detail ?? "") } }
+        return (rows ?? claudeModels)
+            + (unlistedModel(model, list: list).map { [PromptModel(id: $0, name: $0, tag: String(localized: "Current"))] } ?? [])
+    }
+
+    /// A list row's name in a running session's menu: an alias says the version it stands for ("Opus" → "Opus 5.5",
+    /// from its `resolved`), so it reads apart from the versions beside it; Default, typed IDs and models that name
+    /// their version keep their name. A menu row has room for one line only.
+    static func menuName(_ m: AgentModel) -> String {
+        guard !m.isDefault, !m.custom, let resolved = m.resolved, resolved != m.id,
+              let version = SessionModes.modelName(resolved), version != resolved,
+              !m.displayName.localizedCaseInsensitiveContains(version) else { return m.displayName }
+        return version
     }
 
     /// BeautifulUI's model menu for a running session: `runningModels` (the button names the ticked one), then "Other Model…".
-    static func composerModels(running model: String?) -> [PromptModel] {
-        runningModels(model) + [otherModel]
+    static func composerModels(running model: String?, list: [AgentModel]? = nil) -> [PromptModel] {
+        runningModels(model, list: list) + [otherModel]
     }
 
     /// What picking a row of a running Claude Code session's model menu does where the pick is typed as `/model`
@@ -248,28 +272,22 @@ enum PromptItems {
         case send(String)
     }
 
-    static func modelPick(_ picked: String, running model: String?) -> ModelPick {
+    static func modelPick(_ picked: String, running model: String?, list: [AgentModel]? = nil) -> ModelPick {
         if picked == otherModel.id { return .typeID }
-        if picked == runningModelID(model) { return .keep }
+        if picked == runningModelID(model, list: list) { return .keep }
         return .send("/model \(picked)")
     }
 
     /// Files the chat's tools read or wrote, newest first: picking one types `@path` (relative to the session's
     /// folder), which Claude Code and Codex read as that file.
     static func files(_ items: [Item], cwd: String) -> [PromptSource] {
-        var seen = Set<String>()
-        var out: [PromptSource] = []
-        for it in items.reversed() where it.kind == .toolUse {
-            guard let path = it.toolInput?["file_path"]?.string ?? it.toolInput?["notebook_path"]?.string,
-                  !path.isEmpty, seen.insert(path).inserted else { continue }
+        MentionRows.usedPaths(items).map { path in
             let rel = !cwd.isEmpty && path.hasPrefix(cwd + "/") ? String(path.dropFirst(cwd.count + 1)) : path
             let name = (rel as NSString).lastPathComponent
             let dir = (rel as NSString).deletingLastPathComponent
-            out.append(PromptSource(id: "file:" + path, name: name, detail: dir.isEmpty ? String(localized: "Used in this session") : dir,
-                                    icon: .symbol(Theme.Icon.document), insert: "@\(rel) "))
-            if out.count == 12 { break }
+            return PromptSource(id: "file:" + path, name: name, detail: dir.isEmpty ? String(localized: "Used in this session") : dir,
+                                icon: .symbol(Theme.Icon.document), insert: "@\(rel) ")
         }
-        return out
     }
 
     /// Other agents' sessions, most recently active first: picking one quotes it (title, folder, state, its last
@@ -287,6 +305,11 @@ enum PromptItems {
     /// The quote for a picked session (`ContextRef`, sent as a `<persona-context>` tag before the message).
     static func quote(_ source: PromptSource, in all: [Session]) -> ContextRef? {
         guard source.id.hasPrefix("session:"), let s = all.first(where: { "session:" + $0.id == source.id }) else { return nil }
+        return quote(s)
+    }
+
+    /// A session's quote: its title, agent and folder, and its last words (the shell composer's @ list, #2319, too).
+    static func quote(_ s: Session) -> ContextRef {
         var lines = ["另一个会话：\(s.displayTitle)（\(s.agentLabel)）", "目录：\(s.cwd)"] // i18n-ignore
         if let last = s.lastText?.trimmingCharacters(in: .whitespacesAndNewlines), !last.isEmpty {
             lines.append("它最近说：\(String(last.prefix(600)))") // i18n-ignore
@@ -307,25 +330,34 @@ final class Dictation {
     @ObservationIgnored private let microphoneOwner = UUID()
     @ObservationIgnored private var listeningRun = UUID()
 
-    /// A recognizer for the app's interface language (its region when supported, else any region of it);
-    /// Chinese, and languages speech recognition does not know, use zh-CN as before.
-    private static func recognizer() -> SFSpeechRecognizer? {
-        let fallback = Locale(identifier: "zh-CN") // i18n-ignore
-        let language = Locale(identifier: Bundle.main.preferredLocalizations.first ?? "zh-Hans").language.languageCode?.identifier
-        guard let language, language != "zh" else { return SFSpeechRecognizer(locale: fallback) }
-        let supported = SFSpeechRecognizer.supportedLocales()
-        if let region = Locale.current.region?.identifier,
-           let match = supported.first(where: { $0.language.languageCode?.identifier == language && $0.region?.identifier == region }) {
-            return SFSpeechRecognizer(locale: match)
-        }
-        if let match = supported.sorted(by: { $0.identifier < $1.identifier }).first(where: { $0.language.languageCode?.identifier == language }) {
-            return SFSpeechRecognizer(locale: match)
-        }
-        return SFSpeechRecognizer(locale: fallback)
+    /// A recognizer for the language the owner speaks (`DictationLanguage`): their choice, else the language of `hints`
+    /// (the draft and their recent messages in this chat), else the last sure choice, else the interface language.
+    /// A sure choice is remembered for the next chat, written only when it changed.
+    private static func recognizer(hints: [String]) -> SFSpeechRecognizer? {
+        let defaults = UserDefaults.standard
+        let context = DictationLanguage.Context(
+            choice: defaults.string(forKey: DictationLanguage.choiceKey), texts: hints,
+            recent: defaults.string(forKey: DictationLanguage.recentKey),
+            interface: Bundle.main.preferredLocalizations.first ?? "zh-Hans", preferred: Locale.preferredLanguages,
+            region: Locale.current.region?.identifier, supported: SFSpeechRecognizer.supportedLocales().map(\.identifier))
+        let pick = DictationLanguage.pick(context)
+        if pick.sure, pick.locale != context.recent { defaults.set(pick.locale, forKey: DictationLanguage.recentKey) }
+        Self.log.info("dictation in \(pick.locale, privacy: .public) (\(String(describing: pick.source), privacy: .public))")
+        return SFSpeechRecognizer(locale: Locale(identifier: pick.locale))
     }
 
-    /// Starts listening; `update` gets the whole transcript so far. Returns what went wrong, if it could not start.
-    func start(update: @escaping (String) -> Void) async -> String? {
+    private static let log = Logger(subsystem: "persona", category: "dictation")
+
+    /// Starts listening; `update` gets the whole transcript so far. `hints` are what tells the language spoken: the
+    /// draft, then the owner's recent messages in this chat, newest first. Returns what went wrong, if it could not start.
+    func start(hints: [String] = [], update: @escaping (String) -> Void) async -> String? {
+        #if DEBUG
+        // `-showDictationSample "<words>"`: hears these words, one every beat, instead of the microphone (simulators
+        // may have none), for screenshots and recordings of the composer's mic.
+        if let sample = UserDefaults.standard.string(forKey: "showDictationSample"), !sample.isEmpty {
+            return startSample(sample, update: update)
+        }
+        #endif
         #if os(iOS) || os(visionOS)
         guard RecordingCapture.shared.state == .idle else { return String(localized: "A recording is in progress. Stop it before dictating.") }
         #endif
@@ -333,7 +365,7 @@ final class Dictation {
         #if os(iOS) || os(visionOS)
         guard RecordingCapture.shared.state == .idle else { return String(localized: "A recording is in progress. Stop it before dictating.") }
         #endif
-        guard let recognizer = Self.recognizer(), recognizer.isAvailable else {
+        guard let recognizer = Self.recognizer(hints: hints), recognizer.isAvailable else {
             return String(localized: "Speech recognition isn't available right now")
         }
         guard RecordingMicrophone.shared.claim(microphoneOwner) else { return String(localized: "The microphone is in use. Stop the recording or dictation first.") }
@@ -374,6 +406,24 @@ final class Dictation {
         }
         return nil
     }
+
+    #if DEBUG
+    private func startSample(_ sample: String, update: @escaping (String) -> Void) -> String? {
+        guard RecordingMicrophone.shared.claim(microphoneOwner) else { return String(localized: "The microphone is in use. Stop the recording or dictation first.") }
+        self.update = update
+        isListening = true
+        listeningRun = UUID(); let run = listeningRun
+        let words = sample.split(separator: " ").map(String.init)
+        Task { @MainActor [weak self] in
+            for count in 1...max(1, words.count) {
+                try? await Task.sleep(for: .milliseconds(350))
+                guard let self, self.listeningRun == run else { return }
+                self.update?(words.prefix(count).joined(separator: " "))
+            }
+        }
+        return nil
+    }
+    #endif
 
     func stop() {
         guard RecordingMicrophone.shared.release(microphoneOwner) else { return }

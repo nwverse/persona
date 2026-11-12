@@ -316,7 +316,7 @@ func TestShellFirstWord(t *testing.T) {
 		}
 	}
 	// Whatever shellQuote writes reads back the same, with or without a directory in front.
-	for _, p := range []string{"/a/b", "/a b/c", "/it's/x", "/q\"x/y"} {
+	for _, p := range []string{"/a/b", "/a b/c", "/it's/x", "/q\"x/y", `/back\slash/x`, `/it\'s/x`} {
 		if got := shellFirstWord(shellQuote(p) + " hook"); got != p {
 			t.Errorf("round trip of %q: %q", p, got)
 		}
@@ -348,6 +348,24 @@ func TestDoctorClaudeVersion(t *testing.T) {
 		if c := doctorCheckNamed(t, RunDoctor(context.Background(), e.opts), "claude-version"); c.Status != status {
 			t.Errorf("version %q: %s (%s), want %s", v, c.Status, c.Detail, status)
 		}
+	}
+}
+
+// A version not read this time while the shell found claude is a warning in a state of its own, which the hub's
+// readiness reads as unknown rather than Claude Code missing; one the shell could not find has no such state.
+func TestDoctorClaudeVersionUnanswered(t *testing.T) {
+	e := newDoctorEnv(t)
+	e.opts.ClaudeProbe = func(context.Context) (string, bool) { return "", false }
+	if c := doctorCheckNamed(t, RunDoctor(context.Background(), e.opts), "claude-version"); c.Status != DoctorWarn || c.State != ClaudeVersionUnanswered {
+		t.Errorf("unanswered: %+v", c)
+	}
+	e.opts.ClaudeProbe = func(context.Context) (string, bool) { return "", true }
+	if c := doctorCheckNamed(t, RunDoctor(context.Background(), e.opts), "claude-version"); c.Status != DoctorWarn || c.State != "" {
+		t.Errorf("missing: %+v", c)
+	}
+	e.opts.ClaudeProbe = func(context.Context) (string, bool) { return "2.1.322", false }
+	if c := doctorCheckNamed(t, RunDoctor(context.Background(), e.opts), "claude-version"); c.Status != DoctorOK || c.State != "" {
+		t.Errorf("found: %+v", c)
 	}
 }
 
@@ -465,9 +483,9 @@ func TestCheckAgentSandbox(t *testing.T) {
 		words  []string
 	}{
 		{"off", macSandbox, false, nil, DoctorOK, []string{"未开启", "本机可以开启"}},
-		{"off on linux", sandbox.Support{OS: "linux"}, false, nil, DoctorOK, []string{"未开启", "不支持"}},
-		{"on", macSandbox, true, &sandbox.AgentStatus{State: sandbox.AgentActive}, DoctorOK, []string{"已开启", "已在沙箱里", "docker", "sudo"}},
-		{"on on linux", sandbox.Support{OS: "linux"}, true, nil, DoctorWarn, []string{"不支持"}},
+		{"off on linux without bwrap", sandbox.Support{OS: "linux", Why: "机器上没有 bwrap"}, false, nil, DoctorOK, []string{"未开启", "工具不可用", "bwrap"}},
+		{"on", macSandbox, true, &sandbox.AgentStatus{State: sandbox.AgentActive}, DoctorOK, []string{"已开启", "已在沙箱里", "docker", "sudo", "herdr", "personad launch"}},
+		{"on on linux without bwrap", sandbox.Support{OS: "linux", Why: "机器上没有 bwrap"}, true, nil, DoctorWarn, []string{"工具不可用", "bwrap"}},
 		{"on without sandbox-exec", sandbox.Support{OS: "darwin", Why: "机器上没有 sandbox-exec"}, true, nil, DoctorWarn, []string{"工具不可用", "sandbox-exec"}},
 		{"a start skipped", macSandbox, true, &sandbox.AgentStatus{State: sandbox.AgentSkipped, Why: "Claude 开了自带 sandbox"}, DoctorWarn, []string{"跳过", "Claude 开了自带 sandbox"}},
 	}
@@ -489,4 +507,21 @@ func TestCheckAgentSandbox(t *testing.T) {
 			}
 		})
 	}
+	t.Run("active on linux", func(t *testing.T) {
+		agentSandboxFakes(t, sandbox.Support{OS: "linux", Bwrap: "/usr/bin/bwrap"})
+		n := agentNode(t, true)
+		recordAgentSandbox(n.dir, "launch claude", sandbox.AgentStatus{State: sandbox.AgentActive})
+		got := checkAgentSandbox(n.dir)
+		if got.Status != DoctorOK {
+			t.Fatalf("%+v", got)
+		}
+		for _, want := range []string{"已开启", "已在沙箱里", "node 重启", "一并重启", "node.sock"} {
+			if !strings.Contains(got.Detail, want) {
+				t.Errorf("%q not in %q", want, got.Detail)
+			}
+		}
+		if strings.Contains(got.Detail, "ps、top、sudo") {
+			t.Errorf("Linux shows the macOS setuid limitation: %q", got.Detail)
+		}
+	})
 }

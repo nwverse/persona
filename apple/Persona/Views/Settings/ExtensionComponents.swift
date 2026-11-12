@@ -1,14 +1,15 @@
 import MarkdownUI
 import SwiftUI
 
-// The components of an extension's View (docs/extensions/extensions.md「声明式 UI」「UI 版本 3」), drawn by `ExtensionItemRow`.
+// The components of an extension's View (docs/extensions/extensions.md「Declarative UI」「UI 版本 3」), drawn by `ExtensionItemRow`.
 
 /// A row's look: what leads it (an icon, an avatar or a thumbnail), its title and subtitle, its value and badge, and a
-/// chevron when it can be used (a spinner while it runs).
-struct ExtensionComponentRowLabel: View {
+/// chevron when it can be used (a spinner while it runs); `trailing` at its very end (a control, UI version 6).
+struct ExtensionComponentRowLabel<Trailing: View>: View {
     var row: ExtensionRowComponent
     var model: (any ExtensionViewControlling)?
     var chevron: Bool
+    @ViewBuilder var trailing: Trailing
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -36,6 +37,7 @@ struct ExtensionComponentRowLabel: View {
                     ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
                 }
             }
+            trailing
         }
         .contentShape(.rect)
     }
@@ -59,18 +61,27 @@ struct ExtensionComponentRowLabel: View {
             .clipShape(.circle)
             .accessibilityHidden(true)
         } else if let i = row.icon, !i.isEmpty {
+            // The icon and its column stop growing at the largest standard size, where the glyph still fits: past it the
+            // glyph followed the text to 3 × while the column stopped at `sizeScale`'s 1.6 ×, and spilled into the
+            // title and past the inset (#4841). The title keeps growing; the default sizes are unchanged.
             ThemedIcon(ExtensionUIStyle.icon(i))
                 .font(Theme.Font.heading)
                 .foregroundStyle(Theme.accent)
                 .scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon)
+                .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
                 .accessibilityHidden(true)
         }
     }
 
     /// An image the extension points at: https only, loaded without any of the app's credentials.
     static func image(_ s: String) -> URL? {
-        guard let u = URL(string: s), u.scheme?.lowercased() == "https" else { return nil }
-        return u
+        ExtensionImageCache.url(s)
+    }
+}
+
+extension ExtensionComponentRowLabel where Trailing == EmptyView {
+    init(row: ExtensionRowComponent, model: (any ExtensionViewControlling)?, chevron: Bool) {
+        self.init(row: row, model: model, chevron: chevron) { EmptyView() }
     }
 }
 
@@ -80,42 +91,64 @@ struct ExtensionRemoteImage: View {
     var url: URL
     /// An avatar's letters when the picture fails.
     var fallback: String?
+    /// Catalog logos use the existing extension mark while loading or unavailable.
+    var fallbackSymbol: String? = nil
+    var points: CGFloat = Theme.Size.box80
+    var contentMode: ContentMode = .fill
+    @Environment(\.displayScale) private var displayScale
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var image: Image?
     @State private var failed = false
+
+    private struct Request: Hashable { var url: URL; var pixels: Int }
 
     var body: some View {
         ZStack {
             if let image {
-                image.resizable().scaledToFill()
+                image.resizable().aspectRatio(contentMode: contentMode)
+            } else if let fallbackSymbol {
+                ThemedIcon(fallbackSymbol).font(Theme.Font.heading).foregroundStyle(Theme.accent)
             } else if failed, let f = fallback, !f.isEmpty {
                 Monogram(name: f, size: Theme.Size.wellL, fill: Theme.Fill.chip, font: Theme.Font.labelStrong, letters: 2)
             } else {
                 Rectangle().fill(Theme.Fill.chip)
             }
         }
-        .task(id: url) {
+        .task(id: Request(url: url, pixels: Int(ceil(points * displayScale * Theme.sizeScale(typeSize))))) {
             image = nil
             failed = false
             #if DEBUG && os(macOS)
             let captureLoad = MacExtensionSnapshotBatch.beginImageLoad(url)
             defer { MacExtensionSnapshotBatch.finishImageLoad(captureLoad, loaded: image != nil) }
             #endif
-            guard let data = try? await ExtensionRemoteImage.session.data(from: url).0, let img = UIImage(data: data) else {
-                failed = true
+            let pixels = Int(ceil(points * displayScale * Theme.sizeScale(typeSize)))
+            guard let cg = await ExtensionImageCache.shared.image(url, maxPixel: pixels) else {
+                if !Task.isCancelled { failed = true }
                 return
             }
-            image = Image(uiImage: img)
+            guard !Task.isCancelled else { return }
+            image = Image(decorative: cg, scale: displayScale)
         }
     }
+}
 
-    /// No cookies, no credentials, no cache shared with the app's own requests.
-    static let session: URLSession = {
-        let c = URLSessionConfiguration.ephemeral
-        c.httpShouldSetCookies = false
-        c.urlCredentialStorage = nil
-        c.httpAdditionalHeaders = [:]
-        return URLSession(configuration: c)
-    }()
+/// Catalog artwork uses the same safe image component as extension rows, with a fitted logo and generic fallback.
+struct ExtensionLogo: View {
+    var url: String?
+    var side: CGFloat = Theme.Size.wellM
+
+    var body: some View {
+        Group {
+            if let url = ExtensionImageCache.url(url) {
+                ExtensionRemoteImage(url: url, fallbackSymbol: Theme.Icon.plugins, points: side, contentMode: .fit)
+            } else {
+                ThemedIcon(Theme.Icon.plugins).font(Theme.Font.heading).foregroundStyle(Theme.accent)
+            }
+        }
+        .scaledFrame(width: side, height: side)
+        .clipShape(.rect(cornerRadius: Theme.Radius.badge))
+        .accessibilityHidden(true)
+    }
 }
 
 /// An extension's `markdown`: the safe subset (headings, paragraphs, lists, emphasis, code, quotes, links) in the chat's
@@ -324,7 +357,8 @@ enum ExtensionOutcome {
     }
 }
 
-/// An extension's `chart`: its title, the chart (bars or lines, stacked when it says so), what it says under it. A
+/// An extension's `chart`: its title, the chart (bars or lines, stacked when it says so; a donut or pie a `RingChart` of
+/// the first series), what it says under it. A
 /// series' tone is a role color, without one it takes the next data hue; values the extension did not write are compact
 /// numbers with its unit. Compact (a card) when the environment says so.
 struct ExtensionChartItem: View {
@@ -342,6 +376,10 @@ struct ExtensionChartItem: View {
                 if let t = item.title, !t.isEmpty {
                     Text(t).font(compact ? Theme.Font.labelStrong : Theme.Font.secondaryStrong).foregroundStyle(compact ? .secondary : .primary).lineLimit(1)
                 }
+                if item.kind == ExtensionChartKind.donut || item.kind == ExtensionChartKind.pie, let s = series.first {
+                    RingChart(parts: s.points.map { RingChart.Part(label: $0.label, value: $0.value, display: $0.display ?? format($0.value)) },
+                              center: item.center, pie: item.kind == ExtensionChartKind.pie)
+                } else {
                 DataChart(kind: item.kind == "line" ? .line : .bar, labels: labels,
                           series: series.enumerated().map { i, s in
                               DataChart.Series(name: s.name?.isEmpty == false ? s.name! : String(localized: "Series \(i + 1)"),
@@ -351,6 +389,7 @@ struct ExtensionChartItem: View {
                           stacked: item.stacked == true, format: format, compact: compact)
                 // Drawn again with other values, the bars and lines move to them (#37).
                 .animation(reduceMotion ? nil : Theme.Motion.layout, value: item.series)
+                }
                 if let d = item.detail, !d.isEmpty, !compact {
                     Text(d).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(3)
                 }

@@ -107,9 +107,9 @@ fun ChatComposer(
     // A photo taken here waits in cache/chat-captures until it leaves this draft: removed, or sent and cleared. Only the
     // draft's own captures go; the folder is never swept (another conversation's draft may still hold one).
     LaunchedEffect(state) {
-        var before = state.attachments
-        snapshotFlow { state.attachments }.collect { now ->
-            val gone = leftCaptures(before, now, context.packageName)
+        var before = state.attachments to state.photoEdits.values.map { it.sourceUri }
+        snapshotFlow { state.attachments to state.photoEdits.filterKeys { id -> state.attachments.any { it.id == id } }.values.map { it.sourceUri } }.collect { now ->
+            val gone = leftCaptures(before.first, now.first, context.packageName, before.second, now.second)
             before = now
             if (gone.isNotEmpty()) withContext(Dispatchers.IO) { gone.forEach { deleteCapture(context, it) } }
         }
@@ -174,7 +174,11 @@ fun ChatComposer(
         editOpening = true
         scope.launch {
             try {
-                editing = ComposerPhotoEdit(photo, withContext(Dispatchers.IO) { decodePhoto(context, Uri.parse(photo.uri)) })
+                // An edited photo opens from its source with its edits, still undoable; its source gone, it starts over on itself.
+                val prior = state.photoEdits[photo.id]
+                val source = prior?.let { runCatching { withContext(Dispatchers.IO) { decodePhoto(context, Uri.parse(it.sourceUri)) } }.getOrNull() }
+                editing = if (prior != null && source != null) ComposerPhotoEdit(photo, source, prior.sourceUri, prior)
+                    else ComposerPhotoEdit(photo, withContext(Dispatchers.IO) { decodePhoto(context, Uri.parse(photo.uri)) })
             } catch (e: CancellationException) { throw e }
             catch (_: Exception) { onNotice(resources.getString(R.string.chat_attach_edit_unreadable)) }
             finally { editOpening = false }
@@ -182,14 +186,15 @@ fun ChatComposer(
     }
     // "Done": the editor spins while the new photo is written (JPEG like a picked photo) and uploaded, then closes. Only an
     // upload that worked replaces the original; the old path leaves the message with it.
-    fun finishEdit(edit: ComposerPhotoEdit, result: Bitmap) {
-        if (result === edit.source) { editing = null; return } // nothing drawn
+    fun finishEdit(edit: ComposerPhotoEdit, result: Bitmap, done: ImageEditState) {
+        if (result === edit.source && edit.prior == null) { editing = null; return } // nothing done to a photo never edited
         scope.launch {
             var edited: ComposerAttachment? = null
             var kept = false
             try {
                 edited = MediaShare.writeEditedPhoto(context, result)
-                val outcome = state.replaceWithEdited(edit.original, edited) { photo ->
+                val carried = PhotoEdits(edit.sourceUri, done).takeUnless { done.edits.isEmpty }
+                val outcome = state.replaceWithEdited(edit.original, edited, carried) { photo ->
                     uploadAttachment(context, checkNotNull(service), session, photo)
                 }
                 kept = outcome == PhotoEditOutcome.Replaced
@@ -241,7 +246,9 @@ fun ChatComposer(
 
     LaunchedEffect(visible) { if (!visible) { menu = false; confirmClear = false; cameraDenied = false; editing = null; expandedEditor = false } }
     editing?.let { edit ->
-        key(edit) { ImageEditor(edit.source, onCancel = { if (editing === edit) editing = null }, onDone = { finishEdit(edit, it) }) }
+        var done by remember(edit) { mutableStateOf(ImageEditState()) }
+        key(edit) { ImageEditor(edit.source, onCancel = { if (editing === edit) editing = null }, onDone = { finishEdit(edit, it, done) },
+            start = edit.prior?.state ?: ImageEditState(), onEdited = { done = it }) }
     }
     // Voice input: what the phone's recognizer heard goes at the end of the draft, to edit before sending.
     val dictation = rememberDictation(onHeard = { state.appendDictation(it) }, onError = onNotice)
@@ -296,16 +303,25 @@ fun ChatComposer(
     val offersExpand = enabled && composerOffersExpand(lineCount, growLines)
     LaunchedEffect(enabled) { if (!enabled) expandedEditor = false }
     val canSend = enabled && state.ready && !sending
+    val homeAssistant = LocalHomeChrome.current?.let { it.items.firstOrNull()?.key == it.selected } == true
+    val fullToolbar = !homeAssistant || state.focused || hasContent
+    // Expand once on focus, not when the first character arrives. ComposerFrame keeps the field in the same row across
+    // this change, so moving the controls cannot dispose the field and cancel the tap or the IME.
+    val expanded = state.focused || hasContent
+    val composerPlaceholder = if (homeAssistant) stringResource(R.string.chat_composer_ask_persona, LocalPersonaName.current) else placeholder
 
     ComposerFrame(
         // Blank space around the field (its padding, beside the buttons) types too: one tap, not a hunt for the line.
         onBlankTap = { if (enabled) { focusRequester.requestFocus(); keyboard?.show() } },
+        expanded = expanded,
         leading = {
             JIconButton(PhIcons.Plus, stringResource(R.string.chat_composer_add), { menu = true }, enabled = !sending && enabled)
-            if (mentions != null) JIconButton(PhIcons.At, stringResource(R.string.chat_mention), {
-                state.beginEdit(); state.value = typeMention(state.value); state.focusRequest++
-            }, enabled = enabled)
-            leading?.invoke(this)
+            if (expanded) {
+                if (mentions != null) JIconButton(PhIcons.At, stringResource(R.string.chat_mention), {
+                    state.beginEdit(); state.value = typeMention(state.value); state.focusRequest++
+                }, enabled = enabled)
+                leading?.invoke(this)
+            }
         },
         trailing = {
             // The mic stays (iOS ShellComposerBar): more can be dictated after what is typed. Send beside it once there is
@@ -333,8 +349,8 @@ fun ChatComposer(
             if (state.oldVersion) Text(stringResource(R.string.chat_composer_old_version), style = PersonaTheme.type.caption,
                 color = PersonaTheme.palette.cautionText)
             ComposerAttachmentPreviews(state, service, sending, enabled, onEdit = ::editPhoto)
-            accessory?.invoke(this)
-            modeHint?.let { JChip(it, icon = PhIcons.SlidersHorizontal) }
+            if (fullToolbar) accessory?.invoke(this)
+            if (fullToolbar) modeHint?.let { JChip(it, icon = PhIcons.SlidersHorizontal) }
             if (working && hasContent && enabled) Text(stringResource(R.string.chat_composer_will_queue), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
             // A draft that is one "/" word: the quick messages it can be, right above the field.
             ComposerSuggestions(quick.map { ComposerSuggestion(it.title, it.extensionName, key = "${it.extension}/${it.id}", flexible = true) },
@@ -358,7 +374,7 @@ fun ChatComposer(
             cursorBrush = SolidColor(PersonaTheme.palette.ink),
             decorationBox = { field ->
                 Box {
-                    if (state.value.text.isEmpty()) Text(if (working && enabled) stringResource(R.string.chat_composer_placeholder_working) else placeholder,
+                    if (state.value.text.isEmpty()) Text(if (working && enabled && !homeAssistant) stringResource(R.string.chat_composer_placeholder_working) else composerPlaceholder,
                         style = PersonaTheme.type.body, color = PersonaTheme.palette.ink3, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     field()
                 }
@@ -366,7 +382,7 @@ fun ChatComposer(
         if (offersExpand) ComposerExpandButton(expanded = false, onClick = { expandedEditor = true }, modifier = Modifier.align(Alignment.TopEnd))
     }
     // Same draft and caret as the field; collapsing puts the caret back in the field. Sending closes it.
-    if (expandedEditor) ExpandedComposer(state.value, { state.beginEdit(); state.value = it }, placeholder,
+    if (expandedEditor) ExpandedComposer(state.value, { state.beginEdit(); state.value = it }, composerPlaceholder,
         onCollapse = { expandedEditor = false; state.focusRequest++ }, enabled = enabled) {
         SendButton(onClick = { expandedEditor = false; onSend() }, enabled = canSend && hasContent && blockedLabel == null, loading = sending)
     }

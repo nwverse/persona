@@ -3,9 +3,13 @@ package devices
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -73,6 +77,112 @@ func TestMetricsBook(t *testing.T) {
 		t.Fatalf("system = %+v", s)
 	}
 }
+
+// metricsMemStore records the machines of each write: one InsertMetric a sample, or (batchMetricsStore) several in one.
+type metricsMemStore struct {
+	*memStore
+	mu     sync.Mutex
+	writes [][]string
+	stored chan struct{}
+}
+
+func (s *metricsMemStore) record(samples ...db.MachineSample) {
+	var machines []string
+	for _, x := range samples {
+		machines = append(machines, x.Machine)
+	}
+	s.mu.Lock()
+	s.writes = append(s.writes, machines)
+	s.mu.Unlock()
+	s.stored <- struct{}{}
+}
+
+func (s *metricsMemStore) InsertMetric(_ context.Context, machine string, sample proto.MetricSample) error {
+	s.record(db.MachineSample{Machine: machine, Sample: sample})
+	return nil
+}
+func (s *metricsMemStore) PutMachineSystem(context.Context, string, proto.System) error { return nil }
+func (s *metricsMemStore) MachineSystems(context.Context) (map[string]proto.System, error) {
+	return nil, nil
+}
+func (s *metricsMemStore) RollupMetrics(context.Context, time.Time) (int64, error) { return 0, nil }
+func (s *metricsMemStore) PruneMetrics(context.Context, time.Time) (int64, error)  { return 0, nil }
+func (s *metricsMemStore) MetricSeries(context.Context, []string, time.Time, time.Time, int) (map[string][]proto.MetricPoint, error) {
+	return nil, nil
+}
+
+type batchMetricsStore struct{ *metricsMemStore }
+
+func (s batchMetricsStore) InsertMetrics(_ context.Context, samples []db.MachineSample) ([]error, error) {
+	s.record(samples...)
+	return nil, nil
+}
+
+// Six machines' samples of a tick are stored in one write (one transaction: one commit and WAL flush), what came
+// before the manager stopped is stored, and a store without InsertMetrics gets one InsertMetric a sample.
+func TestMetricsStoredATickAtOnce(t *testing.T) {
+	for _, batched := range []bool{true, false} {
+		st := &metricsMemStore{memStore: newMemStore(), stored: make(chan struct{}, 64)}
+		var store Store = st
+		if batched {
+			store = batchMetricsStore{st}
+		}
+		d := New(Options{Store: store})
+		d.metricsWait = time.Second // the first tick waits that long; the next ones end once the six machines sent
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			d.writeMetrics(ctx, d.metricsStore())
+		}()
+		writes := 0
+		send := func(tick int64, machines int, wait bool) {
+			for m := range machines {
+				b, _ := json.Marshal(map[string]any{"sample": proto.MetricSample{T: 1_000_000 + 10*tick, MemTotal: 1}})
+				d.onMetrics(fmt.Sprintf("m%d", m), b)
+			}
+			if !wait {
+				return
+			}
+			if batched {
+				writes++
+			} else {
+				writes += machines
+			}
+			for {
+				st.mu.Lock()
+				n := len(st.writes)
+				st.mu.Unlock()
+				if n >= writes {
+					break
+				}
+				select {
+				case <-st.stored:
+				case <-time.After(10 * time.Second):
+					t.Fatalf("batched %v: tick %d not stored: %v", batched, tick, st.writes)
+				}
+			}
+		}
+		for tick := range int64(3) {
+			send(tick, 6, true)
+		}
+		send(3, 2, false) // then the manager stops before the other four came
+		cancel()
+		<-done
+		sizes := []int{}
+		for _, w := range st.writes {
+			sizes = append(sizes, len(w))
+		}
+		want := []int{6, 6, 6, 2}
+		if !batched {
+			want = slices.Repeat([]int{1}, 20)
+		}
+		if !slices.Equal(sizes, want) {
+			t.Fatalf("batched %v: writes of %v samples, want %v", batched, sizes, want)
+		}
+	}
+}
+
 func TestUsageSummary(t *testing.T) {
 	loc := time.FixedZone("test", 8*3600)
 	now := time.Date(2026, 10, 29, 9, 0, 30, 0, loc) // 30 s into the minute
@@ -164,6 +274,29 @@ func TestUsageAndMetricsForgetARemovedMachine(t *testing.T) {
 	}
 	if machine, latest, outdated := d.MachineResources("gone"); machine != nil || latest != nil || outdated != nil {
 		t.Fatalf("removed machine still listed: %+v %+v %v", machine, latest, outdated)
+	}
+}
+
+// An entry absorbed by another one (the same computer) answers with that computer's latest sample: samples are kept
+// under the id of the machine whose connection sent them, not the id the caller asked by.
+func TestMachineResourcesOfAnAbsorbedEntry(t *testing.T) {
+	d := newTestDevices(t)
+	owner := newMachine(d, MachineConfig{ID: "box", Name: "box", Kind: "ssh"})
+	link := newMachine(d, MachineConfig{ID: "box-link", Name: "box-link", Kind: kindLink})
+	d.addEntry(owner)
+	d.addEntry(link)
+	f := &d.fleet
+	f.mu.Lock()
+	f.init()
+	f.absorbed[link] = owner
+	f.mu.Unlock()
+	d.onMetrics("box", []byte(`{"sample":{"t":7}}`))
+
+	for _, id := range []string{"box", "box-link"} {
+		machine, latest, _ := d.MachineResources(id)
+		if machine == nil || machine.ID != "box" || latest == nil || latest.T != 7 {
+			t.Fatalf("MachineResources(%q): machine=%+v latest=%+v", id, machine, latest)
+		}
 	}
 }
 

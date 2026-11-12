@@ -1,0 +1,10 @@
+{
+  "title": "Subscriptions",
+  "sidebar": "Sidebar",
+  "redraw": "Redraw",
+  "row": "Subscriptions",
+  "counts_on": "{on} on",
+  "counts_failing": "{on} on · {failing} failing",
+  "counts_none": "Available",
+  "title_sources": "Inbox Sources"
+}

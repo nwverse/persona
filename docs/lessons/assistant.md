@@ -1,5 +1,42 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- Terminal spinner frames are presentation, not native-title changes (#5254). Comparing a saved `raw_title`
+  byte for byte with a later inventory hid a successful automatic name while leaving its one-shot count spent.
+  Use the same leading-spinner/whitespace comparison for display decoration and the model-result recheck.
+  Preserve exact substantive-title differences, manual/custom protection and unknown-provenance skips; never
+  clear counters or call the model again just to repair display. Test every frame, a stopped label and a frame
+  change during the request, alongside genuine title changes and manual/unknown sources.
+
+- Automatic Agent names need title provenance, not a string heuristic alone (#4812). A user can deliberately choose
+  a tool-looking name, and an old custom-title record can fall outside a quick tail window. Treat native custom titles
+  as protected and unknown provenance as ineligible. Keep automatic names in the manager's own ledger, persist manual
+  intent before dispatching a rename, and decorate both list and single-session reads. Count cumulative output tokens,
+  never changing input-context size or transcript bytes, for periodic naming; request a bounded Responses output too.
+
+- A task trust key combines a machine and directory with an unescaped delimiter (#4421). Either field can contain
+  that delimiter, and an old ID need not obey current registration rules, so a split can assign the rule to the wrong
+  place. Keep its exact key for matching and deletion; mark an ambiguous listing and give older clients the key as a
+  path-escaped identifier, so a path-component title retains it. A failed settings read is not an empty list:
+  propagate it to the list caller while retaining the fail-closed admission and no-overwrite behavior of writers.
+  Exercise the handler after service reconstruction.
+
+- Reusing a topic to-do must retire the previous plan's execution binding (#3985). Released or dismissed Agents let
+  a later plan take over the same to-do, while the old plans stay in storage. A historical `TodoID` match cannot
+  impose that plan's read-only constraint on the current session. Clear old execution bindings under the takeover
+  reservation before launching the replacement; keep `ReuseTodo` as history. Plan creation order is not start order,
+  and retries can change `UpdatedAt`. Cover both directions of permission changes, memory, storage and restart.
+
+- Unavailable context is not nonexistent data (#3780, #3862). When a privacy switch excludes earlier meetings, carry
+  that policy into both answer prompts: do not promise earlier minutes or render an empty lookup as “none with
+  minutes.” Keep goldens for disabled, enabled-with-results and enabled-without-results modes. Tool descriptions must
+  also distinguish expired transcripts from meeting minutes retained forever by default.
+
+- A to-do's `origin` is what makes it a task, for the hub and every app (#1852, #1909). The hub tests `origin != ""` in some 70 places (receipts, the done judgment, reopening on a new turn, retiring a finished task's Agents, retitling, outcome records, Today, MCP tool text), and web, iOS and Android pick a conversation's tasks by it. A to-do that only relates to a conversation, such as a question nobody answered, keeps that conversation in its own record, not in `origin`: an `isAskTodo` skip in `todosOf` hid it from the snapshot alone, while the apps showed it as a task whose Agent was starting and a hand-off got it closed by the judge. Before giving a new kind of to-do an origin, read every `t.Origin` use and the apps' task filters.
+
+- A read-modify-write of shared assistant state needs a lock and a read that can fail (#2192). `ensureToday` looked for the day's card and then appended one, and `assistant_feed` has no unique key, so concurrent opens of a chat each made a card. A plan's tasks are one blob that `movePlan` writes whole, so tasks whose starts failed together wrote back each other's old errors. `trustKinds` read `tasks.trust` through a read that answered an empty map on error and wrote that back over every kind remembered before. Serialize the writers of one key (`cardLocks`, `patchPlanTask`, `trustMu`), read again under the lock instead of writing back a copy read earlier, skip the write when the read failed, and answer from the rows that were saved (`saveWrites`), not from memory. Where DST starts at midnight, `time.Date(y, m, d, 0, 0, 0, 0, loc)` is 23:00 the day before: take the date from `now` and the day's start from `dayStart`.
+
+- A disconnected start caller does not prove the Agent was never created (#3251). A runtime bridge can finish `agent.start` after the hub loses its reply; directory and title are not unique operation identities. Recover an interrupted task from its persisted plan, to-do and agent links, and fail visibly when no durable start key or session identity can make replay safe. Do not invent a kept pane to enter start remedying. Read all candidate plans before recording failures: patching one task advances the whole plan's update time and can otherwise hide its siblings from a startup time window.
+
 - Model role is not message authorship (#2125). Cross-conversation relays, scheduled work and supervision still use the runtime's user role, but carry explicit `Item.source` in a persisted message-source context. Preserve the sender's stable id and title through queued relay recovery; never use a native peer's display name as that id. The pending-send echo cache expires after a day, so it cannot hold permanent provenance. Prefer metadata and only recognize complete legacy machine templates. Protect user-pasted templates at both new-chat and send entry points before echo matching, and exclude source metadata blocks from selectable Context cards and automated input from user-only navigation. Source JSON and the user-authored sentinel are fixed-size context, never water-filled with ordinary context bodies: near the 24 KiB page boundary a partial JSON block loses authorship while a full-item read restores it. Test the context-clipping boundary as well as large messages that take the plain-cut path.
 
 - A completed onboarding step must not hide recovery from a later failure (#1894). `first_message` stays `ok` after one answer, so key and model errors need their own `test_assistant` alternative on the model step. Verify the real readiness handler after a successful answer and a later error, then failed and successful probes, while retaining the current chat and the existing machine / launcher evidence guards.
@@ -38,7 +75,7 @@
 
 - Owned triage questions require a durable interaction history Store before acknowledging an answer (#5994). A bus integration test that previously used no Store must supply its manager with the isolated Postgres fixture and assert `InteractionOutcome` after resolution; never weaken the production missing-store failure merely to keep the test green. The shared hub fixture does not truncate `session_work`, so explicitly prune old work in this isolated fixture before connecting: otherwise a repeated run can restore the previous answered turn and suppress the new card as a duplicate.
 
-Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md` “Lessons”; index `docs/lessons/README.md`). Add lessons to relevant sections, or a new section if none fits.
+Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; index `docs/lessons/README.md`). Add lessons to relevant sections, or a new section if none fits.
 
 - Push delivery is per destination, not just per conversation (#1896). A shared `notify_user` mark lets one successful channel suppress another channel's failed delivery, while an unmarked extension push duplicates its turn-end mirror. Key delivery by channel, machine and session, record only confirmed sends, and apply the same check to main-chat mirrors, scheduled-task mirrors and Lark mirror retries. Test mixed successes and failures, including text split across several sends.
 
@@ -54,6 +91,8 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md` “L
 
 - Reintroducing a retired model purpose must not read its dormant settings record (2026-11-06, #5921). Lark /agent uses a new override namespace and revision sequence, inheriting Agents until a new user save. Keep category-default assignment from creating an opt-in binding, include overrides in provider-in-use checks, and determine client editability from writable fields rather than `category_id != id`. Tests must seed the old record directly, then verify new conversation startup parameters before override, after save, and after reset; merely asserting the resolved binding misses startup precedence.
 
+- A second opt-in model override shows where the first was keyed by ID (#4232). Setting the AI twin apart like Lark /agent needed no new server path, but every client special-cased `id == "lark.agent"` for its status words, reset label and effort rule, so the twin's row and editor would have kept a category's wording (no "Separately configured", "Restore Default" instead of "Follow Agents") while being an override. Recognize such a row by data (`parent: "agent.new"` and writable `fields`) and keep ID checks for wording that really is one purpose's. Server tests start the twin through its own path (`startInboxAgent`), not the conversation route, and check that a save writes only its own key.
+
 - Model-settings HTTP labels must use `requestCtxLang(ctx)`, not `s.lang(ctx)` (2026-11-06, #5057). The latter reads only the hub's language, so catalog-driven launcher role labels can still ignore a client's `Accept-Language`. Test sequential requests with a different hub language, both discovered-model and fallback-model paths, and unchanged model IDs. MCP-only refusals remain original model text; they must not become exemptions for real HTTP, push or approval-card copy.
 
 - A database-read failure for session triage settings must not return `200` with defaults (2026-11-06, #4553). Toggling one switch makes the client `PUT` the entire settings group; a failed read disguised as All Off would overwrite other enabled values. Preserve the read error and return `503` with a localized reason from the settings API. Only internal automatic triage keeps a default fallback. Do not cache failures; the next retry must read the database again. Regression tests inject read errors through a fake Store and check API failure, saved values after recovery, and unaffected internal fallback and `PUT`, without stopping the shared test database.
@@ -67,7 +106,10 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md` “L
 - AskUserQuestion unavailable in headless `claude -p`, tool disabled rather than disconnected hook. Phone questions need blocking MCP `ask_user` (`docs/assistant/assistant.md`). Model may call it alongside other tools; side-effecting tools require their own hub approval.
 - Claude Code ends a stdio MCP tool call silent for 30 minutes (`CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT`, Claude Code 2.1.3xx; remote servers 5 minutes), whatever the server's own deadline (#1498, 2026-11-08). A wait as long as that limit races it: the phone confirmation's 30 minutes lost 2 of 3 times, and the model got "sent no response or progress for 1800s; aborting" instead of the hub's "check before calling again". `notifications/progress` for the call's `_meta.progressToken` restarts the clock (`personad mcp` `keepAlive`); the per-server `timeout` / `MCP_TOOL_TIMEOUT` is a separate hard cap progress does not extend (default 1e8 ms). Also check `personad mcp`'s own `CallTimeout` when a wait grows: it was 40 minutes under ask_user's 2 hours. Tested end to end with a fake node socket: without progress the call ended at the idle limit, with it the 150-second answer came through.
 - Default-mode headless assistant even needs phone approval for Persona MCP notify_user / `schedule_followup`, stalling nighttime follow-ups / Monitor (tested 2026-10-30). Pass `--allowedTools mcp__persona`; hub asks separately for acting-on-user-behalf tools (`docs/assistant/assistant.md`).
+- A tray's Waiting status describes the parent turn, not whether its background work is idle (#3591, 2026-11-10). Reuse the header's activity data for a Working spinner and phase/progress or running counts; reserve the clock for no background activity. A lightweight `DockAgent` projection must carry that data too: otherwise a same-state workflow update leaves manual-Agent rows stale. Aggregate all linked task agents, deduplicate session references and compatibility workflow markers, and keep progress digits outside truncated phase text.
 - Background tasks / Monitor are Claude child processes; idle recycling or systemd personad restart killing cgroup kills them, leaving chat waiting forever. Node reads `stream-json` `system/background_tasks_changed`, does not recycle with active tasks, persists task list continuously, tells chat what was lost after restart.
+- `background_tasks_changed` comes only when the set changes, never at start (Claude Code's schema, 2.1.311): a process that never ran a background task has reported no list, which is not the same as an empty one. A repeated `initialize` control request is answered with the current set right behind its success, empty included; the first one is not, and node sends none of its own, so asking means sending two (#3495). A fake CLI that prints an empty list at start hides this: recovery's model switch passed its tests and never ran on the real CLI.
+- Resolve read-only permission from the actual launcher at planning and again at dispatch (#1841, #4864). Claude starts in `bypassPermissions` and receives the read-only constraint in its first prompt; Codex retains `plan` and explicit sandbox flags. Persist a changed permission with the resolved launcher even when machine and why are unchanged, and keep the constraint out of the saved prompt so retries do not duplicate it. Ordinary Codex terminal starts discarded `plan`: map it to explicit sandbox and approval CLI flags, check both alias and managed launcher arguments for conflicts, and retain the constraint across later resumes. Runtime bridges can ignore the mode or fall back to another provider; refuse plan starts without an enforcement guarantee before sending the prompt.
 - Scheduled assistant work needs one table only (2026-10-31, `docs/assistant/assistant.md` “Scheduled tasks”). Separate schedules / follow-ups forced repeated checks to `schedule_followup` each round; entry disappeared on start, invisible / unstopppable during hour-long approval waits. Repeating work uses every; self-reschedule recognized as same task. Only user changes task model / permission in app; assistant cannot elevate itself. Headless `bypassPermissions` only at launch.
 - Lark assistant uses gateway skill (copy formerly `server/internal/assistantskills/`, embedded personad, installed `.claude/skills` at assistant startup, upstream sync script; since 2026-11-04 in Lark plugin). Token formerly process env; since #1317 not even env, below. Node Bash PreToolUse `node/larkgate.go` applies only `assistant-hooks` / assistant-settings.json. Unparsed commands containing `ol POST/PUT/PATCH/DELETE` still require phone confirmation, otherwise bypass permits; credential-proxy gate now rejects them outright.
   Test hub uses own HOME / port / DB (`/tmp/jt`), never live personad. SSH pkill -f pattern can match own SSH command; use [/]tmp/…. [x] works only if literal absent elsewhere in same SSH command: 2026-11-01 `pkill -f "[d]rive.py x"` followed by `python3 drive.py x …`, and `pgrep -f persona_args` then process-group kill both killed SSH, exit 255. Safest anchor full path, `pgrep -f '^/tmp/jt/…/personad'`, get PID / kill, only that task per SSH.
@@ -79,20 +121,20 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md` “L
 - Fake HOME is not isolation. Node follows launcher-selected `CLAUDE_CONFIG_DIR`; hardcoded profile launcher writes real transcripts, and cwd suffix `/.persona/assistant` makes real assistant chats appear in test hub, editable by test assistant (2026-11-01 chat-management tests). Copy launcher into fake HOME, redirect `CLAUDE_CONFIG_DIR` there, copy settings.json, define `_claude_launchers` in fake .bashrc, prompt only own created chats; delete full fake HOME afterward, keys included.
 - Unknown `assistant.send` session ID starts **blank new chat** rather than error if no transcript. Resume-or-report-failure calls (scheduled chats 2026-11-01) use `resume_only`; no process / transcript errors, hub creates / records new chat (`docs/assistant/assistant.md` “Scheduled tasks”). Busy state comes from hub working / needs_you and only listed sessions; retain long-lived chats in `keptSessions`, or 80 new transcripts on busy machine evict them.
 - **No per-message changing data in system prompt** (2026-11-01, `docs/assistant/assistant.md` “Live snapshots and prefix caching”). Prefix caching puts system / tools before history; one byte change rewrites hundreds of thousands of tokens after restart, first output 10 seconds to minutes. Snapshots accompany messages. Claude resume actually retains first system prompt until compaction, so old snapshot stale, not cache-invalidating. Real restart cache miss was **changed tools**: one removed MCP tool rewrites all, schema key order does not. Diagnose experimentally: copy real chat with new ID / temporary directory, change one thing per restart, inspect `message_start` cache_read_input_tokens.
-- Per-start compaction belongs in both the process environment and the final merged settings (#6481). Claude settings `env` can override the process, and the SDK recomputes provider environment after spawn. Preserve launcher settings / hooks, then pin the computed AUTO and MAX values last in both paths. A launcher AUTO value is not evidence of backend capacity. Match warm spares and restarts by explicit main-chat scope, not the assistant directory or model purpose; scheduled chats share both.
+- Per-start compaction belongs in both the process environment and the final merged settings (#6481). Claude settings `env` can override the process, and the SDK recomputes provider environment after spawn. Preserve launcher settings / hooks, then pin the computed AUTO and MAX values last in both paths. A launcher AUTO value is not evidence of backend capacity. Match warm spares and restarts by explicit main-chat scope, not the assistant directory or model purpose; scheduled chats share both. Don't turn "nothing declared" into a Persona number (#3008, #3066): a guessed 200k, then fixed 200k / 400k targets, made 1M conversations compact at about 167k. Follow what the launcher declares, write nothing otherwise (Claude Code already holds AUTO to its own model window), and read the real window from `result.modelUsage.<model>.contextWindow` where Persona needs it (the idle threshold). Write values only where Persona owns the environment (a managed launcher): over a shell launcher they would override its own declarations.
 
 - Headless `claude -p` auto-compacts via `CLAUDE_CODE_AUTO_COMPACT_WINDOW`; idle compaction only interactive. `stream-json` `/compact` manually compacts. First resumed-process message sometimes does not compact, second does; one miss not proof unsupported.
 - `ssh_host` aliases exist only hub ~/.ssh/config. Giving remote assistant ssh <alias> supplies unusable command.
 - Npm lark-cli has `#!/usr/bin/env node`; nvm paths missing systemd personad PATH (2026-11-03,#273). Command name not found; absolute script still fails env node. Node login-shell `command -v` finds absolute path, prepends its directory to PATH (`node/larkcligate.go`); assistant wrappers same.
 - Lark-cli user sending requires app `im:message.send_as_user`, absent in default app (2026-11-04,#273). `auth login --domain all` gets 200+ scopes but not it; `im +messages-send --as user` `missing_scope`, `auth login --scope …` suggested by the error cannot grant app-disabled permission. Bot `im:message` exists, so assistant send / reply `--as bot`; phone card states identity from --as. Failed upstream only after phone approval: gate confirms intent, success depends permissions.
-- Session `last_text` is node preview, whitespace collapsed /200 characters (`node/sessions.go` snippet), not renderable Markdown (2026-11-04,#1508). Completion-card summaries became one-line lists / headings with truncated ** / backticks and web plaintext symbols. Full completion cards read `lastTurn` via `session.items`, `clipMarkdown` by lines without splitting markup. One/two-line progress / pushes strip Markdown (hub `plainMarkdown`, web `lib/plain-markdown.ts`).
+- Session `last_text` is node preview, whitespace collapsed /200 characters (`node/sessions.go` snippet), not renderable Markdown (2026-11-04,#1508). Completion-card summaries became one-line lists / headings with truncated ** / backticks and web plaintext symbols. Full completion cards read `lastTurn` via `session.items`, `clipMarkdown` by lines without splitting markup. One/two-line progress / pushes strip Markdown (`textfmt.PlainMarkdown` / `textfmt.PushText` in `server/internal/textfmt`, web `lib/plain-markdown.ts`).
 - Hub feed append-only does not mean later Sent status can stay client-memory (2026-11-04,#1519). GitHub comment sent, refresh reverted card to Draft / Send, nearly duplicate. Persist body.sent_at, rebroadcast same ID, replace body by ID; incremental fetch includes later updates. Same investigation found prompt `查不到的用【】标出来` (“mark unknowns in brackets”), sending literal `【预计今晚 / 几点前】` (“[expected tonight / by what time]”). One-tap drafts must not leave blanks for user completion.
 - MCP `tools/list` failure must not return empty list (2026-11-04,#504). Personad mcp declares `listChanged: false`; Claude lists once per chat. Temporary node failure / startup order returned empty, permanently removing Persona tools without connectivity indication. Retry 15 seconds then JSON-RPC error, visible `/mcp` / logs. Node `{"tools":[],"error":…}` is failure too; only valid empty means no tools.
 - Separate assistant process (2026-11-04,#1446, `docs/assistant/assistant.md` “Process”) can be unavailable to every hub inquiry. Startup connector registration asked each assistant tool name before connection,10 seconds each,60-second test. Startup / registration read last `assistantToolsNow`; wait only when node requests tools for assistant chat. Assistant schedule loop waits first handshake machine / timezone reply before running due tasks, or starts with empty config and fails all.
 - Bus events synchronously invoke read-loop callbacks (`internal/rpc`); slow handler stalls connection. Assistant queues in order, handles `session.turn_ended` separately (model query / waiting task Agent stop). To wait in tests, call assistant after event on same connection, then await empty queue (`BusHub.Settle`).
 - Hub default `os.Executable() assistant` launches test binary in tests, rerunning entire suite. Tests replace `assistantCommand` in init; subprocess tests detect env in `TestMain` and act as assistant.
 - `zsh -ic` expands existing aliases before script execution (#1674). Codex alias makes `codex() { … }` definition parse fail; earlier unalias in same string too late. Use function codex { … }, calls \codex to prevent recursive alias expansion. Real zsh regression with temporary ZDOTDIR, no user shell read / writes.
-- Session-only Agent approval lives in process (2026-11-05,#2202): Claude `addRules … destination: session`, Codex `acceptForSession`, Lark node memory lost on assistant recycle / deploy / launcher switch / node restart, not restored by `--resume`, causing repeated prompts despite Always Allow. Cross-process assistant state belongs in hub DB: cards `always_keys`, hub `assistant_always` auto-answers matches (`docs/assistant/assistant.md` “Always allow for this chat”).
+- Session-only Agent approval lives in process (2026-11-05,#2202): Claude `addRules … destination: session`, Codex `acceptForSession`, Lark node memory lost on assistant recycle / deploy / launcher switch / node restart, not restored by `--resume`, causing repeated prompts despite Always Allow. Cross-process assistant state belongs in hub DB: cards `always_keys`, hub `assistant_always` auto-answers matches (`docs/assistant/assistant.md` “Always allow in this session”).
 - Chat Agent type comes from transcript, not current message launcher (2026-11-05). Main chat selects Model Configuration › Main Chat each message (#1518); changing Codex→Claude rejected only while process live. After exit, Claude resumed Codex thread, No conversation found, message Unconfirmed Delivery / Session Ended, broken 19:39 through late night. Failed launch overwrote state launcher, losing original Codex name. `assistantResumeLauncher` now checks transcript type, chooses original or same-type claude / codex on mismatch. Investigate `rg <id> ~/.persona/node-attach.log` for launcher / failure start.
 - Stopping headless assistant leaves no `已中断` (“Interrupted”) transcript (2026-11-06,#3308). `assistantInterrupt` kills process without [Request interrupted by user]; plugins reading items may send partial final passage as answer. Hub-only signal: assistant-target interrupt emits `session.user_stopped`; assistant records, plugins `GET /api/v1/assistant/reporters`.
 - Gateway usage may cover entire turn, not request (2026-11-06,#3300). Some return 0 intermediate, accumulated inputs final. Claude estimates context from final, compacts unnecessarily; failed summary leaves all messages Prompt is too long. All usage consumers use `transcript.PlausibleContext`; node repairs damaged transcript in place with 0 (`docs/assistant/assistant.md` “Impossible gateway usage”). `stream-json` `result.usage` legitimately sums whole turn, can exceed window, not context metric.
@@ -100,6 +142,7 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md` “L
 - Folded-message answers cannot look only at the physically last row of each segment (2026-11-06, #4120). A reply is followed by `turn_duration`; without skipping it, `endsInWords` treated an already answered earlier turn as intermediate work and returned only the final turn.
   To determine whether a turn ends in text, skip thinking, empty text, `TurnDuration != nil`, and compaction notices just as `Stopped` does. Compaction may have a `Compact` field or only fixed legacy text. Apply compaction detection only to notices without `Task`; do not skip background tasks, errors, interruptions, or all system rows. Regressions cover durations for two turns, cross-page reading, compaction, and termination boundaries that must not be crossed, preserving the rest of `RunAnswer`'s stitching rules.
 - Uncertain question-option matching must pass original text to Agent (2026-11-06,#3497 review). Initial option-name-plus≤3 extra words rule mapped `备份后删除` (“delete after backup”) to `删除` (“delete”), `SQLite，加密` (“SQLite, encrypted”) to SQLite, dropping conditions. Substring all matched Small fix; choices 1/3/5 made “3” third option 5. Wrong option worse than original answer: only grammatical filler beyond label, English word-start matching, reject question marks / numeric ambiguity (`channel.MatchOption`, `docs/extensions/channels.md` “Questions and approvals”).
+- A failed start's background health check and its immediate detour must reserve the same probe before spawning the worker (#2428). Joining only after the goroutine starts leaves a scheduling gap that runs two checks; publishing health after waking waiters lets routing read the stale failure. A mapped home directory is only a path transformation: verify it on the destination before persisting a flexible task's move, and keep the original start error when every candidate fails that check.
 - Completed task Agent / exited Claude can leave Opening Agent forever (2026-11-06,#4510). Node lists only 80 latest exited transcripts machine-wide; thousands daily evict it, hub lacks session, client assumes Agent without session. Unfinished to-do Agents now profile keep, listed regardless age. Also five-minute start timeout cleanup reused expired context, failed DB write, task neither Agent nor failure, still Opening. Cleanup needs fresh taskFailTimeout. Compare `todo_agents` vs `GET /api/v1/sessions`, then hub `task <id>: start:` logs.
 
 - Deleting `assistant_always` does not revoke Claude's `addRules … destination: session` (#5867): the process can bypass PermissionRequest completely. Codex session/turn permissions and the Lark gate also cache grants. Keep assistant approvals in the manager, reset and wait for an existing process when revoking, and report restart-required when reset cannot be confirmed. A graceful stop can reap the launcher before its agent child exits and cancel the delayed group kill; permission reset must terminate the entire group, tested with a child that ignores SIGTERM. Never treat an empty reply from an old node as an acknowledged reset. Automatically answered parallel cards must not reinsert a grant deleted while their answer was in flight. Historical keys are hashes, so do not invent a path or command scope from `tool_name`.
@@ -111,7 +154,7 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md` “L
 
 - **A space-wide rule must be at every entrance to the write** (#5278): the health space's "confirm every write, whatever a rule says" was in `larkCheck` (the gated command) only; the gate proxy, which a script reaches with no command in front, let a write through when a rule allowed it, with no card. Now the address is marked health when it is opened and takes only the grant a card left. When a rule is added to one check, look for the other route to the same write, and test it by calling the address itself. Both must decide the conversation's space from the same place: the process's own, noted when its address is opened. The hook's directory moves with the model's `cd`; and a grant kept under a conversation id needs the address to have that id, which a new Codex conversation gets only when its thread starts (`codexConn.start`).
 
-- **`confirmOutbound` is not a general confirmation**: it asks on the phone only in the health space and returns true at once everywhere else (`assistant/health.go`). A tool that must always ask the user (closing an Agent with `agent_archive` and `close`, changing an assistant setting) builds its own permission card through `s.ask`, as `ownSettingAction` and `archiveAndCloseTool` do, and treats a dismissed, expired or unanswered card as declined.
+- **`confirmOutbound` is not a general confirmation**: it asks on the phone only in the health space and returns true at once everywhere else (`assistant/health.go`). A tool that must always ask the user (closing an Agent with `agent_archive` and `close`, changing an assistant setting) builds its own permission card through `s.ask`, as `ownSettingAction` and `archiveAndCloseTool` do. A dismissed, expired or unanswered card changes nothing, but it is no decline: only the user's own answer counts (`Resolution.UserAllowed` / `UserDenied`; one with `AnsweredBy` set was given for them), and the tool says nobody answered. Reporting an expired card as "the user declined" made a leader conversation tell its supervisor the user had refused a change they never saw (#3722).
 
 - **A selection that does not read is not the defaults** (#1523): the knowledge base's default selection stops writing plain group messages, so falling back
   to it while the settings table is unavailable would silently drop what chats send (the connectors' cursors move on regardless). `kbSelectionNow` keeps
@@ -135,3 +178,167 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md` “L
 - **A small-task model call is sized by what the model is today, not by the first measurement** (#1532): chat titles had 15 s per call and `max_tokens` 200 from a 2–3 s measurement. Once "Chat title" inherited a thinking flash model behind the gateway, a title-sized call took p50 6 s / p90 21.6 s and its thinking ate the 200 tokens (188–192 thinking + 4–8 output, `stop_reason: max_tokens`), so about a fifth of new chats kept "explore | the first message cut short" and some kept a two-character half topic that still parsed. A call off the user's path gets minutes, room for the thinking, and `Chat` instead of `Complete` so a cut-off reply (`Reply.Truncated`) is not taken as an answer; retry only what another try can change (`ai.Transient`: no answer, 5xx; not a 4xx or a model that isn't set up), each kind of failure once, so one doesn't use up another's retry; a naming that got no answer is a stand-in, done again later, and "again later" must read the first turn (`after_seq: 0`): `turns: 1` is the newest. To find which, match the hub's `context deadline exceeded` lines with the gateway's request log: the hub's cancellations sit at the call's timeout to the millisecond (14 996 ms).
 
 - **Model listing and saving must agree on online launcher selection** (#1840). A cached provider's first machine can be offline even when another machine successfully lists its models. For a purpose without a bound machine, reuse `pickMachine` for model validation; if no reported candidate is online, allow saving without a live check. Keep known bound-machine validation and managed-launcher behavior intact. Cover the HTTP save and profile-apply paths, including effort-only edits, rejected online models, exact RPC destinations, and unchanged storage after rejection.
+
+- A successful provider probe does not establish runtime compatibility (#2252). Direct-API calls resolve through `apiConfig`, while launcher tests also support transport settings that the node can honor. Refuse unsupported direct-API fields on saves, effective stored/preset probes, and runtime resolution; validate retained sealed headers without decrypting or rewriting the record, and allow explicit clearing. Preserve legacy anonymous Messages probes and real launcher settings: protocol alone does not distinguish a Messages launcher from a direct-API provider. Count synthetic upstream requests to prove rejected probes and runtime calls stop before sending.
+
+- **A goroutine asleep through a delay costs a stack per event; keep only the fields that are read** (#2472). The finished push, a task's receipt, the launcher's usage-limit mark and the triage each started a goroutine per turn end that slept through its window (60 s by default): with a few turn ends a second the manager held about 900 sleepers, roughly 16 KB of stack each (StackInuse 6 to 21 MB in a soak). Schedule the unchanged body with `time.AfterFunc` (`afterSettle`, `notifyFinished`), reading the delay when the turn ends as before; keep the synchronous function for its callers and tests. The same goes for memory kept between lists: a `proto.Session` is about 1.5 KB, so a by-value copy of every machine's list kept for a few fields (the previous list's turn fields, the reply reminders' rows, the herdr marks' four fields) is megabytes at a few thousand sessions. Keep a struct of what is read (`turnPrev`, `tokenRow`), or only the rows a reader can pick, and decorate one row (`decoratedSession`) rather than a machine's list to read one. A test of such a change compares against the full path's row (`TestDecoratedSessionIsTheListsRow`) and counts goroutines in a `synctest` bubble rather than sleeping.
+- **A hub deployed with new prompts does not reach a running assistant by itself** (#3235; #3068's ring cards kept coming out
+  as stacked bars). The assistant's and the health space's CLAUDE.md were written only by `assistant.prepare` when a
+  conversation started or a spare warmed; messages to an existing conversation go through `session.send` and never wrote
+  it, and the long-lived claude process reads CLAUDE.md only at start anyway. Now the hub compares both right after it
+  starts and every minute (`instructionsLoop`) and rewrites what differs, and the node remembers a digest of the
+  CLAUDE.md each process started with and resumes the conversation in a fresh process on the next idle message once it
+  changed (`instructionsStale`). For "the new prompt has no effect" look first at the CLAUDE.md's modification time in
+  the assistant's directory on its machine and at `wrote the CLAUDE.md` in the hub's log.
+- **What is handed out only once must not be dropped by a shortcut** (#4256). `plugins.assistant` gives a machine a
+  skill's files once and counts them as sent when it answers, but the minute refresh asked for them before deciding that
+  an unchanged CLAUDE.md needed no `assistant.prepare`, and dropped them: after an upgrade that changed only a skill, the
+  assistant's machine kept the old files for over an hour. The node then reported the skill missing
+  (`plugin_skills_need`), the files were queued to go again, and the next refresh dropped them the same way. Now the
+  refresh compares the skills' names and digests too, never skips an answer that brings files, and prepares a directory
+  again on its next round when the node reported skills missing there. For "the new skill has no effect", compare the
+  modification time of `~/.persona/plugin-skills/<name>/.persona-plugin` on the assistant's machine with the upgrade's.
+
+- Inbox fixtures must wait for the first asynchronous roster count before writing directly to their items (#3459). `inboxReady` returns after scheduling `tellInboxNeedsYou`, whose goroutine holds the Inbox mutex while reading the map and status fields. Legacy fixture seeding bypassed that mutex and could crash the whole test process, even without the race detector. Use `waitNeedsYouIdle` at the fixture readiness boundary; later concurrent mutations must still use the Inbox mutex. Keep the real teller enabled and verify the complete Inbox test group under `-race`.
+- **An optional object in a tool's schema can come filled with zero values** (#3386): runtimes that fill in every field
+  of a tool's schema send `agent_send`'s `task` as `{"title":"","done_when":[],"expect_minutes":0}` instead of leaving it
+  out, and the server took any `task` as a hand-off: a reply to another conversation's agent was refused, and one to an
+  agent on no task made a supervised task. A handler that branches on whether an optional object is there treats one
+  with nothing in it as absent (`givenTask`), keeps anything else as it was (another type, a wrongly typed field or an
+  unknown key such as a misspelled `title` must not turn a hand-off into an untracked reply), and its schema allows null
+  and requires none of the object's fields the handler does not.
+
+- A report written before a tool call vanished from the push and the Lark answer. A main-chat turn wrote a long report,
+  called `agent_send`, then closed with one short line; the push and the Lark bot showed only that line, and the owner
+  took it for another conversation's message. Both read "the answer" as the last text (`Meta.LastText`) or the texts
+  after the last tool call (`channel.Answer`), but the model often reports first and acts after. The hub's answer is now
+  every text of the turn from the first, minus a passing line of at most two sentences right before a tool call
+  (`transcript.AnswerParts`), for the push body and the Lark answer alike. The chat pages still fold all but the last
+  text (super rule 2); changing them needs the administrator's approval.
+
+- A source the manager hands to the Inbox itself, rather than a registered connector, must be named in every round's `names`, the Feishu-chats rounds included (#2039). The Inbox keeps a source's held-back count and read error only while rounds name it (`recordHeld`, `recordReads`), and a chats-only round, which follows every Lark event, would otherwise drop a source subscription's "waiting for triage" count within seconds. Name such sources cheaply in those rounds (no items read) and hand in their things only in rounds that read the connectors (`extmgr` `readSubscriptions`).
+
+- **`/stop` has to read the conversation's state, and a state that may be stale is not "nothing running"** (#3793). The
+  command and the progress card's Stop button shared `stopConversation`, which answered "stopped the turn" whenever the
+  conversation existed and sent `session.interrupt`; for an ordinary herdr agent the node answers that by pressing Escape
+  in the agent's terminal (`node/node.go`), so an idle window got a keystroke and the owner was told a turn was stopped
+  that had already finished. Refuse only when the state says the last turn ended (`unread` / `idle`, and not `Starting`)
+  — a state that cannot be told still tries, the owner asked — and let a live run this chat sent into that conversation
+  win (`channel.Run.Seen` false: the turn may just not be read as working yet), or a `/stop` sent right after the message
+  stops nothing.
+
+- **A table row is split at every unescaped `|`, inside a code span too** (#3852). GFM cuts a cell at a pipe the row did
+  not escape, so `| `a || b` | 或 |` really is a row with four cells while its header has two; GFM draws only the
+  header-width cells and ignores the excess, and `answerTables` (`feishubot/answer.go`) built a row the same way, by
+  looping over the header's columns alone, so everything past the header's width — here "b`" and "或" — never reached
+  the card, with nothing said. The rich-text fallback kept those words, so the same answer read differently as a card
+  and as a refused card's text. Those words are still the row's: keep the surplus cells in the last column, joined with
+  " | " and with empty ones skipped (a trailing `||` adds no junk), clipped and escaped like any other cell. When
+  changing how a table row is laid out, compare its card with its fallback.
+
+- **Text a client draws as Markdown is cut with `clipMarkdown`, not `clip`** (#3818). The briefing card quoted the model's answer through `textfmt.Clip` (exactly n runes plus an ellipsis), so an answer over 1500 runes was cut inside whatever it was in: an unclosed code fence turned the rest of the quote into code, and a cut inside `**`, a code span or a link left half a marker or half a URL. `clipMarkdown` (`assistant/mdtext.go`) cuts on a line break where it can, closes a code block the cut lands in, and moves the cut back out of an unclosed span, emphasis or link; it also flattens a `persona-card` block to its title (`wire.AssistantCardText`), so draw charts first with `feishubot.PersonaCards` and cut after, as `answerCards` does for the bot's answers. Plain fallback text (the push body, a notice's fallback) keeps `clip` / `textfmt.PlainMarkdown`; only the Markdown element takes `clipMarkdown`. Test through the same builder the card uses, not the clippers alone, and assert the shape (`fences % 2 == 0`, no `](https://…` left) rather than an exact string. The same trap caught the task report's item body (#4093): it drew the answer with `CardMarkdown` *after* `clipMarkdown`, which flattens a chart to its title on its own, so the owner read the report with no numbers. Any Markdown a client draws that is clipped first must have `PersonaCards` run before the clip.
+
+- **A finished run's last write into the progress card has to wait out a card rate limit** (#3915). The progress tick
+  answers 230020 by pausing its updates (`prog.quietUntil`), but the answer's write comes right after a tick's, and a
+  card update (PATCH) gets no retry of its own on 230020 (`feishubot/api.go` leaves that wait to the caller, because the
+  tick may be holding the run's progress lock): the answer was then posted as a card of its own while nothing wrote the
+  progress card again — the run had ended — so it kept saying it was still working, and a quiet end wrote nothing at
+  all. `botUpdateAnswerCard` (`feishu_turn.go`) waits `answerCardWait` (5 seconds, the first progress backoff) and
+  tries once more before the answer falls back to a card of its own; another refusal still falls back at once. Waiting
+  synchronously is the whole fix here: the run is over, so no tick can write that card later.
+
+- **A quiet ending says nothing when the run has no card left, so a timeout must carry a note** (#3930). `channel.Run.Check`
+  returned the 2-hour held timeout (`HeldMost`) with no note, and `checkChannelRun` turns an empty note into `Quiet`; the
+  Lark sink answers a quiet ending only by rewriting the card it still has (`feishu_turn.go`), and a held run has none —
+  `finishChannelRun` gives the card back with the message (`delete(r.Ext, "card")`) — so the owner's first answer stayed
+  the last word and the chat never learned the wait was over. Both limits now end with `channel-turns.gave_up`, as the
+  docs promise ("Timed out, see the app"); a run with no card gets that line as a card of its own. Plugin channels, which
+  send a note as plain text, stop being silent the same way. When a step ends a run without an answer, give it a note, or
+  check what the sink does with a quiet end and no card.
+
+- **A quiet ending still needs a card to land on** (#4101). `channel.Run.Decide` ends a held run whose background work
+  reported back in a turn without words as `Quiet`, and the Feishu sink answered a quiet end only by rewriting the run's
+  card — but a held run gave its card back with its message, so the owner was told "N background tasks are still running"
+  and then heard nothing when they finished. The sink now builds the ending line for every quiet end and, with no card,
+  posts it as a card of its own (the same rule #3930's timeout relies on). The result stays quiet: the line is
+  "Done · took X", not an empty answer. With no card left it is posted for every ending except a message the owner
+  recalled, which gets no card of its own (that one only gets the card the run still has rewritten), and the line says
+  how the wait ended (#4228); and the quiet branch must not swallow errors the way it first did (#4229): a card update
+  refused for anything but a rate limit falls back to that card of its own, and an unreachable failure is returned so
+  `finishChannelRun` keeps the run and tries again — posting under an idempotency key made from the run id (`endKey`),
+  because the first attempt may have landed before its answer was lost.
+
+- **A card nests a list by four spaces per level, not by the Markdown rule** (#4180). Lark's Markdown component documents
+  one nesting level as four leading spaces (a list's sub-items are indented four spaces per level), while CommonMark — and
+  so a model writing an answer — indents a sub-item by its parent marker's width: two spaces under "- ", three under
+  "1. ". The answer's Markdown was passed through unchanged, so every nested list arrived as a flat list of siblings and
+  the hierarchy the answer was written with was gone. `CardMarkdown` now maps each item's observed indentation to a level
+  and writes four spaces per level (`listIndent` in `feishubot/card.go`) in one pass over the whole answer, so the levels
+  carry across a fenced code block and a list goes on around it; a list item's continuation lines, a list inside a
+  blockquote, and four-or-more-space indented code at the left margin stay as written, and a paragraph at the left margin
+  ends the list. Test the conversion through `CardMarkdown` and through the answer builder (`answerCards`).
+
+- **A list shown to a client holds the thing it names, not the records that produce it** (#4184). `feishu.view`'s
+  `agents` is "the Agents you have talked to in Lark", but it was built by walking the chat's thread bindings — and the
+  chat binds *every* card it posts about a conversation (the list card "Chat here" was pressed on, each progress card,
+  each answer card, each finished card), so one Agent talked to for a while filled the settings section with dozens of
+  copies of itself, in map order, keyed alike on both clients (web and iOS key those rows by session id). Fold the
+  bindings by machine + session, let the newest name the row, and sort it (rows of the same time by session): the same
+  source, read as what the field means. A test that binds three cards of one Agent along with two other Agents, and
+  loads the view ten times, shows it. The settings pages are the only readers — web and iOS key the rows by session id,
+  Android draws them in order — so none of them changes.
+
+- A read-only worker already in plan mode must be able to report without changing it (#4201). New Claude read-only tasks start in `bypassPermissions` (#4864), but Codex and legacy plan sessions still need this path. Denying `ExitPlanMode` does not remove
+  the provider's separate permission request for `report_to_supervisor`. Recognize both built-in namespaces with
+  `compat.MCPToolNames`: Paseo preserves the requested name, including the compatibility alias (#4318). Allow only
+  that tool for a supervised task with a current started read-only plan binding. Return `Allow` without `Always`, `Approve`, or `Mode`;
+  the terminal hook and Paseo then send no permission or mode update. Reuse `PlanTask.TodoID`, whose old bindings are
+  retired on takeover, rather than treating a historical read-only plan as authority for a new writable worker.
+
+- **A quiet ending is still an ending: it has to say how the run ended** (#4228). `channel.Run.Decide` returned a held
+  run's quiet result (`&Result{Quiet: true}`) from an early branch, before the `End` below it was computed — and it left
+  `Stopped` empty too — so `End` stayed `EndDone` whatever had happened, and once #4101 posted that line as a card of its
+  own the owner was told "Done" about a turn that was interrupted, hit a model API error, or lost its computer. Both
+  endings now come from one `endOf(rd, l)` (the turn's last notice, the failed turn, an offline machine), and the sink
+  posts the card of a quiet end unless it was recalled (`end != channel.EndRecalled`), not only when it ended as done:
+  gating the post on `EndDone` would have made every bad quiet ending silent instead. A branch that answers a run owes
+  it the same ending fields as the normal path.
+
+- **A model asked for an option's label copies whatever the input put next to it** (#3929). `delegate_input.md` lists an option as `label：description`, and with Chinese descriptions the delegation model often answered the whole line (`表驱动：和这个包现有的测试一致`): #3923's live runs saw it in 4 of 4, 2 of 5 and 1 of 4 runs of three cases. `interactionAnswers` found no such option, so a choice the assistant had decided to answer went to the user. `optionLabel` (`assistant/tools_apps.go`) now maps an answer to a label only when it writes out exactly one option, its label then a separator (`：`, `:`, a dash, or brackets) and that option's own description, with quotes or spaces; anything else is still refused. Don't widen it to prefixes or the model's own words after a label: those are free text, and a refused answer only costs the user one question. When a prompt shows options with extra text, expect it back and test the hub's check with the exact line the prompt renders.
+
+- **A new scheduled-task `repeat` must survive the apps that don't know it** (#4399). iOS decodes an unknown `repeat`
+  as `once`, and Android and the web send it back as they got it, all without the new rule's field. A `PUT` without
+  `cron` therefore keeps a cron task's `repeat` and `cron` and saves only the rest; otherwise switching such a task
+  off on an older iPhone turned it into a one-off with no time. Keep the new rule's own field out of a body whose
+  task doesn't have one (`cron` is sent only when set), and gate the editor on the hello feature (`task_cron`).
+
+## Cancel confirmation-blocked Agents without granting approval (#4277)
+
+Keep force archive separate from ordinary busy checks. A cancellation path must close the provider or terminal,
+reject or withdraw pending cards, and keep other work protected. A cached blocked inventory after close can undo
+a newly saved archive unless the closed timestamp fences that old snapshot. Persist the archive and a future
+close timestamp in one write before closing, then replace it with the real close time. A failed close removes
+the provisional record with an independent bounded context, including when the request was cancelled.
+Paseo's CLI `archive --force` skips
+a client-side busy check; its archive request has no force field and closes the provider runtime. Check the actual
+archive receipt before removing the Agent from a bridge's local list.
+
+## Standing authorization and notification evidence (#4398)
+
+A quoted instruction in task notes is not a durable grant. Keep explicit grants in manager storage, require the user's
+own approval when adding them, and compare revisions when a setting approval can race App revocation. Recheck the
+grant after condition reads and serialize its final answer against deletion in the database. Commit the answer and
+its task decision together before sending it to a hook. A plan approval must select `default` explicitly: an empty
+mode can fall back to bypass permissions on the node. Count confirmation dispatch at `tellUser`, not interaction
+creation or app presentation; quiet tasks and supervisor routing also show cards without ringing the user.
+
+## A card the chat waits on must be in the chat (#4883)
+
+A Persona conversation's first Bash waited three and a half minutes for approval while its card was only inside the
+closed Needs you tray on the web (Android too) and on the Home overview; the owner typed "what happened?" twice and
+thought the assistant had hung. A request that blocks the turn is drawn above the composer on every client, like an
+Agent's; a tray or overview may count it and link to it, never be its only place. The same incident: a message typed
+mid-turn got no reply for minutes because the mid-turn note went in only with the optional background setting on, and
+the only line between tool calls was English to a Chinese owner. The node now always adds the note to a busy Claude
+(`midTurn`), asking for one sentence in the user's language before the next tool call, and the CLAUDE.md asks for the
+user's language in process text too.

@@ -34,6 +34,10 @@ import kotlinx.coroutines.flow.stateIn
 @Module
 @InstallIn(SingletonComponent::class)
 object ChatWiringModule {
+    /** Used by every live group binding, not a route-independent singleton HTTP client. */
+    internal fun agentShares(connection: OkHttpHubConnection, isCurrent: () -> Boolean): AgentSharesProvider =
+        HttpAgentShares(connection, isCurrent)
+
     @Provides @Singleton
     fun chatWiring(application: android.app.Application, owner: ChatDataOwner, stacks: GroupStacks): ChatWiringSource = object : ChatWiringSource {
         override val current = owner.wiring
@@ -110,6 +114,10 @@ internal suspend fun createChatWiring(
         // The photos sent with messages load from the session's machine (Persona' own conversations too).
         files = HubSessionFiles(connection),
         ports = HubPortOpener(connection),
+        agentShares = ChatWiringModule.agentShares(connection, ::current),
+        worktrees = { connection.route.value?.let { route -> persona.core.hub.HttpAgentCreationService(data.scope.path, route.endpoint.url,
+            connection.token, connection.http.client, isCurrent = { current() && connection.route.value == route }) } },
+        usage = { persona.core.hub.HttpMachineManagement(connection).usageWindows() },
         tasks = persona.core.domain.tasks.TasksStore(persona.core.hub.HttpTasksApi(connection), group, data.coroutineScope,
             repositories.snapshots.todoCache()))
 }
@@ -140,6 +148,11 @@ private class RoutedAssistantManagement(
     override suspend fun endConversation(session: SessionKey) = api().endConversation(session)
     override suspend fun compactConversation(session: SessionKey) = api().compactConversation(session)
     override suspend fun archiveConversation(session: SessionKey) = api().archiveConversation(session)
+    override suspend fun unarchiveConversation(session: SessionKey) = api().unarchiveConversation(session)
+    override suspend fun archivedConversations() = api().archivedConversations()
+    override suspend fun renameConversation(session: SessionKey, title: String) = api().renameConversation(session, title)
+    override suspend fun makeDirection(session: SessionKey) = api().makeDirection(session)
+    override suspend fun endDirection(session: SessionKey) = api().endDirection(session)
     override suspend fun newMainConversation(carrySummary: Boolean, expect: String?) =
         api().newMainConversation(carrySummary, expect)
     override suspend fun tasks() = api().tasks()

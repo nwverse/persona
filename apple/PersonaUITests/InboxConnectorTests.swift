@@ -1,6 +1,6 @@
 import XCTest
 
-/// A connector's items in the inbox (GitHub…, docs/plans/plan-connectors.md「六、App 侧」): the generic row with the
+/// A connector's items in the inbox (GitHub…, docs/plans/plan-connectors.md「App side」): the generic row with the
 /// connector's tag, mark and thread, a filter for the source, the detail (a pull request as GitHub's thread) and
 /// Open in GitHub, and AI Draft Reply whose Send comments on the thread through the hub. Against scripts/mock/mock_hub.py with
 /// MOCK_GITHUB_INBOX=1 (PERSONA_MOCK_HUB), which lists them only to apps asking ?sources=all and records replies at

@@ -130,7 +130,7 @@ project refresh, Moments fetching, and Live Activity push. Member hub-level data
 
 ## Paths via members (node streams)
 
-(`peer_node.go`. Since 2026-11-04, the computers at each end belong to their respective managers ([machines.md](machines.md) ("Who connects computers")): the primary's manager asks the primary hub for this stream
+(`peer_node.go`. Since 2026-11-04, the computers at each end belong to their respective managers ([machines.md](machines.md) ("Who connects to computers")): the primary's manager asks the primary hub for this stream
 (`GET /api/v1/bus/relay?hub=<member>&machine=<id>`); the member hub hands it to its own manager to open (`devices.accept` kind `node`). References below to a "hub" opening a node mean that hub's manager.)
 When the primary connects a computer listed only in a member's hub.json (or also listed locally, but the member's path is currently better), it sends an HTTP upgrade request over the link:
 `GET /api/v1/peer/node`, headers `Upgrade: persona-node`, `X-Persona-Peer-Node: <member hub_id>/<its machine id>`, `X-Persona-Peer-From: <primary>`, forwarded hop by hop to that member.
@@ -204,6 +204,8 @@ which other hubs are reachable and how far away, and computers in member records
 - TLS-enabled hubs advertise `_persona-hub._tcp` over mDNS (instance name hub_id); TXT contains only `hub_id`, `name`, `tls` (TLS port), `fp`, `v` (version), never credentials.
   They also browse that type; the admin UI's "Discovered hubs" lists unpaired hubs heard within 10 minutes. Discovery only lists them, never links automatically.
 - `internal/mdns`: only the standard library and `golang.org/x/net`, sharing 5353 with system mDNSResponder / avahi; implements only a subset of RFC 6762 / 6763. No sending or receiving on point-to-point interfaces.
+  A legacy unicast query (source port not 5353) is answered only when its sender is on the receiving interface's link (inside one of its prefixes, or IPv6 link-local),
+  and at most once a second per sender and answer set, so a hub on a public address cannot be used to reflect spoofed queries at someone else.
 - Docker bridge networks cannot send multicast out, so use "Add hub" and enter an address (`network_mode: host` works). Disable with hub.json `mesh.discovery: false`.
 - Hubs whose TLS listener is loopback-only (`127.0.0.1` / `::1` / `localhost`) listen but do not advertise: nobody on the LAN can reach them, so advertised addresses would be unusable.
 - Probe before manual addition: `POST /api/v1/admin/peers/probe {"address"}` only requests the peer's `GET /api/v1/health` (no redirects, 5 seconds, response at most 64 KB).
@@ -224,7 +226,7 @@ Admin UI ([admin.md](../operations/admin.md)):
 | `POST /api/v1/admin/machines/{id}/connector` | Re-pair a service computer: `{"pair_link","address"?}` |
 
 The CLI on the hub machine uses the same APIs (prefix `/api/v1/admin/cli/`, accepts only loopback + main token): `personad hub pair --peer`, `personad hub peer add '<linking code>'|-`,
-`personad hub peer list` (first reports whether this hub is primary or member), `personad hub peer remove <hub_id>`, `personad hub peer center [<hub_id>] [--confirm]`.
+`personad hub peer list` (first reports whether this hub is primary or member; other hubs' names, ids and addresses show control characters as `<ESC>` / `<U+XXXX>`), `personad hub peer remove <hub_id>`, `personad hub peer center [<hub_id>] [--confirm]`.
 Docker deployment on NAS: `sudo /usr/local/bin/docker exec personad /opt/persona/bin/personad hub …`.
 
 ## Plaintext links (optional, #4514)

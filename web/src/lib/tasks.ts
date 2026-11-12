@@ -3,13 +3,21 @@
 
 import { formatDate, t } from "../i18n";
 import type { BackgroundTask, Item, LoopInfo, Subagent, TaskNote } from "./types";
+import type { Step } from "./turns";
 import type { AgentStatus } from "./work-groups";
+import { launchedTaskID } from "./task-association";
+export { attachedAgentNotices } from "./task-association";
+
+/** The id a nested subagent's card stands under among an exchange's steps (`withNestedSubagents`). */
+const NESTED = "subagent:";
 
 /** Background tasks and the calls that started them. A notice names its call by tool_use_id, or only by the task id
  *  the call's result announced ("running in background with ID: …", "Monitor started (task …"). */
 export interface TaskIndex {
   /** A call's notices, oldest first, by the call's tool_use_id. */
   notes: Map<string, TaskNote[]>;
+  /** Every associated subagent report item, oldest first; never replace an earlier report. */
+  reports: Map<string, Item[]>;
   /** The call a notice came from (notice item id → tool_use_id). */
   calls: Map<string, string>;
   /** Calls whose result says they went to the background (they may not have reported back yet). */
@@ -19,11 +27,8 @@ export interface TaskIndex {
   startedAt: Map<string, string>;
 }
 
-// agentId takes its colon: Claude Code 2.1.319's receipt says "including the agentId below" before the id line.
-const LAUNCHED = /(?:running in background with ID:?|agentId:|Monitor started \(task:?|moved to the background \(ID:?)\s*([A-Za-z0-9_-]+)/;
-
 export function emptyTaskIndex(): TaskIndex {
-  return { notes: new Map(), calls: new Map(), started: new Set(), descriptions: new Map(), startedAt: new Map() };
+  return { notes: new Map(), reports: new Map(), calls: new Map(), started: new Set(), descriptions: new Map(), startedAt: new Map() };
 }
 
 export function buildTaskIndex(items: Item[]): TaskIndex {
@@ -38,23 +43,30 @@ export function buildTaskIndex(items: Item[]): TaskIndex {
     if (use.ts && !x.startedAt.has(call)) x.startedAt.set(call, use.ts);
   };
   for (const it of items) {
-    if (it.kind === "tool_use") {
-      if (it.tool_use_id) uses.set(it.tool_use_id, it);
-    } else if (it.kind === "tool_result") {
-      const text = it.text ?? "";
-      if (!it.tool_use_id || !(text.includes("background") || text.includes("Monitor started") || text.includes("agentId"))) continue;
-      const m = LAUNCHED.exec(text);
-      if (!m) continue;
-      byTask.set(m[1], it.tool_use_id);
-      x.started.add(it.tool_use_id);
-      describe(it.tool_use_id);
-    } else if (it.kind === "notice" && it.task) {
-      const n = it.task;
-      const call = n.tool_use_id || (n.task_id ? byTask.get(n.task_id) : undefined);
-      if (!call) continue;
+    if (it.kind === "tool_use" && it.tool_use_id) uses.set(it.tool_use_id, it);
+    if (it.kind === "tool_result" && it.tool_use_id) {
+      const id = launchedTaskID(it.text ?? "");
+      if (id) {
+        byTask.set(id, it.tool_use_id);
+        x.started.add(it.tool_use_id);
+      }
+    }
+  }
+  for (const it of items) {
+    if (it.kind !== "tool_result" && it.kind !== "notice") continue;
+    const n = it.task;
+    const call = it.tool_use_id || n?.tool_use_id || (n?.task_id ? byTask.get(n.task_id) : undefined);
+    if (!call) continue;
+    const name = uses.get(call)?.tool_name;
+    const agent = n?.kind === "agent" || name === "Agent" || name === "Task";
+    if (n || agent || x.started.has(call)) describe(call);
+    if (n) {
       x.notes.set(call, [...(x.notes.get(call) ?? []), n]);
       x.calls.set(it.id, call);
-      describe(call);
+      if (n.status === "running") x.started.add(call);
+    }
+    if (agent && !isLaunchReceipt(it) && (it.kind === "tool_result" ? it.text?.trim() : n?.detail?.trim())) {
+      x.reports.set(call, [...(x.reports.get(call) ?? []), it]);
     }
   }
   return x;
@@ -124,7 +136,7 @@ export function taskPill(n: TaskNote, startedAt?: string, at?: string): { text: 
 export function taskBadge(notes: TaskNote[]): { text: string; failed: boolean } {
   const events = notes.filter((n) => n.status === "event").length;
   const last = [...notes].reverse().find((n) => n.status !== "event");
-  if (!last) return { text: events > 0 ? t("lib-tasks.badge_events", { count: events }) : t("lib-tasks.badge_running"), failed: false };
+  if (!last || last.status === "running" || last.kind === "agent" && !["completed", "failed", "killed", "stopped", "ended", "waiting"].includes(last.status ?? "")) return { text: events > 0 ? t("lib-tasks.badge_events", { count: events }) : t("lib-tasks.badge_running"), failed: false };
   const state = last.status === "failed" ? t("lib-tasks.state_failed") : last.status === "killed" || last.status === "stopped" ? t("lib-tasks.state_stopped") : last.status === "waiting" ? t("lib-tasks.state_waiting") : last.status === "ended" ? t("lib-tasks.state_ended") : t("lib-tasks.state_done");
   return { text: events > 0 ? t("lib-tasks.badge_state_events", { state, count: events }) : t("lib-tasks.badge_state", { state }), failed: taskFailed(last) };
 }
@@ -228,21 +240,17 @@ export function subagentTitle(a: Subagent): string {
 // ── a subagent call in the chat (its card, cindy's AgentTaskCard) ──
 
 /** What an Agent / Task call returned when it only started the subagent in the background. */
-const LAUNCH_RECEIPT = /Async agent launched|This is an internal ID for your use/;
+const LAUNCH_RECEIPT = /^\s*(?:Async agent launched|This is an internal ID for your use)/;
 /** The "agentId: …" line Claude Code appends to a subagent's report. */
 const AGENT_ID_LINE = /^\s*agentId:.*$/gm;
 
-/** The subagent an Agent / Task call launched, by the call's tool_use_id. */
+/** The subagent an Agent / Task call launched, by the call's tool_use_id (a nested subagent's card: `subagentCall`). */
 export function subagentFor(all: Subagent[], use: Item): Subagent | undefined {
-  return use.tool_use_id ? all.find((a) => a.tool_use_id === use.tool_use_id) : undefined;
-}
-
-/** The session a subagent's conversation belongs to: its id is "<parent>@<agent>" (the parent's own id otherwise). */
-export function subagentParent(sid: string): string {
-  return sid.split("@")[0];
+  return use.tool_use_id ? all.find((a) => subagentCall(a) === use.tool_use_id) : undefined;
 }
 
 export function isLaunchReceipt(result?: Item): boolean {
+  if (result?.task?.kind === "agent" && (result.task.detail || agentNoteStatus(result.task) !== "running")) return false;
   return LAUNCH_RECEIPT.test(result?.text ?? "");
 }
 
@@ -251,12 +259,43 @@ export function isLaunchReceipt(result?: Item): boolean {
  *  result done; none yet runs while the exchange is live or the list says it does, and stopped otherwise. A
  *  background subagent (its result is the launch receipt) is the list's to tell; without it, it runs while the
  *  exchange is live. */
-export function agentStatus(result: Item | undefined, meta: Subagent | undefined, live: boolean): AgentStatus {
+/** Structured subagent lifecycle is authoritative; a running report is not a completed tool call. */
+function agentNoteStatus(note: TaskNote | undefined): AgentStatus | undefined {
+  if (note?.kind !== "agent") return undefined;
+  if (taskFailed(note)) return "failed";
+  switch (note.status) {
+    case "running":
+    case "waiting":
+    case "event": return "running";
+    case "completed":
+    case "ended": return "completed";
+    case "killed":
+    case "stopped": return "stopped";
+  }
+  return "running";
+}
+
+export function agentStatus(result: Item | undefined, meta: Subagent | undefined, live: boolean, notes?: TaskNote[]): AgentStatus {
   if (result?.is_error) return "failed";
+  const status = agentNoteStatus(notes?.at(-1)) ?? agentNoteStatus(result?.task);
+  if (status) return status;
   if (!result) return live || meta?.running ? "running" : "stopped";
   if (!isLaunchReceipt(result)) return "completed";
   if (meta) return meta.running ? "running" : "completed";
   return live ? "running" : "completed";
+}
+
+/** Calls with a terminal result or notification. Launch receipts and interim reports leave work visible. */
+export function terminalCalls(items: Item[], index = buildTaskIndex(items)): Set<string> {
+  const answered = new Set<string>();
+  for (const it of items) {
+    const call = it.tool_use_id || index.calls.get(it.id);
+    if (!call) continue;
+    const status = agentNoteStatus(it.task);
+    if (status === "running") answered.delete(call);
+    else if (status || it.kind === "tool_result" && !isLaunchReceipt(it)) answered.add(call);
+  }
+  return answered;
 }
 
 /** When a finished subagent ended (ms): at its result, but a background one's result is the launch receipt, written as
@@ -267,12 +306,6 @@ export function subagentEnded(result: Item | undefined, meta: Subagent | undefin
     return Number.isFinite(v) ? v : undefined;
   };
   return isLaunchReceipt(result) ? (at(meta?.updated_at) ?? at(result?.ts)) : (at(result?.ts) ?? at(meta?.updated_at));
-}
-
-/** A subagent launched to run in the background: its call returns a launch receipt and it reports after the
- *  exchange, so its card is never folded away with the exchange's work. */
-export function isBackgroundAgent(use: Item, result: Item | undefined, meta: Subagent | undefined): boolean {
-  return Boolean(meta?.background) || isLaunchReceipt(result) || (use.tool_input as { run_in_background?: unknown } | undefined)?.run_in_background === true;
 }
 
 const sameTool = (x: Subagent["last_tool"], y: Subagent["last_tool"]) => x === y || (x?.id === y?.id && x?.name === y?.name && x?.summary === y?.summary);
@@ -317,46 +350,70 @@ export function agentSummary(result: Item | undefined, meta: Subagent | undefine
   return text || meta?.last_text?.trim() || "";
 }
 
-/** The subagents a subagent launched, and theirs, one level deeper each (`depth` 0: launched by `id`). */
-export function nestedSubagents(all: Subagent[] | undefined, id: string): SubagentRow[] {
-  const rows = subagentTree(all);
-  const at = rows.findIndex((r) => r.agent.id === id);
-  if (at < 0) return [];
-  const base = rows[at].depth;
-  const out: SubagentRow[] = [];
-  for (let i = at + 1; i < rows.length && rows[i].depth > base; i++) out.push({ agent: rows[i].agent, depth: rows[i].depth - base - 1 });
-  return out;
+/** A subagent's model as its card's chip says it (#5030): a Claude id as its family and version ("claude-haiku-4-5-20251001"
+ *  → "Haiku 4.5", "claude-opus-4-8[1m]" → "Opus 4.8"), a GPT id as OpenAI writes it ("gpt-5.4-mini" → "GPT-5.4 Mini"),
+ *  anything else in title case. A gateway's "<provider>/<model>" and a cloud route's "anthropic." prefix are dropped. */
+export function modelChipLabel(model: string | undefined): string {
+  let id = (model ?? "").trim().split("/").pop() ?? "";
+  id = id.replace(/\[1m\]$/i, "").replace(/-\d{8}$/, "").replace(/^(?:[a-z]{2}\.)?anthropic\./i, "");
+  if (!id) return "";
+  const word = (w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+  const claude = /^claude-([a-z]+)-(\d+)(?:-(\d+))?$/i.exec(id);
+  if (claude) return `${word(claude[1])} ${claude[3] ? `${claude[2]}.${claude[3]}` : claude[2]}`;
+  const gpt = /^gpt-([\d.]+)(?:-(mini|nano))?$/i.exec(id);
+  if (gpt) return `GPT-${gpt[1]}${gpt[2] ? ` ${word(gpt[2])}` : ""}`;
+  return id.split("-").filter(Boolean).map(word).join(" ");
 }
 
-export interface SubagentRow {
-  agent: Subagent;
-  /** 0: the session launched it (or its launcher is not listed); 1: a subagent did; … */
-  depth: number;
-}
+/** A card for a subagent another subagent launched: its call is in that subagent's transcript, not in the chat's. */
+export const isNestedSubagentStep = (s: Step): boolean => s.kind === "tool" && s.use.id.startsWith(NESTED);
 
-/** Every subagent by who launched whom (`parent_id`), flattened for a list: each right under its launcher, one level
- *  deeper; one whose launcher is not listed (it ended before the node's one-day cutoff) at the top level. Within a
- *  level running ones first, then the newest first (as the node lists them). */
-export function subagentTree(all: Subagent[] | undefined): SubagentRow[] {
-  const list = all ?? [];
-  const listed = new Set(list.map((a) => a.id));
-  const newest = (a: Subagent) => Date.parse(a.started_at ?? "") || 0;
-  const order = (a: Subagent, b: Subagent) => Number(Boolean(b.running)) - Number(Boolean(a.running)) || newest(b) - newest(a);
+/** How a nested subagent is going: only the session's list knows (no call result of the chat's says it). */
+export const nestedSubagentStatus = (a: Subagent | undefined): AgentStatus => (a?.running ? "running" : "completed");
+
+/** An exchange's steps with the subagents its subagents launched (and theirs), each a card of its own (#5030, cindy:
+ *  no tree), among the steps by when it started: after the last step that started before it, never before the call
+ *  of the subagent it descends from. A launcher naming itself or a loop of them adds nothing. */
+export function withNestedSubagents(steps: Step[], all: Subagent[]): Step[] {
+  if (!all.some((a) => a.parent_id)) return steps;
   const kids = new Map<string, Subagent[]>();
-  for (const a of [...list].sort(order)) {
-    const p = a.parent_id && a.parent_id !== a.id && listed.has(a.parent_id) ? a.parent_id : "";
-    kids.set(p, [...(kids.get(p) ?? []), a]);
+  for (const a of all) if (a.parent_id && a.parent_id !== a.id) kids.set(a.parent_id, [...(kids.get(a.parent_id) ?? []), a]);
+  const out = [...steps];
+  const seen = new Set<string>();
+  for (const s of steps) {
+    if (s.kind !== "tool" || (s.use.tool_name !== "Agent" && s.use.tool_name !== "Task")) continue;
+    const root = subagentFor(all, s.use);
+    if (!root) continue;
+    seen.add(root.id);
+    const from = out.indexOf(s);
+    const queue = [...(kids.get(root.id) ?? [])];
+    for (let a = queue.shift(); a; a = queue.shift()) {
+      if (seen.has(a.id)) continue;
+      seen.add(a.id);
+      queue.push(...(kids.get(a.id) ?? []));
+      const at = Date.parse(a.started_at ?? "");
+      let i = from + 1;
+      while (i < out.length && (Date.parse(stepTs(out[i]) ?? "") || Infinity) <= at) i++;
+      const before = out[i - 1];
+      const seq = before.kind === "tool" ? before.use.seq : before.item.seq;
+      const use: Item = { id: `${NESTED}${a.id}`, seq, ts: a.started_at, role: "assistant", kind: "tool_use", tool_name: "Agent", tool_use_id: subagentCall(a), tool_input: { description: a.description ?? "" } };
+      out.splice(i, 0, { kind: "tool", id: use.id, use, images: [] });
+    }
   }
-  const out: SubagentRow[] = [];
-  const placed = new Set<string>();
-  const place = (a: Subagent, depth: number) => {
-    if (placed.has(a.id)) return;
-    placed.add(a.id);
-    out.push({ agent: a, depth });
-    for (const k of kids.get(a.id) ?? []) place(k, depth + 1);
-  };
-  for (const a of kids.get("") ?? []) place(a, 0);
-  // launchers naming each other (only a runtime could write that) are reached from nowhere: list them at the top
-  for (const a of [...list].sort(order)) place(a, 0);
-  return out;
+  return out.length > steps.length ? out : steps;
 }
+
+/** What decides where `withNestedSubagents` puts its cards (who launched whom, when, and the call and words a card is
+ *  drawn from); "" when no subagent was launched by another. */
+export function nestingKey(all: Subagent[]): string {
+  if (!all.some((a) => a.parent_id)) return "";
+  return all.map((a) => [a.id, a.parent_id, a.tool_use_id, a.started_at, a.description].join("\u0000")).join("\u0001");
+}
+
+const stepTs = (s: Step) => (s.kind === "tool" ? s.use.ts : s.item.ts);
+/** The key a subagent card's open / closed state is kept under: by its call, so a link to the subagent can open it. */
+export const subagentCardKey = (scope: string, call: string) => `${scope}task:${call}`;
+
+/** The call a subagent's card is known by (its key, `data-tool-use`): the call that launched it, or for a fork the node
+ *  names no call of, one of its own. */
+export const subagentCall = (a: Subagent): string => a.tool_use_id || `${NESTED}${a.id}`;

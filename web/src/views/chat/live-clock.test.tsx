@@ -15,7 +15,7 @@ import { WorkGroup, type WorkProps } from "./WorkGroup";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const props: WorkProps = { mid: "m", sid: "s", scope: "t:", expandFold: async () => {}, agentStatus: () => "completed", thinking: new Map() };
+const props: WorkProps = { mid: "m", sid: "s", scope: "t:", expandFold: async () => {}, agentStatus: () => "completed" };
 let box: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
@@ -26,6 +26,23 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   box.remove();
+});
+
+describe("the running bar's clock", () => {
+  it("stands still while the hub is out of reach", () => {
+    vi.useFakeTimers();
+    const started = new Date(Date.now() - 5000).toISOString();
+    const bar = (offline: boolean) => <RunningStatusView live={null} working startedAt={started} offline={offline} />;
+    const shown = () => box.querySelector("[data-running-elapsed]")?.textContent;
+    act(() => root.render(bar(true)));
+    const stopped = shown();
+    act(() => { vi.advanceTimersByTime(3000); });
+    expect(shown()).toBe(stopped);
+    act(() => root.render(bar(false)));
+    act(() => { vi.advanceTimersByTime(3000); });
+    expect(shown()).not.toBe(stopped);
+    vi.useRealTimers();
+  });
 });
 
 describe("live clock (#3534)", () => {

@@ -1,7 +1,7 @@
 import Foundation
 
 // An extension being installed, upgraded or removed on the hub, step by step
-// (docs/protocol/protocol.md「扩展的安装、升级、卸载进度」, #3277, #3307): the hub runs it in the background and pushes the whole operation in an
+// (docs/protocol/protocol.md「Extension install, upgrade and uninstall progress」, #3277, #3307): the hub runs it in the background and pushes the whole operation in an
 // `extension_operation` event every time it moves on. Only with a hub that says `extension_operations`; an older hub
 // answers the request itself when it is done. Unknown states and steps are kept as they come: a newer hub may add some.
 
@@ -155,6 +155,9 @@ nonisolated struct ExtensionOperation: Codable, Hashable, Sendable, Identifiable
     var startedAt: Date?
     var updatedAt: Date?
     var endedAt: Date?
+    /// Whose operation it is when another manager's than the default (its push says so, docs/assistant/managers.md
+    /// "Clients"); nil: the default's, as everything this app starts is. Set by the app, never decoded or sent.
+    var manager: String?
 
     /// Going on: running, or waiting for the user's yes.
     var isActive: Bool { state == .running || state == .needsConsent }

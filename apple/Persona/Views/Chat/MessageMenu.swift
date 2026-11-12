@@ -5,7 +5,8 @@ import UIKit.UIGestureRecognizerSubclass
 #endif
 
 /// Message actions: long-press a message and it is lifted over the dimmed chat with the bar of Copy / Select Text / Quote /
-/// Share (and Edit for your own messages) next to it, as Telegram does (#603, `MessageLift`). Tapping outside closes it.
+/// Forward (and Edit for your own messages) next to it, as Telegram does (#603, `MessageLift`). Tapping outside closes it.
+/// Forward (#3807) takes Share's place on iPhone and iPad where the chat forwards; Share as Image is in its picker.
 @Observable
 final class MessageMenu {
     var selected: String?
@@ -13,10 +14,24 @@ final class MessageMenu {
     var lift: MessageLift?
     /// Where the press landed, in the message row's coordinates (`MessageMenu.row`), where the bar is placed.
     var anchor: CGPoint = .zero
-    /// Text shown in the "select text" sheet.
+    /// Text shown in the Mac's Select Text window (iOS selects in place, `inPlace`).
     var selecting: SelectableText?
+    /// The lifted message's words selected where they are (#603, `LiftSelection.swift`): a second long press on it, or
+    /// Select Text. nil: lifted with its bar.
+    var inPlace: InPlaceSelect?
+    /// The lifted copy of a message drawn in parts lays out all of its parts (#5221): asked for when its words are to
+    /// be selected (the text view over them follows every line). Until then it lays out only the parts near the screen.
+    var liftWhole = false
+    /// Selecting asked for while that copy lays out all of its parts: `LiftedMessage` starts it once they are there,
+    /// with what showed kept where it was.
+    @ObservationIgnored var pendingSelect: InPlaceSelect?
     /// The message being shared as a card.
     var sharing: ShareMessage?
+    /// Forward (#3807): the chat makes the pressed message a forward and opens its picker (`forwarding`). nil: the bar
+    /// keeps Share (the Mac, a chat that cannot forward).
+    @ObservationIgnored var forward: ((MessageBarInfo) -> Void)?
+    /// The message whose Forward was tapped: the chat shows the picker (`ForwardSheet`).
+    var forwarding: ForwardDraft?
     /// Where the chat's messages come from ("app › leader"), printed on share cards (read when sharing: the
     /// session may not be loaded yet when the chat binds the menu).
     @ObservationIgnored var source: () -> String = { "" }
@@ -82,12 +97,34 @@ final class MessageMenu {
     }
 
     func close() {
-        if selected != nil || lift != nil {
+        pendingSelect = nil
+        if selected != nil || lift != nil || inPlace != nil || liftWhole {
             withAnimation(Theme.Motion.conceal) {
                 selected = nil
                 lift = nil
+                inPlace = nil
+                liftWhole = false
             }
         }
+    }
+
+    /// Selects the lifted message's words where they are: the word at `point` (in the window), or all of them. A
+    /// message drawn in parts first lays out all of them (`liftWhole`); the selecting starts once they are there.
+    func selectInPlace(at point: CGPoint?) {
+        guard let lift else { return }
+        Haptics.tap()
+        if lift.part != nil, !liftWhole {
+            pendingSelect = InPlaceSelect(at: point)
+            liftWhole = true
+            return
+        }
+        withAnimation(Theme.Motion.state) { inPlace = InPlaceSelect(at: point) }
+    }
+
+    /// Back to the lifted message with its bar.
+    func endSelection() {
+        guard inPlace != nil else { return }
+        withAnimation(Theme.Motion.conceal) { inPlace = nil }
     }
 }
 
@@ -236,14 +273,20 @@ struct LongPressAt: UIGestureRecognizerRepresentable {
 extension View {
     /// The pressable part of a message (the bubble / the text). preview: the same part again, lifted over the dimmed chat
     /// when pressed; card: it is words on the page with nothing around them (an answer), lifted on a card of its own.
-    func messageLongPress<P: View>(id: String, card: Bool = false, @ViewBuilder preview: @escaping () -> P) -> some View {
-        modifier(MessageLongPress(id: id, card: card, preview: preview))
+    /// part: this is that row of the rows a message is drawn in (a long answer, #4970), and preview draws all of the
+    /// message, this part marked with `liftPressedPart` and identified by this number (`MessageLift.part`).
+    func messageLongPress<P: View>(id: String, card: Bool = false, part: Int? = nil, @ViewBuilder preview: @escaping () -> P) -> some View {
+        modifier(MessageLongPress(id: id, card: card, part: part, preview: preview))
     }
     /// The whole row of a message: hosts the action bar above the press point and lifts the row above its neighbours.
     /// pending: your message not in the transcript yet (`PendingBubble`, #6427): Copy, Select Text and Share only, no
     /// quote (it may never reach the agent) and no Edit (a waiting one would still go out besides the edited one).
-    func messageActionBar(id: String, text: String, isUser: Bool, date: Date? = nil, pending: Bool = false) -> some View {
-        modifier(MessageActionBarHost(id: id, text: text, isUser: isUser, date: date, pending: pending))
+    /// from: who wrote it when that is not the chat's Agent or Persona (a relayed or scheduled message's source, another
+    /// session's Claude), for a forward's author.
+    /// delete: one only on this phone ends in Delete (#4626), on the bar and in the plain context menu alike.
+    func messageActionBar(id: String, text: String, isUser: Bool, date: Date? = nil, pending: Bool = false, from: String? = nil,
+                          delete: MessageBarDelete? = nil) -> some View {
+        modifier(MessageActionBarHost(id: id, text: text, isUser: isUser, date: date, pending: pending, from: from, delete: delete))
     }
     /// Messages shown with the bar outside the chat's list (the background tasks' drawer): a tap or a drag there closes
     /// it, as on the list, and it closes with the sheet (#1388: it stayed until one of its buttons was used).
@@ -266,28 +309,40 @@ private struct ClosesMessageBar: ViewModifier {
 private struct MessageLongPress<P: View>: ViewModifier {
     @Environment(MessageMenu.self) private var menu: MessageMenu?
     @Environment(\.messageBar) private var bar
-    @Environment(\.openFile) private var openFile
-    @Environment(\.loadImage) private var loadImage
-    @Environment(\.rowMemoScope) private var memoScope
     let id: String
     let card: Bool
+    let part: Int?
     let preview: () -> P
     /// Where the part is, kept without drawing anything again (it changes on every scrolled frame).
     @State private var place = LiftPlace()
+    /// Pressed: the environment here is read (`EnvironmentCapture`, for one frame), then the part is lifted.
+    @State private var capturing = false
 
     func body(content: Content) -> some View {
         if let menu {
-            content
+            RecordsOffer(place: place) { content }
+                #if DEBUG
+                .modifier(LiftLinesReader { [id] in LiftLines.shared.chat[id] = $0 })
+                #endif
                 .onGeometryChange(for: LiftPlace.Frames.self) { g in
                     LiftPlace.Frames(global: g.frame(in: .global), row: g.frame(in: .named(MessageMenu.row)))
                 } action: { place.frames = $0 }
                 .gesture(LongPressAt(changed: menu.pressChanged) { p in
                     Haptics.tap()
                     menu.anchor = p
-                    lift(menu)
+                    capturing = true
                 })
                 // The screenshot switches (`showMenu`, `showRewind`) pick a message without a press.
-                .onChange(of: menu.selected == id) { _, on in if on, menu.lift?.bar.id != id { lift(menu) } }
+                .onChange(of: menu.selected == id) { _, on in if on, menu.lift?.bar.id != id { capturing = true } }
+                .background {
+                    if capturing {
+                        EnvironmentCapture { env in
+                            capturing = false
+                            place.environment = env
+                            lift(menu)
+                        }
+                    }
+                }
         } else {
             content
         }
@@ -297,15 +352,34 @@ private struct MessageLongPress<P: View>: ViewModifier {
         guard let bar else { return }
         let f = place.frames
         let press = CGPoint(x: menu.anchor.x - f.row.minX, y: menu.anchor.y - f.row.minY)
+        // Drawn over the page, outside the chat, in the environment it had in the chat (`MessageLift.environment`).
         let shown = preview()
-            .environment(\.openFile, openFile)
-            .environment(\.loadImage, loadImage)
-            .environment(\.rowMemoScope, memoScope)
             .environment(\.chatPin, nil) // what opens in the copy does not move the chat under it
+            #if DEBUG
+            .modifier(LiftLinesReader { LiftLines.shared.lift = $0 })
+            #endif
+        #if DEBUG
+        LiftLines.shared.lift = ""
+        LiftLines.shared.select = ""
+        #endif
+        // All of a message drawn in parts is as tall as it takes, at the part's width.
+        let offer = part != nil ? place.offer.map { ProposedViewSize(width: $0.width, height: nil) } : place.offer
         withAnimation(Theme.Motion.state) {
             menu.selected = id
-            menu.lift = MessageLift(bar: bar, frame: f.global, press: press, preview: AnyView(shown), card: card)
+            menu.lift = MessageLift(bar: bar, frame: f.global, press: press, preview: AnyView(shown), card: card,
+                                    offer: offer, environment: place.environment, part: part)
         }
+    }
+}
+
+/// Hands over the environment it is in once, when it appears: read only then, so the views around it don't depend on
+/// all of it the rest of the time.
+private struct EnvironmentCapture: View {
+    @Environment(\.self) private var values
+    let got: (EnvironmentValues) -> Void
+
+    var body: some View {
+        Color.clear.onAppear { got(values) }
     }
 }
 
@@ -333,17 +407,25 @@ private struct MessageActionBarHost: ViewModifier {
     let isUser: Bool
     let date: Date?
     let pending: Bool
+    let from: String?
+    let delete: MessageBarDelete?
     @State private var drag: CGFloat = 0
     @State private var armed = false
 
     func body(content: Content) -> some View {
         if let menu {
             swipeable(content, menu)
-                .environment(\.messageBar, MessageBarInfo(id: id, text: text, isUser: isUser, date: date, pending: pending))
+                .environment(\.messageBar, MessageBarInfo(id: id, text: text, isUser: isUser, date: date, pending: pending, from: from,
+                                                            delete: delete))
                 .coordinateSpace(.named(MessageMenu.row))
                 .zIndex(menu.selected == id ? 1 : 0)
         } else {
-            content.contextMenu { CopyButton(text: text) }
+            content.contextMenu {
+                CopyButton(text: text)
+                if let delete {
+                    Button(role: .destructive, action: delete.run) { Label(delete.title, systemImage: Theme.Icon.delete) }
+                }
+            }
         }
     }
 
@@ -402,6 +484,10 @@ struct MessageActionBar: View {
     var menu: MessageMenu
     /// Not in the transcript yet (`messageActionBar(pending:)`): Copy, Select Text and Share.
     var pending = false
+    /// Who wrote it, when not the chat's Agent or Persona (`messageActionBar(from:)`).
+    var from: String? = nil
+    /// Only on this phone (`messageActionBar(delete:)`): Delete last, in the danger color.
+    var delete: MessageBarDelete?
     var itemWidth: CGFloat = Self.item
 
     static let height: CGFloat = 62
@@ -411,8 +497,8 @@ struct MessageActionBar: View {
     /// Each action's width when the bar is `width` wide.
     static func itemWidth(_ width: CGFloat, count: Int) -> CGFloat { min(item, (width - 12) / CGFloat(max(count, 1))) }
     /// How many actions the bar has for this message.
-    static func count(id: String, isUser: Bool, menu: MessageMenu, pending: Bool = false) -> Int {
-        if pending { return 3 }
+    static func count(id: String, isUser: Bool, menu: MessageMenu, pending: Bool = false, deletes: Bool = false) -> Int {
+        if pending { return 3 + (deletes ? 1 : 0) }
         return (isUser ? 5 : 4) + (forks(id: id, isUser: isUser, menu: menu) ? 1 : 0) + (rewinds(id: id, isUser: isUser, menu: menu) ? 1 : 0)
     }
     /// Your own message ends in Rewind when the chat's session is a Claude agent's and the message is a transcript line
@@ -420,6 +506,15 @@ struct MessageActionBar: View {
     static func rewinds(id: String, isUser: Bool, menu: MessageMenu) -> Bool {
         isUser && menu.rewind != nil && menu.rewindBlock() != nil && Rewind.entry(of: id) != nil
     }
+    /// Forward in Share's place (#3807): on iPhone and iPad, for a message in the transcript of a chat that forwards.
+    static func forwards(menu: MessageMenu, pending: Bool) -> Bool {
+        #if os(iOS)
+        return !pending && menu.forward != nil
+        #else
+        return false
+        #endif
+    }
+
     /// A reply ends in ⋯ with Branch to New Chat when the session can fork and the reply is a Claude transcript line of its
     /// own (`<uuid>#<n>`).
     static func forks(id: String, isUser: Bool, menu: MessageMenu) -> Bool {
@@ -434,14 +529,27 @@ struct MessageActionBar: View {
                 Haptics.success()
             }
             // "Select Text", not "Select": next to Copy a bare Select reads as picking messages (WeChat's multi-select).
+            // On iOS it selects all of the lifted message's words where they are (#603); the Mac opens its window.
+            #if os(macOS)
             action(String(localized: "Select Text [Message Menu 4d8efc]"), Theme.Icon.select) {
                 menu.selecting = SelectableText(text: text, plain: isUser, msg: id, quotable: !pending)
             }
+            #else
+            action(String(localized: "Select Text [Message Menu 4d8efc]"), Theme.Icon.select, closes: false) {
+                menu.selectInPlace(at: nil)
+            }
+            #endif
             if !pending {
                 action(String(localized: "Quote"), "quote.opening") { menu.quote?(text, id, isUser, nil) }
             }
-            action(String(localized: "Share"), Theme.Icon.share) {
-                menu.sharing = ShareMessage(text: text, isUser: isUser, source: menu.source(), date: date, agent: menu.agent())
+            if Self.forwards(menu: menu, pending: pending) {
+                action(String(localized: "Forward [Message Menu]"), Theme.Icon.forwardMessage) {
+                    menu.forward?(MessageBarInfo(id: id, text: text, isUser: isUser, date: date, pending: pending, from: from))
+                }
+            } else {
+                action(String(localized: "Share"), Theme.Icon.share) {
+                    menu.sharing = ShareMessage(text: text, isUser: isUser, source: menu.source(), date: date, agent: menu.agent())
+                }
             }
             if isUser && !pending {
                 action(String(localized: "Edit [Message Menu 051836]"), "pencil") { menu.edit?(text) }
@@ -452,6 +560,9 @@ struct MessageActionBar: View {
             if Self.forks(id: id, isUser: isUser, menu: menu) {
                 action(String(localized: "More"), Theme.Icon.more) { menu.more = id }
             }
+            if let delete { // last, as a menu's destructive item is
+                action(delete.title, Theme.Icon.delete, tint: Theme.danger, perform: delete.run)
+            }
         }
         .padding(.horizontal, Theme.Space.sm)
         .frame(height: Self.height)
@@ -461,30 +572,33 @@ struct MessageActionBar: View {
         .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
     }
 
-    private func action(_ title: String, _ symbol: String, perform: @escaping () -> Void) -> some View {
+    /// tint: the danger color for Delete; nil, the primary ink.
+    private func action(_ title: String, _ symbol: String, closes: Bool = true, tint: Color? = nil,
+                        perform: @escaping () -> Void) -> some View {
         Button {
             perform()
-            menu.close()
-        } label: { label(title, symbol) }
+            if closes { menu.close() }
+        } label: { label(title, symbol, tint: tint) }
         .buttonStyle(.plain)
+        .accessibilityLabel(title) // its word only, not the symbol's own name too
     }
 
-    private func label(_ title: String, _ symbol: String) -> some View {
+    private func label(_ title: String, _ symbol: String, tint: Color?) -> some View {
         VStack(spacing: Theme.Space.xs) {
             // Symbols differ in height: a fixed box keeps every label on one line.
             ThemedIcon(symbol).font(Theme.Font.heading).dynamicTypeSize(...DynamicTypeSize.xxLarge).scaledFrame(height: Theme.Size.iconS)
             Text(title).font(Theme.Font.label).lineLimit(1).minimumScaleFactor(0.8) // Select Text on a narrow bar
         }
-        .foregroundStyle(.primary)
+        .foregroundStyle(tint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(HierarchicalShapeStyle.primary))
         .frame(width: itemWidth, height: Self.height)
         .contentShape(.rect)
     }
 }
 
-/// The message in a text view where any part of it can be selected and copied (「选择文本」). On iOS a reply reads as in
-/// the chat, without the Markdown marks (`SelectableMarkdown`); your own message stays as you wrote it, as its bubble
-/// shows it (`plain`). Copy All copies the message as Copy does; Quote, first in the selection's menu, quotes the
-/// picked words in the composer (`quote`, #4549).
+#if os(macOS)
+/// The Mac's Select Text: the message in a text view where any part of it can be selected and copied. Copy All copies
+/// the message as Copy does; Quote, first in the selection's menu, quotes the picked words in the composer (`quote`,
+/// #4549). iOS selects the lifted message's words where they are instead (#603, `LiftSelection.swift`).
 struct SelectableTextSheet: View {
     @Environment(\.dismiss) private var dismiss
     var text: String
@@ -510,243 +624,6 @@ struct SelectableTextSheet: View {
                 }
         }
         .presentationDetents([.medium, .large])
-    }
-}
-
-#if os(iOS) || os(visionOS)
-struct SelectableTextView: UIViewRepresentable {
-    var text: String
-    var plain = false
-    /// Quote for the selection, first in its menu (none when nil).
-    var quote: ((String) -> Void)? = nil
-
-    func makeUIView(context: Context) -> SelectableUITextView {
-        let v = SelectableUITextView()
-        v.isEditable = false
-        v.isSelectable = true
-        v.textContainerInset = UIEdgeInsets(top: 16, left: 12, bottom: 24, right: 12)
-        v.backgroundColor = .clear
-        v.accessibilityIdentifier = "selectable-text"
-        v.delegate = context.coordinator
-        return v
-    }
-
-    func updateUIView(_ v: SelectableUITextView, context: Context) {
-        context.coordinator.quote = quote
-        v.show(text, plain: plain)
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    final class Coordinator: NSObject, UITextViewDelegate {
-        var quote: ((String) -> Void)?
-
-        func textView(_ textView: UITextView, editMenuForTextIn range: NSRange, suggestedActions: [UIMenuElement]) -> UIMenu? {
-            let selected = (textView.text as NSString).substring(with: range).trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !selected.isEmpty, quote != nil else { return UIMenu(children: suggestedActions) }
-            let ours = UIMenu(options: .displayInline, children: [
-                UIAction(title: String(localized: "Quote"), image: UIImage(systemName: Theme.Icon.quote)) { [weak self] _ in
-                    self?.quote?(selected)
-                },
-            ])
-            return UIMenu(children: [ours] + suggestedActions)
-        }
-    }
-}
-
-/// Draws its text again when the text size changes: the fonts are made for one size (an attributed string's fonts
-/// do not follow `adjustsFontForContentSizeCategory`).
-final class SelectableUITextView: UITextView {
-    private var source: (text: String, plain: Bool)?
-
-    override init(frame: CGRect, textContainer: NSTextContainer?) {
-        super.init(frame: frame, textContainer: textContainer)
-        registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (v: SelectableUITextView, _) in v.render() }
-    }
-
-    required init?(coder: NSCoder) { fatalError("not from a nib") }
-
-    func show(_ text: String, plain: Bool) {
-        guard source?.text != text || source?.plain != plain else { return }
-        source = (text, plain)
-        render()
-    }
-
-    private func render() {
-        guard let source else { return }
-        attributedText = source.plain ? SelectableMarkdown.plain(source.text, traits: traitCollection)
-            : SelectableMarkdown.attributed(source.text, traits: traitCollection)
-    }
-}
-
-/// A reply's Markdown as text to select from: what the chat shows, not its marks. Bold, italics, inline code and
-/// links keep their look (`**`, `` ` `` and `[](…)` go), headings are bold, `-` / `*` / `+` items get a bullet (their
-/// indent kept), and a fenced block is its code in a monospaced font, indented, without the fence. Formulas
-/// (`$…$`, `\(…\)`, `$$` blocks), four-space-indented code, rules, tables and quotes stay as written.
-/// The chat's own rendering (MarkdownUI) cannot be selected across blocks (docs/apple/ios.md「选择文本」), so this is its own.
-enum SelectableMarkdown {
-    /// The page's fonts: body text and code, at the text size of `traits` (the current one when nil).
-    private struct Fonts {
-        let body: UIFont
-        let mono: UIFont
-
-        init(_ traits: UITraitCollection?) {
-            body = UIFont.preferredFont(forTextStyle: .body, compatibleWith: traits)
-            mono = UIFontMetrics(forTextStyle: .body)
-                .scaledFont(for: .monospacedSystemFont(ofSize: 15, weight: .regular), compatibleWith: traits)
-        }
-    }
-
-    /// Your own message, as its bubble shows it: no Markdown.
-    static func plain(_ text: String, traits: UITraitCollection? = nil) -> NSAttributedString {
-        NSAttributedString(string: text, attributes: [.font: Fonts(traits).body, .foregroundColor: UIColor.label])
-    }
-
-    private enum Block {
-        /// A fenced code block: its fence's character and length. Only a bare fence of the same character, at least as
-        /// long, closes it.
-        case fence(Character, Int)
-        /// A `$$` / `\[` formula block and the line that closes it.
-        case math(String)
-    }
-
-    static func attributed(_ markdown: String, traits: UITraitCollection? = nil) -> NSAttributedString {
-        let fonts = Fonts(traits)
-        let code = NSMutableParagraphStyle()
-        code.firstLineHeadIndent = 12
-        code.headIndent = 12
-        let out = NSMutableAttributedString()
-        func verbatim(_ s: String, _ font: UIFont, _ style: NSParagraphStyle? = nil) {
-            var attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: UIColor.label]
-            if let style { attrs[.paragraphStyle] = style }
-            out.append(NSAttributedString(string: s, attributes: attrs))
-        }
-        var block: Block?
-        var lastBlank = true, inList = false, indentedCode = false
-        let lines = markdown.components(separatedBy: "\n")
-        for (i, raw) in lines.enumerated() {
-            let newline = i < lines.count - 1 ? "\n" : ""
-            let trimmed = raw.trimmingCharacters(in: .whitespaces)
-            let indent = raw.prefix { $0 == " " || $0 == "\t" }
-            let deep = indent.contains("\t") || indent.count >= 4
-            switch block {
-            case .fence(let c, let n)?:
-                if !deep, trimmed.count >= n, trimmed.allSatisfy({ $0 == c }) { block = nil } else { verbatim(raw + newline, fonts.mono, code) }
-                continue
-            case .math(let close)?:
-                if trimmed == close { block = nil }
-                verbatim(raw + newline, fonts.body)
-                continue
-            case nil: break
-            }
-            defer { lastBlank = trimmed.isEmpty }
-            if trimmed.isEmpty {
-                verbatim(raw + newline, fonts.body)
-                continue
-            }
-            if !deep, let f = fence(trimmed) {
-                block = .fence(f.0, f.1)
-                indentedCode = false
-                continue
-            }
-            if trimmed == "$$" || trimmed == "\\[" {
-                block = .math(trimmed == "$$" ? "$$" : "\\]")
-                verbatim(raw + newline, fonts.body)
-                continue
-            }
-            // Four spaces or a tab in, after a blank line and not in a list: code, as written.
-            if deep, !inList, lastBlank || indentedCode {
-                indentedCode = true
-                verbatim(raw + newline, fonts.mono)
-                continue
-            }
-            indentedCode = false
-            var line = raw, font = fonts.body
-            if isRule(trimmed) {
-                inList = false
-                verbatim(raw + newline, fonts.body)
-                continue
-            } else if let hashes = trimmed.firstIndex(where: { $0 != "#" }), trimmed.hasPrefix("#"),
-                      trimmed.distance(from: trimmed.startIndex, to: hashes) <= 6, trimmed[hashes] == " " {
-                line = String(trimmed[hashes...].dropFirst())
-                font = bold(fonts.body)
-                inList = false
-            } else if ["- ", "* ", "+ "].contains(where: trimmed.hasPrefix) {
-                line = String(indent) + "• " + String(trimmed.dropFirst(2))
-                inList = true
-            } else if trimmed.range(of: #"^\d{1,9}[.)] "#, options: .regularExpression) != nil {
-                inList = true
-            } else if !deep {
-                inList = false
-            }
-            out.append(inline(line, font: font, mono: fonts.mono))
-            verbatim(newline, fonts.body)
-        }
-        return out
-    }
-
-    /// An opening fence: three or more backticks or tildes (a backtick fence's info string has no backtick).
-    private static func fence(_ trimmed: String) -> (Character, Int)? {
-        guard let c = trimmed.first, c == "`" || c == "~" else { return nil }
-        let n = trimmed.prefix { $0 == c }.count
-        guard n >= 3 else { return nil }
-        if c == "`", trimmed.dropFirst(n).contains("`") { return nil }
-        return (c, n)
-    }
-
-    /// `---`, `* * *`, `___`: a rule, not a list item.
-    private static func isRule(_ trimmed: String) -> Bool {
-        let marks = trimmed.filter { $0 != " " && $0 != "\t" }
-        guard let c = marks.first, "-*_".contains(c), marks.count >= 3 else { return false }
-        return marks.allSatisfy { $0 == c }
-    }
-
-    /// Code spans (left to the Markdown parser) and formulas (kept as written) in a line.
-    private static let spans = try! NSRegularExpression(pattern: #"(`+).+?\1|\$\$.+?\$\$|\$[^\s$](?:[^$\n]*?[^\s$])?\$|\\\(.+?\\\)"#)
-
-    /// Bold, italics, inline code, strikethrough and links of one line, its spaces kept; formulas as written.
-    private static func inline(_ line: String, font: UIFont, mono: UIFont) -> NSAttributedString {
-        let out = NSMutableAttributedString()
-        let ns = line as NSString
-        var pending = "", at = 0
-        for m in spans.matches(in: line, range: NSRange(location: 0, length: ns.length)) {
-            pending += ns.substring(with: NSRange(location: at, length: m.range.location - at))
-            let span = ns.substring(with: m.range)
-            at = m.range.location + m.range.length
-            if span.hasPrefix("`") { pending += span; continue }
-            out.append(markdown(pending, font: font, mono: mono))
-            pending = ""
-            out.append(NSAttributedString(string: span, attributes: [.font: font, .foregroundColor: UIColor.label]))
-        }
-        pending += ns.substring(from: at)
-        out.append(markdown(pending, font: font, mono: mono))
-        return out
-    }
-
-    private static func markdown(_ text: String, font: UIFont, mono: UIFont) -> NSAttributedString {
-        guard !text.isEmpty else { return NSAttributedString() }
-        guard let parsed = try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) else {
-            return NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: UIColor.label])
-        }
-        let out = NSMutableAttributedString()
-        for run in parsed.runs {
-            let intent = run.inlinePresentationIntent ?? []
-            var f = font
-            if intent.contains(.code) { f = mono }
-            if intent.contains(.stronglyEmphasized) { f = bold(f) }
-            if intent.contains(.emphasized), let d = f.fontDescriptor.withSymbolicTraits(f.fontDescriptor.symbolicTraits.union(.traitItalic)) {
-                f = UIFont(descriptor: d, size: 0)
-            }
-            var attrs: [NSAttributedString.Key: Any] = [.font: f, .foregroundColor: UIColor.label]
-            if intent.contains(.strikethrough) { attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
-            if let link = run.link { attrs[.link] = link }
-            out.append(NSAttributedString(string: String(parsed[run.range].characters), attributes: attrs))
-        }
-        return out
-    }
-
-    private static func bold(_ f: UIFont) -> UIFont {
-        f.fontDescriptor.withSymbolicTraits(f.fontDescriptor.symbolicTraits.union(.traitBold)).map { UIFont(descriptor: $0, size: 0) } ?? f
     }
 }
 #endif

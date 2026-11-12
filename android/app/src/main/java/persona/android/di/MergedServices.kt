@@ -12,7 +12,13 @@ import persona.feature.agents.AgentsOperationsBindings
 import persona.feature.agents.AgentsWiringState
 import persona.feature.chat.ChatLocalStorage
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.*
 
 /*
@@ -48,11 +54,12 @@ internal fun mergedSessions(stacks: GroupStacks): SessionsRepository = object : 
             .groupBy({ it.key }, { it.value }).mapValues { (_, values) -> values.sum() }
         SessionListStatus(
             paged = statuses.any { it.paged }, loaded = statuses.isNotEmpty() && statuses.all { it.loaded },
-            loading = statuses.any { it.loading }, hasMore = statuses.any { it.hasMore }, hasPrevious = statuses.any { it.hasPrevious },
+            loading = statuses.any { it.loading }, failed = statuses.any { it.failed },
+            hasMore = statuses.any { it.hasMore }, hasPrevious = statuses.any { it.hasPrevious },
             total = statuses.sumOf { it.total },
             counts = SessionListCounts(total = statuses.sumOf { it.counts.total }, machine = totals({ it.machine }),
                 project = totals({ it.project }), group = totals({ it.group }), state = totals({ it.state }),
-                revision = statuses.joinToString("|") { it.counts.revision }),
+                revision = statuses.joinToString("|") { it.counts.revision }, backgroundWaiting = statuses.sumOf { it.counts.backgroundWaiting }),
             machineCounts = SessionListCounts(total = statuses.sumOf { it.machineCounts.total }, machine = totals({ it.machine }, true),
                 project = totals({ it.project }, true), group = totals({ it.group }, true), state = totals({ it.state }, true)),
         )
@@ -86,10 +93,14 @@ internal fun mergedSessions(stacks: GroupStacks): SessionsRepository = object : 
     }
 }
 
+@OptIn(ExperimentalCoroutinesApi::class)
 internal fun mergedInteractions(stacks: GroupStacks): InteractionCenter = object : InteractionCenter {
     override val pending = stacks.merged(emptyList<Interaction>(), { s ->
         s.mapped(s.repositories.interactions.pending) { list -> list.map(::interaction) }
     }) { it.flatten() }
+    override val arrivals = stacks.stacks.flatMapLatest { list ->
+        list.map { s -> s.mapped(s.repositories.interactions.arrivals) { interaction(it) } }.merge()
+    }
     override suspend fun refresh() = stacks.forEach { it.repositories.interactions.refresh() }
     // Only the request's own group: another group answering says nothing about this one (#5697).
     override suspend fun refresh(id: String) = stacks.use(GroupKeys.namespaceOf(id)) { it.repositories.interactions.refresh() }
@@ -151,12 +162,15 @@ internal fun mergedPreferences(stacks: GroupStacks): HubPreferences = object : H
  * Machine management (machines page, engine, Claude Code / Codex settings) over every group (#634): each call goes to the group its machine id
  * names ([routes]: that group's service, already speaking merged ids), so another group's machine is no longer asked of the
  * selected group's hub. Hub-level services (model configuration, voice) stay with the selected group, like the other hub-level pages.
+ * Subscription quota belongs to a hub too, but the merged overview shows every group's machines, so it lists every group's
+ * accounts ([GroupUsage]).
  */
 internal fun mergedMachineManagement(
     routes: MachineRoutes,
-    /** The selected group's own, for what belongs to a hub rather than a machine (subscription quota). */
-    selected: (suspend () -> MachineManagement)? = null,
+    /** Every open group's own read of its hub's subscription quota, in the groups' order. */
+    usage: (() -> List<GroupUsageRead>)? = null,
 ): MachineManagement = object : MachineManagement {
+    private val groups = GroupUsage()
     override suspend fun launchers(machineId: String) = routes.on(machineId) { it.launchers(machineId) }
     override suspend fun launcherQuota(machineId: String, name: String, refresh: Boolean) =
         routes.on(machineId) { it.launcherQuota(machineId, name, refresh) }
@@ -182,8 +196,37 @@ internal fun mergedMachineManagement(
     override suspend fun browser(machineId: String) = routes.on(machineId) { it.browser(machineId) }
     override suspend fun setBrowser(machineId: String, enabled: Boolean) = routes.on(machineId) { it.setBrowser(machineId, enabled) }
     override suspend fun browserJob(machineId: String, action: String) = routes.on(machineId) { it.browserJob(machineId, action) }
-    override suspend fun usageWindows() = selected?.invoke()?.usageWindows().orEmpty()
+    override suspend fun usageWindows() = groups.read(usage?.invoke().orEmpty())
+    override suspend fun usageWindows(machineId: String) = routes.on(machineId) { it.usageWindows() }
     override suspend fun moveToManager(machineId: String, manager: String) = routes.on(machineId) { it.moveToManager(machineId, manager) }
+}
+
+/** One open group's read of its hub's subscription quota; [group] is its namespace ("" for the primary group). */
+internal class GroupUsageRead(val group: String, val read: suspend () -> List<UsageAccount>)
+
+/**
+ * Subscription limits on the merged machines overview (#1845, as iOS / Mac: docs/server/usage-windows.md): every group's hub
+ * is asked on its own, at once, and the answers are listed in the groups' order, so the same account in two groups shows
+ * once in each. An old hub without the route (404) has none; a group whose read fails keeps its last answer while the
+ * others show theirs, and a group that went away during the read has none.
+ */
+internal class GroupUsage {
+    private val last = ConcurrentHashMap<String, List<UsageAccount>>()
+
+    suspend fun read(groups: List<GroupUsageRead>): List<UsageAccount> = coroutineScope {
+        groups.map { group -> async { answer(group) } }.awaitAll().flatten()
+    }
+
+    private suspend fun answer(group: GroupUsageRead): List<UsageAccount> = try {
+        group.read().also { last[group.group] = it }
+    } catch (gone: CancellationException) {
+        // Its group closed under the call (GroupStacks.use); the overview itself going away still cancels the read.
+        currentCoroutineContext().ensureActive()
+        emptyList()
+    } catch (failure: Exception) {
+        if ((failure as? HubFailure)?.status == 404) emptyList<UsageAccount>().also { last[group.group] = it }
+        else last[group.group].orEmpty()
+    }
 }
 
 /** Runs a call on the machine management of the group [machineId] names, in that group's lifetime (GroupStacks.use). */
@@ -247,7 +290,9 @@ internal class MergedShellServices(private val stacks: GroupStacks) {
         override suspend fun execute(session: Session, action: ChatAction) = of(session).execute(session, action)
         override suspend fun verify(session: Session, action: ChatAction) = of(session).verify(session, action)
         override suspend fun editQueue(session: Session, keep: List<Int>) = of(session).editQueue(session, keep)
+        override suspend fun sendQueuedNow(session: Session) = of(session).sendQueuedNow(session)
         override suspend fun info(session: Session) = of(session).info(session)
+        override suspend fun restoreModel(session: Session) = of(session).restoreModel(session)
         override suspend fun fork(session: Session, atItemId: String) = of(session).fork(session, atItemId)
         override suspend fun rewind(session: Session, target: RewindTarget, restore: RewindRestore) = of(session).rewind(session, target, restore)
     }
@@ -351,6 +396,11 @@ internal fun mergedAgentsState(list: List<GroupNames>, states: List<AgentsWiring
         override suspend fun newAgentModel() = creations.getOrNull(chosen)?.newAgentModel()
         override suspend fun launcherModels(machineId: String, launcher: String, refresh: Boolean) =
             creation(of(machineId)).launcherModels(machineId, launcher, refresh)
+        override suspend fun worktreeStatus(machineId: String, cwd: String) = creation(of(machineId)).worktreeStatus(machineId, cwd)
+        override suspend fun addWorktree(machineId: String, cwd: String, nameHint: String, branch: String) =
+            creation(of(machineId)).addWorktree(machineId, cwd, nameHint, branch)
+        override suspend fun removeWorktree(machineId: String, path: String, deleteBranch: Boolean, force: Boolean) =
+            creation(of(machineId)).removeWorktree(machineId, path, deleteBranch, force)
     }
     return AgentsWiringState(
         scope = scope,

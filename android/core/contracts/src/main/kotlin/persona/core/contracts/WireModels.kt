@@ -27,13 +27,23 @@ data class Subagent(
     @WireTime @SerialName("started_at") val startedAt: String? = null,
     @WireTime @SerialName("updated_at") val updatedAt: String? = null,
     @SerialName("last_text") val lastText: String? = null,
+    /**
+     * How many tool calls it made and its latest one, the model it ran on (its own transcript's, never the one its call
+     * asked for) and its latest reply's tokens; the subagent that launched it ([parentId], absent when the session did).
+     * Each absent from older hubs (docs/protocol/protocol.md, a session's `subagents`).
+     */
+    val steps: Int? = null,
+    @SerialName("last_tool") val lastTool: WorkflowTool? = null,
+    val model: String? = null,
+    val tokens: Long? = null,
+    @SerialName("parent_id") val parentId: String? = null,
 )
 
 @KeepGeneratedSerializer
 @Serializable(with = TaskNoteSerializer::class)
 data class TaskNote(
     @WireEnum("shell", "monitor", "agent", "task", "unknown") val kind: String = "unknown",
-    @WireEnum("completed", "failed", "killed", "stopped", "event", "ended", "waiting", "unknown") val status: String = "unknown",
+    @WireEnum("running", "completed", "failed", "killed", "stopped", "event", "ended", "waiting", "unknown") val status: String = "unknown",
     val title: String = "",
     @SerialName("task_id") val taskId: String? = null,
     @SerialName("tool_use_id") val toolUseId: String? = null,
@@ -50,6 +60,8 @@ data class Fold(
     @SerialName("through_seq") val throughSeq: Int = 0,
     @SerialName("through_id") val throughId: String = "",
     val tasks: List<FoldTaskSnapshot> = emptyList(),
+    /** The folded run belongs to a supervision round the user must see (`fold_supervision.go`); older hubs omit it. */
+    @SerialName("supervision_user") val supervisionUser: Boolean? = null,
 )
 
 @Serializable
@@ -498,7 +510,7 @@ data class WorkflowAgent(
     val calls: Int? = null,
 )
 
-/** A [WorkflowAgent]'s latest tool call: its [name] and what it does ([summary], in the reader's language). */
+/** A [WorkflowAgent]'s or a [Subagent]'s latest tool call: its [name] and what it does ([summary], in the reader's language). */
 @KeepGeneratedSerializer
 @Serializable(with = WorkflowToolSerializer::class)
 data class WorkflowTool(

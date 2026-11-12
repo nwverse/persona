@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"maps"
 	"os"
 	"sync"
 
@@ -78,7 +79,11 @@ func (f *File) history() string {
 	if f.lines == 0 {
 		return "" // nothing read yet: no identity to compare
 	}
-	return fmt.Sprintf("%x.%08x.%d", f.ino, f.firstHash, f.gen) + f.branchToken()
+	version := ""
+	if !f.meta.Codex {
+		version = ".items2"
+	}
+	return fmt.Sprintf("%x.%08x.%d", f.ino, f.firstHash, f.gen) + version + f.branchToken()
 }
 
 // Refresh reads newly appended complete lines and returns the new items.
@@ -122,7 +127,34 @@ func (f *File) freshTree() *branchTree {
 	return &t
 }
 
+// Changed reports whether RefreshSpan may have something to do: the file's size or inode is not what was read, it
+// cannot be stat'ed (RefreshSpan then says why), or a turn taken for rewound has to be read again (RefreshSpan). A
+// watch asks on every tick, so it never waits for the file's lock (a read or a page under way): it says true then.
+func (f *File) Changed() bool {
+	if !f.mu.TryLock() {
+		return true
+	}
+	path, offset, ino := f.Path, f.offset, f.ino
+	revoked := f.tree != nil && len(f.tree.revoked) > 0
+	f.mu.Unlock()
+	if revoked {
+		return true
+	}
+	st, err := os.Stat(path)
+	return err != nil || !unchanged(st, offset, ino)
+}
+
+// unchanged: a file stat'ed as st is the one read up to offset (same inode), with nothing after it.
+func unchanged(st os.FileInfo, offset int64, ino uint64) bool {
+	return st.Size() == offset && inode(st) == ino
+}
+
 func (f *File) refresh() ([]proto.Item, Span, error) {
+	// A file with nothing new is the common case of a watched session at rest (a refresh four times a second): a stat
+	// says so, without the open, fstat and close below. A stat that fails goes on to the open, which reports it.
+	if st, err := os.Stat(f.Path); err == nil && unchanged(st, f.offset, f.ino) {
+		return nil, Span{f.history(), f.lines, f.lines}, nil
+	}
 	fh, err := os.Open(f.Path)
 	if err != nil {
 		return nil, Span{}, err
@@ -250,7 +282,7 @@ func (f *File) Page(beforeSeq, limit int) ([]proto.Item, bool, Span) {
 }
 
 // PageTurns returns the items before beforeSeq (0 = the end) going back far enough to hold `turns` whole exchanges:
-// it starts at a user prompt, so a page never opens in the middle of a turn. maxItems caps one enormous turn.
+// it starts at a user question, not an injected supervision/wake prompt. maxItems caps one enormous turn.
 func (f *File) PageTurns(beforeSeq, turns, maxItems int) ([]proto.Item, bool, Span) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -259,7 +291,7 @@ func (f *File) PageTurns(beforeSeq, turns, maxItems int) ([]proto.Item, bool, Sp
 	start, seen := end, 0
 	for start > 0 && seen < turns && end-start < maxItems {
 		start--
-		if it := f.items[start]; it.Role == "user" && it.Kind == proto.KindText && !it.Queued {
+		if pagePrompt(f.items[start]) {
 			seen++
 		}
 	}
@@ -275,21 +307,13 @@ func (f *File) PageTurns(beforeSeq, turns, maxItems int) ([]proto.Item, bool, Sp
 // rather than pass the cut copy off as whole.
 func (f *File) Full(id string) (proto.Item, error) {
 	f.mu.Lock()
-	var it proto.Item
-	found := false
-	for {
-		for i := len(f.items) - 1; i >= 0; i-- {
-			if f.items[i].ID == id {
-				it, found = f.items[i], true
-				break
-			}
-		}
-		if found || f.loadOlder() == 0 { // an item in lines not parsed yet: parse back to it
-			break
-		}
+	it, found := f.item(id)
+	if !found { // an item in lines not parsed yet: parse back to it (window.go)
+		it, found = f.findOlder(id)
 	}
 	ref, cut := f.cut[it.Seq]
-	scratch := Meta{Sidechain: f.meta.Sidechain, Codex: f.meta.Codex}
+	scratch := Meta{Sidechain: f.meta.Sidechain, Codex: f.meta.Codex,
+		agentCalls: maps.Clone(f.meta.agentCalls), taskCalls: maps.Clone(f.meta.taskCalls)}
 	f.mu.Unlock()
 	if !found {
 		return it, fmt.Errorf("no item %s", id)
@@ -303,6 +327,16 @@ func (f *File) Full(id string) (proto.Item, error) {
 	}
 	it.Text, it.FullSize, it.Image = full.Text, 0, full.Image
 	return it, nil
+}
+
+// item is the parsed item with this id. Callers hold f.mu.
+func (f *File) item(id string) (proto.Item, bool) {
+	for i := len(f.items) - 1; i >= 0; i-- {
+		if f.items[i].ID == id {
+			return f.items[i], true
+		}
+	}
+	return proto.Item{}, false
 }
 
 // WithImages puts the image data back into items (for callers that did not ask for lazy images).

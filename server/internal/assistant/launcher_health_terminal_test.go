@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -37,6 +38,19 @@ func TestLauncherHealthNotInTerminal(t *testing.T) {
 	ctx := context.Background()
 
 	s.recordStartFailure(ctx, "l4", "work", terminalRefusal(proto.CodeLauncherMissing, "work"))
+	// It stays pickable, with its record: only a real start clears this one, so hiding it would leave no way to make
+	// that start, and the clients gray it out with the reason.
+	var picker struct {
+		Launchers []launcherWithHealth `json:"launchers"`
+	}
+	if err := json.Unmarshal(getJSON(t, s, "/api/v1/machines/l4/launchers"), &picker); err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(picker.Launchers, func(l launcherWithHealth) bool { return l.Name == "work" })
+	if i < 0 || picker.Launchers[i].Health == nil || picker.Launchers[i].Health.State != healthBlocked ||
+		picker.Launchers[i].Health.Kind != errKindNotInTerminal {
+		t.Fatalf("the picker hid a launcher only a start can clear, or lost its reason: %+v", picker.Launchers)
+	}
 	r := healthState(s, "l4", "work")
 	if r.State != healthBlocked || r.Kind != errKindNotInTerminal || r.Source != healthSourceStart ||
 		!strings.Contains(r.BlockedReason, "terminal") || !strings.Contains(r.Error, "has no command work") {
@@ -144,6 +158,29 @@ func TestLauncherHealthRecordsAppStarts(t *testing.T) {
 	s.followStarts(ctx, DeviceSessions{MachineID: "l4", Sessions: []proto.Session{up}})
 	if h := healthState(s, "l4", "work"); h.State != healthOK {
 		t.Fatalf("a start that came up did not clear it: %+v", h)
+	}
+}
+
+// A running Agent moving to another launcher is listed as starting meanwhile on the launcher it moves to (Starting with
+// its pending switch, node/launcher_switch.go): it is not followed, since the row listed clean afterwards may be back on
+// its own launcher (a switch that failed and rolled back): no start of the launcher the starting row named.
+func TestLauncherHealthLeavesSwitchesOut(t *testing.T) {
+	s, f := launcherHealthHubOn(t, newStorelessService)
+	delete(f.checks, "l4/work")
+	ctx := context.Background()
+	// a launcher whose starts did not run in the terminal: a start that works is what clears it
+	r := terminalRefusal(proto.CodeLauncherMissing, "work")
+	s.StartEnded(ctx, StartEnded{MachineID: "l4", Launcher: "work", Error: r.Message, Code: r.Code, Data: r.Data})
+	if h := healthState(s, "l4", "work"); h.Kind != errKindNotInTerminal || h.State != healthBlocked {
+		t.Fatalf("a failed start: %+v", h)
+	}
+	switching := proto.Session{SessionID: "a1", Launcher: "work", Starting: true, Status: proto.StatusIdle,
+		PendingSwitch: &proto.PendingSwitch{Launcher: "work", At: time.Now()}}
+	s.followStarts(ctx, DeviceSessions{MachineID: "l4", Sessions: []proto.Session{switching}})
+	back := proto.Session{SessionID: "a1", Launcher: "claude", Status: proto.StatusIdle}
+	s.followStarts(ctx, DeviceSessions{MachineID: "l4", Sessions: []proto.Session{back}})
+	if h := healthState(s, "l4", "work"); h.State != healthBlocked {
+		t.Fatalf("a switch counted as a start that worked: %+v", h)
 	}
 }
 

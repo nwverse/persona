@@ -203,6 +203,9 @@ data class BindPrompt(
     val interval: Int = 0,
     val qr: BindQrCode? = null,
     val hint: String? = null,
+    /** Where what the step asks is done, opened outside the app (the Lark bot's registration page), and its label. */
+    val link: String? = null,
+    @SerialName("link_text") val linkText: String? = null,
     /** What was wrong with the values just given: the same step is asked again. */
     val error: String? = null,
     val done: Boolean = false,
@@ -225,7 +228,7 @@ data class BindField(val name: String = "", val label: String = "", val secret: 
 @Serializable
 data class BindQrCode(val size: Int = 0, val rows: List<String> = emptyList())
 
-/** Which channel a message or a conversation came from (docs/extensions/channels.md "Source marks"). */
+/** Which channel a message or a conversation came from (docs/extensions/channels.md "Source markers"). */
 object ChannelSources {
     /**
      * The channel a message came from, by its `client_msg_id`: `<channel id>-<message id>`. The app's own messages

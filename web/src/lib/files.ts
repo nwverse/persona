@@ -72,6 +72,8 @@ export interface GitStatus {
   files: GitFile[];
   stashes?: number;
   commits: GitCommit[];
+  /** The upstream was deleted on the remote: ahead / behind are 0 and mean nothing, a push publishes the branch again. */
+  gone?: boolean;
 }
 
 export interface GitDiff {
@@ -119,8 +121,8 @@ export function resolveRef(baseDir: string, ref: string): string {
   const src = ref.trim().split(/[?#]/)[0];
   if (!src || !isMachineRef(ref)) return "";
   const path = decodeURIComponentSafe(src);
-  if (path.startsWith("~") || path.startsWith("/")) return normalize(path);
-  return normalize(joinPath(baseDir, path));
+  if (path.startsWith("~") || path.startsWith("/")) return normalizePath(path);
+  return normalizePath(joinPath(baseDir, path));
 }
 
 /** A reference that points into the machine (relative, absolute or ~/), not a URL or an in-page anchor. */
@@ -130,7 +132,8 @@ export function isMachineRef(ref: string): boolean {
   return !/^[a-z][a-z0-9+.-]*:/i.test(r);
 }
 
-function normalize(p: string): string {
+/** A path without "." parts, doubled slashes or ".." where it can go up (a file named two ways is one path). */
+export function normalizePath(p: string): string {
   const abs = p.startsWith("/");
   const out: string[] = [];
   for (const part of p.split("/")) {
@@ -529,18 +532,6 @@ export function languageOf(name: string, firstLine = ""): Lang | null {
   if (!id && firstLine.startsWith("<?xml")) id = "xml";
   if (!id || id === "text") return null;
   return LANGS[id];
-}
-
-/** The language of a Markdown code fence (```swift). */
-export function languageOfFence(name: string): Lang | null {
-  const alias: Record<string, string> = {
-    python3: "py", python: "py", javascript: "js", node: "js", typescript: "ts", bash: "sh", shell: "sh", console: "sh",
-    shellscript: "sh", zsh: "sh", golang: "go", rust: "rs", kotlin: "kt", ruby: "rb", "c++": "cpp", "objective-c": "m",
-    objc: "m", csharp: "cs", "c#": "cs", docker: "dockerfile", make: "mk", makefile: "mk", terraform: "tf", yml: "yaml",
-  };
-  const n = name.trim().toLowerCase();
-  if (!n) return null;
-  return n === "dockerfile" ? LANGS.docker : languageOf("x." + (alias[n] ?? n));
 }
 
 const IDENT = /[A-Za-z0-9_$]/;

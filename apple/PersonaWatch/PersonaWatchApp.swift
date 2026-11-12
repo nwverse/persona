@@ -3,29 +3,65 @@ import WatchKit
 
 @main
 struct PersonaWatchApp: App {
+    /// The notification delegate for all-day recording's notices: set before launch finishes.
+    @WKApplicationDelegateAdaptor(WatchAppDelegate.self) private var appDelegate
     @State private var model = WatchModel()
     @Environment(\.scenePhase) private var phase
 
     var body: some Scene {
         WindowGroup {
             WatchRootView()
-                .onOpenURL { model.openExtensionSurface($0) }
+                .onOpenURL { url in
+                    // The All-Day Recording complication (persona://allday?action=…): start, continue or show it. The
+                    // Meeting Recording one (persona://record?meeting=1): straight into a meeting recording.
+                    if HubNaming.accepts(scheme: url.scheme), let action = AllDayLink.action(of: url) {
+                        WatchAllDay.shared.open(action)
+                    } else if WatchModel.isMeetingLink(url) {
+                        model.meetingAsked = true
+                    } else {
+                        model.openExtensionSurface(url)
+                    }
+                }
                 .environment(model)
                 .tint(Theme.accent)
+                #if DEBUG
+                .largeTextIfAsked()
+                #endif
         }
         .onChange(of: phase) { _, p in
             if p == .active {
+                // First: the microphone can open only now (a recording a call paused, a start a link asked for).
+                WatchAllDay.shared.becameActive()
                 Task { await model.refresh() }
                 Task { await model.refreshExtensionSurfaces() }
             }
         }
-        // The watch face's frog stays current while the app is not open (docs/apple/persona.md).
-        .backgroundTask(.appRefresh(WatchModel.petRefresh)) { await model.backgroundRefresh() }
+        // The watch face's frog stays current while the app is not open (docs/apple/persona.md), and all-day recording
+        // closes a day left open just after midnight: one request shared between them (`WatchBackgroundRefresh`).
+        .backgroundTask(.appRefresh(WatchBackgroundRefresh.Job.pet.rawValue)) {
+            await WatchBackgroundRefresh.run(.pet, model: model)
+        }
+        .backgroundTask(.appRefresh(WatchBackgroundRefresh.Job.allDay.rawValue)) {
+            await WatchBackgroundRefresh.run(.allDay, model: model)
+        }
+        // What the phone sends a suspended or closed app (all-day recording's commands and acknowledgements) arrives
+        // here: without this handler it would wait for the next time the app is opened.
+        .backgroundTask(.watchConnectivity) { await WatchAllDay.shared.receiveConnectivity() }
     }
 }
 
+#if DEBUG
+extension View {
+    /// `-showLargeText YES`: an accessibility text size from the root down, for screenshots at large text that don't
+    /// depend on the simulator applying `-UIPreferredContentSizeCategoryName` to a watch app.
+    @ViewBuilder func largeTextIfAsked() -> some View {
+        if UserDefaults.standard.bool(forKey: "showLargeText") { dynamicTypeSize(.accessibility3) } else { self }
+    }
+}
+#endif
+
 /// Watch state: seeded by the phone over WatchConnectivity, refreshed from the hubs directly while open. With several
-/// groups of hubs on the phone (docs/protocol/multi-hub.md「手表」) the watch gets each group's credential and shows them merged;
+/// groups of hubs on the phone (docs/protocol/multi-hub.md「Watch, Siri, Mac, and demo mode」) the watch gets each group's credential and shows them merged;
 /// what it does goes to the group of what it acts on.
 @Observable
 final class WatchModel {
@@ -54,11 +90,20 @@ final class WatchModel {
     var lastUpdate: Date?
     /// The persona chosen on the phone: the Milk Frog shows only for its own.
     var persona = UserDefaults.standard.string(forKey: WatchModel.personaKey)
+    /// The meetings' minutes the phone relays (`WatchMinutes`, docs/apple/recording.md「Apple Watch」).
+    var minutes = WatchMinutes()
+    /// A meeting recording asked for from outside the app (the complication): the home page opens it.
+    var meetingAsked = false
+
+    /// persona://record (the Meeting Recording complication's link); the All-Day Recording complication's is
+    /// persona://allday, a host of its own, read first (`AllDayLink`).
+    static func isMeetingLink(_ url: URL) -> Bool {
+        HubNaming.accepts(scheme: url.scheme) && url.host() == "record"
+    }
     /// The Milk Frog's files on this watch.
     let pet = WatchPetPack()
     /// The Milk Frog on the watch face.
     @ObservationIgnored private let complication = WatchPetComplication()
-    static let petRefresh = "pet"
     private static let petRefreshEvery: TimeInterval = 30 * 60
     private static let personaKey = "persona"
     private var petWanted: Bool { WatchPet.supports(persona) }
@@ -91,12 +136,10 @@ final class WatchModel {
     init() {
         NativeStateMigration.prepare()
         seenInteractionUids = UserDefaults.standard.stringArray(forKey: Self.seenUidsKey) ?? []
-        if let data = UserDefaults.standard.data(forKey: "configs"), let all = try? JSONDecoder().decode(WatchConfigs.self, from: data) {
+        if let all = WatchConfigs.stored() {
             (configs, names, missing) = (all.configs, all.names, all.missing ?? [])
             extensionDeviceIDs = all.deviceIDs ?? [:]
             extensionCapabilities = all.features ?? [:]
-        } else if let data = UserDefaults.standard.data(forKey: "config"), let c = try? JSONDecoder().decode(ServerConfig.self, from: data) {
-            configs = ["": c]
         }
         #if DEBUG
         if let s = UserDefaults.standard.string(forKey: "pairURL"), let c = ServerConfig(pairURL: s) { configs = ["": c] }
@@ -108,6 +151,8 @@ final class WatchModel {
             missing = s.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
             missing.forEach { names[$0] = $0 }
         }
+        WatchMeetingSamples.install(self) // `-showMeetingSample recording|minutes` (screenshots)
+        WatchAllDaySamples.installIfAsked() // `-showAllDaySample recording|paused|interrupted|stopped|off|consent|deleted` (screenshots)
         #endif
         WatchSync.shared.onConfig = { [weak self] c in
             guard let self else { return }
@@ -119,8 +164,7 @@ final class WatchModel {
             extensionDeviceIDs = [:]
             extensionCapabilities = [:]
             syncExtensionSurfaces()
-            UserDefaults.standard.set(try? JSONEncoder().encode(c), forKey: "config")
-            UserDefaults.standard.removeObject(forKey: "configs")
+            WatchConfigs(configs: ["": c]).store()
             Task { await self.refresh() }
             Task { await self.refreshExtensionSurfaces() }
         }
@@ -134,7 +178,7 @@ final class WatchModel {
             extensionDeviceIDs = all.deviceIDs ?? [:]
             extensionCapabilities = all.features ?? [:]
             syncExtensionSurfaces()
-            UserDefaults.standard.set(try? JSONEncoder().encode(all), forKey: "configs")
+            all.store()
             Task { await self.refresh() }
             Task { await self.refreshExtensionSurfaces() }
         }
@@ -143,6 +187,7 @@ final class WatchModel {
             UserDefaults.standard.set(id, forKey: WatchModel.personaKey)
             Task { await self?.fetchPet() }
         }
+        WatchSync.shared.onMinutes = { [weak self] m in self?.minutes = m }
         WatchSync.shared.onSummary = { [weak self] s in
             guard let self, WatchGroupRefresh.acceptsSummary(at: s.at, lastUpdate: self.lastUpdate) else { return }
             // The phone's summary is every group merged; split it back so a later failed direct fetch keeps the right
@@ -161,6 +206,9 @@ final class WatchModel {
         }
         syncExtensionSurfaces()
         WatchRecordingTransfer.shared.start()
+        // All-day recording's hooks and the phone's commands before WatchConnectivity activates: what it delivers at
+        // once (a command queued while the app was closed) finds them.
+        WatchAllDay.shared.install()
         WatchSync.shared.activate()
         Task { await refreshExtensionSurfaces() }
         Task { await poll() }
@@ -250,14 +298,14 @@ final class WatchModel {
     /// The watch face's frog follows what this refresh learned; a face from before the frog was chosen goes away.
     private func publishPet() {
         complication.publish(petWanted ? petStatus : nil, at: lastUpdate, pack: pet)
-        if petWanted { schedulePetRefresh() }
+        schedulePetRefresh()
     }
 
     /// Wakes the app in the background now and then, so the face does not go stale while the app is closed. watchOS
-    /// decides when; past an hour without one the face says it does not know (WatchPetSnapshot.staleAfter).
+    /// decides when; past an hour without one the face says it does not know (WatchPetSnapshot.staleAfter). The request
+    /// is shared with all-day recording (`WatchBackgroundRefresh`): watchOS keeps one per app.
     private func schedulePetRefresh() {
-        WKApplication.shared().scheduleBackgroundRefresh(withPreferredDate: .now.addingTimeInterval(Self.petRefreshEvery),
-                                                         userInfo: Self.petRefresh as NSString) { _ in }
+        WatchBackgroundRefresh.want(.pet, at: petWanted ? .now.addingTimeInterval(Self.petRefreshEvery) : nil)
     }
 
     func backgroundRefresh() async {
@@ -347,9 +395,15 @@ final class WatchModel {
     }
 
     func interrupt(_ key: SessionKey) async {
-        guard sessions.first(where: { $0.key == key })?.canInterrupt == true else { return }
-        try? await api(key.group)?.interrupt(key)
-        WKInterfaceDevice.current().play(.stop)
+        guard sessions.first(where: { $0.key == key })?.canInterrupt == true, let api = api(key.group) else { return }
+        // The stop haptic says the Agent stopped, so it plays only once the hub accepts the interrupt.
+        do {
+            try await api.interrupt(key)
+            WKInterfaceDevice.current().play(.stop)
+        } catch {
+            self.error = error.watchShown
+            WKInterfaceDevice.current().play(.failure)
+        }
     }
 
     func machine(_ ref: MachineRef) -> Machine? { machines.first { $0.ref == ref } }
@@ -357,12 +411,15 @@ final class WatchModel {
 
 struct WatchRootView: View {
     @Environment(WatchModel.self) private var model
+    @State private var allDay = WatchAllDay.shared
     @State private var openedItem: InboxItem?
     @State private var recordingOpen = false
+    @State private var meetingOpen = false
     #if DEBUG
     @State private var openedInteraction: Interaction?
     @State private var openedSession: Session?
     @State private var openedPetPage: String?
+    @State private var openedMinutes: WatchMinutes.Meeting?
     /// `-openWatchItem running`: the list without Needs You, so the running sessions are on screen (screenshots).
     private static let runningFirst = UserDefaults.standard.string(forKey: "openWatchItem") == "running"
     /// `-openWatchItem inbox`: Needs You without the agents' requests, so the inbox rows are on screen (screenshots).
@@ -397,6 +454,8 @@ struct WatchRootView: View {
                             }
                         }
                     }
+                    WatchAllDayCard()
+                    WatchMeetingEntries(open: { meetingOpen = true })
                     NavigationLink { WatchRecordingView() } label: {
                         Label("Record [Recordings Section ef2821]", systemImage: Theme.Icon.recording).font(Theme.Font.secondaryMedium).lineLimit(1)
                     }.watchCard()
@@ -495,10 +554,33 @@ struct WatchRootView: View {
                     for _ in 0..<20 where model.inbox.isEmpty { try? await Task.sleep(for: .milliseconds(500)) }
                     openedItem = model.inbox.first
                 }
-                // `-openWatchItem pet|complication`: the Milk Frog's page, or the watch face's frog in every family
-                // (screenshots). One destination: two isPresented ones on this stack left both closed.
+                // `-openWatchItem pet|complication|allday-complication`: the Milk Frog's page, the watch face's frog in
+                // every family, or all-day recording's faces in every family and state (screenshots). One destination:
+                // two isPresented ones on this stack left both closed.
                 .navigationDestination(item: $openedPetPage) { page in
-                    if page == "complication" { PetComplicationPreview() } else { WatchPetView() }
+                    switch page {
+                    case "complication": PetComplicationPreview()
+                    case "allday-complication": AllDayComplicationPreview()
+                    default: WatchPetView()
+                    }
+                }
+                // `-openWatchItem allday` (with `-showAllDaySample …`): all-day recording's page, as a link opens it.
+                .task {
+                    switch UserDefaults.standard.string(forKey: "openWatchItem") {
+                    case "allday": allDay.pageRequested = true
+                    case "allday-complication": openedPetPage = "allday-complication"
+                    default: break
+                    }
+                }
+                // `-openWatchItem minutes|minutes-writing` (with `-showMeetingSample minutes`): a meeting's short minutes, or
+                // one still being written.
+                .navigationDestination(item: $openedMinutes) { WatchMinutesView(meeting: $0) }
+                .task {
+                    switch UserDefaults.standard.string(forKey: "openWatchItem") {
+                    case "minutes": openedMinutes = model.minutes.meetings.first { $0.state == .ready }
+                    case "minutes-writing": openedMinutes = model.minutes.meetings.first { $0.state == .writing }
+                    default: break
+                    }
                 }
                 .task {
                     guard let want = UserDefaults.standard.string(forKey: "openWatchItem"), want == "pet" || want == "complication" else { return }
@@ -525,6 +607,19 @@ struct WatchRootView: View {
             }
         }
         .sheet(isPresented: $recordingOpen) { NavigationStack { WatchRecordingView() } }
+        .sheet(isPresented: $meetingOpen) { NavigationStack { WatchRecordingView(startsMeeting: true) } }
+        // All-day recording's page, asked for by the complication or a notification (`WatchAllDay.open`).
+        .sheet(isPresented: Binding(get: { allDay.pageRequested }, set: { allDay.pageRequested = $0 })) {
+            NavigationStack { WatchAllDayView() }
+                #if DEBUG
+                .largeTextIfAsked() // a sheet doesn't take the root's text size
+                #endif
+        }
+        .onChange(of: model.meetingAsked, initial: true) { _, asked in
+            guard asked else { return }
+            model.meetingAsked = false
+            meetingOpen = true
+        }
         .sheet(item: Binding(get: { model.extensionSurface }, set: { model.extensionSurface = $0 })) { destination in
             NavigationStack { WatchExtensionSurfacePage(destination: destination) }
         }
@@ -556,6 +651,7 @@ extension InteractionKind {
         case .plan: String(localized: "Plan Approval")
         case .permission: String(localized: "Permission")
         case .screen: String(localized: "Terminal")
+        case .elicitation: String(localized: "MCP Request")
         }
     }
 
@@ -565,6 +661,7 @@ extension InteractionKind {
         case .plan: Theme.Icon.plan
         case .permission: Theme.Icon.askFirst
         case .screen: Theme.Icon.terminal
+        case .elicitation: Theme.Icon.mcpForm
         }
     }
 }
@@ -579,6 +676,7 @@ extension Interaction {
             (isSecretRun ? [summary] : [toolName, summary]).compactMap { $0 }
                 .joined(separator: String(localized: ": ", comment: "Separator between a label and its value"))
         case .screen: String(localized: "A dialog is open in the terminal")
+        case .elicitation: askLine(includeToolName: false) ?? ""
         }
     }
 }
@@ -705,6 +803,8 @@ struct WatchInteractionView: View {
                         Button("Esc") { act(Resolution(keys: ["esc"])) }
                         Button("⏎") { act(Resolution(keys: ["enter"])) }
                     }
+                case .elicitation: // an MCP form or link is answered on the phone, which keeps it off the watch: its message only
+                    Text(interaction.watchSummary).font(.footnote)
                 }
                 Button("Handle on Computer") { act(.dismissed) }
                     .lineLimit(1).minimumScaleFactor(0.8).font(.caption2).foregroundStyle(.secondary)
@@ -790,7 +890,7 @@ struct WatchSessionView: View {
                         WatchSourceMessage(message: it, source: source)
                     } else if let n = it.injected {
                         // Persona's message for the model (a task's notice, a scheduled run…): its line, centered, never
-                        // its words (docs/protocol/protocol.md「Persona 注入的消息」).
+                        // its words (docs/protocol/protocol.md「Messages injected by Persona」).
                         Label { Text(n.line) } icon: { Image(systemName: InjectedLook.icon(n)).foregroundStyle(InjectedLook.tint(n)) }
                             .font(Theme.Font.caption)
                             .foregroundStyle(.secondary)
@@ -891,6 +991,9 @@ struct WatchSessionView: View {
 /// phone's.
 struct WatchPairView: View {
     @Environment(WatchModel.self) private var model
+    @State private var allDay = WatchAllDay.shared
+    /// The phone's `recordingDay`: absent from a phone that doesn't take day recordings, 0 until its user agrees.
+    @AppStorage(WatchSync.phoneDayKey) private var phoneDay: Int?
 
     var body: some View {
         ScrollView {
@@ -907,10 +1010,22 @@ struct WatchPairView: View {
                 }
                 WatchSyncButton()
                 // In the scroll view: beside it, it squeezed the page until the sync button was out of sight.
+                NavigationLink { WatchRecordingView(startsMeeting: true) } label: {
+                    Label("Meeting Recording", systemImage: Theme.Icon.recording).lineLimit(1)
+                }
+                .padding(.top, Theme.Space.s)
                 NavigationLink { WatchRecordingView() } label: {
                     Label("Record [Recordings Section ef2821]", systemImage: Theme.Icon.recording).lineLimit(1)
                 }
                 .padding(.top, Theme.Space.s)
+                // Recording needs the phone, not the hub: all-day recording too, once the phone takes it (its page
+                // points to the phone's consent until the user agreed there).
+                if allDay.access(phoneDay: phoneDay) != .hidden {
+                    NavigationLink { WatchAllDayView() } label: {
+                        Label("All-Day Recording", systemImage: Theme.Icon.allDay).lineLimit(1)
+                    }
+                    .padding(.top, Theme.Space.s)
+                }
             }
             .padding()
         }

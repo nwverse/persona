@@ -17,11 +17,28 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import persona.core.designsystem.icons.PhIcon
 import kotlinx.coroutines.launch
+
+/** A [JMenu]'s group title ([JAction.section]): lined up with the items' labels. */
+object MenuTokens {
+    /** A menu item's side padding (Material's), which a group's title shares. */
+    val itemPadding = 12.dp
+    /** Above and below a group's title. */
+    val sectionPadding = 6.dp
+    /** A disabled choice's subtitle, fainter than its label. */
+    const val disabledSubtitle = 0.7f
+}
+
+/** [JActionSheet]'s preview: as many lines as iOS's conversation preview shows (`AssistantSidebar.row`). */
+object ActionSheetTokens {
+    const val previewLines = 6
+}
 
 /** One action in a menu or action sheet. */
 @Immutable
@@ -33,6 +50,10 @@ data class JAction(
     val checked: Boolean = false,
     /** Draw a rule above this action, to group menus. */
     val separatorBefore: Boolean = false,
+    /** A quiet line under the label (how many a choice would show: "20 to-dos"). */
+    val subtitle: String? = null,
+    /** A group's title drawn above this action, with a rule above it unless it is the first: "Show", "Sort by". */
+    val section: String? = null,
     val onClick: () -> Unit,
 )
 
@@ -50,6 +71,9 @@ fun JSheet(
     onBlockedDismiss: (() -> Unit)? = null,
     /** Scroll the whole content; leave false when the content has its own lazy list. */
     scrollable: Boolean = false,
+    contentPadding: androidx.compose.ui.unit.Dp? = null,
+    bottomPadding: androidx.compose.ui.unit.Dp? = null,
+    showDragHandle: Boolean = true,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val palette = PersonaTheme.palette
@@ -67,7 +91,7 @@ fun JSheet(
         sheetState = sheetState,
         shape = PersonaTheme.shapes.sheetShape, containerColor = container, contentColor = palette.ink,
         scrimColor = palette.scrim, tonalElevation = 0.dp,
-        dragHandle = { Box(Modifier.padding(top = 10.dp, bottom = 6.dp).size(36.dp, 4.dp).clip(CircleShape).background(palette.ink3.copy(alpha = 0.5f))) },
+        dragHandle = if (!showDragHandle) null else ({ Box(Modifier.padding(top = 10.dp, bottom = 6.dp).size(36.dp, 4.dp).clip(CircleShape).background(palette.ink3.copy(alpha = 0.5f))) }),
     ) {
         // Opaque over a scrim: glass inside the sheet must not sample (and show through) the page behind it.
         androidx.compose.runtime.CompositionLocalProvider(LocalReadingInset provides 0.dp, LocalGlassSource provides null) {
@@ -77,7 +101,7 @@ fun JSheet(
             .onSizeChanged {
                 if (skipPartiallyExpanded && sheetState.targetValue == SheetValue.Expanded) scope.launch { sheetState.expand() }
             }
-            .then(if (scrollable) Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState()) else Modifier).padding(horizontal = pagePadding).padding(bottom = 16.dp)) {
+            .then(if (scrollable) Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState()) else Modifier).padding(horizontal = contentPadding ?: pagePadding).padding(bottom = bottomPadding ?: 16.dp)) {
             title?.let {
                 Text(it, style = PersonaTheme.type.title, color = palette.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.height(12.dp))
@@ -88,13 +112,27 @@ fun JSheet(
     }
 }
 
-/** A long-press or overflow menu as a bottom sheet: easy to reach, room for a note under the actions. */
+/**
+ * A long-press or overflow menu as a bottom sheet: easy to reach, room for a note under the actions. [preview] is what
+ * the thing pressed last said, under the [title] and above the actions, with [previewCaption] (when) under it: iOS's
+ * context-menu preview of a conversation (`AssistantSidebar.row`).
+ */
 @Composable
-fun JActionSheet(actions: List<JAction>, onDismiss: () -> Unit, title: String? = null, note: String? = null) {
+fun JActionSheet(
+    actions: List<JAction>, onDismiss: () -> Unit, title: String? = null, note: String? = null,
+    preview: String? = null, previewCaption: String? = null,
+) {
     val palette = PersonaTheme.palette
     // When some actions have an icon, the others keep its place, so every label starts in one column.
     val iconColumn = actions.any { it.icon != null }
     JSheet(onDismiss, title = title) {
+        if (preview != null || previewCaption != null) {
+            Column(Modifier.padding(horizontal = Tokens.Space.s), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+                preview?.let { Text(it, style = PersonaTheme.type.callout, color = palette.ink2, maxLines = ActionSheetTokens.previewLines, overflow = TextOverflow.Ellipsis) }
+                previewCaption?.let { Text(it, style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1) }
+            }
+            JDivider(Modifier.padding(vertical = Tokens.Space.s))
+        }
         Column(Modifier.weight(1f, fill = false).verticalScroll(androidx.compose.foundation.rememberScrollState())) {
         actions.forEach { action ->
             if (action.separatorBefore) JDivider(Modifier.padding(vertical = 6.dp))
@@ -120,19 +158,51 @@ fun JActionSheet(actions: List<JAction>, onDismiss: () -> Unit, title: String? =
     }
 }
 
-/** A small anchored menu for a few choices next to the control that opened it. */
+/**
+ * A small anchored menu for a few choices next to the control that opened it. A tap outside closes it; what does not
+ * fit the window scrolls. [content] goes above the [actions], with a rule between them: choices that are more than a
+ * label (the sidebar's assistant switcher lists its assistants there, then New assistant and Manage assistants…).
+ */
 @Composable
-fun JMenu(expanded: Boolean, onDismiss: () -> Unit, actions: List<JAction>, modifier: Modifier = Modifier, offset: DpOffset = DpOffset(0.dp, 4.dp)) {
+fun JMenu(
+    expanded: Boolean, onDismiss: () -> Unit, actions: List<JAction>, modifier: Modifier = Modifier, offset: DpOffset = DpOffset(0.dp, 4.dp),
+    content: (@Composable ColumnScope.() -> Unit)? = null,
+) {
     val palette = PersonaTheme.palette
     DropdownMenu(
         expanded, onDismiss, modifier, offset = offset, shape = PersonaTheme.shapes.controlShape,
         containerColor = palette.surfaceOpaque, tonalElevation = 0.dp, shadowElevation = 12.dp,
     ) {
-        actions.forEach { action ->
-            if (action.separatorBefore) HorizontalDivider(color = palette.line)
+        content?.let {
+            it()
+            if (actions.isNotEmpty()) HorizontalDivider(color = palette.line)
+        }
+        actions.forEachIndexed { index, action ->
+            // [content] draws its own rule under it
+            if (action.separatorBefore || (action.section != null && index > 0)) HorizontalDivider(color = palette.line)
+            action.section?.let {
+                Text(it, style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = MenuTokens.itemPadding, vertical = MenuTokens.sectionPadding).semantics { heading() })
+            }
             DropdownMenuItem(
-                text = { Text(action.label, style = PersonaTheme.type.body, color = if (action.destructive) palette.danger.text else palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                leadingIcon = action.icon?.let { { JIcon(it, null, size = 20.dp, tint = if (action.destructive) palette.danger.dot else palette.ink2) } },
+                text = {
+                    // a disabled choice reads as one (its own colors would hide Material's)
+                    val ink = when {
+                        !action.enabled -> palette.ink3
+                        action.destructive -> palette.danger.text
+                        else -> palette.ink
+                    }
+                    val label = @Composable {
+                        Text(action.label, style = PersonaTheme.type.body, color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    if (action.subtitle == null) label()
+                    else Column {
+                        label()
+                        Text(action.subtitle, style = PersonaTheme.type.caption, color = if (action.enabled) palette.ink3 else palette.ink3.copy(alpha = MenuTokens.disabledSubtitle),
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                },
+                leadingIcon = action.icon?.let { { JIcon(it, null, size = 20.dp, tint = if (!action.enabled) palette.ink3 else if (action.destructive) palette.danger.dot else palette.ink2) } },
                 trailingIcon = if (action.checked) ({ JIcon(persona.core.designsystem.icons.PhIcons.Check, null, size = 18.dp, tint = palette.ink) }) else null,
                 enabled = action.enabled, onClick = { onDismiss(); action.onClick() },
             )

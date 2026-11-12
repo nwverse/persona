@@ -32,6 +32,43 @@ func TestTodoSupervision(t *testing.T) {
 		got.State != "rework" || got.Round != 1 || !json.Valid(got.Reviews) || !got.UpdatedAt.Equal(now) {
 		t.Fatalf("row = %+v (%s)", got, got.Reviews)
 	}
+	if got.AutoReview != nil {
+		t.Fatalf("no review ran, auto_review = %s", got.AutoReview)
+	}
+	r.AutoReview = json.RawMessage(`{"id":"rv_1","state":"running","session_id":"s9"}`)
+	if err := d.PutTodoSupervision(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	if list, err = d.ListTodoSupervision(ctx); err != nil || len(list) != 1 {
+		t.Fatalf("list = %+v, %v", list, err)
+	}
+	var run struct{ ID, State, SessionID string }
+	if err := json.Unmarshal(list[0].AutoReview, &run); err != nil || run.ID != "rv_1" || run.State != "running" {
+		t.Fatalf("auto_review = %s (%v)", list[0].AutoReview, err)
+	}
+	r.AutoReview = nil // written without a run: NULL again
+	if err := d.PutTodoSupervision(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	if list, _ = d.ListTodoSupervision(ctx); len(list) != 1 || list[0].AutoReview != nil {
+		t.Fatalf("after a write without a run: %+v", list)
+	}
+	// The work stopped on the owner's decision (#1277): kept, then cleared.
+	r.Waits = json.RawMessage(`{"work":"2026-11-11T08:00:00Z","at":"2026-11-11T09:00:00Z","reason":"等用户挑一版"}`)
+	if err := d.PutTodoSupervision(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	var wait struct{ Reason string }
+	if list, _ = d.ListTodoSupervision(ctx); len(list) != 1 || json.Unmarshal(list[0].Waits, &wait) != nil || wait.Reason != "等用户挑一版" {
+		t.Fatalf("waits = %+v", list)
+	}
+	r.Waits = nil
+	if err := d.PutTodoSupervision(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	if list, _ = d.ListTodoSupervision(ctx); len(list) != 1 || list[0].Waits != nil {
+		t.Fatalf("after the wait cleared: %+v", list)
+	}
 	if err := d.PutTodoSupervision(ctx, TodoSupervisionRow{TodoID: "nope", Supervisor: "main", UpdatedAt: now}); !errors.Is(err, ErrTodoNotFound) {
 		t.Fatalf("missing todo: %v", err)
 	}
@@ -85,5 +122,67 @@ func TestReviewDoneTodoCancellation(t *testing.T) {
 	}
 	if _, _, err := d.ReviewDoneTodo(ctx, "missing", "No longer needed", false, now); !errors.Is(err, ErrTodoNotFound) {
 		t.Fatalf("cancel missing task: %v", err)
+	}
+}
+
+func TestReviewDoneTodoClosesAFailedStart(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	for _, tc := range []struct {
+		name     string
+		id       string
+		accepted bool
+		doneBy   string
+	}{
+		{name: "cancelled", id: "failed_cancelled", accepted: false, doneBy: DoneByCancelled},
+		{name: "accepted", id: "failed_accepted", accepted: true, doneBy: DoneByReview},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := d.CreateTodo(ctx, TodoRow{ID: tc.id, Title: "Supervised task", CreatedAt: now, UpdatedAt: now, Origin: "main"}); err != nil {
+				t.Fatal(err)
+			}
+			failed, err := d.FailTodo(ctx, tc.id, "synthetic start failure", now)
+			if err != nil || failed.StartError == "" || failed.DoneAt == nil || failed.DoneBy != "" {
+				t.Fatalf("FailTodo = %+v, %v", failed, err)
+			}
+			// Without a review the genuine failed start stays visible as one.
+			stored, err := d.GetTodo(ctx, tc.id)
+			if err != nil || stored.StartError != "synthetic start failure" || stored.DoneBy != "" {
+				t.Fatalf("unreviewed failed start = %+v, %v", stored, err)
+			}
+			closedAt := now.Add(time.Minute)
+			row, closed, err := d.ReviewDoneTodo(ctx, tc.id, "reviewed after the start failed", tc.accepted, closedAt)
+			if err != nil || !closed || row == nil {
+				t.Fatalf("ReviewDoneTodo = %+v, closed=%v, err=%v", row, closed, err)
+			}
+			if row.StartError != "" || row.DoneBy != tc.doneBy || row.DoneAt == nil || !row.DoneAt.Equal(closedAt) {
+				t.Fatalf("closed failed start = %+v", row)
+			}
+			stored, err = d.GetTodo(ctx, tc.id)
+			if err != nil || stored.StartError != row.StartError || stored.DoneBy != row.DoneBy || stored.DoneAt == nil || !stored.DoneAt.Equal(*row.DoneAt) {
+				t.Fatalf("stored failed start = %+v, returned = %+v, err=%v", stored, row, err)
+			}
+		})
+	}
+}
+
+func TestReviewDoneTodoDoesNotReplaceAnOrdinaryClose(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	if err := d.CreateTodo(ctx, TodoRow{ID: "ordinary_close", Title: "Ordinary task", CreatedAt: now, UpdatedAt: now, Origin: "main"}); err != nil {
+		t.Fatal(err)
+	}
+	row, closed, err := d.ReviewDoneTodo(ctx, "ordinary_close", "accepted first", true, now)
+	if err != nil || !closed || row.StartError != "" {
+		t.Fatalf("first close = %+v, closed=%v, err=%v", row, closed, err)
+	}
+	for _, accepted := range []bool{false, true} {
+		if _, closed, err := d.ReviewDoneTodo(ctx, "ordinary_close", "late review", accepted, now.Add(time.Minute)); err != nil || closed {
+			t.Fatalf("late review accepted=%v: closed=%v, err=%v", accepted, closed, err)
+		}
+	}
+	stored, err := d.GetTodo(ctx, "ordinary_close")
+	if err != nil || stored.DoneBy != DoneByReview || stored.DoneReason != "accepted first" || stored.DoneAt == nil || !stored.DoneAt.Equal(now) {
+		t.Fatalf("late reviews replaced the first close: %+v, %v", stored, err)
 	}
 }

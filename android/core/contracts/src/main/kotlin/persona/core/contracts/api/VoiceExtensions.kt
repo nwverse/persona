@@ -44,6 +44,13 @@ data class HubExtension(
     val manager: String? = null,
     /** The command-line programs this version runs with (manifest `tools`, #4507). */
     val tools: List<ExtensionToolView>? = null,
+    /** Manager-owned attachment metadata; an attached process is externally managed, not a market installation. */
+    val attached: kotlinx.serialization.json.JsonObject? = null,
+    /** Signed-market metadata, absent for older hubs and extensions without a matching catalog entry. */
+    @SerialName("icon_url") val iconUrl: String? = null,
+    /** GHCR package downloads across all versions; absence must not be displayed as zero. */
+    val downloads: Long? = null,
+    @SerialName("downloads_updated_at") val downloadsUpdatedAt: String? = null,
 ) {
     val isRunningVoice: Boolean get() = kind == "voice" && status == "running"
 }
@@ -62,7 +69,12 @@ data class ExtensionUpgrade(
     val detail: String? = null,
     /** `"user"` when a skipped version is one the user rolled back from (null: it didn't start). */
     @SerialName("skipped_by") val skippedBy: String? = null,
-)
+    /** The new version's ID when it changes the extension's ID ([id] stays the installed one). */
+    @SerialName("rename_to") val renameTo: String? = null,
+) {
+    /** The ID its market lists the new version under: the market page to open for it (#2511). */
+    val marketId: String get() = renameTo ?: id
+}
 
 /** What happened last with an extension's upgrade: `upgraded | rolled_back | needs_permission | failed`. */
 @Serializable
@@ -74,7 +86,7 @@ data class ExtensionUpgradeNote(
     val at: String? = null,
 )
 
-/** An extension's program on one machine (docs/extensions/extensions.md "Programs that run on computers"). */
+/** An extension's program on one machine (docs/extensions/extensions.md "Programs running on computers"). */
 @Serializable
 data class ExtensionNodeState(
     @SerialName("machine_id") val machineId: String = "",

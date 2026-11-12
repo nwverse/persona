@@ -15,6 +15,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/assistant"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -64,7 +65,11 @@ func TestSupervisedTaskOverTheBus(t *testing.T) {
 	})
 	n.known["main-1"] = true
 	box := connectTaskNode(t, h, "box")
-	if err := store.PutSetting(ctx, "assistant", assistant.Settings{MachineID: "server", Main: "main-1", Timezone: "Asia/Shanghai"}); err != nil {
+	// The main conversation supervises its own tasks here: the background supervisor that takes them by default (#4927)
+	// is internal/assistant/supervise_background_test.go's.
+	mainSupervises := true
+	if err := store.PutSetting(ctx, "assistant", assistant.Settings{MachineID: "server", Main: "main-1", Timezone: "Asia/Shanghai",
+		MainSupervisesOwnTasks: &mainSupervises}); err != nil {
 		t.Fatal(err)
 	}
 	dialAssistant(t, h, srv.URL, true)
@@ -83,12 +88,18 @@ func TestSupervisedTaskOverTheBus(t *testing.T) {
 		}
 		return textOf(r)
 	}
+	// The supervise messages sent to the main conversation, recognized the way the hub reads them back: the supervise
+	// template behind the message-source block (#2156), whose source is supervision. The text no longer starts with
+	// the template, so a prefix match finds none.
 	digests := func() []string {
 		n.mu.Lock()
 		defer n.mu.Unlock()
 		var out []string
 		for _, s := range n.sends {
-			if text, _ := s["text"].(string); strings.HasPrefix(text, "📋 督办") {
+			text, _ := s["text"].(string)
+			in := prompts.ParseInjected(text)
+			source := prompts.ItemSource(proto.Item{Role: "user", Kind: proto.KindText, Text: text})
+			if in != nil && in.State == "supervise" && source != nil && source.Kind == proto.SourceSupervision {
 				out = append(out, text)
 			}
 		}
@@ -114,7 +125,7 @@ func TestSupervisedTaskOverTheBus(t *testing.T) {
 
 	// Handed out with what done means: the agent is told it.
 	res := mcp("task_plan", map[string]any{"tasks": []map[string]any{{"title": "部署 hub", "prompt": "把 hub 部署到测试环境并验证",
-		"machine": "box", "cwd": "/code/app", "readonly": false, "user_requested": true, "why": "部署脚本在 box 上",
+		"machine": "box", "cwd": "/code/app", "readonly": false, "permission": "bypassPermissions", "user_requested": true, "why": "部署脚本在 box 上",
 		"done_when": []string{"测试 hub 已部署并验证"}, "expect_minutes": 20}}})
 	if !strings.Contains(res, "You supervise them") {
 		t.Fatalf("task_plan: %s", res)

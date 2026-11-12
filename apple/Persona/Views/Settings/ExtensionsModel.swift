@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-// Settings › Extensions (docs/extensions/extensions.md「hub 的接口」): the hub's plugins, each one's switch, its configuration as a form drawn
+// Settings › Extensions (docs/extensions/extensions.md「The hub's API」): the hub's plugins, each one's switch, its configuration as a form drawn
 // from its schema (`form.fields`), its secrets, write-only, and the pages it draws (`ui`, ExtensionUIModel). Installing,
 // upgrading and removing are done on the hub's machine (`personad plugin`), or from a plugin market the hub has
 // (ExtensionMarketModel: only what a market lists).
@@ -26,11 +26,13 @@ nonisolated struct HubExtension: Codable, Hashable, Sendable, Identifiable {
     var needsSetup: [String]?
     var warnings: [String]?
     /// A plugin from a market (a hub with plugin_auto_upgrade): its own auto-upgrade switch, its newer version and what
-    /// happened last with an upgrade (docs/extensions/extensions.md「自动升级」).
+    /// happened last with an upgrade (docs/extensions/extensions.md「Auto-upgrade」).
     var autoUpgrade: Bool?
-    /// Why its own switch does not apply now: "disabled" while the extension is switched off (the hub keeps the switch
-    /// for when it is on again). Nil from a hub from before it.
+    /// Why its own switch does not apply now: "market_removed" once its market is gone, or "disabled" while it is off.
     var autoUpgradePaused: String?
+    var marketWasRemoved: Bool { autoUpgradePaused == "market_removed" }
+    /// The market it upgrades from, retained after that market is removed (nil: a hub from before this field).
+    var market: String?
     var upgrade: ExtensionUpgrade?
     var upgradeNote: ExtensionUpgradeNote?
     /// An extension with a program on computers: how that program is on each machine it is switched on for.
@@ -42,9 +44,16 @@ nonisolated struct HubExtension: Codable, Hashable, Sendable, Identifiable {
     /// Whose it is (docs/protocol/protocol.md "Per-manager routing"): the hub stamps every item of its merged list, and
     /// every manager lists its own built-ins, so one id can be there once per manager. nil: a hub from before managers.
     var manager: String?
+    var attached: ExtensionAttached?
+    var sandbox: ExtensionSandbox?
+    /// Optional catalog artwork/popularity on newer hubs; absent on legacy responses.
+    var iconURL: String?
+    var downloads: Int?
+    var downloadsUpdatedAt: Date?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, kind, status, error, version, source, enabled, description, contributes, warnings, upgrade, nodes, auth, tools, manager
+        case id, name, kind, status, error, version, source, enabled, description, contributes, warnings, market, upgrade, nodes, auth, tools, manager, attached, sandbox, downloads
+        case iconURL = "icon_url", downloadsUpdatedAt = "downloads_updated_at"
         case needsSetup = "needs_setup", autoUpgrade = "auto_upgrade", autoUpgradePaused = "auto_upgrade_paused", upgradeNote = "upgrade_note"
     }
 
@@ -52,7 +61,27 @@ nonisolated struct HubExtension: Codable, Hashable, Sendable, Identifiable {
     var listKey: String { manager.map { "\($0)/\(id)" } ?? id }
 }
 
-/// An extension's program on one machine (docs/extensions/extensions.md「在电脑上运行的程序」).
+/// An independently running extension connected to the manager's sockets.
+nonisolated struct ExtensionAttached: Codable, Hashable, Sendable {
+    var online: Bool
+    var since: Date?
+    var error: String?
+    var version: String?
+}
+
+/// The manager's sandbox state; egress preserves its counters without assuming their schema.
+nonisolated struct ExtensionSandbox: Codable, Hashable, Sendable {
+    var enabled: Bool
+    var `default`: Bool
+    var chosen: Bool
+    var active: Bool
+    var why: String?
+    var detail: String?
+    var trusted: Bool?
+    var egress: [String: JSONValue]
+}
+
+/// An extension's program on one machine (docs/extensions/extensions.md「Programs running on computers」).
 nonisolated struct ExtensionNodeState: Codable, Hashable, Sendable {
     var machineID: String
     var version: String?
@@ -101,11 +130,14 @@ nonisolated struct ExtensionUpgrade: Codable, Hashable, Sendable, Identifiable {
     var detail: String?
     /// "user" when a skipped version is one the user rolled back from (nil: it didn't start).
     var skippedBy: String?
+    /// The new version's ID when it changes the extension's ID (`id` stays the installed one).
+    var renameTo: String?
 
     enum CodingKeys: String, CodingKey {
         case id, name, market, from, to, state, detail
         case addedPermissions = "added_permissions"
         case skippedBy = "skipped_by"
+        case renameTo = "rename_to"
     }
 }
 
@@ -150,14 +182,50 @@ nonisolated struct ExtensionField: Codable, Hashable, Sendable, Identifiable {
     var fields: [ExtensionField]?
     /// What to ask before a switch of it is turned on (x-confirm; the plugin cua's 「扩展开着时不自动锁屏」).
     var confirm: String?
+    /// format machine: only machines of these systems (x-os); nil, any.
+    var os: [String]?
 
     var id: String { name }
     var label: String { title?.isEmpty == false ? title! : name }
+    /// One of the hub's machines by id (format machine on a string): a picker of them (#2385).
+    var picksMachine: Bool { type == "string" && format == "machine" && (self.enum ?? []).isEmpty }
+    /// One of the hub's launchers by name (format launcher): a picker of them (#2385).
+    var picksLauncher: Bool { type == "string" && format == "launcher" && (self.enum ?? []).isEmpty }
 
     enum CodingKeys: String, CodingKey {
-        case name, type, title, description, `default`, required, `enum`, format, pattern, minimum, maximum, items, fields, confirm
+        case name, type, title, description, `default`, required, `enum`, format, pattern, minimum, maximum, items, fields, confirm, os
         case minLength = "min_length", maxLength = "max_length", minItems = "min_items", maxItems = "max_items"
         case uniqueItems = "unique_items"
+    }
+}
+
+/// One choice of a machine or launcher picker (#2385). `missing`: the value names none of them; it is kept, first, so it
+/// shows and can be changed.
+nonisolated struct ExtensionPickerChoice: Hashable, Sendable, Identifiable {
+    var value: String
+    var label: String
+    var missing = false
+    var id: String { value }
+
+    /// The machines of the systems the field names (x-os), by name.
+    static func machines(_ field: ExtensionField, current: String?, machines: [(id: String, name: String, os: String?)]) -> [Self] {
+        let os = field.os ?? []
+        let out = machines.filter { os.isEmpty || os.contains($0.os ?? "") }
+            .map { Self(value: $0.id, label: $0.name.isEmpty ? $0.id : $0.name) }
+        return keeping(current, in: out, missing: { String(localized: "\($0) (no such machine)") })
+    }
+
+    /// The launchers that are shown (not hidden), by their name, with the one they are started by beside a display
+    /// name that differs.
+    static func launchers(current: String?, launchers: [LauncherView]) -> [Self] {
+        let out = launchers.filter { $0.hidden != true }
+            .map { Self(value: $0.name, label: $0.title == $0.name ? $0.name : "\($0.title) (\($0.name))") }
+        return keeping(current, in: out, missing: { String(localized: "\($0) (no such launcher)") })
+    }
+
+    private static func keeping(_ current: String?, in list: [Self], missing: (String) -> String) -> [Self] {
+        guard let current, !current.isEmpty, !list.contains(where: { $0.value == current }) else { return list }
+        return [Self(value: current, label: missing(current), missing: true)] + list
     }
 }
 
@@ -189,7 +257,48 @@ nonisolated struct ExtensionSecret: Codable, Hashable, Sendable, Identifiable {
     /// The value's last four characters, only when it is set and the extension asked for them (#5906): to tell which
     /// key it is without showing it.
     var hint: String?
+    /// It holds a provider's reference, not a value (docs/extensions/secret-providers.md).
+    var reference: SecretReference?
     var id: String { name }
+}
+
+/// A secret provider's reference a setting holds: whose it is, the reference and what it names in words.
+nonisolated struct SecretReference: Codable, Hashable, Sendable {
+    var provider: String
+    var providerName: String
+    var reference: String
+    var title: String?
+    private enum CodingKeys: String, CodingKey { case provider, reference, title, providerName = "provider_name" }
+}
+
+/// A setting that holds one of a provider's references: another extension's secret, or a model provider's key (on one
+/// computer when `machine` is set).
+nonisolated struct ExtensionSecretUser: Codable, Hashable, Sendable, Identifiable {
+    var kind: String
+    var `extension`: String?
+    var extensionName: String?
+    var secret: String?
+    var secretTitle: String?
+    var launcher: String?
+    var launcherName: String?
+    var machine: String?
+    var reference: String
+    var id: String { [kind, `extension` ?? launcher ?? "", secret ?? machine ?? ""].joined(separator: "/") }
+    private enum CodingKeys: String, CodingKey {
+        case kind, `extension`, secret, launcher, machine, reference
+        case extensionName = "extension_name", secretTitle = "secret_title", launcherName = "launcher_name"
+    }
+}
+
+/// An "Always" of a hand-off card: this reference for this launcher on this computer, asked no more in the user's own
+/// conversations.
+nonisolated struct HandoffRule: Codable, Hashable, Sendable, Identifiable {
+    var id: String
+    var reference: String
+    var launcher: String
+    var machine: String
+    var by: String?
+    var at: String?
 }
 
 /// A line of what a plugin may do (`permissions`).
@@ -220,11 +329,14 @@ nonisolated struct HubExtensionDetail: Decodable, Hashable, Sendable {
     var contributions: [ExtensionContributionSwitch]?
     var depends: [ExtensionDependencyStatus]?
     var extensionPack: [ExtensionPackMember]?
+    /// A secret provider's: the settings that hold its references, and its Always rules for hand-offs.
+    var secretUsers: [ExtensionSecretUser]
+    var handoffRules: [HandoffRule]
 
     private struct Form: Decodable { var fields: [ExtensionField]? }
     private enum CodingKeys: String, CodingKey {
         case publisher, homepage, origin, form, config, secrets, permissions, ui, contributions, depends
-        case extensionPack = "extension_pack"
+        case extensionPack = "extension_pack", secretUsers = "secret_users", handoffRules = "handoff_rules"
         case previousVersion = "previous_version", readOnly = "read_only", nodeMachines = "node_machines"
     }
 
@@ -245,6 +357,8 @@ nonisolated struct HubExtensionDetail: Decodable, Hashable, Sendable {
         contributions = try c.decodeIfPresent([ExtensionContributionSwitch].self, forKey: .contributions)
         depends = try c.decodeIfPresent([ExtensionDependencyStatus].self, forKey: .depends)
         extensionPack = try c.decodeIfPresent([ExtensionPackMember].self, forKey: .extensionPack)
+        secretUsers = try c.decodeIfPresent([ExtensionSecretUser].self, forKey: .secretUsers) ?? []
+        handoffRules = try c.decodeIfPresent([HandoffRule].self, forKey: .handoffRules) ?? []
     }
 }
 
@@ -301,6 +415,14 @@ extension APIClient {
         try JSON.decoder.decode(HubExtensionDetail.self, from: try await request("PUT", extensionPath("/\(id)/-/secrets/\(name)"), body: ["value": value]))
     }
 
+    func setExtension(_ id: String, secret name: String, reference: String) async throws -> HubExtensionDetail {
+        try JSON.decoder.decode(HubExtensionDetail.self, from: try await request("PUT", extensionPath("/\(id)/-/secrets/\(name)"), body: ["reference": reference]))
+    }
+
+    func removeHandoffRule(_ id: String, rule: String) async throws -> HubExtensionDetail {
+        try JSON.decoder.decode(HubExtensionDetail.self, from: try await request("DELETE", extensionPath("/\(id)/-/handoff-rules/\(rule)")))
+    }
+
     func clearExtension(_ id: String, secret name: String) async throws -> HubExtensionDetail {
         try JSON.decoder.decode(HubExtensionDetail.self, from: try await request("DELETE", extensionPath("/\(id)/-/secrets/\(name)")))
     }
@@ -330,6 +452,7 @@ enum ExtensionText {
 
     /// A secret's row: set (with its last four characters when the hub gives them, #5906), or not set (required).
     static func secretState(_ s: ExtensionSecret) -> String {
+        if let r = s.reference { return String(localized: "From \(r.providerName.isEmpty ? r.provider : r.providerName)", comment: "A secret that holds a secret provider's reference") }
         guard s.set else { return s.required == true ? String(localized: "Not set (required)") : String(localized: "Not set") }
         guard let hint = s.hint, !hint.isEmpty else { return String(localized: "Set") }
         return String(localized: "Set · ends in \(hint)", comment: "A secret that is set, with its last four characters")
@@ -384,17 +507,23 @@ enum ExtensionText {
     static func saveFooter(_ fields: [ExtensionField]) -> String? {
         let all = fields.flatMap { $0.type == "object" ? ($0.fields ?? []) : [$0] }
         let now = all.filter { $0.items?.format == "machine" }.map { String(localized: "「\($0.label)」", comment: "A field's name in quotes") }
-        if now.isEmpty { return String(localized: "When you're done, tap Save at the top right; the extension restarts after saving. Empty fields use the extension's defaults.") }
+        if now.isEmpty { return String(localized: "When you're done, tap Save at the end of Extension configuration; the extension restarts after saving. Empty fields use the extension's defaults.") }
         if now.count == all.count { return nil }
         let names = list(now)
-        return String(localized: "Switches in \(names) take effect right away. For the rest, tap Save at the top right when you're done; the extension restarts after saving. Empty fields use the extension's defaults.")
+        return String(localized: "Switches in \(names) take effect right away. For the rest, tap Save at the end of Extension configuration when you're done; the extension restarts after saving. Empty fields use the extension's defaults.")
     }
 
     /// The Update section's line for a newer version: what happens to it (docs/extensions/extensions.md「自动升级」).
     static func upgradeDetail(_ u: ExtensionUpgrade) -> String {
         let why = u.detail.flatMap { $0.isEmpty ? nil : $0 }
         switch u.state {
-        case "needs_permission": return morePermissions(u.addedPermissions ?? [])
+        case "needs_permission":
+            // A rename is confirmed for the ID change, not for permissions: the hub's words, or ours for a version
+            // Check for Updates found (#2511).
+            if let renameTo = u.renameTo {
+                return why ?? String(localized: "Changes the extension ID from \(u.id) to \(renameTo). Needs your confirmation; its settings and data stay.")
+            }
+            return morePermissions(u.addedPermissions ?? [])
         case "waiting_idle": return String(localized: "Updates automatically when the extension is idle")
         case "available": return String(localized: "Updates automatically later")
         case "off": return String(localized: "Auto-update is off")
@@ -407,8 +536,8 @@ enum ExtensionText {
         }
     }
 
-    /// The auto-upgrade switch as shown: off while it is paused (the extension switched off), else the extension's own.
-    static func autoUpgradeShown(_ p: HubExtension) -> Bool { p.autoUpgradePaused == nil && (p.autoUpgrade ?? true) }
+    /// The saved preference remains visible while upgrades are paused.
+    static func autoUpgradeShown(_ p: HubExtension) -> Bool { p.autoUpgrade ?? true }
 
     /// Whether the line asks something of the user (its row opens the upgrade in the market).
     static func upgradeAction(_ u: ExtensionUpgrade) -> String? {
@@ -455,7 +584,7 @@ enum ExtensionText {
     }
 }
 
-/// Settings › Extensions: the list, under each manager's name when the hub has several (docs/assistant/managers.md "Grouping").
+/// Settings › Extensions: only the current assistant's installed extensions.
 @Observable final class ExtensionsModel {
     struct Deps {
         var api: () -> APIClient?
@@ -464,41 +593,52 @@ enum ExtensionText {
     }
 
     private(set) var plugins: [HubExtension]?
-    /// The hub's managers, read with the list; nil from a hub without a roster.
     private(set) var roster: ManagerRoster?
-    /// The hub has plugin markets: the list shows Extension Market.
+    private(set) var manager: String?
     private(set) var markets = false
     private(set) var loading = false
     private(set) var error: String?
+    private(set) var missing = false
     @ObservationIgnored private let deps: Deps
+    @ObservationIgnored private var context: APIClient?
+    @ObservationIgnored private var read = 0
 
     init(deps: Deps = .live) { self.deps = deps }
 
-    /// The hub has no extensions to list (404: an older hub, or Demo Mode): the Mac says so instead of the error.
-    private(set) var missing = false
-
-    /// The list under each manager's name; nil with one manager (or none known): one list, as before.
-    var groups: [ManagerGroup<HubExtension>]? { plugins.flatMap { list in roster?.groups(list) { $0.manager } } }
-
-    /// The manager an extension's page and requests name: nil for the default's.
-    func manager(of p: HubExtension) -> String? { roster?.named(p.manager) }
+    /// Kept for callers that inspect grouping; a current-assistant list never groups.
+    var groups: [ManagerGroup<HubExtension>]? { nil }
+    func manager(of p: HubExtension) -> String? { manager }
 
     func load() async {
-        guard !loading else { return }
+        guard let api = deps.api()?.currentAssistantSettings() else { return }
+        if !api.sameSettingsScope(as: context) {
+            plugins = nil
+            markets = false
+            roster = nil
+            error = nil
+        }
+        context = api
+        manager = api.managerID
+        read += 1
+        let revision = read
         loading = true
-        defer { loading = false }
+        defer { if revision == read { loading = false } }
         do {
-            guard let api = deps.api() else { throw APIError(status: 0, message: String(localized: "Not connected to the hub yet")) }
-            let last = roster
-            async let managers = ManagerRoster.read(api, keeping: last)
+            async let managers = ManagerRoster.read(api.manager(nil), keeping: roster)
             let list = try await api.pluginList()
-            roster = await managers
-            plugins = list.plugins
-            for p in list.plugins where p.auth != nil { deps.auth.received(p.id, p.auth, manager: manager(of: p)) }
+            let roster = await managers
+            guard revision == read, !Task.isCancelled, api.sameSettingsScope(as: deps.api()) else { return }
+            self.roster = roster
+            plugins = ManagerRoster.settingsItems(list.plugins, roster: roster, manager: manager, stamped: { $0.manager }).sorted {
+                ExtensionPopularity.precedes(downloads: $0.downloads, name: $0.name, identity: $0.listKey,
+                                             downloads: $1.downloads, name: $1.name, identity: $1.listKey)
+            }
+            for p in plugins ?? [] where p.auth != nil { deps.auth.received(p.id, p.auth, manager: manager) }
             markets = list.markets
             error = nil
             missing = false
         } catch {
+            guard revision == read, !Task.isCancelled, api.sameSettingsScope(as: deps.api()) else { return }
             self.error = error.localizedDescription
             missing = (error as? APIError)?.status == 404
         }
@@ -532,7 +672,10 @@ nonisolated enum ExtensionSecretSave: Equatable, Sendable {
     private(set) var error: String?
     private(set) var changingContribution: String?
     private(set) var changingEnabled = false
+    private(set) var changingAutoUpgrade = false
     var disableConfirmation: ExtensionDisableConfirmation?
+    /// A pack's members by the names they're installed under (#4122), read only for a pack; a member not installed keeps its id.
+    private(set) var memberNames: [String: String] = [:]
     /// The hub's word on a field it refused, by its dotted path ("proxy.host").
     private(set) var fieldErrors: [String: String] = [:]
     /// The extension's own word on the settings it refused when they were saved (#5906), under the form; nothing was saved.
@@ -541,6 +684,10 @@ nonisolated enum ExtensionSecretSave: Equatable, Sendable {
     var draft: [String: JSONValue] = [:] { didSet { keepDraft() } }
     /// What number fields hold as typed, by path, until they read as a number.
     var numberText: [String: String] = [:] { didSet { keepDraft() } }
+    /// The hub's launchers for the form's launcher pickers (format launcher), read once the form has one: nil before,
+    /// or when they could not be read (the field is typed then).
+    private(set) var launchers: [LauncherView]?
+    private(set) var loadingLaunchers = false
     @ObservationIgnored private let deps: Deps
     @ObservationIgnored private var draftKey: ExtensionDrafts.Key?
 
@@ -562,7 +709,7 @@ nonisolated enum ExtensionSecretSave: Equatable, Sendable {
         }
     }
 
-    var canSave: Bool { dirty && numberProblems.isEmpty && !saving && !changingEnabled && changingContribution == nil }
+    var canSave: Bool { dirty && numberProblems.isEmpty && !saving && !changingEnabled && !changingAutoUpgrade && changingContribution == nil }
 
     func load() async {
         guard !loading else { return }
@@ -575,7 +722,22 @@ nonisolated enum ExtensionSecretSave: Equatable, Sendable {
         let (whose, base) = (managerName == nil ? manager : nil, deps.api())
         async let name = ManagerRoster.name(of: whose, base)
         await run(preservingDraft: true) { api in try await api.plugin(self.id) }
+        if detail?.extensionPack?.isEmpty == false, let list = try? await api?.plugins() {
+            memberNames = ExtensionPackMemberLine.names(list)
+        }
         if let name = await name { managerName = name }
+    }
+
+    /// Reads the hub's launchers when the form has a launcher field and they aren't in yet. GET /api/v1/launchers asks
+    /// every machine (up to half a minute), so it runs apart from load. They are the hub's, not a manager's: asked of
+    /// the default client.
+    func loadLaunchersIfNeeded() async {
+        guard launchers == nil, !loadingLaunchers, let form = detail?.form,
+              form.contains(where: { $0.picksLauncher || ($0.fields ?? []).contains(where: \.picksLauncher) }),
+              let api = deps.api() else { return }
+        loadingLaunchers = true
+        defer { loadingLaunchers = false }
+        launchers = try? await api.allLaunchers()
     }
 
     func setEnabled(_ on: Bool, cascade: Bool = false) async {
@@ -614,6 +776,10 @@ nonisolated enum ExtensionSecretSave: Equatable, Sendable {
     }
 
     func setAutoUpgrade(_ on: Bool) async {
+        guard !changingAutoUpgrade, !loading, !saving, !changingEnabled, changingContribution == nil,
+              let detail, ExtensionSettingsPolicy(detail: detail).canAutoUpgrade else { return }
+        changingAutoUpgrade = true
+        defer { changingAutoUpgrade = false }
         await run(preservingDraft: true) { api in try await api.setExtension(self.id, autoUpgrade: on) }
     }
 
@@ -656,6 +822,20 @@ nonisolated enum ExtensionSecretSave: Equatable, Sendable {
         return ok ? .saved : refusal.map(ExtensionSecretSave.refused) ?? .failed
     }
 
+    /// Saves a provider's reference in a secret's place (docs/extensions/secret-providers.md).
+    func setSecretReference(_ name: String, reference: String) async -> ExtensionSecretSave {
+        let reference = reference.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !reference.isEmpty else { return .failed }
+        var refusal: String?
+        let ok = await run(preservingDraft: true, refused: { refusal = $0 }) { api in try await api.setExtension(self.id, secret: name, reference: reference) }
+        return ok ? .saved : refusal.map(ExtensionSecretSave.refused) ?? .failed
+    }
+
+    /// Removes one of a provider's Always rules: the next hand-off it covered asks again.
+    func removeHandoffRule(_ rule: String) async {
+        await run(preservingDraft: true) { api in try await api.removeHandoffRule(self.id, rule: rule) }
+    }
+
     func clearSecret(_ name: String) async {
         await run(preservingDraft: true) { api in try await api.clearExtension(self.id, secret: name) }
     }
@@ -673,10 +853,13 @@ nonisolated enum ExtensionSecretSave: Equatable, Sendable {
         do {
             guard let api else { throw APIError(status: 0, message: String(localized: "Not connected to the hub yet")) }
             let d = try await call(api)
-            let editing = preservingDraft ? draftKey.flatMap { deps.drafts.values[$0] } : nil
+            let editing = preservingDraft && detail != nil ? draft : nil
+            let numbers = preservingDraft && detail != nil ? numberText : nil
+            let kept = editing ?? (preservingDraft ? draftKey.flatMap { deps.drafts.values[$0]?.config } : nil)
+            let keptNumbers = numbers ?? (preservingDraft ? draftKey.flatMap { deps.drafts.values[$0]?.numbers } : nil)
             detail = d
-            draft = editing?.config ?? d.config
-            numberText = editing?.numbers ?? [:]
+            draft = kept ?? d.config
+            numberText = keptNumbers ?? [:]
             error = nil
             return true
         } catch let e as APIError where e.code == "invalid_config" {

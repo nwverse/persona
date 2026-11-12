@@ -37,19 +37,22 @@ struct AgentsListMenu: View {
         /// Not `openMonitor` / `openMachines`: a stored property's name is in the Release binary, and those are DEBUG
         /// launch arguments the release check looks for (TestFlight 50 stopped on one).
         private var onMachines: () -> Void = {}
+        private var onTerminals: () -> Void = {}
 
         /// `sections`: the fold ids of what the list shows now.
         func update(sections: [String], foldAll: @escaping ([String]) -> Void, unfoldAll: @escaping () -> Void,
-                    onMachines: @escaping () -> Void) {
+                    onMachines: @escaping () -> Void, onTerminals: @escaping () -> Void = {}) {
             self.sections = sections
             self.foldAll = foldAll
             self.unfoldAll = unfoldAll
             self.onMachines = onMachines
+            self.onTerminals = onTerminals
         }
 
         func collapse() { foldAll(sections) }
         func expand() { unfoldAll() }
         func machinesPage() { onMachines() }
+        func terminalsPage() { onTerminals() }
     }
 
     @StoredValue("dev.machineFilter") private var machineFilter = ""
@@ -59,9 +62,14 @@ struct AgentsListMenu: View {
     private var shownGrouping: DevGrouping { DevGrouping.resolved(grouping, supportsTodos: TodoStore.shared.isSupported) }
     private var groupingChoice: Binding<DevGrouping> { Binding(get: { shownGrouping }, set: { grouping = $0 }) }
     @StoredValue("dev.sort") private var sort: AgentSort = .state
+    #if os(iOS)
+    /// The rows' style or Compact List (#2530), as Settings › Appearance › Layout sets it.
+    private let display = AgentListDisplayChoice()
+    #else
     @StoredValue("dev.compact") private var compact = false
+    #endif
 
-    /// The shell (docs/apple/ios.md「新外壳」) shows these inside its Work switch's menu: the items, without a button of their own.
+    /// The shell (docs/apple/ios.md「New shell」) shows these inside its Work switch's menu: the items, without a button of their own.
     var inline = false
 
     var body: some View {
@@ -85,16 +93,25 @@ struct AgentsListMenu: View {
             Picker("Group By [Agents Menus 399ee6]", selection: groupingChoice) {
                 ForEach(DevGrouping.offered(supportsTodos: TodoStore.shared.isSupported)) { g in Label(g.title, systemImage: g.symbol).tag(g) }
             }
-            if shownGrouping != .state, shownGrouping != .recent {
-                // By Status is sectioned by state, and the rows in a section are by time already; Recently Used is by time only.
+            if shownGrouping != .state, shownGrouping != .recent, shownGrouping != .app {
+                // By Status is sectioned by state, and the rows in a section are by time already; Recently Used is by time
+                // only, as are By App's sections.
                 Picker("Sort", selection: $sort) {
                     ForEach(AgentSort.allCases) { o in Label(o.title, systemImage: o.symbol).tag(o) }
                 }
             }
+            #if os(iOS)
+            // Every grouping draws its agents this way, By Repository too (#3753).
+            Picker("Display", selection: display.binding) {
+                ForEach(AgentListDisplay.allCases) { d in Label(d.title, systemImage: d.symbol).tag(d) }
+            }
+            #else
+            // The Mac and Apple Vision Pro keep their rows (#2530): cards or Compact List.
             Picker("Display", selection: $compact) {
                 Label("Cards", systemImage: Theme.Icon.cardView).tag(false)
                 Label("Compact List [Agents Menus 06829c]", systemImage: Theme.Icon.listView).tag(true)
             }
+            #endif
             if shownGrouping != .recent {
                 Section {
                     Button {
@@ -106,7 +123,7 @@ struct AgentsListMenu: View {
                 }
             }
             if model.isMultiHub {
-                // Several groups of hubs (docs/protocol/multi-hub.md「按组筛选」): one group's agents only.
+                // Several groups of hubs (docs/protocol/multi-hub.md「What the user sees」): one group's agents only.
                 Picker("hub", selection: Binding(get: { hubFilter }, set: { hubFilter = $0; machineFilter = "" })) {
                     Label("All Hubs", systemImage: Theme.Icon.hubGroup).tag("")
                     ForEach(model.groupIDs, id: \.self) { g in
@@ -123,6 +140,10 @@ struct AgentsListMenu: View {
             Section {
                 Button { actions.machinesPage() } label: {
                     Label("Machines", systemImage: Theme.Icon.machines)
+                }
+                // Every terminal on the computers, plain ones too (#4754): watch, type, close.
+                Button { actions.terminalsPage() } label: {
+                    Label("Terminals", systemImage: Theme.Icon.terminal)
                 }
             }
     }
@@ -292,7 +313,7 @@ struct AgentRowMenu: View, Equatable {
 }
 
 extension AgentRowMenu {
-    /// The menu of a row's agent: its long-press menu and, on iOS, its ⋯ (`AgentRowMoreButton`) are the same one. With
+    /// The menu of a row's agent, its long-press menu (on iOS the only way to it since the row's ⋯ went, #2530). With
     /// the rows' swipes gone there (#1244), Interrupt and Mark as Seen are here too.
     @MainActor init(_ s: Session, model: AppModel, actions: Actions) {
         self.init(key: s.key, pinned: model.isPinned(s.key), muted: model.isMuted(s), looping: s.loop != nil, live: s.state.isLive,

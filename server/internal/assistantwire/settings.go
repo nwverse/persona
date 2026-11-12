@@ -2,7 +2,7 @@ package assistantwire
 
 import "github.com/nwverse/persona/server/internal/proto"
 
-// ---- the assistant's settings, and the conversations the hub's features start (docs/assistant/assistant.md "The boundary with the hub") ----
+// ---- the assistant's settings, and the conversations the hub's features start (docs/assistant/assistant.md "Boundary with hub") ----
 
 // Profile is the assistant's settings (settings `assistant`, its own) as the hub's own features need them, in every
 // snapshot: a phone's message to the main conversation is told apart, the model configuration's main chat runs on its
@@ -10,8 +10,9 @@ import "github.com/nwverse/persona/server/internal/proto"
 // the assistant's own). The hub keeps the last
 // one; before one came in it goes by hub.json's assistant section, its own time zone and no main conversation.
 type Profile struct {
-	MachineID string `json:"machine_id"` // where its conversations run
-	Main      string `json:"main,omitempty"`
+	MachineID     string `json:"machine_id"` // where its conversations run
+	Main          string `json:"main,omitempty"`
+	MainMachineID string `json:"main_machine_id,omitempty"` // confirmed route of Main, independent of the default
 	// Launcher is the one it runs on when "Models" › main chat names none (its own setting, else hub.json's, else claude):
 	// that purpose's default.
 	Launcher string `json:"launcher"`
@@ -19,6 +20,14 @@ type Profile struct {
 	// Keep are the conversations their machines list however long they are quiet: the main one, the main ones it
 	// replaced, scheduled tasks' own (node.configure keep_sessions: a busy machine's newest transcripts crowd them out).
 	Keep []SessionRef `json:"keep"`
+}
+
+// MainRouteMachine keeps legacy profiles usable while preferring the confirmed main binding.
+func (p Profile) MainRouteMachine() string {
+	if p.MainMachineID != "" {
+		return p.MainMachineID
+	}
+	return p.MachineID
 }
 
 // The hub asks the assistant (Handler) for what its own features need of the assistant's conversations.
@@ -38,11 +47,17 @@ const (
 // (docs/protocol/protocol.md "hub ↔ node"), passed through by the hub's device.call like the others.
 const (
 	// DeviceAssistantPrepare: {dir, claude_md, connectors, clis, plugin_skills} → {cwd, plugin_skills_need}.
-	DeviceAssistantPrepare = "assistant.prepare"
+	DeviceAssistantPrepare   = "assistant.prepare"
+	DeviceAssistantExecution = "assistant.execution" // {session_id} → proto.AssistantExecution
 	// DeviceAssistantGuestPrepare: {dir, claude_md} → {cwd}: a guest conversation's directory (assistant/guest.go), only
 	// its CLAUDE.md / AGENTS.md written; the assistant's connectors, CLIs and skills are left as they are. A node without
 	// it answers "unknown method": no guest conversation starts there.
 	DeviceAssistantGuestPrepare = "assistant.guest_prepare"
+	// DeviceAssistantGuestDelete: {dir, session_id} → {deleted}: a meeting's room removed at its transcript's cut or
+	// with its recording (docs/assistant/meeting-minutes.md "Deletion"): its process, transcript and directory. With
+	// kind meeting, assistant.guest_prepare answers {cwd, kind, start_ids} on a node that starts rooms; an older node
+	// answers {cwd} only, or "unknown method" for this one.
+	DeviceAssistantGuestDelete = "assistant.guest_delete"
 	// DeviceAssistantWarm: {cwd, launcher, …model} → {}: a process ready for the next new conversation.
 	DeviceAssistantWarm = "assistant.warm"
 	// DeviceAssistantMemory: {op, cwd, name?, content?} → the memory files (op list) or {}.
@@ -62,6 +77,8 @@ type StartParams struct {
 	Text           string        `json:"text"`
 	Images         []proto.Image `json:"images,omitempty"`
 	Launcher       string        `json:"launcher,omitempty"`
+	Model          string        `json:"model,omitempty"`      // the first message's model, picked as a message's is (#5033)
+	ConfigDir      string        `json:"config_dir,omitempty"` // Claude profile on the target machine; "" private, "legacy" old resolution, "default" unset
 	PermissionMode string        `json:"permission_mode,omitempty"`
 	Effort         string        `json:"effort,omitempty"`
 	Purpose        string        `json:"purpose,omitempty"`    // the model configuration's purpose; "" is the main chat's
@@ -77,10 +94,28 @@ type StartParams struct {
 	// Origin and OriginRef: who opens it (SessionView.Origin); "" is the user's.
 	Origin    string `json:"origin,omitempty"`
 	OriginRef string `json:"origin_ref,omitempty"`
+	// OpenedBy: the extension whose token opened it (SessionView.OpenedBy). Only POST /api/v1/assistant/conversations
+	// sets it, from the hub's headers; never over the bus.
+	OpenedBy string `json:"-"`
 	// GuestTools: a guest conversation (assistant/guest.go) that may use only these connector tools; nil is an
 	// ordinary one.
 	GuestTools []string `json:"guest_tools,omitempty"`
+	// NewSessionID: start it under this session id (a meeting's follow-up, made once also across a restart); a node
+	// that cannot picks its own. Never over the bus.
+	NewSessionID string `json:"-"`
+	// ClientMsgID: the first message's client_msg_id (with NewSessionID: the node sends it once and its transcript
+	// item carries it, as a send's; without, the node ties it to the new conversation's first line). Never over the bus.
+	ClientMsgID string `json:"-"`
+	// Human: a person's own app opens it, as the hub vouched (HTTPRequest.Human): its first message gets a
+	// client_msg_id (FirstMessageIDPrefix) and counts as theirs, as a send the hub vouched for does (SendParams.Human).
+	// Never over the bus.
+	Human bool `json:"-"`
 }
+
+// FirstMessageIDPrefix begins the client_msg_id the manager gives the first message of a conversation a person's own
+// app opened (StartParams.Human). It is the manager's alone: the hub refuses an app's send that names one, so no later
+// message can carry it; a channel's ids (<channel>-<message>) never begin with it.
+const FirstMessageIDPrefix = "start:"
 
 // SendParams is assistant.send_params's params: Params are the node's assistant.send / session.send params. Lang is
 // the app's language, the one a refusal is said in ("": the user's; an older hub sends none).
@@ -89,6 +124,11 @@ type SendParams struct {
 	SessionID string         `json:"session_id"`
 	Params    map[string]any `json:"params"`
 	Lang      string         `json:"lang,omitempty"`
+	// Human is the hub's word that a person's own app sent this message: the request's credential is a full device's
+	// (never an extension's, a computer link's or the hub's own token). Set by the hub's auth, never from the request;
+	// the manager's own sends (channels, the inbox, meetings) never set it, and an older hub never sends it. A hand-off's
+	// Always rule spares the card only for a turn of such messages (assistant secret_handoff.go).
+	Human bool `json:"human,omitempty"`
 }
 
 // RenameParams is assistant.rename's params: Params are the app's ({title?, tab_name?}).
@@ -96,6 +136,10 @@ type RenameParams struct {
 	MachineID string         `json:"machine_id"`
 	SessionID string         `json:"session_id"`
 	Params    map[string]any `json:"params"`
+	// Extension is the extension whose token asked, as the hub's auth found it (never what the caller says), "" for
+	// anyone else: its title is a hint the hub names the conversation by, not the user's (docs/protocol/protocol.md
+	// "Origin of assistant chats"). An older hub never sends it, and an older manager takes every rename as the user's.
+	Extension string `json:"extension,omitempty"`
 }
 
 // CodeBadRequest is what the assistant refuses a request of the hub's with when the app's request itself is wrong

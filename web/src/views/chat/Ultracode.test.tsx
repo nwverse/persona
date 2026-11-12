@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-// Claude Code's ultracode switch on the web (#3428): the row in the model and effort popover, the line above the composer
-// after a resume, the workflow mark on the thinking chip and on agent rows; nothing of it on an older hub.
+// Claude Code's ultracode switch on the web (#3428): the row in the model panel's flyout of the model that runs (#5032), the
+// line above the composer after a resume, the workflow mark on the model pill and on agent rows; nothing of it on an older hub.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -14,8 +14,10 @@ vi.hoisted(() => {
   g.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
 });
 
-const { ModelEffortPopover } = await import("./ModelEffortPopover");
-const { ModeChips } = await import("./SessionDialogs");
+// the panel draws what it is given for the current model's flyout (ui/model-panel has its own tests)
+vi.mock("../../ui/model-panel/ModelPanel", () => ({ ModelPanel: ({ currentExtra }: { currentExtra?: React.ReactNode }) => <div data-testid="panel">{currentExtra}</div> }));
+
+const { AgentModelPill } = await import("./ModelPill");
 const { UltracodeLostNote, UltracodeStartRow, UltracodeSwitchRow } = await import("./Ultracode");
 const { SessionRow } = await import("../Sidebar");
 
@@ -64,18 +66,19 @@ afterEach(() => {
 const modes = () => calls.filter((c) => c.url.endsWith("/modes"));
 const theSwitch = () => document.body.querySelector<HTMLButtonElement>('[role="switch"]');
 
-describe("the popover's ultracode row", () => {
-  const anchor = () => {
-    const a = document.createElement("button");
-    document.body.append(a);
-    return a;
+describe("the panel's ultracode row", () => {
+  const open = async (s: Session) => {
+    render(<AgentModelPill session={s} />);
+    await flush();
+    await act(async () => host.querySelector<HTMLButtonElement>("button[data-model-pill]")!.click());
+    await act(async () => vi.dynamicImportSettled());
+    await flush();
   };
 
-  it("sits under the efforts on a hub that has it, and turning it on sends {ultracode: true} at once", async () => {
+  it("is under the model that runs on a hub that has it, and turning it on sends {ultracode: true} at once", async () => {
     const s = { ...base, ultracode: false };
     upsertSession(s);
-    render(<ModelEffortPopover session={s} anchor={anchor()} onClose={() => {}} apply={async () => true} />);
-    await flush();
+    await open(s);
     const row = document.body.querySelector('[data-testid="ultracode-row"]')!;
     expect(row.textContent).toContain("ultracode");
     expect(row.textContent).toContain("每个任务都编排多 Agent workflow · 很费额度 · 只对本会话");
@@ -89,8 +92,8 @@ describe("the popover's ultracode row", () => {
 
   it("is not there on an older hub", async () => {
     hub([]);
-    render(<ModelEffortPopover session={base} anchor={anchor()} onClose={() => {}} apply={async () => true} />);
-    await flush();
+    await open(base);
+    expect(document.body.querySelector('[data-testid="panel"]')).not.toBeNull();
     expect(document.body.querySelector('[data-testid="ultracode-row"]')).toBeNull();
     expect(theSwitch()).toBeNull();
   });
@@ -259,26 +262,40 @@ describe("New agent's switch", () => {
     await flush();
     expect(host.querySelector("[data-ultracode-quota-warn]")).not.toBeNull();
   });
+
+  it("an out-of-date quota fades and says how old it is, as the usage bars do (#1906)", async () => {
+    const at = new Date(Date.now() + 3 * 86400_000).toISOString();
+    answer = () => json({ accounts: [{ id: "c", provider: "claude", name: "Claude", sampled_at: new Date(Date.now() - 2 * 3600_000).toISOString(), local: true, stale: true,
+      windows: [{ label: "7d", window_minutes: 10080, used_percent: 62, resets_at: at }] }] });
+    render(<UltracodeStartRow on={false} onChange={() => {}} blocked="" />);
+    await flush();
+    const line = host.querySelector("[data-ultracode-quota]")!;
+    expect(line.textContent).toContain("每周 62%");
+    expect(line.firstElementChild!.className).toContain("opacity-70");
+    const stale = host.querySelector("[data-ultracode-quota-stale]")!;
+    expect(stale.textContent).toBe("已过期 · 2小时前"); // its own line: the age is never cut off with the numbers
+    expect(stale.className).toContain("opacity-70");
+  });
 });
 
 describe("the workflow mark", () => {
   const marks = (html: string) => html.match(/data-ultracode-mark/g)?.length ?? 0;
 
-  it("on the thinking chip while it is on, an icon and no words", () => {
+  it("on the model pill while it is on, an icon and no words", () => {
     hub(["ultracode"]);
-    const on = renderToStaticMarkup(<ModeChips session={{ ...base, ultracode: true }} />);
+    const on = renderToStaticMarkup(<AgentModelPill session={{ ...base, ultracode: true }} />);
     expect(marks(on)).toBe(1);
     expect(on).toContain('aria-label="ultracode 开"');
-    expect(marks(renderToStaticMarkup(<ModeChips session={{ ...base, ultracode: false }} />))).toBe(0);
-    expect(marks(renderToStaticMarkup(<ModeChips session={base} />))).toBe(0);
+    expect(marks(renderToStaticMarkup(<AgentModelPill session={{ ...base, ultracode: false }} />))).toBe(0);
+    expect(marks(renderToStaticMarkup(<AgentModelPill session={base} />))).toBe(0);
   });
 
-  it("on a Codex thread's \"ultra\" effort chip, the same mark", () => {
-    const codex = { ...base, agent: "codex", effort: "ultra", efforts: ["low", "medium", "high", "ultra"] } as Session;
-    const html = renderToStaticMarkup(<ModeChips session={codex} effortOnly />);
+  it("on a Codex thread's pill at its \"ultra\" effort, the same mark", () => {
+    const codex = { ...base, agent: "codex", source_kind: "codex_app_server", capabilities: { send: true }, model: "gpt-5.5", effort: "ultra", efforts: ["low", "medium", "high", "ultra"] } as Session;
+    const html = renderToStaticMarkup(<AgentModelPill session={codex} />);
     expect(marks(html)).toBe(1);
     expect(html).toContain("很费额度");
-    expect(marks(renderToStaticMarkup(<ModeChips session={{ ...codex, effort: "high" }} effortOnly />))).toBe(0);
+    expect(marks(renderToStaticMarkup(<AgentModelPill session={{ ...codex, effort: "high" }} />))).toBe(0);
   });
 
   it("beside an agent row's title in the AI colour; a row without it is as before", () => {

@@ -131,7 +131,10 @@ func (p *Pusher) postRelayOnce(d Device, req relayproto.PushRequest) (relayResul
 	if err != nil {
 		return relayResult{}, 0, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096)) // read to the end, so an HTTP/1 connection is reused
+		_ = resp.Body.Close()
+	}()
 	var out struct {
 		Error  string `json:"error"`
 		Reason string `json:"reason"`
@@ -281,7 +284,7 @@ func shortenAlert(v any, n int) any {
 	return out
 }
 
-// relayCollapseID: the relay sees a hash of the collapse id (an interaction id), not the id.
+// relayCollapseID: the relay sees a hash of the collapse id (a card's, cardCollapseID, or another push's), not the id.
 func relayCollapseID(id string) string {
 	if id == "" {
 		return ""

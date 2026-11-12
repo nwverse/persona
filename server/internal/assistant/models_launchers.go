@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/extmgr"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -22,7 +24,9 @@ import (
 const (
 	launchersManagedKey = "launchers.managed" // []storedLauncher
 	launchersHiddenKey  = "launchers.hidden"  // []string: ~/.zshrc launcher names hidden in Persona
-	launchersZshrcKey   = "launchers.zshrc"   // map machine id → []proto.Launcher, the last list seen
+	// launchersMachineKeysKey: []machineKey, a provider's key for one computer (models_launchers_scope.go).
+	launchersMachineKeysKey = "launchers.machine_keys"
+	launchersZshrcKey       = "launchers.zshrc" // map machine id → []proto.Launcher, the last list seen
 	// launchersMetaKey: map machine id → launcherMeta (its shell, rc file, when its list last came in).
 	launchersMetaKey = "launchers.zshrc.meta"
 )
@@ -63,9 +67,15 @@ type storedLauncher struct {
 	EnvSealed     string `json:"env_sealed,omitempty"` // Env (#5953) sealed the same way; Env itself is never stored
 	Preset        string `json:"preset,omitempty"`     // the preset (built-in or a plugin's) it was added from
 	// DisplayName is what the apps call it (any language, "Zhipu GLM"); Name stays the ASCII id the launch uses.
-	DisplayName string    `json:"display_name,omitempty"`
-	Created     time.Time `json:"created"`
-	Updated     time.Time `json:"updated"`
+	DisplayName string `json:"display_name,omitempty"`
+	// Share and ScopeMachines are its device scope (models_launchers_scope.go): "all", "selected", "none"; "" is a
+	// record from before scopes, every confirmed computer as then.
+	Share         string   `json:"share,omitempty"`
+	ScopeMachines []string `json:"scope_machines,omitempty"`
+	// ViaMachine (kind api): the computer whose node sends this connection's requests (models_via.go); "" the manager.
+	ViaMachine string    `json:"via_machine,omitempty"`
+	Created    time.Time `json:"created"`
+	Updated    time.Time `json:"updated"`
 }
 
 // LauncherView is one launcher for the app: where it comes from, which machines have it; never the key.
@@ -112,6 +122,21 @@ type LauncherView struct {
 	Effort        string                `json:"effort,omitempty"`
 	// Origin is ManagedLauncher.Source ("" made by hand, "zshrc:<alias>@<machine>", "preset:<id>"); "source" is taken.
 	Origin string `json:"origin,omitempty"`
+	// Managed only: the device scope (docs/integrations/launchers.md "Device scope and on-demand delivery"). LegacyScope:
+	// saved before scopes, read as all (work computers too) + push + use. KeyMachines: the computers with a key of their own.
+	Share         string   `json:"share,omitempty"`
+	ScopeMachines []string `json:"scope_machines,omitempty"`
+	Delivery      string   `json:"delivery,omitempty"`
+	OwnService    string   `json:"own_service,omitempty"`
+	KeyMachines   []string `json:"key_machines,omitempty"`
+	LegacyScope   bool     `json:"legacy_scope,omitempty"`
+	// ViaMachine (managed, kind api): the computer that sends its requests; "" this manager (models_via.go).
+	ViaMachine string `json:"via_machine,omitempty"`
+	// KeyReference (managed): the key is a reference to a provider extension's secret: the reference and what it
+	// names, never the value (launcher_secrets.go). MachineKeyReferences: the same for the computers' own keys.
+	KeyReference         *extmgr.SecretReferenceView            `json:"key_reference,omitempty"`
+	MachineKeyReferences map[string]*extmgr.SecretReferenceView `json:"machine_key_references,omitempty"`
+	keySealed            string                                 // the stored key, for withKeyReferences
 	// Definition per machine (zshrc launchers, detail only): the function body, secrets masked.
 	Definitions map[string]string `json:"definitions,omitempty"`
 	// Details per machine (zshrc launchers, detail only): what the launcher really sets when run (node/launcherprobe.go).
@@ -125,7 +150,9 @@ func launcherView(l storedLauncher) LauncherView {
 		CustomModelDescription: l.CustomModelDescription, Args: l.Args, HasKey: l.KeySealed != "", Auth: l.Auth,
 		Models: l.Models, OpusModel: l.OpusModel, SonnetModel: l.SonnetModel, HaikuModel: l.HaikuModel, FableModel: l.FableModel,
 		SubagentForce: l.SubagentForce, HasHeaders: l.HeadersSealed != "", HasEnv: l.EnvSealed != "", Proxy: l.Proxy, NoProxy: l.NoProxy, TimeoutMS: l.TimeoutMS,
-		CompactWindow: l.CompactWindow, MaxContext: l.MaxContext, Effort: l.Effort, Origin: l.Source}
+		CompactWindow: l.CompactWindow, MaxContext: l.MaxContext, Effort: l.Effort, Origin: l.Source,
+		Share: l.share(), ScopeMachines: l.ScopeMachines, Delivery: l.delivery(), OwnService: l.ownService(), LegacyScope: l.Share == "",
+		ViaMachine: l.ViaMachine, keySealed: l.KeySealed}
 }
 
 var managedLauncherName = lazyre.New(`^[A-Za-z_][A-Za-z0-9_-]*$`)
@@ -204,14 +231,27 @@ func memoSetting(ctx context.Context, st Store, key string, out any) (bool, erro
 }
 
 func (s *Service) storedLaunchers(ctx context.Context) []storedLauncher {
+	list, _ := s.storedLaunchersKnown(ctx)
+	return list
+}
+
+// storedLaunchersKnown is storedLaunchers with whether the list is really known: false means the setting could not be
+// read, which is not the same as no managed launcher. Callers that judge whether a launcher still exists must not read
+// an unknown list as "it is gone": a message would be refused as launcher_missing while the provider is still
+// configured (#4437). No database configured counts as no managed launchers, as storedLaunchers always did.
+func (s *Service) storedLaunchersKnown(ctx context.Context) ([]storedLauncher, bool) {
 	if list, ok := ctx.Value(managedSnapshotKey{}).([]storedLauncher); ok {
-		return list
+		return list, true
+	}
+	st := s.store()
+	if st == nil {
+		return nil, true // no database configured: no managed launchers, as before
 	}
 	var list []storedLauncher
-	if st := s.store(); st != nil {
-		_, _ = memoSetting(ctx, st, launchersManagedKey, &list)
+	if _, err := memoSetting(ctx, st, launchersManagedKey, &list); err != nil {
+		return nil, false
 	}
-	return list
+	return list, true
 }
 
 var errManagedLaunchersRead = errors.New("managed provider configuration unavailable")
@@ -235,12 +275,35 @@ func (s *Service) readStoredLaunchers(ctx context.Context) (list []storedLaunche
 	return list, nil
 }
 
+// readHiddenLaunchers reads launchers.hidden from the store itself (never a request's memo) for a change to it, made
+// under models.mu so no other hide or restore is lost; a failed read fails the change instead of emptying the list.
+func (s *Service) readHiddenLaunchers(ctx context.Context) ([]string, error) {
+	st := s.store()
+	if st == nil {
+		return nil, i18n.Err("assistant-models.err_no_database")
+	}
+	var list []string
+	_, err := st.Setting(ctx, launchersHiddenKey, &list)
+	return list, err
+}
+
 func (s *Service) hiddenLaunchers(ctx context.Context) []string {
 	var list []string
 	if st := s.store(); st != nil {
 		_, _ = memoSetting(ctx, st, launchersHiddenKey, &list)
 	}
+	if n, _ := ctx.Value(unhiddenKey{}).(string); n != "" && slices.Contains(list, n) {
+		list = slices.DeleteFunc(slices.Clone(list), func(h string) bool { return h == n })
+	}
 	return list
+}
+
+type unhiddenKey struct{}
+
+// withUnhidden has hiddenLaunchers leave name out: a launcher that a configuration or a conversation still names keeps
+// running when it is hidden, as the hide route says; hiding takes it out of the pickers only (#4659).
+func withUnhidden(ctx context.Context, name string) context.Context {
+	return context.WithValue(ctx, unhiddenKey{}, name)
 }
 
 func (s *Service) putSetting(ctx context.Context, key string, v any) error {

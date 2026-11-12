@@ -55,7 +55,7 @@ class AppleRenameTests(unittest.TestCase):
             'Persona': 'Persona', 'PersonaMac': 'Persona', 'PersonaWatch': 'Persona', 'PersonaVision': 'Persona',
             'PersonaWidgets': 'PersonaWidgets', 'PersonaNotify': 'PersonaNotify', 'PersonaMacNotify': 'PersonaNotify', 'PersonaVisionNotify': 'PersonaNotify',
             'PersonaShare': 'PersonaShare', 'PersonaVisionShare': 'PersonaShare',
-            'PersonaWatchWidgets': 'PersonaWatchWidgets',
+            'PersonaWatchWidgets': 'PersonaWatchWidgets', 'PersonaVisionWidgets': 'PersonaWidgets',
         }
         self.assertEqual(set(targets), {*expected, 'PersonaTests', 'PersonaMacTests', 'PersonaUITests', 'PersonaMacUITests'})
         for target, module in expected.items():
@@ -146,8 +146,10 @@ class AppleRenameTests(unittest.TestCase):
         root = (APPLE / 'Persona/Views/RootView.swift').read_text()
         selection = root.split('private var usesShell: Bool {', 1)[1].split('\n    }', 1)[0]
         self.assertRegex(selection, r'#if os\(visionOS\)[\s\S]*?return false')
-        self.assertRegex(selection, r'#elseif os\(iOS\)\s+return widthClass == \.compact \|\| flipped\s+#else\s+return false')
-        self.assertIn('if usesShell { ShellView() } else { RootTabs()', root)
+        # Active compact width still selects the shell; #2836 holds that width while iOS snapshots the app away.
+        self.assertRegex(selection, r'#elseif os\(iOS\)\s+return \(heldWidthClass \?\? widthClass\) == \.compact \|\| flipped\s+#else\s+return false')
+        self.assertIn('if usesShell { ShellView()', root)
+        self.assertIn('} else { RootTabs()', root)
         self.assertIn('RootTabs().visionShell()', root)
         tabs = root.split('private struct RootTabs: View {', 1)[1].split('\n#if os(iOS)', 1)[0]
         self.assertIn('TabView(selection: $model.selectedTab)', tabs)

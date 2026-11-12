@@ -16,6 +16,17 @@ def run(args, cwd, env=None):
     subprocess.run(args, cwd=cwd, env=env, check=True)
 
 
+def run_together(commands, cwd, env=None):
+    """Start every command at once and wait for all of them; fail with the first that failed."""
+    for args in commands:
+        print('+', ' '.join(map(str, args)), flush=True)
+    processes = [(args, subprocess.Popen(args, cwd=cwd, env=env)) for args in commands]
+    failed = [(args, process.wait()) for args, process in processes]
+    for args, status in failed:
+        if status:
+            raise subprocess.CalledProcessError(status, args)
+
+
 def package_release(binary, bin_dir, out, platforms, version, build, sha, root):
     # A retry may leave old content-addressed files in out; only this build's
     # canonical platform names belong in the manifest generator input.
@@ -33,6 +44,11 @@ def package_release(binary, bin_dir, out, platforms, version, build, sha, root):
             os.replace(packages / artifact['name'], out / name)
             artifact['name'] = name
         return manifest
+
+
+def build_tags(root):
+    """The -tags value every program is built with: server/build-tags.txt (server/internal/buildtags)."""
+    return (root / 'server/build-tags.txt').read_text().strip()
 
 
 def write_json(path, value):
@@ -67,7 +83,16 @@ def main():
     test_env.update(caches)
     with tempfile.TemporaryDirectory(prefix='hub-release-tests-') as home:
         test_env.update(HOME=home, ZDOTDIR=home)
-        run(['go', 'test', '-count=1', './...'], root / 'server', test_env)
+        # internal/node's serial run outgrew Go's ten-minute -timeout: it runs in partitions beside the other
+        # packages, split exactly as CI's node shard splits it (scripts/test/go_partitions.py).
+        import go_partitions
+        node = go_partitions.list_patterns(root / 'server', test_env)
+        others = [package for package in subprocess.check_output(['go', 'list', './...'], cwd=root / 'server',
+                                                                 env=test_env, text=True).split()
+                  if not go_partitions.is_partitioned(package)]
+        run_together([['go', 'test', '-count=1', *others]] +
+                     [['go', 'test', '-count=1', '-run', pattern, go_partitions.PACKAGE] for pattern in node],
+                     root / 'server', test_env)
         run(['go', 'test', '-race', '-count=1', './internal/hubedge', './internal/update',
              './internal/devices'], root / 'server', test_env)
     for suite in sorted((root / 'scripts').rglob('test_*.py')):
@@ -81,19 +106,24 @@ def main():
     webdist = root / 'server/internal/hub/webdist'
     try:
         shutil.copytree(root / 'web/dist', webdist, dirs_exist_ok=True)
+        # The binaries' privacy scan reads printable strings, which gzip hides: scan the web client as built, then
+        # keep its hashed assets gzipped as the hub sends them (docs/web/web.md "Precompressed assets").
+        run(['python3', 'scripts/release/check_bundle_privacy.py', '--whole-short', str(webdist)], root)
+        run(['go', 'run', './internal/webasset/precompress', 'internal/hub/webdist'], root / 'server')
         run(['go', 'generate', './internal/runtimepkg'], root / 'server')
+        tags = build_tags(root)
         flags = (f'-s -w -X main.version={version} -X main.channel=release '
                  f'-X main.build={args.build} -X main.commit={sha} -X main.updateURL={args.update_url}')
         bin_dir = out / 'bin'
         bin_dir.mkdir(exist_ok=True)
         binary = bin_dir / 'personad-linux-amd64'
         env = dict(os.environ, GOOS='linux', GOARCH='amd64', CGO_ENABLED='0')
-        run(['go', 'build', '-tags', 'public', '-trimpath', '-ldflags', flags,
+        run(['go', 'build', '-tags', tags, '-trimpath', '-ldflags', flags,
              '-o', str(binary), './cmd/personad'], root / 'server', env)
         platforms = ['linux-amd64']
         if args.publish_nodes or args.publish_managers:
             darwin = bin_dir / 'personad-darwin-arm64'
-            run(['go', 'build', '-tags', 'public', '-trimpath', '-ldflags', flags,
+            run(['go', 'build', '-tags', tags, '-trimpath', '-ldflags', flags,
                  '-o', str(darwin), './cmd/personad'], root / 'server',
                 dict(os.environ, GOOS='darwin', GOARCH='arm64', CGO_ENABLED='0'))
             platforms.append('darwin-arm64')

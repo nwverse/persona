@@ -1,4 +1,4 @@
--- Plugin markets (docs/extensions/extensions.md "Plugin market", #1303): the markets this hub reads plugins from, the token of a private
+-- Plugin markets (docs/extensions/extensions.md "Extension marketplace", #1303): the markets this hub reads plugins from, the token of a private
 -- one sealed with the hub's secret.key, and the index last read (so the catalog shows without waiting on the network).
 CREATE TABLE IF NOT EXISTS plugin_markets (
 	id text PRIMARY KEY,

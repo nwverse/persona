@@ -79,6 +79,12 @@ func (s *Service) launcherParams(ctx context.Context, machine, name string, para
 // its PATH ("path", node/pathlaunchers.go); its page shows its text and what a probe found.
 func machineSource(source string) bool { return source == "zshrc" || source == "path" }
 
+// listedRCLauncher: Settings › Model providers lists l from a computer's list. A runtime's launcher without model
+// configuration (DSH, node/runtimes.go) is not.
+func listedRCLauncher(l proto.Launcher) bool {
+	return l.Source == "" || machineSource(l.Source) || l.Agent == "agy" || l.Agent == "omp"
+}
+
 // launcherViews is the whole list: managed first (newest last), then ~/.zshrc ones by name; hidden ones flagged.
 func (s *Service) launcherViews(ctx context.Context) []LauncherView {
 	return s.launcherViewsOf(ctx, s.zshrcLaunchers(ctx, false))
@@ -100,8 +106,8 @@ func (s *Service) launcherViewsFrom(ctx context.Context, zshrc []zshrcLaunchers,
 	var names []string
 	for _, m := range zshrc {
 		for _, l := range m.Launchers {
-			if managed[l.Name] || l.Name == "claude" || (l.Source != "" && !machineSource(l.Source) && l.Agent != "agy" && l.Agent != "omp") {
-				continue // a runtime's launcher without model configuration (DSH, node/runtimes.go) is not listed here
+			if managed[l.Name] || l.Name == "claude" || !listedRCLauncher(l) {
+				continue
 			}
 			v := byName[l.Name]
 			if v == nil {
@@ -136,7 +142,8 @@ func (s *Service) builtinClaude(ctx context.Context, zshrc []zshrcLaunchers) (La
 	if slices.ContainsFunc(s.storedLaunchers(ctx), func(l storedLauncher) bool { return l.Name == "claude" }) {
 		return LauncherView{}, false
 	}
-	v := LauncherView{Name: "claude", Source: "builtin", Versions: map[string]string{}}
+	// hidden like an rc-file launcher (#4384): out of the pickers, shown under Hidden to restore
+	v := LauncherView{Name: "claude", Source: "builtin", Versions: map[string]string{}, Hidden: slices.Contains(s.hiddenLaunchers(ctx), "claude")}
 	for _, m := range zshrc {
 		listed := slices.ContainsFunc(m.Launchers, func(l proto.Launcher) bool { return l.Name == "claude" })
 		if m.ClaudeVersion == "" && !listed {
@@ -174,7 +181,9 @@ func (s *Service) machineLaunchers(ctx context.Context, machine string) ([]proto
 		return nil, err
 	}
 	hidden := s.hiddenLaunchers(ctx)
-	managed := s.storedLaunchers(ctx)
+	// Only the providers in this computer's scope: one out of it is not named to the node, whose own launcher by
+	// that name (if any) is what runs there.
+	managed := slices.DeleteFunc(slices.Clone(s.storedLaunchers(ctx)), func(m storedLauncher) bool { return !s.usableOn(ctx, m, machine) })
 	out := make([]proto.Launcher, 0, len(res.Launchers)+len(managed))
 	for _, envelope := range res.Launchers {
 		l := proto.Launcher(envelope)
@@ -187,31 +196,96 @@ func (s *Service) machineLaunchers(ctx context.Context, machine string) ([]proto
 		}
 		out = append(out, l)
 	}
+	// A node that starts its own Codex launchers with no first message starts a managed one so too (they share
+	// codex-start, node/codex_waiting.go); an older node's Codex starts all need it.
+	codexOptional := slices.ContainsFunc(res.Launchers, func(l proto.LauncherEnvelope) bool { return l.Agent == "codex" && l.PromptOptional })
 	for _, m := range managed {
 		if m.Kind == "api" {
 			continue
 		}
-		out = append(out, proto.Launcher{Name: m.Name, BaseURL: m.BaseURL, Model: m.Model, Source: "persona", Agent: m.Agent, Assistant: m.Agent == "agy"})
+		out = append(out, proto.Launcher{Name: m.Name, BaseURL: m.BaseURL, Model: m.Model, Source: "persona", Agent: m.Agent, Assistant: m.Agent == "agy",
+			PromptOptional: m.Agent == "codex" && codexOptional})
 	}
 	return out, nil
 }
 
-// launcherAvailable: whether the machine can still run this launcher name (plain claude always; a deleted managed
-// launcher or a renamed ~/.zshrc one does not). A failed list counts as available.
-func (s *Service) launcherAvailable(ctx context.Context, machine, name string) bool {
-	if name == "" || name == "claude" {
-		return true
-	}
-	if slices.ContainsFunc(s.storedLaunchers(ctx), func(l storedLauncher) bool { return l.Name == name }) {
-		return true
-	}
-	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	list, err := s.machineLaunchers(cctx, machine)
+// pickerLaunchers is what machine can start, as New Agent's picker lists it: machineLaunchers with hub.json's
+// launchers for it applied (sessionLaunchers).
+func (s *Service) pickerLaunchers(ctx context.Context, machine string) ([]ConfiguredLauncher, error) {
+	ls, err := s.machineLaunchers(ctx, machine)
 	if err != nil {
-		return true
+		return nil, err
 	}
-	return slices.ContainsFunc(list, func(l proto.Launcher) bool { return l.Name == name })
+	discovered := make([]ConfiguredLauncher, 0, len(ls))
+	for _, l := range ls {
+		discovered = append(discovered, ConfiguredLauncher{Launcher: l})
+	}
+	return sessionLaunchers(discovered, s.hello(ctx).Models.Launchers[machine]), nil
+}
+
+// assistantLaunchers are the machine's launchers backed by a provider the main conversation supports.
+func (s *Service) assistantLaunchers(ctx context.Context, machine string) ([]ConfiguredLauncher, error) {
+	picker, err := s.pickerLaunchers(ctx, machine)
+	if err != nil {
+		return nil, err
+	}
+	return s.assistantLaunchersOf(ctx, machine, picker)
+}
+
+// assistantProviders are the launcher names whose current, merged configuration supports the main conversation on
+// machine. picker is the node's current list; managed and direct Messages providers are added from their stored records.
+func (s *Service) assistantProviders(ctx context.Context, machine string, picker []ConfiguredLauncher) (map[string]bool, error) {
+	p, err := s.modelPurposeDef(ctx, "assistant")
+	if err != nil {
+		return nil, err
+	}
+	p.MachineID = machine
+	stored := s.storedLaunchers(ctx)
+	current := slices.Clone(picker)
+	for _, managed := range stored {
+		if !slices.ContainsFunc(current, func(l ConfiguredLauncher) bool { return l.Name == managed.Name }) {
+			current = append(current, ConfiguredLauncher{Launcher: proto.Launcher{
+				Name: managed.Name, BaseURL: managed.BaseURL, Model: managed.Model, Source: "persona", Agent: managed.Agent,
+			}})
+		}
+	}
+	current = sessionLaunchers(current, s.hello(ctx).Models.Launchers[machine])
+	hidden := s.hiddenLaunchers(ctx)
+	allowed := map[string]bool{}
+	for _, l := range current {
+		if l.Name == "" || slices.Contains(hidden, l.Name) && compat.Source(l.Source) != "persona" {
+			continue
+		}
+		if s.modelLauncherCompatible(p, l, stored) {
+			allowed[l.Name] = true
+		}
+	}
+	return allowed, nil
+}
+
+// assistantLaunchersOf is assistantLaunchers from the machine's picker list (pickerLaunchers).
+func (s *Service) assistantLaunchersOf(ctx context.Context, machine string, picker []ConfiguredLauncher) ([]ConfiguredLauncher, error) {
+	ctx = withSettingsMemo(ctx)
+	allowed, err := s.assistantProviders(ctx, machine, picker)
+	if err != nil {
+		return nil, err
+	}
+	stored := s.storedLaunchers(ctx)
+	out := []ConfiguredLauncher{}
+	seen := map[string]bool{}
+	for _, l := range picker {
+		if allowed[l.Name] {
+			out = append(out, l)
+			seen[l.Name] = true
+		}
+	}
+	// Ordinary Agent lists omit direct API providers; Messages providers are already sent to nodes as launchers.
+	for _, l := range stored {
+		if l.Kind == "api" && allowed[l.Name] && !seen[l.Name] && s.usableOn(ctx, l, machine) {
+			out = append(out, ConfiguredLauncher{Launcher: proto.Launcher{Name: l.Name, BaseURL: l.BaseURL, Model: l.Model, Source: "persona"}, AgentType: "claude"})
+		}
+	}
+	return out, nil
 }
 
 // launcherHasModel: whether the launcher offers model (its id or what an alias resolves to), from its list as it was
@@ -271,5 +345,16 @@ func (s *Service) askLauncherModels(ctx context.Context, machine, name string, r
 	if res.Models == nil {
 		res.Models = []proto.AgentModel{}
 	}
-	return s.presetModels(ctx, machine, name, res), nil
+	res = s.presetModels(ctx, machine, name, res)
+	for i, m := range res.Models {
+		id := m.ID
+		if m.Resolved != "" {
+			id = m.Resolved
+		}
+		res.Models[i].Price = nil
+		if c, ok := catalogModel(id); ok && c.InheritedFrom == "" {
+			res.Models[i].Price = c.Price
+		}
+	}
+	return res, nil
 }

@@ -3,7 +3,7 @@ import SwiftUI
 
 /// The window's sidebar sections: the iPhone's four tabs, plus Knowledge and Machines (on the phone a page inside
 /// Persona, and Machines inside Agents / Settings), which a Mac with room for a sidebar shows as sections of their own
-/// (docs/apple/mac.md「主窗口」), and Messages while Settings › Lark › Show Messages on Home is on (the iPhone's extra tab, #392). ⌘1…⌘8: see
+/// (docs/apple/mac.md「Main window」), and Messages while Settings › Lark › Show Messages on Home is on (the iPhone's extra tab, #392). ⌘1…⌘8: see
 /// `shortcutOrder`.
 enum MacSection: String, CaseIterable, Identifiable {
     case assistant, agents, todos, messages, inbox, knowledge, machines, settings
@@ -225,7 +225,7 @@ private struct MacShell: View {
         // No toolbar band across the window: the sections column reaches up behind the traffic lights, and the bar's
         // backdrop and hairline cut it off at the toolbar (2026-11-02).
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
-        // The plugins' sidebar entries and cards (docs/extensions/extensions.md「UI 插槽」): with a hub that has them.
+        // The plugins' sidebar entries and cards (docs/extensions/extensions.md「UI slots」): with a hub that has them.
         .task(id: ExtensionSlots.source(model)) {
             let hub = ExtensionSlots.source(model).hub
             await ExtensionSlots.shared.reload(for: hub)
@@ -304,7 +304,7 @@ private struct MacShell: View {
     private var sections: some View {
         return VStack(spacing: Theme.Space.xxs) {
             ForEach(MacSection.visibleNow) { section in
-                // The plugins' pages go with Machines and Settings, right before Settings (docs/extensions/extensions.md「UI 插槽」).
+                // The plugins' pages go with Machines and Settings, right before Settings (docs/extensions/extensions.md「UI slots」).
                 if section == .settings { pluginRows }
                 MacSidebarRow(icon: section.icon, title: section.title, selected: section == shown && shell.pluginPage == nil,
                               badge: badge(section), identifier: "mac.section.\(section.rawValue)") { shell.go(section, model) }
@@ -313,7 +313,7 @@ private struct MacShell: View {
             // The subscription accounts' windows (docs/server/usage-windows.md), as the web's sidebar ends; nothing without any.
             MacUsageFooter()
             // The sidebar's foot: while the hub is out of reach, Waiting for Network / Connecting… (a click explains), as the
-            // iPhone's title spot does (docs/apple/mac.md「主窗口」).
+            // iPhone's title spot does (docs/apple/mac.md「Main window」).
             MacConnectionFooter()
         }
         // Below the traffic lights at a fixed height: the title bar is taller on pages with toolbar items, and rows
@@ -351,7 +351,7 @@ private struct MacShell: View {
         case .todos: n = TodoStore.shared.badgeCount
         case .assistant: n = model.badges.assistant
         case .agents: n = model.badges.agents
-        case .inbox: n = InboxStore.shared.actionCount
+        case .inbox: n = InboxStore.shared.unreadCount
         case .settings: return model.isDemo ? .word(String(localized: "Demo", comment: "Sidebar badge: demo mode is on")) : nil
         }
         return n > 0 ? .count(n) : nil

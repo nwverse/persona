@@ -15,10 +15,15 @@
   "name_kb_dedupe": "项目去重",
   "name_kb_items": "事项提取与打标",
   "name_kb_moments": "公司圈关联",
+  "name_kb_topics": "按主题整理知识点",
   "name_assistant_title": "对话标题",
+  "name_assistant_route": "新对话归属",
   "name_agent_title": "Agent 标签名",
   "name_todo_title": "待办标题",
+  "name_subscription_recipe": "订阅方式起草",
+  "name_meeting_answer": "会议中的回答",
   "name_schedule": "定时任务",
+  "name_assistant_supervise": "后台督办",
   "group_default": "默认模型",
   "group_agents": "Agents",
   "group_triage": "信息筛选",
@@ -43,7 +48,7 @@
   "provider_legacy_judge": "hub 判断 API",
   "provider_legacy_kb": "hub 知识 API",
   "provider_claude_default": "Claude Code 默认",
-  "source_hub_config": "管理者配置",
+  "source_hub_config": "助手配置",
   "source_assistant_default": "助手默认",
   "source_default": "默认",
   "source_extension_default": "扩展默认",
@@ -91,5 +96,6 @@
   "source_auto_named": "自动选择：{provider}（hub 上能直接调用的接入）",
   "err_model_invalid": "模型 ID {model} 不能用：要以字母或数字开头（或 ~ 后接字母或数字），只能有字母、数字和 . _ - / : @ [ ]，最多 256 个字符",
   "custom_model_description": "之前用过的模型 ID",
-  "err_role_forget": "删除用过的模型 ID 需要完整权限。"
+  "err_role_forget": "删除用过的模型 ID 需要完整权限。",
+  "err_via_offline": "{name} 不在线。这个接入要通过它发请求：让它上线，或在 设置 › 模型供应商 的「通过…发送」里换一台电脑"
 }

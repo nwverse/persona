@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { applyMachine, dropAnswered, endInteraction, getState, hubHas, larkOn, refresh, refreshAssistant, refreshTodos, reset, setSpacesSupported } from "./store";
+import { managerHeaderFor } from "./manager-choice";
+import { applyMachine, dropAnswered, endInteraction, getState, hubHas, larkOn, putTodo, refresh, refreshAssistant, refreshTodos, reset, setSpacesSupported } from "./store";
 
 describe("待办 store 与 404 兼容 (C2)", () => {
   beforeEach(() => {
@@ -297,6 +298,31 @@ describe("待办列表：先发的 /todos 晚回来不盖掉新的 (#3540)", () 
     expect(st.todos.map((t) => t.title)).toEqual(["new", "added"]);
   });
 
+  it("confirmed completion fences older reads even when the follow-up read fails, but allows a later reopen", async () => {
+    const reads: { resolve: (r: Response) => void; reject: (e: Error) => void }[] = [];
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve, reject) => reads.push({ resolve, reject }))));
+    const asked = { ...todo("t1", "Synthetic task"), ask: { outcome: "decide" as const, verdict: "Choose an option", asked_at: "2026-11-10T08:00:00Z" } };
+    getState().todos = [asked];
+    const old = refreshTodos();
+    await settle();
+    const done = { ...asked, done_at: "2026-11-10T09:00:00Z", ask: undefined };
+    putTodo(done);
+    const followup = refreshTodos();
+    await settle();
+    reads[0].resolve(new Response(JSON.stringify({ todos: [asked] }), { status: 200 }));
+    await old;
+    expect(getState().todos).toEqual([done]);
+    reads[1].reject(new Error("Synthetic refresh failure"));
+    await followup;
+    expect(getState().todos).toEqual([done]);
+    const reopened = { ...asked, ask: { ...asked.ask, asked_at: "2026-11-10T10:00:00Z" } };
+    const later = refreshTodos();
+    await settle();
+    reads[2].resolve(new Response(JSON.stringify({ todos: [reopened] }), { status: 200 }));
+    await later;
+    expect(getState().todos).toEqual([reopened]);
+  });
+
   it("an answer still on its way when the store is reset is dropped", async () => {
     const turns = heldTodos();
     const old = refreshTodos();
@@ -320,6 +346,26 @@ describe("待办列表：先发的 /todos 晚回来不盖掉新的 (#3540)", () 
     turns[1]([todo("t1", "second")]);
     await b;
     expect(getState().todos.map((t) => t.title)).toEqual(["second"]);
+  });
+
+  it("GET /api/v1/todos 返回携带 manager 的待办时，自动记录其 manager 归属", async () => {
+    const managerTodos = [
+      { id: "t-default", title: "默认待办", created_at: "", updated_at: "" },
+      { id: "t-other", title: "其他管理者的待办", manager: "m-other", created_at: "", updated_at: "" },
+    ];
+    const fetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes("/todos")) {
+        return Promise.resolve(new Response(JSON.stringify({ todos: managerTodos }), { status: 200 }));
+      }
+      return Promise.resolve(new Response(JSON.stringify({}), { status: 200 }));
+    });
+    vi.stubGlobal("fetch", fetch);
+
+    await refresh();
+    expect(getState().todos).toHaveLength(2);
+    expect(managerHeaderFor("/todos/t-other")).toBe("m-other");
+    expect(managerHeaderFor("/todos/t-other/retry")).toBe("m-other");
+    expect(managerHeaderFor("/todos/t-default")).toBeUndefined();
   });
 });
 

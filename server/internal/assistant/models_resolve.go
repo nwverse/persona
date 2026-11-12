@@ -40,7 +40,7 @@ func (s *Service) modelBaseline(ctx context.Context, p ModelPurpose) (ModelBindi
 			// failing while a keyed Claude connection sits unused (#388). Not stored, so a later explicit choice still
 			// wins.
 			if name := s.fallbackAPIProvider(ctx); name != "" {
-				return ModelBinding{Provider: "launcher." + name}, mc(l, modelAutoSource), nil
+				return ModelBinding{Provider: "launcher." + name, Effort: c.ReasoningEffort}, mc(l, modelAutoSource), nil
 			}
 		}
 		return ModelBinding{Provider: provider, Model: c.Model, Effort: c.ReasoningEffort}, mc(l, "source_hub_config"), nil
@@ -97,7 +97,7 @@ func inheritedLabel(l i18n.Lang, p ModelPurpose, base ModelBinding, from string,
 		return mc(l, "source_delegate_connection", i18n.Args{"provider": name}) // the model is the user's pick, or the connection's own
 	case p.ID == "agent.delegate":
 		return mc(l, "source_delegate_default", i18n.Args{"provider": name, "model": model})
-	case p.ID == purposeLarkAgent, isExtensionPurpose(p.ID):
+	case ownModelRecord(p.ID), isExtensionPurpose(p.ID):
 		return purposeName(l, p.Parent)
 	case from == mc(l, modelAutoSource):
 		return mc(l, "source_auto_named", i18n.Args{"provider": name})
@@ -155,7 +155,17 @@ func mergeModel(base, over ModelBinding) ModelBinding {
 	return base
 }
 
-// resolveModel reads category defaults, except the opt-in Lark /agent override and independent plugin models.
+// effectiveModel applies purpose defaults after merging, so choosing another provider cannot clear triage's default.
+func effectiveModel(p ModelPurpose, base, over ModelBinding) ModelBinding {
+	b := mergeModel(base, over)
+	if p.ID == "inbox.triage" && b.Effort == "" {
+		b.Effort = "off"
+	}
+	return b
+}
+
+// resolveModel reads category defaults, except the opt-in overrides of Agents (agentsOverride), a task's own and
+// independent plugin models.
 func (s *Service) resolveModel(ctx context.Context, id string) (ModelBinding, error) {
 	return s.resolveModelRecord(ctx, id, nil)
 }
@@ -180,7 +190,7 @@ func (s *Service) resolveModelRecord(ctx context.Context, id string, r *modelRec
 		}
 		r = &read
 	}
-	return mergeModel(base, r.Binding), nil
+	return effectiveModel(p, base, r.Binding), nil
 }
 
 func launcherProvider(name string) string {
@@ -202,10 +212,13 @@ func (s *Service) apiConfig(ctx context.Context, b ModelBinding) (ai.Config, err
 				if l.Kind != "api" && !messagesAPI(l.API) {
 					return c, i18n.Err("assistant-models.err_launcher_not_responses")
 				}
-				c = ai.Config{API: l.API, BaseURL: l.BaseURL, Model: l.Model, Bearer: l.BearerAuth()}
-				key, err := s.openKey(l.KeySealed)
+				if err := checkAPITransport(l.Kind, l.API, l.Proxy, l.NoProxy, l.HeadersSealed != ""); err != nil {
+					return c, err
+				}
+				c = ai.Config{API: l.API, BaseURL: l.BaseURL, Model: l.Model, Bearer: l.BearerAuth(), ViaMachine: l.ViaMachine}
+				key, err := s.openLauncherKey(ctx, l.KeySealed, l.Name, "")
 				if err != nil {
-					return c, i18n.Err("assistant-models.err_key_decrypt")
+					return c, err
 				}
 				c.APIKey = key
 				found = true
@@ -225,9 +238,9 @@ func (s *Service) apiConfig(ctx context.Context, b ModelBinding) (ai.Config, err
 	if c.API != "" && c.API != "messages" && c.API != "responses" && c.API != "chat" {
 		return c, i18n.Err("assistant-models.err_api_protocol")
 	}
-	if c.API != "responses" && b.Effort != "" {
+	if c.API != "responses" && c.API != "messages" && c.API != "" && b.Effort != "" {
 		c.ReasoningEffort = ""
-	} // Older Messages configurations carried an unused Responses-only field.
+	}
 	return c, nil
 }
 
@@ -242,7 +255,7 @@ func (s *Service) purposeModel(id string) *ai.Client {
 		if err != nil {
 			return nil, err
 		}
-		return ai.New(c), nil
+		return s.aiClient(c), nil
 	})
 }
 

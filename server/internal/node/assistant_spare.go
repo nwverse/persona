@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/shellcmd"
 )
 
 // A spare process started when the app opens the "Chat" tab, so the first message skips claude's startup.
@@ -30,7 +31,11 @@ func (n *Node) adoptSpare(cwd, launcher string, options ...modelExecution) *assi
 	defer n.mu.Unlock()
 	p := n.spare
 	if p == nil || !p.alive() || time.Since(p.born) > assistantSpareMaxAge ||
+		((p.agent == "claude" || p.agent == "codex") && p.personaMCPOnly != n.hubSupportsPersonaContracts()) ||
 		(launcher != "" && p.launcher != launcher) || (cwd != "" && p.cwd != cwd) || p.fingerprint != n.executionFingerprint(p.launcher, executionOption(options)) {
+		return nil
+	}
+	if selected := executionOption(options).ConfigDir; selected != "" && !sameAssistantProfile(p.model.ConfigDir, selected) {
 		return nil
 	}
 	n.spare = nil
@@ -41,18 +46,37 @@ func (n *Node) adoptSpare(cwd, launcher string, options ...modelExecution) *assi
 // assistantWarm makes sure a fresh spare process is waiting for the next new conversation.
 func (n *Node) assistantWarm(cwd, launcher string, options ...modelExecution) error {
 	if n.assistantRuntime(launcher) != nil { // a runtime is running already: nothing to start ahead
+		if executionOption(options).ConfigDir != "" {
+			return fmt.Errorf("config_dir is only supported for Claude assistant conversations")
+		}
 		return nil
 	}
 	execution := executionOption(options)
 	if err := execution.check(); err != nil {
 		return err
 	}
-	if launcher == "" || !nameRe.MatchString(launcher) {
+	if launcher == "" || !shellcmd.NameRe.MatchString(launcher) {
 		return fmt.Errorf("invalid launcher %q", launcher)
+	}
+	if err := n.ensureManaged(context.Background(), launcher); err != nil {
+		return err
+	}
+	if agent, err := n.assistantAgent(context.Background(), launcher); err != nil {
+		return err
+	} else if agent == "claude" {
+		execution.ConfigDir, err = n.assistantProfileSelection(context.Background(), "", launcher, execution.Runtime, execution.ConfigDir, false)
+		if err != nil {
+			return err
+		}
+	} else if execution.ConfigDir != "" {
+		return fmt.Errorf("config_dir is only supported for Claude assistant conversations")
 	}
 	n.mu.Lock()
 	old := n.spare
-	if old != nil && old.alive() && old.launcher == launcher && old.cwd == cwd && old.fingerprint == n.executionFingerprint(launcher, execution) && time.Since(old.born) < assistantSpareMaxAge/2 {
+	if old != nil && old.alive() && old.launcher == launcher && old.cwd == cwd &&
+		((old.agent != "claude" && old.agent != "codex") || old.personaMCPOnly == n.hubSupportsPersonaContracts()) &&
+		(old.agent != "claude" || sameAssistantProfile(old.model.ConfigDir, execution.ConfigDir)) &&
+		old.fingerprint == n.executionFingerprint(launcher, execution) && time.Since(old.born) < assistantSpareMaxAge/2 {
 		n.mu.Unlock()
 		return nil
 	}
@@ -60,9 +84,6 @@ func (n *Node) assistantWarm(cwd, launcher string, options ...modelExecution) er
 	n.mu.Unlock()
 	if old != nil {
 		old.stop()
-	}
-	if _, err := n.assistantAgent(context.Background(), launcher); err != nil {
-		return err
 	}
 	p, err := n.spawnAssistant("", cwd, launcher, false, true, execution)
 	if err != nil {

@@ -43,15 +43,39 @@ func (s *inboxOrderStore) PutInboxItem(ctx context.Context, id string, data []by
 	return nil
 }
 
-func (s *inboxOrderStore) InboxItems(ctx context.Context, doneSince time.Time) ([][]byte, error) {
-	return s.inboxMemStore.InboxItems(ctx, doneSince)
+func (s *inboxOrderStore) InboxItems(ctx context.Context, doneSince time.Time, each func(raw []byte) error) error {
+	return s.inboxMemStore.InboxItems(ctx, doneSince, each)
 }
 
-func (s *inboxOrderStore) DeleteInboxItems(ctx context.Context, ids []string) error {
+func (s *inboxOrderStore) DeleteInboxSource(ctx context.Context, source string, ids []string) ([]string, error) {
 	if s.deleteEntered != nil {
 		s.deleteOnce.Do(func() { close(s.deleteEntered) })
 	}
-	return s.inboxMemStore.DeleteInboxItems(ctx, ids)
+	return s.inboxMemStore.DeleteInboxSource(ctx, source, ids)
+}
+
+// inboxCutStore's start read breaks off after the first row.
+type inboxCutStore struct{ *inboxMemStore }
+
+func (s inboxCutStore) InboxItems(ctx context.Context, doneSince time.Time, each func(raw []byte) error) error {
+	n := 0
+	return s.inboxMemStore.InboxItems(ctx, doneSince, func(raw []byte) error {
+		if n++; n > 1 {
+			return errMuteStoreDown
+		}
+		return each(raw)
+	})
+}
+
+// A start read that breaks off midway takes in nothing (the rows decoded before it are dropped) and is read again the
+// next time, as one that fails at once.
+func TestInboxLoadBrokenMidwayTakesNothing(t *testing.T) {
+	st := newInboxMemStore()
+	st.rows["a"], st.rows["b"] = []byte(`{"id":"a","source":"mail"}`), []byte(`{"id":"b","source":"mail"}`)
+	h := New(Options{Hub: newFakeHub().withMachine(), Store: func() Store { return inboxCutStore{st} }, Logf: t.Logf})
+	if err := h.inboxReady(context.Background()); !errors.Is(err, errInboxUnavailable) || h.inbox.loaded.Load() || len(h.inbox.items) != 0 {
+		t.Fatalf("a read broken after one row: %v, loaded %v, %d items in memory", err, h.inbox.loaded.Load(), len(h.inbox.items))
+	}
 }
 
 func (s *inboxOrderStore) hasRow(id string) bool {
@@ -72,6 +96,7 @@ func TestInboxPersistenceKeepsLatestState(t *testing.T) {
 	if err := h.inboxReady(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	waitNeedsYouIdle(t, h)
 	h.inbox.items["item"] = &InboxItem{ID: "item", Source: "mail", UpdatedAt: time.Now()}
 	var releaseOnce sync.Once
 	release := func() { releaseOnce.Do(func() { close(s.releaseFirst) }) }
@@ -197,12 +222,12 @@ type inboxForgetStore struct {
 	calls      atomic.Int32
 }
 
-func (s *inboxForgetStore) DeleteInboxItems(ctx context.Context, ids []string) error {
+func (s *inboxForgetStore) DeleteInboxSource(ctx context.Context, source string, ids []string) ([]string, error) {
 	s.calls.Add(1)
 	if s.deleteFail != nil {
-		return s.deleteFail
+		return nil, s.deleteFail
 	}
-	return s.inboxMemStore.DeleteInboxItems(ctx, ids)
+	return s.inboxMemStore.DeleteInboxSource(ctx, source, ids)
 }
 
 // InboxForget deletes the rows before dropping items from memory: a failed delete keeps everything in place, and the

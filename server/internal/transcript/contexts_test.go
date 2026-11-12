@@ -2,6 +2,7 @@ package transcript
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -149,9 +150,31 @@ func TestTitle(t *testing.T) {
 		// The title in the screenshot: the first message clipped at 40 characters inside the opening tag.
 		{`<persona-context kind="context" title="接上…`, ""},
 		{"<persona-context>\n快照\n</persona-context>", ""},
+		// Another tool's block in front of the first message: the words after it, else no title (the project stands in).
+		{`<memory-index file="MEMORY.md">` + "\n- [Notes](notes.md)\n</memory-index>\nTidy up the notes", "Tidy up the notes"},
+		{`<memory-index file="MEMORY.md">` + "\n- [Notes](notes.md) — what to keep…", ""},
+		{`<memory-index file="MEMO…`, ""},
+		{`<a href="x">link</a> and more`, `<a href="x">link</a> and more`},
+		{"<b>bold</b> stays", "<b>bold</b> stays"},
+		{"a <tag k=\"v\"> later", "a <tag k=\"v\"> later"},
 	} {
 		if got := Title(c.in); got != c.want {
 			t.Errorf("Title(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+// BenchmarkLegacyLarkAgentOrdinary: what every user message pays for the old shape it is not in (#2473).
+func BenchmarkLegacyLarkAgentOrdinary(b *testing.B) {
+	for _, n := range []int{40, 1000, 4000} {
+		s := strings.Repeat("please run the tests and tell me what fails. ", n/45+1)[:n]
+		b.Run(fmt.Sprintf("%dB", n), func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				if legacyLarkAgent(s) != s {
+					b.Fatal("rewritten")
+				}
+			}
+		})
 	}
 }

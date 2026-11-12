@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // A manager's messages to the apps (ws.broadcast, docs/assistant/managers.md "What the hub keeps of each manager"). The hub
@@ -29,18 +30,24 @@ import (
 //     replacing one it carried), so an app showing one manager's assistant page leaves the others' live updates out.
 //     The assistant's go without it, as they always did (one it carried is taken out): no "manager" is the
 //     assistant's (docs/protocol/protocol.md).
+//   - its place in the stream: a top-level "event_seq" is taken out. The apps read it from every message for their
+//     resume cursor, and only the event log numbers a message; an extension_operation, which the log does not keep,
+//     goes without one.
 
 // managerMessageTypes are the types the managers send the apps (internal/assistant Service.event, internal/extmgr
-// Manager.broadcast and broadcastExtension).
+// Manager.broadcast and broadcastExtension, internal/devices Devices.broadcast).
 var managerMessageTypes = map[string]bool{
 	// the assistant
 	"assistant_feed": true, "assistant_schedule": true, "assistant_view": true, "assistant_view_action": true,
-	"assistant_view_block": true, "agents.triage": true, "interaction_reanswered": true, "kb_selection": true, "launcher_health": true,
+	"assistant_view_block": true, "agents.triage": true, "direction_offer": true, "directions": true, "interaction_reanswered": true, "kb_selection": true, "launcher_health": true,
 	"model_profile": true, "task_plan": true, "todos": true, "workspace_board": true, "workspace_board_settings": true,
+	"meeting_live": true,
 	// its extensions' manager
 	"agents": true, "agents.prefs": true, "inbox": true, "mail_accounts": true, "messaging": true,
 	"extension_auth": true, "extension_operation": true, "extension_ui": true, "plugin_ui": true,
-	"extension_upgrade": true, "plugin_upgrade": true,
+	"extension_upgrade": true, "plugin_upgrade": true, "subscription": true,
+	// its devices
+	"file_transfer": true,
 }
 
 // hubMessageTypes are the messages the hub sends the apps from its own state (cards, machines, sessions and their
@@ -66,11 +73,6 @@ var checkedKeys = []string{"type", "machine_id", "session_id", "conversation"}
 // top level (a "Manager" beside the hub's stamp would read as the sender's to a lenient decoder); deeper down they are
 // the sender's own fields (a contact record's "Manager"), which the hub neither reads nor sets.
 var stampKeys = []string{ManagerQuery}
-
-// relayBroadcast is relayBroadcastFrom the assistant the hub starts.
-func (h *Hub) relayBroadcast(message json.RawMessage) error {
-	return h.relayBroadcastFrom(assistantwire.AssistantID, message)
-}
 
 // relayBroadcastFrom sends message, manager from's, to every app (see the top of the file for what is dropped).
 func (h *Hub) relayBroadcastFrom(from string, message json.RawMessage) error {
@@ -98,6 +100,7 @@ func (h *Hub) relayBroadcastFrom(from string, message json.RawMessage) error {
 	} else {
 		m[ManagerQuery] = from
 	}
+	delete(m, "event_seq") // the event log's, and an extension_operation skips the log (stampEvent never sees it)
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
@@ -108,6 +111,13 @@ func (h *Hub) relayBroadcastFrom(from string, message json.RawMessage) error {
 	if typ == extensionOperationEvent {
 		h.toWanting(extensionOperationsFeature, out)
 		return nil
+	}
+	if typ == proto.FileTransferEvent {
+		h.toFullWanting(proto.FileTransferEvent, out)
+		return nil
+	}
+	if typ == "inbox" { // before the apps hear it: the list they ask for then is fetched afresh (inbox_answers.go)
+		h.inboxAnswers.changed(from)
 	}
 	h.broadcastRaw(typ, out)
 	return nil

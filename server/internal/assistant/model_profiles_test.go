@@ -73,8 +73,11 @@ func TestModelProfilesSeedAndCaptureCurrentConfiguration(t *testing.T) {
 	}
 	before, puts := profileStoreSnapshot(st.memStore)
 	v := profilesOf(t, s)
-	if v.Revision != 1 || v.Active != "" || v.Rollback != nil || len(v.Events) != 0 || len(v.Profiles) != 2 {
-		t.Fatalf("seeding applied a profile: %+v", v)
+	// The templates are copies of the configuration: performance is marked in use (its tiers work from the start),
+	// nothing switches and there is nothing to roll back.
+	if v.Revision != 1 || v.Active != seededProfile || v.Rollback != nil || len(v.Events) != 1 || v.Events[0].Action != "seed" ||
+		v.Events[0].By.Kind != "system" || len(v.Profiles) != 2 {
+		t.Fatalf("seeding: %+v", v)
 	}
 	for _, p := range v.Profiles {
 		if p.Purposes["assistant"].Model != "test-chat" || p.Purposes["assistant"].Runtime != "" ||
@@ -87,14 +90,19 @@ func TestModelProfilesSeedAndCaptureCurrentConfiguration(t *testing.T) {
 				t.Fatalf("capture lost launcher field %s", field.name)
 			}
 		}
-		if p.Tiers["strong"] != (ModelTier{Launcher: "current", Model: "test-chat"}) ||
-			p.Tiers["standard"] != (ModelTier{Launcher: "current", Model: "test-agents"}) {
+		strong, standard := p.Tiers["strong"], p.Tiers["standard"]
+		if strong.Description == "" || standard.Description == "" {
+			t.Fatalf("seeded tiers say nothing of when to use them: %+v", p.Tiers)
+		}
+		strong.Description, standard.Description = "", ""
+		if strong != (ModelTier{Launcher: "current", Model: "test-chat"}) || standard != (ModelTier{Launcher: "current", Model: "test-agents"}) {
 			t.Fatalf("tiers are not the current configuration: %+v", p.Tiers)
 		}
 	}
 	after, n := profileStoreSnapshot(st.memStore)
 	delete(after, modelProfilesKey)
-	if !reflect.DeepEqual(before, after) || n != puts+1 {
+	delete(after, modelProfileStateKey)
+	if !reflect.DeepEqual(before, after) || n != puts+2 { // the profiles and the state, in one transaction
 		t.Fatal("seeding reset model defaults or changed another setting")
 	}
 	if f.eventTypes() != "" || len(f.managed) != 0 {
@@ -122,7 +130,7 @@ func TestModelProfilesSeedAndCaptureCurrentConfiguration(t *testing.T) {
 	}
 	v = profilesOf(t, s)
 	if v.Profiles[0].Purposes["assistant"].Model != "test-later" ||
-		!reflect.DeepEqual(v.Profiles[0].Tiers, customTiers) || v.Profiles[1].Purposes["assistant"].Model != "test-chat" || v.Active != "" {
+		!reflect.DeepEqual(v.Profiles[0].Tiers, customTiers) || v.Profiles[1].Purposes["assistant"].Model != "test-chat" || v.Active != seededProfile {
 		t.Fatalf("capture applied or overwrote other profile data: %+v", v)
 	}
 	if got, err := s.modelRecord(ctx, "assistant"); err != nil || got.Binding.Model != "test-later" || got.Revision != 4 {
@@ -267,7 +275,8 @@ func TestModelProfilesInheritedOverridesAndValidation(t *testing.T) {
 	}{
 		{"inherited model", ModelBinding{Model: "test-selected"}, "responses", false},
 		{"inherited effort", ModelBinding{Effort: "high"}, "responses", false},
-		{"messages effort", ModelBinding{Effort: "high"}, "messages", true},
+		{"messages effort", ModelBinding{Effort: "high"}, "messages", false},
+		{"chat effort", ModelBinding{Effort: "high"}, "chat", true},
 		{"missing provider", ModelBinding{Provider: "launcher.missing", Model: "test-selected"}, "responses", true},
 		{"bad effort", ModelBinding{Effort: "invalid"}, "responses", true},
 		{"runtime", ModelBinding{Runtime: proto.AssistantRuntimeAgentSDK}, "responses", true},
@@ -570,6 +579,35 @@ func TestModelProfileCaptureDirectAPIAndUnrelatedLaunchers(t *testing.T) {
 	if len(launchers) != 1 || launchers["direct"].Model == nil || *launchers["direct"].Model != "test-direct" ||
 		launchers["direct"].Effort != nil || launchers["direct"].SmallModel != nil {
 		t.Fatalf("capture included unsupported API or unrelated launcher fields: %+v", launchers)
+	}
+}
+
+func TestModelProfileSwitchAllowsMessagesEffort(t *testing.T) {
+	for _, tc := range []struct{ name, api, effort string }{
+		{name: "messages", api: "messages", effort: "low"},
+		{name: "legacy empty protocol", api: "", effort: "off"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _, st := modelService(t)
+			key, err := s.sealKey("test-key")
+			if err != nil {
+				t.Fatal(err)
+			}
+			putLaunchers(t, s, storedLauncher{
+				ManagedLauncher: proto.ManagedLauncher{Kind: "api", Name: "direct", API: tc.api, Model: "test-direct", BaseURL: "https://example.invalid"},
+				KeySealed:       key,
+			})
+			storeProfiles(t, st, ModelProfile{ID: "selected", Name: "Selected", Purposes: map[string]ModelBinding{
+				"inbox.triage": {Provider: "launcher.direct", Effort: tc.effort},
+			}})
+			if _, err := s.applyModelProfile(context.Background(), "selected", ProfileActor{}); err != nil {
+				t.Fatalf("switch Messages profile: %v", err)
+			}
+			b, err := s.resolveModel(context.Background(), "inbox.triage")
+			if err != nil || b.Provider != "launcher.direct" || b.Effort != tc.effort {
+				t.Fatalf("profile effort did not survive: %+v, %v", b, err)
+			}
+		})
 	}
 }
 

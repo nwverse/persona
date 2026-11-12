@@ -1,26 +1,31 @@
-import { managedProvider, storedCredentials } from "../lib/compatibility";
+import { managedProvider } from "../lib/compatibility";
 // Settings (docs/web/web.md): appearance, where the assistant runs, "Models" (every launcher: rc-file and PATH ones synced, the
 // built-in claude, Persona ones kept by the hub — docs/integrations/launchers.md), this browser and the other devices, about. The same data as the app's Settings.
 import { BASE, stripBase } from "../lib/base";
 import { href } from "../lib/router";
+import { takeOverlayEntry } from "../lib/back-close";
 import { useScrollMemory } from "../lib/scroll-memory";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { api, enc, errorText, handleUnauthorized, setToken } from "../lib/api";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { api, enc, errorText } from "../lib/api";
 import { splitDevices } from "../lib/devices";
 import { ago } from "../lib/format";
 import { install, useInstall, type InstallState } from "../lib/pwa";
-import { reset, useStore } from "../lib/store";
+import { useStore } from "../lib/store";
 import { Button, cx, Dialog, EASE, IconButton, Loading, Spinner, toast } from "../ui/atoms";
 import { Icon, type IconName } from "../ui/icons";
 import { ExtensionThemePicker } from "../ui/ExtensionThemePicker";
 import { setTheme, useTheme, type Theme } from "./theme";
 import { Group, Row, Pill, RowConfirm, Switch } from "./settings/SettingsParts";
 import { LanguageRow } from "./settings/LanguageRow";
-import { TextSizeRow, ThemeColorPicker } from "./settings/LookSettings";
+import { RecentChatsRow, TextSizeRow, ThemeColorPicker } from "./settings/LookSettings";
 import { setReplyMotionEnabled, useReplyMotionSetting } from "../ui/stream/motion";
-import { setSidebarTerminals, useSidebarTerminals } from "../lib/sidebar-terminals";
 import { setAgentDetails, setContextAsUsed, useAgentDetails, useContextAsUsed } from "../lib/context-usage";
+import { setSidebarTerminals, useSidebarTerminals } from "../lib/sidebar-terminals";
 import { HubList } from "./Hubs";
+import { useDisconnect } from "./DisconnectBrowser";
+import { KnowledgeSelection } from "./settings/KnowledgeSelection";
+import { SourcesUI } from "./subscriptions/SourcesUI";
+import { useInboxSourcesShown } from "../lib/subscriptions";
 import { ModelConfiguration } from "./settings/ModelConfiguration";
 import { AgentSettings } from "./settings/AgentSettings";
 import { SidebarPagesGroup } from "./settings/SidebarPages";
@@ -36,20 +41,25 @@ import { NotificationSettings } from "./settings/NotificationSettings";
 import { ChannelList, ChannelPage } from "./settings/Channels";
 import { ConnectDevice } from "./settings/ConnectDevice";
 import { settingsTarget } from "../lib/channels";
-import { routeSub } from "../lib/extension-market";
-import { ownedSub, parseOwnedSub } from "../lib/manager-choice";
+import { extensionsRoute, routeSub } from "../lib/extension-market";
+import { otherManager, ownedSub, parseOwnedSub, pinManagerAt, useChosenManager } from "../lib/manager-choice";
 import { HubSettings } from "./settings/HubSettings";
 import { ManagersSettings } from "./settings/ManagersSettings";
-import { SentSettings } from "./settings/SentSettings";
 import { LauncherQuota } from "./settings/LauncherQuota";
 import { LauncherExtensionSections } from "./settings/ExtensionView";
 import { hubHasExt } from "../lib/extension-api";
 import { hostOf, type ProviderView } from "../lib/providers";
+import { referenceState } from "../lib/secret-reference";
+import { forgetProviderNames, providerIdNote, providerTitle } from "../lib/provider-names";
+import { harnessGroups, harnessLabel, scopeSummary } from "../lib/provider-scope";
+import { foundAliases, type EditDraft, type FoundAlias } from "../lib/provider-paste";
 import { ProviderWizard } from "./settings/ProviderWizard";
 import { ProviderImport } from "./settings/ProviderImport";
 import { builtinRows, loadLaunchers, rcFilesOf, rcGroups, syncStateText, type LauncherSync } from "../lib/launcher-list";
 import { TerminalModeRow } from "./settings/TerminalModeSetting";
-import { FROM_LIST, LIST_GROUPS, openedFromList, settingsAt, settingsHref, TAB_INFO, TABS, type Tab } from "./settings/nav";
+import { AGENT_KINDS, ASSISTANT_TABS, categoryState, FROM_LIST, itemIsPage, itemState, NAV_GROUPS, openedFromSub, redirectLegacySettings, settingsAt, settingsHref, SENT_SUB, stepsToList, TAB_INFO, TABS, type AgentTab, type SettingsSection, type Tab } from "./settings/nav";
+import { searchSettings, type SearchGroup } from "./settings/search";
+import { GroupAction, GroupFooter, GroupTitle, hasFooter } from "./settings/SettingsGroups";
 import { SHEET_QUERY, useMedia } from "../ui/overlay";
 import { formatList, t } from "../i18n";
 
@@ -108,6 +118,11 @@ interface DeviceToken {
 
 const enLauncher = (n: string) => `/launchers/${enc(n)}`;
 
+/** What the current assistant's pages ask of its manager besides their merged lists and configuration editors (which
+ *  name it themselves): the model providers, session triage, mail accounts, the chat connector (all its routes: accounts, status, message display), the
+ *  chat bot, and the messages sent as you. Pinned to the current assistant while one of those pages is open. */
+const ASSISTANT_PREFIXES = ["/launchers", "/agents/triage", "/mail", "/lark", "/bots", "/connectors/sent"];
+
 export function tokens(n: number): string {
   if (n >= 1_000_000 && n % 100_000 === 0) return `${n % 1_000_000 === 0 ? n / 1_000_000 : (n / 1_000_000).toFixed(1)}M`;
   if (n >= 1000) return `${Math.floor(n / 1000)}K`;
@@ -116,10 +131,17 @@ export function tokens(n: number): string {
 
 // ── page ────────────────────────────────────────────────
 
+function readSettingsLocation() {
+  const redirect = redirectLegacySettings(location.search, location.hash, stripBase(location.pathname));
+  if (redirect) history.replaceState(history.state, "", BASE + redirect);
+  return settingsAt(location.search, location.hash);
+}
+
 export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const phone = useMedia(SHEET_QUERY);
-  // the category bar can wrap, so the header can be taller than the usual 56px: tell <main> its height, which the
-  // connection pill (App.tsx) sits under instead of over the second row (#3594)
+  // list pages (channels / connectors / extensions) keep their list beside the open item from this width
+  const twoCol = useMedia("(min-width: 900px)");
+  // Keep the connection pill (App.tsx) below the page header, including at larger text sizes.
   const header = useRef<HTMLElement>(null);
   useEffect(() => {
     const el = header.current;
@@ -133,45 +155,125 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     };
   }, []);
   // The category (null: none named, the phone's list) and the purpose (model configuration) or extension ("Extensions") it has open.
-  const [at, setAt] = useState(() => settingsAt(location.search));
+  const [at, setAt] = useState(readSettingsLocation);
   // Back from a category opened from the list: the URL went back, the page follows it.
   useEffect(() => {
     const back = () => {
-      if (stripBase(location.pathname) !== "/settings") return;
-      const now = settingsAt(location.search);
-      setAt((was) => (was.tab === now.tab && was.sub === now.sub ? was : now));
+      const path = stripBase(location.pathname);
+      if (path !== "/settings" && path !== "/settings/sent" && path !== "/settings/sent/") return;
+      const now = readSettingsLocation();
+      setAt((was) => (was.tab === now.tab && was.sub === now.sub && was.section === now.section ? was : now));
     };
     addEventListener("popstate", back);
     return () => removeEventListener("popstate", back);
   }, []);
   const listed = phone && !at.tab;
-  // one scroller shows the list and every page: each keeps its own spot, and Back to the list lands where it was (#5133)
-  const scroller = useRef<HTMLDivElement>(null);
-  useScrollMemory(scroller, listed ? "settings" : `settings/${at.tab ?? "general"}/${at.sub ?? ""}`);
   const tab: Tab = at.tab ?? "general";
+  // one scroller shows the list and every page: each keeps its own spot, and Back to the list lands where it was (#5133).
+  // An item that opens in a dialog over its category's page (a model purpose) is not a page: the key leaves it out, so
+  // opening and closing it leave the page where it was (#4282).
+  const scroller = useRef<HTMLDivElement>(null);
+  useScrollMemory(scroller, listed ? "settings" : `settings/${tab}/${itemIsPage(tab) ? (at.sub ?? "") : ""}`);
   const { sub } = at;
+  // The current assistant's group (docs/assistant/managers.md "The current assistant"): its pages read and write that
+  // assistant only. Their merged lists are filtered by it, its configuration editors name it, and what else they ask of
+  // its manager (ASSISTANT_PREFIXES) names it while the page is open.
+  const picked = useChosenManager();
+  useLayoutEffect(() => (ASSISTANT_TABS.has(tab) ? pinManagerAt(ASSISTANT_PREFIXES, otherManager(picked ?? undefined)) : undefined), [tab, picked]);
+  // Another assistant made current with one of the group's items open (a connector, an extension, a channel, a model
+  // purpose): that item is the last assistant's, so the page goes back to its list, which then lists the new one's.
+  const [pickSeen, setPickSeen] = useState(picked);
+  if (pickSeen !== picked) {
+    setPickSeen(picked);
+    if (ASSISTANT_TABS.has(tab) && sub) setAt({ tab, sub: null, section: null });
+  }
+  // the address follows an item closed so
+  useLayoutEffect(() => {
+    if (ASSISTANT_TABS.has(tab) && !sub && settingsAt(location.search, location.hash).sub) history.replaceState(categoryState(history.state), "", BASE + settingsHref(tab, null, phone));
+  }, [tab, sub, phone]);
+  useEffect(() => {
+    if (!at.section || listed) return;
+    const section = document.getElementById(`settings-${at.section}`);
+    if (!section) return;
+    section.scrollIntoView?.({ block: "start" });
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => section.scrollIntoView?.({ block: "start" }));
+    observer.observe(section);
+    if (scroller.current) observer.observe(scroller.current);
+    const timer = setTimeout(() => observer.disconnect(), 500);
+    return () => { clearTimeout(timer); observer.disconnect(); };
+  }, [tab, at.section, listed]);
   // "Extensions" only on a hub with the extension base (docs/extensions/extensions.md "The hub's API"); a link to it still opens it.
   const hasExtensions = useStore((s) => hubHasExt(s.features, "manager"));
   const hasChannels = useStore((s) => s.features.includes("channels"));
-  const shown = (k: Tab) => (k !== "extensions" || hasExtensions || tab === "extensions") && (k !== "channels" || hasChannels || tab === "channels");
-  const tabs = TABS.filter(shown).map((k) => ({ k, ...TAB_INFO[k] }));
+  // Inbox Sources (#5278) only with a manager that draws them; a link to it still opens it
+  const hasSources = useInboxSourcesShown();
+  const shown = (k: Tab) => (k !== "extensions" || hasExtensions || tab === "extensions") && (k !== "channels" || hasChannels || tab === "channels") &&
+    (k !== "sources" || hasSources || tab === "sources");
+  const contentId = useId();
   const configurationOwner = useRef<string | null>(new URLSearchParams(location.search).get("manager"));
-  const pick = (k: Tab, id: string | null = null) => {
+  const pick = (k: Tab, id: string | null = null, section?: SettingsSection) => {
     configurationOwner.current = new URLSearchParams(location.search).get("manager") ?? configurationOwner.current;
-    setAt({ tab: k, sub: id });
-    const to = settingsHref(k, id, phone, k === "assistant" || k === "model-config" || k === "hub" ? configurationOwner.current : null);
-    // from the phone's list the category goes on top of it, so Back returns to the list
+    const state: unknown = history.state;
+    // Out of an item's page opened on its category's page: back to that page's entry, as Back does, so neither a copy of
+    // it nor the item is left to go back to. A sheet open over the item has an entry of its own on top: off with both,
+    // its marker taken first so its close does not go back once more.
+    if (k === tab && sub && !id && openedFromSub(state)) {
+      setAt({ tab: k, sub: null, section: section ?? null });
+      if (!takeOverlayEntry()) return history.back();
+      history.replaceState(null, "", location.href);
+      return history.go(-2);
+    }
+    setAt({ tab: k, sub: id, section: section ?? null });
+    // the hub's page keeps its own choice of manager (the download mirrors); the current assistant's pages follow the pick
+    const to = settingsHref(k, id, phone, k === "hub" ? configurationOwner.current : null, section);
+    // from the phone's list the category goes on top of it, and an item's page on top of its category's page, so Back
+    // returns to each; another item of the category keeps the entry's way back, another category only the way to the list
     if (listed) history.pushState({ [FROM_LIST]: true }, "", BASE + to);
-    else history.replaceState(openedFromList(history.state) ? history.state : null, "", BASE + to);
+    else if (k === tab && !sub && id && itemIsPage(k)) {
+      if (takeOverlayEntry()) history.replaceState(itemState(state), "", BASE + to);
+      else history.pushState(itemState(state), "", BASE + to);
+    } else history.replaceState(k === tab && sub && id && openedFromSub(state) ? state : categoryState(state), "", BASE + to);
   };
   const toList = () => {
     configurationOwner.current = new URLSearchParams(location.search).get("manager") ?? configurationOwner.current;
-    if (openedFromList(history.state)) return history.back();
+    const steps = stepsToList(history.state);
+    if (steps) return steps === 1 ? history.back() : history.go(-steps);
     history.replaceState(null, "", href({ name: "settings" }));
-    setAt({ tab: null, sub: null });
+    setAt({ tab: null, sub: null, section: null });
+  };
+  // Settings search: filters the sidebar categories, and jumps to a group inside a page (scroll + brief highlight).
+  const [query, setQuery] = useState("");
+  const search = searchSettings(query);
+  const [scrollAnchor, setScrollAnchor] = useState<string | null>(null);
+  useEffect(() => {
+    if (!scrollAnchor) return;
+    const el = scroller.current?.querySelector<HTMLElement>(`[data-settings-group="${scrollAnchor}"]`) ?? document.getElementById(scrollAnchor);
+    if (!el) {
+      setScrollAnchor(null);
+      return;
+    }
+    el.scrollIntoView({ block: "start" });
+    const card = el.querySelector<HTMLElement>(":scope > div") ?? el;
+    const prev = card.style.boxShadow;
+    card.style.boxShadow = "inset 0 0 0 2px var(--accent)";
+    const timer = setTimeout(() => {
+      card.style.boxShadow = prev;
+      setScrollAnchor(null);
+    }, 1200);
+    return () => {
+      clearTimeout(timer);
+      card.style.boxShadow = prev;
+    };
+  }, [scrollAnchor, tab]);
+  const goGroup = (g: SearchGroup) => {
+    setQuery("");
+    const agent = g.tab === "agents" ? AGENT_KINDS.find((id) => g.anchor === `settings-${id}`) : undefined;
+    pick(g.tab, null, agent);
+    setScrollAnchor(g.anchor);
   };
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
       <header ref={header} className="flex min-h-14 shrink-0 items-center gap-2 border-b border-line px-3 py-2 sm:px-4">
         {phone && at.tab ? (
           <>
@@ -184,61 +286,226 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
             <h1 className="shrink-0 whitespace-nowrap text-[14px] font-semibold text-ink">{t("settings.title")}</h1>
           </>
         )}
-        {!phone && (
-          // when the labels don't fit (narrow desktop, English, Japanese) the bar wraps instead of hiding categories past the
-          // right edge: scrollbars are hidden and a mouse wheel cannot scroll it sideways (#3594)
-          <nav className="ml-1 flex min-w-0 flex-wrap items-center gap-0.5 rounded-control bg-inset p-0.5 shadow-hairline sm:ml-3" aria-label={t("settings.categories")}>
-            {tabs.map((it) => (
-              <button
-                key={it.k}
-                type="button"
-                onClick={() => pick(it.k)}
-                aria-current={tab === it.k ? "page" : undefined}
-                className={cx(
-                  "flex h-7 items-center gap-1.5 whitespace-nowrap rounded-[7px] px-2.5 text-[12.5px] transition-[background-color,color] duration-150",
-                  tab === it.k ? "bg-surface font-medium text-ink shadow-btn" : "text-ink-3 hover:text-ink-2",
-                )}
-              >
-                <Icon name={it.icon} size={13} />
-                {it.label}
-              </button>
-            ))}
-          </nav>
-        )}
       </header>
-      <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto">
-        {listed ? (
-          <div className="px-4 py-5" style={{ animation: `fade-up 320ms ${EASE} both` }}>
-            <SettingsList shown={shown} onPick={pick} />
-          </div>
-        ) : (
-          <div key={tab} className="mx-auto max-w-[760px] px-5 py-6 sm:px-8" style={{ animation: `fade-up 320ms ${EASE} both` }}>
-            {tab === "general" && <General onTriageModel={() => pick("model-config", "agent.triage")} onExtensions={() => pick("extensions")} />}
-            {tab === "notifications" && <NotificationSettings />}
-            {tab === "models" && <Models />}
-            {tab === "model-config" && <ModelConfiguration open={sub} onOpen={(id) => pick("model-config", id)} onProviders={() => pick("models")} />}
-            {tab === "assistant" && <AssistantSettings />}
-            {(tab === "claude" || tab === "codex" || tab === "agy" || tab === "omp") && <AgentSettings key={tab} agent={tab} />}
-            {tab === "channels" && (sub ? (
-              <ChannelPage key={sub} {...parseOwnedSub(sub)} onBack={() => pick("channels")} onSettings={(url) => {
-                const target = settingsTarget(url);
-                if (target && TABS.includes(target.tab as Tab)) pick(target.tab as Tab, target.sub);
-              }} />
-            ) : (
-              <ChannelList onOpen={(id) => pick("channels", id)} onMarketItem={(market, id) => pick("extensions", routeSub({ kind: "item", market, id }))} />
-            ))}
-            {tab === "connectors" && <Connectors open={sub} onOpen={(id) => pick("connectors", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} />}
-            {tab === "sent" && <SentSettings />}
-            {tab === "extensions" && <Extensions open={sub} onOpen={(id) => pick("extensions", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} onConnector={(id, manager) => pick("connectors", ownedSub(id, manager))} />}
-            {tab === "translate" && <TranslationSettings onConfigure={() => pick("model-config", "translate")} />}
-            {tab === "shortcuts" && <ShortcutSettings />}
-            {tab === "devices" && <Devices />}
-            {tab === "hub" && <HubSettings />}
-            {tab === "managers" && <ManagersSettings />}
-          </div>
+      <div className="flex min-h-0 min-w-0 flex-1">
+        {!phone && (
+          <SettingsNav tab={tab} query={query} onQuery={setQuery} search={search} shown={shown} onPick={pick} onGroup={goGroup} contentId={contentId} />
         )}
+        <div ref={scroller} id={contentId} role={listed ? undefined : "region"} aria-label={listed ? undefined : TAB_INFO[tab].label} tabIndex={0} className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent">
+          {listed ? (
+            <div className="px-4 py-5" style={{ animation: `fade-up 320ms ${EASE} both` }}>
+              <SettingsList shown={shown} onPick={pick} />
+            </div>
+          ) : (
+            <div key={ASSISTANT_TABS.has(tab) ? `${tab}@${picked ?? ""}` : tab} className={cx("mx-auto px-5 py-6 sm:px-8", tab === "channels" || tab === "connectors" || tab === "extensions" ? "max-w-[1120px]" : "max-w-[760px]")} style={{ animation: `fade-up 320ms ${EASE} both` }}>
+              {tab === "general" && <General onModel={() => pick("models", "translate", "model-config")} />}
+              {tab === "persona" && <AssistantProfile onTriageModel={() => pick("models", "agent.triage", "model-config")} />}
+              {tab === "avatar" && (
+                <Group title={t("settings.avatar")} footer={t("settings.avatar_footer")} anchor="avatar">
+                  <PersonaPicker onExtensions={() => pick("extensions")} />
+                </Group>
+              )}
+              {tab === "notifications" && <NotificationSettings />}
+              {tab === "knowledge" && <KnowledgeSelection />}
+              {tab === "sources" && <SourcesUI title={TAB_INFO.sources.label} />}
+              {tab === "models" && <>
+                <section id="settings-providers" className="scroll-mt-4">
+                  <h2 className="mb-2 px-1 text-[15px] font-semibold text-ink">{TAB_INFO.models.label}</h2>
+                  <Models />
+                </section>
+                <section id="settings-model-config" className="scroll-mt-4">
+                  {/* no section: the row is on the page in view, which stays where it is (#4282) */}
+                  <ModelConfiguration open={sub} onOpen={(id) => pick("models", id)} onProviders={() => pick("models", null, "providers")} />
+                </section>
+              </>}
+              {tab === "agents" && <AgentSections section={at.section} />}
+              {tab === "channels" && (sub ? (twoCol ? (
+                <div className="flex gap-6">
+                  <div className="w-[300px] shrink-0"><ChannelList onOpen={(id) => pick("channels", id)} onMarketItem={(market, id) => pick("extensions", routeSub({ kind: "item", market, id }))} /></div>
+                  <div className="min-w-0 flex-1"><ChannelPage key={sub} {...parseOwnedSub(sub)} onBack={() => pick("channels")} onSettings={(url) => {
+                    const target = settingsTarget(url);
+                    if (target && TABS.includes(target.tab as Tab)) pick(target.tab as Tab, target.sub);
+                  }} /></div>
+                </div>
+              ) : (
+                <ChannelPage key={sub} {...parseOwnedSub(sub)} onBack={() => pick("channels")} onSettings={(url) => {
+                  const target = settingsTarget(url);
+                  if (target && TABS.includes(target.tab as Tab)) pick(target.tab as Tab, target.sub);
+                }} />
+              )) : (
+                <ChannelList onOpen={(id) => pick("channels", id)} onMarketItem={(market, id) => pick("extensions", routeSub({ kind: "item", market, id }))} />
+              ))}
+              {tab === "connectors" && (sub && sub !== SENT_SUB && sub !== "feishu-bot" && twoCol ? (
+                <div className="flex gap-6">
+                  <div className="w-[300px] shrink-0"><Connectors open={null} onOpen={(id) => pick("connectors", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} /></div>
+                  <div className="min-w-0 flex-1"><Connectors open={sub} onOpen={(id) => pick("connectors", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} /></div>
+                </div>
+              ) : (
+                <Connectors open={sub} onOpen={(id) => pick("connectors", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} />
+              ))}
+              {tab === "extensions" && (extensionsRoute(sub).kind === "extension" && twoCol ? (
+                <div className="flex gap-6">
+                  <div className="w-[300px] shrink-0"><Extensions open={null} onOpen={(id) => pick("extensions", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} onConnector={(id, manager) => pick("connectors", ownedSub(id, manager))} /></div>
+                  <div className="min-w-0 flex-1"><Extensions open={sub} onOpen={(id) => pick("extensions", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} onConnector={(id, manager) => pick("connectors", ownedSub(id, manager))} /></div>
+                </div>
+              ) : (
+                <Extensions open={sub} onOpen={(id) => pick("extensions", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} onConnector={(id, manager) => pick("connectors", ownedSub(id, manager))} />
+              ))}
+              {tab === "shortcuts" && <ShortcutSettings />}
+              {tab === "devices" && <Devices />}
+              {tab === "hub" && <>
+                <HubSettings />
+                <AgentGroup />
+              </>}
+              {tab === "managers" && <ManagersSettings />}
+            </div>
+          )}
+        </div>
       </div>
     </div>
+  );
+}
+
+const AGENT_LABEL: Record<AgentTab, string> = { claude: "Claude Code", codex: "Codex", agy: "Antigravity", omp: "omp" };
+
+function isAgentSection(section: SettingsSection | null): section is AgentTab {
+  return section != null && (AGENT_KINDS as readonly string[]).includes(section);
+}
+
+/** The original stacked launcher sections. Each heading folds its own settings; all start open. */
+function AgentSections({ section }: { section: SettingsSection | null }) {
+  const [closed, setClosed] = useState<ReadonlySet<string>>(() => new Set());
+  useEffect(() => {
+    if (!isAgentSection(section)) return;
+    setClosed((cur) => {
+      if (!cur.has(section)) return cur;
+      const next = new Set(cur);
+      next.delete(section);
+      return next;
+    });
+  }, [section]);
+  const toggle = (id: AgentTab) => {
+    setClosed((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  return (
+    <>
+      {AGENT_KINDS.map((id) => {
+        const shown = !closed.has(id);
+        return (
+          <section key={id} id={`settings-${id}`} className="scroll-mt-4">
+            <button
+              type="button"
+              aria-expanded={shown}
+              aria-controls={`settings-${id}-body`}
+              aria-label={t(shown ? "settings-agentsettings.hide_agent" : "settings-agentsettings.show_agent", { agent: AGENT_LABEL[id] })}
+              onClick={() => toggle(id)}
+              className="mb-2 flex w-full items-center gap-1 px-1 py-0.5 text-left"
+            >
+              <h2 className="text-[15px] font-semibold text-ink">{AGENT_LABEL[id]}</h2>
+              <Icon name="chevronRight" size={14} className={cx("shrink-0 text-ink-3 transition-transform", shown && "rotate-90")} />
+            </button>
+            <div id={`settings-${id}-body`} hidden={!shown}>
+              <AgentSettings agent={id} />
+            </div>
+          </section>
+        );
+      })}
+    </>
+  );
+}
+
+/** The desktop left sidebar: a sticky "Settings" title and search box, then the grouped categories. */
+function SettingsNav({ tab, query, onQuery, search, shown, onPick, onGroup, contentId }: {
+  tab: Tab;
+  query: string;
+  onQuery: (q: string) => void;
+  search: ReturnType<typeof searchSettings>;
+  shown: (k: Tab) => boolean;
+  onPick: (k: Tab) => void;
+  onGroup: (g: SearchGroup) => void;
+  contentId: string;
+}) {
+  const nav = useRef<HTMLElement>(null);
+  // A deep link or a width change can select a category below the sidebar's fold.
+  useEffect(() => {
+    nav.current?.querySelector('[aria-current="page"]')?.scrollIntoView?.({ block: "nearest" });
+  }, [tab, query]);
+  const tabs = search.tabs.filter(shown);
+  const groups = search.groups.filter((g) => shown(g.tab));
+  const none = !!query && !tabs.length && !groups.length;
+  return (
+    <aside className="flex w-[236px] shrink-0 flex-col border-r border-line bg-inset">
+      <div className="shrink-0 border-b border-line px-3 pt-3 pb-2.5">
+        <div className="text-[14px] font-semibold text-ink">{t("settings.title")}</div>
+        <label className="mt-2 flex h-8 items-center gap-2 rounded-control bg-surface px-2.5 shadow-btn focus-within:shadow-[inset_0_0_0_1px_var(--accent)]">
+          <Icon name="search" size={13} stroke={2} className="shrink-0 text-ink-3" />
+          <input value={query} onChange={(e) => onQuery(e.target.value)} placeholder={t("settings.search_placeholder_settings")} aria-label={t("settings.search_settings")} className="min-w-0 flex-1 bg-transparent text-[13px] text-ink outline-none placeholder:text-ink-3" />
+          {query && <IconButton icon="x" label={t("settings.clear")} size={22} iconSize={12} onClick={() => onQuery("")} />}
+        </label>
+      </div>
+      <nav ref={nav} aria-label={t("settings.categories")} className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-2">
+        {query ? (
+          <>
+            {tabs.map((k) => <NavRow key={k} k={k} selected={tab === k} contentId={contentId} onPick={onPick} />)}
+            {groups.length > 0 && <div className="px-3 pt-3 pb-1 text-[11px] font-medium text-ink-3">{t("settings.search_in_page")}</div>}
+            {groups.map((g) => <GroupResult key={`${g.tab}/${g.anchor}`} g={g} onGroup={onGroup} />)}
+            {none && <p className="px-3 py-3 text-[12.5px] leading-relaxed text-ink-3">{t("settings.search_no_results")}</p>}
+          </>
+        ) : (
+          NAV_GROUPS.map((g) => {
+            const its = g.tabs.filter(shown);
+            if (!its.length) return null;
+            return (
+              <div key={g.key} data-settings-nav-group={g.key}>
+                <div className="flex min-h-7 items-center gap-1 pt-2 pr-1 pl-3 text-[11px] font-medium text-ink-3">
+                  <span className="min-w-0 flex-1"><GroupTitle group={g.key} compact /></span>
+                  <GroupAction group={g.key} />
+                </div>
+                {its.map((k) => <NavRow key={k} k={k} selected={tab === k} contentId={contentId} onPick={onPick} />)}
+                {hasFooter(g.key) && <p className="px-3 pt-1 pb-1.5 text-[11px] leading-snug text-ink-3"><GroupFooter group={g.key} /></p>}
+              </div>
+            );
+          })
+        )}
+      </nav>
+    </aside>
+  );
+}
+
+function NavRow({ k, selected, contentId, onPick }: { k: Tab; selected: boolean; contentId: string; onPick: (k: Tab) => void }) {
+  const info = TAB_INFO[k];
+  return (
+    <button
+      type="button"
+      onClick={() => onPick(k)}
+      aria-current={selected ? "page" : undefined}
+      aria-controls={contentId}
+      className={cx(
+        "relative flex h-8 w-full items-center gap-2 rounded-[7px] px-2.5 text-left text-[13px] transition-colors",
+        selected ? "bg-accent-tint font-medium text-accent-ink" : "text-ink-2 hover:bg-hover hover:text-ink",
+      )}
+    >
+      {selected && <span aria-hidden className="absolute left-0 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-full bg-accent" />}
+      <Icon name={info.icon} size={15} className="shrink-0" />
+      <span className="truncate" title={info.label}>{info.label}</span>
+    </button>
+  );
+}
+
+function GroupResult({ g, onGroup }: { g: SearchGroup; onGroup: (g: SearchGroup) => void }) {
+  return (
+    <button type="button" onClick={() => onGroup(g)} className="flex w-full items-center gap-1.5 rounded-[7px] px-3 py-1.5 text-left text-[12.5px] text-ink-2 transition-colors hover:bg-hover hover:text-ink">
+      <span className="min-w-0 truncate">
+        <span className="font-medium text-ink">{TAB_INFO[g.tab].label}</span>
+        <span className="mx-1 text-ink-3">›</span>
+        <span>{g.group}</span>
+      </span>
+    </button>
   );
 }
 
@@ -246,11 +513,11 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
 function SettingsList({ shown, onPick }: { shown: (k: Tab) => boolean; onPick: (k: Tab) => void }) {
   return (
     <nav aria-label={t("settings.categories")}>
-      {LIST_GROUPS.map((g) => {
+      {NAV_GROUPS.map((g) => {
         const tabs = g.tabs.filter(shown);
         if (!tabs.length) return null;
         return (
-          <Group key={g.title} title={g.title}>
+          <Group key={g.key} anchor={`nav-${g.key}`} title={<GroupTitle group={g.key} />} right={<GroupAction group={g.key} />} footer={hasFooter(g.key) ? <GroupFooter group={g.key} /> : undefined}>
             {tabs.map((k) => (
               <Row key={k} icon={TAB_INFO[k].icon} label={TAB_INFO[k].label} hint={TAB_INFO[k].hint} onClick={() => onPick(k)} />
             ))}
@@ -265,35 +532,19 @@ const host = hostOf;
 
 // ── General ─────────────────────────────────────────────
 
-interface AssistantState {
-  machine_id?: string;
-  launcher?: string;
-  cwd?: string;
-}
-
-function General({ onTriageModel, onExtensions }: { onTriageModel: () => void; onExtensions: () => void }) {
+function General({ onModel }: { onModel: () => void }) {
   const theme = useTheme();
   const replyMotion = useReplyMotionSetting();
-  const sidebarTerminals = useSidebarTerminals();
-  const agentDetails = useAgentDetails();
-  const contextAsUsed = useContextAsUsed();
-  const machines = useStore((s) => s.machines);
-  const [assistant, setAssistant] = useState<AssistantState | null>(null);
-
-  useEffect(() => {
-    api<AssistantState>("/assistant").then(setAssistant).catch((e) => toast(errorText(e), "error"));
-  }, []);
 
   const themes: { k: Theme; label: string; icon: IconName }[] = [
     { k: "system", label: t("language.system"), icon: "monitor" },
     { k: "light", label: t("settings.theme_light"), icon: "sun" },
     { k: "dark", label: t("settings.theme_dark"), icon: "moon" },
   ];
-  const machineName = machines.find((m) => m.id === assistant?.machine_id)?.name ?? assistant?.machine_id;
 
   return (
     <>
-      <Group title={t("settings.appearance")}>
+      <Group title={t("settings.appearance")} anchor="appearance">
         <div className="flex gap-2 p-3">
           {themes.map((th) => (
             <button
@@ -318,37 +569,52 @@ function General({ onTriageModel, onExtensions }: { onTriageModel: () => void; o
         <Row label={t("settings.reply_motion")} hint={t("settings.reply_motion_hint")}>
           <Switch on={replyMotion} onChange={setReplyMotionEnabled} label={t("settings.reply_motion")} />
         </Row>
-        <TerminalModeRow />
-        <Row label={t("settings.sidebar_terminals")} hint={t("settings.sidebar_terminals_hint")}>
-          <Switch on={sidebarTerminals} onChange={setSidebarTerminals} label={t("settings.sidebar_terminals")} />
-        </Row>
-        <Row label={t("context.details")} hint={t("context.details_hint")}>
-          <Switch on={agentDetails} onChange={setAgentDetails} label={t("context.details")} />
-        </Row>
-        <Row label={t("context.as_used")} hint={t("context.as_used_hint")}>
-          <Switch on={contextAsUsed} onChange={setContextAsUsed} label={t("context.as_used")} />
-        </Row>
+        <RecentChatsRow />
       </Group>
 
       <SidebarPagesGroup />
 
-      <AgentGroup />
+      <section id="settings-translation" className="scroll-mt-4">
+        <TranslationSettings onConfigure={onModel} />
+      </section>
 
-      <Group title={t("settings.avatar")} footer={t("settings.avatar_footer")}>
-        <PersonaPicker onExtensions={onExtensions} />
-      </Group>
-
-      {/* where it runs by the computer's name only: its folder is a path a newcomer has no use for (Settings › Assistant shows it);
-          no computer yet ("" from the hub) says so instead of a sentence with gaps */}
-      <Group title={t("settings.assistant")} footer={assistantFooter(machineName, !!assistant)}>
-        <Row label={t("settings.runs_on")}>{machineName || (assistant ? t("settings-assistantsettings.machine_none") : "—")}</Row>
-      </Group>
-
-      <TriageSettings onModel={onTriageModel} />
-
+      <AgentPreferences />
       <HubList />
       <About />
     </>
+  );
+}
+
+/** The assistant's profile (the current assistant's): About me, memory, skills, scheduled tasks and where it runs, then
+ *  session triage. Its avatar is the hub's (the Avatar page), and what was about this browser is under General. */
+function AssistantProfile({ onTriageModel }: { onTriageModel: () => void }) {
+  return (
+    <>
+      <AssistantSettings bare />
+      <TriageSettings onModel={onTriageModel} />
+    </>
+  );
+}
+
+/** This browser's own switches for Agents (the terminal, the sidebar, the details shown). */
+function AgentPreferences() {
+  const workBrowserReady = useStore((s) => s.features.includes("sessions_dimensions"));
+  const sidebarTerminals = useSidebarTerminals();
+  const agentDetails = useAgentDetails();
+  const contextAsUsed = useContextAsUsed();
+  return (
+    <Group title={t("settings.agent_preferences")} anchor="agent-preferences">
+      <TerminalModeRow />
+      {!workBrowserReady && <Row label={t("settings.sidebar_terminals")} hint={t("settings.sidebar_terminals_hint")}>
+        <Switch on={sidebarTerminals} onChange={setSidebarTerminals} label={t("settings.sidebar_terminals")} />
+      </Row>}
+      <Row label={t("context.details")} hint={t("context.details_hint")}>
+        <Switch on={agentDetails} onChange={setAgentDetails} label={t("context.details")} />
+      </Row>
+      <Row label={t("context.as_used")} hint={t("context.as_used_hint")}>
+        <Switch on={contextAsUsed} onChange={setContextAsUsed} label={t("context.as_used")} />
+      </Row>
+    </Group>
   );
 }
 
@@ -364,17 +630,9 @@ function About() {
   // interconnected hubs (docs/archive/operations/plan-hub-mesh.md 2.6): this page talks to one hub and sees its whole group
   const mesh = useStore((s) => s.mesh);
   const others = mesh.filter((h) => !h.self);
-  const logout = async () => {
-    // signing out on purpose: a request that gets a 401 meanwhile must not show "this browser was signed out"
-    handleUnauthorized(() => {});
-    const id = storedCredentials().tokenId;
-    if (id) await api(`/auth/tokens/${enc(id)}`, { method: "DELETE" }).catch(() => {});
-    setToken("");
-    reset();
-    location.href = BASE + "/";
-  };
+  const disconnect = useDisconnect();
   return (
-    <Group title={t("settings.this_browser")} footer={t("settings.this_browser_footer")}>
+    <Group title={t("settings.this_browser")} footer={t("settings.this_browser_footer")} anchor="this-browser">
       <Row label={t("settings.hub_address")} mono>
         {location.host}
       </Row>
@@ -392,10 +650,11 @@ function About() {
       <Row label={t("settings.computers")}>{t("settings.computers_online", { online: machines.filter((m) => m.online).length, total: machines.length })}</Row>
       <InstallRow />
       <div className="flex justify-end px-4 py-2.5">
-        <Button tone="quiet" icon="logout" onClick={() => void logout()} className="text-red enabled:hover:text-red">
+        <Button tone="quiet" icon="logout" onClick={disconnect.start} busy={disconnect.busy} className="text-red enabled:hover:text-red">
           {t("settings.disconnect_browser")}
         </Button>
       </div>
+      {disconnect.dialog}
     </Group>
   );
 }
@@ -446,29 +705,51 @@ function Models() {
   const [open, setOpen] = useState<string | null>(() => new URLSearchParams(location.search).get("launcher"));
   const [editing, setEditing] = useState<LauncherView | "new" | null>(() => (new URLSearchParams(location.search).get("add") === "1" ? "new" : null));
   const [importing, setImporting] = useState(false);
+  // the import opened for one alias the wizard found (#5193); null: the computer's whole list
+  const [importAlias, setImportAlias] = useState<FoundAlias | null>(null);
+  // what a stored provider opens with when a paste goes on with it
+  const [editDraft, setEditDraft] = useState<EditDraft | null>(null);
 
+  // the list read again; rejects when it couldn't be
+  const refresh = () => loadLaunchers<LauncherView>().then((r) => (setList(r.launchers), setSync(r.sync ?? []), r.launchers));
   const load = () => {
     setLoading(true);
     setError("");
-    return loadLaunchers<LauncherView>()
-      .then((r) => (setList(r.launchers), setSync(r.sync ?? [])))
+    return refresh()
       .catch((e) => setError(errorText(e)))
       .finally(() => setLoading(false));
   };
   useEffect(() => void load(), []);
+  const found = useMemo(() => foundAliases(list ?? [], machines), [list, machines]);
+  const closeWizard = () => (setEditing(null), setEditDraft(null), dropLinkParams());
+  // The wizard swaps to a stored provider the paste matched; one added since this list loaded is in a fresh one.
+  const editWith = async (name: string, draft: EditDraft) => {
+    const find = (ls?: LauncherView[] | null) => ls?.find((l) => managedProvider(l.source) && l.name === name);
+    let l = find(list);
+    if (!l) {
+      try {
+        l = find(await refresh());
+      } catch (e) {
+        return toast(t("settings.launchers_failed", { error: errorText(e) }), "error");
+      }
+    }
+    if (!l) return toast(t("settings-providerpaste.provider_missing", { name }), "error");
+    setEditDraft(draft);
+    setEditing(l);
+  };
 
   const name = (id: string) => sync.find((s) => s.machine === id)?.name || machines.find((m) => m.id === id)?.name || id;
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!list || !q) return list ?? [];
-    return list.filter((l) => [l.name, l.model, l.small_model, l.base_url, ...(l.machines ?? []).map(name)].some((v) => v?.toLowerCase().includes(q)));
+    return list.filter((l) => [l.name, l.display_name, l.model, l.small_model, l.base_url, ...(l.machines ?? []).map(name)].some((v) => v?.toLowerCase().includes(q)));
   }, [list, query, machines, sync]);
   const managed = shown.filter((l) => managedProvider(l.source));
   const builtin = builtinRows(shown);
   const rc = rcGroups(shown);
   // a wrapper script on PATH or a runtime's launcher (agy, omp): a computer's, but not from an rc file
   const onPath = shown.filter((l) => !managedProvider(l.source) && l.source !== "builtin" && l.source !== "zshrc" && !l.hidden);
-  const hidden = shown.filter((l) => !managedProvider(l.source) && l.source !== "builtin" && l.hidden);
+  const hidden = shown.filter((l) => !managedProvider(l.source) && l.hidden);
   // the machines that did not answer this time, named on the entries they gave before
   const staleMark = (ids?: string[]) =>
     ids?.length ? <Pill tone="orange">{t("settings.stale", { machines: formatList(ids.map(name), { type: "conjunction", style: "narrow" }) })}</Pill> : null;
@@ -496,12 +777,20 @@ function Models() {
 
   return (
     <>
-      <div className="mb-4 flex items-center gap-2">
+      <div className="mb-8">
+        <h2 className="mb-1 px-1 text-[15px] font-semibold text-ink">{t("settings-nav.tab_providers")}</h2>
+        <div className="mb-4 flex items-center gap-2">
         <label className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-control bg-surface px-3 shadow-btn focus-within:shadow-[inset_0_0_0_1px_var(--accent)]">
           <Icon name="search" size={13} stroke={2} className="text-ink-3" />
           <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("settings.search_placeholder")} className="min-w-0 flex-1 bg-transparent text-[13px] text-ink outline-none placeholder:text-ink-3" aria-label={t("settings.search_providers")} />
           {query && <IconButton icon="x" label={t("settings.clear")} size={22} iconSize={12} onClick={() => setQuery("")} />}
         </label>
+        {list && (
+          // for people who already run claude from aliases on a computer: turns them into providers (the dialog explains when there is no computer)
+          <Button tone="secondary" icon="download" title={t("settings-providerimport.title")} onClick={() => (setImportAlias(null), setImporting(true))}>
+            <span className="max-sm:sr-only">{t("settings-providerimport.import")}</span>
+          </Button>
+        )}
         <Button tone="accent" icon="plus" onClick={() => setEditing("new")}>
           <span className="max-sm:hidden">{t("settings.add_provider")}</span>
           <span className="sm:hidden">{t("settings.add_provider_short")}</span>
@@ -515,13 +804,14 @@ function Models() {
       {list && query && shown.length === 0 && <p className="py-10 text-center text-[13px] text-ink-3">{t("settings.no_matching_providers", { query })}</p>}
       {list && (!query || managed.length > 0) && (
         <Group title={t("settings.managed_title", { count: managed.length })} footer={managed.length ? t("settings.managed_footer") : undefined}>
-          {managed.length ? managed.map(row) : <p className="px-4 py-3 text-[12.5px] text-ink-3">{t("settings.managed_empty")}</p>}
+          {managed.length ? <ManagedRows list={managed} row={row} /> : <p className="px-4 py-3 text-[12.5px] text-ink-3">{t("settings.managed_empty")}</p>}
         </Group>
       )}
       {builtin.length > 0 && (
         <Group title={t("settings.builtin_title", { count: builtin.length })} footer={t("settings.builtin_footer")}>
           {builtin.map((b) => (
-            <div key={`${b.name}/${b.machine}`} className="flex items-center gap-3 px-4 py-2.5">
+            // its page tests it and hides it in Persona (#4384), as an rc-file launcher's does
+            <button key={`${b.name}/${b.machine}`} type="button" onClick={() => setOpen(b.name)} className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-hover">
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <span className="truncate text-[13px] font-medium text-ink">{t("settings.builtin_row", { name: b.name, machine: name(b.machine) })}</span>
@@ -529,7 +819,8 @@ function Models() {
                 </div>
                 <div className="mt-0.5 truncate font-mono text-[11.5px] text-ink-3">{b.version ? `Claude Code ${b.version}` : "Claude Code"}</div>
               </div>
-            </div>
+              <Icon name="chevronRight" size={12} stroke={2} className="shrink-0 text-ink-3" />
+            </button>
           ))}
         </Group>
       )}
@@ -546,16 +837,6 @@ function Models() {
       {hidden.length > 0 && (
         <Group title={t("settings.hidden_title", { count: hidden.length })} footer={t("settings.hidden_footer")}>
           {hidden.map(row)}
-        </Group>
-      )}
-      {list && !query && (
-        // "Import from ~/.zshrc" reads a computer's ~/.zshrc, so it is for people who already run claude there, and needs a computer
-        <Group title={t("settings.providers_advanced")} footer={machines.length ? t("settings.zshrc_import_hint") : t("settings.zshrc_import_no_machines")}>
-          <Row label={t("settings-providerimport.title")} icon="terminal">
-            <Button tone="secondary" icon="download" disabled={machines.length === 0} onClick={() => setImporting(true)}>
-              {t("settings-providerimport.import")}
-            </Button>
-          </Row>
         </Group>
       )}
       {list && !query && sync.length > 0 && (
@@ -583,8 +864,10 @@ function Models() {
           setEditing(l);
         }}
       />
-      <ProviderWizard existing={editing} onClose={() => (setEditing(null), dropLinkParams())} onSaved={() => void load()} />
-      <ProviderImport open={importing} onClose={() => setImporting(false)} onImported={() => void load()} />
+      <ProviderWizard existing={editing} draft={editDraft} found={found} onClose={closeWizard} onSaved={() => void load()}
+        onImportAlias={(a) => (closeWizard(), setImportAlias(a), setImporting(true))} onEditWith={(name, draft) => void editWith(name, draft)} />
+      <ProviderImport open={importing} machine={importAlias?.machine} alias={importAlias?.name} onClose={() => setImporting(false)} onImported={() => void load()} />
+      </div>
     </>
   );
 }
@@ -595,6 +878,8 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit }: { nam
   const [error, setError] = useState("");
   const [checks, setChecks] = useState<Record<string, LauncherCheck | null>>({});
   const [confirm, setConfirm] = useState(false);
+  // what still names an rc-file launcher, asked when its Hide is confirmed: they keep running on it (#4661)
+  const [uses, setUses] = useState<string[] | null>(null);
   const [showDef, setShowDef] = useState(false);
   const mname = (id: string) => machines.find((m) => m.id === id)?.name ?? id;
   // extensions draw a section here (docs/extensions/extensions.md "Declarative UI" launcher_section)
@@ -609,6 +894,7 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit }: { nam
     setError("");
     setChecks({});
     setConfirm(false);
+    setUses(null);
     setShowDef(false);
     if (!name) return;
     let live = true;
@@ -650,11 +936,21 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit }: { nam
     );
   };
 
+  const askRemove = () => {
+    setConfirm((c) => !c);
+    if (!l || !name || managedProvider(l.source) || uses !== null) return;
+    const asked = name;
+    api<{ uses?: string[] }>(`${enLauncher(name)}/uses`)
+      .then((r) => shown.current === asked && setUses(r.uses ?? []))
+      .catch(() => {}); // an older hub: the plain confirmation, as before
+  };
+
   const remove = async () => {
     if (!l) return;
     try {
       await api(enLauncher(l.name), { method: "DELETE" });
-      toast(managedProvider(l.source) ? t("settings.deleted", { name: l.name }) : t("settings.hid", { name: l.name }), "ok");
+      forgetProviderNames();
+      toast(managedProvider(l.source) ? t("settings.deleted", { name: providerTitle(l) }) : t("settings.hid", { name: providerTitle(l) }), "ok");
       onChanged();
       onClose();
     } catch (e) {
@@ -665,7 +961,8 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit }: { nam
     if (!l) return;
     try {
       await api(`${enLauncher(l.name)}/restore`, { method: "POST" });
-      toast(t("settings.restored", { name: l.name }), "ok");
+      forgetProviderNames();
+      toast(t("settings.restored", { name: providerTitle(l) }), "ok");
       onChanged();
       onClose();
     } catch (e) {
@@ -678,7 +975,8 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit }: { nam
       open={name !== null}
       onClose={onClose}
       width={620}
-      title={<span className="font-mono">{name}</span>}
+      // a provider's display name with its startup ID after it (#5029); an rc alias, or one not read yet, by its ID
+      title={l && providerIdNote(l) ? <>{providerTitle(l)} <span className="font-mono text-[11.5px] font-normal text-ink-3">{providerIdNote(l)}</span></> : <span className="font-mono">{name}</span>}
       footer={
         l && (
           <>
@@ -688,12 +986,13 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit }: { nam
               </Button>
             ) : (
               <span className="relative">
-                <Button tone="quiet" icon={managedProvider(l.source) ? "x" : undefined} onClick={() => setConfirm((c) => !c)} className="text-red enabled:hover:text-red">
+                <Button tone="quiet" icon={managedProvider(l.source) ? "x" : undefined} onClick={askRemove} className="text-red enabled:hover:text-red">
                   {managedProvider(l.source) ? t("settings.delete_provider") : t("settings.hide_in_persona")}
                 </Button>
                 {/* the confirmation comes up right at the button (like the app), not as another dialog */}
                 {confirm && (
-                  <span className="absolute bottom-full left-0 mb-1.5 rounded-control bg-surface p-1 shadow-overlay" style={{ animation: `pop-in 160ms ${EASE} both` }}>
+                  <span className="absolute bottom-full left-0 mb-1.5 flex flex-col items-start gap-1 rounded-control bg-surface p-1 shadow-overlay" style={{ animation: `pop-in 160ms ${EASE} both` }}>
+                    {!managedProvider(l.source) && !!uses?.length && <span className="w-72 px-1 text-[12px] text-ink-2">{t("settings.hide_uses", { uses: uses.join(", ") })}</span>}
                     <Button tone="danger" onClick={() => void remove()}>
                       {managedProvider(l.source) ? t("settings.confirm_delete") : t("settings.confirm_hide")}
                     </Button>
@@ -762,7 +1061,9 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit }: { nam
               {l.kind !== "api" && (!l.agent || l.agent === "claude") && l.subagent_model && <KVRow k={t("settings.subagent_model")} v={l.subagent_model} mono />}
               {l.kind !== "api" && (!l.agent || l.agent === "claude") && l.custom_model && <KVRow k={t("settings.custom_model")} v={l.custom_model} mono />}
               {l.kind !== "api" && (!l.agent || l.agent === "claude") && l.custom_model_name && <KVRow k={t("settings.custom_model_name")} v={l.custom_model_name} />}
-              <KVRow k="API Key" v={l.has_key ? t("settings.key_set_hidden") : t("settings.not_set")} />
+              <KVRow k="API Key" v={l.key_reference ? referenceState(l.key_reference) : l.has_key ? t("settings.key_set_hidden") : t("settings.not_set")} />
+              {l.share && <KVRow k={t("settings.devices")} v={scopeSummary(l, mname)} />}
+              {l.share && l.key_machines?.length ? <KVRow k={t("settings.machine_keys")} v={formatList(l.key_machines.map(mname), { type: "conjunction", style: "narrow" })} /> : null}
               {l.api !== "responses" && l.api !== "chat" && (!l.agent || l.agent === "claude") && <KVRow k={t("settings.auth")} v={l.auth === "bearer" ? "Bearer" : "x-api-key"} />}
               {l.kind !== "api" && l.args?.length ? <KVRow k={t("settings.extra_args")} v={l.args.join(" ")} mono /> : null}
               {l.models?.length ? <KVRow k={t("settings.model_list")} v={formatList(l.models.map((m) => m.id), { type: "conjunction", style: "narrow" })} mono sub={t("settings.model_count", { count: l.models.length })} /> : null}
@@ -805,6 +1106,23 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit }: { nam
         </div>
       )}
     </Dialog>
+  );
+}
+
+/** Persona's providers by harness (Claude Code, Codex, …, direct API), each under a small header; one harness alone
+ *  needs none, so the list stays as it was. */
+function ManagedRows({ list, row }: { list: LauncherView[]; row: (l: LauncherView) => React.ReactNode }) {
+  const groups = harnessGroups(list);
+  if (groups.length < 2) return <>{list.map(row)}</>;
+  return (
+    <>
+      {groups.map((g) => (
+        <div key={g.harness} role="group" aria-label={harnessLabel(g.harness)} className="divide-y divide-line">
+          <div className="bg-inset px-4 py-1.5 text-[11px] font-medium text-ink-3">{harnessLabel(g.harness)}</div>
+          {g.items.map(row)}
+        </div>
+      ))}
+    </>
   );
 }
 

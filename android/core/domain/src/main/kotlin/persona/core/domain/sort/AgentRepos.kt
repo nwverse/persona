@@ -38,14 +38,26 @@ fun repoOf(cwd: String, repoRoot: String? = null): RepoPlace {
     return RepoPlace(path, baseName(path), path, main = true)
 }
 
-/** A working tree of a repository on one computer and the sessions in it (in the order they came). */
-data class AgentWorktree(val id: String, val name: String, val path: String, val main: Boolean, val members: List<AgentSession>)
+/**
+ * A working tree of a repository on one computer and the sessions in it (in the order they came). [name] is its [branch]
+ * when the node says (#1805), else its folder's name (the main checkout: the repository's). A linked tree goes by the
+ * name its host gave the place instead, when its sessions agree on one (#4497, [hostPlaceName]) and no Orca session is in
+ * it; its [id] does not change with the name.
+ */
+data class AgentWorktree(
+    val id: String, val name: String, val path: String, val main: Boolean, val members: List<AgentSession>, val branch: String? = null,
+    /** The node placed its sessions in git (#1805) and named no branch: HEAD is detached there ([worktreeLine]). */
+    val detached: Boolean = false,
+)
 
 /** One repository on one computer, its working trees the main checkout first, then by name. */
 data class AgentRepo(val id: String, val machineId: String, val name: String, val path: String, val worktrees: List<AgentWorktree>) {
     val members: List<AgentSession> get() = worktrees.flatMap { it.members }
-    /** Only its main checkout: its sessions sit right under the repository, without a working-tree heading. */
-    val flat: Boolean get() = worktrees.size == 1 && worktrees[0].main
+    /**
+     * Only its main checkout and no branch the node named: its sessions sit right under the repository, without a
+     * working-tree heading. A named branch keeps its heading (#1805: machine → project → branch → sessions).
+     */
+    val flat: Boolean get() = worktrees.size == 1 && worktrees[0].main && worktrees[0].branch == null
 }
 
 /**
@@ -84,9 +96,30 @@ internal val NaturalOrder = Comparator<String> { a, b ->
 
 private val byName = compareBy<Pair<String, String>, String>(NaturalOrder) { it.first }.thenBy { it.second }
 
-private val AgentSession.place: RepoPlace get() = repoOf(session.cwd, session.repoRoot)
+/**
+ * Where the node placed a session in git (#1805, web's `gitPlaceOf`, iOS's `RepoPlace.git`): its project (`repo_root`,
+ * else the working tree itself) and working tree; null from an older node, which leaves [repoOf]'s inference.
+ */
+fun gitPlaceOf(repoRoot: String?, worktree: String?): RepoPlace? {
+    val tree = worktree.orEmpty().trimEnd('/')
+    if (tree.isEmpty()) return null
+    val repo = repoRoot.orEmpty().trimEnd('/').ifEmpty { tree }
+    return RepoPlace(repo, baseName(repo), tree, main = tree == repo)
+}
 
-/** The repositories of [rows] by name in natural order (then path), each computer's apart; ids are `repo/<machine>/<path>`, `tree/<machine>/<path>`. */
+private val AgentSession.place: RepoPlace
+    get() = gitPlaceOf(session.repoRoot, session.worktree) ?: repoOf(session.cwd, session.repoRoot)
+
+/**
+ * The name the host gave the place [members] run in (#4497, web's `hostPlaceName`: Paseo sends its workspace's title as
+ * `slot_name`, with no `slot_id`), when every session that gives one gives the same; two different names name nothing.
+ * A `slot_name` beside a `slot_id` is a tab's label (herdr), which names no working tree.
+ */
+private fun hostPlaceName(members: List<AgentSession>): String? =
+    members.mapNotNullTo(mutableSetOf()) { m -> m.session.slotName?.trim()?.takeIf { it.isNotEmpty() && m.session.slotId.isNullOrBlank() } }
+        .singleOrNull()
+
+/** The repositories of [rows] by name in natural order (then path), with each computer's repositories kept apart. */
 fun agentRepos(rows: List<AgentSession>): List<AgentRepo> =
     rows.groupBy { it.session.machineId to it.place.repo }.map { (key, members) ->
         val (machine, repo) = key
@@ -94,7 +127,16 @@ fun agentRepos(rows: List<AgentSession>): List<AgentRepo> =
         val name = place.name.ifEmpty { UnnamedRepo }
         val trees = members.groupBy { it.place.worktree }.map { (path, inTree) ->
             val main = inTree.first().place.main
-            AgentWorktree("tree/$machine/$path", if (path == repo) name else baseName(path), path, main, inTree)
+            // Orca's sidebar and git name a working tree by its branch.
+            val branch = inTree.firstNotNullOfOrNull { it.session.branch?.takeIf(String::isNotEmpty) }
+            // Keep the saved fold key for the repository inferred from the path. If the host puts the same
+            // path under a different repository, scope its key to that repository even when filtered on its own.
+            val id = "tree/$machine/$path" + if (repo != repoOf(path).repo) "\u0000$repo" else ""
+            // A linked tree takes the name its host gave it (#4497), its branch staying beside it. The main checkout keeps
+            // its name: several workspaces can share it. So does a tree with an Orca session in it, which Orca names (web `orcaTrees`).
+            val hostName = if (main || inTree.any { it.session.spaceKind == "orca" }) null else hostPlaceName(inTree)
+            AgentWorktree(id, hostName ?: branch ?: if (path == repo) name else baseName(path), path, main, inTree, branch,
+                detached = branch == null && inTree.any { !it.session.worktree.isNullOrBlank() })
         }.sortedWith(compareBy<AgentWorktree> { !it.main }.thenComparing({ it.name to it.path }, byName))
         AgentRepo("repo/$machine/$repo", machine, name, repo, trees)
     }.sortedWith(compareBy<AgentRepo, Pair<String, String>>(byName) { it.name to it.path }.thenBy { it.machineId })

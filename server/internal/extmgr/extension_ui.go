@@ -173,6 +173,9 @@ type uiRequest struct {
 		Size     string `json:"size,omitempty"`
 		// UIVersion is the UI version the app draws: 1 (the first eight items) when it says nothing.
 		UIVersion int `json:"ui_version,omitempty"`
+		// Assistant is the name the app shows for the assistant (its "Ask {name}…"), sent only to the manager's own
+		// pages (subscriptions_ui.go), which name it; never handed to an extension (uiParams).
+		Assistant string `json:"assistant,omitempty"`
 	} `json:"context"`
 	State  string            `json:"state,omitempty"`
 	Action string            `json:"action,omitempty"`
@@ -351,6 +354,9 @@ func (h *Manager) uiCall(ctx context.Context, id, uiID string, in uiRequest) (ex
 			if err := checkPushes(p.Manifest, item, &v, nil); err != nil {
 				return res, err
 			}
+			if err := h.signPictures(id, uiID, params.UIVersion, &v, nil); err != nil {
+				return res, err
+			}
 			res.View = &v
 			return res, nil
 		}
@@ -369,6 +375,9 @@ func (h *Manager) uiCall(ctx context.Context, id, uiID string, in uiRequest) (ex
 			return extension.ActionResult{}, err
 		}
 		if err := checkPushes(p.Manifest, item, res.View, res.Push); err != nil {
+			return extension.ActionResult{}, err
+		}
+		if err := h.signPictures(id, uiID, params.UIVersion, res.View, res.Items); err != nil {
 			return extension.ActionResult{}, err
 		}
 		if params.UIVersion < 3 {

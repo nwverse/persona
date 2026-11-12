@@ -159,6 +159,12 @@ func (c *conversation) startSession(ctx context.Context, up upLink, w wire, p *P
 	in prompts.VoiceInstructions, tools []string) (int, error) {
 	in.Tools = c.toolMode(tools)
 	s := session{Model: model, Voice: voice, InputRate: p.inputRate(), Instructions: fitInstructions(in), Tools: toolDecls(tools)}
+	return startUpstream(ctx, up, w, p, s)
+}
+
+// startUpstream sends session s's start on up and waits for the service to start it: the rate of its audio. A failure
+// closes up; the service's refusal is a *sessionRefused. A call's sessions and a read-aloud's (speak.go) start alike.
+func startUpstream(ctx context.Context, up upLink, w wire, p *Provider, s session) (int, error) {
 	if err := writeJSON(ctx, up, w.start(s)); err != nil {
 		_ = up.CloseNow()
 		return 0, err
@@ -243,6 +249,12 @@ func fitInstructions(in prompts.VoiceInstructions) string {
 
 // dial opens the upstream socket: the service's WebSocket, or the fake dialect's stand-in.
 func (c *conversation) dial(ctx context.Context, p *Provider, w wire, model string) (upLink, error) {
+	return dialUpstream(ctx, p, w, model)
+}
+
+// dialUpstream opens provider p's socket for model, with its credential: the service's WebSocket, or the fake
+// dialect's stand-in.
+func dialUpstream(ctx context.Context, p *Provider, w wire, model string) (upLink, error) {
 	if p.Dialect == DialectFake {
 		return newFakeLink(), nil
 	}
@@ -367,8 +379,9 @@ func (c *conversation) handle(gen int, e event) {
 		}
 		c.lastAudio = now
 		if c.dropAudio {
-			return
+			return // the rest of an answer cut off: the user never hears it, so it answers nothing (nudge.go)
 		}
+		c.modelActed(now) // before its caption of the user's line closes, if that is still open: this answers it
 		c.pace.played(now, len(e.audio), c.outRate)
 		c.closeUser()
 		select {
@@ -382,15 +395,24 @@ func (c *conversation) handle(gen int, e event) {
 			c.gate.user = time.Now()
 			c.userAt = c.gate.user
 		}
-		c.userText(e.text, e.replace, e.final, spoke)
+		c.userLineDone(c.userText(e.text, e.replace, e.final, spoke)) // a line the service ends itself (codex)
 	case evAssistant:
+		if strings.TrimSpace(e.text) != "" {
+			c.modelActed(time.Now())
+		}
 		c.asstText(e.text, e.replace, e.final, e.name)
 	case evReply:
 		c.signals, c.turnsEnd = true, true
 		c.reply, c.replyVoiced = e.id, false
+		c.replying = true
 	case evTurnEnd:
 		c.dropAudio, c.cutAt = false, time.Time{}
 		c.turnsEnd = true
+		c.replying = false
+		if c.createOwed {
+			c.createOwed = false
+			go c.sendUp(gen, responseCreate)
+		}
 		if e.id != "" {
 			c.signals = true
 			if c.replied = append(c.replied, e.id); len(c.replied) > repliedMost {
@@ -417,6 +439,7 @@ func (c *conversation) handle(gen int, e event) {
 		c.pace.playEnd = time.Now() // the app drops what it had not played
 		c.closeAsst()
 	case evDelegation:
+		c.modelActed(time.Now())
 		c.closeUser()
 		c.pace.delegated = time.Now()
 		if e.id == "" {
@@ -442,6 +465,7 @@ func (c *conversation) handle(gen int, e event) {
 		c.logf("delegation %s: made in session %d", e.id, sessionNo(gen))
 		c.startTask(e.id, e.text, at, reply)
 	case evToolCall:
+		c.modelActed(time.Now())
 		c.closeUser()
 		c.pace.delegated = time.Now()
 		c.count(func(l *callLog) { l.calls++ })
@@ -469,16 +493,34 @@ func (c *conversation) handle(gen int, e event) {
 func (c *conversation) sendUp(gen int, frames ...any) bool {
 	c.mu.Lock()
 	up, cur, ready := c.up, c.gen, c.ready
+	if ready && up != nil && (gen < 0 || gen == cur) && c.replying {
+		// A response.create while a reply is under way is refused: it goes when that reply is over (evTurnEnd).
+		frames = slices.DeleteFunc(slices.Clone(frames), func(f any) bool {
+			if isResponseCreate(f) {
+				c.createOwed = true
+				return true
+			}
+			return false
+		})
+	}
 	c.mu.Unlock()
 	if !ready || up == nil || (gen >= 0 && gen != cur) {
 		return false
 	}
 	for _, f := range frames {
-		if err := writeJSON(c.ctx, up, f); err != nil {
+		if err := c.writeUp(up, f); err != nil {
 			return false
 		}
 	}
 	return true
+}
+
+// responseCreate asks the service for a response (realtime dialect).
+var responseCreate = map[string]any{"type": "response.create"}
+
+func isResponseCreate(f any) bool {
+	m, ok := f.(map[string]any)
+	return ok && m["type"] == "response.create"
 }
 
 // lost: the upstream session went away while the app is still here; a new one is told what was said.
@@ -505,6 +547,7 @@ func (c *conversation) lost(gen int, why error) {
 	c.count(func(l *callLog) { l.reconnects++ })
 	c.gen++
 	c.ready = false
+	c.replying, c.createOwed = false, false // that session's reply, and what waited on it
 	old := c.up
 	c.up = nil
 	for id, t := range c.pending {
@@ -516,6 +559,9 @@ func (c *conversation) lost(gen int, why error) {
 	c.sendApp(map[string]any{"type": "clear"})
 	c.closeAsst()
 	c.closeUser()
+	if c.owed.result {
+		c.owed = owedAnswer{} // what was handed to that session went with it; the user's line is in the next one's history
+	}
 	if c.version >= 2 {
 		c.sendApp(map[string]any{"type": "link", "state": linkReconnecting})
 	} else {

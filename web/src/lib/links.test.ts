@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
 // router.ts listens to popstate at load (no window in node); links.ts only needs navigate from it.
-vi.mock("./router", () => ({ navigate: vi.fn() }));
+vi.mock("./router", () => ({ navigate: vi.fn(), routeAt: () => null }));
 vi.mock("./api", () => ({ api: vi.fn(), enc: encodeURIComponent, getToken: () => "tok", ApiError: class extends Error {} }));
 
+import { api } from "./api";
 import { parseUserText } from "./turns";
-import { closePanel, getPanel } from "./panel";
+import { getPanel } from "./panel";
 import { navigate } from "./router";
 import { NARROW } from "./viewport";
 import {
@@ -21,6 +22,7 @@ import {
   newContext,
   openLink,
   opensInApp,
+  prefetchLink,
   registerComposer,
   removeContext,
   usableComposer,
@@ -28,7 +30,7 @@ import {
   withContexts,
   WHOLE,
 } from "./links";
-import { BR, docErrorFromBody, orderedNumbers, prepareMarkdown, readDoc, type DocNode, type Get } from "../views/link/feishu-doc";
+import { BR, docErrorFromBody, loadDoc, mediaURL, orderedNumbers, prepareMarkdown, readDoc, type DocNode, type Get } from "../views/link/feishu-doc";
 
 describe("where a link opens", () => {
   it("reads Feishu documents in the panel, like the phone's FeishuLinks.isDoc", () => {
@@ -121,25 +123,23 @@ describe("where a link opens", () => {
     expect(linkHref(`${hub}/todos?id=todo_1`)).toBe(`${hub}/todos?id=todo_1`);
   });
 
-  it("opens this hub's agent and task links in the panel on a wide screen, and moves there on a narrow one", () => {
+  it("opens this hub's agent and task links as pages at every width, never in the panel (#5096)", () => {
     const hub = "https://hub.example.com";
-    vi.stubGlobal("location", { origin: hub });
+    vi.stubGlobal("location", { origin: hub, href: `${hub}/persona`, pathname: "/persona", search: "" });
     const narrow = { value: false };
     // viewport.ts keeps the list it got, so `matches` follows `narrow`
     vi.stubGlobal("matchMedia", (q: string) => ({ get matches() { return q === NARROW && narrow.value; }, addEventListener() {}, removeEventListener() {} }));
     try {
       expect(opensInApp(`${hub}/s/m1/abc-1`)).toBe(true);
       expect(opensInApp("https://other.example.com/s/m1/abc-1")).toBe(false);
-      openLink(`${hub}/s/m1/abc-1`);
-      expect(getPanel()).toEqual({ kind: "agent", mid: "m1", sid: "abc-1" });
-      openLink(`${hub}/todos?id=todo_1`);
-      expect(getPanel()).toEqual({ kind: "task", todo: "todo_1" });
-      closePanel();
-      narrow.value = true;
-      openLink(`${hub}/s/m1/abc-1`);
-      openLink(`${hub}/todos?id=todo_1`);
-      expect(getPanel()).toBeNull();
-      expect(vi.mocked(navigate).mock.calls.slice(-2)).toEqual([[{ name: "session", mid: "m1", sid: "abc-1" }], [{ name: "todos", id: "todo_1" }]]);
+      for (const n of [false, true]) {
+        narrow.value = n;
+        openLink(`${hub}/s/m1/abc-1`);
+        // a task the store does not know yet: its to-do's page (with an Agent on it, that Agent's page; lib/handoff.test.ts)
+        openLink(`${hub}/todos?id=todo_1`);
+        expect(getPanel()).toBeNull();
+        expect(vi.mocked(navigate).mock.calls.slice(-2)).toEqual([[{ name: "session", mid: "m1", sid: "abc-1" }], [{ name: "todos", id: "todo_1" }]]);
+      }
       // a conversation moves there on any screen
       narrow.value = false;
       expect(opensInApp(`${hub}/persona/conv-1`)).toBe(true);
@@ -312,6 +312,35 @@ describe("reading a Feishu document", () => {
     expect(fail(401, { error: { code: "AUTH_SESSION_EXPIRED" } }).message).toContain("没有登录飞书");
     expect(fail(502, { error: "lark: the Lark gateway is not configured (set lark.token or lark.container in hub.json)", code: "upstream_error" }).message).toContain("没有接入飞书");
     expect(fail(403, { error: "forbidden", code: "forbidden" }).message).toBe("没有访问权限");
+  });
+});
+
+describe("a document read as another manager (the chat's the link was in)", () => {
+  it("is read, kept and read ahead apart from the default's, which names none", async () => {
+    const doc = "https://example.feishu.cn/docx/Kept1";
+    vi.mocked(api).mockImplementation(async () => ({ title: "T", markdown: "body" }));
+    const named = () => vi.mocked(api).mock.calls.filter(([p]) => String(p).includes("Kept1")).map(([, init]) => (init?.headers as Record<string, string> | undefined)?.["X-Persona-Manager"]);
+    try {
+      await loadDoc(doc, undefined, false, "m-2");
+      await loadDoc(doc, undefined, false, "m-2");
+      await loadDoc(doc);
+      await loadDoc(doc, undefined, false, "assistant");
+      expect(named()).toEqual(["m-2", undefined]);
+      prefetchLink(doc, "m-3");
+      await loadDoc(doc, undefined, false, "m-3");
+      expect(named()).toEqual(["m-2", undefined, "m-3"]);
+    } finally {
+      vi.mocked(api).mockReset();
+    }
+  });
+
+  it("links its media and the hub's files as that manager", () => {
+    const md = "Body\n\n![pic](</api/v1/lark/raw/m?x=1>) [file](</api/v1/lark/raw/f>) [site](https://example.com/api/v1/x)";
+    expect(prepareMarkdown(md, "", "k", "/persona", "m-2")).toBe("Body\n\n![pic](</persona/api/v1/lark/raw/m?x=1&manager=m-2&token=k>) [file](</persona/api/v1/lark/raw/f?manager=m-2>) [site](https://example.com/api/v1/x)");
+    expect(prepareMarkdown(md, "", "k", "/persona", "assistant")).toBe(prepareMarkdown(md, "", "k", "/persona"));
+    expect(mediaURL("http://127.0.0.1:3000/api/documents/media/abc", "m-2", "k")).toMatch(/\/api\/v1\/lark\/raw\/documents\/media\/abc\?manager=m-2&token=k$/);
+    expect(mediaURL("http://127.0.0.1:3000/api/documents/media/abc", undefined, "k")).toMatch(/\/api\/v1\/lark\/raw\/documents\/media\/abc\?token=k$/);
+    expect(mediaURL("https://example.com/pic.png", "m-2")).toBe("https://example.com/pic.png");
   });
 });
 

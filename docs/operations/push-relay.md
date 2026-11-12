@@ -46,7 +46,8 @@ The relay builds the APNs `aps` itself. The hub can only provide ciphertext and 
 | `liveactivity` | The `aps` given by the hub (only keys used by Live Activities are allowed), push type `liveactivity`, topic with `.push-type.liveactivity` appended |
 
 - "New message" is the fallback: it's shown when the extension fails to decrypt, times out, the device hasn't been unlocked since boot (private key unreadable), or the ciphertext has expired. **It never falls back to plaintext.**
-- The hub SHA-256 hashes `collapse_id` before giving it to the relay (the original value is the interaction id).
+- The fallback always rings. Once the extension opens the push, the sealed `aps` decides the sound as well: one without `sound` (`personad notify --silent`, `"silent": true`, a push hushed by quiet hours) arrives quiet, the same as with direct APNs (`PushCrypto.apply`).
+- The hub SHA-256 hashes `collapse_id` before giving it to the relay (for a card the original value is `card:` and a hash of the manager and the id, or the interaction id for a built-in assistant's card whose id fits APNs' 64 bytes).
 
 ### Live Activities are plaintext
 
@@ -107,6 +108,7 @@ lost alerts and Live Activity updates. Live Activity pushes carry `aps.timestamp
 - Notification Service Extension `PersonaNotify`: if `e` is present, decrypt it and swap in the title / subtitle / body / category (the notification's buttons) / thread / interruption level / userInfo;
   without `e` (direct pushes never carry `mutable-content`, so the extension isn't invoked) the notification is shown as-is.
 - Silent pushes (`background`) are decrypted in the App process; `persona_wake` wakes the connection as before, and `resolved_interaction_ids` removes the notifications of cards that are over (#4349, only to apps that registered with `features: ["withdraw"]`).
+- MCP forms and links (`INTERACTION_ELICITATION`, no buttons) are pushed only to apps that registered with `features: ["elicitation"]`, sealed like any other alert. Their alert carries neither the link to open nor a form's values ([protocol.md](../protocol/protocol.md) "MCP elicitation", #2433).
 
 ## Which way a device is pushed (#5998)
 
@@ -128,6 +130,13 @@ Now every side says which way pushes take and, when none, why:
   | `direct` / `relay` | `push_failed` | The way is there, but the last push to the device's token did not go (`detail`: APNs' or the relay's answer, or the hub's own reason when it did not send the push: `seal: …` for a relay push it could not seal, `push of N bytes is over APNs' 4096-byte limit` for a direct push too long even shortened). In memory, until a push goes or the device registers a new token / relay. A Live Activity push goes to the activity's own token: its answer neither sets nor clears this |
 
   `GET /api/v1/auth/tokens` adds `push` (credential id → the way of the device it registered last) for **Settings › Devices**; `GET /api/v1/devices/push` lists every device (`personad hub doctor` prints it under "推送").
+
+## Connections
+
+The hub's relay client and the relay's APNs client (`apns.Client`, also a hub's own key) each keep their connection between pushes
+(`apns.NewTransport`, #4800): an idle connection lives for an hour, and an HTTP/2 ping after a minute without traffic finds one that died
+silently. Before, both closed after 90 s idle, so most pushes paid a new TCP + TLS handshake. The Worker's request to the tunnel and the
+tunnel's own connection are Cloudflare's and are not affected.
 
 ## Deployment (publisher)
 

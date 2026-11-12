@@ -32,6 +32,10 @@ func (n *Node) paneFor(ctx context.Context, id string) (string, error) {
 			return a.PaneID, nil
 		}
 	}
+	// A claude the user started in tmux has no host agent: its own record names the pane (#2562).
+	if pane := n.outsidePaneOf(id); pane != "" {
+		return pane, nil
+	}
 	return "", fmt.Errorf("session %s is not running", id)
 }
 
@@ -44,8 +48,8 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 	}
 	defer unlock()
 	if n.externalCodex(id) {
-		if n.codexResumable(id) { // nothing runs it: resumed in a new tab with the message (codex_resume.go)
-			return n.resumeCodexThread(ctx, id, opts.Launcher, text, images) // a refusal says nothing was sent
+		if n.codexResumable(ctx, id) { // nothing runs it: a stopped agent takes no messages (stopped.go, #4754)
+			return n.stoppedRefusal(id)
 		}
 		return n.sendCodex(ctx, id, text, images)
 	}
@@ -64,8 +68,11 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 		return n.exitAgent(ctx, id)
 	}
 	pane, err := n.paneFor(ctx, id)
+	if err != nil {
+		ctx = n.withResumeHost(ctx, id)
+	}
 	if err != nil && (n.codexPath(id) != "" || n.traexPath(id) != "") {
-		return n.resumeOther(ctx, id, text, images) // retire.go
+		return n.stoppedRefusal(id) // a stopped Codex or TRAEX takes no messages (stopped.go, #4754)
 	}
 	kind := "claude"
 	if err == nil {
@@ -79,30 +86,55 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 		if err := n.checkPaneFor(ctx, pane, kind, opts); err != nil { // sendsafe.go
 			return err
 		}
+		if kind == "claude" && opts.ApplySwitch {
+			// The user's own message carries out the switch to another launcher they picked (launcher_switch.go): the
+			// agent is quit and resumed there, in the same terminal, and the message goes to it. While the agent is busy
+			// the message goes on the launcher it runs on and the switch waits; a failed switch is dropped with nothing
+			// typed. A switch kept with the record waits for the hub's copy of it after a node restart.
+			_ = n.state.loaded(ctx)
+			if ps := n.pendingSwitch(id); ps != nil {
+				switched := false
+				if pane, switched, err = n.applySwitch(ctx, id, pane, *ps); err != nil {
+					return err
+				}
+				// The new claude came up behind a dialog of its own (start returns early then): the text would answer it.
+				if switched {
+					if err := n.checkPane(ctx, pane, "claude", ""); err != nil {
+						return err
+					}
+				}
+			}
+		}
 	} else {
-		// On a machine whose default host is a runtime (Paseo) the session is continued there (runtimecontrol.go).
-		if _, ok := engineRuntimes[n.defaultKind()]; ok {
+		// A session of the desktop app's sidebar that nothing runs: the app opens it, and the message goes to its inbox,
+		// not to a claude --resume of ours (claudedesktop_open.go).
+		if handled, err := n.sendThroughDesktopApp(ctx, id, text, images); handled {
+			return err
+		}
+		// A session continuing in a runtime is taken over there (runtimecontrol.go).
+		if _, ok := engineRuntimes[n.startKind(ctx)]; ok {
 			return n.continueInRuntime(ctx, id, text, images, opts.ClientMsgID)
 		}
 		if r := n.notRunningRefusal(ctx, id); r != nil {
 			return r
 		}
-		// Offline: resume (with the launcher that started it, see resumeLauncher) and then send.
-		st, _ := n.state.get(id)
-		launcher, execution := n.resumeLauncher(st, id, opts)
-		cwd := st.Cwd
-		if cwd == "" {
-			if p := n.transcriptPath(id); p != "" {
-				if fi, err := os.Stat(p); err == nil {
-					cwd = n.meta(p, fi).cwd
-				}
-			}
+		// A claude outside Persona's panes that has it open (Claude's desktop app, another terminal, a background run)
+		// is no stopped agent: refused as open elsewhere, as before (openelsewhere.go).
+		if r := n.openElsewhereRefusal(id); r != nil {
+			return r
 		}
-		mode, effort := n.modesOf(id) // resume with what it ran with: modes, model, and the tab's name from its title
-		s, err := n.start(ctx, cwd, launcher, "", id, "", mode, effort, n.resumeTabName(id), "", "", execution)
+		// A stopped agent takes no messages; its terminal page's Resume brings it back (stopped.go, #4754). Only a
+		// branch nothing has started yet (fork.go) is started by its first message, with the launcher it came from,
+		// and a session of Claude's desktop app the app could not take is resumed as before.
+		if !n.freshFork(id) && !n.desktopSession(id) {
+			return n.stoppedRefusal(id)
+		}
+		r := n.resumeWith(id, opts)
+		s, err := n.start(ctx, r.cwd, r.launcher, "", id, "", r.mode, r.effort, r.tab, "", "", r.execution)
 		if err != nil {
 			return err
 		}
+		n.forkStarted(id)
 		pane = s.PaneID
 		// start returns early when Claude comes up blocked (a dialog of its own): the text would answer it.
 		if err := n.checkPane(ctx, pane, "claude", ""); err != nil {
@@ -128,6 +160,7 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 		// In a tag so it never mixes with what the user typed; the phone shows these as thumbnails.
 		text = strings.TrimSpace(text) + "\n\n<attached_images>\n" + strings.Join(paths, "\n") + "\n</attached_images>"
 	}
+	text = inertControls(text) // as the host pastes it (hostPrompt): the box and the transcript are matched against it
 	var watch *promptWatch
 	if kind == "claude" {
 		text = keepImagePaths(text)
@@ -164,7 +197,7 @@ func (n *Node) prompt(ctx context.Context, pane, text string) error {
 	if err := n.typeable(ctx, pane); err != nil {
 		return err
 	}
-	paste := pasteStart + strings.ReplaceAll(text, "\x1b", inertEscape) + pasteEnd
+	paste := pasteStart + inertControls(text) + pasteEnd
 	if err := n.sendText(ctx, pane, paste); err != nil {
 		return err
 	}
@@ -235,14 +268,18 @@ func (n *Node) saveImages(images []proto.Image) ([]string, error) {
 }
 
 // imagePathLine starts the line that repeats a photo's path in an <attached_images> block as text (keepImagePaths).
-const imagePathLine = "path: "
+// No space after the colon: older Claude Code (2.1.296) cuts a pasted line at every space before "/" and attaches each
+// piece that is an image path, so "path: <path>" attached the picture a second time (#4361). Messages sent before
+// still have "path: <path>"; the apps read both.
+const imagePathLine = "path:"
 
 // keepImagePaths gives each path in the <attached_images> block that ends text (the node's own, or one a client wrote
-// after uploading the photos itself, as Android's composer does) a second line, "path: <path>". Claude Code's paste
-// turns a line that is only a path to a readable image into an `[Image #n]` and drops it; a line that starts with a
-// word stays text, so the agent keeps the path. The apps take only lines starting with "/" or "~" as photos. A block
-// with any other line (prose that ends in the tag, or path: lines already added) is left as it is. With words before
-// it, the block makes Claude fold the paste into a `[Pasted text #n]` placeholder (longPaste).
+// after uploading the photos itself, as Android's composer does) a second line, "path:<path>". Claude Code's paste
+// turns a line that is only a path to a readable image into an `[Image #n]` and drops it. The path: line stays text on
+// Claude Code 2.1.316 and later, so the agent keeps the path; older versions drop it without attaching anything (they
+// tell the model the picture's source path themselves). The apps take only lines starting with "/" or "~" as photos. A
+// block with any other line (prose that ends in the tag, or path: lines already added) is left as it is. With words
+// before it, the block makes Claude fold the paste into a `[Pasted text #n]` placeholder (longPaste).
 func keepImagePaths(text string) string {
 	const open = "<attached_images>"
 	rest, ok := strings.CutSuffix(strings.TrimRight(text, " \t\r\n"), "</attached_images>")
@@ -265,6 +302,9 @@ func keepImagePaths(text string) string {
 }
 
 func (n *Node) keys(ctx context.Context, id string, keys []string, text string) error {
+	if err := n.switchingRefusal(id); err != nil { // a launcher switch, maybe on the last connection's Node
+		return err
+	}
 	n.dropSuggestion(id) // whatever goes in replaces or sends it
 	pane, err := n.paneFor(ctx, id)
 	if err != nil {

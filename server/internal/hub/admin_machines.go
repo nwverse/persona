@@ -43,7 +43,7 @@ type adminMachine struct {
 	HubID        string             `json:"hub_id,omitempty"`  // the hub it is reached through now
 	Paths        []pathInfo         `json:"paths,omitempty"`   // every way to it (devices/paths.go)
 	// State: active (running), pending_add (in hub.json, connects after a restart), pending_remove (gone from
-	// hub.json, still running until the restart).
+	// hub.json, still running until the restart). One its manager keeps is out of hub.json and active (machines_kept.go).
 	State string `json:"state"`
 }
 
@@ -72,7 +72,9 @@ func (h *Hub) adminMachines() []adminMachine {
 		listed[m.ID] = true
 		state := "active"
 		mm := h.localMachine(m.ID)
-		if disk != nil && !onDisk[m.ID] && (mm == nil || !mm.derived) {
+		// Gone from hub.json: removed there, until the restart. Not one its manager keeps, which left hub.json for
+		// that manager's own list (machines_kept.go), nor one only a member hub has.
+		if disk != nil && !onDisk[m.ID] && h.keptBy(m.ID) == "" && (mm == nil || !mm.derived) {
 			state = "pending_remove"
 		}
 		a := adminMachineFrom(m, state)
@@ -347,7 +349,7 @@ func (h *Hub) adminMachineRoutes(mux *http.ServeMux) {
 // machineEntries is hub.json's "machines", each entry as it is in the file.
 func machineEntries(o *jsonObject) ([]json.RawMessage, error) {
 	var list []json.RawMessage
-	if raw, ok := o.get("machines"); ok && strings.TrimSpace(string(raw)) != "null" {
+	if raw, ok := o.Get("machines"); ok && strings.TrimSpace(string(raw)) != "null" {
 		if err := json.Unmarshal(raw, &list); err != nil {
 			return nil, errors.New("hub.json machines is not a list")
 		}
@@ -396,11 +398,11 @@ func setMachineField(o *jsonObject, id, key string, v any) error {
 		if err != nil {
 			return err
 		}
-		if err := entry.set(key, v); err != nil {
+		if err := entry.Set(key, v); err != nil {
 			return err
 		}
-		list[i] = entry.marshal()
-		return o.set("machines", list)
+		list[i] = entry.Marshal()
+		return o.Set("machines", list)
 	}
 	return errors.New("hub.json has no such machine")
 }

@@ -8,6 +8,10 @@ import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -23,6 +27,7 @@ import org.robolectric.annotation.GraphicsMode
 import persona.core.contracts.generated.*
 import persona.core.contracts.stream.*
 import persona.core.designsystem.*
+import persona.core.designsystem.icons.PhIcons
 
 /** COMPONENT evidence only: fixed server-schema payloads, not Deno/HackerNews or live transport E2E. */
 @RunWith(AndroidJUnit4::class)
@@ -407,6 +412,16 @@ class NativeStreamCoverageTest {
         assertEquals(JsonPrimitive(0), raw.getValue("sections").jsonArray[0].jsonObject.getValue("items").jsonArray[0].jsonObject.getValue("control").jsonObject["value"])
     }
 
+    @Test fun aZoomablePictureSaysATapOpensIt() {
+        val zoomable = """{"type":"image","key":"zoomable","src":{"url":"https://example.com/zoom.png"},"alt":"Zoomable picture"}"""
+        show(snapshot("$image,$zoomable")); mount()
+        rule.onNode(hasClickAction() and hasContentDescription("Zoomable picture")).assert(SemanticsMatcher("a picture a tap views (#4176)") {
+            it.config.getOrNull(SemanticsActions.OnClick)?.label == "View image" && it.config.getOrNull(SemanticsProperties.Role) == Role.Image
+        })
+        rule.onNodeWithContentDescription("Picture unavailable").assert(!hasClickAction())
+        runBlocking { adapter.close() }
+    }
+
     @Test fun cancellingConfirmedControlDoesNotLeaveACancelledValueInSubmit() {
         val button = """{"type":"button","key":"submit","title":"Submit","action":{"id":"submit","submit":true}}"""
         show(snapshot("$row,$button")); mount()
@@ -569,7 +584,10 @@ class NativeStreamCoverageTest {
 
     @Test fun schemaIconMeaningsMustBeRenderedOrRefusedInsteadOfBecomingAnExtensionIcon() {
         val view = Json.parseToJsonElement(snapshot("""{"type":"row","key":"row","title":"Home","icon":"home"}""")).jsonObject.getValue("view").jsonObject
-        assertTrue(NativeExtensionProfile.gaps(view).any { it.endsWith("icon") })
+        assertEquals(PhIcons.House, ExtensionIcons.of("home"))
+        assertFalse(NativeExtensionProfile.gaps(view).any { it.endsWith("icon") })
+        val unknown = Json.parseToJsonElement(snapshot("""{"type":"row","key":"row","title":"Unknown","icon":"future-icon"}""")).jsonObject.getValue("view").jsonObject
+        assertTrue(NativeExtensionProfile.gaps(unknown).any { it.endsWith("icon") })
         val schema = generateSequence(File(System.getProperty("user.dir"))) { it.parentFile }
             .map { File(it, "schema/extension/view.schema.json") }.first { it.isFile }
         Json.parseToJsonElement(schema.readText()).jsonObject.getValue("\$defs").jsonObject.getValue("NavIcon").jsonObject.getValue("enum").jsonArray.forEach { entry ->

@@ -3,6 +3,7 @@ package assistantwire
 import (
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/connectorwire"
 )
@@ -19,6 +20,8 @@ import (
 // and these (assistant.TestRoutesAreTheWireOnes).
 var InboxRoutes = []string{
 	"GET /api/v1/inbox",
+	"GET /api/v1/inbox/done",
+	"GET /api/v1/inbox/done/days",
 	"GET /api/v1/inbox/{id}",
 	"POST /api/v1/inbox/{id}/done",
 	"POST /api/v1/inbox/{id}/draft",
@@ -27,6 +30,9 @@ var InboxRoutes = []string{
 	"POST /api/v1/inbox/{id}/handoff",
 	"POST /api/v1/inbox/{id}/doc/status",
 	"PUT /api/v1/inbox/{id}/parent",
+	"PUT /api/v1/inbox/{id}/folder",
+	"GET /api/v1/inbox/folders",
+	"PUT /api/v1/inbox/folders",
 	"GET /api/v1/inbox/tree/{kind}/{id...}",
 	"POST /api/v1/inbox/refresh",
 	"POST /api/v1/inbox/done",
@@ -56,9 +62,22 @@ const (
 	// MethodInboxRepoMutes: InboxRepoMutes → {repos}: a source's muted repositories (GitHub's settings page lists and
 	// sets them as its muted_repos); with set, they become the source's repository mutes first (add: added to them).
 	MethodInboxRepoMutes = "inbox.repo_mutes"
+	// MethodInboxMutes: {source?} → {mutes: [InboxMute]}: the mutes, one source's when source is set, for the Inbox
+	// Sources pages (#5278).
+	MethodInboxMutes = "inbox.mutes"
+	// MethodInboxUnmute: {id} → {}: the user unmuted one on those pages; what it filed stays done.
+	MethodInboxUnmute = "inbox.unmute"
+	// MethodInboxTriagePreview: InboxTriagePreview → {verdicts: [InboxTriageVerdict]}: the triage model tries a
+	// subscription's dry-run items as the Inbox would be handed them, one verdict each, at the user's request on the
+	// pages. Nothing is kept: no item, no triage state.
+	MethodInboxTriagePreview = "inbox.triage_preview"
 
 	// EventInboxChanged (the manager tells the extension manager, one way): InboxChanged.
 	EventInboxChanged = "inbox.changed"
+	// EventInboxNeedsYou (the manager tells the hub, one way): InboxNeedsYou, after each handshake and whenever the
+	// inbox changes. The hub keeps the number for the roster (GET /api/v1/managers inbox_needs_you) and reads nothing
+	// else of the inbox; a hub from before it drops the event.
+	EventInboxNeedsYou = "inbox.needs_you"
 )
 
 // The manager asks the extension manager about the inbox's sources (AppInbox).
@@ -112,6 +131,9 @@ const (
 	// CodeAssistantInDoubt: the hub's link to the manager dropped while a request was with it: it may have been done
 	// (a reply may have gone out). The apps get it with delivered "unknown"; sending the same reply again is safe.
 	CodeAssistantInDoubt = "assistant_in_doubt"
+	// CodeInboxRefreshFailed: a pull to refresh could not collect the sources (the inbox.collect call failed): nothing
+	// was read now and the list is as it was. POST /api/v1/inbox/refresh answers 502 with it; pulling again is safe.
+	CodeInboxRefreshFailed = "inbox_refresh_failed"
 )
 
 // Rounds of InboxRound.Round.
@@ -166,16 +188,31 @@ type InboxSource struct {
 	ReadError string `json:"read_error,omitempty"`
 }
 
-// Why a source could not be read (InboxSource.ReadError).
+// Why a source could not be read (InboxSource.ReadError, InboxMailFailed.ReadError).
 const (
 	ReadTimeout     = "timeout"
 	ReadRateLimited = "rate_limited"
 	ReadFailed      = "failed"
+	// ReadLoginRefused: a mail account whose server refuses its login (mail settings show the account's error).
+	ReadLoginRefused = "login_refused"
 )
 
 // InboxMailRead is a round's mail: each account's latest inbox page (an account that could not be read is left out).
 type InboxMailRead struct {
 	Accounts []InboxMailAccount `json:"accounts"`
+	// Failed are the accounts this round could not read, with why (#1849). They are still left out of Accounts, so a
+	// manager that does not know this field reads the round as before; one an earlier round read while the manager
+	// was away is in Accounts too, with what that round read (mergeRounds). Absent when the sender does not know it:
+	// no account is said to have failed.
+	Failed []InboxMailFailed `json:"failed,omitempty"`
+}
+
+// InboxMailFailed is a mail account a round could not read: a short code (ReadTimeout, ReadLoginRefused,
+// ReadFailed), never the error's text.
+type InboxMailFailed struct {
+	ID        string `json:"id"`
+	Email     string `json:"email"`
+	ReadError string `json:"read_error"`
 }
 
 // InboxMailAccount is one mail account and its latest messages.
@@ -255,8 +292,9 @@ type InboxAgentConfig struct {
 	// MaxAgeHours: items whose newest message is older are not handed over (default 24), so turning this on does
 	// not start an agent for every old item.
 	MaxAgeHours int `json:"max_age_hours,omitempty"`
-	// Rules is manager.json's inbox.agent.rules: no longer read (the judge only links items to tasks; what the twin takes
-	// on is set by inbox policies). Kept so older hub.json files still parse.
+	// Rules is manager.json's inbox.agent.rules: the file default for the settings key `inbox.agent_rules`
+	// (extmgr/self_settings.go inboxAgentRules). The database value wins once set; without either, what the twin takes on
+	// is set by inbox policies. Kept so older hub.json files still parse.
 	Rules string `json:"rules,omitempty"`
 }
 
@@ -267,6 +305,44 @@ type InboxRepoMutes struct {
 	Set   bool     `json:"set,omitempty"`
 	Add   bool     `json:"add,omitempty"`
 	Repos []string `json:"repos,omitempty"`
+}
+
+// InboxTriagePreview is MethodInboxTriagePreview's params: the source as a round names it (a subscription's id, ""
+// for one not subscribed yet), its kinds' words for the model, and at most 3 things.
+type InboxTriagePreview struct {
+	Source string                     `json:"source"`
+	Name   string                     `json:"name"`
+	Kinds  map[string]string          `json:"kinds,omitempty"`
+	Things []connectorwire.InboxThing `json:"things"`
+}
+
+// InboxTriageVerdict is the model's answer for one thing (tier action, fyi or noise, its summary and reason), or why
+// there is none (state: unconfigured, paused, error, timeout; why in the user's language).
+type InboxTriageVerdict struct {
+	Tier    string `json:"tier,omitempty"`
+	Summary string `json:"summary,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	Urgent  bool   `json:"urgent,omitempty"`
+	State   string `json:"state,omitempty"`
+	Why     string `json:"why,omitempty"`
+}
+
+// InboxMute is one mute as the Inbox keeps it (GET /api/v1/inbox/mutes lists the same): nothing of Source tagged
+// Tag = Value stays in the Inbox.
+type InboxMute struct {
+	ID         string    `json:"id"`
+	Source     string    `json:"source"`
+	SourceName string    `json:"source_name,omitempty"`
+	Tag        string    `json:"tag"`
+	Value      string    `json:"value"`
+	Name       string    `json:"name"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// InboxNeedsYou is EventInboxNeedsYou's params: how many open items are in "Needs you" (status action; the ones not
+// triaged yet count), the connectors' among them: the number the apps' Inbox badge shows of this manager's list.
+type InboxNeedsYou struct {
+	Count int `json:"count"`
 }
 
 // InboxChanged is EventInboxChanged's params: the items that changed and were stored (the extension manager tells the

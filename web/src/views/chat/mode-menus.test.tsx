@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-// #5584: the composer's permission mode and effort menus show each option's name over its full description, mark the
-// current one, fit a narrow window and work from the keyboard.
+// #5584: the composer's permission mode menu shows each option's name over its full description, marks the current one,
+// fits a narrow window and works from the keyboard. (The thinking effort is the model pill's, #5032 / #5033.)
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,13 +16,13 @@ vi.mock("../../lib/api", async (importOriginal) => ({ ...(await importOriginal<t
 vi.mock("../../lib/store", async (importOriginal) => ({ ...(await importOriginal<typeof import("../../lib/store")>()), upsertSession: vi.fn() }));
 
 import { ModeChips } from "./SessionDialogs";
-import { effortOptions, switchableModes } from "../../lib/session-actions";
+import { switchableModes } from "../../lib/session-actions";
 import type { Session } from "../../lib/types";
 import { t } from "../../i18n";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-// a Persona conversation: no model picker, so the effort chip opens the plain effort menu too
+// a Persona conversation
 const session = { machine_id: "server", session_id: "s1", assistant: true, agent: "claude", permission_mode: "acceptEdits", effort: "high" } as unknown as Session;
 const startWidth = window.innerWidth;
 let host: HTMLDivElement;
@@ -114,16 +114,39 @@ describe("permission mode menu (#5584)", () => {
   });
 });
 
-describe("effort menu (#5584)", () => {
-  it("shows every effort's name above its description and marks the current one", () => {
-    open(t("chat-sessiondialogs.effort"));
-    const efforts = effortOptions(session);
-    expect(rows()).toHaveLength(efforts.length);
-    rows().forEach((row, i) => {
-      const [name, detail] = row.querySelectorAll<HTMLElement>("span.block");
-      expect(name.textContent).toBe(efforts[i].title);
-      expect(detail.textContent).toBe(efforts[i].detail);
-      expect(row.getAttribute("aria-checked")).toBe(efforts[i].id === "high" ? "true" : "false");
-    });
+describe("Allow all on a running agent (#1379)", () => {
+  const agent = (over: Partial<Session>) => ({ machine_id: "mac", session_id: "a1", agent: "claude", permission_mode: "acceptEdits", effort: "high", ...over }) as unknown as Session;
+  const show = (s: Session) => {
+    act(() => root.unmount());
+    root = createRoot(host);
+    act(() => root.render(<ModeChips session={s} />));
+    // in "Allow all" the chip's title is its red warning
+    open(s.permission_mode === "bypassPermissions" ? t("lib-session-actions.bypass_warning") : t("chat-sessiondialogs.permission_mode"));
+  };
+  const bypassRow = () => rows().find((r) => r.textContent?.includes(t("lib-session-actions.mode_bypass_permissions")));
+
+  it("is not offered to a Claude that wasn't started so it can reach it", () => {
+    show(agent({}));
+    expect(rows()).toHaveLength(4);
+    expect(bypassRow()).toBeUndefined();
+  });
+
+  it("is offered in red when the node says it can reach it, and asks again before switching", async () => {
+    show(agent({ bypass_available: true }));
+    expect(rows()).toHaveLength(5);
+    const row = bypassRow()!;
+    expect(row.className).toContain("text-red");
+    await act(async () => row.click());
+    expect(api).not.toHaveBeenCalled();
+    expect(document.querySelector('[role="menu"]')!.textContent).toContain(t("chat-sessiondialogs.bypass_confirm"));
+    expect(document.querySelector('[role="menu"]')!.textContent).toContain(t("lib-session-actions.bypass_warning"));
+    await act(async () => bypassRow()!.click());
+    expect(api).toHaveBeenCalledWith(expect.stringContaining("/modes"), { method: "POST", json: { permission_mode: "bypassPermissions" } });
+  });
+
+  it("is the checked row while the agent runs in it, so it can be switched away and back", () => {
+    show(agent({ permission_mode: "bypassPermissions" }));
+    expect(rows()).toHaveLength(5);
+    expect(bypassRow()!.getAttribute("aria-checked")).toBe("true");
   });
 });
