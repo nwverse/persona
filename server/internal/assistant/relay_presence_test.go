@@ -119,11 +119,10 @@ func TestSupervisionMessageWaitsOnADecisionByItsSignals(t *testing.T) {
 	if first.Tool != superviseTool || first.Urgent || first.rank() != relayRankOther || f.sentTo("conv1") != 0 {
 		t.Fatalf("a review alone: %+v, %d sent", first, f.sentTo("conv1"))
 	}
-	time.Sleep(5 * time.Millisecond)
 	s.signal(superviseSignal{Todo: ids[1], Kind: sigFailed, Key: "x", Detail: "its computer is offline"})
 	waitFor(t, "the failed start to merge in", func() bool {
 		q := queuedRelays(s, "conv1")
-		return len(q) == 1 && q[0].Urgent
+		return len(q) == 1 && q[0].Urgent && q[0].At.After(first.QueuedAt)
 	})
 	merged := queuedRelays(s, "conv1")[0]
 	if merged.rank() != relayRankDecision || !merged.decisionSince().After(first.QueuedAt) || !merged.QueuedAt.Equal(first.QueuedAt) || f.sentTo("conv1") != 0 {
@@ -236,7 +235,7 @@ func TestScheduledRunWaitsForTheOwner(t *testing.T) {
 	if next := s.nextDue(ctx, now); !next.After(now) || next.After(now.Add(300*time.Millisecond)) {
 		t.Fatalf("looked at again %s after now, want when the hold ends", next.Sub(now))
 	}
-	time.Sleep(320 * time.Millisecond)
+	waitFor(t, "the owner's hold to end", func() bool { return len(s.ownersPresent(time.Now())) == 0 })
 	s.runDue(ctx, time.Now())
 	s.sched.inflight.Wait()
 	if task, _ := taskByID(s, "fu_1"); task.Enabled || f.sentTo("conv1") != 1 {
@@ -319,7 +318,11 @@ func TestSystemMessagesWaitWhileTheOwnerTalks(t *testing.T) {
 		t.Fatalf("while the owner talks: %d queued, %d sent", q, sent)
 	}
 	s.drainRelays("server", []proto.Session{{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}})
-	time.Sleep(50 * time.Millisecond)
+	waitFor(t, "the held message's timer", func() bool {
+		s.relays.mu.Lock()
+		defer s.relays.mu.Unlock()
+		return s.relays.holds["conv1"] != nil
+	})
 	if sent := f.sentTo("conv1"); sent != 0 {
 		t.Fatalf("a change of the list delivered %d held message(s)", sent)
 	}
@@ -430,8 +433,9 @@ func TestDecisionGoesInWhileTheOwnerKeepsTalking(t *testing.T) {
 	if q, sent := s.queuedFor("conv1"), f.sentTo("conv1"); q != 2 || sent != 0 {
 		t.Fatalf("at first: %d queued, %d sent", q, sent)
 	}
-	waitFor(t, "the decision after its longest hold", func() bool { return f.sentTo("conv1") == 1 })
-	time.Sleep(50 * time.Millisecond)
+	waitFor(t, "the decision after its longest hold", func() bool {
+		return len(f.notices()) == 1 && s.queuedFor("conv1") == 1
+	})
 	if n := f.notices(); len(n) != 1 || !strings.Contains(n[0], "the late answer") || s.queuedFor("conv1") != 1 {
 		t.Fatalf("sent %q, %d still queued", n, s.queuedFor("conv1"))
 	}
@@ -578,7 +582,6 @@ func TestHeldRelaysSurviveARestart(t *testing.T) {
 		t.Fatalf("restored: %d queued, spoke %v", restarted.queuedFor("conv1"), restarted.relays.st.Spoke)
 	}
 	restarted.drainHeldRelays(ctx, time.Now())
-	time.Sleep(50 * time.Millisecond)
 	if sent := f.sentTo("conv1"); sent != 0 {
 		t.Fatalf("%d sent while the owner still counts as present", sent)
 	}

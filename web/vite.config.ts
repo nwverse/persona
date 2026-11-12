@@ -81,7 +81,8 @@ const showcaseImages: Plugin = {
 // screen fetches: once they are written, each of 1 KB or more gets a brotli copy beside it (name.br,
 // src/startup-preload.ts brotliCopies), which the hub sends as stored to a browser that takes br (docs/web/web.md
 // "Precompressed assets"). The build then fails if any language's first screen sends more than FIRST_SCREEN_BUDGET,
-// counted with the hashes of the files it names as a fixed string (src/startup-preload.ts firstScreenBytes).
+// counted with the hashes of the files it names and the minified names its files import from each other as fixed
+// strings (src/startup-preload.ts firstScreenBytes).
 //
 // After start the page also fetches, once the browser is idle, the chunks of each lazyPage(…, { idle: true }) and
 // what they import beyond those files (src/lib/lazy-page.ts): the build fails if they send more than IDLE_TIER_BUDGET.

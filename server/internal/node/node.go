@@ -1765,8 +1765,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		}
 		_ = json.Unmarshal(params, &closeParams)
 		if closeParams.Force {
-			a, ok := n.agent(p.SessionID)
-			if !ok || a.AgentStatus != proto.StatusBlocked || n.isAssistantSession(p.SessionID) || n.runtimeAssistant(p.SessionID) {
+			if n.isAssistantSession(p.SessionID) || n.runtimeAssistant(p.SessionID) || !n.waitsOnUser(ctx, p.SessionID) {
 				return nil, refusal("agent_busy", "the Agent is no longer waiting for confirmation", nil)
 			}
 		}
