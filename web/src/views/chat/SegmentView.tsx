@@ -2,6 +2,7 @@ import { type CSSProperties, Fragment, memo, type ReactNode, useContext, useLayo
 import { clock } from "../../lib/format";
 import { stripCloseout } from "../../lib/closeout";
 import { getSession, getState } from "../../lib/store";
+import { withChildSessions } from "../../lib/child-cards";
 import { agentStatus, isNestedSubagentStep, nestedSubagentStatus, nestingKey, subagentFor, withNestedSubagents } from "../../lib/tasks";
 import { turnImages } from "../../lib/turn-images";
 import { TurnImages } from "./TurnImages";
@@ -277,13 +278,18 @@ export const SegmentView = memo(function SegmentView({
    *  height through this (ChatView `watchSegment`, returning the unwatch) to keep the view still when it changes. */
   offscreen?: (section: HTMLElement) => () => void;
 }) {
-  const { subagents, tasks, scope, workflowCalls = NO_WORKFLOW_CALLS, lineStyle, closeoutSegment } = useChatContext();
+  const { subagents, tasks, scope, workflowCalls = NO_WORKFLOW_CALLS, lineStyle, closeoutSegment, children } = useChatContext();
   const own = useMemo(() => exchangeSteps(seg), [seg]);
   // the subagents its subagents launched, each a card of its own by when it started (#5030); a trace shows the calls only.
   // Keyed by what places them, not the list: that changes with every subagent's tokens and steps.
   const nesting = trace ? "" : nestingKey(subagents);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const steps = useMemo(() => (nesting ? withNestedSubagents(own, subagents) : own), [own, nesting]);
+  // the child sessions that started during this exchange, each a card among its steps (#5120, lib/child-cards.ts)
+  const placed = trace ? undefined : children?.get(seg.id);
+  const steps = useMemo(
+    () => withChildSessions(nesting ? withNestedSubagents(own, subagents) : own, placed),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [own, nesting, placed],
+  );
   const turnStart = seg.user?.ts ?? seg.start;
   const thinking = useMemo(() => thinkingDurations(steps, turnStart), [steps, turnStart]);
   const p = useMemo<WorkProps>(() => {
