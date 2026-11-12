@@ -14,6 +14,9 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
@@ -66,6 +69,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import java.time.LocalTime
+import kotlin.math.roundToInt
 import java.util.UUID
 
 /** One assistant's in-flight operation and retry target survive switching away and back. */
@@ -130,6 +134,11 @@ fun AssistantScreen(
     composerFocus: ComposerFocusRequests = AssistantComposerFocus,
     /** "Needs you now" over the blank page's suggestions; [onOpenNeed] opens a line where it lives (none: not shown). */
     needsYou: NeedsYou = NeedsYou(),
+    /**
+     * On Glass, what needs the user over the blank page's composer instead (#4339 C17, [needsYouBySession]): a line per
+     * session the Agents tab's badge counts, then the inbox's, all of them; the page shows as many as fit.
+     */
+    shellNeedsYou: List<NeedsYouLine> = emptyList(),
     onOpenNeed: ((NeedsYouLine) -> Unit)? = null,
     /** "N more in the inbox": opens the inbox as a secondary page. */
     onOpenInbox: (() -> Unit)? = null,
@@ -634,7 +643,7 @@ fun AssistantScreen(
         assistantAttempt { api.config().launcher }.onSuccess { defaultLauncher = it.takeIf(String::isNotBlank) }
         if (launchers != null) return
         launchersFailed = false
-        assistantAttempt { api.launchers(machine).filter(::runsAssistant) }
+        assistantAttempt { api.assistantLaunchers(machine) }
             .onSuccess { if (machine == assistantMachine) launchers = it }
             .onFailure { if (machine == assistantMachine) launchersFailed = true }
     }
@@ -764,9 +773,16 @@ fun AssistantScreen(
                 if (feedback?.failure(error) != true) toast.show(persona.core.designsystem.FeedbackNotice(persona.core.designsystem.operationFeedback(error).text.resolve(resources), style = persona.core.designsystem.FeedbackStyle.Error))
             })
     }
+    // On Glass what needs the user sits over the blank page's composer, as many lines as fit (#4339 C17, iOS ShellNeedsYou);
+    // Brief and Board keep "Needs you now" in the page's scroll.
+    val needsRoom = remember { NeedsRoom() }
+    val needsFade = with(androidx.compose.ui.platform.LocalDensity.current) { NeedsFade.roundToPx() }
     val body: @Composable (Boolean) -> Unit = { wide ->
         val hasComposer = active == null || !hasChat || demo
-        Box(Modifier.fillMaxSize()) {
+        val blankPage = active == null && !viewingMainQueue && !healthPage
+        val needsOverComposer = PersonaTheme.style == AppStyle.Glass
+        val shellLines = if (needsOverComposer && blankPage && onOpenNeed != null) shellNeedsYou else emptyList()
+        Box(Modifier.fillMaxSize().then(if (shellLines.isEmpty()) Modifier else Modifier.onSizeChanged { needsRoom.pageSize(it) })) {
         JPage(
             title = LocalPersonaName.current,
             modifier = Modifier.fillMaxSize().imePadding(),
@@ -794,10 +810,14 @@ fun AssistantScreen(
                     )
                 }
             },
-            bottomBar = if (hasComposer) ({
+            bottomBar = if (hasComposer) ({ Box {
+                // On Glass with lines over the composer, the dock is on the page's own backdrop (NeedsBackdrop).
+                if (shellLines.isNotEmpty()) NeedsBackdrop(NeedsFade, Modifier.matchParentSize())
                 Column {
                     if (hasComposer && active == null && !viewingMainQueue) {
-                        val cardModifier = Modifier.padding(horizontal = pagePadding).padding(bottom = Tokens.Space.s)
+                        val cardModifier = (if (shellLines.isEmpty()) Modifier else Modifier.onSizeChanged { needsRoom.above = it.height })
+                            .padding(horizontal = pagePadding).padding(bottom = Tokens.Space.s)
+                        if (shellLines.isNotEmpty() && blocking == null && !(mainReadiness.chatOnly && readinessOn)) SideEffect { needsRoom.above = 0 }
                         if (blocking != null) ReadinessStepCard(blocking, { runReadinessAction(it) }, cardModifier,
                             busy = ReadinessActionId.TestAssistant.takeIf { mainReadiness.probing },
                             note = readiness?.probe?.let { probe ->
@@ -809,8 +829,20 @@ fun AssistantScreen(
                             actionLabel = stringResource(ReadinessActionId.AddComputer.label),
                             onAction = { runReadinessAction(ReadinessActionId.AddComputer) })
                     }
+                    if (shellLines.isNotEmpty()) {
+                        ShellNeedsYou(shellLines, { needsRoom.height(needsFade) }, requireNotNull(onOpenNeed), onMore = { more ->
+                            if (more.opensAgents) navigator.selectTab(AppTab.Agents) else onOpenInbox?.invoke() ?: navigator.navigate(InboxRoute)
+                        }, Modifier.padding(horizontal = Tokens.Space.m))
+                    }
                     if (hasComposer) {
-                        draftError?.let { JNotice(androidx.compose.ui.res.stringResource(it), Modifier.padding(horizontal = pagePadding), status = Status.NeedsYou) }
+                        draftError?.let { JNotice(androidx.compose.ui.res.stringResource(it),
+                            (if (shellLines.isEmpty()) Modifier else Modifier.onSizeChanged { needsRoom.below = it.height }).padding(horizontal = pagePadding),
+                            status = Status.NeedsYou) }
+                        if (shellLines.isNotEmpty() && draftError == null) SideEffect { needsRoom.below = 0 }
+                        // Where the composer starts with the keyboard down: the floor of the room the lines above may take.
+                        if (shellLines.isNotEmpty()) Spacer(Modifier.fillMaxWidth().onGloballyPositioned {
+                            needsRoom.composerAt(it.positionInRoot().y.roundToInt())
+                        })
                         val uploadTarget = active ?: snapshot.mainSession
                             ?: SessionKey(assistantMachine, PendingMainConversation.sessionId)
                         // New chat's @: the sessions, and a typed path's folder on the assistant's computer (where uploads go).
@@ -846,7 +878,7 @@ fun AssistantScreen(
                             }) else if (starterQuotes.isNotEmpty()) ({ StarterQuoteCards(starterMentions) }) else null)
                     }
                 }
-            }) else null,
+            } }) else null,
             // An embedded conversation is a page of its own and softens the edges under these bars itself.
             edges = !(active != null && hasChat),
             scrollEdgeStyle = ScrollEdgeStyle.Gradient,
@@ -902,8 +934,8 @@ fun AssistantScreen(
                     onSuggestion = {
                         composer.value = androidx.compose.ui.text.input.TextFieldValue(it, androidx.compose.ui.text.TextRange(it.length))
                         submit()
-                    }, needsYou = needsYou, onNeed = onOpenNeed,
-                    onMore = onOpenInbox ?: { navigator.navigate(InboxRoute) })
+                    }, needsYou = needsYou, onNeed = onOpenNeed.takeUnless { needsOverComposer },
+                    onMore = onOpenInbox ?: { navigator.navigate(InboxRoute) }, room = needsRoom.takeIf { shellLines.isNotEmpty() })
             }
         }
             // The page's own toast (no app feedback), at the top, where the root draws the app's.
@@ -1098,9 +1130,23 @@ private fun NewChatPage(
     /** The hub's example questions (readiness `suggestions`), in place of the app's own; null: the app's. */
     hubSuggestions: List<ReadinessSuggestion>? = null,
     onLocalSuggestion: (String) -> Unit = {},
+    /** On Glass, the room Needs you over the composer may take: told where the first two rows of things to ask end. */
+    room: NeedsRoom? = null,
 ) {
+    val grid = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
+    var gridTop by remember { mutableIntStateOf(0) }
+    if (room != null) {
+        // The items before the things to ask: the demo's notice, the lead, and "Needs you now" where the scroll has it.
+        val first = (if (demo) 1 else 0) + 1 + (if (onNeed != null && !needsYou.isEmpty) 1 else 0)
+        val fold = welcomeFold(first, hubSuggestions?.size ?: suggestions.size)
+        LaunchedEffect(grid, room, fold) {
+            snapshotFlow { if (grid.canScrollBackward) null else foldBottom(grid.layoutInfo, fold)?.let { gridTop + it } }
+                .collect { bottom -> if (bottom != null) room.fold = bottom }
+        }
+    }
     LazyVerticalGrid(
-        columns = GridCells.Fixed(2), modifier = Modifier.fillMaxSize(),
+        columns = GridCells.Fixed(2), state = grid,
+        modifier = Modifier.fillMaxSize().then(if (room == null) Modifier else Modifier.onGloballyPositioned { gridTop = it.positionInRoot().y.roundToInt() }),
         contentPadding = PaddingValues(start = pagePadding, end = pagePadding,
             top = contentPadding.calculateTopPadding() + 16.dp, bottom = contentPadding.calculateBottomPadding() + 24.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp),

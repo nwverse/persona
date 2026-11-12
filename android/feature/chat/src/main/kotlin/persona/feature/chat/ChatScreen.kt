@@ -283,6 +283,8 @@ private fun ChatPage(
     var submittedDraft by remember { mutableStateOf<Pair<String, ChatComposerDraft>?>(null) }
     var clearingPane by rememberSaveable { mutableStateOf<String?>(null) }
     var linkContexts by rememberSaveable(stateSaver = ChatLinkContextsSaver) { mutableStateOf(emptyList<ChatLinkContext>()) }
+    var conversationLauncher by rememberSaveable(key.path, chrome.assistantManagement) { mutableStateOf<String?>(null) }
+    var conversationModel by rememberSaveable(key.path, chrome.assistantManagement) { mutableStateOf<String?>(null) }
     var submittedContexts by remember { mutableStateOf(emptyList<ChatLinkContext>()) }
     var notice by remember { mutableStateOf<String?>(null) }
     // /model in the "/" list asked for the "Mode" sheet: a one-off, cleared once the sheet opened (not replayed when the bar returns).
@@ -550,6 +552,16 @@ private fun ChatPage(
     LaunchedEffect(projection) {
         openFoldsToFetch(projection.lines, folding, foldErrors.keys).forEach(::expand)
     }
+    // The chat's model operating a Mac (#4339 C9 and C18, iOS ComputerActivityPill), on Glass: a pill over an Agent chat's
+    // composer, under the entries in Persona's conversation; a tap opens the work line that holds the call.
+    val computer = remember(glass, readOnly, snapshot.items, machines, key.machineId) {
+        if (glass && !readOnly) persona.core.domain.ComputerActivity.latest(snapshot.items, key.machineId, machines) else null
+    }
+    val computerLine = computer?.let { a -> computerWorkLine(lines, a.toolUseId) }
+    val computerPill: (@Composable (Modifier) -> Unit)? = computer?.let { a -> { modifier -> ChatComputerPill(a, onOpen = computerLine?.let { line -> {
+        if (!line.open) toggle(line.id)
+        if (!chatList.followsEnd) scope.launch { chatList.scrollToRecord(line.contentKey) }
+    } }, modifier) } }
     /** Whether the message was taken (false: nothing went, the box or another send stands); [onFailed] if it then fails. */
     fun send(command: String? = null, onFailed: () -> Unit = {}): Boolean {
         if (readOnly || !canSend) return false
@@ -570,7 +582,7 @@ private fun ChatPage(
         sending = true
         followEnd()
         scope.launch {
-            try { sender.send(key, wireText, id) }
+            try { sender.send(key, wireText, id, null, conversationLauncher, conversationModel) }
             catch (e: CancellationException) { throw e }
             catch (e: Exception) {
                 submittedDraft = null; submittedContexts = emptyList()
@@ -1026,6 +1038,8 @@ private fun ChatPage(
                                 // Inset like the status line and the composer around it, not edge to edge.
                                 JNotice(interactionFeedback.orEmpty(), Modifier.padding(horizontal = Tokens.Space.m))
                             }
+                            // An agent operating a Mac: over the cards and the composer, as iOS's footer has it.
+                            if (agentChat) computerPill?.invoke(Modifier.padding(horizontal = Tokens.Space.m))
                             // This agent has nothing left for you, others have (#4325): one tap to the next, no jump.
                             val openRequest = chrome.onOpenRequest
                             val keyboard = WindowInsets.ime.getBottom(LocalDensity.current) > 0
@@ -1120,6 +1134,7 @@ private fun ChatPage(
                                             requestCollapsed = false
                                         }, onSend = ::sendTray, onSchedule = { traySchedule = it }, onPlan = { trayPlan = it },
                                         backgroundRecords = host.backgroundRecords.isNotEmpty(), onBackground = host.onOpenBackground,
+                                        under = computerPill?.let { pill -> { pill(Modifier) } },
                                         groupByOrigin = foldsBackground)
                                     // Where the next message goes, with the composer, never only inside the In progress tray (iOS RouteChip, #4339 C15).
                                     if (composerShown(panel, requestCollapsed)) TaskRouteChip(host)
@@ -1145,6 +1160,13 @@ private fun ChatPage(
                                     }) else null,
                                     modeHint = chatModeHint(session, includeModes = session?.canChangeModes == true || session?.canChangeEffortOnly == true),
                                     accessory = {
+                                        if (renderStyle == ChatRenderStyle.Assistant && !readOnly && canSend && chrome.assistantManagement != null) {
+                                            ConversationLauncherChip(chrome.assistantManagement, key.machineId, key.sessionId, session?.launcher,
+                                                conversationLauncher, conversationModel) { launcher, model ->
+                                                conversationLauncher = launcher
+                                                conversationModel = model
+                                            }
+                                        }
                                         if (linkContexts.isEmpty()) ComposerSuggestion(session, composer, onSend = { text -> send(text) })
                                         // One line each while the link card peeks: the whole cards left no room for the composer.
                                         if (linkContexts.isNotEmpty()) ComposerContextCards(linkContexts, compact = linkInset.value > 0f) { ref ->

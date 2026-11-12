@@ -1049,3 +1049,12 @@ recovery that publishes fewer rows than are on screen moves the reader.
 - **CSP doesn't stop a `<meta http-equiv="refresh">` in a sandboxed `allow-scripts` frame**: the frame navigates itself (one request). Only never drawing a `meta` (or any HTML from the card) stops it. Chromium also opens a connection, without a request, for an `<iframe src>` its CSP refuses. A check of the frame by itself shows both (`web/e2e/html-runtime-security.mjs`, raw mode).
 - **A sync bridge needs its "asking" slot taken synchronously**: a card that calls `persona.reply` 200 times in one turn gets all 200 through a check on React state set in the same tick. Take the slot in the call, not in the render.
 
+## Connector context is not a conversation (#856)
+
+A collected context string loses message boundaries, individual timestamps and
+direction. Do not recover them by splitting on sender names or colons: descriptions
+can contain both. Use `Threads` for structured pages and retain a literal fallback
+for old items. Parse a textual card envelope only inside one source message, and
+keep incomplete or unknown card shapes readable. Capability errors need their own
+code; a 409 without `Threads` is different from a temporary failure or lost access.
+A failed page refresh must not erase a loaded page or its pending reply draft.
