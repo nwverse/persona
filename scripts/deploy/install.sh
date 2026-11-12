@@ -712,7 +712,7 @@ node_service() {
 install_node() {
 	fetch_link || fail node_link_required
 	if [ -z "$PAIR" ] && [ -z "$LISTEN_SET" ] && (: </dev/tty) 2>/dev/null; then
-		install_text node_connect_help >/dev/tty
+		install_format node_connect_help >/dev/tty
 		printf '\n' >/dev/tty
 		prompt node_connect_choose
 		read -r how </dev/tty || how=

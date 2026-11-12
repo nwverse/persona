@@ -38,6 +38,11 @@ const (
 	// photos"). The hub lists meeting_photos only while the default manager names it beside
 	// CapabilityMeetingConversation.
 	CapabilityMeetingPhotos = "meeting_photos"
+	// CapabilityMeetingLiveView: the manager takes the meeting conversation's phase 2, its live view (lines and topics
+	// on GET …/live, the room's meeting_topics_set, lines and topics in meeting_live; docs/assistant/meeting-minutes.md
+	// "Phase 2: live view"). The hub lists meeting_live_view only while the default manager names it beside
+	// CapabilityMeetingConversation.
+	CapabilityMeetingLiveView = "meeting_live_view"
 	// CapabilityRecordingDay: the manager takes all-day recordings and writes their daily recap (the upload's kind
 	// day, POST …/segments, detail.recap, recap_state; #4741). The hub lists the recording_day feature only while the
 	// default manager names it.
@@ -209,6 +214,8 @@ var Routes = []string{
 	"PATCH /api/v1/todos/{id}/decisions/{did}",
 	"PUT /api/v1/todos/{id}/thread",
 	"DELETE /api/v1/todos/{id}/thread",
+	"PUT /api/v1/todos/{id}/seen", // Got it on a Just finished to-do, and its Undo (todo_seen.go, #5707)
+	"DELETE /api/v1/todos/{id}/seen",
 	"POST /api/v1/todos/{id}/accept",
 	"POST /api/v1/todos/{id}/decision-dismiss",
 	"POST /api/v1/todos/{id}/decision-undo-dismiss",
