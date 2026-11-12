@@ -106,7 +106,7 @@ func TestInboxContextDoesNotPromoteUnrelatedGroupMessages(t *testing.T) {
 
 func TestInboxSweepReachesEleventhDirectChat(t *testing.T) {
 	message := adapter.Message{MessageID: "om_followup", MessagePosition: "20", ChatID: "oc_target",
-		CreateTime: "2030-01-01T00:00:00Z", Sender: adapter.Sender{ID: "ou_example_peer"}, Content: json.RawMessage(`"Need help"`)}
+		CreateTime: "2029-12-31T22:59:32Z", Sender: adapter.Sender{ID: "ou_example_peer"}, Content: json.RawMessage(`"Need help"`)}
 	c := followupConnector(t, nil, []adapter.Message{message})
 	var chats []adapter.Chat
 	for i := 0; i < inboxDirectChats; i++ {

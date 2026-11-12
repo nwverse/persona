@@ -33,7 +33,7 @@ const (
 	// up to inboxDirectChats per round, rotating through the most recent candidates.
 	inboxDirectChats      = 10
 	inboxDirectCandidates = 50
-	inboxDirectLookback   = time.Hour
+	inboxDirectLookback   = 2 * time.Hour
 )
 
 // StateStore is the small part of the manager's Postgres-backed settings store
