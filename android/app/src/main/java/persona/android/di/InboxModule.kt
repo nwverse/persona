@@ -196,7 +196,7 @@ class InboxDataOwner @Inject constructor(
         }
     }
 
-    val inbox = object : persona.feature.inbox.InboxRepository, InboxHandOffBarOwner {
+    val inbox: persona.feature.inbox.InboxRepository = object : persona.feature.inbox.InboxRepository, InboxHandOffBarOwner {
         override val supportsThreadOutbox = true
         override val conversationInbox = observe<InboxConversations?>(null) { flowOf(it.conversations) }
         override val messageReads = observe(emptySet<InboxMessageRead>()) { it.inbox.messageReads }
