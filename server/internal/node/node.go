@@ -60,8 +60,9 @@ type Node struct {
 	sock   os.FileInfo
 
 	// claudeStart, claudeReady: when set, how long a start waits for the shell to run claude, then for claude's
-	// input box, in place of claudeStartWait and claudeReadyWait (tests; claudeready.go).
-	claudeStart, claudeReady time.Duration
+	// input box, in place of claudeStartWait and claudeReadyWait (tests; claudeready.go). claudePoll replaces only
+	// the polling interval for synchronously scripted hosts; the normal interval remains 500 ms.
+	claudeStart, claudeReady, claudePoll time.Duration
 	// shellSettle, shellQuiet, shellAsk: when set, how long a start waits at most for a new tab's shell to settle, how
 	// long its screen must stay the same, and how long a startup question may stay on screen, in place of
 	// shellSettleWait, shellQuietFor and shellQuestionWait (tests; shellsettle.go).

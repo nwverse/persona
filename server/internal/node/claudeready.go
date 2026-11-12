@@ -47,6 +47,10 @@ func (n *Node) startWait() time.Duration {
 // shell saying it cannot run it ends the wait at once with a coded refusal (shellmiss.go, #1642).
 func (n *Node) waitReady(ctx context.Context, pane string, probe *startProbe) (*host.Agent, error) {
 	startWait, readyWait := n.claudeWaits()
+	poll := 500 * time.Millisecond
+	if n.claudePoll > 0 {
+		poll = n.claudePoll
+	}
 	deadline := time.Now().Add(startWait)
 	running := false
 	h, _, _ := n.paneHost(pane)
@@ -67,7 +71,7 @@ func (n *Node) waitReady(ctx context.Context, pane string, probe *startProbe) (*
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(500 * time.Millisecond):
+		case <-time.After(poll):
 		}
 		screen, err := n.readPane(ctx, pane, "visible", 60)
 		if gone = goneLooks(gone, err); gone >= paneGoneLooks && !running {
