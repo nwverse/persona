@@ -15,6 +15,7 @@ An Agent's session and a conversation with the assistant read the same on Androi
 **C1. Tools named in words.** iOS names another server's MCP tool "<Server> · <Tool>" ("GitHub · Create issue") and puts any unknown name into words (`DESIGN_SYSTEM.md` section 4.7). Android falls back to a "Use" verb with a subject taken from the input, so the server and the tool never show. Requirement: section 4.7's naming, from the same table.
 
 **C2. Subagents.** iOS draws a subagent as a card with its status, run time, prompt, reports, latest steps and View Subagent; parallel subagents share a grid ("Running 3 agents"), and a running card stays visible under a folded work line. The header's third line says what running subagents do, and a tap swaps the transcript in place with a way back. Android draws an ordinary tool row with a "View sub-agent" button that opens a separate read-only page. Requirement: as on iOS.
+  Moved (11-12): the web's task cards (#5030) are the spec for every client's subagents (`DESIGN_SYSTEM.md` section 4.7, "Task cards"), so Android draws those under #5045 rather than iOS's older card and grid; done in #PRNUM.
 
 **C3. Model and effort in the composer.** iOS shows a text button such as "Opus High ✦" in the composer's row; its menu holds the model (with Other Model…), the effort, ultracode and the permission mode. Android has an icon-only Mode button opening a sheet with a fixed model list and no typed model, a chip above the field when the setting isn't the default, and a permission-mode icon in the header. Requirement: the iOS button and menu; the header's mode icon goes (Q11).
   Moved (11-12): the web's model pill and unified model panel (#5032, #5033) became the spec for every client's composer (`DESIGN_SYSTEM.md` section 3.8, "Model pill and unified model panel"), so Android takes that structure in #5055 rather than copying iOS's current button, which #5055 replaces too. What stays here is Q11: the header's mode icon goes once the composer shows the mode.
@@ -138,7 +139,7 @@ An Agent's session and a conversation with the assistant read the same on Androi
 1. C1, C4's second line, C14 and C18's error card: small, and each fixes a written rule.
 2. C10 with phase 2 T6, and C17 with the Agents page's A1.
 3. C5 (C3 moved to #5055).
-4. C2, C12 and C13.
+4. C12 and C13 (C2 moved to #5045).
 5. C11 and C7.
 6. The rest of C9 and C18.
 

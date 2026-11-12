@@ -181,8 +181,9 @@ private fun AskUserChoice(label: String, picked: Boolean) {
 }
 
 /**
- * "View Subagent" under a Task / Agent step (iOS `SubagentCard`): its subagent's read-only conversation, running or
- * done; nothing when the session does not list a subagent for the call or it cannot be opened here.
+ * "View sub-agent" under a Task / Agent step in Brief and Board (Glass draws the task card instead): its sub-agent's
+ * read-only conversation, running or done; nothing when the session does not list a sub-agent for the call or it cannot
+ * be opened here.
  */
 @Composable
 internal fun SubagentEntry(toolUseId: String?) {

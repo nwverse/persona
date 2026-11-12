@@ -24,7 +24,7 @@
     <string name="chat_rewind_input_kept">巻き戻しましたが、コンピューター側のClaudeの入力欄にこのメッセージが残っています。</string>
     <string name="chat_rewind_failed">巻き戻せませんでした：%1$s</string>
     <string name="chat_rewind_running">巻き戻し中…</string>
-    <string name="chat_tool_open_subagent">サブエージェントを表示</string>
+    <string name="chat_tool_open_subagent">サブエージェントを見る</string>
     <string name="chat_tool_no_answer">回答なし</string>
     <string name="chat_computer_script">スクリプトを実行</string>
     <string name="chat_computer_script_named">スクリプトを実行：%1$s</string>

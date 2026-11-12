@@ -21,17 +21,9 @@ internal fun ChatLine.lastItem(): Item? = when (this) {
     is ChatLine.UserImages -> images.lastOrNull()?.item
     is ChatLine.Work -> steps.mapNotNull { it.lastItem() }.maxWithOrNull(chatItemOrder)
     is ChatLine.Step -> step.lastItem()
-    is ChatLine.Agents -> calls.mapNotNull { (it.result ?: it.use).item }.maxWithOrNull(chatItemOrder)
     is ChatLine.Wakes -> turn.wakes.lastOrNull()?.item
     is ChatLine.ApiError -> item.item
     is ChatLine.Recaps -> items.lastOrNull()?.item
-    else -> null
-}
-
-/** The open work line a step, or a grid of subagents, is drawn under. */
-internal fun ChatLine.workGroup(): String? = when (this) {
-    is ChatLine.Step -> groupId
-    is ChatLine.Agents -> groupId
     else -> null
 }
 
@@ -195,7 +187,6 @@ internal fun ChatLine.contentType(): String = when (this) {
     is ChatLine.Row -> row.type
     is ChatLine.Work -> "work"
     is ChatLine.Step -> when (step) { is WorkItem.Tool -> "tool"; is WorkItem.Folded -> "fold"; else -> "thought" }
-    is ChatLine.Agents -> "agents"
     is ChatLine.End -> "work_end"
     is ChatLine.UserImages -> "images"
     is ChatLine.Wakes -> "wakes"

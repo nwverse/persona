@@ -174,13 +174,6 @@ sealed interface ChatLine {
         override val id get() = "$groupId/${step.id}"
         val separatorBefore get() = !first
     }
-    /**
-     * Subagents an open work line launched one after another, their cards in one grid ([gridAgents], iOS `.agents`);
-     * [calls] are in the order they were launched, [first] as a [Step]'s.
-     */
-    data class Agents(val groupId: String, val calls: List<ToolCall>, val first: Boolean) : ChatLine {
-        override val id get() = "$groupId/agents-${calls.first().id}"
-    }
     data class End(val groupId: String, val count: Int) : ChatLine {
         override val id get() = "$groupId-end"
         val separatorBefore get() = true

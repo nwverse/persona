@@ -52,7 +52,6 @@ internal fun WorkCollapseOverlay(lines: List<ChatLine>, list: LazyListState, out
             val top = visible.maxByOrNull { it.index }?.key
             val group = when (val line = byId[top]) {
                 is ChatLine.Step -> line.groupId
-                is ChatLine.Agents -> line.groupId
                 is ChatLine.End -> line.groupId
                 else -> null
             }

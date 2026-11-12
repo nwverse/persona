@@ -184,8 +184,6 @@ private class Projection(val tasks: TaskIndex, val menu: List<String?>, val now:
                 "summary_short" to line.summary.short, "steps" to line.steps.map(::step))
             is ChatLine.Step -> obj("type" to "work_step", "group_id" to line.groupId,
                 "first" to line.first, "separator_before" to line.separatorBefore, "step" to step(line.step))
-            is ChatLine.Agents -> obj("type" to "agents", "group_id" to line.groupId, "first" to line.first,
-                "call_ids" to line.calls.map { it.id })
             is ChatLine.End -> obj("type" to "work_end", "group_id" to line.groupId,
                 "count" to line.count, "separator_before" to line.separatorBefore)
             is ChatLine.Wakes -> obj("type" to "wakes", "notice_ids" to line.turn.wakes.map { it.id },

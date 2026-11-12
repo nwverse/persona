@@ -32,7 +32,6 @@ import persona.core.designsystem.icons.PhIcons
 import persona.core.domain.ChatTaps
 import persona.core.domain.chatBubbles
 import persona.core.domain.lines.ChatLine
-import persona.core.domain.lines.gridAgents
 import persona.core.domain.lines.isLiveStatus
 import persona.core.domain.sort.READ_ONLY
 import persona.core.domain.sort.canApprove
@@ -397,9 +396,11 @@ private fun ChatPage(
         } else persona.core.domain.tasks.AssistantConversation(projection.lines, emptyList())
     }
     LaunchedEffect(key, tasks) { tasks?.load(key.sessionId); tasks?.loadTodayIfMain(key.sessionId) }
-    // Glass draws parallel subagents as one grid (#4339 C2); Brief and Board list them as steps.
-    val subagentGrid = PersonaTheme.style == AppStyle.Glass
-    val lines = remember(assistantPresentation, search.selected, jumpItem, feed, tasks, taskPlans, taskTodos, taskCardProjection, renderStyle, subagentGrid) {
+    // Glass draws the subagents a subagent launched as task cards of their own among the steps, by when they started
+    // (#5045, DESIGN_SYSTEM.md 4.7 "Task cards"); Brief and Board do not.
+    val subagentCards = PersonaTheme.style == AppStyle.Glass
+    val nestedSubagents = if (subagentCards) session?.subagents.orEmpty() else emptyList()
+    val lines = remember(assistantPresentation, search.selected, jumpItem, feed, tasks, taskPlans, taskTodos, taskCardProjection, renderStyle, nestedSubagents) {
         searchVisibleLines(assistantPresentation.foreground, search.selected?.itemId ?: jumpItem)
             .let {
                 when {
@@ -409,7 +410,7 @@ private fun ChatPage(
                     else -> persona.core.domain.tasks.AssistantLines.lines(it,
                         persona.core.domain.tasks.SentToAgents.shown(feed))
                 }
-            }.let { if (subagentGrid) gridAgents(it) else it }.asReversed()
+            }.let { persona.core.domain.lines.Subagents.withNested(it, nestedSubagents) }.asReversed()
     }
     val searchableItems by produceState(emptyList<Item>(), snapshot.items, timelineVersion, search.visible) {
         if (search.visible) value = withContext(Dispatchers.Default) { timeline.searchItems(snapshot.items) }
@@ -431,6 +432,7 @@ private fun ChatPage(
     }
     val contentSourceLabels = remember(lines) { sourceLabelIds(lines.asReversed()) }
     val contentWorkGroups = remember(lines) { lines.filterIsInstance<ChatLine.Work>().associateBy { it.id } }
+    val contentLastSteps = remember(lines) { lines.asReversed().filterIsInstance<ChatLine.Step>().associate { it.groupId to it.step.id } }
     // Each open work line's plan card (web #1990 draws only the latest plan of an exchange).
     val contentPlans = remember(contentWorkGroups) { contentWorkGroups.filterValues { it.open }.mapValues { latestPlan(it.value.steps) } }
     val currentItems by rememberUpdatedState(snapshot.items)
@@ -597,13 +599,14 @@ private fun ChatPage(
                 }
             }
         }) else null
-    // The session's subagents by the call that started them, done ones too (iOS `subagentsByCall`): what their cards say,
-    // where an open card reads its latest steps, and "View Subagent" where they can be opened.
-    val subagentLinks = remember(session?.subagents, chrome.onOpenSession, readOnly, key.machineId, repository) {
-        val listed = session?.subagents.orEmpty().filter { !it.toolUseId.isNullOrBlank() }
+    // The session's subagents by the call that started them, done ones too: what their task cards say (Glass), and the
+    // conversations "View sub-agent" opens under Task / Agent steps in Brief and Board.
+    val subagentLinks = remember(session?.subagents, chrome.onOpenSession, readOnly, key.machineId) {
+        val listed = session?.subagents.orEmpty()
         if (listed.isEmpty()) null
-        else ChatSubagents(listed.filter { it.sessionId.isNotBlank() }.associate { it.toolUseId!! to SessionKey(key.machineId, it.sessionId) },
-            chrome.onOpenSession?.takeIf { !readOnly }, listed.associateBy { it.toolUseId!! }, repository)
+        else ChatSubagents(listed.filter { !it.toolUseId.isNullOrBlank() && it.sessionId.isNotBlank() }
+            .associate { it.toolUseId!! to SessionKey(key.machineId, it.sessionId) },
+            chrome.onOpenSession?.takeIf { !readOnly }, listed.associateBy(persona.core.domain.lines.Subagents::callOf))
     }
     val subagentFolds = remember(key) { SubagentFolds() }
     // A Workflow call draws its run's card (#3435): the session's runs by the call that launched them, their agents
@@ -1088,12 +1091,12 @@ private fun ChatPage(
                                     }, style = renderStyle, textUpdates = liveTextUpdates,
                                         userImages = contentUserImages[line.id].orEmpty(),
                                         imagesInUserBubble = line.id in contentHiddenImages,
-                                        workRunning = line.workGroup()?.let { contentWorkGroups[it]?.live } == true,
-                                        lastWorkStep = when (line) {
-                                            is ChatLine.Step -> contentWorkGroups[line.groupId]?.steps?.lastOrNull()?.id == line.step.id
-                                            is ChatLine.Agents -> contentWorkGroups[line.groupId]?.steps?.lastOrNull()?.id == line.calls.last().id
-                                            else -> false
-                                        },
+                                        workRunning = (line as? ChatLine.Step)?.let { contentWorkGroups[it.groupId]?.live } == true,
+                                        lastWorkStep = (line as? ChatLine.Step)?.let {
+                                            // A nested subagent's card can come after the line's own last step (Glass).
+                                            if (subagentCards) contentLastSteps[it.groupId] == it.step.id
+                                            else contentWorkGroups[it.groupId]?.steps?.lastOrNull()?.id == it.step.id
+                                        } == true,
                                         plan = (line as? ChatLine.Step)?.let { contentPlans[it.groupId] },
                                         showSourceLabel = line.id in contentSourceLabels, waiting = waitingOnYou,
                                         closeoutReply = closeoutReply, hideTaskPrompts = foldsBackground)

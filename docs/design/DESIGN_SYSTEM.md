@@ -798,7 +798,8 @@ opens a subagent card in place (prompt, the latest result folded past four lines
 per card; a workflow card's head opens the chat's Background dialog at its run. A subagent is never a conversation of
 its own (no panel, no page, no sidebar row). Like every tool call the cards sit inside the work summary, running or
 not (super rule 2; cindy's running cards outside it wait on #5047). Nested subagents are flat cards by start time. A card offers Stop only
-where the node can stop that task. iOS and Android still draw the earlier design (#5045).
+where the node can stop that task. Android draws these cards in Glass (#5045; Brief and Board keep their tool rows with
+"View sub-agent"); iOS still draws the earlier design (#5045).
 A child session (a Codex subagent, an Agent a Paseo Agent created; #5120) is the same card in its parent's chat, built
 from its own row and placed by when it started, since no call in the parent's transcript names it: what runs it, its
 model and effort, its status and time; opened, its prompt, latest words and last tool. iOS and Android follow in #5140.

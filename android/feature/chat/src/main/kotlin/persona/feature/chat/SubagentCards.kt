@@ -2,22 +2,25 @@ package persona.feature.chat
 
 import android.content.res.Resources
 import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
@@ -30,7 +33,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -39,33 +42,20 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import kotlinx.coroutines.CancellationException
-import persona.core.contracts.Item
-import persona.core.contracts.SessionKey
 import persona.core.contracts.Subagent
-import persona.core.contracts.api.ChatRepository
-import persona.core.designsystem.HueTintAlpha
-import persona.core.designsystem.JSpinner
 import persona.core.designsystem.JIcon
+import persona.core.designsystem.JSpinner
 import persona.core.designsystem.JTextButton
 import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.Tokens
-import persona.core.designsystem.WorkState
 import persona.core.designsystem.icons.PersonaIcons
-import persona.core.designsystem.resolve
-import persona.core.designsystem.workRail
-import persona.core.designsystem.WorkStep as TimelineStep
-import persona.core.domain.lines.LineItem
-import persona.core.domain.lines.LineStore
 import persona.core.domain.lines.SubagentStatus
 import persona.core.domain.lines.Subagents
 import persona.core.domain.lines.ToolCall
 
 /**
- * Which subagent cards are open, by their call, while the chat is (iOS `openTools`): a card that joins a grid when the
- * next subagent starts, or scrolls away and back, stays as the reader left it.
+ * Which task cards are open, by their call, while the chat is (the web's `subagentCardKey`): a card that scrolls away
+ * and back, or turns from running to done, stays as the reader left it.
  */
 @Stable
 internal class SubagentFolds {
@@ -76,194 +66,179 @@ internal class SubagentFolds {
 
 internal val LocalSubagentFolds = staticCompositionLocalOf<SubagentFolds?> { null }
 
-/** What a subagent's card says under its title (iOS `SubagentCardText`): what it is doing, then how it went in how many steps. */
+/** A task card's words (the web's `taskStatusWord` and `subagentMeta`). */
 internal object SubagentCardText {
-    /** "Running the tests… · 7 steps", "Starting…"; "Done · 7 steps · 1 min". */
-    fun line(res: Resources, status: SubagentStatus, agent: Subagent?, took: Long?): String {
-        val steps = Subagents.steps(agent)?.let { res.getQuantityString(R.plurals.chat_subagent_steps, it, it) }
-        return when (status) {
-            SubagentStatus.Running -> Subagents.doing(agent)?.let { listOfNotNull(it + "…", steps).joinToString(" · ") }
-                ?: res.getString(R.string.chat_subagent_starting)
-            else -> listOfNotNull(res.getString(when (status) {
-                SubagentStatus.Failed -> R.string.chat_subagent_failed
-                SubagentStatus.Stopped -> R.string.chat_subagent_stopped
-                else -> R.string.chat_subagent_done
-            }), steps, took?.let { Subagents.ran(it).resolve(res) }).joinToString(" · ")
-        }
-    }
+    /** The status word, the same four on every task card. */
+    fun status(res: Resources, status: SubagentStatus): String = res.getString(when (status) {
+        SubagentStatus.Running -> R.string.chat_subagent_status_running
+        SubagentStatus.Completed -> R.string.chat_subagent_status_completed
+        SubagentStatus.Failed -> R.string.chat_subagent_status_failed
+        SubagentStatus.Stopped -> R.string.chat_subagent_status_stopped
+    })
 
-    /** Over a grid (iOS `SubagentGridText.head`): "Running 3 agents" while any runs, "Ran 3 agents · 12 steps" after. */
-    fun head(res: Resources, count: Int, running: Int, steps: Int): String {
-        if (running > 0) return res.getQuantityString(R.plurals.chat_subagent_grid_running, running, running)
-        val ran = res.getQuantityString(R.plurals.chat_subagent_grid_ran, count, count)
-        return if (steps > 0) ran + " · " + res.getQuantityString(R.plurals.chat_subagent_grid_steps, steps, steps) else ran
-    }
+    /**
+     * The second line's pieces, in order: what ran it (Claude Code; none in a Persona conversation, whose reader does not
+     * work with the tool), the model chip (empty: none), its tokens, its tool uses and how long it took ([took], none while
+     * it runs: "Running for …" counts there instead).
+     */
+    fun meta(res: Resources, agent: Subagent?, took: Long?, assistant: Boolean): Meta = Meta(
+        harness = if (assistant) null else res.getString(R.string.chat_subagent_harness_claude),
+        model = Subagents.modelChip(agent?.model).ifEmpty { null },
+        tokens = agent?.tokens?.takeIf { it > 0 }?.let { res.getString(R.string.chat_subagent_tokens, Subagents.tokens(it)) },
+        uses = agent?.steps?.takeIf { it > 0 }?.let { res.getQuantityString(R.plurals.chat_subagent_tool_uses, it, it) },
+        took = took?.let { workDuration(res, it) },
+    )
+
+    data class Meta(val harness: String?, val model: String?, val tokens: String?, val uses: String?, val took: String?)
 }
-
-/** Its title: what the agent asked it to do (`description`), else what the session calls it. */
-private fun subagentTitle(call: ToolCall, agent: Subagent?, fallback: String): String =
-    call.use.item.toolInput.inputText("description")
-        ?: agent?.description?.takeIf(String::isNotBlank) ?: agent?.type?.takeIf(String::isNotBlank) ?: fallback
-
-private fun kotlinx.serialization.json.JsonElement?.inputText(key: String): String? =
-    ((this as? kotlinx.serialization.json.JsonObject)?.get(key) as? kotlinx.serialization.json.JsonPrimitive)
-        ?.takeIf { it.isString }?.content?.takeIf(String::isNotBlank)
-
-/** The colour a card's state is drawn in (iOS `SubagentCard.tint`). */
-@Composable
-private fun SubagentStatus.tint(): Color {
-    val palette = PersonaTheme.palette
-    return when (this) {
-        SubagentStatus.Running -> palette.working.dot
-        SubagentStatus.Done -> palette.positive
-        SubagentStatus.Failed -> palette.danger.dot
-        SubagentStatus.Stopped -> palette.ink2
-    }
-}
-
-/** A card's or a grid's mark on the work rail: a spinner while it runs, the subagent icon after, on a wash of its colour. */
-@Composable
-private fun SubagentMark(running: Boolean, tint: Color, name: String) {
-    // The page under the mark hides the rail behind it, as a step's icon does.
-    Box(Modifier.size(Tokens.Size.iconXS).clip(CircleShape).background(PersonaTheme.palette.background)) {
-        Box(Modifier.size(Tokens.Size.iconXS).background(tint.copy(alpha = HueTintAlpha)), contentAlignment = Alignment.Center) {
-            if (running) JSpinner(Modifier.size(Tokens.Space.m), color = tint, stroke = Tokens.Space.xxs)
-            else JIcon(toolCategory(name), null, size = Tokens.Space.m, tint = tint, decorative = true)
-        }
-    }
-}
-
-/** Where a step's words start on the rail: its inset, its icon and the gap after it ([TimelineStep] in Glass). */
-private val textColumn: Dp get() = Tokens.Space.m + Tokens.Size.iconXS + Tokens.Space.l
 
 /**
- * A subagent the agent launched (an Agent / Task call) as iOS draws it in Glass (#4339 C2, iOS `SubagentCard`): while it
- * runs, a card with its title and what it is doing; opened, what it was asked, what it reported, its latest steps and
- * "View Subagent". Once it reported back it is the tool's own row ([row]), as on iOS.
+ * A subagent the agent launched (an Agent / Task call) as its task card, in Glass (#5045; `docs/design/DESIGN_SYSTEM.md`
+ * section 4.7, "Task cards"; the web's `SubagentCard` on `TaskCard`): one full-width card where it was launched, running
+ * or done, never a conversation of its own. Two lines: its avatar, "Subagent", its title and its status word; then what
+ * ran it, the model chip, its tokens, its tool uses and how long it took, or "Running for …" each second. The head opens
+ * it in place: what it was asked, its latest result (four lines until Show full result), its last tool and its output.
+ * [live]: its exchange is the running one; [assistant]: a Persona conversation.
  */
 @Composable
-internal fun SubagentCard(call: ToolCall, modifier: Modifier = Modifier, row: @Composable () -> Unit) {
+internal fun SubagentCard(call: ToolCall, live: Boolean, assistant: Boolean, modifier: Modifier = Modifier) {
     val links = LocalChatSubagents.current
-    val id = call.use.item.toolUseId
-    val agent = id?.let { links?.agents?.get(it) }
-    if (Subagents.drawsAsRow(call, agent)) return Box(modifier) { row() }
+    val agent = call.use.item.toolUseId?.let { links?.agents?.get(it) }
     val res = LocalResources.current
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
-    val status = Subagents.status(call, agent)
+    val status = Subagents.status(call, agent, live)
+    val running = status == SubagentStatus.Running
     val folds = LocalSubagentFolds.current
     var openHere by rememberSaveable(call.id) { mutableStateOf(false) }
     val open = folds?.isOpen(call.id) ?: openHere
-    val title = subagentTitle(call, agent, stringResource(R.string.chat_tool_subagent))
-    val line = SubagentCardText.line(res, status, agent, Subagents.took(call, agent))
-    Column(modifier.fillMaxWidth().animateContentSize(PersonaTheme.motion.size()).semantics { testTag = "chat.subagent-card" }) {
+    val title = Subagents.title(call, agent) ?: stringResource(R.string.chat_subagent_untitled)
+    val meta = SubagentCardText.meta(res, agent, Subagents.took(call, agent, status), assistant)
+    val started = Subagents.started(call, agent)
+    val now by rememberNow(1_000, enabled = running && started != null)
+    val runningFor = if (running && started != null)
+        stringResource(R.string.chat_subagent_running_for, workDuration(res, java.time.Duration.between(started, now).seconds.coerceAtLeast(1)))
+        else null
+    val shape = PersonaTheme.shapes.cardShape
+    // The page under the card hides the work rail behind it; its avatar sits where the rail runs.
+    Column(modifier.fillMaxWidth().padding(vertical = Tokens.Space.xs).clip(shape).background(palette.background)
+        .background(palette.surface).border(Tokens.Size.lineMedium, palette.line, shape)
+        .animateContentSize(PersonaTheme.motion.size())
+        .padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s)
+        .semantics { testTag = "chat.subagent-card" }) {
         val state = stringResource(if (open) R.string.chat_tasks_expanded else R.string.chat_tasks_collapsed)
-        Row(Modifier.fillMaxWidth()
-            .clickable(role = Role.Button) {
+        val action = stringResource(if (open) R.string.chat_subagent_collapse_details else R.string.chat_subagent_expand_details)
+        Row(Modifier.fillMaxWidth().clickable(role = Role.Button, onClickLabel = action) {
                 if (folds != null) folds.toggle(call.id) else openHere = !openHere
+            }.semantics(mergeDescendants = true) { stateDescription = state },
+            verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+            Box(Modifier.padding(top = Tokens.Space.xxs).size(Tokens.Size.iconXS).clip(CircleShape).background(palette.sunken),
+                contentAlignment = Alignment.Center) {
+                JIcon(toolCategory(call.name), null, size = Tokens.Space.m, tint = palette.ink2, decorative = true)
             }
-            .semantics(mergeDescendants = true) { stateDescription = state }
-            .padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s), verticalAlignment = Alignment.Top) {
-            SubagentMark(status == SubagentStatus.Running, status.tint(), call.name)
-            Spacer(Modifier.width(Tokens.Space.l))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xxs)) {
-                Text(title, style = type.callout.copy(fontWeight = FontWeight.SemiBold), color = palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(line, style = type.micro, color = if (status == SubagentStatus.Failed) palette.danger.text else palette.ink2,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                val titleStyle = type.callout.copy(fontWeight = FontWeight.Medium)
+                // At the large text sizes the title gets a line of its own: beside the label and the status it was cut to a letter.
+                if (LocalDensity.current.fontScale >= LargeText) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+                        Text(stringResource(R.string.chat_subagent_label), Modifier.weight(1f), style = type.micro, color = palette.ink2, maxLines = 1)
+                        StatusWord(status, SubagentCardText.status(res, status))
+                    }
+                    Text(title, style = titleStyle, color = palette.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                } else Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+                    Text(stringResource(R.string.chat_subagent_label), style = type.micro, color = palette.ink2, maxLines = 1)
+                    Text(title, Modifier.weight(1f), style = titleStyle, color = palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    StatusWord(status, SubagentCardText.status(res, status))
+                }
+                MetaLine(meta, runningFor)
             }
-            Spacer(Modifier.width(Tokens.Space.xs))
-            JIcon(PersonaIcons.disclosure, null, Modifier.padding(top = Tokens.Space.xxs).rotate(if (open) 90f else 0f),
+            JIcon(PersonaIcons.disclosure, null, Modifier.padding(top = Tokens.Space.xs).rotate(if (open) 90f else 0f),
                 size = Tokens.Space.m, tint = palette.ink3)
         }
-        // Its reports and steps are rows with their own inset: their icons line up with the brief's words.
-        if (open) Column(Modifier.fillMaxWidth().padding(start = textColumn - Tokens.Space.m, end = Tokens.Space.m, bottom = Tokens.Space.m),
-            verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-            call.use.item.toolInput.inputText("prompt")?.let {
-                Text(it, Modifier.padding(start = Tokens.Space.m), style = type.caption, color = palette.ink2, maxLines = 6, overflow = TextOverflow.Ellipsis)
+        if (open) Details(call, agent, status)
+    }
+}
+
+/** The font scale from which a card's title takes a line of its own (Android's large text sizes). */
+private const val LargeText = 1.5f
+
+/** The status mark and word: a spinner while it runs, otherwise the outcome's mark; only a failure is red. */
+@Composable
+private fun StatusWord(status: SubagentStatus, word: String) {
+    val palette = PersonaTheme.palette
+    val color = if (status == SubagentStatus.Failed) palette.danger.text else palette.ink2
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+        when (status) {
+            SubagentStatus.Running -> JSpinner(Modifier.size(Tokens.Space.m), color = palette.ink2, stroke = Tokens.Space.xxs)
+            SubagentStatus.Failed -> JIcon(PersonaIcons.error, null, size = Tokens.Space.m, tint = color, decorative = true)
+            SubagentStatus.Stopped -> JIcon(PersonaIcons.interrupt, null, size = Tokens.Space.m, tint = color, decorative = true)
+            SubagentStatus.Completed -> JIcon(PersonaIcons.done, null, size = Tokens.Space.m, tint = color, decorative = true)
+        }
+        Text(word, style = PersonaTheme.type.micro, color = color, maxLines = 1)
+    }
+}
+
+/** The second line: what ran it, the model chip, tokens, tool uses, the time; it wraps rather than cutting a piece. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun MetaLine(meta: SubagentCardText.Meta, runningFor: String?) {
+    val palette = PersonaTheme.palette
+    val style = PersonaTheme.type.micro
+    val pieces = listOfNotNull(meta.harness, meta.tokens, meta.uses, meta.took, runningFor)
+    if (pieces.isEmpty() && meta.model == null) return
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xxs),
+        itemVerticalAlignment = Alignment.CenterVertically) {
+        meta.harness?.let { Text(it, style = style, color = palette.ink3, maxLines = 1) }
+        // The model chip: the line's own size and colour, only a chip's fill and radius.
+        meta.model?.let {
+            Text(it, Modifier.clip(CircleShape).background(palette.sunken).padding(horizontal = Tokens.Space.sm, vertical = Tokens.Space.xxs),
+                style = style, color = palette.ink3, maxLines = 1)
+        }
+        listOfNotNull(meta.tokens, meta.uses, meta.took, runningFor).forEach { Text(it, style = style, color = palette.ink3, maxLines = 1) }
+    }
+}
+
+/** The opened card: what it was asked, its latest result, its last tool and its output, on a rail of their own. */
+@Composable
+private fun Details(call: ToolCall, agent: Subagent?, status: SubagentStatus) {
+    val palette = PersonaTheme.palette
+    val type = PersonaTheme.type
+    Row(Modifier.fillMaxWidth().padding(top = Tokens.Space.s).height(IntrinsicSize.Min).semantics { testTag = "chat.subagent-details" }) {
+        Box(Modifier.width(Tokens.Space.xxs).fillMaxHeight().background(palette.line))
+        Column(Modifier.weight(1f).padding(start = Tokens.Space.m), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+            Subagents.prompt(call).takeIf(String::isNotEmpty)?.let { Text(it, style = type.caption, color = palette.ink2) }
+            SubagentResult(call, agent, status)
+            agent?.lastTool?.name?.takeIf(String::isNotBlank)?.let {
+                Text(stringResource(R.string.chat_subagent_last_tool, it), style = type.micro, color = palette.ink3)
             }
-            // What it reported so far, each one line until opened (iOS `FoldedReport`).
-            Subagents.reports(call).forEach { report ->
-                if (report.task != null) TaskNoteLine(report)
-                else report.text?.let { Text(it, style = type.caption, color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-            }
-            val key = id?.let { links?.keys?.get(it) }
-            val repository = links?.repository
-            if (key != null && repository != null) SubagentRecentSteps(key, repository, status == SubagentStatus.Running)
-            val view = links?.open
-            if (key != null && view != null) JTextButton(stringResource(R.string.chat_tool_open_subagent), { view(key) }, icon = PersonaIcons.openExternal)
+            Subagents.outputFile(call)?.let { Text(stringResource(R.string.chat_subagent_output_file, it), style = type.micro, color = palette.ink3) }
         }
     }
 }
 
 /**
- * A subagent's latest steps in its open card (iOS `SubagentRecentSteps`): its own conversation, followed while shown;
- * the newest short fold the hub sent is opened for them.
+ * Its latest result as plain text (the web's `SubagentResult`): four lines until "Show full result" when it is longer; a
+ * report the hub cut loads whole in its place first ("Show full text").
  */
 @Composable
-private fun SubagentRecentSteps(key: SessionKey, repository: ChatRepository, running: Boolean) {
-    val snapshot by remember(repository, key) { repository.observe(key) }.collectAsStateWithLifecycle(null)
-    var opened by remember(key) { mutableStateOf<Pair<String, List<Item>>?>(null) }
-    val items = remember(snapshot, opened) {
-        val lines = snapshot?.items.orEmpty().map { it.asLineItem() }
-        opened?.let { (fold, page) -> LineStore().apply { replace(lines); unfold(fold, page.map { it.asLineItem() }) }.items } ?: lines
+private fun SubagentResult(call: ToolCall, agent: Subagent?, status: SubagentStatus) {
+    val item = remember(call) { Subagents.resultItem(call) }
+    var loaded by remember(item?.id) { mutableStateOf<String?>(null) }
+    val text = remember(call, agent, status, loaded) {
+        val said = Subagents.resultText(call, agent, status)
+        if (loaded != null && item != null) Subagents.resultText(call.copy(results = call.results.map {
+            if (it.id == item.id) it.copy(item = it.item.copy(text = loaded, fullSize = null)) else it
+        }), agent, status) else said
     }
-    val fold = remember(items) { Subagents.foldToOpen(items) }
-    LaunchedEffect(fold?.id) {
-        val f = fold ?: return@LaunchedEffect
-        val through = f.fold?.throughSeq ?: return@LaunchedEffect
-        try { opened = f.id to repository.expandFold(key, f.seq, through) }
-        catch (cancelled: CancellationException) { throw cancelled }
-        catch (_: Exception) { /* Its latest steps stay what the page holds. */ }
-    }
-    val calls = remember(items) { Subagents.recent(items) }
-    if (calls.isEmpty()) {
-        if (snapshot?.loading != false) JSpinner(Modifier.size(Tokens.Space.m), stroke = Tokens.Space.xxs)
-        return
-    }
-    val res = LocalResources.current
-    Column(Modifier.fillMaxWidth().semantics { testTag = "chat.subagent-steps" }) {
-        calls.forEach { step ->
-            val presentation = remember(step.use.item, res) { toolPresentation(res, step.use.item) }
-            TimelineStep(toolCategory(step.name), presentation.title, detail = presentation.detail, mono = presentation.mono, singleLine = true,
-                state = when {
-                    step.failed -> WorkState.Failed
-                    step.result == null && running -> WorkState.Running
-                    else -> WorkState.Done
-                })
-        }
-    }
-}
-
-/**
- * Subagents launched one after another (in parallel) as one line of an open work line (iOS `SubagentGrid`, the web's
- * `AgentGrid`): "Running 3 agents" while any runs, "Ran 3 agents · 12 steps in all" after; their cards in the order they
- * were launched, two side by side where there is room (a tablet), one under the other on a phone. [last]: the work line's
- * last step, where the rail ends.
- */
-@Composable
-internal fun SubagentGrid(calls: List<ToolCall>, last: Boolean, card: @Composable (ToolCall) -> Unit) {
-    val res = LocalResources.current
-    val agents = LocalChatSubagents.current?.agents.orEmpty()
-    val running = Subagents.running(calls, agents)
-    val head = SubagentCardText.head(res, calls.size, running, Subagents.steps(calls, agents))
-    Column(Modifier.fillMaxWidth().semantics { testTag = "chat.subagent-grid" }) {
-        Row(Modifier.fillMaxWidth().workRail(false).semantics(mergeDescendants = true) {}
-            .padding(start = Tokens.Space.m, end = Tokens.Space.m, top = Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
-            SubagentMark(running > 0, if (running > 0) PersonaTheme.palette.working.dot else PersonaTheme.palette.ink2, calls.first().name)
-            Spacer(Modifier.width(Tokens.Space.l))
-            Text(head, style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-        BoxWithConstraints(Modifier.fillMaxWidth()) {
-            val columns = (maxWidth / Tokens.Size.subagentColumn).toInt().coerceIn(1, calls.size)
-            val rows = calls.chunked(columns)
-            Column(Modifier.fillMaxWidth()) {
-                rows.forEachIndexed { n, cells ->
-                    Row(Modifier.fillMaxWidth().workRail(last && n == rows.lastIndex), verticalAlignment = Alignment.Top) {
-                        cells.forEach { Box(Modifier.weight(1f)) { card(it) } }
-                        repeat(columns - cells.size) { Spacer(Modifier.weight(1f)) }
-                    }
-                }
-            }
-        }
+    if (text.isEmpty()) return
+    var whole by remember(item?.id) { mutableStateOf(false) }
+    var cut by remember(text) { mutableStateOf(false) }
+    val palette = PersonaTheme.palette
+    Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xxs)) {
+        Text(text, style = PersonaTheme.type.caption, color = palette.ink2, maxLines = if (whole) Int.MAX_VALUE else 4,
+            overflow = TextOverflow.Ellipsis, onTextLayout = { if (!whole) cut = it.hasVisualOverflow })
+        if (cut || whole) JTextButton(stringResource(if (whole) R.string.chat_subagent_hide_full_result else R.string.chat_subagent_show_full_result),
+            { whole = !whole })
+        if (loaded == null && item?.item?.fullSize != null) FullTextButton(item.item) { loaded = it }
     }
 }

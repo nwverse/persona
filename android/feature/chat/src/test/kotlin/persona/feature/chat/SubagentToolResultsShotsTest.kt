@@ -142,8 +142,8 @@ class SubagentToolResultsShotsTest {
         frame()
         rule.onNodeWithText("Interim SendMessage report\nThe agent is still checking the remaining cases.").assertIsDisplayed()
         rule.onNodeWithText("Stale preview").assertDoesNotExist()
-        // Glass draws the running Agent as its card (#4339 C2, opened in SubagentCardsShotsTest): drawn there, the row and
-        // what the reader opened in it would leave the composition, so this scene is Brief's and Board's.
+        // Glass draws each Agent as its task card (#5045, opened in SubagentCardsShotsTest): drawn there, the row and what
+        // the reader opened in it would leave the composition, so this scene is Brief's and Board's.
         captureStyles("interim-expanded", listOf(AppStyle.Brief, AppStyle.Board))
 
         // New SendMessage and notification items do not finish the call or close what the reader opened.
@@ -196,8 +196,8 @@ class SubagentToolResultsShotsTest {
             for (d in listOf(false, true)) {
                 style = s; dark = d; frame()
                 rule.onNodeWithText("Completed").assertIsDisplayed()
-                // Glass draws the running Agent as its card (#4339 C2): what it is doing, not the task's badge.
-                rule.onNodeWithText(if (s == AppStyle.Glass) "Starting…" else "Working").assertIsDisplayed()
+                // Glass draws each Agent as its task card (#5045): the card's status word, not the task's badge.
+                rule.onNodeWithText(if (s == AppStyle.Glass) "Running" else "Working").assertIsDisplayed()
                 val bitmap = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
                 File(directory, "$scene-${s.name.lowercase()}-${if (d) "dark" else "light"}.png").outputStream().use {
                     assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it))

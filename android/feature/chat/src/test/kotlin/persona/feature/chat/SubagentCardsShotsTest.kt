@@ -29,11 +29,8 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import coil3.ImageLoader
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flowOf
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Rule
 import org.junit.Test
@@ -45,20 +42,20 @@ import persona.core.contracts.SessionKey
 import persona.core.contracts.Subagent
 import persona.core.contracts.TaskNote
 import persona.core.contracts.WorkflowTool
-import persona.core.contracts.api.ChatRepository
-import persona.core.contracts.api.ChatSnapshot
 import persona.core.designsystem.AppStyle
 import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.Tokens
 import persona.core.domain.lines.ChatLine
-import persona.core.domain.lines.gridAgents
+import persona.core.domain.lines.Subagents
 import java.io.File
+import java.time.Instant
 
 /**
- * Subagents in an Agent's chat as iOS draws them in Glass (#4339 C2): a running one's card, folded and open (its brief,
- * its report so far, its latest steps, View Subagent); a finished and a failed one as the tool's row; an older hub's
- * background one with how it went; parallel ones in a grid, running and finished. Light and dark; PNGs in
- * `build/subagent-cards-shots/` (or `-Dpersona.shots=<dir>`).
+ * Subagents in an Agent's chat as the task cards of `docs/design/DESIGN_SYSTEM.md` section 4.7 (#5045), in Glass: a running
+ * one, folded and opened (its brief, its latest report, its last tool); a completed one opened with its result folded to
+ * four lines, a failed one, a stopped background one and an older hub's background one with its output file; a subagent
+ * a subagent launched as a flat card of its own. Light and dark; Brief and Board for the diff that shows they did not
+ * change. PNGs in `build/subagent-cards-shots/` (or `-Dpersona.shots=<dir>`).
  */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -71,76 +68,67 @@ class SubagentCardsShotsTest {
 
     private fun out(): File = File(System.getProperty("persona.shots") ?: "build/subagent-cards-shots").also { it.mkdirs() }
 
-    private fun user(seq: Int, text: String) = Item("u$seq", seq = seq, role = "user", kind = "text", text = text, ts = at(seq))
-    private fun use(seq: Int, id: String, name: String, vararg input: Pair<String, String>) = Item("c$seq", seq = seq, role = "assistant",
-        kind = "tool_use", toolUseId = id, toolName = name, ts = at(seq), toolInput = buildJsonObject { input.forEach { (k, v) -> put(k, v) } })
-    private fun agent(seq: Int, id: String, title: String, prompt: String = "Look into $title and report back.") =
-        use(seq, id, "Agent", "description" to title, "prompt" to prompt, "subagent_type" to "general-purpose")
-    private fun result(seq: Int, id: String, text: String?, error: Boolean = false, task: String? = null) = Item("r$seq", seq = seq,
-        role = "user", kind = "tool_result", toolUseId = id, text = text, isError = error, ts = at(seq),
-        task = task?.let { TaskNote(kind = "agent", status = it, title = "Report", toolUseId = id) })
-    private fun at(seq: Int) = "2026-11-12T10:%02d:%02dZ".format(seq * 20 / 60, seq * 20 % 60)
+    private val base = Instant.parse("2026-11-12T10:00:00Z")
+    private fun at(seconds: Long) = base.plusSeconds(seconds).toString()
+    private fun user(seq: Int, text: String) = Item("u$seq", seq = seq, role = "user", kind = "text", text = text, ts = at(seq * 5L))
+    private fun use(seq: Int, id: String, name: String, vararg input: Pair<String, String>, ts: String = at(seq * 5L)) = Item("c$seq",
+        seq = seq, role = "assistant", kind = "tool_use", toolUseId = id, toolName = name, ts = ts,
+        toolInput = buildJsonObject { input.forEach { (k, v) -> put(k, v) } })
+    private fun agent(seq: Int, id: String, title: String, prompt: String = "Look into $title and report back.", ts: String = at(seq * 5L)) =
+        use(seq, id, "Agent", "description" to title, "prompt" to prompt, "subagent_type" to "general-purpose", ts = ts)
+    private fun result(seq: Int, id: String, text: String?, error: Boolean = false, task: String? = null, output: String? = null,
+        ts: String = at(seq * 5L)) = Item("r$seq", seq = seq, role = "user", kind = "tool_result", toolUseId = id, text = text,
+        isError = error, ts = ts, task = task?.let { TaskNote(kind = "agent", status = it, title = "Report", toolUseId = id, outputFile = output) })
 
-    private val listed = mapOf(
-        "run" to Subagent("a-run", "s1@a-run", "general-purpose", "Run the unit tests", "run", running = true, steps = 7,
-            lastTool = WorkflowTool(name = "Bash", summary = "Running the tests")),
-        "old" to Subagent("a-old", "s1@a-old", "Explore", "Map the old screens", "old", running = false, background = true,
-            startedAt = "2026-11-12T10:00:00Z", updatedAt = "2026-11-12T10:01:20Z", steps = 7),
-        "p" to Subagent("a-p", "s1@a-p", "Explore", toolUseId = "p", running = true, steps = 4, lastTool = WorkflowTool(name = "Read", summary = "Reading Lexer.kt")),
-        "q" to Subagent("a-q", "s1@a-q", "Explore", toolUseId = "q", steps = 3),
-        "r" to Subagent("a-r", "s1@a-r", "Explore", toolUseId = "r", steps = 5),
-        "x" to Subagent("a-x", "s1@a-x", "Explore", toolUseId = "x", steps = 3),
-        "y" to Subagent("a-y", "s1@a-y", "Explore", toolUseId = "y", steps = 4),
-        "z" to Subagent("a-z", "s1@a-z", "Explore", toolUseId = "z", steps = 5),
+    // The running scene happens now, so its work line and "Running for …" read a minute or so.
+    private val now = Instant.now().minusSeconds(90)
+    private fun recent(seq: Int) = now.plusSeconds(seq * 5L).toString()
+    private val runStart = recent(4)
+    private val listed = listOf(
+        Subagent("a-run", "s1@a-run", "general-purpose", "Run the unit tests", "run", running = true, startedAt = runStart, steps = 12,
+            lastTool = WorkflowTool(name = "Bash", summary = "Running the tests"), model = "claude-haiku-4-5-20251001", tokens = 23_400),
+        Subagent("a-done", "s1@a-done", "Explore", "Find the crash", "done", startedAt = at(10), steps = 7,
+            model = "claude-sonnet-4-5", tokens = 8_200),
+        Subagent("a-bad", "s1@a-bad", "general-purpose", toolUseId = "bad", steps = 3, model = "claude-haiku-4-5"),
+        Subagent("a-stop", "s1@a-stop", "Explore", "Watch the logs", "stop", background = true, startedAt = at(30), updatedAt = at(95), steps = 2),
+        Subagent("a-old", "s1@a-old", "Explore", "Map the old screens", "old", background = true, startedAt = at(45), updatedAt = at(170), steps = 9),
+        Subagent("a-lead", "s1@a-lead", "general-purpose", "Plan the migration", "lead", running = true, startedAt = recent(2), steps = 4,
+            model = "claude-opus-4-1", tokens = 51_000),
+        Subagent("a-kid", "s1@a-kid", "Explore", "List the old tables", null, running = true, startedAt = now.plusSeconds(13).toString(), steps = 6, parentId = "a-lead",
+            model = "claude-haiku-4-5"),
     )
 
-    // What the running subagent's own conversation holds: its latest three calls show in its open card.
-    private val child = listOf(
-        use(0, "k0", "Read", "file_path" to "/repo/settings.gradle.kts"),
-        use(1, "k1", "Read", "file_path" to "/repo/core/domain/build.gradle.kts"), result(2, "k1", "ok"),
-        use(3, "k2", "Grep", "pattern" to "SubagentStatus"), result(4, "k2", "3 matches"),
-        use(5, "k3", "Bash", "command" to "./gradlew :core:domain:test"),
-    )
-
-    private val repository = object : ChatRepository {
-        override fun observe(session: SessionKey): Flow<ChatSnapshot> = flowOf(ChatSnapshot(items = child, loading = false))
-        override suspend fun loadOlder(session: SessionKey) = Unit
-        override suspend fun expandFold(session: SessionKey, fromSeq: Int, toSeq: Int): List<Item> = emptyList()
-    }
+    private val longReport = (1..7).joinToString("\n") { "Finding $it: a null session reaches ChatScreen.kt:14$it when the chat reopens." }
 
     private val scenes = mapOf(
         "running" to listOf(
-            user(1, "Check the release before tagging it"),
-            use(2, "read", "Read", "file_path" to "/repo/CHANGELOG.md"), result(3, "read", "ok"),
-            agent(4, "run", "Run the unit tests", "Run the unit tests in core/domain and core/data, then report each failure with its cause."),
-            result(5, "run", "Async agent launched successfully.\nagentId: a-run", task = "running"),
-            result(6, "run", "Half way: core/domain passed, core/data is running.", task = "running"),
+            user(1, "Check the release before tagging it").copy(ts = recent(1)),
+            use(2, "read", "Read", "file_path" to "/repo/CHANGELOG.md", ts = recent(2)), result(3, "read", "ok", ts = recent(3)),
+            agent(4, "run", "Run the unit tests", "Run the unit tests in core/domain and core/data, then report each failure with its cause.", ts = runStart),
+            result(5, "run", "Async agent launched successfully.\nagentId: a-run", task = "running", ts = recent(5)),
+            result(6, "run", "Half way: core/domain passed, core/data is running.", task = "running", ts = recent(6)),
         ),
         "done" to listOf(
             user(1, "Look at the crash and the old screens"),
-            agent(2, "done", "Find the crash"), result(3, "done", "The crash comes from a null session in ChatScreen.kt:142."),
-            use(4, "sh", "Bash", "command" to "git log -3 --oneline"), result(5, "sh", "ok"),
-            agent(6, "bad", "Reproduce on a tablet"), result(7, "bad", "No tablet emulator is installed.", error = true),
-            use(8, "sh2", "Bash", "command" to "ls"), result(9, "sh2", "ok"),
-            // An older hub: the receipt is the result, a notice says how it went.
-            use(10, "old", "Agent", "description" to "Map the old screens", "prompt" to "List the screens", "run_in_background" to "true"),
-            result(11, "old", "Async agent launched successfully.\nagentId: a-old"),
-            Item("n12", seq = 12, kind = "notice", text = "done", ts = at(12), task = TaskNote(kind = "agent", status = "completed", title = "Map the old screens", toolUseId = "old")),
+            agent(2, "done", "Find the crash"), result(20, "done", "$longReport\nagentId: a-done"),
+            agent(3, "bad", "Reproduce on a tablet"), result(4, "bad", "No tablet emulator is installed.", error = true),
+            use(6, "stop", "Agent", "description" to "Watch the logs", "prompt" to "Tail the logs", "run_in_background" to "true"),
+            result(7, "stop", "Async agent launched successfully.\nagentId: a-stop", task = "running"),
+            result(19, "stop", null, task = "killed"),
+            // An older hub: the receipt is the result, its notice says how it went and where it wrote.
+            use(9, "old", "Agent", "description" to "Map the old screens", "prompt" to "List the screens", "run_in_background" to "true"),
+            result(10, "old", "Async agent launched successfully.\nagentId: a-old"),
+            Item("n34", seq = 34, kind = "notice", text = "done", ts = at(170), task = TaskNote(kind = "agent", status = "completed",
+                title = "Map the old screens", toolUseId = "old", detail = "Twelve screens, three still on the old theme.", outputFile = "/tmp/screens.md")),
         ),
-        "grid" to listOf(
-            user(1, "Review the three modules"),
-            agent(2, "p", "Review the parser"), agent(3, "q", "Review the renderer"), agent(4, "r", "Review the docs"),
-            result(5, "q", "The renderer is fine."), result(6, "r", "Two broken links in README.md.", error = true),
-        ),
-        "grid-done" to listOf(
-            user(1, "Review the three modules"),
-            agent(2, "x", "Review the parser"), agent(3, "y", "Review the renderer"), agent(4, "z", "Review the docs"),
-            result(5, "x", "The parser is fine."), result(6, "y", "The renderer is fine."), result(7, "z", "The docs are fine."),
+        "nested" to listOf(
+            user(1, "Plan the database migration").copy(ts = recent(1)),
+            agent(2, "lead", "Plan the migration", ts = recent(2)),
+            use(3, "grep", "Grep", "pattern" to "CREATE TABLE", ts = recent(3)), result(4, "grep", "12 matches", ts = recent(4)),
         ),
     )
 
-    @Test fun subagentsReadAsOnIOS() {
-        val opened = mutableListOf<SessionKey>()
+    @Test fun subagentsAreTaskCards() {
         val session = SessionKey("box", "s1")
         rule.mainClock.autoAdvance = false // spinners never settle
         rule.setContent {
@@ -150,10 +138,13 @@ class SubagentCardsShotsTest {
                 DisposableEffect(loader) { onDispose { loader.shutdown() } }
                 val timeline = remember(scene) { ChatTimeline() }
                 val folds = remember(scene) { SubagentFolds() }
-                val snapshot = timeline.lines(scenes.getValue(scene), live = scene != "done" && scene != "grid-done", open = setOf("w-u1"))
-                val lines = if (style == AppStyle.Glass) gridAgents(snapshot.lines) else snapshot.lines
+                val snapshot = timeline.lines(scenes.getValue(scene), live = scene != "done", open = setOf("w-u1"))
+                // As the chat page: nested subagents are cards of their own in Glass only.
+                val lines = if (style == AppStyle.Glass) Subagents.withNested(snapshot.lines, listed) else snapshot.lines
                 val groups = lines.filterIsInstance<ChatLine.Work>().associateBy { it.id }
-                val links = ChatSubagents(listed.mapValues { SessionKey("box", it.value.sessionId) }, { opened += it }, listed, repository)
+                val last = lines.filterIsInstance<ChatLine.Step>().associate { it.groupId to it.step.id }
+                val links = ChatSubagents(listed.filter { it.toolUseId != null }.associate { it.toolUseId!! to SessionKey("box", it.sessionId) },
+                    {}, listed.associateBy(Subagents::callOf))
                 CompositionLocalProvider(LocalChatTaskIndex provides snapshot.tasks, LocalChatSubagents provides links,
                     LocalSubagentFolds provides folds) {
                     // Each scene starts as the reader would find it: nothing opened in another scene carries over.
@@ -161,22 +152,23 @@ class SubagentCardsShotsTest {
                         lines.forEach { line ->
                             ChatLineContent(line, session, loader, null, onToggle = {}, onFold = {}, folding = emptySet(),
                                 foldErrors = emptyMap(), onFullText = {},
-                                workRunning = line.workGroup()?.let { groups[it]?.live } == true,
-                                lastWorkStep = when (line) {
-                                    is ChatLine.Step -> groups[line.groupId]?.steps?.lastOrNull()?.id == line.step.id
-                                    is ChatLine.Agents -> groups[line.groupId]?.steps?.lastOrNull()?.id == line.calls.last().id
-                                    else -> false
-                                })
+                                workRunning = (line as? ChatLine.Step)?.let { groups[it.groupId]?.live } == true,
+                                lastWorkStep = (line as? ChatLine.Step)?.let { last[it.groupId] == it.step.id } == true)
                         }
                     } }
                 }
             }
         }
         frame()
-        // Running: its card says what it is doing and how far it got; Starting… nowhere.
+        // Running: Subagent, its title, Running; then what ran it, the model, tokens, tool uses and how long it has run.
         rule.onNodeWithText("Run the unit tests").assertIsDisplayed()
-        rule.onNodeWithText("Running the tests… · 7 steps").assertIsDisplayed()
+        rule.onNodeWithText("Running").assertIsDisplayed()
+        rule.onNodeWithText("Haiku 4.5").assertIsDisplayed()
+        rule.onNodeWithText("23.4k tokens").assertIsDisplayed()
+        rule.onNodeWithText("12 tool uses").assertIsDisplayed()
+        rule.onNodeWithText("Running for", substring = true).assertIsDisplayed()
         rule.onNodeWithText("Half way", substring = true).assertDoesNotExist()
+        rule.onNodeWithText("View Subagent").assertDoesNotExist()
         capture("running")
         style = AppStyle.Glass; dark = false
         frame()
@@ -184,34 +176,38 @@ class SubagentCardsShotsTest {
         frame()
         rule.onNodeWithText("Run the unit tests in core/domain", substring = true).assertIsDisplayed()
         rule.onNodeWithText("Half way: core/domain passed, core/data is running.").assertIsDisplayed()
-        rule.onNodeWithTag("chat.subagent-steps", useUnmergedTree = true).assertIsDisplayed()
-        rule.onNodeWithText("./gradlew :core:domain:test", substring = true).assertIsDisplayed()
-        rule.onNodeWithText("settings.gradle.kts", substring = true).assertDoesNotExist() // only the latest three: not the first
-        rule.onNodeWithText("View Subagent").performClick()
-        assertEquals(listOf(SessionKey("box", "s1@a-run")), opened)
-        capture("running-open")
+        rule.onNodeWithText("Last tool: Bash").assertIsDisplayed()
+        capture("running-open", glassOnly = true)
 
-        // Finished: the tool's row, as iOS draws it once the subagent reported; an older hub's background one keeps its card.
+        // Done: every subagent is still its card, with how it went and how long it took.
         scene = "done"; style = AppStyle.Glass; dark = false
         frame()
-        rule.onNodeWithText("Find the crash").assertIsDisplayed()
-        rule.onNodeWithText("Reproduce on a tablet").assertIsDisplayed()
-        rule.onAllNodesWithTag("chat.subagent-card", useUnmergedTree = true).assertCountEquals(1)
-        rule.onNodeWithText("Done · 7 steps · 1 min").assertIsDisplayed()
+        rule.onAllNodesWithTag("chat.subagent-card", useUnmergedTree = true).assertCountEquals(4)
+        rule.onAllNodesWithText("Completed").assertCountEquals(2)
+        rule.onNodeWithText("Failed").assertIsDisplayed()
+        rule.onNodeWithText("Stopped").assertIsDisplayed()
+        rule.onNodeWithText("1m 30s").assertIsDisplayed()
         capture("done")
+        style = AppStyle.Glass; dark = false
+        frame()
+        rule.onNodeWithText("Find the crash").performClick()
+        rule.onNodeWithText("Map the old screens").performClick()
+        frame()
+        rule.onNodeWithText("Finding 1", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("Show full result").assertIsDisplayed()
+        rule.onNodeWithText("Twelve screens, three still on the old theme.").assertIsDisplayed()
+        rule.onNodeWithText("Output: /tmp/screens.md").assertIsDisplayed()
+        capture("done-open", glassOnly = true)
+        rule.onNodeWithText("Show full result").performClick()
+        frame()
+        rule.onNodeWithText("Collapse result").assertIsDisplayed()
 
-        // Parallel: one grid under "Running 1 agent", in launch order.
-        scene = "grid"; style = AppStyle.Glass; dark = false
+        // A subagent's own subagent: a flat card after the step that started before it.
+        scene = "nested"; style = AppStyle.Glass; dark = false
         frame()
-        rule.onNodeWithText("Running 1 agent").assertIsDisplayed()
-        rule.onNodeWithText("Reading Lexer.kt… · 4 steps").assertIsDisplayed()
-        rule.onAllNodesWithTag("chat.subagent-grid", useUnmergedTree = true).assertCountEquals(1)
-        capture("grid", glassOnly = true)
-        scene = "grid-done"; style = AppStyle.Glass; dark = false
-        frame()
-        rule.onNodeWithText("Ran 3 agents · 12 steps").assertIsDisplayed()
-        listOf("parser", "renderer", "docs").forEach { rule.onNodeWithText("Review the $it").assertIsDisplayed() }
-        capture("grid-done", glassOnly = true)
+        rule.onNodeWithText("List the old tables").assertIsDisplayed()
+        rule.onAllNodesWithTag("chat.subagent-card", useUnmergedTree = true).assertCountEquals(2)
+        capture("nested", glassOnly = true)
     }
 
     private fun frame() {

@@ -6,125 +6,121 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import persona.core.contracts.CoreText
-import persona.core.contracts.CoreText.Key
 import persona.core.contracts.Item
 import persona.core.contracts.Subagent
-import persona.core.contracts.WorkflowTool
 
-/** A subagent's card reads as iOS's (`SubagentCardStatus`, `SubagentResult`, `SubagentRecent`, `ChatLines.gridAgents`). */
+/** A subagent's task card reads as the web's (`lib/tasks.ts`: `agentStatus`, `agentSummary`, `modelChipLabel`, `withNestedSubagents`). */
 class SubagentsTest {
-    private fun use(seq: Int, id: String, name: String = "Agent", at: String = "2026-11-12T10:00:00Z") = LineItem(Item("u$seq", seq = seq,
-        kind = "tool_use", role = "assistant", toolName = name, toolUseId = id, ts = at,
-        toolInput = Json.parseToJsonElement("""{"description":"Check $id","prompt":"Look at $id"}""")))
+    private fun use(seq: Int, id: String, name: String = "Agent", at: String = "2026-11-12T10:00:00Z",
+        input: String = """{"description":"Check $id","prompt":"Look at $id"}""") = LineItem(Item("u$seq", seq = seq,
+        kind = "tool_use", role = "assistant", toolName = name, toolUseId = id, ts = at, toolInput = Json.parseToJsonElement(input)))
     private fun result(seq: Int, id: String, text: String? = "ok", status: String? = null, error: Boolean = false,
-        at: String = "2026-11-12T10:01:20Z") = LineItem(Item("r$seq", seq = seq, kind = "tool_result", role = "user",
-        toolUseId = id, text = text, isError = error, ts = at), task = status?.let { TaskNote("agent", "Check $id", it, toolUseId = id) })
+        at: String = "2026-11-12T10:01:20Z", detail: String? = null, output: String? = null, full: Int? = null) =
+        LineItem(Item("r$seq", seq = seq, kind = "tool_result", role = "user", toolUseId = id, text = text, isError = error, ts = at, fullSize = full),
+            task = status?.let { TaskNote("agent", "Check $id", it, toolUseId = id, detail = detail, outputFile = output) })
     private fun notice(seq: Int, id: String, status: String, detail: String? = null) = LineItem(Item("n$seq", seq = seq,
         kind = "notice", text = "x"), task = TaskNote("agent", "Check $id", status, toolUseId = id, detail = detail))
     private fun call(use: LineItem, vararg results: LineItem) = ToolCall(use, results.lastOrNull(), emptyList(), results.toList())
     private val receipt = "Async agent launched successfully.\nagentId: a1"
+    private fun agent(running: Boolean = false, id: String = "a1", call: String? = "a", parent: String? = null, started: String? = null) =
+        Subagent(id, "s@$id", "Explore", "Listed $id", call, running = running, startedAt = started, parentId = parent)
 
-    @Test fun aRunningForegroundCallIsACard() {
-        val running = call(use(1, "a"))
-        assertEquals(SubagentStatus.Running, Subagents.status(running, null))
-        assertFalse(Subagents.drawsAsRow(running, null))
-        assertNull(Subagents.took(running, null))
+    @Test fun aCallWithoutAResultRunsWhileItsExchangeDoesOrTheListSaysSo() {
+        val c = call(use(1, "a"))
+        assertEquals(SubagentStatus.Running, Subagents.status(c, null, live = true))
+        assertEquals(SubagentStatus.Running, Subagents.status(c, agent(running = true), live = false))
+        assertEquals(SubagentStatus.Stopped, Subagents.status(c, agent(), live = false))
+        assertNull(Subagents.took(c, null, SubagentStatus.Running))
     }
 
-    @Test fun aFinishedOneIsTheToolsRowAndAFailedOneSaysSo() {
-        val done = call(use(1, "a"), result(2, "a"))
-        assertEquals(SubagentStatus.Done, Subagents.status(done, null))
-        assertTrue(Subagents.drawsAsRow(done, null))
-        assertEquals(80L, Subagents.took(done, null))
+    @Test fun aResultCompletesItAndAnErrorFailsIt() {
+        val done = call(use(1, "a"), result(2, "a", "All good\nagentId: a1"))
+        assertEquals(SubagentStatus.Completed, Subagents.status(done, null, live = true))
+        assertEquals("All good", Subagents.resultText(done, null, SubagentStatus.Completed))
+        assertEquals(80L, Subagents.took(done, null, SubagentStatus.Completed))
         val failed = call(use(1, "b"), result(2, "b", "boom", error = true))
-        assertEquals(SubagentStatus.Failed, Subagents.status(failed, null))
-        assertTrue(Subagents.drawsAsRow(failed, null))
+        assertEquals(SubagentStatus.Failed, Subagents.status(failed, null, live = true))
     }
 
-    @Test fun deliveriesDecideAndAnUnknownWordIsNotAnEnd() {
+    @Test fun deliveriesSayHowItGoesAndAReceiptIsNeverItsResult() {
         val launched = call(use(1, "a"), result(2, "a", receipt, "running"))
-        assertEquals(SubagentStatus.Running, Subagents.status(launched, null))
-        assertTrue(Subagents.reports(launched).isEmpty())
+        assertTrue(Subagents.isLaunchReceipt(launched.results.single()))
+        assertEquals(SubagentStatus.Running, Subagents.status(launched, null, live = false))
+        assertEquals("", Subagents.resultText(launched, null, SubagentStatus.Running))
         val interim = call(use(1, "a"), result(2, "a", receipt, "running"), result(3, "a", "Half way", "running"))
-        assertEquals(SubagentStatus.Running, Subagents.status(interim, null))
-        assertEquals(listOf("r3"), Subagents.reports(interim).map { it.id })
-        assertEquals(SubagentStatus.Running, Subagents.status(call(use(1, "a"), result(2, "a", "?", "unknown")), null))
-        // A status-only notification ends it; with no report the call's own row shows how it went.
-        val ended = call(use(1, "a"), result(2, "a", receipt, "running"), result(3, "a", null, "completed"))
-        assertEquals(SubagentStatus.Done, Subagents.status(ended, null))
-        assertTrue(Subagents.drawsAsRow(ended, null))
-        assertEquals(SubagentStatus.Stopped, Subagents.status(call(use(1, "a"), result(2, "a", receipt, "running"), result(3, "a", null, "killed")), null))
-        assertEquals(SubagentStatus.Failed, Subagents.status(call(use(1, "a"), result(2, "a", receipt, "running"), result(3, "a", "x", "failed")), null))
+        assertEquals(SubagentStatus.Running, Subagents.status(interim, null, live = false))
+        assertEquals("Half way", Subagents.resultText(interim, null, SubagentStatus.Running))
+        val ended = call(use(1, "a"), result(2, "a", receipt, "running"), result(3, "a", "Half way", "running"), result(4, "a", null, "completed"))
+        assertEquals(SubagentStatus.Completed, Subagents.status(ended, null, live = true))
+        assertEquals("Half way", Subagents.resultText(ended, null, SubagentStatus.Completed)) // a status-only pointer adds no report
+        assertEquals(SubagentStatus.Stopped, Subagents.status(call(use(1, "a"), result(2, "a", receipt, "running"), result(3, "a", null, "killed")), null, true))
+        assertEquals(SubagentStatus.Failed, Subagents.status(call(use(1, "a"), result(2, "a", receipt, "running"), result(3, "a", "x", "failed")), null, true))
     }
 
-    @Test fun anOlderHubsBackgroundOneKeepsItsCardWithHowItWentAndHowLong() {
-        val agent = Subagent("a1", "s@a1", "Explore", toolUseId = "a", running = false, background = true,
-            startedAt = "2026-11-12T10:00:00Z", updatedAt = "2026-11-12T10:01:20Z", steps = 7)
+    @Test fun aBackgroundOneIsTheListsToTellAndAnOlderHubsNoticeCarriesItsReport() {
         val waiting = call(use(1, "a"), result(2, "a", receipt))
-        assertEquals(SubagentStatus.Stopped, Subagents.status(waiting, agent))
-        assertEquals(SubagentStatus.Running, Subagents.status(waiting, agent.copy(running = true)))
-        val done = call(use(1, "a"), result(2, "a", receipt), notice(3, "a", "completed"))
-        assertEquals(SubagentStatus.Done, Subagents.status(done, agent))
-        assertFalse(Subagents.drawsAsRow(done, agent))
-        assertEquals(80L, Subagents.took(done, agent))
-        // With a report in its notice, the report is the row's.
-        val reported = call(use(1, "a"), result(2, "a", receipt), notice(3, "a", "failed", "It broke"))
-        assertEquals(SubagentStatus.Failed, Subagents.status(reported, agent))
-        assertTrue(Subagents.drawsAsRow(reported, agent))
+        assertEquals(SubagentStatus.Running, Subagents.status(waiting, agent(running = true), live = false))
+        assertEquals(SubagentStatus.Completed, Subagents.status(waiting, agent(), live = true))
+        assertEquals(SubagentStatus.Running, Subagents.status(waiting, null, live = true))
+        val reported = call(use(1, "a"), result(2, "a", receipt), notice(3, "a", "completed", "[Subagent hand-back]\nThe map is done."))
+        assertEquals(SubagentStatus.Completed, Subagents.status(reported, null, live = false))
+        assertEquals("The map is done.", Subagents.resultText(reported, null, SubagentStatus.Completed))
+        // With nothing reported, what the session last heard from it.
+        val quiet = call(use(1, "a"), result(2, "a", receipt), notice(3, "a", "completed"))
+        assertEquals("Its last words", Subagents.resultText(quiet, agent().copy(lastText = " Its last words "), SubagentStatus.Completed))
     }
 
-    @Test fun whatItDoesAndHowLongItRan() {
-        val agent = Subagent("a1", toolUseId = "a", running = true, steps = 7, lastTool = WorkflowTool(name = "Bash", summary = " Running the tests "))
-        assertEquals("Running the tests", Subagents.doing(agent))
-        assertEquals("Bash", Subagents.doing(agent.copy(lastTool = WorkflowTool(name = "Bash"))))
-        assertNull(Subagents.doing(agent.copy(lastTool = null)))
-        assertEquals(7, Subagents.steps(agent))
-        assertNull(Subagents.steps(agent.copy(steps = 0)))
-        assertEquals(CoreText.of(Key.DurationSeconds, 42L), Subagents.ran(42))
-        assertEquals(CoreText.of(Key.DurationMinutes, 1L), Subagents.ran(80))
-        assertEquals(CoreText.of(Key.DurationHours, 2L), Subagents.ran(7200))
-        assertEquals(CoreText.of(Key.DurationHoursMinutes, 2L, 5L), Subagents.ran(7500))
+    @Test fun itsTimeRunsFromItsStartToItsResultOrABackgroundOnesLastLine() {
+        val background = call(use(1, "a"), result(2, "a", receipt, at = "2026-11-12T10:00:01Z"), notice(3, "a", "completed"))
+        val listed = agent().copy(startedAt = "2026-11-12T10:00:00Z", updatedAt = "2026-11-12T10:02:05Z")
+        assertEquals(125L, Subagents.took(background, listed, SubagentStatus.Completed))
+        assertEquals(1L, Subagents.took(call(use(1, "a"), result(2, "a", at = "2026-11-12T10:00:00Z")), null, SubagentStatus.Completed))
     }
 
-    @Test fun aGridCountsItsRunningOnesAndTheirSteps() {
-        val calls = listOf(call(use(1, "a")), call(use(2, "b"), result(3, "b")), call(use(4, "c")))
-        val agents = mapOf("a" to Subagent("1", toolUseId = "a", steps = 4), "b" to Subagent("2", toolUseId = "b", steps = 8))
-        assertEquals(2, Subagents.running(calls, agents))
-        assertEquals(12, Subagents.steps(calls, agents))
+    @Test fun titlePromptOutputAndTheCompactText() {
+        val c = call(use(1, "a", input = """{"prompt":"  Read   every\nfile  "}"""), result(2, "a", "ok", "completed", output = "/tmp/out.txt"))
+        assertEquals("Read every file", Subagents.title(c, null))
+        assertEquals("Listed a1", Subagents.title(call(use(1, "a", input = "{}")), agent()))
+        assertNull(Subagents.title(call(use(1, "a", input = "{}")), null))
+        assertEquals("Read every file", Subagents.prompt(c))
+        assertEquals("/tmp/out.txt", Subagents.outputFile(c))
+        assertEquals("abcd…", Subagents.compact("abcdefgh", 5))
     }
 
-    @Test fun parallelSubagentsShareOneLineAndOneAloneStaysAStep() {
-        val a = WorkItem.Tool(call(use(1, "a")))
-        val b = WorkItem.Tool(call(use(2, "b", "Task")))
-        val c = WorkItem.Tool(call(use(3, "c")))
-        val read = WorkItem.Tool(call(use(4, "r", "Read")))
-        val d = WorkItem.Tool(call(use(5, "d")))
-        val lines = listOf(ChatLine.Work("w", listOf(a, b, c, read, d), true, null, null, true),
-            ChatLine.Step("w", a, true), ChatLine.Step("w", b, false), ChatLine.Step("w", c, false),
-            ChatLine.Step("w", read, false), ChatLine.Step("w", d, false), ChatLine.End("w", 5))
-        val grid = gridAgents(lines)
-        assertEquals(listOf("w", "w/agents-u1", "w/u4", "w/u5", "w-end"), grid.map { it.id })
-        val agents = grid[1] as ChatLine.Agents
-        assertEquals(listOf("u1", "u2", "u3"), agents.calls.map { it.id })
-        assertTrue(agents.first)
-        // Nothing to group: the same lines.
-        val plain = listOf(ChatLine.Step("w", read, true), ChatLine.Step("w", a, false))
-        assertEquals(plain, gridAgents(plain))
-        // Two work lines' subagents never share a grid.
-        val split = gridAgents(listOf(ChatLine.Step("w1", a, false), ChatLine.Step("w2", b, true)))
-        assertEquals(listOf("w1/u1", "w2/u2"), split.map { it.id })
+    @Test fun theModelChipAndTokensReadAsTheWebWritesThem() {
+        assertEquals("Haiku 4.5", Subagents.modelChip("claude-haiku-4-5-20251001"))
+        assertEquals("Opus 4.8", Subagents.modelChip("claude-opus-4-8[1m]"))
+        assertEquals("Sonnet 4", Subagents.modelChip("us.anthropic.claude-sonnet-4"))
+        assertEquals("Opus 4.1", Subagents.modelChip("gateway/claude-opus-4-1"))
+        assertEquals("GPT-5.4 Mini", Subagents.modelChip("gpt-5.4-mini"))
+        assertEquals("Kimi K2", Subagents.modelChip("kimi-k2"))
+        assertEquals("", Subagents.modelChip(null))
+        assertEquals("950", Subagents.tokens(950))
+        assertEquals("23.4k", Subagents.tokens(23_400))
+        assertEquals("1.2M", Subagents.tokens(1_200_000))
     }
 
-    @Test fun anOpenCardShowsItsSubagentsLatestCallsAndOpensItsNewestShortFold() {
-        val items = listOf(use(1, "x", "Read"), result(2, "x"), use(3, "y", "Grep"), use(4, "z", "Edit"), result(5, "z"), use(6, "w", "Bash"))
-        val recent = Subagents.recent(items)
-        assertEquals(listOf("u3", "u4", "u6"), recent.map { it.id })
-        assertEquals(listOf(null, "r5", null), recent.map { it.result?.id })
-        val fold = LineItem(Item("f1", seq = 1, kind = "fold"), fold = Fold(items = 6, tools = 3, thoughts = 0, throughSeq = 6, throughId = "6"))
-        assertEquals("f1", Subagents.foldToOpen(listOf(fold, use(7, "v", "Read")))?.id)
-        assertNull(Subagents.foldToOpen(listOf(fold, use(7, "v"), use(8, "u"), use(9, "t"))))
-        assertNull(Subagents.foldToOpen(listOf(fold.copy(fold = fold.fold!!.copy(tools = 41)))))
-        assertNull(Subagents.foldToOpen(listOf(use(1, "x"))))
+    @Test fun nestedSubagentsAreFlatCardsByWhenTheyStarted() {
+        val root = WorkItem.Tool(call(use(1, "a", at = "2026-11-12T10:00:00Z")))
+        val read = WorkItem.Tool(call(use(2, "r", "Read", at = "2026-11-12T10:00:30Z")))
+        val bash = WorkItem.Tool(call(use(3, "b", "Bash", at = "2026-11-12T10:01:30Z")))
+        val lines = listOf(ChatLine.Work("w", listOf(root, read, bash), true, null, null, true),
+            ChatLine.Step("w", root, true), ChatLine.Step("w", read, false), ChatLine.Step("w", bash, false), ChatLine.End("w", 3))
+        val agents = listOf(agent(running = true, started = "2026-11-12T10:00:00Z"),
+            agent(running = true, id = "k1", call = null, parent = "a1", started = "2026-11-12T10:01:00Z"),
+            agent(id = "k2", call = "kc", parent = "k1", started = "2026-11-12T10:02:00Z"),
+            agent(id = "loop", call = null, parent = "loop", started = "2026-11-12T10:00:10Z"))
+        val out = Subagents.withNested(lines, agents)
+        assertEquals(listOf("w", "w/u1", "w/u2", "w/subagent:k1", "w/u3", "w/subagent:k2", "w-end"), out.map { it.id })
+        val k1 = ((out[3] as ChatLine.Step).step as WorkItem.Tool).call
+        assertTrue(Subagents.isNested(k1))
+        assertEquals("subagent:k1", k1.use.item.toolUseId)
+        assertEquals("subagent:k1", Subagents.callOf(agents[1]))
+        assertEquals(SubagentStatus.Running, Subagents.status(k1, agents[1], live = false))
+        assertEquals(SubagentStatus.Completed, Subagents.status(k1, agents[1].copy(running = false), live = true))
+        assertEquals("kc", (((out[5] as ChatLine.Step).step as WorkItem.Tool).call).use.item.toolUseId)
+        // No subagent of a subagent: the lines as they were.
+        assertEquals(lines, Subagents.withNested(lines, agents.take(1)))
+        assertFalse(Subagents.isNested(((out[1] as ChatLine.Step).step as WorkItem.Tool).call))
     }
 }

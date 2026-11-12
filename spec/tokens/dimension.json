@@ -279,14 +279,6 @@
         "unit": "px"
       },
       "$description": "Theme.Size.lineMedium"
-    },
-    "subagentColumn": {
-      "$type": "dimension",
-      "$value": {
-        "value": 260,
-        "unit": "px"
-      },
-      "$description": "Theme.Size.subagentColumn"
     }
   }
 }
