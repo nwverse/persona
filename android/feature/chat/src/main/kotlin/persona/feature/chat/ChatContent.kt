@@ -229,22 +229,31 @@ private fun CodeBody(preview: String, language: String, colour: Boolean, header:
 
 internal data class ChatImage(val session: SessionKey, val item: Item)
 
-internal fun chatImageLoader(context: android.content.Context, repository: ChatRepository): ImageLoader =
-    ImageLoader.Builder(context).components {
-        add(Keyer<ChatImage> { data, _ -> "${(repository as? ChatLocalStorage)?.localStorage?.value?.scope}/${data.session.path}/${data.item.id}" })
-        add(object : Fetcher.Factory<ChatImage> {
-            override fun create(data: ChatImage, options: Options, imageLoader: ImageLoader): Fetcher = object : Fetcher {
-                override suspend fun fetch() = withContext(Dispatchers.IO) {
-                    val file = checkNotNull(repository as? ChatLocalStorage) { "Scoped image storage is unavailable" }
-                        .imageFile(data.session, data.item,
-                            (options.size.width as? coil3.size.Dimension.Pixels)?.px ?: context.resources.displayMetrics.widthPixels,
-                            (options.size.height as? coil3.size.Dimension.Pixels)?.px ?: context.resources.displayMetrics.heightPixels)
-                    SourceFetchResult(ImageSource(file.toOkioPath(), FileSystem.SYSTEM), "image/png",
-                        DataSource.DISK)
+internal const val CHAT_IMAGE_MEMORY_BYTES = 96L * 1024 * 1024
+
+fun chatImageLoader(context: android.content.Context, repository: ChatRepository, scope: String? = null): ImageLoader =
+    scopedChatImageLoader(context, repository as? ChatLocalStorage, scope)
+
+fun scopedChatImageLoader(context: android.content.Context, storage: ChatLocalStorage?, scope: String? = null): ImageLoader =
+    ImageLoader.Builder(context)
+        .memoryCache { coil3.memory.MemoryCache.Builder().maxSizeBytes(CHAT_IMAGE_MEMORY_BYTES).build() }
+        .components {
+            add(Keyer<ChatImage> { data, _ ->
+                "${scope ?: storage?.localStorage?.value?.scope}/${data.session.path}/${data.item.id}"
+            })
+            add(object : Fetcher.Factory<ChatImage> {
+                override fun create(data: ChatImage, options: Options, imageLoader: ImageLoader): Fetcher = object : Fetcher {
+                    override suspend fun fetch() = withContext(Dispatchers.IO) {
+                        val file = checkNotNull(storage) { "Scoped image storage is unavailable" }
+                            .imageFile(data.session, data.item,
+                                (options.size.width as? coil3.size.Dimension.Pixels)?.px ?: context.resources.displayMetrics.widthPixels,
+                                (options.size.height as? coil3.size.Dimension.Pixels)?.px ?: context.resources.displayMetrics.heightPixels)
+                        SourceFetchResult(ImageSource(file.toOkioPath(), FileSystem.SYSTEM), "image/png",
+                            DataSource.DISK)
+                    }
                 }
-            }
-        })
-    }.build()
+            })
+        }.build()
 
 /**
  * A picture of the conversation (R5): it keeps its shape while it loads, at most [ChatPictureMaxHeight] tall; a tap opens
@@ -334,6 +343,12 @@ internal fun ChatLineContent(
         }
         is ChatLine.Recaps -> RecapLine(line.items.map { it.item })
         is ChatLine.Viewed -> ViewedImagesRow(line.images, session, loader)
+        // Glass: where the replies' model changed (#5055, ModelChanges.mark), as the transcript names both.
+        is ChatLine.ModelChange -> {
+            val from = persona.core.domain.lines.ModelChanges.replyModelName(line.from)
+            val to = persona.core.domain.lines.ModelChanges.replyModelName(line.to)
+            persona.core.designsystem.JModelChangeDivider("$from → $to", res.getString(R.string.chat_model_changed, from, to))
+        }
         is ChatLine.Extra -> {
             val round = line.payload as? persona.core.domain.tasks.BackgroundRound
             if (round != null) BackgroundRoundLine(round, onToggle) else AssistantExtraLine(line.payload, LocalAssistantTaskHost.current)
@@ -351,7 +366,7 @@ internal fun ChatLineContent(
                 // waits: no "Working", no clock, no spinner, as the header says "Waiting for you".
                 val waits = waiting && line.live
                 val now by rememberNow(1_000, enabled = line.live && !waits)
-                WorkGroup(workSummary(res, line, recordedDuration, now.takeIf { line.live }, waiting = waits), line.open,
+                WorkGroup(workSummary(res, line, recordedDuration, now.takeIf { line.live }, waiting = waits, names = LocalToolNames.current), line.open,
                     { onToggle(line.id) }, running = line.live && !waits,
                     onTerminal = onTerminal?.takeIf { ChatTerminalPlaces.onWorkLine(line.live, PersonaTheme.style) },
                     terminalLabel = stringResource(R.string.chat_screen_open_terminal)) {}
@@ -436,7 +451,7 @@ private fun WorkStep(step: WorkItem, session: SessionKey, loader: ImageLoader, o
                 PlanStep(plan, running)
                 return
             }
-            val presentation = toolPresentation(LocalResources.current, call.use.item)
+            val presentation = toolPresentation(LocalResources.current, call.use.item, LocalToolNames.current)
             val taskBadge = if (call.results.any { it.task?.kind == "agent" })
                 LocalChatTaskIndex.current.badge(call.use.item.toolUseId, concise = true)?.text?.text() else null
             Column(Modifier.fillMaxWidth()) {
@@ -461,10 +476,13 @@ private fun WorkStep(step: WorkItem, session: SessionKey, loader: ImageLoader, o
                 // Right of the rail on Glass, under the step's words (iOS's timeline, `detailLeading`).
                 if (open) Column(Modifier.fillMaxWidth().workDetail(Tokens.Space.m),
                     verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+                    // A tool that operates a Mac says its steps in words on Glass, its output and picture with them (iOS ComputerToolDetail).
+                    val computer = PersonaTheme.style == AppStyle.Glass && persona.core.domain.ComputerSteps.isComputerTool(call.name)
                     if (diff != null) {
                         toolPath(call.use.item)?.let { DiffHeader(it, diff.added, diff.removed) }
                         DiffView(diff, call.id)
-                    } else if (todos == null) ToolInputDetail(call.use.item, call.result?.item)
+                    } else if (computer) ComputerToolDetail(call, session, loader)
+                    else if (todos == null) ToolInputDetail(call.use.item, call.result?.item)
                     // A truncated output opens in full from "Raw output" below. An edit's own result only says it worked; an
                     // answered ask_user's result repeats the ticked choices above in the model's words (iOS ToolViews).
                     val agentReports = call.results.any { it.task?.kind == "agent" }
@@ -483,14 +501,15 @@ private fun WorkStep(step: WorkItem, session: SessionKey, loader: ImageLoader, o
                             }
                         }
                     } else call.result?.item?.let { result ->
-                        if (todos == null && (diff == null || call.failed) && (!PersonaTools.isAskUser(call.name) || call.failed))
+                        if (!computer && todos == null && (diff == null || call.failed) && (!PersonaTools.isAskUser(call.name) || call.failed))
                             CodeText(result.text.orEmpty(), stringResource(R.string.chat_content_output))
                     }
                     // A dev server saying where it listens (docs/operations/ports.md).
                     if (call.name == "Bash") call.result?.text?.let { PortBadges(it) }
-                    call.images.forEach { ChatPicture(session, it.item, loader) }
+                    if (!computer) call.images.forEach { ChatPicture(session, it.item, loader) }
                     ToolReaderActions(call.use.item.toolInput?.toString(), call.result?.text?.takeUnless { agentReports },
-                        call.result?.item?.takeIf { !agentReports && it.fullSize != null }?.let { result -> { onFullText(result) } })
+                        call.result?.item?.takeIf { !agentReports && it.fullSize != null }?.let { result -> { onFullText(result) } },
+                        rawInput = !drawsRawInput(call.use.item))
                 }
             }
         }

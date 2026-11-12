@@ -249,6 +249,8 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   // Settings search: filters the sidebar categories, and jumps to a group inside a page (scroll + brief highlight).
   const [query, setQuery] = useState("");
   const search = searchSettings(query);
+  // Inbox Sources' relationship view (#5741) takes the wide page while it is shown; the list keeps its width.
+  const [sourcesGraph, setSourcesGraph] = useState(false);
   const [scrollAnchor, setScrollAnchor] = useState<string | null>(null);
   useEffect(() => {
     if (!scrollAnchor) return;
@@ -301,7 +303,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
               <SettingsList shown={shown} onPick={pick} />
             </div>
           ) : (
-            <div key={ASSISTANT_TABS.has(tab) ? `${tab}@${picked ?? ""}` : tab} className={cx("mx-auto px-5 py-6 sm:px-8", tab === "channels" || tab === "connectors" || tab === "extensions" ? "max-w-[1120px]" : "max-w-[760px]")} style={{ animation: `fade-up 320ms ${EASE} both` }}>
+            <div key={ASSISTANT_TABS.has(tab) ? `${tab}@${picked ?? ""}` : tab} className={cx("mx-auto px-5 py-6 sm:px-8", tab === "channels" || tab === "connectors" || tab === "extensions" || (tab === "sources" && sourcesGraph) ? "max-w-[1120px]" : "max-w-[760px]")} style={{ animation: `fade-up 320ms ${EASE} both` }}>
               {tab === "general" && <General onModel={() => pick("models", "translate", "model-config")} />}
               {tab === "persona" && <AssistantProfile onTriageModel={() => pick("models", "agent.triage", "model-config")} />}
               {tab === "avatar" && (
@@ -311,7 +313,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
               )}
               {tab === "notifications" && <NotificationSettings />}
               {tab === "knowledge" && <KnowledgeSelection />}
-              {tab === "sources" && <SourcesUI title={TAB_INFO.sources.label} />}
+              {tab === "sources" && <SourcesUI title={TAB_INFO.sources.label} onGraph={setSourcesGraph} />}
               {tab === "models" && <>
                 <section id="settings-providers" className="scroll-mt-4">
                   <h2 className="mb-2 px-1 text-[15px] font-semibold text-ink">{TAB_INFO.models.label}</h2>

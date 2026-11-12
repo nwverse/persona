@@ -129,6 +129,11 @@ type Subscription struct {
 	// without keeping it (baseline). Each is when the change asked for it.
 	CatchupFrom *time.Time `json:"-"`
 	Baseline    *time.Time `json:"-"`
+	// How the Inbox's rows are grouped (#5671, deliver.go "rowsFrom"): InboxGroup is the recipe's group_by they are made
+	// by ("" for rows from before #5671, which were a thread's or an item's whatever the recipe said), and the rows take
+	// only the items stored from InboxGroupFrom on (nil: all), as the earlier ones came in as rows grouped otherwise.
+	InboxGroup     string     `json:"-"`
+	InboxGroupFrom *time.Time `json:"-"`
 }
 
 // Run is one execution, as the subscription's history keeps it (the newest RunsKept).

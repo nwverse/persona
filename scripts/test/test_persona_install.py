@@ -256,6 +256,19 @@ printf 'catalog placeholders preserved in all languages\n'
                 self.assertIn(expected, result.stderr)
                 self.assertFalse((home / '.persona').exists())
 
+    def test_node_connection_help_keeps_its_line_breaks(self):
+        # node_connect_help is a format string with \n in it: printed through install_format, not straight from the
+        # catalog, so the terminal shows separate lines, not a literal \n (#5623). The terminal is the test's own
+        # pseudo-terminal (run_with_terminal, killed after its timeout), never the one running the tests.
+        for lang, heading in (('en', 'How should this computer connect to the hub?'), ('zh-Hans', '这台电脑怎么和 hub 连？'),
+                              ('ja', 'このコンピュータを hub にどう接続しますか？')):
+            with self.subTest(lang), tempfile.TemporaryDirectory() as directory:
+                result = self.run_install(Path(directory), link=LINK_FIXTURE, node=True, extra={'PERSONA_ROLE': 'node'},
+                                          args=('--lang', lang), answers=[('[1-2', '2')])
+                self.assertEqual(result.returncode, 0, result.stdout)
+                self.assertIn(heading, result.stdout)
+                self.assertNotIn('\\n', result.stdout)
+
     def test_admin_access_prompt_uses_selected_language(self):
         cases = (
             ('en', 'Who can open the hub admin page'),
