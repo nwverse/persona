@@ -979,27 +979,39 @@ nonisolated enum ExtensionContentSource {
 nonisolated enum ExtensionPromptKind {
     static let instructions = "instructions"
     static let quick = "quick"
-    static let all = ["instructions", "quick"]
+    static let projectContext = "project_context"
+    static let inboxContext = "inbox_context"
+    static let all = ["instructions", "quick", "project_context", "inbox_context"]
 }
 
 /// A prompt: instructions (a .md of the package, or with source data of the data directory, added to the assistant's
-/// CLAUDE.md) or quick (a template the apps offer in the message box).
+/// CLAUDE.md), quick (a template the apps offer in the message box), project_context (a directory of the data
+/// directory whose <project slug>.md files go into a new Agent's project background) or inbox_context (a .md of the
+/// data directory added to the Inbox's triage and draft prompts).
 nonisolated struct ExtensionPromptItem: Codable, Hashable, Sendable {
     var id: String
     var kind: String
     var source: String?
-    /// instructions: the .md file (with source data: at most 6 KB, adopted at most once a day).
+    /// instructions: the .md file (with source data: at most 6 KB, adopted at most once a day); inbox_context: the
+    /// .md file (1 KB used).
     var file: String?
+    /// project_context: the directory of <project slug>.md files (1.5 KB of each used).
+    var dir: String?
+    /// inbox_context: a text file of sentences, one a line, a draft must not repeat word for word (64 KB used); only
+    /// checked, never in a prompt.
+    var neverQuote: String?
     /// quick: what the apps show.
     var title: String?
     /// quick: what goes into the message box.
     var text: String?
 
-    init(id: String = "", kind: String = "", source: String? = nil, file: String? = nil, title: String? = nil, text: String? = nil) {
+    init(id: String = "", kind: String = "", source: String? = nil, file: String? = nil, dir: String? = nil, neverQuote: String? = nil, title: String? = nil, text: String? = nil) {
         self.id = id
         self.kind = kind
         self.source = source
         self.file = file
+        self.dir = dir
+        self.neverQuote = neverQuote
         self.title = title
         self.text = text
     }
@@ -1009,6 +1021,8 @@ nonisolated struct ExtensionPromptItem: Codable, Hashable, Sendable {
         case kind
         case source
         case file
+        case dir
+        case neverQuote = "never_quote"
         case title
         case text
     }
@@ -1019,6 +1033,8 @@ nonisolated struct ExtensionPromptItem: Codable, Hashable, Sendable {
         self.kind = (try? c.decodeIfPresent(String.self, forKey: .kind)) ?? ""
         self.source = try? c.decodeIfPresent(String.self, forKey: .source)
         self.file = try? c.decodeIfPresent(String.self, forKey: .file)
+        self.dir = try? c.decodeIfPresent(String.self, forKey: .dir)
+        self.neverQuote = try? c.decodeIfPresent(String.self, forKey: .neverQuote)
         self.title = try? c.decodeIfPresent(String.self, forKey: .title)
         self.text = try? c.decodeIfPresent(String.self, forKey: .text)
     }

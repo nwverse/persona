@@ -150,7 +150,9 @@ func (s *Service) triageModel(ctx context.Context, input, rules string, timeout 
 		rules = s.inboxConfig(ctx).Rules
 	}
 	hello := s.hello(ctx)
-	system := prompts.RenderInboxTriage(prompts.InboxTriage{Owner: hello.Owner, Rules: rules, Language: answerLanguage(hello.Locale)})
+	extContext, _ := s.inboxExtensionContext(ctx)
+	system := prompts.RenderInboxTriage(prompts.InboxTriage{Owner: hello.Owner, Rules: rules, Language: answerLanguage(hello.Locale),
+		Context: extContext})
 	var out struct {
 		Tier    string `json:"tier"`
 		Summary string `json:"summary"`
@@ -251,17 +253,31 @@ func (s *Service) draftReply(ctx context.Context, id, instruction string) (strin
 		return "", errNoInboxItem
 	}
 	hello := s.hello(ctx)
+	extContext, neverQuote := s.inboxExtensionContext(ctx)
 	// About me as the user last edited it in the app, else the config file's (notes), as the main chat has it.
-	system := prompts.RenderInboxDraft(prompts.InboxDraft{Owner: hello.Owner, Notes: s.notes(ctx),
-		Language: answerLanguage(hello.Locale)})
+	d := prompts.InboxDraft{Owner: hello.Owner, Notes: s.notes(ctx), Language: answerLanguage(hello.Locale), Context: extContext}
 	input := prompts.RenderInboxDraftInput(prompts.InboxDraftInput{Item: item, Instruction: strings.TrimSpace(instruction)})
 	cctx, cancel := context.WithTimeout(ctx, draftModelWait)
 	defer cancel()
-	text, err := s.inboxModelComplete(cctx, purposeDraft, system, input, 1024)
-	if err != nil {
-		return "", err
+	// A draft that repeats a sentence an extension marked never to quote (what it keeps about people: evaluations,
+	// guesses) is written again once, told so; if that one repeats one too, there is no draft (extension_context.go).
+	for {
+		text, err := s.inboxModelComplete(cctx, purposeDraft, prompts.RenderInboxDraft(d), input, 1024)
+		if err != nil {
+			return "", err
+		}
+		text = strings.TrimSpace(text)
+		hit := quotesAny(text, neverQuote)
+		if hit == "" {
+			return text, nil
+		}
+		if d.Rewrite {
+			s.logf("inbox: draft for %s withheld: the rewrite still repeats a sentence an extension marked never to quote", id)
+			return "", errDraftWithheld
+		}
+		s.logf("inbox: draft for %s repeats a sentence an extension marked never to quote; writing it again", id)
+		d.Rewrite = true
 	}
-	return strings.TrimSpace(text), nil
 }
 
 // inboxReply serializes the replies to one inbox item and remembers the last one that went out.

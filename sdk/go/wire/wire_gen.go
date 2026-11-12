@@ -363,21 +363,31 @@ var ContentSources = []string{"package", "data"}
 
 // Values of PromptKind.
 const (
-	PromptKindInstructions = "instructions"
-	PromptKindQuick        = "quick"
+	PromptKindInstructions   = "instructions"
+	PromptKindQuick          = "quick"
+	PromptKindProjectContext = "project_context"
+	PromptKindInboxContext   = "inbox_context"
 )
 
 // PromptKinds are the values of PromptKind, in order.
-var PromptKinds = []string{"instructions", "quick"}
+var PromptKinds = []string{"instructions", "quick", "project_context", "inbox_context"}
 
 // PromptItem: A prompt: instructions (a .md of the package, or with source data of the data directory, added to the
-// assistant's CLAUDE.md) or quick (a template the apps offer in the message box).
+// assistant's CLAUDE.md), quick (a template the apps offer in the message box), project_context (a directory of the
+// data directory whose <project slug>.md files go into a new Agent's project background) or inbox_context (a .md of
+// the data directory added to the Inbox's triage and draft prompts).
 type PromptItem struct {
 	ID     string `json:"id"`
 	Kind   string `json:"kind"`
 	Source string `json:"source,omitempty"`
-	// instructions: the .md file (with source data: at most 6 KB, adopted at most once a day).
+	// instructions: the .md file (with source data: at most 6 KB, adopted at most once a day); inbox_context: the .md
+	// file (1 KB used).
 	File string `json:"file,omitempty"`
+	// project_context: the directory of <project slug>.md files (1.5 KB of each used).
+	Dir string `json:"dir,omitempty"`
+	// inbox_context: a text file of sentences, one a line, a draft must not repeat word for word (64 KB used); only
+	// checked, never in a prompt.
+	NeverQuote string `json:"never_quote,omitempty"`
 	// quick: what the apps show.
 	Title string `json:"title,omitempty"`
 	// quick: what goes into the message box.
@@ -4938,10 +4948,10 @@ type AssistantMessagesResult struct {
 type AssistantDataStatusParams struct {
 }
 
-// AssistantDataState: what the assistant reads of the contribution: adopted (the content as it is now; skills: sent),
-// pending (instructions: an older version, the new one waits for next_adopt_at), kept (instructions: an older
-// version, the new one cannot be used, see reason), none (nothing: none written yet, none usable, or the extension or
-// contribution is switched off).
+// AssistantDataState: what the assistant reads of the contribution: adopted (the content as it is now; skills: sent;
+// project and Inbox context: used whenever their prompt is built), pending (instructions: an older version, the new
+// one waits for next_adopt_at), kept (instructions: an older version, the new one cannot be used, see reason), none
+// (nothing: none written yet, none usable, or the extension or contribution is switched off).
 const (
 	AssistantDataStateAdopted = "adopted"
 	AssistantDataStatePending = "pending"
@@ -4973,7 +4983,7 @@ var AssistantDataReasons = []string{"too_large", "invalid", "not_regular", "unre
 type AssistantDataItem struct {
 	// Its id, as the manifest has it.
 	Contribution string `json:"contribution"`
-	// instructions or skills.
+	// instructions, skills, project_context or inbox_context.
 	Kind string `json:"kind"`
 	// Its file or directory, relative to the data directory.
 	Path string `json:"path"`
@@ -4998,6 +5008,12 @@ type AssistantDataItem struct {
 	NextAdoptAt string `json:"next_adopt_at,omitempty"`
 	// skills: the skills sent.
 	Skills []string `json:"skills,omitempty"`
+	// project_context: the projects (slugs) with a file in use.
+	Files []string `json:"files,omitempty"`
+	// project_context, inbox_context: some content is used cut at its limit (detail says which).
+	Truncated bool `json:"truncated,omitempty"`
+	// inbox_context: how many sentences drafts are checked against.
+	NeverQuote int `json:"never_quote,omitempty"`
 }
 
 type AssistantDataStatusResult struct {

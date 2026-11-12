@@ -121,7 +121,7 @@ What an extension contributes where is written in the manifest's `contributes`: 
 | `events` (version 1) | `event.` | `id`, `subscribe` (a list of event names, see "Events") | Process speaks the protocol, `on_startup` | Only tells the extension what happened on the hub, see "Events" below |
 | `shortcuts` (version 1) | `shortcut.` | `id`, `title` (1–40 characters), `description?` (≤ 200 characters), `params?` (≤ 8 `{name, title, kind: text / number / toggle / choice, choices?, required?}`), `ui?` (a full page from the same extension) | Process speaks the protocol | Actions in Shortcuts and Siri (iPhone, Mac, Apple Watch), see "System-level placements" below |
 | `skills` (version 1) | — | `id`, `dir` (a directory in the package with `SKILL.md`), `source?` (`package` / `data`: with `data`, `dir` is in the extension's data directory and holds one skill per subdirectory) | Declarative is enough | The assistant's skills, delivered the same way as `assistant.skills`, see "Declarative contributions" and "Assistant content from the data directory" below |
-| `prompts` (version 1) | — | `id`, `kind`: `instructions` (`file`: an `.md` in the package, or in the data directory with `source: "data"`) / `quick` (`title`, `text`); `source?` (`package` / `data`, not for `quick`) | Declarative is enough | Instructions appended to the assistant's CLAUDE.md; quick prompts in the App's input box; see "Declarative contributions" and "Assistant content from the data directory" |
+| `prompts` (version 1) | — | `id`, `kind`: `instructions` (`file`: an `.md` in the package, or in the data directory with `source: "data"`) / `quick` (`title`, `text`) / `project_context` (`dir` in the data directory) / `inbox_context` (`file` in the data directory, `never_quote?`); `source?` (`package` / `data`, not for `quick`; the two context kinds are always `data`) | Declarative is enough | Instructions appended to the assistant's CLAUDE.md; quick prompts in the App's input box; a new Agent's project background; the Inbox's triage and draft prompts; see "Declarative contributions" and "Assistant content from the data directory" |
 | `themes` (version 1) | — | `id`, `name`, `light` / `dark`: `#RRGGBB` for the role colors `accent` (required), `positive`, `caution`, `danger`, `ai` | Declarative is enough | One more option in **Settings › Appearance › Theme Color**, see "Declarative contributions" |
 | `looks` (version 1) | — | `id` (`^[a-z0-9][a-z0-9-]{0,31}$`), `name`, `names?`, `subtitle?`, `subtitles?`, `avatar` (`sizes`: PNG, `svg?`, `safe?`, `dark?`), `colors?`, `dot?`, `app_icon_fallback` (id of a built-in avatar) | Declarative is enough; the package has the images it names | One more **Avatar** in settings: Persona's name, picture, colors and status dot, plus the App icon where it can be changed; see "Avatars" below |
 | `triage_templates` (version 1) | — | `id`, `title` (≤ 40 characters), `text` (≤ 4000 characters) | Declarative is enough | Templates to pick from when filling in Inbox triage rules (`triage_rules`), see "Declarative contributions" |
@@ -1673,9 +1673,28 @@ writing the file is the whole interface.
   removing the extension also forgets what was adopted.
 - **Install screen**: an extension with any `source: "data"` contribution shows the line "Add what it writes to what your assistant reads"
   (`assistant_data`). It is shown, not part of the permissions digest: package instructions and skills are not either.
+- **Project and Inbox context** (#5771): two more `prompts` kinds, always from the data directory (`source` may be left out), go into
+  prompts the manager builds itself. They are read whenever such a prompt is built, so they restart nothing, need no rate limit and
+  reach every runtime alike. A file over its limit is cleaned like instructions and then **cut at a line end** (the status says
+  `truncated`), as there is no older version to keep; a file over 256 KB is not read at all (`too_large`).
+
+  ```json
+  "prompts": [{"id": "projects", "kind": "project_context", "dir": "agent/projects"},
+              {"id": "inbox", "kind": "inbox_context", "file": "inbox/context.md", "never_quote": "inbox/never_quote.txt"}]
+  ```
+
+  | Kind | Files | Goes to | Limit |
+  | --- | --- | --- | --- |
+  | `project_context` | `<dir>/<project slug>.md`, the slug as the knowledge base names the project's directory (letters and digits of any script, hyphens) | The `<persona-context>` project background a new Agent gets before its first prompt (`docs/assistant/todos.md`), after the conclusions, under "扩展「<name>」为这个项目整理的背景"; enough alone for a block | 1.5 KB per project per extension |
+  | `inbox_context` | `file`, one `.md` | The Inbox's triage and draft prompts (`docs/assistant/inbox.md` "Extension context"), read at most once a minute | 1 KB per extension |
+  | `inbox_context.never_quote` | A text file, one sentence a line (empty lines and repeats dropped) | **Never a prompt**: a draft repeating one (at least 6 letters or digits; compared without case, width, spaces and punctuation) is written again once, then withheld (`422 draft_withheld`) | 64 KB |
+
 - **Read-back** (`schema/extension/assistant_data.schema.json`), so an extension can tell the user truthfully whether its content
   reached the assistant and warn when it did not: it asks `assistant.data_status` (no parameters, no permission: only its own
-  contributions, every one its manifest declares) → `{items: [{contribution, kind, path, limit, bytes, state, reason?, detail?, hash?, adopted_hash?, adopted_at?, next_adopt_at?, skills?}]}`.
+  contributions, every one its manifest declares) → `{items: [{contribution, kind, path, limit, bytes, state, reason?, detail?, hash?, adopted_hash?, adopted_at?, next_adopt_at?, skills?, files?, truncated?, never_quote?}]}`.
+  `kind` is `instructions`, `skills`, `project_context` or `inbox_context`. For the two context kinds `adopted` means the next prompt
+  built gets it: `files` lists the projects with a file in use, `truncated` says something is cut at its limit (`detail` says which),
+  `never_quote` counts the sentences drafts are checked against.
 
   | `state` | Meaning |
   | --- | --- |

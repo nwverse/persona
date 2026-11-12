@@ -410,7 +410,24 @@ func (ps *extensions) assistantDataStatus(ctx context.Context, id string, force 
 		}
 		skills = append(skills, off(AssistantDataView{Contribution: it.ID, Kind: "skills", Path: it.Dir, Limit: dataSkillsMost}))
 	}
-	return append(instr, skills...)
+	// Project and Inbox context (extension_prompt_context.go): read when a prompt is built, nothing to adopt.
+	var contexts []AssistantDataView
+	if on {
+		contexts = ps.contextViews(p)
+	}
+	for _, kind := range []string{extension.PromptProjectContext, extension.PromptInboxContext} {
+		for _, it := range p.Full.DataPrompts(kind) {
+			if on && slices.ContainsFunc(contexts, func(v AssistantDataView) bool { return v.Contribution == it.ID }) {
+				continue
+			}
+			v := AssistantDataView{Contribution: it.ID, Kind: kind, Path: it.File, Limit: inboxContextMost}
+			if kind == extension.PromptProjectContext {
+				v.Path, v.Limit = it.Dir, projectContextMost
+			}
+			contexts = append(contexts, off(v))
+		}
+	}
+	return append(append(instr, skills...), contexts...)
 }
 
 // assistantDataRoutes: GET /api/v1/extensions/{id}/-/assistant-data is the status of its data contributions;

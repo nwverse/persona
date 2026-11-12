@@ -363,19 +363,31 @@ export interface SkillItem {
 export type ContentSource = "package" | "data" | (string & {});
 export const CONTENT_SOURCES = ["package", "data"] as const;
 
-export type PromptKind = "instructions" | "quick" | (string & {});
-export const PROMPT_KINDS = ["instructions", "quick"] as const;
+export type PromptKind = "instructions" | "quick" | "project_context" | "inbox_context" | (string & {});
+export const PROMPT_KINDS = ["instructions", "quick", "project_context", "inbox_context"] as const;
 
 /**
  * A prompt: instructions (a .md of the package, or with source data of the data directory, added to the assistant's
- * CLAUDE.md) or quick (a template the apps offer in the message box).
+ * CLAUDE.md), quick (a template the apps offer in the message box), project_context (a directory of the data
+ * directory whose <project slug>.md files go into a new Agent's project background) or inbox_context (a .md of the
+ * data directory added to the Inbox's triage and draft prompts).
  */
 export interface PromptItem {
   id: string;
   kind: PromptKind;
   source?: ContentSource;
-  /** instructions: the .md file (with source data: at most 6 KB, adopted at most once a day). */
+  /**
+   * instructions: the .md file (with source data: at most 6 KB, adopted at most once a day); inbox_context: the .md
+   * file (1 KB used).
+   */
   file?: string;
+  /** project_context: the directory of <project slug>.md files (1.5 KB of each used). */
+  dir?: string;
+  /**
+   * inbox_context: a text file of sentences, one a line, a draft must not repeat word for word (64 KB used); only
+   * checked, never in a prompt.
+   */
+  never_quote?: string;
   /** quick: what the apps show. */
   title?: string;
   /** quick: what goes into the message box. */
@@ -5232,10 +5244,10 @@ export interface AssistantDataStatusParams {
 }
 
 /**
- * What the assistant reads of the contribution: adopted (the content as it is now; skills: sent), pending
- * (instructions: an older version, the new one waits for next_adopt_at), kept (instructions: an older version, the
- * new one cannot be used, see reason), none (nothing: none written yet, none usable, or the extension or contribution
- * is switched off).
+ * What the assistant reads of the contribution: adopted (the content as it is now; skills: sent; project and Inbox
+ * context: used whenever their prompt is built), pending (instructions: an older version, the new one waits for
+ * next_adopt_at), kept (instructions: an older version, the new one cannot be used, see reason), none (nothing: none
+ * written yet, none usable, or the extension or contribution is switched off).
  */
 export type AssistantDataState = "adopted" | "pending" | "kept" | "none" | (string & {});
 export const ASSISTANT_DATA_STATES = ["adopted", "pending", "kept", "none"] as const;
@@ -5255,7 +5267,7 @@ export const ASSISTANT_DATA_REASONS = ["too_large", "invalid", "not_regular", "u
 export interface AssistantDataItem {
   /** Its id, as the manifest has it. */
   contribution: string;
-  /** instructions or skills. */
+  /** instructions, skills, project_context or inbox_context. */
   kind: string;
   /** Its file or directory, relative to the data directory. */
   path: string;
@@ -5286,6 +5298,12 @@ export interface AssistantDataItem {
   next_adopt_at?: string;
   /** skills: the skills sent. */
   skills?: string[];
+  /** project_context: the projects (slugs) with a file in use. */
+  files?: string[];
+  /** project_context, inbox_context: some content is used cut at its limit (detail says which). */
+  truncated?: boolean;
+  /** inbox_context: how many sentences drafts are checked against. */
+  never_quote?: number;
 }
 
 export interface AssistantDataStatusResult {

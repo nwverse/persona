@@ -676,6 +676,14 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
 ## Item actions (`Persona/Views/Inbox/InboxActions.swift`)
 
 - **AI Draft Reply**: `POST /api/v1/inbox/{id}/draft {instruction}`. The manager uses the Draft reply model in the user's voice (Lark short and conversational; mail matches the incoming language and formality). With nothing the hub can call directly for it (only launchers such as Claude Code default, no Direct API provider or keyed Messages launcher) it answers `503 model_unavailable`, localized and naming Settings › Model providers and Model configuration; the web shows where to set one up instead of a bare HTTP error. Other failures stay `502`.
+  The draft knows "About me" as the user last edited it in the app (else `assistant.notes` of the manager's config; #5769).
+- **Extension context** (#5771): extensions with an `inbox_context` contribution add a short block (1 KB each) to both the triage and the
+  draft prompts (`prompts/inbox/extension_context.md`), read through the extension manager at most once a minute. Its optional
+  `never_quote` list holds sentences a draft must not repeat word for word (an extension's private notes about people): it is never put
+  in a prompt; after a draft is written the manager compares it with each sentence of at least 6 letters or digits (NFKC, lower case,
+  letters and digits only, so spacing, width and punctuation do not hide a repeat). On a hit it writes the draft once more, told not to
+  copy the background; if that one repeats a sentence too, there is no draft: `422 draft_withheld` with a localized message asking the
+  user to write the reply themselves. Details: `docs/extensions/extensions.md` "Assistant content from the data directory".
   Do not invent unknown facts or leave 【】 placeholders for the user; omit unknown details. Include `assistant.notes` as About the user. Edit directly in the sheet or enter "Have AI revise: …" to rewrite.
   Send uses `POST /api/v1/inbox/{id}/reply {text}`: the manager asks hub to post in the original Lark chat through its plugin, or reply by mail (Re: subject, In-Reply-To / References,
   quote first 40 lines, using the receiving account), then mark done (`done_by=replied`). Phone and Watch use the same API.

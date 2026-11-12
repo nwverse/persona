@@ -15,7 +15,7 @@
       "properties": {}
     },
     "AssistantDataState": {
-      "description": "What the assistant reads of the contribution: adopted (the content as it is now; skills: sent), pending (instructions: an older version, the new one waits for next_adopt_at), kept (instructions: an older version, the new one cannot be used, see reason), none (nothing: none written yet, none usable, or the extension or contribution is switched off).",
+      "description": "What the assistant reads of the contribution: adopted (the content as it is now; skills: sent; project and Inbox context: used whenever their prompt is built), pending (instructions: an older version, the new one waits for next_adopt_at), kept (instructions: an older version, the new one cannot be used, see reason), none (nothing: none written yet, none usable, or the extension or contribution is switched off).",
       "type": "string",
       "enum": ["adopted", "pending", "kept", "none"]
     },
@@ -30,7 +30,7 @@
       "additionalProperties": false,
       "properties": {
         "contribution": {"type": "string", "description": "Its id, as the manifest has it."},
-        "kind": {"type": "string", "description": "instructions or skills."},
+        "kind": {"type": "string", "description": "instructions, skills, project_context or inbox_context."},
         "path": {"type": "string", "description": "Its file or directory, relative to the data directory."},
         "limit": {"type": "integer", "description": "The most it may weigh, in bytes."},
         "bytes": {"type": "integer", "description": "What it weighs now (all files, for skills)."},
@@ -41,7 +41,10 @@
         "adopted_hash": {"type": "string", "description": "instructions: the digest of the text the assistant reads (for a contribution or extension switched off: read last); empty when that is no text."},
         "adopted_at": {"type": "string", "description": "instructions: when that text was adopted (RFC 3339)."},
         "next_adopt_at": {"type": "string", "description": "instructions, state pending: the new version is adopted by then at the latest (RFC 3339); sooner when the hub's own instructions change or the user applies it."},
-        "skills": {"type": "array", "items": {"type": "string"}, "description": "skills: the skills sent."}
+        "skills": {"type": "array", "items": {"type": "string"}, "description": "skills: the skills sent."},
+        "files": {"type": "array", "items": {"type": "string"}, "description": "project_context: the projects (slugs) with a file in use."},
+        "truncated": {"type": "boolean", "description": "project_context, inbox_context: some content is used cut at its limit (detail says which)."},
+        "never_quote": {"type": "integer", "description": "inbox_context: how many sentences drafts are checked against."}
       },
       "required": ["contribution", "kind", "path", "limit", "bytes", "state"]
     },
