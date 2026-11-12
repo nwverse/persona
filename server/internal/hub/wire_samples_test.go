@@ -210,6 +210,14 @@ func wireSamples(t *testing.T) map[string][]wireSample {
 	add("sessions", "sessions_event", "会话事件以信封中的机器标识为准。", "event", ws(map[string]any{"type": "sessions", "machine_id": "m1", "sessions": sessions}),
 		map[string]any{"/type": "sessions", "/machine_id": "m1", "/sessions/0/machine_id": "m1", "/sessions/1/status": "offline"},
 		"server/internal/hub/http.go: Hub.serveWS", "apple/Shared/LiveConnection.swift: ServerEvent.decode")
+	// A Persona chat's queue: the user's own first, then what the manager holds from other conversations (fleet_sessions.go).
+	personaQueue := []proto.Session{{MachineID: "m1", SessionID: "a1", Title: "Persona", Cwd: "/home/user/persona", Status: proto.StatusWorking,
+		State: proto.StateWorking, StateSince: now, Assistant: true, UpdatedAt: now,
+		Queued: []string{"请补充示例。", "再检查一遍。", "来自「示例对话」：示例结果已整理好。"}, QueuedRelayed: 1}}
+	add("sessions", "sessions_assistant_queue", "Persona 对话的队列先列用户自己的消息，最后 queued_relayed 条来自其他对话或系统。", "sessions",
+		httpJSON(map[string]any{"sessions": personaQueue}),
+		map[string]any{"/sessions/0/assistant": true, "/sessions/0/queued/0": "请补充示例。", "/sessions/0/queued/2": "来自「示例对话」：示例结果已整理好。", "/sessions/0/queued_relayed": 1},
+		"server/internal/proto/session.go: Session.QueuedRelayed", "server/internal/assistant/fleet_sessions.go: Service.decorateInventory", "apple/Shared/Models.swift: Session.ownQueuedCount")
 
 	m := newMachine(h, MachineConfig{ID: "m1", Name: "示例电脑", Kind: "ssh", SSHHost: "example.com"})
 	m.online = true
