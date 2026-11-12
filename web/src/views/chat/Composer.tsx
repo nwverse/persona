@@ -9,6 +9,7 @@ import { memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRe
 import { useQuickPrompts } from "../../lib/extension-declared";
 import { promptCommands, type ComposerCommand as Command } from "../../lib/extension-prompts";
 import { LOOP_TEXT, loopHint } from "../../lib/loop-command";
+import { WORKFLOWS_COMMAND } from "../../lib/background-panel";
 import { ApiError, errorText } from "../../lib/api";
 import { composerEntryDrop, dragHasEntry, droppedEntry } from "../../lib/entry-drag";
 import { uuid } from "../../lib/format";
@@ -84,6 +85,8 @@ export const AGENT_COMMANDS: Command[] = [
   { word: t("chat-composer.cmd_continue_word"), desc: t("chat-composer.cmd_continue_desc"), text: t("chat-composer.cmd_continue_text") },
   { word: t("chat-composer.cmd_commit_word"), desc: t("chat-composer.cmd_commit_desc"), text: t("chat-composer.cmd_commit_text") },
   { word: t("chat-composer.cmd_report_word"), desc: t("chat-composer.cmd_report_desc"), text: t("chat-composer.cmd_report_text") },
+  // Persona's own (cindy's /workflows): the chat page opens the Background tasks panel instead of sending it (#5421)
+  { word: WORKFLOWS_COMMAND, desc: t("chat-composer.cmd_workflows_desc"), text: WORKFLOWS_COMMAND },
   // the agent's own commands: the palette names it beside them (agentCommands)
   { word: "/compact", desc: t("chat-composer.cmd_compact_desc"), text: "/compact", agent: true },
   { word: "/context", desc: t("chat-composer.cmd_context_desc"), text: "/context", agent: true },

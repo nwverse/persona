@@ -13,6 +13,7 @@
   "cmd_context_desc": "查看上下文",
   "cmd_model_desc": "切换模型",
   "cmd_loop_desc": "定时重复做一件事",
+  "cmd_workflows_desc": "查看后台任务和 workflow",
   "cmd_clear_desc": "清空对话，从头开始",
   "cmd_clear_confirm": "清空这个 Agent 的对话？它会忘掉之前的上下文。",
   "replaced": "已替换输入框里的内容",

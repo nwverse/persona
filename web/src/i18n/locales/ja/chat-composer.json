@@ -13,6 +13,7 @@
   "cmd_context_desc": "コンテキストを表示",
   "cmd_model_desc": "モデルを切り替え",
   "cmd_loop_desc": "定期的に同じ作業を繰り返す",
+  "cmd_workflows_desc": "バックグラウンドタスクと workflow を表示",
   "cmd_clear_desc": "チャットをクリアして最初から",
   "cmd_clear_confirm": "このエージェントのチャットをクリアしますか？これまでのコンテキストは失われます。",
   "replaced": "入力中の内容を置き換えました",

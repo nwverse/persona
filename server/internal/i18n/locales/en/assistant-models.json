@@ -47,6 +47,7 @@
   "desc_agent_title": "Names an agent's tab from what it is working on.",
   "desc_todo_title": "Names a task's to-do.",
   "desc_subscription_recipe": "Drafts how a source subscription fetches its content.",
+  "desc_suggest_next": "Suggests the next message for chats that don't make one themselves (Persona's own, Codex and other agents), from their last few messages. Only while \"Suggest the next message\" is on; one small call per reply.",
   "desc_meeting_answer": "Answers questions asked in a meeting Persona attends, from the meeting's material only.",
   "desc_schedule": "Scheduled tasks, such as the morning briefing, run as Persona's own conversations.",
   "desc_assistant_supervise": "Follows up and reviews the tasks Persona hands out, so the main chat stays free to answer you: it reads their signals, checks the evidence and sends work back. Nobody waits on it.",
