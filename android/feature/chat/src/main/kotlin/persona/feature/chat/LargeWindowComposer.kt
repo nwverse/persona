@@ -39,6 +39,7 @@ import persona.core.designsystem.ComposerDropTargetFrame
 import persona.core.designsystem.ComposerHardwareActions
 import persona.core.designsystem.LocalComposerHardware
 import persona.core.designsystem.LocalLargeWindowInput
+import persona.core.designsystem.ModelPillWidth
 
 /**
  * The production chat composer with large-window input integrations. Compact and wide-phone windows call the original
@@ -73,6 +74,7 @@ fun LargeWindowComposer(
     loop: Boolean = false,
     blockedLabel: String? = null,
     onBlocked: () -> Unit = {},
+    modelPill: (@Composable (ModelPillWidth) -> Unit)? = null,
 ) {
     val composer: @Composable () -> Unit = {
         ChatComposer(
@@ -82,7 +84,7 @@ fun LargeWindowComposer(
             accessory = accessory, modeHint = modeHint, onOverlay = onOverlay, visible = visible,
             agentName = agentName, canInterrupt = canInterrupt, mentions = mentions, onMention = onMention,
             onMentionTask = onMentionTask, onMentionOpen = onMentionOpen, onModel = onModel, loop = loop,
-            blockedLabel = blockedLabel, onBlocked = onBlocked,
+            blockedLabel = blockedLabel, onBlocked = onBlocked, modelPill = modelPill,
         )
     }
     if (!LocalLargeWindowInput.current) {

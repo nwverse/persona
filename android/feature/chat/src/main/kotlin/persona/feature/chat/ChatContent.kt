@@ -334,6 +334,12 @@ internal fun ChatLineContent(
         }
         is ChatLine.Recaps -> RecapLine(line.items.map { it.item })
         is ChatLine.Viewed -> ViewedImagesRow(line.images, session, loader)
+        // Glass: where the replies' model changed (#5055, ModelChanges.mark), as the transcript names both.
+        is ChatLine.ModelChange -> {
+            val from = persona.core.domain.lines.ModelChanges.replyModelName(line.from)
+            val to = persona.core.domain.lines.ModelChanges.replyModelName(line.to)
+            persona.core.designsystem.JModelChangeDivider("$from → $to", res.getString(R.string.chat_model_changed, from, to))
+        }
         is ChatLine.Extra -> {
             val round = line.payload as? persona.core.domain.tasks.BackgroundRound
             if (round != null) BackgroundRoundLine(round, onToggle) else AssistantExtraLine(line.payload, LocalAssistantTaskHost.current)

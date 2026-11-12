@@ -322,6 +322,7 @@
     <string name="designsystem_qr_code">QR code</string>
     <string name="designsystem_queue_actions">Queued message actions</string>
     <string name="designsystem_queue_item">Item %1$d: %2$s</string>
+    <string name="designsystem_queue_item_note">Item %1$d: %2$s. %3$s</string>
     <string name="designsystem_draft_ready">Persona drafted a reply</string>
     <!-- Connection details (the title's sheet while the hub is out of reach) -->
     <string name="designsystem_connection_online">Connected to the hub</string>
