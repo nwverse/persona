@@ -725,6 +725,22 @@ A computer's dev server opened from a chat (a forwarded port, `docs/web/preview.
 
 Tool execution is one summary line, never opens by itself, shows the latest text segment while running and the result when done, and expands by hand. Opened by hand, a step (and the summary itself) changes in place: the tapped row stays under the finger, what opens fades in, what closes goes at once, and the list holds still while the turn goes on (new steps, the answer, the next turn, the footer under the list changing) until the user scrolls, taps ↓ or sends (`toggleInPlace`, `ChatFollow.toggledRow`, #3005). iOS complies: `isOpen` ignores `live` (`apple/Persona/Views/Chat/ChatLines.swift:293`) and tool rows use `autoExpand: false`. The "latest segment only" half was not confirmed from code reading and needs a screenshot test.
 
+**The opened summary** (web, #5155; the owner asked on 2026-11-12 that it follow cindy's `WorkGroupBlock` and
+`createCompletedWorkGroup`). A summary that holds intermediate narration opens to cindy's timeline: the narration in
+order, and each run of work between two pieces of it an inner summary of its own, "Worked for 12s" from the words
+before it to the words after it, the live one "Working…" with its clock. Without intermediate narration it holds its
+rows directly. Inner summaries open together with the outer one and then keep their own open / closed state, so
+opening a summary shows every tool call. A thought with words is one row in the tool rows' chrome (16 px status slot
+with the sparkle, italic `thinking-ink` words on one line, the 18 px chevron slot), opening in place only when it does
+not fit or has a line break; a thought without words has no row. The live "Thinking" line with dots and a clock ends
+the innermost live summary, once. Durations read `6s`, `1m 5s`, `2m` in every language and, from an hour, the
+language's form that always keeps the minutes (`1h 0m`, `1 小时 0 分`, `1時間0分`). Copy follows cindy's catalog
+("Work details" without times, "Searched once", "Listed files once"). A diff count reads `+12 -3`; the in-place
+detail's divider is the tool ink at 20 %. The chat's items stand 14 px apart under 28 px of top padding. Held back by
+super rule 2: cindy's running preview of the latest five activities, its narration in the open while running, and its
+inner summaries folded by default (exception requested in #5162). Kept from Persona: a failed call's red ✕ and red
+output (#4303 outcomes, below), which cindy's rows lack.
+
 Subagent launch receipts, interim reports and final results belong under their launching tool, not in independent
 parent-chat message bubbles (#3378). Empty completion pointers update status without creating another report. The
 shared wire contract is in `docs/protocol/protocol.md` ("Subagent deliveries as tool results").
