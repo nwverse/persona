@@ -1171,6 +1171,9 @@ control when it sits lower in the row.
   row is never pushed off the screen. Closing there brings the newest end back: the row comes down by what closed,
   gliding, not in one frame.
 - **At the oldest end**: what opens grows downward and nothing moves above it.
+- **Your own long message** (#5676, `BubbleFold`): its top stays where it is when it opens or folds, at the newest end
+  too, with no rise to the top bar: the owner asked that the bubble never move (2026-11-12). What opens runs on below
+  the screen and ↓ shows; folded from its end, what was under it comes up (`toggleInPlace(rises: false)`).
 - **Afterwards**: the list holds still while the conversation goes on (new steps, the answer, the next turn, a strip
   appearing under the list), until the user scrolls, taps ↓ or sends (section 4.7). A row opened at the newest end
   takes what comes in next the same way it took what opened: it rises until it is under the top bar, then stays.
