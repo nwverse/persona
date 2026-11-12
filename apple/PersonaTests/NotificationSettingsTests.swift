@@ -108,14 +108,14 @@ import Testing
     }
 
     /// Two quick changes: the page keeps both, one PUT at a time, the second over the first's answer; the hub ends on both.
-    @Test func twoChangesSaveInTheOrderMade() async throws {
+    @Test(.timeLimit(.minutes(1))) func twoChangesSaveInTheOrderMade() async throws {
         let hub = SlowHub()
         let m = await model(hub)
         let saving = m.change { $0.input = false }
         m.change { $0.done = .always }
         #expect(m.prefs?.input == false && m.prefs?.done == .always)
         for _ in 0..<20 { await Task.yield() }
-        #expect(hub.inFlight == 1, "one PUT at a time")
+        try #require(hub.inFlight == 1, "one PUT at a time") // more would wait for answers the test never gives
         try await hub.answer()
         #expect(m.prefs?.input == false && m.prefs?.done == .always, "the first answer doesn't undo the second change")
         try await hub.answer()
@@ -125,7 +125,7 @@ import Testing
     }
 
     /// The first save fails while the second waits: only the first change goes, and no PUT carries it.
-    @Test func aFailedChangeRevertsAloneAndIsNeverSaved() async throws {
+    @Test(.timeLimit(.minutes(1))) func aFailedChangeRevertsAloneAndIsNeverSaved() async throws {
         let hub = SlowHub()
         var errors = 0
         let m = await model(hub, failed: { _ in errors += 1 })
@@ -141,7 +141,7 @@ import Testing
     }
 
     /// The last change fails after an earlier one went through: back to the hub's last answer, not to before both.
-    @Test func aFailedLastChangeGoesBackToTheHubsLastAnswer() async throws {
+    @Test(.timeLimit(.minutes(1))) func aFailedLastChangeGoesBackToTheHubsLastAnswer() async throws {
         let hub = SlowHub()
         var applied: [NotifyPrefs] = []
         let m = await model(hub, applied: { applied.append($0) })
@@ -162,7 +162,7 @@ import Testing
     }
 
     /// Quiet hours go their own way: shown over the rest while on their way, and their answer is the hub's last one.
-    @Test func quietHoursShowAndSettle() async throws {
+    @Test(.timeLimit(.minutes(1))) func quietHoursShowAndSettle() async throws {
         let hub = SlowHub()
         let m = await model(hub)
         let quiet = QuietHours(enabled: true, start: "22:00", end: "07:00", tz: "UTC")
