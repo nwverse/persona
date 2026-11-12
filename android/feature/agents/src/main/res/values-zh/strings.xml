@@ -538,6 +538,10 @@
         <item quantity="other">%d 条</item>
     </plurals>
     <string name="agents_todo_restore">恢复</string>
+    <string name="agents_todo_seen">知道了</string>
+    <string name="agents_todo_seen_moved">已移到「已完成」</string>
+    <string name="agents_todo_seen_undo">撤销</string>
+    <string name="agents_todo_seen_failed">操作失败：%1$s</string>
     <string name="agents_todo_pr_moved">%1$s · %2$s有动静</string>
     <string name="agents_todo_for_briefing">这项决定随下一次简报一起送达</string>
     <string name="agents_todo_pr">PR</string>

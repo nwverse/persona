@@ -501,6 +501,8 @@ fun ReadinessScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val preferences = remember { context.getSharedPreferences("settings-readiness", android.content.Context.MODE_PRIVATE) }
+    // The GitHub star prompts (#5761): finish() tells them setup is done.
+    val starPrompt = persona.core.designsystem.LocalStarPrompt.current
     val readinessOn by remember(readiness) { readiness?.available ?: kotlinx.coroutines.flow.flowOf(false) }.collectAsState(false)
     var main by remember(readiness) { mutableStateOf<AssistantReadiness?>(null) }
     var probing by remember { mutableStateOf(false) }
@@ -563,6 +565,9 @@ fun ReadinessScreen(
                     withContext(kotlinx.coroutines.NonCancellable) { try { source.dismiss(true) } catch (_: Exception) { } }
                 }
             }
+            // Setup finished (Done, not Later): the GitHub star toast once per phone, which the app shell shows when it is
+            // up (StarPromptWelcome), past this page's leaving (#5761).
+            if (!later && !backgroundOnly) starPrompt?.onboarded()
         }
         onDone()
     }

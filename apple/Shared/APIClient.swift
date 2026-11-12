@@ -945,11 +945,20 @@ nonisolated struct APIClient: Sendable {
     /// clear first.
     /// opID: the message's op id (the outbox passes its id, the same as clientMsgID: docs/protocol/protocol.md「Operation receipts」).
     /// via: how the app sent it when not typed in the app itself (Siri, the share sheet).
+    /// Returns whether the message waits behind a question on the computer (`waits_on_computer`, #5890): a Claude
+    /// outside Persona's terminals took it while a dialog only the computer can answer holds it. Only `sendPending`
+    /// (the composer and the outbox flush) tells the user; the other callers drop it.
+    @discardableResult
     func send(_ k: SessionKey, text: String, images: [ImagePayload] = [], launcher: String? = nil, model: String? = nil,
-              clientMsgID: String? = nil, clearDraft: String? = nil, todoID: String? = nil, via: MessageVia? = nil, opID: UUID? = nil) async throws {
-        try await post(sp(k) + "/messages", body: SendBody(text: HubNaming.outbound(text, canonical: personaNaming), images: images.isEmpty ? nil : images, launcher: launcher,
-                                                           model: model, clientMsgID: clientMsgID, clearDraft: clearDraft, todoID: todoID, via: via),
-                       timeout: 100, opID: opID)
+              clientMsgID: String? = nil, clearDraft: String? = nil, todoID: String? = nil, via: MessageVia? = nil, opID: UUID? = nil) async throws -> Bool {
+        let data = try await post(sp(k) + "/messages", body: SendBody(text: HubNaming.outbound(text, canonical: personaNaming), images: images.isEmpty ? nil : images, launcher: launcher,
+                                                                      model: model, clientMsgID: clientMsgID, clearDraft: clearDraft, todoID: todoID, via: via),
+                                  timeout: 100, opID: opID)
+        struct Answer: Decodable {
+            var waitsOnComputer: Bool?
+            enum CodingKeys: String, CodingKey { case waitsOnComputer = "waits_on_computer" }
+        }
+        return (try? JSON.decoder.decode(Answer.self, from: data))?.waitsOnComputer == true
     }
     func interrupt(_ k: SessionKey) async throws { try await post(sp(k) + "/interrupt") }
     func attach(_ k: SessionKey) async throws { try await post(sp(k) + "/attach") }
