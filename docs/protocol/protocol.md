@@ -645,7 +645,9 @@ parked: idle, done, offline or cut off by a restart, with no pane and no claude 
 thread an app-server keeps loaded after the switch included: a message to it would fork the conversation). Their
 transcripts stay on the computer, and a switch back resumes the most recent one of that engine. A named session that
 runs again (in a pane, resumed by hand, a claude in another terminal), works or waits for the user is listed as its own
-row. The row shows the title of the
+row, and so is one used after the conversation left it (its activity more than two minutes after its stretch's
+`until`: a Codex resumed in another terminal or the Codex App). A hidden earlier session still takes a message sent to
+its id directly; clients open the conversation's row instead. The row shows the title of the
 conversation's first stretch unless it has a manual title of its own. The history is kept in the session's state
 record (the hub's Postgres), so a node restart keeps the row joined. While the switch is carried out, the session
 switched away from is listed as `starting` with the new launcher and `agent`.
@@ -669,14 +671,16 @@ message; what codex-start printed is not read for this.
 
 **A first message held back.** When the new Claude Code session comes up behind a dialog of its own, its first message
 is not typed: the switch is done and the row says the first message did not go in, as for any start. The handoff waits
-on the session's record and goes in front of the next message sent to it, whoever sends it, once.
+on the session's record and goes in front of the next message sent to it, whoever sends it, once: it is cleared when
+that message is known to be in, and dropped (not put in front) when the session got a message since or works. A first
+message found lost only later by the node's background check does not keep it.
 
 **The earlier session while it is resumed.** From just before the first Ctrl+C until the switch ends, the session
 being resumed is held as switching (and one the user's Resume is starting right then is not resumed: a fresh session
 takes the conversation): a message to it and the user's Resume of it wait for the switch and then find it running
 (nothing starts a second writer of its conversation), and a stop, a pick or keys are refused as for the session
-switching. It is looked at again first: one that runs again by then is not resumed, and a fresh session takes the
-conversation.
+switching. It is looked at again as soon as it is held, before the first Ctrl+C, and right before the resume: one that
+runs again by then is not resumed, and a fresh session takes the conversation.
 
 **To-dos.** A pane linked to a to-do (`persona_todo_ref`) gets that link as `persona_from` before the other engine
 starts, so the new session joins the same to-do as a spawned Agent would ([todos.md](../assistant/todos.md) "Following

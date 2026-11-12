@@ -166,12 +166,20 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 		}
 	}
 	// A switch to Claude Code whose first message a dialog held back (engine_switch.go): its handoff goes in front of
-	// this message, whoever sends it, and is cleared once it is typed.
+	// this message, whoever sends it, and is cleared once the message is in. One the session got a message since (typed
+	// at the computer, or one sent with it whose arrival was not confirmed) or that it works without is dropped instead:
+	// put in front again, it would come twice or after the conversation went on.
 	var handoff *pendingHandoff
 	if kind == "claude" {
 		if st, ok := n.state.get(id); ok && st.PendingHandoff != nil {
 			handoff = st.PendingHandoff
-			text = handoff.message(text)
+			if a, _ := n.agent(id); a.AgentStatus == proto.StatusWorking || n.promptedSince(id, handoff.At) {
+				n.logf("session %s: its pending handoff is dropped: the session got a message since", id)
+				n.dropHandoff(id, handoff)
+				handoff = nil
+			} else {
+				text = handoff.message(text)
+			}
 		}
 	}
 	paths, err := n.saveImages(images)
@@ -201,17 +209,12 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 	if err == nil {
 		n.typing.typed(pane, text)
 		n.lostFirst.clear(id) // the message the start could not deliver went in now, or another one
-		if handoff != nil {
-			n.state.update(id, func(v *sessionState) bool {
-				if v.PendingHandoff != handoff {
-					return false // another switch's since
-				}
-				v.PendingHandoff = nil
-				return true
-			})
-		}
 		if kind == "claude" {
-			return n.afterPrompt(ctx, id, pane, text, typedAt, watch) // sendsafe_submit.go
+			err := n.afterPrompt(ctx, id, pane, text, typedAt, watch) // sendsafe_submit.go
+			if handoff != nil && err == nil {
+				n.dropHandoff(id, handoff) // in with this message (not when that is not known: promptedSince tells then)
+			}
+			return err
 		}
 	}
 	return uncertain(err)

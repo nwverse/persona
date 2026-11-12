@@ -699,6 +699,9 @@ func (n *Node) awaitSwitch(ctx context.Context, id string) {
 // (awaitSwitch), it is registered as resuming it until done is called, so a switch to the other engine does not resume
 // the same session beside it (switchShare.hold). ctx ending gives up the wait, not the Resume.
 func (n *Node) resumeTurn(ctx context.Context, id string) (done func()) {
+	if !validID(id) {
+		return func() {} // nothing waits for or switches it (awaitSwitch): the start refuses it
+	}
 	for {
 		n.awaitSwitch(ctx, id)
 		if done, ok := n.switches().resuming(id); ok || ctx.Err() != nil {
