@@ -77,12 +77,12 @@ func (n *Node) launcherCheck(ctx context.Context, name string) proto.LauncherChe
 		if err := os.WriteFile(ours, []byte(`{"disableAllHooks":true}`), 0o600); err != nil {
 			return proto.LauncherCheck{Error: err.Error()}
 		}
-		after += ` --settings ` + shellQuote(n.claudeSettings(ctx, name, ours, dir))
+		after += ` --settings ` + scriptPath(n.claudeSettings(ctx, name, ours, dir))
 	}
 	ctx, cancel := context.WithTimeout(ctx, launcherCheckTimeout)
 	defer cancel()
 	run := func(flag string) (string, error) {
-		cmd := loginShell(ctx, "cd "+shellQuote(dir)+" && "+n.launcherCommand(name)+before+flag+after+" </dev/null")
+		cmd := loginShell(ctx, "cd "+scriptPath(dir)+" && "+n.launcherForScript(name)+before+flag+after+" </dev/null")
 		killGroupOnCancel(cmd)
 		out, err := cmd.CombinedOutput()
 		return strings.TrimSpace(string(out)), err

@@ -1,6 +1,7 @@
 package node
 
 import (
+	"context"
 	"io"
 	"log"
 	"slices"
@@ -10,75 +11,158 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// assistantWindowsLaunchCase is a native Windows path set the assistant's launch command quotes for Git Bash (#5487).
-type assistantWindowsLaunchCase struct {
-	name, launcher, profile, bin string
-	managed                      bool
-}
+// The scripts the node hands Git Bash as an argument cross the native process → Git Bash boundary on Windows, which
+// eats the backslashes shellQuote escapes and leaves an unmatched quote (#5487). Their native paths go with forward
+// slashes and no backslash in the quoting, and a POSIX shell reads them back as the intended paths: sh here, Git Bash
+// started natively on Windows (shellRun).
 
-var assistantWindowsLaunchCases = []assistantWindowsLaunchCase{
-	{"profile", "claude", `C:\Users\Example\.persona\profiles\claude`, `C:\Persona\personad.exe`, false},
-	{"profile with a space", "claude", `C:\Users\Example User\.persona\profiles\claude`, `C:\Persona\personad.exe`, false},
-	{"managed launcher", "work", `C:\Users\Example User\.persona\profiles\work`, `C:\Program Files\Persona\personad.exe`, true},
-}
-
-// script is the -ic script assistantCLICommand builds for c on goos, launched with shell.
-func (c assistantWindowsLaunchCase) script(t *testing.T, goos, shell string) string {
+// windowsScriptNode is a node building its scripts for Windows, with bin as its personad and managed launchers.
+func windowsScriptNode(t *testing.T, bin string, managed ...string) *Node {
 	t.Helper()
-	old := assistantCLIGOOS
-	assistantCLIGOOS = goos
-	t.Cleanup(func() { assistantCLIGOOS = old })
-	n := &Node{bin: c.bin, home: t.TempDir(), dir: t.TempDir(), logger: log.New(io.Discard, "", 0)}
-	if c.managed {
-		n.managed.byID = map[string]proto.ManagedLauncher{c.launcher: {Name: c.launcher}}
+	old := shellScriptGOOS
+	shellScriptGOOS = "windows"
+	t.Cleanup(func() { shellScriptGOOS = old })
+	n := &Node{bin: bin, home: t.TempDir(), dir: t.TempDir(), logger: log.New(io.Discard, "", 0)}
+	n.managed.byID = map[string]proto.ManagedLauncher{}
+	for _, name := range managed {
+		n.managed.byID[name] = proto.ManagedLauncher{Name: name}
 	}
-	cmd := n.assistantCLICommand(shell, c.launcher, n.dir, []string{"-p"}, []string{"CLAUDE_CONFIG_DIR=" + c.profile})
-	i := slices.Index(cmd.Args, "-ic")
-	if i < 0 || i+2 >= len(cmd.Args) || cmd.Args[i+2] != "persona" {
-		t.Fatalf("not a -ic launch: %q", cmd.Args)
-	}
-	return cmd.Args[i+1]
+	return n
 }
 
-// words are the words the launch script must run: the profile directory and the command, forward-slashed.
-func (c assistantWindowsLaunchCase) words() []string {
-	words := []string{"CLAUDE_CONFIG_DIR=" + strings.ReplaceAll(c.profile, `\`, "/"), c.launcher}
-	if c.managed {
-		words = []string{words[0], strings.ReplaceAll(c.bin, `\`, "/"), "launch", c.launcher}
-	}
-	return words
-}
+// slashed is a native path as the scripts must hand it to Git Bash.
+func slashed(path string) string { return strings.ReplaceAll(path, `\`, "/") }
 
 // wordsProbe prefixes a launch script with a function printing each of its words, so a shell reports how it parsed the
 // script instead of running the launcher.
 const wordsProbe = `words() { printf '%s\n' "$@"; }; words `
 
-// On Windows the assistant's launch command crosses the native process → Git Bash argument boundary, which eats the
-// backslashes shellQuote escapes and leaves an unmatched quote (#5487). Its paths go in with forward slashes, and a
-// POSIX shell reads them back as the intended paths: sh here, Git Bash started natively on Windows (shellRun).
+// checkScriptWords fails unless script (a command line of the scripts above) has no backslash and the shell parses it
+// into want.
+func checkScriptWords(t *testing.T, script string, want ...string) {
+	t.Helper()
+	if strings.Contains(script, `\`) {
+		t.Fatalf("backslash in the Git Bash script: %s", script)
+	}
+	out, err := shellRun(t, wordsProbe+script)
+	if err != nil {
+		t.Fatalf("the shell rejected %s: %v\n%s", script, err, out)
+	}
+	if got := strings.Split(strings.TrimSuffix(out, "\n"), "\n"); !slices.Equal(got, want) {
+		t.Fatalf("the shell read %q, want %q (script %s)", got, want, script)
+	}
+}
+
+// icScript is the -ic script of cmd's arguments.
+func icScript(t *testing.T, args []string) string {
+	t.Helper()
+	i := slices.Index(args, "-ic")
+	if i < 0 || i+2 >= len(args) || args[i+2] != "persona" {
+		t.Fatalf("not a -ic launch: %q", args)
+	}
+	return args[i+1]
+}
+
 func TestAssistantCLICommandWindowsPathsUseForwardSlashes(t *testing.T) {
-	for _, c := range assistantWindowsLaunchCases {
+	for _, c := range []struct {
+		name, launcher, profile, bin string
+		managed                      bool
+	}{
+		{"profile", "claude", `C:\Users\Example\.persona\profiles\claude`, `C:\Persona\personad.exe`, false},
+		{"profile with a space", "claude", `C:\Users\Example User\.persona\profiles\claude`, `C:\Persona\personad.exe`, false},
+		{"profile with an apostrophe", "claude", `C:\Users\O'Example\.persona\profiles\claude`, `C:\Persona\personad.exe`, false},
+		{"managed launcher", "work", `C:\Users\Example User\.persona\profiles\work`, `C:\Program Files\Persona\personad.exe`, true},
+	} {
 		t.Run(c.name, func(t *testing.T) {
-			script := c.script(t, "windows", "bash")
-			if strings.Contains(script, `\`) {
-				t.Fatalf("backslash in the Git Bash script: %s", script)
+			var n *Node
+			if c.managed {
+				n = windowsScriptNode(t, c.bin, c.launcher)
+			} else {
+				n = windowsScriptNode(t, c.bin)
 			}
-			out, err := shellRun(t, wordsProbe+script)
-			if err != nil {
-				t.Fatalf("the shell rejected %s: %v\n%s", script, err, out)
+			cmd := n.assistantCLICommand("bash", c.launcher, n.dir, []string{"-p"}, []string{"CLAUDE_CONFIG_DIR=" + c.profile})
+			script, ok := strings.CutSuffix(icScript(t, cmd.Args), ` "$@"`)
+			if !ok {
+				t.Fatalf("no \"$@\": %q", cmd.Args)
 			}
-			if got, want := out, strings.Join(c.words(), "\n")+"\n"; got != want {
-				t.Fatalf("the shell read %q, want %q (script %s)", got, want, script)
+			want := []string{"CLAUDE_CONFIG_DIR=" + slashed(c.profile), c.launcher}
+			if c.managed {
+				want = []string{want[0], slashed(c.bin), "launch", c.launcher}
 			}
+			checkScriptWords(t, script, want...)
 		})
 	}
 }
 
+// The Codex assistant's app-server starts a managed launcher's personad from the same kind of script.
+func TestCodexAssistantCommandWindowsPathsUseForwardSlashes(t *testing.T) {
+	const bin = `C:\Program Files\Persona\personad.exe`
+	n := windowsScriptNode(t, bin, "box")
+	cmd := n.codexAssistantCommand("bash", "box", []string{"--listen", "stdio://"})
+	launcher, ok := strings.CutPrefix(icScript(t, cmd.Args), codexShell(""))
+	if !ok {
+		t.Fatalf("not codexShell: %q", cmd.Args)
+	}
+	checkScriptWords(t, launcher, slashed(bin), "launch", "box")
+}
+
+// The model list runs a managed Codex launcher, or plain claude with claude_start_dir, the same way.
+func TestAgentModelsCommandWindowsPathsUseForwardSlashes(t *testing.T) {
+	const bin = `C:\Program Files\Persona\personad.exe`
+	n := windowsScriptNode(t, bin, "box")
+	cmd, err := n.agentModelsCommand(context.Background(), "bash", "box", "codex", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	launcher, ok := strings.CutPrefix(icScript(t, cmd.Args), codexShell(""))
+	if !ok {
+		t.Fatalf("not codexShell: %q", cmd.Args)
+	}
+	checkScriptWords(t, launcher, slashed(bin), "launch", "box")
+
+	start := `C:\Users\Example User\.claude-work`
+	n.claudeStartDir.Store(&start)
+	cmd, err = n.agentModelsCommand(context.Background(), "bash", "claude", "claude", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	script, ok := strings.CutSuffix(icScript(t, cmd.Args), ` "$@"`)
+	if !ok {
+		t.Fatalf("no \"$@\": %q", cmd.Args)
+	}
+	checkScriptWords(t, script, "CLAUDE_CONFIG_DIR="+slashed(start), "claude")
+}
+
 // Other platforms keep their paths exactly as shellQuote has them, backslashes included.
-func TestAssistantCLICommandNonWindowsPathsUnchanged(t *testing.T) {
-	c := assistantWindowsLaunchCase{launcher: "work", profile: `/home/a\b/profile`, bin: `/opt/a\b/personad`, managed: true}
-	want := "CLAUDE_CONFIG_DIR=" + shellQuote(c.profile) + " " + shellQuote(c.bin) + ` launch work "$@"`
-	if got := c.script(t, "linux", "/bin/sh"); got != want {
-		t.Fatalf("got %q, want %q", got, want)
+func TestScriptPathsUnchangedOffWindows(t *testing.T) {
+	old := shellScriptGOOS
+	shellScriptGOOS = "linux"
+	t.Cleanup(func() { shellScriptGOOS = old })
+	const profile, bin = `/home/a\b/O'profile`, `/opt/a\b/personad`
+	n := &Node{bin: bin, home: t.TempDir(), dir: t.TempDir(), logger: log.New(io.Discard, "", 0)}
+	n.managed.byID = map[string]proto.ManagedLauncher{"work": {Name: "work"}}
+	cmd := n.assistantCLICommand("/bin/sh", "work", n.dir, nil, []string{"CLAUDE_CONFIG_DIR=" + profile})
+	if want := "CLAUDE_CONFIG_DIR=" + shellQuote(profile) + " " + shellQuote(bin) + ` launch work "$@"`; cmd.Args[2] != want {
+		t.Fatalf("got %q, want %q", cmd.Args[2], want)
+	}
+	if got, want := n.codexAssistantCommand("/bin/sh", "work", nil).Args[2], codexShell(shellQuote(bin)+" launch work"); got != want {
+		t.Fatalf("codex: got %q, want %q", got, want)
+	}
+}
+
+// scriptPath on Windows: forward slashes, double quotes only for an apostrophe nothing in the path expands around.
+func TestScriptPathWindowsQuoting(t *testing.T) {
+	old := shellScriptGOOS
+	shellScriptGOOS = "windows"
+	t.Cleanup(func() { shellScriptGOOS = old })
+	for in, want := range map[string]string{
+		`C:\Persona\personad.exe`:    `'C:/Persona/personad.exe'`,
+		`C:\Program Files\Persona`:   `'C:/Program Files/Persona'`,
+		`C:\Users\O'Example\profile`: `"C:/Users/O'Example/profile"`,
+		`C:\Users\O'Ex$ample`:        `'C:/Users/O'\''Ex$ample'`, // the known limit: still a backslash
+	} {
+		if got := scriptPath(in); got != want {
+			t.Errorf("scriptPath(%q) = %s, want %s", in, got, want)
+		}
 	}
 }
