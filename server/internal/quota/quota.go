@@ -151,6 +151,12 @@ func Do(ctx context.Context, client *http.Client, base, key string, r Request) (
 	if err != nil {
 		return Response{}, err
 	}
+	if strings.Contains(target.Path, KeyPlaceholder) {
+		// The path carries the key as one escaped segment: a key with "/" or "?" must not add segments or a query.
+		placeholder := (&url.URL{Path: KeyPlaceholder}).EscapedPath()
+		target.RawPath = strings.ReplaceAll(target.EscapedPath(), placeholder, url.PathEscape(key))
+		target.Path = strings.ReplaceAll(target.Path, KeyPlaceholder, key)
+	}
 	q := target.Query()
 	for k, vs := range q {
 		for i := range vs {
