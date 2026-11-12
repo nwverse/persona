@@ -140,7 +140,6 @@
     <string name="chat_full_text_failed">加载失败，点一下重试</string>
     <string name="chat_full_text_open">看全文（%1$s）</string>
     <string name="chat_request_collapse_full">收起完整页</string>
-    <string name="chat_request_list_title">等你处理的请求</string>
     <string name="chat_request_allow">允许</string>
     <string name="chat_request_deny">拒绝</string>
     <string name="chat_request_always_allows">总是同意会放行：%1$s</string>

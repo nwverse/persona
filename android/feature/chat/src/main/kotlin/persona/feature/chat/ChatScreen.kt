@@ -21,6 +21,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -232,7 +233,12 @@ private fun ChatPage(
     var pillOverlay by remember { mutableStateOf(false) }
     var composerOverlay by remember { mutableStateOf(false) }
     val chromeOverlay = headerOverlay || modeOverlay || pillOverlay || composerOverlay
-    var requestCollapsed by rememberSaveable { mutableStateOf(false) }
+    // Each pending card folds on its own (iOS InteractionPanel's `collapsed`); the composer stays either way.
+    val requestFolds = rememberRequestFolds()
+    // What the stack's room is read from (PendingStack.cap): the bars' and the stack's own heights.
+    var topBarHeight by remember { mutableIntStateOf(0) }
+    var footerHeight by remember { mutableIntStateOf(0) }
+    var stackHeight by remember { mutableIntStateOf(0) }
     val assistantTrays = remember(key) { AssistantTrayState() }
     var trayReview by remember(key) { mutableStateOf<String?>(null) }
     var trayApproving by remember(key) { mutableStateOf(false) }
@@ -297,8 +303,15 @@ private fun ChatPage(
     }).collectAsStateWithLifecycle()
     val requests = taps.shown(allRequests).filter { it.sessionKey == key || it.sessionKey in taskKeys }
         .sortedBy { if (it.id == chrome.requestId) 0 else 1 }
-    // the conversation's own cards are in the panel above the composer, not only behind Needs you (#4883)
-    val panel = panelRequests(renderStyle == ChatRenderStyle.Assistant, requests, key, trayReview, taps.shown(allRequests))
+    // The stack above the composer: an Agent's chat, every card it waits on; Persona's conversation, its own cards (#4883),
+    // its tasks' oldest question under the task's name and a card the tray's Review opened (#4339 C10).
+    val stack = if (renderStyle != ChatRenderStyle.Assistant) StackCards(requests, emptyMap())
+        else assistantStack(requests, key, taskKeys, taps.shown(allRequests).firstOrNull { it.id == trayReview }) { card ->
+            val raw = GroupKeys.rawKey(card.sessionKey)
+            taskTodos.firstOrNull { todo -> todo.activeAgents.any { it.key == raw } }?.title?.takeIf(String::isNotBlank)
+                ?: card.taskTitle?.takeIf(String::isNotBlank) ?: card.sessionTitle?.takeIf(String::isNotBlank)
+                ?: sessionList.firstOrNull { it.key == card.sessionKey }?.displayTitle
+        }
     val messages = chatBubbles(allMessages, key, snapshot.items)
     val composerDeliveries by (composerService?.deliveries ?: remember {
         kotlinx.coroutines.flow.MutableStateFlow(emptyMap<String, ComposerDelivery>())
@@ -1022,8 +1035,65 @@ private fun ChatPage(
                 }
             }, onVisibilityChanged = { linkVisible = it; if (it) { fullText = null; statusSheet = false } }, manager = linkManager) { linkInset ->
             BoxWithConstraints(Modifier.fillMaxSize().padding(bottom = linkInset)) {
-                val panelMax = maxHeight * 0.55f
+                val pageHeight = maxHeight
                 val trayMax = maxHeight * AssistantTrayTokens.maximumHeightFraction
+                // The pending cards above the composer (DESIGN_SYSTEM.md 4.8, iOS PendingCards): about half the page, never pushing
+                // the composer off it; with the keyboard up, what the conversation has above the rest of the footer. Derived:
+                // the bars' heights move as the header folds, the cap only now and then.
+                val pendingCards: @Composable (Boolean) -> Unit = { keyboard ->
+                    val density = LocalDensity.current
+                    val above = LocalChromeInsets.current.top
+                    val cap by remember(pageHeight, keyboard, density, above) {
+                        derivedStateOf {
+                            with(density) {
+                                PendingStack.cap(pageHeight, keyboard, rest = (footerHeight - stackHeight).coerceAtLeast(0).toDp(),
+                                    header = above + topBarHeight.toDp(), floor = Tokens.Space.xl)
+                            }
+                        }
+                    }
+                    // In a box of its own: with no cards it is nothing, and its height reads 0 again.
+                    Box(Modifier.onSizeChanged { stackHeight = it.height }) {
+                        InteractionPanel(stack.cards, machine, cap, taps.busyId, taps.uncertain, { interaction, resolution ->
+                            if (taps.canTap(interaction, allRequests, java.time.Instant.now())) {
+                                taps = taps.tapped(interaction.id)
+                                scope.launch {
+                                    try {
+                                        val result = submitInteraction { interactions.resolveOutcome(interaction.id, resolution) }
+                                        result.submission.haptic?.let(haptics)
+                                        taps = taps.answered(interaction.id, result.card)
+                                        if (result.withdraw) {
+                                            interactionFeedback = result.notice(res, interaction, resolution)
+                                            if (result.offersNext(resolution)) answeredHere++
+                                        }
+                                        notice = if (result.withdraw) null else result.notice(res, interaction, resolution)
+                                        if (result.submission == InteractionSubmission.PromptChanged || !result.withdraw) {
+                                            try { interactions.refresh() } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+                                        }
+                                    } finally { taps = taps.idle() }
+                                }
+                            }
+                        }, terminal, { overlay = it }, linkVisible = linkVisible,
+                            // a card the tray opened goes back to the tray once folded
+                            folds = requestFolds, onFold = { interaction, folded -> if (folded && interaction.id == trayReview) trayReview = null },
+                            blockedReason = if (canApprove) null else approvalBlockedReason(res, session),
+                            terminalHelp = canTerminal, onDiscardLocal = { interaction ->
+                                if (!taps.busy) {
+                                    taps = taps.tapped(interaction.id)
+                                    scope.launch {
+                                        try {
+                                            interactions.discardLocal(interaction.id)
+                                            taps = taps.discarded(interaction.id)
+                                            interactionFeedback = res.getString(R.string.chat_card_discarded_local)
+                                            notice = null
+                                        } catch (e: CancellationException) { throw e
+                                        } catch (_: Exception) {
+                                            notice = res.getString(R.string.chat_card_discard_failed)
+                                        } finally { taps = taps.idle() }
+                                    }
+                                }
+                            }, keyboard = keyboard, labels = stack.labels, first = chrome.requestId)
+                    }
+                }
                 val onOpenSibling = chrome.onOpenSession
                 val siblingSessions = if (showTopBar && renderStyle != ChatRenderStyle.Assistant && onOpenSibling != null) {
                     remember(session, sessionList) { spaceTabs(session, sessionList) }
@@ -1038,7 +1108,7 @@ private fun ChatPage(
                     scrollEdgeStyle = ScrollEdgeStyle.Gradient,
                     topScrollEdgeStyle = if (tabs || activityPill != null) TabbedChatScrollEdgeStyle else ScrollEdgeStyle.Gradient,
                     topBar = {
-                        Column {
+                        Column(Modifier.onSizeChanged { topBarHeight = it.height }) {
                             val header: @Composable () -> Unit = {
                                 Column {
                                     if (showTopBar) ChatHeader(session, machine, sessionList, controls, connection, readOnly, onBack,
@@ -1071,7 +1141,7 @@ private fun ChatPage(
                         }
                     },
                     bottomBar = {
-                        Column {
+                        Column(Modifier.onSizeChanged { footerHeight = it.height }) {
                             if (renderStyle == ChatRenderStyle.Assistant && (status.submitting || status.processing ||
                                     (status.unconfirmed && sendReceipts.isNotEmpty()))) StatusLine(status)
                             if (renderStyle != ChatRenderStyle.Assistant) ChatSessionStatusLine(status, session, snapshot.turnDurationSeconds, projection.turns.lastOrNull()?.toolCount ?: 0,
@@ -1090,48 +1160,10 @@ private fun ChatPage(
                                 nextWaiting(chrome.waiting, key)?.let { next ->
                                     NextWaitingRow(next, { offerNext = false; openRequest?.invoke(next.request.session, next.request.requestId) })
                                 }
-                            if (!readOnly && (renderStyle != ChatRenderStyle.Assistant || panel.isNotEmpty())) InteractionPanel(
-                                panel,
-                                machine, panelMax, taps.busyId, taps.uncertain, { interaction, resolution ->
-                                if (taps.canTap(interaction, allRequests, java.time.Instant.now())) {
-                                    taps = taps.tapped(interaction.id)
-                                    scope.launch {
-                                        try {
-                                            val result = submitInteraction { interactions.resolveOutcome(interaction.id, resolution) }
-                                            result.submission.haptic?.let(haptics)
-                                            taps = taps.answered(interaction.id, result.card)
-                                            if (result.withdraw) {
-                                                interactionFeedback = result.notice(res, interaction, resolution)
-                                                if (result.offersNext(resolution)) answeredHere++
-                                            }
-                                            notice = if (result.withdraw) null else result.notice(res, interaction, resolution)
-                                            if (result.submission == InteractionSubmission.PromptChanged || !result.withdraw) {
-                                                try { interactions.refresh() } catch (e: CancellationException) { throw e } catch (_: Exception) { }
-                                            }
-                                        } finally { taps = taps.idle() }
-                                    }
-                                }
-                            }, terminal, { overlay = it }, linkVisible = linkVisible,
-                                collapsed = requestCollapsed, onCollapsedChange = { requestCollapsed = it; if (it) trayReview = null },
-                                blockedReason = if (canApprove) null else approvalBlockedReason(res, session),
-                                terminalHelp = canTerminal, onDiscardLocal = { interaction ->
-                                    if (!taps.busy) {
-                                        taps = taps.tapped(interaction.id)
-                                        scope.launch {
-                                            try {
-                                                interactions.discardLocal(interaction.id)
-                                                taps = taps.discarded(interaction.id)
-                                                interactionFeedback = res.getString(R.string.chat_card_discarded_local)
-                                                notice = null
-                                            } catch (e: CancellationException) { throw e
-                                            } catch (_: Exception) {
-                                                notice = res.getString(R.string.chat_card_discard_failed)
-                                            } finally { taps = taps.idle() }
-                                        }
-                                    }
-                                })
+                            // An Agent's cards sit over the queue, the notes and the composer, as iOS's footer has them.
+                            if (!readOnly && renderStyle != ChatRenderStyle.Assistant) pendingCards(keyboard)
                             // The latest question the assistant answered here, after the agent's own cards (iOS DelegatedCard, #4339 C9).
-                            if (glass && agentChat && !readOnly && composerShown(panel, requestCollapsed))
+                            if (glass && agentChat && !readOnly)
                                 DelegatedCard(key, interactions, canSend, Modifier.padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.xs))
                             val composerError = snapshot.error.takeIf { errorLine == null }
                             (if (feedback == null) notice ?: composerError else composerError)?.let {
@@ -1157,12 +1189,11 @@ private fun ChatPage(
                                 // What waits in the agent's queue sits right above the composer, while the composer shows (Persona's further down).
                                 // Not while a "/" quick message is being picked: the list opens above the field, and with the
                                 // keyboard up the queue, the list and the status line together climbed over the top bar.
-                                if (renderStyle != ChatRenderStyle.Assistant && (requests.isEmpty() || requestCollapsed) &&
-                                    SlashCommand.suggestions(composer.value.text, clear = true).isEmpty())
+                                if (renderStyle != ChatRenderStyle.Assistant && SlashCommand.suggestions(composer.value.text, clear = true).isEmpty())
                                     ChatQueueStrip(session, chrome.actions, composer, { notice = it }, sessions::refresh)
                                 // A source that only lets the phone read says so where the typing would be.
-                                if (!canSend && session != null && (requests.isEmpty() || requestCollapsed)) ChatSourceNote(session)
-                                if (renderStyle == ChatRenderStyle.Assistant && trayReview == null) taskHost?.let { host ->
+                                if (!canSend && session != null) ChatSourceNote(session)
+                                if (renderStyle == ChatRenderStyle.Assistant) taskHost?.let { host ->
                                     val namespace = GroupKeys.namespaceOf(key.machineId)
                                     val owner = session?.manager ?: managerChoice.shown
                                     val trayRequests = taps.shown(allRequests).filter { request ->
@@ -1176,26 +1207,30 @@ private fun ChatPage(
                                         busy = trayApproving || traySending || taps.busy, enabled = canSend,
                                         onApprove = ::approveTray, onReview = { interaction ->
                                             assistantTrays.expanded = null
-                                            trayReview = interaction.id
-                                            requestCollapsed = false
+                                            // A card already in the stack: the row closes the tray onto it (DESIGN_SYSTEM.md 4.8);
+                                            // any other comes into the stack until it is answered or folded.
+                                            if (interaction.id !in stack.ids) trayReview = interaction.id
+                                            requestFolds.open(interaction.id)
                                         }, onSend = ::sendTray, onSchedule = { traySchedule = it }, onPlan = { trayPlan = it },
                                         backgroundRecords = host.backgroundRecords.isNotEmpty(), onBackground = host.onOpenBackground,
                                         under = computerPill?.let { pill -> { pill(Modifier) } },
                                         groupByOrigin = foldsBackground)
-                                    // Where the next message goes, with the composer, never only inside the In progress tray (iOS RouteChip, #4339 C15).
-                                    if (composerShown(panel, requestCollapsed)) TaskRouteChip(host)
+                                    // Where the next message goes, never only inside the In progress tray (iOS RouteChip, #4339 C15).
+                                    TaskRouteChip(host)
                                 }
+                                // Persona's cards under its entries and the route chip, over its queue and the composer, as iOS's
+                                // footer has them (DESIGN_SYSTEM.md 4.8, #4339 C10).
+                                if (renderStyle == ChatRenderStyle.Assistant) pendingCards(keyboard)
                                 // Persona's queue: its own messages, then those relayed from elsewhere, under its entries and right
                                 // above the composer, as iOS's footer has it (every style: it is behaviour; each draws its own strip, #4339 C6).
-                                if (renderStyle == ChatRenderStyle.Assistant && composerShown(panel, requestCollapsed) &&
-                                    SlashCommand.suggestions(composer.value.text, clear = true).isEmpty())
+                                if (renderStyle == ChatRenderStyle.Assistant && SlashCommand.suggestions(composer.value.text, clear = true).isEmpty())
                                     ChatQueueStrip(session, chrome.actions, composer, { notice = it }, sessions::refresh)
                                 val claudeCommands = session?.canTypeClaudeCommands == true
                                 ChatComposer(key, composer, session?.status == "working", sending || submittedDraft != null,
                                     // /clear and /model type into Claude's pane: Claude in a terminal engine only (positive check).
                                     canClear = clearingPane == null && session?.canTypeClaudeCommands == true,
                                     service = composerService, onSend = { send() }, onCommand = { send(it) }, onNotice = { notice = it },
-                                    extraContent = linkContexts.isNotEmpty(), visible = composerShown(panel, requestCollapsed),
+                                    extraContent = linkContexts.isNotEmpty(),
                                     enabled = canSend, placeholder = when {
                                         !canSend -> READ_ONLY.text()
                                         // "Ask Persona…", as the assistant's blank page and iOS say (#4339 C18).
