@@ -8,7 +8,7 @@ import { attentionReason, backgroundWaiting, externalLink, failureReason, isStop
 import { conversationPage } from "../../lib/conversation-page";
 import { navigate, type SessionView } from "../../lib/router";
 import { canShowTerminal, composerSlot, otherView, useSessionView, viewOnlyRow } from "../../lib/session-view";
-import { resumeAgent, terminalResume } from "../../lib/agent-resume";
+import { resumeInTerminal, terminalResume } from "../../lib/agent-resume";
 import { openLink } from "../../lib/links";
 import { getPanel, openPanel, togglePanel, usePanel } from "../../lib/panel";
 import { backgroundPanelOf, hasBackgroundWork, isWorkflowsCommand, latestWorkflowRun, openBackgroundPanel, provideBackgroundChat, toggleBackgroundPanel, WORKFLOWS_COMMAND } from "../../lib/background-panel";
@@ -1712,6 +1712,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
         topCenter={topCenter}
         view={switchable ? view : undefined}
         onView={switchable ? setView : undefined}
+        onTerminal={openTerminal}
         viewDot={view === "term" && (interactions.length > 0 || state === "needs_you")}
         actions={headerActions}
         team={team}
@@ -2160,6 +2161,7 @@ export const Header = memo(function Header({
   topCenter,
   view,
   onView,
+  onTerminal,
   viewDot,
   actions,
   team,
@@ -2182,6 +2184,8 @@ export const Header = memo(function Header({
   /** On an agent's page with a terminal to show: the view in the middle, and how to change it (the terminal button). */
   view?: SessionView;
   onView?: (view: SessionView) => void;
+  /** Shows the agent's terminal as its stopped line's Terminal does (in place, or its page's terminal view). */
+  onTerminal?: () => void;
   /** The conversation has something that wants an answer while the terminal is shown. */
   viewDot?: boolean;
   /** The page's own buttons, at the end of the right side (ChatView `headerActions`). */
@@ -2219,13 +2223,12 @@ export const Header = memo(function Header({
   const [sharingOpen, setSharingOpen] = useState(false);
   const allowed = session ? sessionMenuActions(session) : [];
   const attach = () => session && attachLive(session);
-  // Resume in terminal (#5521): a stopped Agent comes back in a terminal on its computer, shown in place of the chat
+  // Resume in terminal (#5521): a stopped Agent comes back in a terminal on its computer. The same action as its stopped
+  // line's Resume: the terminal shown as that line's Terminal shows it, then the Resume both share.
   const machine = useStore((s) => s.machines.find((m) => m.id === session?.machine_id));
-  const resumeOffer = terminalResume(session, machine);
+  const resumeOffer = onTerminal ? terminalResume(session, machine) : "hidden";
   const resumeHere = () => {
-    if (!session) return;
-    if (view === "chat") onView?.("term"); // where the resumed Agent shows up; Resume's progress and error show there too
-    void resumeAgent(session.machine_id, session.session_id);
+    if (session && onTerminal) void resumeInTerminal(session.machine_id, session.session_id, onTerminal);
   };
   // a task's or an Agent's side panel leaves the space's other agents out of ⋯
   const others = chrome ? [] : siblings.filter((s) => s.session_id !== session?.session_id);

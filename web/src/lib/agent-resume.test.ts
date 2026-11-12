@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
-import { clearResume, resumeAgent, resumeState, subscribeResume, terminalResume } from "./agent-resume";
+import { clearResume, resumeAgent, resumeInTerminal, resumeState, subscribeResume, terminalResume } from "./agent-resume";
 import type { Session } from "./types";
 
 afterEach(() => {
@@ -52,6 +52,19 @@ describe("Resume a stopped Agent (#4754)", () => {
     expect(fetch.mock.calls[0][0]).toBe("/api/v1/sessions");
     expect(fetch.mock.calls[0][1].method).toBe("POST");
     expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ machine_id: "m1", resume_session_id: "s1" });
+  });
+});
+
+describe("Resume in terminal (#5521): the stopped line's Resume and ⋯'s item are one action", () => {
+  it("shows the terminal first, then posts the same resume", async () => {
+    const order: string[] = [];
+    const post = vi.fn(async () => {
+      order.push("post");
+      return {};
+    });
+    expect(await resumeInTerminal("m1", "s1", () => order.push("terminal"), post)).toBe(true);
+    expect(order).toEqual(["terminal", "post"]);
+    expect(post).toHaveBeenCalledWith("/sessions", { method: "POST", json: { machine_id: "m1", resume_session_id: "s1" } });
   });
 });
 

@@ -71,6 +71,13 @@ export async function resumeAgent(mid: string, sid: string, post: Post = (path, 
   }
 }
 
+/** Resume in terminal (#5521): shows the session's terminal (`openTerminal`), where the resumed Agent comes up, and
+ *  resumes it there. The one action behind the stopped line's Resume and the chat's ⋯ › Resume in terminal. */
+export function resumeInTerminal(mid: string, sid: string, openTerminal: () => void, post?: Post): Promise<boolean> {
+  openTerminal();
+  return resumeAgent(mid, sid, post);
+}
+
 export function useResume(mid: string, sid: string): ResumeState {
   return useSyncExternalStore(subscribeResume, () => resumeState(mid, sid));
 }
