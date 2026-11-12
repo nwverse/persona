@@ -703,12 +703,13 @@ function Models() {
   // what a stored provider opens with when a paste goes on with it
   const [editDraft, setEditDraft] = useState<EditDraft | null>(null);
 
+  // the list read again; rejects when it couldn't be
+  const refresh = () => loadLaunchers<LauncherView>().then((r) => (setList(r.launchers), setSync(r.sync ?? []), r.launchers));
   const load = () => {
     setLoading(true);
     setError("");
-    return loadLaunchers<LauncherView>()
-      .then((r) => (setList(r.launchers), setSync(r.sync ?? []), r.launchers))
-      .catch((e) => void setError(errorText(e)))
+    return refresh()
+      .catch((e) => setError(errorText(e)))
       .finally(() => setLoading(false));
   };
   useEffect(() => void load(), []);
@@ -717,7 +718,14 @@ function Models() {
   // The wizard swaps to a stored provider the paste matched; one added since this list loaded is in a fresh one.
   const editWith = async (name: string, draft: EditDraft) => {
     const find = (ls?: LauncherView[] | null) => ls?.find((l) => managedProvider(l.source) && l.name === name);
-    const l = find(list) ?? find(await load());
+    let l = find(list);
+    if (!l) {
+      try {
+        l = find(await refresh());
+      } catch (e) {
+        return toast(t("settings.launchers_failed", { error: errorText(e) }), "error");
+      }
+    }
     if (!l) return toast(t("settings.provider_missing", { name }), "error");
     setEditDraft(draft);
     setEditing(l);

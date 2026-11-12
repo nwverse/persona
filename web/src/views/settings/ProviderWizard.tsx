@@ -174,6 +174,8 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, found
   // ① shows the paste view instead of the list; what was pasted and read stays for this opening (#5193)
   const [pasting, setPasting] = useState(false);
   const [paste, setPaste] = useState<PasteState>(newPaste);
+  // the gateway's form holds a paste's draft: picking the gateway by hand starts from an empty one
+  const pasteFilled = useRef(false);
   // "More options": a preset's names and model, a gateway's startup ID
   const [more, setMore] = useState(false);
   // null: not touched, so it follows the readiness (off while Claude Code already answers)
@@ -240,6 +242,7 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, found
     setMore(false);
     setPasting(false);
     setPaste(newPaste());
+    pasteFilled.current = false;
     setStep(old ? draft?.step ?? "connect" : "pick");
     if (!isNew) return;
     setChoice("");
@@ -300,6 +303,11 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, found
       setPf({ ...NO_PRESET_FORM, model: p ? presetDefaultModel(p) : "" });
       setMore(false);
     }
+    if (id === CUSTOM && pasteFilled.current) {
+      pasteFilled.current = false;
+      setF(newForm());
+      setMore(false);
+    }
     setChoice(id);
     setStep(id === CUSTOM ? "connect" : "key");
   };
@@ -313,6 +321,7 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, found
     if (action.type !== "new") return onEditWith?.(action.provider, editDraft(d, action.type));
     setError("");
     setF(draftForm(d));
+    pasteFilled.current = true;
     setChoice(CUSTOM);
     setStep("connect");
   };

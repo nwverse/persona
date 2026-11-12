@@ -24,10 +24,11 @@ vi.mock("./settings/ProviderImport", () => ({ ProviderImport: (p: unknown) => ((
 vi.mock("../lib/pwa", async (original) => ({ ...(await original<typeof import("../lib/pwa")>()), useInstall: () => "installed" }));
 const GW = { name: "gw_full", display_name: "Team gateway", source: "persona", base_url: "https://gw.example.com" };
 const IMPORTED = { name: "relay", source: "persona", base_url: "https://relay.example.org", origin: "zshrc:cc_relay@laptop" };
-const LIST = vi.hoisted(() => ({ launchers: [] as unknown[] }));
+// `fail`: reading the list again fails with this
+const LIST = vi.hoisted(() => ({ launchers: [] as unknown[], fail: "" }));
 vi.mock("../lib/api", async (original) => ({
   ...(await original<typeof import("../lib/api")>()),
-  api: (path: string) => Promise.resolve(path === "/launchers" ? { launchers: LIST.launchers } : {}),
+  api: (path: string) => (path === "/launchers" && LIST.fail ? Promise.reject(new Error(LIST.fail)) : Promise.resolve(path === "/launchers" ? { launchers: LIST.launchers } : {})),
 }));
 const toasts = vi.hoisted(() => [] as string[]);
 vi.mock("../ui/atoms", async (original) => ({ ...(await original<typeof import("../ui/atoms")>()), toast: (text: string) => void toasts.push(text) }));
@@ -45,6 +46,7 @@ const DRAFT: EditDraft = { step: "models", models: [{ id: "example-5-air" }] };
 
 beforeEach(async () => {
   toasts.length = 0;
+  LIST.fail = "";
   LIST.launchers = [
     GW,
     IMPORTED,
@@ -94,5 +96,13 @@ describe("model providers: paste and found aliases", () => {
     await flush();
     expect(wizard().existing).toBeNull();
     expect(toasts).toEqual([t("settings.provider_missing", { name: "gw_gone" })]);
+  });
+
+  it("says the list couldn't be read, not that the provider is gone, when reading it again fails", async () => {
+    LIST.fail = "hub unreachable";
+    await act(async () => wizard().onEditWith!("gw_new", DRAFT));
+    await flush();
+    expect(wizard().existing).toBeNull();
+    expect(toasts).toEqual([t("settings.launchers_failed", { error: "hub unreachable" })]);
   });
 });
