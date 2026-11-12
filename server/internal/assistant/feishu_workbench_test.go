@@ -180,6 +180,49 @@ func TestWorkbenchButtonOnEveryCard(t *testing.T) {
 	}
 }
 
+// Navigation added at different times still forms one footer. Approval and form callbacks keep their own row, and the
+// card-size guard still leaves Workbench off an oversized card (#5317).
+func TestWorkbenchFooterKeepsNavigationTogether(t *testing.T) {
+	e := newWorkbenchEnv(t, workbenchOnFeatures)
+	t.Run("navigation", func(t *testing.T) {
+		card := feishubot.NewCard("", "", "answer").Note("Main chat").Buttons(feishubot.LinkBtn("Open on web", "https://example.com"))
+		e.s.workbenchStamp(context.Background(), card)
+		if got := strings.Count(card.JSON(), `"tag":"column_set"`); got != 1 {
+			t.Fatalf("navigation actions occupy %d rows: %s", got, card.JSON())
+		}
+		row := card.Body.Elements[len(card.Body.Elements)-1].(map[string]any)
+		if got := len(row["columns"].([]any)); got != 2 {
+			t.Fatalf("the shared navigation row has %d buttons: %s", got, card.JSON())
+		}
+		if js := card.JSON(); !strings.Contains(js, `"type":"open_url"`) || !strings.Contains(js, `"to":"home"`) {
+			t.Fatalf("a navigation behavior changed: %s", js)
+		}
+	})
+	t.Run("callbacks stay independent", func(t *testing.T) {
+		card := feishubot.NewCard("", "", "approval").Buttons(feishubot.Btn("Allow", feishubot.Primary, map[string]any{"allow": true}))
+		e.s.workbenchStamp(context.Background(), card)
+		if got := strings.Count(card.JSON(), `"tag":"column_set"`); got != 2 {
+			t.Fatalf("an approval action was merged with navigation: %s", card.JSON())
+		}
+	})
+	t.Run("mixed actions stay independent", func(t *testing.T) {
+		card := feishubot.NewCard("", "", "approval").Buttons(
+			feishubot.LinkBtn("Open on web", "https://example.com"),
+			feishubot.Btn("Allow", feishubot.Primary, map[string]any{"allow": true}))
+		e.s.workbenchStamp(context.Background(), card)
+		if got := strings.Count(card.JSON(), `"tag":"column_set"`); got != 2 {
+			t.Fatalf("a mixed action row was merged with navigation: %s", card.JSON())
+		}
+	})
+	t.Run("size guard", func(t *testing.T) {
+		card := feishubot.NewCard("", "", "large").Markdown(strings.Repeat("x", workbenchStampMost)).Buttons(feishubot.LinkBtn("Open on web", "https://example.com"))
+		e.s.workbenchStamp(context.Background(), card)
+		if strings.Contains(card.JSON(), `"to":"home"`) {
+			t.Fatalf("the oversized card gained a workbench button: %d bytes", len(card.JSON()))
+		}
+	})
+}
+
 // /start asks for a permission mode before what to do, offering every mode the agents take; the mode picked goes to
 // the agent's start, one that is not a mode does not.
 func TestWorkbenchStartAsksForAPermissionMode(t *testing.T) {
