@@ -21,7 +21,7 @@ import (
 // fields differ from them (a field added, renamed, retyped or retagged by a change that did not update this file),
 // appendSession leaves every session to the reflect encoder: the session is sent whole, only slower, until its line
 // here and this hash are brought up to date. TestSessionWireMatchesReflect fails meanwhile and prints the new hash.
-const sessionWireLayout = 0x2537a85cc88c7042
+const sessionWireLayout = 0x375815a2ca60a60b
 
 var sessionWireCurrent = sessionLayout() == sessionWireLayout && hierarchyLayout() == hierarchyWireLayout
 
@@ -124,6 +124,9 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 	if s.UltracodeLostAt != nil {
 		w.time(`"ultracode_lost_at":`, *s.UltracodeLostAt)
 	}
+	if s.PendingSwitch != nil {
+		w.value(`"pending_switch":`, s.PendingSwitch)
+	}
 	w.integer(`"context_tokens":`, int64(s.ContextTokens), true)
 	w.integer(`"context_window":`, int64(s.ContextWindow), true)
 	w.integer(`"output_tokens":`, int64(s.OutputTokens), true)
@@ -133,8 +136,8 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 		w.value(`"service_tiers":`, s.ServiceTiers)
 	}
 	w.str(`"space":`, s.Space, true)
-	if !s.ArchiveChangedAt.IsZero() {
-		w.time(`"archive_changed_at":`, s.ArchiveChangedAt)
+	if s.ArchiveChangedAt != nil {
+		w.time(`"archive_changed_at":`, *s.ArchiveChangedAt)
 	}
 	if s.NativeArchive != nil {
 		w.value(`"native_archive":`, s.NativeArchive)
