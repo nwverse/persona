@@ -292,7 +292,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   }, [becameThread, inPage, mid]);
   // a lead's Team panel (#5180, lib/team.ts): opened and closed by itself with cindy's timing; never in a worker's own
   // conversation (embedded), a task's or an Agent's side panel (whose place the Team panel would take) or a Persona chat
-  const leads = !embedded && !chrome && !assistant;
+  const inPanel = Boolean(chrome);
+  const leads = !embedded && !inPanel && !assistant;
   useTeamReveal(mid, sid, session, leads);
   const panel = usePanel();
   // drawn: ⌘⇧↵ (the middle alone) keeps a wide screen's panel open but not drawn, so it shows nothing there
@@ -1083,7 +1084,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       // stopped as a running turn can, as the Interrupt button shows for both
       // a worker's conversation in a Team panel, and an Agent's in a task's or an Agent's side panel, leave Esc to the
       // panel (it closes it) and to the page beside it
-      if (embedded || chrome) return;
+      if (embedded || inPanel) return;
       if (e.key === "Escape" && (state === "working" || awaiting) && view !== "term" && !document.querySelector("[role=dialog],[role=menu]")) {
         e.preventDefault();
         void interrupt();
@@ -1092,7 +1093,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     addEventListener("keydown", key);
     return () => removeEventListener("keydown", key);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state, awaiting, session, view, embedded, chrome]);
+  }, [state, awaiting, session, view, embedded, inPanel]);
 
   // The hub says its turn is over and a workflow it launched keeps it working (#3434): the exchange is drawn finished
   // (its work folded, the run's card inside it), and the running bar says the workflow, timed from its start, instead
@@ -1549,7 +1550,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // a narrow screen's cards fold and its dock keeps to DOCK_MAX (#1282)
   // a worker's conversation in a Team panel (embedded) and a task's or an Agent's side panel are a phone's width, so
   // their docks are one too: unbounded there, a plan with a question and a permission stood taller than the panel (#1282)
-  const compactDock = narrow || Boolean(embedded) || Boolean(chrome);
+  const compactDock = narrow || Boolean(embedded) || inPanel;
   const short = useMedia(SHORT);
   const [typing, setTyping] = useState(false);
   const keyboard = typing && !fine;
