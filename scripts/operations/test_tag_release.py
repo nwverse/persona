@@ -163,6 +163,51 @@ class TagReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(tag_release.ConfigError, "verification"):
                 tag_release.upload("example/project", "v1.0.0", assets)
 
+    def test_old_gh_without_digests_uses_rest_and_downloads_as_a_last_resort(self):
+        artifact = self.root / "Persona-1.0.0.apk"
+        artifact.write_bytes(b"signed")
+        assets = [{"path": str(artifact), "name": artifact.name}]
+        digest = tag_release.hashlib.sha256(artifact.read_bytes()).hexdigest()
+        without_digest = {"tagName": "v1.0.0", "isDraft": False,
+                          "assets": [{"name": artifact.name, "size": len(b"signed")}]}
+        with patch.object(tag_release.subprocess, "check_output", side_effect=[
+                json.dumps(without_digest),
+                json.dumps({"assets": [{"name": artifact.name, "size": len(b"signed"), "digest": "sha256:" + digest}]})]) as api:
+            tag_release.upload("example/project", "v1.0.0", assets)
+            self.assertEqual(api.call_args.args[0],
+                             ["gh", "api", "repos/example/project/releases/tags/v1.0.0"])
+
+        def output(command, **kwargs):
+            if command[-1] == "tagName,isDraft,assets":
+                return json.dumps({"tagName": "v1.0.0", "isDraft": False, "assets": []})
+            if command[-1] == "assets":
+                return json.dumps([{"name": artifact.name, "size": len(b"signed")}])
+            if command[-1] == "repos/example/project/releases/tags/v1.0.0":
+                return json.dumps({"assets": [{"name": artifact.name, "size": len(b"signed"),
+                                               "url": "https://api.github.com/repos/example/project/releases/assets/42"}]})
+            self.assertEqual(command, ["gh", "api", "-H", "Accept: application/octet-stream",
+                                       "https://api.github.com/repos/example/project/releases/assets/42"])
+            return artifact.read_bytes()
+
+        with patch.object(tag_release.subprocess, "run"), patch.object(tag_release.subprocess, "check_output", side_effect=output):
+            tag_release.upload("example/project", "v1.0.0", assets)
+
+        for bad in (b"replaced", b"short"):
+            with self.subTest(body=bad), patch.object(tag_release.subprocess, "run"), \
+                    patch.object(tag_release.subprocess, "check_output", side_effect=[
+                        json.dumps(without_digest),
+                        json.dumps({"assets": [{"name": artifact.name, "size": len(b"signed"),
+                                                "url": "https://api.github.com/repos/example/project/releases/assets/42"}]}),
+                        bad]):
+                with self.assertRaisesRegex(tag_release.ConfigError, "verification"):
+                    tag_release.upload("example/project", "v1.0.0", assets)
+
+        with patch.object(tag_release.subprocess, "check_output", side_effect=[
+                json.dumps(without_digest),
+                json.dumps({"assets": [{"name": artifact.name, "size": len(b"signed"), "digest": "sha256:" + "0" * 64}]})]):
+            with self.assertRaisesRegex(tag_release.ConfigError, "verification"):
+                tag_release.upload("example/project", "v1.0.0", assets)
+
     def release_receipt(self, build=202611110749, binary_builds=None):
         """A hub receipt as publish.sh leaves it: personad for this machine (a script answering version -v), one for
         another platform (bytes with its build number, as -X main.build leaves it) and latest.json over them.

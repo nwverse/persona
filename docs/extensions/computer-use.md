@@ -368,9 +368,10 @@ displays to offer; on a narrow screen the button keeps only its icon). The rules
   framebuffer changes size (a display plugged in or out, another resolution), so a chosen display that comes back is shown again
   without a reload, and as the menu opens, so its list is the Mac's as the choice is made. Two displays of one size swapped while the
   menu stays closed keep the old crop until it opens.
-- **Loading**: the menu (`screen/DisplayMenu.tsx`) is imported once there is a choice to offer, so its words (`screen-displays`) stay
-  out of the first screen's catalog. One that would not load (offline, the hub redeployed) leaves every display shown and is asked for
-  again the next time the screen goes live.
+- **Loading**: the menu (`screen/DisplayMenu.tsx`) is a chunk of its own, so its words (`screen-displays`) stay out of the first
+  screen's catalog. It is fetched while a Mac whose status lists several displays connects, and the page crops to a kept display only
+  once it is in, so a cropped picture always has the menu to go back. One that would not load (offline, the hub redeployed) leaves
+  every display shown and is asked for again as the connection moves on.
 - Pages an app embeds (`embed=1`) have no top bar: they show every display and ignore a choice this browser kept.
 - **Tests**: `web/src/screen/displays.test.ts`, `ScreenView.displays.test.tsx`, and in a real browser against the mock hub
   (`MOCK_COMPUTER=ready MOCK_SCREEN=fake MOCK_SCREEN_DISPLAYS=2:node`) `node web/e2e/screen-displays.mjs <web URL> <mock hub URL>`: the

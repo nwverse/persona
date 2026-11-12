@@ -953,9 +953,9 @@ nonisolated enum Theme {
         /// The colors that travel around the composer while a reply is generating (Glow While Replying, `ComposerGlow`):
         /// blue through violet to pink, each in its light and dark shade.
         static let composerGlow: [Color] = [Hue.blue, Hue.indigo, Hue.purple, Hue.pink]
-        /// Reserve most of the keyboard-visible viewport for the conversation, not the draft.
-        static let composerHeightFraction: CGFloat = 0.22
-        static let composerMinimumLines = 3
+        /// iPhone and iPad drafts grow through six lines before scrolling; keyboard height does not lower the cap.
+        static let composerPhoneMaximumLines = 6
+        /// The shared Mac/visionOS composer retains its existing eight-line cap.
         static let composerMaximumLines = 8
         /// Text and TextField round line heights differently; half a line distinguishes adjacent counts.
         static let composerLineTolerance: CGFloat = 0.5
