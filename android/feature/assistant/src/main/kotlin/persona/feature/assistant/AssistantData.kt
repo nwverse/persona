@@ -28,8 +28,8 @@ import java.util.UUID
 /**
  * The drawer's Persona chats (#4331): [main] the main conversation (its own row, above the search), [directions] the
  * leader conversations under their [names] ("常驻", in the hub's order), and [others] every other conversation, which
- * "All chats" lists and a search narrows. [counts] each leader's open tasks, by session id. [recent] the user's own newest
- * chats between 常驻 and All chats (#4922), none while searching. [background] the built-in background supervisor's
+ * "All chats" lists and a search narrows. [counts] each leader's open tasks, by session id. [recent] the newest eligible
+ * chats between 常驻 and All chats (#4922, #5196), none while searching. [background] the built-in background supervisor's
  * conversation id (#4927): it is one of [others], under its own name, and its row has no pin, archive or end.
  */
 internal data class ConversationGroups(
@@ -45,15 +45,33 @@ internal const val RECENT_LIMIT = 5
 /** Origins of the user's own chats (docs/protocol/protocol.md "Origin of assistant chats"): the app, a channel's /new, or none from an older hub. */
 private val USER_ORIGINS = setOf("", "user", "channel")
 
+/** Where Persona opened a chat, shared by Recent, 常驻, search and All chats (#5196); unknown origins share [Other]. */
+internal enum class AssistantConversationOrigin(val id: String, @StringRes val labelRes: Int) {
+    Inbox("inbox", R.string.assistant_origin_inbox),
+    Task("task", R.string.assistant_origin_task),
+    LarkAgent("lark_agent", R.string.assistant_origin_lark_agent),
+    Spawned("spawned", R.string.assistant_origin_spawned),
+    Extension("extension", R.string.assistant_origin_extension),
+    Other("other", R.string.assistant_origin_other),
+}
+
+/** Null for the user's own chat, otherwise the one source mapping used by every conversation row. */
+internal fun automaticConversationOrigin(origin: String?): AssistantConversationOrigin? {
+    val id = origin?.trim().orEmpty()
+    if (id in USER_ORIGINS) return null
+    return AssistantConversationOrigin.entries.firstOrNull { it.id == id && it != AssistantConversationOrigin.Other }
+        ?: AssistantConversationOrigin.Other
+}
+
 /**
- * The drawer's Recent (#4922, web `recentConversations`, iOS `AssistantSidebarGroups.recent`): the conversations that are
- * not the main one, not a leader, not archived and not opened by Persona itself (the inbox, a task, Lark /agent, a spawned
- * chat, an extension, the background supervisor: those stay in All chats only), newest first, equal times by session id, at most [limit].
+ * The drawer's Recent (#4922, #5196; web `recentConversations`, iOS `AssistantSidebarGroups.recent`): every conversation
+ * that is not the main one, not a leader, not archived and not the built-in background supervisor, newest first, equal
+ * times by session id, at most [limit]. Automatic chats carry their source's mark; only the supervisor stays in All chats.
  */
 internal fun recentConversations(snapshot: AssistantSnapshot, limit: Int = RECENT_LIMIT): List<Session> {
     val leaders = snapshot.leaders.toSet()
     return snapshot.conversations.distinctBy { it.key }
-        .filter { it.key != snapshot.mainSession && it.sessionId !in leaders && !it.archived && it.origin?.trim().orEmpty() in USER_ORIGINS &&
+        .filter { it.key != snapshot.mainSession && it.sessionId !in leaders && !it.archived &&
             it.sessionId != snapshot.backgroundSupervisor }
         .map { it to it.updated }
         .sortedWith(compareByDescending<Pair<Session, java.time.Instant?>> { it.second }.thenBy { it.first.sessionId })

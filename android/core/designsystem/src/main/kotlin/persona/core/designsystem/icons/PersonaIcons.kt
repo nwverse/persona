@@ -268,6 +268,8 @@ object PersonaIcons {
     val retry: PhIcon get() = PhIcons.ArrowClockwise
     /** SF Symbol `play.fill`. */
     val run: PhIcon get() = PhIcons.Play
+    /** SF Symbol `alarm`. */
+    val schedule: PhIcon get() = PhIcons.Clock
     /** SF Symbol `display`. */
     val screen: PhIcon get() = PhIcons.Monitor
     /** SF Symbol `magnifyingglass`. */

@@ -533,6 +533,10 @@
       "sf": "magnifyingglass",
       "phosphor": "magnifying-glass"
     },
+    "schedule": {
+      "sf": "alarm",
+      "phosphor": "clock"
+    },
     "send": {
       "sf": "arrow.up",
       "phosphor": "arrow-up"

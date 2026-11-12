@@ -253,8 +253,8 @@ class AssistantDrawerShotsTest {
         capture("drawer-all-chats-glass-light")
     }
 
-    // #4922: Recent, the user's own newest chats, between 常驻 and All chats (which still lists everything), in every style,
-    // light and dark; no Recent heading when nothing qualifies.
+    // #4922 / #5196: every newest chat, including automatic ones with their source mark, between 常驻 and All chats
+    // (which still lists everything), in every style, light and dark; no Recent heading when the group is empty.
     @Test fun drawsRecentBetweenTheLeadersAndAllChats() {
         var style by mutableStateOf(AppStyle.Glass)
         var dark by mutableStateOf(false)
@@ -274,7 +274,8 @@ class AssistantDrawerShotsTest {
         val top = { text: String -> rule.onNodeWithText(text).fetchSemanticsNode().boundsInRoot.top }
         rule.onNodeWithText("最近").assertExists()
         assertTrue("常驻 › 最近 › 全部对话", top("常驻") < top("最近") && top("最近") < top("整理收件箱") && top("周末去哪儿") < top("全部对话（3）"))
-        rule.onNodeWithText("收件箱分身").assertDoesNotExist()
+        rule.onNodeWithText("收件箱分身").assertExists()
+        rule.onNodeWithContentDescription("收件箱", useUnmergedTree = true).assertExists()
         for (s in AppStyle.entries) for (d in listOf(false, true)) {
             style = s; dark = d
             androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
@@ -283,6 +284,48 @@ class AssistantDrawerShotsTest {
         groups = groups.copy(recent = emptyList())
         rule.waitForIdle()
         rule.onNodeWithText("最近").assertDoesNotExist()
+    }
+
+    // #5196: automatic conversations carry their source's mark everywhere the same row is drawn. The user's own chat
+    // keeps its latest-message channel mark; an automatic chat's source takes precedence over that channel.
+    @Test fun drawsSourceMarksInRecentLeadersSearchAndAllChats() {
+        val origins = listOf("inbox", "task", "lark_agent", "spawned", "extension", "something_new")
+        val titles = listOf("Inbox chat", "Scheduled chat", "Lark chat", "Spawned chat", "Extension chat", "Other chat")
+        val sources = origins.mapIndexed { index, origin ->
+            Session(machineId = "hub", sessionId = "auto-$index", title = titles[index], origin = origin,
+                channels = if (origin == "lark_agent") listOf("feishu") else emptyList())
+        }
+        val own = Session(machineId = "hub", sessionId = "own", title = "Own chat", origin = "user", channels = listOf("feishu"))
+        val lead = sources[1].copy(sessionId = "lead", title = "Leader chat")
+        var query by mutableStateOf("")
+        var groups by mutableStateOf(ConversationGroups(main = main, directions = listOf(lead), others = sources + own,
+            recent = sources + own, names = mapOf("lead" to "Leader chat")))
+        rule.setContent {
+            CompositionLocalProvider(LocalChannels provides listOf(persona.core.contracts.api.HubChannel(id = "feishu", name = "Feishu channel"))) {
+                PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
+                    Box(Modifier.testTag("shot").width(400.dp).height(1700.dp).background(PersonaTheme.palette.background)) {
+                        AssistantDrawer(query, { query = it }, groups, active = null, hasMain = true, onEnd = null,
+                            onMain = {}, onOpen = {}, onInfo = {}, onNew = {}, onSettings = {})
+                    }
+                }
+            }
+        }
+        val labels = listOf("收件箱", "定时任务", "飞书 /agent", "对话派生", "扩展", "其他")
+        fun assertMarks() {
+            labels.forEach { label ->
+                assertTrue("$label has no accessible source mark",
+                    rule.onAllNodesWithContentDescription(label, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty())
+            }
+            assertEquals("only the user's own chat uses the channel mark", 1,
+                rule.onAllNodesWithContentDescription("Feishu channel", useUnmergedTree = true).fetchSemanticsNodes().size)
+        }
+        assertMarks() // Recent and 常驻.
+        rule.onNodeWithText("全部对话（7）").performScrollTo().performClick()
+        assertMarks() // All chats.
+        query = "chat"
+        groups = groups.copy(recent = emptyList())
+        rule.waitForIdle()
+        assertMarks() // Search results.
     }
 
     // #5084: the built-in background supervisor waits under All chats with the chats Persona opened itself, under the
@@ -309,7 +352,7 @@ class AssistantDrawerShotsTest {
         rule.onNodeWithText("后台督办").assertDoesNotExist()
         rule.onNodeWithText("全部对话（4）").performClick()
         rule.onNodeWithText("后台督办").assertExists()
-        rule.onNodeWithText("每日早报").assertExists()
+        rule.onAllNodesWithText("每日早报").assertCountEquals(2) // Recent and All chats, with the same Scheduled mark.
         rule.onAllNodesWithText("Background supervisor").assertCountEquals(0)
         for (s in AppStyle.entries) for (d in listOf(false, true)) {
             style = s; dark = d
@@ -318,16 +361,16 @@ class AssistantDrawerShotsTest {
         }
         style = AppStyle.Glass; dark = false
         rule.waitForIdle()
-        // The rows with a menu, top to bottom: Persona, the two recent chats, then All chats newest first, where the
+        // The rows with a menu, top to bottom: Persona, the three recent chats, then All chats newest first, where the
         // background supervisor (3 minutes ago) is first.
-        rule.onAllNodesWithContentDescription("对话操作")[3].performClick()
+        rule.onAllNodesWithContentDescription("对话操作")[4].performClick()
         rule.onNodeWithText("拷贝会话 ID").assertExists()
         rule.onAllNodesWithText("设为常驻").assertCountEquals(0)
         rule.onAllNodesWithText("归档").assertCountEquals(0)
         rule.onAllNodesWithText("结束…").assertCountEquals(0)
         rule.onNodeWithText("拷贝会话 ID").performClick()
         // any other chat there keeps its whole menu
-        rule.onAllNodesWithContentDescription("对话操作")[4].performClick()
+        rule.onAllNodesWithContentDescription("对话操作")[5].performClick()
         rule.onNodeWithText("设为常驻").assertExists()
         rule.onNodeWithText("归档").assertExists()
         rule.onNodeWithText("结束…").assertExists()
