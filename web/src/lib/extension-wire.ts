@@ -345,25 +345,36 @@ export interface Contributes {
 
 /**
  * A skill (docs "Declarative contributions"): a directory of the package with SKILL.md, put in with the assistant's
- * skills.
+ * skills. With source data (docs "Assistant content from the data directory"): a directory of the extension's data
+ * directory whose subdirectories with a SKILL.md are skills its program writes (Markdown files only, 256 KB and 32
+ * skills per extension).
  */
 export interface SkillItem {
   id: string;
-  /** The directory, relative to the package. */
+  /** The directory, relative to the package (or to the data directory with source data). */
   dir: string;
+  source?: ContentSource;
 }
+
+/**
+ * Where a skill's or a prompt's files are: package (the default) or data, the extension's data directory, which its
+ * program writes and upgrades keep.
+ */
+export type ContentSource = "package" | "data" | (string & {});
+export const CONTENT_SOURCES = ["package", "data"] as const;
 
 export type PromptKind = "instructions" | "quick" | (string & {});
 export const PROMPT_KINDS = ["instructions", "quick"] as const;
 
 /**
- * A prompt: instructions (a .md of the package added to the assistant's CLAUDE.md) or quick (a template the apps
- * offer in the message box).
+ * A prompt: instructions (a .md of the package, or with source data of the data directory, added to the assistant's
+ * CLAUDE.md) or quick (a template the apps offer in the message box).
  */
 export interface PromptItem {
   id: string;
   kind: PromptKind;
-  /** instructions: the .md file. */
+  source?: ContentSource;
+  /** instructions: the .md file (with source data: at most 6 KB, adopted at most once a day). */
   file?: string;
   /** quick: what the apps show. */
   title?: string;

@@ -154,6 +154,9 @@
     <string name="designsystem_show_fewer">收起</string>
     <string name="designsystem_count_waiting_background">%1$d 个后台等待中</string>
     <string name="designsystem_machine_monitor">机器监控</string>
+    <!-- 一台电脑的项目页（iOS MachineSpacesView，#4338 A11）：打开它的胶囊，以及项目的置顶标记 -->
+    <string name="designsystem_machine_projects">%1$s 上的所有项目</string>
+    <string name="designsystem_project_pinned">已置顶</string>
     <string name="designsystem_details">详情</string>
     <string name="designsystem_space">空间</string>
     <string name="designsystem_repository">仓库</string>
