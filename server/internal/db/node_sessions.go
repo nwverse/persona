@@ -37,6 +37,10 @@ type NodeSession struct {
 	// PendingSwitch: a switch to another launcher waiting for the next message (node/launcher_switch.go), opaque here
 	// like UltracodeProcess, kept with the model so a node restart neither loses it nor carries it out by itself.
 	PendingSwitch json.RawMessage `json:"pending_switch,omitempty"`
+	// EngineHistory: the conversation's earlier stretches this session continues after a switch between Claude Code
+	// and Codex (node/engine_switch.go), opaque here like PendingSwitch, kept with the model so the session list leaves
+	// those sessions out after a node restart too.
+	EngineHistory json.RawMessage `json:"engine_history,omitempty"`
 }
 
 func (d *DB) PutNodeSession(ctx context.Context, machine, id string, s NodeSession) error {
@@ -59,6 +63,10 @@ func (d *DB) PutNodeSession(ctx context.Context, machine, id string, s NodeSessi
 	if len(s.PendingSwitch) > 0 && string(s.PendingSwitch) != "null" {
 		pendingSwitch = s.PendingSwitch
 	}
+	var engineHistory json.RawMessage // SQL NULL for none, as pending_switch
+	if len(s.EngineHistory) > 0 && string(s.EngineHistory) != "null" {
+		engineHistory = s.EngineHistory
+	}
 	_, err = d.pool.Exec(ctx, `WITH saved AS (
 		INSERT INTO node_sessions (machine_id, session_id, pane, launcher, cwd, started_at, tasks, updated_at, creation_id, incarnation)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, now(), $15, $16)
@@ -71,10 +79,10 @@ func (d *DB) PutNodeSession(ctx context.Context, machine, id string, s NodeSessi
 		jsonb_build_object('model', $8::text, 'model_fingerprint', $9::text, 'model_effort', $10::text,
 			'app_mode', $11::text, 'app_effort', $12::text, 'ultracode_process', $13::jsonb,
 			'started_at_unknown', $14::bool, 'guest', $17::jsonb, 'guest_kind', $18::text, 'config_dir', $19::text,
-			'pending_switch', $20::jsonb), now() FROM saved
+			'pending_switch', $20::jsonb, 'engine_history', $21::jsonb), now() FROM saved
 		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
 		machine, id, s.Pane, s.Launcher, s.Cwd, s.StartedAt, tasks, s.Model, s.ModelFingerprint, s.ModelEffort, s.AppMode, s.AppEffort,
-		s.UltracodeProcess, unknownStart, s.CreationID, s.Incarnation, guest, s.GuestKind, s.ConfigDir, pendingSwitch)
+		s.UltracodeProcess, unknownStart, s.CreationID, s.Incarnation, guest, s.GuestKind, s.ConfigDir, pendingSwitch, engineHistory)
 	return err
 }
 
@@ -103,6 +111,7 @@ type nodeModel struct {
 	Guest            []string        `json:"guest"`
 	GuestKind        string          `json:"guest_kind"`
 	PendingSwitch    json.RawMessage `json:"pending_switch"`
+	EngineHistory    json.RawMessage `json:"engine_history"`
 }
 
 // NodeSessions returns a machine's sessions from the last 60 days.
@@ -128,6 +137,9 @@ func (d *DB) NodeSessions(ctx context.Context, machine string) (map[string]NodeS
 		}
 		if len(m.PendingSwitch) > 0 && string(m.PendingSwitch) != "null" {
 			s.PendingSwitch = m.PendingSwitch
+		}
+		if len(m.EngineHistory) > 0 && string(m.EngineHistory) != "null" {
+			s.EngineHistory = m.EngineHistory
 		}
 		if m.StartedAtUnknown {
 			s.StartedAt = time.Time{}

@@ -263,8 +263,9 @@ func (n *Node) resumeOtherWith(ctx context.Context, id string, st sessionState, 
 	return uncertain(n.resumeCodex(ctx, launch, id, st, argv, text, ws, tab))
 }
 
-// resumeCodex runs `<launcher words> resume <id> -- <message>` (through codex-start, like a new Codex) in a new tab
-// and waits until the engine shows that Codex in it.
+// resumeCodex runs `<launcher words> resume <id> -- <message>` (through codex-start, like a new Codex, in the thread's
+// directory) in a new tab and waits until the engine shows that Codex in it. In a pane it was given (adoptedPane: a
+// switch between engines, engine_switch.go) it runs there once its shell is at rest.
 func (n *Node) resumeCodex(ctx context.Context, launch host.Launcher, id string, st sessionState, argv []string, prompt, ws, tabName string) error {
 	if codexOnRemote(argv) {
 		argv = append(argv, "-C", st.Cwd)
@@ -276,7 +277,7 @@ func (n *Node) resumeCodex(ctx context.Context, launch host.Launcher, id string,
 	}
 	defer os.RemoveAll(dir)
 	file := filepath.Join(dir, "start.json")
-	b, _ := json.Marshal(codexStartFile{Argv: argv, Prompt: prompt, Agent: herdrAgentFor(launch, "codex")})
+	b, _ := json.Marshal(codexStartFile{Argv: argv, Prompt: prompt, Agent: herdrAgentFor(launch, "codex"), Dir: st.Cwd})
 	if err := os.WriteFile(file, b, 0o600); err != nil {
 		return err
 	}
@@ -285,7 +286,14 @@ func (n *Node) resumeCodex(ctx context.Context, launch host.Launcher, id string,
 		return err
 	}
 	pane := created.Pane.String()
-	time.Sleep(300 * time.Millisecond) // the fresh shell loads ~/.zshrc; typed input is buffered either way
+	if adoptedPane(ctx) != nil {
+		// A shell that just took the agent's exit back: at rest before the line goes in (shellsettle.go).
+		if err := n.settleShell(ctx, pane); err != nil {
+			return err
+		}
+	} else {
+		time.Sleep(300 * time.Millisecond) // the fresh shell loads ~/.zshrc; typed input is buffered either way
+	}
 	shells := paneShells(ctx, created)
 	done, err := n.runAgentCommand(ctx, launch, created, ws, "", n.agentCommand(shellQuote(n.bin)+" codex-start "+shellQuote(file), shellQuote, shells...), shells...) // typedstart.go
 	if err != nil {

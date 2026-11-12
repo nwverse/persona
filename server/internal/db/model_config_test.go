@@ -150,3 +150,33 @@ func TestNodePendingSwitchIsPersisted(t *testing.T) {
 		t.Fatalf("cleared switch came back: %q %v", out["session"].PendingSwitch, err)
 	}
 }
+
+// The conversation's earlier stretches after a switch between engines (node/engine_switch.go, #5054) come back after a
+// node restart, and a record written without them has none.
+func TestNodeEngineHistoryIsPersisted(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	history := `[{"session_id":"claude-1","agent":"claude","until":"2026-11-12T10:00:00Z"}]`
+	s := NodeSession{Launcher: "codex", Cwd: "/tmp/project", StartedAt: time.Now().UTC(), EngineHistory: json.RawMessage(history)}
+	if err := d.PutNodeSession(ctx, "machine", "session", s); err != nil {
+		t.Fatal(err)
+	}
+	out, err := d.NodeSessions(ctx, "machine")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got, want []any
+	if err := json.Unmarshal(out["session"].EngineHistory, &got); err != nil {
+		t.Fatalf("engine history %q: %v", out["session"].EngineHistory, err)
+	}
+	_ = json.Unmarshal([]byte(history), &want)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("engine history = %v, want %v", got, want)
+	}
+	s.EngineHistory = nil
+	if err := d.PutNodeSession(ctx, "machine", "session", s); err != nil {
+		t.Fatal(err)
+	}
+	if out, err = d.NodeSessions(ctx, "machine"); err != nil || out["session"].EngineHistory != nil {
+		t.Fatalf("cleared history came back: %q %v", out["session"].EngineHistory, err)
+	}
+}
