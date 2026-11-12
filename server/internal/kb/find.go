@@ -85,7 +85,8 @@ func matcher(query string) func(string) bool {
 // distill mark (.topics.json, topics.go). A meeting's live log (live.json, live.go) is never
 // searched: other people's words said while Persona attended, and the questions asked of it. Nor is photos.json
 // (recording_photos.go: digests, deletions; photos.md has the photos' words), and the photos themselves are in
-// attachments/, which the walk never enters.
+// attachments/, which the walk never enters (nor a hub-mode meeting's audio, attachments/audio/). Nor is
+// hub_segments.json (hub_segments.go): transcript.md, rendered from the transcript of record, is the searched text.
 func searchable(rel string) bool {
 	parts := strings.Split(filepath.ToSlash(rel), "/")
 	switch {
@@ -103,6 +104,8 @@ func searchable(rel string) bool {
 		return false // meeting.json (meeting.go): the manager's bookkeeping of the room and the mark
 	case len(parts) >= 3 && parts[0] == KindRecording && strings.HasPrefix(parts[2], photosFile):
 		return false // photos.json (recording_photos.go): digests and deletions; photos.md has the photos' words
+	case len(parts) >= 3 && parts[0] == KindRecording && strings.HasPrefix(parts[2], hubSegmentsFile):
+		return false // hub_segments.json and its temporary file: transcript.md has the transcript of record
 	case len(parts) == 3 && parts[0] == KindPerson && parts[2] == "handles.json":
 		return false
 	case len(parts) == 3 && parts[0] == KindPerson && parts[2] == profilesFile:
