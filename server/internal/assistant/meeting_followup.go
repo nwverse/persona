@@ -249,6 +249,9 @@ func (s *Service) followupSeed(ctx context.Context, e *kb.Engine, rec kb.Recordi
 	}
 	if l, _, err := e.LiveRead(rec.ID); err == nil {
 		d.Topics = meetingTopics(l.Topics)
+		for _, h := range l.Highlights { // at their place in the transcript below
+			d.Highlights = append(d.Highlights, prompts.MeetingHighlight{At: meetingClock(h.At), Text: oneLine(h.Text)})
+		}
 		for _, a := range l.Asks {
 			if a.State == askAnswered {
 				q := a.Question

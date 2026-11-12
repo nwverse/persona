@@ -25,6 +25,10 @@ const featureMeetingPhotos = assistantwire.CapabilityMeetingPhotos
 // docs/assistant/meeting-minutes.md "Phase 2: live view"); only with meeting_conversation.
 const featureMeetingLiveView = assistantwire.CapabilityMeetingLiveView
 
+// featureMeetingHighlights: the default manager takes the meeting conversation's highlights (phase 2b,
+// docs/assistant/meeting-minutes.md "Phase 2b: highlights"); only with meeting_live_view.
+const featureMeetingHighlights = assistantwire.CapabilityMeetingHighlights
+
 // featureMeetingEcho: the default manager takes Persona's echo marked on a meeting's upload (#5905,
 // docs/assistant/meeting-minutes.md "Persona's echo"); only with meeting_attendance.
 const featureMeetingEcho = assistantwire.CapabilityMeetingEcho
@@ -64,6 +68,16 @@ func (h *Hub) meetingLiveViewFeatures() []string {
 		return nil
 	}
 	return []string{featureMeetingLiveView}
+}
+
+// meetingHighlightsFeatures is meeting_highlights while the default manager names it beside meeting_live_view (and so
+// meeting_conversation and meeting_attendance); nothing otherwise, so no app looks for highlights a manager never
+// keeps.
+func (h *Hub) meetingHighlightsFeatures() []string {
+	if len(h.meetingLiveViewFeatures()) == 0 || !h.defaultManagerNames(assistantwire.CapabilityMeetingHighlights) {
+		return nil
+	}
+	return []string{featureMeetingHighlights}
 }
 
 // meetingEchoFeatures is meeting_echo while the default manager names it beside meeting_attendance (Persona speaks

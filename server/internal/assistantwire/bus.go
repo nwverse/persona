@@ -43,6 +43,11 @@ const (
 	// "Phase 2: live view"). The hub lists meeting_live_view only while the default manager names it beside
 	// CapabilityMeetingConversation.
 	CapabilityMeetingLiveView = "meeting_live_view"
+	// CapabilityMeetingHighlights: the manager takes the meeting conversation's phase 2b, its highlights (highlights and
+	// highlights_at on GET …/live, the room's meeting_highlights_set, highlights in meeting_live and in GET …/live's
+	// revs and parts; docs/assistant/meeting-minutes.md "Phase 2b: highlights"). The hub lists meeting_highlights only
+	// while the default manager names it beside CapabilityMeetingLiveView.
+	CapabilityMeetingHighlights = "meeting_highlights"
 	// CapabilityMeetingEcho: the manager takes Persona's echo marked on a meeting's upload (#5905: the segments' echo
 	// and the spoken spans, its own copy of the rule, echo lines kept but left out of the minutes, the summary and the
 	// follow-up; docs/assistant/meeting-minutes.md "Persona's echo"). The hub lists meeting_echo only while the default
