@@ -193,6 +193,12 @@ export const authLabel = (m: AuthMethod) => (m === "bearer" ? "Bearer" : "x-api-
 /** The method in use: the one chosen, or with "Automatic" the one the check found; "" while Automatic has found none. */
 export const chosenAuth = (f: ProviderForm): "" | AuthMethod => (f.auth === "auto" ? f.auth_found : f.auth);
 
+/** Whether the sign-in method matters: Claude Code (and omp) launch with the variable it picks, and the hub's own Messages
+ *  calls send its header. Responses and Chat Completions always send Bearer; Codex and Antigravity launch with their
+ *  own key variables (OPENAI_API_KEY, GEMINI_API_KEY), so their probes keep both headers. */
+export const asksAuth = (f: Pick<ProviderForm, "kind" | "agent" | "api">): boolean =>
+  f.kind === "api" ? f.api === "messages" : f.agent !== "codex" && f.agent !== "agy";
+
 /** The form an existing provider opens with: its models checked, the default among them even when not listed. */
 export function formFromView(v: ProviderView): ProviderForm {
   const models = (v.models ?? []).map((m) => formModel(m));
@@ -504,7 +510,8 @@ export function providerBody(f: ProviderForm, old: ProviderView | null, clearLeg
  *  A reference is never sent: the probe would hand its value to the address in the request (`referencePending`).
  *  "Automatic" asks the hub to find the method until the check found it, then sends that one. */
 export function probeBody(f: ProviderForm, stored: string | null, model?: string): Record<string, unknown> {
-  const b: Record<string, unknown> = { base_url: f.base_url.trim(), auth: chosenAuth(f) || "auto", api: f.api };
+  const b: Record<string, unknown> = { base_url: f.base_url.trim(), api: f.api };
+  if (asksAuth(f)) b.auth = chosenAuth(f) || "auto";
   if (stored) b.name = stored;
   if (f.api_key.trim() && !f.key_by_reference) b.api_key = f.api_key.trim();
   if (!(f.kind === "api" && f.api === "chat") && f.headers_touched) b.headers = f.headers.trim();

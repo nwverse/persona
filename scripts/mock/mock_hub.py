@@ -11582,16 +11582,19 @@ def _probe_signed_in(b):
     "auto" sends Bearer, then x-api-key once that is refused. (ok, method or None)."""
     auth = b.get("auth") or ""
     takes = _gateway_takes(b.get("base_url"))
+    stored = next((x for x in LAUNCHERS if b.get("name") and x["name"] == b.get("name")), None)
+    keyed = b.get("api_key") or (stored and stored.get("has_key"))
     if b.get("api") in ("responses", "chat"):
         sent = ("bearer",)
-    elif auth == "auto":
+    elif auth == "auto" and keyed:  # no key, no header: nothing to find
         found = next((m for m in ("bearer", "api_key") if m in takes), None)
         return bool(found), found
-    elif auth:
+    elif auth and auth != "auto":
         sent = (auth,)
+    elif stored and not auth and stored.get("agent") not in ("codex", "agy"):  # those launch with their own variables
+        sent = ("bearer",) if stored.get("auth") == "bearer" else ("api_key",)
     else:
-        stored = next((x for x in LAUNCHERS if b.get("name") and x["name"] == b.get("name")), None)
-        sent = (("bearer",) if stored.get("auth") == "bearer" else ("api_key",)) if stored else ("bearer", "api_key")
+        sent = ("bearer", "api_key")
     return any(m in takes for m in sent), None
 
 

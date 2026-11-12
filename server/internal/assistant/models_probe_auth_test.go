@@ -200,6 +200,55 @@ func TestProbeByNameUsesTheStoredMethod(t *testing.T) {
 	}
 }
 
+// Codex and Antigravity launch with their own key variables, which auth does not choose: by name they keep both headers.
+func TestProbeByNameKeepsBothForOtherAgents(t *testing.T) {
+	_, mux := launcherTestService(t)
+	g := newAuthGateway(t, true, true)
+	for _, agent := range []string{"codex", "agy"} {
+		if code, raw := launcherCall(t, mux, "POST", "/api/v1/launchers",
+			`{"name":"by-`+agent+`","agent":"`+agent+`","base_url":"`+g.URL+`","model":"m","api_key":"`+fakeKey+`","auth":"bearer"}`); code != 200 {
+			t.Fatal(raw)
+		}
+		out := probeResult(t, mux, "/api/v1/launchers/test", `{"name":"by-`+agent+`"}`)
+		if sent := g.requests(); out["ok"] != true || !slices.Equal(sent, []string{"both"}) {
+			t.Fatalf("%s: %v sent %v", agent, out, sent)
+		}
+	}
+}
+
+// Under auto, a Bearer key the gateway knew but forbade something (403) says more than the 401 of a header it does not
+// read: that answer stands, and no method is reported.
+func TestProbeAutoKeepsBearersForbiddenOverAMissingKey(t *testing.T) {
+	_, mux := launcherTestService(t)
+	var sent []string
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sent = append(sent, sentAuth(r))
+		if r.Header.Get("Authorization") != "" {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":{"message":"model not allowed for this key"}}`))
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"missing Authorization header"}}`))
+	}))
+	defer gw.Close()
+	out := probeResult(t, mux, "/api/v1/launchers/test", `{"base_url":"`+gw.URL+`","api_key":"`+fakeKey+`","model":"m","auth":"auto"}`)
+	if msg, _ := out["error"].(string); out["ok"] != false || out["auth"] != nil || out["code"] != "auth" ||
+		!strings.Contains(msg, "model not allowed") || !slices.Equal(sent, []string{probeAuthBearer, probeAuthAPIKey}) {
+		t.Fatalf("%v sent %v", out, sent)
+	}
+}
+
+// Without a key no credential header goes, so auto has nothing to find: one request, no method reported.
+func TestProbeAutoWithoutAKeyFindsNothing(t *testing.T) {
+	_, mux := launcherTestService(t)
+	g := newAuthGateway(t, true, true)
+	out := probeResult(t, mux, "/api/v1/launchers/discover", `{"base_url":"`+g.URL+`","auth":"auto"}`)
+	if sent := g.requests(); out["auth"] != nil || !slices.Equal(sent, []string{"none"}) {
+		t.Fatalf("%v sent %v", out, sent)
+	}
+}
+
 // A preset without auth in the request sends the preset's method, what a provider saved from it launches with.
 func TestProbePresetUsesItsMethod(t *testing.T) {
 	_, mux := launcherTestService(t)

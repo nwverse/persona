@@ -166,11 +166,13 @@ Supported since herdr 0.7.1 (Linux) / 0.7.5 (macOS); ignored by older herdr and 
 - **Testing sends what a launch sends** (#5329): `POST /api/v1/launchers/test` and `/discover` put the key in one header only, the one the launch's variable makes Claude Code send:
   `auth: "api_key"` → `x-api-key`, `"bearer"` → `Authorization: Bearer`; without `auth`, a stored provider (`name`) uses its stored method (the predicate `personad launch` uses) and a preset its own.
   A test that sent both headers used to pass for a gateway that then refused the launch with 401. Responses and Chat Completions probes send Bearer only, as their real calls do.
-  A request with no `auth`, no `name` and no `preset` (an app from before #5329 typing a gateway) still sends both, as before.
+  A request with no `auth`, no `name` and no `preset` (an app from before #5329 typing a gateway) still sends both, as before, and so does a stored Codex or Antigravity
+  launcher by name: they launch with `OPENAI_API_KEY` / `GEMINI_API_KEY` (`node/managed.go`), which `auth` does not choose, and the wizard does not ask them.
 - **Finding the method** (`auth: "auto"`, feature `launcher_auth_auto`): the probe sends Bearer first and, when the gateway answers 401 or 403 (not Anthropic's region block),
   the same request again with `x-api-key`. A passing test carries `auth` (`"bearer"` or `"api_key"`), the header that worked; a gateway that accepts both answers `bearer`,
   the web wizard's earlier default for a custom gateway and the variable most compatible gateways document. Any other failure is not retried and carries no `auth`;
-  both refused answers the `x-api-key` attempt's failure. Discovery settles the header on the first page and keeps it for the rest, but names none: a model list
+  both refused answers the `x-api-key` attempt's failure, except a 401 after Bearer's 403: the gateway knew the Bearer key and forbade something, which says more.
+  Without a key no header goes, so there is nothing to find (no retry, no `auth`). Discovery settles the header on the first page and keeps it for the rest, but names none: a model list
   may answer without looking at the key, so only a test says what a launch needs. `auth` is never stored as `auto`: the client saves the method the test found.
 - **Set the other authentication variable to empty**: Claude Code merges `env` from all settings sources. Variables the launcher **does not set** still come from the user's `~/.claude/settings.json`.
   If that contains another gateway's `ANTHROPIC_AUTH_TOKEN`, Claude sends it as `Authorization: Bearer` alongside the launcher's `x-api-key`. The gateway receives two credentials

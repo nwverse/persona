@@ -321,3 +321,25 @@ describe("an older hub", () => {
     expect((await saveEdit()).auth).toBe("api_key");
   });
 });
+
+describe("an agent that does not launch with the method", () => {
+  it("asks nothing for Codex or Antigravity and names no method to the hub: they launch with their own key variables", async () => {
+    for (const agent of ["Codex", "Antigravity"]) {
+      calls = [];
+      await draw(null);
+      await draw("new");
+      click("settings-providerwizard.custom");
+      const kind = [...document.body.querySelectorAll<HTMLButtonElement>('[role="radio"]')].find((b) => b.textContent === agent);
+      act(() => kind!.click());
+      type(urlInput(), "https://gw.example.com");
+      act(() => { urlInput().focus(); urlInput().blur(); });
+      type(keyInput(), "sk-example-123456");
+      await advance(AUTO);
+      act(() => moreOptions().click());
+      expect(authGroup(), agent).toBeNull();
+      expect(probes("discover").length, agent).toBeGreaterThan(0);
+      expect(sentAuth(), agent).toEqual([]);
+      expect(text()).not.toContain(foundLine("x-api-key"));
+    }
+  });
+});

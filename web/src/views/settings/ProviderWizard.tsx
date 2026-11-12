@@ -41,6 +41,7 @@ import {
 } from "../../lib/launcher-presets";
 import {
   AUTH_AUTO_FEATURE,
+  asksAuth,
   authLabel,
   autoCheckable,
   chosenAuth,
@@ -516,9 +517,10 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, found
   // A gateway's startup ID: typed for a new one (where the hub makes one up, only if wanted, under "More options"), and
   // read-only on a saved one, whose launches and settings refer to it (#5029).
   const idInMore = autoName || !isNew;
-  // How the gateway is signed in to (Responses and Chat Completions always use Bearer, so they don't ask): on the step
-  // for an older hub, under "More options" with Automatic where the hub finds it (#5329).
-  const authInMore = autoAuth && !openAI;
+  // How the gateway is signed in to (Responses and Chat Completions always use Bearer, and Codex and Antigravity launch
+  // with their own key variables, so they don't ask, asksAuth): on the step for an older hub, under "More options" with
+  // Automatic where the hub finds it (#5329).
+  const authInMore = autoAuth && asksAuth(f);
   const authField = (
     <Labelled label={t("settings-providerwizard.auth")}
       hint={f.auth === "auto" ? t("settings-providerwizard.auth_auto_hint") : f.auth === "bearer" ? t("settings-providerwizard.auth_bearer_hint") : t("settings-providerwizard.auth_key_hint")}>

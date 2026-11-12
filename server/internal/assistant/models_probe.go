@@ -101,7 +101,9 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 		if t.kind == "" {
 			t.kind = "launcher" // Stored entries without kind are legacy launchers.
 		}
-		if auth == "" { // none named: the stored one
+		// none named: the stored one. Codex and Antigravity launch with their own key variables (OPENAI_API_KEY,
+		// GEMINI_API_KEY; node managedEnv), which auth does not choose, so they keep both headers.
+		if a := l.AgentType(); auth == "" && a != "codex" && a != "agy" {
 			auth = launchAuth(l.Auth)
 		}
 	}
@@ -170,6 +172,9 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 		t.auth = probeAuthBearer
 	}
 	t.key = strings.TrimSpace(strings.TrimPrefix(t.key, "Bearer "))
+	if t.key == "" && t.auth == probeAuthAuto {
+		t.auth = probeAuthBoth // no key, no header: nothing to find
+	}
 	if err := checkGateway(t.base); err != nil {
 		return t, err
 	}
@@ -213,18 +218,27 @@ func (t probeTarget) modelsEndpoint() string {
 
 // send sends one request under t.auth. Under auto it goes with Bearer and, when the gateway refuses the key, once
 // more with x-api-key (the body is bytes so it can go twice); t then keeps the header of the request answered, so
-// later requests (the next model page) send that one alone.
+// later requests (the next model page) send that one alone. When both are refused, the x-api-key answer stands,
+// except a 401 after Bearer's 403: the gateway knew the Bearer key and only forbade something, which says more than a
+// header it does not read.
 func (t *probeTarget) send(ctx context.Context, method, endpoint string, body []byte) (*http.Response, error) {
 	if t.auth != probeAuthAuto {
 		return t.do(ctx, method, endpoint, body)
 	}
 	t.auth = probeAuthBearer
 	res, err := t.do(ctx, method, endpoint, body)
-	if err == nil && t.keyRefused(res) {
-		res.Body.Close()
-		t.auth = probeAuthAPIKey
-		res, err = t.do(ctx, method, endpoint, body)
+	if err != nil || !t.keyRefused(res) {
+		return res, err
 	}
+	first := res // its body already read into memory by keyRefused
+	t.auth = probeAuthAPIKey
+	res, err = t.do(ctx, method, endpoint, body)
+	if err == nil && first.StatusCode == http.StatusForbidden && res.StatusCode == http.StatusUnauthorized {
+		res.Body.Close()
+		t.auth = probeAuthBearer
+		return first, nil
+	}
+	first.Body.Close()
 	return res, err
 }
 

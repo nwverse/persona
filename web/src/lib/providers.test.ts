@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "./api";
 import {
+  asksAuth,
   autoCheckable,
   fallbackTitle,
   fillFromCatalog,
@@ -263,6 +264,13 @@ describe("probes", () => {
     expect(probeBody(ready({ auth_found: "bearer" }), null).auth).toBe("bearer");
     expect(probeBody(ready({ auth: "api_key" }), null).auth).toBe("api_key");
     expect(probeBody(ready({ auth: "bearer", auth_found: "api_key" }), "gw").auth).toBe("bearer");
+  });
+  it("names no method where it does not choose the header: Codex, Antigravity, Responses and Chat Completions (#5329)", () => {
+    for (const f of [ready({ agent: "codex" }), ready({ agent: "agy", auth: "bearer" }), ready({ kind: "api", api: "responses" }), ready({ kind: "api", api: "chat" })]) {
+      expect(asksAuth(f)).toBe(false);
+      expect(probeBody(f, null)).not.toHaveProperty("auth");
+    }
+    for (const f of [ready(), ready({ agent: "omp" }), ready({ kind: "api", api: "messages" })]) expect(asksAuth(f)).toBe(true);
   });
   it("words the test result", () => {
     expect(testText({ ok: true, ms: 412 })).toBe("连接成功（412 ms）");
