@@ -58,10 +58,10 @@ import UserNotifications
     /// Starts a meeting recording named after the calendar event happening now (a dated "Meeting" without one). In front
     /// (`inForeground`), the Recordings page opens (unless the caller opened it: `openPage`), and the calendar is asked
     /// for once if it never was, after the recording has begun, so the prompt costs no seconds of the meeting.
-    /// `attendance`: Persona's part (#2981), as picked on the Recordings page; nil (the drawer, Siri, the Control, the Action
-    /// button) starts with the hub's default role and the session picked last that isn't the main chat, else off
-    /// (`MeetingAttendees.defaultAttendance`), or, with the meeting conversation, as a room meeting in the default role,
-    /// not private (`MeetingAttendees.startAttendance`).
+    /// `attendance`: Persona's part (#2981), as picked on the Recordings page; nil (the + list, the home screen's menu,
+    /// Siri, the Control, the Action button) starts with the hub's default role and the session picked last that isn't the
+    /// main chat, else off (`MeetingAttendees.defaultAttendance`), or, with the meeting conversation, as a room meeting in
+    /// the default role, not private (`MeetingAttendees.startAttendance`).
     @discardableResult
     func startMeeting(inForeground: Bool, openPage: Bool? = nil, attendance: RecordingAttendance? = nil) async -> Outcome {
         if openPage ?? inForeground { Self.openRecordings() }
@@ -244,6 +244,20 @@ import UserNotifications
     /// shell yet: it tries again for a few seconds.
     static func openRecordings() {
         RecordingLivePresenter.shared.open() // a sheet swiped away on the page already in front comes back (`recordingLiveSheet`)
+        showRecordings()
+    }
+
+    /// The minutes push (#3862 phase 6): Recordings, with the meeting's one thread (`MeetingPage` after mode) pushed over it
+    /// once the page is on screen (`MeetingPageOpener`). Not the live sheet: the push is about a meeting that ended, and
+    /// with another recording running the sheet doesn't present itself as the page appears (`holdOnAppear`), so it
+    /// doesn't cover that meeting; the now-recording card is the way back to it.
+    static func openMeeting(_ id: UUID) {
+        RecordingLivePresenter.shared.holdOnAppear()
+        MeetingPageOpener.shared.open(id)
+        showRecordings()
+    }
+
+    private static func showRecordings() {
         let model = AppModel.shared
         model.shellSettings = false
         model.selectedTab = .assistant

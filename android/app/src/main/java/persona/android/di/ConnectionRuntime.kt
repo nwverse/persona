@@ -182,6 +182,13 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
 
     /** Every group's outbox in one list; a message goes to the group its session belongs to. */
     val messages: MessageSender = object : MessageSender {
+        override val sendReceipts = groups.flatMapLatest { list ->
+            val flows = list.mapNotNull { group -> group.data?.messages?.sendReceipts?.map { entries ->
+                val names = GroupNames(group.namespace)
+                entries.map(names::receipt)
+            } }
+            if (flows.isEmpty()) flowOf(emptyList()) else combine(flows) { lists -> lists.flatMap { it } }
+        }.stateIn(scope, SharingStarted.Eagerly, emptyList())
         override val outbox = groups.flatMapLatest { list ->
             val flows = list.mapNotNull { group -> group.data?.messages?.outbox?.map { entries ->
                 val names = GroupNames(group.namespace)
@@ -202,6 +209,12 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
                 val group = groupOf(session.machineId) ?: throw IllegalStateException(AppText.get(R.string.app_error_pair_first))
                 checkNotNull(group.data) { AppText.get(R.string.app_error_pair_first) }.messages.send(
                     GroupKeys.rawKey(session), text, clientMessageId, clearDraft, launcher, model)
+            }
+        }
+        override suspend fun sendApplyingSwitch(session: SessionKey, text: String, clientMessageId: String) {
+            gate.withLock {
+                val group = groupOf(session.machineId) ?: throw IllegalStateException(AppText.get(R.string.app_error_pair_first))
+                checkNotNull(group.data) { AppText.get(R.string.app_error_pair_first) }.messages.sendApplyingSwitch(GroupKeys.rawKey(session), text, clientMessageId)
             }
         }
         override suspend fun cancel(clientMessageId: String) = gate.withLock {

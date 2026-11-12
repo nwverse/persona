@@ -186,7 +186,12 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
     backgroundRecords: Boolean = false, onBackground: (() -> Unit)? = null,
     onPlan: (TaskPlan) -> Unit = {},
     /** The main conversation folds background rounds (#4314): Needs you groups its rows by supervising conversation. */
-    groupByOrigin: Boolean = false) {
+    groupByOrigin: Boolean = false,
+    /**
+     * Under the entries: the pill while the conversation's model operates a Mac. iOS puts it after them in their row
+     * (`AssistantActionBar`); beside Android's two entries a phone leaves it too little room for its words.
+     */
+    under: (@Composable () -> Unit)? = null) {
     val todos by host.tasks.todos.collectAsStateWithLifecycle()
     val plans by host.tasks.plans.collectAsStateWithLifecycle()
     val feeds by host.tasks.feeds.collectAsStateWithLifecycle()
@@ -372,6 +377,7 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                 { state.toggle(tray) }, Modifier.testTag("assistant-entry-${tray.tag}"),
                 enabled = true)
         }
+        under?.invoke()
     }
 }
 

@@ -68,5 +68,22 @@
   "uninstalled": "「{name}」をアンインストールしました",
   "uninstall_detail": "プログラムを停止し、パッケージ、設定、シークレットを削除します。提供していたコネクタは受信トレイ、ナレッジ、アシスタントから外れます。再び使うにはインストールし直してください。",
   "keep_data": "データを残す",
-  "keep_data_detail": "{path}を残すので、再インストール後も続きから使えます。"
+  "keep_data_detail": "{path}を残すので、再インストール後も続きから使えます。",
+  "network_title": "ネットワークと分離",
+  "sandbox_label": "サンドボックスで実行",
+  "sandbox_default_on": "既定でオン：公式マーケット以外からのインストール",
+  "sandbox_default_off": "既定でオフ：公式マーケットからのインストール",
+  "sandbox_you_off": "オフにしました・既定はオン",
+  "sandbox_you_on": "オンにしました・既定はオフ",
+  "sandbox_proxy_still": "出口プロキシを使うプログラムは、許可されたアドレスにしか接続できません。",
+  "sandbox_off_note": "サンドボックスはオフです：{name}はどのアドレスにも接続でき、ハブのユーザーのファイルを読み書きできます。",
+  "network_egress": "ネットワーク",
+  "network_allowed_other": "許可 {count}",
+  "network_blocked_other": "ブロック {count}",
+  "sandbox_switch_label": "{name}をサンドボックスで実行",
+  "sandbox_off_title": "{name}のサンドボックスをオフにしますか？",
+  "sandbox_off_body": "オフにすると、ハブのユーザーが読み書きできるすべてのファイルを読み書きでき、どのアドレスにも接続できます。",
+  "sandbox_off_confirm": "サンドボックスをオフ",
+  "sandbox_turned_on": "{name}のサンドボックスをオンにしました",
+  "sandbox_turned_off": "{name}のサンドボックスをオフにしました"
 }

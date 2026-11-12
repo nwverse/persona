@@ -132,6 +132,9 @@
     <plurals name="assistant_needs_you_more">
         <item quantity="other">还有 %1$d 件在收件箱</item>
     </plurals>
+    <plurals name="assistant_needs_you_more_agents">
+        <item quantity="other">还有 %1$d 件需要你</item>
+    </plurals>
     <string name="assistant_home_setup_lead">还差一步就能开始。</string>
     <string name="assistant_suggest_local_detail">打开说明</string>
     <string name="assistant_suggest_needs_calendar">会用到手机日历</string>

@@ -22,7 +22,7 @@ data class OutboxMessage(
 
 private val NoWrittenAt = MutableStateFlow(emptyMap<String, Long>())
 
-interface MessageSender {
+interface MessageSender : MessageSendReceiptSource {
     val outbox: StateFlow<List<OutboxMessage>>
     /** When this phone wrote each send, including ones already in the transcript. Epoch millis, by client message id. */
     val writtenAt: StateFlow<Map<String, Long>> get() = NoWrittenAt
@@ -35,6 +35,12 @@ interface MessageSender {
         require(launcher == null && model == null) { "Launcher/model overrides are not supported" }
         send(session, text, clientMessageId, clearDraft)
     }
+    /**
+     * [send] for the user's own message from a chat whose session shows a launcher switch waiting
+     * (`pending_switch`, docs/protocol/protocol.md "Switching a running Agent to another provider"): it goes with
+     * `apply_switch`, so the hub carries the switch out first. Every other message leaves the switch waiting.
+     */
+    suspend fun sendApplyingSwitch(session: SessionKey, text: String, clientMessageId: String) = send(session, text, clientMessageId)
     suspend fun cancel(clientMessageId: String): Boolean = false
     /**
      * Undo of a [cancel] (#4645): [message], as the outbox listed it before, back in its state with its refusal, so it
