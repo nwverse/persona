@@ -2,6 +2,8 @@ package node
 
 import (
 	"bytes"
+	"go/scanner"
+	"go/token"
 	"path/filepath"
 	"strings"
 
@@ -76,7 +78,8 @@ func normalizeLarkCommand(cmd string) string {
 
 	// A heredoc fed only to a file writer is data, except when a later command
 	// could execute it or its unquoted body contains an executable substitution.
-	hasHeredoc, safe := false, true
+	hasHeredoc, safe, goTest := false, true, false
+	var bodies []*syntax.Word
 	for _, stmt := range tree.Stmts {
 		call := stmt.Cmd.(*syntax.CallExpr)
 		if len(call.Args) == 0 {
@@ -93,6 +96,7 @@ func normalizeLarkCommand(cmd string) string {
 		allowed := map[string]bool{"cat": true, "tee": true, "echo": true, "pwd": true, "ls": true, "head": true, "wc": true}[base]
 		if base == "go" && len(call.Args) > 1 && call.Args[1].Lit() == "test" {
 			allowed = true
+			goTest = true
 		}
 		if !allowed || name != base || dynamic || dynamicCommandName(name) || len(call.Assigns) != 0 {
 			safe = false
@@ -111,6 +115,7 @@ func normalizeLarkCommand(cmd string) string {
 				continue
 			}
 			hasHeredoc = true
+			bodies = append(bodies, redir.Hdoc)
 			if base != "cat" && base != "tee" {
 				safe = false
 				continue
@@ -150,6 +155,13 @@ func normalizeLarkCommand(cmd string) string {
 			})
 		}
 	}
+	if goTest {
+		for _, body := range bodies {
+			if !inertGoDocument(body) {
+				safe = false
+			}
+		}
+	}
 	if hasHeredoc && safe {
 		for _, stmt := range tree.Stmts {
 			redirs := stmt.Redirs[:0]
@@ -170,6 +182,42 @@ func normalizeLarkCommand(cmd string) string {
 		return cmd
 	}
 	return out.String()
+}
+
+// go test can execute generated tests and package initializers. Only a document
+// containing comments and an optional package clause is inert for this purpose.
+func inertGoDocument(body *syntax.Word) bool {
+	value, dynamic := executionWord(body)
+	if dynamic {
+		return false
+	}
+	content := []byte(value)
+	file := token.NewFileSet().AddFile("", -1, len(content))
+	var scan scanner.Scanner
+	valid := true
+	scan.Init(file, content, func(token.Position, string) { valid = false }, scanner.ScanComments)
+	packageName := false
+	seenPackage := false
+	for {
+		_, tok, _ := scan.Scan()
+		switch tok {
+		case token.EOF:
+			return valid && !packageName
+		case token.COMMENT, token.SEMICOLON:
+		case token.PACKAGE:
+			if seenPackage || packageName {
+				return false
+			}
+			seenPackage, packageName = true, true
+		case token.IDENT:
+			if !packageName {
+				return false
+			}
+			packageName = false
+		default:
+			return false
+		}
+	}
 }
 
 func safeLiteralCommand(value string) bool {

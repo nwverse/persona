@@ -68,6 +68,7 @@ func TestLarkInertHeredoc(t *testing.T) {
 		{"execute go program", "cat > /tmp/a.go <<'EOF'\n// lark-cli im +messages-send\nEOF\ngo run /tmp/a.go", 1},
 		{"custom cat executable", "/tmp/cat > /tmp/a.go <<'EOF'\n// lark-cli im +messages-send\nEOF", 1},
 		{"test executable override", "cat > /tmp/a.go <<'EOF'\n// lark-cli im +messages-send\nEOF\ngo test -exec sh ./...", 1},
+		{"test executes generated Go code", "cat > /tmp/a_test.go <<'EOF'\npackage x\nimport (\"testing\"; \"os/exec\")\nfunc TestSend(t *testing.T) { exec.Command(\"lark-cli\", \"im\", \"+messages-send\").Run() }\nEOF\ngo test ./...", 1},
 
 		{"tee source file", "tee /tmp/a.go <<'EOF'\n// lark-cli im +messages-send\nEOF\ngo test ./...", 0},
 		{"execute written file", "cat > /tmp/a.sh <<'EOF'\nlark-cli im +messages-send\nEOF\nsh /tmp/a.sh", 1},
