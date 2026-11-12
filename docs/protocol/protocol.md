@@ -1151,17 +1151,17 @@ Assistant chats (sessions with `assistant: true`) carry `origin`: who opened the
 and fills it into the session lists sent to the App through the snapshot (`SessionView.origin` / `origin_ref`) (`sessions` / `sessions_delta` pushes, `GET /api/v1/sessions`, `conversations` in `GET /api/v1/assistant`).
 Once recorded, the origin never changes; Agent sessions (`assistant: false`) don't carry it. Hubs that know this field include `conversation_origin` in features.
 
-| `origin` | Opened by | `origin_ref` | Sidebar |
+| `origin` | Opened by | `origin_ref` | Sidebar (#5195) |
 | --- | --- | --- | --- |
-| `user` (or absent) | The user creating one in the App / web (including the main chat, and ones opened with **Hand to AI** in the Inbox or a Lark chat) | — | Recent |
-| `channel` | The user sending `/new` in a channel such as the Lark bot or WeChat | Channel id (`feishu`, `wechat`…) | Recent |
-| `inbox` | The handling chat for an Inbox item (AI twin, `docs/assistant/inbox.md`) | Inbox item id | Auto · Inbox |
-| `task` | Scheduled tasks and follow-ups (`schedule_followup`, including `new_conversation` ones and the own chats of `notify_user`-only `push: "asked"` tasks); also the built-in background supervisor's chat (#4927, `docs/assistant/unified-entry.md` "Background supervisor"), which has no `origin_ref` | Task id | Auto · Scheduled Tasks |
-| `spawned` | Opened by another chat with `conversation_new` | Session id of the chat that opened it | Auto · Spawned from Chats |
-| `lark_agent` | Sending `/agent …` in Lark (the extension via `POST /api/v1/assistant/conversations`, `purpose: "lark.agent"`, `docs/extensions/lark-agent.md`) | Extension id | Auto · Lark /agent |
-| `extension` | Opened by another extension via `POST /api/v1/assistant/conversations` | Extension id | Auto · Extensions |
-| `meeting` | A recorded meeting's room conversation, a guest the hub opens for the meeting (#3862, "Meeting conversation (#3862)"), titled `MMDD \| 会议 \| <meeting title>` | Recording id | Auto (apps that know it: one row per meeting) |
-| `meeting_followup` | The follow-up conversation of a recorded meeting, made by the owner's first `POST /api/v1/recordings/{id}/followup` (#3862), titled like the room | Recording id | Auto (apps that know it: one row per meeting) |
+| `user` (or absent) | The user creating one in the App / web (including the main chat, and ones opened with **Hand to AI** in the Inbox or a Lark chat) | — | Recent, no mark (All Chats: Mine) |
+| `channel` | The user sending `/new` in a channel such as the Lark bot or WeChat | Channel id (`feishu`, `wechat`…) | Recent, its channel's mark (All Chats: Mine) |
+| `inbox` | The handling chat for an Inbox item (AI twin, `docs/assistant/inbox.md`) | Inbox item id | Recent, marked Inbox |
+| `task` | Scheduled tasks and follow-ups (`schedule_followup`, including `new_conversation` ones and the own chats of `notify_user`-only `push: "asked"` tasks); also the built-in background supervisor's chat (#4927, `docs/assistant/unified-entry.md` "Background supervisor"), which has no `origin_ref` | Task id | Recent, marked Scheduled Tasks (not the background supervisor) |
+| `spawned` | Opened by another chat with `conversation_new` | Session id of the chat that opened it | Recent, marked Spawned from Chats |
+| `lark_agent` | Sending `/agent …` in Lark (the extension via `POST /api/v1/assistant/conversations`, `purpose: "lark.agent"`, `docs/extensions/lark-agent.md`) | Extension id | Recent, Lark's mark |
+| `extension` | Opened by another extension via `POST /api/v1/assistant/conversations` | Extension id | Recent, marked Extensions |
+| `meeting` | A recorded meeting's room conversation, a guest the hub opens for the meeting (#3862, "Meeting conversation (#3862)"), titled `MMDD \| 会议 \| <meeting title>` | Recording id | Recent, marked Other (apps that know it: one row per meeting) |
+| `meeting_followup` | The follow-up conversation of a recorded meeting, made by the owner's first `POST /api/v1/recordings/{id}/followup` (#3862), titled like the room | Recording id | Recent, marked Other (apps that know it: one row per meeting) |
 
 - **`opened_by`** (`SessionView.opened_by`, the session's `opened_by`): the extension whose token opened the chat (`POST /api/v1/assistant/conversations` with an extension's token, whatever its `purpose`), by id.
   The assistant notes it when the chat opens, from the extension the hub's auth found for the request (a client's own `X-Persona-*` headers are dropped on the way) and nothing else: not from `origin` or `origin_ref`, and never over the bus (`assistant.start` cannot set it).
@@ -1173,7 +1173,7 @@ Once recorded, the origin never changes; Agent sessions (`assistant: false`) don
   `收件箱` is not among the kinds the model may pick (only the hub uses it). Other origins still get a title after the first turn (`docs/assistant/assistant.md` "Chat titles").
   A title an extension gives the chat it opened (`POST /api/v1/sessions/{mid}/{sid}/rename` with its token) is a hint the model reads, not the title (#3758).
 - **Only a scoped token makes an extension the opener**: the hub tells the extension apart by its own token (`permissions.hub`, `docs/extensions/extensions.md` "Hub API: scopes").
-  An extension that calls with the hub's full token (`hub_api`) is the user as far as the hub can tell: its chats are `user` and land in Recent, and its renames are the user's.
+  An extension that calls with the hub's full token (`hub_api`) is the user as far as the hub can tell: its chats are `user` and carry no source mark, and its renames are the user's.
 - **Backfilling old chats**: when the hub sees the session list of the assistant's machine, it fills in assistant chats that have no origin yet (`by: "backfill"`): AI twin sessions recorded on Inbox items → `inbox` (filling the title too);
   chats recorded on tasks (`run_session_id`, sessions in run records) and titles started with `定时` (scheduled) → `task`; a first message starting with the Inbox AI twin / chat-forward / scheduled-task prompt → the matching origin;
   the rest → `user`. It can run repeatedly: already recorded ones are untouched. `POST /api/v1/assistant/origins/backfill` (full-permission devices only; with `{"redo":true}` it also re-judges `by: "backfill"` ones)
@@ -1181,12 +1181,10 @@ Once recorded, the origin never changes; Agent sessions (`assistant: false`) don
 
 ### Sidebar (same on every client)
 
-- **Recent** under **Persona Chats** lists only the user's own chats (the "Recent" kinds in the table above); pinned ones still appear under pinned regardless of origin.
-- Auto chats are collapsed into one row below **Recent**, "Auto Chats N" (N is the number of unarchived auto chats), **collapsed by default**, with the expanded state remembered per device.
-  While collapsed the row still shows status on the right: a working dot when something is running, and a **Needs You** dot with a count when something is waiting for you (`state: needs_you`), so nothing is missed because it's folded.
-- When expanded, each origin gets a row with a small label (Inbox · Scheduled Tasks · Lark /agent · Spawned from Chats · Extensions · Other), with a count and the same status dots; only origins that have chats are listed. Tapping a row opens **All Chats** filtered to that origin.
-- **All Chats** gets an origin filter at the top (All · Mine · Inbox · Scheduled Tasks · …), defaulting to **All**; search still covers all chats regardless of origin and folding.
-- **Conversations an extension opened** (`lark_agent`, `extension`; #3758) say so, the same on iOS / iPadOS and the web (Android: #4203): their rows carry the source's mark beside the title in the channel mark's place (Lark's for Lark /agent, the extensions symbol otherwise; one mark per row, the origin's over the channel's), and the message that opened the chat gets the "From Lark /agent" / "From an extension" line a channel's message has, on that first message only. `channel`, `user` and origins a client doesn't know get no such mark.
+- **Recent** under **Persona Chats** lists every chat by last activity whoever opened it (#5195), except the main chat, the leaders (常驻, listed above it), the archived ones and the built-in background supervisor (#4927, in All Chats only); iOS / iPadOS list 5, the web its setting (15 by default) with Show more. The web follows iOS in #5195's second PR; Android in #5196.
+- **A chat Persona opened carries its source's mark** beside the title in the channel mark's place: the icon and name of its All Chats filter (Inbox · Scheduled Tasks · Lark /agent with Lark's mark · Spawned from Chats · Extensions · Other), named for VoiceOver and in the tooltip. Whether a chat is the user's own and which source it has is decided by the function that filters All Chats, so its mark and its filter agree; the same chat has the same mark in Recent, 常驻, the search results and All Chats.
+- **All Chats** has an origin filter at the top (All · Mine · Inbox · Scheduled Tasks · …) and opens on **All** every time: the last pick is not kept (on the web the pick is in the address, `/history/<origin>`, so Back returns to it). Search covers all chats whatever their origin.
+- **Conversations an extension opened** (`lark_agent`, `extension`; #3758) say so, the same on iOS / iPadOS and the web (Android: #4203): their rows carry the source's mark as every chat Persona opened does (Lark's for Lark /agent, the extensions symbol otherwise, named "From Lark /agent" / "From an extension"; one mark per row, the origin's over the channel's), and the message that opened the chat gets the "From Lark /agent" / "From an extension" line a channel's message has, on that first message only. `channel` and `user` chats get no origin mark (a channel's chat keeps its channel's).
 
 ## Extension install, upgrade and uninstall progress (`extension_operations`, #3277)
 
