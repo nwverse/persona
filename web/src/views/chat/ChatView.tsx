@@ -58,6 +58,7 @@ import { AWAIT_MS, awaitingTurn, DOCK_MAX, turnStart } from "./dock";
 import { HEADER_SLOT, HEADER_SLOT_END, HEADER_SLOT_START } from "./header";
 import { ContextMeter } from "./ContextMeter";
 import { AgentModelPill } from "./ModelPill";
+import { switchRefused } from "../../lib/session-models";
 import { NARROW, NO_HOVER, PHONE, SHORT, useFinePointer, useMedia } from "../../lib/viewport";
 import { UserBubble } from "./SegmentView";
 import { scrollsAFold } from "./fold-scroll";
@@ -886,7 +887,10 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
         await inSendOrder(key, () => apiOp(`${sessionPath(mid, sid)}/messages`, {
           method: "POST",
           opId: id,
-          json: { text: out.text, images: out.images.length ? out.images : undefined, client_msg_id: id, clear_draft: clearDraft, launcher, model },
+          // a switch to another launcher the user picked for this Agent goes with their own message from here, and only
+          // with it (#5035): the agent restarts there first
+          json: { text: out.text, images: out.images.length ? out.images : undefined, client_msg_id: id, clear_draft: clearDraft, launcher, model,
+            apply_switch: !assistant && row?.pending_switch ? true : undefined },
         }));
         const acceptedAt = Date.now();
         acceptOutgoing(key, id, acceptedAt);
@@ -909,8 +913,10 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
         }
         setPending((ps) => ps.filter((x) => x.id !== id));
         // an edit's send the node did not take (#4605): nothing went, so the words go back into the box with the node's
-        // reason (a draft in Claude's box…), not into a failed bubble whose Retry would send them without the rewind's care
-        if (keepInBox && e instanceof ApiError && e.body.delivered === "none") {
+        // reason (a draft in Claude's box…), not into a failed bubble whose Retry would send them without the rewind's care.
+        // So does a message that was to carry out a switch to another launcher first (#5035, `switch_*`: the launcher
+        // went, the agent did not come up there…): the switch is dropped, and sending again sends it where the agent runs
+        if ((keepInBox || switchRefused(e)) && e instanceof ApiError && e.body.delivered === "none") {
           forgetOutgoing(key, id);
           toast(errorText(e), "error");
           return false;

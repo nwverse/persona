@@ -23398,6 +23398,110 @@ MOCK_HELP.append("MOCK_CUSTOM_MODELS=1|forgetfail|empty|fail  手动输入模型
                  "DELETE …/models/custom?model= 忘掉；新建和 …/modes 用了列表里没有的 ID 就记下。forgetfail：忘掉回 500；empty：Claude Code 的列表是空的；"
                  "fail：读不到列表（502）。GET /mock/custom_models 看记着的，?reset=1 复原")
 
+# Switching a running Agent to another provider (#5035, docs/protocol/protocol.md "Switching a running Agent to another
+# provider"): MOCK_LAUNCHER_SWITCH=1 advertises `launcher_switch`, gives every computer a second Claude Code launcher
+# ("work", through a made-up gateway, with its own models) beside claude, the locked sonnetcc and codex, and takes
+# POST …/modes {launcher, model?, effort?}: another Claude launcher records `pending_switch` on the row (nothing typed;
+# codex is 409 switch_other_agent, a model with sonnetcc 409 switch_model_locked, an unknown one 409
+# switch_launcher_missing), the session's own drops it. The next message carries it out: the row's launcher (and model)
+# become the new ones and pending_switch goes. =pending: the PR review starts with a switch to work waiting; =refuse: a
+# message carrying a switch is refused (409 switch_busy, delivered none) and the switch keeps waiting; =pending,refuse
+# both. GET /mock/launcher_switch: the requests; ?reset=1 drops every pending switch (and puts =pending's back).
+LAUNCHER_SWITCH_MODE = os.environ.get("MOCK_LAUNCHER_SWITCH", "")
+LAUNCHER_SWITCH_LOG = []
+LAUNCHER_SWITCH_ALL = [{"name": "claude", "model": "opus"}, {"name": "work", "model": "glm-5.3"}, {"name": "sonnetcc", "model": "sonnet"},
+                       {"name": "codex", "model": "gpt-5.5", "agent": "codex", "agent_type": "codex"}]
+if LAUNCHER_SWITCH_MODE:
+    LAUNCHER_MODELS["work"] = {"agent": "claude", "models": [
+        {"id": "default", "name": "Default (recommended)", "description": "Use the gateway's default model (currently glm-5.3)", "resolved": "glm-5.3", "default": True, "efforts": ["low", "medium", "high"]},
+        {"id": "glm-5.3", "name": "glm-5.3", "description": "From the gateway", "efforts": ["low", "medium", "high"]},
+        {"id": "deepseek-v4", "name": "deepseek-v4", "description": "From the gateway", "efforts": ["low", "medium", "high"]},
+        {"id": "opus", "name": "Opus 5.5", "description": "Opus 5.5 · through the gateway", "resolved": "claude-opus-5-5", "efforts": _CLAUDE_EFFORTS},
+    ]}
+
+
+def launcher_switch_reset():
+    for s in SESSIONS:
+        s.pop("pending_switch", None)
+    if "pending" in LAUNCHER_SWITCH_MODE:
+        for s in SESSIONS:
+            if s["session_id"] == REVIEW:
+                s["pending_switch"] = {"launcher": "work", "model": "glm-5.3", "at": ago(minutes=2)}
+
+
+def launcher_switch_route(handler, p, body):
+    """MOCK_LAUNCHER_SWITCH: the second launcher, POST …/modes {launcher}, a message carrying the switch. False otherwise."""
+    if not LAUNCHER_SWITCH_MODE: return False
+    if p == "/mock/launcher_switch":
+        if "reset=1" in (handler.path.split("?", 1) + [""])[1]:
+            launcher_switch_reset()
+            for m in MACHINES: push_machine(m["id"])
+        return handler.send_json({"requests": LAUNCHER_SWITCH_LOG}) or True
+    if handler.command == "GET" and re.fullmatch(r"/api/v1/machines/[^/]+/launchers", p):
+        return handler.send_json({"launchers": launcher_health_list([dict(l) for l in LAUNCHER_SWITCH_ALL])}) or True
+    m = re.fullmatch(r"/api/v1/sessions/([^/]+)/([^/]+)/(modes|messages)", p)
+    if not m or handler.command != "POST": return False
+    s = next((x for x in SESSIONS if x["machine_id"] == m.group(1) and x["session_id"] == m.group(2)), None)
+    if s is None: return False
+    req = json.loads(body or b"{}")
+    if m.group(3) == "messages":
+        ps = s.get("pending_switch")
+        if not ps: return False
+        if "refuse" in LAUNCHER_SWITCH_MODE:
+            return handler.send_json({"error": "Agent 正在工作，等它停下再发，发出时会先切换到 %s" % ps["launcher"], "code": "switch_busy",
+                                      "delivered": "none"}, 409) or True
+        s["launcher"] = ps["launcher"]
+        s["model"] = ps.get("model") or LAUNCHER_MODELS.get(ps["launcher"], {}).get("models", [{}])[0].get("resolved", s.get("model"))
+        if ps.get("effort"): s["effort"] = ps["effort"]
+        s.pop("pending_switch", None)
+        push_machine(s["machine_id"])
+        return False  # the message goes on as any other
+    launcher = req.get("launcher") or ""
+    if not launcher: return False
+    LAUNCHER_SWITCH_LOG.append({"session_id": s["session_id"], **{k: req[k] for k in ("launcher", "model", "effort") if k in req}})
+    if launcher == (s.get("launcher") or "claude"):
+        s.pop("pending_switch", None)
+        push_machine(s["machine_id"])
+        rest = {k: v for k, v in req.items() if k in ("permission_mode", "effort", "model") and v}
+        if rest:
+            s.update(rest)
+            MODES_LOG.append({"session_id": s["session_id"], **rest})
+        return handler.send_json({}) or True
+    known = {l["name"]: l for l in LAUNCHER_SWITCH_ALL}
+    if launcher not in known:
+        return handler.send_json({"error": "这台电脑上没有启动器 %s" % launcher, "code": "switch_launcher_missing"}, 409) or True
+    if known[launcher].get("agent", "claude") != "claude":
+        return handler.send_json({"error": "%s 运行的不是 Claude Code" % launcher, "code": "switch_other_agent"}, 409) or True
+    if req.get("model") and LAUNCHER_MODELS.get(launcher, {}).get("locked"):
+        return handler.send_json({"error": "%s 固定了自己的模型，不能另选" % launcher, "code": "switch_model_locked"}, 409) or True
+    s["pending_switch"] = {"launcher": launcher, **{k: req[k] for k in ("model", "effort") if req.get(k)}, "at": ago(minutes=0)}
+    if req.get("permission_mode"): s["permission_mode"] = req["permission_mode"]
+    push_machine(s["machine_id"])
+    return handler.send_json({}) or True
+
+
+if LAUNCHER_SWITCH_MODE:
+    launcher_switch_reset()
+
+_plugins_route_without_launcher_switch = plugins_route
+
+
+def plugins_route(handler, p, body):
+    return launcher_switch_route(handler, p, body) or _plugins_route_without_launcher_switch(handler, p, body)
+
+
+_features_without_launcher_switch = features
+
+
+def features():
+    return _features_without_launcher_switch() + (["launcher_switch"] if LAUNCHER_SWITCH_MODE else [])
+
+
+MOCK_HELP.append("MOCK_LAUNCHER_SWITCH=1|pending|refuse|pending,refuse  运行中的 Agent 换服务商（#5035）：features 带 launcher_switch；每台电脑多一个 Claude Code 启动器 work（走网关，"
+                 "自己的模型列表）；POST …/modes {launcher} 换到另一个 Claude 启动器就记下 pending_switch（codex 回 409 switch_other_agent，"
+                 "sonnetcc 带模型回 409 switch_model_locked），换回自己的就清掉；下一条消息执行切换。pending：检查 PR 那个一开始就有待切换；"
+                 "refuse：带切换的消息回 409 switch_busy。GET /mock/launcher_switch 看请求，?reset=1 复原")
+
 # Agent session archives (docs/protocol/protocol.md "Agent session archives"; web "Archived agents"): MOCK_AGENT_ARCHIVES=1
 # advertises archives and "Archive and close" (=archive: archives only, as behind an older manager), with two agents
 # already archived. Busy agents are refused (409 agent_busy) as the manager does; ?close=1 closes an open Claude agent
