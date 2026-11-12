@@ -37,6 +37,7 @@ class AdaptiveProbeTest {
 
     private fun enable() {
         context.applicationInfo.flags = context.applicationInfo.flags or ApplicationInfo.FLAG_DEBUGGABLE
+        org.robolectric.shadows.ShadowProcess.setPid(1234)
         AdaptiveProbe.enable(context)
     }
 
@@ -46,14 +47,14 @@ class AdaptiveProbeTest {
     @Test fun disabledProbeHasNoFileOrListener() {
         AdaptiveProbe.disable()
         AdaptiveProbe.publishList("Agents", AdaptiveListEvidence("session", 12))
-        AdaptiveProbe.publishComposer("chat:one", androidx.compose.ui.text.TextFieldValue("secret"), emptyList())
+        AdaptiveProbe.publishComposer("chat:one", androidx.compose.ui.text.input.TextFieldValue("secret"), emptyList())
         assertFalse(file.exists())
         assertFalse(AdaptiveProbe.enabled)
     }
 
     @Test fun enableWritesAtomicallyWithoutDraftText() {
         enable()
-        AdaptiveProbe.publishComposer("chat:one", androidx.compose.ui.text.TextFieldValue("private draft"), listOf("a" to "Uploaded"))
+        AdaptiveProbe.publishComposer("chat:one", androidx.compose.ui.text.input.TextFieldValue("private draft"), listOf("a" to "Uploaded"))
         AdaptiveProbe.publishComposerFocus("chat:one", true)
         val snapshot = assertNotNullSnapshot()
         val composer = snapshot.pages.getValue("chat:one").composer!!
@@ -96,7 +97,7 @@ class AdaptiveProbeTest {
 
     @Test fun equalDraftsHaveDifferentHmacsAcrossEnableSessions() {
         enable()
-        val value = androidx.compose.ui.text.TextFieldValue("same draft")
+        val value = androidx.compose.ui.text.input.TextFieldValue("same draft")
         AdaptiveProbe.publishComposer("chat:one", value, emptyList())
         val first = assertNotNullSnapshot().pages.getValue("chat:one").composer!!.draftHmac!!
         AdaptiveProbe.disable()
@@ -114,7 +115,7 @@ class AdaptiveProbeTest {
         )
         AdaptiveProbe.publishBounds("Settings", bounds)
         AdaptiveProbe.publishList("Settings", AdaptiveListEvidence("notifications", 20))
-        AdaptiveProbe.publishComposer("Settings", androidx.compose.ui.text.TextFieldValue("draft"), emptyList())
+        AdaptiveProbe.publishComposer("Settings", androidx.compose.ui.text.input.TextFieldValue("draft"), emptyList())
         val page = assertNotNullSnapshot().pages.getValue("Settings")
         assertEquals(bounds, page.bounds)
         assertEquals("notifications", page.list!!.firstVisibleKey)
@@ -141,7 +142,7 @@ class AdaptiveProbeTest {
 
     private fun assertNotNullSnapshot(): AdaptiveProbeSnapshot {
         val value = snapshot()
-        assertNotNull(value)
+        assertNotNull(file.readText(), value)
         return value!!
     }
 }

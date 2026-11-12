@@ -35,6 +35,7 @@ internal fun tabletopPageLayout(
     bottomBarHeight: Int?,
     totalHeight: Int,
     minimumContentHeight: Int,
+    bottomInset: Int = 0,
 ): TabletopPageLayout {
     val height = totalHeight.coerceAtLeast(0)
     if (!window.tabletop || height == 0) return TabletopPageLayout.SinglePage
@@ -52,7 +53,8 @@ internal fun tabletopPageLayout(
 
     val dockHeight = bottomBarHeight.coerceAtLeast(0)
     val lowerHeight = height - hingeBottom
-    if (dockHeight > lowerHeight) return TabletopPageLayout.SinglePage
-    val dockTop = hingeBottom + (lowerHeight - dockHeight) / 2
+    val safeLowerHeight = lowerHeight - bottomInset.coerceIn(0, lowerHeight)
+    if (dockHeight > safeLowerHeight) return TabletopPageLayout.SinglePage
+    val dockTop = hingeBottom + (safeLowerHeight - dockHeight) / 2
     return TabletopPageLayout.Split(hingeTop, hingeBottom, TabletopDockPlacement.BottomBar(dockTop))
 }

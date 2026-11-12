@@ -1,5 +1,6 @@
 package persona.core.designsystem
 
+import android.os.SystemClock
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -19,18 +20,20 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.test.assertDoesNotExist
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.onAllNodes
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.height
+import androidx.compose.ui.unit.width
+import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.chrisbanes.haze.HazeState
 import org.junit.After
@@ -177,7 +180,7 @@ class TabletopPageTest {
     @Test fun listPageRetainsTheCallersStateWithTheProbeEnabled() = exerciseListProbe(enabled = true)
 
     private fun exerciseListProbe(enabled: Boolean) {
-        if (enabled) AdaptiveProbe.enable(rule.activity) else AdaptiveProbe.disable()
+        if (enabled) AdaptiveProbe.enable(ApplicationProvider.getApplicationContext()) else AdaptiveProbe.disable()
         assertEquals(enabled, AdaptiveProbe.enabled)
         val listState = LazyListState(firstVisibleItemIndex = 20, firstVisibleItemScrollOffset = 7)
         var window by mutableStateOf(tabletop)
@@ -239,5 +242,62 @@ class TabletopPageTest {
         rule.waitForIdle()
         assertTrue("home bar did not publish its height", barHeight.intValue > 0)
         assertAtMost(450.dp, rule.onNodeWithText("Agents").getBoundsInRoot().bottom, "home navigation")
+    }
+
+    @Test fun crampedFlatBriefAndBoardKeepTheOriginalColumnOrder() {
+        var style by mutableStateOf(AppStyle.Brief)
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true, style = style) {
+                CompositionLocalProvider(LocalWindowLayout provides flat) {
+                    Box(Modifier.fillMaxWidth().height(100.dp)) {
+                        JPage("Page", topBar = topBar, bottomBar = dock) {
+                            Box(Modifier.fillMaxSize().testTag("content"))
+                        }
+                    }
+                }
+            }
+        }
+        for (current in listOf(AppStyle.Brief, AppStyle.Board)) {
+            rule.runOnIdle { style = current }
+            rule.waitForIdle()
+            val top = rule.onNodeWithTag("top-bar").getBoundsInRoot()
+            val bottom = rule.onNodeWithTag("dock").getBoundsInRoot()
+            assertEquals("the dock follows the top bar in $current", top.bottom.value, bottom.top.value, 0.5f)
+        }
+    }
+
+    @Test fun nonListPagesPublishSafeContentAndHingeBounds() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        context.applicationInfo.flags = context.applicationInfo.flags or android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE
+        org.robolectric.shadows.ShadowProcess.setPid(1234)
+        var style by mutableStateOf(AppStyle.Glass)
+        AdaptiveProbe.enable(context)
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true, style = style) {
+                CompositionLocalProvider(LocalWindowLayout provides tabletop) {
+                    JPage("Files-$style", topBar = topBar, bottomBar = dock) {
+                        Box(Modifier.fillMaxSize().testTag("content"))
+                    }
+                }
+            }
+        }
+        for (current in AppStyle.entries) {
+            if (current != AppStyle.Glass) {
+                AdaptiveProbe.enable(context)
+                rule.runOnIdle { style = current }
+            }
+            rule.waitForIdle()
+            val file = context.noBackupFilesDir.resolve("hub-data/adaptive-probe.json")
+            assertTrue("probe file missing for $current", file.isFile)
+            val snapshot = decodeAdaptiveProbeSnapshot(file.readText(), SystemClock.elapsedRealtimeNanos(), Long.MAX_VALUE)
+            val evidence = snapshot?.pages?.get("Files-$current")?.bounds
+            assertTrue("bounds missing for $current", evidence != null)
+            assertTrue("hinge missing for $current", evidence?.hinge != null)
+            assertTrue(
+                "content crosses the hinge in $current: $evidence",
+                evidence != null && evidence.hinge != null && evidence.content.bottom <= evidence.hinge.top,
+            )
+            AdaptiveProbe.disable()
+        }
     }
 }

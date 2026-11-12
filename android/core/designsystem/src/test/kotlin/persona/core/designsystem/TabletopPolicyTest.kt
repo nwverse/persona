@@ -13,7 +13,8 @@ class TabletopPolicyTest {
         dock: Int? = null,
         height: Int = 900,
         minimum: Int = 48,
-    ): TabletopPageLayout = tabletopPageLayout(window, top, dock, height, minimum)
+        bottomInset: Int = 0,
+    ): TabletopPageLayout = tabletopPageLayout(window, top, dock, height, minimum, bottomInset)
 
     @Test fun flatOrInvalidHingesStaySingle() {
         assertEquals(TabletopPageLayout.SinglePage, resolve(window = WindowLayout()))
@@ -45,6 +46,12 @@ class TabletopPolicyTest {
         val shortLower = hinge.copy(hingeBottom = 850f)
         assertEquals(TabletopPageLayout.SinglePage, resolve(window = shortLower, dock = 80))
         assertTrue(resolve(window = shortLower, dock = null) is TabletopPageLayout.Split)
+    }
+
+    @Test fun aDockUsesTheLowerAreaOutsideTheBottomSystemInset() {
+        val exact = resolve(dock = 80, height = 540, bottomInset = 40) as TabletopPageLayout.Split
+        assertEquals(TabletopDockPlacement.BottomBar(top = 420), exact.dockPlacement)
+        assertEquals(TabletopPageLayout.SinglePage, resolve(dock = 80, height = 530, bottomInset = 40))
     }
 
     @Test fun fractionalHingeEdgesRoundAwayFromContent() {
