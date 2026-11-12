@@ -52,7 +52,7 @@ object AgentSpaceLayout {
 
 /**
  * The space page's first line (iOS `SpaceView`): the computer as an accent capsule with its device [icon], its name and,
- * when [onMachine] opens its page, a chevron; then the space's folder, already shortened with ~, cut at its start so
+ * when [onMachine] opens its projects (iOS `MachineSpacesView`, read as "All projects on <computer>"), a chevron; then the space's folder, already shortened with ~, cut at its start so
  * its end shows.
  */
 @Composable
@@ -70,7 +70,7 @@ fun AgentSpaceLocation(
         Row(
             Modifier.then(if (onMachine != null) Modifier.minimumInteractiveComponentSize() else Modifier)
                 .clip(CircleShape).background(accent.copy(alpha = SpaceCardTokens.machineFillAlpha))
-                .then(if (onMachine != null) Modifier.clickable(onClickLabel = stringResource(R.string.designsystem_machine_monitor), role = Role.Button, onClick = onMachine) else Modifier)
+                .then(if (onMachine != null) Modifier.clickable(onClickLabel = stringResource(R.string.designsystem_machine_projects, machine), role = Role.Button, onClick = onMachine) else Modifier)
                 .padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.sm),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.sm),
         ) {
@@ -103,7 +103,8 @@ fun AgentCardRow(modifier: Modifier = Modifier, end: @Composable () -> Unit = {}
  * needs-you color. The agent chip goes first when the column is narrow, then the tab's name is cut.
  *
  * [status] is the agent's own state (dot, chip, ring); [stateTone] colors the words (Awaiting reply takes its own);
- * [waiting]: it only waits in the background, so its clock replaces the dot and both take the lighter working color.
+ * [waiting]: it only waits in the background, so its clock replaces the dot and the clock, the chip and the words take
+ * that state's lighter tone ([PersonaPalette.backgroundWaiting], iOS `stateTone`).
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -127,8 +128,8 @@ fun AgentSlotCard(
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
     val shape = PersonaTheme.shapes.cardShape
-    val chip = palette.status(if (waiting) Status.Waiting else status)
-    val words = palette.status(if (waiting) Status.Waiting else stateTone)
+    val chip = palette.status(status, waiting)
+    val words = palette.status(stateTone, waiting)
     var line = state
     if (starter) line = stringResource(R.string.designsystem_space_card_starter, line)
     if (pending > 0) line = pluralStringResource(R.plurals.designsystem_space_card_pending, pending, line, pending)
@@ -144,7 +145,7 @@ fun AgentSlotCard(
             tab = { CardChip(listOfNotNull(tab, pane).joinToString(" · ").ifEmpty { "—" }, chip.text, chip.tint) },
             agent = agent?.takeIf { pane == null }?.let { name -> { CardChip(name, palette.ink2, outline = palette.ink2.copy(alpha = SpaceCardTokens.outlineAlpha)) } },
             dot = {
-                if (waiting) JIcon(PersonaIcons.backgroundWaiting, null, size = Tokens.Size.dotL * SpaceCardTokens.clockScale, tint = palette.status(Status.Working).dot, decorative = true)
+                if (waiting) JIcon(PersonaIcons.backgroundWaiting, null, size = Tokens.Size.dotL * SpaceCardTokens.clockScale, tint = palette.backgroundWaiting.dot, decorative = true)
                 else JStatusDot(status, size = Tokens.Size.dotL)
             },
         )

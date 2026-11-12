@@ -184,7 +184,7 @@ func TestSubscriptionListGetAndSources(t *testing.T) {
 	}
 	format := out["recipe_format"].(map[string]any)
 	if fmt.Sprint(format["fields"]) != "[id thread title sender time body link due_date]" || format["template_vars"].(map[string]any)["{{since_date}}"] == nil ||
-		fmt.Sprint(format["modes"].(map[string]any)["snapshot"]) == "" {
+		fmt.Sprint(format["modes"].(map[string]any)["snapshot"]) == "" || len(format["group_by"].(map[string]any)) != 2 {
 		t.Fatalf("the recipe format: %v", format)
 	}
 	out, _ = e.call("subscription_sources", `{}`)

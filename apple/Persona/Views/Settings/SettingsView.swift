@@ -139,6 +139,12 @@ struct SettingsView: View {
                 settingsLink(.assistant, "Assistant Profile", Theme.Icon.ai, id: "settings-assistant")
                 settingsLink(.channels, "Channels", Theme.Icon.channels, id: "settings-channels")
                 settingsLink(.connectors, "Connectors", Theme.Icon.connectors, id: "settings.connectors")
+                #if os(iOS)
+                // Every source of the Inbox, built-in ones and subscriptions, on the manager's pages (#5278).
+                if model.hubFeatures.contains(SubscriptionsUI.sourcesFeature) {
+                    settingsLink(.inboxSources, "Inbox Sources", Theme.Icon.subscriptions, id: "settings-inbox-sources")
+                }
+                #endif
                 if model.hubFeatures.hasExtensionFeature("manager") {
                     settingsLink(.plugins, "Extensions", Theme.Icon.plugins, id: "settings-plugins", value: ExtensionText.listSummary(plugins))
                 }
@@ -301,6 +307,7 @@ struct SettingsView: View {
         else if d.bool(forKey: "openSentAsYou") { p = SettingsPage.sentPath }
         else if d.bool(forKey: "openConnectors") { p.append(SettingsPage.connectors) }
         else if d.bool(forKey: "openSkills") { p.append(SettingsPage.skills) }
+        else if d.bool(forKey: "openInboxSources") { p.append(SettingsPage.inboxSources) } // Settings › Inbox Sources (#5278)
         else if let scope = str("openSubscriptions") { // the source subscription pages: `all`, or their first state (#2041)
             p.append(SettingsPage.subscriptions(state: scope == "all" ? nil : scope))
         }
@@ -406,6 +413,9 @@ enum SettingsPage: Hashable {
     /// The source subscription pages (#2041, docs/extensions/subscriptions.md "Pages"), drawn by the manager; `state` opens them on
     /// one extension's or one connector's (`SubscriptionsUI.state`), nil on every subscription.
     case subscriptions(state: String? = nil)
+    /// Settings › Inbox Sources (#5278): the same pages unnarrowed, every source of the Inbox, once the manager reports
+    /// `inbox_sources`.
+    case inboxSources
     /// Settings › Extensions › Extension Market, one plugin of a market, and the markets (docs/extensions/extensions.md「Extension marketplace」).
     case pluginMarket
     case marketExtension(market: String, id: String)
@@ -526,6 +536,8 @@ private struct SettingsDestinations: ViewModifier {
         case .pluginPage(let plugin, let ui, let title, let manager): ExtensionPageView(plugin: plugin, ui: ui, title: title, manager: manager ?? model.assistantManagerID)
         case .subscriptions(let state):
             ExtensionPageView(plugin: SubscriptionsUI.id, ui: SubscriptionsUI.page, title: String(localized: "Subscriptions [Source Subscriptions]"), state: state, manager: model.assistantManagerID)
+        case .inboxSources:
+            ExtensionPageView(plugin: SubscriptionsUI.id, ui: SubscriptionsUI.page, title: String(localized: "Inbox Sources"), manager: model.assistantManagerID)
         case .pluginMarket: ExtensionMarketView()
         case .marketExtension(let market, let id): MarketExtensionDetailView(market: market, id: id)
         case .pluginMarkets: ExtensionMarketsView()

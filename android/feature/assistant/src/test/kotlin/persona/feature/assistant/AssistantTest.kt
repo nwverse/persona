@@ -47,6 +47,41 @@ class AssistantTest {
         assertNull(conversationTime(null, Locale.ENGLISH))
     }
 
+    // The history's times as iOS writes them (`Fmt.relative`, #4339 C12): just now, minutes, today's time, yesterday, the
+    // weekday within six days, else the date.
+    @Test fun historyTimesReadAsIOSWritesThem() {
+        val zone = ZoneId.of("Asia/Shanghai")
+        val now = Instant.parse("2026-11-12T06:30:00Z") // Thursday 14:30
+        val locale = resources.configuration.locales[0]
+        fun at(time: String) = historyTime(Instant.parse(time), resources, now, zone)
+        fun shown(time: String, skeleton: String) = persona.core.designsystem.LocalizedFormats.format(Instant.parse(time), skeleton, locale, zone)
+        assertEquals("刚刚", historyTime(now.minusSeconds(44), resources, now, zone))
+        assertEquals("1 分钟前", historyTime(now.minusSeconds(45), resources, now, zone))
+        assertEquals("5 分钟前", historyTime(now.minusSeconds(300), resources, now, zone))
+        assertEquals("59 分钟前", historyTime(now.minusSeconds(3599), resources, now, zone))
+        assertEquals("a time ahead of the clock is just now", "刚刚", historyTime(now.plusSeconds(30), resources, now, zone))
+        assertEquals("earlier today: its time", shown("2026-11-12T01:00:00Z", persona.core.designsystem.LocalizedFormats.TIME), at("2026-11-12T01:00:00Z"))
+        assertEquals("昨天", at("2026-11-11T14:00:00Z"))
+        assertEquals("昨天", at("2026-11-11T00:30:00Z"))
+        assertEquals("星期一", at("2026-11-09T06:00:00Z"))
+        assertEquals(shown("2026-11-07T06:30:00Z", persona.core.designsystem.LocalizedFormats.WEEKDAY), at("2026-11-07T06:30:00Z"))
+        assertEquals("six days is the date", "11月6日", at("2026-11-06T06:30:00Z"))
+        assertEquals("11月5日", at("2026-11-05T06:00:00Z"))
+        assertNull(historyTime(null, resources, now, zone))
+    }
+
+    // The blank page's lead is iOS's (`ShellHome`): the main chat's page, a side chat's page, and a step still to finish.
+    @Test fun theBlankPagesLeadIsIOSs() {
+        assertEquals(R.string.assistant_home_lead_main, homeLead(setup = false, startsMain = true))
+        assertEquals(R.string.assistant_home_lead_side, homeLead(setup = false, startsMain = false))
+        assertEquals(R.string.assistant_home_setup_lead, homeLead(setup = true, startsMain = true))
+        assertEquals(R.string.assistant_home_setup_lead, homeLead(setup = true, startsMain = false))
+        assertEquals("这是你的主对话：我会记住这里聊过的事。我能看你的电脑、手机、邮箱、飞书和整理好的项目，也能替你盯着事、到点提醒。",
+            resources.getString(R.string.assistant_home_lead_main))
+        assertEquals("开一段新的旁支对话。我能看你的电脑、手机、邮箱、飞书和整理好的项目，也能替你盯着事、到点提醒。",
+            resources.getString(R.string.assistant_home_lead_side))
+    }
+
     @Test fun handoffConversationTitle() {
         // From the old app's InboxTest: the hub names a hand-off after its first message, a <persona-context> tag.
         val s = Session(machineId = "m", sessionId = "x", title = "<persona-context kind=\"context\" title=\"飞书 · 发布群\">(feed_id=f2)")
@@ -102,7 +137,7 @@ class AssistantTest {
         val result = conversationGroups(snapshot, "", named)
         assertEquals("bg", result.background)
         assertEquals(listOf(background, scheduled, mine), result.others)
-        assertEquals(listOf(mine), result.recent)
+        assertEquals(listOf(scheduled, mine), result.recent)
         assertTrue(result.directions.isEmpty())
         // whatever the leaders or its origin say, it is no direction and no recent chat of the user's
         val odd = snapshot.copy(leaders = listOf("bg"), conversations = listOf(main, mine, background.copy(origin = null)))
@@ -179,21 +214,32 @@ class AssistantTest {
         assertEquals("整理日程", repository.assistant.value.conversations.single { it.key == main }.lastText)
     }
 
-    /** #4922 (web `recentConversations`, iOS `AssistantSidebarGroups.recent`): the drawer's Recent. */
-    @Test fun recentIsTheUsersOwnNewestFiveWithoutMainLeadersOrPersonasOwn() {
+    /** #5196 (web `recentConversations`, iOS `AssistantSidebarGroups.recent`): every eligible chat in the drawer's Recent. */
+    @Test fun recentIsEveryNewestFiveWithoutMainLeadersArchivedOrBackground() {
         fun chat(id: String, minutes: Long, origin: String? = null, archived: Boolean = false) = Session(machineId = "demo", sessionId = id,
             updatedAt = Instant.parse("2026-11-11T12:00:00Z").minusSeconds(minutes * 60).toString(), origin = origin, archived = archived)
         val main = chat("main", 0)
-        val chats = listOf(main, chat("lead", 1), chat("inbox", 2, "inbox"), chat("task", 2, "task"), chat("lark", 2, "lark_agent"),
+        val chats = listOf(main, chat("lead", 1), chat("background", 0, "task"), chat("inbox", 2, "inbox"), chat("task", 2, "task"), chat("lark", 2, "lark_agent"),
             chat("spawned", 2, "spawned"), chat("ext", 2, "extension"), chat("future", 2, "something_new"), chat("gone", 2, archived = true),
             chat("b", 3, "user"), chat("a", 3, "channel"), chat("c", 4, ""), chat("d", 5), chat("e", 6), chat("f", 7))
-        val snapshot = AssistantSnapshot(main.key, chats + chats.last(), leaders = listOf("lead"))
-        assertEquals("newest first, equal times by session id, at most 5", listOf("a", "b", "c", "d", "e"), recentConversations(snapshot).map { it.sessionId })
+        val snapshot = AssistantSnapshot(main.key, chats + chats.last(), leaders = listOf("lead"), backgroundSupervisor = "background")
+        assertEquals("automatic chats included; newest first, equal times by session id, at most 5",
+            listOf("ext", "future", "inbox", "lark", "spawned"), recentConversations(snapshot).map { it.sessionId })
         assertEquals("ending the leader lets it back in", "lead", recentConversations(snapshot.copy(leaders = emptyList())).first().sessionId)
         val groups = conversationGroups(snapshot, "", words)
-        assertEquals(listOf("a", "b", "c", "d", "e"), groups.recent.map { it.sessionId })
+        assertEquals(listOf("ext", "future", "inbox", "lark", "spawned"), groups.recent.map { it.sessionId })
         assertTrue("All chats still lists them", groups.others.map { it.sessionId }.containsAll(listOf("a", "b", "inbox")))
         assertTrue("no Recent while searching", conversationGroups(snapshot, "x", words).recent.isEmpty())
-        assertTrue("nothing qualifies: no Recent", recentConversations(AssistantSnapshot(main.key, listOf(main, chat("inbox", 1, "inbox")))).isEmpty())
+        assertTrue("only the main chat: no Recent", recentConversations(AssistantSnapshot(main.key, listOf(main))).isEmpty())
+    }
+
+    @Test fun automaticConversationOriginsHaveOneAccessibleMapping() {
+        listOf(null, "", "user", "channel", " user ").forEach { origin ->
+            assertNull("the user's own origin has no source mark: $origin", automaticConversationOrigin(origin))
+        }
+        val origins = listOf("inbox", "task", "lark_agent", "spawned", "extension", "something_new")
+        assertEquals(AssistantConversationOrigin.entries.toList(), origins.map { automaticConversationOrigin(it) })
+        assertEquals(listOf("收件箱", "定时任务", "来自 飞书 /agent", "对话派生", "来自扩展", "其他"),
+            AssistantConversationOrigin.entries.map { it.accessibilityLabel(resources) })
     }
 }

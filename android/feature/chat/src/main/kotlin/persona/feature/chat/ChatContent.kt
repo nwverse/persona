@@ -53,7 +53,9 @@ import persona.core.contracts.SessionKey
 import persona.core.contracts.api.ChatRepository
 import persona.core.designsystem.*
 import persona.core.designsystem.WorkStep as TimelineStep
+import persona.core.designsystem.dense
 import persona.core.designsystem.icons.PhIcons
+import persona.core.designsystem.row
 import persona.core.domain.lines.*
 import androidx.compose.runtime.key
 import kotlinx.coroutines.Dispatchers
@@ -157,10 +159,10 @@ private fun ChatMarkdownBody(text: String, id: String, bodyStyle: TextStyle, col
                 textLink = TextLinkStyles(SpanStyle(color = palette.accent, textDecoration = TextDecoration.Underline))),
             components = markdownComponents(
                 orderedList = { model -> MarkdownOrderedList(model.content, model.node, depth = model.listDepth,
-                    markerModifier = { Modifier.alignBy(FirstBaseline).padding(end = 8.dp) },
+                    markerModifier = { Modifier.alignBy(FirstBaseline).padding(end = 8.dp.dense) },
                     listModifier = { Modifier.weight(1f).alignBy(FirstBaseline) }) },
                 unorderedList = { model -> MarkdownBulletList(model.content, model.node, depth = model.listDepth,
-                    markerModifier = { Modifier.alignBy(FirstBaseline).padding(end = 8.dp) },
+                    markerModifier = { Modifier.alignBy(FirstBaseline).padding(end = 8.dp.dense) },
                     listModifier = { Modifier.weight(1f).alignBy(FirstBaseline) }) },
                 codeFence = { model ->
                     MarkdownFence(model.content.substring(model.node.startOffset, model.node.endOffset), color, bodyStyle) {
@@ -182,12 +184,14 @@ private fun ChatMarkdownBody(text: String, id: String, bodyStyle: TextStyle, col
  */
 @Composable
 internal fun CodeText(text: String, language: String = "", syntax: Boolean = false, bar: Boolean = false) {
+    // In a picture the whole code shows, with nothing to tap (iOS's card theme).
+    if (LocalInPicture.current) return CodeBody(text, language, syntax && language.isNotBlank())
     var expanded by remember(text) { mutableStateOf(false) }
     val preview = remember(text, expanded) { if (expanded) text else text.lineSequence().take(40).joinToString("\n") }
     val copy = rememberCopy()
     val palette = PersonaTheme.palette
     val colour = syntax && language.isNotBlank()
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp.dense)) {
         if (bar) CodeBody(preview, language, colour) { CodeBar(language) { copy(text, null) } }
         else {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -202,6 +206,9 @@ internal fun CodeText(text: String, language: String = "", syntax: Boolean = fal
         }
     }
 }
+
+/** True where messages are drawn into a picture (Share's card, [MessageShareCard]): code blocks lose their Copy bar and "Show all". */
+internal val LocalInPicture = staticCompositionLocalOf { false }
 
 /** A code block's code: links in it tappable, coloured by [language] when [colour]; [header] inside its box, on top. */
 @Composable
@@ -222,22 +229,31 @@ private fun CodeBody(preview: String, language: String, colour: Boolean, header:
 
 internal data class ChatImage(val session: SessionKey, val item: Item)
 
-internal fun chatImageLoader(context: android.content.Context, repository: ChatRepository): ImageLoader =
-    ImageLoader.Builder(context).components {
-        add(Keyer<ChatImage> { data, _ -> "${(repository as? ChatLocalStorage)?.localStorage?.value?.scope}/${data.session.path}/${data.item.id}" })
-        add(object : Fetcher.Factory<ChatImage> {
-            override fun create(data: ChatImage, options: Options, imageLoader: ImageLoader): Fetcher = object : Fetcher {
-                override suspend fun fetch() = withContext(Dispatchers.IO) {
-                    val file = checkNotNull(repository as? ChatLocalStorage) { "Scoped image storage is unavailable" }
-                        .imageFile(data.session, data.item,
-                            (options.size.width as? coil3.size.Dimension.Pixels)?.px ?: context.resources.displayMetrics.widthPixels,
-                            (options.size.height as? coil3.size.Dimension.Pixels)?.px ?: context.resources.displayMetrics.heightPixels)
-                    SourceFetchResult(ImageSource(file.toOkioPath(), FileSystem.SYSTEM), "image/png",
-                        DataSource.DISK)
+internal const val CHAT_IMAGE_MEMORY_BYTES = 96L * 1024 * 1024
+
+fun chatImageLoader(context: android.content.Context, repository: ChatRepository, scope: String? = null): ImageLoader =
+    scopedChatImageLoader(context, repository as? ChatLocalStorage, scope)
+
+fun scopedChatImageLoader(context: android.content.Context, storage: ChatLocalStorage?, scope: String? = null): ImageLoader =
+    ImageLoader.Builder(context)
+        .memoryCache { coil3.memory.MemoryCache.Builder().maxSizeBytes(CHAT_IMAGE_MEMORY_BYTES).build() }
+        .components {
+            add(Keyer<ChatImage> { data, _ ->
+                "${scope ?: storage?.localStorage?.value?.scope}/${data.session.path}/${data.item.id}"
+            })
+            add(object : Fetcher.Factory<ChatImage> {
+                override fun create(data: ChatImage, options: Options, imageLoader: ImageLoader): Fetcher = object : Fetcher {
+                    override suspend fun fetch() = withContext(Dispatchers.IO) {
+                        val file = checkNotNull(storage) { "Scoped image storage is unavailable" }
+                            .imageFile(data.session, data.item,
+                                (options.size.width as? coil3.size.Dimension.Pixels)?.px ?: context.resources.displayMetrics.widthPixels,
+                                (options.size.height as? coil3.size.Dimension.Pixels)?.px ?: context.resources.displayMetrics.heightPixels)
+                        SourceFetchResult(ImageSource(file.toOkioPath(), FileSystem.SYSTEM), "image/png",
+                            DataSource.DISK)
+                    }
                 }
-            }
-        })
-    }.build()
+            })
+        }.build()
 
 /**
  * A picture of the conversation (R5): it keeps its shape while it loads, at most [ChatPictureMaxHeight] tall; a tap opens
@@ -326,6 +342,13 @@ internal fun ChatLineContent(
                 ?: ChatSystemLine(line.row.item?.text.orEmpty(), line.row.item?.task?.failed == true)
         }
         is ChatLine.Recaps -> RecapLine(line.items.map { it.item })
+        is ChatLine.Viewed -> ViewedImagesRow(line.images, session, loader)
+        // Glass: where the replies' model changed (#5055, ModelChanges.mark), as the transcript names both.
+        is ChatLine.ModelChange -> {
+            val from = persona.core.domain.lines.ModelChanges.replyModelName(line.from)
+            val to = persona.core.domain.lines.ModelChanges.replyModelName(line.to)
+            persona.core.designsystem.JModelChangeDivider("$from → $to", res.getString(R.string.chat_model_changed, from, to))
+        }
         is ChatLine.Extra -> {
             val round = line.payload as? persona.core.domain.tasks.BackgroundRound
             if (round != null) BackgroundRoundLine(round, onToggle) else AssistantExtraLine(line.payload, LocalAssistantTaskHost.current)
@@ -343,7 +366,7 @@ internal fun ChatLineContent(
                 // waits: no "Working", no clock, no spinner, as the header says "Waiting for you".
                 val waits = waiting && line.live
                 val now by rememberNow(1_000, enabled = line.live && !waits)
-                WorkGroup(workSummary(res, line, recordedDuration, now.takeIf { line.live }, waiting = waits), line.open,
+                WorkGroup(workSummary(res, line, recordedDuration, now.takeIf { line.live }, waiting = waits, names = LocalToolNames.current), line.open,
                     { onToggle(line.id) }, running = line.live && !waits,
                     onTerminal = onTerminal?.takeIf { ChatTerminalPlaces.onWorkLine(line.live, PersonaTheme.style) },
                     terminalLabel = stringResource(R.string.chat_screen_open_terminal)) {}
@@ -354,7 +377,7 @@ internal fun ChatLineContent(
             WorkStep(line.step, session, loader, onFold, folding, foldErrors, onFullText, style, textUpdates, workRunning, lastWorkStep, plan)
         }
         is ChatLine.End -> TimelineMark(pluralStringResource(R.plurals.chat_content_collapse_steps, line.count, line.count),
-            Modifier.heightIn(min = 44.dp).clickable(role = Role.Button) { onToggle(line.groupId) })
+            Modifier.heightIn(min = 44.dp.row).clickable(role = Role.Button) { onToggle(line.groupId) })
         is ChatLine.Wakes -> ChatSystemLine(pluralStringResource(R.plurals.chat_content_wakes, line.turn.wakes.size, line.turn.wakes.size))
     }
 }
@@ -428,7 +451,7 @@ private fun WorkStep(step: WorkItem, session: SessionKey, loader: ImageLoader, o
                 PlanStep(plan, running)
                 return
             }
-            val presentation = toolPresentation(LocalResources.current, call.use.item)
+            val presentation = toolPresentation(LocalResources.current, call.use.item, LocalToolNames.current)
             val taskBadge = if (call.results.any { it.task?.kind == "agent" })
                 LocalChatTaskIndex.current.badge(call.use.item.toolUseId, concise = true)?.text?.text() else null
             Column(Modifier.fillMaxWidth()) {
@@ -453,10 +476,13 @@ private fun WorkStep(step: WorkItem, session: SessionKey, loader: ImageLoader, o
                 // Right of the rail on Glass, under the step's words (iOS's timeline, `detailLeading`).
                 if (open) Column(Modifier.fillMaxWidth().workDetail(Tokens.Space.m),
                     verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+                    // A tool that operates a Mac says its steps in words on Glass, its output and picture with them (iOS ComputerToolDetail).
+                    val computer = PersonaTheme.style == AppStyle.Glass && persona.core.domain.ComputerSteps.isComputerTool(call.name)
                     if (diff != null) {
                         toolPath(call.use.item)?.let { DiffHeader(it, diff.added, diff.removed) }
                         DiffView(diff, call.id)
-                    } else if (todos == null) ToolInputDetail(call.use.item, call.result?.item)
+                    } else if (computer) ComputerToolDetail(call, session, loader)
+                    else if (todos == null) ToolInputDetail(call.use.item, call.result?.item)
                     // A truncated output opens in full from "Raw output" below. An edit's own result only says it worked; an
                     // answered ask_user's result repeats the ticked choices above in the model's words (iOS ToolViews).
                     val agentReports = call.results.any { it.task?.kind == "agent" }
@@ -475,14 +501,15 @@ private fun WorkStep(step: WorkItem, session: SessionKey, loader: ImageLoader, o
                             }
                         }
                     } else call.result?.item?.let { result ->
-                        if (todos == null && (diff == null || call.failed) && (!PersonaTools.isAskUser(call.name) || call.failed))
+                        if (!computer && todos == null && (diff == null || call.failed) && (!PersonaTools.isAskUser(call.name) || call.failed))
                             CodeText(result.text.orEmpty(), stringResource(R.string.chat_content_output))
                     }
                     // A dev server saying where it listens (docs/operations/ports.md).
                     if (call.name == "Bash") call.result?.text?.let { PortBadges(it) }
-                    call.images.forEach { ChatPicture(session, it.item, loader) }
+                    if (!computer) call.images.forEach { ChatPicture(session, it.item, loader) }
                     ToolReaderActions(call.use.item.toolInput?.toString(), call.result?.text?.takeUnless { agentReports },
-                        call.result?.item?.takeIf { !agentReports && it.fullSize != null }?.let { result -> { onFullText(result) } })
+                        call.result?.item?.takeIf { !agentReports && it.fullSize != null }?.let { result -> { onFullText(result) } },
+                        rawInput = !drawsRawInput(call.use.item))
                 }
             }
         }
@@ -520,13 +547,15 @@ private fun userPictures(images: List<Item>, session: SessionKey, loader: ImageL
  * press opens the menu for a message not sent ("Copy", "Select", "Share", "Delete"), without one none.
  */
 @Composable
-internal fun UserBubble(text: String, id: String = "pending", pending: persona.core.contracts.api.DeliveryState? = null) {
-    MergedUserBubble(listOf(Item(id, role = "user", kind = "text", text = text)), menu = pending != null, pending = pending)
+internal fun UserBubble(text: String, id: String = "pending", pending: persona.core.contracts.api.DeliveryState? = null,
+    faded: Boolean = false, leading: (@Composable () -> Unit)? = null) {
+    MergedUserBubble(listOf(Item(id, role = "user", kind = "text", text = text)), menu = pending != null, pending = pending,
+        faded = faded, leading = leading)
 }
 
 @Composable
 internal fun ChatSystemLine(text: String, failed: Boolean = false) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp),
+    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp.dense), horizontalArrangement = Arrangement.spacedBy(6.dp.dense),
         verticalAlignment = Alignment.Top) {
         JIcon(if (failed) PhIcons.WarningCircle else PhIcons.Info, null, size = 16.dp,
             tint = if (failed) PersonaTheme.palette.danger.text else PersonaTheme.palette.ink2)

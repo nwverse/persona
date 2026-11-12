@@ -1,6 +1,7 @@
 package transcript
 
 import (
+	"slices"
 	"sort"
 	"strings"
 
@@ -78,12 +79,17 @@ func FoldWork(items []proto.Item) []proto.Item {
 
 func fold(run []proto.Item) proto.Item {
 	first, last := run[0], run[len(run)-1]
-	fo := &proto.Fold{Items: len(run), Until: last.TS, ThroughSeq: last.Seq, ThroughID: last.ID}
+	fo := &proto.Fold{Items: len(run), Until: last.TS, ThroughSeq: last.Seq, ThroughID: last.ID, ToolNames: []string{}}
 	latestThought := -1
 	for i, it := range run {
 		switch {
 		case it.Kind == proto.KindToolUse:
 			fo.Tools++
+			if it.ToolName != "" && len(fo.ToolNames) < proto.FoldToolNamesMax && !slices.Contains(fo.ToolNames, it.ToolName) {
+				fo.ToolNames = append(fo.ToolNames, it.ToolName)
+			}
+		case it.Kind == proto.KindToolResult && it.IsError:
+			fo.Errors++
 		case it.Kind == proto.KindThinking && strings.TrimSpace(it.Text) != "":
 			fo.Thoughts++
 			latestThought = i
@@ -96,6 +102,7 @@ func fold(run []proto.Item) proto.Item {
 		fo.LatestThinking = thinkingPreview(run[latestThought])
 	}
 	fo.Changes = foldChanges(run)
+	fo.Usage = foldUsage(run)
 	return proto.Item{ID: "fold:" + first.ID, Seq: first.Seq, TS: first.TS, Role: "assistant", Kind: proto.KindFold, Fold: fo}
 }
 

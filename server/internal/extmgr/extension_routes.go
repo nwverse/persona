@@ -175,6 +175,7 @@ func readExtensionJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 func (h *Manager) extensionRoutes(api *http.ServeMux) {
 	h.extensionUIRoutes(api)
 	h.extensionImageRoutes(api)
+	h.extensionLogoRoutes(api)
 	h.extensionSystemRoutes(api)
 	h.marketRoutes(api)
 	h.operationRoutes(api)
@@ -215,6 +216,7 @@ func (h *Manager) extensionRoutes(api *http.ServeMux) {
 		}
 	}
 	h.authRoutes(api, full)
+	h.assistantDataRoutes(api, full)
 	// Installing, upgrading and removing run or delete code on this machine: the master token over loopback only.
 	owner := func(f http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {

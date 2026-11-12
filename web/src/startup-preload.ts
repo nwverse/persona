@@ -197,13 +197,27 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * and their words; the earlier stretches' windows, reading and drawing, the handoff panel and their words, the "Switch
  * Agent?" dialog and the panel's engine code load lazily). And 453 B because #5303 and #5457 landed together (#5488):
  * #5303 counted the room main had at d7536a601c as its own, and #5457 (#5420, the provider import link) used that room
- * too, merged in between; ja 591,939 B on main at 48f1e053b5, plus 41 B of room. And 71 B for a refusal in plain words
- * in a Persona conversation (#5202: ja 592,011 B against 591,928 B on main at d7017cbe6e, +83 B, of which 52 B fit the
- * room main had, plus 40 B of room: the refusal line's one sentence with the model's short name and its closed Details,
- * the fallback card's one-line title, its Details and the short name while going back, their words). Raise it on
- * purpose, in the change that needs it.
+ * too, merged in between; ja 591,939 B on main at 48f1e053b5, plus 41 B of room. And 684 B for each turn's cost on the
+ * reply bar (#5426: ja 592,664 B against 591,753 B on main at cc83e770df, +911 B, of which 227 B fit the room main had:
+ * collecting an exchange's usage while the chat's lines are built, a subagent's once in the chat, in the exchange that
+ * launched it, and handing it to the reply; the prices, the sums by model, the card and their words load with the reply
+ * bar). And 279 B for the same usage bar after the command card's wording landed (#5512, #5539: ja 592,943 B against
+ * 592,664 B on main at 0856795596: the command-answer labels and the usage computation share the reply bar's helpers;
+ * the command card itself and its usage card stay lazy, outside the idle tier). And 82 B for Done paging the list's last
+ * days now that the list carries only the newest done items (#5549: ja 593,025 B against 592,867 B on main at 86c439b97,
+ * +158 B, of which 76 B fit the room main had: Undo reopening what the hub moved, listed or not, a route reading an item
+ * only the history has or, once, the hub's copy by id, and the state that says it is being read). And 32 B because #5592
+ * and #4743 landed together: #5592 (+64 B, a Done group's first page starting past the done items the list holds)
+ * counted the 69 B of room main had at 0bfcf2879 as its own, and #4743 (+37 B) used part of it, merged in between; ja
+ * 593,057 B on main at 18de01b8d, with 0 B of room. And 94 B for the six-line composer (#5674, #5704, #5713: ja
+ * 593,151 B on main at 5f60a1c45: the composer's fixed maximum-height token and manual-scroll measurement; the
+ * layout is unchanged by this accounting). And 194 B for a refusal in plain words in a Persona conversation (#5202:
+ * ja 593,305 B against 592,937 B on main at 5790ee8be3, +368 B, of which 214 B fit the room main had, plus 40 B of room:
+ * the refusal line's one sentence with the model's short name and its closed Details, the fallback card's one-line
+ * title, its Details and the short name while going back, their words). Raise it on purpose, in the change that needs
+ * it.
  */
-export const FIRST_SCREEN_BUDGET = 592_051;
+export const FIRST_SCREEN_BUDGET = 593_345;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
@@ -310,9 +324,12 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
  * took the @ menu's rows off the first screen, beside #5325's / palette and #5327's queue panel, which together left
  * less room than it needs: 43,729 B merged with main at f18875688; 43,809 B with the review's fixes merged with main at
  * 0fef425ef, and 31 B over that so the next main does not tip it). It stays idle: a typed @ opens it at once.
+ * And 183 B for the single-category stacked bar's share predicate and horizontal segmented renderer (#5386,
+ * 2026-11-12: 43,782 B measured on main before the change, 43,965 B after; the chart chunk is idle by contract —
+ * code-views-lazy.test enforces `idle: true` — so the renderer has no intent tier to move into).
  * Every other lazy page loads on intent, not at idle; raise it on purpose, in the change that needs it.
  */
-export const IDLE_TIER_BUDGET = 43_840;
+export const IDLE_TIER_BUDGET = 43_965;
 
 const gzip = promisify(gzipCompress);
 

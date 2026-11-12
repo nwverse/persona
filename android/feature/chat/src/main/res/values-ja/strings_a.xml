@@ -370,7 +370,7 @@
     <string name="chat_tasks_message_filed_title">対応済み・送信しなかった下書き</string>
     <string name="chat_tasks_dock_waiting">%1$s・要対応</string>
     <string name="chat_tasks_dock_interrupted">%1$s・中断</string>
-    <string name="chat_tasks_route_chip">「%1$s」へ ×</string>
+    <string name="chat_tasks_route_chip">「%1$s」に伝える</string>
     <string name="chat_tool_details">ツールの詳細</string>
     <string name="chat_tool_view_file">ファイルを表示</string>
     <string name="chat_tool_plan_title">プラン</string>
@@ -420,15 +420,11 @@
     <string name="chat_work_thinking">思考中</string>
     <string name="chat_work_step">%1$s、ステップ%2$d</string>
     <string name="chat_work_elapsed">%1$s、%2$s</string>
-    <string name="chat_work_seconds">%1$d秒</string>
-    <string name="chat_work_minutes">%1$d分</string>
-    <string name="chat_work_hours_minutes">%1$d時間%2$d分</string>
     <string name="chat_work_working_for">作業中%1$s</string>
     <string name="chat_work_done">完了</string>
     <string name="chat_work_tools">ツール%1$d</string>
     <string name="chat_work_thoughts">思考%1$d</string>
     <string name="chat_work_replies">返信%1$d</string>
-    <string name="chat_work_minutes_seconds">%1$d分%2$d秒</string>
     <string name="chat_work_reading_files">%1$d件のファイルを読み込み中</string>
     <plurals name="chat_work_done_steps">
         <item quantity="other">%1$dステップ</item>
