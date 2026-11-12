@@ -1163,9 +1163,9 @@ page the user watches during the meeting is the page they keep writing in after 
   microphone the recording holds, and its model and attachment rows don't apply. The page has no second composer.
 - **Control row** (live only): Pause / Continue, Bookmark and Stop, with the live bar's looks, identifiers, Stop
   confirmation and announcements; hidden while the field has focus. At accessibility sizes the bar is at most two rows,
-  the field and one row of icons: Pause or Continue, Stop, a More menu (Bookmark, the Just Me switch, **What Was Just
-  Said**) and send. Why the field takes no words then shows at the end of what scrolls (a neutral `NoticeBanner`) and as
-  the field's spoken hint, not in the bar.
+  the field and one row of icons: Pause or Continue, Stop, a More menu (Bookmark, the Just Me switch, the photo items
+  when the meeting takes photos, **What Was Just Said**) and send. Why the field takes no words then shows at the end of
+  what scrolls (a neutral `NoticeBanner`) and as the field's spoken hint, not in the bar.
 - **When Persona can't take part**: an older manager took the room meeting with Persona off (the last upload's `200` had
   no `room`): the subtitle and the thread's header say "Persona can't take part right now", the field asks nothing of the
   room and [+] goes, with a caption that says so; Just me stays. The same rule (`MeetingAsk.canAsk`) decides the asks
@@ -1188,6 +1188,54 @@ page the user watches during the meeting is the page they keep writing in after 
   `MeetingExchangeRow` look.
 - **The After the Meeting divider**: a centered caption between two hairlines, the look of the chat's `CompactDivider`,
   between the room's thread and the follow-up's.
+- **Photos (phase 3)**: in a meeting started while the hub listed `meeting_photos`, [+] also has **Take Photo** (where
+  the device has a camera) and **Choose Photos** (the system picker, images only, at most
+  `Theme.Recording.photoPickLimit` at once), live only and never with Just Me on: a photo is the meeting's material,
+  not a private question. Picked photos show in the thread at once as **Preparing…** rows, before Photos hands their
+  bytes over; those it can't (still in iCloud) leave again and are said in one `Theme.danger` line under the field until
+  the next pick (at accessibility sizes a danger `NoticeBanner` at the end of what scrolls instead, so the bar stays two
+  rows). Each photo is a row of its own: a thumbnail (`Theme.Recording.photoThumbSide` square, scaled with the text,
+  `Theme.Radius.control` corners on `Theme.Fill.well`, the photo icon until the picture is ready; a tap opens the
+  viewer), then "Photo" and the meeting clock it was taken at, the caption or the first
+  `Theme.Recording.photoTextLines` lines of the words read on it, and its state in words: **Preparing…** and
+  **Uploading…** with a small spinner, **Used as material** with the success check in `Theme.positive` once the hub
+  stored it, or **Couldn't upload** in `Theme.danger` with the reason. A failed photo has its buttons under it, plain
+  themed ones: **Retry** only when sending it again can help (no answer, a busy or read-only hub, a full meeting once a
+  photo is deleted), and **Delete Photo** always, so a refusal the hub would give again (a picture it can't take, a
+  meeting whose transcript expired, a hub without photos, a device without access) never leaves a Retry that can't
+  work. Under it the room's note shows as a **Persona** answer row; while the room has the photo and no note yet,
+  "Persona is looking at the photo…" with a spinner, for at most `Theme.Recording.photoNoteWait` after it was added (a
+  room that never writes one stops the spinner). After the meeting a photo the minutes cite says **Cited in the
+  minutes** with the minutes icon. A photo whose room message the thread holds sits there; the others (not sent to the
+  room, their message not among the room's pages loaded, still on their way) follow the room's rows, oldest first,
+  those still on their way last; never hidden. A photo the room holds but the hub no longer lists (deleted, trimmed) is
+  a quiet centered line, **Photo removed**, with no thumbnail. At accessibility sizes the thumbnail stands above the
+  words, and the failed photo's buttons stack. VoiceOver reads the thumbnail, heading, words and state as one element
+  (label "Photo, 12:34, its first lines"; value the state words, "Deleting…" while it is deleted, and Cited in the
+  minutes), with **View Photo**, **Retry** and **Delete Photo** as its accessibility actions, so nothing needs the long
+  press; the buttons and the note are elements of their own. Reason: the whiteboard is what the minutes and answers
+  read, so the row says in words where it is (stored, read by Persona) instead of a badge, and the note shows what
+  Persona took from it.
+- **Deleting a photo**: the row's long-press menu has **Delete Photo** (destructive) for a stored or a failed photo, as
+  does the failed one's button; then a confirmation dialog, **Delete This Photo?**, with **Delete Photo** and a message
+  that says what deleting does: sent to the room, "Persona already saw it. It is told not to use it again, and it leaves
+  the minutes."; stored but not sent, "It leaves the meeting's material and the minutes."; a failed one has no message,
+  since it may have been stored with its answer lost: the delete reads the hub's list first and deletes it there when
+  the list has it, else it only leaves this phone; with no list (offline) it stays and says why. While it is deleted the
+  row is dimmed (`Theme.Recording.dimmed`) and its state reads **Deleting…** with a spinner, so the dimming never says
+  it alone; a refusal shows its words under the photo in `Theme.danger` and is announced. Why a confirmation: it can't
+  be undone, and it changes the minutes.
+- **Photos and haptics**: adding a photo (camera or library) and deleting one play no haptic: the new row, its state
+  words and the confirmation are the feedback, and the microphone is open (the Haptics line below keeps them to send,
+  Pause and Bookmark).
+- **A cited photo in the minutes** (the recording page's minutes, `RecordingMinutesSections`; iPhone only, visionOS
+  shows the item alone): an item that cites a photo (`"photo": 3`) shows that photo's thumbnail under its words, the
+  same thumbnail as the thread's, a tap opens the viewer; **Photo removed** in caption secondary once the hub's list
+  was read and no longer has it (a trimmed recording's deleted photo); the thumbnail's place while the list isn't read
+  yet (offline), which is not a delete. Copy and Share end such an item with "(photo 3)", as the hub's Markdown does.
+- **Photo viewer**: the thumbnail opens the photo full screen (`.fullScreenCover`) in the app's image viewer
+  (`ImageViewer`), from this phone's copy or the hub's; a spinner with **Done** until the bytes are here, and when
+  neither has it an `EmptyStateView` ("Image didn't load") with **Retry**.
 - **Just me**: a switch row in the bar (live only) with its caption ("Only you see it, in the main chat"). With it on the
   section header reads **Just Me** ("Only on this screen, never said aloud"), the field's placeholder "Ask privately…",
   and the thread shows only the owner's private questions and the main chat's answers to them, in the same You / Persona
@@ -1206,12 +1254,19 @@ page the user watches during the meeting is the page they keep writing in after 
   nobody chosen the role shows Off; Listen or Take Part shows "Who Attends: Choose" with a caption under it in the same
   row ("Choose who attends. Until then Persona stays out of the meeting."), and the strip's Turn on Persona or role menu
   pushes the attendee picker first, turning on once someone is picked. The main chat stays an ordinary row of the picker.
-- Haptics: only `tap`, on send, Pause and Bookmark, while the microphone is open (section 4.3); new room answers are
-  announced to VoiceOver as the live view's are.
+- Haptics: only `tap`, on send, Pause and Bookmark, while the microphone is open (section 4.3); photos play none;
+  new room answers are announced to VoiceOver as the live view's are.
 - Identifiers for tests: `meeting-page-menu`, `meeting-role`, `meeting-private`, `meeting-page-subtitle`,
   `meeting-room-problem`, `meeting-live`, `meeting-transcript`, `meeting-thread-header`, `meeting-thread-earlier`,
   one `meeting-thread-<kind>` per row kind (`lines`, `heard`, `question`, `answer` and the others),
-  `meeting-just-me`, `meeting-just-me-retry`, `meeting-plus`, `meeting-heard`, `meeting-ask-field`, `meeting-ask-send`
+  `meeting-just-me`, `meeting-just-me-retry`, `meeting-plus`, `meeting-heard`, `meeting-photo-camera`,
+  `meeting-photo-library`, `meeting-photo-row` (the row), its photo element named by its state (`meeting-photo-preparing`,
+  `meeting-photo-uploading`, `meeting-photo-material`, `meeting-photo-failed`, `meeting-photo-deleting`,
+  `meeting-photo-unlisted`), `meeting-photo-retry`, `meeting-photo-remove`, `meeting-photo-note`,
+  `meeting-photo-reading`, `meeting-photo-removed`, `meeting-photo-delete`, `meeting-photo-delete-confirm`,
+  `meeting-photo-delete-problem`, `meeting-photo-viewer`, `meeting-photo-viewer-done`, `meeting-photo-problem`; in the
+  minutes `minutes-photo` and `minutes-photo-removed`,
+  `meeting-ask-field`, `meeting-ask-send`
   (the two shared with the live bar's typed question), `meeting-ask-caption`, `meeting-ask-notice`, `recording-more`,
   `meeting-page-stop-speaking`, `meeting-after-status`, `meeting-after-divider`, `meeting-followup-retry`; at the start
   `meeting-private-start`; on the recording's page `recording-private` and `recording-meeting-conversation`; the sheet's
