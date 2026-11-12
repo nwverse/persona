@@ -44,6 +44,7 @@ import { TurnChanges, turnChangesHeight } from "./TurnChanges";
 import { turnChanges } from "../../lib/turn-changes";
 import { useCallSeeker } from "./jump";
 import { t } from "../../i18n";
+import { useMessageFeedback } from "../../lib/message-send";
 
 /** A message longer than this many lines folds to ten of them (FOLDED), with "Expand" under it (the reference client's UserMessage). */
 export const BUBBLE_MAX_LINES = 14;
@@ -92,6 +93,7 @@ export function segmentHeight(user: UserMessage | undefined, nodes: WorkNode[], 
  *  the transcript to go back to). */
 export function UserBubble({ msg, mid, sid, pending, sendState, starting, onDelete }: { msg: UserMessage; mid: string; sid: string; pending?: boolean; sendState?: "sending" | "sent" | "failed"; starting?: boolean; onDelete?: () => void }) {
   const own = isOwnMessage(msg);
+  const feedback = useMessageFeedback(mid, sid, msg.client_msg_id ?? msg.id?.replace(/^(pending:|outbox:)/, "") ?? "");
   // the chat's last message keeps its time on screen under the bubble (#5285); a hover shows the others' beside it
   const pinned = useIsLatestMessage(msg.ts) && !pending && !starting;
   // the message an extension opened the conversation with (#3758)
@@ -124,7 +126,7 @@ export function UserBubble({ msg, mid, sid, pending, sendState, starting, onDele
           </MessageActions>
         ))}
       {pinned && <span className="text-[11px] text-ink-3 tabular-nums" data-latest-time>{clock(msg.ts)}</span>}
-      {(pending || msg.queued) && <span className="text-[11px] text-ink-3">{pending ? t("chat-segmentview.sending") : t("chat-segmentview.queued")}</span>}
+      {(pending || starting || msg.queued) && feedback !== "" && <span className="text-[11px] text-ink-3 whitespace-nowrap">{feedback === "processing" ? t("chat-segmentview.processing") : feedback === "unknown" ? t("lib-outbox.delivery_unknown") : pending || starting ? t("chat-segmentview.sending") : t("chat-segmentview.queued")}</span>}
       {!pending && !starting && <ChannelSource clientMsgId={msg.client_msg_id} openedBy={openedBy} />}
     </div>
   );
