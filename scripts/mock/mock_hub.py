@@ -2892,6 +2892,7 @@ def is_read_only(h):
 
 
 # ---------- the knowledge base (Persona › Knowledge base, docs/assistant/knowledge.md) ----------
+KB_KINDS = ("projects", "chats", "people", "docs", "meetings", "events", "recordings", "topics")  # kb_search's kinds
 KB = {
     "projects": [
         {"kind": "projects", "id": "weather-app", "name": "天气 App", "one_line": "小组件时间线已按小时刷新，等中号布局的降雨条",
@@ -2924,6 +2925,7 @@ KB_UPDATES = []  # what "Tagging" saved (read back at /mock/kb_updates)
 # Recordings synced from the phone (docs/protocol/protocol.md "Recording sync", #3235): uuid → the last body PUT; deleted ids are
 # tombstones (a later PUT gets 410). GET /mock/recordings reads both back. MOCK_RECORDINGS_DOWN=1: 503 (the hub away).
 RECORDINGS = {}
+RECORDING_UPLOADED = {}  # uuid → when its last upload was stored (the hub's Recording.Updated): a meeting without ended_at ends 12 h after
 RECORDINGS_DELETED = set()
 RECORDING_PUTS = [0]  # every PUT, stored or refused
 # Trimmed recordings (#3780, docs/assistant/meeting-minutes.md "Privacy"): POST /mock/recording_trim {"id"} makes a stored one
@@ -3175,6 +3177,7 @@ def day_put(h, rid, raw):
     if have and have.get("recap_final_at"): body["recap_final_at"] = have["recap_final_at"]
     for i, seg in enumerate(body["segments"]): seg["n"] = i + 1
     RECORDINGS[rid] = body
+    RECORDING_UPLOADED[rid] = time.time()
     day_publish(rid, repair=bool(have))
     return h.send_json(day_result(rid, "stored", put=True, fallback=raw)) or True
 
@@ -3953,7 +3956,7 @@ def meeting_conversation_on():
 def conv_of(rid, make=False):
     m = MEETING_CONV.get(rid)
     if m is None and make:
-        m = MEETING_CONV[rid] = {"room": None, "private": None, "followup": None, "revs": {}, "updated": 0.0}
+        m = MEETING_CONV[rid] = {"room": None, "private": None, "followup": None, "revs": {}}
     return m
 
 
@@ -4063,7 +4066,6 @@ def meeting_put(rid, body):
     good, one without turns its role off) and its first private mark (a meeting's, only while it has none). What was
     wrong with the room's role."""
     m = conv_of(rid, True)
-    m["updated"] = time.time()
     room_before, private_before = json.dumps(m["room"], sort_keys=True), m["private"]
     problem = None
     if isinstance(body.get("room"), dict):
@@ -4345,10 +4347,11 @@ def meeting_message(body):
 
 def meeting_running(rid):
     """The meeting is not over for a follow-up (followup.meetingRunning): no ended_at and an upload in the last 12 hours
-    (a trimmed one has ended), or a room still starting, ready or unavailable."""
+    (a trimmed one has ended), or a room still starting, ready or unavailable. Any recording, a note or one that never
+    had a room too (#3862 phase 6): one with neither waits for nothing."""
     if rid in RECORDINGS_TRIMMED: return False
+    if not RECORDINGS[rid].get("ended_at") and time.time() - RECORDING_UPLOADED.get(rid, 0) < MEETING_STALE: return True
     m = MEETING_CONV.get(rid) or {}
-    if not RECORDINGS[rid].get("ended_at") and time.time() - m.get("updated", time.time()) < MEETING_STALE: return True
     return ((m.get("room") or {}).get("state") or "none") in ("starting", "ready", "unavailable")
 
 
@@ -4962,7 +4965,7 @@ def recordings_route_locked(h, method, p):
         # A fresh start for the next test on the same mock: what an earlier one stored (its minutes) is gone too.
         RECORDING_MINUTES[0] = json.loads(h.last_body or b"{}").get("mode", "pending")
         meeting_conversation_reset()
-        RECORDINGS.clear(); RECORDING_MINUTES_ASKED.clear(); MEETING_LIVE.clear(); RECORDINGS_TRIMMED.clear(); RECORDING_DAY_TODOS.clear()
+        RECORDINGS.clear(); RECORDING_UPLOADED.clear(); RECORDING_MINUTES_ASKED.clear(); MEETING_LIVE.clear(); RECORDINGS_TRIMMED.clear(); RECORDING_DAY_TODOS.clear()
         with PHOTO_LOCK: PHOTO_STORE.clear()
         KB["recordings"] = []
         for key in [k for k in KB_DETAIL if k[0] == "recordings"]: KB_DETAIL.pop(key)
@@ -5053,7 +5056,7 @@ def recordings_route_locked(h, method, p):
         return h.send_json({"error": "404 page not found"}, 404) or True
     if method == "DELETE":
         existed = rid in RECORDINGS
-        RECORDINGS.pop(rid, None); RECORDINGS_DELETED.add(rid); RECORDINGS_TRIMMED.pop(rid, None); RECORDING_DAY_TODOS.pop(rid, None)
+        RECORDINGS.pop(rid, None); RECORDING_UPLOADED.pop(rid, None); RECORDINGS_DELETED.add(rid); RECORDINGS_TRIMMED.pop(rid, None); RECORDING_DAY_TODOS.pop(rid, None)
         kb[:] = [e for e in kb if e["id"] != rid]; KB_DETAIL.pop(("recordings", rid), None)
         with MEETING_LOCK: MEETING_LIVE.pop(rid, None)  # live lines and asks go with the recording
         with PHOTO_LOCK:  # as at the trim
@@ -5089,6 +5092,7 @@ def recordings_route_locked(h, method, p):
             if (v := upload_room_view(rid, body)) is not None: out["room"] = v
         return h.send_json(out) or True
     RECORDINGS[rid] = body
+    RECORDING_UPLOADED[rid] = time.time()
     text = "\n".join("[%d:%02d] %s" % (int(x["start"]) // 60, int(x["start"]) % 60, x["text"]) for x in body.get("segments", []))
     entry = {"kind": "recordings", "id": rid, "name": body.get("title") or "录音", "relevance": 0, "tags": [],
              "one_line": (body.get("segments") or [{"text": ""}])[0]["text"], "updated": body["started_at"]}
@@ -6260,6 +6264,55 @@ if MOCK_TASKS:
             it("user", "text", 5.8, text=_digest, injected={"kind": "system", "state": "supervise", "line": "督办：2 个派出去的任务要处理"}),
             it("assistant", "text", 5.7, text="网络层测试我核对过了：PR 已合并，覆盖率 83%，验收通过。小组件那个我让它接着修。"),
         ]
+        ITEMS[ASK1].sort(key=lambda x: x["ts"])
+        _base = min(x["seq"] for x in ITEMS[ASK1])
+        for _i, _x in enumerate(ITEMS[ASK1]):
+            _x["seq"] = _base + _i
+    # MOCK_PLACE_MAP=1 (with MOCK_TASKS=1): "where am I" and "coffee near me" answered with the phone's location tools,
+    # drawn as map cards under their work lines (#5543), then the walk to the second café as a route (#5544) and handed
+    # to Maps (#5545); the places and the route are made up.
+    if os.environ.get("MOCK_PLACE_MAP") == "1":
+        _cafes = [("街角咖啡", 31.2318, 121.4752, 180), ("安静书房咖啡", 31.2291, 121.4769, 340),
+                  ("老弄堂咖啡馆", 31.2335, 121.4711, 420), ("河边烘焙咖啡", 31.2276, 121.4702, 610)]
+        ITEMS[ASK1] += (
+            [it("user", "text", 1.6, text="我现在在哪")]
+            + tool("mcp__persona__phone_location_current", {},
+                   json.dumps({"latitude": 31.2304, "longitude": 121.4737, "accuracy_meters": 12, "altitude_meters": 4,
+                               "timestamp": ago(minutes=1.6), "timezone": "Asia/Shanghai",
+                               "address": {"city": "上海市", "district": "黄浦区", "formatted": "上海市黄浦区人民大道"}},
+                              ensure_ascii=False), 1.55)
+            + [it("assistant", "text", 1.5, text="你在上海市黄浦区人民大道附近。")]
+            + [it("user", "text", 1.2, text="附近有安静点的咖啡馆吗")]
+            + tool("mcp__persona__phone_maps_search_nearby", {"query": "安静 咖啡馆"},
+                   json.dumps({"query": "安静 咖啡馆", "center": {"latitude": 31.2304, "longitude": 121.4737, "from": "current_location"},
+                               "radius_meters": 1500, "count": len(_cafes),
+                               "places": [{"name": n, "address": "上海市黄浦区", "latitude": la, "longitude": lo,
+                                           "distance_meters": d, "category": "MKPOICategoryCafe"} for n, la, lo, d in _cafes],
+                               "source": "Apple Maps (MapKit local search)",
+                               "note": "Opening hours are not available from Apple Maps to apps."}, ensure_ascii=False), 1.15)
+            + [it("assistant", "text", 1.1, text="找到 4 家：最近的是 1 号街角咖啡，180 米；想安静些可以去 2 号安静书房咖啡，340 米。营业时间苹果地图不提供，去之前最好确认一下。")]
+            # How long a walk to the second café takes, worked out without opening anything (#5544): a route card.
+            + [it("user", "text", 0.95, text="走到 2 号要多久")]
+            + tool("mcp__persona__phone_maps_route",
+                   {"latitude": 31.2291, "longitude": 121.4769, "name": "安静书房咖啡", "mode": "walking"},
+                   json.dumps({"destination": "安静书房咖啡", "latitude": 31.2291, "longitude": 121.4769, "mode": "walking",
+                               "distance_meters": 420, "expected_seconds": 330,
+                               "line": [[31.2304, 121.4737], [31.2299, 121.4741], [31.2297, 121.4755],
+                                        [31.2293, 121.4762], [31.2291, 121.4769]],
+                               "from": "current_location", "source": "Apple Maps (MapKit directions)",
+                               "note": "Nothing was opened: Persona draws the route in the chat. Hand it to Maps with "
+                                       "phone_maps_navigate when the user wants to go."}, ensure_ascii=False), 0.9)
+            + [it("assistant", "text", 0.85, text="走过去 420 米，大约 6 分钟，路线在上面。要出发的话我帮你在地图里打开。")]
+            # Directions to the second café handed to Maps (#5545): the hand-off's card is the conversation's last.
+            + [it("user", "text", 0.8, text="好，走过去")]
+            + tool("mcp__persona__phone_maps_navigate",
+                   {"latitude": 31.2291, "longitude": 121.4769, "name": "安静书房咖啡", "mode": "walking"},
+                   json.dumps({"opened": "maps", "destination": "安静书房咖啡", "latitude": 31.2291, "longitude": 121.4769,
+                               "mode": "walking",
+                               "note": "Directions are open in the Maps app; navigation runs there, not in Persona."},
+                              ensure_ascii=False), 0.75)
+            + [it("assistant", "text", 0.7, text="去安静书房咖啡的步行路线已经在地图 App 里打开了，导航在地图里进行。")]
+        )
         ITEMS[ASK1].sort(key=lambda x: x["ts"])
         _base = min(x["seq"] for x in ITEMS[ASK1])
         for _i, _x in enumerate(ITEMS[ASK1]):
@@ -8543,6 +8596,39 @@ if os.environ.get("MOCK_IMESSAGE_INBOX"):
                        "rule_tier": "action"}},
     ]
 
+
+# MOCK_SUBSCRIPTION_INBOX=1 (#5537): an item a source subscription delivered (a mail subscription's notice): its source is
+# the subscription's id, not a connector's, and its content is the whole of it. Its thread request answers as the hub
+# does now, a page that is no conversation (`chat.kind: none`); =old as hubs before #5537 did, 404 "no connector".
+# GET /mock/subscription_inbox?mode=old|1 switches it for the next requests. Only with ?sources=all, like connectors' items.
+SUBSCRIPTION_INBOX = os.environ.get("MOCK_SUBSCRIPTION_INBOX", "")
+if SUBSCRIPTION_INBOX:
+    INBOX[1:1] = [
+        {"id": "sub_example01:t1", "source": "sub_example01", "kind": "sub_update", "account": "sub_example01", "account_name": "示例邮件",
+         "title": "11 月 16 日园区东门临时交通管理通知", "sender": "示例物业", "preview": "11 月 16 日上午 8:00–9:00 东门只允许登记车辆通行",
+         "count": 1, "started_at": ago(minutes=40), "updated_at": ago(minutes=40), "tier": "fyi",
+         "summary": "园区东门 11 月 16 日早上临时交通管理", "reason": "订阅的通知", "read": False,
+         "context": "11 月 16 日园区东门临时交通管理通知\n示例物业 · 11-12 15:33\n\n各位同事：\n\n"
+                    "11 月 16 日（周一）园区有活动。为保障交通秩序，当天上午 8:00–9:00 东门只允许登记车辆通行，"
+                    "其他车辆请从北门进出。\n\n停车场 A、B 区当天上午临时关闭，下午恢复。\n\nhttps://mail.example.com/notice/1116",
+         "connector": {"thread": "sub:sub_example01:t1", "label": "示例邮件", "url": "https://mail.example.com/notice/1116"}},
+    ]
+
+
+def subscription_thread_area(h, method, p):
+    """A subscription's thread request (MOCK_SUBSCRIPTION_INBOX) and /mock/subscription_inbox; True when it answered."""
+    global SUBSCRIPTION_INBOX
+    if not SUBSCRIPTION_INBOX or method != "GET":
+        return False
+    if p == "/mock/subscription_inbox":
+        SUBSCRIPTION_INBOX = parse_qs(urlparse(h.path).query).get("mode", [SUBSCRIPTION_INBOX])[0] or "1"
+        return h.send_json({"mode": SUBSCRIPTION_INBOX}) or True
+    if p != "/api/v1/connectors/sub_example01/thread":
+        return False
+    if SUBSCRIPTION_INBOX == "old":
+        return h.send_json({"error": 'no connector "sub_example01"'}, 404) or True
+    thread = parse_qs(urlparse(h.path).query).get("thread", [""])[0]
+    return h.send_json({"chat": {"id": thread, "name": "", "kind": "none"}, "messages": []}) or True
 
 # What each item can be muted by (the row's menu: "Mute this repository" / "Conversation" / "Sender"), as the hub lists it (`mutes`).
 ITEM_MUTES = {
@@ -20782,6 +20868,7 @@ class H(BaseHTTPRequestHandler):
         if kb_selection_route(self, "GET", p, b""): return
         if wechat_area(self, "GET", p, b""): return
         if github_thread_area(self, "GET", p, b""): return
+        if subscription_thread_area(self, "GET", p): return
         if github_area(self, "GET", p, b""): return
         if p == "/api/v1/connectors":  # Settings › Connectors › GitHub; MOCK_GITHUB=signed_out: its gh login has expired
             listed = [GITHUB_CONNECTOR, {k: v for k, v in _imessage_connector().items() if v is not None}] + ([telegram_connector()] if TELEGRAM_MODE else [])
@@ -21048,9 +21135,14 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(out)
         if p == "/api/v1/kb-search":
             word = (q.get("q") or [""])[0].lower()
+            # kind: one kind only, as kb_search (#3862 phase 6: recordings for meetings); another is the hub's 400.
+            only = (q.get("kind") or [""])[0]
+            if only and only not in KB_KINDS:
+                return self.send_json({"error": "Unknown kind: search one of " + ", ".join(KB_KINDS) + "."}, 400)
             if (q.get("results") or [""])[0] == "1":
                 res = []
                 for k, l in KB.items():
+                    if only and k != only: continue
                     for e in l:
                         found = [{"path": "%s/%s/messages/%s.md" % (k, e["id"], d), "n": n, "line": t}
                                  for d, n, t in reversed(kb_messages(e["id"])) if kb_match(t, word)] if k == "chats" else \
@@ -21060,9 +21152,10 @@ class H(BaseHTTPRequestHandler):
                             res.append({"entry": e, "count": len(found), "hits": found[:3], "in_name": kb_match(e["name"], word)})
                 return self.send_json({"results": res})
             hits = [{"path": "%s/%s/summary.md" % (k, e["id"]), "line": "- " + e["name"] + "：" + (e.get("one_line") or "")}
-                    for k, l in KB.items() for e in l if word and (word in e["name"].lower() or word in (e.get("one_line") or "").lower())]
+                    for k, l in KB.items() if not only or k == only
+                    for e in l if word and (word in e["name"].lower() or word in (e.get("one_line") or "").lower())]
             hits += [{"path": x["path"], "line": x["line"]} for e in KB.get("recordings", [])
-                     for x in photo_matches(e["id"], word) + day_recap_matches(e["id"], word)] if word else []
+                     for x in photo_matches(e["id"], word) + day_recap_matches(e["id"], word)] if word and only in ("", "recordings") else []
             return self.send_json({"hits": hits})
         if p.startswith("/api/v1/machines/") and p.endswith("/file/thumb"): return self.file_thumb(p, q)
         files = mock_files(p, q)

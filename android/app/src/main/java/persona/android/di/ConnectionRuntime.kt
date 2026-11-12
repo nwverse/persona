@@ -182,6 +182,13 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
 
     /** Every group's outbox in one list; a message goes to the group its session belongs to. */
     val messages: MessageSender = object : MessageSender {
+        override val sendReceipts = groups.flatMapLatest { list ->
+            val flows = list.mapNotNull { group -> group.data?.messages?.sendReceipts?.map { entries ->
+                val names = GroupNames(group.namespace)
+                entries.map(names::receipt)
+            } }
+            if (flows.isEmpty()) flowOf(emptyList()) else combine(flows) { lists -> lists.flatMap { it } }
+        }.stateIn(scope, SharingStarted.Eagerly, emptyList())
         override val outbox = groups.flatMapLatest { list ->
             val flows = list.mapNotNull { group -> group.data?.messages?.outbox?.map { entries ->
                 val names = GroupNames(group.namespace)
@@ -195,10 +202,19 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
                 maps.fold(emptyMap<String, Long>()) { acc, one -> acc + one }
             }
         }.stateIn(scope, SharingStarted.Eagerly, emptyMap())
-        override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?) {
+        override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?) =
+            send(session, text, clientMessageId, clearDraft, null, null)
+        override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?, launcher: String?, model: String?) {
             gate.withLock {
                 val group = groupOf(session.machineId) ?: throw IllegalStateException(AppText.get(R.string.app_error_pair_first))
-                checkNotNull(group.data) { AppText.get(R.string.app_error_pair_first) }.messages.send(GroupKeys.rawKey(session), text, clientMessageId, clearDraft)
+                checkNotNull(group.data) { AppText.get(R.string.app_error_pair_first) }.messages.send(
+                    GroupKeys.rawKey(session), text, clientMessageId, clearDraft, launcher, model)
+            }
+        }
+        override suspend fun sendApplyingSwitch(session: SessionKey, text: String, clientMessageId: String) {
+            gate.withLock {
+                val group = groupOf(session.machineId) ?: throw IllegalStateException(AppText.get(R.string.app_error_pair_first))
+                checkNotNull(group.data) { AppText.get(R.string.app_error_pair_first) }.messages.sendApplyingSwitch(GroupKeys.rawKey(session), text, clientMessageId)
             }
         }
         override suspend fun cancel(clientMessageId: String) = gate.withLock {
