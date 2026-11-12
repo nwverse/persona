@@ -6268,6 +6268,33 @@ if MOCK_TASKS:
         _base = min(x["seq"] for x in ITEMS[ASK1])
         for _i, _x in enumerate(ITEMS[ASK1]):
             _x["seq"] = _base + _i
+    # MOCK_PLACE_MAP=1 (with MOCK_TASKS=1): "where am I" and "coffee near me" answered with the phone's location tools,
+    # drawn as map cards under their work lines (#5543); the places are made up.
+    if os.environ.get("MOCK_PLACE_MAP") == "1":
+        _cafes = [("街角咖啡", 31.2318, 121.4752, 180), ("安静书房咖啡", 31.2291, 121.4769, 340),
+                  ("老弄堂咖啡馆", 31.2335, 121.4711, 420), ("河边烘焙咖啡", 31.2276, 121.4702, 610)]
+        ITEMS[ASK1] += (
+            [it("user", "text", 1.6, text="我现在在哪")]
+            + tool("mcp__persona__phone_location_current", {},
+                   json.dumps({"latitude": 31.2304, "longitude": 121.4737, "accuracy_meters": 12, "altitude_meters": 4,
+                               "timestamp": ago(minutes=1.6), "timezone": "Asia/Shanghai",
+                               "address": {"city": "上海市", "district": "黄浦区", "formatted": "上海市黄浦区人民大道"}},
+                              ensure_ascii=False), 1.55)
+            + [it("assistant", "text", 1.5, text="你在上海市黄浦区人民大道附近。")]
+            + [it("user", "text", 1.2, text="附近有安静点的咖啡馆吗")]
+            + tool("mcp__persona__phone_maps_search_nearby", {"query": "安静 咖啡馆"},
+                   json.dumps({"query": "安静 咖啡馆", "center": {"latitude": 31.2304, "longitude": 121.4737, "from": "current_location"},
+                               "radius_meters": 1500, "count": len(_cafes),
+                               "places": [{"name": n, "address": "上海市黄浦区", "latitude": la, "longitude": lo,
+                                           "distance_meters": d, "category": "MKPOICategoryCafe"} for n, la, lo, d in _cafes],
+                               "source": "Apple Maps (MapKit local search)",
+                               "note": "Opening hours are not available from Apple Maps to apps."}, ensure_ascii=False), 1.15)
+            + [it("assistant", "text", 1.1, text="找到 4 家：最近的是 1 号街角咖啡，180 米；想安静些可以去 2 号安静书房咖啡，340 米。营业时间苹果地图不提供，去之前最好确认一下。")]
+        )
+        ITEMS[ASK1].sort(key=lambda x: x["ts"])
+        _base = min(x["seq"] for x in ITEMS[ASK1])
+        for _i, _x in enumerate(ITEMS[ASK1]):
+            _x["seq"] = _base + _i
     # MOCK_MARKDOWN=1 (with MOCK_TASKS=1, and MOCK_EXCHANGES=1 for the exchanges): the words as Agents and Persona write them,
     # with **bold**, `code` and a heading (#2363), in Persona's message to the task, the task's report and the release
     # notes receipt: drawn rendered, never as raw marks.
@@ -8547,6 +8574,39 @@ if os.environ.get("MOCK_IMESSAGE_INBOX"):
                        "rule_tier": "action"}},
     ]
 
+
+# MOCK_SUBSCRIPTION_INBOX=1 (#5537): an item a source subscription delivered (a mail subscription's notice): its source is
+# the subscription's id, not a connector's, and its content is the whole of it. Its thread request answers as the hub
+# does now, a page that is no conversation (`chat.kind: none`); =old as hubs before #5537 did, 404 "no connector".
+# GET /mock/subscription_inbox?mode=old|1 switches it for the next requests. Only with ?sources=all, like connectors' items.
+SUBSCRIPTION_INBOX = os.environ.get("MOCK_SUBSCRIPTION_INBOX", "")
+if SUBSCRIPTION_INBOX:
+    INBOX[1:1] = [
+        {"id": "sub_example01:t1", "source": "sub_example01", "kind": "sub_update", "account": "sub_example01", "account_name": "示例邮件",
+         "title": "11 月 16 日园区东门临时交通管理通知", "sender": "示例物业", "preview": "11 月 16 日上午 8:00–9:00 东门只允许登记车辆通行",
+         "count": 1, "started_at": ago(minutes=40), "updated_at": ago(minutes=40), "tier": "fyi",
+         "summary": "园区东门 11 月 16 日早上临时交通管理", "reason": "订阅的通知", "read": False,
+         "context": "11 月 16 日园区东门临时交通管理通知\n示例物业 · 11-12 15:33\n\n各位同事：\n\n"
+                    "11 月 16 日（周一）园区有活动。为保障交通秩序，当天上午 8:00–9:00 东门只允许登记车辆通行，"
+                    "其他车辆请从北门进出。\n\n停车场 A、B 区当天上午临时关闭，下午恢复。\n\nhttps://mail.example.com/notice/1116",
+         "connector": {"thread": "sub:sub_example01:t1", "label": "示例邮件", "url": "https://mail.example.com/notice/1116"}},
+    ]
+
+
+def subscription_thread_area(h, method, p):
+    """A subscription's thread request (MOCK_SUBSCRIPTION_INBOX) and /mock/subscription_inbox; True when it answered."""
+    global SUBSCRIPTION_INBOX
+    if not SUBSCRIPTION_INBOX or method != "GET":
+        return False
+    if p == "/mock/subscription_inbox":
+        SUBSCRIPTION_INBOX = parse_qs(urlparse(h.path).query).get("mode", [SUBSCRIPTION_INBOX])[0] or "1"
+        return h.send_json({"mode": SUBSCRIPTION_INBOX}) or True
+    if p != "/api/v1/connectors/sub_example01/thread":
+        return False
+    if SUBSCRIPTION_INBOX == "old":
+        return h.send_json({"error": 'no connector "sub_example01"'}, 404) or True
+    thread = parse_qs(urlparse(h.path).query).get("thread", [""])[0]
+    return h.send_json({"chat": {"id": thread, "name": "", "kind": "none"}, "messages": []}) or True
 
 # What each item can be muted by (the row's menu: "Mute this repository" / "Conversation" / "Sender"), as the hub lists it (`mutes`).
 ITEM_MUTES = {
@@ -20740,6 +20800,7 @@ class H(BaseHTTPRequestHandler):
         if kb_selection_route(self, "GET", p, b""): return
         if wechat_area(self, "GET", p, b""): return
         if github_thread_area(self, "GET", p, b""): return
+        if subscription_thread_area(self, "GET", p): return
         if github_area(self, "GET", p, b""): return
         if p == "/api/v1/connectors":  # Settings › Connectors › GitHub; MOCK_GITHUB=signed_out: its gh login has expired
             listed = [GITHUB_CONNECTOR, {k: v for k, v in _imessage_connector().items() if v is not None}] + ([telegram_connector()] if TELEGRAM_MODE else [])

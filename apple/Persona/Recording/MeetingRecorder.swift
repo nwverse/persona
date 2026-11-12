@@ -58,10 +58,10 @@ import UserNotifications
     /// Starts a meeting recording named after the calendar event happening now (a dated "Meeting" without one). In front
     /// (`inForeground`), the Recordings page opens (unless the caller opened it: `openPage`), and the calendar is asked
     /// for once if it never was, after the recording has begun, so the prompt costs no seconds of the meeting.
-    /// `attendance`: Persona's part (#2981), as picked on the Recordings page; nil (the drawer, Siri, the Control, the Action
-    /// button) starts with the hub's default role and the session picked last that isn't the main chat, else off
-    /// (`MeetingAttendees.defaultAttendance`), or, with the meeting conversation, as a room meeting in the default role,
-    /// not private (`MeetingAttendees.startAttendance`).
+    /// `attendance`: Persona's part (#2981), as picked on the Recordings page; nil (the + list, the home screen's menu,
+    /// Siri, the Control, the Action button) starts with the hub's default role and the session picked last that isn't the
+    /// main chat, else off (`MeetingAttendees.defaultAttendance`), or, with the meeting conversation, as a room meeting in
+    /// the default role, not private (`MeetingAttendees.startAttendance`).
     @discardableResult
     func startMeeting(inForeground: Bool, openPage: Bool? = nil, attendance: RecordingAttendance? = nil) async -> Outcome {
         if openPage ?? inForeground { Self.openRecordings() }

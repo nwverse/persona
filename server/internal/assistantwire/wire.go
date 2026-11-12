@@ -27,11 +27,11 @@ type Hello struct {
 	// DoneDelayMS is how long a finished turn stays still before it counts as the end (hub.json notify): a task's
 	// agents are followed with the same patience as the hub's own pushes.
 	DoneDelayMS int64 `json:"done_delay_ms"`
-	// PersonaView is hub.json's assistant.persona_view: teach ```persona-view rather than ```persona-card (#1850).
+	// PersonaView and HTMLViews were the switches for the assistant's cards and their HTML bridge. The cards are always
+	// on now (#5509): a hub always sends both true, for a manager from before that still reads them; a manager no
+	// longer reads them, so an older hub's false (its switch off) changes nothing.
 	PersonaView bool `json:"persona_view,omitempty"`
-	// HTMLViews is hub.json's assistant.html_views (default on) while PersonaView is on: the HTML bridge
-	// (…/views/{key}/html-actions) answers. An older hub never sends it, so the bridge stays off there.
-	HTMLViews bool `json:"html_views,omitempty"`
+	HTMLViews   bool `json:"html_views,omitempty"`
 	// Agents is manager.json's agents section: the triage's limits and default switches (agents.go).
 	Agents AgentsConfig `json:"agents,omitzero"`
 	// KB is manager.json's kb section: the knowledge base the assistant keeps (kb.go).
