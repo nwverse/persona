@@ -53,6 +53,13 @@ nonisolated extension ContextRef {
     ]
     #endif
 
+    /// A knowledge note or a to-do from Add as Context (#3721): its link leads back to it in the app
+    /// (`persona://kb/…`, `persona://task/…`); it quotes the item, not a selection.
+    private var isAppItem: Bool {
+        guard let components = URLComponents(string: url) else { return false }
+        return HubNaming.accepts(scheme: components.scheme) && (components.host == "kb" || components.host == "task")
+    }
+
     /// The page quoted as a whole: the text is the marker the link sheet puts there, not the user's words.
     private var isWholePage: Bool { text == "（整篇）" } // i18n-ignore: marker
 
@@ -69,7 +76,7 @@ nonisolated extension ContextRef {
         case ForwardMessage.kind: return ForwardMessage.heading(self)
         default:
             if isSession { return String(localized: "Quoting session \(label)") }
-            if !url.isEmpty { return isWholePage ? String(localized: "Quoting \(label)") : String(localized: "Quoting selected text · \(label)") }
+            if !url.isEmpty, !isAppItem { return isWholePage ? String(localized: "Quoting \(label)") : String(localized: "Quoting selected text · \(label)") }
             return String(localized: "Quoting \(label)")
         }
     }

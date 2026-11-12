@@ -136,7 +136,12 @@ final class AttachMenuTests: XCTestCase {
             row.tap()
             let quote = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "待办 · ")).firstMatch
             XCTAssertTrue(quote.waitForExistence(timeout: 10), "the pick is not over the box:\n\(app.debugDescription)")
+            XCTAssertFalse(app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "引用选中的文字")).firstMatch.exists,
+                           "a to-do is quoted as a whole, not as selected text")
             shot("context-picked-todo", scheme)
+            // The conversation keeps its quotes: the pick goes again, or the next tests' screenshots show it.
+            app.buttons["取消引用"].firstMatch.tap()
+            sleep(2) // drafts are saved a moment later
             app.terminate()
         }
     }

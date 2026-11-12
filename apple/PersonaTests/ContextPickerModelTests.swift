@@ -55,6 +55,7 @@ struct ContextPickerModelTests {
         #expect(ref.url == "persona://task/t2")
         #expect(ref.title == String(localized: "To-do · \("预订周五的餐厅")"))
         #expect(ref.text.contains("四个人，靠窗") && ref.text.contains("t2"))
+        #expect(ref.quoteHeading == String(localized: "Quoting \(ref.label)"), "the to-do is quoted as a whole, not as selected text")
     }
 
     @Test func aNoteLeadsBackToItsEntry() {
