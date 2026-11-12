@@ -22,6 +22,7 @@ func TestParseHierarchy(t *testing.T) {
 	for _, bad := range []url.Values{
 		{"parent_session_id": {"lead"}}, {"parent_session_id": {""}, "machine_id": {"m"}}, {"roots": {"yes"}},
 		{"roots": {"1", "1"}}, {"parent_session_id": {"a", "b"}, "machine_id": {"m"}},
+		{"roots": {"1"}, "parent_session_id": {"lead"}, "machine_id": {"m"}}, // never a root: always an empty page
 	} {
 		if _, err := Parse(bad); err == nil || err.(*Error).Code != "invalid_query" {
 			t.Errorf("%v: %v", bad, err)
@@ -29,6 +30,9 @@ func TestParseHierarchy(t *testing.T) {
 	}
 	if _, err := validate(Options{Under: "lead"}); err == nil {
 		t.Error("an adapter's Under without Machine was taken")
+	}
+	if _, err := validate(Options{Under: "lead", Machine: "m", Roots: true}); err == nil {
+		t.Error("an adapter's Under with Roots was taken")
 	}
 }
 

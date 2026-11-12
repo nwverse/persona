@@ -148,7 +148,8 @@ func TestRuntimeListHierarchyOlderQueries(t *testing.T) {
 func TestRuntimeListHierarchyValidationAndBinding(t *testing.T) {
 	h, m := hierarchyHub(t)
 	for _, query := range []string{"parent_session_id=lead", "parent_session_id=&machine_id=demo", "roots=yes",
-		"roots=1&roots=0", "machine_id=demo&parent_session_id=a&parent_session_id=b"} {
+		"roots=1&roots=0", "machine_id=demo&parent_session_id=a&parent_session_id=b", "roots=1&machine_id=demo&parent_session_id=lead",
+		"counts=1&roots=1&machine_id=demo&parent_session_id=lead"} {
 		w := httptest.NewRecorder()
 		h.listSessions(w, httptest.NewRequest("GET", "/api/v1/sessions?"+query, nil))
 		if w.Code != 400 || !strings.Contains(w.Body.String(), "invalid_query") {

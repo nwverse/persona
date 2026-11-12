@@ -62,7 +62,8 @@ type Options struct {
 	Manager string
 	// Roots (roots=1) leaves the items folded under another (Item.Root) out of the rows, the totals and every count,
 	// and filters and counts the rest by Item.FoldedState. Under (parent_session_id, which needs Machine) selects the
-	// items of Machine folded under that session, all depths. Both bind a cursor, as the other filters do.
+	// items of Machine folded under that session, all depths; the two cannot be combined. Both bind a cursor, as the
+	// other filters do.
 	Roots   bool
 	Under   string
 	Summary bool

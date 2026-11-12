@@ -1,12 +1,9 @@
 package assistant
 
 import (
-	"context"
-	"encoding/json"
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -19,7 +16,7 @@ func foldRow(id, state string, set func(*proto.Session)) proto.Session {
 }
 
 func foldOf(list []proto.Session) map[string]string {
-	f := foldSessions(list)
+	f := foldSessions(list, nil)
 	f.apply(list)
 	out := map[string]string{}
 	for i := range list {
@@ -158,9 +155,9 @@ func TestFoldSessionsStable(t *testing.T) {
 		foldRow("lead", proto.StateIdle, nil),
 		foldRow("kid", proto.StateWorking, func(s *proto.Session) { s.IsSubagent, s.ParentSessionID = true, "lead" }),
 	}
-	foldSessions(list).apply(list)
+	foldSessions(list, nil).apply(list)
 	lead, kid := list[0].Hierarchy, list[1].Hierarchy
-	foldSessions(list).apply(list)
+	foldSessions(list, nil).apply(list)
 	if list[0].Hierarchy != lead || list[1].Hierarchy != kid {
 		t.Fatal("an unchanged fold made new hierarchies")
 	}
@@ -197,35 +194,42 @@ func TestPublishedListFoldsChildren(t *testing.T) {
 	waitFolded(proto.SessionChildren{Total: 1})
 }
 
-// A card that reached the apps before the list that folds its session is told again once that list does, naming the
-// session that shows it.
-func TestCardToldAgainOnceFolded(t *testing.T) {
-	ft := newFleetTestNoStore(t)
-	ix := proto.Interaction{ID: "ix_kid", MachineID: "mac", SessionID: "kid", Kind: proto.IxPermission, Summary: "write file"}
-	go func() { _, _ = ft.s.waitInteraction(context.Background(), ix) }()
-	ft.waitPending(1)
-	ft.sessions("mac", proto.Session{SessionID: "lead", Status: proto.StatusIdle, Cwd: "/w/app"},
-		proto.Session{SessionID: "kid", Status: proto.StatusBlocked, Cwd: "/w/app", SourceKind: proto.SourceRuntime,
-			Hierarchy: &proto.SessionHierarchy{AskingParentSessionID: "lead"}})
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		var under []string
-		for _, b := range ft.toldOf(assistantwire.EventFleetInteraction) {
-			var p assistantwire.FleetInteraction
-			if json.Unmarshal(b, &p) == nil && p.Interaction.ID == "ix_kid" {
-				under = append(under, p.Interaction.FoldedUnder)
-			}
-		}
-		if len(under) >= 2 && under[0] == "" && under[len(under)-1] == "lead" {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the card was told under %q", under)
-		}
-		time.Sleep(5 * time.Millisecond)
+// A review's reviewer is no row the apps are shown (publishList leaves it out): it is no parent, and it is not counted in
+// a parent's children or the state the parent shows.
+func TestFoldLeavesReviewersOut(t *testing.T) {
+	list := []proto.Session{
+		foldRow("lead", proto.StateIdle, nil),
+		foldRow("kid", proto.StateWorking, func(s *proto.Session) { s.IsSubagent, s.ParentSessionID = true, "lead" }),
+		foldRow("reviewer", proto.StateNeedsYou, func(s *proto.Session) { s.IsSubagent, s.ParentSessionID = true, "lead" }),
+		foldRow("under-reviewer", proto.StateWorking, func(s *proto.Session) { s.IsSubagent, s.ParentSessionID = true, "reviewer" }),
 	}
-	if got := ft.s.pendingInteractions(); len(got) != 1 || got[0].FoldedUnder != "lead" {
-		t.Fatalf("pending %+v", got)
+	f := foldSessions(list, map[string]bool{"reviewer": true})
+	f.apply(list)
+	if got := rowNamed(list, "lead").Children(); got != (proto.SessionChildren{Total: 1, Working: 1}) {
+		t.Fatalf("rollup %+v", got)
 	}
-	_ = ft.s.resolve("ix_kid", proto.Resolution{Dismiss: true})
+	if lead := rowNamed(list, "lead"); lead.FoldedState() != proto.StateWorking {
+		t.Fatalf("the parent shows %s", lead.FoldedState())
+	}
+	if r, u := rowNamed(list, "reviewer"), rowNamed(list, "under-reviewer"); r.Hierarchy != nil || u.FoldedUnder() != "" {
+		t.Fatalf("reviewer %+v, its child under %q", r.Hierarchy, u.FoldedUnder())
+	}
+
+	// The manager reads its reviewers off the to-dos, for the machine it folds only.
+	s := &Service{}
+	s.todos.todos = map[string]*Todo{"todo_r": {ID: "todo_r", Title: "x",
+		Agents: []TodoAgent{{MachineID: "m1", SessionID: "reviewer", Source: sourceReview}}}}
+	again := []proto.Session{
+		foldRow("lead", proto.StateIdle, nil),
+		foldRow("reviewer", proto.StateNeedsYou, func(s *proto.Session) { s.IsSubagent, s.ParentSessionID = true, "lead" }),
+	}
+	s.foldInventory("m1", again)
+	if again[0].Hierarchy != nil || s.foldedUnder("m1", "reviewer") != "" {
+		t.Fatalf("a reviewer folded: %+v", again[0].Hierarchy)
+	}
+	other := []proto.Session{again[0], foldRow("reviewer", proto.StateNeedsYou, func(s *proto.Session) { s.IsSubagent, s.ParentSessionID = true, "lead" })}
+	s.foldInventory("m2", other)
+	if s.foldedUnder("m2", "reviewer") != "lead" {
+		t.Fatal("another machine's session of the reviewer's id was left out")
+	}
 }

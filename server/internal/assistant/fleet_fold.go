@@ -1,7 +1,8 @@
 package assistant
 
 import (
-	"github.com/nwverse/persona/server/internal/assistantwire"
+	"slices"
+
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -14,19 +15,18 @@ type sessionFold struct {
 	children map[string]*proto.SessionChildren
 }
 
-// listedRow: the row is in the list the apps show (the hub leaves archived Agents out of it, deleted_sessions.go).
-func listedRow(s *proto.Session) bool { return !s.Archived || s.Assistant }
-
-// foldSessions folds a machine's complete list (its rows as decorated, their states computed). A child (a subagent, or
-// a session that names a parent or another root, proto.Session.IsChild) has as its parent the listed row its
-// parent_session_id names, else the one its asking_parent_session_id names, else its root_session_id's; it folds under
-// the topmost listed ancestor that parent leads to. An orphan (no listed parent) and a row whose ancestors go round in
-// a cycle fold under nothing. Each ancestor that children fold under counts them all, whatever their depth, by their
-// own states.
-func foldSessions(list []proto.Session) sessionFold {
+// foldSessions folds a machine's complete list (its rows as decorated, their states computed). Only the rows the apps
+// are shown are listed: not an archived Agent (the hub leaves those out, deleted_sessions.go), nor one in hidden (a
+// review's reviewer, which publishList leaves out). A child (a subagent, or a session that names a parent or another
+// root, proto.Session.IsChild) has as its parent the listed row its parent_session_id names, else the one its
+// asking_parent_session_id names, else its root_session_id's; it folds under the topmost listed ancestor that parent
+// leads to. An orphan (no listed parent) and a row whose ancestors go round in a cycle fold under nothing. Each
+// ancestor that children fold under counts them all, whatever their depth, by their own states.
+func foldSessions(list []proto.Session, hidden map[string]bool) sessionFold {
+	listed := func(s *proto.Session) bool { return (!s.Archived || s.Assistant) && !hidden[s.SessionID] }
 	at := make(map[string]int, len(list))
 	for i := range list {
-		if _, dup := at[list[i].SessionID]; !dup && listedRow(&list[i]) {
+		if _, dup := at[list[i].SessionID]; !dup && listed(&list[i]) {
 			at[list[i].SessionID] = i
 		}
 	}
@@ -49,7 +49,7 @@ func foldSessions(list []proto.Session) sessionFold {
 	var f sessionFold
 	var path []int // the rows walked up from one child, to find a cycle
 	for i := range list {
-		if at[list[i].SessionID] != i || !listedRow(&list[i]) {
+		if at[list[i].SessionID] != i || !listed(&list[i]) {
 			continue
 		}
 		top := i
@@ -59,7 +59,7 @@ func foldSessions(list []proto.Session) sessionFold {
 			if p < 0 {
 				break
 			}
-			if containsRow(path, p) {
+			if slices.Contains(path, p) {
 				top = i // a cycle: no topmost ancestor
 				break
 			}
@@ -90,15 +90,6 @@ func foldSessions(list []proto.Session) sessionFold {
 	return f
 }
 
-func containsRow(path []int, i int) bool {
-	for _, j := range path {
-		if j == i {
-			return true
-		}
-	}
-	return false
-}
-
 // apply puts the fold on the rows: what each folds under and the rollup it carries, nothing on the others. A row is
 // given a new hierarchy only where it changes.
 func (f sessionFold) apply(list []proto.Session) {
@@ -108,39 +99,27 @@ func (f sessionFold) apply(list []proto.Session) {
 	}
 }
 
-// foldInventory folds machine's complete list (foldSessions), puts the fold on its rows and keeps it for the rows
-// decorated on their own (foldSubset) and the cards sent to the apps (withTask) until the next complete list.
+// foldInventory folds machine's complete list (foldSessions, without the reviewers publishList hides), puts the fold on
+// its rows and keeps it for the rows decorated on their own (foldSubset) and the cards sent to the apps (withTask)
+// until the next complete list.
 func (s *Service) foldInventory(machine string, list []proto.Session) {
-	f := foldSessions(list)
+	var hidden map[string]bool
+	for k := range s.reviewerSessions() {
+		if k[0] == machine {
+			if hidden == nil {
+				hidden = map[string]bool{}
+			}
+			hidden[k[1]] = true
+		}
+	}
+	f := foldSessions(list, hidden)
 	f.apply(list)
 	s.fleet.foldMu.Lock()
+	defer s.fleet.foldMu.Unlock()
 	if s.fleet.folds == nil {
 		s.fleet.folds = map[string]sessionFold{}
 	}
-	was := s.fleet.folds[machine]
 	s.fleet.folds[machine] = f
-	s.fleet.foldMu.Unlock()
-	s.retellFolded(machine, was, f)
-}
-
-// retellFolded tells the apps again the pending cards of machine's sessions whose folded_under changed between two
-// complete lists (a card can reach the apps before the first list that folds its session): each card names the chat
-// that shows it as the list does.
-func (s *Service) retellFolded(machine string, was, now sessionFold) {
-	if len(was.under) == 0 && len(now.under) == 0 {
-		return
-	}
-	var again []proto.Interaction
-	s.fleet.mu.Lock()
-	for _, p := range s.fleet.interactions {
-		if p.ix.MachineID == machine && was.under[p.ix.SessionID] != now.under[p.ix.SessionID] {
-			again = append(again, p.ix)
-		}
-	}
-	s.fleet.mu.Unlock()
-	for _, ix := range again {
-		s.hub.Tell(assistantwire.EventFleetInteraction, assistantwire.FleetInteraction{Interaction: s.withTask(ix)})
-	}
 }
 
 // foldSubset puts on rows decorated without the rest of their machine's list what its last complete list folded them

@@ -117,6 +117,10 @@ func validate(o Options) (Options, error) {
 	if o.Under != "" && o.Machine == "" {
 		return Options{}, failure("invalid_query", "parent_session_id requires machine_id")
 	}
+	if o.Under != "" && o.Roots {
+		// The rows folded under a session are never roots: together they would always select nothing.
+		return Options{}, failure("invalid_query", "roots cannot be combined with parent_session_id")
+	}
 	switch o.PaneSource {
 	case "", "terminal", "feishu", "desktop", "unknown":
 	default:
