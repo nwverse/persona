@@ -27,8 +27,6 @@ export type Panel =
   | { kind: "file"; mid: string; path: string; cwd?: string; line?: number; to?: number; sid?: string }
   /** `manager`: the chat's it was opened from, which reads it (none: the default's). */
   | { kind: "link"; url: string; title?: string; manager?: string }
-  /** A chat's plan: its latest TodoWrite as a whole list, following the chat (#5602). */
-  | { kind: "plan"; mid: string; sid: string }
   /** The session's dev server in a headless browser on its computer (docs/web/preview.md); `port` / `path`: the one to
    *  show (a localhost link of a reply), else the one shown last or the first running one. */
   | { kind: "preview"; mid: string; sid: string; cwd: string; port?: number; path?: string };
