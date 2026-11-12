@@ -212,8 +212,14 @@ export function ComposerPanel({
     const resources: Entry[] = (empty ? firstOfEach(rows) : rows).map((row) => ({ kind: "row", row }));
     if (browsing) return resources;
     if (empty) return [...actions, ...resources];
+    // a typed query is a resource first: an Add row comes after them, and only when a word of it starts with the query,
+    // so `@a` + Enter picks api.ts rather than opening the file picker
     const lq = q.trim().toLowerCase();
-    return [...actions.filter((a) => a.kind === "action" && a.label.toLowerCase().includes(lq)), ...resources];
+    const starts = (label: string) => {
+      const l = label.toLowerCase();
+      return l.startsWith(lq) || l.split(/[\s…]+/).some((w) => w.startsWith(lq));
+    };
+    return [...resources, ...actions.filter((a) => a.kind === "action" && starts(a.label))];
   }, [attach, plan, rows, empty, browsing, q]);
 
   const [active, setActive] = useState(0);
@@ -333,7 +339,11 @@ export function ComposerPanel({
             placeholder={t("chat-composerpanel.search")}
             onChange={(e) => setSearch(e.target.value)}
             onKeyDown={(e) => {
-              if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+              if (e.nativeEvent.isComposing || e.keyCode === 229) {
+                // the IME's own Escape (cancelling a candidate) must not reach ChatView's interrupt on the window
+                if (e.key === "Escape") e.stopPropagation();
+                return;
+              }
               if (e.key === "Escape" || (e.key === "Backspace" && !search)) {
                 // closing the panel only: kept from ChatView's interrupt on the window
                 e.preventDefault();

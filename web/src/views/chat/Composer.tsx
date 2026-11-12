@@ -551,8 +551,11 @@ export const Composer = memo(function Composer({
       setDraft(out.text);
       setCaret(out.caret);
     } else setPlusOpen(false);
-    if (p.action === "attach") fileInput.current?.click();
-    else {
+    if (p.action === "attach") {
+      fileInput.current?.click();
+      // from the +, the caret goes back to the box as after any other pick (the dialog hands the focus back to it)
+      if (!at && hasFinePointer()) requestAnimationFrame(() => input.current?.focus({ preventScroll: true }));
+    } else {
       planMode?.toggle();
       requestAnimationFrame(() => input.current?.focus({ preventScroll: true }));
     }
@@ -561,6 +564,18 @@ export const Composer = memo(function Composer({
     setPlusOpen(false);
     if (refocus) input.current?.focus({ preventScroll: true });
   }, []);
+  const togglePlus = () => {
+    if (plusOpen) return setPlusOpen(false);
+    setPlusOpen(true);
+    // one panel at a time: the / palette (and a typed @'s panel) close until the box is typed in again
+    setDismissed(true);
+    // a touch screen alone: the keyboard goes down and the search box waits for a tap, so no key lands in the covered box
+    if (!hasFinePointer()) input.current?.blur();
+  };
+  // a box turned off takes its + panel with it: it would come back later and take the focus
+  useEffect(() => {
+    if (disabled) setPlusOpen(false);
+  }, [disabled]);
 
   // A Files panel entry dropped on the box: `@path ` at the caret, as the @ menu types it
   const dropEntry = (e: React.DragEvent): boolean => {
@@ -984,7 +999,7 @@ export const Composer = memo(function Composer({
             aria-expanded={plusOpen}
             disabled={disabled}
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => setPlusOpen((o) => !o)}
+            onClick={togglePlus}
             className={cx(TOOL, "text-ink-2 disabled:opacity-50")}
           >
             {uploading ? <Spinner /> : <Icon name="plus" size={15} stroke={2} />}

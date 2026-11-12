@@ -15,8 +15,11 @@ import type { MentionSource } from "./ComposerPanel";
 import type { PlanMode } from "./PermissionPicker";
 import { t } from "../../i18n";
 
+// the session folder's first level: a test may put other entries in it
+const DEFAULT_ENTRIES = [{ name: "src", dir: true }, { name: "README.md", dir: false }];
+let entries = DEFAULT_ENTRIES;
 const api = vi.fn(async (path: string, _init?: unknown): Promise<unknown> => {
-  if (path.startsWith("/machines/m1/fs")) return { path: "/code/app", entries: [{ name: "src", dir: true }, { name: "README.md", dir: false }] };
+  if (path.startsWith("/machines/m1/fs")) return { path: "/code/app", entries };
   throw new Error(`unexpected ${path}`);
 });
 vi.mock("../../lib/api", async (orig) => ({ ...(await orig<typeof import("../../lib/api")>()), api: (path: string, init?: unknown) => api(path, init) }));
@@ -33,12 +36,15 @@ beforeAll(async () => {
   act(() => applyCompleteSessions([{ machine_id: "m2", session_id: "other", title: "Fix the login page", agent: "claude", cwd: "/code/site", updated_at: "2026-11-12T10:00:00Z" } as Session]));
 });
 
+// a precise pointer unless a test takes it away (lib/viewport.ts keeps one list per query, so the switch is read live)
+let fine = true;
 beforeEach(() => {
-  // a precise pointer: the search box takes the focus as the panel opens
-  vi.stubGlobal("matchMedia", (q: string) => ({ matches: q.includes("fine"), media: q, addEventListener() {}, removeEventListener() {} }));
+  fine = true;
+  vi.stubGlobal("matchMedia", (q: string) => ({ get matches() { return q.includes("fine") && fine; }, media: q, addEventListener() {}, removeEventListener() {} }));
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   Element.prototype.scrollIntoView ??= () => {};
   api.mockClear();
+  entries = DEFAULT_ENTRIES;
   localStorage.clear();
   host = document.createElement("div");
   document.body.append(host);
@@ -158,6 +164,47 @@ describe("the + (#5324)", () => {
     expect(panel()).toBeNull();
   });
 
+  it("keeps an IME's Escape in its search box from the window (ChatView's interrupt)", async () => {
+    const seen = vi.fn();
+    window.addEventListener("keydown", seen);
+    render();
+    click(plus());
+    act(() => void search()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", isComposing: true, bubbles: true, cancelable: true })));
+    expect(seen).not.toHaveBeenCalled();
+    expect(panel()).not.toBeNull(); // the IME's Escape cancels its candidate, not the panel
+    window.removeEventListener("keydown", seen);
+  });
+
+  it("closes the / palette: one panel at a time", async () => {
+    render({ commands: [{ word: "/compact", desc: "Compact", text: "/compact" }] });
+    act(() => box().focus());
+    setValue(box(), "/");
+    await settle();
+    expect(host.querySelector("[data-slash-palette]")).not.toBeNull();
+    click(plus());
+    expect(host.querySelector("[data-slash-palette]")).toBeNull();
+    expect(panel()?.dataset.composerPanel).toBe("plus");
+  });
+
+  it("goes when the box is turned off, and does not come back with it", async () => {
+    render();
+    click(plus());
+    expect(panel()).not.toBeNull();
+    render({ disabled: true });
+    expect(panel()).toBeNull();
+    render();
+    expect(panel()).toBeNull();
+  });
+
+  it("on a touch screen alone, takes the keyboard down and leaves the search box for a tap", async () => {
+    fine = false;
+    render();
+    act(() => box().focus());
+    click(plus());
+    expect(document.activeElement).not.toBe(box());
+    expect(document.activeElement).not.toBe(search());
+  });
+
   it("opens the file picker from its Add row, images only where there is no computer", async () => {
     const picker = vi.spyOn(HTMLInputElement.prototype, "click").mockImplementation(() => {});
     render({ machineId: undefined });
@@ -165,6 +212,9 @@ describe("the + (#5324)", () => {
     click(option(t("chat-composerpanel.add_images")));
     expect(picker).toHaveBeenCalledOnce();
     picker.mockRestore();
+    // the caret back in the box, as after any other pick
+    await act(async () => void (await new Promise((r) => requestAnimationFrame(r))));
+    expect(document.activeElement).toBe(box());
   });
 });
 
@@ -195,6 +245,52 @@ describe("a typed @ (#5324)", () => {
     press(box(), "Enter");
     expect(box().value).toBe("see @lib/links.ts ");
     expect(panel()).toBeNull();
+  });
+});
+
+describe("a typed query picks a resource before an Add row (#5324)", () => {
+  const at = async (text: string, plan?: PlanMode) => {
+    render(plan ? { planMode: plan } : {});
+    act(() => box().focus());
+    setValue(box(), text);
+    await settle();
+  };
+
+  it("`@a` + Enter picks api.ts, not the file picker", async () => {
+    entries = [{ name: "api.ts", dir: false }];
+    const picker = vi.spyOn(HTMLInputElement.prototype, "click").mockImplementation(() => {});
+    await at("@a");
+    expect(options()[0].textContent).toContain("api.ts");
+    press(box(), "Enter");
+    expect(picker).not.toHaveBeenCalled();
+    expect(box().value).toBe("@api.ts ");
+    picker.mockRestore();
+  });
+
+  it("`@pl` + Enter opens the plans/ folder, not Plan mode", async () => {
+    entries = [{ name: "plans", dir: true }];
+    const plan: PlanMode = { on: false, toggle: vi.fn() };
+    await at("@pl", plan);
+    expect(options()[0].textContent).toContain("plans/");
+    press(box(), "Enter");
+    expect(plan.toggle).not.toHaveBeenCalled();
+    expect(box().value).toBe("@plans/");
+  });
+
+  it("`@plan` with nothing else matching still offers Plan mode", async () => {
+    entries = [{ name: "api.ts", dir: false }];
+    const plan: PlanMode = { on: false, toggle: vi.fn() };
+    await at(`@${t("lib-session-actions.mode_plan").slice(0, 2)}`, plan); // "Pl", "计划", "計画"
+    expect(options().map((o) => o.textContent)).toEqual([t("lib-session-actions.mode_plan")]);
+    press(box(), "Enter");
+    expect(plan.toggle).toHaveBeenCalledOnce();
+    expect(box().value).toBe("");
+  });
+
+  it("matches an Add row by a word's start, not anywhere in it", async () => {
+    entries = [];
+    await at(`@${t("chat-composerpanel.add_files").slice(1, 3)}`); // inside the label's first word ("dd", "加文")
+    expect(options().some((o) => o.textContent === t("chat-composerpanel.add_files"))).toBe(false);
   });
 });
 
