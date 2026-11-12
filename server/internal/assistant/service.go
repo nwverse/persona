@@ -93,6 +93,9 @@ type Service struct {
 	standingJudgeModel jsonModel  // nil: the configured agent.delegate model; tests can supply a deterministic model.
 	standingMu         sync.Mutex // standing_authorizations.go: revocation and automatic answers serialize
 
+	// rules: the answers to suggested rules, and the last count of what earns one (rule_suggest.go).
+	rules ruleSuggestState
+
 	// prepared is what this hub last gave a machine's node for a directory (key: machine id NUL directory), the
 	// CLAUDE.md and the plugin skills, by prepareSpaceIf; refreshInstructions gives again what differs.
 	preparedMu sync.Mutex
@@ -110,21 +113,28 @@ type Service struct {
 	// interrupts: the interrupted receipts re-sent when their tasks change (interruptions.go).
 	interrupts interruptBook
 
-	titles    titleBook     // titles.go
-	prefs     settingsBook  // profile.go
-	main      mainBook      // start.go
-	archived  archiveBook   // conversations.go
-	origins   originBook    // origins.go
-	guests    guestBook     // guest.go
-	relays    relayBook     // conversations.go
-	avail     availBook     // availability.go
-	quiet     quietBook     // quiet.go
-	supervise superviseBook // supervise_signals.go
-	preempt   preemptBook   // owner_preempt.go
-	tbriefs   taskBriefBook // task_brief.go
+	titles     titleBook       // titles.go
+	agentNames agentNamingBook // agent_naming.go
+	prefs      settingsBook    // profile.go
+	main       mainBook        // start.go
+	archived   archiveBook     // conversations.go
+	origins    originBook      // origins.go
+	guests     guestBook       // guest.go
+	relays     relayBook       // conversations.go
+	avail      availBook       // availability.go
+	quiet      quietBook       // quiet.go
+	supervise  superviseBook   // supervise_signals.go
+	preempt    preemptBook     // owner_preempt.go
+	tbriefs    taskBriefBook   // task_brief.go
+
+	modelPicks modelPickBook // model_pick.go
+	// noBackground: there is no background supervisor whatever the setting says, so the main conversation gets its
+	// own tasks' signals. Only the tests of what the main conversation's own supervision does set it; the hub never does.
+	noBackground bool
 	// briefsOptional: task_plan takes a task without done_when / expect_minutes (briefRequired). Only the tests of
 	// what a plan does once it exists set it; the hub never does.
 	briefsOptional bool
+	background     backgroundBook // supervise_background.go
 	autoRuns       autoReviewBook // supervise_autoreview.go
 	reports        reportBook     // reports.go
 	upReports      reportRate     // agent_control.go: report_to_supervisor
@@ -146,7 +156,8 @@ type Service struct {
 	questions        questions    // tools.go (ask_user)
 	// deadlineSweeping: a sweep of the decisions past their deadline is running (decision_deadline.go).
 	deadlineSweeping atomic.Bool
-	askTodos         askTodoBook // ask_todo.go: the questions nobody answered, now to-dos
+	askTodos         askTodoBook  // ask_todo.go: the questions nobody answered, now to-dos
+	askLaters        askLaterBook // ask_later.go: the questions asked without waiting, still out
 	// minutesMu is held while confirmed action items of meeting minutes become to-dos (kb_minutes.go): one
 	// confirmation at a time reads and records what the others made.
 	minutesMu  sync.Mutex
@@ -220,9 +231,11 @@ func New(o Options) *Service {
 	// The kept old keys too while a rotation keeps them (keyrotate.go).
 	s.models.secret = secretkey.NewWithFallback(o.SecretKey)
 	s.archiveRoutes()
+	s.modelPickRoutes()
 	s.agentArchiveRoutes()
 	s.alwaysRoutes()
 	s.standingAuthorizationRoutes()
+	s.ruleSuggestionRoutes()
 	s.northStarRoutes()
 	s.reporterRoutes()
 	s.directionRoutes()
@@ -557,6 +570,11 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 	for id, machine := range archived {
 		view(id, machine).Archived = true
 	}
+	picks, ok := s.modelPicksSet()
+	snap.Partial = snap.Partial || !ok
+	for id, p := range picks {
+		view(id, p.MachineID).ModelPick = p.wire()
+	}
 	directions, ok := s.directionViews(ctx)
 	snap.Partial = snap.Partial || !ok
 	leadersAt := s.settings(ctx).MachineID // a leader conversation is on the assistant's machine
@@ -608,6 +626,7 @@ func (s *Service) UserSpoke(ctx context.Context, r SessionRef) {
 	s.meetingTurnUserSpoke(r.MachineID, r.SessionID)
 	s.releasePushes(ctx, r.SessionID) // the user speaks: its turns are pushed as ever (supervise_digest.go)
 	s.withdrawAskUser(r.SessionID)    // a question it waits on is taken back: the user's words are not left behind its turn
+	s.askLaterSpoke(ctx, r.SessionID) // one asked without waiting stays up; that they wrote is kept (ask_later.go)
 	s.unarchiveOnSend(r.MachineID, r.SessionID)
 	s.userSpoke(r.SessionID)
 	if s.reporterStopped(ctx, r.SessionID) { // talked to again: its tasks are told to it again (#3308)
@@ -702,6 +721,7 @@ func (s *Service) SessionsChanged(ctx context.Context, d DeviceSessions) {
 	s.nativeArchivesListed(d.MachineID) // agent_archive_native.go
 	s.followStarts(ctx, d)              // the app's starts, for launcher health (launcher_health_starts.go)
 	s.directionTreeSessions(d)          // an Agent of the direction tree may have moved (direction_tree.go)
+	s.agentNamesChanged(d)
 }
 
 func randomHex(n int) string {

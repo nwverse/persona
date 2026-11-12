@@ -125,6 +125,9 @@
     </plurals>
     <!-- A herdr tab of several agents (#2320) -->
     <string name="designsystem_tab_launcher">起点</string>
+    <!-- An Agents row's third line on Glass (#4338 A9): the to-do chip and the muted bell, for TalkBack -->
+    <string name="designsystem_row_todo">ToDo：%1$s</string>
+    <string name="designsystem_row_muted">通知はミュート中</string>
     <plurals name="designsystem_tab_agents">
         <item quantity="other">%1$d個のエージェント</item>
     </plurals>
@@ -136,6 +139,13 @@
     <string name="designsystem_machine_monitor">マシンモニター</string>
     <string name="designsystem_details">詳細</string>
     <string name="designsystem_space">スペース</string>
+    <string name="designsystem_repository">リポジトリ</string>
+    <string name="designsystem_main_worktree">メインのワークツリー</string>
+    <string name="designsystem_worktree">ワークツリー</string>
+    <string name="designsystem_worktree_primary">メイン</string>
+    <string name="designsystem_worktree_detached">Detached HEAD</string>
+    <string name="designsystem_worktree_offline">このコンピューターは現在オフラインです</string>
+    <string name="designsystem_worktree_idle">アイドル</string>
     <string name="designsystem_expand_named">%1$sを展開</string>
     <string name="designsystem_collapse_named">%1$sを折りたたむ</string>
     <plurals name="designsystem_idle_more">
@@ -195,6 +205,19 @@
     <string name="designsystem_editor_picture">編集する画像</string>
     <string name="designsystem_editor_undo">取り消す</string>
     <string name="designsystem_editor_clear">クリア</string>
+    <!-- The image editor's crop, turn, widths and redo (#4992, iOS ImageEditor) -->
+    <string name="designsystem_markup_crop">切り抜き</string>
+    <string name="designsystem_editor_rotate">回転</string>
+    <string name="designsystem_editor_reset">リセット</string>
+    <string name="designsystem_editor_redo">やり直す</string>
+    <string name="designsystem_editor_shape">縦横比</string>
+    <string name="designsystem_editor_shape_free">自由形式</string>
+    <string name="designsystem_editor_shape_original">オリジナル</string>
+    <string name="designsystem_editor_shape_square">正方形</string>
+    <string name="designsystem_editor_width">線の太さ</string>
+    <string name="designsystem_editor_width_thin">細い</string>
+    <string name="designsystem_editor_width_medium">中</string>
+    <string name="designsystem_editor_width_thick">太い</string>
     <string name="designsystem_viewer_load_failed">画像を読み込めませんでした</string>
     <string name="designsystem_viewer_action_failed">操作は完了しませんでした。再試行してください</string>
     <string name="designsystem_render_too_slow">描画に時間がかかりすぎました</string>

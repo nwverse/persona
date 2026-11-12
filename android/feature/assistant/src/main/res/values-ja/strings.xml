@@ -82,6 +82,7 @@
     <!-- The drawer's newest own chats, between 常驻 and All chats (#4922) -->
     <string name="assistant_recent">最近</string>
     <string name="assistant_directions">常駐</string>
+    <string name="assistant_background_supervisor">バックグラウンド監督</string>
     <string name="assistant_origin_inbox">受信箱</string>
     <string name="assistant_empty_title">チャットはまだありません</string>
     <string name="assistant_empty_detail">メッセージを送って、Personaと話してみましょう。</string>
@@ -147,4 +148,17 @@
     <string name="assistant_health_history">ヘルスケアのチャット</string>
     <string name="assistant_health_new">新しいヘルスケアのチャット</string>
     <string name="assistant_health_load_failed">ヘルスケアのチャットを読み込めませんでした</string>
+    <string name="assistant_rename_menu">名前を変更…</string>
+    <string name="assistant_rename_title">名前を変更</string>
+    <string name="assistant_rename_field">セッション名</string>
+    <string name="assistant_save">保存</string>
+    <string name="assistant_renamed">名前を変更しました</string>
+    <string name="assistant_copy_diagnostics">診断情報をコピー</string>
+    <string name="assistant_diagnostics_copied">診断情報をコピーしました</string>
+    <string name="assistant_end_menu">終了…</string>
+    <string name="assistant_archived_count">アーカイブ済み（%1$d）</string>
+    <string name="assistant_archived_empty">アーカイブしたチャットはありません</string>
+    <string name="assistant_archived_empty_detail">チャット一覧でチャットを左にスワイプするとアーカイブでき、ここに表示されます。</string>
+    <string name="assistant_unarchive">アーカイブ解除</string>
+    <string name="assistant_unarchived">アーカイブを解除しました</string>
 </resources>

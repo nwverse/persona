@@ -15,6 +15,8 @@ const (
 	CapabilityConfigOwn = "config.own"
 	// CapabilityAgentSessionArchives: the manager owns recoverable Codex/Claude archives.
 	CapabilityAgentSessionArchives = "agent_session_archives"
+	// CapabilityAgentNaming: ordinary full-user renames record manual intent before node dispatch.
+	CapabilityAgentNaming = "agent_naming.v1"
 	// CapabilityAgentSessionArchiveClose: the manager's archive also takes ?close=1, "Archive and close", which closes
 	// the agent on its computer (session.retire) once archived (docs/protocol/protocol.md "Agent session archives").
 	CapabilityAgentSessionArchiveClose = "agent_session_archive_close"
@@ -103,16 +105,21 @@ const (
 
 // HTTPRequest is http.request's params: an app's request on one of Routes, with an escaped URL path (header without
 // the hub's credentials and hop-by-hop headers, the asking device's role in RoleHeader; body as base64).
-// HandoffApprover is set by the hub on a card's answer from a device that may approve a hand-off card.
+// HandoffApprover is set by the hub on a card's answer from a device that may approve a hand-off card; Human on a new
+// conversation a person's own app opens.
 type HTTPRequest struct {
 	Caller          *devicewire.Caller         `json:"caller,omitempty"`
 	ShareAuthority  *devicewire.ShareAuthority `json:"share_authority,omitempty"`
 	HandoffApprover *HandoffApprover           `json:"handoff_approver,omitempty"`
-	Method          string                     `json:"method"`
-	Path            string                     `json:"path"`
-	Query           string                     `json:"query,omitempty"`
-	Header          map[string][]string        `json:"header,omitempty"`
-	Body            []byte                     `json:"body,omitempty"`
+	// Human is the hub's word that a person's own app opens this conversation (POST /api/v1/assistant/conversations
+	// with a full device's credential, decided as for SendParams.Human): its first message counts as theirs
+	// (WithHumanStart). Set by the hub on that route only, never from the request; an older hub never sends it.
+	Human  bool                `json:"human,omitempty"`
+	Method string              `json:"method"`
+	Path   string              `json:"path"`
+	Query  string              `json:"query,omitempty"`
+	Header map[string][]string `json:"header,omitempty"`
+	Body   []byte              `json:"body,omitempty"`
 }
 
 // HTTPResponse is http.request's answer, written back to the app unchanged.
@@ -135,6 +142,8 @@ var Routes = []string{
 	"GET /api/v1/assistant/standing-authorizations",
 	"GET /api/v1/assistant/north-star",
 	"DELETE /api/v1/assistant/standing-authorizations/{id}",
+	"POST /api/v1/assistant/rule-suggestions/{id}/always",
+	"POST /api/v1/assistant/rule-suggestions/{id}/not-now",
 	"DELETE /api/v1/assistant/conversations/{id}/always/{hash}",
 	"POST /api/v1/assistant/conversations/{id}/unarchive",
 	"POST /api/v1/assistant/conversations/{id}/stop",
@@ -212,7 +221,10 @@ var Routes = []string{
 	"GET /api/v1/assistant/capabilities",
 	"POST /api/v1/assistant/conversations",
 	"POST /api/v1/assistant/conversations/{id}/compact",
+	"PUT /api/v1/assistant/conversations/{id}/model", // the model a conversation's next messages run on (model_pick.go, #5033)
+	"DELETE /api/v1/assistant/conversations/{id}/model",
 	"POST /api/v1/assistant/main/new",
+	"POST /api/v1/assistant/main/clear",
 	"POST /api/v1/assistant/origins/backfill",
 	// The channels (channels.go there, docs/extensions/channels.md "API").
 	"GET /api/v1/channels",
