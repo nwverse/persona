@@ -105,6 +105,7 @@ Colors are written light/dark. iOS sizes are at the default text size.
 | --- | --- | --- | --- | --- |
 | `accent` | from the theme color; blue `#007AFF`/`#0A84FF` | `apple/Shared/Design/Theme.swift:104` | `--accent` `#0285ff`/`#3d9aff` (differs; preset "blue" matches Apple) | Glass accent same as Apple |
 | `danger` | `#D93A3A`/`#FF5F57` | `apple/Shared/Design/Theme.swift:136` | `--red` `#bd3038`/`#ff9499` | same as Apple |
+| `danger` wash | `danger` at 12% | `apple/Shared/Design/Theme.swift` (the failed and interrupted conclusion cards) | `--danger-wash` = `--red` at 12% (#5569); `--red-tint` stays neutral | same as Apple |
 | `positive` | `#248A3D`/`#30D158` | `apple/Shared/Design/Theme.swift:137` | `--green` `#107638`/`#6dd697` | same as Apple |
 | `caution` / `cautionText` | `#F08A00`/`#FF9F0A`; `#B35400`/`#FF9F0A` | `apple/Shared/Design/Theme.swift:138` | `--orange` `#a64c00`/`#eea66d` (one token) | same as Apple |
 | `ai` | `#5B4FD6`/`#9C94FF` | `apple/Shared/Design/Theme.swift:140` | `--ai` same | same |
@@ -1280,6 +1281,16 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
 - **A question the assistant answered** (iOS `DelegatedCard`, web `Delegated.tsx`, Android on Glass): no longer a pending request, so it is counted nowhere and has no Needs you row. The newest one for the Agent is a card over its chat's composer, after the Agent's own cards, until its × puts it away: "Answered by the assistant", each question with the answer as it is now, "Why: …", and Change Answer while the chat takes messages. Change Answer's sheet starts from the answers so far and sends only what changed, as a message to the Agent. Session Info lists every one with the same body and Change Answer.
 - **Everywhere at once**: the first decision on any surface (phone, web, notification, watch) wins. Every other entry updates at once, with a light haptic, and offers Undo where the action can be undone.
 
+### 4.8.0 Task cards (web, #5569)
+
+The task cards follow `docs/design/task-cards.md`, which holds the state tables and the reasons.
+
+- **Conclusion cards.** The chat draws a card for each way a task ended (done, stopped, failed to start, interrupted); reviews and reports stay out of it. A failed card keeps Retry, an interrupted one Continue and View. Failed and interrupted cards sit on `--danger-wash`, and their words are `--ink`, not `--ink-2` / `--ink-3`: the wash over the light canvas is 4.31:1 for `--red` and 4.37:1 for `--ink-2`. The hand-off card of a task whose failed card says why only says it did not start.
+- **Accept and decision rows** stack when their container is narrow (a container query, not the viewport): the words take the whole width, the secondary buttons one row, the primary its own full-width line. Never a menu.
+- **Progress rows.** The status word is its own right-aligned column, then a fixed end slot: `›` where the row opens something, a check once finished, an info mark for a usage limit. A task whose Agent is not up says Starting. A usage limit's second line says when it resets.
+- **Needs you rows with something to answer are folded to one line** (mark, title, what it waits for, the kind) and open in place on a click of the line or its chevron (`aria-expanded`); the card leaves with the answer, and every row is folded again when the tray changes. The conversation's own cards stay in the chat, and their rows close the tray onto them.
+- **Hard-coded font sizes.** `text-[13px]` and its kin may only fall: `scripts/ci/web_font_ratchet.py` (`docs/operations/testing.md`).
+
 ### 4.8.1 Records of interruptions
 
 A chat record of something that went wrong (an interrupted task, #3834) says what became of it once that is known: a grey line with the result ("Cancelled", "Dispatched again", "Resumed", "Accepted", "Done"), never a red card that outlives the problem. Several records with one cause in a short time are one card that counts handled and pending and opens to each item. The danger color is only for what is still pending. The hub works out the result and the grouping; the clients only draw them (principle 4; `docs/assistant/unified-entry.md`, "Interrupted receipts after the fact").
@@ -1957,3 +1968,36 @@ fetched from the hub and goes when the dialog closes. Reason: a link is how gate
 (principle 1), the review and Save stay the user's (principle 3), and the risky part is opt-in and explained
 (principle 2); it reuses the paste view, `Menu`, `Dialog`, `Switch` and the copy notice, and adds no setting, style or
 motion.
+
+## GitHub star prompts (#5761)
+
+Persona is open source, and, as Orca does, it asks for a GitHub star in three quiet places on the web and Android
+clients, with iOS to follow (#5910); the frozen Mac app, the watch and Vision have none. When each shows is one rule for every client, replayed from
+`spec/fixtures/star-prompt` (principle 4); the state is the device's own (browser storage, `UserDefaults`, device-wide
+preferences) and never goes to the hub. Whether the user really starred can't be known, so a tap on **Star on GitHub**
+from any of them counts and ends all three on that device. It opens the project outside the app, where the user's
+GitHub session is: a new tab on the web, the GitHub app or the browser on the phones, never the in-app links card (4.6).
+
+- **The empty Agents page's pill**: a small rounded pill, the star mark and **Star on GitHub** with a ✕ (**Hide**) at its
+  end, on the Agents page's empty surface: on the web the start area when nothing is open (pinned to its foot, under
+  "Open a session"; a phone's web never shows that area), on iOS and Android under "Start your first session". ✕ hides
+  it for good on that device.
+- **The milestone line**: once the device has started 20 Agents, a line in the hub notice's slot of the Agents list, in
+  its look (the star mark in the accent, the words in secondary text, ✕ at the end): "Enjoying Persona? It's open
+  source, and a star on GitHub helps others find it." with **Star on GitHub** under the words (beside them a narrow
+  sidebar cut the sentence short). ✕ (**Later**) doubles the count it waits for, past the Agents started so far, and
+  keeps it away three days. It never shows while a session needs the user, a card waits or a search is on, so it never
+  pushes a waiting row down (3.4, 4.8).
+- **The onboarding toast**: once per device, when first setup finishes (iOS: the checklist's **Get started**; Android:
+  the readiness screen's **Done**; the web: this tab seeing setup turn ready, or the first answer come, on a hub that
+  never answered a first message, so a long-time user whose computer went away and came back is not taken for a new
+  one), the platform's toast with an action: "All set! If you like Persona, a star helps others find it." and **Star on
+  GitHub**; it is short so the words fit a phone's three toast lines beside the button. On the web it stays until closed
+  (`sticky`); on the phones it goes after the platform's time for a toast with a button.
+
+Reason: the pill and the line live only in Agents, whose people know GitHub, and wait for a quiet moment; the toast is
+the one place an everyday user meets it, so it says what to do in plain words and goes away on its own on the phones
+(principles 1 and 2). They reuse the hub notice's line, each platform's toast with an action and the existing star
+icon (`Theme.Icon.gitHubStar`, an alias of the plugin star; Android `PersonaIcons.gitHubStar`; the web's `star`), and
+add no setting, style or motion. Deviation (principle 3): hiding the pill or putting the line off is not a setting with
+an undo; a prompt dismissed is a prompt answered, and the rule above already brings the line back less and less often.

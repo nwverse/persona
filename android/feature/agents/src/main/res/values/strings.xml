@@ -556,6 +556,10 @@
         <item quantity="other">%d to-dos</item>
     </plurals>
     <string name="agents_todo_restore">Restore</string>
+    <string name="agents_todo_seen">Got it</string>
+    <string name="agents_todo_seen_moved">Moved to Done</string>
+    <string name="agents_todo_seen_undo">Undo</string>
+    <string name="agents_todo_seen_failed">Something went wrong: %1$s</string>
     <string name="agents_todo_pr_moved">%1$s · moved %2$s</string>
     <string name="agents_todo_for_briefing">Decision comes with the next briefing</string>
     <string name="agents_todo_pr">PR</string>
