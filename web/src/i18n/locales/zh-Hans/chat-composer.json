@@ -21,8 +21,6 @@
   "uploaded": "已传到电脑：{path}",
   "file_too_large": "文件太大（最多 200 MB）",
   "upload_failed": "上传失败：{error}",
-  "command_text": "「{text}」",
-  "keys_hint": "↑↓ 选择 · Enter 填入 · Esc 关闭",
   "suggestion": "{suggestion}（Tab 填入）",
   "too_many_images": "一次最多 {max} 张",
   "suggestion_label": "Claude 建议：{suggestion}",

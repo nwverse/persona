@@ -5696,6 +5696,18 @@ if os.environ.get("MOCK_COMMENTS") == "1":
             "整体可以，改完这三处再提交。"])),
         it("assistant", "text", 0.4, text="好，三处都改：城市名改成可选，解析失败回退到上次的缓存，保存按钮改成整行宽的主按钮。"),
     ]
+    # And Persona's main conversation has a quote of words picked in its answer and a comment on others (#5204): the
+    # blocks sit in the new layout's box, whatever the style's bubble.
+    _answer = next(i["id"] for i in ITEMS[ASK1] if i["role"] == "assistant" and i["kind"] == "text")
+    ITEMS[ASK1] = ITEMS[ASK1] + [
+        it("user", "text", 2.1, text=f'<persona-context kind="quote" title="Persona" url="" msg="{_answer}" part="selection">\n'
+           "照片同步脚本（Mac Studio）的计划写好了，等你批准。\n</persona-context>\n这个下周再看。"),
+        it("assistant", "text", 2.0, text="好，下周一提醒你看照片同步脚本的计划。"),
+        it("user", "text", 1.9, text="\n".join([
+            "> Comment 1", "> Selected text:", "> > 韩梅梅在飞书问你周五的发布能不能赶上", "> ", "> 她说的是哪个版本？", "",
+            "先帮我问清楚再答复她。"])),
+        it("assistant", "text", 1.7, text="好，我先在飞书问她是哪个版本，问清楚了再告诉你。"),
+    ]
 # MOCK_LIVE_STEP=bash|command|reads|parallel|thinking|thinking-folded (#2987): the widget chat is a minute into a new turn whose newest
 # step is still going, for the running work line that names it: `bash` a command Claude described (its description alone),
 # `command` a long command with no description (cut in its middle, the clock whole), `reads` three files read at once

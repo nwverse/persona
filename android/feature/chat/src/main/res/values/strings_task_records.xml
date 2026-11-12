@@ -13,4 +13,7 @@
     <!-- A quiet supervision round folded into one line (iOS SupervisionRecordLine). -->
     <string name="chat_supervision_record">Supervision record</string>
     <string name="chat_supervision_record_live">Supervision record · running</string>
+    <!-- A message card on Glass (iOS MessageCard): Edit opens the drafted reply for typing, Done closes it. -->
+    <string name="chat_tasks_message_edit">Edit</string>
+    <string name="chat_tasks_message_edit_done">Done</string>
 </resources>
