@@ -420,7 +420,8 @@ struct MeetingPage: View {
 
     // MARK: The page menu
 
-    /// Persona's role (Off turns it off) and the private mark.
+    /// Persona's role (Off turns it off), the private mark, and Meeting / Note (#5243: a note leaves this page for the live
+    /// view, as the sheet shows a note).
     private func pageMenu(_ entry: RecordingEntry) -> some View {
         let role = entry.attendance?.role ?? .off
         return Menu {
@@ -436,6 +437,7 @@ struct MeetingPage: View {
             }
             .disabled(pendingPrivate != nil)
             .accessibilityIdentifier("meeting-private")
+            RecordingKindPicker(entry: entry)
         } label: {
             ThemedIcon(Theme.Icon.moreMenu).font(Theme.Font.heading).foregroundStyle(Theme.accent)
                 .tapTargetFrame()

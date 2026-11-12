@@ -369,6 +369,29 @@
         }
       }
     },
+    "No minutes, and Persona stays out.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No minutes, and Persona stays out."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不出纪要，Persona 也不参与。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "議事録は作らず、Persona も加わりません。"
+          }
+        }
+      }
+    },
     "No settings found": {
       "extractionState": "manual",
       "localizations": {
@@ -388,6 +411,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "一致する設定がありません"
+          }
+        }
+      }
+    },
+    "Note [Recording Kind]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Note"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "笔记"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "メモ"
           }
         }
       }
@@ -434,6 +480,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "プロバイダーとキー"
+          }
+        }
+      }
+    },
+    "Recording options": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording options"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "录音选项"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "録音のオプション"
           }
         }
       }
@@ -44566,6 +44635,29 @@
       },
       "extractionState" : "manual"
     },
+    "Couldn't save the scan." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't save the scan."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スキャンを保存できませんでした。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "扫描件没能保存。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Couldn't save: %@" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -64921,6 +65013,29 @@
       },
       "extractionState" : "manual"
     },
+    "Inbox Item…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Inbox Item…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "受信トレイの項目…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收件箱条目…"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Include Old Chat Summary" : {
       "localizations" : {
         "en" : {
@@ -68828,6 +68943,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "知识库"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Knowledge Note…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Knowledge Note…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ナレッジのノート…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "知识库笔记…"
           }
         }
       },
@@ -114892,6 +115030,29 @@
       },
       "extractionState" : "manual"
     },
+    "Scan Document" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Scan Document"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "書類をスキャン"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "扫描文稿"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Scan again" : {
       "localizations" : {
         "en" : {
@@ -125766,24 +125927,47 @@
         }
       }
     },
-    "Starts in the selected shell without opening a new tab. Codex needs a first message, so use New Session." : {
+    "Starts in the selected shell without opening a new tab." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Starts in the selected shell without opening a new tab. Codex needs a first message, so use New Session."
+            "value" : "Starts in the selected shell without opening a new tab."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "選択したshellで起動し、新しいタブは開きません。Codexには最初のメッセージが必要なため、「新規セッション」を使ってください。"
+            "value" : "選択したshellで起動し、新しいタブは開きません。"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在选中的 shell 里启动，不新开标签页。Codex 需要第一条消息，请用「新建会话」。"
+            "value" : "在选中的 shell 里启动，不新开标签页。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Starts in the selected shell without opening a new tab. Codex starts in a tab of its own: use New Session." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Starts in the selected shell without opening a new tab. Codex starts in a tab of its own: use New Session."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選択したshellで起動し、新しいタブは開きません。Codexは専用のタブで起動するため、「新規セッション」を使ってください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在选中的 shell 里启动，不新开标签页。Codex 在自己的标签页里启动，请用「新建会话」。"
           }
         }
       },
@@ -145515,6 +145699,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "待办"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "To-do…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "To-do…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ToDo…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "待办…"
           }
         }
       },
