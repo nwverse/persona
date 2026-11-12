@@ -44,6 +44,7 @@
   "not_sent_plan": "{name} 在等你看计划，这句没发出去",
   "not_sent_card": "{name} 在等你先处理上面的卡片",
   "not_sent_unprompted": "刚才没听到你要做这件事，所以没发出去",
+  "not_sent_unprompted_quoted": "刚才没听到你要做这件事，所以没发出去：『{task}』",
   "not_sent_on_screen": "批准请在屏幕上点",
   "not_sent_empty": "没听清，再说一遍",
   "not_sent_elsewhere": "这个对话正在别处打开，发不进去",

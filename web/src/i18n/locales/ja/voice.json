@@ -44,6 +44,7 @@
   "not_sent_plan": "{name}はプランの確認待ちのため、この内容は送信されませんでした",
   "not_sent_card": "{name}は上のカードの対応を待っています",
   "not_sent_unprompted": "直前にこの依頼を聞き取れなかったため、送信していません",
+  "not_sent_unprompted_quoted": "直前にこの依頼を聞き取れなかったため、送信していません：「{task}」",
   "not_sent_on_screen": "承認は画面上でクリックしてください",
   "not_sent_empty": "聞き取れませんでした。もう一度お話しください",
   "not_sent_elsewhere": "このチャットはほかの場所で開かれているため送信できません",

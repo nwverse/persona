@@ -176,6 +176,9 @@ export interface VoiceStart {
   resume?: VoiceRun[];
   /** False: the microphone records without echo cancellation, so a caption of the user's may be the voice's own. */
   echoCancellation?: boolean;
+  /** The user-speech gate on (true) or off (false) for the call (#5904, docs/assistant/voice.md 3.2). Saying it also tells
+   *  the extension this page has Send anyway; a page from before it says nothing, and an older extension ignores it. */
+  speechGate?: boolean;
 }
 
 /** Extension ids are a-z, 0-9, `_` and `-` (docs/extensions/extensions.md): anything else must not become a path. */

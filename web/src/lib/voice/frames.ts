@@ -112,6 +112,7 @@ export function startFrame(s: VoiceStart): string {
     };
   }
   if (s.echoCancellation !== undefined) frame.echo_cancellation = s.echoCancellation;
+  if (s.speechGate !== undefined) frame.speech_gate = s.speechGate;
   return JSON.stringify(frame);
 }
 

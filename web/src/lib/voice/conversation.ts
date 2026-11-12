@@ -332,10 +332,11 @@ export class VoiceConversation {
   }
 
   /** `run` can go again on this connection. One the user-speech gate held back (`unprompted`) only with an extension
-   *  that keeps it (`speech_gate`, #5904): an older one does nothing with its resend. */
+   *  that keeps it (`speech_gate`, #5904), and only with a task: the extension keeps none without one, and an older
+   *  extension none at all, so a resend would do nothing. */
   private knows(run: VoiceRun, features: readonly string[]): boolean {
     if (!this.ready || !this.socket || run.state !== "refused" || this.runSeen.get(run.id) !== this.generation) return false;
-    return run.code !== "unprompted" || features.includes(SPEECH_GATE_FEATURE);
+    return run.code !== "unprompted" || (run.task.trim() !== "" && features.includes(SPEECH_GATE_FEATURE));
   }
 
   /** Resend / Clear and Send / Send Anyway a refused run, under its id; `clearingDraft` hands the hub's `clearable` back. */
@@ -364,12 +365,14 @@ export class VoiceConversation {
     this.audio?.cue(cue);
   }
 
-  /** What `start` says now: the target, the conversation's last turns, whether the microphone cancels echo, and when it
-   *  picks up again the captions so far and the runs not over yet, each as last reported. */
+  /** What `start` says now: the target, the conversation's last turns, whether the microphone cancels echo, the
+   *  user-speech gate (always on: the web has no switch; said, it tells the extension this page has Send anyway, #5904),
+   *  and when it picks up again the captions so far and the runs not over yet, each as last reported. */
   startFrame(): VoiceStart {
     return {
       model: this.snap.model, voice: this.snap.voice, target: { machine_id: this.mid, session_id: this.sid }, recent: this.recent,
       history: historyOf(this.snap.captions), resume: this.snap.runs.filter((r) => runOpen(r.state)), echoCancellation: this.audio?.cancelsEcho,
+      speechGate: true,
     };
   }
 

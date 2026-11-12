@@ -133,9 +133,14 @@ function notSent(run: VoiceRun, cards: readonly Pick<Interaction, "id" | "kind">
       if (plan) return line(t("voice.not_sent_plan", { name: label }), [{ kind: "returnPlan", card: plan.id, feedback: run.task, run: run.id }]);
       return line(t("voice.not_sent_card", { name: label }));
     }
-    case "unprompted":
-      // the gate heard no fresh request (docs/assistant/voice.md 4.4): never worded as if someone else said it
-      return line(t("voice.not_sent_unprompted"), resendable ? [{ kind: "sendAnyway", run: run.id }] : []);
+    case "unprompted": {
+      // the gate heard no fresh request (docs/assistant/voice.md 4.4): never worded as if someone else said it. What was
+      // held back is quoted, as a draft is: Send anyway confirms words the user can see (last, so a long one only loses
+      // its end to the line's ellipsis)
+      const task = run.task.trim();
+      if (!task) return line(t("voice.not_sent_unprompted"));
+      return line(t("voice.not_sent_unprompted_quoted", { task }), resendable ? [{ kind: "sendAnyway", run: run.id }] : []);
+    }
     case "on_screen":
       return line(t("voice.not_sent_on_screen"));
     case "empty":

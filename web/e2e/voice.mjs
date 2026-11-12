@@ -425,7 +425,8 @@ try {
       const anyway = page.locator('[data-voice-action="sendAnyway"]');
       await anyway.waitFor();
       assert.equal((await anyway.textContent()).trim(), L.action_send_anyway);
-      assert.ok((await line.textContent()).includes(L.not_sent_unprompted), `${name}: the held-back line says why`);
+      // quoted (the mock's task), so Send anyway confirms words the user can see
+      assert.ok((await line.textContent()).includes(L.not_sent_unprompted_quoted.replace("{task}", "顺便发布新版本")), `${name}: the held-back line says why, and what`);
       await shot("unprompted");
       await singleLineButtons("unprompted");
       const heldFrom = (await mockLog()).resends.length;
