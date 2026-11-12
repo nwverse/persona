@@ -21,8 +21,6 @@
   "uploaded": "コンピューターにアップロードしました：{path}",
   "file_too_large": "ファイルが大きすぎます（最大200MB）",
   "upload_failed": "アップロードできませんでした：{error}",
-  "command_text": "「{text}」",
-  "keys_hint": "↑↓ 選択 · Enter 挿入 · Esc 閉じる",
   "suggestion": "{suggestion}（Tabで挿入）",
   "too_many_images": "一度に {max} 枚まで",
   "suggestion_label": "Claude の提案：{suggestion}",

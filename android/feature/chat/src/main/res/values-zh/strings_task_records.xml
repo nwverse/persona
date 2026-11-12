@@ -10,4 +10,6 @@
     <string name="chat_report_step">第 %1$d 步 · %2$s</string>
     <string name="chat_supervision_record">督办记录</string>
     <string name="chat_supervision_record_live">督办记录 · 处理中</string>
+    <string name="chat_tasks_message_edit">改一下</string>
+    <string name="chat_tasks_message_edit_done">改好了</string>
 </resources>
