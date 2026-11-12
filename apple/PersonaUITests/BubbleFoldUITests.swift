@@ -24,13 +24,15 @@ final class BubbleFoldUITests: XCTestCase {
         self.hub = hub
     }
 
-    @MainActor private func launch(_ chat: String, scheme: String = "light", largest: Bool = false, whole: Bool = false) {
+    /// fresh: `-openChatsFresh` (no chat kept on disk, and every fold closed: `OpenReports`).
+    @MainActor private func launch(_ chat: String, scheme: String = "light", largest: Bool = false, whole: Bool = false,
+                                   fresh: Bool = true) {
         app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         let open = chat == persona
             ? ["-app.tab", "assistant", "-tab", "assistant", "-openAssistant", chat]
             : ["-tab", "dev", "-openSession", chat]
-        app.launchArguments = ["-pairURL", pair, "-openChatsFresh", "YES", "-ui.scheme", scheme,
+        app.launchArguments = ["-pairURL", pair, "-openChatsFresh", fresh ? "YES" : "NO", "-ui.scheme", scheme,
                                "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"] + open
             + (largest ? ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] : [])
             + (whole ? ["-showWholeBubbles", "YES"] : [])
@@ -54,6 +56,16 @@ final class BubbleFoldUITests: XCTestCase {
 
     @MainActor private func press(_ words: XCUIElement) {
         words.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 60, dy: 20)).press(forDuration: 0.8)
+    }
+
+    /// Taps Show More where it shows: in the upside-down chat list an element's frame may come flipped (as
+    /// MessageLiftUITests' `liftAt` finds), and `isHittable` is then wrong too.
+    @MainActor private func tapShowMore() {
+        let window = app.windows.firstMatch.frame
+        var f = expand.firstMatch.frame
+        if !window.insetBy(dx: 0, dy: window.height * 0.12).contains(CGPoint(x: f.midX, y: f.midY)) { f.origin.y = window.height - f.maxY }
+        print("FOLD show-more frame \(expand.firstMatch.frame) tapped at y \(f.midY) in \(window)")
+        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: f.minX + 24, dy: f.midY)).tap()
     }
 
     private var expand: XCUIElementQuery { app.buttons.matching(identifier: "bubble.expand") }
@@ -96,7 +108,7 @@ final class BubbleFoldUITests: XCTestCase {
         collapse.tap()
         XCTAssertTrue(expand.firstMatch.waitForExistence(timeout: 5), "Show Less did not fold it")
         sleep(1)
-        expand.firstMatch.tap()
+        tapShowMore()
         XCTAssertTrue(collapse.waitForExistence(timeout: 5), "Show More did not open it")
     }
 
@@ -105,11 +117,11 @@ final class BubbleFoldUITests: XCTestCase {
         launch(agent)
         XCTAssertTrue(expand.firstMatch.waitForExistence(timeout: 20), "not folded:\n\(app.debugDescription)")
         sleep(1)
-        expand.firstMatch.tap()
+        tapShowMore()
         XCTAssertTrue(collapse.waitForExistence(timeout: 5))
         sleep(2) // written off the main thread (StateCache)
         app.terminate()
-        launch(agent)
+        launch(agent, fresh: false)
         XCTAssertTrue(text(first).waitForExistence(timeout: 20))
         sleep(2)
         XCTAssertTrue(collapse.exists, "the message folded again")
@@ -145,9 +157,7 @@ final class BubbleFoldUITests: XCTestCase {
                     if scheme == "dark" { acceptIconAlert(timeout: 3) }
                     sleep(2)
                     shot(name + "-folded")
-                    let show = expand.firstMatch
-                    if !show.isHittable { app.swipeDown(velocity: .slow); sleep(1) }
-                    show.tap()
+                    tapShowMore()
                     XCTAssertTrue(collapse.waitForExistence(timeout: 5), "\(name): Show More did not open it")
                     sleep(1)
                     shot(name + "-opened")

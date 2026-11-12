@@ -325,12 +325,15 @@ final class MessageLiftUITests: XCTestCase {
     /// Lifts the message with `words` and selects all of its words in place: in each state its lines are where the
     /// chat drew them. Lifted, a message with no room for its bar beside it moves (all of it, upright, `moves`); the
     /// text view over the selected words lays them out as the chat did (`selectMatches`), within half a point.
+    /// unfold: the message is a long one of yours, folded in the chat (#5676; a long press would open it rather than lift
+    /// it): opened with Show More first, then pressed open, as these checks are about the words of an open message.
     @MainActor private func checkTheWordsStay(_ words: String, _ name: String, moves: Bool = false, selectMatches: Bool = true,
-                                             close: Bool = false, reveal: Bool = false) {
+                                             close: Bool = false, reveal: Bool = false, unfold: Bool = false) {
         guard text(words).waitForExistence(timeout: 20) else { return XCTFail("\(name): missing \(words)") }
         // Closed again even when a step fails, so the next check finds the chat as it was.
         defer { if close, self.lifted.exists { closeTheLift(name) } }
         sleep(2)
+        if unfold { openYourFoldedMessage(name) }
         if reveal { self.reveal(words) }
         shot(name + "-normal")
         guard liftAt(words) else { return XCTFail("\(name): did not lift") }
@@ -353,6 +356,19 @@ final class MessageLiftUITests: XCTestCase {
         }
         print("LIFT-LINES \(name) select=\(selected.select)")
         shot(name + "-selected")
+    }
+
+    /// Show More on your folded long message (#5676), if it is folded (open is kept from an earlier run). Its frame may
+    /// come flipped in the upside-down chat list (as `liftAt` finds): tapped where it shows.
+    @MainActor private func openYourFoldedMessage(_ name: String) {
+        let more = app.buttons["bubble.expand"].firstMatch
+        guard more.exists else { return }
+        let window = app.windows.firstMatch.frame
+        var f = more.frame
+        if !window.insetBy(dx: 0, dy: window.height * 0.12).contains(CGPoint(x: f.midX, y: f.midY)) { f.origin.y = window.height - f.maxY }
+        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: f.minX + 24, dy: f.midY)).tap()
+        XCTAssertTrue(app.buttons["bubble.collapse"].firstMatch.waitForExistence(timeout: 5), "\(name): Show More did not open it")
+        sleep(1)
     }
 
     /// Two taps beside the lifted message: the first ends the selecting, the second puts it back.
@@ -380,7 +396,7 @@ final class MessageLiftUITests: XCTestCase {
             checkTheWordsStay("可以，就这么改", "mine-short")
             app = XCUIApplication()
             launchWithLines(mix)
-            checkTheWordsStay("定时检查", "mine-long", moves: true)
+            checkTheWordsStay("定时检查", "mine-long", moves: true, unfold: true)
         }
     }
 
@@ -415,7 +431,7 @@ final class MessageLiftUITests: XCTestCase {
             checkTheWordsStay("要我先带你看哪一块", "persona-answer", moves: true)
             app = XCUIApplication()
             launchWithLines(mix, style: "clay")
-            checkTheWordsStay("定时检查", "clay-mine", moves: true)
+            checkTheWordsStay("定时检查", "clay-mine", moves: true, unfold: true)
             app = XCUIApplication()
             launchWithLines(mix, style: "clay")
             checkTheWordsStay("下一次核对在整点之后五分钟", "clay-answer", moves: true)
