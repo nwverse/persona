@@ -5,9 +5,14 @@ import SwiftUI
 // reminder it added: the call itself stays folded in "Tools N" (docs/SUPER_RULES.md, rule 2). The chat shows a still
 // snapshot, so scrolling never drives a live map; tapping it opens one.
 
-/// Where the phone is, or the places a search found, read from the tool call's result.
+/// Where the phone is, the places a search found, or where directions were handed to Maps, read from the tool call's
+/// result.
 nonisolated struct PlaceMapResult: Hashable, Sendable {
-    enum Kind: Sendable { case here, places }
+    /// `handoff`: `phone_maps_navigate` opened directions in Apple Maps (#5545); Maps does the navigating.
+    enum Kind: Sendable { case here, places, handoff }
+
+    /// How the directions handed to Maps go, as `phone_maps_navigate` names it.
+    enum Mode: String, Sendable { case driving, walking, transit }
 
     struct Place: Hashable, Sendable {
         var name: String?
@@ -22,14 +27,18 @@ nonisolated struct PlaceMapResult: Hashable, Sendable {
 
     var kind: Kind
     var callID: String
-    /// In the order the tool returned them, so pin 2 is the place the answer calls the second.
+    /// In the order the tool returned them, so pin 2 is the place the answer calls the second. A hand-off has one: the
+    /// destination.
     var places: [Place]
+    /// A hand-off's mode; nil when the result names none Persona knows.
+    var mode: Mode?
 
     /// The calls drawn this way, by the tool's own name (an MCP name ends in it: mcp__<server>__<name>).
     static func kind(of name: String) -> Kind? {
         switch name.components(separatedBy: "__").last ?? name {
         case "phone_location_current": .here
         case "phone_location_search", "phone_maps_search_nearby": .places
+        case "phone_maps_navigate": .handoff
         default: nil
         }
     }
@@ -50,11 +59,16 @@ nonisolated struct PlaceMapResult: Hashable, Sendable {
             found = ((obj["places"] as? [[String: Any]]) ?? []).compactMap {
                 Self.place($0, name: $0["name"] as? String, address: $0["address"] as? String)
             }
+        case .handoff:
+            // Only directions Maps really opened: the tool says so with `opened: maps`.
+            guard obj["opened"] as? String == "maps" else { return nil }
+            found = Self.place(obj, name: obj["destination"] as? String, address: nil).map { [$0] } ?? []
         }
         guard !found.isEmpty else { return nil }
         self.kind = kind
         callID = call.id
         places = Array(found.prefix(Self.most))
+        mode = kind == .handoff ? (obj["mode"] as? String).flatMap(Mode.init(rawValue:)) : nil
     }
 
     private static func place(_ obj: [String: Any], name: String?, address: String?) -> Place? {
@@ -97,11 +111,38 @@ nonisolated enum PlaceMapText {
             .formatted(.measurement(width: .abbreviated, usage: .road, numberFormatStyle: .number.precision(.fractionLength(0...1))))
     }
 
-    /// Hands a place to Apple Maps, with directions there from wherever the phone is.
-    @MainActor static func directions(to place: PlaceMapResult.Place, number: Int) {
+    /// Where directions were handed to Maps: its name, else its address, else "Destination".
+    static func destination(_ place: PlaceMapResult.Place) -> String {
+        place.name ?? place.address ?? String(localized: "Destination [Place Map]")
+    }
+
+    /// "Walking", "Driving", "Transit".
+    static func mode(_ mode: PlaceMapResult.Mode) -> String {
+        switch mode {
+        case .driving: String(localized: "Driving [Place Map]")
+        case .walking: String(localized: "Walking [Place Map]")
+        case .transit: String(localized: "Transit [Place Map]")
+        }
+    }
+
+    /// The line under a hand-off's destination: "Walking · Opened in Maps", the mode left out when the result has none.
+    static func handoff(_ how: PlaceMapResult.Mode?) -> String {
+        let opened = String(localized: "Opened in Maps [Place Map]")
+        return how.map { mode($0) + " · " + opened } ?? opened
+    }
+
+    /// Hands a place to Apple Maps, with directions there from wherever the phone is: by `mode` when given (a hand-off
+    /// opens again the way it was opened), else the way Maps prefers.
+    @MainActor static func directions(to place: PlaceMapResult.Place, named name: String, mode: PlaceMapResult.Mode? = nil) {
         let item = MKMapItem(placemark: MKPlacemark(coordinate: place.coordinate))
-        item.name = title(place, number: number)
-        item.openInMaps(launchOptions: [MKLaunchOptionsDirectionsModeKey: MKLaunchOptionsDirectionsModeDefault])
+        item.name = name
+        let how = switch mode {
+        case .driving: MKLaunchOptionsDirectionsModeDriving
+        case .walking: MKLaunchOptionsDirectionsModeWalking
+        case .transit: MKLaunchOptionsDirectionsModeTransit
+        case nil: MKLaunchOptionsDirectionsModeDefault
+        }
+        item.openInMaps(launchOptions: [MKLaunchOptionsDirectionsModeKey: how])
     }
 }
 
@@ -134,10 +175,15 @@ nonisolated final class PlaceMapSnapshot: @unchecked Sendable {
         let options = MKMapSnapshotter.Options()
         options.region = result.region()
         options.size = size
+        #if os(macOS)
+        // The Mac's snapshot options have no trait collection: light or dark is an appearance there (#5662).
+        options.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        #else
         options.traitCollection = UITraitCollection { traits in
             traits.userInterfaceStyle = dark ? .dark : .light
             traits.displayScale = scale
         }
+        #endif
         options.pointOfInterestFilter = .excludingAll
         guard let shot = try? await MKMapSnapshotter(options: options).start() else { return nil }
         let points = result.places.map { place -> CGPoint in
@@ -218,7 +264,8 @@ struct PlaceMapCard: View {
             }
     }
 
-    /// "Map: 1 Blue Bottle, 2 % Arabica, 3 Manner" or "Map: your location, <address>".
+    /// "Map: 1 Blue Bottle, 2 % Arabica, 3 Manner", "Map: your location, <address>" or "Map: directions to <place>,
+    /// opened in Maps".
     static func spoken(_ result: PlaceMapResult) -> String {
         switch result.kind {
         case .here:
@@ -227,11 +274,15 @@ struct PlaceMapCard: View {
         case .places:
             let names = result.places.enumerated().map { "\($0.offset + 1) \(PlaceMapText.title($0.element, number: $0.offset + 1))" }
             return String(localized: "Map: \(names.joined(separator: ", ")) [Place Map]")
+        case .handoff:
+            let destination = result.places.first.map(PlaceMapText.destination) ?? ""
+            return String(localized: "Map: directions to \(destination), opened in Maps [Place Map]")
         }
     }
 }
 
-/// A place's number (or the phone's dot), name and distance, and Directions, which hands it to Maps.
+/// A place's number (or the phone's dot), name and distance, and Directions, which hands it to Maps. A hand-off's row
+/// is Maps' icon, the destination, the mode, and a button that opens the same directions again (#5545).
 private struct PlaceMapRow: View {
     var result: PlaceMapResult
     var place: PlaceMapResult.Place
@@ -240,38 +291,67 @@ private struct PlaceMapRow: View {
     var body: some View {
         HStack(spacing: Theme.Space.m) {
             Group {
-                if result.kind == .here {
+                switch result.kind {
+                case .here:
                     ThemedIcon(Theme.Icon.currentLocation).font(Theme.Font.secondaryStrong).foregroundStyle(Theme.accent)
-                } else {
+                case .places:
                     CountBadge(count: number, look: .accent)
+                case .handoff:
+                    BrandMark(Theme.Brand.iosMaps, side: Theme.Size.iconS)
                 }
             }
             .scaledFrame(width: Theme.Size.iconS)
             .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                Text(result.kind == .here ? String(localized: "Your Location [Place Map]") : PlaceMapText.title(place, number: number))
-                    .font(Theme.Font.secondaryStrong).lineLimit(2)
-                if let detail = result.kind == .here ? place.address : PlaceMapText.detail(place) {
+                Text(title).font(Theme.Font.secondaryStrong).lineLimit(2)
+                if let detail {
                     Text(detail).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(2)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .combine)
-            if result.kind == .places {
-                Button { PlaceMapText.directions(to: place, number: number) } label: {
-                    Label(String(localized: "Directions [Place Map]"), systemImage: Theme.Icon.directions)
-                        .labelStyle(.iconOnly)
-                }
-                .font(Theme.Font.captionStrong)
-                .themedButton()
-                .tapTargetFrame()
-                .accessibilityLabel(String(localized: "Directions to \(PlaceMapText.title(place, number: number)) [Place Map]"))
+            switch result.kind {
+            case .here:
+                EmptyView()
+            case .places:
+                directions(String(localized: "Directions [Place Map]"),
+                           spoken: String(localized: "Directions to \(title) [Place Map]"), mode: nil)
+            case .handoff:
+                directions(String(localized: "Open in Maps [Place Map]"),
+                           spoken: String(localized: "Open directions to \(title) in Maps [Place Map]"), mode: result.mode)
             }
         }
     }
+
+    private var title: String {
+        switch result.kind {
+        case .here: String(localized: "Your Location [Place Map]")
+        case .places: PlaceMapText.title(place, number: number)
+        case .handoff: PlaceMapText.destination(place)
+        }
+    }
+
+    private var detail: String? {
+        switch result.kind {
+        case .here: place.address
+        case .places: PlaceMapText.detail(place)
+        case .handoff: PlaceMapText.handoff(result.mode)
+        }
+    }
+
+    /// The icon-only button that hands the place to Maps; a hand-off's opens it again the way it went.
+    private func directions(_ label: String, spoken: String, mode: PlaceMapResult.Mode?) -> some View {
+        Button { PlaceMapText.directions(to: place, named: title, mode: mode) } label: {
+            Label(label, systemImage: Theme.Icon.directions).labelStyle(.iconOnly)
+        }
+        .font(Theme.Font.captionStrong)
+        .themedButton()
+        .tapTargetFrame()
+        .accessibilityLabel(spoken)
+    }
 }
 
-/// A place's mark on the map: its number on the accent, or the phone's dot.
+/// A place's mark on the map: its number on the accent, the phone's dot, or a hand-off's destination.
 private struct PlaceMapPin: View {
     var kind: PlaceMapResult.Kind
     var number: Int
@@ -285,6 +365,11 @@ private struct PlaceMapPin: View {
         case .places:
             CountBadge(count: number, look: .accent)
                 .overlay(Capsule().stroke(.white, lineWidth: Theme.Size.lineMedium))
+        case .handoff:
+            ThemedIcon(Theme.Icon.place).font(Theme.Font.labelStrong).foregroundStyle(.white)
+                .scaledFrame(width: Theme.Size.iconS, height: Theme.Size.iconS)
+                .background(Theme.accent, in: .circle)
+                .overlay(Circle().stroke(.white, lineWidth: Theme.Size.lineMedium))
         }
     }
 }
@@ -307,11 +392,15 @@ struct PlaceMapSheet: View {
                     UserAnnotation()
                     ForEach(result.places.indices, id: \.self) { i in
                         let place = result.places[i]
-                        if result.kind == .here {
+                        switch result.kind {
+                        case .here:
                             Marker(String(localized: "Your Location [Place Map]"), systemImage: Theme.Icon.currentLocation, coordinate: place.coordinate)
                                 .tint(Theme.accent)
-                        } else {
+                        case .places:
                             Marker(PlaceMapText.title(place, number: i + 1), monogram: Text(verbatim: "\(i + 1)"), coordinate: place.coordinate)
+                                .tint(Theme.accent)
+                        case .handoff:
+                            Marker(PlaceMapText.destination(place), systemImage: Theme.Icon.place, coordinate: place.coordinate)
                                 .tint(Theme.accent)
                         }
                     }
@@ -325,13 +414,21 @@ struct PlaceMapSheet: View {
                 .listStyle(.plain)
                 .scaledFrame(maxHeight: Theme.Size.box240)
             }
-            .navigationTitle(result.kind == .here ? String(localized: "Your Location [Place Map]") : String(localized: "Places [Place Map]"))
+            .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button(String(localized: "Done [Place Map]")) { dismiss() }.lineLimit(1)
                 }
             }
+        }
+    }
+
+    private var title: String {
+        switch result.kind {
+        case .here: String(localized: "Your Location [Place Map]")
+        case .places: String(localized: "Places [Place Map]")
+        case .handoff: result.places.first.map(PlaceMapText.destination) ?? String(localized: "Destination [Place Map]")
         }
     }
 }
