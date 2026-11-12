@@ -195,7 +195,21 @@ func (n *Node) writeText(p fileMakeParams) (*fileWritten, error) {
 	if err := os.Rename(tmp.Name(), real); err != nil {
 		return nil, err
 	}
+	pastRevision(real, st)
 	return written(shown, real)
+}
+
+// pastRevision moves a new version's mtime past the old one's when the two would share a revision. A coarse clock (a
+// Linux file system stamps mtimes at the kernel's tick, HFS+ to the second) can give a save of the same size the
+// mtime the opened version had, and an editor still on that version would then overwrite it unasked.
+func pastRevision(real string, old os.FileInfo) {
+	for _, d := range []time.Duration{time.Microsecond, time.Second} {
+		now, err := os.Stat(real)
+		if err != nil || fileRevision(now) != fileRevision(old) {
+			return
+		}
+		_ = os.Chtimes(real, time.Time{}, old.ModTime().Add(d)) // zero atime: left as it is
+	}
 }
 
 func written(shown, real string) (*fileWritten, error) {
