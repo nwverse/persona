@@ -592,7 +592,22 @@ func TestTaskWorkspaceExplicitNewWithoutCommitsSaysWhy(t *testing.T) {
 	f.nodes[DeviceWorktreePrepare] = func(string, json.RawMessage) (any, error) { return nil, noCommits() }
 	task := PlanTask{Machine: "box", Cwd: "/code/app", Workspace: &TaskWorkspace{Mode: workspaceNew}}
 	err := s.resolveTaskWorkspace(context.Background(), &task)
-	if err == nil || !strings.Contains(err.Error(), "has no commits yet") {
+	// The manager's own sentence, not the node's text passed through.
+	if err == nil || !strings.Contains(err.Error(), "a new task workspace cannot be made from it") {
 		t.Fatalf("explicit new in a folder without commits: %v", err)
+	}
+}
+
+// Only the node's "no commits" code falls back to the folder: a failure to look at the repository (git missing or
+// timing out, a corrupt HEAD) stops an inferred task instead of quietly reusing the folder.
+func TestTaskWorkspaceInferredGitFailureIsNotNoCommits(t *testing.T) {
+	s, f := workspaceTaskService(t)
+	f.nodes[DeviceWorktreePrepare] = func(string, json.RawMessage) (any, error) {
+		return nil, &rpc.Error{Message: "git rev-list: signal: killed"}
+	}
+	setSettings(t, s, func(v *Settings) { v.TaskWorkspacePreference = preferNew })
+	task := PlanTask{Machine: "box", Cwd: "/code/app"}
+	if err := s.resolveTaskWorkspace(context.Background(), &task); err == nil || !strings.Contains(err.Error(), "signal: killed") {
+		t.Fatalf("a git failure fell back instead of failing: err=%v workspace=%+v", err, task.Workspace)
 	}
 }

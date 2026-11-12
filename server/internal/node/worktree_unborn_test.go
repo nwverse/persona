@@ -3,6 +3,7 @@ package node
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -94,5 +95,48 @@ func TestHerdrWorktreeRefusesARepositoryWithoutCommits(t *testing.T) {
 	assertNoCommits(t, "create", err)
 	if got := w.f.trace("worktree.create", "workspace.create"); len(got) != 0 {
 		t.Fatalf("a workspace was opened for a repository without commits: %v", got)
+	}
+}
+
+// Commits on any ref are enough: HEAD on an orphan branch, or a repository whose only commits were fetched, still has
+// something to check out, so neither is refused as "no commits".
+func TestOrcaWorktreeWithCommitsElsewhereIsNotRefused(t *testing.T) {
+	w := orcaWorktreeNode(t)
+	runPullGit(t, w.repo, "checkout", "--orphan", "gh-pages")
+	if _, err := request(t, w.n, "worktree.prepare", map[string]any{"cwd": w.repo}); err != nil {
+		t.Fatalf("prepare with HEAD on an orphan branch: %v", err)
+	}
+	if _, err := w.create(t, "spare"); err != nil {
+		t.Fatalf("checking out an existing branch with HEAD on an orphan branch: %v", err)
+	}
+}
+
+func TestWorktreeComposerAcceptsAFetchedOnlyRepository(t *testing.T) {
+	w := composerNode(t)
+	fetched := unbornRepo(t, filepath.Join(w.home, "fetched"))
+	runPullGit(t, fetched, "remote", "add", "origin", w.repo)
+	runPullGit(t, fetched, "fetch", "--quiet", "origin")
+	id := "repo2::" + fetched
+	w.o.SetWorktrees(orcarttest.Worktree(w.src, w.repo, "refs/heads/dev"), orcarttest.Worktree(id, fetched, "refs/heads/main"))
+	prepared, err := request(t, w.n, "worktree.prepare", map[string]any{"kind": "orca", "workspace_id": id, "composer": true})
+	if err != nil {
+		t.Fatalf("composer prepare of a repository with only fetched commits: %v", err)
+	}
+	if refs, _ := prepared["composer"].(map[string]any)["refs"].([]any); !slices.Contains(refs, any("origin/main")) {
+		t.Fatalf("fetched branches are not offered as bases: %v", prepared)
+	}
+}
+
+// The plain (non-composer) calls carry the caller's locale too.
+func TestWorktreeNoCommitsFollowsTheCallersLocale(t *testing.T) {
+	w := orcaWorktreeNode(t)
+	empty := unbornRepo(t, filepath.Join(w.home, "scratchpad"))
+	w.o.SetWorktrees(orcarttest.Worktree(w.src, w.repo, "refs/heads/dev"), orcarttest.Worktree("repo2::"+empty, empty, "refs/heads/main"))
+	for locale, want := range map[string]string{"en": "has no commits yet", "ja": "コミットがない"} {
+		_, err := request(t, w.n, "worktree.prepare", map[string]any{"cwd": empty, "locale": locale})
+		assertNoCommits(t, "prepare in "+locale, err)
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("prepare in %s: %v", locale, err)
+		}
 	}
 }

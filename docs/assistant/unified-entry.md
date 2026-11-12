@@ -60,7 +60,7 @@ A writable Git task whose directory is occupied defaults to `new`, regardless of
 When that inferred `new` meets an engine that cannot prepare checkouts (`worktree.prepare` fails with code `worktree_unsupported`:
 the Paseo or Cindy runtime, or a host without checkout support), the task runs in its `cwd` as tasks did before workspaces: a free directory becomes `existing`, an occupied one becomes
 `none` with `workspace_resolved.shared: true` and no claim. An explicit `new` still fails on such an engine.
-A repository nobody has committed to (HEAD names an unborn branch) has nothing to check out, so `worktree.prepare` fails
+A repository nobody has committed to (no ref names a commit) has nothing to check out, so `worktree.prepare` fails
 with code `worktree_no_commits` (#5548): an inferred `new` then uses the free directory as `existing`, and an occupied one
 is refused with a message naming the task that holds it; an explicit `new` fails saying the repository has no commits.
 An explicit `workspace` overrides inference. When a caller means a particular branch/PR/checkout, it should name that checkout with `existing`.
