@@ -708,13 +708,19 @@ private struct LiftedMessage: View {
 
     /// The pressed part of a message drawn in parts, measured in the copy. Its first measure places the copy; the first
     /// after all of its parts were laid out (to select its words) keeps what showed. Until then the lazy copy keeps
-    /// what shows itself as the parts around it are laid out.
+    /// what shows itself as the parts around it are laid out. All of it laid out, the parts above the pressed one are
+    /// laid out again a pass later (MarkdownUI spaces its blocks once it has measured them): the pressed part stays
+    /// where it is, the copy scrolled by as much as it moved (else the words under a second long press were lines
+    /// further down by the time they were selected).
     private func measured(_ v: LiftPressedPart.Mark?) {
         guard let v else { return }
         if partTop == nil {
             align = .place
         } else if v.whole, !scrolled.whole {
             align = .keep(scrolled.past)
+        } else if v.whole, align == nil, abs(v.top - scrolled.top) > 0.25 {
+            scrolled.y += v.top - scrolled.top
+            scroll.scrollTo(y: scrolled.y)
         }
         scrolled.whole = v.whole
         scrolled.top = v.top
@@ -732,6 +738,7 @@ private struct LiftedMessage: View {
     private func aligned(_ target: CGFloat?) {
         guard let target else { return }
         scroll.scrollTo(y: target)
+        scrolled.y = target // where it is from now on, before the scroll view says so
         align = nil
         if scrolled.whole, let pending = menu.pendingSelect {
             menu.pendingSelect = nil

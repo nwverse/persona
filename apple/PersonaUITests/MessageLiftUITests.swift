@@ -556,9 +556,10 @@ final class MessageLiftUITests: XCTestCase {
         XCTAssertTrue(isTheWholeSplitAnswer(copied, markdown: false), "拷贝 copied all of the answer: \(copied.prefix(80))…\(copied.suffix(40))")
     }
 
-    /// A second long press on the lifted split answer, on the pressed line: its words are selected there (all of its
-    /// parts laid out first, what showed kept where it was), with the edit menu over them; Copy copies a word of that
-    /// paragraph (laid out a few lines off, it would have been another paragraph's).
+    /// A second long press on the lifted split answer, at the start of the pressed paragraph: its words are selected
+    /// there (all of its parts laid out first, what showed kept where it was), with the edit menu over them; Copy copies
+    /// a word of that line (with the copy a few lines off, it was another line's), and the text view's paragraph is
+    /// where the chat's was.
     @MainActor func testASecondLongPressOnALongAnswerSelectsWhereItIs() throws {
         launch(split, ["-openDraftsFresh", "YES", "-openChatsFresh", "YES"])
         XCTAssertTrue(text(Self.splitLast).waitForExistence(timeout: 20), "missing the split answer")
@@ -567,21 +568,24 @@ final class MessageLiftUITests: XCTestCase {
         liftAt(Self.splitMiddle)
         let line = lifted.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", Self.splitMiddle)).firstMatch
         XCTAssertTrue(shows(line), "the pressed line shows in the lifted copy")
-        let before = line.frame, paragraph = line.label
-        // In its second line, clear of the paragraph's first words and of the heading above it.
-        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: before.midX, dy: before.minY + 40)).press(forDuration: 0.8)
+        let before = line.frame
+        // On its first words, 「第 4 节的说明」.
+        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: before.minX + 12, dy: before.minY + 12)).press(forDuration: 0.8)
         let words = app.textViews["lift-text"]
         XCTAssertTrue(words.waitForExistence(timeout: 5), "a second long press did not select in place")
         let copy = menuItem("拷贝")
         XCTAssertTrue(copy.waitForExistence(timeout: 3), "no edit menu:\n\(app.debugDescription)")
         XCTAssertTrue(isTheWholeSplitAnswer(words.value as? String ?? "", markdown: false), "the text view holds the whole answer")
         sleep(1)
+        let laid = words.textViews.matching(NSPredicate(format: "label BEGINSWITH %@", Self.splitMiddle)).firstMatch
+        XCTAssertTrue(laid.exists, "no paragraph with the pressed line:\n\(words.debugDescription)")
+        XCTAssertLessThanOrEqual(abs(laid.frame.minY - before.minY), 6, "the words stayed where they were (\(before.minY) → \(laid.frame.minY))")
         shot("split-second-press")
         copy.tap()
         XCTAssertTrue(words.waitForNonExistence(timeout: 3), "拷贝 did not put the answer back")
         let copied = pasted().trimmingCharacters(in: .whitespacesAndNewlines)
         XCTAssertFalse(copied.isEmpty, "nothing was selected")
-        XCTAssertTrue(paragraph.contains(copied), "the word selected is the pressed paragraph's: \(copied)")
+        XCTAssertTrue(Self.splitMiddle.contains(copied), "the word selected is the pressed one, in 「\(Self.splitMiddle)」: \(copied)")
     }
 
     /// A short answer, as before: lifted where it is, all of it; Copy copies it.
