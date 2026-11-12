@@ -616,7 +616,7 @@ fun AssistantScreen(
         assistantAttempt { api.config().launcher }.onSuccess { defaultLauncher = it.takeIf(String::isNotBlank) }
         if (launchers != null) return
         launchersFailed = false
-        assistantAttempt { api.launchers(machine).filter(::runsAssistant) }
+        assistantAttempt { api.assistantLaunchers(machine) }
             .onSuccess { if (machine == assistantMachine) launchers = it }
             .onFailure { if (machine == assistantMachine) launchersFailed = true }
     }

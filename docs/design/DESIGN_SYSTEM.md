@@ -774,6 +774,11 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   that can't switch) are listed with their rows off and the reason; a pending switch to another launcher of the same
   engine names the launcher rather than the engine; the engine warning line wraps rather than truncating; "Switch Agent?"
   sits high on a computer and is a sheet on a phone, with no close ×.
+- Android's existing-conversation equivalent (#4663, `ConversationLauncherChip`) reuses the composer's `JChip` and a
+  `JActionSheet` with Launcher and Model sections, not a second visual selector. It reads only the hub's
+  `?purpose=assistant` list. The sheet says the pick applies from the next message until changed and leaves settings
+  unchanged; **Use the default** clears it. The pick follows every later send and retry in that conversation. Older hubs
+  without a model list keep the launcher choices and show one disabled explanation row. No new token or style.
 
 ### 3.9 Empty states
 

@@ -283,6 +283,8 @@ private fun ChatPage(
     var submittedDraft by remember { mutableStateOf<Pair<String, ChatComposerDraft>?>(null) }
     var clearingPane by rememberSaveable { mutableStateOf<String?>(null) }
     var linkContexts by rememberSaveable(stateSaver = ChatLinkContextsSaver) { mutableStateOf(emptyList<ChatLinkContext>()) }
+    var conversationLauncher by rememberSaveable(key.path, chrome.assistantManagement) { mutableStateOf<String?>(null) }
+    var conversationModel by rememberSaveable(key.path, chrome.assistantManagement) { mutableStateOf<String?>(null) }
     var submittedContexts by remember { mutableStateOf(emptyList<ChatLinkContext>()) }
     var notice by remember { mutableStateOf<String?>(null) }
     // /model in the "/" list asked for the "Mode" sheet: a one-off, cleared once the sheet opened (not replayed when the bar returns).
@@ -570,7 +572,7 @@ private fun ChatPage(
         sending = true
         followEnd()
         scope.launch {
-            try { sender.send(key, wireText, id) }
+            try { sender.send(key, wireText, id, null, conversationLauncher, conversationModel) }
             catch (e: CancellationException) { throw e }
             catch (e: Exception) {
                 submittedDraft = null; submittedContexts = emptyList()
@@ -1145,6 +1147,13 @@ private fun ChatPage(
                                     }) else null,
                                     modeHint = chatModeHint(session, includeModes = session?.canChangeModes == true || session?.canChangeEffortOnly == true),
                                     accessory = {
+                                        if (renderStyle == ChatRenderStyle.Assistant && !readOnly && canSend && chrome.assistantManagement != null) {
+                                            ConversationLauncherChip(chrome.assistantManagement, key.machineId, key.sessionId, session?.launcher,
+                                                conversationLauncher, conversationModel) { launcher, model ->
+                                                conversationLauncher = launcher
+                                                conversationModel = model
+                                            }
+                                        }
                                         if (linkContexts.isEmpty()) ComposerSuggestion(session, composer, onSend = { text -> send(text) })
                                         if (linkContexts.isNotEmpty()) Column(Modifier.heightIn(max = 140.dp).verticalScroll(rememberScrollState())) {
                                             // One line each while the link card peeks: the whole cards left no room for the composer.
