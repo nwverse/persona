@@ -293,10 +293,12 @@ private func briefMeta(_ row: BriefBody.Row) -> String {
 /// Open: the to-do or the Agent's chat.
 private struct BriefOpenButton: View {
     var title: String
+    /// A finger's height (44 pt) for the buttons of a row that has the decision's ones beside it.
+    var tall = false
     var open: () -> Void
 
     var body: some View {
-        Button(action: open) { Text("Open").lineLimit(1) }
+        Button(action: open) { Text("Open").lineLimit(1).tapTargetHeightIf(tall) }
             .font(Theme.Font.captionStrong)
             .themedButton()
             .accessibilityLabel(String(localized: "Open: \(title)"))
@@ -372,7 +374,7 @@ struct BriefAcceptRow: View {
     }
 
     @ViewBuilder private var secondaryActions: some View {
-        BriefOpenButton(title: row.title) {
+        BriefOpenButton(title: row.title, tall: true) {
             if let open { open() } else { TasksStore.shared.detailTask = row.id }
         }
         let outcome = actions.outcome(accepting: row, group: group)
@@ -380,7 +382,7 @@ struct BriefAcceptRow: View {
             Button {
                 Task { await actions.completeDirectly(row, group: group) }
             } label: {
-                Text("Complete Directly").lineLimit(1)
+                Text("Complete Directly").lineLimit(1).tapTargetHeight()
             }
             .font(Theme.Font.captionStrong)
             .themedButton()
@@ -393,7 +395,7 @@ struct BriefAcceptRow: View {
             Button {
                 withAnimation(Theme.Motion.state) { TasksStore.shared.laterDecision(todo) }
             } label: {
-                Text("Later [Task Views 9d2ca2]").lineLimit(1)
+                Text("Later [Task Views 9d2ca2]").lineLimit(1).tapTargetHeight()
             }
             .font(Theme.Font.captionStrong)
             .themedButton()
@@ -403,7 +405,7 @@ struct BriefAcceptRow: View {
             Button {
                 Task { await TasksStore.shared.dismissDecision(todo) }
             } label: {
-                Text("Do not handle [Task Draft]").lineLimit(1)
+                Text("Do not handle [Task Draft]").lineLimit(1).tapTargetHeight()
             }
             .font(Theme.Font.captionStrong)
             .themedButton()
@@ -428,7 +430,7 @@ struct BriefAcceptRow: View {
             Button {
                 Task { await actions.accept(row, group: group) }
             } label: {
-                Text(Self.label(take)).lineLimit(1).opacity(busy ? 0 : 1)
+                Text(Self.label(take)).lineLimit(1).opacity(busy ? 0 : 1).tapTargetHeight()
                     .overlay { if busy { ProgressView().controlSize(.small) } }
             }
             .font(Theme.Font.captionStrong)
@@ -528,5 +530,11 @@ private struct BriefOutcomeText: View {
             .foregroundStyle(.secondary)
             .lineLimit(1)
             .accessibilityIdentifier("brief.outcome.\(id)")
+    }
+}
+
+private extension View {
+    @ViewBuilder func tapTargetHeightIf(_ tall: Bool) -> some View {
+        if tall { tapTargetHeight() } else { self }
     }
 }
