@@ -157,6 +157,11 @@ These rules apply to all three styles, including extension-rendered content.
 - **Contrast in light and dark.** Brief and Board: all enabled text, including status, timestamps, hints, links and destructive labels, reaches 4.5:1 on its actual backing (composite transparent fills first). Glass holds iOS's floors instead: body words and words on the bubble 4.5:1, white on the accent 3.5:1, the accent as a link 3:1; its other words are iOS's own colors, which `StyleContrastTest` reports without failing. Informative graphics need 3:1, or a redundant label/shape explaining the same state. Never rely on color alone. Preserve resource-based localization and single-line button labels.
 - **Evidence before shipping.** Capture matching synthetic before/after cases for Glass, Brief and Board in light/dark and inspect them. Prefer actual app/emulator captures. Native Robolectric images are useful component/page evidence but do not prove system bars, navigation, WebViews, glass refraction, device behavior or performance; explicitly disclose when those checks could not run.
 
+### 2.3.2 Persistent Inbox event hand-off bar
+
+`InboxHandOffBar` is the event page's `JListPage.bottomBar`: one horizontally scrolling row of `JChip` presets and Draft Reply, then a `ComposerFrame` with a target `JChip` + `JMenu`, the one-line field and `SendButton`. All three styles use that same structure; their existing components supply the surface and geometry, with no page-local dimensions, colors, fonts or style branches. Target names ellipsize and every button label stays on one line.
+
+The bar applies `imePadding()` itself. `JListPage` measures it for the list's bottom inset, so the last chain entry can scroll above it and the keyboard leaves the target, input and Send usable. Its local `JToastHost` reuses the five-second action timeout for the local Undo window; it does not change the root feedback host. When the toast expires, a compact status row retains Sent View and Failure Retry. Done and missing items do not show interactive controls.
 
 ### 2.4 Agents list (computer → space → session)
 
