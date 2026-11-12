@@ -320,6 +320,24 @@ drawn in gray at the end of the call's row: the call did not run, so it is not a
 
 Source: `apple/Shared/Design/Theme.swift:11-39`, `apple/Shared/Design/StyleSpec.swift`. Style and theme color are independent axes; `StyleSpecTests` checks every pair. New code never switches on `AppStyle`. It reads the composed spec. Web has one look (the Beautiful style). Android has Glass, Brief and Board, so only Glass is common to both platforms.
 
+On the Mac a style may also bring the window's chrome (`StyleSpec.MacChrome`), read only through the tokens in
+`apple/Mac/Design/MacTokens.swift` and `Theme.monogram(_:)`: the sections column, the side column beside a list, how the
+shell's lists show the selected row and the row under the pointer, and the discs of names without a picture. Every style
+but Lark keeps the system's (`.system`), so their Mac windows are unchanged; the iPhone, iPad and watch draw none of it.
+Lark's follows the Feishu desktop window (#5598):
+
+| Part | Light / dark | Token |
+| --- | --- | --- |
+| Sections column | `#E4EAF6` / `#1C1D21` | `Theme.macSidebar` |
+| Selected section | a raised block `#FFFFFF` / `#2C2E34`, its icon in the accent, the title semibold | `Theme.Fill.macSidebarSelected`, `Theme.macSelectedIcon`, `Theme.macSelectedWeight` |
+| Side column (Inbox's filters) | `#EDF1F7` / `#18191C` | `Theme.macSideColumn` |
+| Other selected rows | the accent at 12 %, the icon in the accent | `Theme.Fill.macSelected` |
+| Row under the pointer | `#1F2329` / `#FFFFFF` at 6 % | `Theme.Fill.macHover` |
+| Names without a picture | one of nine hues picked by the name (the same on every launch), white letter ≥ 3.6:1 | `Theme.monogram(_:)` |
+
+`StyleSpecTests.theMacChromeReads` checks it in the style's own colors: the accent icon ≥ 3:1 on every selected shade,
+the row's words ≥ 4.5:1, the white letter ≥ 3:1 on every hue.
+
 ## 3. Components
 
 For every component: use the design-system one, not a lookalike. Counts are approximate uses at the snapshot. "Platforms" lists web and Android equivalents.
