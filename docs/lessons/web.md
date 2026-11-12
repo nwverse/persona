@@ -11,6 +11,8 @@ over stopped/seen turn signals: seeing a turn cannot complete the task.
 Keep completed session ownership separate from active task membership. Filling active `session.todo` with a closed
 task would make older consumers treat history as current work. The optional `completed_todo` display reference keeps
 the Web menu useful without changing active links, supervision, counts or quiet rules.
+Put its completion marker before the variable-length title: end truncation can hide a suffix even when a DOM-text
+test finds it. Regress the order in every translation and inspect the actual long-title menu.
 
 ## Live acceptance must distinguish a lookup POST from a mutation (#5753)
 
