@@ -1228,6 +1228,15 @@ Advanced (principle 2). Reason: a default the product can work out should not wa
 control away from them (principle 3). This reuses the wizard's field, pill and status-line styles and adds no setting,
 style or motion.
 
+A value the product measures rather than reads follows the same rule with a line instead of a pill: the wizard's sign-in
+method (#5329). On **Automatic**, the default under **More options**, the Connect step's own check finds whether the
+gateway takes Bearer or x-api-key, and one quiet line in the check box names it (`--ink-2`, no icon, after the test
+result and before the model count), with **Change** (the status line's action) opening More options and focusing the
+choice; the `Segmented` there offers Automatic, Bearer and x-api-key. A saved provider's line names its stored method the
+same way. Before the check has found anything the line is absent rather than a guess. Reason: a question with a right
+answer the product can measure should not be asked (principle 1), and the line keeps the answer visible and one tap from
+changing (principle 3).
+
 ## Codex speed controls (#3865)
 
 An Agent's Codex thread sets its speed with Fast in the model panel's flyout of the model it runs (#5032, the model pill
