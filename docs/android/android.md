@@ -233,6 +233,49 @@ without opening sockets. JVM Native-rendered component captures are separate evi
 - **Browser (ego lite)**: when the hub's ego plugin is on (the machine has `browser`), a Mac's machine page has the **Let the assistant use this browser** toggle, install / uninstall, the first-time setup steps (open ego lite, import data from other browsers, finish setup, check again) and, once ready, its status (imports, usage stats), same as iOS `BrowserSection`. While a task is running or first-time setup is in progress it reads every 2 seconds. The phone has no live view of that Mac (the iOS "VNC" button); first-time setup is done on the Mac.
 - **Not done yet**: "Control computer" (Cua) and "Browser sign-in" (importing cookies) on the machine page, attachments in a new Agent's first message, "New worktree…".
 
+## Settings navigation and search (#5233)
+
+Settings keeps three scopes: the current assistant, this device, and Hub. This is a navigation reorganization;
+model choices, notification defaults, permissions, pairing, update installation and assistant ownership do not change.
+Search filters entry names and localized common aliases (including complete former labels from the existing
+localization resources), case-insensitively with
+Unicode width normalization. It never indexes credentials, account values or addresses. Clearing it restores the
+three groups; a query with no matches shows an empty state. Extension-contributed navigation stays in its original
+assistant scope and is shown when the search is empty.
+
+| Previous home entry | New home entry and location |
+| --- | --- |
+| Model providers; Model configuration | Models; uses first, then Advanced › Model providers and Add provider |
+| Assistant profile | Assistant profile (unchanged, current assistant) |
+| Claude Code; Codex; Session triage | Agent › Claude Code settings, Codex settings, Session triage |
+| Connectors; Extensions; Channels | Same current-assistant entries; plain home subtitles |
+| Notifications; Floating capsule; Background keep-alive; desktop presence/muting | Notifications and background; notification preferences, capsule entry, one complete phone-check list, desktop-muting details |
+| About; Check for updates | About and updates; version, manual check, recovery and verified APK installation |
+| Hub status card; hub address; Connection diagnostics; Pairing | Connection; status, selectable wrapping address, pairing and existing diagnostics |
+| Appearance; Language; Translation; Storage; native Inbox chats | This device, unchanged behavior |
+| Hubs; Hub version; Assistants; Avatar; Devices | Hub, unchanged behavior |
+
+The legacy `notify` and `ready` Settings destinations open the same Notifications and background page. `capsule`,
+`desktops`, `providers`, `models`, `claude`, `codex`, `triage`, `diag`, `pair`, `about` and connector routes retain their
+names and remain directly accessible. In-place navigation records the parent, so Back returns to the group page;
+the navigation shell keeps its existing stack. Switching assistants closes the new Agent group as it does the
+existing assistant-owned pages.
+
+The device page reuses `ReadinessScreen(backgroundOnly = true)` without assistant or computer setup, checklist
+completion/dismissal actions, or implicit writes to first-run pending state. System notification checks have one home;
+notification channels, manufacturer battery/autostart controls, lock-screen and cellular tests remain there.
+First-run onboarding still uses the original checklist behavior. When an older hub cannot supply phone-muting
+preferences, its online-computer detail entry remains visible in this page rather than disappearing with the switch.
+
+Android currently has knowledge-base browsing, searching and tagging, but no knowledge-base **selection** settings
+(priorities, context-source toggles or per-chat selection). No misleading selection entry is added; that capability
+remains separate work tracked by #2217.
+
+Verification: `SettingsSearchTest` pins alias matching and stable destinations; `SettingsGroupsShotsTest` checks scope
+order, assistant switching, real-page phone home/search/empty states in every style and light/dark; model tests check
+Advanced folding and owner-aware selection. Captures produced by these tests are **Native JVM Compose renders**,
+not emulator/handset screenshots, and do not prove system dialogs, background survival or live hub transport.
+
 ## Notifications (no push service)
 
 Android shares the hub WebSocket through the foreground service in `:platform:notify` and does not depend on FCM or vendor push. Notification channels, restore on boot, network reconnects, keep-alive scheduling and the setup checklist for Chinese-vendor ROMs are implemented.
