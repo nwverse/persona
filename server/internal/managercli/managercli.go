@@ -16,6 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/manager"
 	"github.com/nwverse/persona/server/internal/managerconf"
 	"github.com/nwverse/persona/server/internal/osproc"
+	"github.com/nwverse/persona/server/internal/procs"
 	"github.com/nwverse/persona/server/internal/tunnel"
 	"github.com/nwverse/persona/server/internal/update"
 )
@@ -39,6 +40,7 @@ func Assistant(ctx context.Context, build update.Build, args []string, stdin io.
 	// A service of its own starts again in place (manager.RunBuiltin: a new binary, a new token): what the previous
 	// image started is this one's child then, and only this reaps it.
 	osproc.ReapInherited()
+	procs.AtStart() // the hub's cap (or its own, as a service of its own), out of what the manager starts
 	if identity.Getenv("PERSONA_ASSISTANT_DEPLOY") == assistant.DeployService {
 		// A service of its own (its unit says so): on its binding, waiting when the hub refuses it. Not bound is a
 		// configuration mistake: exit 2, which its unit does not restart.
