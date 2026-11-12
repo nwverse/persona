@@ -27,10 +27,10 @@ Before #5806 the catalog left it out and each client asked for it by its ID with
 | Client | Before (hub without the row) | Against a hub that lists it |
 | --- | --- | --- |
 | Web (`withPurposeAfter`) | Reads the purpose beside the catalog and puts it right after Main chat | Keeps the catalog as it is: one row, in the same group (Persona chats · Background process), now after Lark /agent and the AI twin instead of right after Main chat; the same summary, **Follows Main chat**, sentence and editor. It still sends the request by ID and drops the answer |
-| Apple (`ModelConfigurationModel.listing`) | Reads the purpose beside the catalog and appends it after the catalog | Keeps the catalog as it is: one row, after the categories, the AI twin and Lark /agent as before (an extension's purpose with fields of its own now comes after it, not before); "Follow Main Chat" and its editor unchanged. It still sends the request by ID |
+| Apple (`ModelConfigurationModel.listing`) | Reads the purpose by its ID once the catalog is in and appends it after the catalog | Keeps the catalog as it is: one row, after the categories, the AI twin and Lark /agent as before (an extension's purpose with fields of its own now comes after it, not before); "Follow Main Chat" and its editor unchanged. Builds with #5806's Apple part send no request by ID (`asksApart`); older builds still send it and drop the answer |
 | Android (`ModelCatalogModel.withBackgroundSupervisor`) | Reads the purpose after the catalog and lists it after the last use of its group, else at the end | Does not send the request by ID: one row, under the hub's group name for it, in the same place as before unless an extension has a purpose (its group then comes after this one) |
 
-Builds from before each client asked by ID (web before #5082, Apple before #5083, Android before #5084) draw the listed row with the name and group the hub sends, with no words of their own for it: the web and Android list every catalog purpose by `launch` or `group`; Apple lists a non-category purpose that has `fields` of its own and a `category_id` other than its ID, without the "Follow Main Chat" line, and its editor offers "Restore Default". None of them counts rows or reads the catalog by position, and the editor works from the purpose's `fields`. Clients still to do (#5806's client part): the web puts a listed row back right after Main chat; the web and Apple drop the request by ID once the catalog lists the row; the web and Apple draw `description` (Android does since #5802, and never asked by ID for a listed row); and `scripts/mock/mock_hub.py` gets a way to list the row, since its catalog still leaves it out and every mock-driven test and screenshot therefore covers only the path of a hub before #5806.
+Builds from before each client asked by ID (web before #5082, Apple before #5083, Android before #5084) draw the listed row with the name and group the hub sends, with no words of their own for it: the web and Android list every catalog purpose by `launch` or `group`; Apple lists a non-category purpose that has `fields` of its own and a `category_id` other than its ID, without the "Follow Main Chat" line, and its editor offers "Restore Default". None of them counts rows or reads the catalog by position, and the editor works from the purpose's `fields`. Done on Apple (#5806's Apple part, `docs/apple/ios.md` "Background supervisor"): no request by ID once the catalog lists the row, each purpose's `description` under its name in the list, and `MOCK_SUPERVISE_LISTED=1` makes `scripts/mock/mock_hub.py` list the row with descriptions (without the flag its catalog leaves it out, the path of a hub before #5806). Android draws `description` since #5802 and never asked by ID for a listed row. Still to do: the web puts a listed row back right after Main chat, drops its request by ID and draws `description`.
 
 “Triage and summary” currently runs as one call, entirely under information screening; categories do not split it into two calls. persona gets no separate model override. A voice plugin's upstream audio model stays within that plugin's scope, outside the four launcher / text-API categories; text tasks handed from voice to the main chat use the main-chat model. This does not take over external Claude Code Skills or users' existing external sessions.
 
@@ -53,7 +53,7 @@ It is returned by the model-configuration list and detail endpoints, never store
 | --- | --- | --- | --- |
 | `assistant`, `schedule`, `task.*`, `assistant.supervise`, `inbox.agent`, `lark.agent` | `launcher` | `headless` | Background process, without a terminal panel |
 | `agent.new` | `launcher` | `engine` | Interactive Agent in the target computer's terminal host |
-| `kb`, `inbox.triage`, `agent.delegate`, other API purposes, `extension.*` | `api` | omitted | HTTP requests sent directly by the assistant |
+| `kb`, `inbox.triage`, `agent.delegate`, other API purposes, `extension.*` | `api` | omitted | HTTP requests sent directly by the assistant; with a Claude Code launcher that has no Messages gateway picked, one `claude -p` run per request on the main chat's computer (#5823) |
 | `plugin.*` | `plugin` | omitted | The plugin's own model service |
 
 Non-launcher purposes always have an empty launch value, even if their parent is a launcher.
@@ -108,6 +108,44 @@ before this setting.
 - **Which computers**: only a direct API connection (`kind: "api"`), and only a computer this manager carries (another
   manager's machines are not its to call). Others are 400. Changing it clears the connection's recorded failures.
 
+## Running API purposes on a launcher (#5823)
+
+Many users have no API key, only Claude Code or Codex logged in on a computer (a subscription), which is what runs their
+main chat and Agents. An API purpose (`kb`, `inbox.triage`, `agent.delegate`, their uses, `extension.*`) may therefore
+pick a launcher provider too: each request then runs that launcher's CLI headless, once, on a computer and returns its
+final text. Nothing reads, copies or re-serves the login (#4220 is a different thing): only the prompt and the answer travel.
+
+- **Which providers**: a launcher whose CLI is Claude Code (plain `claude`, a `~/.zshrc` or `PATH` launcher, a managed
+  launcher that does not speak Messages), on that computer and in its scope. A managed launcher that speaks Messages
+  keeps being called over HTTP with its own address and key, as before; direct API connections are unchanged. Codex is
+  not offered: `codex exec` has no switch that turns off all its tools (its shell reads any file even in the read-only
+  sandbox, and the user's MCP servers, apps and plugins come along), and a request's text may be anyone's (a mail, an
+  extension). A launcher deleted since it was picked fails with "can't call this provider", never a run.
+- **Which computer**: the main chat's (Settings › Assistant), which the purpose's `machine_id` in
+  `GET /api/v1/model-config` names. With none set, the purpose says so.
+- **What is sent**: the manager resolves the purpose as always, then sends one `model.run` call to that computer's node
+  (`docs/protocol/protocol.md`, "hub ↔ node RPC") with the launcher, the chosen model and effort (empty: the launcher's
+  own), the system prompt and the conversation. A single user turn goes as it is; several are rendered as one transcript
+  (`prompts/tools/launcher_run_input.md`). The answer is the run's final text.
+- **How it runs**: the node runs the launcher as a start does (`personad launch` for a managed one, the login shell's
+  function or alias otherwise, with its environment, settings and default model), in a fresh temporary directory that
+  is removed afterwards. Claude Code runs as `-p --output-format json --max-turns 1 --no-session-persistence` with
+  `--tools ""`, `--strict-mcp-config` (no MCP servers), hooks disabled and the system prompt from a file. No tools, no
+  session left behind, no file written in the user's projects.
+- **Concurrency and time**: at most two runs at a time on one computer; others wait for a slot within their own time.
+  The call's deadline goes along as `timeout_ms` (2 minutes without one, at most 10); when the manager stops waiting it
+  sends `rpc.cancel` and the node kills the run. Each run pays a CLI start (seconds) on top of the answer, so this suits
+  background work.
+- **Purposes that call tools**: no API purpose uses the provider's native tool calling. Inbox event grouping
+  (`inbox_group.go`) asks for its tools in its JSON answer and the manager runs them, so it works unchanged, each step
+  within its 45 seconds; a step that runs out of time falls back to the rule grouping, as any failed model call does.
+- **Errors**: an offline computer fails at once with "<computer> is offline", without a fallback. A CLI that is not
+  logged in, a run past its time and a node too old for `model.run` (capability `model_run`) each say so, localized.
+  Other failures carry the end of what the CLI printed, without keys, URLs or addresses.
+- **What does not change**: the automatic fallback of an unconfigured API purpose still picks only HTTP connections;
+  "Send through" (#4775) belongs to HTTP connections and is not involved; the upstream rate-limit gate does not apply
+  (the CLI's own subscription limits do).
+
 ## Editing and inheritance
 
 Each category shows both “In Effect” and “Model Settings”:
@@ -123,7 +161,7 @@ For launcher purposes without a bound machine (such as Agents), saving a specifi
 
 For API purposes (triage, assessment, drafting, translation, knowledge processing, titles), when there is no override or legacy `ai` configuration in the manager's `manager.json`, automatically choose a connection directly callable from the hub: first the first `kind: api` entry, then the first Persona-managed launcher with a key and Messages protocol (excluding hidden entries or those missing an address / default model / key). Use its default model. “Inherited From” shows “Automatic selection”; no override is written, and later selections here still take priority. Automatic selection by these built-in categories alone does not block provider deletion when another eligible connection can take over: the next eligible connection takes over, while an explicit provider choice (or deleting the last provider that leaves no eligible connection) still returns 409. If none exists, status and errors explain where to configure one (#388, 2026-11-02: with only “Claude Code default” configured, reply drafting immediately returned no model configured). Both Responses and Messages protocols support thinking effort configuration; Information screening (`inbox.triage`) defaults to no thinking (`effort: "off"`), including after a provider-only selection, while explicit effort levels are preserved. The caller maps `off` to Responses `none` and the model's supported Messages no-thinking mode (`thinking: {"type":"disabled"}`, or `between_tools` for Sonnet 5.5); Messages models that cannot disable thinking use `output_config.effort: "low"` instead.
 
-Launchers such as “Claude Code default” are only CLIs on computers, without an API address or key, so they cannot be called directly and are not offered for API purposes.
+Launchers such as “Claude Code default” are only CLIs on computers, without an API address or key, so automatic selection never picks them. Chosen explicitly, they run each request headless on the main chat's computer (“Running API purposes on a launcher”); `off` / `none` effort then leaves the launcher's own.
 
 ## Lark /agent override (#5921)
 
@@ -378,7 +416,7 @@ What each purpose is for, in one sentence, comes with the purpose from the manag
 
 `purposes` in `GET /api/v1/model-config` returns the five ordered category configurations followed by the editable AI twin (`inbox.agent`) and Lark /agent purposes and the extensions' own purposes (`extension.<id>`, see "Extensions' own purposes"), plus `providers`; `GET /api/v1/model-config/purposes/{id}` returns one `purpose` and available `providers`, supporting legacy-purpose queries.
 
-`Purpose` includes `id/name/group/kind`, `description` (#5086: what the purpose is for, one sentence in the request's language; every built-in purpose has one, including `assistant.supervise` and the read-only purposes under a category; a task's own, an extension's and a voice plugin's have none, and a hub before #5086 sends none. Android draws it under the purpose's name since #5802 (`docs/android/android.md`); the web and Apple do not yet, and the web still shows its own sentence for the background supervisor only; the catalog's row for `assistant.supervise` carries it since #5806), `category_id`, `override`, `effective`, `revision`, `inherited_from/status`, `limit` when the connection is paused (see “Upstream rate limits”), and `fields/provider_ids` to constrain the form. The categories' `category_id` equals their own ID, with `uses: [{"name":"Read-only purpose description"}]`. The AI twin and Lark /agent point `category_id` to Agents but have their own `override`, `revision`, and nonempty `fields`; clients determine editability from `fields`, not solely `category_id`. The background supervisor's purpose (in the catalog since #5806) points `category_id` and `parent` to Main chat the same way, with its own `override`, `revision` and nonempty `fields`. Other legacy purposes point `category_id` to their owning category; `override` is empty, `fields` is `[]`, and revision and effective model come from the category. A task purpose (`task.<task id>`, requested by its own `GET`) points `category_id` and `parent` to Main chat but has its own `revision` and `override` and nonempty `fields` (provider, model, effort); with an empty override it follows Main chat, including later changes there. Real task names do not appear on the configuration home page. The `plugin.<plugin id>` model protocol remains independent and is not added to the four-category catalog. Responses contain no secrets.
+`Purpose` includes `id/name/group/kind`, `description` (#5086: what the purpose is for, one sentence in the request's language; every built-in purpose has one, including `assistant.supervise` and the read-only purposes under a category; a task's own, an extension's and a voice plugin's have none, and a hub before #5086 sends none. Android draws it under the purpose's name since #5802 (`docs/android/android.md`) and the Apple apps do in Model Settings (#5806, `docs/apple/ios.md`); the web does not yet and still shows its own sentence for the background supervisor only; the catalog's row for `assistant.supervise` carries it since #5806), `category_id`, `override`, `effective`, `revision`, `inherited_from/status`, `limit` when the connection is paused (see “Upstream rate limits”), and `fields/provider_ids` to constrain the form. The categories' `category_id` equals their own ID, with `uses: [{"name":"Read-only purpose description"}]`. The AI twin and Lark /agent point `category_id` to Agents but have their own `override`, `revision`, and nonempty `fields`; clients determine editability from `fields`, not solely `category_id`. The background supervisor's purpose (in the catalog since #5806) points `category_id` and `parent` to Main chat the same way, with its own `override`, `revision` and nonempty `fields`. Other legacy purposes point `category_id` to their owning category; `override` is empty, `fields` is `[]`, and revision and effective model come from the category. A task purpose (`task.<task id>`, requested by its own `GET`) points `category_id` and `parent` to Main chat but has its own `revision` and `override` and nonempty `fields` (provider, model, effort); with an empty override it follows Main chat, including later changes there. Real task names do not appear on the configuration home page. The `plugin.<plugin id>` model protocol remains independent and is not added to the four-category catalog. Responses contain no secrets.
 
 Saving one item:
 

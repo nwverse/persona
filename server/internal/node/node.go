@@ -597,6 +597,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.secretStageCall(params)
 	case proto.MethodModelHTTP: // an API connection's request sent through this computer (modelhttp.go); the same
 		return modelHTTP(ctx, params)
+	case proto.MethodModelRun: // an API purpose's request answered by a launcher here (modelrun.go); the same
+		return n.modelRun(ctx, params)
 	}
 	if strings.HasPrefix(method, "plugin.node.") { // plugins' programs on this computer (plugins.go)
 		return n.handlePlugins(ctx, method, params)
