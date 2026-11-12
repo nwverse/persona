@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.*
@@ -20,6 +21,21 @@ import org.junit.rules.TemporaryFolder
 @OptIn(ExperimentalCoroutinesApi::class)
 class SessionsAdoptTest {
     @get:Rule val temporary = TemporaryFolder()
+
+    @Test fun waitingAndReturnedThreadMetadataStayAvailableOutsideTheFilteredWindow() = runTest {
+        val transport = Transport().apply { paged = true }
+        val repository = HubSessionsRepository(transport, Connection(), backgroundScope)
+        repository.setListFilter(SessionListFilter(state = "working"))
+        val waiting = Session("computer", "waiting", agent = "codex", status = "idle", paneId = "pane", awaitingFirstMessage = true)
+        val thread = waiting.copy(sessionId = "thread", awaitingFirstMessage = false)
+        repository.adopt(waiting)
+        repository.adoptThread(waiting.key, thread)
+        advanceTimeBy(100); runCurrent()
+        assertTrue(repository.sessions.value.isEmpty())
+        assertEquals(0, repository.listStatus.value.total)
+        assertEquals(listOf(waiting, thread), repository.adoptedSessions.value)
+        assertEquals(thread, repository.startedThreads.value[waiting.key])
+    }
 
     @Test fun adoptedSessionsAreListedOnceAndKeptThroughARefreshInFlight() = runTest {
         val directory = temporary.newFolder()
@@ -67,6 +83,12 @@ class SessionsAdoptTest {
     }
 
     private class Transport : ChatTransport {
+        var paged = false
+        override suspend fun sessionPage(filter: SessionListFilter, cursor: String?, since: String?): SessionListPage {
+            if (!paged) throw SessionListsUnsupported()
+            return SessionListPage(revision = "revision")
+        }
+        override suspend fun sessionCounts(filter: SessionListFilter) = SessionListCounts()
         var list = emptyList<Session>()
         var machineList = emptyList<Machine>()
         var listFetch: (suspend () -> List<Session>)? = null

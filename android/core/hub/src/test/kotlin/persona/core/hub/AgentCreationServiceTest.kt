@@ -13,6 +13,27 @@ import org.junit.Test
 import java.util.Base64
 
 class AgentCreationServiceTest {
+    @Test fun codexCapabilityDecodesBothLauncherShapesAndStartsWithNoPromptOrAsync() = runBlocking {
+        MockWebServer().use { server ->
+            val service = HttpAgentCreationService("hub/pairing", server.url("/").toString(), "test-token", OkHttpClient())
+            server.enqueue(MockResponse().setBody("""{"launchers":[{"name":"modern","agent":"codex","prompt_optional":true},{"name":"older","agent_type":"codex"}]}"""))
+            val launchers = service.launchers("computer")
+            assertEquals(listOf("codex", "codex"), launchers.map { it.agentType })
+            assertTrue(launchers.first().promptOptional)
+            assertFalse(launchers.last().promptOptional)
+            assertEquals("codex", JsonCodec.decodeFromString<AgentLauncher>(
+                """{"name":"detected","agent":"codex","agent_type":"claude","prompt_optional":true}""").agentType)
+            server.takeRequest()
+            server.enqueue(MockResponse().setBody("""{"session":{"machine_id":"computer","session_id":"waiting","agent":"codex","status":"idle","pane_id":"pane","awaiting_first_message":true}}"""))
+            val result = service.start(AgentStartRequest("computer", "/code", "modern", agentType = "codex"),
+                "00000000-0000-4000-8000-000000000004") as AgentStartResult.Created
+            val body = JsonCodec.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
+            assertFalse("prompt" in body)
+            assertFalse("async" in body)
+            assertTrue(result.session.awaitingFirstMessage)
+            assertEquals("idle", result.session.status)
+        }
+    }
     @Test fun lostStartResponseQueriesTheReceiptWithoutPostingAgain() = runBlocking {
         MockWebServer().use { server ->
             val service = HttpAgentCreationService("hub/pairing", server.url("/").toString(), "test-token", OkHttpClient())

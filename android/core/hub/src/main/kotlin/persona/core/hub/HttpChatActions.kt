@@ -5,6 +5,8 @@ import persona.core.contracts.CoreText
 import persona.core.contracts.*
 import persona.core.contracts.api.*
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.*
@@ -165,6 +167,29 @@ class HttpChatActions internal constructor(
             JsonCodec.decodeFromString<SessionsResponse>(it.body!!.string()).sessions
                 .firstOrNull { row -> row.sessionId == session.sessionId }?.copy(machineId = session.machineId)
         }
+    }
+
+    override suspend fun codexThread(session: Session): Session? = withContext(Dispatchers.IO) {
+        val pane = session.paneId?.takeIf(String::isNotBlank) ?: return@withContext null
+        if (!session.awaitingFirstMessage) return@withContext null
+        var cursor: String? = null
+        val visited = mutableSetOf<String>()
+        do {
+            val url = HttpUrl.Builder().scheme("https").host("example.com").addPathSegments("api/v1/sessions")
+                .addQueryParameter("summary", "0").addQueryParameter("limit", "50")
+                .addQueryParameter("machine_id", session.machineId).addQueryParameter("provider", "codex")
+                .apply { cursor?.let { addQueryParameter("cursor", it) } }.build()
+            val page = request(url.encodedPath + "?" + url.encodedQuery, "GET", null).use {
+                if (!it.isSuccessful) throw HubFailure.from(it)
+                JsonCodec.decodeFromString<SessionListPage>(it.body!!.string())
+            }
+            page.sessions.firstOrNull {
+                it.machineId == session.machineId && it.paneId == pane && it.sessionId != session.sessionId &&
+                    it.agent == "codex" && !it.awaitingFirstMessage && it.agentState != AgentState.Offline
+            }?.let { return@withContext it }
+            cursor = page.nextCursor?.takeIf { page.hasMore && it.isNotBlank() && visited.add(it) }
+        } while (cursor != null)
+        null
     }
 
     override suspend fun interactionHistory(session: Session): List<InteractionRecord> {
