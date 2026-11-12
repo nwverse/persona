@@ -58,6 +58,13 @@ nonisolated extension ContextRef {
     ]
     #endif
 
+    /// A knowledge note or a to-do from Add as Context (#3721): its link leads back to it in the app
+    /// (`persona://kb/…`, `persona://task/…`); it quotes the item, not a selection.
+    private var isAppItem: Bool {
+        guard let components = URLComponents(string: url) else { return false }
+        return HubNaming.accepts(scheme: components.scheme) && (components.host == "kb" || components.host == "task")
+    }
+
     /// The page quoted as a whole: the text is the marker the link sheet puts there, not the user's words.
     private var isWholePage: Bool { text == "（整篇）" } // i18n-ignore: marker
 
@@ -74,7 +81,7 @@ nonisolated extension ContextRef {
         case ForwardMessage.kind: return ForwardMessage.heading(self)
         default:
             if isSession { return String(localized: "Quoting session \(label)") }
-            if !url.isEmpty { return isWholePage ? String(localized: "Quoting \(label)") : String(localized: "Quoting selected text · \(label)") }
+            if !url.isEmpty, !isAppItem { return isWholePage ? String(localized: "Quoting \(label)") : String(localized: "Quoting selected text · \(label)") }
             return String(localized: "Quoting \(label)")
         }
     }
@@ -97,22 +104,44 @@ nonisolated extension ContextRef {
 
 extension Theme {
     /// Quotes' colors (`QuoteBar`, `QuoteBlock`).
-    enum Quote {
-        /// The block's fill under its rule and words: a tint of the rule's color.
+    nonisolated enum Quote {
+        /// The block's fill under its rule and words: a tint of the rule's color (a forward's card, Inbox replies); in
+        /// the user's bubble a tint of the accent or a shade (`UserBubbleInk.quoteFill`).
         static let fillOpacity = 0.12
-        /// The quoted words on a colored bubble: its words' color, a little quieter.
-        static let summaryOnColor = 0.82
         /// The band left on the message a quote led back to, as it starts to fade.
         static let flashOpacity = 0.18
+    }
 
-        /// The rule and the heading in a sent bubble: on a colored bubble (white words) its words' color, the accent
-        /// on a pale one.
-        static var tint: Color {
-            StyleSpec.current.deepensBubble ? Theme.userBubbleText : Theme.accent
-        }
+    /// The user's own bubble as it is drawn, and the colors of what sits in it (#5204). Persona's main conversation
+    /// draws the new layout's pale box under the primary words (`Theme.ChatBox.user`, whatever the style), the other
+    /// chats the style's bubble under its words. Quotes, forwards, text to change and comment blocks read their colors
+    /// from here, never from the style alone: the style's white words of a colored bubble were near invisible on the box.
+    /// Held to the floors in every style and Theme Color by `StyleSpecTests`.
+    nonisolated struct UserBubbleInk {
+        /// The box's or the bubble's color; a colored bubble deepens toward its bottom (`Theme.deepening`).
+        var bubble: Color
+        var deepens: Bool
+        /// The words, and a block's rule, heading and words.
+        var words: Color
+        /// A path linked in the words (underlined): the accent, as in replies, on a pale bubble; the words' color on a
+        /// colored one, where the accent would not show.
+        var link: Color
+        /// A block's fill: the accent's tint on a pale bubble; on a colored one a shade, as the bubble's own deepening,
+        /// since a veil of its light words would lighten what they sit on.
+        var quoteFill: Color
 
-        static var summary: Color {
-            StyleSpec.current.deepensBubble ? Theme.userBubbleText.opacity(summaryOnColor) : .primary
+        var fill: AnyShapeStyle { deepens ? AnyShapeStyle(Theme.deepening(bubble)) : AnyShapeStyle(bubble) }
+
+        /// `boxed`: the new layout's box (`ChatLayout.on`).
+        static func of(_ spec: StyleSpec, boxed: Bool) -> UserBubbleInk {
+            let tint = spec.accent.opacity(Quote.fillOpacity)
+            if boxed {
+                return UserBubbleInk(bubble: Theme.ChatBox.user, deepens: false, words: .primary, link: spec.accent, quoteFill: tint)
+            }
+            let colored = spec.deepensBubble
+            return UserBubbleInk(bubble: spec.userBubble, deepens: colored, words: spec.userBubbleText,
+                                 link: colored ? spec.userBubbleText : spec.accent,
+                                 quoteFill: colored ? Color.black.opacity(Quote.fillOpacity) : tint)
         }
     }
 }
@@ -254,13 +283,17 @@ extension EnvironmentValues {
     @Entry var openQuote: ((ContextRef) -> Bool)? = nil
 }
 
-/// A quote at the top of a sent bubble: the same words as over the box, on a tint of the bubble. A tap leads back to
-/// the message it quotes (or opens the page it is from); with nothing to go back to, it opens to the whole text.
+/// A quote at the top of a sent bubble: the same words as over the box, in the bubble's colors (`ink`). A tap leads
+/// back to the message it quotes (or opens the page it is from); with nothing to go back to, it opens to the whole text.
 struct QuoteBlock: View {
     var ref: ContextRef
+    var ink: Theme.UserBubbleInk
     @Environment(\.openQuote) private var openQuote
     @Environment(\.openLink) private var openLink
+    @Environment(\.chatPin) private var pin
     @State private var open = false
+    /// What the chat's pin knows it by (a quote has no id of its own; this view's is kept while it is drawn).
+    @State private var pinKey = "quote-" + UUID().uuidString
 
     /// A forward shows this many lines of the original until it is opened.
     static let forwardLines = 4
@@ -269,13 +302,15 @@ struct QuoteBlock: View {
         if ref.isForward {
             QuoteCard(heading: ref.quoteHeading, icon: Theme.Icon.forwardMessage, meta: ForwardMessage.meta(ref),
                       summary: open ? ref.text : ref.forwardSummary, lines: open ? .max : Self.forwardLines,
-                      tint: Theme.Quote.tint, ink: Theme.Quote.summary, action: tap)
+                      tint: ink.words, ink: ink.words, fill: ink.quoteFill, action: tap)
                 .accessibilityHint(String(localized: "Opens the original message"))
                 .accessibilityIdentifier("bubble.forward")
+                .chatPinned(pinKey)
         } else {
             QuoteCard(heading: ref.quoteHeading, summary: open ? ref.text : ref.quoteSummary, lines: open ? .max : 2,
-                      tint: Theme.Quote.tint, ink: Theme.Quote.summary, action: tap)
+                      tint: ink.words, ink: ink.words, fill: ink.quoteFill, action: tap)
                 .accessibilityHint(ref.msg.isEmpty ? "" : String(localized: "Jumps to the original message"))
+                .chatPinned(pinKey)
         }
     }
 
@@ -286,7 +321,8 @@ struct QuoteBlock: View {
             openLink(u)
             return
         }
-        withAnimation(Theme.Motion.state) { open.toggle() }
+        // In the chat its top stays where it is and the text opens under it (#3757).
+        toggleInPlace(pin, pinKey, animation: Theme.Motion.state, closing: open) { open.toggle() }
     }
 }
 
@@ -300,13 +336,15 @@ struct QuoteCard: View {
     var lines = 2
     var tint: Color
     var ink: Color
+    /// Under the words: a tint of `tint` unless given (the user's bubble gives its own, `Theme.UserBubbleInk`).
+    var fill: Color? = nil
     var action: () -> Void
 
     var body: some View {
         let bui = AppStyle.current.usesBeautifulUI
         Button(action: action) {
             QuoteLines(heading: heading, icon: icon, meta: meta, summary: summary, lines: lines, tint: tint, ink: ink, rule: !bui)
-                .quoteCardFill(tint)
+                .quoteCardFill(tint, fill: fill)
                 .contentShape(.rect)
         }
         .buttonStyle(.plain)
@@ -316,15 +354,16 @@ struct QuoteCard: View {
 }
 
 extension View {
-    /// A quote card's padding and fill in a sent bubble: a tint of `tint`, its rule along the edge in BeautifulUI.
-    func quoteCardFill(_ tint: Color) -> some View {
+    /// A quote card's padding and fill in a sent bubble: `fill`, else a tint of `tint`; its rule along the edge in
+    /// BeautifulUI.
+    func quoteCardFill(_ tint: Color, fill: Color? = nil) -> some View {
         let bui = AppStyle.current.usesBeautifulUI
         let shape = RoundedRectangle(cornerRadius: bui ? Theme.Radius.control : Theme.Radius.badge, style: .continuous)
         return padding(.vertical, Theme.Space.sm)
             .padding(.leading, bui ? Theme.Space.m : Theme.Space.s)
             .padding(.trailing, Theme.Space.m)
             .background {
-                shape.fill(tint.opacity(Theme.Quote.fillOpacity))
+                shape.fill(fill ?? tint.opacity(Theme.Quote.fillOpacity))
                     .overlay(alignment: .leading) {
                         if bui { Rectangle().fill(tint).frame(width: Theme.Size.bar) }
                     }
@@ -335,9 +374,10 @@ extension View {
 
 /// Several messages forwarded together (#3838) in a sent bubble: one card naming the chat and the computer, then each
 /// message with who wrote it and when and its first lines, in order. A tap on one leads back to it; past `shown`, the
-/// rest open with "N More".
+/// rest open with "N More". In the bubble's colors (`ink`), as the other blocks in it.
 struct ForwardGroupBlock: View {
     var refs: [ContextRef]
+    var ink: Theme.UserBubbleInk
     @Environment(\.openQuote) private var openQuote
     @State private var open = false
 
@@ -346,8 +386,8 @@ struct ForwardGroupBlock: View {
 
     var body: some View {
         let bui = AppStyle.current.usesBeautifulUI
-        let tint = Theme.Quote.tint
-        let ink = Theme.Quote.summary
+        let tint = ink.words
+        let words = ink.words
         let visible = open ? refs : Array(refs.prefix(Self.shown))
         HStack(spacing: Theme.Space.s) {
             if !bui { Capsule().fill(tint).frame(width: Theme.Size.bar) }
@@ -359,15 +399,15 @@ struct ForwardGroupBlock: View {
                             .lineLimit(1).truncationMode(.tail)
                     }
                     if let machine = refs[0].extra?["machine"], !machine.isEmpty {
-                        Text(machine).font(Theme.Font.label).foregroundStyle(ink).lineLimit(1)
+                        Text(machine).font(Theme.Font.label).foregroundStyle(words).lineLimit(1)
                     }
                 }
                 .accessibilityElement(children: .combine)
                 ForEach(visible) { r in
                     Button { tap(r) } label: {
                         VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                            Text(ForwardMessage.byline(r)).font(Theme.Font.labelStrong).foregroundStyle(ink).lineLimit(1)
-                            Text(r.forwardSummary).font(Theme.Font.caption).foregroundStyle(ink)
+                            Text(ForwardMessage.byline(r)).font(Theme.Font.labelStrong).foregroundStyle(words).lineLimit(1)
+                            Text(r.forwardSummary).font(Theme.Font.caption).foregroundStyle(words)
                                 .lineLimit(Self.lines).truncationMode(.tail)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -388,7 +428,7 @@ struct ForwardGroupBlock: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .fixedSize(horizontal: false, vertical: true)
-        .quoteCardFill(tint)
+        .quoteCardFill(tint, fill: ink.quoteFill)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("bubble.forwardGroup")
     }
@@ -451,51 +491,52 @@ struct UserBubbleBody: View {
     /// The comment blocks the message led with (`MessageComments.inBubble`), and the plain quote before them.
     var comments: [MessageComment] = []
     var lead: String?
-    /// The new conversation layout (#1666, `ChatLayout`): the user's box is pale blue under the primary text color.
+    /// The new conversation layout (#1666, `ChatLayout`): the user's box is pale blue under the primary text color
+    /// (`Theme.UserBubbleInk`).
     @Environment(\.chatLayout) private var layout
 
     var body: some View {
+        // The box or the style's bubble, and everything in it in its colors (#5204).
+        let ink = Theme.UserBubbleInk.of(.current, boxed: layout.on)
         if quotes.isEmpty, comments.isEmpty, lead == nil {
-            words.padding(.horizontal, Theme.Space.l).padding(.vertical, Theme.Space.m)
-                .background(fill, in: .rect(cornerRadius: Theme.Radius.bubble, style: .continuous))
+            words(ink).padding(.horizontal, Theme.Space.l).padding(.vertical, Theme.Space.m)
+                .background(ink.fill, in: .rect(cornerRadius: Theme.Radius.bubble, style: .continuous))
         } else {
-            quoted
+            quoted(ink)
         }
     }
 
-    private var fill: AnyShapeStyle { layout.on ? AnyShapeStyle(Theme.ChatBox.user) : Theme.userBubbleFill }
-
-    private var words: some View {
-        PathText(text: text, refs: paths, link: layout.on ? Theme.accent : Theme.userBubbleLink)
-            .font(Theme.Font.body).lineHeight(.body).foregroundStyle(layout.on ? Color.primary : Theme.userBubbleText)
-            .selectableInLift(text, as: .plain(layout.on ? Color.primary : Theme.userBubbleText)) // #603
+    private func words(_ ink: Theme.UserBubbleInk) -> some View {
+        PathText(text: text, refs: paths, link: ink.link)
+            .font(Theme.Font.body).lineHeight(.body).foregroundStyle(ink.words)
+            .selectableInLift(text, as: .plain(ink.words)) // #603
             #if os(macOS)
             .textSelection(.enabled) // drag to select and ⌘C, as on the web (#2542)
             #endif
     }
 
-    private var quoted: some View {
+    private func quoted(_ ink: Theme.UserBubbleInk) -> some View {
         WidestColumn {
             if !quotes.isEmpty || !comments.isEmpty || lead != nil {
                 VStack(alignment: .leading, spacing: Theme.Space.xs) {
                     ForEach(ForwardMessage.runs(quotes).map { $0.map { quotes[$0] } }, id: \.[0].id) { run in
-                        if run.count > 1 { ForwardGroupBlock(refs: run) } else { QuoteBlock(ref: run[0]) }
+                        if run.count > 1 { ForwardGroupBlock(refs: run, ink: ink) } else { QuoteBlock(ref: run[0], ink: ink) }
                     }
-                    if let lead { QuoteBlock(ref: .quote(lead, from: "", msg: "")) }
-                    ForEach(Array(comments.enumerated()), id: \.offset) { i, c in CommentQuote(comment: c, number: i + 1) }
+                    if let lead { QuoteBlock(ref: .quote(lead, from: "", msg: ""), ink: ink) }
+                    ForEach(Array(comments.enumerated()), id: \.offset) { i, c in CommentQuote(comment: c, number: i + 1, ink: ink) }
                 }
                 .padding(.horizontal, Theme.Space.s)
                 .padding(.top, Theme.Space.s)
                 .padding(.bottom, text.isEmpty ? Theme.Space.s : 0)
             }
             if !text.isEmpty {
-                words
+                words(ink)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, Theme.Space.l)
                     .padding(.vertical, Theme.Space.m)
             }
         }
-        .background(fill, in: .rect(cornerRadius: Theme.Radius.bubble, style: .continuous))
+        .background(ink.fill, in: .rect(cornerRadius: Theme.Radius.bubble, style: .continuous))
     }
 }
 

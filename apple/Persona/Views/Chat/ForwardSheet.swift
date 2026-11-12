@@ -15,6 +15,8 @@ struct ForwardSheet: View {
     @State private var query = ""
     @State private var sessions: [Session] = []
     @State private var busy: ForwardTarget?
+    /// The read `pick` started: Cancel, or the sheet going any other way, stops it before it opens anything (#5338).
+    @State private var work: Task<Void, Never>?
     @State private var error: String?
     /// The recent targets, read once when the sheet opens.
     @State private var recents: [SessionKey] = []
@@ -88,12 +90,19 @@ struct ForwardSheet: View {
             }
             .pageSearchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
                             prompt: String(localized: "Search chats, computers or projects"))
+            // The list only: Cancel stays usable while the message is read.
+            .disabled(busy != nil)
             .navigationTitle("Forward To")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        work?.cancel()
+                        dismiss()
+                    }
+                    .accessibilityIdentifier("forward.cancel")
+                }
             }
-            .disabled(busy != nil)
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
@@ -103,6 +112,7 @@ struct ForwardSheet: View {
             list()
         }
         .onChange(of: query) { list() }
+        .onDisappear { work?.cancel() }
         .accessibilityIdentifier("forward.sheet")
     }
 
@@ -162,13 +172,15 @@ struct ForwardSheet: View {
         guard busy == nil else { return }
         busy = target
         error = nil
-        Task {
+        work = Task {
             do {
                 let done = try await draft.complete()
+                guard !Task.isCancelled else { return }
                 Haptics.tap()
                 picked(target == .newAgent ? .newAgent(done.refs, done.images) : .target(done.refs, done.images, target))
                 dismiss()
             } catch {
+                guard !Task.isCancelled else { return }
                 busy = nil
                 self.error = error.isOffline ? String(localized: "Can't reach the hub") : error.shown
             }

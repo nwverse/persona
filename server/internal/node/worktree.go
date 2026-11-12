@@ -119,13 +119,20 @@ func repoAt(ctx context.Context, dir string) (worktreeRepo, error) {
 
 // spaceHolding is the host's space whose directory is dir or holds it, the deepest such space.
 func spaceHolding(ctx context.Context, h host.Host, dir string) (string, error) {
-	l, ok := h.(host.Launcher)
-	if !ok {
+	// A full layout fills workspace directories from agreeing panes; herdr's workspace.list can omit them.
+	// Keep Spaces as the fallback when the snapshot is unavailable or has no spaces.
+	var spaces []host.Space
+	layout, snapshotErr := h.Snapshot(ctx)
+	if snapshotErr == nil && layout != nil && len(layout.Spaces) > 0 {
+		spaces = layout.Spaces
+	} else if l, ok := h.(host.Launcher); ok {
+		var err error
+		spaces, err = l.Spaces(ctx)
+		if err != nil {
+			return "", err
+		}
+	} else {
 		return "", unsupported(h)
-	}
-	spaces, err := l.Spaces(ctx)
-	if err != nil {
-		return "", err
 	}
 	d := realPath(filepath.Clean(dir))
 	best, depth := "", -1

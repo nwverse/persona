@@ -34,17 +34,21 @@ run with `ELECTRON_RUN_AS_NODE=1`. A plain `node` always runs the bridge without
   says it was archived, and after connecting the ones Paseo's directory still has (read newest first, archived Agents included).
   Not named: an Agent deleted in Paseo (it stays gone), an Agent another Agent created (its creator's chat says what it did), Paseo's own helper runs, which have no Agent,
   and an Agent that keeps its own ID (next). The transcript is listed under its Claude session ID, the ID such an Agent had while it was listed.
-- **Archived Agents that keep their own ID** (#4771): an Agent whose session ID is not its Claude session's (one created or taken over from Persona, `paseo-<agent id>`
+- **Archived Agents that keep their own ID** (#4771, #5129): an Agent whose session ID is not its Claude session's (one created or taken over from Persona, `paseo-<agent id>`
   below) is not named that way: listed as its transcript, it would come back under another ID, and everything Persona keeps under its own (a to-do's link, a pin, an archive
   mark, its read state, its sharing owner) would be left behind. The bridge keeps listing it itself instead, as a row not running under the same ID that names its
   transcript (`transcript`), so its content comes from the transcript as for any Claude Agent and node lists no second row for it. These rows come after the 300: the latest
   80 archived in the last 7 days, and those the phone touched lately. They are read from Paseo's archive at connect, so a restarted bridge lists them again once it has read
   it, and they leave the list with the bridge, as the other rows do.
+  Codex Agents started from Persona keep their ID in the same way: a valid `persona.session` label and a known Codex thread retain an offline row with
+  `codex_thread`, so node does not list that thread again as history. These rows share the same archive limits; distinct threads stay distinct, and a live
+  Agent naming a thread takes precedence over an archived row for that thread. Codex Agents started in Paseo itself keep their existing archive behavior.
+  Resuming a retained Codex Agent requires its original provider to remain enabled; it never imports that thread through a different provider.
   - A message to one goes to the Agent: Paseo takes it back from the archive first, keeping its labels, and it goes on under the same ID. `session.start` with `resume` set
     to that ID does the same through `import_agent` (see "Take over").
   - While it is archived, interrupting and closing it do nothing, and its permission mode and effort cannot be changed (Paseo changes them only on an Agent it has loaded).
     A rename goes to Paseo's record, which tells no list of it: the row takes the name from the bridge, and from Paseo's archive when the bridge reads it again (every 2 minutes, below).
-  - Deleted in Paseo, it leaves the list as below. Old nodes need nothing new: such a row is an ordinary row not running with a transcript.
+  - Deleted in Paseo, it leaves the list as below. The bridge uses the existing `transcript` / `codex_thread` fields, without a new protocol feature.
 - **Deleted Agents** (#4629): an Agent deleted in Paseo (its App, `paseo delete`) leaves Persona too, and an archived one's Claude session is named no more (or its row leaves). Paseo tells a
   deletion only to the client that asked for it: the bridge sees an Agent that ran since Paseo started go `closed`, and of any other nothing. So it asks Paseo for the Agent
   (`fetch_agent_request`: a deleted one is `agent: null`): 1 s and 5 s after an Agent that ran is closed, and every 2 minutes for the Agents its directory no longer has (the
@@ -241,6 +245,9 @@ otherwise use Paseo's default provider (its built-in Claude Code provider if ena
   - Test from creation through closing (the session stays listed under its ID), a message that continues it, archiving it again across a restart of the bridge, and resuming it.
   - Use only temporary directories, without touching the active local Paseo or `~/.claude`.
   - Add `KEEP=1` to retain temporary directories, or `DEBUG=1` to print the bridge lines from node's log.
+- Codex archive lifecycle: with the same generated `personad` binary, run `PERSONAD=/tmp/personad CODEX_BIN=<a Codex executable> PASEO_BIN=<a Paseo executable> node integrations/paseo/e2e/codex.mjs`.
+  It uses a real temporary Paseo daemon and Codex with a scripted local Responses API, isolated homes and synthetic data. It checks that archiving,
+  reconnecting and continuing preserve the Agent and thread identity and leave only one conversation row. It never uses the active Paseo daemon or a real model account.
 - Local testing (2026-11-04, Paseo 0.14.0, Claude Code 2.1.294):
   - All 29 end-to-end checks passed (35 on 2026-11-11, with the archived sessions that keep their ID).
   - Read-only validation against a real active Paseo: the bridge connected to a fake node, allowing only read requests. Every available provider became a launcher; all Claude Code sessions pointed to their own transcripts,

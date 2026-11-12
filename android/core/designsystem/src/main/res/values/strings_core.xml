@@ -110,6 +110,7 @@
     <string name="designsystem_core_agents_no_todo">No to-do</string>
     <string name="designsystem_core_agents_manual">Opened by hand</string>
     <string name="designsystem_core_agents_quiet_spaces">Idle spaces</string>
+    <string name="designsystem_core_agents_started_tab">Started it</string>
     <plurals name="designsystem_core_count_needs_you">
         <item quantity="one">%1$d needs you</item>
         <item quantity="other">%1$d need you</item>
@@ -483,6 +484,6 @@
     <string name="designsystem_core_always_scope_commands">All commands in this conversation</string>
     <string name="designsystem_core_always_scope_read_directory">All reads in this directory in this conversation</string>
     <string name="designsystem_core_always_scope_edit_directory">All file edits in this directory in this conversation</string>
-    <string name="designsystem_core_always_scope_tool">All uses of this tool in this conversation</string>
+    <string name="designsystem_core_always_scope_tool">All %1$s calls in this conversation</string>
     <string name="designsystem_core_always_scope_approved">The approved scope remains allowed in this conversation</string>
 </resources>

@@ -128,3 +128,79 @@ describe("a message the switch refused", () => {
     expect(switchRefused(new Error("x"))).toBe(false);
   });
 });
+
+// Moving a running Agent to the other engine (#5054): on a hub with `engine_switch` a Claude Code or Codex Agent in a
+// terminal picks the other engine's launchers like another launcher of its own; without it, or for a session that can't
+// (a Codex app thread, an assistant chat, a stopped one), the reason stays.
+describe("a launcher of the other engine", () => {
+  const engine: PanelOptions = { switching: true, engineSwitch: true };
+  const terminalCodex = (x: Partial<Session> = {}) => session({ agent: "codex", launcher: "cx", model: "gpt-5.5", effort: "medium", pane_id: "w1:p2", ...x });
+
+  it("is picked on a hub that moves the conversation there, and needs a new conversation without it", () => {
+    const cx = provider(session(), "cx", engine);
+    expect(cx.unavailable).toBeUndefined();
+    expect(cx.models!.map((m) => m.id)).toEqual(["gpt-5.5"]);
+    expect(provider(session(), "cx", on).unavailable).toBe(t("chat-modelpanel.other_engine", { from: "Claude Code", to: "Codex" }));
+    // the other engine's launchers never join Recommended: those switch at once
+    expect(sessionPanel(session(), launchers, listOf, engine).state.recommended).toEqual(["claude"]);
+  });
+
+  it("a Codex Agent in a terminal picks Claude Code's launchers; its own rows keep their reason", () => {
+    const s = terminalCodex();
+    expect(provider(s, "claude", engine).unavailable).toBeUndefined();
+    expect(provider(s, "work", engine).unavailable).toBeUndefined();
+    expect(provider(s, "cx", engine).unavailable).toBe(t("chat-modelpanel.model_fixed", { agent: "Codex" }));
+    // without the feature: as before
+    expect(provider(s, "claude", on).unavailable).toBe(t("chat-modelpanel.other_engine", { from: "Codex", to: "Claude Code" }));
+  });
+
+  it("a Codex app thread, a session not in a terminal, an assistant chat and a stopped Agent keep the reason", () => {
+    const reason = t("chat-modelpanel.other_engine", { from: "Codex", to: "Claude Code" });
+    expect(provider(terminalCodex({ source_kind: "codex_app_server", capabilities: { send: true } }), "claude", engine).unavailable).toBe(reason);
+    expect(provider(terminalCodex({ pane_id: undefined }), "claude", engine).unavailable).toBe(reason);
+    expect(provider(terminalCodex({ status: "offline", state: "offline" }), "claude", engine).unavailable).toBe(reason);
+    expect(provider(session({ assistant: true }), "cx", engine).unavailable).toBe(t("chat-modelpanel.other_engine", { from: "Claude Code", to: "Codex" }));
+  });
+
+  it("a pick sends one request recording the switch, as for another launcher", () => {
+    expect(pickPlan(session(), { provider: "cx", model: "gpt-5.5" }, raw, engine)).toEqual([{ launcher: "cx", from: "claude" }]);
+    expect(pickPlan(session(), { provider: "cx", model: "gpt-5.5-mini", effort: "low" }, raw, engine)).toEqual([{ launcher: "cx", from: "claude", model: "gpt-5.5-mini", effort: "low" }]);
+    expect(pickPlan(terminalCodex(), { provider: "claude", model: "opus", effort: "high" }, raw, engine)).toEqual([{ launcher: "claude", from: "cx", model: "opus", effort: "high" }]);
+    // without the feature: nothing
+    expect(pickPlan(session(), { provider: "cx", model: "gpt-5.5" }, raw, on)).toBeNull();
+    // the very same switch waiting already: nothing to send
+    const waiting = session({ pending_switch: { launcher: "cx", agent: "codex" } });
+    expect(pickPlan(waiting, { provider: "cx", model: "gpt-5.5" }, raw, engine)).toEqual([]);
+  });
+
+  it("knows the engine of a launcher whose list isn't read from the panel's providers", () => {
+    const unread = (name: string) => (name === "relay" ? undefined : raw(name));
+    const engineOf = (name: string) => (name === "relay" ? "codex" : undefined);
+    expect(pickPlan(session(), { provider: "relay", model: "gpt-5.5" }, unread, { ...engine, engineOf })).toEqual([{ launcher: "relay", from: "claude", model: "gpt-5.5" }]);
+    expect(pickPlan(session(), { provider: "relay", model: "gpt-5.5" }, unread, { engineSwitch: true, engineOf })).toEqual([{ launcher: "relay", from: "claude", model: "gpt-5.5" }]);
+    // nobody knows: taken as a launcher of its own engine (none to switch to without `launcher_switch`)
+    expect(pickPlan(session(), { provider: "relay", model: "gpt-5.5" }, unread, { engineSwitch: true })).toBeNull();
+  });
+
+  it("waiting: Cindy's warning on top, the pill names the engine with that model's own effort", () => {
+    const waiting = session({ pending_switch: { launcher: "cx", agent: "codex", at: "2026-11-12T10:00:00Z" } });
+    const { state } = sessionPanel(waiting, launchers, listOf, engine);
+    expect(state.note).toBe(t("chat-modelpanel.engine_note"));
+    expect(state.pending).toEqual({ provider: "cx", model: "gpt-5.5" });
+    // reopened, the panel stands on what runs now
+    expect(state.current).toEqual({ provider: "claude", model: "opus", effort: "high" });
+    const withEffort: Record<string, ModelList> = { ...read, cx: { list: { agent: "codex", models: [{ id: "gpt-5.5", name: "GPT-5.5", default: true, default_effort: "medium" }] } } };
+    expect(pendingView(waiting, (n) => withEffort[n] ?? {})).toEqual({ engine: "codex", provider: "cx", model: "5.5", effort: "medium" });
+    // no effort of Claude Code's carried over when the model has none to say
+    expect(pendingView(waiting, listOf)).toEqual({ engine: "codex", provider: "cx", model: "5.5" });
+    expect(pendingView(session({ pending_switch: { launcher: "cx", agent: "codex", effort: "low" } }), listOf)!.effort).toBe("low");
+  });
+
+  it("is dropped by a pick of what runs now: Claude Code's own model, or a Codex Agent's, which has no other pick", () => {
+    const waiting = session({ pending_switch: { launcher: "cx", agent: "codex" } });
+    expect(pickPlan(waiting, { provider: "claude", model: "opus", effort: "high" }, raw, engine)).toEqual([{ launcher: "claude", from: "claude" }]);
+    const codexWaiting = terminalCodex({ pending_switch: { launcher: "claude", model: "opus", agent: "claude" } });
+    expect(pickPlan(codexWaiting, { provider: "cx", model: "gpt-5.5", effort: "medium" }, raw, engine)).toEqual([{ launcher: "cx", from: "cx" }]);
+    expect(sessionPanel(codexWaiting, launchers, listOf, engine).state.note).toBe(t("chat-modelpanel.engine_note"));
+  });
+});
