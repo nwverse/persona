@@ -255,7 +255,8 @@ existing assistant-owned pages.
 The device page reuses `ReadinessScreen(backgroundOnly = true)` without assistant or computer setup, checklist
 completion/dismissal actions, or implicit writes to first-run pending state. System notification checks have one home;
 notification channels, manufacturer battery/autostart controls, lock-screen and cellular tests remain there.
-First-run onboarding still uses the original checklist behavior.
+First-run onboarding still uses the original checklist behavior. When an older hub cannot supply phone-muting
+preferences, its online-computer detail entry remains visible in this page rather than disappearing with the switch.
 
 Android currently has knowledge-base browsing, searching and tagging, but no knowledge-base **selection** settings
 (priorities, context-source toggles or per-chat selection). No misleading selection entry is added; that capability
