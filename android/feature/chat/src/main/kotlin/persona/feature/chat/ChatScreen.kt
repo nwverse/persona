@@ -552,7 +552,10 @@ private fun ChatPage(
     }
     val readThrough = listOfNotNull(reportedSeen, snapshot.items.firstOrNull { it.id == snapshot.lastSeenMessageId }).maxWithOrNull(chatItemOrder)
     val context = androidx.compose.ui.platform.LocalContext.current
-    val loader = remember(context, repository, readingKey?.scope) { chatImageLoader(context.applicationContext, repository) }
+    val pairingLoader = remember(repository, key) { (repository as? ChatLocalStorage)?.imageLoader(key) }
+    val loader = remember(context, repository, pairingLoader) {
+        pairingLoader ?: chatImageLoader(context.applicationContext, repository)
+    }
     val markdownCache = remember { ChatMarkdownCache() }
     // Only fresh Agent replies preload their links (ChatLinks.toPreload): paging old history never does.
     val preloadUrls by produceState(emptyList<String>(), snapshot.items) {
@@ -563,7 +566,7 @@ private fun ChatPage(
     // list that pushes the question off the top (the newest reply is the one that keeps its place).
     var markdownReadyFor by remember { mutableStateOf<List<Item>?>(null) }
     val markdownSplit = remember { MarkdownPrewarm() }
-    DisposableEffect(loader) { onDispose { loader.shutdown() } }
+    DisposableEffect(loader, pairingLoader) { onDispose { if (pairingLoader == null) loader.shutdown() } }
     var folding by remember { mutableStateOf(emptySet<String>()) }
     var foldErrors by remember { mutableStateOf(emptyMap<String, String>()) }
     val terminal: (() -> Unit)? = if (readOnly || !canTerminal) null else onTerminal?.let { action -> { action(key) } }

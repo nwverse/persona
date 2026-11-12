@@ -229,22 +229,31 @@ private fun CodeBody(preview: String, language: String, colour: Boolean, header:
 
 internal data class ChatImage(val session: SessionKey, val item: Item)
 
-internal fun chatImageLoader(context: android.content.Context, repository: ChatRepository): ImageLoader =
-    ImageLoader.Builder(context).components {
-        add(Keyer<ChatImage> { data, _ -> "${(repository as? ChatLocalStorage)?.localStorage?.value?.scope}/${data.session.path}/${data.item.id}" })
-        add(object : Fetcher.Factory<ChatImage> {
-            override fun create(data: ChatImage, options: Options, imageLoader: ImageLoader): Fetcher = object : Fetcher {
-                override suspend fun fetch() = withContext(Dispatchers.IO) {
-                    val file = checkNotNull(repository as? ChatLocalStorage) { "Scoped image storage is unavailable" }
-                        .imageFile(data.session, data.item,
-                            (options.size.width as? coil3.size.Dimension.Pixels)?.px ?: context.resources.displayMetrics.widthPixels,
-                            (options.size.height as? coil3.size.Dimension.Pixels)?.px ?: context.resources.displayMetrics.heightPixels)
-                    SourceFetchResult(ImageSource(file.toOkioPath(), FileSystem.SYSTEM), "image/png",
-                        DataSource.DISK)
+internal const val CHAT_IMAGE_MEMORY_BYTES = 96L * 1024 * 1024
+
+fun chatImageLoader(context: android.content.Context, repository: ChatRepository, scope: String? = null): ImageLoader =
+    scopedChatImageLoader(context, repository as? ChatLocalStorage, scope)
+
+fun scopedChatImageLoader(context: android.content.Context, storage: ChatLocalStorage?, scope: String? = null): ImageLoader =
+    ImageLoader.Builder(context)
+        .memoryCache { coil3.memory.MemoryCache.Builder().maxSizeBytes(CHAT_IMAGE_MEMORY_BYTES).build() }
+        .components {
+            add(Keyer<ChatImage> { data, _ ->
+                "${scope ?: storage?.localStorage?.value?.scope}/${data.session.path}/${data.item.id}"
+            })
+            add(object : Fetcher.Factory<ChatImage> {
+                override fun create(data: ChatImage, options: Options, imageLoader: ImageLoader): Fetcher = object : Fetcher {
+                    override suspend fun fetch() = withContext(Dispatchers.IO) {
+                        val file = checkNotNull(storage) { "Scoped image storage is unavailable" }
+                            .imageFile(data.session, data.item,
+                                (options.size.width as? coil3.size.Dimension.Pixels)?.px ?: context.resources.displayMetrics.widthPixels,
+                                (options.size.height as? coil3.size.Dimension.Pixels)?.px ?: context.resources.displayMetrics.heightPixels)
+                        SourceFetchResult(ImageSource(file.toOkioPath(), FileSystem.SYSTEM), "image/png",
+                            DataSource.DISK)
+                    }
                 }
-            }
-        })
-    }.build()
+            })
+        }.build()
 
 /**
  * A picture of the conversation (R5): it keeps its shape while it loads, at most [ChatPictureMaxHeight] tall; a tap opens

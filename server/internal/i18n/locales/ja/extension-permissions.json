@@ -101,5 +101,7 @@
   "network_config_unset": "未入力",
   "secret_provider_title": "シークレットの値を提供",
   "secret_provider_more_title": "シークレットの値を提供（新規）",
-  "secret_provider_detail": "設定に {schemes} 参照が入っているとき、またはスマートフォンで参照を Agent に渡すことを承認したとき、Persona はこの拡張機能に値を求めます。どの参照が何に使われるかは伝わりますが、ほかのシークレットは見えません"
+  "secret_provider_detail": "設定に {schemes} 参照が入っているとき、またはスマートフォンで参照を Agent に渡すことを承認したとき、Persona はこの拡張機能に値を求めます。どの参照が何に使われるかは伝わりますが、ほかのシークレットは見えません",
+  "assistant_data_title": "拡張機能が書いた内容をアシスタントが読む内容に加える",
+  "assistant_data_detail": "プログラムが書いたテキストを、アシスタントの指示とスキル、Agent のプロジェクト背景、受信箱の仕分けと下書きに、サイズ上限の範囲で加えられます。各項目は詳細画面で個別にオフにできます"
 }
