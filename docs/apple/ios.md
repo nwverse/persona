@@ -330,7 +330,7 @@ Chat page:
   Repeated identical errors separated only by Continue-like retries merge with count (`ChatView.foldAPIErrors`). Retry (sends "继续", "Continue") only when last item, idle Agent and transient.
   Currently text parsing; Claude Code also provides `apiErrorStatus`, `error`, `requestId` fields, preferred once hub reads them. DEBUG `-showErrorDetails YES` opens by default.
   Screenshots mock `MOCK_API_ERRORS=1`, assistant main and review chats.
-- Refusal fallback (#4489, the iOS half of #2528; web #4487, Android #4488): a notice with `model_refusal` is a line of its own after the exchange (`RefusalNotice`; `ChatStore` puts it with the turn's trailing rows, never in the work row): the upstream refused, which model Claude Code switched from and to (or that no switch is recorded), "later turns may keep using it" for scope `session`, the category, the explanation and the refusal's own words. Models go by their short names (`SessionModes.modelName`), where the web shows ids. While the session has `model_fallback`, a card above the composer (`ModelFallbackCard`, a `ReadinessCard`) names both models and the error since: a terminal session gets only the "type /model in Claude Code" step; a Persona conversation gets **Back to Configured Model** (`POST …/restore-model`, refusals said in words by `ModelFallbackText.restoreError`), and the main conversation also **New Main Chat**. While `model_restore` is pending the card says only that the next start uses the configured model, and names it. The API error card offers no Retry while `turn_error_code` is `model_fallback_unavailable`. Items keep the refusal's words as their text, never an older hub's whole record line (`Item.publicRefusal`); `ChatCache` went to `chats-v17` so notices cached without `model_refusal` are dropped. Tests: `ModelFallbackTests`, `ModelFallbackUITests` (mock `MOCK_MODEL_FALLBACK=1 MOCK_MAIN_ACTIONS=1`).
+- Refusal fallback (#4489, the iOS half of #2528; web #4487, Android #4488): a notice with `model_refusal` is a line of its own after the exchange (`RefusalNotice`; `ChatStore` puts it with the turn's trailing rows, never in the work row): the upstream refused, which model Claude Code switched from and to (or that no switch is recorded), "later turns may keep using it" for scope `session`, the category, the explanation and the refusal's own words. Models go by their short names (`SessionModes.modelName`), where the web shows ids. While the session has `model_fallback`, a card above the composer (`ModelFallbackCard`, a `ReadinessCard`) names both models and the error since: a terminal session gets only the "type /model in Claude Code" step; a Persona conversation gets **Switch Back** (zh-Hans 回到配置的模型, ja 元に戻す; `POST …/restore-model`, refusals said in words by `ModelFallbackText.restoreError`), and the main conversation also **New Main Chat** (the card's own key, ja 新しいチャット: at the largest text size, stacked, the longer Japanese and English words still ended in "…", `docs/design/DESIGN_SYSTEM.md` 1.2 rule 3 (a), #5202). While `model_restore` is pending the card says only that the next start uses the configured model, and names it. The API error card offers no Retry while `turn_error_code` is `model_fallback_unavailable`. Items keep the refusal's words as their text, never an older hub's whole record line (`Item.publicRefusal`); `ChatCache` went to `chats-v17` so notices cached without `model_refusal` are dropped. In a Persona conversation (`plainRefusals`, set by `ChatView` from `session.assistant`; #5202) the line is one sentence with the model's short name and the record under a closed Details, and the card's title says which model answers now, with the configured model while pending; the rest goes under `ReadinessCard`'s Details. Tests: `ModelFallbackTests`, `ModelFallbackUITests` (mock `MOCK_MODEL_FALLBACK=1 MOCK_MAIN_ACTIONS=1`).
 - Claude suggestions (`SuggestionPill`): session `suggestion`, not working, empty input shows "✦ Suggestion … Use" above (AI purple, not accent), also placeholder;
   tap fills editable input, long-press Send now. Typing hides it. Headless assistant has no TUI/suggestions; mock `MOCK_SUGGESTION=1`, review session.
 - Sending clears input immediately and displays Sending bubble (`ChatStore.pending`), request background; same text in transcript
@@ -729,6 +729,28 @@ Long-press the Persona icon: the last conversation opened on this device, then "
 - Navigation only, except Record, which starts recording: Inbox pushes onto the assistant, New chat follows the drawer's New chat route (`ShellState.show(.newConversation)`), returning already-pushed pages such as Inbox to the root. Without hub pairing, remain on Welcome.
 - If the App is open or backgrounded, use the scene delegate's `windowScene(_:performActionFor:)`; on cold launch the item comes through scene connectionOptions. `QuickActionSceneDelegate` handles only these two entry points; SwiftUI still manages the window.
 - `QuickActionsTests` opens a demo chat, long-presses the home-screen icon, finds that chat on the menu (with Record, and no Agents) and taps it, then Inbox and New chat; a second test opens two chats in turn and checks the menu's order (the newer chat only, then Record, New chat, Inbox). Record is not tapped (it would record). `RecentChatsTests` runs the shared fixture. Cold launch is untested: SpringBoard launch cannot pass demo-mode arguments. Each simulator return to the home screen waits about 60 seconds for SpringBoard idle; the whole test takes about 7 minutes.
+
+## App icon badge (#5824)
+
+The number on the Persona icon (the iPhone's home screen, the Mac's Dock; Apple Vision Pro runs the same code) is the
+tab badges added up: Persona's waiting questions (`TabBadges.assistant`) + Agents' Needs You (`TabBadges.agents`) +
+the Inbox's unread items (`InboxStore.unreadCount`). One function, `AppIconBadge.count` (`Persona/App/AppIconBadge.swift`),
+on every Apple app.
+
+- **Same as the tabs**: nothing the tabs leave out (muted agents, an agent's finished turn not yet opened, open
+  to-dos, an extension's badge, Messages) and nothing more; a quiet task's question counts with Persona's, as on its
+  tab. Signed out, or every item handled, clears it.
+- **Set by the app**: `AppIconBadgeWatcher` observes the numbers while the app runs and sets the icon only when the sum
+  moves, 0.25 s after the first change of a burst (P7). iOS calls `UNUserNotificationCenter.setBadgeCount` on a serial
+  utility queue (P1) and sends the number again each time the app becomes active: one set before the user allowed
+  badges is dropped. The Mac sets `NSApp.dockTile.badgeLabel`. The hub's pushes carry no `badge`, so while the app is
+  not running the icon keeps the last number set, and a build without push (no `aps-environment`) works the same.
+- **The user's switch**: the system draws the number only with badge permission (asked with notifications after
+  pairing, `PushRegistrar`) and its Badges switch on (iOS Settings › Notifications; macOS System Settings ›
+  Notifications › Badge application icon). A Mac that never asked (Demo Mode only) has the Dock label set but not
+  drawn (`lsappinfo info -only StatusLabel` shows it).
+- **Tests**: `AppIconBadgeTests` (also in `PersonaMacTests`): the sum, the model's tabs feeding it, nothing while
+  signed out, one call per burst, none when a burst ends where it started.
 
 ## Share to Persona (#4586, #1460)
 
@@ -1292,7 +1314,8 @@ With hub feature `assistant_readiness`, the App reads `GET /api/v1/assistant/rea
 state in `AppModel.readiness`, `AssistantReadinessModel`), using the same presentation as the web (`../web/web.md` ("What the main chat still needs")):
 
 - Query while Persona is foregrounded (`.tabActiveTask`), when machines change, from `warm` responses, after chat creation is refused, and after saving a provider (`readinessChanged()`). Old hubs (no feature or 404) show nothing.
-- Above the new-chat input (old `AssistantHome`, new-shell `ShellHome`), a `ReadinessCard` (design-system component, BeautifulUI list rows):
+- Above the new-chat input (old `AssistantHome`, new-shell `ShellHome`), a `ReadinessCard` (design-system component, BeautifulUI list rows;
+  at the accessibility text sizes its buttons and Details stack, the main one first, each on one line, `docs/design/DESIGN_SYSTEM.md` 1.2 rule 3, #5202):
   `setup` shows the first missing step; `rate_limited` shows only a card without blocking Send. In `setup`, a nonempty draft replaces Send with `SendGate` ("Connect a model first", "Add a computer first"…); tap opens that step, retaining the draft without queuing it.
 - Actions (`ReadinessRoute`): add / confirm computer first opens Machines (switches to Add Computer after M3 lands); connect model opens provider wizard, replace key opens that provider;
   install / log in to Claude Code, wake computer and `local` sample questions open local instructions (`ReadinessHelpView`, not sent to a model); Try a message queries `?probe=1`. Unknown `action` shows text only.
@@ -1360,7 +1383,7 @@ When on, tasks dispatched by the main chat are quiet (to-do `quiet`, attached se
 - Foreground notifications: `willPresent` shows no banner for quiet sessions.
 - Badges: quiet-session questions count toward the assistant, not Agents (handled in the main chat); the drawer / Mac sidebar's To-dos count excludes quiet tasks (`TodoStore.badgeCount`), though the to-do list still includes them.
 - Watch: both the phone-synced summary and the watch's directly fetched lists exclude quiet sessions and their questions (watch credentials cannot read to-dos and use only session `quiet`).
-- Mac: notifications and Dock badges treat them as muted; the menu bar excludes them.
+- Mac: notifications treat them as muted; the menu bar excludes them. The app icon counts their questions with Persona's, as the tabs do ("App icon badge (#5824)").
 
 `AppModel.isQuiet` decides: first the hub's session `quiet`, then the current hub's to-dos (`QuietTasks`: quiet to-dos and their Agents, including ones detached from the to-do). Task cards in the main chat and the Agents-page list still display normally.
 
@@ -1480,8 +1503,9 @@ Mac and Vision Pro. Nothing here shows on a hub from before it.
   Persona hands out. It is read and written through `AppModel.assistantConfig` (`setMainSupervisesOwnTasks`: shown at
   once, put back when the hub refuses), as the two switches above it. A hub that omits the field has no switch.
 - **Its model**: Settings › Models lists the use `assistant.supervise` after the categories and the other uses set
-  apart. The hub's catalog leaves it out, so `ModelConfigurationModel.load` asks for it by its id beside the catalog
-  (`listing`); a hub without it answers 404 and the list has no such row. Its page says "Follow Main Chat" where Lark
+  apart. A hub before #5806 leaves it out of its catalog, so `ModelConfigurationModel.load` asks for it by its id
+  beside the catalog (`listing`); a hub without it answers 404 and the list has no such row, and one that lists it in
+  the catalog (#5806 on) gets the catalog's row only. Its page says "Follow Main Chat" where Lark
   /agent says "Follow Agents", and saves to the use's own record.
 - **Its reviews in the main chat**: a review is the feed kind `review` in the conversation that planned the task,
   whoever reviewed, so `ChatLines.mergeFeed` places it and `ReviewFeedLine` draws it as one line that opens the task.
@@ -1907,8 +1931,9 @@ is listed), and a hub that answers it has no roster filters nothing (`AppModel.m
   or Don't Start, a briefing question's Handled) name the conversation's own manager (`AppModel.feedManager`), whichever
   assistant is current: some of those routes name no conversation, so the hub would take them to the default. The
   default's conversations name none, and with one installed manager or no roster nothing is named.
-- **Counts**: the tab badges, the sidebar's Inbox and To-dos counts, the home page's Needs You and the main conversation's
-  dock count the current assistant's (`AppModel.countBadges`, `InboxStore.actionCount`, `TodoStore.badgeCount`). The
+- **Counts**: the tab badges, the app icon's number (their sum), the sidebar's Inbox and To-dos counts, the home page's
+  Needs You and the main conversation's dock count the current assistant's (`AppModel.countBadges`,
+  `InboxStore.actionCount`, `TodoStore.badgeCount`). The
   switcher shows beside every other assistant what waits there (`AssistantBadges`, `AppModel.assistantBadges`): its agents
   waiting (a session with a pending card or in Needs You once, quiet and muted ones left out, a card on no session by
   itself; Persona's own conversations by their cards only) plus `inbox_needs_you`. The header's face carries a mark while
