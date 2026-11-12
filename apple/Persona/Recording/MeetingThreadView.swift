@@ -321,7 +321,16 @@ struct MeetingThreadView: View {
     // MARK: After the meeting
 
     @ViewBuilder private func followupRows(_ key: SessionKey?, sends: [MeetingConversation.FollowupSend]) -> some View {
-        afterDivider
+        // Between the room's part and the follow-up: a recording that never had a room, and a room meeting whose room never
+        // came up with no asks, have nothing before it (#3862 phase 6), and their thread is the follow-up alone.
+        let roomPart = conversation.roomKey(entry.id) != nil || !roomRows.isEmpty || !apart.isEmpty
+        if roomPart { afterDivider }
+        if key == nil, sends.isEmpty, !roomPart {
+            Text("Ask Persona about this meeting: what was decided, who does what, or a follow-up email.")
+                .font(Theme.Font.secondary).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("meeting-followup-empty")
+        }
         if let key {
             let store = model.chat(key)
             if store.hasMore { earlier(key, identifier: "meeting-followup-earlier") }

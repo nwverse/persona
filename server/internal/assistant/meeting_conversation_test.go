@@ -204,6 +204,37 @@ func TestMeetingFollowup(t *testing.T) {
 	wantCode(t, r.do("POST", "/api/v1/recordings/"+meetingOther+"/followup", "", map[string]any{"id": callOne, "text": "x"}, http.StatusConflict), codeNoMaterial)
 }
 
+// Talk about this meeting (#3862 phase 6): the follow-up is made for any recording with text or minutes, a note or a
+// meeting that never had a room, without waiting for a room; one with no ended_at waits as any recording does.
+func TestMeetingFollowupAnyRecording(t *testing.T) {
+	r := newRoomFixture(t)
+	end := time.Now().UTC().Format(time.RFC3339)
+	lines := []map[string]any{{"start": 0, "end": 9, "text": "We keep the cap."}}
+	for _, c := range []struct {
+		id     string
+		fields map[string]any
+	}{{meetingOther, map[string]any{"kind": "note", "title": "Voice memo"}}, {meetingRec, map[string]any{"title": "Design review"}}} {
+		p := "/api/v1/recordings/" + c.id + "/followup"
+		r.upload(c.id, 1, c.fields)
+		wantCode(t, r.do("POST", p, "", map[string]any{"id": callOne, "text": "x"}, http.StatusConflict), codeMeetingRunning)
+		fields := map[string]any{"ended_at": end, "complete": true, "segments": lines}
+		for k, v := range c.fields {
+			fields[k] = v
+		}
+		r.upload(c.id, 2, fields)
+		out := r.do("POST", p, "", map[string]any{"id": callTwo, "text": "What did we decide?"}, http.StatusOK)
+		sends := r.sends()
+		text, _ := sends[len(sends)-1]["text"].(string)
+		if out["created"] != true || out["followup"].(map[string]any)["session_id"] != meetingSessionID(c.id, partFollowup) ||
+			!strings.Contains(text, "We keep the cap.") || !strings.HasSuffix(text, "What did we decide?") {
+			t.Fatalf("%s: %v, first message %q", c.id, out, text)
+		}
+		if v, _ := r.do("GET", "/api/v1/kb/recordings/"+c.id, "", nil, http.StatusOK)["detail"].(map[string]any)["meta"].(map[string]any)["followup"].(map[string]any); v["session_id"] != meetingSessionID(c.id, partFollowup) {
+			t.Fatalf("%s: detail.meta's followup %v", c.id, v)
+		}
+	}
+}
+
 // A meeting's conversations start in the assistant's profile (a new private one has no login); a node too old to be
 // told a profile, which the hub refuses one for before anything starts, gets them started as before.
 func TestMeetingConversationsOnAnOlderNode(t *testing.T) {

@@ -2892,6 +2892,7 @@ def is_read_only(h):
 
 
 # ---------- the knowledge base (Persona › Knowledge base, docs/assistant/knowledge.md) ----------
+KB_KINDS = ("projects", "chats", "people", "docs", "meetings", "events", "recordings", "topics")  # kb_search's kinds
 KB = {
     "projects": [
         {"kind": "projects", "id": "weather-app", "name": "天气 App", "one_line": "小组件时间线已按小时刷新，等中号布局的降雨条",
@@ -2924,6 +2925,7 @@ KB_UPDATES = []  # what "Tagging" saved (read back at /mock/kb_updates)
 # Recordings synced from the phone (docs/protocol/protocol.md "Recording sync", #3235): uuid → the last body PUT; deleted ids are
 # tombstones (a later PUT gets 410). GET /mock/recordings reads both back. MOCK_RECORDINGS_DOWN=1: 503 (the hub away).
 RECORDINGS = {}
+RECORDING_UPLOADED = {}  # uuid → when its last upload was stored (the hub's Recording.Updated): a meeting without ended_at ends 12 h after
 RECORDINGS_DELETED = set()
 RECORDING_PUTS = [0]  # every PUT, stored or refused
 # Trimmed recordings (#3780, docs/assistant/meeting-minutes.md "Privacy"): POST /mock/recording_trim {"id"} makes a stored one
@@ -3175,6 +3177,7 @@ def day_put(h, rid, raw):
     if have and have.get("recap_final_at"): body["recap_final_at"] = have["recap_final_at"]
     for i, seg in enumerate(body["segments"]): seg["n"] = i + 1
     RECORDINGS[rid] = body
+    RECORDING_UPLOADED[rid] = time.time()
     day_publish(rid, repair=bool(have))
     return h.send_json(day_result(rid, "stored", put=True, fallback=raw)) or True
 
@@ -3953,7 +3956,7 @@ def meeting_conversation_on():
 def conv_of(rid, make=False):
     m = MEETING_CONV.get(rid)
     if m is None and make:
-        m = MEETING_CONV[rid] = {"room": None, "private": None, "followup": None, "revs": {}, "updated": 0.0}
+        m = MEETING_CONV[rid] = {"room": None, "private": None, "followup": None, "revs": {}}
     return m
 
 
@@ -4063,7 +4066,6 @@ def meeting_put(rid, body):
     good, one without turns its role off) and its first private mark (a meeting's, only while it has none). What was
     wrong with the room's role."""
     m = conv_of(rid, True)
-    m["updated"] = time.time()
     room_before, private_before = json.dumps(m["room"], sort_keys=True), m["private"]
     problem = None
     if isinstance(body.get("room"), dict):
@@ -4345,10 +4347,11 @@ def meeting_message(body):
 
 def meeting_running(rid):
     """The meeting is not over for a follow-up (followup.meetingRunning): no ended_at and an upload in the last 12 hours
-    (a trimmed one has ended), or a room still starting, ready or unavailable."""
+    (a trimmed one has ended), or a room still starting, ready or unavailable. Any recording, a note or one that never
+    had a room too (#3862 phase 6): one with neither waits for nothing."""
     if rid in RECORDINGS_TRIMMED: return False
+    if not RECORDINGS[rid].get("ended_at") and time.time() - RECORDING_UPLOADED.get(rid, 0) < MEETING_STALE: return True
     m = MEETING_CONV.get(rid) or {}
-    if not RECORDINGS[rid].get("ended_at") and time.time() - m.get("updated", time.time()) < MEETING_STALE: return True
     return ((m.get("room") or {}).get("state") or "none") in ("starting", "ready", "unavailable")
 
 
@@ -4962,7 +4965,7 @@ def recordings_route_locked(h, method, p):
         # A fresh start for the next test on the same mock: what an earlier one stored (its minutes) is gone too.
         RECORDING_MINUTES[0] = json.loads(h.last_body or b"{}").get("mode", "pending")
         meeting_conversation_reset()
-        RECORDINGS.clear(); RECORDING_MINUTES_ASKED.clear(); MEETING_LIVE.clear(); RECORDINGS_TRIMMED.clear(); RECORDING_DAY_TODOS.clear()
+        RECORDINGS.clear(); RECORDING_UPLOADED.clear(); RECORDING_MINUTES_ASKED.clear(); MEETING_LIVE.clear(); RECORDINGS_TRIMMED.clear(); RECORDING_DAY_TODOS.clear()
         with PHOTO_LOCK: PHOTO_STORE.clear()
         KB["recordings"] = []
         for key in [k for k in KB_DETAIL if k[0] == "recordings"]: KB_DETAIL.pop(key)
@@ -5053,7 +5056,7 @@ def recordings_route_locked(h, method, p):
         return h.send_json({"error": "404 page not found"}, 404) or True
     if method == "DELETE":
         existed = rid in RECORDINGS
-        RECORDINGS.pop(rid, None); RECORDINGS_DELETED.add(rid); RECORDINGS_TRIMMED.pop(rid, None); RECORDING_DAY_TODOS.pop(rid, None)
+        RECORDINGS.pop(rid, None); RECORDING_UPLOADED.pop(rid, None); RECORDINGS_DELETED.add(rid); RECORDINGS_TRIMMED.pop(rid, None); RECORDING_DAY_TODOS.pop(rid, None)
         kb[:] = [e for e in kb if e["id"] != rid]; KB_DETAIL.pop(("recordings", rid), None)
         with MEETING_LOCK: MEETING_LIVE.pop(rid, None)  # live lines and asks go with the recording
         with PHOTO_LOCK:  # as at the trim
@@ -5089,6 +5092,7 @@ def recordings_route_locked(h, method, p):
             if (v := upload_room_view(rid, body)) is not None: out["room"] = v
         return h.send_json(out) or True
     RECORDINGS[rid] = body
+    RECORDING_UPLOADED[rid] = time.time()
     text = "\n".join("[%d:%02d] %s" % (int(x["start"]) // 60, int(x["start"]) % 60, x["text"]) for x in body.get("segments", []))
     entry = {"kind": "recordings", "id": rid, "name": body.get("title") or "录音", "relevance": 0, "tags": [],
              "one_line": (body.get("segments") or [{"text": ""}])[0]["text"], "updated": body["started_at"]}
@@ -20954,9 +20958,14 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(out)
         if p == "/api/v1/kb-search":
             word = (q.get("q") or [""])[0].lower()
+            # kind: one kind only, as kb_search (#3862 phase 6: recordings for meetings); another is the hub's 400.
+            only = (q.get("kind") or [""])[0]
+            if only and only not in KB_KINDS:
+                return self.send_json({"error": "Unknown kind: search one of " + ", ".join(KB_KINDS) + "."}, 400)
             if (q.get("results") or [""])[0] == "1":
                 res = []
                 for k, l in KB.items():
+                    if only and k != only: continue
                     for e in l:
                         found = [{"path": "%s/%s/messages/%s.md" % (k, e["id"], d), "n": n, "line": t}
                                  for d, n, t in reversed(kb_messages(e["id"])) if kb_match(t, word)] if k == "chats" else \
@@ -20966,9 +20975,10 @@ class H(BaseHTTPRequestHandler):
                             res.append({"entry": e, "count": len(found), "hits": found[:3], "in_name": kb_match(e["name"], word)})
                 return self.send_json({"results": res})
             hits = [{"path": "%s/%s/summary.md" % (k, e["id"]), "line": "- " + e["name"] + "：" + (e.get("one_line") or "")}
-                    for k, l in KB.items() for e in l if word and (word in e["name"].lower() or word in (e.get("one_line") or "").lower())]
+                    for k, l in KB.items() if not only or k == only
+                    for e in l if word and (word in e["name"].lower() or word in (e.get("one_line") or "").lower())]
             hits += [{"path": x["path"], "line": x["line"]} for e in KB.get("recordings", [])
-                     for x in photo_matches(e["id"], word) + day_recap_matches(e["id"], word)] if word else []
+                     for x in photo_matches(e["id"], word) + day_recap_matches(e["id"], word)] if word and only in ("", "recordings") else []
             return self.send_json({"hits": hits})
         if p.startswith("/api/v1/machines/") and p.endswith("/file/thumb"): return self.file_thumb(p, q)
         files = mock_files(p, q)

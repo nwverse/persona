@@ -605,6 +605,11 @@ struct RecordingsPage: View {
     @State private var debugPage: DebugPage?
     private static var sampleOpened = false
     #endif
+    #if os(iOS)
+    /// A meeting's thread asked for from outside (the minutes push, #3862 phase 6), pushed over this page.
+    @State private var opener = MeetingPageOpener.shared
+    @State private var openedMeeting: UUID?
+    #endif
 
     var body: some View {
         List { RecordingsSection() }
@@ -614,6 +619,11 @@ struct RecordingsPage: View {
             .navigationBarTitleDisplayMode(.inline)
             #if os(iOS)
             .recordingLiveSheet()
+            .navigationDestination(item: $openedMeeting) { MeetingPage(id: $0, mode: .after) }
+            // On appear too: a cold launch from the push asks before this page exists.
+            .onChange(of: opener.serial, initial: true) {
+                if let id = opener.take() { openedMeeting = id }
+            }
             #endif
             #if DEBUG
             .navigationDestination(item: $debugPage) { page in
@@ -885,14 +895,15 @@ struct RecordingDetailView: View {
     // MARK: The meeting conversation (#3862)
 
     /// Private Meeting for any meeting (whatever recorded it: a meeting with no mark counts as private until it is turned
-    /// off), and Meeting Conversation for a room meeting, or one the hub says has a room or a follow-up. Only with a hub
-    /// that lists the meeting conversation.
+    /// off), and Talk about this meeting (#3862 phase 6) for any recording that ended with text or minutes, or one the hub
+    /// holds a conversation for (`MeetingTalk.offered`): it pushes the meeting's one thread. Only with a hub that lists
+    /// the meeting conversation.
     @ViewBuilder private func meetingSection(_ entry: RecordingEntry) -> some View {
         let meeting = conversation.meeting(id)
+        let offered = MeetingAttendees.conversation(model)
         let showsPrivate = entry.isMeeting && !notMeeting
-        let showsThread = entry.roomMeeting || meeting.followup != nil
-            || meeting.room.map { $0.known != MeetingRoom.State.none } == true
-        if MeetingAttendees.conversation(model), showsPrivate || showsThread {
+        let showsThread = MeetingTalk.offered(entry, conversation: offered, minutes: minutes.ready != nil, meeting: meeting)
+        if offered, showsPrivate || showsThread {
             Section {
                 if showsPrivate {
                     Toggle(isOn: Binding(get: { pendingPrivate ?? MeetingPage.isPrivate(entry, meeting) }, set: { setPrivate($0) })) {
@@ -913,9 +924,11 @@ struct RecordingDetailView: View {
                 if showsThread {
                     NavigationLink { MeetingPage(id: id, mode: .after) } label: {
                         // Drawn as the Private Meeting row beside it: in the style's icon language.
-                        Label { Text("Meeting Conversation").lineLimit(1) } icon: { ThemedIcon(Theme.Icon.meeting) }
+                        Label { Text("Talk about this meeting").lineLimit(1) } icon: {
+                            ThemedIcon(Theme.Icon.conversation)
+                        }
                     }
-                    .accessibilityIdentifier("recording-meeting-conversation")
+                    .accessibilityIdentifier("recording-talk")
                 }
             }
         }

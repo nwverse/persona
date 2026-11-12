@@ -19,9 +19,14 @@ struct MeetingPage: View {
     /// Hide (live) / Done (after, in the sheet); nil when pushed (the navigation bar's back).
     var close: (() -> Void)? = nil
 
+    @Environment(AppModel.self) private var model
     @Environment(\.dynamicTypeSize) private var size
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
     @State private var capture = RecordingCapture.shared
+    /// After the meeting: the app's voice call, when it is bound to the follow-up (#3862 phase 6), and why one couldn't start.
+    @State private var calls = VoiceCalls.shared
+    @State private var voiceNote: VoiceUnavailableNote?
     @State private var library = RecordingLibrary.shared
     @State private var conversation = MeetingConversation.shared
     @State private var sync = RecordingSync.shared
@@ -89,6 +94,8 @@ struct MeetingPage: View {
         guard let watching else { return }
         conversation.unwatch(watching, by: owner)
         self.watching = nil
+        // Leaving the page ends the phone's call bound to the follow-up, as leaving a chat does (docs/assistant/voice.md 6.5).
+        if mode == .after, let key = conversation.followupKey(watching) { VoiceCalls.shared.leave(key) }
     }
 
     // MARK: While the meeting records
@@ -516,8 +523,13 @@ struct MeetingPage: View {
                 .padding(.horizontal, Theme.Space.page)
             }
         }
-        .safeAreaInset(edge: .bottom, spacing: Theme.Space.flush) {
-            MeetingPageBar(entry: entry, mode: .after, justMe: .constant(false), focus: $writing, notice: $notice)
+        .safeAreaInset(edge: .bottom, spacing: Theme.Space.flush) { afterBar(entry) }
+        .voiceUnavailableAlert($voiceNote, model: model)
+        // Whether the follow-up's hub has a voice to call (at most once a minute, `VoiceSupport`).
+        .tabActiveTask(id: VoiceProbeID(group: conversation.followupKey(id)?.group ?? "", active: scenePhase == .active)) {
+            guard scenePhase == .active, VoicePlatform.current == .phone, let key = conversation.followupKey(id),
+                  let api = model.api(key.group) else { return }
+            await VoiceSupport.shared.refresh(group: key.group, api: api)
         }
         // Pushed from the recording's page, the back button returns there: no way to push it again from here.
         .modifier(OpensRecording(id: id, enabled: close != nil, opening: $opening))
@@ -527,6 +539,39 @@ struct MeetingPage: View {
             guard case .ready = new, [RecordingMinutesModel.State.writing, .waitingForSync, .waitingForText].contains(old) else { return }
             AccessibilityNotification.Announcement(String(localized: "Minutes ready")).post()
         }
+    }
+
+    /// The composer, or while a voice call bound to the follow-up runs its bar in the composer's place (#3862 phase 6, the
+    /// chat's way: docs/assistant/voice.md 6.2), with the line a call that ended by itself leaves over it.
+    @ViewBuilder private func afterBar(_ entry: RecordingEntry) -> some View {
+        let key = conversation.followupKey(id)
+        let call = key.flatMap { key in calls.current.flatMap { $0.key == key ? $0 : nil } }
+        VStack(spacing: Theme.Space.s) {
+            if let call, call.isOver, case .ended(let end) = call.phase, let note = VoiceEndNote.make(end, extensionID: call.extensionID) {
+                VoiceEndedStrip(call: call, note: note)
+                    .padding(.horizontal, Theme.Space.page)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+            if let call, let key, !call.isOver {
+                VoiceBar(call: call, key: key, label: model.persona.name)
+                    .padding(.horizontal, Theme.Space.page)
+                    .padding(.vertical, Theme.Space.s)
+                    .frame(maxWidth: .infinity)
+                    .background { Theme.groupedPage.ignoresSafeArea(edges: .bottom) }
+                    .transition(.opacity)
+            } else {
+                MeetingPageBar(entry: entry, mode: .after, justMe: .constant(false), focus: $writing, notice: $notice,
+                               voice: voiceStart(key, entry: entry))
+            }
+        }
+    }
+
+    /// Voice Chat bound to the follow-up: only once it exists (with none yet the first request is typed, so no turn runs on
+    /// the meeting's material alone), while nothing records (the microphone is the recording's) and the hub has a voice.
+    private func voiceStart(_ key: SessionKey?, entry: RecordingEntry) -> (() -> Void)? {
+        guard let key, capture.state == .idle, conversation.followupHold(entry) == nil,
+              VoiceSupport.shared.availability(for: model.session(key), group: key.group).isAvailable else { return nil }
+        return { voiceNote = VoiceEntry.start(key, model: model) }
     }
 
     /// The title, when the meeting ran, where the minutes are, and (in the sheet) the way to them. The composer is the

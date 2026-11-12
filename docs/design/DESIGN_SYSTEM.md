@@ -1391,9 +1391,10 @@ Apple reuses the pairing Form, Section, Picker, toolbar and Theme tokens.
 The live recording sheet's page for a room meeting (a phone meeting recording started while the hub listed
 `meeting_conversation`; contract: `docs/assistant/meeting-minutes.md`, "Meeting conversation (#3862)"; the phone's side:
 `docs/apple/recording.md`, "The meeting conversation (#3862)"). It is `MeetingPage`, shown by `RecordingLiveSheet`: live
-while the meeting records, and after Stop the same page in its after mode, continuing as the meeting's thread; a past
-meeting's recording page pushes the after mode (row **Meeting Conversation**). Ordinary recordings and #3746 meetings keep
-the live view and the wrap-up unchanged. Reason: the meeting is one conversation from its start to its follow-up, so the
+while the meeting records, and after Stop the same page in its after mode, continuing as the meeting's thread; any
+finished recording's page with something to talk about (a note, a meeting no room attended, a room meeting) pushes the
+after mode (row **Talk about this meeting**, phase 6). Ordinary recordings and #3746 meetings keep the live view and the
+wrap-up unchanged while they record. Reason: the meeting is one conversation from its start to its follow-up, so the
 page the user watches during the meeting is the page they keep writing in after it.
 
 - **Structure, live**: a header (title in `Theme.Font.title`, the page menu, **Hide**), a state line (the recording dot,
@@ -1447,7 +1448,19 @@ page the user watches during the meeting is the page they keep writing in after 
   entries. Asks the room's thread doesn't hold (still asking, failed, answered from material) keep the existing
   `MeetingExchangeRow` look.
 - **The After the Meeting divider**: a centered caption between two hairlines, the look of the chat's `CompactDivider`,
-  between the room's thread and the follow-up's.
+  between the room's thread and the follow-up's. With nothing before it (a recording that never had a room, a room that
+  never came up and no asks) there is no divider: the thread is the follow-up alone, and until it starts one secondary
+  line says what to ask ("Ask Persona about this meeting: what was decided, who does what, or a follow-up email.").
+- **Talk about this meeting (phase 6)**: on the recording's page one row, in the section under the header beside
+  Private Meeting, drawn as that row (a `Label` with the style's `Theme.Icon.conversation`, one line), pushing the after
+  mode; it shows for any recording that ended (not rolling or all-day) with text, minutes or a conversation the hub holds,
+  on a hub with the meeting conversation. It is a row, not a button: the page's primary content stays the minutes, and
+  the composer is the thread's. The minutes push opens the same page over Recordings.
+- **Voice after the meeting (phase 6)**: once the follow-up exists, the composer has the chat's **Voice Chat** button
+  (`ComposerVoiceButton`, the plain face) before the field, where the live page has [+]; at accessibility sizes it is in
+  the row under the field. During the call the chat's `VoiceBar` takes the composer's place, and a call that ended by
+  itself leaves the chat's `VoiceEndedStrip` over the composer, as in a chat (section 3.1). No voice before the follow-up
+  exists, and none while something records.
 - **Photos (phase 3)**: in a meeting started while the hub listed `meeting_photos`, [+] also has **Take Photo** (where
   the device has a camera) and **Choose Photos** (the system picker, images only, at most
   `Theme.Recording.photoPickLimit` at once), live only and never with Just Me on: a photo is the meeting's material,
@@ -1529,12 +1542,14 @@ page the user watches during the meeting is the page they keep writing in after 
   minutes `minutes-photo` and `minutes-photo-removed`,
   `meeting-ask-field`, `meeting-ask-send`
   (the two shared with the live bar's typed question), `meeting-ask-caption`, `meeting-ask-notice`, `recording-more`,
-  `meeting-page-stop-speaking`, `meeting-after-status`, `meeting-after-divider`, `meeting-followup-retry`; at the start
-  `meeting-private-start`; on the recording's page `recording-private` and `recording-meeting-conversation`; the sheet's
+  `meeting-page-stop-speaking`, `meeting-after-status`, `meeting-after-divider`, `meeting-followup-retry`,
+  `meeting-followup-empty`, `meeting-voice` (and the chat's `voice-bar`, `voice-ended`); at the start
+  `meeting-private-start`; on the recording's page `recording-private` and `recording-talk`; the sheet's
   shared ones (`recording-now-title`, `recording-live-timer`, `recording-live-hide`, `recording-pause`,
   `recording-bookmark`, `recording-stop`, `recording-wrapup-title`, `recording-wrapup-open`, `recording-wrapup-done`)
-  keep their names. UI tests: `MeetingConversationUITests`.
-- Platforms: the web shows the same thread on the recording detail (**Conversation**); Android has no meeting page yet.
+  keep their names. UI tests: `MeetingConversationUITests`, `TalkAboutMeetingUITests`.
+- Platforms: the web shows the same thread on the recording detail (**Conversation**, with **Talk about this meeting**
+  from phase 6); Android has no meeting page yet.
 
 ## One Record entry (#5243)
 

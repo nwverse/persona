@@ -93,6 +93,29 @@
         }
       }
     },
+    "Ask Persona about this meeting: what was decided, who does what, or a follow-up email.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ask Persona about this meeting: what was decided, who does what, or a follow-up email."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "问问 Persona 这场会议的事：定了什么、谁负责什么，或者帮你写封跟进邮件。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この会議について Persona に聞けます。決まったこと、誰が何をするか、フォローアップのメールなど。"
+          }
+        }
+      }
+    },
     "Choose models for each use.": {
       "extractionState": "manual",
       "localizations": {
@@ -572,6 +595,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "切り替え"
+          }
+        }
+      }
+    },
+    "Talk about this meeting": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Talk about this meeting"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "聊聊这场会议"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この会議について話す"
           }
         }
       }
@@ -75871,29 +75917,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "会议"
-          }
-        }
-      }
-    },
-    "Meeting Conversation": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Meeting Conversation"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "会议对话"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "会議の会話"
           }
         }
       }
