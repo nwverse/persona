@@ -66,9 +66,13 @@ type Node struct {
 	// long its screen must stay the same, and how long a startup question may stay on screen, in place of
 	// shellSettleWait, shellQuietFor and shellQuestionWait (tests; shellsettle.go).
 	shellSettle, shellQuiet, shellAsk time.Duration
-	// shellPause: when set, a start pauses this long instead of watching the new tab's shell, the fixed pause before
-	// #2570 (tests whose herdr call traces have no room for the settle wait's reads; shellsettle.go).
-	shellPause time.Duration
+	// shellSettled: the fixture's shell is already ready (tests whose herdr call traces have no settle reads).
+	// A real node always watches the new tab's shell (shellsettle.go).
+	shellSettled bool
+
+	// firstPromptParent owns background delivery checks in an isolated fixture. Nil keeps the normal detached
+	// lifetime: a start's request may end before its first message reaches the transcript.
+	firstPromptParent context.Context
 
 	// doctorAt replaces the places node.doctor looks at (tests; doctor_rpc.go).
 	doctorAt func() DoctorOptions
