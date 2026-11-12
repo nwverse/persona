@@ -367,6 +367,9 @@ the only line between tool calls was English to a Chinese owner. The node now al
 (`midTurn`), asking for one sentence in the user's language before the next tool call, and the CLAUDE.md asks for the
 user's language in process text too.
 
+## Disable ToolSearch per server, not for the whole assistant process (#5838)
+
+Setting `ENABLE_TOOL_SEARCH=false` for Persona's assistant also forced every claude.ai connector's tools into each request (one connector alone was hundreds of tools and most of the context), causing repeated compaction. `personad mcp` now marks only Persona tools with `_meta: {"anthropic/alwaysLoad": true}` when `PERSONA_ASSISTANT=1`, and the assistant no longer disables ToolSearch globally. Keep other servers on Claude Code's normal deferred loading. A regression test checks both the metadata and the process environment.
 ## A leader writes to an owner who has seen nothing else (#5842)
 
 Leaders spend most of their turns with the main chat, other leaders, scheduled runs and supervision messages (on one
