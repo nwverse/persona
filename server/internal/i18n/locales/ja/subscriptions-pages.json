@@ -306,7 +306,7 @@
   "setup.dry_run": "試し取得",
   "setup.fields": "項目の対応",
   "setup.fields_footer": "選択肢は試し取得の結果にある項目と例です。タイトルは必須。ID がなければ内容で重複を判定します。",
-  "setup.group_by": "ナレッジベースでは",
+  "setup.group_by": "受信箱とナレッジベースでは",
   "setup.items_path": "項目の場所",
   "setup.kind": "種類",
   "setup.mode": "取得するもの",

@@ -137,7 +137,7 @@
     <string name="designsystem_row_style_two_lines">紧凑两行</string>
     <string name="designsystem_row_style_cards">色条卡片</string>
     <string name="designsystem_row_style_list">细列表</string>
-    <string name="designsystem_row_style_avatar_summary">头像、标题和时间，一行最新的话，再一行写它在哪儿跑。</string>
+    <string name="designsystem_row_style_avatar_summary">头像、标题和时间，两行最新的话，再一行写它在哪儿跑。</string>
     <string name="designsystem_row_style_two_lines_summary">每个 Agent 两行：标题和时间，再一行最新的话。</string>
     <string name="designsystem_row_style_cards_summary">每个 Agent 一张卡片，左边一条状态色；等你处理的那张整张淡蓝底。</string>
     <string name="designsystem_row_style_list_summary">每个 Agent 一行：状态、标题和时间。</string>

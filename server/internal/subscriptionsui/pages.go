@@ -55,6 +55,10 @@ type Env struct {
 	// Assistant is the name the app shows for the assistant ("Ask {name}…"), for Set Up with it; "" names it the
 	// assistant.
 	Assistant string
+	// Ask: the app opens Set Up with …'s persona://ask (it sent context.assistant, a name or ""). Only then do the pages
+	// draw it: an app that can't (iOS before #5278's part, Android before #5308) would drop the link and the row would
+	// do nothing (#5661).
+	Ask bool
 	// Triage has the triage model try a preview's items (#5278): one verdict each, nothing kept; nil: not offered.
 	Triage func(ctx context.Context, tp subscriptions.TriagePreview) ([]Verdict, error)
 	// UIVersion is the UI version the app draws (6 when 0): an older app gets icons it knows.

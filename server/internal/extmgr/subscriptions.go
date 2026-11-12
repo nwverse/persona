@@ -117,7 +117,7 @@ func (h *Manager) readSubscriptions(ctx context.Context, r *assistantwire.InboxR
 	}
 	for _, src := range srcs {
 		r.Names[src.ID] = src.Name
-		r.Sources = append(r.Sources, assistantwire.InboxSource{ID: src.ID, Name: src.Name, Extension: true, Kinds: src.Kinds,
+		r.Sources = append(r.Sources, assistantwire.InboxSource{ID: src.ID, Name: src.Name, Extension: true, Counts: true, Kinds: src.Kinds,
 			Things: src.Things})
 	}
 }

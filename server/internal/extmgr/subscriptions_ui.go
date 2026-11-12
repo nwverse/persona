@@ -42,9 +42,12 @@ func (h *Manager) subscriptionUI(w http.ResponseWriter, r *http.Request) {
 		Name:      h.subscriptionConnectorName,
 		Native:    h.subscriptionNative,
 		Builtin:   builtinSources{h},
-		Assistant: in.Context.Assistant,
+		Ask:       in.Context.Assistant != nil,
 		Triage:    h.triagePreview,
 		Platform:  in.Context.Platform,
+	}
+	if env.Ask {
+		env.Assistant = *in.Context.Assistant
 	}
 	res, err := subscriptionsui.Handle(ctx, h.subs, env, subscriptionsui.Request{State: in.State, Action: in.Action, Values: in.Values})
 	switch {
