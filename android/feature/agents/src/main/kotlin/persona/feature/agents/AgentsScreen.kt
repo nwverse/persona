@@ -578,7 +578,7 @@ internal fun AgentsScreen(
                                 actionLabel = stringResource(R.string.agents_view_todo))
                         } else AgentTreeHeader(groupTitle, group.folded, { model.fold(group) }, first = entry.first,
                             icon = PhIcons.PushPin.takeIf { group.id == "pinned" } ?: PersonaIcons.backgroundWaiting.takeIf { group.id == "state/background" },
-                            counts = group.stateSectionCounts ?: group.todoLooseCounts ?: group.headingCounts, waitsInBackground = group.id == "state/background",
+                            counts = group.stateSectionCounts ?: group.todoLooseCounts ?: group.sectionCounts, waitsInBackground = group.id == "state/background",
                             // Pinned's counts are the states', so a clock counts the agents that only wait in the background apart.
                             waiting = if (group.stateSectionCounts == null && group.todoLooseCounts == null) group.waitingInBackground else 0)
                     }
@@ -622,10 +622,10 @@ internal fun AgentsScreen(
                         if (fold != null && repoTree) AgentRepoIdleLine(fold.rows.size, fold.names, fold.open,
                             onClick = { if (fold.open) model.hideIdle(entry.group) else model.showIdle(entry.group) },
                             modifier = if (slot != null) Modifier.repoCard(slot.first, slot.last) else Modifier, level = slot?.level ?: entry.depth)
-                        // By project on Glass: "Hide N Idle" after the opened agents; closed, "N more idle" as before.
+                        // By project on Glass: "Hide N Idle" after the opened agents; closed, "N more idle" with the first six's tabs (iOS `IdleFoldRow`).
                         else AgentIdleRow(entry.hidden, onClick = { if (fold != null) model.hideIdle(entry.group) else model.showIdle(entry.group) },
                             modifier = if (slot != null) Modifier.repoCard(slot.first, slot.last) else Modifier, depth = slot?.level ?: entry.depth,
-                            open = fold != null)
+                            open = fold != null, tabs = entry.tabs, compact = page.preferences.compact)
                     }
                     is TreeIdleReposEntry -> item(entry.key, contentType = "section") {
                         JSectionHeader(stringResource(R.string.agents_idle_repositories), count = entry.count, countTone = Status.Idle)
@@ -903,7 +903,9 @@ internal fun SectionTitle(text: String) { JSectionHeader(text) }
 @Composable
 internal fun SlotRow(
     row: AgentSession, machine: String?, metadata: AgentRowMetadata, now: Instant, compact: Boolean, pinned: Boolean, muted: Boolean,
-    depth: Int, position: GroupPosition, located: Boolean, onOpen: () -> Unit, menuItems: @Composable () -> List<JAction>,
+    depth: Int, position: GroupPosition, located: Boolean, onOpen: () -> Unit,
+    /** What a long press offers; null: nothing (a computer's projects page lists its agents outside any space as iOS does, with no menu). */
+    menuItems: (@Composable () -> List<JAction>)?,
     slotLabel: String? = null, requestCount: Int = 0,
     /** Swiping the row left offers "Close" (iOS); null where the agent cannot be closed from here ([closeSwipe]). */
     onClose: (() -> Unit)? = null,
@@ -939,7 +941,7 @@ internal fun SlotRow(
     JSwipeActions(end = onClose?.let { SwipeAction(stringResource(R.string.agents_close), PhIcons.X, Status.NeedsYou, it, destructive = true) }) {
     AgentRow(
         title = session.displayTitle, status = row.rowStatus(muted), depth = depth, position = position,
-        onClick = onOpen, onLongClick = { menu = true }, compact = compact, muted = muted,
+        onClick = onOpen, onLongClick = menuItems?.let { { menu = true } }, compact = compact, muted = muted,
         selected = isSessionSelected(LocalDetailKey.current, session.key),
         // What its card asks while it needs you, else why its host says it waits or stopped, where its work stands, its last words.
         preview = session.rowLine(card, now, muted)?.text(), time = relativeTime(agentResources(), row.updatedAt, now),
@@ -1004,7 +1006,7 @@ internal fun SlotRow(
         note = WorkflowSummary.lineFields(session, now)?.let { RowNote(it, WorkflowIcon) },
     )
     }
-    if (menu) JActionSheet(menuItems(), { menu = false }, title = session.displayTitle)
+    if (menu && menuItems != null) JActionSheet(menuItems(), { menu = false }, title = session.displayTitle)
 }
 
 /**
