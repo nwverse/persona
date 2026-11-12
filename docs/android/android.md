@@ -100,8 +100,13 @@ On Glass the conversation draws the hub's task records as iOS does ([chats](../p
 message cards behind, and `FeedLine` draws the receipt (its PR button and **View**), the review line, the report as
 "task → @Persona" and Persona's hand-off as "Persona → @task" (both in Persona's box, the first three lines and **Expand**,
 `ExchangeHeader` / `ExchangeText` in `feature/chat/AgentExchange.kt`), the user's own word to a task as "Me → @task" in the
-user's bubble, and the hub's `notice` line, centered. Brief and Board keep the records behind the trays as above. Tests:
-`TaskRecordsTest` (core/domain), `TaskRecordsShotsTest`.
+user's bubble, and the hub's `notice` line, centered. A quiet supervision round stays in the conversation as one
+**Supervision record** line (`· running` while it runs, iOS `SupervisionRecordLine`) that opens to the round
+(`AssistantConversation.project(…, inline = true)` folds it with `BackgroundFolding(rounds = false)` outside the main
+conversation's background folding), scheduled and follow-up rounds read as they are unless background rounds fold, and
+Persona's work line is the Agent chat's (`WorkGroup` with `workSummary`, ticking while it runs) and opens to its thoughts
+too. Brief and Board keep the records behind the trays, the quiet rounds in the background record and **Checked N places**,
+as above. Tests: `TaskRecordsTest`, `SupervisionRecordTest` (core/domain), `TaskRecordsShotsTest`, `SupervisionRecordShotsTest`.
 
 #### Background rounds fold into one line (#4314)
 

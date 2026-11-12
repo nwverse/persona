@@ -45,7 +45,8 @@ Chat page:
   one row of a 30,000-character report was laid out whole, twice, on opening and redrew every table's decoration on each scrolled frame. Cuts fall only
   between plain blocks whose reply-theme margins are fixed (paragraph, ATX heading, fenced code, table), each part drawn the gap MarkdownUI would put
   there; lists, quotes, display math and HTML comments are never cut. A long press on any part lifts the whole answer and acts on all of it: Copy, Select
-  Text, Quote and Forward (#5221, `AnswerPartsLift`: the parts stacked again, one text to select, placed from where the pressed part is); its file chips sit
+  Text, Quote and Forward (#5221, `AnswerPartsLift`: the parts stacked again in a lazy stack, only those near the screen laid out, placed from where the
+  pressed part is; all of them laid out once its words are to be selected, under one text view); its file chips sit
   under the last part. Persona's own conversation (boxed answers) and the Mac keep one row. `AnswerPartsLookTests` checks the parts draw the same pixels as the whole.
 - Expanded work is one card: each step remains a separate lazy-loaded chat row (a turn may have hundreds; one giant view would hang), with each row drawing a card slice
   (`WorkCardSlice`: top corners on first step, bottom corners on Collapse N steps, backgrounds extending halfway into spacing to join neighbors), thin separators starting at the text column; tool rows 44pt high.
