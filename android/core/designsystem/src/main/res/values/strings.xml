@@ -142,6 +142,9 @@
     </plurals>
     <!-- A herdr tab of several agents (#2320) -->
     <string name="designsystem_tab_launcher">Lead</string>
+    <!-- An Agents row's third line on Glass (#4338 A9): the to-do chip and the muted bell, for TalkBack -->
+    <string name="designsystem_row_todo">To-do: %1$s</string>
+    <string name="designsystem_row_muted">Notifications muted</string>
     <plurals name="designsystem_tab_agents">
         <item quantity="one">%1$d agent</item>
         <item quantity="other">%1$d agents</item>

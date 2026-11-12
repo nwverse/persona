@@ -502,10 +502,10 @@ A herdr tab's workers are the same (web, #5180; the owner asked on 2026-11-12 th
 
 The Agents list, the Inbox's Agent section, the Assistant home and history show a session with the same content, in every Agents row style (Avatar, Two Lines, State Cards, Compact List):
 
-- Leading: one source mark, the Agent's brand or a contact's avatar. The row's one state sits on its corner, chosen by the order in section 5.6.
+- Leading: one source mark, the Agent's brand or a contact's avatar. The row's one state sits on its corner, chosen by the order in section 5.6. iOS (`AgentAvatar`) and Android's Glass row put the mark in a round well with the state's dot on its corner, rimmed apart from the well.
 - Line 1: the session's title, with the time on the right, localized ("6 min ago").
 - Line 2: when the session needs the user, what it waits for (the plan's title, the command, or the question itself); otherwise its latest line, in the secondary color. For a failed run, what failed, in red.
-- Line 3, optional: computer · project, leaving out what the grouping already shows, then the model's short name.
+- Line 3, optional: computer · project, leaving out what the grouping already shows, then the model's short name. iOS's Avatar row and Android's Glass row (#4338 A9) draw it as the source tag, the tab (space › tab outside the tree), the computer only while the list mixes computers, the model, the to-do as an outlined chip and the muted mark; Android's words come from `rowContent` in core/domain.
 - Never in a row: raw model IDs, session IDs or engine badges. At most one count badge.
 - Answers in the row: a question's choices, and a tool approval whose full command is shown and whose action is low-risk (Deny, Allow Once). Plans, high-risk actions and Always Allow for This Session open the session, where the context is.
 - Views grouped by location draw these rows too (#3753): By Repository's computer, repository and worktree are lines of their own, each worktree's sessions in these rows under its line. The Mac's By Repository cards (frozen) keep their rows (`WorkspaceAgentRow`). On iOS and on Android's Glass style each repository is a card: its header has the folder, the bold name and the chevron, no counts, with its actions in its long press (`RepoCardHeader`, Android `AgentRepoHeader`); a worktree's line has its mark, its name, a Primary chip on the main checkout, the branch when the name is not it or Detached HEAD as a caution, "N agents" or Idle at the end, dimmed while its computer is offline (`RepoWorktreeLine`, Android `AgentWorktreeLine`, #4338 A7).
@@ -895,7 +895,8 @@ opens a subagent card in place (prompt, the latest result folded past four lines
 per card; a workflow card's head opens the chat's Background dialog at its run. A subagent is never a conversation of
 its own (no panel, no page, no sidebar row). Like every tool call the cards sit inside the work summary, running or
 not (super rule 2; cindy's running cards outside it wait on #5047). Nested subagents are flat cards by start time. A card offers Stop only
-where the node can stop that task. iOS and Android still draw the earlier design (#5045).
+where the node can stop that task. Android draws these cards in Glass (#5045; Brief and Board keep their tool rows with
+"View sub-agent"); iOS still draws the earlier design (#5045).
 A child session (a Codex subagent, an Agent a Paseo Agent created; #5120) is the same card in its parent's chat, built
 from its own row and placed by when it started, since no call in the parent's transcript names it: what runs it, its
 model and effort, its status and time; opened, its prompt, latest words and last tool. iOS and Android follow in #5140.
