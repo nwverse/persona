@@ -67,6 +67,16 @@ struct ChatSendFeedbackTests {
         #expect(feedback.visible(now: now) == nil)
     }
 
+    @Test func inFlightSnapshotsCannotCancelSendingOrItsLaterAcceptance() throws {
+        let store = ChatStore(key: key)
+        let pending = PendingMessage(text: "example", images: [])
+        store.beginSendFeedback(pending)
+        store.updateSendFeedback(try session(status: "blocked"), previous: try session(status: "idle"))
+        #expect(store.sendFeedback?.phase == .sending)
+        store.settleSendFeedback(pending.id, state: .sent)
+        #expect(store.sendFeedback?.phase == .processing)
+    }
+
     @Test func staleSnapshotsDoNotSuppressAcceptanceButFreshFailuresDo() throws {
         let store = ChatStore(key: key)
         let pending = PendingMessage(text: "example", images: [])

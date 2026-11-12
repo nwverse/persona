@@ -24,7 +24,8 @@ extension ChatStore {
 
     /// Only fresh session changes terminate a local attempt; an old idle/failure snapshot is not its result.
     func updateSendFeedback(_ session: Session, previous: Session?) {
-        guard var feedback = sendFeedback, feedback.phase != .finished else { return }
+        // Runtime snapshots do not decide whether an in-flight request was accepted.
+        guard var feedback = sendFeedback, feedback.phase == .processing else { return }
         let terminal = (session.status == .blocked || session.status == .offline) && session.status != previous?.status
         let failed = session.failureReason != nil &&
             (session.failureReason != previous?.failureReason || session.stateSince != previous?.stateSince)
