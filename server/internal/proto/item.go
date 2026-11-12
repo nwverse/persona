@@ -47,6 +47,9 @@ type Fold struct {
 	// turn's changed-files card without opening the run. Always a list, empty when the run edited nothing: a fold
 	// without it (an older node) leaves the edits unknown.
 	Changes []FoldChange `json:"changes"`
+	// Usage: the tokens of the model requests the folded items stood for, summed per model and speed (TokenUsage), so
+	// a chat counts its turn's usage without opening the run. Absent when they carried none and from older nodes.
+	Usage []TokenUsage `json:"usage,omitempty"`
 }
 
 // FoldChange is one file a folded run's successful edits changed (docs/protocol/protocol.md "Folded work"): the lines
@@ -185,6 +188,32 @@ type Item struct {
 	// (never its "<synthetic>" placeholder), a Codex turn's turn_context model. Absent when the transcript does not
 	// say, on other roles, and from older nodes. Clients draw a divider where the model of the replies changes.
 	Model string `json:"model,omitempty"`
+	// Usage: the tokens of the model requests this item stands for, one entry per model and speed (TokenUsage, #5426).
+	// Claude Code: a request's usage once, on the first item its lines made. Codex: the turn's total, on its
+	// turn_duration item (on its interrupted notice when the user stopped it). A finished subagent's result or
+	// completion notice: what its own transcript used and what each of its nested subagents used (in-process teammates
+	// never), each agent under its own ID "agent:<agent id>"; a finished workflow's report: each of its run's agents the
+	// same way. An agent reported on several items counts once in the chat. Absent on anything else and from older
+	// nodes. A chat sums a turn's items (folds' Fold.Usage included) into the turn's usage
+	// (docs/protocol/protocol.md "Token usage on items").
+	Usage []TokenUsage `json:"usage,omitempty"`
+}
+
+// TokenUsage is what model requests used, as the transcript records it (#5426): tokens by kind, the way the usage
+// meter counts them (UsageBucket: Input excludes the cache). Model is the model the transcript names (never Claude
+// Code's "<synthetic>"); empty when it does not say.
+type TokenUsage struct {
+	// ID: entries with the same ID (and model) are one report, counted once; empty: count it as it is.
+	ID         string `json:"id,omitempty"`
+	Model      string `json:"model,omitempty"`
+	Input      int64  `json:"in,omitempty"`  // input not read from the cache
+	Output     int64  `json:"out,omitempty"` // Codex: reasoning included
+	CacheRead  int64  `json:"cache_read,omitempty"`
+	CacheWrite int64  `json:"cache_write,omitempty"` // every cache write, the 1-hour ones included
+	// CacheWrite1h: of CacheWrite, what was written for an hour (priced higher than the 5-minute writes).
+	CacheWrite1h int64 `json:"cache_write_1h,omitempty"`
+	// Fast: the requests ran at Claude Code's fast speed (usage.speed "fast"), priced higher than the standard rate.
+	Fast bool `json:"fast,omitempty"`
 }
 
 // ModelRefusal is a Claude Code model_refusal_* record as clients see it: its known fields, values kept as recorded

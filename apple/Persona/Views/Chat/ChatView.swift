@@ -46,6 +46,8 @@ struct ChatView: View {
     @State private var macChromeHeight: CGFloat = 0
     #endif
     @State private var file: FileRef?
+    /// A knowledge note's block from Add as Context (#3721), opened from the bubble.
+    @State private var openedKnowledge: KBEntry?
     @State private var showActivity = false
     /// "All subagents" opened, from the header's status line or ⋯ (`SubagentTreeSheet`).
     @State private var showSubagents = false
@@ -261,11 +263,10 @@ struct ChatView: View {
     private var linkManager: String? {
         model.linkManager(session?.manager ?? itemManager ?? (style == .assistant ? model.assistantManagerID : nil), group: key.group)
     }
-    /// A listed default-manager session has a nil owner; it must not inherit the page's current selection.
-    private var feedManager: String? {
-        if let session { return session.manager ?? model.managerRosters[key.group]?.defaultID }
-        return linkManager ?? model.managerRosters[key.group]?.defaultID
-    }
+    /// The manager this conversation's feed is read from and its cards answer to (`AppModel.feedManager`): its own,
+    /// whichever assistant the page shows. nil for the default's and with one manager: that client names none (and
+    /// drops the page's current selection, `APIClient.manager`).
+    private var feedManager: String? { model.feedManager(listed: session, opened: itemManager, group: key.group) }
     nonisolated private struct FeedScope: Hashable {
         var key: SessionKey
         var manager: String?
@@ -752,6 +753,7 @@ struct ChatView: View {
         // Deleted here or from the list beside it: the chat goes (AppModel.deletedSession).
         .onChange(of: model.deletedSession) { _, gone in if let gone { closedAgent(gone, order: []) } }
         .sheet(item: $file) { ref in FileViewer(ref: ref, key: key) }
+        .sheet(item: $openedKnowledge) { entry in NavigationStack { KnowledgeDetailView(entry: entry) } }
         .sheet(isPresented: $planOpen) { PlanSheet(plan: latestPlan) }
         #if DEBUG
         // Simulator automation: `-showComposerPhoto YES` puts a made-up picture in the composer, as if picked from
@@ -1383,6 +1385,7 @@ struct ChatView: View {
                 .chatMark(index == 0 ? "chat.answer." + item.id : "chat.answer.\(item.id).\(index)")
         case .feed(let item): FeedLine(item: item, group: shownKey.group)
         case .quick(let result): QuickResultCard(result: result)
+        case .placeMap(let result): PlaceMapCard(result: result)
         case .day(let date): DayLine(date: date)
         case .apiError(_, let info, _) where turnErrorCard(line, raw: info.raw) != nil:
             turnErrorCard(line, raw: info.raw)
@@ -2216,11 +2219,30 @@ struct ChatView: View {
         }
     }
 
+    /// A note's or a to-do's block from Add as Context (#3721) leads back to it, as a card's link does
+    /// (`persona://kb/<kind>/<id>`, `persona://task/<id>`); false for any other block.
+    private func openContextLink(_ ref: ContextRef) -> Bool {
+        guard ref.kind == "context", let c = URLComponents(string: ref.url), c.scheme == "persona" else { return false }
+        let parts = c.percentEncodedPath.split(separator: "/").compactMap { String($0).removingPercentEncoding }
+        switch c.host {
+        case "task" where parts.count == 1:
+            TasksStore.shared.detailTask = parts[0]
+            return true
+        case "kb" where parts.count >= 2 && KBKind(rawValue: parts[0]) != nil:
+            let id = parts.dropFirst().joined(separator: "/")
+            openedKnowledge = KBEntry(kind: parts[0], id: id, name: id, relevance: 0)
+            return true
+        default:
+            return false
+        }
+    }
+
     /// From a quote in a sent bubble to the message it quotes (#986): brought to the middle of the list and lit up
     /// for a moment. False when it is not in the loaded chat (an older page, another conversation): the block shows
     /// its whole text instead.
     private func jumpToQuoted(_ ref: ContextRef) -> Bool {
         if ref.isForward { return openForwarded(ref) }
+        if openContextLink(ref) { return true }
         guard ref.kind == "quote", !ref.msg.isEmpty else { return false }
         var target: String?
         for line in currentLines() {
@@ -4673,6 +4695,11 @@ struct Composer: View, Equatable {
     @State private var showPhotos = false
     @State private var showCamera = false
     @State private var showGlasses = false // Glasses Photo (Persona/Glasses), only when MetaGlasses.isBuiltIn
+    @State private var showScan = false // Scan Document (#3720), only where the device can scan
+    #if os(iOS)
+    /// Add as Context › (#3721): the kind whose picker is open.
+    @State private var contextPick: ContextPickKind?
+    #endif
     /// The photos, videos and file uploads for the next message: the app keeps them per conversation, as it keeps the
     /// text (#2626), so a composer built again still has them.
     private var held: ComposerAttachments { model.composerAttachments(key) }
@@ -5259,6 +5286,11 @@ struct Composer: View, Equatable {
         #if os(iOS)
         .modifier(attachHost)
         .task { if attachOpener != nil { AttachLibrary.prewarm() } }
+        .sheet(item: $contextPick) { kind in
+            ContextPickerSheet(kind: kind) { ref in
+                if !contexts.wrappedValue.contains(where: { $0.title == ref.title && $0.text == ref.text }) { contexts.wrappedValue.append(ref) }
+            }
+        }
         #endif
         .fileUploadPicker(isPresented: $showFiles) { urls in
             uploads.start(urls, machine: key.machineRef, model: model, dest: uploadDest) { insertPath($0) }
@@ -5286,7 +5318,7 @@ struct Composer: View, Equatable {
             }
         }
         #endif
-        .modifier(ComposerCaptureSheets(camera: $showCamera, glasses: $showGlasses) { add($0) })
+        .modifier(ComposerCaptureSheets(camera: $showCamera, glasses: $showGlasses, scan: $showScan, pages: { addScan($0) }) { add($0) })
         .sheet(isPresented: $typingModel) { SessionTypedModelSheet(key: key, session: model.session(key)) }
         .onChange(of: picks) { _, items in
             guard !items.isEmpty else { return }
@@ -5331,13 +5363,16 @@ struct Composer: View, Equatable {
 
     /// What + offers besides photos and files (#3225), one list for three places: the panel's More tab, the iPhone's touch
     /// and hold on +, and the iPad's + menu under Photos and Files. The most used first (the menu puts it nearest the
-    /// finger): calls and the camera, Mention, an Agent's Quick Commands, then extension prompts. Rows a chat or device
-    /// can never use are left out; /clear while the Agent works is dimmed.
+    /// finger): calls, the camera and (Persona's main conversation) Meeting Recording, Mention, an Agent's Quick Commands,
+    /// then extension prompts. Rows a chat or device can never use are left out; /clear while the Agent works is dimmed.
     private var attachMoreSections: [AttachMoreSection] {
         var sections = AttachMoreSection.common(voice: VoicePlatform.current == .phone ? { startVoice() } : nil,
                                                 camera: CameraPicker.isAvailable ? { showCamera = true } : nil,
+                                                scan: DocumentScanner.isAvailable ? { showScan = true } : nil,
                                                 glasses: MetaGlasses.isBuiltIn ? { showGlasses = true } : nil,
-                                                mention: { typeMention() })
+                                                // As the sidebar's (#3723): records the meeting with Recordings open, or opens the one running.
+                                                meeting: isMain ? { Task { await MeetingRecorder.shared.startMeeting(inForeground: true) } } : nil,
+                                                mention: { typeMention() }, context: { contextPick = $0 })
         if !shellChat {
             var rows = SlashCommand.commands(loop: canLoop).map { cmd in
                 AttachMoreRow(id: "attach-command-\(cmd.title)", title: cmd.title, symbol: cmd.symbol, word: cmd.word) {
@@ -5448,6 +5483,16 @@ struct Composer: View, Equatable {
     }
 
     private func add(_ img: UIImage) { MessagePhotos.add(img, to: &images, model: model) }
+
+    /// A scan's pages: the next message's photos while they fit, else one PDF uploaded as a picked file is (#3720).
+    private func addScan(_ pages: [UIImage]) {
+        #if os(iOS)
+        // A PDF goes up as the panel's Files do (`upload` is the Mac's drop).
+        DocumentScanner.deliver(pages, room: MessagePhotos.limit - images.count, model: model, add: { add($0) }) { urls in
+            uploads.start(urls, machine: key.machineRef, model: model, dest: uploadDest) { insertPath($0) }
+        }
+        #endif
+    }
 }
 
 /// The composer's "/" menu: Claude Code's own commands, and Persona' quick messages under a short word. Picking one
@@ -5598,7 +5643,8 @@ struct SlashMenu: View {
 }
 
 extension UIImage {
-    func scaledDown(maxSide: CGFloat) -> UIImage {
+    /// Nonisolated: a scan's PDF is drawn off the main actor (`DocumentScanner.pdf`, #3720).
+    nonisolated func scaledDown(maxSide: CGFloat) -> UIImage {
         let side = max(size.width, size.height)
         guard side > maxSide else { return self }
         let scale = maxSide / side
@@ -6161,6 +6207,8 @@ struct ChatLine: Identifiable {
         case feed(FeedItem)
         /// A reminder or an event the assistant added on the phone, under its turn's work line (QuickResult).
         case quick(QuickResult)
+        /// Where the phone is, or the places a search found, on a map under its turn's work line (PlaceMapResult, #5543).
+        case placeMap(PlaceMapResult)
         /// The date over the first line of a day (the assistant's conversation).
         case day(Date)
         /// The images an exchange's work looked at, between it and the answer (`ViewedImages`, docs/protocol/protocol.md「Images viewed this turn」).
@@ -6184,6 +6232,7 @@ struct ChatLine: Identifiable {
             case .apiError(let item, _, _): item.id
             case .feed(let f): "feed-" + f.id
             case .quick(let q): "quick-" + q.callID
+            case .placeMap(let m): "map-" + m.callID
             case .day(let d): "day-\(Int(d.timeIntervalSince1970))"
             case .viewed(let id, _): id
             case .answerPart(let item, _, let index, _): index == 0 ? item.id : item.id + "/part-\(index)"
@@ -6219,6 +6268,7 @@ struct ChatLine: Identifiable {
     static func apiError(item: Item, info: APIErrorInfo, count: Int) -> Self { Self(.apiError(item: item, info: info, count: count)) }
     static func feed(_ item: FeedItem) -> Self { Self(.feed(item)) }
     static func quick(_ result: QuickResult) -> Self { Self(.quick(result)) }
+    static func placeMap(_ result: PlaceMapResult) -> Self { Self(.placeMap(result)) }
     static func day(_ date: Date) -> Self { Self(.day(date)) }
     static func viewed(id: String, images: [ViewedImage]) -> Self { Self(.viewed(id: id, images: images)) }
     static func answerPart(item: Item, part: AnswerParts.Part, index: Int, count: Int) -> Self {
@@ -6891,7 +6941,7 @@ private struct ChatStreamFollow: ViewModifier {
 /// read only by `ChromeHeader`, so following the finger redraws the header and nothing else.
 @Observable
 final class ChatChrome {
-    static let compactHeight: CGFloat = 40
+    static let compactHeight: CGFloat = Theme.Size.slimBar
     /// Whether the header folds at all. Not on the Mac (#1337, the user's call): a window is tall enough, and each fold
     /// and unfold while scrolling cost frames (about 30 ms of hitches a second scrolling up and down; 6–11 open).
     #if os(macOS)

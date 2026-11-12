@@ -166,6 +166,24 @@ import Foundation
         return .room(defaultRole(model), private: false, photos: photos(model))
     }
 
+    /// A recording's attendance once it becomes a meeting again mid-recording, at `at` on its clock (a note turned into a
+    /// meeting, #5243): `start`'s role and attendee from then on. One it had as a meeting before keeps what came with it:
+    /// the live log the hub already has, the stretches Persona spoke in, and a room meeting its room (a meeting never
+    /// moves from its room). Nothing said before `at` is attended.
+    static func resumed(_ attendance: RecordingAttendance?, start: RecordingAttendance, at: Double) -> RecordingAttendance {
+        var a: RecordingAttendance
+        if var kept = attendance {
+            if !kept.room { kept.session = start.session; kept.sessionTitle = start.sessionTitle; kept.mainPicked = start.mainPicked }
+            a = kept
+        } else {
+            a = start
+            a.role = .off
+            a.periods = []
+        }
+        a.set(start.role, at: at)
+        return a
+    }
+
     /// Remembers the session picked (nil: the main chat, which the next meeting reads as no pick), for the next meeting.
     static func remember(_ key: SessionKey?, title: String?, store: UserDefaults = .standard) {
         store.set(key?.path ?? MeetingAttendanceDefaults.main, forKey: MeetingAttendanceDefaults.sessionKey)

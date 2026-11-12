@@ -66,6 +66,12 @@ interface ChatActions {
     suspend fun info(session: Session): SessionInfo = throw UnsupportedOperationException("Session info unavailable")
 
     /**
+     * The session's cards and how each ended (GET /api/v1/interactions/history, iOS `DelegatedHistoryModel`), for Session
+     * info's questions the assistant answered. A hub that keeps the history from this device (403) or has none (404) gives none.
+     */
+    suspend fun interactionHistory(session: Session): List<persona.core.contracts.InteractionRecord> = emptyList()
+
+    /**
      * "Back to the configured model" after a refusal fallback (#2528, POST …/restore-model, no body): the node closes a
      * Persona conversation's idle headless process so its next start uses the configured model. Sends no message; the
      * session's next push carries `model_restore`. Refusals are 409 with a `code` (restore_busy, restore_unsupported,

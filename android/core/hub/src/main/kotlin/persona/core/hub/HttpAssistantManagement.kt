@@ -91,6 +91,18 @@ class HttpAssistantManagement private constructor(
         require(machineId.isNotBlank())
         return request("GET", listOf("api", "v1", "machines", machineId, "launchers")).list("launchers")
     }
+    override suspend fun assistantLaunchers(machineId: String): List<AgentLauncher> {
+        require(machineId.isNotBlank())
+        return request("GET", listOf("api", "v1", "machines", machineId, "launchers"),
+            query = mapOf("purpose" to "assistant")).list("launchers")
+    }
+    override suspend fun launcherModels(machineId: String, launcher: String): LauncherModels? = try {
+        require(machineId.isNotBlank() && launcher.isNotBlank())
+        JsonCodec.decodeFromJsonElement(request("GET",
+            listOf("api", "v1", "machines", machineId, "launchers", launcher, "models")))
+    } catch (failure: HubFailure) {
+        if (failure.status == 404) null else throw failure
+    }
     override suspend fun endConversation(session: SessionKey) {
         request("POST", listOf("api", "v1", "sessions", session.machineId, session.sessionId, "close"), buildJsonObject { })
     }
