@@ -21,8 +21,6 @@
   "uploaded": "Uploaded to the computer: {path}",
   "file_too_large": "File is too large (200 MB max)",
   "upload_failed": "Upload failed: {error}",
-  "command_text": "“{text}”",
-  "keys_hint": "↑↓ select · Enter insert · Esc close",
   "suggestion": "{suggestion} (Tab to insert)",
   "too_many_images": "Up to {max} images at a time",
   "suggestion_label": "Claude suggests: {suggestion}",

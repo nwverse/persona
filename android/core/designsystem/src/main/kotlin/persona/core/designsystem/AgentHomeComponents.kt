@@ -16,18 +16,25 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 
+/**
+ * The Agents page's surface: under By Repository on the Glass home, the repository page's gray, with each repository a
+ * card on it ([LocalRepoCard], iOS's grouped card): the system page's white in light, a step lighter than the page in dark.
+ */
 @Composable
 fun JAgentHomeSurface(repository: Boolean, content: @Composable () -> Unit) {
     val palette = PersonaTheme.palette
     val home = LocalHomeChrome.current != null && PersonaTheme.style == AppStyle.Glass && repository
-    CompositionLocalProvider(LocalPalette provides if (home) palette.copy(
-        background = if (palette.dark) HomeTokens.repositoryDark else HomeTokens.repositoryLight,
-    ) else palette) { content() }
+    val page = if (palette.dark) HomeTokens.repositoryDark else HomeTokens.repositoryLight
+    CompositionLocalProvider(
+        LocalPalette provides if (home) palette.copy(background = page) else palette,
+        LocalRepoCard provides if (home) { if (palette.dark) palette.sunken.compositeOver(page) else palette.background } else null,
+    ) { content() }
 }
 
 /** The iPhone's filters wrap into another line instead of adding a horizontal navigation strip. */

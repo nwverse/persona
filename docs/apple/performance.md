@@ -340,6 +340,9 @@ Start from a reproduction, measure the base, change one thing, measure again.
    "Jank measurement (dropped frames)").
 2. **Use your own simulator** through `scripts/app/sim-boot.sh` and an isolated mock hub (`scripts/mock/mock_hub.py` on your
    own port) with heavy data (`MOCK_AGENTS=1`, `MOCK_LONG_ASSISTANT=1`, `MOCK_LONG_HISTORY=1`).
+   Before measuring, check that the app is active (`scripts/app/personactl.py`'s `state` answers `appState: active`). An app
+   left inactive, for example under an unanswered system prompt (#5089), keeps its hub links suspended and measures nothing;
+   restart the simulator with `sim-boot.sh --reslim`, or use `--profile stock`.
 3. **Find the main thread's time.**
    - `sample <pid> 10 1 -file out.txt` while reproducing: no Instruments authorization needed; aggregate the main thread.
    - Instruments: Time Profiler (attach to the simulator app's PID); Hangs (reports main-thread blocks over the
