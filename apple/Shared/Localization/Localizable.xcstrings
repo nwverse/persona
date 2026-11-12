@@ -10605,13 +10605,13 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "已看 %1$lld / %2$lld"
+            "value": "已查看 %1$lld / %2$lld"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "確認済み %1$lld / %2$lld"
+            "value": "閲覧済み %1$lld / %2$lld"
           }
         }
       }
@@ -158548,13 +158548,13 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "已看"
+            "value": "已查看"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "確認済み"
+            "value": "閲覧済み"
           }
         }
       }
