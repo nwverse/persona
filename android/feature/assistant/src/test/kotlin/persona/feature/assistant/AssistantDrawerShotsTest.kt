@@ -324,12 +324,12 @@ class AssistantDrawerShotsTest {
         rule.onNodeWithText("拷贝会话 ID").assertExists()
         rule.onAllNodesWithText("设为常驻").assertCountEquals(0)
         rule.onAllNodesWithText("归档").assertCountEquals(0)
-        rule.onAllNodesWithText("结束对话").assertCountEquals(0)
+        rule.onAllNodesWithText("结束…").assertCountEquals(0)
         rule.onNodeWithText("拷贝会话 ID").performClick()
         // any other chat there keeps its whole menu
         rule.onAllNodesWithContentDescription("对话操作")[4].performClick()
         rule.onNodeWithText("设为常驻").assertExists()
         rule.onNodeWithText("归档").assertExists()
-        rule.onNodeWithText("结束对话").assertExists()
+        rule.onNodeWithText("结束…").assertExists()
     }
 }
