@@ -10,8 +10,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // The Android app a release carries (docs/operations/hub-update.md "The Android app", #5563): android.json beside
@@ -30,10 +31,10 @@ const (
 )
 
 var (
-	androidAPKName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*\.apk$`)
-	androidPackage = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$`)
-	androidDigest  = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	androidStored  = regexp.MustCompile(`^([0-9a-f]{64})\.apk(\.gz)?$`)
+	androidAPKName = lazyre.New(`^[A-Za-z0-9][A-Za-z0-9._-]*\.apk$`)
+	androidPackage = lazyre.New(`^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$`)
+	androidDigest  = lazyre.New(`^[0-9a-f]{64}$`)
+	androidStored  = lazyre.New(`^([0-9a-f]{64})\.apk(\.gz)?$`)
 )
 
 // AndroidRelease is android.json: the hub's apps/android/latest.json (scripts/release/publish_android_apk.py writes
