@@ -326,6 +326,9 @@
     </plurals>
     <string name="chat_queue_deleted">キューから削除しました</string>
     <string name="chat_queue_restored">入力欄に戻しました。編集してから送信してください。</string>
+    <plurals name="chat_queue_photos_lost">
+        <item quantity="other">入力欄に戻しました。画像%1$d枚は戻せませんでした。</item>
+    </plurals>
     <string name="chat_queue_not_found">このメッセージが見つかりません。キューが変わった可能性があります。確認してもう一度お試しください</string>
     <string name="chat_queue_failed">変更できませんでした：%1$s</string>
     <string name="chat_queue_edit">取り消して編集</string>

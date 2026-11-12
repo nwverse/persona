@@ -52,6 +52,7 @@ import persona.core.domain.rewind.Rewind
 import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.internal.GeneratedComponentManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
@@ -434,6 +435,8 @@ private fun ChatPage(
         }
         projectedFrom = items
     }
+    // Where the header counts "Working 22 min" from: the start of the turn that runs now (iOS `Turn.startedAt`).
+    val runningSince = remember(projection) { projection.liveTurnId?.let { id -> projection.turns.firstOrNull { it.id == id }?.start } }
     val liveWorkLines = remember(projection) { liveWorkIds(projection.lines) }
     var previousLiveWork by remember { mutableStateOf(emptySet<String>()) }
     // Fold the completed run, but keep choices made on historical lines and transfer an opened placeholder.
@@ -817,7 +820,8 @@ private fun ChatPage(
             sheet = taskSheet, machines = machines.filter { GroupKeys.namespaceOf(it.id) == namespace }.map { it.copy(id = GroupKeys.raw(it.id)) },
             pending = taskCards.filter { GroupKeys.namespaceOf(it.machineId) == namespace }.map { it.copy(machineId = GroupKeys.raw(it.machineId)) },
             manager = session?.manager,
-            backgroundRecords = assistantPresentation.background, onOpenBackground = { backgroundOpen = true })
+            backgroundRecords = assistantPresentation.background, onOpenBackground = { backgroundOpen = true },
+            onOpenSetup = chrome.onOpenSetup?.let { open -> { page: persona.core.contracts.BriefSetupPage -> open(page, session?.manager) } })
     }
     fun approveTray(captured: List<Pair<Interaction, Resolution>>) {
         if (trayApproving || taps.busy || readOnly) return
@@ -948,12 +952,19 @@ private fun ChatPage(
         line.holds(lastUserId)
     }?.let { ChatListEntry(it.contentKey, lastLineAtTop = true) } else null
     val placed = remember(lines, messages, writtenAt) { placeFailed(lines.asReversed(), messages, writtenAt) }
-    // The list's keys from the bottom (reverse layout): the tail rows, the outbox's bubbles still on their way, then the
-    // lines, each with the failed sends written before it just above it (#2769).
-    val listKeys = remember(lines, placed, tailRows) {
+    // Persona's first message, not in the transcript yet: its day stands over it on Glass, as the transcript's will once it
+    // is there (iOS `DayLine`, #1911), so the line does not appear above it later. The day it was written, else today.
+    val pendingDay = if (glass && !agentChat && lines.isEmpty() && placed.rest.isNotEmpty())
+        placed.rest.mapNotNull { it.createdAt }.minOrNull()?.let { java.time.Instant.ofEpochMilli(it).atZone(java.time.ZoneId.systemDefault()).toLocalDate() }
+            ?: java.time.LocalDate.now()
+        else null
+    // The list's keys from the bottom (reverse layout): the tail rows, the outbox's bubbles still on their way, that day,
+    // then the lines, each with the failed sends written before it just above it (#2769).
+    val listKeys = remember(lines, placed, tailRows, pendingDay != null) {
         buildList {
             addAll(tailRows)
             placed.rest.asReversed().forEach { add("outbox-${it.clientMessageId}") }
+            if (pendingDay != null) add(PENDING_DAY_ROW)
             for (line in lines) {
                 add(line.contentKey)
                 placed.before[line.id].orEmpty().asReversed().forEach { add("outbox-${it.clientMessageId}") }
@@ -1016,7 +1027,12 @@ private fun ChatPage(
                 .map { (todo, state) -> MentionTask(todo.id, todo.title, todo.place(host, null), state.status()) }
         }
     }
-    val mentions = if (readOnly || !canSend) null else ComposerMentions(mentionFiles, session?.cwd.orEmpty(), sessionList, key, taskMentions)
+    // Its session's folder and any folder a typed path names are read from the session's computer, as iOS's `MentionSource` does.
+    val mentionFolders = remember(chrome.files, key.machineId) {
+        chrome.files?.let { files -> MentionFolders { dir, cwd -> files.directory(key.machineId, cwd, dir).entries } }
+    }
+    val mentions = if (readOnly || !canSend) null
+        else ComposerMentions(mentionFiles, session?.cwd.orEmpty(), sessionList, key, taskMentions, mentionFolders)
     // An assistant conversation's cards answer through its hub's store (docs/assistant/assistant-views.md); elsewhere they only draw.
     val cardsHost = remember(tasks, key.sessionId, readOnly, canSend) {
         tasks?.let { persona.core.domain.views.AssistantCardsHost(key.sessionId, it.cards, it.cardActions, interactive = !readOnly && canSend) }
@@ -1049,6 +1065,11 @@ private fun ChatPage(
             BoxWithConstraints(Modifier.fillMaxSize().padding(bottom = linkInset)) {
                 val pageHeight = maxHeight
                 val trayMax = maxHeight * AssistantTrayTokens.maximumHeightFraction
+                // The rule a question a supervisor passed up suggests, under its card (#4929); a hub from before sends none.
+                val ruleLine: (@Composable (Interaction) -> Unit)? = if (tasks == null) null else { card ->
+                    RuleSuggestionLine("card:${card.id}", card.suggestion, tasks, { notice = operationFeedback(it).text.resolve(res) },
+                        card.manager, enabled = canApprove)
+                }
                 // The pending cards above the composer (DESIGN_SYSTEM.md 4.8, iOS PendingCards and TaskQuestions), in two places:
                 // [task] Persona's task question above its entries, else the stack. Each takes at most half the page and never so
                 // much that the composer leaves it; with the keyboard up, what the conversation has above the rest of the
@@ -1108,7 +1129,7 @@ private fun ChatPage(
                                 }
                             }, keyboard = keyboard,
                             labels = if (task) taskAsk?.let { mapOf(it.card.id to it.label) }.orEmpty() else emptyMap(),
-                            first = if (task) null else chrome.requestId, counted = !task)
+                            first = if (task) null else chrome.requestId, counted = !task, suggestion = ruleLine)
                     }
                 }
                 val onOpenSibling = chrome.onOpenSession
@@ -1134,7 +1155,8 @@ private fun ChatPage(
                                         statusState = status, onDetails = { statusSheet = true },
                                         onOpenTodo = chrome.onOpenTodo, agentShares = chrome.agentShares, worktrees = chrome.worktrees,
                                         onSearch = { search.open(chatList) { timeline.freeze(currentItems); timelineVersion++ } },
-                                        onTerminal = agentTerminal, onTerminalHelp = if (hasTerminal && terminal == null) ({ terminalHelp = true }) else null)
+                                        onTerminal = agentTerminal, onTerminalHelp = if (hasTerminal && terminal == null) ({ terminalHelp = true }) else null,
+                                        turnStart = runningSince)
                                     // The space's other tabs under the title (iOS SiblingTabs); not for the assistant's conversation.
                                     if (tabs && session != null && onOpenSibling != null) {
                                         ChatSiblingTabs(session, siblingSessions, onOpenSibling, trailing = activityPill)
@@ -1370,6 +1392,7 @@ private fun ChatPage(
                                 placed.rest.asReversed().forEach { message ->
                                     item(key = "outbox-${message.clientMessageId}", contentType = "outbox") { outboxBubble(message) }
                                 }
+                                pendingDay?.let { day -> item(key = PENDING_DAY_ROW, contentType = "day") { DayLine(day, Modifier.testTag("chat-pending-day")) } }
                                 for (line in lines) {
                                     item(key = line.contentKey, contentType = line.contentType()) {
                                         ChatSearchHighlight(search, line.contentKey) {
@@ -1506,3 +1529,5 @@ internal fun ComposerContextCards(contexts: List<ChatLinkContext>, compact: Bool
 /** The rows at the chat's newest end, under your unsent messages: a load error (Glass), then "Claude is getting ready…". */
 private const val ERROR_ROW = "load-error"
 private const val READY_ROW = "getting-ready"
+/** The day over a first message not in the transcript yet (Glass, Persona's conversation). */
+private const val PENDING_DAY_ROW = "pending-day"

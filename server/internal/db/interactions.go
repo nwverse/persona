@@ -37,6 +37,35 @@ func (d *DB) FinishInteraction(ctx context.Context, id, status string, res *prot
 	return err
 }
 
+// LateAnswer records on expired card id an answer that came after it expired (proto.Resolution.Late): answers (by
+// question) are added to those recorded late before, and by / reason (proto.Resolution.AnsweredBy, Reason) say who
+// answered. The card stays "expired"; resolved_at becomes when the answer came. A card that did not expire is left as
+// it is (false).
+func (d *DB) LateAnswer(ctx context.Context, id string, answers map[string]string, by, reason string) (bool, error) {
+	add, err := json.Marshal(answers)
+	if err != nil {
+		return false, err
+	}
+	who := map[string]string{}
+	if by != "" {
+		who["answered_by"] = by
+	}
+	if reason != "" {
+		who["reason"] = reason
+	}
+	extra, err := json.Marshal(who)
+	if err != nil {
+		return false, err
+	}
+	tag, err := d.pool.Exec(ctx, `UPDATE interactions SET resolved_at = now(), resolution = jsonb_build_object('late', true,
+			'answers', COALESCE(CASE WHEN resolution->>'late' = 'true' THEN resolution->'answers' END, '{}'::jsonb) || $2::jsonb) || $3::jsonb
+		WHERE id = $1 AND status = 'expired'`, id, add, extra)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
 // InteractionRecord is a past interaction with its outcome.
 type InteractionRecord struct {
 	Interaction proto.Interaction `json:"interaction"`

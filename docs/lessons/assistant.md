@@ -389,3 +389,12 @@ request lists the deferred tools by name but nothing can load them (the transcri
 `toolSearchAbsent: true`), so the user's own MCP servers and claude.ai connectors were unusable from the assistant.
 Measured on Claude Code 2.1.321 with a 256-tool connector: with `--tools Bash,Read` the connector's tools were
 unreachable; with `ToolSearch` added the model loaded one on request, and the first request stayed ~15K tokens.
+
+## A leader's split must be somewhere the owner can see (#5846)
+
+Owners lost track of their directions because a leader kept its breakdown in its own files and turns: the direction tree
+only listed tasks with an Agent, so the pieces nobody had started yet were invisible, and the owner could only ask the
+leader and read an answer full of its own labels. A leader's `todo_create` now opens a to-do under its direction, and the
+tree shows pieces no Agent has worked on as `planned`. Two traps found on the way: such a piece has an `origin`, so the
+To-dos SOP shelves it after 48 h untouched like any agent-made to-do (it leaves the tree; the leader touching it keeps it),
+and the stuck rule must not count a piece that never started, or every planned piece older than a day reported stuck.

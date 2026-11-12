@@ -494,7 +494,7 @@ so the extension does not need to read the hub's or the manager's data directory
 | `kb.get` | `{kind,id,recent_chars?}` | `{detail}` | `kb.read` |
 | `kb.day` | `{id,day}`, day is `YYYY-MM-DD` | `{day,messages,prev,next,sent_origin}`; `messages[].n` is the 1-based line number in the source file | `kb.read`; `sent.read` adds origin marks |
 | `kb.search` | `{query,messages?,limit?}` | `{hits}` | `kb.read` |
-| `kb.update` | `{kind,id,...fields to update,evidence?,unlock?}` | `{id,before?}` | `kb.write` |
+| `kb.update` | `{kind,id,...fields to update,evidence?,unlock?}` | `{id,before?,ignored?}` | `kb.write` |
 | `kb.owner` | `{}` | `{name,aliases,handles:[{kind,value}]}` | `kb.read` |
 
 The params, answers, error codes and events are described in `schema/extension/kb.schema.json`; the Go SDK has them as `ext.Hub`'s `KBList`, `KBRecent`, `KBGet`, `KBDay`, `KBSearch`, `KBUpdate` and `KBOwner`.
@@ -529,6 +529,19 @@ The locked fields it writes become its own with `evidence` (`[{chat, day, n?, no
 `before` is each written field's previous value (`null` when unset, the old `summary` text), for the extension's undo. Rules and how this sits with the built-in pipeline: [Knowledge base](../assistant/knowledge.md#who-holds-a-field-6100).
 
 The update fields follow the existing knowledge base update API, plus `pinned`, `lock` and `remove_people/remove_chats/remove_aliases/remove_projects`.
+Each kind takes only the fields it uses ("Fields each kind takes" in `docs/assistant/knowledge.md`); the others are not applied, and the answer names them in `ignored: [{field, reason}]`, so nothing is dropped silently (a person's `summary` and `log`, for one).
+
+**A person's profile** (`profile`, people only): what the extension knows of the person, in four parts kept apart: `facts`, the user's own words about them (`views`), `inferences` (each with its `basis`, shown as only a hint), and `commitments` either way (`owes: user | them`, `due?`, `done?`). Every item needs `sources`.
+It is the extension's own: a write replaces the profile it wrote before as a whole (one with no items removes it) and touches no other extension's, nor the user's, nor the person's `pinned` and `note`, so it never conflicts. `before.profile` is the one replaced.
+The person's summary.md shows it under its own headings, every line labelled with its part, which is what `kb_get` / `kb_search` and `kb.get` / `kb.search` read; `kb.get` also gives `profiles` by writer, as written. Rules and bounds are in "Person profiles" (`docs/assistant/knowledge.md`).
+
+```json
+{"kind":"people","id":"<person id>","profile":{
+  "facts":[{"text":"Leads the example project","sources":["chats/<dm id>/messages/2026-11-03.md"]}],
+  "views":[{"text":"explains things clearly","sources":["user"]}],
+  "inferences":[{"text":"Prefers written updates","basis":"asked for a written summary after three of four calls","sources":["chats/<dm id>"]}],
+  "commitments":[{"text":"Send the review notes","owes":"user","due":"2026-11-20","sources":["chats/<dm id>/messages/2026-11-04.md"]}]}}
+```
 Protection rules, which entities they apply to, encryption of the owner's identity and history limits are in [Knowledge base](../assistant/knowledge.md#扩展整理知识库1908). The owner's aliases are edited by the user in the assistant settings;
 there is no separate RPC for extensions to write the owner's identity.
 
@@ -664,6 +677,31 @@ cursor.
 An extension's token is never shown a private card, one of the health space, or one whose space cannot be told, and a card's
 `resolution.values` (what was filled into its fields on the phone, such as a password) is left out (see "Never shown to
 extensions"). A page may then hold fewer cards than `limit` while the cursor still says there is more.
+
+#### Recommendations and who decided
+
+To learn how the user usually decides, and how often they take what was recommended, read these on the assistant's own questions
+(`tool_name: "ask_user"`; `docs/protocol/protocol.md` "Decision fields" and "Who answered a card"):
+
+| Where | Field | Meaning |
+| --- | --- | --- |
+| `interaction` | `deadline` | When an unanswered question takes its recommendation by default (or is reminded, when it cannot be undone) |
+| `interaction` | `reversible` | Whether going ahead can be undone, as the assistant said it; absent when it did not say |
+| `interaction.questions[]` | `recommend` | The recommended option's label; absent when there was none |
+| `resolution` | `answered_by` | Absent: the user. `assistant`: the assistant answered for the user. `default`: nobody answered; the recommendation was taken at the deadline |
+| `resolution` | `late` | The answer came after the card expired (on the to-do it became, or at its deadline); the card's `status` stays `expired` |
+
+None of them is filled in for cards from before they were kept: a missing field is unknown, not `false` or "no recommendation".
+Taken-or-not is `resolution.answers[q] == questions[].recommend` for the user's answers (`answered_by` absent); a `default` answer
+was not the user's choice.
+
+A finished task's decision for the owner (a supervised task's `needs_user` review) is not a card. While it waits, `GET /api/v1/todos`
+(`todos.read`) lists it on its to-do as `ask`: `recommend`, `options` (the recommended first), `deadline`, and `default` (`taken`: the
+recommendation is taken at the deadline, which only a reversible decision does; `never`: it never is). The review itself stays on the
+to-do, decided or not (`supervision.reviews[]`, the last 20, with `verdict: "needs_user"`, `recommend`, `options`, and `deadline` and
+`reversible` as the supervisor gave them, absent when it gave none or on reviews from before they were kept). Once decided,
+`GET /api/v1/todos/{id}/decisions` has the outcome: `source: "manual"` for the user's choice, `source: "agent"` with the deadline's
+`reason` for the default.
 
 #### Folded work
 

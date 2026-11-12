@@ -157,7 +157,17 @@ struct PlanCard: View {
         }
     }
 
+    /// The open card, and under it the standing rule the hub suggests for this kind of plan (#5802); without one the
+    /// card alone, as before.
     private var open: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            openCard
+            RuleSuggestionLine(suggestion: plan.suggestion, card: .plan(id: plan.id, conversation: plan.conversation),
+                               group: AppModel.shared.hub?.group ?? "", inset: true)
+        }
+    }
+
+    private var openCard: some View {
         @Bindable var picked = picked
         let offered = Ultracode.planOffered
         let ultracode = Ultracode.choices(plan, card: picked.ultra)

@@ -284,6 +284,14 @@ func (s *Service) toolTodoCreate(ctx context.Context, machine, self string, args
 	if ok, err := s.confirmOutbound(ctx, machine, self, "todo_create", title, args); err != nil || !ok {
 		return todoNotAllowed(err)
 	}
+	if s.isLeader(ctx, self) {
+		t, err := s.createDirectionTodo(ctx, self, title, strings.TrimSpace(a.Notes), plan)
+		if err != nil {
+			return "", fmt.Errorf("the to-do could not be saved, nothing changed: %w", err)
+		}
+		return "Created under your direction (you supervise it; to have an Agent do it, use task_plan with todo_id " + t.ID +
+			"): " + todoLine(t, now, loc), nil
+	}
 	t, err := s.createPlainTodo(ctx, title, strings.TrimSpace(a.Notes), plan)
 	if err != nil {
 		return "", fmt.Errorf("the to-do could not be saved, nothing changed: %w", err)
