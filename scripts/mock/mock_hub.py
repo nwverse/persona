@@ -14048,6 +14048,21 @@ def fold_changes(run):
     return out
 
 
+def fold_usage(run):
+    """transcript.FoldWork's Fold.Usage (#5426): the folded items' tokens summed per model and speed; a subagent's report
+    (an entry with an id) kept as it is, so the web still counts it once."""
+    sums, out = {}, []
+    for x in run:
+        for u in x.get("usage") or []:
+            if u.get("id"):
+                out.append(dict(u)); continue
+            key = (u.get("model", ""), bool(u.get("fast")))
+            have = sums.setdefault(key, {k: v for k, v in (("model", key[0]), ("fast", True if key[1] else None)) if v})
+            for k in ("in", "out", "cache_read", "cache_write", "cache_write_1h"):
+                if u.get(k): have[k] = have.get(k, 0) + u[k]
+    return list(sums.values()) + out
+
+
 def fold_work(items):
     """transcript.FoldWork: each run of tool calls (with their results) and thoughts becomes one fold item."""
     uses = {x.get("tool_use_id") for x in items if x["kind"] == "tool_use"}
@@ -14080,12 +14095,13 @@ def fold_work(items):
                     preview["full_size"] = max(latest.get("full_size", 0), len(preview["text"].encode()))
                     preview["text"] = preview["text"][:511] + "…"
                 narration["latest_thinking"] = preview
+            usage = fold_usage(run)
             out.append({"id": "fold:" + run[0]["id"], "seq": run[0]["seq"], "ts": run[0]["ts"], "role": "assistant", "kind": "fold",
                         "fold": {"items": len(run), "tools": sum(x["kind"] == "tool_use" for x in run),
                                  "thoughts": sum(x["kind"] == "thinking" and bool((x.get("text") or "").strip()) for x in run),
                                  "until": run[-1]["ts"], "through_seq": run[-1]["seq"], "through_id": run[-1]["id"],
                                  **({"tasks": tasks} if tasks else {}), **({"images": images} if images else {}), **narration,
-                                 "changes": fold_changes(run)}})
+                                 "changes": fold_changes(run), **({"usage": usage} if usage else {})}})
         i = j
     return out
 
@@ -19674,6 +19690,7 @@ VOICE_VOICES = {
 }
 # What --help lists after the options.
 MOCK_HELP = [
+    "MOCK_TURN_USAGE=1|multi|unpriced  What a finished exchange cost, after the reply's time: \"菜谱搜索按用时排序\" on Opus 5.5 (1), with a Sonnet 5.5 subagent (multi), or on Haiku 5.5 without a price (unpriced: its tokens); the main conversation's last exchange the same (#5426)",
     "MOCK_CF_ACCESS=<client id>:<client secret>  The hub behind Cloudflare Access: /api/ requests without those two CF-Access-Client-* headers get a 302 to an Access login (no token) or Access's 403 page (wrong token) (#3502)",
     "MOCK_KB_TOPICS=1  Knowledge base: five topics of knowledge points from the example projects and chats (Topics tab, a topic's page, the knowledge map)",
     "MOCK_KB_SELECTION=missing|future|fail  Settings › Knowledge selection: a hub from before it (404) / a document with a field clients don't know / a save the hub refuses (503)",
@@ -25327,6 +25344,65 @@ if MODEL_FALLBACK:
             if _s["session_id"] == _sid:
                 _s.update(model_fallback=dict(_refusal), turn_error=_error, turn_error_code="model_fallback_unavailable",
                           status="done", state="idle", last_text=_error, updated_at=ago(minutes=1.8))
+
+
+# MOCK_TURN_USAGE=1|multi|unpriced (#5426): what a finished exchange's model requests used (Item.usage as the node
+# attaches it: a Claude Code request's on the first item it wrote, a finished subagent's on its result with an `id`), so
+# the reply bar says what the exchange cost after the time. "菜谱搜索按用时排序" is an Agent session whose last exchange
+# ran on Opus 5.5 (1: "Worth $…" and its card), with a subagent on Sonnet 5.5 too (multi: the card lists each model's
+# cost), or on Haiku 5.5, which the catalog has no price for (unpriced: "… tokens" and the tooltip). Its run of work
+# folds, so fold_work sums those items' usage into fold.usage. The main conversation's last exchange ran on the same
+# models: "≈ $…" (1, multi with each model's share), nothing at all on Haiku (unpriced). A cost needs the catalog's
+# cache_write prices (server/internal/assistant/models_catalog.json); without them a turn that wrote to the cache
+# shows its tokens.
+MOCK_TURN_USAGE = os.environ.get("MOCK_TURN_USAGE", "")
+TURN_USAGE = "a1f3c2d4-0000-4000-8000-000000005426"
+
+
+def _usage(model, i, o, read, write=0, write1h=0, **kw):
+    u = {"model": model, "in": i, "out": o, "cache_read": read}
+    if write: u["cache_write"] = write
+    if write1h: u["cache_write_1h"] = write1h
+    return [dict(u, **kw)]
+
+
+def mock_turn_usage(mode):
+    model = "claude-haiku-5-5" if mode == "unpriced" else "claude-opus-5-5"
+    w = "/Users/me/code/recipes"
+    r = [it("user", "text", 31, text="搜索功能做好了吗？"), it("assistant", "text", 30.8, text="做好了，支持按食材和用时筛选。",
+                                                           usage=_usage(model, 4, 96, 0, 15_400, 15_400))]
+    r.append(it("user", "text", 28, text="结果再按用时从短到长排一下"))
+    r.append(it("assistant", "thinking", 27.9, text="先看看搜索结果是在哪里排序的。", usage=_usage(model, 3, 412, 18_240, 6_120)))
+    r += tool("Grep", {"pattern": "sort", "path": w + "/src"}, "src/search.ts:31:  return hits", 27.8)
+    r[-2]["usage"] = _usage(model, 1, 96, 24_360, 310)
+    r += tool("Read", {"file_path": w + "/src/search.ts"}, "export function search(q: Query) { … return hits }", 27.6)
+    r[-2]["usage"] = _usage(model, 1, 88, 24_670, 1_920)
+    r += tool("Edit", {"file_path": w + "/src/search.ts", "old_string": "return hits", "new_string": "return hits.sort(byTime)"}, "ok", 27.3)
+    r[-2]["usage"] = _usage(model, 1, 1_380, 26_590, 2_050)
+    if mode == "multi":
+        r += tool("Agent", {"description": "检查排序的边界情况", "subagent_type": "general-purpose",
+                            "prompt": "看看用时相同、缺少用时的菜谱排在哪里"},
+                  "用时相同的按收藏数排；缺少用时的排在最后。\nagentId: usagesort (use SendMessage with to: 'usagesort' to continue this agent)", 27)
+        r[-2]["usage"] = _usage(model, 1, 160, 28_640, 380)
+        r[-1].update(task={"kind": "agent", "status": "completed", "task_id": "usagesort", "tool_use_id": r[-2]["tool_use_id"]},
+                     usage=_usage("claude-sonnet-5-5", 14, 2_840, 61_200, 9_800, id="agent:usagesort"))
+    r.append(it("assistant", "text", 26.5, text="排好了：用时短的菜谱排在前面，同样用时的按收藏数，缺少用时的排在最后。",
+                usage=_usage(model, 1, 214, 28_960, 1_400)))
+    ITEMS[TURN_USAGE] = r
+    SESSIONS.append(sess("macbook", TURN_USAGE, "菜谱搜索按用时排序", w, "done", "read", "", 0, "", 0, 26.5, r[-1]["text"],
+                         space_kind=None, space_id=None, space_name=None, slot_id=None, slot_name=None))
+    # the main conversation's last exchange: each of its model requests on its first item, its subagent with multi
+    main = ITEMS.get(ASK1, [])
+    last = max((i for i, x in enumerate(main) if x["role"] == "user" and x["kind"] == "text"), default=-1)
+    replies = [x for x in main[last + 1:] if x["role"] == "assistant"]
+    for k, x in enumerate(replies):
+        x["usage"] = _usage(model, 2, 180 + 60 * k, 21_000 + 1_800 * k, 2_400 if k == 0 else 600)
+    if mode == "multi" and replies:
+        replies[-1]["usage"] = replies[-1]["usage"] + _usage("claude-sonnet-5-5", 9, 1_260, 30_400, 5_200, id="agent:mainhelper")
+
+
+if MOCK_TURN_USAGE in ("1", "multi", "unpriced"):
+    mock_turn_usage(MOCK_TURN_USAGE)
 
 
 if __name__ == "__main__":

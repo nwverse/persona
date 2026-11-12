@@ -179,10 +179,11 @@ private fun SectionRule() {
 
 /**
  * Status counts after a heading: a dot and a number for each state that has any; [waiting] (the agents that only wait in
- * the background, #6045) as a clock and a number, before an idle count, as iOS's `StateCounts`. Each is spoken as one.
+ * the background, #6045) as a clock in that state's lighter tone and a number, before an idle count, as iOS's
+ * `StateCounts`. Each is spoken as one. [lighter]: the counted agents only wait in the background, so their dots take that tone.
  */
 @Composable
-private fun StateCounts(counts: List<Pair<Status, Int>>, waiting: Int = 0) {
+private fun StateCounts(counts: List<Pair<Status, Int>>, waiting: Int = 0, lighter: Boolean = false) {
     val palette = PersonaTheme.palette
     @Composable fun count(n: Int, spoken: String, mark: @Composable () -> Unit) {
         Spacer(Modifier.width(Tokens.Space.s + Tokens.Space.xxs))
@@ -197,12 +198,12 @@ private fun StateCounts(counts: List<Pair<Status, Int>>, waiting: Int = 0) {
     counts.filter { it.second > 0 }.forEach { (status, n) ->
         if (status == Status.Idle && waiting > 0 && !clockDrawn) {
             clockDrawn = true
-            count(waiting, waitingWords) { JIcon(persona.core.designsystem.icons.PersonaIcons.backgroundWaiting, null, size = Caret, tint = palette.status(Status.Working).dot, decorative = true) }
+            count(waiting, waitingWords) { JIcon(persona.core.designsystem.icons.PersonaIcons.backgroundWaiting, null, size = Caret, tint = palette.backgroundWaiting.dot, decorative = true) }
         }
-        count(n, "$n ${stringResource(status.labelRes)}") { JStatusDot(status, size = Dot) }
+        count(n, "$n ${stringResource(status.labelRes)}") { JStatusDot(status, size = Dot, waiting = lighter) }
     }
     if (waiting > 0 && !clockDrawn) count(waiting, waitingWords) {
-        JIcon(persona.core.designsystem.icons.PersonaIcons.backgroundWaiting, null, size = Caret, tint = palette.status(Status.Working).dot, decorative = true)
+        JIcon(persona.core.designsystem.icons.PersonaIcons.backgroundWaiting, null, size = Caret, tint = palette.backgroundWaiting.dot, decorative = true)
     }
 }
 
@@ -235,6 +236,11 @@ fun AgentTreeHeader(
     counts: List<Pair<Status, Int>> = emptyList(),
     /** The agents that only wait in the background, drawn apart from [counts] ([StateCounts]). */
     waiting: Int = 0,
+    /**
+     * A section of agents that only wait in the background (By Status, #4338 A5): on Glass its [icon] and its count's dot
+     * take that state's lighter tone ([PersonaPalette.backgroundWaiting]), as iOS's `SectionHeader` takes its section's.
+     */
+    waitsInBackground: Boolean = false,
     onMonitor: (() -> Unit)? = null,
     tag: String? = null,
     onAction: (() -> Unit)? = null,
@@ -243,6 +249,7 @@ fun AgentTreeHeader(
 ) {
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
+    val lighter = waitsInBackground && PersonaTheme.style == AppStyle.Glass
     Column(modifier.fillMaxWidth().padding(top = if (first) Tokens.Space.xs else Tokens.Space.xl)) {
         if (!first) SectionRule()
         Row(
@@ -252,7 +259,7 @@ fun AgentTreeHeader(
         ) {
             JIcon(if (folded) PhIcons.CaretRight else PhIcons.CaretDown, stringResource(if (folded) R.string.designsystem_group_expand else R.string.designsystem_group_collapse), size = Tokens.Space.l, tint = palette.ink3)
             Spacer(Modifier.width(Tokens.Space.s - Tokens.Space.xxs))
-            icon?.let { JIcon(it, null, size = Tokens.Size.iconXS, tint = palette.ink); Spacer(Modifier.width(Tokens.Space.s)) }
+            icon?.let { JIcon(it, null, size = Tokens.Size.iconXS, tint = if (lighter) palette.backgroundWaiting.dot else palette.ink); Spacer(Modifier.width(Tokens.Space.s)) }
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(title, style = type.title.copy(fontWeight = FontWeight.Bold), color = palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis,
@@ -268,7 +275,7 @@ fun AgentTreeHeader(
                 }
                 detail?.let { Text(it, style = type.caption.copy(fontWeight = FontWeight.Normal), color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis) }
             }
-            StateCounts(counts, waiting)
+            StateCounts(counts, waiting, lighter)
             if (onMonitor != null) { Spacer(Modifier.width(Tokens.Space.xs)); HeadingAction(PhIcons.Gauge, stringResource(R.string.designsystem_machine_monitor), onMonitor) }
             if (onAction != null) { Spacer(Modifier.width(Tokens.Space.xs)); HeadingAction(actionIcon ?: PhIcons.CaretRight, actionLabel ?: stringResource(R.string.designsystem_details), onAction) }
         }
@@ -417,7 +424,7 @@ fun AgentRow(
     val type = PersonaTheme.type
     val board = PersonaTheme.style == AppStyle.Board
     val shown = if (muted) Status.Muted else status
-    val tone = palette.status(shown)
+    val tone = palette.status(shown, waiting)
     val strong = !muted && (status == Status.NeedsYou || status == Status.Unread)
     val glass = PersonaTheme.style == AppStyle.Glass
     val parts = AgentListDisplay.of(if (glass) style else AgentRowStyle.Avatar, compact).rowParts
@@ -444,8 +451,8 @@ fun AgentRow(
         return
     }
     if (glass && parts.card) {
-        StateCardRow(title, shown, strong, muted, depth, preview, time, statusText, label, launcher, flags, note, facts, source, agentMark,
-            place, selected, modifier, press, end)
+        StateCardRow(title, shown, strong, muted, waiting, depth, preview, time, statusText, label, launcher, flags, note, facts, source,
+            agentMark, place, selected, modifier, press, end)
         return
     }
     val text: @Composable ColumnScope.() -> Unit = {
@@ -596,7 +603,7 @@ private fun StyledTitleLine(
 @Composable
 private fun RowStateDot(status: Status, waiting: Boolean) {
     if (waiting) JIcon(persona.core.designsystem.icons.PersonaIcons.backgroundWaiting, null, size = Tokens.Size.dotL * WaitClockScale,
-        tint = PersonaTheme.palette.status(Status.Working).dot, decorative = true)
+        tint = PersonaTheme.palette.backgroundWaiting.dot, decorative = true)
     else JStatusDot(status)
 }
 
@@ -615,7 +622,7 @@ private fun TwoLineRow(
 ) {
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
-    val tone = palette.status(shown)
+    val tone = palette.status(shown, waiting)
     val start = Step * depth
     val words = start + Caret + TwoLineGap
     val hasMetadata = note != null || facts.isNotEmpty()
@@ -661,16 +668,17 @@ private fun TwoLineRow(
  * bar down the leading edge; the agent's mark and the title with the time; two lines of its latest words; the facts
  * line; at the foot its state in words in its color ([statusText], every state but Seen: `cardStateWord`) and where it
  * runs ([PlaceLine]). One that needs you is tinted ([CardWashAlpha]); one open beside the list is ringed in the accent.
+ * One that only waits in the background ([waiting]) takes that state's lighter tone, as iOS's `stateTone`.
  */
 @Composable
 private fun StateCardRow(
-    title: String, shown: Status, strong: Boolean, muted: Boolean, depth: Int, preview: String?, time: String?, statusText: String?,
-    label: String?, launcher: Boolean, flags: List<RowFlag>, note: RowNote?, facts: List<RowFact>, source: RowSource?,
+    title: String, shown: Status, strong: Boolean, muted: Boolean, waiting: Boolean, depth: Int, preview: String?, time: String?,
+    statusText: String?, label: String?, launcher: Boolean, flags: List<RowFlag>, note: RowNote?, facts: List<RowFact>, source: RowSource?,
     agentMark: AgentMarkSpec?, place: RowPlace?, selected: Boolean, modifier: Modifier, press: Modifier, end: (@Composable () -> Unit)?,
 ) {
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
-    val tone = palette.status(shown)
+    val tone = palette.status(shown, waiting)
     val shape = PersonaTheme.shapes.cardShape
     Column(
         modifier.fillMaxWidth().padding(start = Step * depth, top = Tokens.Space.xs, bottom = Tokens.Space.xs)
@@ -879,7 +887,7 @@ private fun AgentAvatar(mark: AgentMarkSpec, status: Status, waiting: Boolean) {
         ) { JAgentMark(mark, size = AvatarMark) }
         Box(Modifier.align(Alignment.BottomEnd).offset(AvatarRim, AvatarRim).size(corner), contentAlignment = Alignment.Center) {
             if (waiting) JIcon(persona.core.designsystem.icons.PersonaIcons.backgroundWaiting, null, size = corner,
-                tint = palette.status(Status.Working).dot, decorative = true)
+                tint = palette.backgroundWaiting.dot, decorative = true)
             else JStatusDot(status, size = Tokens.Size.dotXL)
         }
     }
@@ -1003,8 +1011,14 @@ private const val BoardBayPeek = 0.4f
 
 /** One quick filter: a label, its count, and the status it filters by. */
 @Immutable
-/** A quick filter: its words, count and state ([status]'s dot, or [icon] in its color: Waiting in the background's clock). */
-data class Bay(val label: String, val count: Int? = null, val status: Status? = null, val icon: persona.core.designsystem.icons.PhIcon? = null)
+/**
+ * A quick filter: its words, count and state ([status]'s dot, or [icon] in its color: Waiting in the background's clock).
+ * [waiting]: it lists the agents that only wait in the background, so the Glass home draws it in that state's lighter tone.
+ */
+data class Bay(
+    val label: String, val count: Int? = null, val status: Status? = null, val icon: persona.core.designsystem.icons.PhIcon? = null,
+    val waiting: Boolean = false,
+)
 
 /**
  * The quick filters of a list. Glass shows glass chips; brief underlined tabs; the board a counter board with

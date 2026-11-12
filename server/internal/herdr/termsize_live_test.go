@@ -109,7 +109,20 @@ func TestLiveObserveAtTheTerminalsSize(t *testing.T) {
 	if err := c.PaneSendKeys(ctx, pane, "Enter"); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(time.Second)
+	var text string
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		rctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		var err error
+		text, err = c.PaneRead(rctx, pane, "visible", rows)
+		cancel()
+		if err == nil && strings.Contains(text, "EDGE!|") && strings.Contains(text, "BOTTOMROW") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the marker command did not draw the terminal: %q, %v", text, err)
+		}
+		<-time.After(20 * time.Millisecond)
+	}
 	seen := func(w, h int) string {
 		octx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
