@@ -82,7 +82,9 @@ struct ExtensionMultiChoiceField: View {
             } label: {
                 Text(summary).lineLimit(1).truncationMode(.tail)
             }
+            #if !os(macOS) // the frozen Mac app's menu closes after each pick: macOS has no `.disabled` here
             .menuActionDismissBehavior(.disabled)
+            #endif
         } label: {
             Text(label).lineLimit(2)
         }
