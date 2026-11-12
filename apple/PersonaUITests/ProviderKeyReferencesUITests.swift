@@ -38,7 +38,9 @@ final class ProviderKeyReferencesUITests: XCTestCase {
             let advanced = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "高级")).firstMatch
             reach(advanced, in: app, timeout: 10)
             advanced.tap()
-            let computers = app.buttons["wizard.computers"]
+            // Inside Advanced the group's identifier replaces the row's own: found by its label there.
+            let computers = app.buttons.matching(NSPredicate(format: "identifier IN %@ AND label BEGINSWITH %@",
+                                                             ["wizard.computers", "wizard.advanced"], "电脑")).firstMatch
             reach(computers, in: app)
             computers.tap()
             let keys = app.descendants(matching: .any)["computers.keys"].firstMatch
