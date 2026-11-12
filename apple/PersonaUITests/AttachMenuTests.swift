@@ -274,9 +274,10 @@ final class AttachMenuTests: XCTestCase {
     }
 
     /// A menu row by its identifier, or by its title where UIKit's menu drops the identifier (zh-Hans, as the tests run).
+    /// The meeting row says Record, as the drawer's row does since #5243 (#6067).
     @MainActor private func item(_ app: XCUIApplication, _ id: String) -> XCUIElement {
         let titles = ["composer-menu-voice": "语音对话", "composer-menu-camera": "拍照", "composer-menu-scan": "扫描文稿",
-                      "composer-menu-mention": "提及文件或会话", "composer-menu-meeting": "会议录音", "attach-clear": "清空上下文"]
+                      "composer-menu-mention": "提及文件或会话", "composer-menu-meeting": "录音", "attach-clear": "清空上下文"]
         let title = titles[id] ?? (id.hasPrefix("attach-command-") ? String(id.dropFirst("attach-command-".count)) : id)
         return app.descendants(matching: .any).matching(NSPredicate(format: "identifier == %@ OR label BEGINSWITH %@", id, title)).firstMatch
     }
