@@ -35,7 +35,7 @@ func fileEditHub(t *testing.T, answer func(method string, params map[string]any)
 	m.peer = hubPeer
 	h.byID["m1"] = m
 	mux := http.NewServeMux()
-	for _, op := range []string{"rename", "move", "trash", "restore", "mkdir", "write", "zip"} {
+	for _, op := range []string{"rename", "move", "trash", "restore", "mkdir", "write", "zip", "copy"} {
 		mux.HandleFunc("POST /api/v1/machines/{mid}/files/"+op, h.fileEdit(op))
 	}
 	return mux

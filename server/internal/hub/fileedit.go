@@ -91,6 +91,16 @@ func (q fileEditRequest) check(op string) error {
 		}
 	case "zip":
 		return nonEmpty(q.Paths, "paths")
+	case "copy":
+		if strings.TrimSpace(q.Dir) == "" {
+			return errors.New("dir is required")
+		}
+		switch q.Conflict {
+		case "", proto.UploadConflictReplace, proto.UploadConflictKeep:
+		default:
+			return errors.New("conflict must be replace or keep")
+		}
+		return nonEmpty(q.Paths, "paths")
 	}
 	return nil
 }
@@ -111,7 +121,7 @@ func (h *Hub) fileEdit(op string) http.HandlerFunc {
 			return
 		}
 		wait := 2 * time.Minute // a big folder to the trash on a slow disk
-		if op == "zip" {
+		if op == "zip" || op == "copy" {
 			wait = 10 * time.Minute // up to 2 GB of files
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), wait)

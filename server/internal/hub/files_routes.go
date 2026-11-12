@@ -45,4 +45,5 @@ func (h *Hub) fileRoutes(api *http.ServeMux) {
 	api.HandleFunc("POST /api/v1/machines/{mid}/files/mkdir", h.fileEdit("mkdir"))
 	api.HandleFunc("POST /api/v1/machines/{mid}/files/write", h.fileEdit("write"))
 	api.HandleFunc("POST /api/v1/machines/{mid}/files/zip", h.fileEdit("zip"))
+	api.HandleFunc("POST /api/v1/machines/{mid}/files/copy", h.fileEdit("copy")) // #5830: copy and duplicate
 }

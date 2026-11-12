@@ -458,6 +458,7 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/machines/{mid}/deploy
 -                    POST /api/v1/machines/{mid}/doctor/fix
 -                    POST /api/v1/machines/{mid}/files
+-                    POST /api/v1/machines/{mid}/files/copy
 -                    POST /api/v1/machines/{mid}/files/mkdir
 -                    POST /api/v1/machines/{mid}/files/move
 -                    POST /api/v1/machines/{mid}/files/rename

@@ -46,6 +46,7 @@ type fileMakeParams struct {
 	Revision string   `json:"revision"`
 	SHA256   string   `json:"sha256"`
 	Force    bool     `json:"force"`
+	Conflict string   `json:"conflict"`
 }
 
 func (n *Node) fileMake(ctx context.Context, method string, params json.RawMessage) (any, error) {
@@ -64,6 +65,8 @@ func (n *Node) fileMake(ctx context.Context, method string, params json.RawMessa
 		return n.writeText(p)
 	case "file.zip":
 		return n.zipPaths(ctx, p.Paths, p.Cwd, p.Dir, p.Name)
+	case "file.copy": // filecopy.go
+		return n.copyFiles(ctx, p.Paths, p.Cwd, p.Dir, p.Conflict)
 	}
 	return nil, fmt.Errorf("unknown method %s", method)
 }
