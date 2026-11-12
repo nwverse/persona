@@ -282,6 +282,28 @@ internal fun conversationTime(at: java.time.Instant?, locale: java.util.Locale,
     zone: java.time.ZoneId = java.time.ZoneId.systemDefault()): String? =
     at?.let { LocalizedFormats.format(it, LocalizedFormats.MONTH_DAY_TIME, locale, zone) }
 
+/**
+ * When a conversation last moved, as the history writes it (iOS `Fmt.relative`): "Just now" under 45 seconds, "5 min ago"
+ * under an hour, today the time ("14:30"), "Yesterday", within six days the weekday ("Tuesday"), else the month and day
+ * ("Nov 5"). Null when there is no time.
+ */
+internal fun historyTime(at: java.time.Instant?, res: android.content.res.Resources, now: java.time.Instant = java.time.Instant.now(),
+    zone: java.time.ZoneId = java.time.ZoneId.systemDefault()): String? {
+    at ?: return null
+    val locale = res.configuration.locales[0]
+    val seconds = java.time.Duration.between(at, now).seconds
+    val day = at.atZone(zone).toLocalDate()
+    val today = now.atZone(zone).toLocalDate()
+    return when {
+        seconds < 45 -> res.getString(R.string.assistant_time_just_now)
+        seconds < 3600 -> maxOf(1, (seconds / 60).toInt()).let { res.getQuantityString(R.plurals.assistant_time_minutes_ago, it, it) }
+        day == today -> LocalizedFormats.format(at, LocalizedFormats.TIME, locale, zone)
+        day == today.minusDays(1) -> res.getString(R.string.assistant_time_yesterday)
+        seconds < 6 * 86_400 -> LocalizedFormats.format(at, LocalizedFormats.WEEKDAY, locale, zone)
+        else -> LocalizedFormats.format(at, LocalizedFormats.MONTH_DAY, locale, zone)
+    }
+}
+
 /** The composition root adapts these options to the shared chat lane's presentation parameters. */
 data class AssistantChatOptions(
     val assistant: Boolean = true,

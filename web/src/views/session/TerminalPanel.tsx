@@ -518,7 +518,7 @@ export function TerminalPanel({
   // failed one shows its error there for as long as the Agent is still not running.
   const [paneOffline, setPaneOffline] = useState(false);
   const resume = useResume(mid, sid);
-  const agentRow = Boolean(session && !session.source_kind && !session.assistant && !isPaneAddress(sid));
+  const agentRow = Boolean(session && (!session.source_kind || isStoppedAgent(session)) && !session.assistant && !isPaneAddress(sid));
   const resumable = agentRow && (isStoppedAgent(session) || (paneOffline && stateOf(session!) === "offline") || resume.phase === "resuming");
 
   const dir = cwd || session?.cwd || "";
