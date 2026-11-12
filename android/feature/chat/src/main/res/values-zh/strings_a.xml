@@ -29,6 +29,8 @@
     <string name="chat_delivery_edit">撤回编辑</string>
     <string name="chat_delivery_retry">重试</string>
     <string name="chat_delivery_delete">删除</string>
+    <string name="chat_delivery_deleted">消息已删除</string>
+    <string name="chat_delivery_undo">撤销</string>
     <string name="chat_delivery_discard">丢弃</string>
     <string name="chat_delivery_check">核对消息</string>
     <string name="chat_delivery_resend_title">重发这条消息？</string>
@@ -283,7 +285,7 @@
     </plurals>
     <string name="chat_tasks_plan_single">这样开</string>
     <string name="chat_tasks_default_model">默认模型</string>
-    <string name="chat_tasks_read_only">只读</string>
+    <string name="chat_tasks_read_only">已要求只读</string>
     <string name="chat_tasks_plan_remember">这类以后直接开</string>
     <plurals name="chat_tasks_plan_start_count">
         <item quantity="other">开始 %1$d 个任务</item>

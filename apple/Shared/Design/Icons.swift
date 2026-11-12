@@ -648,6 +648,12 @@ extension Theme {
         static let openQuestion = "questionmark.circle.dashed"
         /// A meeting's minutes as a whole (the watch's Meeting Minutes).
         static let minutes = "note.text"
+        /// A meeting's private mark (#3862, Private Meeting): its minutes are never used when Persona answers in later
+        /// meetings. What stays private, as Health's note says it.
+        static let privateMeeting = privacy
+        /// Just Me (#3862): a question asked during a meeting that only its asker sees, answered in the main chat and
+        /// never said aloud.
+        static let justMe = "person.crop.circle.badge.questionmark"
         /// A meeting marked inside an all-day recording (the watch's Mark Meeting, the day's timeline): a meeting, so the
         /// same symbol.
         static let meetingMark = meeting
