@@ -208,9 +208,24 @@ func (n *Node) assistantResumable(id string) bool {
 	return (p != nil && p.alive()) || n.transcriptPath(id) != ""
 }
 
+type sendTraceKey struct{}
+
+type assistantSendTiming struct {
+	node  *Node
+	id    string
+	start time.Time
+}
+
+func (s assistantSendTiming) mark(phase string, ok bool) {
+	s.node.logf("send_timing trace=%s phase=%s elapsed_ms=%d ok=%t", s.id, phase, time.Since(s.start).Milliseconds(), ok)
+}
+
 // assistantSend delivers a user message, starting or restarting the headless claude when needed.
 // id == "" starts a new conversation and returns its id.
 func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string, images []proto.Image, mode, effort string, options ...modelExecution) (string, error) {
+	clientID, _ := ctx.Value(sendTraceKey{}).(string)
+	timing := assistantSendTiming{node: n, id: proto.SendTraceID(clientID), start: time.Now()}
+	timing.mark("assistant_received", true)
 	if launcher != "" && !shellcmd.NameRe.MatchString(launcher) {
 		return "", fmt.Errorf("invalid launcher %q", launcher)
 	}
@@ -220,6 +235,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if id != "" {
 		defer n.typing.lock(id)()
 	}
+	timing.mark("typing_locked", true)
 	recovery, restart := assistantRecoveryOf(ctx)
 	if recovery != nil {
 		n.mu.Lock()
@@ -367,6 +383,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	} else if executionOption(options).ConfigDir != "" {
 		return "", errors.New("config_dir is only supported for Claude assistant conversations")
 	}
+	timing.mark("preflight_done", true)
 	var p *assistantProc
 	if id == "" && guest != nil {
 		// Never the warm spare: it was started with the assistant's tools. Its process reads Guest from the state.
@@ -404,6 +421,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	// One at a time with restoreModel and compactions on this conversation's process (model_restore.go): a restore
 	// either sees the process this send made busy, or this send starts a new one after the restore closed it.
 	defer n.assistantLife.lock(id)()
+	timing.mark("lifecycle_locked", true)
 	n.mu.Lock()
 	p = n.procs[id]
 	n.mu.Unlock()
@@ -457,6 +475,15 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 
 	n.persistModes(id, mode, effort) // after saving state, including defaults filled on resume
 	n.noteAssistantRecoveryProcess(ctx, p)
+	retryMode, retryEffort := n.modesOf(id) // retain the request before an unconfirmed control can roll it back
+	// Controls do not depend on the live context. Start their acknowledged sync
+	// while the snapshot RPC is pending, but join both before writing any input.
+	// Busy state and context receipts still change only at the delivery boundary.
+	var modec chan error
+	if p.agent == "claude" {
+		modec = make(chan error, 1)
+		go func() { modec <- n.syncAssistantModes(ctx, p) }()
+	}
 	live, commit := n.turnContext(id, <-snapc)
 	if p.agent == "codex" {
 		p.mu.Lock()
@@ -492,10 +519,15 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		content = append(content, map[string]any{"type": "text", "text": text})
 	}
 	in := assistantInput{text: text, images: images, content: content}
-	retryMode, retryEffort := n.modesOf(id)
 	for attempt := 1; ; attempt++ {
-		controlErr := n.syncAssistantModes(ctx, p) // a new or resumed process starts without them
+		var controlErr error
+		if attempt == 1 {
+			controlErr = <-modec
+		} else {
+			controlErr = n.syncAssistantModes(ctx, p) // a retry has its own new process
+		}
 		var unconfirmed *assistantControlUnconfirmed
+		timing.mark("preparation_joined", controlErr == nil) // context may have fallen back; this marks the join, not snapshot success
 		if controlErr != nil && (!fresh || ctx.Err() != nil || !errors.As(controlErr, &unconfirmed)) {
 			return "", controlErr
 		}
@@ -510,6 +542,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		werr := controlErr
 		if werr == nil {
 			werr = p.writeInput(in) // a new id each attempt: a process that died may have written the last one down
+			timing.mark("input_written", werr == nil)
 		}
 		switch {
 		case werr != nil && !fresh:
@@ -519,6 +552,16 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			werr = p.startFailure() // it is gone already: say why, not that the pipe is closed (#2581)
 		case fresh:
 			werr = p.awaitStart(assistantStartWait)
+			if werr != nil {
+				timing.mark("start_failed", false)
+			} else {
+				select {
+				case <-p.ready:
+					timing.mark("process_ready", true)
+				default:
+					timing.mark("start_wait_elapsed", true) // awaitStart's timeout is not observed readiness
+				}
+			}
 		}
 		if werr == nil {
 			if interject {
@@ -526,8 +569,10 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			}
 			break
 		}
+		timing.mark("start_attempt_failed", false)
 		n.stopAssistantProcess(id)
 		if !p.missingCommand() || attempt > assistantStartRetries {
+			timing.mark("start_failed", false)
 			return "", p.startRefusal(werr)
 		}
 		// Its command is missing, most likely for the moment Claude Code is being reinstalled: start it again.

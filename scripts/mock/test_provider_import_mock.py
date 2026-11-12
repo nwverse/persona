@@ -1,8 +1,10 @@
 """mock_hub.py's alias import (#5024, docs/protocol/protocol.md): the preview names what will really be created
 (`create_as`: an alias Persona already lists is saved as "<alias>-2"), the POST saves under those names, honours `split`,
 `hide_aliases` and `alias` (#5193), and refuses a name it did not preview. The parse route (#5193) reads each pasted
-format into drafts with their matches and notes, and logs only the text's length. Each case runs its own mock hub on a
-free port; the parse cases share one, as parsing changes nothing."""
+format into drafts with their matches and notes, and logs only the text's length; with launcher_import_link (#5420) it
+reads provider import links as the hub does (spec/fixtures/provider-import-link/cases.json). Each case runs its own mock
+hub on a free port; the parse cases share one, as parsing changes nothing."""
+import base64
 import json
 import os
 from pathlib import Path
@@ -15,6 +17,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 HERE = Path(__file__).resolve().parent
+LINK_CASES = HERE.parent.parent / "spec" / "fixtures" / "provider-import-link" / "cases.json"
 
 
 class Hub:
@@ -255,6 +258,8 @@ class ProviderPasteMockTests(unittest.TestCase):
         self.assertEqual(out["format"], "cindy")
         messages, responses, local = out["drafts"]
         self.assertEqual(messages["label"], "Example AI")
+        self.assertNotIn("auth", messages["provider"])  # the wizard's check finds a gateway's header (#5329)
+        self.assertEqual(responses["provider"]["auth"], "bearer")
         self.assertEqual({k: messages["provider"][k] for k in ("kind", "display_name", "base_url", "api_key", "model", "models", "headers")},
                          {"kind": "launcher", "display_name": "Example AI", "base_url": "https://api.example.invalid/anthropic",
                           "api_key": "sk-example-cindy", "model": "example-claude", "headers": "X-Tenant: t",
@@ -283,6 +288,81 @@ class ProviderPasteMockTests(unittest.TestCase):
         log = self.h.call("GET", "/mock/providers/log")[1]["parse"]
         self.assertEqual(log[-1], {"length": len(text)})
         self.assertNotIn("sk-example-logged", json.dumps(log))
+
+
+def web_link(payload):
+    data = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode().rstrip("=")
+    return "https://persona.example.invalid/settings?tab=models#import=" + data
+
+
+class ProviderLinkMockTests(unittest.TestCase):
+    """Provider import links (#5420): the shared cases the hub and the web read, the size limits, and no value in a
+    refused link's answer."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.h = Hub(MOCK_PROVIDERS="1")
+        cls.addClassCleanup(cls.h.stop)
+
+    def parse(self, text):
+        status, out = self.h.call("POST", "/api/v1/launchers/import/parse", {"text": text})
+        self.assertEqual(status, 200, out)
+        return out
+
+    def test_the_hub_lists_the_feature(self):
+        self.assertIn("launcher_import_link", self.h.call("GET", "/api/v1/health")[1]["features"])
+        self.assertNotIn("launcher_import_link", hub(self).call("GET", "/api/v1/health")[1]["features"])
+
+    def test_shared_cases(self):
+        cases = json.loads(LINK_CASES.read_text())["links"]
+        self.assertTrue(cases)
+        for case in cases:
+            with self.subTest(case["name"]):
+                out = self.parse(case["text"])
+                self.assertEqual((out["format"], out["notes"]), (case["format"], case["notes"]))
+                self.assertEqual(len(out["drafts"]), len(case["drafts"]))
+                for got, want in zip(out["drafts"], case["drafts"]):
+                    p = got["provider"]
+                    seen = {k: p.get(k, "") for k in ("kind", "api", "base_url", "display_name", "auth", "api_key", "model")}
+                    seen["models"] = [m["id"] for m in p.get("models", [])]
+                    if "notes" in want:
+                        seen["notes"] = got["notes"]
+                    self.assertEqual(seen, want)
+
+    def test_sizes(self):
+        head = "cindy://provider/import?v=1&data="
+        most = (32 << 10) - len(head) + len("cindy://")  # data filling the 32 KiB after cindy://
+        payload = {"kind": "custom", "name": "Example", "endpoints": [{"protocol": "openai-chat", "baseUrl": "https://example.invalid/v1"}]}
+        text = json.dumps(payload, separators=(",", ":"))
+        text = text[:-1] + " " * (most * 3 // 4 - len(text)) + "}"
+        data = base64.urlsafe_b64encode(text.encode()).decode().rstrip("=")
+        self.assertEqual(len(data), most)
+        self.assertEqual(len(self.parse(head + data)["drafts"]), 1)
+        self.assertEqual(self.parse(head + data + "A")["notes"], [{"code": "link_too_long"}])
+        self.assertEqual(self.parse("https://persona.example.invalid/#import=" + "A" * (32 << 10))["notes"], [{"code": "link_too_long"}])
+
+    def test_a_refused_link_names_no_value(self):
+        secret = "sk-example-hidden"
+        ep = {"protocol": "openai-chat", "baseUrl": "https://example.invalid/v1"}
+        for payload in ({"kind": "custom", "name": "Example", "auth": {"method": "apiKey", "apiKey": secret + "\nX"}, "endpoints": [ep]},
+                        {"kind": "custom", "name": "Example", "endpoints": [ep], secret: 1},
+                        {"kind": "custom", "name": "Example", "endpoints": [dict(ep, baseUrl="https://example.invalid/v1?key=" + secret)]},
+                        {"kind": "custom", "name": "Example", "endpoints": [dict(ep, models=[{"id": "m", secret: 1}])]}):
+            out = self.parse(web_link(payload))
+            self.assertEqual((out["format"], out["drafts"], len(out["notes"])), ("link", [], 1), out)
+            self.assertNotIn(secret, json.dumps(out))
+            self.assertNotIn("example.invalid", json.dumps(out))
+
+    def test_broken_links_ports_and_request_paths(self):
+        ep = {"protocol": "openai-chat", "baseUrl": "https://example.invalid/v1"}
+        link = web_link({"kind": "custom", "name": "Example", "endpoints": [ep]})
+        self.assertEqual(self.parse(link + " and more"), {"format": "link", "drafts": [], "notes": [{"code": "link_invalid"}]})
+        self.assertNotEqual(self.parse("Here it is: " + link)["format"], "link")
+        out = self.parse(web_link({"kind": "custom", "name": "Example", "endpoints": [dict(ep, modelsUrl="https://example.invalid:99999999999999999999/m")]}))
+        self.assertEqual(out["notes"], [{"code": "link_invalid", "name": "endpoints[0].modelsUrl"}])
+        pasted = self.parse(json.dumps({"kind": "custom", "name": "Example", "endpoints": [dict(ep, requestPath="/secret-path/chat")]}))
+        self.assertIn({"code": "cindy_request_path"}, pasted["drafts"][0]["notes"])
+        self.assertNotIn("secret-path", json.dumps(pasted))
 
 
 if __name__ == "__main__":

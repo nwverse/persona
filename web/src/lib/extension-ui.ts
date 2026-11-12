@@ -925,3 +925,27 @@ export function sliceColors(n: number): string[] {
   const more = ["teal", "amber", "indigo", "orange"];
   return Array.from({ length: n }, (_, i) => (i < 4 ? `var(--series-${i + 1})` : `var(--hue-${more[(i - 4) % more.length]})`));
 }
+
+/** One segment of a single category's horizontal share bar: its series index, value and share of the total (0…1). */
+export interface SharePart {
+  series: number;
+  value: number;
+  ratio: number;
+}
+
+/**
+ * Whether a stacked bar chart is one category's shares — every series holds exactly one point, all values finite and
+ * non-negative and the total positive. A persona-card stacked_bar is always this shape (a single day's parts), so it
+ * reads as a horizontal segmented bar rather than a lone column; a chart with two or more categories stays columns for
+ * the comparison. The same rule on every app (docs/extensions/extensions.md "New items" chart; issue #5386).
+ */
+export function stackedShare(item: Pick<UIItem, "kind" | "stacked" | "series">): SharePart[] | null {
+  const series = item.series ?? [];
+  if (item.kind !== "bar" || !item.stacked || series.length === 0) return null;
+  if (series.some((s) => s.points.length !== 1)) return null;
+  const values = series.map((s) => s.points[0].value);
+  if (values.some((v) => !Number.isFinite(v) || v < 0)) return null;
+  const total = values.reduce((a, b) => a + b, 0);
+  if (total <= 0) return null;
+  return values.map((value, i) => ({ series: i, value, ratio: value / total }));
+}

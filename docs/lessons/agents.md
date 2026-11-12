@@ -199,6 +199,7 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
   `agentIdentity` may remain after the Agent exits; decide "is an Agent" from claude / codex processes matching `ORCA_PANE_KEY`. node tests point `ORCA_USER_DATA_PATH`
   to an empty directory; never touch the live Orca (its socket fully controls Orca).
   New Orca terminals (#924): omit `presentation: "background"` in `terminal.create` to avoid an orphan PTY; after creation, check identity and generation via `terminal.list` using the exact handle; ordinary creation explicitly `cd`s to the target directory. Permission to create sessions isn't permission to resume ones still open elsewhere: since #5548 Orca resumes an exited Claude session like herdr, after `openElsewhereRefusal` (a live claude on the session, including a suspended one) and a check that its last pane is closed; `orca_resume` (which also kept `openElsewhereRefusal` from ever running on Orca) now refuses only non-Claude agents. Send and retire share `orcaContinues`: retire must not close what a message cannot bring back. Orca's `terminal create --agent --resume` is a CLI of some builds only and drops the session's launcher.
+  An Orca pane key is not a terminal's identity (#5547): a terminal made in a worktree Orca's window is not showing is not adopted by the UI, and about 2 s after `terminal.create` it turns `orphaned` with `tabId` / `leafId` rewritten to `pty:<worktreeId>@@…`, the same handle and incarnation. Starts from a directory in no worktree went to the first worktree listed, so the node lost the pane it had just typed into: `Run` said "replaced", the readiness wait said "is the machine busy?" for 3 minutes while claude had started in 2 s, and the empty tab was never closed. Fall back to the active worktree, and find a terminal the host made by handle + incarnation under the key creation gave (`orcaHost.made`); the opposite case, a new handle under the same key (#972), stays refused. `orcarttest.Fake.Orphan` reproduces it.
   Claude with background tasks (#5463): Orca's `terminal.agentStatus` says `isRunningAgent: false` while Claude Code has background Bash tasks, though its input box takes text; requiring it refused every send to such a session with nothing logged. The process scan is the foreground gate. A `tmux new-session -d` an agent runs inherits the pane's `ORCA_PANE_KEY`, and each process in it is "in front" of tmux's own pty: a `claude -p` worker with a lower pid took the pane and its manager dropped to interrupted. Without Orca's check, "in front" must mean in front of the pane's own pty: a candidate whose pty owner (first ancestor on another terminal) carries the same pane key is nested (tmux, zellij, script…) and not the pane's. Not by `TMUX=`: Orca's agent teams set it in a real pane. A refusal and a pane changing sessions are logged since.
   A pane variable is not ownership (2026-11-08): a claude whose environment carried `ORCA_PANE_KEY` was skipped as "its engine lists it" even on a node that did not enable Orca, or when the macOS scan missed it, so every running claude in Orca's terminals showed as offline. The outside-claude list now defers to an engine only when an engine in use lists that pane with a claude in it.
 - Launchers (`docs/integrations/launchers.md`, 2026-11-01): discovery once only read `_claude_launchers` helper output; a machine with all aliases in `~/.zshrc` (41 for one user)
@@ -294,13 +295,19 @@ The pre-effort-change check read only plain text, mistook suggestions for drafts
 
 A new herdr tab's tty is in canonical mode until zsh's line editor takes it, and macOS limits a canonical line to 1024 bytes (`getconf MAX_CANON /`). herdr 0.9.5 refuses a longer `pane run` up front with `pane_send_failed`. The node types its start about 300 ms after creating the tab, so the shell is rarely at its prompt yet. After #1055 added the `unset` of the assistant's environment (about 460 bytes), every managed-launcher start or resume was over the limit and failed every time. Before that, it only failed when the shell happened to be slow. A retry that seemed to work had a shorter line.
 
-In a herdr pane whose shell sources a file (sh family, fish), a start now writes its whole command to a 0600 `agent-start-*.sh` in the node's directory and types only `. '<file>'`. The shell sources the file, so aliases and functions used as launchers still work, and the file deletes itself first. When the pane refuses the line, the start closes the tab it made and returns `terminal_not_ready` (503, `retryable: true`, `delivered: none`). `TestHerdrStartTypesAShortLine` checks the worst case. Not covered: Orca panes and herdr's restore (`claudeResumeArgv`) still type the full command.
+In a herdr pane whose shell sources a file (sh family, fish), a start now writes its whole command to a 0600 `agent-start-*.sh` in the node's directory and types only `. '<file>'`. The shell sources the file, so aliases and functions used as launchers still work, and the file deletes itself first. When the pane refuses the line, the start closes the tab it made and returns `terminal_not_ready` (503, `retryable: true`, `delivered: none`). `TestHerdrStartTypesAShortLine` checks the worst case. Not covered: herdr's restore (`claudeResumeArgv`) still types the full command. Orca panes were left out until #5450 (below).
 
 ## A startup question eats a typed start's head (2026-11-10, #2570)
 
 oh-my-zsh asks "[oh-my-zsh] Would you like to update? [Y/n]" while `~/.zshrc` loads and reads a single key. A start typed into a new tab a fixed 300 ms after creating it lost its first character to that question: the shell printed `command not found: nset` (for `unset …`) or `permission denied` for the start file (for `. <file>`, with the `.` gone), and the start then waited the full 3 minutes for a claude that was never run. Typed input is not "buffered either way": anything that reads the terminal before the line editor (`read -k 1`, `read -q`, a `[Y/n]` prompt) consumes it.
 
 The node now waits for the new tab's shell to settle before typing (`node/shellsettle.go`): only shells in front of the pane (no `git` or `nvm` an rc file runs) and the screen unchanged for 600 ms, at most 15 s. A question on the last line is never answered for the user: after 20 s the start ends with `shell_waiting` and the tab is kept open for 10 minutes. A typed line the shell still answers for (`rejects` / `rejectedLine` in `node/shellmiss.go`) is typed once more right away instead of waiting out `claudeStartWait`. Avoid fixed sleeps before typing into a fresh shell; read its screen and foreground processes instead.
+
+## "The shell is at rest" needs a screen to read (2026-11-11, #5450)
+
+On a Mac running Orca, starts kept failing after 3 minutes with "the tab's shell had not run it yet", the start line sitting unrun after the prompt. Its echo was printed above the shell's banner too, so it had been typed before the shell started. For the first 40–100 ms after `terminal.create` returns, Orca's `terminal.read` answers `source: "screen-unavailable"` (`orcart.ErrNoScreen`). `settleShell` took any read error to mean "this host cannot read screens" and typed at once. The tty was still canonical, and Orca had been left out of the start file, so the 1400-byte command was cut at 1024 bytes (the echo above the banner is exactly that long) and its Enter was dropped. It looked like it depended on load or on whether the start made a worktree, but it was a race on every start: whether the first settle read came before Orca had a screen.
+
+`settleShell` now waits while the host has no screen yet, and Orca starts type the start file as herdr's do (`TestOrcaStartWaitsForTheScreenAndTypesAShortLine`). If a host can say "not drawn yet", treat that as "wait", not as "cannot read". To check by hand: `orca terminal create` followed at once by `orca terminal send` of a line over 1024 bytes plus `\r` leaves the line unrun.
 
 ## A pane's shell may be fish: quote for it too (2026-11-10, #2867)
 
@@ -909,3 +916,19 @@ Cover unwatch before completion, a pending batch, and a later watcher in the SDK
   joined on its app-server listed Idle for a whole turn while the node knew the turn ran (its `turn/started`), and its chat
   page showed Working from the live words, so the two pages disagreed. `codexStatus` counts the app-server's turn and Codex's
   title spinner over the host's done / idle / unknown.
+
+## Native preview exports can silently truncate assistant replies (#5644)
+
+AGY's compact export includes `<truncated N bytes>` inside long text while its complete export retains the body.
+Such previews can fit Persona's own page limit, hiding the full-text action. Read complete native records before
+applying SDK page limits, and use the same source for inventory revisions, watch cursors and live pushes. A compact
+cursor ahead of the complete export can skip content. Change the history scope when replacing previously cached
+previews, and cache parsed files with bounded storage and file-version invalidation to keep polling responsive.
+Test normal RPC pages, live pushes, delayed export writes and same-size or atomic file updates. Preserve literal
+placeholder examples in complete source text.
+
+## Filesystem timestamps can alias rapid native rewrites (#5659)
+
+Nanosecond stat fields can repeat across same-size writes within one filesystem timestamp tick. Bypass the parsed
+cache for recently modified exports, and cache settled histories after a quiet window. Run rewrite regressions on
+the deployment filesystem as well as the development machine, including a settled cache hit and atomic replacement.
