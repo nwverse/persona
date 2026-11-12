@@ -792,8 +792,10 @@ func TestSetupRecordsTheInstallLanguage(t *testing.T) {
 			}
 		})
 	}
+	// An unknown --lang stops before anything is set up; in a temporary home all the same, in case it ever did not.
+	setupTestHome(t)
 	var out, errOut bytes.Buffer
-	if err := SetupCommand(context.Background(), []string{"--lang", "fr"}, &out, &errOut); err == nil || !strings.Contains(err.Error(), "--lang") {
+	if err := SetupCommand(context.Background(), []string{"--lang", "fr", "--no-service", "--manager-service"}, &out, &errOut); err == nil || !strings.Contains(err.Error(), "--lang") {
 		t.Fatalf("--lang fr: %v", err)
 	}
 }

@@ -81,7 +81,8 @@ class PersonaInstallTests(unittest.TestCase):
             downloads = Path(directory)
             data = gzip.compress(b'#!/bin/sh\necho "$*" >> "$HOME/personad-calls"\nif [ "$1" = version ]; then printf "fixture-version\\n"; fi\n'
                                  # the language hub setup is given (#5519)
-                                 b'if [ "$1 $2" = "hub setup" ]; then echo "${PERSONA_INSTALL_LANG-unset}" >> "$HOME/personad-setup-lang"; fi\n', mtime=0)
+                                 b'if [ "$1 $2" = "hub setup" ]; then echo "${PERSONA_INSTALL_LANG-unset}" >> "$HOME/personad-setup-lang"; fi\n'
+                                 b'if [ "$1 $2" = "hub setup" ] && [ -n "$SETUP_FAILS" ]; then exit 1; fi\n', mtime=0)
             (downloads / (name + '.gz')).write_bytes(data)
             digest = '0' * 64 if corrupt else hashlib.sha256(data).hexdigest()
             sums = digest + '  ' + name + '.gz\n'
@@ -193,6 +194,20 @@ class PersonaInstallTests(unittest.TestCase):
                 result = self.run_install(home, extra=env, args=args)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual((home / 'personad-setup-lang').read_text(), expected + '\n')
+
+    def test_hub_setup_hints_carry_the_installer_language(self):
+        # Someone who runs hub setup by hand from the installer's hint records the same language (#5519).
+        for lang in ('en', 'zh-Hans', 'ja'):
+            with self.subTest(lang), tempfile.TemporaryDirectory() as directory:
+                home = Path(directory)
+                result = self.run_install(home, extra={'PERSONA_ROLE': ''}, args=('--lang', lang))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(f'{home}/.persona/bin/personad hub setup --lang {lang}', result.stdout)
+            with self.subTest(lang, setup='fails'), tempfile.TemporaryDirectory() as directory:
+                home = Path(directory)
+                result = self.run_install(home, extra={'SETUP_FAILS': '1'}, args=('--lang', lang))
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn(f'{home}/.persona/bin/personad hub setup --lang {lang}', result.stderr)
 
     def test_invalid_installer_language_stops_before_installing(self):
         for args in (('--lang',), ('--lang', 'fr'), ('--lang=',)):
