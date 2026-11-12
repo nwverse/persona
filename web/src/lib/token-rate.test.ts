@@ -7,7 +7,8 @@ import { clearRateHistories, emptyRateHistory, formatRate, FRESH_MS, GAP_MS, loa
 function feed(h: RateHistory, readings: [number, number][], turn: string | null = "t1"): RateHistory {
   return readings.reduce((acc, [tokens, at]) => recordTokens(acc, { turn, tokens, at, now: at }), h);
 }
-const begin = () => feed(emptyRateHistory(), [[0, 0]]);
+/** A turn measuring from 0 tokens at 0 ms (its first reading and the rise after it already in). */
+const begin = (): RateHistory => ({ ...emptyRateHistory(), turn: "t1", last: { tokens: 0, at: 0 } });
 
 describe("the speed history", () => {
   it("measures each stretch between readings, not the turn's running average", () => {
@@ -20,11 +21,13 @@ describe("the speed history", () => {
     expect(recordTokens(next, { turn: "t1", tokens: 150, at: 2000, now: 2500 })).toBe(next);
   });
 
-  it("takes a page's first reading in the middle of a turn only as where to measure from", () => {
+  it("does not know when a first reading's count was reached: measuring starts at the rise after it", () => {
+    // a page opened in the middle of a turn, or a turn waiting for its first tokens
     const first = feed(emptyRateHistory(), [[1000, 10_000]]);
-    expect(first.samples).toEqual([]);
-    expect(first.latestRate).toBeNull();
-    expect(feed(first, [[1100, 12_000]]).samples[0].rate).toBe(50);
+    const rise = feed(first, [[1100, 11_000]]);
+    expect(rise.samples).toEqual([]);
+    expect(rise.latestRate).toBeNull();
+    expect(feed(rise, [[1150, 12_000]]).samples.map((s) => s.rate)).toEqual([50]);
   });
 
   it("counts no time between rises further apart than GAP_MS (a tool, a wait) and measures again after them", () => {
@@ -48,7 +51,7 @@ describe("the speed history", () => {
     expect(newTurn.genMs).toBe(0);
     const back = feed(first, [[50, 1500]]);
     expect(back.samples).toEqual(first.samples);
-    expect(feed(back, [[100, 2500]]).samples.map((s) => s.rate)).toEqual([100, 50]);
+    expect(feed(back, [[100, 2500], [150, 3500]]).samples.map((s) => s.rate)).toEqual([100, 50]);
   });
 
   it("does not turn a count corrected with no time between into a spike", () => {
@@ -83,7 +86,7 @@ describe("the speed history", () => {
     const end = feed(active, [[150, 2000]], null);
     expect(end.turn).toBe("t1");
     expect(end.samples.map((s) => s.rate)).toEqual([100, 50]);
-    const next = feed(feed(end, [[0, 9000]], "t2"), [[40, 10_000]], "t2");
+    const next = feed(end, [[0, 8000], [10, 9000], [50, 10_000]], "t2");
     expect(next.samples.map((s) => s.rate)).toEqual([100, 50, 40]);
     expect(next.samples.map((s) => s.durationMs)).toEqual([1000, 2000, 3000]);
     expect(next.latestRate).toBe(40);
@@ -93,6 +96,7 @@ describe("the speed history", () => {
   it("ignores readings without a count", () => {
     const h = begin();
     expect(recordTokens(h, { turn: "t1", tokens: undefined, at: 1000, now: 1000 })).toBe(h);
+    expect(recordTokens(h, { turn: "t1", tokens: 0, at: 1000, now: 1000 })).toBe(h);
     expect(recordTokens(h, { turn: "t1", tokens: Number.NaN, at: 1000, now: 1000 })).toBe(h);
   });
 });

@@ -39,7 +39,7 @@ const line = (s: number, tokens: number): SessionLive => ({ verb: "Frosting", el
 const bar = (live: SessionLive | null, working = true, key = "m/s") => <RunningStatusView live={live} working={working} startedAt="2026-11-12T09:59:59Z" speedKey={key} />;
 const draw = (ui: React.ReactElement) => act(() => root.render(ui));
 const tick = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
-/** Readings one second apart, 50 tokens each (the first, `line(1, 50)`, is where measuring starts). */
+/** Readings one second apart, 50 tokens each (after the first, `line(1, 50)`, the rise at 2 s is where measuring starts). */
 async function run(from: number, to: number, key = "m/s") {
   for (let s = from; s <= to; s++) {
     vi.setSystemTime(T0 + s * 1000);
@@ -90,7 +90,7 @@ describe("the running bar's speed (#5312)", () => {
     expect(q("[data-speed-average]")?.textContent).toBe("50 tok/s");
     expect(q("[data-speed-output]")?.textContent).toBe("200 tok");
     expect(q("[data-speed-peak]")?.textContent).toBe("50 tok/s");
-    expect(q("[data-speed-chart]")?.dataset.speedChart).toBe("3");
+    expect(q("[data-speed-chart]")?.dataset.speedChart).toBe("2");
     expect(q("[data-speed-close]")).toBeNull();
     click(speed()!);
     expect(card()?.dataset.speedCard).toBe("pinned");
@@ -143,8 +143,20 @@ describe("the running bar's speed (#5312)", () => {
     draw(bar(line(31, 2040)));
     click(speed()!);
     await loaded();
-    expect(q("[data-speed-chart]")?.dataset.speedChart).toBe("4");
+    expect(q("[data-speed-chart]")?.dataset.speedChart).toBe("3");
     expect(q("[data-speed-latest]")?.textContent).toBe("40");
+  });
+
+  it("times readings by when they arrive: the node's whole seconds are too coarse", async () => {
+    // every reading says the same second: read by it, no stretch could be measured
+    const coarse = (s: number): SessionLive => ({ ...line(s, s * 50), at: "2026-11-12T10:00:00Z" });
+    draw(bar(coarse(1)));
+    await loaded();
+    for (let s = 2; s <= 3; s++) {
+      vi.setSystemTime(T0 + s * 1000);
+      draw(bar(coarse(s)));
+    }
+    expect(q("[data-running-rate]")?.textContent).toBe("50 tok/s");
   });
 });
 

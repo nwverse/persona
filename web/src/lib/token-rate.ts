@@ -4,6 +4,8 @@
 // generation time is worked out from when that count moves: two rises at most GAP_MS apart are generation, and a longer
 // gap (a tool running, a wait) counts for nothing and starts the measuring again. Every speed is a count over a time
 // that both moved; nothing is guessed, and nothing shows before there is a measurement (docs/design/PRINCIPLES.md 5).
+// The times are when each reading arrived: the node's `at` is in whole seconds, too coarse for gaps of a second or two,
+// so it counts only when it carries fractions of a second.
 import { useEffect, useState } from "react";
 
 export interface RateSample {
@@ -15,7 +17,7 @@ export interface RateSample {
 export interface RateHistory {
   /** The turn the counts belong to (its start); a new one starts the counts and the peak again, not the chart. */
   turn: string | null;
-  /** The last count seen and when (the node's clock when it says, else this page's). */
+  /** The last count seen and when it was reached (-Infinity: not known, so the next rise only starts the measuring). */
   last: { tokens: number; at: number } | null;
   /** Generation since the last sample, not a second long yet. */
   window: { tokens: number; ms: number };
@@ -54,8 +56,9 @@ export function recordTokens(h: RateHistory, input: { turn: string | null; token
   const { tokens, at, now } = input;
   if (tokens === undefined || !Number.isFinite(tokens) || tokens < 0 || !Number.isFinite(at)) return cur;
   const last = cur.last;
-  // the first reading (a page opened in the middle of a turn) or a count that went back: only where to measure from
-  if (!last || tokens < last.tokens) return { ...cur, last: { tokens, at }, window: NO_WINDOW };
+  // the first reading (a page opened in the middle of a turn, a turn waiting for its first tokens) or a count that went
+  // back: when it was reached is not known, so the rise after it is where measuring starts
+  if (!last || tokens < last.tokens) return { ...cur, last: { tokens, at: -Infinity }, window: NO_WINDOW };
   // a reading with the same count says nothing of when the next tokens came
   if (tokens === last.tokens) return cur;
   const gap = at - last.at;
@@ -126,7 +129,7 @@ export function useRateHistory(key: string, turn: string | undefined, tokens: nu
   useEffect(() => {
     if (!on) return;
     const now = Date.now();
-    const node = at ? Date.parse(at) : NaN;
+    const node = at && /\.\d/.test(at) ? Date.parse(at) : NaN;
     setState((s) => {
       const h = recordTokens(s.h, { turn: turn ?? null, tokens, at: Number.isFinite(node) ? node : now, now });
       return h === s.h ? s : { key: s.key, h };
