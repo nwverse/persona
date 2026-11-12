@@ -22,7 +22,7 @@ import { useStore } from "../../lib/store";
 import { useFsLive } from "../../lib/use-fs-live";
 import { NARROW, useMedia } from "../../lib/viewport";
 import { Button, copyText, cx, IconButton, Loading, Menu, useMenu } from "../../ui/atoms";
-import type { MenuAt } from "../../ui/menu-model";
+import type { MenuAt, MenuItem } from "../../ui/menu-model";
 import { Icon } from "../../ui/icons";
 import { SearchField } from "../../ui/SearchField";
 import { scrollBehavior } from "../../ui/stream/motion";
@@ -218,7 +218,9 @@ export function FilesPanel({ mid, sid, cwd, path, file, highlight: marked, onClo
         )}
         {rowMenu?.scope === ops.scope && (
           <Menu
-            items={[...ops.rowItems(rowMenu.x, rowMenu.open), { key: "info", label: t("files-info.info"), icon: "info", divider: true, onSelect: () => setInfo({ path: rowMenu.x.path }) }]}
+            items={beforeTrash(ops.rowItems(rowMenu.x, rowMenu.open), [
+              { key: "info", label: t("files-info.info"), icon: "info", divider: true, onSelect: () => setInfo({ path: rowMenu.x.path }) },
+            ])}
             anchor={rowMenu.at.anchor ?? null}
             point={rowMenu.at.point}
             onClose={() => setRowMenu((current) => current === rowMenu ? null : current)}
@@ -320,6 +322,12 @@ export function FilesPanel({ mid, sid, cwd, path, file, highlight: marked, onClo
       )}
     </>
   );
+}
+
+/** The row menu with the panel's own items (Info…) before Move to Trash, which stays last (destructive last). */
+function beforeTrash(items: MenuItem[], extra: MenuItem[]): MenuItem[] {
+  const i = items.findIndex((x) => x.key === "trash");
+  return i < 0 ? [...items, ...extra] : [...items.slice(0, i), ...extra, ...items.slice(i)];
 }
 
 /** Back, Forward, Up and the path from the home (a house) or "/", every folder a button; the session's folder marked. */
