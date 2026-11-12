@@ -56,6 +56,7 @@
   "hide_in_persona": "在 Persona 里隐藏",
   "confirm_delete": "确认删除",
   "confirm_hide": "确认隐藏",
+  "hide_uses": "仍在使用它的有：{uses}。隐藏后它们照常用它运行，隐藏只是不在选择列表里显示。",
   "edit": "编辑",
   "test_again": "再测一次",
   "test": "测试可用性",

@@ -327,6 +327,22 @@ func (s *Service) launcherRoutes() {
 		}
 		apierr.WriteJSON(w, map[string]any{"machine": machine, "check": res})
 	})
+	// What still names a launcher as its own (Model configuration's purposes, extensions' too, scheduled tasks, model
+	// profiles and their tiers), in words, for the hide confirmation (#4661): hiding an rc-file launcher only takes it
+	// out of the pickers, and these keep running on it.
+	s.handle("GET /api/v1/launchers/{name}/uses", func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		f, err := s.importHideFacts(ctx, "", nil, s.storedLaunchers(ctx))
+		var uses []string
+		if err == nil {
+			uses, err = s.aliasUses(ctx, f, r.PathValue("name"))
+		}
+		if err != nil {
+			apierr.Call(w, err)
+			return
+		}
+		apierr.WriteJSON(w, map[string]any{"uses": append([]string{}, uses...)})
+	})
 	s.handle("POST /api/v1/launchers/{name}/restore", func(w http.ResponseWriter, r *http.Request) {
 		ctx, name := r.Context(), r.PathValue("name")
 		s.models.mu.Lock() // launchers.hidden changes one at a time (the import, hiding, restoring)
@@ -396,19 +412,31 @@ type pickerTier struct {
 // in use, by name, but those whose launcher the machine does not have (a direct API provider is in no machine's list)
 // or the list leaves out because its latest check failed. None when no profile is in use or it cannot be read: the
 // form then has no preset row.
-func (s *Service) pickerTiers(ctx context.Context, launchers []ConfiguredLauncher) (*ModelProfile, []pickerTier) {
+func (s *Service) pickerTiers(ctx context.Context, machine string, launchers []ConfiguredLauncher) (*ModelProfile, []pickerTier) {
 	p, _, err := s.activeModelProfile(ctx)
 	if err != nil || p == nil {
 		return nil, nil
 	}
+	hidden := s.hiddenLaunchers(ctx)
 	var out []pickerTier
 	for _, name := range slices.Sorted(maps.Keys(p.Tiers)) {
 		t := p.Tiers[name]
-		if slices.ContainsFunc(launchers, func(l ConfiguredLauncher) bool { return l.Name == t.Launcher }) {
+		if slices.ContainsFunc(launchers, func(l ConfiguredLauncher) bool { return l.Name == t.Launcher }) ||
+			slices.Contains(hidden, t.Launcher) && s.hiddenUsable(ctx, machine, t.Launcher) { // hidden still runs (#4661)
 			out = append(out, pickerTier{ModelTier: t, Name: name})
 		}
 	}
 	return p, out
+}
+
+// hiddenUsable: machine has hidden launcher name (launchersHere, which a start goes by) and its latest check did not
+// fail, as withHealth holds the visible ones.
+func (s *Service) hiddenUsable(ctx context.Context, machine, name string) bool {
+	if _, bad := s.launcherUnusable(ctx, machine, name); bad {
+		return false
+	}
+	list, known := s.launchersHere(withUnhidden(ctx, name), machine)
+	return known && slices.ContainsFunc(list, func(l proto.Launcher) bool { return l.Name == name })
 }
 
 // machineLauncherRoutes are "New Agent"'s pickers on one machine: its launchers with the agent each starts
@@ -451,7 +479,7 @@ func (s *Service) machineLauncherRoutes() {
 			for _, l := range shown {
 				usable = append(usable, l.ConfiguredLauncher)
 			}
-			if p, tiers := s.pickerTiers(ctx, usable); len(tiers) > 0 {
+			if p, tiers := s.pickerTiers(ctx, mid, usable); len(tiers) > 0 {
 				out["tiers"], out["tiers_profile"] = tiers, map[string]string{"id": p.ID, "name": p.Name}
 			}
 		}

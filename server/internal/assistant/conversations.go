@@ -206,6 +206,10 @@ type relayMsg struct {
 	// DecisionAt is when it began to wait on a decision, where that is later than QueuedAt: it took the place of a
 	// queued message that waited on none (replacing, relay_presence.go).
 	DecisionAt time.Time `json:"decision_at,omitzero"`
+	// Owner: what the owner themselves just did, their answer on the card of a question asked without waiting
+	// (ask_later.go). It is not held for their presence (holdLocked): it is what they are waiting to see taken up. A
+	// version that does not know it drops it on its next save: the answer is then held as any late answer is.
+	Owner bool `json:"owner,omitempty"`
 }
 
 type relayHop struct {

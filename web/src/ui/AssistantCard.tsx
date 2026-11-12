@@ -12,16 +12,15 @@ import { createContext, lazy, Suspense, useContext, useMemo, useState } from "re
 import { assistantView, cardText } from "../lib/assistant-view";
 import { blockKey, blockOf, cardKnown, checkCard, openTarget, type OpenTarget } from "../lib/assistant-blocks";
 import { hasHtml, HTML_BRIDGE_FEATURE, WEB_HTML_RUNTIME_VERIFIED } from "../lib/assistant-html";
-import { cardHeight } from "../lib/html-runtime/limits";
 import { conversationCards, draftKey, submitAction, updateDraft, useCards, type CardDraft } from "../lib/assistant-views";
 import type { AssistantView, ViewAction } from "../lib/extension-wire";
 import { fieldValues, numberProblem, readView, type UIAction, type UIItem, type UIView } from "../lib/extension-ui";
 import { openLink } from "../lib/links";
 import { useLinkManager } from "../lib/manager-choice";
 import { openPanel } from "../lib/panel";
+import { openTask } from "../lib/handoff";
 import { navigate } from "../lib/router";
 import { hubHas, useStore } from "../lib/store";
-import { mediaMatches, NARROW } from "../lib/viewport";
 import { INERT, ViewSections } from "../views/extensions/view-sections-lazy";
 import { t } from "../i18n";
 import { Button, cx, Dialog, toast } from "./atoms";
@@ -41,7 +40,7 @@ export const CardItem = createContext<{ id: string; text: string } | null>(null)
 /** How deep push goes (docs/assistant/assistant-views.md "Actions and multiple pages"). */
 const STACK_MOST = 4;
 
-/** Whether html components run here: WEB_HTML_RUNTIME_VERIFIED, which dev pages may turn on for themselves. */
+/** Whether html components run here: WEB_HTML_RUNTIME_VERIFIED (dev pages and tests may set it for themselves). */
 export const HtmlRuntime = createContext<boolean>(WEB_HTML_RUNTIME_VERIFIED);
 
 const HtmlCard = lazy(() => import("./HtmlCard"));
@@ -118,14 +117,10 @@ function HtmlFallback({ text, title }: { text: string; title?: string }) {
   );
 }
 
-/** One html component of a card that runs them: a component without a key gets no bridge and shows the words. */
+/** One html component of a card that runs them: nothing while the card's code loads (the first card only), its words for
+ *  a component without a key (no bridge). */
 function HtmlItem(p: { item: UIItem; conversation: string; cardKey: string; version: number; page: string; fallback: string }) {
-  if (!p.item.key) return <HtmlFallback text={p.fallback} title={p.item.title} />;
-  return (
-    <Suspense fallback={<div className="card-ui rounded-card bg-surface shadow-card" style={{ height: cardHeight((p.item as { height?: unknown }).height) + 30 }} />}>
-      <HtmlCard {...p} />
-    </Suspense>
-  );
+  return p.item.key ? <Suspense fallback={null}><HtmlCard {...p} /></Suspense> : <HtmlFallback text={p.fallback} title={p.item.title} />;
 }
 
 // ── the card ──
@@ -393,8 +388,7 @@ export function openTargetOf(target: string, manager?: string) {
       navigate({ name: "session", mid: to.mid, sid: to.sid });
       return;
     case "task":
-      if (mediaMatches(NARROW)) navigate({ name: "todos", id: to.id });
-      else openPanel({ kind: "task", todo: to.id });
+      openTask(to.id);
       return;
     case "kb":
       navigate({ name: "kb", kind: to.path[0], id: to.path.slice(1).join("/") || undefined });

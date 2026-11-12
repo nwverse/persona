@@ -14,6 +14,48 @@ not how far the session has progressed **in its work**. The Agents page ends up 
 - Which stopped only because of a transient error such as `API Error: 503`, and simply need a "continue" message;
 - Authorization links that expire within minutes and are already invalid by the time the user sees them.
 
+## Automatic session names (#4812)
+
+Settings › Assistant › Agents can correct recognizable placeholder names with the model configured for
+**Information screening** (`inbox.triage`, the same purpose as Inbox sorting). The default is one successful
+correction per Agent, with periodic updates off; it does not classify every meaningful title with a model.
+Turning automatic naming off prevents further calls but keeps already chosen names and saved advanced options.
+
+The manager owns the title override in Postgres setting `agent.naming.v1`, keyed by computer and session
+as an encoded pair. It decorates `session.title` on session lists and lookups, so the existing web, iOS,
+Android, watch, Mac and Vision selectors all see the same name. Automatic naming never writes into the
+Agent's input or transcript, and never renames herdr/Orca tabs. `todo.title` and plan titles name separate work
+objects and are unchanged.
+
+Candidates are empty names, tool-only names (including terminal spinners), plain directory names,
+new-chat placeholders, and instruction/template openings in Chinese, English or Japanese. A meaningful but
+out-of-date name is refreshed only with periodic naming enabled. Native custom titles are protected even
+when they look like placeholders. Old nodes and runtimes that cannot establish title provenance are skipped
+rather than guessing that a title was not chosen by the user. Claude nodes provide `title_source`,
+`title_manual` and cached cumulative `output_tokens`; unknown sources do not establish eligibility.
+
+`agent_auto_naming_max` is a total successful-change limit (1–1000), including periodic refreshes.
+`agent_auto_naming_interval_hours` is 0 by default; a positive integer (1–8760) enables refresh after that
+interval only while the Agent is working, its activity is recent, and cumulative output grew since its last
+name. A meaningful original title starts with an observation baseline when periodic naming is enabled.
+Changing the maximum does not erase the ledger. A native or app rename stops automatic naming permanently
+for that session; app/API rename intent is persisted before contacting the node, even when its reply is uncertain.
+
+Cost controls: list events coalesce into one worker, dispatching at most one candidate per 30-second pass.
+Queue-local one-shot wakes drain existing matches even without another list event, then stop; they do not
+install a timer on any node. A successful check that keeps the name advances its interval baseline without
+counting another name change, so a daily choice does not retry hourly.
+Input keeps at most 2000 characters of the first user message and 4000 of recent dialogue; images and tool
+payloads are excluded. Calls time out after 45 seconds and request at most 256 output tokens on every protocol.
+Responses relays that refuse the output bound fail closed, without retrying unbounded. A persisted ten-minute
+lease precedes dispatch; failures back off from ten minutes and stop after three consecutive failures.
+Before committing, the worker checks settings, counters, current provenance, native title and eligibility again.
+
+Only web settings controls are added here. iOS and Android can read effective fields from
+`GET /api/v1/assistant` and send sparse `PUT /api/v1/assistant` updates with the selected assistant's
+`X-Persona-Manager` header. They must check all three fields are present before showing controls,
+and verify the returned manager and effective values before showing a save as confirmed.
+
 ## Model
 
 In work terms, each session is in exactly one of three states (`proto.Session.work.phase`):
