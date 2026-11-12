@@ -387,7 +387,7 @@ private struct HomeTodayWidget: View {
                 dateHead(compact: false).frame(width: HomeWidgetTokens.ringHero, alignment: .leading)
                     .frame(maxHeight: .infinity, alignment: .top)
                 VStack(alignment: .leading, spacing: HomeWidgetTokens.row) {
-                    ForEach(Array(c.events.prefix(3).enumerated()), id: \.offset) { HomeEventView(event: $0.element, lines: 1) }
+                    ForEach(Array(c.events.prefix(3)), id: \.self) { HomeEventView(event: $0, lines: 1) }
                     if c.events.isEmpty { none }
                     Spacer(minLength: 0)
                     if c.events.count > 3 { more(c.events.count - 3) }
@@ -492,7 +492,7 @@ private struct HomeDayTimeline: View {
                     }
                     .offset(y: CGFloat(h - firstHour) * perHour - HomeWidgetTokens.gap)
                 }
-                ForEach(Array(c.events.filter { !$0.allDay }.enumerated()), id: \.offset) { _, e in
+                ForEach(c.events.filter { !$0.allDay }, id: \.self) { e in
                     let top = max(0, y(e.start)), bottom = min(geo.size.height, y(e.end))
                     // Tall enough for two lines: its title and its time; shorter (under about an hour): its title alone,
                     // on one line, never past the block (the block is at least that line tall).
@@ -810,7 +810,7 @@ private struct HomeAccountRings: View {
         let fullest = account.windows.max { $0.percent < $1.percent }
         VStack(spacing: HomeWidgetTokens.tight) {
             ZStack {
-                ForEach(Array(windows.enumerated()), id: \.offset) { i, w in
+                ForEach(Array(windows.enumerated()), id: \.element) { i, w in
                     HomeRing(fraction: w.percent / 100, color: HomeUsageWidget.color(w.percent), width: HomeWidgetTokens.ringStrokeSmall)
                         .padding(CGFloat(i) * (HomeWidgetTokens.ringStrokeSmall + HomeWidgetTokens.hair))
                 }
@@ -1182,7 +1182,7 @@ private struct HomeWeekChart: View {
         let peak = max(1, max(days.max() ?? 1, average ?? 0))
         VStack(spacing: HomeWidgetTokens.tight) {
             HStack(alignment: .bottom, spacing: HomeWidgetTokens.gap) {
-                ForEach(Array(days.suffix(7).enumerated()), id: \.offset) { i, n in
+                ForEach(Array(days.suffix(7).enumerated()), id: \.offset) { i, n in // a bar is its day's place in the week
                     UnevenRoundedRectangle(topLeadingRadius: HomeWidgetTokens.tight, topTrailingRadius: HomeWidgetTokens.tight)
                         .frame(maxWidth: .infinity)
                         .frame(height: max(HomeWidgetTokens.hair, HomeWidgetTokens.chartHeight * CGFloat(n) / CGFloat(peak)))
