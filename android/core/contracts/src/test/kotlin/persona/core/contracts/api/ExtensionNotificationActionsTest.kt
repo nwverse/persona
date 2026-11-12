@@ -41,6 +41,18 @@ class ExtensionNotificationActionsTest {
         assertTrue(store.peek(replacement.token) != null)
     }
 
+    @Test fun invalidReplacementStillRetiresOnlyTheExactNotificationTag() {
+        val store = store()
+        val old = store.register(action = ExtensionNotifyAction("one", "One"))
+        val other = store.register(tag = "alert:other")
+        val replacement = store.registerBatch("alert:one", "example-gateway", "usage", "state",
+            listOf(null, ExtensionNotifyAction("same", "Same"), ExtensionNotifyAction("same", "Duplicate")), scope)
+
+        assertNull(replacement)
+        assertNull(store.peek(old.token))
+        assertTrue(store.peek(other.token) != null)
+    }
+
     @Test fun boundedStoreEvictsTheOldestRecord() {
         val store = store(capacity = 2)
         val first = store.register(tag = "one")

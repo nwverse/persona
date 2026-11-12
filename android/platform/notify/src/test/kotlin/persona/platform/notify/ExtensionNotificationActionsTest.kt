@@ -9,7 +9,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import persona.core.contracts.NotifyEvent
 import persona.core.contracts.api.ExtensionNotificationActionRecord
+import persona.core.contracts.api.ExtensionNotificationActionStore
 import persona.core.contracts.api.ExtensionNotificationScope
 import persona.core.contracts.generated.ExtensionNotification
 import persona.core.contracts.generated.ExtensionNotifyAction
@@ -79,11 +81,6 @@ class ExtensionNotificationActionsTest {
     }
 
     @Test fun unscopedAlertsNeedOneOpenGroupAndNamespacedIdsStayOnTheirOwnHub() {
-        fun environment(scope: ExtensionNotificationScope, unscoped: Boolean = false) = object : ExtensionNotificationEnvironment {
-            override fun currentScope() = scope
-            override fun canRouteUnscopedEvents() = unscoped
-            override fun extensionUi(record: ExtensionNotificationActionRecord) = null
-        }
         assertNull(extensionEventScope(environment(scope), "", null))
         assertEquals(scope, extensionEventScope(environment(scope, unscoped = true), "", null))
         assertNull(extensionEventScope(environment(scope), "machine~other", null))
@@ -91,6 +88,58 @@ class ExtensionNotificationActionsTest {
         val other = scope.copy(namespace = "other")
         assertEquals(other, extensionEventScope(environment(other), "machine~other", null))
         assertEquals(other, extensionEventScope(environment(other), "", "alert~other"))
+
+        assertEquals("raw machine and alert ids consistently name the primary scope", scope,
+            extensionEventScope(environment(scope), "machine", "alert"))
+        assertNull("primary machine conflicts with a namespaced alert",
+            extensionEventScope(environment(scope), "machine", "alert~other"))
+        val first = scope.copy(namespace = "first")
+        assertNull("two different namespaces conflict",
+            extensionEventScope(environment(first), "machine~first", "alert~other"))
+        assertEquals("matching machine and alert namespaces are accepted", first,
+            extensionEventScope(environment(first), "machine~first", "alert~first"))
+    }
+
+    @Test fun everyDegradedReplacementRetiresOldTokensAndPreservesOtherTags() {
+        val environment = environment(scope)
+        var tokens = 0
+        val store = ExtensionNotificationActionStore(currentScope = environment::currentScope,
+            token = { "%032x".format(++tokens) })
+        val payload = ExtensionNotification("example-gateway", "usage", "state",
+            listOf(ExtensionNotifyAction("stop", "Stop", foreground = true)))
+        fun event(body: ExtensionNotification?, machine: String = "machine", id: String? = "alert") =
+            NotifyEvent("alert", machine, "", id = id, extensionNotification = body)
+        fun valid() = prepareExtensionNotification(event(payload), "alert:one", environment, store)!!
+
+        val other = prepareExtensionNotification(event(payload, id = "other"), "alert:other", environment, store)!!
+        val withActions = valid()
+        val noActions = prepareExtensionNotification(event(payload.copy(actions = emptyList())), "alert:one", environment, store)!!
+        assertTrue(noActions.buttons.isEmpty())
+        assertNull(store.peek(withActions.body.token))
+        assertTrue(store.peek(other.body.token) != null)
+
+        val invalid = valid()
+        assertNull(prepareExtensionNotification(event(payload.copy(actions = listOf(
+            ExtensionNotifyAction("same", "Same"), ExtensionNotifyAction("same", "Duplicate")))), "alert:one", environment, store))
+        assertNull(store.peek(invalid.body.token))
+        assertTrue(store.peek(other.body.token) != null)
+
+        val wrongSource = valid()
+        assertNull(prepareExtensionNotification(event(payload, machine = "machine~other", id = null),
+            "alert:one", environment, store))
+        assertNull(store.peek(wrongSource.body.token))
+        assertTrue(store.peek(other.body.token) != null)
+
+        val ordinary = valid()
+        assertNull(prepareExtensionNotification(event(null), "alert:one", environment, store))
+        assertNull(store.peek(ordinary.body.token))
+        assertTrue(store.peek(other.body.token) != null)
+    }
+
+    private fun environment(scope: ExtensionNotificationScope, unscoped: Boolean = false) = object : ExtensionNotificationEnvironment {
+        override fun currentScope() = scope
+        override fun canRouteUnscopedEvents() = unscoped
+        override fun extensionUi(record: ExtensionNotificationActionRecord) = null
     }
 
     private fun record(token: String, action: ExtensionNotifyAction?) = ExtensionNotificationActionRecord(

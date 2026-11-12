@@ -373,4 +373,5 @@
     <string name="settings_subscriptions_counts_none">購読できます</string>
     <string name="settings_ext_notification_expired">この通知は有効期限切れです。拡張機能のページで再試行してください。</string>
     <string name="settings_ext_notification_wrong_scope">元のハブまたはアシスタントが見つかりません。再接続して拡張機能のページで再試行してください。</string>
+    <string name="settings_ext_notification_unlock">この通知の操作を実行するには、スマートフォンのロックを解除してください。</string>
 </resources>

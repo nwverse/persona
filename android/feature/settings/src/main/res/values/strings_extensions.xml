@@ -383,4 +383,5 @@
     <string name="settings_subscriptions_counts_none">Available</string>
     <string name="settings_ext_notification_expired">This notification has expired. Retry from the extension page.</string>
     <string name="settings_ext_notification_wrong_scope">Can\'t find the original hub or assistant. Reconnect, then retry from the extension page.</string>
+    <string name="settings_ext_notification_unlock">Unlock your phone to run this notification action.</string>
 </resources>

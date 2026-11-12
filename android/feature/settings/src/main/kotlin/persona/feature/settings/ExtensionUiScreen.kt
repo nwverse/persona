@@ -1,6 +1,7 @@
 package persona.feature.settings
 
 import android.app.Activity
+import android.app.KeyguardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
@@ -13,6 +14,9 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import persona.core.contracts.GroupKeys
 import persona.core.contracts.api.AgentLauncher
 import persona.core.contracts.api.EXTENSION_NOTIFICATION_REMOTE_INPUT
@@ -29,7 +33,9 @@ import persona.core.navigation.ExtensionUiRoute
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import persona.core.contracts.api.SUBSCRIPTIONS_UI
 import persona.core.contracts.generated.ExtensionNotifyAction
 
@@ -48,7 +54,7 @@ internal fun nativePageBinding(owner: persona.core.contracts.api.ExtensionStream
     owner?.let { binding -> manager?.takeIf { it.isNotBlank() }?.let { binding.copy(manager = it) } ?: binding }
 
 internal data class ExtensionNotificationPageExecution(val action: ExtensionNotifyAction, val values: Map<String, String>)
-internal enum class ExtensionNotificationPageError { Expired, WrongScope, Invalid }
+internal enum class ExtensionNotificationPageError { Expired, WrongScope, Invalid, Locked }
 internal data class ExtensionNotificationPageResolution(
     val record: ExtensionNotificationActionRecord? = null,
     val execution: ExtensionNotificationPageExecution? = null,
@@ -58,13 +64,14 @@ internal data class ExtensionNotificationPageResolution(
 }
 
 /** A route is only navigation; the process-local record is what proves which declared action, if any, may run. */
-internal fun resolveExtensionNotificationPage(
+internal suspend fun resolveExtensionNotificationPage(
     token: String,
     extensionId: String,
     uiId: String,
     manager: String?,
     inputText: String?,
     store: ExtensionNotificationActionStore,
+    locked: suspend () -> Boolean = { false },
 ): ExtensionNotificationPageResolution {
     val inspection = store.inspect(token) ?: return ExtensionNotificationPageResolution()
     val record = inspection.record
@@ -77,6 +84,9 @@ internal fun resolveExtensionNotificationPage(
         ExtensionNotificationInspectionStatus.Current -> Unit
     }
     val action = record.action ?: return ExtensionNotificationPageResolution(record)
+    if (action.foreground == true && locked()) {
+        return ExtensionNotificationPageResolution(record, error = ExtensionNotificationPageError.Locked)
+    }
     val values = if (action.input == null) emptyMap() else mapOf("text" to inputText.orEmpty())
     return when (val claim = store.claim(token, action.id, values)) {
         is ExtensionNotificationClaim.Claimed -> ExtensionNotificationPageResolution(record,
@@ -89,17 +99,53 @@ internal fun resolveExtensionNotificationPage(
     }
 }
 
+/** SystemUI can deliver the intent just before KeyguardManager reports the accepted unlock; never bypass a real lock. */
+internal suspend fun extensionNotificationLockedAfterUnlockSettles(
+    locked: () -> Boolean,
+    settleMillis: Long = 3_000,
+    pollMillis: Long = 100,
+): Boolean {
+    if (!locked()) return false
+    return withTimeoutOrNull(settleMillis) {
+        while (locked()) delay(pollMillis)
+        false
+    } ?: true
+}
+
 @Composable
 fun ExtensionUiPage(extensions: ExtensionManagement?, extensionId: String, uiId: String, title: String, onBack: () -> Unit,
                     initialState: String? = null, depth: Int = 0, shown: Boolean = true, availableAdapter: NativeExtensionStreamAdapter? = null,
-                    onPush: (ExtensionUiRoute) -> Unit = {}, manager: String? = null, notificationActionToken: String? = null) {
+                    onPush: (ExtensionUiRoute) -> Unit = {}, manager: String? = null, notificationActionToken: String? = null,
+                    notificationStore: ExtensionNotificationActionStore = ExtensionNotificationActionStore.shared,
+                    notificationLocked: (suspend () -> Boolean)? = null) {
     val notification = if (notificationActionToken == null) null else {
-        val activity = LocalContext.current as? Activity
-        produceState<ExtensionNotificationPageResolution?>(initialValue = null, notificationActionToken, activity?.intent) {
+        val context = LocalContext.current
+        val activity = context as? Activity
+        val keyguard = remember(context) { context.getSystemService(KeyguardManager::class.java) }
+        val lifecycle = LocalLifecycleOwner.current.lifecycle
+        var resume by remember(notificationActionToken) { mutableIntStateOf(0) }
+        DisposableEffect(lifecycle, notificationActionToken) {
+            val observer = LifecycleEventObserver { _, event ->
+                if (event == Lifecycle.Event.ON_RESUME) resume++
+            }
+            lifecycle.addObserver(observer)
+            onDispose { lifecycle.removeObserver(observer) }
+        }
+        produceState<ExtensionNotificationPageResolution?>(initialValue = null, notificationActionToken, notificationStore,
+            activity?.intent, resume) {
             val text = activity?.intent?.let { RemoteInput.getResultsFromIntent(it) }
                 ?.getCharSequence(EXTENSION_NOTIFICATION_REMOTE_INPUT)?.toString()
+            val locked = notificationLocked ?: {
+                try {
+                    extensionNotificationLockedAfterUnlockSettles({ keyguard?.isDeviceLocked != false })
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    true
+                }
+            }
             value = resolveExtensionNotificationPage(notificationActionToken, extensionId, uiId, manager, text,
-                ExtensionNotificationActionStore.shared)
+                notificationStore, locked)
         }.value
     }
     if (notificationActionToken != null && notification == null) {
@@ -109,6 +155,7 @@ fun ExtensionUiPage(extensions: ExtensionManagement?, extensionId: String, uiId:
     notification?.error?.let { error ->
         val message = when (error) {
             ExtensionNotificationPageError.WrongScope -> R.string.settings_ext_notification_wrong_scope
+            ExtensionNotificationPageError.Locked -> R.string.settings_ext_notification_unlock
             else -> R.string.settings_ext_notification_expired
         }
         JListPage(title = title, onBack = onBack) { item { JNotice(stringResource(message)) } }

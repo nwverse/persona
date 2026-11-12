@@ -18,8 +18,13 @@ interface ExtensionNotificationEnvironment {
 
 internal fun extensionEventScope(environment: ExtensionNotificationEnvironment, machineId: String, alertId: String?): ExtensionNotificationScope? {
     val current = environment.currentScope() ?: return null
-    if (machineId.isEmpty() && alertId.isNullOrEmpty()) return current.takeIf { environment.canRouteUnscopedEvents() }
-    val namespace = GroupKeys.namespaceOf(machineId.ifEmpty { alertId.orEmpty() })
+    val hasMachine = machineId.isNotEmpty()
+    val hasAlert = !alertId.isNullOrEmpty()
+    if (!hasMachine && !hasAlert) return current.takeIf { environment.canRouteUnscopedEvents() }
+    val machineNamespace = if (hasMachine) GroupKeys.namespaceOf(machineId) else null
+    val alertNamespace = if (hasAlert) GroupKeys.namespaceOf(alertId.orEmpty()) else null
+    if (hasMachine && hasAlert && machineNamespace != alertNamespace) return null
+    val namespace = if (hasMachine) machineNamespace else alertNamespace
     return current.takeIf { it.namespace == namespace }
 }
 

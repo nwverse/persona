@@ -86,14 +86,22 @@ internal data class ExtensionNotificationPresentation(
     val buttons: List<ExtensionNotificationActionRecord>,
 )
 
-/** Any invalid extension field degrades the whole payload to the pre-existing alert, never to a partial action set. */
-internal fun prepareExtensionNotification(context: Context, event: NotifyEvent, tag: String): ExtensionNotificationPresentation? {
+internal fun prepareExtensionNotification(context: Context, event: NotifyEvent, tag: String): ExtensionNotificationPresentation? =
+    prepareExtensionNotification(event, tag, Notify.dependencies(context).extensionNotifications(), ExtensionNotificationActionStore.shared)
+
+/** Any replacement first retires its exact tag, including ordinary, invalid and wrong-source alerts. */
+internal fun prepareExtensionNotification(
+    event: NotifyEvent,
+    tag: String,
+    environment: ExtensionNotificationEnvironment,
+    store: ExtensionNotificationActionStore,
+): ExtensionNotificationPresentation? {
     if (event.kind != "alert") return null
+    store.retire(tag)
     val payload = event.extensionNotification?.let(ExtensionNotificationPayload::validate) ?: return null
-    val environment = Notify.dependencies(context).extensionNotifications()
     val scope = extensionEventScope(environment, event.machineId, event.id) ?: return null
     val actions = payload.actions.orEmpty()
-    val records = ExtensionNotificationActionStore.shared.registerBatch(tag, payload.extension, payload.ui, payload.state,
+    val records = store.registerBatch(tag, payload.extension, payload.ui, payload.state,
         listOf(null) + actions, scope, environment::currentScope) ?: return null
     return ExtensionNotificationPresentation(records.first(), records.drop(1))
 }

@@ -73,6 +73,16 @@ class ExtensionNotificationActionStore(
         currentScope: () -> ExtensionNotificationScope? = scopeReader,
     ): ExtensionNotificationActionRecord? = registerBatch(tag, extension, ui, state, listOf(action), scope, currentScope)?.singleOrNull()
 
+    /** Retires every capability for the exact system notification tag, including degraded replacements. */
+    fun retire(tag: String): Unit = synchronized(lock) {
+        retireLocked(tag)
+    }
+
+    private fun retireLocked(tag: String) {
+        records.entries.removeAll { it.value.tag == tag }
+        claimed.retainAll(records.keys)
+    }
+
     /** Validates and installs a body plus its buttons as one replacement; no earlier button is retired by a later one. */
     fun registerBatch(
         tag: String,
@@ -84,6 +94,8 @@ class ExtensionNotificationActionStore(
         currentScope: () -> ExtensionNotificationScope? = scopeReader,
     ): List<ExtensionNotificationActionRecord>? = synchronized(lock) {
         scopeReader = currentScope
+        // The system replaces this exact tag even when the new payload is invalid or has no actions.
+        retireLocked(tag)
         val declared = actions.filterNotNull()
         if (actions.isEmpty() || declared.size > 3 || declared.map { it.id }.toSet().size != declared.size ||
             !scope.valid() || currentScope() != scope || tag.isBlank() || tag.length > 256 ||
@@ -99,11 +111,9 @@ class ExtensionNotificationActionStore(
                 listOf(scope.pairingScope, scope.namespace.orEmpty(), scope.manager, tag, action?.id.orEmpty())
                     .joinToString("|") { "${it.length}:$it" })
         }
-        records.entries.removeAll { it.value.tag == tag && it.value.scope == scope }
         handled.entries.removeAll { createdAt - it.value >= dedupeMillis }
         batch.forEach { records[it.token] = it }
         while (records.size > capacity) records.remove(records.entries.first().key)
-        claimed.retainAll(records.keys)
         batch
     }
 
