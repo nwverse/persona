@@ -24,9 +24,11 @@ import persona.core.contracts.api.DeliveryState
 import persona.core.contracts.api.RewindRestore
 import persona.core.domain.rewind.Rewind
 import persona.core.domain.sort.canSend
+import persona.core.designsystem.AppStyle
 import persona.core.designsystem.JAction
 import persona.core.designsystem.JActionSheet
 import persona.core.designsystem.JDialog
+import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.swipeToReply
 import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
@@ -38,11 +40,12 @@ import persona.core.designsystem.stableAlpha
 /**
  * A message the long-press menu is open for: [text] is what it says ("Copy" / "Select" / "Quote" / "Share" / "Hand to Persona" / "Use as context"
  * take it), [editText] what "Edit" puts back in the composer (its photos as attachments again), [user] for your own. [pending]: a
- * message only in the outbox (its id the client message id), in that delivery state.
+ * message only in the outbox (its id the client message id), in that delivery state. [time]: when it was said (the item's
+ * `ts`), which its picture shows.
  */
 @Immutable
 internal data class MessageTarget(val id: String, val text: String, val user: Boolean, val editText: String = text,
-    val pending: DeliveryState? = null)
+    val pending: DeliveryState? = null, val time: String? = null)
 
 /** Which message the long-press menu is open for (iOS `MessageMenu`); the page shows the menu, rows open it. */
 @Stable
@@ -114,21 +117,29 @@ internal fun MessageMenuSheet(
     rewind: RewindMenu? = null,
     /** "Delete" / "Cancel send" on a message only on this phone ([MessageTarget.pending]). */
     onDelete: ((MessageTarget) -> Unit)? = null,
+    /** Who answers here and where: on Glass "Share" opens the message's picture (iOS `MessageShareSheet`); without, it shares the text. */
+    share: ShareCardSource? = null,
 ) {
     var selecting by remember { mutableStateOf<String?>(null) }
+    var sharing by remember { mutableStateOf<MessagePicture?>(null) }
+    val pictures = share?.takeIf { PersonaTheme.style == AppStyle.Glass }
     var rewinding by remember { mutableStateOf<MessageTarget?>(null) }
     var confirmCode by remember { mutableStateOf<MessageTarget?>(null) }
     val context = LocalContext.current
     val copy = rememberCopy()
     val target = menu.target
     val resources = LocalResources.current
-    val extras = MessageExtras(fork = onFork != null, rewind = rewind != null, rewindBlock = rewind?.block, delete = onDelete != null)
+    val extras = MessageExtras(fork = onFork != null, rewind = rewind != null, rewindBlock = rewind?.block, delete = onDelete != null,
+        dontSend = PersonaTheme.style == AppStyle.Glass)
     if (target != null) JActionSheet(messageMenuActions(target, writes, onHandToPersona != null, resources, extras) { action ->
         when (action) {
             MessageAction.Copy -> { copy(target.text, null) }
             MessageAction.Select -> { selecting = target.text }
             MessageAction.Quote -> onQuote(target)
-            MessageAction.Share -> { if (!shareText(context, target.text)) onNotice(resources.getString(R.string.chat_menu_no_share)) }
+            MessageAction.Share -> {
+                if (pictures != null) { sharing = messagePicture(target, pictures) }
+                else if (!shareText(context, target.text)) { onNotice(resources.getString(R.string.chat_menu_no_share)) }
+            }
             MessageAction.HandToPersona -> onHandToPersona?.invoke(target.text)
             MessageAction.Context -> onContext(target.text)
             MessageAction.Edit -> onEdit(target.editText)
@@ -153,7 +164,12 @@ internal fun MessageMenuSheet(
             }, destructive = true)
     }
     selecting?.let { FullTextReader(it, onDismiss = { selecting = null }, title = stringResource(R.string.chat_menu_select_title), plain = true) }
+    sharing?.let { MessageSharePage(it, onDismiss = { sharing = null }) }
 }
+
+/** The message [target] as its picture says it, from [source]'s conversation. */
+internal fun messagePicture(target: MessageTarget, source: ShareCardSource): MessagePicture =
+    MessagePicture(target.text, target.user, source.source, persona.core.contracts.parseTime(target.time), source.agent, source.mark)
 
 /** What the menu offers, in order. */
 internal enum class MessageAction(@StringRes val label: Int) {
@@ -167,7 +183,9 @@ internal enum class MessageAction(@StringRes val label: Int) {
  * is offered (blocked for [rewindBlock] while it cannot).
  */
 internal data class MessageExtras(val fork: Boolean = false, val rewind: Boolean = false, val rewindBlock: String? = null,
-    val delete: Boolean = false)
+    val delete: Boolean = false,
+    /** Deleting one still waiting reads "Don't send", the word of its mark's menu on Glass ([OutboxBubble], iOS); else "Cancel send". */
+    val dontSend: Boolean = false)
 
 /** The menu's actions for [target]: [writes] for the composer ones, [handOff] when "Hand to Persona" is offered. */
 internal fun messageActions(target: MessageTarget, writes: Boolean, handOff: Boolean,
@@ -189,13 +207,14 @@ internal fun messageActions(target: MessageTarget, writes: Boolean, handOff: Boo
     if (extras.rewind && writes && target.user) add(MessageAction.Rewind)
 }
 
-private fun messageMenuActions(target: MessageTarget, writes: Boolean, handOff: Boolean, resources: Resources,
+internal fun messageMenuActions(target: MessageTarget, writes: Boolean, handOff: Boolean, resources: Resources,
     extras: MessageExtras, run: (MessageAction) -> Unit): List<JAction> =
     messageActions(target, writes, handOff, extras).mapIndexed { index, action ->
         val label = if (action == MessageAction.Rewind && extras.rewindBlock != null)
             resources.getString(R.string.chat_menu_rewind_blocked, extras.rewindBlock)
         // Still waiting to go: the words of its own action in the status panel.
-        else if (action == MessageAction.Delete && target.pending?.allows(DeliveryAction.Cancel) == true) resources.getString(R.string.chat_delivery_cancel)
+        else if (action == MessageAction.Delete && target.pending?.allows(DeliveryAction.Cancel) == true)
+            resources.getString(if (extras.dontSend) R.string.chat_outbox_dont_send else R.string.chat_delivery_cancel)
         else resources.getString(action.label)
         JAction(label, when (action) {
             MessageAction.Copy -> PhIcons.Copy

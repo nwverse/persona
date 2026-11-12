@@ -44,6 +44,7 @@
     <string name="chat_chrome_more">その他の操作</string>
     <string name="chat_chrome_actions_title">セッションの操作</string>
     <string name="chat_chrome_todo">ToDo · %1$s</string>
+    <string name="chat_chrome_terminal">ターミナル</string>
     <string name="chat_chrome_search">検索</string>
     <string name="chat_chrome_files">ファイル</string>
     <string name="chat_chrome_details">セッションの詳細</string>

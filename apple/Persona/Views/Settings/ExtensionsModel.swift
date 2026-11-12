@@ -585,7 +585,7 @@ enum ExtensionText {
     }
 }
 
-/// Settings › Extensions: the list, under each manager's name when the hub has several (docs/assistant/managers.md "Grouping").
+/// Settings › Extensions: only the current assistant's installed extensions.
 @Observable final class ExtensionsModel {
     struct Deps {
         var api: () -> APIClient?
@@ -594,44 +594,52 @@ enum ExtensionText {
     }
 
     private(set) var plugins: [HubExtension]?
-    /// The hub's managers, read with the list; nil from a hub without a roster.
     private(set) var roster: ManagerRoster?
-    /// The hub has plugin markets: the list shows Extension Market.
+    private(set) var manager: String?
     private(set) var markets = false
     private(set) var loading = false
     private(set) var error: String?
+    private(set) var missing = false
     @ObservationIgnored private let deps: Deps
+    @ObservationIgnored private var context: APIClient?
+    @ObservationIgnored private var read = 0
 
     init(deps: Deps = .live) { self.deps = deps }
 
-    /// The hub has no extensions to list (404: an older hub, or Demo Mode): the Mac says so instead of the error.
-    private(set) var missing = false
-
-    /// The list under each manager's name; nil with one manager (or none known): one list, as before.
-    var groups: [ManagerGroup<HubExtension>]? { plugins.flatMap { list in roster?.groups(list) { $0.manager } } }
-
-    /// The manager an extension's page and requests name: nil for the default's.
-    func manager(of p: HubExtension) -> String? { roster?.named(p.manager) }
+    /// Kept for callers that inspect grouping; a current-assistant list never groups.
+    var groups: [ManagerGroup<HubExtension>]? { nil }
+    func manager(of p: HubExtension) -> String? { manager }
 
     func load() async {
-        guard !loading else { return }
+        guard let api = deps.api()?.currentAssistantSettings() else { return }
+        if !api.sameSettingsScope(as: context) {
+            plugins = nil
+            markets = false
+            roster = nil
+            error = nil
+        }
+        context = api
+        manager = api.managerID
+        read += 1
+        let revision = read
         loading = true
-        defer { loading = false }
+        defer { if revision == read { loading = false } }
         do {
-            guard let api = deps.api() else { throw APIError(status: 0, message: String(localized: "Not connected to the hub yet")) }
-            let last = roster
-            async let managers = ManagerRoster.read(api, keeping: last)
+            async let managers = ManagerRoster.read(api.manager(nil), keeping: roster)
             let list = try await api.pluginList()
-            roster = await managers
-            plugins = list.plugins.sorted {
+            let roster = await managers
+            guard revision == read, !Task.isCancelled, api.sameSettingsScope(as: deps.api()) else { return }
+            self.roster = roster
+            plugins = ManagerRoster.settingsItems(list.plugins, roster: roster, manager: manager, stamped: { $0.manager }).sorted {
                 ExtensionPopularity.precedes(downloads: $0.downloads, name: $0.name, identity: $0.listKey,
                                              downloads: $1.downloads, name: $1.name, identity: $1.listKey)
             }
-            for p in list.plugins where p.auth != nil { deps.auth.received(p.id, p.auth, manager: manager(of: p)) }
+            for p in plugins ?? [] where p.auth != nil { deps.auth.received(p.id, p.auth, manager: manager) }
             markets = list.markets
             error = nil
             missing = false
         } catch {
+            guard revision == read, !Task.isCancelled, api.sameSettingsScope(as: deps.api()) else { return }
             self.error = error.localizedDescription
             missing = (error as? APIError)?.status == 404
         }

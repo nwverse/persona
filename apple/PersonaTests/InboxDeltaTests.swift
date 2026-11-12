@@ -8,7 +8,7 @@ struct InboxDeltaTests {
     private func item(_ id: String, manager: String? = "assistant", at: TimeInterval, title: String? = nil) -> InboxItem {
         let m = manager.map { #","manager":"\#($0)""# } ?? ""
         let json = """
-        {"id":"\(id)","source":"mail","kind":"mail","title":"\(title ?? id)","preview":"","count":1,
+        {"id":"\(id)","source":"mail","kind":"mail","account":"a","account_name":"A","title":"\(title ?? id)","preview":"","count":1,
          "updated_at":"\(ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: at)))"\(m)}
         """
         do { return try JSON.decoder.decode(InboxItem.self, from: Data(json.utf8)) }
@@ -53,8 +53,8 @@ struct InboxDeltaTests {
     /// A done item listed with its newest entry alone says how many it has; one listed whole does not (#4742).
     @Test func aCutChainSaysSo() throws {
         let entry = #"{"id":"c3","kind":"sent","text":"x","at":"2026-11-11T00:00:00Z"}"#
-        let cut = try listing(#"{"items":[{"id":"a","source":"mail","kind":"mail","title":"a","preview":"","count":1,"updated_at":"2026-11-11T00:00:00Z","done_at":"2026-11-11T00:00:00Z","chain":["# + entry + #"],"chain_count":3}]}"#)
-        let whole = try listing(#"{"items":[{"id":"a","source":"mail","kind":"mail","title":"a","preview":"","count":1,"updated_at":"2026-11-11T00:00:00Z","chain":["# + entry + #"]}]}"#)
+        let cut = try listing(#"{"items":[{"id":"a","source":"mail","kind":"mail","account":"a","account_name":"A","title":"a","preview":"","count":1,"updated_at":"2026-11-11T00:00:00Z","done_at":"2026-11-11T00:00:00Z","chain":["# + entry + #"],"chain_count":3}]}"#)
+        let whole = try listing(#"{"items":[{"id":"a","source":"mail","kind":"mail","account":"a","account_name":"A","title":"a","preview":"","count":1,"updated_at":"2026-11-11T00:00:00Z","chain":["# + entry + #"]}]}"#)
         #expect(cut.items.first?.chainCut == true && cut.items.first?.chainCount == 3)
         #expect(whole.items.first?.chainCut == false && whole.items.first?.chainCount == nil)
         #expect(cut.items.first?.isEvent == true) // still opens as an event

@@ -350,10 +350,35 @@ The `scripts/ci/` lanes are written for the hosted runners; on a Mac developer m
 - A database copied with `CREATE DATABASE ... TEMPLATE` keeps none of its template's `ALTER DATABASE ... SET` settings: set `synchronous_commit` on every copy (`dbtest.create`). Nothing may be connected to the template; Postgres waits up to 5 s on its own for backends that are closing, so no sleep after `Close` is needed. Use `STRATEGY wal_log`: `file_copy` checkpoints the whole server twice.
 - Since Postgres 15, every `DROP DATABASE` forces a checkpoint of the whole server, which writes whatever other tests left dirty. On a loaded machine, one drop took 0.07-3.8 s. Count that before giving more tests a database of their own.
 
+## "TempDir RemoveAll cleanup: directory not empty" after an assistant test (2026-11-12, #5510)
+
+- A test passed and then failed its own cleanup: something wrote into its `t.TempDir()` after the test returned. In
+  `internal/assistant` the writer was the service's debounced timers (`directionsSoon`, `directionTreeSoon`,
+  `meetingLiveChanged`, an attending look): they fire up to a second later, call `kbGet`, and that opened the
+  knowledge base again after the test's cleanup had closed it, putting back `.lock`, `chats/`, `people/` and the rest.
+  The same happened to a stopping manager (a late timer took the data directory's lock back), so it was a code bug:
+  `kbEnd` closes for good, and test fixtures register `t.Cleanup(s.kbEnd)`, not `kbClose` (which stays reopenable,
+  for the disconnected case and restart tests). A timer that already holds the engine still writes: the meeting
+  fixture runs the attending feed on real timers, so its cleanup waits for the looks already running and lets none
+  start after (`trackAttendFeed` in `server/internal/assistant/meeting_live_test.go`).
+- It shows only under load (one in four shuffled package runs on a busy Mac; six processes of `-run '^TestMeeting'
+  -count=20 -cpu=1` reproduce it every time). To find such a writer, give the fixture a directory whose cleanup, when
+  `os.RemoveAll` fails, lists what is left (with modification times against the cleanup's start) and dumps every
+  goroutine with `runtime.Stack(buf, true)`: the stack that calls `MkdirAll` or opens the lock names the timer.
+
 ## Green here, red on the hub: judge server tests on the hub machine (2026-11-12, #5182, #5188)
 
 - A test that needs Postgres skips without `PERSONA_TEST_DATABASE_URL`, and a plain `go test` prints `ok` for its package. #5031 changed what `task_plan` answers and checked `internal/hub` without a database, so `TestSupervisedTaskOverTheBus`, which drives that answer end to end, never ran and went red on `main` (#5182). Before a change that touches what a database test covers, run its package with `scripts/test/test-server.sh <package>`, or `go test -v` and check for `SKIP` lines.
 - Allocation budgets are set from numbers measured on the hub machine (linux/amd64). The same tests read about 2 KB lower on an arm64 Mac, so #5150 passed `TestReindexOneRevAllocation` and `TestIndexWholeListAllocation` there and failed them on the hub (#5188). Judge a budget only from a `test-server.sh` run. To find where a regression comes from, compare `allocated(...)` in a probe at both commits; the Mac shows the same difference, so a `pprof -sample_index=alloc_space` profile of the measured call can be taken there.
+
+## "Not listed" holds for a transcript the list never shows (2026-11-12, #5054)
+
+The node's list leaves out offline Claude transcripts under 2 KB (a hook probe's, `scanOffline`), and the fixtures of
+the launcher switch tests (`finishedTurn`) are about 400 bytes. A test that a session is left out of the list once it is
+no longer running passes with such a transcript whatever the code does: the engine switch's "the old session is not
+listed" did, and its title check (the row takes the old session's title, read off that session's row) failed until the
+transcript was long enough to be listed (`longTurn`). Before asserting a row is absent, assert it is there in the same
+setup.
 
 ## The mock hub does not enforce device roles (2026-11-12, #4869)
 
@@ -695,6 +720,14 @@ Pin the visual style, not an alternate navigation tree. A shared launch helper t
 - **Fake extensions installed through `dir:` in e2e are sandboxed by default** (bwrap, writes only to own data/runtime directories). A fake channel plugin writing received messages to a test directory throws and exits;
   hub restarts it, replayed input is deduplicated, and it looks like lost messages. Store files in `extension.data_dir` from `initialize` (tests read `~/.persona/extensions/data/<id>/`), retaining sandboxing.
 
+## A switch row's tap lands on its label (2026-11-12, #4741)
+
+- `SettingsSwitchRow` (and any `Toggle` with a label) puts its identifier on the whole row, so `app.switches["allday-switch"]`
+  spans the mark, the title, the line under it and the switch. `tap()` taps the element's center, which is the label, and a list
+  row's label doesn't flip the switch: the value stays, and a test that expects a sheet or a command after it fails, or passes for
+  the wrong reason. Tap the switch itself: `(row.switches.firstMatch.exists ? row.switches.firstMatch : row).tap()`, as
+  `ExtensionControlsUITests` and `AgentWorktreeUITests` do, and assert the value it reports (`"1"` / `"0"`) afterwards.
+
 ## XCUITest cannot tap while a list glides (2026-11-10, #3027)
 
 - **Every XCUITest gesture waits for the app to be idle, before and after**, and a scroll view gliding after a flick
@@ -788,6 +821,10 @@ The test binary does not recognize `voice`, reruns the whole package recursively
 ## Stop test programs before their temporary directories go (2026-11-11, #4104)
 
 `t.TempDir` removes all of a test's temporary directories in one cleanup, added at its first call, and cleanups run last added, first called. A test that first calls it after starting extension programs (`extensionTestHub` adds the cleanup that stops them) has its directories removed while the programs still run. A program the test's last change restarted (a provider switched back on restarts the extensions holding its references) then writes into a directory being removed, and the run fails with only `TempDir RemoveAll cleanup: … directory not empty`, about one run in three. `startTestExtensions` therefore calls `t.TempDir` before adding its cleanup. Anything else that starts processes writing into a test's directories must also add its stop cleanup after the first `t.TempDir` call.
+
+## A stub PATH and HOME do not hide fixed paths a script checks (2026-11-12, #5434)
+
+`install.sh` and `ensure-herdr.sh` look for herdr in `PATH`, `$HOME/.local/bin`, `$HOME/bin` and the fixed `/opt/homebrew/bin` and `/usr/local/bin`. Their tests set a stub `PATH` and a temporary `HOME`, so they passed on hosted runners but failed on any Mac with herdr from Homebrew: the scripts found the real one and never ran the fake installer. A test of a shell script that looks at absolute paths runs a copy pointing those paths into its temporary root, asserting the rewritten text is found exactly once so a moved path fails loudly instead of quietly testing the real machine again (`InstallHerdrTests` in `scripts/deploy/test_compressed_publish.py`). Keep anything the script finds relative to itself (`$(dirname "$0")/../persona_identity.py`) at the same relative place in the copy.
 
 ## Web screenshots on Linux unsupported by Playwright (2026-11-06, #3140)
 
