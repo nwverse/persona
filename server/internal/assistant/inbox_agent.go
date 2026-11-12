@@ -18,7 +18,7 @@ import (
 // The inbox's AI twin (docs/assistant/inbox.md): model 1 triages every new item (inbox_triage.go), every "Needs you" item
 // (and what an inbox policy hands it, inbox_policies.go) goes to an agent, model 2 links it to one of the user's
 // tasks (linkTaskFor), and the agent (model 3, a headless Claude Code in the assistant's
-// directory, with its tools: a conversation the assistant starts itself, untitled) looks into it and drafts the reply
+// directory, with its tools: a named handling conversation, archived from the default lists) looks into it and drafts the reply
 // (inbox_draft). The draft waits in the inbox; nothing is sent until the user taps "Send" (POST /api/v1/inbox/{id}/reply).
 
 // InboxAgentConfig is manager.json's inbox.agent (the hub hands it over in InboxConfig).
@@ -68,7 +68,7 @@ type InboxAgent struct {
 	Task      string `json:"task,omitempty"`   // model 2's instruction to the agent
 	Reason    string `json:"reason,omitempty"` // model 2's why, short
 	MachineID string `json:"machine_id,omitempty"`
-	SessionID string `json:"session_id,omitempty"` // the agent's conversation ("Chats" tab): how it got there
+	SessionID string `json:"session_id,omitempty"` // the handling conversation, opened from the item's chain
 	Draft     string `json:"draft,omitempty"`
 	Note      string `json:"note,omitempty"` // what the agent found, for the user to check the draft against
 	// Changes are the status moves the agent proposes with its draft (document items); "Send" makes them.
@@ -387,7 +387,8 @@ func kbChatOf(it *InboxItem) string {
 }
 
 // startInboxAgent starts a headless conversation like the assistant's (same directory, so the same tools) on the
-// inbox agent's model (model settings › inbox.agent), untitled: the draft in the inbox is its result.
+// inbox agent's model (model settings > inbox.agent). Untitled skips ordinary auto-naming; the item's subject
+// names it below. Its origin keeps it archived in the session snapshot; the Inbox item opens its transcript.
 func (s *Service) startInboxAgent(ctx context.Context, cfg InboxAgentConfig, it *InboxItem, prompt string) (machineID, sessionID string, err error) {
 	machine := s.settings(ctx).MachineID
 	if _, ok := s.device(ctx, cfg.Machine); ok && cfg.Machine != "" {

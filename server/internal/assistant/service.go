@@ -579,9 +579,13 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 	snap.Partial = snap.Partial || !ok
 	origins, ok := s.conversationOrigins()
 	snap.Partial = snap.Partial || !ok
+	cfg := s.settings(ctx)
 	for id, o := range origins {
 		v := view(id, o.machine)
 		v.Origin, v.OriginRef, v.OpenedBy = o.origin, o.ref, o.ext
+		// Inbox processing belongs to its item, not Recent. Keep the transcript reachable through the item and
+		// archived history, including after an instruction or a restart, without changing its saved origin.
+		v.Archived = o.origin == OriginInbox && id != cfg.Main
 	}
 	for id, machine := range archived {
 		view(id, machine).Archived = true
@@ -605,7 +609,6 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 	snap.Partial = snap.Partial || snap.Profile == nil
 	snap.Channels = s.channelsReport()
 	snap.Partial = snap.Partial || snap.Channels == nil
-	cfg := s.settings(ctx)
 	here := cfg.MachineID
 	queued, ok := s.queuedRelays()
 	snap.Partial = snap.Partial || !ok

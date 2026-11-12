@@ -1,5 +1,10 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- Inbox handling chats are implementation details, not user-created conversations (#5723). `Untitled` suppresses
+  automatic naming but does not hide a chat, and `titleFixed` still gives it the item's subject. Apply default
+  archiving in the common session snapshot, not only after starting or finishing: restored chats and follow-up
+  instructions must stay hidden too. Preserve item-chain links and the main conversation.
+
 - Proven `prompt` source can describe either a terminal tool label or a first-message fallback (#5269).
   Ordinary Claude inventory falls back to the first message for a bare tool label but not its spinner-prefixed
   form, so spinner normalization alone still lets a generated name disappear. Accept recognizable bad fallback
