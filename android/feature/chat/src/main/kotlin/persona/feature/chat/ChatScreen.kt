@@ -52,6 +52,7 @@ import persona.core.domain.rewind.Rewind
 import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.internal.GeneratedComponentManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
@@ -552,7 +553,10 @@ private fun ChatPage(
     }
     val readThrough = listOfNotNull(reportedSeen, snapshot.items.firstOrNull { it.id == snapshot.lastSeenMessageId }).maxWithOrNull(chatItemOrder)
     val context = androidx.compose.ui.platform.LocalContext.current
-    val loader = remember(context, repository, readingKey?.scope) { chatImageLoader(context.applicationContext, repository) }
+    val pairingLoader = remember(repository, key) { (repository as? ChatLocalStorage)?.imageLoader(key) }
+    val loader = remember(context, repository, pairingLoader) {
+        pairingLoader ?: chatImageLoader(context.applicationContext, repository)
+    }
     val markdownCache = remember { ChatMarkdownCache() }
     // Only fresh Agent replies preload their links (ChatLinks.toPreload): paging old history never does.
     val preloadUrls by produceState(emptyList<String>(), snapshot.items) {
@@ -563,7 +567,7 @@ private fun ChatPage(
     // list that pushes the question off the top (the newest reply is the one that keeps its place).
     var markdownReadyFor by remember { mutableStateOf<List<Item>?>(null) }
     val markdownSplit = remember { MarkdownPrewarm() }
-    DisposableEffect(loader) { onDispose { loader.shutdown() } }
+    DisposableEffect(loader, pairingLoader) { onDispose { if (pairingLoader == null) loader.shutdown() } }
     var folding by remember { mutableStateOf(emptySet<String>()) }
     var foldErrors by remember { mutableStateOf(emptyMap<String, String>()) }
     val terminal: (() -> Unit)? = if (readOnly || !canTerminal) null else onTerminal?.let { action -> { action(key) } }
@@ -814,7 +818,8 @@ private fun ChatPage(
             sheet = taskSheet, machines = machines.filter { GroupKeys.namespaceOf(it.id) == namespace }.map { it.copy(id = GroupKeys.raw(it.id)) },
             pending = taskCards.filter { GroupKeys.namespaceOf(it.machineId) == namespace }.map { it.copy(machineId = GroupKeys.raw(it.machineId)) },
             manager = session?.manager,
-            backgroundRecords = assistantPresentation.background, onOpenBackground = { backgroundOpen = true })
+            backgroundRecords = assistantPresentation.background, onOpenBackground = { backgroundOpen = true },
+            onOpenSetup = chrome.onOpenSetup?.let { open -> { page: persona.core.contracts.BriefSetupPage -> open(page, session?.manager) } })
     }
     fun approveTray(captured: List<Pair<Interaction, Resolution>>) {
         if (trayApproving || taps.busy || readOnly) return
@@ -945,12 +950,19 @@ private fun ChatPage(
         line.holds(lastUserId)
     }?.let { ChatListEntry(it.contentKey, lastLineAtTop = true) } else null
     val placed = remember(lines, messages, writtenAt) { placeFailed(lines.asReversed(), messages, writtenAt) }
-    // The list's keys from the bottom (reverse layout): the tail rows, the outbox's bubbles still on their way, then the
-    // lines, each with the failed sends written before it just above it (#2769).
-    val listKeys = remember(lines, placed, tailRows) {
+    // Persona's first message, not in the transcript yet: its day stands over it on Glass, as the transcript's will once it
+    // is there (iOS `DayLine`, #1911), so the line does not appear above it later. The day it was written, else today.
+    val pendingDay = if (glass && !agentChat && lines.isEmpty() && placed.rest.isNotEmpty())
+        placed.rest.mapNotNull { it.createdAt }.minOrNull()?.let { java.time.Instant.ofEpochMilli(it).atZone(java.time.ZoneId.systemDefault()).toLocalDate() }
+            ?: java.time.LocalDate.now()
+        else null
+    // The list's keys from the bottom (reverse layout): the tail rows, the outbox's bubbles still on their way, that day,
+    // then the lines, each with the failed sends written before it just above it (#2769).
+    val listKeys = remember(lines, placed, tailRows, pendingDay != null) {
         buildList {
             addAll(tailRows)
             placed.rest.asReversed().forEach { add("outbox-${it.clientMessageId}") }
+            if (pendingDay != null) add(PENDING_DAY_ROW)
             for (line in lines) {
                 add(line.contentKey)
                 placed.before[line.id].orEmpty().asReversed().forEach { add("outbox-${it.clientMessageId}") }
@@ -1020,6 +1032,9 @@ private fun ChatPage(
     }
     // A task's notice jumps to the call that started it through the task bar's navigation (ChatTasks).
     val callJumps = remember(key) { ChatCallJumps() }
+    // The Macs a computer tool's `machine` is, by name (the list changes with every report, its names seldom); Glass's
+    // rows also keep some tools' words as the title with the subject under them (#4339 C1).
+    val toolNames = remember(machines.map { it.id to it.name }, key.machineId, glass) { ToolNames(machines, key.machineId, glass = glass) }
     // Whose the conversation is, for what its links open (docs/assistant/managers.md "Clients"): its session's manager, else
     // for an assistant conversation the one whose page listed it.
     val linkManager = session?.manager ?: if (renderStyle == ChatRenderStyle.Assistant)
@@ -1027,7 +1042,7 @@ private fun ChatPage(
     CompositionLocalProvider(LocalChatMarkdownCache provides markdownCache, LocalChatRowActions provides rowActions,
         LocalContentColor provides PersonaTheme.palette.ink, LocalChatPorts provides chatPorts,
         persona.core.designsystem.LocalAssistantCards provides cardsHost, LocalChatSubagents provides subagentLinks, LocalSubagentFolds provides subagentFolds, LocalChatWorkflows provides workflowCards,
-        LocalChatTaskIndex provides projection.tasks, LocalChatJumpToCall provides callJumps::jump) {
+        LocalChatTaskIndex provides projection.tasks, LocalChatJumpToCall provides callJumps::jump, LocalToolNames provides toolNames) {
         // Under the files pane or the terminal's cover: hidden from screen readers too.
         ChatLinkHost(Modifier.fillMaxSize().background(PersonaTheme.palette.background)
             .then(if (embedded) Modifier else Modifier.imePadding())
@@ -1043,6 +1058,11 @@ private fun ChatPage(
             BoxWithConstraints(Modifier.fillMaxSize().padding(bottom = linkInset)) {
                 val pageHeight = maxHeight
                 val trayMax = maxHeight * AssistantTrayTokens.maximumHeightFraction
+                // The rule a question a supervisor passed up suggests, under its card (#4929); a hub from before sends none.
+                val ruleLine: (@Composable (Interaction) -> Unit)? = if (tasks == null) null else { card ->
+                    RuleSuggestionLine("card:${card.id}", card.suggestion, tasks, { notice = operationFeedback(it).text.resolve(res) },
+                        card.manager, enabled = canApprove)
+                }
                 // The pending cards above the composer (DESIGN_SYSTEM.md 4.8, iOS PendingCards and TaskQuestions), in two places:
                 // [task] Persona's task question above its entries, else the stack. Each takes at most half the page and never so
                 // much that the composer leaves it; with the keyboard up, what the conversation has above the rest of the
@@ -1102,7 +1122,7 @@ private fun ChatPage(
                                 }
                             }, keyboard = keyboard,
                             labels = if (task) taskAsk?.let { mapOf(it.card.id to it.label) }.orEmpty() else emptyMap(),
-                            first = if (task) null else chrome.requestId, counted = !task)
+                            first = if (task) null else chrome.requestId, counted = !task, suggestion = ruleLine)
                     }
                 }
                 val onOpenSibling = chrome.onOpenSession
@@ -1364,6 +1384,7 @@ private fun ChatPage(
                                 placed.rest.asReversed().forEach { message ->
                                     item(key = "outbox-${message.clientMessageId}", contentType = "outbox") { outboxBubble(message) }
                                 }
+                                pendingDay?.let { day -> item(key = PENDING_DAY_ROW, contentType = "day") { DayLine(day, Modifier.testTag("chat-pending-day")) } }
                                 for (line in lines) {
                                     item(key = line.contentKey, contentType = line.contentType()) {
                                         ChatSearchHighlight(search, line.contentKey) {
@@ -1500,3 +1521,5 @@ internal fun ComposerContextCards(contexts: List<ChatLinkContext>, compact: Bool
 /** The rows at the chat's newest end, under your unsent messages: a load error (Glass), then "Claude is getting ready…". */
 private const val ERROR_ROW = "load-error"
 private const val READY_ROW = "getting-ready"
+/** The day over a first message not in the transcript yet (Glass, Persona's conversation). */
+private const val PENDING_DAY_ROW = "pending-day"
