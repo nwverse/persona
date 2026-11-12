@@ -32,7 +32,7 @@ const (
 	kbPageMost      = 100                // items a knowledge-base call takes
 	previewMost     = 200
 	contextBodyMost = 3000
-	threadLinesMost = 10 // a thread's earlier items listed above its newest
+	threadLinesMost = 10 // a row's earlier items listed above its newest
 	failingNotice   = 24 * time.Hour
 )
 
@@ -171,7 +171,9 @@ func heldAt(h Held) time.Time {
 }
 
 // inboxThings are the Inbox's things of the catch-up and later items: a snapshot's newest state; the catch-up's
-// items as rows, or past digestOver as one digest with the ones still due kept as rows; then a row a thread.
+// items as rows, or past digestOver as one digest with the ones still due kept as rows; then the rows, one a thread,
+// or one for the whole subscription when its recipe groups by source (#5671), of the items stored since the rows'
+// grouping started (rowsFrom).
 func (d deliverer) inboxThings(catchup, live []Held) []connector.InboxThing {
 	var snaps, rows []Held
 	var digest []Held
@@ -202,10 +204,18 @@ func (d deliverer) inboxThings(catchup, live []Held) []connector.InboxThing {
 	if len(digest) > 0 {
 		out = append(out, d.digestThing(digest))
 	}
+	from, grouped := rowsFrom(d.sub)
+	byThread := groupsByThread(d.sub.Recipe)
 	threads := map[string][]Held{}
 	var order []string
 	for _, h := range rows {
-		key := cmpOr(h.Thread, h.UID)
+		if !grouped || from != nil && h.Stored.Before(*from) {
+			continue // came in as a row grouped otherwise; or the next run says from when the new grouping starts
+		}
+		key := rowAll
+		if byThread {
+			key = cmpOr(h.Thread, h.UID)
+		}
 		if _, ok := threads[key]; !ok {
 			order = append(order, key)
 		}
@@ -215,6 +225,50 @@ func (d deliverer) inboxThings(catchup, live []Held) []connector.InboxThing {
 		out = append(out, d.threadThing(key, threads[key]))
 	}
 	return out
+}
+
+// rowAll is the key of a subscription's one row when its recipe groups by source, as its knowledge-base chat is "all".
+const rowAll = "all"
+
+// groupsByThread says whether a recipe's items are grouped a thread each, in the Inbox and the knowledge base alike;
+// otherwise (source) the whole subscription is one row and one chat.
+func groupsByThread(r Recipe) bool { return r.GroupBy == wire.ConnectorSubscriptionGroupThread }
+
+// groupOf is the grouping r's items get: thread or source.
+func groupOf(r Recipe) string {
+	if groupsByThread(r) {
+		return wire.ConnectorSubscriptionGroupThread
+	}
+	return wire.ConnectorSubscriptionGroupSource
+}
+
+// rowsGroup is how sub's Inbox rows were made: its InboxGroup, or for rows from before #5671 a thread each (an item
+// without a thread its own), whatever the recipe said.
+func rowsGroup(sub Subscription) string {
+	return cmpOr(sub.InboxGroup, wire.ConnectorSubscriptionGroupThread)
+}
+
+// rowsFrom is when sub's rows start: they take the items stored from then on (nil: all of them). ok is false while the
+// recipe groups otherwise than the rows were made, until its next run that succeeds marks the change (markRows): the
+// items before it came in as rows of their own, and handing them in again regrouped would bring them in twice.
+func rowsFrom(sub Subscription) (from *time.Time, ok bool) {
+	if rowsGroup(sub) != groupOf(sub.Recipe) {
+		return nil, false
+	}
+	return sub.InboxGroupFrom, true
+}
+
+// markRows is next after a run that succeeded at start: the run that ends the Inbox's catch-up starts its rows with
+// the recipe's grouping (the catch-up holds no item delivered before), and one after the grouping changed (a recipe
+// changed without a new catch-up, or rows from before #5671) starts the new grouping with this run's items.
+func markRows(next Subscription, caughtUp bool, start time.Time) Subscription {
+	switch g := groupOf(next.Recipe); {
+	case caughtUp:
+		next.InboxGroup, next.InboxGroupFrom = g, nil
+	case inboxFrom(next) != nil && next.InboxCatchup != nil && rowsGroup(next) != g:
+		next.InboxGroup, next.InboxGroupFrom = g, &start
+	}
+	return next
 }
 
 func (d deliverer) thread(key string) string { return threadPrefix(d.sub.ID) + key }
@@ -256,8 +310,10 @@ func (d deliverer) fallback(due bool) *connector.ThingExtra {
 	return &connector.ThingExtra{RuleTier: string(tier)}
 }
 
-// threadThing is one row for a thread's items (or one item's): its newest is the row, the earlier ones are listed
-// above it in the context.
+// threadThing is one row for a thread's items (or one item's, or the whole subscription's): its newest is the row,
+// the earlier ones are listed above it in the context. Its count (extra.count) is how many items the newest pull
+// brought (pulled together with its newest, or the catch-up's when the Inbox took them at once): the Inbox adds it as a
+// move's messages, as a chat row counts its unread ones (#5671).
 func (d deliverer) threadThing(key string, items []Held) connector.InboxThing {
 	slices.SortStableFunc(items, func(a, b Held) int {
 		if c := heldAt(a).Compare(heldAt(b)); c != 0 {
@@ -289,10 +345,37 @@ func (d deliverer) threadThing(key string, items []Held) connector.InboxThing {
 	if strings.HasPrefix(last.Link, "https://") {
 		t.URL = last.Link
 	}
+	if n := d.newestPull(items); n > 1 {
+		if t.Extra == nil {
+			t.Extra = &connector.ThingExtra{}
+		}
+		t.Extra.Count = n
+	}
 	return t
 }
 
-// block is an item for the Inbox's context: title, who and when, its due date, its body (cut), its link.
+// newestPull is how many of items the Inbox got at the latest time it got any: those stored by the newest run, or
+// the catch-up's, which come in together when it ends.
+func (d deliverer) newestPull(items []Held) int {
+	var newest time.Time
+	n := 0
+	for _, h := range items {
+		got := h.Stored
+		if m := d.sub.InboxCatchup; m != nil && !got.After(*m) {
+			got = *m
+		}
+		switch {
+		case got.After(newest):
+			newest, n = got, 1
+		case got.Equal(newest):
+			n++
+		}
+	}
+	return n
+}
+
+// block is an item for the Inbox's context: title, who and when, its due date, its body (cut; left out when it only
+// says the title again, as a chat message read as both does), its link.
 func (d deliverer) block(it Item, when time.Time) string {
 	var lines []string
 	if it.Title != "" {
@@ -306,7 +389,7 @@ func (d deliverer) block(it Item, when time.Time) string {
 	if it.DueDate != nil {
 		lines = append(lines, i18n.T(d.lang, "subscriptions-deliver.due", i18n.Args{"when": d.when(*it.DueDate)}))
 	}
-	if body := strings.TrimSpace(it.Body); body != "" {
+	if body := strings.TrimSpace(it.Body); body != "" && body != strings.TrimSpace(it.Title) {
 		lines = append(lines, "", clip(body, contextBodyMost))
 	}
 	if it.Link != "" {
@@ -459,8 +542,8 @@ func (s *Service) Changes(ctx context.Context, id, cursor string, _ int) ([]conn
 // chatOf is the knowledge-base chat an item goes to: its thread's (named by the thread's first item the knowledge base
 // sees), or the subscription's own; a snapshot always the subscription's.
 func (d deliverer) chatOf(h Held) kbwire.SourceChat {
-	if h.Snapshot || d.sub.Recipe.GroupBy != wire.ConnectorSubscriptionGroupThread {
-		return kbwire.SourceChat{ID: "all", Name: d.sub.Label, Kind: "subscription"}
+	if h.Snapshot || !groupsByThread(d.sub.Recipe) {
+		return kbwire.SourceChat{ID: rowAll, Name: d.sub.Label, Kind: "subscription"}
 	}
 	key := cmpOr(h.Thread, h.UID)
 	return kbwire.SourceChat{ID: "t" + hashOf(key)[:16], Name: cmpOr(h.Title, d.sub.Label), Kind: "subscription"}
