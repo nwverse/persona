@@ -217,4 +217,247 @@ enum RecordingSamples {
     }
     #endif
 }
+
+#if os(iOS)
+// MARK: - All-day recording
+
+extension RecordingSamples {
+    /// The made-up past day (`-openDayRecap YES` opens it): yesterday, closed at its midnight, with a meeting mark, pauses,
+    /// a call, an erase on the watch and a silent minute. Its recap is the hub's: the mock writes one from its text
+    /// (`POST /mock/recording_day {"recap": …}`).
+    static let pastDay = UUID(uuidString: "00000000-0000-0000-0000-0000000000da")!
+    /// Today's made-up day, which the watch is recording (`today`) or waits on after a call (`paused`).
+    static let todayDay = UUID(uuidString: "00000000-0000-0000-0000-0000000000db")!
+
+    /// The made-up days asked for at launch (`-showDaySample`), nil without them. Read once: the Today section shows for
+    /// them as it would for a paired watch.
+    static let daySampleMode: String? = UserDefaults.standard.string(forKey: "showDaySample")
+
+    /// The modes `-showDaySample` takes.
+    private static let dayModes: Set<String> = ["today", "paused", "recap", "pending", "failed", "consent"]
+
+    /// The first install's work; later calls wait for it.
+    private static var dayInstall: Task<Void, Never>?
+
+    /// `-showDaySample today|paused|recap|pending|failed|consent`: yesterday's day in Recent Recordings and today's in the
+    /// Today section, both transcribed (no microphone, no speech recognition) and stored as the watch would send them, so
+    /// the phone uploads them to the hub as it would a real day; `paused` has the watch waiting for Continue after a call.
+    /// `recap|pending|failed` name the hub's answer the screenshot is for (the UI test sets the mock to it). They stand in
+    /// for a user who agreed to the consent sheet; `consent` is one who hasn't yet: no day, the watch off, and the Agree
+    /// row. Without the argument an earlier run's samples go, so other tests see only their own recordings. Once per
+    /// launch.
+    static func installDaySampleIfAsked() async {
+        if dayInstall == nil {
+            let mode = daySampleMode
+            dayInstall = Task { await installDays(mode) }
+        }
+        await dayInstall?.value
+    }
+
+    private static func installDays(_ mode: String?) async {
+        await removeEarlierDays(rebuilding: mode.map(dayModes.contains) ?? false)
+        guard let mode, dayModes.contains(mode) else { return }
+        let consent = RecordingDayConsent.shared
+        if mode == "consent" {
+            consent.forget()
+            RecordingDaySummaries.shared.receive(watch: RecordingDayWatchState(recording: nil, day: nil, state: .off, since: nil,
+                                                                              next: nil, pending: 0))
+            return
+        }
+        // The watch records only once the user agreed (docs/assistant/day-recap.md「Retention and privacy」).
+        consent.agree()
+        let library = RecordingLibrary.shared, store = RecordingDayStore.shared
+        let zone = TimeZone.current, now = Date.now
+        let paused = mode == "paused"
+        let past = pastSample(now: now, zone: zone), today = todaySample(now: now, zone: zone, paused: paused)
+        for day in [past, today] {
+            library.restore(day.id)
+            await write(day, to: store)
+            library.adoptDay(id: day.id, day: day.day, timeZone: zone.identifier, createdAt: day.startedAt, closed: day.closed)
+        }
+        RecordingDaySummaries.shared.receive(watch: RecordingDayWatchState(
+            recording: today.id, day: today.day, state: paused ? .interrupted : .recording,
+            since: today.lastChange, next: today.chunks.count, pending: 0))
+    }
+
+    /// An earlier run's made-up days, with everything the store kept of them: built again on every run (another day,
+    /// another mode).
+    /// `rebuilding`: the made-up days are built again now, so an earlier run's erases over a stretch of time go too (every
+    /// launch of a DEBUG build comes here; without a sample it leaves them, a real erase kept for a day still to come).
+    private static func removeEarlierDays(rebuilding: Bool) async {
+        let library = RecordingLibrary.shared, store = RecordingDayStore.shared
+        for id in [pastDay, todayDay] {
+            let stored = await store.record(id) != nil
+            guard stored || library.entry(id) != nil else { continue }
+            // Removed here only: a delete on the hub would tombstone the id there, and the new sample couldn't go up. (The
+            // day's upload also asks the watch to delete its copy, which it doesn't have: it confirms, and that is all.)
+            try? library.remove(id)
+            RecordingDaySync.shared.removedHere(id)
+            // Read while deleted: the store lets go of the day it holds in memory before the new one is written.
+            _ = await store.record(id)
+        }
+        // An earlier run's erases (Erase Last 10 Minutes) would otherwise reach the same hours of the day built again.
+        await store.forgetSampleRequests([pastDay, todayDay], ranges: rebuilding)
+    }
+
+    /// A made-up day: its chunks and control events as the watch would send them, and the text the phone would have
+    /// transcribed.
+    private nonisolated struct SampleDay: Sendable {
+        nonisolated struct Chunk: Sendable {
+            var header: RecordingDayHeader
+            var sentences: [RecordingSentence]
+            var state: RecordingDayChunk.State
+        }
+
+        var id: UUID
+        var day: String
+        var zone: TimeZone
+        var startedAt: Date
+        var chunks: [Chunk] = []
+        var events: [RecordingDayEvent] = []
+
+        var closed: Bool { events.contains { $0.type == .closed } }
+        /// When the watch's state last changed: the last `started` or `paused`.
+        var lastChange: Date {
+            events.last { $0.type == .started || $0.type == .paused }?.at ?? startedAt
+        }
+
+        /// The seq the next chunk gets: every seq below it was sent, or erased before it was.
+        var nextSeq: Int { chunks.count + reservedSeqs }
+
+        /// A chunk of `seconds` from `at`, its lines spread over it (`skipped`: quieter than speech).
+        mutating func chunk(_ at: Date, seconds: Double = 60, level: Double = -32, lines: [String] = [], skipped: Bool = false) {
+            let header = RecordingDayHeader(recording: id, recordingStartedAt: startedAt, tz: zone.identifier, day: day,
+                                            seq: nextSeq, startedAt: at, duration: seconds, level: level)
+            chunks.append(Chunk(header: header, sentences: RecordingSamples.sentences(lines, seconds: seconds),
+                                state: skipped ? .skipped : .transcribed))
+        }
+
+        /// A seq the watch allocated and erased before sending it: no chunk ever comes for it.
+        mutating func erasedChunk() -> Int {
+            let seq = nextSeq
+            reservedSeqs += 1
+            return seq
+        }
+
+        mutating func event(_ make: (Int) -> RecordingDayEvent) {
+            events.append(make(events.count))
+        }
+
+        var envelopes: [RecordingDayEventEnvelope] {
+            events.map { RecordingDayEventEnvelope(recording: id, recordingStartedAt: startedAt, tz: zone.identifier, day: day, event: $0) }
+        }
+
+        /// Seqs handed out without a chunk (`erasedChunk`); a chunk's seq counts them.
+        private var reservedSeqs = 0
+
+        init(id: UUID, day: String, zone: TimeZone, startedAt: Date) {
+            self.id = id
+            self.day = day
+            self.zone = zone
+            self.startedAt = startedAt
+        }
+    }
+
+    /// Stores the chunks and events as the receiver does, then gives the chunks their text as the transcriber would.
+    /// The store's receiver calls block on its queue, so they run off the main actor.
+    private static func write(_ day: SampleDay, to store: RecordingDayStore) async {
+        await Task.detached(priority: .userInitiated) {
+            // Never decoded: every chunk is transcribed already. The store needs some audio for a chunk that has it.
+            let audio = Data(repeating: 0, count: 64)
+            for chunk in day.chunks { _ = try? store.store(header: chunk.header, audio: audio) }
+            for envelope in day.envelopes { _ = try? store.store(event: envelope) }
+        }.value
+        // The text and its hub positions in one write, as the transcriber saves them (`RecordingDayUpload.place`).
+        await store.update(day.id) { record in
+            for chunk in day.chunks {
+                record.chunks[chunk.header.seq]?.state = chunk.state
+                record.chunks[chunk.header.seq]?.attempts = 0
+                record.chunks[chunk.header.seq]?.sentences = chunk.state == .transcribed ? chunk.sentences : nil
+            }
+            RecordingDayUpload.place(&record)
+        }
+    }
+
+    /// Yesterday, 09:12 to 19:07, closed at its midnight: a design review the watch marked as a meeting, a call, ten
+    /// minutes erased on the watch, lunch, the afternoon, the evening, a silent minute, then Stop for Today.
+    private static func pastSample(now: Date, zone: TimeZone) -> SampleDay {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = zone
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: now) ?? now.addingTimeInterval(-86_400)
+        let midnight = calendar.startOfDay(for: yesterday)
+        func at(_ hour: Int, _ minute: Int) -> Date {
+            calendar.date(bySettingHour: hour, minute: minute, second: 0, of: midnight) ?? midnight
+        }
+        let reason = RecordingDayContract.Reason.self
+        var day = SampleDay(id: pastDay, day: RecordingDayCalendar.day(of: yesterday, in: zone), zone: zone, startedAt: at(9, 12))
+        day.event { .started($0, at: at(9, 12)) }
+        day.chunk(at(9, 12), lines: ["早上先把导出功能的发布清单过一遍。", "超过 4 MB 的条目导出时会被丢掉，这个要先修。"])
+        day.event { .paused($0, at: at(9, 13), reason: reason.paused) }
+        day.event { .started($0, at: at(9, 41)) }
+        day.event { .mark($0, at: at(9, 41), label: RecordingDayEvent.Label.meeting) }
+        day.chunk(at(9, 41), lines: ["设计评审会议开始，先看新的导出流程。", "大家同意把进度条放到列表顶部。"])
+        day.chunk(at(9, 42), lines: ["Bo 负责明天把上传失败的测试修好。"])
+        day.event { .paused($0, at: at(9, 43), reason: reason.interrupted) }
+        day.event { .started($0, at: at(10, 20)) }
+        day.chunk(at(10, 20), lines: ["刚才接了个电话，继续说导出的事。"])
+        day.event { .paused($0, at: at(10, 21), reason: reason.paused) }
+        // Erase the Last 10 Minutes on the watch, before the chunk it was writing reached the phone.
+        day.event { .started($0, at: at(11, 5)) }
+        let erased = day.erasedChunk()
+        day.event { .erase($0, id: UUID(), from: at(10, 56), to: at(11, 6), seqs: [erased]) }
+        day.event { .paused($0, at: at(11, 6), reason: reason.paused) }
+        day.event { .started($0, at: at(12, 30)) }
+        day.chunk(at(12, 30), lines: ["中午和平台组一起吃饭，聊了上传接口的限流。", "他们建议把重试间隔调长一点。"])
+        day.event { .paused($0, at: at(12, 31), reason: reason.paused) }
+        day.event { .started($0, at: at(15, 20)) }
+        day.chunk(at(15, 20), lines: ["下午整理周报，记得周五前发出去。"])
+        day.event { .paused($0, at: at(15, 21), reason: reason.paused) }
+        day.event { .started($0, at: at(19, 5)) }
+        day.chunk(at(19, 5), lines: ["晚上回顾一下：导出修复和设计评审都有进展。"])
+        day.chunk(at(19, 6), level: -62, skipped: true)
+        day.event { .paused($0, at: at(19, 7), reason: reason.paused) }
+        let seqCount = day.nextSeq
+        day.event { .closed($0, at: RecordingDayCalendar.nextMidnight(after: yesterday, in: zone), seqCount: seqCount) }
+        return day
+    }
+
+    /// Today, from two and a half hours ago (or just after midnight) to two minutes ago: a pause, a call, then the last
+    /// minutes, which "Erase Last 10 Minutes" reaches. `paused`: a call took the microphone after them.
+    private static func todaySample(now: Date, zone: TimeZone, paused: Bool) -> SampleDay {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = zone
+        let start = max(calendar.startOfDay(for: now).addingTimeInterval(60), now.addingTimeInterval(-150 * 60))
+        // Every chunk ends two minutes before now at the latest; just after midnight the day is shorter, and so are they.
+        let room = max(10, now.timeIntervalSince(start) - 120)
+        let seconds = min(60, room / 10)
+        func at(_ share: Double) -> Date { start.addingTimeInterval(share * (room - seconds)) }
+        let reason = RecordingDayContract.Reason.self
+        var day = SampleDay(id: todayDay, day: RecordingDayCalendar.day(of: now, in: zone), zone: zone, startedAt: start)
+        day.event { .started($0, at: start) }
+        day.chunk(start, seconds: seconds, lines: ["今天先把全天录音的手机端过一遍。", "Today 一栏要能看到录了多久、转写到哪。"])
+        day.event { .paused($0, at: start.addingTimeInterval(seconds), reason: reason.paused) }
+        day.event { .started($0, at: at(0.2)) }
+        day.chunk(at(0.2), seconds: seconds, lines: ["下午三点和设计组对一下回顾页的布局。"])
+        day.event { .paused($0, at: at(0.2).addingTimeInterval(seconds), reason: reason.interrupted) }
+        day.event { .started($0, at: at(0.45)) }
+        day.chunk(at(0.45), seconds: seconds, lines: ["接完电话了，继续看同步的状态。"])
+        day.chunk(at(0.45).addingTimeInterval(seconds), seconds: seconds, lines: ["记得明天把截图发到群里。"])
+        day.event { .paused($0, at: at(0.45).addingTimeInterval(2 * seconds), reason: reason.paused) }
+        day.event { .started($0, at: at(1)) }
+        day.chunk(at(1), seconds: seconds, lines: ["这段话说完就删掉，试一下删掉最近 10 分钟。"])
+        if paused { day.event { .paused($0, at: at(1).addingTimeInterval(seconds), reason: reason.interrupted) } }
+        return day
+    }
+
+    /// Lines spread evenly over a chunk, each a moment shorter than its share.
+    private nonisolated static func sentences(_ lines: [String], seconds: Double) -> [RecordingSentence] {
+        guard !lines.isEmpty else { return [] }
+        let share = seconds / Double(lines.count)
+        return lines.enumerated().map { i, text in
+            RecordingSentence(start: Double(i) * share, end: Double(i) * share + share * 0.9, text: text)
+        }
+    }
+}
+#endif
 #endif

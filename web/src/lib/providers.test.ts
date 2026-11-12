@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "./api";
 import {
+  asksAuth,
   autoCheckable,
   fallbackTitle,
   fillFromCatalog,
@@ -27,6 +28,7 @@ import {
   providerBody,
   testModel,
   testText,
+  withoutAutoAuth,
   type ProviderForm,
   type ProviderView,
 } from "./providers";
@@ -58,8 +60,13 @@ const stored: ProviderView = {
 };
 
 describe("newForm", () => {
-  it("is a gateway typed by hand: no address, Bearer", () => {
-    expect(newForm()).toMatchObject({ auth: "bearer", base_url: "" });
+  it("is a gateway typed by hand: no address, its sign-in method found by the check (#5329)", () => {
+    expect(newForm()).toMatchObject({ auth: "auto", auth_found: "", base_url: "" });
+  });
+  it("takes Bearer, the old default, for a hub that does not find the method", () => {
+    expect(withoutAutoAuth(newForm())).toMatchObject({ auth: "bearer", auth_found: "" });
+    const chosen = ready({ auth: "api_key" });
+    expect(withoutAutoAuth(chosen)).toBe(chosen);
   });
 });
 
@@ -195,6 +202,22 @@ describe("providerBody", () => {
     const b = providerBody(ready({ kind: "api", api, small_model: "s", args: "--x" }), null);
     expect(b).toMatchObject({ kind: "api", api, small_model: "", args: [], auth: "api_key" });
   });
+  it("never sends Automatic: what the check found, else Bearer for a new gateway and what is stored when editing (#5329)", () => {
+    expect(providerBody(ready({ auth: "auto", auth_found: "api_key" }), null).auth).toBe("api_key");
+    expect(providerBody(ready({ auth: "auto", auth_found: "bearer" }), null).auth).toBe("bearer");
+    expect(providerBody(ready({ auth: "auto" }), null).auth).toBe("bearer");
+    const key: ProviderView = { ...stored, auth: "api_key" };
+    expect(providerBody({ ...formFromView(key), auth: "auto" }, key).auth).toBe("api_key");
+    expect(providerBody({ ...formFromView(stored), auth: "auto" }, stored).auth).toBe("bearer");
+    expect(providerBody({ ...formFromView(stored), auth: "auto", auth_found: "api_key" }, stored).auth).toBe("api_key");
+    // saved before the choice existed: x-api-key
+    expect(providerBody({ ...formFromView({ name: "old", model: "m1" }), auth: "auto" }, { name: "old", model: "m1" }).auth).toBe("api_key");
+    // chosen by hand: as is, whatever was found before
+    expect(providerBody(ready({ auth: "api_key" }), null).auth).toBe("api_key");
+    expect(providerBody(ready({ auth: "bearer", auth_found: "api_key" }), null).auth).toBe("bearer");
+    // Responses and Chat Completions as before
+    expect(providerBody(ready({ kind: "api", api: "chat", auth: "auto", auth_found: "bearer" }), null).auth).toBe("api_key");
+  });
   it("retains the protocol when editing and still requires a key for new chat providers", () => {
     const old: ProviderView = { name: "chat", kind: "api", api: "chat", model: "m1", base_url: "https://gw.example.com", has_key: true };
     const form = formFromView(old);
@@ -205,9 +228,10 @@ describe("providerBody", () => {
 });
 
 describe("formFromView", () => {
-  it("brings back what was saved", () => {
+  it("brings back what was saved, its sign-in method chosen (not Automatic)", () => {
     const f = formFromView(stored);
-    expect(f).toMatchObject({ name: "gw", auth: "bearer", opus_model: "m1", subagent_force: true, proxy: "http://proxy.example.com:8080", timeout_ms: "600000", effort: "high", headers: "", headers_touched: false });
+    expect(formFromView({ name: "old" })).toMatchObject({ auth: "api_key", auth_found: "" });
+    expect(f).toMatchObject({ name: "gw", auth: "bearer", auth_found: "", opus_model: "m1", subagent_force: true, proxy: "http://proxy.example.com:8080", timeout_ms: "600000", effort: "high", headers: "", headers_touched: false });
     expect(f.models.map((m) => [m.id, m.context_window, m.checked])).toEqual([["m1", "1000000", true], ["m2", "", true]]);
   });
   it("keeps a default model that is not in the list", () => {
@@ -231,8 +255,22 @@ describe("fallbackTitle", () => {
 
 describe("probes", () => {
   it("by name when editing, the typed key and touched headers over it", () => {
-    expect(probeBody(ready({ api_key: "" }), "gw", "m1")).toEqual({ base_url: "https://gw.example.com", auth: "bearer", api: "messages", name: "gw", model: "m1" });
-    expect(probeBody(ready({ api: "responses", headers: "", headers_touched: true }), null)).toEqual({ base_url: "https://gw.example.com", auth: "bearer", api: "responses", api_key: "sk-test-1", headers: "" });
+    expect(probeBody(ready({ api_key: "", auth: "bearer" }), "gw", "m1")).toEqual({ base_url: "https://gw.example.com", auth: "bearer", api: "messages", name: "gw", model: "m1" });
+    expect(probeBody(ready({ api: "responses", auth: "bearer", headers: "", headers_touched: true }), null)).toEqual({ base_url: "https://gw.example.com", auth: "bearer", api: "responses", api_key: "sk-test-1", headers: "" });
+  });
+  it("asks the hub to find the method while Automatic, then sends the one the check found (#5329)", () => {
+    expect(probeBody(ready(), null).auth).toBe("auto");
+    expect(probeBody(ready({ auth_found: "api_key" }), null, "m1").auth).toBe("api_key");
+    expect(probeBody(ready({ auth_found: "bearer" }), null).auth).toBe("bearer");
+    expect(probeBody(ready({ auth: "api_key" }), null).auth).toBe("api_key");
+    expect(probeBody(ready({ auth: "bearer", auth_found: "api_key" }), "gw").auth).toBe("bearer");
+  });
+  it("names no method where it does not choose the header: Codex, Antigravity, Responses and Chat Completions (#5329)", () => {
+    for (const f of [ready({ agent: "codex" }), ready({ agent: "agy", auth: "bearer" }), ready({ kind: "api", api: "responses" }), ready({ kind: "api", api: "chat" })]) {
+      expect(asksAuth(f)).toBe(false);
+      expect(probeBody(f, null)).not.toHaveProperty("auth");
+    }
+    for (const f of [ready(), ready({ agent: "omp" }), ready({ kind: "api", api: "messages" })]) expect(asksAuth(f)).toBe(true);
   });
   it("words the test result", () => {
     expect(testText({ ok: true, ms: 412 })).toBe("连接成功（412 ms）");
@@ -370,6 +408,8 @@ describe("autoCheckable (#4881)", () => {
     expect(autoCheckable({ ...opened, base_url: "https://other.example.com" }, saved)).toBe(true);
     expect(autoCheckable({ ...opened, api_key: "sk-new-key-1" }, saved)).toBe(true);
     expect(autoCheckable({ ...opened, auth: "api_key" }, saved)).toBe(true);
+    // choosing Automatic checks which method works (#5329)
+    expect(autoCheckable({ ...opened, auth: "auto" }, saved)).toBe(true);
     // a new address with no key stored and none typed has nothing to sign in with
     expect(autoCheckable({ ...opened, base_url: "https://other.example.com" }, { ...saved, has_key: false })).toBe(false);
   });

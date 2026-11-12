@@ -254,17 +254,18 @@ internal class AgentsViewModel(
     // session event kept the long list janky. Tests (no listContext) stay synchronous.
     }.let { built -> if (listContext == kotlin.coroutines.EmptyCoroutineContext) built.flowOn(listContext)
         else built.conflate().flowOn(listContext).throttleLatest(PAGE_MILLIS) }
-    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     val page = combine(projectedPage, repository.listStatus, flow {
         // Apply filters only while the page is observed; hidden/destroyed screens retain no filter worker.
-        emitAll(remoteFilter.mapLatest { (filter, group) ->
+        // A hub hello can cancel the first request and start a replacement. Keep displaying the repository's
+        // updates even if that first filter application never completes.
+        emit(Unit)
+        remoteFilter.collectLatest { (filter, group) ->
             try {
                 repository.setListNamespaces(group?.let { setOf(it.namespace) })
                 repository.setListFilter(filter)
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { _failure.value = error }
-            Unit
-        })
+        }
     }, groupListCounts) { projected, status, _, metadata ->
         if (!status.paged) projected.copy(loaded = status.loaded, pagination = status)
         else {
@@ -669,12 +670,14 @@ internal class AgentsViewModel(
         settings.update { it.copy(expandedIdle = if (open) it.expandedIdle + key else it.expandedIdle - key) }
     }
     fun showIdle(group: AgentListGroup) {
-        val key = when {
-            group.id.startsWith("machine/") -> "machine-${group.id.removePrefix("machine/")}"
-            else -> group.id
-        }
-        settings.update { it.copy(expandedIdle = it.expandedIdle + key) }
+        settings.update { it.copy(expandedIdle = it.expandedIdle + group.idleKey) }
     }
+    /** Folds [group]'s idle agents behind their line again (By Repository's "Hide N Idle", iOS `collapseRow`, #4338 A8). */
+    fun hideIdle(group: AgentListGroup) {
+        settings.update { it.copy(expandedIdle = it.expandedIdle - group.idleKey) }
+    }
+    private val AgentListGroup.idleKey: String
+        get() = if (id.startsWith("machine/")) "machine-${id.removePrefix("machine/")}" else id
     fun clearNotice() { _notice.value = null }
 
     fun linkTodo(todoId: String, session: Session) {

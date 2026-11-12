@@ -695,6 +695,14 @@ Pin the visual style, not an alternate navigation tree. A shared launch helper t
 - **Fake extensions installed through `dir:` in e2e are sandboxed by default** (bwrap, writes only to own data/runtime directories). A fake channel plugin writing received messages to a test directory throws and exits;
   hub restarts it, replayed input is deduplicated, and it looks like lost messages. Store files in `extension.data_dir` from `initialize` (tests read `~/.persona/extensions/data/<id>/`), retaining sandboxing.
 
+## A switch row's tap lands on its label (2026-11-12, #4741)
+
+- `SettingsSwitchRow` (and any `Toggle` with a label) puts its identifier on the whole row, so `app.switches["allday-switch"]`
+  spans the mark, the title, the line under it and the switch. `tap()` taps the element's center, which is the label, and a list
+  row's label doesn't flip the switch: the value stays, and a test that expects a sheet or a command after it fails, or passes for
+  the wrong reason. Tap the switch itself: `(row.switches.firstMatch.exists ? row.switches.firstMatch : row).tap()`, as
+  `ExtensionControlsUITests` and `AgentWorktreeUITests` do, and assert the value it reports (`"1"` / `"0"`) afterwards.
+
 ## XCUITest cannot tap while a list glides (2026-11-10, #3027)
 
 - **Every XCUITest gesture waits for the app to be idle, before and after**, and a scroll view gliding after a flick
@@ -788,6 +796,10 @@ The test binary does not recognize `voice`, reruns the whole package recursively
 ## Stop test programs before their temporary directories go (2026-11-11, #4104)
 
 `t.TempDir` removes all of a test's temporary directories in one cleanup, added at its first call, and cleanups run last added, first called. A test that first calls it after starting extension programs (`extensionTestHub` adds the cleanup that stops them) has its directories removed while the programs still run. A program the test's last change restarted (a provider switched back on restarts the extensions holding its references) then writes into a directory being removed, and the run fails with only `TempDir RemoveAll cleanup: … directory not empty`, about one run in three. `startTestExtensions` therefore calls `t.TempDir` before adding its cleanup. Anything else that starts processes writing into a test's directories must also add its stop cleanup after the first `t.TempDir` call.
+
+## A stub PATH and HOME do not hide fixed paths a script checks (2026-11-12, #5434)
+
+`install.sh` and `ensure-herdr.sh` look for herdr in `PATH`, `$HOME/.local/bin`, `$HOME/bin` and the fixed `/opt/homebrew/bin` and `/usr/local/bin`. Their tests set a stub `PATH` and a temporary `HOME`, so they passed on hosted runners but failed on any Mac with herdr from Homebrew: the scripts found the real one and never ran the fake installer. A test of a shell script that looks at absolute paths runs a copy pointing those paths into its temporary root, asserting the rewritten text is found exactly once so a moved path fails loudly instead of quietly testing the real machine again (`InstallHerdrTests` in `scripts/deploy/test_compressed_publish.py`). Keep anything the script finds relative to itself (`$(dirname "$0")/../persona_identity.py`) at the same relative place in the copy.
 
 ## Web screenshots on Linux unsupported by Playwright (2026-11-06, #3140)
 
