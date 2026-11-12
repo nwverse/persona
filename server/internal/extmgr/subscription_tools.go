@@ -234,7 +234,7 @@ func recipeFormat() map[string]any {
 		"fields": subscriptions.FieldKeys,
 		"field_meaning": map[string]string{
 			"id":       "the item's stable id: dedup key (without one, items are told apart by title, time and sender)",
-			"thread":   "items with the same thread share one Inbox row and one knowledge-base chat (group_by thread)",
+			"thread":   "the conversation an item belongs to: with group_by thread, items with the same thread share one Inbox row and one knowledge-base chat",
 			"title":    "required: what the Inbox row says",
 			"sender":   "who it is from",
 			"time":     "when it happened: RFC 3339, a date and time (user's zone), a date, or Unix seconds / milliseconds",
@@ -249,8 +249,11 @@ func recipeFormat() map[string]any {
 			wire.ConnectorSubscriptionModeItems:    "new items, each kept once (a JSON result with a list)",
 			wire.ConnectorSubscriptionModeSnapshot: "the result as one state kept when it changes (any result; text can only be a snapshot); at most hourly, daily by default",
 		},
-		"kinds":    wire.ConnectorSubscriptionKinds,
-		"group_by": wire.ConnectorSubscriptionGroups,
+		"kinds": wire.ConnectorSubscriptionKinds,
+		"group_by": map[string]string{
+			wire.ConnectorSubscriptionGroupSource: "the whole subscription is one Inbox row (its newest item on top) and one knowledge-base chat: for one conversation, such as a group chat or a channel",
+			wire.ConnectorSubscriptionGroupThread: "a row and a chat per thread, an item without one its own: for items that stand on their own (articles, notifications, mail) or belong to one of several conversations",
+		},
 		"intervals": "interval_seconds is at least 300 and the source's min_interval_seconds; a snapshot at least 3600, by default daily at daily_at (HH:MM). " +
 			"items default to every 900 seconds",
 	}
