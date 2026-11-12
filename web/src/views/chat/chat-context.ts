@@ -32,6 +32,9 @@ export interface ChatContextValue {
   /** The child sessions drawn as cards in this chat (#5120, lib/child-cards.ts), by the exchange each sits in. The same
    *  map while none moved: a child's own updates redraw only its card. */
   children?: ReadonlyMap<string, ChildPlace[]>;
+  /** The chat is drawn inside another page's panel (the Team panel's worker, ChatView `embedded`): what would open in
+   *  the side panel opens in place instead, since that panel is the one it is drawn in (a workflow card, #5421). */
+  embedded?: boolean;
 }
 
 export const ChatContext = createContext<ChatContextValue>({ tasks: emptyTaskIndex(), subagents: [], scope: "", workflowCalls: NO_WORKFLOW_CALLS });

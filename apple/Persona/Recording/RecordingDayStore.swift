@@ -911,6 +911,8 @@ nonisolated final class RecordingDayStore: @unchecked Sendable {
     private static let unreadableFile = "day-unreadable.json"
     private static let journalFile = "journal.log"
     private static let requestsFile = "day-requests.json"
+    /// When the audio's retention pass last ran (`claimRetentionPass`), across launches.
+    private static let retentionFile = "day-retention.json"
     /// The journal's lines for an append to `events.log` and a write of `erases.json` (the others are seqs).
     private static let eventsEntry = "events"
     private static let erasesEntry = "erases"
@@ -973,16 +975,34 @@ nonisolated final class RecordingDayStore: @unchecked Sendable {
         try queue.sync { try commitEvent(envelope) }
     }
 
+    /// Whether the audio's retention pass (`RecordingDayKeeper`) may run now, counted across launches: it reads every day
+    /// the phone holds, and WatchConnectivity can relaunch the app in the background several times an hour. Says yes at
+    /// most once per `interval`, and records `now` when it does.
+    func claimRetentionPass(now: Date, every interval: TimeInterval) async -> Bool {
+        await onQueue {
+            let url = self.root.appendingPathComponent(Self.retentionFile)
+            if let data = try? Data(contentsOf: url), // perf-ok: store queue
+               let last = try? JSONDecoder().decode(Date.self, from: data),
+               now >= last, now.timeIntervalSince(last) < interval {
+                return false
+            }
+            try? JSONEncoder().encode(now).write(to: url, options: .atomic)
+            return true
+        }
+    }
+
     #if DEBUG
     /// Screenshots and UI tests (`-showDaySample`): forgets what an earlier run asked the watch about the made-up days
     /// `ids` and every erase over a stretch of time, which there is no watch to confirm. Otherwise an erase made by an
     /// earlier run (kept `RecordingDayWatchRequests.lifetime`) would erase the same day built again at those hours.
-    func forgetSampleRequests(_ ids: Set<UUID>) async {
+    /// `ranges`: also every erase over a stretch of time (only while a sample is being built: they belong to no day, so a
+    /// real one kept for a day still to come would go too).
+    func forgetSampleRequests(_ ids: Set<UUID>, ranges: Bool) async {
         await onQueue {
             self.updateRequests { requests in
                 requests.erases.removeAll { ids.contains($0.recording) }
                 requests.deletes.removeAll { ids.contains($0.recording) }
-                requests.ranges = nil
+                if ranges { requests.ranges = nil }
             }
         }
     }

@@ -243,7 +243,7 @@ export interface Session {
   read_only_reason?: string;
   capabilities?: SessionCapabilities;
   attached?: boolean;
-  /** "Branch to new chat" works for it (a Claude Code conversation, node/fork.go); older nodes never say so. */
+  /** "Start a new session" (a branch of it, #2137) works for it (a Claude Code conversation, node/fork.go); older nodes never say so. */
   can_fork?: boolean;
   /** What to call an agent the app does not know (a runtime's own name, "DSH"; docs/integrations/runtimes.md). */
   agent_label?: string;
@@ -378,6 +378,9 @@ export interface Session {
   background_waiting?: boolean;
   rev?: number;
   suggestion?: string;
+  /** The suggestion names a command, a path, a link, a secret-looking string or a risky action (#4644): it is filled
+   *  in, never sent with one tap. An older hub never sends it. */
+  suggestion_risky?: boolean;
   /** An assistant conversation moved out of the list (docs/assistant/assistant.md "Managing its own conversations"), or
    *  an archived agent (docs/protocol/protocol.md "Agent session archives": only the Archived list has those). */
   archived?: boolean;

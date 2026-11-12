@@ -410,6 +410,11 @@ private fun WorkStep(step: WorkItem, session: SessionKey, loader: ImageLoader, o
                     return
                 }
             }
+            // Glass draws a subagent as its task card, running or done (#5045, DESIGN_SYSTEM.md 4.7 "Task cards").
+            if (PersonaTheme.style == AppStyle.Glass && Subagents.isAgent(call)) {
+                SubagentCard(call, live = running, assistant = style == ChatRenderStyle.Assistant)
+                return
+            }
             var open by remember(call.id) { mutableStateOf(false) }
             val diff = remember(call.use.item) { toolDiff(call.use.item) }
             val todos = remember(call.use.item) { todoEntries(call.use.item) }

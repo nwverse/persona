@@ -519,7 +519,8 @@ struct AssistantView: View {
                                                 effort: starterEffort.isEmpty ? nil : starterEffort,
                                                 main: makesMain, space: space, opID: op)
             }
-            if makesMain { await model.refreshAssistant() }
+            // The accepted conversation is visible before a follow-up configuration refresh.
+            if makesMain { Task { await model.refreshAssistant() } }
             Haptics.success()
             model.began(s, text: text, images: images) // the message stays on screen until claude has written it
             withAnimation(Theme.Motion.standard) {
@@ -587,7 +588,7 @@ struct FirstMessagePending: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .chatMark("chat.outbox.sending.start")
-                TypingIndicator(text: String(localized: "\(name) is getting ready…"))
+                TypingIndicator(text: String(localized: "Sending…"))
             }
         }
         .padding(.horizontal, Theme.Space.l) // the chat's list margins
@@ -1341,6 +1342,14 @@ struct BeautifulStarterComposer: View {
 struct AssistantToolsRow: View {
     var steps: [ToolStep]
     @State private var open = false
+    @State private var unfold = Unfolding()
+    @Environment(\.chatPin) private var pin
+    /// The line stays where it is in the chat while its steps open under it, folded ones fetched a moment later (#3757).
+    private var pinKey: String { "tools-" + (steps.first?.id ?? "") }
+
+    private func toggle() {
+        toggleInPlace(pin, pinKey, animation: Theme.Motion.standard, unfold: $unfold, closing: open) { open.toggle() }
+    }
 
     private var calls: [ToolCall] { steps.compactMap { if case .call(let c) = $0 { c } else { nil } } }
 
@@ -1351,9 +1360,7 @@ struct AssistantToolsRow: View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             if AppStyle.current.usesBeautifulUI {
                 // BeautifulUI's chip run, as in an agent's chat: one chip per kind of tool (a spinner while one runs).
-                Button {
-                    withAnimation(Theme.Motion.standard) { open.toggle() }
-                } label: {
+                Button(action: toggle) {
                     ToolChipGroup(ToolRunSummary.chips(calls), isOpen: open, isRunning: running)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .contentShape(.rect)
@@ -1361,9 +1368,7 @@ struct AssistantToolsRow: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("\(count) tool calls: \(sources(calls))")
             } else {
-                Button {
-                    withAnimation(Theme.Motion.standard) { open.toggle() }
-                } label: {
+                Button(action: toggle) {
                     HStack(spacing: Theme.Space.sm) {
                         if running {
                             ProgressView().controlSize(.mini)
@@ -1394,8 +1399,10 @@ struct AssistantToolsRow: View {
                     case .thought: EmptyView()
                     }
                 }
+                .unfolding(unfold)
             }
         }
+        .chatPinned(pinKey)
     }
 
     /// Which kinds of data were touched, in plain words.
