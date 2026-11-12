@@ -4,6 +4,7 @@ import org.junit.Assert.*
 import org.junit.Test
 import persona.core.contracts.Session
 import persona.core.contracts.Workflow
+import persona.core.domain.zh
 
 /**
  * The Agents list's row styles (#4338 A9): one display made of the two stored values, with iOS's cases
@@ -113,6 +114,23 @@ class AgentRowStylesTest {
         assertEquals("Awaiting reply", word(row("idle") { copy(awaitsReply = true) }))
         // Muted, plain Seen: a muted one is never Awaiting reply.
         assertEquals("Seen", word(row("idle") { copy(awaitsReply = true) }, muted = true))
+    }
+
+    @Test fun theStateLabelIsThePlainWordAChatHeaderSays() {
+        // iOS `Session.stateLabel`: the same words as `stateWord`, except Awaiting reply, which needs to know about the mute.
+        assertEquals("Seen", row("idle") { copy(awaitsReply = true) }.stateLabel.english())
+        assertEquals("Awaiting reply", row("idle") { copy(awaitsReply = true) }.stateWord(false).english())
+        assertEquals("Working (Background)", row { copy(workflows = listOf(workflow)) }.stateLabel.english())
+        assertEquals("Waiting in the background", row { copy(backgroundWaiting = true) }.stateLabel.english())
+        assertEquals("Waiting in the background", row { copy(backgroundWaiting = true, workflows = listOf(workflow)) }.stateLabel.english())
+        // Only a working one waits in the background; the assistant's own conversation never runs background work.
+        assertEquals("Seen", row("idle") { copy(backgroundWaiting = true) }.stateLabel.english())
+        assertEquals("Working", row { copy(assistant = true, workflows = listOf(workflow)) }.stateLabel.english())
+        for ((state, word) in listOf("needs_you" to "Needs you", "working" to "Working", "unread" to "Unread", "idle" to "Seen",
+            "offline" to "Not running", "unknown" to "Unknown")) assertEquals(word, row(state).stateLabel.english())
+        // The words in the app's other languages, from iOS's catalog.
+        assertEquals("工作中（后台）", row { copy(workflows = listOf(workflow)) }.stateLabel.zh())
+        assertEquals("后台等待中", row { copy(backgroundWaiting = true) }.stateLabel.zh())
     }
 
     @Test fun rowContentTakesTheDisplaysStateWord() {
