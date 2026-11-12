@@ -189,6 +189,12 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
             } }
             if (flows.isEmpty()) flowOf(emptyList()) else combine(flows) { lists -> lists.flatMap { it } }
         }.stateIn(scope, SharingStarted.Eagerly, emptyList())
+        override val writtenAt = groups.flatMapLatest { list ->
+            val flows = list.mapNotNull { it.data?.messages?.writtenAt }
+            if (flows.isEmpty()) flowOf(emptyMap()) else combine(flows) { maps ->
+                maps.fold(emptyMap<String, Long>()) { acc, one -> acc + one }
+            }
+        }.stateIn(scope, SharingStarted.Eagerly, emptyMap())
         override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?) {
             gate.withLock {
                 val group = groupOf(session.machineId) ?: throw IllegalStateException(AppText.get(R.string.app_error_pair_first))

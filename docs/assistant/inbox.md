@@ -317,8 +317,9 @@ Settings › Inbox Sources (#5278) shows the same mutes per source on each built
   Item `mutes` lists allowed mute targets, which the menu renders.
 
 - **Manager** (`assistant/inbox_mutes.go`): mutes live in `inbox_mutes` settings (source + tag + value + name). Each collection handles covered open items, so future
-  messages arrive already done. Item mute targets (`mutes`): connector `InboxThing.Tags` (`repo`, `chat`, `sender`); Lark chat (`lark.feed_id`)
-  and latest group speaker (`lark.sender_id`); lowercase mail sender address. Lark Docs and Moments items have none.
+  messages arrive already done. Item mute targets (`mutes`): connector `InboxThing.Tags` (`repo`, `chat`, `sender`; a subscription's rows carry
+  their newest item's `sender`, #5306); Lark chat (`lark.feed_id`) and latest group speaker (`lark.sender_id`); lowercase mail sender address.
+  Lark Docs and Moments items have none.
 - **GitHub muted repositories**: formerly GitHub connector setting `muted_repos`, now source `github`, tag `repo` mutes. On manager connection,
   hub migrates old entries through `inbox.repo_mutes` and clears them from GitHub settings. Settings › Connectors › GitHub (and old Apps) still read / write `muted_repos`;
   hub translates through the manager, so both entry points share the same data.

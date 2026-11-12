@@ -1908,6 +1908,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           stopping={stopping}
           commands={commands}
           suggestion={session?.suggestion}
+          suggestionRisky={session?.suggestion_risky}
           mention={mention}
           autoFocus
           onFocusChange={setTyping}
