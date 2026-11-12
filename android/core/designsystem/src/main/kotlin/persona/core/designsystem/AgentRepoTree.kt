@@ -8,6 +8,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -37,9 +38,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
 
-// By Repository's lines on Glass (iOS `RepoTreeRows.swift`, #4338 A7; docs/android/android-design.md 2.4): each repository a
-// card on the page, its header line and its working trees' lines in it, their agents in the work-item rows (`AgentRow`)
-// under their line. Brief and Board keep `AgentSpaceHeader` (decision 8).
+// By Repository's lines on Glass (iOS `RepoTreeRows.swift`, #4338 A7, A8; docs/android/android-design.md 2.4): each
+// repository a card on the page, its header line and its working trees' lines in it, their agents in the work-item rows
+// (`AgentRow`) under their line, the idle ones behind one quiet line; a computer's idle repositories one row each in its
+// Idle Repositories. Brief and Board keep `AgentSpaceHeader` and `AgentIdleRow` (decision 8).
 
 /** A level in (iOS `Theme.Tree.indent`), the column a line's mark sits in (`Theme.Tree.column`), above and below its words. */
 private val TreeIndent = Tokens.Space.xl - Tokens.Space.xxs
@@ -56,18 +58,19 @@ val LocalRepoCard = staticCompositionLocalOf<Color?> { null }
 
 /**
  * A line's slice of its repository's card (iOS's inset grouped section): the card's fill, its top corners and the room
- * between cards above it on the [first] line, its bottom corners on the [last], the card's sides inside it. The rows of
- * the card each draw their slice, as the list draws one line an item.
+ * between cards above it on the [first] line ([spaced]; none right under a section's header, Idle Repositories), its
+ * bottom corners on the [last], the card's sides inside it. The rows of the card each draw their slice, as the list
+ * draws one line an item.
  */
 @Composable
-fun Modifier.repoCard(first: Boolean, last: Boolean): Modifier {
+fun Modifier.repoCard(first: Boolean, last: Boolean, spaced: Boolean = true): Modifier {
     val fill = LocalRepoCard.current ?: return this
     val radius = PersonaTheme.shapes.panel
     val shape = RoundedCornerShape(
         topStart = if (first) radius else Tokens.Space.flush, topEnd = if (first) radius else Tokens.Space.flush,
         bottomStart = if (last) radius else Tokens.Space.flush, bottomEnd = if (last) radius else Tokens.Space.flush,
     )
-    return padding(top = if (first) Tokens.Space.m else Tokens.Space.flush).clip(shape).background(fill)
+    return padding(top = if (first && spaced) Tokens.Space.m else Tokens.Space.flush).clip(shape).background(fill)
         .padding(horizontal = Tokens.Space.l, vertical = Tokens.Space.flush)
         .padding(top = if (first) Tokens.Space.xs else Tokens.Space.flush, bottom = if (last) Tokens.Space.xs else Tokens.Space.flush)
 }
@@ -109,8 +112,8 @@ private fun RepoTreeLine(
 /**
  * A repository's header (iOS `RepoCardHeader`): its folder, its [title] in bold and the chevron that turns as it folds;
  * no counts. Its actions (the space's open, pin, mute, rename and to-do; Mark all as read) are its long press
- * ([onLongClick], read as [actionsLabel]), with no ⋯ of its own. A [quiet] repository (nothing going on, folded until
- * opened) is in the secondary color and says how many agents it holds ([agents]) until it has iOS's idle section.
+ * ([onLongClick], read as [actionsLabel]), with no ⋯ of its own. A repository with nothing going on is a row of its
+ * computer's Idle Repositories instead ([AgentIdleRepoRow]).
  */
 @Composable
 fun AgentRepoHeader(
@@ -118,28 +121,24 @@ fun AgentRepoHeader(
     folded: Boolean,
     onToggle: () -> Unit,
     modifier: Modifier = Modifier,
-    quiet: Boolean = false,
-    agents: Int? = null,
     onLongClick: (() -> Unit)? = null,
     actionsLabel: String? = null,
 ) {
     val palette = PersonaTheme.palette
     val kind = stringResource(R.string.designsystem_repository)
     val foldState = stringResource(if (folded) R.string.designsystem_folded else R.string.designsystem_expanded)
-    val tally = agents?.let { pluralStringResource(R.plurals.designsystem_tab_agents, it, it) }
     val separator = stringResource(R.string.designsystem_separator)
     RepoTreeLine(
         level = 0, onClick = onToggle, onLongClick = onLongClick, onLongClickLabel = actionsLabel, modifier = modifier,
         spoken = {
             heading()
-            contentDescription = listOfNotNull(title, kind, tally).joinToString(separator)
+            contentDescription = listOf(title, kind).joinToString(separator)
             stateDescription = foldState
         },
         mark = { JIcon(PersonaIcons.folder, null, size = Tokens.Space.l, tint = palette.ink2) },
     ) {
-        Text(title, style = PersonaTheme.type.bodyStrong, color = if (quiet) palette.ink2 else palette.ink, maxLines = 1,
+        Text(title, style = PersonaTheme.type.bodyStrong, color = palette.ink, maxLines = 1,
             overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-        tally?.let { Text(it, style = PersonaTheme.type.caption, color = palette.ink2, maxLines = 1) }
         FoldChevron(folded)
     }
 }
@@ -193,6 +192,77 @@ fun AgentWorktreeLine(
         }
         tally?.let { Text(it, style = type.caption, color = palette.ink2, maxLines = 1) }
         FoldChevron(folded)
+    }
+}
+
+/**
+ * An idle repository's row in its computer's Idle Repositories (iOS `QuietSpaceRow` in By Repository's `quietSection`,
+ * #4338 A8): its folder, its [title], under it how many [agents] and the first [tabs] they are in, when it last moved
+ * ([time]) and the chevron that turns as it opens. A tap opens its agents under it ([onToggle]); a long press is the
+ * actions its card's header had ([onLongClick], read as [actionsLabel]).
+ */
+@Composable
+fun AgentIdleRepoRow(
+    title: String,
+    agents: Int,
+    tabs: List<String>,
+    time: String?,
+    folded: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+    onLongClick: (() -> Unit)? = null,
+    actionsLabel: String? = null,
+) {
+    val palette = PersonaTheme.palette
+    val type = PersonaTheme.type
+    val kind = stringResource(R.string.designsystem_repository)
+    val foldState = stringResource(if (folded) R.string.designsystem_folded else R.string.designsystem_expanded)
+    val separator = stringResource(R.string.designsystem_separator)
+    // "2 agents · review · research", as iOS joins them.
+    val detail = (listOf(pluralStringResource(R.plurals.designsystem_tab_agents, agents, agents)) + tabs).joinToString(" · ")
+    RepoTreeLine(
+        level = 0, onClick = onToggle, onLongClick = onLongClick, onLongClickLabel = actionsLabel, modifier = modifier,
+        spoken = {
+            contentDescription = listOfNotNull(title, kind, detail, time?.takeIf { it.isNotEmpty() }).joinToString(separator)
+            stateDescription = foldState
+        },
+        mark = { JIcon(PersonaIcons.folder, null, size = Tokens.Space.l, tint = palette.ink2) },
+    ) {
+        // A list row's room above and below its two lines, as iOS's.
+        Column(Modifier.weight(1f).padding(vertical = Tokens.Space.xs)) {
+            Text(title, style = type.headline, color = palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(detail, style = type.micro, color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        time?.takeIf { it.isNotEmpty() }?.let { Text(it, style = type.micro, color = palette.ink2, maxLines = 1) }
+        FoldChevron(folded)
+    }
+}
+
+/**
+ * A working tree's idle agents behind one quiet line (iOS `RepoIdleLine`, #4338 A8), at their rows' [level]: folded,
+ * "2 idle · review · research" ([count] and the first [names]) and a chevron, and a tap shows them ([onClick]); once
+ * [open], "Hide 2 Idle" after them, and a tap folds them again.
+ */
+@Composable
+fun AgentRepoIdleLine(
+    count: Int,
+    names: List<String>,
+    open: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    level: Int = 1,
+) {
+    val palette = PersonaTheme.palette
+    val words = if (open) pluralStringResource(R.plurals.designsystem_idle_hide, count, count)
+        else (listOf(pluralStringResource(R.plurals.designsystem_idle_count, count, count)) + names).joinToString(" · ")
+    val spoken = if (open) words else pluralStringResource(R.plurals.designsystem_idle_show, count, count)
+    RepoTreeLine(
+        level = level, onClick = onClick, modifier = modifier, spoken = { contentDescription = spoken },
+        mark = { JIcon(if (open) PersonaIcons.collapse else PersonaIcons.idleFold, null, size = TreeWorktreeMark, tint = palette.ink3) },
+    ) {
+        Text(words, style = PersonaTheme.type.caption, color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f))
+        if (!open) JIcon(PersonaIcons.disclosure, null, size = TreeChevron, tint = palette.ink3)
     }
 }
 

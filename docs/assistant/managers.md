@@ -7,6 +7,44 @@ A manager is the assistant's process, `personad assistant` (`docs/assistant/assi
 - Each manager keeps its own data: a Postgres of its own, which `personad manager install` sets up in Docker the way `personad hub setup` sets up the hub's (or one the user gives with `--database-url`). The hub never touches a manager's database. The default manager keeps using the hub's database, with nothing migrated.
 - Where a manager runs is the user's choice: another service on the hub machine, a service on another computer, or a container. Bots, channels, plugins and sources are set up in each manager's own settings; none of it is global.
 
+## Repository references
+
+Repository bindings (#5330) belong to one manager's Settings entry `assistant.repositories`, not a hub-wide catalog.
+The document uses Settings CAS and a revision; at most 200 active records contain a stable ID, provider, HTTPS
+instance, full namespace path, canonical URL, optional name/aliases/purpose and `verified_at`. No credentials,
+computer or checkout are stored. HTTPS, `git@host:path.git` and `ssh://git@host/path.git` normalize to the same
+identity. GitHub Enterprise and self-hosted GitLab require an explicit provider; nested GitLab groups are preserved.
+
+The manager-owned `/api/v1/assistant/repositories` routes list/create; `/{id}` reads/updates/unbinds;
+`/preview` parses without contacting a remote. Mutations require full access. `/{id}/restore` accepts the unbind
+receipt once within ten minutes and restores the original ID and verification evidence, without a new probe.
+The latest 20 removed references are retained for undo. A failed persistence acknowledgement is not success.
+
+Creation and remote-identity changes require positive, matching provider repository metadata (including empty
+repositories). Descriptive edits and reads do not probe or synchronize. Checks are anonymous and establish only
+existence, never identity, membership, ownership, roles or push permission. Hidden/private 404, login HTML,
+authentication failures, rate limits, timeouts and ambiguous metadata cannot pass verification.
+
+Checks allow HTTPS only, reject redirects, use no ambient proxy/cookies/credentials, cap body/headers/time, validate
+all DNS answers and dial pinned numeric destinations with ordinary TLS hostname verification. Special, metadata,
+loopback and link-local addresses are always refused. Private RFC1918/ULA destinations require an operator's
+explicit `repository_trusted_targets` entry in this manager's `manager.json`; no Web/API input can grant trust:
+
+```json
+{"repository_trusted_targets":[{"instance_url":"https://code.example.com","networks":["<private CIDR>"]}]}
+```
+
+The exact HTTPS instance (including nondefault port) and private CIDR must both match. Broad public/default-route
+CIDRs cannot opt in private networks. Configure only infrastructure the operator trusts; this is not a connector
+or sign-in system. Public-only installations need no configuration.
+
+Read-only MCP `repositories_list(query?, cursor?, limit?)` and `repository_get(id)` return only this manager's saved
+metadata. Search covers name, aliases, namespace path and purpose (200-character query, at most 50 records/page).
+Cursors are bounded and tied to query/document revision; edits invalidate old cursors. Neither tool accepts a
+manager selector or fetches source. Their descriptions and the existing `task_plan` description guide identity
+resolution: explicit user URLs/paths win, references grant no authorization, and machine/cwd must never be inferred.
+There is no forced lookup preflight, injected list, new prompt or launcher-dependent behavior.
+
 ## Steps
 
 1. **Roster and identity** (below): the roster, each manager's own token, install codes, `/api/v1/managers`. Behavior unchanged.
