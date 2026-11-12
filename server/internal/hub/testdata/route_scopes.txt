@@ -162,6 +162,7 @@ assistant.ask        GET /api/v1/assistant/reporters
 -                    GET /api/v1/endpoints
 -                    GET /api/v1/extensions
 -                    GET /api/v1/extensions/-/audit
+-                    GET /api/v1/extensions/-/catalog/{mid}/{id}/icon
 -                    GET /api/v1/extensions/-/operations
 -                    GET /api/v1/extensions/-/operations/{op}
 -                    GET /api/v1/extensions/-/prompts
@@ -173,6 +174,7 @@ assistant.ask        GET /api/v1/assistant/reporters
 -                    GET /api/v1/extensions/-/widgets
 -                    GET /api/v1/extensions/{id}/-/auth
 -                    GET /api/v1/extensions/{id}/-/dev/logs
+-                    GET /api/v1/extensions/{id}/-/icon
 -                    GET /api/v1/extensions/{id}/-/image/{token}
 -                    GET /api/v1/extensions/{id}/-/storage/retained
 -                    GET /api/v1/extensions/{id}/-/{$}

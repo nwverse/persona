@@ -124,10 +124,10 @@ Defined once in `apple/Shared/StatusPalette.swift:19-36` and shared by the app, 
 | Needs you | system blue `#007AFF`/`#0A84FF` | `#0064C8`/`#409CFF` | blue since #6231 |
 | Working | `#E8890C`/`#FFB224` | `#A35A00`/`#FFB224` | amber |
 | Unread / awaiting reply | `#30A46C`/`#4CC38A` | `#1D7A4C`/`#4CC38A` | green |
-| Waiting in the background | working dot at 0.6 | secondary | clock mark |
+| Waiting in the background | working dot at 0.6 | secondary | clock mark; its soft fill the working dot at 0.08 |
 | Idle / Offline | secondary at 0.55 / 0.3 | secondary | gray |
 
-Needs you is blue on every client (`docs/design/DECISIONS.md`, 11-11). Android reads these values from the generated tokens (`spec/tokens/color.status.json`); the web still uses amber (`web/src/styles.css:233`), DS-01.
+Needs you is blue on every client (`docs/design/DECISIONS.md`, 11-11). Android reads these values from the generated tokens (`spec/tokens/color.status.json`); the web still uses amber (`web/src/styles.css:233`), DS-01. Waiting in the background is `status.<mode>.backgroundWaiting` there; Android Glass draws it as iOS does (`PersonaPalette.backgroundWaiting`, picked by `PersonaPalette.status(status, waitsInBackground)` as iOS's `Session.stateTone`), and Brief and Board keep Working's colors for it.
 
 #### Fills, diff, hues, shell neutrals
 
@@ -296,7 +296,7 @@ Reduce Motion:
   No new style, setting or navigation is added; at accessibility sizes the market row puts its full name above the
   version and status instead of squeezing all three beside the logo.
 - Web draws about 80 stroke glyphs (`web/src/ui/icons.tsx`, 15 px, stroke 1.9). Android uses Phosphor. There is no shared glyph map.
-- Catalog package logos (#4780) replace only the generic extension glyph inside its existing leading tile in the market list, market detail, installed list and installed detail. A shared logo component keeps the tile's geometry and fallback glyph. Loaded artwork has a fixed light neutral backing (`--extension-logo-backing` on web, `PersonaPalette.catalogLogoBackground` on Android) so transparent dark marks remain legible in either appearance. Missing, invalid, loading and failed artwork retain the earlier role-tinted generic mark; a changed URL can retry. The image fits without cropping and is decorative beside the package name. Only anonymous absolute HTTPS URLs without account credentials load. Downloads, when supplied, use secondary text (`--extension-meta-size` on web, scaled by the existing text-size transform) and the same GHCR package total across versions on every surface, never an install/user count; unknown counts add no line. This adds package identity to an existing component, not a new style or theme. Other marks, actions and primary screens stay unchanged.
+- Catalog package logos (#4780) replace only the generic extension glyph inside its existing leading tile in the market list, market detail, installed list and installed detail. A shared logo component keeps the tile's geometry and fallback glyph. Loaded artwork has a fixed light neutral backing (`--extension-logo-backing` on web, `PersonaPalette.catalogLogoBackground` on Android) so transparent dark marks remain legible in either appearance. Missing, invalid, loading and failed artwork retain the earlier role-tinted generic mark; a changed URL can retry. The image fits without cropping and is decorative beside the package name. Bundled catalog artwork (#5461) is a square PNG inside the versioned extension package; the hub verifies/reads it and returns an authenticated relative `icon_url`. Web uses its selected hub connection to fetch bytes and displays a local Blob URL; Android uses its authenticated hub image loader. Missing, stale or unavailable bundled files keep the same fallback. Legacy absolute HTTPS sources still load anonymously without hub or market credentials. Publisher limits and authenticated image routes are in `docs/extensions/extensions.md` ("Bundled catalog artwork"). Downloads, when supplied, use secondary text (`--extension-meta-size` on web, scaled by the existing text-size transform) and the same GHCR package total across versions on every surface, never an install/user count; unknown counts add no line. This adds package identity to an existing component, not a new style or theme. Other marks, actions and primary screens stay unchanged.
 
 `Theme.Icon.phoneControl` (`iphone.radiowaves.left.and.right`) is the assistant operating an iPhone through a computer:
 the phone-control sections and the `iphone_*` tools. Why a separate symbol: `Theme.Icon.phone` (`iphone`) already means a
@@ -540,6 +540,25 @@ No new token. The two icons are added to `ui/icons.tsx` in the existing stroke g
 
 Deviations from cindy: no Undo / Reapply (Persona cannot apply or revert a turn's patch), the plain `file` mark instead of file-type icons, rows a finger tall on touch screens (6.3), and 评审 for Review in Chinese (the Review panel's word). The `fileDiff` and `alertCircle` marks are added to `ui/icons.tsx` (Lucide's file-diff and circle-alert, as cindy's); no new token.
 
+#### Connected Inbox message cards (#856)
+
+Lark CLI Inbox items with a source AppLink offer **Open in Feishu** (or **Open in Lark**)
+while **AI draft reply** remains available. This secondary Button opens the source client at the original
+message or topic using the CLI's unmodified link. Missing links have no opening action;
+the existing in-app Original action remains available.
+For older items without a stored link, the loaded original message supplies the
+same action next to the reply-target details; a stored header action is never duplicated.
+
+The web Inbox uses the existing connector conversation for source-provided messages;
+legacy collected text is never split into inferred messages. A supported card uses
+`bg-surface`, `rounded-card`, the existing stroke icons and the Markdown/link reader.
+Its linked subject and description come first; author, repository and original text
+are disclosed in details. Long descriptions have a preview, reversible expansion
+and a bottom collapse action that restores focus to the expansion control.
+Reply targets show a friendly name and a source-backed preview when available;
+opaque routing IDs and read diagnostics stay in details. The layout changes no
+sending identity or confirmation behavior.
+
 ### 3.4 Lists and rows
 
 - Page chrome: `.themedPage()`, `.themedGroupedPage()`, `.themedRow()` (`apple/Persona/DesignSystem/Styling.swift:13-22`). Settings uses `SettingsForm` and `SettingsRow`.
@@ -683,6 +702,17 @@ use another subtitle line rather than pushing the workflow count out of the row.
 
 Agent header loop and background pill (iOS `ActivityChips` in `apple/Persona/Views/Session/SessionPanes.swift`; Android Glass `JActivityPill`, #4339 C8): one neutral pill held at the trailing end of the header's second row, as tall as the tabs beside it: the loop's arrows in the loop color with its next time (Running once due, Loop without one), a divider, and the background tasks' count by a neutral gear (whether they work or only wait is the title line's state). Its sheet holds the loop with Stop Loop (asks first, then asks the agent to stop scheduling) and each background task with View Output. The folded slim bar shows none of it.
 
+Where a message goes in Persona's conversations (iOS `RouteChip` and `TaskMentionList`, web `RouteChip`, Android
+`TaskRouteChip`; #4339 C15): while the next message goes straight to a task, one accent-tinted chip sits right above the
+composer, under the action or tray bar: the send mark, "Message “task”", and a × of its own read "Hand to Persona" that
+gives the message back to Persona. The route never shows only inside a tray. It is behaviour, so every style shows it,
+each with its own chip (Android `JChip(accent, onRemove)`). @ lists the conversation's open tasks (not done or failed,
+newest first) with their state's dot and where they run, and a pick takes the @word out and sets the same route a task's
+Message sets. iOS draws them as a panel of their own above the action bar ("Message a Task", or "No tasks in this chat
+yet"); Android puts them first in the composer's one @ list under "Message a task", the files and sessions after them
+under "Mention a file or session", the typed word narrowing all of them, so the list takes no more room above the
+keyboard than before.
+
 Agent header permission mode (#3719, `HeaderModeButton` in `apple/Persona/Views/Chat/SessionModes.swift`): an icon-only
 capsule at the trailing end of the open Agents header's second row, under `⋯`, as tall as the tabs, with a 44 pt target that
 overhangs the row. It draws the mode menu's own symbol (one per mode) in its `ModeTone`, tinted as `ModeChip` tints a
@@ -763,6 +793,11 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   that can't switch) are listed with their rows off and the reason; a pending switch to another launcher of the same
   engine names the launcher rather than the engine; the engine warning line wraps rather than truncating; "Switch Agent?"
   sits high on a computer and is a sheet on a phone, with no close ×.
+- Android's existing-conversation equivalent (#4663, `ConversationLauncherChip`) reuses the composer's `JChip` and a
+  `JActionSheet` with Launcher and Model sections, not a second visual selector. It reads only the hub's
+  `?purpose=assistant` list. The sheet says the pick applies from the next message until changed and leaves settings
+  unchanged; **Use the default** clears it. The pick follows every later send and retry in that conversation. Older hubs
+  without a model list keep the launcher choices and show one disabled explanation row. No new token or style.
 
 ### 3.9 Empty states
 
@@ -933,7 +968,7 @@ Today there are seven mechanisms and the same action can use different ones (DS-
 
 ### 4.5 Push, notifications and reminders
 
-- The system prompt appears right after pairing and at launch, with no in-app explanation first (`apple/Persona/App/PushRegistrar.swift:16-33`). Requested options include time-sensitive. When denied, Settings explains and deep-links.
+- The system prompt appears right after pairing and at launch, with no in-app explanation first (`apple/Persona/App/PushRegistrar.swift:41-53`, the options at `:174`). Requested options include time-sensitive. When denied, Settings explains and deep-links; allowing it there registers when the app comes back (#1861).
 - Foreground: the system banner, suppressed for the visible session. No custom in-app push banner.
 - Actions: Allow (needs unlock) and Deny on permissions; Approve and Send Back on plans; Reply on done (`apple/Persona/App/NotificationActions.swift:19-52`). Failures are posted as local notifications.
 - Live Activity: Allow and Deny buttons; Allow requires authentication. Stale after 15 minutes.
