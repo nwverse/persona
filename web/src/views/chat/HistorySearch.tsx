@@ -3,7 +3,8 @@
 // Enter or Tab puts the message in the box, Esc or Ctrl+G cancels. lib/send-history.ts holds the matching and the keys.
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { t } from "../../i18n";
-import { composing, moveActive, readAllHistory, searchAction, searchSent } from "../../lib/send-history";
+import { composing } from "../../lib/send-history";
+import { moveActive, readAllHistory, searchAction, searchSent } from "../../lib/send-history-search";
 import { cx, EASE } from "../../ui/atoms";
 import { splitSkillDraft } from "../../lib/skill-mentions";
 

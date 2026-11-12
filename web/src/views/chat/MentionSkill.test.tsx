@@ -58,7 +58,7 @@ afterEach(() => { act(() => root.unmount()); host.remove(); });
 it("searches name/description locally, disambiguates equal names, selects with keys and retains explicit identity on send", async () => {
   render();
   await type("@");
-  await waitForOptions(2);
+  await waitForOptions(3); // two skills and the existing Add files action
   expect(options().map((o) => o.textContent)).toEqual(expect.arrayContaining([expect.stringContaining("project · ."), expect.stringContaining("user")]));
   await type("@security");
   expect(options()).toHaveLength(1);
@@ -95,13 +95,13 @@ it("supports touch/click removal, restores edit/queue references and persists th
   expect(getContexts("skill-test")).toHaveLength(0);
 });
 
-it("never offers stale rows across environment switches, ignores late responses, and allows ordinary chat on failure", async () => {
+it.each(["manager", "directory"])("never offers stale rows across %s switches, ignores late responses, and allows ordinary chat on failure", async (change) => {
   let resolve!: (value: unknown) => void;
   api.mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
   render();
   await type("@review");
   await vi.waitFor(() => expect(resolve).toBeTypeOf("function"));
-  render({ ...source, skills: { ...source.skills!, manager: "helper-b", environment: "profile-b" } });
+  render(change === "directory" ? { ...source, cwd: "/example/changed" } : { ...source, skills: { ...source.skills!, manager: "helper-b", environment: "profile-b" } });
   await waitForOptions(2);
   await act(async () => resolve({ catalog_version: 1, complete: true, skills: [{ ...skills[0], name: "stale" }] }));
   expect(host.textContent).not.toContain("stale");
@@ -134,7 +134,7 @@ it("keeps existing file rows reachable beside a large skill catalog and searches
   }));
   render({ ...source, files: () => ["/example/report.ts"] });
   await type("@");
-  await waitForOptions(4);
+  await waitForOptions(5); // three skill previews, the existing file, and Add files
   expect(options().some((o) => o.textContent?.includes("report.ts"))).toBe(true);
   expect(options().filter((o) => o.textContent?.includes("review-"))).toHaveLength(3);
   await type("@review-49");
