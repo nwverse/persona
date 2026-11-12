@@ -60,6 +60,8 @@ fun ChatTopBar(
     onTitleClick: (() -> Unit)? = null,
     /** Which agent runs here, and in which client (#6390): its mark before the status line's dot. */
     agentMark: AgentMarkSpec? = null,
+    /** What a tap on the title does, as the screen reader says it ("View session info"); null: just a button. */
+    titleClickLabel: String? = null,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     val palette = PersonaTheme.palette
@@ -67,7 +69,7 @@ fun ChatTopBar(
     val style = PersonaTheme.style
     val tone = status?.let { palette.status(it) }
     val titleBlock: @Composable RowScope.() -> Unit = {
-        Column(Modifier.weight(1f).padding(horizontal = 4.dp).then(if (onTitleClick != null) Modifier.clickable(role = Role.Button, onClick = onTitleClick) else Modifier)) {
+        Column(Modifier.weight(1f).padding(horizontal = 4.dp).then(if (onTitleClick != null) Modifier.clickable(role = Role.Button, onClickLabel = titleClickLabel, onClick = onTitleClick) else Modifier)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (busy) { JSpinner(Modifier.size(14.dp), stroke = 1.8.dp); Spacer(Modifier.width(6.dp)) }
                 Text(title, style = if (style == AppStyle.Board) type.headline else type.label.copy(fontSize = androidx.compose.ui.unit.TextUnit(16f, androidx.compose.ui.unit.TextUnitType.Sp)), color = palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)

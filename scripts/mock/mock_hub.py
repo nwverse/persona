@@ -7170,6 +7170,35 @@ if os.environ.get("MOCK_SCREEN_DIALOG"):
                         {"key": "2", "label": "Yes, and don't ask again for git push commands in /Users/me/code/weather", "keys": ["2"]},
                         {"key": "3", "label": "No, and tell Claude what to do differently (esc)", "keys": ["3"]}]}})
 
+# MOCK_SCREEN_DANGER=before|after: Claude Code 2.1.322's safety check on a command (bypass mode, #5265 / #5266) with
+# its countdown, on the review agent. "before": as a hub before #5265 read it at a narrow width (the command missing,
+# the wrapped countdown in detail); "after": as a hub reads it now (command, description, the warning and what it is
+# about, the countdown and when it runs out, 1:44 from the mock's start).
+if os.environ.get("MOCK_SCREEN_DANGER") in ("before", "after"):
+    _danger_cmd = ('cd ./dist && F=(${(f)"$(grep -oE \'(src|href)="\\./assets/[^"]+\\.js"\' index.html | sed -E '
+                   '\'s/.*="\\.\\///; s/"$//\' | sort -u)"}); echo "${#F[@]} files"; for k in alpha_name beta_name gamma_name; '
+                   'do echo "$k: $(cat "${F[@]}" | grep -o "$k" | wc -l | xargs)"; done')
+    _danger_desc = "Count the example names in first-screen chunks"
+    _danger_warning = "Dangerous rm operation not ruled out — the shell may read this command differently than it was parsed"
+    _danger_deadline = "Claude Code will automatically block this request in 1:44, to avoid holding up an unattended session"
+    _danger = {"question": "Do you want to proceed?", "rev": "7c2e9a41d0b3", "options": [
+        {"key": "1", "label": "Yes", "keys": ["1"]}, {"key": "2", "label": "No", "keys": ["2"]}]}
+    if os.environ["MOCK_SCREEN_DANGER"] == "before":
+        _danger.update(detail="Bash command\n" + _danger_desc + "\n⚠ Claude Code will automatically block this request in\n"
+                       "1:44, to avoid holding up an unattended session",
+                       warning=_danger_cmd + " " + _danger_warning)
+    else:
+        _danger.update(detail="Bash command\n" + _danger_desc + "\n" + _danger_cmd, warning=_danger_warning,
+                       deadline=_danger_deadline, command=_danger_cmd, description=_danger_desc, risk="delete",
+                       deadline_action="deny",
+                       deadline_at=(datetime.now(timezone.utc) + timedelta(seconds=104)).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    INTERACTIONS.append(
+        {"id": "scr_macbook_review_7c2e9a41d0b3", "machine_id": "macbook", "session_id": REVIEW, "session_title": "检查 PR #42 的改动",
+         "cwd": "/Users/me/code/weather", "kind": "screen", "created_at": ago(minutes=1), "expires_at": later(hours=24),
+         "screen": " Bash command\n " + _danger_desc + "\n │ " + _danger_cmd + "\n │ " + _danger_warning + "\n ⚠ " + _danger_deadline
+                   + "\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n\n Esc to cancel · Tab to amend",
+         "dialog": _danger})
+
 # MOCK_SCREEN_MULTI=1: a multi-select AskUserQuestion read off the terminal (Claude Code 2.1.316), the second of
 # three questions: two boxes already ticked at the computer, a few words in its free-text field, "Next" to send it.
 # /mock/reset puts it back unanswered (MultiSelectCardTests: each case starts from the card).
