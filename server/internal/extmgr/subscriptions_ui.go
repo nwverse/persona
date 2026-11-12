@@ -3,6 +3,7 @@ package extmgr
 import (
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/extension"
@@ -90,9 +91,15 @@ func (h *Manager) subscriptionGraph(w http.ResponseWriter, r *http.Request) {
 			loc = l
 		}
 	}
+	// The UI version the app draws, as a page request's context says it: its icons are the ones it knows. The web draws
+	// all of them and says nothing.
+	version := extension.UIVersion
+	if v, err := strconv.Atoi(q.Get("ui_version")); err == nil {
+		version = min(max(v, 1), extension.UIVersion)
+	}
 	p := principalOf(ctx)
 	g, err := subscriptionsui.DrawGraph(ctx, h.subs, subscriptionsui.Env{
-		UIVersion: extension.UIVersion,
+		UIVersion: version,
 		Lang:      lang,
 		Loc:       loc,
 		CanEdit:   p.Role == roleFull,

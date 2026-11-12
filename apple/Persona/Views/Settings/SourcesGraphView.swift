@@ -108,9 +108,10 @@ nonisolated struct SourcesGraph: Decodable, Equatable, Sendable {
 }
 
 extension APIClient {
-    /// `GET /api/v1/subscriptions/-/graph`: Inbox Sources as relations, in the request's language.
+    /// `GET /api/v1/subscriptions/-/graph`: Inbox Sources as relations, in the request's language, with the icons the
+    /// pages' UI version has (the pages' rows show the same ones).
     func sourcesGraph() async throws -> SourcesGraph {
-        try await get("/api/v1/subscriptions/-/graph")
+        try await get("/api/v1/subscriptions/-/graph", query: ["ui_version": String(ExtensionUIContext.pageVersion)])
     }
 }
 

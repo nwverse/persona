@@ -29,3 +29,30 @@ func TestGraphRow(t *testing.T) {
 		t.Errorf("the press from a device that may only look: %+v %v", res, err)
 	}
 }
+
+// The graph's icons are the ones the app asking can draw, as on its pages: the iPhone draws the pages at UI version 4,
+// which has money for the broker's wallet; the web draws them all.
+func TestGraphIconsForTheAppsVersion(t *testing.T) {
+	f, b := newFake(), newBuiltins()
+	icon := func(version int) string {
+		e := sourcesEnv(i18n.En, true, b)
+		e.UIVersion = version
+		g, err := DrawGraph(context.Background(), f, e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, s := range g.Sources {
+			if s.ID == "s.sub_broker" {
+				return s.Icon
+			}
+		}
+		t.Fatal("no broker source")
+		return ""
+	}
+	if got := icon(4); got != "money" {
+		t.Errorf("UI version 4: %q", got)
+	}
+	if got := icon(0); got != "wallet" {
+		t.Errorf("the hub's own version: %q", got)
+	}
+}

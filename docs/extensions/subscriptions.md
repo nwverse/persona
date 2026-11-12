@@ -147,7 +147,7 @@ Reading is open to every device; changing anything, dry runs included, needs ful
 | `DELETE /api/v1/subscriptions/{id}?data=1` | 204; removes its seen keys and pending items. With `data=1` it first switches both destinations off and has the Inbox and the knowledge base remove what they took ("Destinations"); 503 `assistant_offline` while the assistant is away, the subscription left off for another delete |
 | `POST /api/v1/subscriptions/-/push` | `{items: [{key?, title?, body?, app?, link?, time?}]}` from a full-access device → `{subscription, new, count}`: the device's push source, made on its first push (no items: only made). 400 `bad_request` for more than 20 items or one with neither a title nor a body, 429 `rate_limited` with `retry_after` past 300 items an hour ("Push sources") |
 | `POST /api/v1/subscriptions/-/ui` | the pages below, with an extension page's request and answer; every device may draw them, actions need full access |
-| `GET /api/v1/subscriptions/-/graph?locale=&tz=` | Inbox Sources as relations (#5741, "Pages"): `{extensions, reads, sources, destinations}`; every device may read it |
+| `GET /api/v1/subscriptions/-/graph?locale=&tz=&ui_version=` | Inbox Sources as relations (#5741, "Pages"): `{extensions, reads, sources, destinations}`; every device may read it |
 
 A subscription's `state` is `off` (both destinations off), `ok`, `failing`, `not_connected`, `rate_limited` or `needs_recipe`, with `error {code, message}`. The message is one English sentence without source content; clients localize the code. The manager reports the `source_subscriptions` feature now that subscriptions deliver (`features.deliver`, #2039), and the apps show their entry rows only with it; beside it `subscription_push` says a device can push ("Push sources"); it broadcasts `subscription` `{id, connector, revision, state, removed}` when one is saved, runs or is deleted.
 
@@ -201,7 +201,8 @@ source, `push` for a device's own), `sources` and `destinations` (`inbox`, `kb`)
 problem: signed out, failing, `needs_recipe` and `not_connected` don't; `rate_limited` does), `to`, the sources it may duplicate
 (the list's Possible duplicate), the page `state` that shows it, and for a subscription `ask` (Set Up with the assistant's
 `open_url`). A destination counts the sources with it on and how many of them are reading. A source with neither destination on
-is left out. Sources come grouped by extension (Persona's own first) and, inside one, by read, reads in the order of their first
+is left out. A source's `icon` is one the app's `ui_version` has, as on its pages (the hub's own version when the request
+says none, as the web's doesn't; the iPhone sends its pages' version). Sources come grouped by extension (Persona's own first) and, inside one, by read, reads in the order of their first
 source, so columns drawn in that order cross no links. The manager reports `inbox_sources_graph` with it. The iPhone app says it
 draws the view itself with `context.graph` in these page requests (never handed to an extension), and the list then starts
 with a **Source Relationships** row whose press answers `open_url` `persona://sources-graph`: the app pushes the view (a tree per
