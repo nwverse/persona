@@ -331,12 +331,6 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                                     }
                                 }
                             }
-                            item {
-                                val routes by host.tasks.routes.collectAsStateWithLifecycle()
-                                val routed = routes[host.conversation]?.let { id -> todos.firstOrNull { it.id == id } }
-                                if (routed != null) JRow(stringResource(R.string.chat_tasks_route_chip, routed.title),
-                                    onClick = { host.tasks.setRoute(host.conversation, null) }, leadingIcon = PhIcons.PaperPlaneTilt)
-                            }
                             if (schedules.isNotEmpty() || backgroundRecords) item { JSectionHeader(stringResource(R.string.chat_tray_quiet)) }
                             items(schedules, key = { "schedule:${it.id}" }) { schedule ->
                                 JRow(schedule.title, subtitle = schedule.lastError?.takeIf(String::isNotBlank)
@@ -376,6 +370,25 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                 enabled = true)
         }
         under?.invoke()
+    }
+}
+
+/**
+ * "Message “x”" above the composer while the next message goes straight to a task (iOS `RouteChip`, web `RouteChip`;
+ * docs/assistant/unified-entry.md "Routing"); its × hands the message back to Persona. The route is the store's one per
+ * conversation, set by a task's Message or by picking the task after @. Every style: where a message goes is behaviour,
+ * and each style draws its own chip.
+ */
+@Composable
+internal fun TaskRouteChip(host: AssistantTaskHost, modifier: Modifier = Modifier) {
+    val routes by host.tasks.routes.collectAsStateWithLifecycle()
+    val todos by host.tasks.todos.collectAsStateWithLifecycle()
+    val task = routedTask(routes, todos, host.conversation) ?: return
+    // At the tray bar's inset, so the chip lines up with its chips above it.
+    Row(modifier.fillMaxWidth().padding(horizontal = Tokens.Space.m)) {
+        JChip(stringResource(R.string.chat_tasks_route_chip, task.title), Modifier.testTag("assistant-route-chip"),
+            icon = PhIcons.PaperPlaneTilt, accent = true, onRemove = { host.tasks.setRoute(host.conversation, null) },
+            removeLabel = stringResource(R.string.chat_tasks_route_clear))
     }
 }
 

@@ -937,9 +937,16 @@ private fun ChatPage(
                 listed, opener, portPresence)
         }
     }
-    // The @ menu: files this chat's tools used (newest first) and the other sessions, to quote (iOS PromptItems).
+    // The @ menu: files this chat's tools used (newest first) and the other sessions, to quote (iOS PromptItems); in
+    // Persona's conversation its open tasks first, to route the next message to one (iOS TaskMentionList, #4339 C15).
     val mentionFiles = remember(snapshot.items) { chatFiles(snapshot.items) }
-    val mentions = if (readOnly || !canSend) null else ComposerMentions(mentionFiles, session?.cwd.orEmpty(), sessionList, key)
+    val taskMentions = remember(renderStyle, tasks, taskTodos, sessionList, taskAgentSessions, machines) {
+        if (renderStyle != ChatRenderStyle.Assistant) null else taskHost?.let { host ->
+            mentionTasks(taskTodos, host.conversation) { host.tasks.stateOf(it, host.sessions) }
+                .map { (todo, state) -> MentionTask(todo.id, todo.title, todo.place(host, null), state.status()) }
+        }
+    }
+    val mentions = if (readOnly || !canSend) null else ComposerMentions(mentionFiles, session?.cwd.orEmpty(), sessionList, key, taskMentions)
     // An assistant conversation's cards answer through its hub's store (docs/assistant/assistant-views.md); elsewhere they only draw.
     val cardsHost = remember(tasks, key.sessionId, readOnly, canSend) {
         tasks?.let { persona.core.domain.views.AssistantCardsHost(key.sessionId, it.cards, it.cardActions, interactive = !readOnly && canSend) }
@@ -1123,6 +1130,8 @@ private fun ChatPage(
                                         backgroundRecords = host.backgroundRecords.isNotEmpty(), onBackground = host.onOpenBackground,
                                         under = computerPill?.let { pill -> { pill(Modifier) } },
                                         groupByOrigin = foldsBackground)
+                                    // Where the next message goes, with the composer, never only inside the In progress tray (iOS RouteChip, #4339 C15).
+                                    if (composerShown(panel, requestCollapsed)) TaskRouteChip(host)
                                 }
                                 val claudeCommands = session?.canTypeClaudeCommands == true
                                 ChatComposer(key, composer, session?.status == "working", sending || submittedDraft != null,
@@ -1152,6 +1161,7 @@ private fun ChatPage(
                                     }, onOverlay = { composerOverlay = it }, agentName = session?.agentLabel ?: "Claude",
                                     canInterrupt = session?.canInterrupt ?: true,
                                     mentions = mentions, onMention = { ref -> linkContexts = linkContexts + ref },
+                                    onMentionTask = { id -> tasks?.setRoute(key.sessionId, id) },
                                     // /model opens the "Mode" sheet's model choices; both need Claude in a pane (as the sheet does).
                                     onModel = if (claudeCommands && session?.canChangeModes == true) ({ openModes = true }) else null,
                                     loop = claudeCommands)

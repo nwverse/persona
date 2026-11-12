@@ -285,7 +285,14 @@ func TestOrcaStartWaitsForTheScreenAndTypesAShortLine(t *testing.T) {
 	repoDir := mkdir(t, filepath.Join(home, "proj"))
 	o.SetWorktrees(orcarttest.Worktree("wt-proj", repoDir, "refs/heads/main"))
 	var drawn atomic.Bool
+	var reads atomic.Int32
+	read := make(chan struct{}, 1)
 	o.Handle("terminal.read", func(p map[string]any) any {
+		reads.Add(1)
+		select {
+		case read <- struct{}{}:
+		default:
+		}
 		if !drawn.Load() {
 			return map[string]any{"terminal": map[string]any{"handle": p["terminal"], "tail": []string{}, "source": "screen-unavailable"}}
 		}
@@ -294,21 +301,19 @@ func TestOrcaStartWaitsForTheScreenAndTypesAShortLine(t *testing.T) {
 	if _, err := request(t, n, "session.start", map[string]any{"session_id": startID, "cwd": repoDir, "async": true}); err != nil {
 		t.Fatal(err)
 	}
-	for deadline := time.Now().Add(5 * time.Second); len(o.Trace("terminal.create")) == 0; time.Sleep(10 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatalf("no tab made: %v", o.Trace())
+	waitFor(t, "the new tab", func() bool { return len(o.Trace("terminal.create")) > 0 })
+	for reads.Load() < 3 { // no screen across more than one settle poll
+		if w := o.Writes(); len(w) != 0 {
+			t.Fatalf("typed before the tab had a screen: %q", w[0].Text)
 		}
-	}
-	time.Sleep(800 * time.Millisecond)
-	if w := o.Writes(); len(w) != 0 {
-		t.Fatalf("typed before the tab had a screen: %q", w[0].Text)
+		select {
+		case <-read:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("the tab was not read again: %v", o.Trace())
+		}
 	}
 	drawn.Store(true)
-	for deadline := time.Now().Add(5 * time.Second); len(o.Writes()) == 0; time.Sleep(10 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatalf("nothing typed once the prompt showed: %v", o.Trace())
-		}
-	}
+	waitFor(t, "the start line", func() bool { return len(o.Writes()) > 0 })
 	typed := o.Writes()[0].Text
 	want := "cd -- " + shellQuote(repoDir) + " && . "
 	if !strings.HasPrefix(typed, want) || !strings.HasSuffix(typed, " && true "+shellQuote(startID)+"\r") || len(typed) >= 1024 {
