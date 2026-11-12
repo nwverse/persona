@@ -325,10 +325,15 @@ As built (K1, #5086; `docs/assistant/model-config.md` "Models for each role" and
   web keeps its own sentence for the background supervisor), so "in Model Settings" is the hub's half only.
 - The main chat's rule speaks of tiers, not models, and covers the task-leader row too. It knows tiers only from the
   Agent presets of the model profile in use or from what the owner said; when it cannot tell them apart it leaves the
-  model empty and the configured default applies.
+  tier, the model and the effort empty and what the owner set in Model Settings applies. A preset it picks runs in
+  place of the Agents binding for that task, which is a changed start for well-scoped work on an install whose presets
+  say where they stand.
 - **Tokens per accepted task is not reported.** Nothing recorded attributes a supervisor's tokens to a task, so the
   read gives, per day and supervisor conversation, its output tokens (output only, the conversation's whole output)
-  next to the tasks it accepted that day. Accepted, reopened and rework rounds are per model and effort as proposed.
+  next to the tasks it accepted that day. Accepted, reopened and rework rounds are per model and effort as proposed:
+  reopened is within 24 hours of the acceptance and over the acceptances at least that old (`settled`), so models in
+  use for different lengths of time compare; rework rounds are those since the task's previous acceptance; a task
+  leader's agent is counted by its model too.
 - `assistant.supervise` stays out of the catalog `GET /api/v1/model-config` returns. The web, the Apple apps and
   Android as of B2 each skip their own request's row when the catalog already lists the purpose, so adding it would
   not break them; an app from before B2 has no words for the row, and the catalog's list is also what a provider's

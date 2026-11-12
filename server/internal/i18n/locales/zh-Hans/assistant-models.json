@@ -27,7 +27,7 @@
   "desc_assistant": "和你对话，把事情拆成任务派出去。只有这个对话是你在等它回复的。",
   "desc_agent_new": "在你的各台电脑上干活的 Agent。任务开始时仍可以单独指定模型。",
   "desc_kb": "没有人在等的文字处理：翻译、草拟回复、起标题、整理知识库。",
-  "desc_inbox_triage": "分拣、摘要收件箱里的新内容并判断重要性。调用多而小，出错容易发现。",
+  "desc_inbox_triage": "分拣、摘要收件箱里的新内容并判断重要性。同一个模型还判断 Agent 为什么停下、哪些事交给 AI 分身。调用多而小。",
   "desc_agent_delegate": "判断 Agent 的提问要不要你来答，不用你答的替你答。答错了会直接到 Agent 那里。",
   "desc_inbox_agent": "AI 分身的执行：由 Agent 处理收件箱里的一件事并草拟回复，等你发送。",
   "desc_lark_agent": "你在飞书里发 /agent 启动的 Agent。",

@@ -17,11 +17,12 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// The supervision read (#5086): acceptances, reopens and rework rounds by the reviewer's model and effort, and a
-// supervisor conversation's day of output next to that day's acceptances.
+// The supervision read (#5086): acceptances, those settled, reopens within a day and rework rounds by the reviewer's
+// model and effort, and a supervisor conversation's day of output next to that day's acceptances.
 func TestSummarizeSupervision(t *testing.T) {
 	day := time.Date(2026, 3, 2, 10, 0, 0, 0, time.UTC)
 	since := day.Add(-time.Hour)
+	now := since.Add(48 * time.Hour)
 	ev := func(at time.Time, session, kind string, detail map[string]any) db.WorkEvent {
 		b, _ := json.Marshal(detail) // as the store returns them
 		var d map[string]any
@@ -32,9 +33,9 @@ func TestSummarizeSupervision(t *testing.T) {
 		}
 		return db.WorkEvent{At: at, MachineID: machine, SessionID: session, Kind: kind, Detail: d}
 	}
-	reviewed := func(at time.Time, by, role, todo, verdict string, round int, model, effort string) db.WorkEvent {
-		return ev(at, "", taskReviewedEvent, map[string]any{"todo": todo, "verdict": verdict, "round": round, "conversation": by, "role": role,
-			"model": model, "effort": effort})
+	reviewed := func(at time.Time, by, role, todo, verdict string, rounds int, model, effort string) db.WorkEvent {
+		return ev(at, "", taskReviewedEvent, map[string]any{"todo": todo, "verdict": verdict, "round": rounds + 5, "rework_rounds": rounds,
+			"conversation": by, "role": role, "model": model, "effort": effort})
 	}
 	round := func(at time.Time, session string, tokens int, model, effort string) db.WorkEvent {
 		d := map[string]any{"source": proto.SourceSupervision, "seconds": 10.0, "main": false, "model": model, "effort": effort}
@@ -56,27 +57,40 @@ func TestSummarizeSupervision(t *testing.T) {
 		ev(day.Add(time.Hour), "", todoReopenedEvent, map[string]any{"todo": "t1"}),
 		ev(day.Add(2*time.Hour), "", todoReopenedEvent, map[string]any{"todo": "t1"}),
 		ev(day.Add(2*time.Hour), "", todoReopenedEvent, map[string]any{"todo": "t9"}),
+		// Accepted again after one more round: a second acceptance, charged that round alone (the event's own count,
+		// not the ledger's running one).
+		reviewed(day.Add(3*time.Hour), "bg", supervisorBackground, "t1", reviewAccepted, 1, "small", "medium"),
+		// A reopen more than a day after the acceptance is not held against it.
+		reviewed(day.Add(4*time.Minute), "bg", supervisorBackground, "t5", reviewAccepted, 0, "small", "medium"),
+		ev(day.Add(30*time.Hour), "", todoReopenedEvent, map[string]any{"todo": "t5"}),
+		// A task leader's agent: a row by its model, no day of its own.
+		reviewed(day.Add(5*time.Minute), "lead-agent", supervisorTaskLeader, "w1", reviewRework, 1, "top", "medium"),
+		reviewed(day.Add(6*time.Minute), "lead-agent", supervisorTaskLeader, "w1", reviewAccepted, 1, "top", "medium"),
 		// The next day it runs a stronger model: a new transcript counts from zero, and a round with no count adds nothing.
 		round(day.Add(24*time.Hour), "bg", 400, "big", "high"),
 		round(day.Add(24*time.Hour+time.Minute), "bg", 0, "big", "high"),
+		// Its acceptance is less than a day old at the read: not settled, and its reopen waits with it.
 		reviewed(day.Add(24*time.Hour+2*time.Minute), "bg", supervisorBackground, "t3", reviewAccepted, 0, "big", "high"),
+		ev(day.Add(25*time.Hour), "", todoReopenedEvent, map[string]any{"todo": "t3"}),
 		// The main conversation accepted one on a model its node did not name; a conversation that reviewed nothing has no row.
 		round(day, "main", 5000, "", ""),
 		round(day.Add(time.Minute), "main", 9000, "", ""),
-		ev(day.Add(2*time.Minute), "", taskReviewedEvent, map[string]any{"todo": "t4", "verdict": reviewAccepted, "round": 0, "conversation": "main", "role": supervisorMain}),
+		ev(day.Add(2*time.Minute), "", taskReviewedEvent, map[string]any{"todo": "t4", "verdict": reviewAccepted, "round": 0, "rework_rounds": 0, "conversation": "main", "role": supervisorMain}),
 		round(day, "side", 100, "small", "medium"),
 		round(day.Add(time.Minute), "side", 300, "small", "medium"),
 	}
-	got := summarizeSupervision(since, events, time.UTC)
+	slices.SortStableFunc(events, func(a, b db.WorkEvent) int { return a.At.Compare(b.At) }) // oldest first, as the store gives them
+	got := summarizeSupervision(since, now, events, time.UTC)
 	want := supervisionStats{
 		ByModel: []supervisorModel{
-			{Model: "small", Effort: "medium", Accepted: 2, Reopened: 1, ReworkRounds: 3, ReworkRoundsPerTask: 1.5},
-			{Model: "", Effort: "", Accepted: 1},
+			{Model: "small", Effort: "medium", Accepted: 4, Settled: 4, Reopened: 1, ReworkRounds: 4, ReworkRoundsPerTask: 1},
+			{Model: "", Effort: "", Accepted: 1, Settled: 1},
 			{Model: "big", Effort: "high", Accepted: 1},
+			{Model: "top", Effort: "medium", Accepted: 1, Settled: 1, ReworkRounds: 1, ReworkRoundsPerTask: 1},
 		},
 		Days: []supervisorDay{
 			{Day: "2026-03-03", Conversation: "bg", Role: supervisorBackground, Model: "big", Effort: "high", Accepted: 1, OutputTokens: 400},
-			{Day: "2026-03-02", Conversation: "bg", Role: supervisorBackground, Model: "small", Effort: "medium", Accepted: 2, OutputTokens: 800},
+			{Day: "2026-03-02", Conversation: "bg", Role: supervisorBackground, Model: "small", Effort: "medium", Accepted: 4, OutputTokens: 800},
 			{Day: "2026-03-02", Conversation: "main", Role: supervisorMain, Accepted: 1, OutputTokens: 4000},
 		},
 	}
@@ -120,9 +134,9 @@ func TestTaskReviewIsRecordedByTheSupervisorsModel(t *testing.T) {
 		t.Fatalf("%d reviews recorded: %v", len(got), got)
 	}
 	for i, want := range []map[string]any{
-		{"todo": todo.ID, "verdict": reviewRework, "round": 1, "conversation": bg, "role": supervisorBackground},
-		{"todo": todo.ID, "verdict": reviewRework, "round": 2, "conversation": "conv1", "role": supervisorMain},
-		{"todo": todo.ID, "verdict": reviewAccepted, "round": 2, "conversation": bg, "role": supervisorBackground},
+		{"todo": todo.ID, "verdict": reviewRework, "round": 1, "rework_rounds": 1, "conversation": bg, "role": supervisorBackground},
+		{"todo": todo.ID, "verdict": reviewRework, "round": 2, "rework_rounds": 2, "conversation": "conv1", "role": supervisorMain},
+		{"todo": todo.ID, "verdict": reviewAccepted, "round": 2, "rework_rounds": 2, "conversation": bg, "role": supervisorBackground},
 	} {
 		for k, v := range want {
 			if got[i][k] != v {
@@ -135,8 +149,103 @@ func TestTaskReviewIsRecordedByTheSupervisorsModel(t *testing.T) {
 	if n := len(reviews()); n != 3 {
 		t.Fatalf("accepting a closed task was recorded: %d", n)
 	}
-	stats := summarizeSupervision(time.Now().Add(-time.Hour), testEvents(s), time.UTC)
-	if len(stats.ByModel) != 1 || stats.ByModel[0].Accepted != 1 || stats.ByModel[0].ReworkRounds != 2 || stats.ByModel[0].Reopened != 0 {
+	stats := summarizeSupervision(time.Now().Add(-time.Hour), time.Now(), testEvents(s), time.UTC)
+	if len(stats.ByModel) != 1 || stats.ByModel[0].Accepted != 1 || stats.ByModel[0].ReworkRounds != 2 || stats.ByModel[0].Settled != 0 || stats.ByModel[0].Reopened != 0 {
+		t.Fatalf("read back: %+v", stats)
+	}
+	// An acceptance that closes nothing is none: only its report closes a concern (made one in memory here: recording
+	// one takes the hub's database).
+	if _, err := runJSON(t, s, "conv1", "todo_create", map[string]any{"title": "发版会不会拖"}); err != nil {
+		t.Fatal(err)
+	}
+	var concern Todo
+	s.todos.mu.Lock()
+	for _, c := range s.todos.todos {
+		if c.ID != todo.ID {
+			c.Kind, c.Origin = db.KindConcern, "conv1"
+			concern = copyTodoLocked(c)
+		}
+	}
+	s.todos.mu.Unlock()
+	if concern.ID == "" {
+		t.Fatal("no concern recorded")
+	}
+	if _, err := runJSON(t, s, "conv1", "task_review", map[string]any{"todo_id": concern.ID, "verdict": reviewAccepted}); err != nil {
+		t.Fatal(err)
+	}
+	if c := todoNow(s, concern.ID); c.DoneAt != nil {
+		t.Fatalf("a review closed a concern: %+v", c)
+	}
+	if n := len(reviews()); n != 3 {
+		t.Fatalf("an acceptance that closed nothing was recorded: %d", n)
+	}
+}
+
+// What an acceptance took is the rounds since the task was last accepted, not the ledger's running count: a task
+// accepted, reopened and accepted again is not charged its earlier rounds twice.
+func TestReworkedSinceAccepted(t *testing.T) {
+	r := func(verdicts ...string) Supervision {
+		var v Supervision
+		for _, verdict := range verdicts {
+			v.Reviews = append(v.Reviews, TaskReview{Verdict: verdict})
+		}
+		return v
+	}
+	for _, c := range []struct {
+		v    Supervision
+		want int
+	}{
+		{r(), 0},
+		{r(reviewAccepted), 0},
+		{r(reviewRework), 1},
+		{r(reviewRework, reviewRework, reviewAccepted), 2},
+		{r(reviewRework, reviewRework, reviewAccepted, reviewRework, reviewAccepted), 1},
+		{r(reviewRework, reviewAccepted, reviewRework), 1},
+		{r(reviewRework, reviewNeedsUser, reviewParked, reviewRework, reviewAccepted), 2},
+	} {
+		if got := c.v.reworkedSinceAccepted(); got != c.want {
+			t.Errorf("%v: %d rounds, want %d", c.v.Reviews, got, c.want)
+		}
+	}
+}
+
+// A task leader's agent reviewing its workers is recorded too, by what its node lists it running on.
+func TestTaskLeadersReviewIsRecorded(t *testing.T) {
+	s, f := newQuietService(t)
+	ctx := context.Background()
+	startTaskLeader(t, s, f)
+	w := planWorker(t, s, f, nil)
+	call := func(verdict string) {
+		t.Helper()
+		args, _ := json.Marshal(map[string]any{"todo_id": w.ID, "verdict": verdict, "note": "补测试"})
+		if res := s.mcpCall(ctx, "box", "s1", "task_review", args, false); res.IsError {
+			t.Fatalf("%s: %+v", verdict, res)
+		}
+	}
+	call(reviewRework)
+	call(reviewAccepted)
+	call(reviewAccepted) // closed already: no acceptance of its own
+	var got []map[string]any
+	for _, e := range testEvents(s) {
+		if e.Kind == taskReviewedEvent {
+			got = append(got, e.Detail)
+		}
+	}
+	if len(got) != 2 {
+		t.Fatalf("%d reviews recorded: %v", len(got), got)
+	}
+	for i, want := range []map[string]any{
+		{"todo": w.ID, "verdict": reviewRework, "rework_rounds": 1, "conversation": "s1", "role": supervisorTaskLeader},
+		{"todo": w.ID, "verdict": reviewAccepted, "rework_rounds": 1, "conversation": "s1", "role": supervisorTaskLeader},
+	} {
+		for k, v := range want {
+			if got[i][k] != v {
+				t.Errorf("review %d: %s = %v, want %v (%v)", i+1, k, got[i][k], v, got[i])
+			}
+		}
+	}
+	stats := summarizeSupervision(time.Now().Add(-time.Hour), time.Now(), testEvents(s), time.UTC)
+	if len(stats.ByModel) != 1 || stats.ByModel[0].Accepted != 1 || stats.ByModel[0].ReworkRounds != 1 || len(stats.Days) != 0 {
 		t.Fatalf("read back: %+v", stats)
 	}
 }
@@ -311,7 +420,7 @@ func TestTaskModelRuleNamesNoModel(t *testing.T) {
 	if !ok {
 		t.Fatal("the rule does not end with stating the choice in why")
 	}
-	for _, want := range []string{"低一档", "`medium`", "日常主力那一档", "最高一档", "先提高 `effort`", "都留空", "永远优先"} {
+	for _, want := range []string{"低一档", "`medium`", "日常主力那一档", "最高一档", "先提高 `effort`", "`effort` 留空", "`tier`、`model`、`effort` 都留空", "而不是「模型设置」里 Agents 的默认", "永远优先"} {
 		if !strings.Contains(rule, want) {
 			t.Errorf("the rule lacks %q", want)
 		}

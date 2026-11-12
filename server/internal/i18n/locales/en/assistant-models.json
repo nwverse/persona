@@ -27,7 +27,7 @@
   "desc_assistant": "Talks with you, splits work into tasks and hands them out. The one conversation you wait on for a reply.",
   "desc_agent_new": "The agents that do the tasks on your computers. A task can still be given its own model when it starts.",
   "desc_kb": "Text work nobody waits on: translation, reply drafts, titles and organizing the knowledge base.",
-  "desc_inbox_triage": "Sorts and summarizes what comes into the Inbox and judges its importance. Many small calls, where a mistake is easy to spot.",
+  "desc_inbox_triage": "Sorts and summarizes what comes into the Inbox and judges its importance. The same model reads why an agent stopped and judges what the AI twin takes up. Many small calls.",
   "desc_agent_delegate": "Decides whether an agent's question is yours to answer, and answers the ones that are not. A wrong answer goes straight to the agent.",
   "desc_inbox_agent": "The AI twin's runs: an agent handles an Inbox item and drafts the reply for you to send.",
   "desc_lark_agent": "Agents you start by sending /agent in Lark.",

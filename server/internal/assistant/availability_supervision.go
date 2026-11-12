@@ -11,7 +11,7 @@ import (
 
 // What supervision costs per accepted task (#5086, step K1 of docs/design/proposals/main-chat-availability.md;
 // docs/assistant/assistant.md "Supervision by model"): per model and effort the reviewing conversation ran on, how
-// many tasks it accepted, how many of those were reopened afterwards and how many rework rounds they took; and per
+// many tasks it accepted, how many of those were reopened within a day and how many rework rounds they took; and per
 // day and supervisor conversation, the tasks it accepted next to the output tokens it generated. Work events like the
 // rest of availability.go, no new table: one per task_review, and the round event's own model, effort and output
 // count.
@@ -20,12 +20,18 @@ import (
 // supervision message gathers several tasks' signals, the token counts are per conversation or per machine), so the
 // read puts a conversation's day of output next to that day's acceptances and leaves the division to the reader.
 const (
-	// taskReviewedEvent: a conversation gave a task_review. Detail: todo, verdict (as written: a rework past its
-	// rounds is needs_user), round (the task's rework rounds so far), conversation (the reviewer), role (the
-	// supervisor* constants), model and effort (what the reviewer ran on, supervisorRuns; absent when not known). An
-	// acceptance of a task that was closed already is not recorded.
+	// taskReviewedEvent: a conversation or a task leader's agent gave a task_review. Detail: todo, verdict (as
+	// written: a rework past its rounds is needs_user), round (the task's rework rounds so far in all, as its ledger
+	// counts them), rework_rounds (those since the task was last accepted: what this acceptance took), conversation
+	// (the reviewer), role (the supervisor* constants), model and effort (what the reviewer ran on, supervisorRuns;
+	// absent when not known). An acceptance is recorded once it closed the task: not of a task that was closed
+	// already, nor when the close failed or closed nothing (a concern).
 	taskReviewedEvent = "task_reviewed"
 )
+
+// supervisionReopenWithin: a reopen this soon after an acceptance counts against it, and an acceptance younger than
+// this is not settled yet. The work stats' wrong_done uses the same day for the judge's closes.
+const supervisionReopenWithin = wrongDoneWithin
 
 // Which supervisor a reviewing conversation is.
 const (
@@ -33,6 +39,7 @@ const (
 	supervisorBackground = "background"
 	supervisorLeader     = "leader"
 	supervisorOther      = "conversation" // a side conversation reviewing what it handed out
+	supervisorTaskLeader = "task_leader"  // a task leader's agent reviewing its workers (task_leader.go)
 )
 
 // supervisorRole is which supervisor conversation id is.
@@ -73,18 +80,47 @@ func (s *Service) supervisorRuns(ctx context.Context, id, role string) (model, e
 	return model, effort
 }
 
-// taskReviewed records conversation self's review of task todo: verdict as written, round the task's rework rounds
-// so far.
-func (s *Service) taskReviewed(ctx context.Context, self, todo, verdict string, round int) {
+// reworkedSinceAccepted is how many times the task was sent back since it was last accepted (by anyone: a
+// conversation, a task leader, the independent reviewer), the review just written counted when it is a rework and
+// passed over when it is the acceptance being recorded. Out of the ledger's reviews, of which it keeps the last 20.
+func (v Supervision) reworkedSinceAccepted() int {
+	n := 0
+	for i := len(v.Reviews) - 1; i >= 0; i-- {
+		switch r := v.Reviews[i]; {
+		case r.Verdict == reviewRework:
+			n++
+		case r.Verdict == reviewAccepted && i < len(v.Reviews)-1:
+			return n
+		}
+	}
+	return n
+}
+
+// taskReviewed records conversation self's review of task todo: verdict as written, v the task's ledger after it.
+func (s *Service) taskReviewed(ctx context.Context, self, todo, verdict string, v Supervision) {
 	role := s.supervisorRole(ctx, self)
-	detail := map[string]any{"todo": todo, "verdict": verdict, "round": round, "conversation": self, "role": role}
-	if model, effort := s.supervisorRuns(ctx, self, role); model != "" || effort != "" {
-		if model != "" {
-			detail["model"] = model
-		}
-		if effort != "" {
-			detail["effort"] = effort
-		}
+	model, effort := s.supervisorRuns(ctx, self, role)
+	s.reviewRecorded(todo, verdict, v, self, role, model, effort)
+}
+
+// leaderTaskReviewed records task leader agent lead's review of its worker task todo, by what the agent's node lists
+// it running on.
+func (s *Service) leaderTaskReviewed(lead TodoAgent, todo, verdict string, v Supervision) {
+	var model, effort string
+	if c, ok := s.nodeSession(lead.MachineID, lead.SessionID); ok {
+		model, effort = c.Model, c.Effort
+	}
+	s.reviewRecorded(todo, verdict, v, lead.SessionID, supervisorTaskLeader, model, effort)
+}
+
+func (s *Service) reviewRecorded(todo, verdict string, v Supervision, reviewer, role, model, effort string) {
+	detail := map[string]any{"todo": todo, "verdict": verdict, "round": v.Round, "rework_rounds": v.reworkedSinceAccepted(),
+		"conversation": reviewer, "role": role}
+	if model != "" {
+		detail["model"] = model
+	}
+	if effort != "" {
+		detail["effort"] = effort
 	}
 	s.workEvent("", "", taskReviewedEvent, detail)
 }
@@ -121,12 +157,16 @@ type supervisorModel struct {
 	// Model and Effort: what the reviewer ran on when it accepted; "" when not known (the launcher's own default).
 	Model  string `json:"model"`
 	Effort string `json:"effort"`
-	// Accepted: the tasks a task_review accepted and closed in the window.
+	// Accepted: the acceptances in the window: a task_review that accepted a task and closed it. A task accepted,
+	// reopened and accepted again is two.
 	Accepted int `json:"accepted"`
-	// Reopened: how many of those acceptances were followed by the task being reopened, whichever way.
+	// Settled: those of them made at least supervisionReopenWithin before the read, whose day to be reopened in is
+	// over. Reopened: the settled ones whose task was reopened within supervisionReopenWithin of the acceptance,
+	// whichever way. Reopened over Settled is the same rule for every row, however long ago its model was in use.
+	Settled  int `json:"settled"`
 	Reopened int `json:"reopened"`
-	// ReworkRounds: the rework rounds the accepted tasks had been sent back for before they were accepted, whoever
-	// sent them back; ReworkRoundsPerTask is that over Accepted.
+	// ReworkRounds: the times the accepted tasks were sent back between their previous acceptance (or their start)
+	// and this one, whoever sent them back; ReworkRoundsPerTask is that over Accepted.
 	ReworkRounds        int     `json:"rework_rounds"`
 	ReworkRoundsPerTask float64 `json:"rework_rounds_per_task"`
 }
@@ -134,7 +174,8 @@ type supervisorModel struct {
 type supervisorDay struct {
 	Day          string `json:"day"`
 	Conversation string `json:"conversation"`
-	// Role: main, background, leader or conversation (a side conversation reviewing what it handed out).
+	// Role: main, background, leader or conversation (a side conversation reviewing what it handed out). A task
+	// leader's agent has no day: its rounds are not an assistant conversation's, so there is no output to put here.
 	Role string `json:"role"`
 	// Model and Effort: what the conversation ran on at the day's last round, else at its last review; "" when not
 	// known.
@@ -148,13 +189,14 @@ type supervisorDay struct {
 }
 
 // summarizeSupervision reads supervisionStats out of events (oldest first; those before since only give a
-// conversation's output count to take the window's first difference from, and are otherwise not counted). Reopens are
-// counted up to the newest event, the acceptances from since.
-func summarizeSupervision(since time.Time, events []db.WorkEvent, loc *time.Location) supervisionStats {
+// conversation's output count to take the window's first difference from, and are otherwise not counted). now is the
+// time of the read: an acceptance is settled supervisionReopenWithin before it.
+func summarizeSupervision(since, now time.Time, events []db.WorkEvent, loc *time.Location) supervisionStats {
 	out := supervisionStats{ByModel: []supervisorModel{}, Days: []supervisorDay{}}
 	type accepted struct {
 		at       time.Time
 		key      [2]string // model, effort
+		settled  bool
 		reopened bool
 	}
 	models := map[[2]string]*supervisorModel{}
@@ -208,16 +250,21 @@ func summarizeSupervision(since time.Time, events []db.WorkEvent, loc *time.Loca
 			if e.At.Before(since) {
 				continue
 			}
-			conversation := str("conversation")
-			roles[conversation] = str("role")
-			d := day(e, conversation)
-			if d.Model == "" && d.Effort == "" {
-				d.Model, d.Effort = str("model"), str("effort")
+			isAccepted := str("verdict") == reviewAccepted
+			if role := str("role"); role != supervisorTaskLeader { // an agent: by_model only
+				conversation := str("conversation")
+				roles[conversation] = role
+				d := day(e, conversation)
+				if d.Model == "" && d.Effort == "" {
+					d.Model, d.Effort = str("model"), str("effort")
+				}
+				if isAccepted {
+					d.Accepted++
+				}
 			}
-			if str("verdict") != reviewAccepted {
+			if !isAccepted {
 				continue
 			}
-			d.Accepted++
 			k := [2]string{str("model"), str("effort")}
 			m := models[k]
 			if m == nil {
@@ -225,13 +272,19 @@ func summarizeSupervision(since time.Time, events []db.WorkEvent, loc *time.Loca
 				models[k] = m
 			}
 			m.Accepted++
-			rounds, _ := num("round")
+			rounds, _ := num("rework_rounds")
 			m.ReworkRounds += int(rounds)
-			byTodo[str("todo")] = append(byTodo[str("todo")], &accepted{at: e.At, key: k})
+			a := &accepted{at: e.At, key: k, settled: !now.Before(e.At.Add(supervisionReopenWithin))}
+			if a.settled {
+				m.Settled++
+			}
+			byTodo[str("todo")] = append(byTodo[str("todo")], a)
 		case todoReopenedEvent:
-			// The acceptance it undoes: the task's latest one before it, once.
+			// The acceptance it undoes: the task's latest one before it, once, when it is settled and the reopen came
+			// within its day.
 			list := byTodo[str("todo")]
-			if n := len(list); n > 0 && !list[n-1].reopened && !e.At.Before(list[n-1].at) {
+			if n := len(list); n > 0 && list[n-1].settled && !list[n-1].reopened && !e.At.Before(list[n-1].at) &&
+				e.At.Before(list[n-1].at.Add(supervisionReopenWithin)) {
 				list[n-1].reopened = true
 				models[list[n-1].key].Reopened++
 			}

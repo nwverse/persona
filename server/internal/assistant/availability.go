@@ -593,8 +593,8 @@ type availabilityStats struct {
 	QueueWait queueWaits `json:"queue_wait"`
 	// AskOutcome: by card kind, then by who answered: how many and after how long.
 	AskOutcome map[string]map[string]waitStats `json:"ask_outcome"`
-	// Supervision: per model and effort the reviewing conversation ran on, the tasks it accepted, those reopened
-	// afterwards and their rework rounds; per day and supervisor conversation, the tasks accepted next to the output
+	// Supervision: per model and effort the reviewer ran on, the tasks it accepted, those reopened within a day and
+	// their rework rounds; per day and supervisor conversation, the tasks accepted next to the output
 	// tokens it generated (availability_supervision.go, #5086).
 	Supervision supervisionStats `json:"supervision"`
 }
@@ -856,7 +856,7 @@ func summarizeAvailability(hours int, since time.Time, events []db.WorkEvent, lo
 		}
 		out.AskOutcome[k[0]][k[1]] = waitsOf(v)
 	}
-	out.Supervision = summarizeSupervision(since, events, loc)
+	out.Supervision = summarizeSupervision(since, since.Add(time.Duration(hours)*time.Hour), events, loc)
 	return out
 }
 
