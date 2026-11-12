@@ -18,6 +18,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.onClick
@@ -353,14 +354,6 @@ internal fun AgentsScreen(
                     JSearchField(settings.query, model::query, stringResource(R.string.agents_search_placeholder), Modifier.padding(bottom = Tokens.Space.xs))
                 }
             }
-            if (firstPageIncomplete) item("initial-state") {
-                if (page.pagination.failed) JNotice(
-                    text = stringResource(persona.core.designsystem.R.string.designsystem_load_failed),
-                    modifier = Modifier.padding(horizontal = Tokens.Space.l, vertical = Tokens.Space.xs),
-                    actionLabel = stringResource(persona.core.designsystem.R.string.designsystem_retry),
-                    onAction = model::refresh,
-                ) else JLoading()
-            }
             if (groups.size > 1) item("groups") {
                 GroupFilterRow(groups, page.groupCounts, group, model::group)
             }
@@ -464,6 +457,14 @@ internal fun AgentsScreen(
                 JRow(stringResource(R.string.agents_mark_all_read), leadingIcon = PhIcons.Check,
                     value = pluralStringResource(R.plurals.agents_mark_all_read_count, unread.size, unread.size),
                     chevron = false, onClick = { confirmRead = unread })
+            }
+            if (firstPageIncomplete) item("initial-state") {
+                if (page.pagination.failed) JNotice(
+                    text = stringResource(persona.core.designsystem.R.string.designsystem_load_failed),
+                    modifier = Modifier.padding(horizontal = Tokens.Space.l, vertical = Tokens.Space.xs),
+                    actionLabel = stringResource(persona.core.designsystem.R.string.designsystem_retry),
+                    onAction = model::refresh,
+                ) else AgentsListPlaceholder()
             }
             if (page.loaded && page.list.groups.isEmpty()) item("empty") {
                 // Three cases, as iOS: a search with no result (no New session, which read as if the agents were gone), no
@@ -796,6 +797,31 @@ internal fun AgentsScreen(
             }), machine = machine,
             blockedReason = session?.takeIf { !it.canApprove }?.let { approveBlocked },
             terminalHelp = session?.canTerminal != false)
+    }
+}
+
+@Composable
+private fun AgentsListPlaceholder() {
+    val loading = stringResource(persona.core.designsystem.R.string.designsystem_loading)
+    val fill = PersonaTheme.palette.sunken
+    val shape = PersonaTheme.shapes.controlShape
+    Column(
+        Modifier.fillMaxWidth().repoCard(first = true, last = true)
+            .testTag("agents-initial-placeholder").clearAndSetSemantics { contentDescription = loading },
+    ) {
+        repeat(3) {
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = Tokens.Space.s),
+                horizontalArrangement = Arrangement.spacedBy(Tokens.Space.m),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.size(Tokens.Space.xxl).background(fill, shape))
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+                    Box(Modifier.fillMaxWidth(0.48f).height(Tokens.Space.m).background(fill, shape))
+                    Box(Modifier.fillMaxWidth(0.68f).height(Tokens.Space.s).background(fill, shape))
+                }
+            }
+        }
     }
 }
 
