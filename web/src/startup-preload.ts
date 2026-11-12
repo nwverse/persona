@@ -140,9 +140,12 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * fitRect now live in lib/image-zoom.ts. And 64 B for the sidebar's Recent count and its Show more (#5146 added 222 B
  * to ja, 592,153 B at 9534ce535 to 592,375 B, 213 B of it in the room left: lib/sidebar-recent.ts, which the sidebar
  * reads for how many to list and how far Show more opened it, and the Show more / Show less row; the setting's row and
- * its words are in the lazy Settings page and the ui-look catalog). Raise it on purpose, in the change that needs it.
+ * its words are in the lazy Settings page and the ui-look catalog). And 174 B more for it as merged (#5166): #5161 added
+ * 451 B to ja, not 222 B, 592,153 B at 76b9cf3b4a to 592,604 B at b73f259f71 (505 B with the file names' hashes counted
+ * as a fixed string, so not their noise), which left main 174 B over; the room is 0 B. Take it back down by as much as
+ * the sidebar's Recent code gets lighter. Raise it on purpose, in the change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 592_430;
+export const FIRST_SCREEN_BUDGET = 592_604;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
