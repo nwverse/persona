@@ -309,7 +309,7 @@
     <string name="chat_tasks_say">メッセージ</string>
     <string name="chat_tasks_restarting">「%1$s」を再開始しています</string>
     <string name="chat_tasks_restarted">「%1$s」は再試行で開始しました</string>
-    <string name="chat_tasks_receipt_failed_title">%1$sを開始できませんでした</string>
+    <string name="chat_tasks_receipt_failed_title">%1$sを起動できませんでした</string>
     <string name="chat_tasks_receipt_done_title">%1$sが完了しました</string>
     <string name="chat_tasks_receipt_stopped_title">%1$sは止まりました（未完了）</string>
     <string name="chat_tasks_look">見る</string>
