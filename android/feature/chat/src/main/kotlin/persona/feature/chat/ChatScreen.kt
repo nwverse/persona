@@ -267,6 +267,8 @@ private fun ChatPage(
     }).collectAsStateWithLifecycle()
     val requests = taps.shown(allRequests).filter { it.sessionKey == key || it.sessionKey in taskKeys }
         .sortedBy { if (it.id == chrome.requestId) 0 else 1 }
+    // the conversation's own cards are in the panel above the composer, not only behind Needs you (#4883)
+    val panel = panelRequests(renderStyle == ChatRenderStyle.Assistant, requests, key, trayReview, taps.shown(allRequests))
     val messages = chatBubbles(allMessages, key, snapshot.items)
     val currentMessageCount by rememberUpdatedState(messages.size)
     val composerDeliveries by (composerService?.deliveries ?: remember {
@@ -283,19 +285,26 @@ private fun ChatPage(
     var hostRetried by rememberSaveable(key.path) { mutableStateOf<String?>(null) }
     val deliveryActions = remember(sender) { ChatDeliveryActions(sender) }
     var statusSheet by remember { mutableStateOf(false) }
+    // The shell presents transient notices once; persistent sync errors stay inline.
+    val feedback = persona.core.designsystem.LocalAppFeedback.current
+    // A message only on this phone taken off (Cancel send / Delete): nothing was sent; Undo puts it back (#4645,
+    // docs/design/DESIGN_SYSTEM.md 4.4 principle 3).
+    fun removed(message: OutboxMessage) {
+        val deleted = res.getString(R.string.chat_delivery_deleted)
+        val undo = persona.core.designsystem.FeedbackAction(res.getString(R.string.chat_delivery_undo)) { sender.restore(message) }
+        if (feedback?.notice(deleted, undo) != true) notice = deleted
+    }
     fun deliveryAction(message: OutboxMessage, action: DeliveryAction) {
         if (readOnly) return
         scope.launch {
             try {
-                if (!deliveryActions.perform(message.clientMessageId, action, composer::restoreMessage))
+                if (!deliveryActions.perform(message.clientMessageId, action, composer::restoreMessage, ::removed))
                     notice = res.getString(R.string.chat_screen_delivery_changed)
                 else if (action == DeliveryAction.Discard) statusSheet = false
             } catch (e: CancellationException) { throw e }
             catch (_: Exception) { notice = res.getString(R.string.chat_screen_delivery_failed) }
         }
     }
-    // The shell presents transient notices once; persistent sync errors stay inline.
-    val feedback = persona.core.designsystem.LocalAppFeedback.current
     LaunchedEffect(notice) { notice?.let { if (feedback?.notice(it) == true) notice = null } }
     val currentDraftCallback by rememberUpdatedState(onDraftChanged)
     LaunchedEffect(composer) { snapshotFlow { composer.draft }.collect { currentDraftCallback?.invoke(it) } }
@@ -769,6 +778,10 @@ private fun ChatPage(
         taps = taps.pending(allRequests.map { it.id }.toSet())
     }
     val lastUserId = snapshot.items.lastOrNull { it.role == "user" && it.kind == "text" }?.id
+    // Persona's last turn ended on a model set-up error the hub named: the fix replaces the error line (#4339 C18, iOS
+    // `turnFix`). Persona's conversations only, as iOS and the web.
+    val turnFix = if (renderStyle == ChatRenderStyle.Assistant) TurnErrorFix.of(session?.turnErrorCode) else null
+    val fixModel = chrome.onFixModel?.let { open -> { action: persona.core.designsystem.ReadinessActionId -> open(action, session?.launcher, session?.manager) } }
     ChatCompletionFeedback(lastUserId, session?.status,
         lifecycle == Lifecycle.State.RESUMED && !chrome.covered && !overlay && !chromeOverlay && !linkVisible &&
             !statusSheet && !terminalHelp && !taskPageVisible && fullText == null && !search.visible &&
@@ -899,8 +912,8 @@ private fun ChatPage(
                                 nextWaiting(chrome.waiting, key)?.let { next ->
                                     NextWaitingRow(next, { offerNext = false; openRequest?.invoke(next.request.session, next.request.requestId) })
                                 }
-                            if (!readOnly && (renderStyle != ChatRenderStyle.Assistant || trayReview != null)) InteractionPanel(
-                                if (renderStyle == ChatRenderStyle.Assistant) taps.shown(allRequests).filter { it.id == trayReview } else requests,
+                            if (!readOnly && (renderStyle != ChatRenderStyle.Assistant || panel.isNotEmpty())) InteractionPanel(
+                                panel,
                                 machine, panelMax, taps.busyId, taps.uncertain, { interaction, resolution ->
                                 if (taps.canTap(interaction, allRequests, java.time.Instant.now())) {
                                     taps = taps.tapped(interaction.id)
@@ -992,7 +1005,7 @@ private fun ChatPage(
                                     // /clear and /model type into Claude's pane: Claude in a terminal engine only (positive check).
                                     canClear = clearingPane == null && session?.canTypeClaudeCommands == true,
                                     service = composerService, onSend = { send() }, onCommand = { send(it) }, onNotice = { notice = it },
-                                    extraContent = linkContexts.isNotEmpty(), visible = (renderStyle == ChatRenderStyle.Assistant && trayReview == null) || requests.isEmpty() || requestCollapsed,
+                                    extraContent = linkContexts.isNotEmpty(), visible = composerShown(panel, requestCollapsed),
                                     enabled = canSend, placeholder = if (canSend) stringResource(R.string.chat_screen_placeholder) else READ_ONLY.text(),
                                     // Permission mode and effort for Claude's sessions, Persona's included; the model for Claude in a pane;
                                     // the effort alone for a Codex thread on its app-server.
@@ -1040,7 +1053,7 @@ private fun ChatPage(
                                     val deliveryState = if (message.state in setOf(DeliveryState.Refused, DeliveryState.Rejected))
                                         delivery?.state ?: message.state else message.state
                                     Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-                                        UserBubble(composerMessagePreview(message.text))
+                                        UserBubble(composerMessagePreview(message.text), message.clientMessageId, deliveryState)
                                         OutboxStatus(message.copy(state = deliveryState,
                                             error = delivery?.refusal?.code ?: message.error),
                                             busy = message.clientMessageId in deliveryActions.busyIds,
@@ -1055,11 +1068,13 @@ private fun ChatPage(
                                 }
                                 items(lines, key = { it.contentKey }, contentType = { it.contentType() }) { line ->
                                     ChatSearchHighlight(search, line.contentKey) {
-                                        androidx.compose.runtime.CompositionLocalProvider(LocalAssistantTaskHost provides taskHost) {
+                                        androidx.compose.runtime.CompositionLocalProvider(LocalAssistantTaskHost provides taskHost,
+                                            LocalTurnErrorFixAction provides fixModel) {
                                         ChatLineContent(line, key, loader,
                                         line.recordedDuration(snapshot.recordedTurnDurations),
                                         ::toggle, ::expand, folding, foldErrors,
                                         lastUserId = lastUserId,
+                                        turnFix = turnFix.takeIf { line.contentKey == lines.firstOrNull()?.contentKey },
                                         onLastLine = { extent -> chatList.reportLastLine(line.contentKey, extent) }, onFullText = { item ->
                                         scope.launch {
                                             try { fullText = repository.fullText(key, item.id) }
@@ -1135,7 +1150,10 @@ private fun ChatPage(
                 onContext = { text -> linkContexts = linkContexts + messageContext(menuTitle, text, context.resources); notice = res.getString(R.string.chat_screen_added_context) },
                 onHandToPersona = chrome.onHandToPersona?.takeIf { renderStyle != ChatRenderStyle.Assistant }
                     ?.let { hand -> { text: String -> hand(handoffMessage(menuTitle, text, context.resources)) } },
-                onNotice = { notice = it }, onFork = onFork, rewind = rewindMenu)
+                onNotice = { notice = it }, onFork = onFork, rewind = rewindMenu,
+                onDelete = { target -> messages.firstOrNull { it.clientMessageId == target.id }?.let { message ->
+                    deliveryAction(message, if (message.state.allows(DeliveryAction.Cancel)) DeliveryAction.Cancel else DeliveryAction.Delete)
+                } })
             viewer?.let { request ->
                 ChatImageViewer(request.images, request.index, onDismiss = { viewer = null },
                     onEdited = if (readOnly) null else ({ attachment -> composer.beginEdit(); composer.attachments += attachment }),

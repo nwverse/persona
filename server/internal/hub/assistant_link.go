@@ -128,7 +128,7 @@ func (h *Hub) startConversationOnce() http.HandlerFunc {
 		if !ok {
 			return
 		}
-		r = withManager(r, id)
+		r = withManager(withHumanStart(r), id) // a person's own app: its first message is theirs (secret_handoff.go)
 		if h.busConnOf(id) == nil {
 			writeErrCode(w, http.StatusServiceUnavailable, assistantwire.CodeAssistantOffline, errAssistantOffline)
 			return
@@ -147,7 +147,8 @@ type assistantLink struct{ h *Hub }
 // "manager.json").
 func (l assistantLink) Hello(context.Context) (assistantwire.Hello, error) {
 	h := l.h
-	out := assistantwire.Hello{Locale: string(h.userLang())}
+	// SecretHandoffGate: this hub checks who approves a hand-off card (secret_handoff.go).
+	out := assistantwire.Hello{Locale: string(h.userLang()), SecretHandoffGate: true}
 	if m, ok := h.mutesEvent(); ok { // the hub's mutes, before the manager pushes anything (fleet_link.go)
 		out.Mutes = m.Mutes
 	}
