@@ -1,6 +1,7 @@
 package node
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -26,7 +27,9 @@ import (
 // launcher claudeDesktopLauncher:
 //
 //  1. writes the session with the CLI and no model request: `claude -p --session-id <new id> "/rename <title>"` runs a
-//     local command only, so it needs no sign-in, and the transcript holds the folder and the title the app shows;
+//     local command only, so it needs no sign-in, and the transcript holds the folder and the title the app shows (the
+//     app gives an imported session none of its own: the title is the first message's, or the start's name hint when
+//     the message goes after it, as the apps send it);
 //  2. asks the app to import it (in the background; the app comes to the front all the same) and waits for its index to
 //     list the session (claudedesktop.go);
 //  3. sends the first message as to any session of the app (send → sendThroughDesktopApp): the app starts the
@@ -117,16 +120,17 @@ func isDesktopLauncher(name string) bool {
 }
 
 // startInDesktopApp starts a new session in the desktop app for a start with its launcher; handled false for any
-// other start (and a resume: a session of the app is continued by a message, claudedesktop_open.go).
-func (n *Node) startInDesktopApp(ctx context.Context, p runtimeStartParams) (s *proto.Session, err error, handled bool) {
+// other start (and a resume: a session of the app is continued by a message, claudedesktop_open.go). nameHint names it
+// when the start carries no first message (the apps send it after the start).
+func (n *Node) startInDesktopApp(ctx context.Context, p runtimeStartParams, nameHint string) (s *proto.Session, err error, handled bool) {
 	if !isDesktopLauncher(p.Launcher) || p.Resume != "" {
 		return nil, nil, false
 	}
-	s, err = n.newDesktopSession(ctx, p)
+	s, err = n.newDesktopSession(ctx, p, nameHint)
 	return s, err, true
 }
 
-func (n *Node) newDesktopSession(ctx context.Context, p runtimeStartParams) (*proto.Session, error) {
+func (n *Node) newDesktopSession(ctx context.Context, p runtimeStartParams, nameHint string) (*proto.Session, error) {
 	if !n.desktopKeepsSessions() {
 		return nil, errors.New("这台电脑上没有 Claude 桌面版的 Code 会话，不能在桌面版里新开会话，这次没有发送。")
 	}
@@ -145,7 +149,7 @@ func (n *Node) newDesktopSession(ctx context.Context, p runtimeStartParams) (*pr
 	if err != nil {
 		return nil, err
 	}
-	id, title := newUUID(), desktopTitle(p.Prompt, dir)
+	id, title := newUUID(), desktopTitle(cmp.Or(strings.TrimSpace(p.Prompt), nameHint), dir)
 	if err := seedDesktopSession(ctx, claude, dir, id, title); err != nil {
 		return nil, fmt.Errorf("Claude Code 没能写出新会话：%v", err)
 	}

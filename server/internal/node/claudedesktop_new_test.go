@@ -238,6 +238,35 @@ func TestADesktopStartMakesANewFolder(t *testing.T) {
 	}
 }
 
+// The apps start with no first message and send it after (async): the session is named after the start's name hint,
+// and the message, sent as any message, goes to the inbox of the claude the app starts for it.
+func TestADesktopStartNamedAfterItsHintTakesTheFirstMessageAfter(t *testing.T) {
+	n, f, home := herdrNode(t)
+	noPaneEnv(t)
+	shortPeerWait(t, 3*time.Second)
+	app := newFakeDesktopApp(t, home)
+	fakeClaudeOnPath(t)
+	shellLaunchers(t, "claude")
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	dir := t.TempDir()
+	s, err := startDesktop(t, n, map[string]any{"cwd": dir, "launcher": "claude-desktop", "async": true, "name_hint": "周报\n整理"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Title != "周报" || len(app.seeded()) != 1 || app.seeded()[0].title != "周报" {
+		t.Fatalf("session %+v, seeded %v", s, app.seeded())
+	}
+	if links := app.opened(); len(links) != 1 {
+		t.Fatalf("a message was sent with no first message: %v", links)
+	}
+	if err := waitSend(t, sendWithin(context.Background(), n, s.SessionID, "周报\n整理")); err != nil {
+		t.Fatalf("first message: %v", err)
+	}
+	if in := app.inbox(s.SessionID); in == nil || len(in.users()) != 1 {
+		t.Fatal("the first message is not in the session's inbox")
+	}
+}
+
 // A computer with no terminal engine starts one in the app too: the launcher is not a terminal's.
 func TestTheDesktopLauncherNeedsNoTerminalEngine(t *testing.T) {
 	n, home := testNode(t)
