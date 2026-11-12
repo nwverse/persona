@@ -28,6 +28,13 @@ The follow-up branding / input compatibility work for #277 landed in batches: #7
 ## Unified home navigation
 
 The home has only **Assistant** and **Agents**, selected at the top, on phones, tablets and foldables (#2589).
+Selecting **Agents from Assistant** opens its list, not an earlier session or secondary page (#5638). Its root entry stays,
+so list state is retained; selecting Assistant keeps the current conversation. Task/session entries, `/s/…` links and
+notifications still open their requested detail directly. Back from an Agent opened in Assistant returns to its origin.
+Re-tapping an already selected Glass home segment retains its existing menu; that is not a selection from Assistant.
+`AgentsTabNavigationTest` checks prior task, app/hub link, notification and restored-detail stacks;
+`AgentsTabNavigationShotsTest` clicks the production home control and renders the Agents list and chat through Navigation 3
+in three styles, light/dark and default/large text (Native JVM Compose captures, not device/emulator screenshots).
 The avatar opens one shared left-side history drawer from either page; it pushes the full-size page aside rather than
 rising from the bottom. Settings opens from its bottom gear in a sheet, never a home tab. Root Close returns to the
 originating page; child Back pops only the settings sheet's secondary stack.

@@ -1,5 +1,14 @@
 # Lessons: Android
 
+## Explicit home selection is not detail-stack restoration (#5638)
+
+Keeping visited tabs composed prevents loading flashes, but keeping their entire back stacks can make the Agents
+home control reopen a session instead of its list. Treat explicit Agents selection separately from a targeted session
+entry: remove only destinations above the existing Agents root, and preserve Assistant's current conversation.
+Do not route task entries or notification/session links through that reset. Exercise the production home control after
+those entry paths and after a restored stack; a navigator test that expects the old detail to survive a tab selection
+can accidentally pin the bug rather than prevent it.
+
 ## Keep a worktree fixed while Gradle verifies it (#5233)
 
 Do not merge main or edit source while a multi-task Gradle invocation is running in that worktree. Earlier tasks can
