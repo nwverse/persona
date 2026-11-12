@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
@@ -63,6 +64,17 @@ func (s *Service) recordingRoutes(engine func(http.ResponseWriter, *http.Request
 		if put.AttendanceProblem != "" {
 			out["attendance_problem"] = put.AttendanceProblem
 		}
+		// The transcription mode in effect (meeting_transcribe.go): on every meeting upload, and on another kind that
+		// asked for the hub (not_meeting); only an older manager leaves it out, and the phone then stays on the device.
+		if strings.EqualFold(strings.TrimSpace(u.Kind), kb.RecordingMeeting) || put.TranscriptionProblem != "" {
+			out["transcription"] = put.Transcription
+			if put.TranscriptionProblem != "" {
+				out["transcription_problem"] = put.TranscriptionProblem
+			}
+		}
+		if status == kb.RecordingStored && put.Transcription == kb.TranscriptionHub {
+			s.hubUploaded(e, id, u.Segments, u.Complete) // the timeline, the phone's text, the fallback
+		}
 		if put.Room { // a room meeting (meeting_room.go): its room's state, at least none; only an older manager leaves it out
 			room := &kb.RoomView{State: kb.RoomNone}
 			if put.Meeting != nil && put.Meeting.Room != nil {
@@ -88,6 +100,7 @@ func (s *Service) recordingRoutes(engine func(http.ResponseWriter, *http.Request
 		}
 		if deleted { // its room goes with it (meeting_room.go); the retention pass asks again if the node is away
 			go s.meetingRoomsSweep(context.WithoutCancel(r.Context()), e)
+			s.hubStop(r.PathValue("id"), codeRecordingDeleted) // its audio socket and job (meeting_transcribe.go)
 		}
 		apierr.WriteJSON(w, map[string]any{"deleted": deleted})
 	})
@@ -102,6 +115,6 @@ func (s *Service) recordingRoutes(engine func(http.ResponseWriter, *http.Request
 	s.minutesRoutes(engine)
 	s.meetingRoutes()
 	s.dayRoutes()
-	// Hub transcription's gap uploads (meeting_transcribe.go); its audio socket is ServeSocket's.
+	// Hub transcription's gap uploads (meeting_audio.go); its audio socket is ServeSocket's.
 	s.handle("PUT /api/v1/recordings/{id}/audio", s.audioPut)
 }
