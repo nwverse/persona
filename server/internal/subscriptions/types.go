@@ -279,17 +279,32 @@ type Check struct {
 	Error *Problem `json:"error,omitempty"`
 }
 
-// Preview is one item of a dry run.
+// Preview is one item of a dry run, as the Inbox would show it: Summary is its row's preview line (the body's first
+// 200 characters on one line), Problems what its mapped fields could not read in this item.
 type Preview struct {
-	UID     string  `json:"uid"`
-	New     bool    `json:"new"`
-	Title   string  `json:"title"`
-	Sender  string  `json:"sender"`
-	Time    *string `json:"time"`
-	Thread  string  `json:"thread"`
-	Link    string  `json:"link"`
-	DueDate *string `json:"due_date"`
-	Body    string  `json:"body"`
+	UID      string         `json:"uid"`
+	New      bool           `json:"new"`
+	Title    string         `json:"title"`
+	Sender   string         `json:"sender"`
+	Time     *string        `json:"time"`
+	Thread   string         `json:"thread"`
+	Link     string         `json:"link"`
+	DueDate  *string        `json:"due_date"`
+	Body     string         `json:"body"`
+	Summary  string         `json:"summary"`
+	Problems []FieldProblem `json:"problems"`
+}
+
+// The problems of one item's field (FieldProblem.Code).
+const (
+	FieldEmpty   = "empty"    // the field's path finds nothing in this item
+	FieldBadTime = "bad_time" // a time or due date that cannot be read
+)
+
+// FieldProblem is a mapped field one item has no value for: Key is the recipe key ("fields.sender").
+type FieldProblem struct {
+	Key  string `json:"key"`
+	Code string `json:"code"`
 }
 
 // PathValue is a leaf of the first item, for the field pickers.

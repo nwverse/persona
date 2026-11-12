@@ -557,7 +557,8 @@ func (s *Service) check(ctx context.Context, c ConnectorInfo, sourceID string, r
 		dr.Count = 1
 		dr.Checks[2].OK, dr.Checks[3].OK = true, true
 		body := clip(pl.snapshot.Body, previewMax)
-		dr.Items = append(dr.Items, Preview{UID: pl.snapshot.UID, New: sub == nil || sub.SnapshotHash != pl.snapHash, Title: pl.snapshot.Title, Body: body})
+		dr.Items = append(dr.Items, Preview{UID: pl.snapshot.UID, New: sub == nil || sub.SnapshotHash != pl.snapHash, Title: pl.snapshot.Title, Body: body,
+			Summary: clip(oneLine(pl.snapshot.Body), previewMost), Problems: []FieldProblem{}})
 	} else {
 		dr.Count, dr.WeakDedup = len(pl.items), pl.weak
 		switch {
@@ -589,7 +590,7 @@ func (s *Service) check(ctx context.Context, c ConnectorInfo, sourceID string, r
 			if i >= 3 {
 				break
 			}
-			dr.Items = append(dr.Items, preview(m, !seen[m.item.UID]))
+			dr.Items = append(dr.Items, preview(m, !seen[m.item.UID], t.recipe.Fields))
 		}
 		if pl.first != nil {
 			dr.Paths = leaves(pl.first)
@@ -621,9 +622,9 @@ func fieldPath(r Recipe, name string) string {
 	return "(no path)"
 }
 
-func preview(m mapped, fresh bool) Preview {
+func preview(m mapped, fresh bool, f *connector.SubscriptionFields) Preview {
 	p := Preview{UID: m.item.UID, New: fresh, Title: m.item.Title, Sender: m.item.Sender, Thread: m.item.Thread, Link: m.item.Link,
-		Body: clip(m.item.Body, previewMax)}
+		Body: clip(m.item.Body, previewMax), Summary: clip(oneLine(m.item.Body), previewMost), Problems: itemProblems(m, f)}
 	if m.item.Time != nil {
 		v := m.item.Time.Format(time.RFC3339)
 		p.Time = &v

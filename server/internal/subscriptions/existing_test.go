@@ -199,6 +199,18 @@ func TestADryRunWarnsAboutUnknownKeysAndEmptyFields(t *testing.T) {
 	if strings.Join(got, ",") != want {
 		t.Fatalf("warnings:\n%s\nwant\n%s", strings.Join(got, ","), want)
 	}
+	// Each item says what the Inbox row shows and which of its fields came out empty.
+	if it := dr.Items[0]; it.Title != "One" || it.Sender != "Office" || it.Time != nil || it.Summary != "" || // no time or body mapped
+		len(it.Problems) != 1 || it.Problems[0] != (FieldProblem{Key: "fields.link", Code: FieldEmpty}) {
+		t.Fatalf("a previewed item: %+v", it)
+	}
+	e.answer(`{"items":[{"id":"b1","title":"Bad time","at":"soon","text":"Line one\n\n  line   two"}]}`)
+	bad, err := e.svc.DryRun(e.ctx, DryRunRequest{Connector: "example", Source: "notices", Recipe: ptr(itemsRecipe())})
+	if err != nil || bad.OK || len(bad.Items) != 1 || bad.Items[0].Summary != "Line one line two" ||
+		fmt.Sprint(bad.Items[0].Problems) != "[{fields.sender empty} {fields.time bad_time}]" {
+		t.Fatalf("an item whose time cannot be read: %+v %v", bad.Items, err)
+	}
+	e.answer(notesJSON(note{id: "a1", title: "One", at: "2026-11-10T08:00:00Z"}))
 	// A clean recipe has none, and says so with an empty list.
 	clean, err := e.svc.DryRun(e.ctx, DryRunRequest{Connector: "example", Source: "notices", Recipe: ptr(itemsRecipe())})
 	if err != nil || clean.Warnings == nil || len(clean.Warnings) != 0 {

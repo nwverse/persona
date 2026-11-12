@@ -88,6 +88,36 @@ func unknownWarnings(keys []string) []Warning {
 	return out
 }
 
+// itemProblems are the mapped fields one item has no readable value for, in the recipe format's order.
+func itemProblems(m mapped, f *wire.ConnectorSubscriptionFields) []FieldProblem {
+	out := []FieldProblem{}
+	if f == nil {
+		return out
+	}
+	for _, c := range []struct {
+		key, path string
+		has, bad  bool
+	}{
+		{"id", f.ID, m.idFound, false},
+		{"thread", f.Thread, m.item.Thread != "", false},
+		{"title", f.Title, m.hasTitle, false},
+		{"sender", f.Sender, m.item.Sender != "", false},
+		{"time", f.Time, m.rawTime != "", m.timeBad},
+		{"body", f.Body, m.item.Body != "", false},
+		{"link", f.Link, m.item.Link != "", false},
+		{"due_date", f.DueDate, m.rawDue != "", m.dueBad},
+	} {
+		switch {
+		case c.path == "":
+		case c.bad:
+			out = append(out, FieldProblem{Key: "fields." + c.key, Code: FieldBadTime})
+		case !c.has:
+			out = append(out, FieldProblem{Key: "fields." + c.key, Code: FieldEmpty})
+		}
+	}
+	return out
+}
+
 // emptyFieldWarnings are the fields the recipe maps whose path finds a value in none of the items pulled. The title
 // is left to the fields check (no_title), which fails the dry run.
 func emptyFieldWarnings(f *wire.ConnectorSubscriptionFields, items []mapped) []Warning {
