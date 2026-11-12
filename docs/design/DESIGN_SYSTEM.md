@@ -389,6 +389,10 @@ For every component: use the design-system one, not a lookalike. Counts are appr
 
 `LargeWindowComposer` adds hardware actions without replacing `ChatComposer` or its layout. In regular / expanded windows, Ctrl or Meta+Return is the same action as Send and uses the same enabled, content, attachment-readiness, sending and blocked gates; the first key-down acts once, repeats and key-up do not. Return and Shift+Return insert a newline, and an active IME composition passes every key to the IME. `LocalComposerHardware` supplies the optional action to `ExpandedComposer`: send collapses first and then invokes the caller's one `onSend`, while Escape only collapses and restores the small field's focus. Null is the default and preserves phone, preview and standalone-editor behavior. Compact and wide-phone windows do not install these actions. Ctrl+/, terminal keys and unrelated keys are not consumed by the composer.
 
+#### Large-window file drop (Android)
+
+`ComposerDropTargetFrame` is the composer's drop-target chrome: a style-shaped accent outline (`Tokens.Size.lineMedium`, existing motion standard / reduced-motion snap) with no padding, size change or compact / wide-phone instance. Its semantics say **Drop files to attach them** while hovered and **Copying dropped files…** during import; all copy is localized. A target accepts only a visible, writable chat with an upload service. `ComposerDropImport` copies a transient-grant URI into app-owned `cache/chat-drops` before calling the ordinary attachment selector and uploader. Media count, 200 MiB, JPEG conversion, video / file bytes, progress, failure, retry and send remain the ordinary Composer rules. Cleanup removes only unused app-owned copies, never a directory or another draft's source.
+
 **Run status bar** (web, #5312; the owner asked on 2026-11-12 that it follow cindy's `RunningStatusBar` and
 `RunningTokenRatePopover`, and cindy wins over what this document said before; `web/src/views/chat/RunningStatusBar.tsx`,
 `docs/web/web.md` "Live status and streaming"). One row above the composer while a turn runs, 13 px medium, 8 px side and

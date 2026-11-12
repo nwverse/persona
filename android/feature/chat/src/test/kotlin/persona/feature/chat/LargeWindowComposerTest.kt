@@ -162,6 +162,7 @@ class LargeWindowComposerTest {
         val state = ChatComposerState().apply { value = TextFieldValue("hello", TextRange(5)) }
         var sent = 0
         show(state, large = false) { sent++ }
+        rule.onNodeWithTag("composer-drop-target").assertDoesNotExist()
         rule.onNode(hasSetTextAction() and isFocused()).performKeyInput {
             withKeyDown(Key.CtrlLeft) { pressKey(Key.Enter) }
         }
