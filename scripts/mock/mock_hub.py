@@ -48,6 +48,7 @@ def features():
                 ["sessions_list", "sessions_lookup", "sessions_hierarchy"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
                 ["preview"] if os.environ.get("MOCK_PREVIEW") else []) + (
                 ["task_cron"] if os.environ.get("MOCK_CRON") == "1" else []) + (
+                [] if os.environ.get("MOCK_TODO_SEEN") == "off" else ["todo_seen"]) + (
                 [] if os.environ.get("MOCK_LOOK_UPLOADS") == "off" else ["look_uploads"])
 
 
@@ -945,6 +946,31 @@ if os.environ.get("MOCK_WORKTREES") == "1":
         sess("macbook", "a1f3c2d4-0000-4000-8000-0000000000c3", "整理读书笔记", "/Users/me/code/notes",
              "idle", "idle", "notes", 4, "1", 1, 60 * 48, "按主题整理好了，每本书一页。", seen_at=ago(days=2)),
     ]
+
+# MOCK_SHARED_FOLDER=1 (#5715): one folder two repositories claim, on Mac Studio. Three Claude desktop chats (one finished
+# and unseen, two idle) have /Users/me/code/atlas as their main checkout; a finished Codex App chat in the same folder
+# names its Codex project, /Users/me/code, as its repository. By Repository lists the three under atlas's working tree
+# (the two idle ones behind their fold) and the Codex chat under code's, each tree's count matching its rows.
+if os.environ.get("MOCK_SHARED_FOLDER") == "1":
+    _atlas, _herdr = "/Users/me/code/atlas", ("space_kind", "space_id", "space_name", "space_index", "slot_id", "slot_name",
+                                              "slot_index", "pane_id", "tab_id", "workspace_id")
+
+    def _desktop(sid, title, status, state, minutes, last, agent="claude", **kw):
+        s = {k: v for k, v in sess("studio", sid, title, _atlas, status, state, "", 0, "", 0, minutes, last, agent=agent).items()
+             if k not in _herdr}
+        s.update(worktree=_atlas, branch="feat/tiles", agent_surface="desktop", **kw)
+        return s
+
+    SESSIONS += [
+        _desktop("a1f3c2d4-0000-4000-8000-00000000571%d" % i, title, *(("done", "unread") if i == 1 else ("idle", "idle")),
+                 40 + 20 * i, last, repo_root=_atlas, source_kind="claude_desktop",
+                 **({} if i == 1 else {"seen_at": ago(minutes=30 + 20 * i)}))
+        for i, (title, last) in enumerate([("地图瓦片缓存", "瓦片缓存改成按缩放级别分目录了。"),
+                                           ("离线包大小评估", "离线包压到 180 MB，列了三种取舍。"),
+                                           ("标注图层的点击区域", "点击区域放大到 44 pt，补了测试。")], 1)
+    ] + [_desktop("a1f3c2d4-0000-4000-8000-000000005719", "总结这周的地图反馈", "done", "unread", 8,
+                  "反馈分成三类：加载慢、离线包太大、标注难点，各附了例子。", agent="codex", repo_root="/Users/me/code",
+                  source_kind="codex_history", space_kind="codex_app", space_id="codex-project:/Users/me/code", space_name="code")]
 
 
 # MOCK_MACHINES=1: the machine pages' edge cases (MachinePagesTests): a fourth machine that is offline with an ssh
@@ -8599,7 +8625,8 @@ if os.environ.get("MOCK_IMESSAGE_INBOX"):
 
 # MOCK_SUBSCRIPTION_INBOX=1 (#5537): an item a source subscription delivered (a mail subscription's notice): its source is
 # the subscription's id, not a connector's, and its content is the whole of it. Its thread request answers as the hub
-# does now, a page that is no conversation (`chat.kind: none`); =old as hubs before #5537 did, 404 "no connector".
+# does now, a page that is no conversation (`chat.kind: none`); =old as hubs before #5537 did, 404 "no connector"
+# (=group and =group_before below answer as =1).
 # GET /mock/subscription_inbox?mode=old|1 switches it for the next requests. Only with ?sources=all, like connectors' items.
 SUBSCRIPTION_INBOX = os.environ.get("MOCK_SUBSCRIPTION_INBOX", "")
 if SUBSCRIPTION_INBOX:
@@ -8614,6 +8641,50 @@ if SUBSCRIPTION_INBOX:
          "connector": {"thread": "sub:sub_example01:t1", "label": "示例邮件", "url": "https://mail.example.com/notice/1116"}},
     ]
 
+# MOCK_SUBSCRIPTION_INBOX=group (#5671): beside it, a group chat's subscription grouped by source, as one row like a Lark
+# chat: titled by the subscription, the newest message its sender line, nine came in, one of them asks the owner (so the
+# row is Needs you), the earlier ones listed in its context. =group_before: the same messages as hubs before #5671 delivered them, a row each.
+SUB_GROUP_MESSAGES = [  # (minutes ago, sender, text, tier, summary): made up
+    (58, "小林", "周六的读书会改到下午了", "fyi", "读书会改到周六下午"),
+    (51, "Mia", "下午几点？我两点以后才有空", "fyi", ""),
+    (47, "小林", "@我 周六你能带投影仪吗？", "action", "小林问你周六能不能带投影仪"),
+    (40, "阿杰", "这次读第三章，大家记得带书", "fyi", ""),
+    (33, "Mia", "我可以带零食", "fyi", ""),
+    (24, "小林", "地点还是图书馆二楼？", "fyi", ""),
+    (18, "阿杰", "对，二楼靠窗那间", "fyi", ""),
+    (11, "Mia", "好的", "fyi", ""),
+    (6, "阿杰", "那就定周六下午两点，老地方见", "fyi", "读书会定在周六下午两点"),
+]
+
+
+def sub_group_line(m):
+    return f"{fmt_hm(ago(minutes=m[0]))} · {m[1]} · {m[2]}"
+
+
+def fmt_hm(iso):
+    t = datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone()
+    return t.strftime("%m-%d %H:%M")
+
+
+def sub_group_row(ms, key, count, tier, summary):
+    last = ms[-1]
+    earlier = "\n".join(sub_group_line(m) for m in ms[:-1][-10:])
+    block = f"{last[2]}\n{last[1]} · {fmt_hm(ago(minutes=last[0]))}"  # the body is the title: said once
+    return {"id": f"sub_example02:{key}", "source": "sub_example02", "kind": "sub_message", "account": "sub_example02",
+            "account_name": "示例读书群", "title": last[2], "sender": last[1], "preview": last[2], "count": count,
+            "started_at": ago(minutes=ms[0][0]), "updated_at": ago(minutes=last[0]), "tier": tier, "summary": summary,
+            "reason": "订阅的群消息", "read": False, "context": (earlier + "\n\n" if earlier else "") + block,
+            "connector": {"thread": f"sub:sub_example02:{key}", "label": "示例读书群"}}
+
+
+if SUBSCRIPTION_INBOX == "group":
+    _row = sub_group_row(SUB_GROUP_MESSAGES, "all", len(SUB_GROUP_MESSAGES), "action", "读书会定在周六下午两点，小林问你能不能带投影仪")
+    _row["title"] = "示例读书群"  # the one row is titled by the subscription, with no tag saying it again
+    del _row["connector"]["label"]
+    INBOX[1:1] = [_row]
+elif SUBSCRIPTION_INBOX == "group_before":
+    INBOX[1:1] = [sub_group_row([m], f"m{i}", 1, m[3], m[4] or m[2]) for i, m in reversed(list(enumerate(SUB_GROUP_MESSAGES)))]
+
 
 def subscription_thread_area(h, method, p):
     """A subscription's thread request (MOCK_SUBSCRIPTION_INBOX) and /mock/subscription_inbox; True when it answered."""
@@ -8623,7 +8694,7 @@ def subscription_thread_area(h, method, p):
     if p == "/mock/subscription_inbox":
         SUBSCRIPTION_INBOX = parse_qs(urlparse(h.path).query).get("mode", [SUBSCRIPTION_INBOX])[0] or "1"
         return h.send_json({"mode": SUBSCRIPTION_INBOX}) or True
-    if p != "/api/v1/connectors/sub_example01/thread":
+    if p not in ("/api/v1/connectors/sub_example01/thread", "/api/v1/connectors/sub_example02/thread"):
         return False
     if SUBSCRIPTION_INBOX == "old":
         return h.send_json({"error": 'no connector "sub_example01"'}, 404) or True
@@ -13582,9 +13653,10 @@ if os.environ.get("MOCK_LONG_HISTORY") == "1":
 # MOCK_LONG_REPORT=1: an agent chat that ends in one very long final report, the shape of a real planning session that
 # scrolled badly (#4970): about 33,000 characters in one reply (headings, lists, nine tables of 115 rows, a dozen code
 # blocks, a quote), after 120 tool calls folded into work lines, eight subagent cards and the same report handed in as a
-# plan. `-openSession macbook/a1f3c2d4-0000-4000-8000-000000000090`. MOCK_LONG_REPORT=<items.json> serves that file's
-# items instead (a transcript's items as the hub parses them, kept outside the repository), cutting long tool outputs as
-# the hub's pages do.
+# plan. `-openSession macbook/a1f3c2d4-0000-4000-8000-000000000090`. MOCK_LONG_REPORT=cjk: the same chat with a report as
+# varied in its Chinese characters as a real one (#5076: what the glyph cache has to hold). MOCK_LONG_REPORT=<items.json>
+# serves that file's items instead (a transcript's items as the hub parses them, kept outside the repository), cutting
+# long tool outputs as the hub's pages do.
 LONG_REPORT = "a1f3c2d4-0000-4000-8000-000000000090"
 
 
@@ -13618,14 +13690,59 @@ def long_report_text():
     return "\n".join(out)
 
 
+def long_report_text_varied():
+    """The report's shape with a real report's glyph variety (#5076): about 10,900 Chinese characters, some 800 of them
+    distinct, the most common fifty 38% of the text (`MOCK_LONG_REPORT=1` repeats one sentence: about 100 distinct).
+    The characters are drawn from the CJK block by a fixed seed, so every run serves the same text."""
+    import random
+    rnd = random.Random(5076)
+    pool = [chr(0x4E00 + (k * 37) % 20902) for k in range(800)]
+    weights = [1 / (k + 15) for k in range(len(pool))]  # Zipf-like: a few characters often, most of them rarely
+
+    def words(n):
+        cs = rnd.choices(pool, weights, k=n)
+        for k in range(rnd.randint(8, 14), n, rnd.randint(9, 16)):  # punctuation as prose has it
+            cs[k] = rnd.choice("，，，。；、")
+        if rnd.random() < 0.4:  # an English word or two, as the real one mixes them
+            cs.insert(rnd.randrange(n), " %s " % rnd.choice(("adapter", "rollout", "client", "cache", "schema", "v2")))
+        return "".join(cs) + "。"
+
+    tables = [(7, 3), (20, 3), (10, 2), (9, 3), (8, 3), (35, 3), (8, 5), (7, 3), (11, 3)]
+    codes = [31, 6, 3, 7, 8, 18, 3, 1, 1, 20, 6, 56]
+    out = ["# " + words(10), "", "> " + words(30), ""]
+    for n in range(12):
+        out += ["## %d. %s" % (n + 1, words(6)), ""]
+        for k in range(3):
+            out += [words(110), ""]
+            out += ["### %d.%d %s" % (n + 1, k + 1, words(7)), ""]
+            out += ["- **%s**：%s" % (words(4), words(30 + j * 6)) for j in range(3)] + [""]
+            if k == 1:
+                out += ["#### " + words(4), "", "1. " + words(12), "2. " + words(14), "3. " + words(10), ""]
+        if n < len(tables):
+            rows, cols = tables[n]
+            out.append("| " + " | ".join(words(3) for _ in range(cols)) + " |")
+            out.append("|" + "---|" * cols)
+            out += ["| " + " | ".join(("`field_%d_%d`" % (r, c)) if c == 0 else words(8 + 8 * (c % 2)) for c in range(cols)) + " |"
+                    for r in range(rows - 2)]
+            out.append("")
+        if n < len(codes):
+            out.append("```text")
+            out += ["%-3d %s" % (j + 1, "step_%02d -> check_%02d -> commit  # keep the old reader until every client moved" % (j, j))[:64 + j % 10]
+                    for j in range(codes[n])]
+            out += ["```", ""]
+    return "\n".join(out)
+
+
 if os.environ.get("MOCK_LONG_REPORT"):
     _src = os.environ["MOCK_LONG_REPORT"]
     SESSIONS.append(sess("macbook", LONG_REPORT, "数据层迁移方案", "/Users/me/code/weather", "done", "idle", "weather", 1, "plan", 6, 3,
                          "方案写好了，共十二部分。"))
-    if _src == "1":
-        _report = long_report_text()
+    if _src in ("1", "cjk"):
+        _report = long_report_text_varied() if _src == "cjk" else long_report_text()
         _r = [it("user", "text", 180, text="把天气 App 的数据层迁移方案整理出来，先读完现有代码再写。")]
         _r += [it("assistant", "text", 179, text="好，我先分头读代码。")]
+        if _src == "cjk":  # a plain call before the subagents: the oldest step a call's notice can lead back to (-showJumpPerf)
+            _r += tool("Bash", {"command": "ls Sources/Data"}, "".join("Model%02d.swift\n" % k for k in range(15)), 179)
         for _a in range(8):
             _r += tool("Agent", {"description": "读第 %d 组模块" % (_a + 1), "prompt": "读 Sources/Data 下第 %d 组文件，列出公开接口。" % (_a + 1)},
                        "第 %d 组共 12 个文件，公开接口如下：\n" % (_a + 1) + "".join("- func load%d()\n" % k for k in range(40)), 178 - _a)
@@ -21507,6 +21624,19 @@ class H(BaseHTTPRequestHandler):
                         push_machine(mid)
                         push_todos()
                         return self.send_json({"ok": True})
+        # PUT / DELETE /api/v1/todos/{id}/seen (#5707, server/internal/assistant/todo_seen.go): Got it and its Undo. Not
+        # activity: updated_at stays. MOCK_TODO_SEEN=off is a hub without it (no feature, 404 here).
+        if p.startswith("/api/v1/todos/") and p.endswith("/seen") and p.count("/") == 5 and self.command in ("PUT", "DELETE") \
+                and os.environ.get("MOCK_TODO_SEEN") != "off":
+            if is_read_only(self): return self.send_json({"error": "只读角色不能修改待办"}, 403)
+            t = next((x for x in TODOS if x["id"] == p.split("/")[4]), None)
+            if not t: return self.send_json({"error": "待办不存在"}, 404)
+            if self.command == "PUT":
+                t["seen_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            else:
+                t.pop("seen_at", None)
+            push_todos()
+            return self.send_json({"todo": format_todo(t)})
         if p.startswith("/api/v1/todos/") and "/agents/" in p:
             if is_read_only(self): return self.send_json({"error": "只读角色不能修改待办"}, 403)
             parts = p.split("/")  # ['', 'api', 'v1', 'todos', id, 'agents', mid, sid]
@@ -23340,7 +23470,7 @@ MOCK_HELP.append("MOCK_EXTENSION_PICKERS=1  （配合 MOCK_EXTENSIONS=1）多一
 MOCK_HELP.append("MOCK_EXTENSION_OPS=1|fail  （配合 MOCK_EXTENSIONS）扩展的安装 / 升级 / 卸载分步骤推进度（extension_operation 事件）：后台预览、停在等你同意、同意后同一个操作接着装；fail：每个扩展第一次安装停在「启动」、第一次卸载停在「删除」，都能重试；MOCK_EXTENSION_OPS_STEP=秒 每步的时长；MOCK_EXTENSION_INSTALL_DELAY=秒 没有分步骤的旧 hub 安装 / 卸载要这么久才回（#3307）")
 MOCK_HELP.append("MOCK_MANAGER_NAS=1  （默认的三个管理者）NAS 归离线的「家里」：像 hub 一样显示成离线，error 是 hub 的「助手暂时连不上，稍后再试」；它的一个 agent（备份脚本）状态 unknown")
 MOCK_HELP.append("MOCK_ASSISTANT_BASH=1  主对话自己的第一条 Bash 在等批准（#4883），是它唯一的卡片：对话里输入区上方显示「在等你批准」，不只在收起的「需要你」里")
-MOCK_HELP.append("MOCK_LONG_REPORT=1|<items.json>  An Agent chat (macbook/a1f3c2d4-0000-4000-8000-000000000090) ending in one ~33,000-character report with nine tables and a dozen code blocks after 120 folded tool calls (#4970); a path serves that file's transcript items instead")
+MOCK_HELP.append("MOCK_LONG_REPORT=1|cjk|<items.json>  An Agent chat (macbook/a1f3c2d4-0000-4000-8000-000000000090) ending in one ~33,000-character report with nine tables and a dozen code blocks after 120 folded tool calls (#4970); cjk: the report as varied in Chinese characters as a real one, ~800 distinct (#5076); a path serves that file's transcript items instead")
 MOCK_HELP.append("MOCK_ASK_LONG=1|actions|swipe|review|perm|agent  卡片比输入区上方的盒子还高（#3112）：1 主对话的 ask_user 提问卡（八个带说明的选项）；actions 单道八个带说明选项的多选题，swipe 短单选拖动不误发，review 六道单选题的长复核页，Submit 首屏可达（#4839）；perm 主对话的飞书授权卡（超长命令）；agent MacBook 上补测试的 Agent 对话里两张这样的授权卡、没有别的卡（手机和侧边面板把第二张折在「还有 1 件」后面）")
 MOCK_HELP.append("MOCK_MANAGER_NEEDS_YOU=0  名册不带 inbox_needs_you（旧 hub，或还不上报这个数的旧管理者）；默认每个在线的管理者带它收件箱里「需要你处理」的未完成条目数，数变了推 managers")
 MOCK_HELP.append("MOCK_MANAGER_OUTDATED=1  设置 › 管理者：「工作」带 needs_update（它还不读自己的 manager.json，hub 在它在线时这样标）")
