@@ -286,10 +286,10 @@
     <string name="settings_demo_connect">连接我的 hub</string>
     <string name="settings_not_paired">尚未配对</string>
     <string name="settings_hub_computers_online">电脑在线</string>
-    <string name="settings_hub_address">hub 地址</string>
-    <string name="settings_row_hubs">hub</string>
-    <string name="settings_row_hubs_subtitle">添加、改名和断开 hub</string>
-    <string name="settings_row_hub_update">hub 版本</string>
+    <string name="settings_hub_address">Hub 地址</string>
+    <string name="settings_row_hubs">Hub 连接</string>
+    <string name="settings_row_hubs_subtitle">添加、改名和断开 Hub</string>
+    <string name="settings_row_hub_update">Hub 版本</string>
     <string name="settings_row_hub_update_subtitle">版本、检查和安装更新、自动更新</string>
     <string name="settings_row_pairing">配对</string>
     <string name="settings_row_pairing_subtitle">扫码、粘贴链接或手动输入</string>
@@ -330,9 +330,9 @@
     <string name="settings_update_allow_unknown">请允许安装未知应用，返回后再次点“下载并安装”。</string>
     <string name="settings_update_verified">下载和校验完成，请在系统页面确认安装。</string>
     <string name="settings_update_failed">更新未完成。请检查下载连接、校验信息和安装权限后重试。</string>
-    <string name="settings_disconnect_forget">断开并忘记服务器</string>
+    <string name="settings_disconnect_forget">断开并忘记 Hub</string>
     <string name="settings_disconnect_title">断开配对？</string>
-    <string name="settings_disconnect_text">将断开与 hub 的连接，清除本机凭据和这个 hub 的本地数据。再次使用需要重新配对。</string>
+    <string name="settings_disconnect_text">将断开与 Hub 的连接，清除本机凭据和这个 Hub 的本地数据。再次使用需要重新配对。</string>
     <string name="settings_disconnect">断开</string>
     <string name="settings_ready_title">准备清单</string>
     <string name="settings_ready_channels_header">系统通知渠道</string>
