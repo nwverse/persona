@@ -279,6 +279,7 @@ test('a stream ending after unwatch clears the published text and cancels its pe
   rt.stream('s1', 'Previous reply.')
   await until('a new reply may repeat the earlier words', () => n.last('session.delta')?.text === 'Previous reply.')
   rt.streamEnd('never-watched')
+  await new Promise((resolve) => setTimeout(resolve, 20))
   assert.ok(n.all('session.delta').every((delta) => delta.session_id === 's1'))
 })
 
