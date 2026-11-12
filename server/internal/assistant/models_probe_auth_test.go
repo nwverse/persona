@@ -256,20 +256,20 @@ func TestProbeUnknownAuth(t *testing.T) {
 	}
 }
 
-// Discover settles auto on the first page and sends only that header for the next ones.
+// Discover settles auto on the first page and sends only that header for the next ones. It names no method: a model
+// list may answer without looking at the key, so only the test says what a launch needs.
 func TestProbeDiscoverAutoResolvesOnTheFirstPage(t *testing.T) {
 	_, mux := launcherTestService(t)
 	for name, c := range map[string]struct {
 		bearer, apiKey bool
 		sent           []string
-		auth           string
 	}{
-		"x-api-key": {false, true, []string{probeAuthBearer, probeAuthAPIKey, probeAuthAPIKey}, probeAuthAPIKey},
-		"both":      {true, true, []string{probeAuthBearer, probeAuthBearer}, probeAuthBearer},
+		"x-api-key": {false, true, []string{probeAuthBearer, probeAuthAPIKey, probeAuthAPIKey}},
+		"both":      {true, true, []string{probeAuthBearer, probeAuthBearer}},
 	} {
 		g := newAuthGateway(t, c.bearer, c.apiKey)
 		out := probeResult(t, mux, "/api/v1/launchers/discover", `{"base_url":"`+g.URL+`","api_key":"`+fakeKey+`","auth":"auto"}`)
-		if sent := g.requests(); out["error"] != nil || out["auth"] != c.auth || !slices.Equal(sent, c.sent) ||
+		if sent := g.requests(); out["error"] != nil || out["auth"] != nil || !slices.Equal(sent, c.sent) ||
 			!strings.Contains(jsonText(out["models"]), "model-b") {
 			t.Fatalf("%s: %v sent %v", name, out, sent)
 		}

@@ -44,10 +44,10 @@ type probeInput struct {
 	ViaMachine *string `json:"via_machine"`
 }
 
-// The credential header(s) a probe sends (probeTarget.auth). probeTarget resolves a request without auth to the
-// stored provider's method, else the preset's, else both headers (a client from before auth was read).
+// The credential header(s) a probe sends (probeTarget.auth). A request naming none ("") gets the stored provider's
+// method, else the preset's, else both headers (a client from before auth was read).
 const (
-	probeAuthBoth   = ""        // both x-api-key and Authorization: Bearer
+	probeAuthBoth   = ""        // none named: both x-api-key and Authorization: Bearer
 	probeAuthAPIKey = "api_key" // x-api-key only
 	probeAuthBearer = "bearer"  // Authorization: Bearer only
 	probeAuthAuto   = "auto"    // Bearer, then x-api-key when the gateway refuses the key (send)
@@ -69,8 +69,6 @@ type probeTarget struct {
 	through http.RoundTripper
 	// auth is the credential header(s) the requests send (probeAuth*); send settles auto on the first request.
 	auth string
-	// found is the header an auto probe settled on (probeAuthBearer / probeAuthAPIKey), "" when auth was not auto.
-	found string
 }
 
 func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, error) {
@@ -103,7 +101,7 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 		if t.kind == "" {
 			t.kind = "launcher" // Stored entries without kind are legacy launchers.
 		}
-		if auth == probeAuthBoth {
+		if auth == "" { // none named: the stored one
 			auth = launchAuth(l.Auth)
 		}
 	}
@@ -147,7 +145,7 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 		if t.api == "" {
 			t.api = pr.API
 		}
-		if auth == probeAuthBoth && in.Name == "" {
+		if auth == "" { // none named, nothing stored: the preset's
 			auth = launchAuth(pr.Auth) // saving from the preset without auth stores the preset's (presetFill)
 		}
 	}
@@ -168,7 +166,7 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 	// Responses and Chat Completions calls send Bearer alone (ai.respond, ai.chatCompletions), whatever auth says. A
 	// client naming no method, no stored provider and no preset gets both headers, as before auth was read.
 	t.auth = auth
-	if t.api == "responses" || t.api == "chat" {
+	if !messagesAPI(t.api) {
 		t.auth = probeAuthBearer
 	}
 	t.key = strings.TrimSpace(strings.TrimPrefix(t.key, "Bearer "))
@@ -215,7 +213,7 @@ func (t probeTarget) modelsEndpoint() string {
 
 // send sends one request under t.auth. Under auto it goes with Bearer and, when the gateway refuses the key, once
 // more with x-api-key (the body is bytes so it can go twice); t then keeps the header of the request answered, so
-// later requests (the next model page) send that one alone, and found names it.
+// later requests (the next model page) send that one alone.
 func (t *probeTarget) send(ctx context.Context, method, endpoint string, body []byte) (*http.Response, error) {
 	if t.auth != probeAuthAuto {
 		return t.do(ctx, method, endpoint, body)
@@ -227,24 +225,25 @@ func (t *probeTarget) send(ctx context.Context, method, endpoint string, body []
 		t.auth = probeAuthAPIKey
 		res, err = t.do(ctx, method, endpoint, body)
 	}
-	t.found = t.auth
 	return res, err
 }
 
-// keyRefused: the gateway turned the credential down, a 401 or a 403 other than Anthropic's region block (which
-// comes before the key is looked at, so the other header would fare no better). A 403's body is read to tell and put
-// back for failure.
+// credentialRefused: the gateway turned the key down, a 401 or a 403 other than Anthropic's region block (which
+// comes before the key is looked at, so the other header would fare no better). failure calls it code "auth".
+func credentialRefused(status int, raw []byte, anthropic bool) bool {
+	return status == http.StatusUnauthorized || status == http.StatusForbidden && !regionBlocked(raw, anthropic)
+}
+
+// keyRefused: res is credentialRefused. A 401 / 403's body is read to tell (which also lets the retry reuse the
+// connection) and put back for failure.
 func (t probeTarget) keyRefused(res *http.Response) bool {
-	switch res.StatusCode {
-	case http.StatusUnauthorized:
-		return true
-	case http.StatusForbidden:
-		raw, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
-		res.Body.Close()
-		res.Body = io.NopCloser(bytes.NewReader(raw))
-		return !regionBlocked(raw, t.atAnthropic())
+	if res.StatusCode != http.StatusUnauthorized && res.StatusCode != http.StatusForbidden {
+		return false
 	}
-	return false
+	raw, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
+	res.Body.Close()
+	res.Body = io.NopCloser(bytes.NewReader(raw))
+	return credentialRefused(res.StatusCode, raw, t.atAnthropic())
 }
 
 // do sends one request with the custom headers first, then the version and the credential header(s) t.auth names
@@ -354,10 +353,8 @@ func (t probeTarget) failure(ctx context.Context, res *http.Response, err error)
 	switch res.StatusCode {
 	case http.StatusUnauthorized:
 		head = pt(l, "status_401")
-		code = "auth"
 	case http.StatusForbidden:
 		head = pt(l, "status_403")
-		code = "auth"
 	case http.StatusNotFound:
 		head = pt(l, "status_404")
 		code = "not_found"
@@ -368,6 +365,9 @@ func (t probeTarget) failure(ctx context.Context, res *http.Response, err error)
 		head = pt(l, "status_429")
 	default:
 		head = pt(l, "status_other", i18n.Args{"status": res.StatusCode})
+	}
+	if credentialRefused(res.StatusCode, raw, t.atAnthropic()) {
+		code = "auth"
 	}
 	if said != "" {
 		head = pt(l, "said", i18n.Args{"head": head, "said": said})
@@ -465,6 +465,7 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 	}
 	body, _ := json.Marshal(payload)
 	started := time.Now()
+	auto := t.auth == probeAuthAuto
 	res, err := t.send(ctx, http.MethodPost, t.endpoint(path), body)
 	if err == nil && t.api == "chat" && res.StatusCode == http.StatusBadRequest {
 		raw, readErr := io.ReadAll(io.LimitReader(res.Body, 4096))
@@ -504,8 +505,8 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 	if res != nil {
 		res.Body.Close()
 	}
-	if out["ok"] == true && t.found != "" {
-		out["auth"] = t.found // the header the gateway took, for an auto probe
+	if out["ok"] == true && auto {
+		out["auth"] = t.auth // the header the gateway took
 	}
 	out["ms"] = int(time.Since(started).Milliseconds())
 	return out
@@ -732,11 +733,8 @@ func (s *Service) providerDiscover(ctx context.Context, in probeInput) map[strin
 		case meta.HasMore:
 			return fail(pt(i18n.From(ctx), "models_pagination"))
 		default:
-			out := map[string]any{"models": enriched()}
-			if t.found != "" {
-				out["auth"] = t.found // the header the gateway took, for an auto probe
-			}
-			return out
+			// no auth: a model list may answer without looking at the key, so only the test says what a launch needs
+			return map[string]any{"models": enriched()}
 		}
 		cursor := query.Encode()
 		if seenCursors[cursor] {

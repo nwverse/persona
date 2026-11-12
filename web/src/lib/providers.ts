@@ -187,8 +187,11 @@ export const storedAuth = (v: ProviderView): AuthMethod => v.auth ?? "api_key";
  *  (gateways mostly want ANTHROPIC_AUTH_TOKEN). */
 export const withoutAutoAuth = (f: ProviderForm): ProviderForm => (f.auth === "auto" ? { ...f, auth: "bearer", auth_found: "" } : f);
 
-/** The method a probe names: the one chosen, or with "Automatic" the one the check found, else "auto" for the hub to find. */
-const authOf = (f: ProviderForm): "auto" | AuthMethod => (f.auth === "auto" ? f.auth_found || "auto" : f.auth);
+/** How a method is written: as the header carries it. */
+export const authLabel = (m: AuthMethod) => (m === "bearer" ? "Bearer" : "x-api-key");
+
+/** The method in use: the one chosen, or with "Automatic" the one the check found; "" while Automatic has found none. */
+export const chosenAuth = (f: ProviderForm): "" | AuthMethod => (f.auth === "auto" ? f.auth_found : f.auth);
 
 /** The form an existing provider opens with: its models checked, the default among them even when not listed. */
 export function formFromView(v: ProviderView): ProviderForm {
@@ -481,7 +484,7 @@ export function providerBody(f: ProviderForm, old: ProviderView | null, clearLeg
     custom_model_description: api ? "" : f.custom_model_description.trim(),
     args: api ? [] : f.args.split(/\s+/).filter(Boolean),
     // never "auto": what the check found, else Bearer for a new gateway (the old default) or what is stored
-    auth: openAI ? "api_key" : f.auth === "auto" ? f.auth_found || (old ? storedAuth(old) : "bearer") : f.auth,
+    auth: openAI ? "api_key" : chosenAuth(f) || (old ? storedAuth(old) : "bearer"),
   };
   if (f.api_key.trim()) body[f.key_by_reference ? "api_key_reference" : "api_key"] = f.api_key.trim();
   const extra = extraFields(f);
@@ -501,7 +504,7 @@ export function providerBody(f: ProviderForm, old: ProviderView | null, clearLeg
  *  A reference is never sent: the probe would hand its value to the address in the request (`referencePending`).
  *  "Automatic" asks the hub to find the method until the check found it, then sends that one. */
 export function probeBody(f: ProviderForm, stored: string | null, model?: string): Record<string, unknown> {
-  const b: Record<string, unknown> = { base_url: f.base_url.trim(), auth: authOf(f), api: f.api };
+  const b: Record<string, unknown> = { base_url: f.base_url.trim(), auth: chosenAuth(f) || "auto", api: f.api };
   if (stored) b.name = stored;
   if (f.api_key.trim() && !f.key_by_reference) b.api_key = f.api_key.trim();
   if (!(f.kind === "api" && f.api === "chat") && f.headers_touched) b.headers = f.headers.trim();

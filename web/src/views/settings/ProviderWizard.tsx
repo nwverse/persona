@@ -41,7 +41,9 @@ import {
 } from "../../lib/launcher-presets";
 import {
   AUTH_AUTO_FEATURE,
+  authLabel,
   autoCheckable,
+  chosenAuth,
   EFFORT_LEVELS,
   fallbackTitle,
   fillFromCatalog,
@@ -184,8 +186,9 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, found
   const pasteFilled = useRef(false);
   // "More options": a preset's names and model, a gateway's startup ID and sign-in method
   const [more, setMore] = useState(false);
-  // "Change" on the sign-in line opened it: the choice is brought into view (it may open below the dialog's fold) and
-  // focused, the button that opened it being gone
+  // "Change" on the sign-in line opened it: the fold is brought into view (it may open below the dialog's fold) and
+  // the choice focused, the button that opened it being gone
+  const moreRef = useRef<HTMLDivElement>(null);
   const authRef = useRef<HTMLDivElement>(null);
   const revealAuth = useRef(false);
   // null: not touched, so it follows the readiness (off while Claude Code already answers)
@@ -427,7 +430,8 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, found
   useEffect(() => {
     if (!autoAuth) setF((x) => withoutAutoAuth(x));
   }, [autoAuth]);
-  // Follows the opening fold until it settles, so the choice ends up whole in view.
+  // Follows the opening fold until it settles, so the choice ends up whole in view. The fold's outer box is the one
+  // scrolled to: scrollIntoView on something inside a Collapse still opening also scrolls its clipped box (Sidebar reveal).
   useEffect(() => {
     if (!more || !revealAuth.current) return;
     revealAuth.current = false;
@@ -435,7 +439,7 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, found
     const until = performance.now() + REVEAL_MS;
     let frame = 0;
     const follow = () => {
-      authRef.current?.scrollIntoView?.({ block: "nearest" });
+      moreRef.current?.scrollIntoView?.({ block: "nearest" });
       if (performance.now() < until) frame = requestAnimationFrame(follow);
     };
     follow();
@@ -519,7 +523,7 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, found
     <Labelled label={t("settings-providerwizard.auth")}
       hint={f.auth === "auto" ? t("settings-providerwizard.auth_auto_hint") : f.auth === "bearer" ? t("settings-providerwizard.auth_bearer_hint") : t("settings-providerwizard.auth_key_hint")}>
       <Segmented<ProviderForm["auth"]> label={t("settings-providerwizard.auth")} value={f.auth} onChange={set("auth")}
-        options={[...(autoAuth ? [{ v: "auto" as const, label: t("settings-providerwizard.auth_auto") }] : []), { v: "bearer", label: "Bearer" }, { v: "api_key", label: "x-api-key" }]} />
+        options={[...(autoAuth ? [{ v: "auto" as const, label: t("settings-providerwizard.auth_auto") }] : []), { v: "bearer", label: authLabel("bearer") }, { v: "api_key", label: authLabel("api_key") }]} />
     </Labelled>
   );
   const idField = (
@@ -719,11 +723,13 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, found
                 )}
               </div>
             {(idInMore || authInMore) && (
-              <Disclosure title={t("settings-providerwizard.more_options")} open={more} onToggle={() => setMore((o) => !o)}
-                badge={more ? undefined : idInMore && authInMore ? t("settings-providerwizard.more_options_badge_auth") : authInMore ? t("settings-providerwizard.auth") : t("settings-providerwizard.startup_id")}>
-                {authInMore && <div ref={authRef}>{authField}</div>}
-                {idInMore && idField}
-              </Disclosure>
+              <div ref={moreRef}>
+                <Disclosure title={t("settings-providerwizard.more_options")} open={more} onToggle={() => setMore((o) => !o)}
+                  badge={more ? undefined : idInMore && authInMore ? t("settings-providerwizard.more_options_badge_auth") : authInMore ? t("settings-providerwizard.auth") : t("settings-providerwizard.startup_id")}>
+                  {authInMore && <div ref={authRef}>{authField}</div>}
+                  {idInMore && idField}
+                </Disclosure>
+              </div>
             )}
           </div>
         )}
@@ -1016,9 +1022,9 @@ function ConnectStatus({ discovering, found, testing, test, waiting, onRetryFetc
  *  method chosen (a saved provider's, or one picked by hand); nothing while Automatic has found nothing yet. "Change"
  *  opens "More options", where it is chosen (absent once that is open). */
 function AuthLine({ f, onChange }: { f: ProviderForm; onChange?: () => void }) {
-  const method = f.auth === "auto" ? f.auth_found : f.auth;
+  const method = chosenAuth(f);
   if (!method) return null;
-  const name = method === "bearer" ? "Bearer" : "x-api-key";
+  const name = authLabel(method);
   return (
     <div className="flex items-start gap-1.5 text-[12px] text-ink-2">
       <span className="min-w-0 flex-1 break-words">

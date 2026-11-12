@@ -1,14 +1,16 @@
 """mock_hub.py's typed-in gateway probes sign in as the hub's do (#5329, launcher_auth_auto, docs/integrations/launchers.md;
 the hub's own cases are in server/internal/assistant): `auth` "auto" tries Bearer, then x-api-key, and names the one that
-worked; a method asked for is the only one sent; Responses and Chat Completions use Bearer. The fake gateway takes only
+worked (the model list never says: it may answer without looking at the key); a method asked for is the only one sent; Responses and Chat Completions use Bearer. The fake gateway takes only
 x-api-key with "xapikey" in its address, only Bearer with "bearer-only", else both. Each case runs its own mock hub on a
 free port."""
 import unittest
 
+import readiness_mock
 from test_readiness_mock import hub
 
 KEY = "sk-example-123456"
-REFUSED = "401 认证失败：网关不认这个 Key"
+BAD_KEY = "401 认证失败：网关不认这个 Key"  # the mock's answer to a key with "bad" in it
+REFUSED = readiness_mock.t("zh-Hans", "assistant-models_probe.status_401")  # the hub's words for a refused method
 
 
 def probe(h, kind, url, **body):
@@ -31,11 +33,11 @@ class ProviderAuthMockTests(unittest.TestCase):
             with self.subTest(url=url):
                 self.assertEqual(probe(h, "test", url, auth="auto"), {"ok": True, "ms": 412, "model": "m1", "auth": want})
                 found = probe(h, "discover", url, auth="auto")
-                self.assertEqual(found["auth"], want)
+                self.assertNotIn("auth", found)
                 self.assertEqual(len(found["models"]), 3)
         # both refused (a bad key): the failure, no method
         out = probe(h, "test", "https://gw.example.com", auth="auto", api_key="sk-bad-123456")
-        self.assertEqual((out["ok"], out["error"]), (False, REFUSED))
+        self.assertEqual((out["ok"], out["error"]), (False, BAD_KEY))
         self.assertNotIn("auth", out)
         self.assertEqual([t["auth"] for t in h.call("GET", "/mock/providers/log")[1]["test"]], ["auto"] * 4)
 
