@@ -711,6 +711,95 @@ func TestWorktreeFromSecondRepositoryPaneKeepsItsSource(t *testing.T) {
 	}
 }
 
+func TestWorktreeCwdDoesNotUseAnAncestorWorkspaceSource(t *testing.T) {
+	for _, scenario := range []struct {
+		name       string
+		repository bool
+		membership bool
+	}{
+		{name: "plain ancestor"},
+		{name: "ancestor repository", repository: true},
+		{name: "ancestor membership with a project pane", repository: true, membership: true},
+	} {
+		for _, automatic := range []bool{false, true} {
+			t.Run(scenario.name+map[bool]string{false: "/explicit", true: "/automatic"}[automatic], func(t *testing.T) {
+				w := worktreeNode(t)
+				if scenario.repository {
+					runPullGit(t, w.home, "init", "--initial-branch=main")
+					if err := os.WriteFile(filepath.Join(w.home, ".bashrc"), []byte("dotfiles repository\n"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+					runPullGit(t, w.home, "add", ".bashrc")
+					runPullGit(t, w.home, "commit", "-m", "dotfiles")
+				}
+				workspace := map[string]any{"workspace_id": "w1", "label": "home", "number": 1}
+				paneDir := w.home
+				if scenario.membership {
+					workspace["worktree"] = map[string]any{"repo_root": w.home, "checkout_path": w.home}
+					paneDir = w.repo
+				}
+				panes := []any{map[string]any{"workspace_id": "w1", "tab_id": "w1:t1", "pane_id": "w1:p1", "cwd": paneDir}}
+				w.f.reply("workspace.list", map[string]any{"workspaces": []any{workspace}})
+				w.f.reply("pane.list", map[string]any{"panes": panes})
+				w.f.reply("session.snapshot", snapshot([]any{workspace}, []any{map[string]any{"workspace_id": "w1", "tab_id": "w1:t1"}}, nil, panes))
+				// herdr creates from the workspace's source, not from the requested nested repository.
+				w.f.handle("worktree.create", func(p map[string]any) any {
+					if !scenario.repository {
+						return herdrFail{Code: "not_git_worktree", Message: "workspace is not a Git worktree"}
+					}
+					runPullGit(t, w.home, "worktree", "add", "-b", str(p["branch"]), "--", str(p["path"]))
+					return map[string]any{
+						"workspace": map[string]any{"workspace_id": "w2"},
+						"tab":       map[string]any{"tab_id": "w2:t1"}, "root_pane": map[string]any{"pane_id": "w2:p1"},
+						"worktree": map[string]any{"path": p["path"], "branch": p["branch"]},
+					}
+				})
+				listSessions(t, w.n)
+				w.f.reset()
+				args := map[string]any{"cwd": w.repo, "branch": "feature/project", "path": filepath.Join(w.home, "project-checkout")}
+				if automatic {
+					args = map[string]any{"cwd": w.repo, "auto_name": true}
+				}
+				res, err := request(t, w.n, "worktree.create", args)
+				if err != nil {
+					t.Fatal(err)
+				}
+				path := str(res["path"])
+				if got, want := runPullGit(t, path, "rev-parse", "HEAD"), runPullGit(t, w.repo, "rev-parse", "HEAD"); got != want {
+					t.Fatalf("created the ancestor repository: HEAD %q, want project HEAD %q", got, want)
+				}
+				if b, err := os.ReadFile(filepath.Join(path, "app.txt")); err != nil || string(b) != "one\n" {
+					t.Fatalf("project contents: %q, %v", b, err)
+				}
+				if _, err := os.Stat(filepath.Join(path, ".bashrc")); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("included ancestor dotfiles: %v", err)
+				}
+				if len(w.f.trace("worktree.create")) != 0 || len(w.f.trace("workspace.create")) != 1 {
+					t.Fatal("an ancestor source must use Git and open a plain workspace")
+				}
+				if branchOf(t, w.repo) != "main" {
+					t.Fatal("changed the source checkout")
+				}
+			})
+		}
+	}
+}
+
+func TestWorktreeCwdInTheSameRepositoryKeepsNativeGrouping(t *testing.T) {
+	w := worktreeNode(t)
+	subdir := mkdir(t, filepath.Join(w.repo, "src"))
+	w.f.reply("pane.list", map[string]any{"panes": []any{map[string]any{"workspace_id": "w1", "cwd": subdir}}})
+	res, err := request(t, w.n, "worktree.create", map[string]any{
+		"cwd": mkdir(t, filepath.Join(subdir, "nested")), "branch": "feature/grouped", "path": filepath.Join(w.home, "grouped"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res["workspace_id"] != "w2" || len(w.f.trace("worktree.create")) != 1 || len(w.f.trace("workspace.create")) != 0 {
+		t.Fatalf("same-repository creation lost native grouping: %v", res)
+	}
+}
+
 func TestSpaceHoldingPaneCandidates(t *testing.T) {
 	w := worktreeNode(t)
 	h, err := w.n.hostOfKind("")

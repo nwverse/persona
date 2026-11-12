@@ -48,8 +48,8 @@ type worktreeRepo struct {
 }
 
 // repoOfWorkspace finds the repository of a workspace the host lists, and the host that makes its worktrees. Without
-// a workspace, cwd names it: the host's space holding that directory, the deepest one (the assistant knows directories,
-// not space ids). It returns the workspace it used.
+// a workspace, cwd names the repository. Its deepest holding space is used only when its matched directory is inside
+// that repository; an ancestor space can belong to a different repository. It returns the workspace it used.
 func (n *Node) repoOfWorkspace(ctx context.Context, kind, workspace, cwd string) (host.Host, string, worktreeRepo, error) {
 	var repo worktreeRepo
 	if workspace == "" && cwd == "" {
@@ -70,7 +70,7 @@ func (n *Node) repoOfWorkspace(ctx context.Context, kind, workspace, cwd string)
 	}
 	if workspace == "" {
 		dir := proto.ExpandHome(cwd, n.home)
-		workspace, err = spaceHolding(ctx, h, dir)
+		space, err := spaceHoldingDirectory(ctx, h, dir)
 		if err != nil && !errors.Is(err, errNoHoldingSpace) {
 			return nil, "", repo, err
 		}
@@ -81,6 +81,9 @@ func (n *Node) repoOfWorkspace(ctx context.Context, kind, workspace, cwd string)
 			return nil, "", repo, err
 		}
 		repo, err = repoAt(ctx, dir)
+		if err == nil && space.workspace != "" && within(space.cwd, realPath(repo.root)) {
+			workspace = space.workspace
+		}
 		return h, workspace, repo, err
 	}
 	dir, err := n.gitDirOf(ctx, "", workspace, kind)
@@ -136,6 +139,12 @@ var errNoHoldingSpace = errors.New("no workspace holds this directory")
 
 // spaceHolding is the host's space whose directory is dir or holds it, the deepest such space.
 func spaceHolding(ctx context.Context, h host.Host, dir string) (string, error) {
+	space, err := spaceHoldingDirectory(ctx, h, dir)
+	return space.workspace, err
+}
+
+// spaceHoldingDirectory retains the directory that matched, including herdr's workspace source metadata.
+func spaceHoldingDirectory(ctx context.Context, h host.Host, dir string) (spaceDirectory, error) {
 	var dirs []spaceDirectory
 	if source, ok := h.(interface {
 		directorySpaces(context.Context) ([]spaceDirectory, error)
@@ -143,7 +152,7 @@ func spaceHolding(ctx context.Context, h host.Host, dir string) (string, error) 
 		var err error
 		dirs, err = source.directorySpaces(ctx)
 		if err != nil {
-			return "", err
+			return spaceDirectory{}, err
 		}
 	} else {
 		// A full layout fills workspace directories from agreeing panes; herdr's workspace.list can omit them.
@@ -156,17 +165,17 @@ func spaceHolding(ctx context.Context, h host.Host, dir string) (string, error) 
 			var err error
 			spaces, err = l.Spaces(ctx)
 			if err != nil {
-				return "", err
+				return spaceDirectory{}, err
 			}
 		} else {
-			return "", unsupported(h)
+			return spaceDirectory{}, unsupported(h)
 		}
 		for _, s := range spaces {
 			dirs = append(dirs, spaceDirectory{workspace: s.ID, cwd: s.Cwd})
 		}
 	}
 	d := realPath(filepath.Clean(dir))
-	best, depth := "", -1
+	best, depth := spaceDirectory{}, -1
 	// A foreground process may cd elsewhere: use those directories only if no stable directory matches.
 	for _, fallback := range []bool{false, true} {
 		for _, s := range dirs {
@@ -174,15 +183,16 @@ func spaceHolding(ctx context.Context, h host.Host, dir string) (string, error) 
 				continue
 			}
 			if c := realPath(filepath.Clean(s.cwd)); within(d, c) && len(c) > depth {
-				best, depth = s.workspace, len(c)
+				best, depth = s, len(c)
+				best.cwd = c
 			}
 		}
-		if best != "" {
+		if best.workspace != "" {
 			break
 		}
 	}
-	if best == "" {
-		return "", fmt.Errorf("%s 不在这台电脑的任何工作区里: %w", dir, errNoHoldingSpace)
+	if best.workspace == "" {
+		return spaceDirectory{}, fmt.Errorf("%s 不在这台电脑的任何工作区里: %w", dir, errNoHoldingSpace)
 	}
 	return best, nil
 }
