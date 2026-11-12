@@ -1,6 +1,29 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "%@ Wants to Run a Command" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ Wants to Run a Command"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@がコマンドを実行しようとしています"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 想运行一条命令"
+          }
+        }
+      }
+    },
     "%@'s settings": {
       "extractionState": "manual",
       "localizations": {
@@ -70,6 +93,29 @@
         }
       }
     },
+    "Allowed automatically in %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Allowed automatically in %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@後に自動で許可されます"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 后自动允许"
+          }
+        }
+      }
+    },
     "Appearance & Display": {
       "extractionState": "manual",
       "localizations": {
@@ -89,6 +135,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "外観と表示"
+          }
+        }
+      }
+    },
+    "Can't confirm this command won't delete files" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Can't confirm this command won't delete files"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このコマンドでファイルが削除されないか確認できません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法确认这条命令不会删除文件"
           }
         }
       }
@@ -116,6 +185,29 @@
         }
       }
     },
+    "Claude Code warns about this command" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude Code warns about this command"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude Codeがこのコマンドについて警告しています"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude Code 提醒这条命令可能有风险"
+          }
+        }
+      }
+    },
     "Current Assistant's Settings": {
       "extractionState": "manual",
       "localizations": {
@@ -135,6 +227,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "現在のアシスタントの設定"
+          }
+        }
+      }
+    },
+    "Denied automatically in %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Denied automatically in %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@後に自動で拒否されます"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 后自动拒绝"
           }
         }
       }
@@ -227,6 +342,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "Hub を切断して削除…"
+          }
+        }
+      }
+    },
+    "Hide Original" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hide Original"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "原文を隠す"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "隐藏原文"
           }
         }
       }
@@ -641,6 +779,52 @@
           "stringUnit": {
             "state": "translated",
             "value": "このアシスタントにはオンラインのコンピュータがありません。接続すると Agent 設定を変更できます。"
+          }
+        }
+      }
+    },
+    "Time's up: Claude Code allows it" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Time's up: Claude Code allows it"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "時間切れのため、Claude Codeが自動で許可します"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "时间到了，Claude Code 会自动允许"
+          }
+        }
+      }
+    },
+    "Time's up: Claude Code denies it" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Time's up: Claude Code denies it"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "時間切れのため、Claude Codeが自動で拒否します"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "时间到了，Claude Code 会自动拒绝"
           }
         }
       }
@@ -76163,25 +76347,25 @@
       },
       "extractionState" : "manual"
     },
-    "Members: %@. Uninstalling only the pack keeps them. Uninstalling with members deletes their settings and data." : {
+    "Members: %@. Pack Only keeps them. Everything also uninstalls them and deletes their settings and data." : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Members: %1$@. Uninstalling only the pack keeps them. Uninstalling with members deletes their settings and data."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "成员：%1$@。只卸载合集会保留这些成员；连成员一起卸载会删除它们的设置和数据。"
+            "value" : "Members: %1$@. Pack Only keeps them. Everything also uninstalls them and deletes their settings and data."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "メンバー：%1$@。パックのみアンインストールするとメンバーは残ります。メンバーごとアンインストールすると、メンバーの設定とデータが削除されます。"
+            "value" : "メンバー：%1$@。「パックのみ」ではメンバーは残ります。「メンバーも」ではメンバーもアンインストールされ、その設定とデータが削除されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "成员：%1$@。「只卸载合集」会保留这些成员；「也卸载成员」会把它们一起卸载，并删除它们的设置和数据。"
           }
         }
       }
@@ -125927,24 +126111,47 @@
         }
       }
     },
-    "Starts in the selected shell without opening a new tab. Codex needs a first message, so use New Session." : {
+    "Starts in the selected shell without opening a new tab." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Starts in the selected shell without opening a new tab. Codex needs a first message, so use New Session."
+            "value" : "Starts in the selected shell without opening a new tab."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "選択したshellで起動し、新しいタブは開きません。Codexには最初のメッセージが必要なため、「新規セッション」を使ってください。"
+            "value" : "選択したshellで起動し、新しいタブは開きません。"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在选中的 shell 里启动，不新开标签页。Codex 需要第一条消息，请用「新建会话」。"
+            "value" : "在选中的 shell 里启动，不新开标签页。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Starts in the selected shell without opening a new tab. Codex starts in a tab of its own: use New Session." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Starts in the selected shell without opening a new tab. Codex starts in a tab of its own: use New Session."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選択したshellで起動し、新しいタブは開きません。Codexは専用のタブで起動するため、「新規セッション」を使ってください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在选中的 shell 里启动，不新开标签页。Codex 在自己的标签页里启动，请用「新建会话」。"
           }
         }
       },
@@ -149471,18 +149678,19 @@
       },
       "extractionState" : "manual"
     },
-    "Uninstall Pack Only" : {
+    "Pack Only" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Uninstall Pack Only"
+            "value" : "Pack Only"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "パックのみアンインストール"
+            "value" : "パックのみ"
           }
         },
         "zh-Hans" : {
@@ -149491,8 +149699,7 @@
             "value" : "只卸载合集"
           }
         }
-      },
-      "extractionState" : "manual"
+      }
     },
     "Uninstall didn’t finish" : {
       "localizations" : {
@@ -149540,28 +149747,28 @@
       },
       "extractionState" : "manual"
     },
-    "Uninstall with Members" : {
+    "Everything [Extension Market Views 8fc6ce]" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Uninstall with Members"
+            "value" : "Everything"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "メンバーごとアンインストール"
+            "value" : "メンバーも"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "连同成员一起卸载"
+            "value" : "也卸载成员"
           }
         }
-      },
-      "extractionState" : "manual"
+      }
     },
     "Uninstall “%@”?" : {
       "localizations" : {
@@ -149701,28 +149908,28 @@
       },
       "extractionState" : "manual"
     },
-    "Uninstalling only the pack keeps its members. Uninstalling with members deletes their settings and data." : {
+    "Pack Only keeps its members. Everything also uninstalls them and deletes their settings and data." : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Uninstalling only the pack keeps its members. Uninstalling with members deletes their settings and data."
+            "value" : "Pack Only keeps its members. Everything also uninstalls them and deletes their settings and data."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "パックのみアンインストールするとメンバーは残ります。メンバーごとアンインストールすると、メンバーの設定とデータが削除されます。"
+            "value" : "「パックのみ」ではメンバーは残ります。「メンバーも」ではメンバーもアンインストールされ、その設定とデータが削除されます。"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "只卸载合集会保留成员。连成员一起卸载会删除成员的设置和数据。"
+            "value" : "「只卸载合集」会保留成员；「也卸载成员」会把它们一起卸载，并删除它们的设置和数据。"
           }
         }
-      },
-      "extractionState" : "manual"
+      }
     },
     "Unknown (200K assumed)" : {
       "localizations" : {
