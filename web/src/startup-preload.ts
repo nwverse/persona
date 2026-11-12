@@ -162,9 +162,12 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * page). And 238 B for the work summary's review fixes (#5155: ja counted 594,228 B with them against 594,043 B on main
  * at 4885b1458, +185 B; 594,241 B merged with main at ebcb0fa62, plus 40 B of room: the duration units back in the
  * catalogs as CLAUDE.md asks of user-facing words, wordless thoughts left out before grouping, rows spinning while the
- * exchange runs; the thought row and its parser stay lazy). Raise it on purpose, in the change that needs it.
+ * exchange runs; the thought row and its parser stay lazy). And 371 B for model quotas, prices and composer usage
+ * (#5176, #5208: ja 594,414 B before #5155's review fixes: the composer's quota and the context meter's model price,
+ * the pill's model-panel handoff and the quota helpers; the panel's prices and quota rows and their words load with
+ * the panel). Raise it on purpose, in the change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 594_281;
+export const FIRST_SCREEN_BUDGET = 594_652;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
