@@ -889,8 +889,8 @@ internal fun SlotRow(
                 if (source?.readOnly == true) add(RowFact(stringResource(R.string.agents_row_view_only), caution = true))
                 if (located) listOfNotNull(machine, session.spaceName?.takeIf { it.isNotBlank() } ?: session.folderName.takeIf { it.isNotBlank() })
                     .joinToString(" / ").takeIf { it.isNotBlank() }?.let { add(RowFact(it)) }
-                // The model it runs on, as iOS's row names it (#4338 A9): the session's model, else its launcher's.
-                (session.model ?: session.launcher)?.trim()?.takeIf(String::isNotEmpty)?.let { add(RowFact(it)) }
+                // The model it runs on (#4338 A9): the session's model, else its launcher's, by its short name, never the raw id.
+                session.rowModel?.let { add(RowFact(it)) }
                 session.todo?.let { add(RowFact(stringResource(R.string.agents_row_todo, it.title))) }
                 slotLabel?.let { add(RowFact(it)) }
             }

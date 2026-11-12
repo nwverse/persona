@@ -4,6 +4,7 @@ import persona.core.contracts.AgentState
 import persona.core.contracts.CoreText
 import persona.core.contracts.CoreText.Key
 import persona.core.contracts.Session
+import persona.core.domain.modelShortName
 
 // What an Agents row says beside its title and its latest words, as iOS's default row draws it (the Avatar style:
 // `AgentRowStyles.swift`, `SlotRow` in `ChatsView.swift`; #4338 A9). The rows draw it; the rules are here, with their tests.
@@ -24,7 +25,10 @@ data class AgentRowContent(
      * which never give way to the rest of the line.
      */
     val place: List<CoreText>,
-    /** The model it runs on (iOS `modelShortName`). */
+    /**
+     * The model it runs on, by its short name ([rowModel]): never the raw id (`DESIGN_SYSTEM.md` 3.4, 5.6), which iOS's
+     * row still shows.
+     */
     val model: String?,
     /** Its to-do's title. */
     val todo: String?,
@@ -84,7 +88,7 @@ fun AgentSession.rowContent(context: AgentRowContext = AgentRowContext(), muted:
         stateWord = rowStateWord(muted).takeUnless { context.stateSection },
         source = s.agentSource?.takeIf { !s.assistant },
         place = place,
-        model = s.modelShortName,
+        model = s.rowModel,
         todo = s.todo?.title?.takeIf(String::isNotBlank),
         muted = muted,
     )
@@ -102,8 +106,11 @@ fun AgentSession.rowStateWord(muted: Boolean): CoreText? = when {
     else -> null
 }
 
-/** The model a row names (iOS `Session.modelShortName`): the session's model, else its launcher's; null for none. */
-val Session.modelShortName: String? get() = (model ?: launcher)?.trim()?.takeIf(String::isNotEmpty)
+/**
+ * The model a row names: the session's model, else its launcher's (as iOS's `Session.modelShortName`), by its short name
+ * (`modelShortName`, the web's `modelChipLabel`); null for none.
+ */
+val Session.rowModel: String? get() = modelShortName(model ?: launcher).takeIf(String::isNotEmpty)
 
 /**
  * The list holds agents of more than one computer (iOS `AgentListProjection.byHost`), so a row outside the tree names
