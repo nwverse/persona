@@ -704,6 +704,14 @@ Pin the visual style, not an alternate navigation tree. A shared launch helper t
 - **Fake extensions installed through `dir:` in e2e are sandboxed by default** (bwrap, writes only to own data/runtime directories). A fake channel plugin writing received messages to a test directory throws and exits;
   hub restarts it, replayed input is deduplicated, and it looks like lost messages. Store files in `extension.data_dir` from `initialize` (tests read `~/.persona/extensions/data/<id>/`), retaining sandboxing.
 
+## A switch row's tap lands on its label (2026-11-12, #4741)
+
+- `SettingsSwitchRow` (and any `Toggle` with a label) puts its identifier on the whole row, so `app.switches["allday-switch"]`
+  spans the mark, the title, the line under it and the switch. `tap()` taps the element's center, which is the label, and a list
+  row's label doesn't flip the switch: the value stays, and a test that expects a sheet or a command after it fails, or passes for
+  the wrong reason. Tap the switch itself: `(row.switches.firstMatch.exists ? row.switches.firstMatch : row).tap()`, as
+  `ExtensionControlsUITests` and `AgentWorktreeUITests` do, and assert the value it reports (`"1"` / `"0"`) afterwards.
+
 ## XCUITest cannot tap while a list glides (2026-11-10, #3027)
 
 - **Every XCUITest gesture waits for the app to be idle, before and after**, and a scroll view gliding after a flick

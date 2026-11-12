@@ -73,6 +73,9 @@ const (
 	// its next session.send carries out (docs/integrations/claude-integration.md "Switching a running Agent to another
 	// provider"). A node without it would drop launcher and apply the model on the launcher the Agent runs on.
 	LauncherSwitch = "launcher_switch"
+	// ModelHTTP: model.http, a direct-API model request an API connection sends through this computer
+	// (docs/assistant/model-config.md "Sending through a computer").
+	ModelHTTP = "model_http"
 	// EngineSwitch: session.modes takes a launcher of the other engine (Claude Code ↔ Codex) for a running terminal
 	// Agent, kept as its pending switch (Session.pending_switch.agent); its next session.send with apply_switch starts
 	// that engine in the same terminal with a handoff summary, or resumes the conversation's earlier session of it, and
@@ -104,7 +107,7 @@ const (
 )
 
 // Announced is what a node built from this code announces.
-var Announced = []string{ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, Sessions, ModelConfiguration, AssistantConfigDir, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, LauncherSwitch, EngineSwitch}
+var Announced = []string{ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, Sessions, ModelConfiguration, AssistantConfigDir, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch}
 
 // ShareProjection is the bounded complete-source sharing projection, not light Items.
 const ShareProjection = "share_projection.v1"

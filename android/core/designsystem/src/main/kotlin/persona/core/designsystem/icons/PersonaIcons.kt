@@ -236,6 +236,8 @@ object PersonaIcons {
     val privacy: PhIcon get() = PhIcons.ShieldCheck
     /** SF Symbol `shield`. */
     val protection: PhIcon get() = PhIcons.Shield
+    /** SF Symbol `arrow.triangle.pull`. */
+    val pullRequest: PhIcon get() = PhIcons.GitDiff
     /** SF Symbol `arrowshape.down`. */
     val queueDown: PhIcon get() = PhIcons.ArrowDown
     /** SF Symbol `arrowshape.up`. */
@@ -252,6 +254,8 @@ object PersonaIcons {
     val repair: PhIcon get() = PhIcons.Wrench
     /** SF Symbol `arrowshape.turn.up.left`. */
     val reply: PhIcon get() = PhIcons.ArrowBendUpLeft
+    /** SF Symbol `arrow.up.message`. */
+    val reported: PhIcon get() = PhIcons.ChatCircle
     /** SF Symbol `arrow.clockwise`. */
     val retry: PhIcon get() = PhIcons.ArrowClockwise
     /** SF Symbol `play.fill`. */

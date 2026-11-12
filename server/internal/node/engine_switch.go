@@ -11,6 +11,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/shellcmd"
 )
 
 // Switching a running terminal Agent between Claude Code and Codex (#5054, docs/integrations/claude-integration.md
@@ -89,7 +90,7 @@ func engineUnsupported(why string) error {
 // launcherEngine is the agent launcher runs, for a pick (launcherModes): one this computer has, not a runtime's.
 // Checked in this order so no word that is not a launcher is ever run by a probe.
 func (n *Node) launcherEngine(ctx context.Context, launcher string) (string, error) {
-	if !nameRe.MatchString(launcher) {
+	if !shellcmd.NameRe.MatchString(launcher) {
 		return "", fmt.Errorf("invalid launcher %q", launcher)
 	}
 	if err := n.ensureManaged(ctx, launcher); err != nil {

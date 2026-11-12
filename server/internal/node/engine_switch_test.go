@@ -17,8 +17,8 @@ import (
 // #5054), against a fake herdr as launcher_switch_test.go does. The handoff's text is engine_handoff.go's: these tests
 // look at the block it is carried in and at the user's words after it, not at its wording.
 
-// newThread is the Codex thread a switch to Codex starts.
-const newThread = "01a19a00-0000-7000-8000-000000005054"
+// switchedThread is the Codex thread a switch to Codex starts.
+const switchedThread = "01a19a00-0000-7000-8000-000000005054"
 
 // tellTo is the user's message from the chat (apply_switch) to session id.
 func tellTo(t *testing.T, n *Node, id, text string) error {
@@ -48,7 +48,7 @@ func writeThread(t *testing.T, home, id, cwd, first string) {
 }
 
 // codexComesUp plays Codex in pane: once codex-start is typed there, it keeps what the file held (the words, message
-// and directory), and, when up, the thread shows: a new one (newThread, its rollout beginning with the file's
+// and directory), and, when up, the thread shows: a new one (switchedThread, its rollout beginning with the file's
 // message) or the one resumed, listed in the pane from then on.
 func codexComesUp(t *testing.T, f *fakeHerdr, home, pane string, up bool) func() []codexStartFile {
 	t.Helper()
@@ -72,7 +72,7 @@ func codexComesUp(t *testing.T, f *fakeHerdr, home, pane string, up bool) func()
 		if !up {
 			return
 		}
-		thread := newThread
+		thread := switchedThread
 		if i := strings.Index(strings.Join(file.Argv, " "), " resume "); i >= 0 {
 			thread = file.Argv[len(file.Argv)-1]
 		} else {
@@ -323,10 +323,10 @@ func TestEngineSwitchToCodexOnTheUsersNextMessage(t *testing.T) {
 	}
 	checkHandoffBlock(t, got[0].Prompt, "claude", "codex", "gpt-6", false, "hello")
 	marks := strings.Join(f.trace("pane.report_metadata"), "\n")
-	if !strings.Contains(marks, `"persona_from":"todo-1@m1/`+sidA+`"`) || !strings.Contains(marks, `"persona_tab":"`+newThread+`"`) {
+	if !strings.Contains(marks, `"persona_from":"todo-1@m1/`+sidA+`"`) || !strings.Contains(marks, `"persona_tab":"`+switchedThread+`"`) {
 		t.Errorf("the pane's marks:\n%s", marks)
 	}
-	st, ok := n.state.get(newThread)
+	st, ok := n.state.get(switchedThread)
 	if !ok || len(st.EngineHistory) != 1 || st.EngineHistory[0].SessionID != sidA || st.EngineHistory[0].Agent != "claude" ||
 		st.EngineHistory[0].Until.Before(before) || st.PendingSwitch != nil || st.Launcher != "cx" || st.Model != "gpt-6" {
 		t.Fatalf("the new thread's record = %+v (%v)", st, ok)
@@ -338,7 +338,7 @@ func TestEngineSwitchToCodexOnTheUsersNextMessage(t *testing.T) {
 	if _, listed := list[sidA]; listed {
 		t.Error("the Claude Code session the conversation ran in is still listed")
 	}
-	row, ok := list[newThread]
+	row, ok := list[switchedThread]
 	if !ok || len(row.EngineHistory()) != 1 || row.EngineHistory()[0].SessionID != sidA || row.Title != title {
 		t.Fatalf("the conversation's row = %+v (history %+v, listed %v), want title %q", row, row.EngineHistory(), ok, title)
 	}
@@ -556,7 +556,7 @@ func TestSwitchShareKeepsTheRecordOfTheSessionAnEngineSwitchStarts(t *testing.T)
 	share.begin(sidA, proto.Session{SessionID: sidA, Starting: true})
 	defer share.end(sidA)
 	started := sessionState{Launcher: "cx", Cwd: "/w", EngineHistory: []proto.EngineLeg{{SessionID: sidA, Agent: "claude", Until: time.Now()}}}
-	if !share.keep(old, newThread, started) {
+	if !share.keep(old, switchedThread, started) {
 		t.Fatal("the started session's record was not kept")
 	}
 	if share.keep(old, sidC, sessionState{Launcher: "claude", Cwd: "/w"}) {
@@ -565,7 +565,7 @@ func TestSwitchShareKeepsTheRecordOfTheSessionAnEngineSwitchStarts(t *testing.T)
 	next, _ := testNode(t)
 	next.share.Store(share)
 	share.receive(next)
-	if st, ok := next.state.get(newThread); !ok || len(st.EngineHistory) != 1 || st.EngineHistory[0].SessionID != sidA {
+	if st, ok := next.state.get(switchedThread); !ok || len(st.EngineHistory) != 1 || st.EngineHistory[0].SessionID != sidA {
 		t.Fatalf("the next Node has %+v (%v)", st, ok)
 	}
 }
