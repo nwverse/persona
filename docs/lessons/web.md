@@ -1,5 +1,15 @@
 # Lessons: web UI and interactions
 
+## A lazy page importing a first-screen module can split it into a chunk of its own (#3962)
+
+Step 4c's settings pages imported `referenceState` from `lib/extensions.ts`, which the first screen already loaded inside
+another chunk. Rollup puts each module in the chunk shared by everything that imports it, so the new lazy importers moved
+`lib/extensions.ts` into a chunk of its own, still on the first screen, and the first screen grew 1.5 kB in every
+language (the same delta everywhere is the sign) although no first-screen code changed: a separate file compresses worse
+and adds its import and export lists. Put what a lazy page needs from such a module in a small module of its own
+(`lib/secret-reference.ts`). To find the file that moved, build main and the branch with the budget at 1 (the build then
+prints every language's count), and compare the first-screen files' brotli sizes with hashes blanked out.
+
 ## A size budget over built files must not count their content hashes (#5164)
 
 The first-screen budget added up the brotli copies of files that import and preload each other by content-hashed name.
