@@ -9,7 +9,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n";
 import { agentName } from "../../lib/agent-kind";
-import { NEW_CONVERSATION, pickedEffort, pickedLauncher, pickedModel, pickEffort, pickLauncher } from "../../lib/assistant-chat";
+import { NEW_CONVERSATION, pickedEffort, pickedLauncher, pickedModel, pickEffort, pickLauncher, pickModel } from "../../lib/assistant-chat";
 import { getSession, getState, upsertSession } from "../../lib/store";
 import type { Session } from "../../lib/types";
 import type { ModelPanelProps } from "../../ui/model-panel/ModelPanel";
@@ -192,6 +192,20 @@ describe("an older hub and the new-conversation page", () => {
     await show(chat());
     expect(pickedLauncher(`${mid()}/c1`)).toBeUndefined();
     expect(toast).toHaveBeenCalledWith(t("chat-modelpill.pick_dropped", { launcher: "gone-gw" }), "info");
+  });
+
+  it("the new-conversation page drops such a pick whole, its model and effort too, so none of it goes with the start", async () => {
+    pickLauncher(NEW_CONVERSATION, "gone-gw");
+    pickModel(NEW_CONVERSATION, "glm-5");
+    pickEffort(NEW_CONVERSATION, "max");
+    await show(undefined);
+    expect([pickedLauncher(NEW_CONVERSATION), pickedModel(NEW_CONVERSATION), pickedEffort(NEW_CONVERSATION)]).toEqual([undefined, undefined, undefined]);
+    expect(toast).toHaveBeenCalledWith(t("chat-modelpill.pick_dropped", { launcher: "gone-gw" }), "info");
+    // what it says now is the default's, effort included
+    expect(pill().textContent).toContain("Opus 5.5");
+    await open();
+    expect(strip()!.textContent).toBe(t("chat-modelpill.header_new", { setup: "claude · Opus 5.5" }));
+    expect(panel.props!.state.current).toEqual({ provider: "claude", model: "opus", effort: "high" });
   });
 
   it("the new-conversation page keeps its pick, the effort too, for the start", async () => {
