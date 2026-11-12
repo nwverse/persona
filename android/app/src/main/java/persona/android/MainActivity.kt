@@ -136,6 +136,7 @@ class MainActivity : ComponentActivity() {
                 persona.core.designsystem.LocalManagerGroup provides managerGroup,
                 persona.feature.inbox.LocalTranslator provides translator,
                 LocalAppStyleStore provides app.appearance,
+                persona.core.designsystem.LocalStarPrompt provides app.starPrompt,
                 LocalGlassLevel provides glassLevel,
                 LocalPersonaDesign provides face,
                 persona.core.designsystem.LocalPersonaStore provides app.personas,

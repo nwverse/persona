@@ -30,6 +30,8 @@ import persona.core.domain.sort.slotLabel
 import persona.core.domain.sort.stateLabel
 import persona.core.domain.sort.source
 import persona.core.domain.sort.sourceSubtitle
+import persona.core.domain.sort.TerminalResume
+import persona.core.domain.sort.terminalResume
 
 @Composable
 internal fun ChatHeader(
@@ -47,6 +49,11 @@ internal fun ChatHeader(
     onTerminal: (() -> Unit)? = null,
     /** The chat has a terminal it can't open from here: Brief's and Board's header button explains it instead. */
     onTerminalHelp: (() -> Unit)? = null,
+    /**
+     * Resume in Terminal (#5565): opens the session's terminal and resumes the stopped Agent there (iOS / web same
+     * action). Nil when the shell has no terminal to open.
+     */
+    onResumeInTerminal: (() -> Unit)? = null,
     /** When the turn that runs now began (the newest turn's start, iOS `Turn.startedAt`): "Working 22 min" counts from it. */
     turnStart: java.time.Instant? = null,
     actions: @Composable RowScope.() -> Unit = {},
@@ -141,6 +148,24 @@ internal fun ChatHeader(
         }
         // iOS's first item after the to-do: the terminal comes up over the chat.
         onTerminal?.let { add(JAction(stringResource(R.string.chat_chrome_terminal), PersonaIcons.terminal, onClick = it)) }
+        // Resume in Terminal (#5565): offered for a stopped Agent; disabled with why where its computer has no terminal engine.
+        when (terminalResume(session, machine)) {
+            TerminalResume.Available -> onResumeInTerminal?.let {
+                add(JAction(stringResource(R.string.chat_chrome_resume_in_terminal), PersonaIcons.run, onClick = it))
+            }
+            TerminalResume.NoEngine -> add(
+                JAction(
+                    stringResource(R.string.chat_chrome_resume_in_terminal),
+                    PersonaIcons.run,
+                    enabled = false,
+                    subtitle = stringResource(
+                        R.string.chat_chrome_resume_no_engine,
+                        machine?.displayName?.takeIf(String::isNotBlank) ?: session?.machineId.orEmpty(),
+                    ),
+                ) {},
+            )
+            TerminalResume.Hidden -> Unit
+        }
         onSearch?.let { add(JAction(stringResource(R.string.chat_chrome_search), PhIcons.MagnifyingGlass, onClick = it)) }
         onFiles?.let { add(JAction(stringResource(R.string.chat_chrome_files), PhIcons.FolderSimple, onClick = it)) }
         onGit?.let { add(JAction(gitLabel, onClick = it)) }
@@ -259,16 +284,26 @@ internal fun ChatActionsSheet(actions: List<JAction>, onDismiss: () -> Unit, tit
         LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(bottom = 16.dp.dense)) {
             items(actions) { action ->
                 JRow(action.label, leadingIcon = action.icon, enabled = action.enabled, destructive = action.destructive,
+                    subtitle = action.subtitle,
                     leading = if (action.icon == null && iconColumn) ({ Spacer(Modifier.width(24.dp.dense)) }) else null,
-                    chevron = false, onClick = { onDismiss(); action.onClick() })
+                    chevron = false, onClick = if (action.enabled) ({ onDismiss(); action.onClick() }) else null)
             }
         }
     }
 }
 
-/** The state the header shows: the status line's (an ended chat, an offline machine, a request), else the session's. */
-internal fun headerStatus(state: StatusLineState, session: Session?): Status =
-    resolveStatusLine(state)?.status ?: Status.entries.firstOrNull { it.name == session?.agentState?.name } ?: Status.Unknown
+/**
+ * The state the header shows: the status line's (an ended chat, an offline machine, a request), else the session's. The status
+ * line's own "Waiting" (a loop or background work on a chat that is not working) is not a state of the session: the header says
+ * the session's own, as iOS does (`stateWords`, `StatusDot`), so a seen chat with a loop says nothing in words and has Seen's dot,
+ * and a finished one says Unread; the loop and the background work have their pill (Glass) and their chips above the composer.
+ * A chat the hub counts as working keeps it: its words are [stateLabel]'s.
+ */
+internal fun headerStatus(state: StatusLineState, session: Session?): Status {
+    val own = Status.entries.firstOrNull { it.name == session?.agentState?.name } ?: Status.Unknown
+    val line = resolveStatusLine(state) ?: return own
+    return if (line.kind == StatusLineKind.Waiting && own != Status.Working) own else line.status
+}
 
 /**
  * The slim bar an Agent chat's header folds into on Glass (iOS `compactChrome`, #4339 C4): back, the agent's mark, the
