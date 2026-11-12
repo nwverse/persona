@@ -13,13 +13,5 @@
   "use_as_context": "コンテキストにする",
   "context_title": "{title} · メッセージ",
   "fork_chat": "新しいチャットで続ける",
-  "more_actions": "その他のメッセージ操作",
-  "just_now": "たった今",
-  "minutes_ago_one": "{count}分前",
-  "minutes_ago_other": "{count}分前",
-  "hours_ago_one": "{count}時間前",
-  "hours_ago_other": "{count}時間前",
-  "days_ago_one": "{count}日前",
-  "days_ago_other": "{count}日前",
   "cut_short": "この返信は完了しませんでした。内容は参考情報としてご覧ください。"
 }

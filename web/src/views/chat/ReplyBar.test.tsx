@@ -39,27 +39,58 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function draw(ts = "2026-11-12T09:59:01Z") {
-  act(() => root.render(
-    <ChatActionsContext.Provider value={chat}>
-      <MessageActions text="All done." ts={ts} itemId="r1#0" bar>
+/** The reply with the bar, once its code is in (it loads after the first screen). */
+async function draw({ actions = chat, itemId = "r1#0" as string | null } = {}) {
+  await act(async () => root.render(
+    <ChatActionsContext.Provider value={actions}>
+      <MessageActions text="All done." ts="2026-11-12T09:59:01Z" itemId={itemId ?? undefined} bar>
         <p data-message>All done.</p>
       </MessageActions>
     </ChatActionsContext.Provider>,
   ));
+  // React tries the lazy bar again on a timer, which the fake clock holds: let it run
+  await act(async () => {
+    await vi.dynamicImportSettled();
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(host.querySelector('[data-reply-bar="loading"]')).toBeNull();
 }
 
 const bar = () => host.querySelector<HTMLElement>("[data-reply-bar]")!;
 const shown = () => bar().classList.contains("opacity-100");
 const button = (label: string) => host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
+const labels = () => [...host.querySelectorAll("[data-reply-bar] button")].map((b) => b.getAttribute("aria-label"));
 // React takes enter / leave from mouseover / mouseout
 const enter = () => act(() => void host.querySelector("[data-message]")!.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, relatedTarget: document.body })));
 const leave = () => act(() => void host.querySelector("[data-message]")!.dispatchEvent(new MouseEvent("mouseout", { bubbles: true, relatedTarget: document.body })));
 const wait = (ms: number) => act(() => void vi.advanceTimersByTime(ms));
 
 describe("the reply bar", () => {
-  it("shows on hover, stays a moment after the pointer leaves, and a quick way back keeps it", () => {
-    draw();
+  it("is in cindy's order: Copy message, Start a new session, More message actions, then the time", async () => {
+    await draw();
+    expect(labels()).toEqual(["复制消息", "开启一个新会话", "更多消息操作"]);
+    expect(bar().lastElementChild?.tagName).toBe("TIME");
+  });
+
+  it("says chat, not session, in a Persona conversation", async () => {
+    await draw({ actions: { ...chat, assistant: true } });
+    expect(labels()).toEqual(["复制消息", "开启一个新对话", "更多消息操作"]);
+  });
+
+  it("has no Start a new session where the session cannot branch, or for words that are not a line of their own", async () => {
+    await draw({ actions: { ...chat, fork: undefined } });
+    expect(labels()).toEqual(["复制消息", "更多消息操作"]);
+    await draw({ itemId: "line12#0" });
+    expect(labels()).toEqual(["复制消息", "更多消息操作"]);
+  });
+
+  it("has no ⋯ with nothing to put in it (a chat that cannot send, words not in the transcript)", async () => {
+    await draw({ actions: { ...chat, canCompose: false }, itemId: null });
+    expect(labels()).toEqual(["复制消息"]);
+  });
+
+  it("shows on hover, stays a moment after the pointer leaves, and a quick way back keeps it", async () => {
+    await draw();
     expect(shown()).toBe(false);
     expect(bar().className).toContain("has-[:focus-visible]:opacity-100");
     enter();
@@ -76,8 +107,8 @@ describe("the reply bar", () => {
     expect(bar().className).toContain("pointer-events-none");
   });
 
-  it("stays while its ⋯ menu is open, which holds Quote, Forward and Use as context", () => {
-    draw();
+  it("stays while its ⋯ menu is open, which holds Quote, Forward and Use as context", async () => {
+    await draw();
     enter();
     act(() => button("更多消息操作").click());
     expect([...document.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent?.trim())).toEqual(["引用", "转发", "作为上下文"]);
@@ -89,7 +120,7 @@ describe("the reply bar", () => {
   });
 
   it("copies quietly and shows ✓ until the pointer comes back", async () => {
-    draw();
+    await draw();
     enter();
     await act(async () => button("复制消息").click());
     expect(copied).toHaveBeenCalledExactlyOnceWith("All done.", { quiet: true });
@@ -102,8 +133,8 @@ describe("the reply bar", () => {
     expect(check()).toBe(false);
   });
 
-  it("says when, the exact time as its tooltip, and keeps no timer while the pointer is elsewhere", () => {
-    draw();
+  it("says when, the exact time as its tooltip, and keeps no timer while the pointer is elsewhere", async () => {
+    await draw();
     const time = () => host.querySelector("time")!;
     expect(time().textContent).toBe("刚刚");
     expect(time().title).toMatch(/^2026-11-12 \d\d:59:01$/);

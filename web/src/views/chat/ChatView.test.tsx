@@ -64,10 +64,18 @@ vi.mock("../../lib/router", async (importOriginal) => ({
   useRoute: () => ({ name: "session", mid: "hub", id: "c1" }),
 }));
 vi.mock("../assistant/Persona", () => ({ usePersona: () => ({ name: "Persona" }) }));
-// the last reply's ⋯ menu (#5314) drawn open: what the chat offers on it
-vi.mock("./ReplyBar", () => ({
-  ReplyBar: ({ more }: { more: { key: string; label: string }[] }) => <div data-reply-bar>{more.map((a) => <button key={a.key} type="button" aria-label={a.label} />)}</div>,
-}));
+// a reply's Forward and Use as context drawn in the page: they are in its menus (the bar's ⋯ since #5314), which open
+// on a click, so the chat's actions are read here as those menus read them
+vi.mock("./MessageActions", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./MessageActions")>();
+  const { useChatActions } = await import("./chat-actions");
+  function MessageActions(p: Parameters<typeof real.MessageActions>[0]) {
+    const chat = useChatActions();
+    const pick = p.itemId ? { itemId: p.itemId, text: p.text, isUser: false } : undefined;
+    return <>{p.children}{real.messageContextActions(p.text, chat, pick).map((a) => <button key={a.key} type="button" aria-label={a.label} />)}</>;
+  }
+  return { ...real, MessageActions };
+});
 vi.mock("../assistant/AssistantChat", () => ({
   AssistantFace: () => null,
   CompactionStrip: () => null,

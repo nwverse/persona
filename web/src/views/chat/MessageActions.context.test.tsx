@@ -38,6 +38,13 @@ vi.mock("../../ui/icons", async (original) => {
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+// the bar under a turn's last reply loads after the first screen (MessageActions): wait for it, and for React's retry
+// on a timer when the clock is fake
+const settle = () => act(async () => {
+  await vi.dynamicImportSettled();
+  if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(0);
+});
+
 const forward = vi.fn();
 const chat: ChatActions = {
   draftKey: "machine/chat",
@@ -142,6 +149,7 @@ describe("message context interaction paths", () => {
           </MessageActions>
         </ChatActionsContext.Provider>,
       ));
+      await settle();
       const open = () => act(() => {
         const message = host.querySelector("[data-message]")!;
         // both in ⋯: beside your bubble ("More"), and in the reply bar's "More message actions" (#5314)
@@ -173,25 +181,28 @@ describe("message context interaction paths", () => {
     expect(forward).toHaveBeenCalledTimes(2);
   });
 
-  it("gives the last reply a copy button and a ⋯ on touch, which opens the same menu", () => {
-    const render = (isUser: boolean, bar = !isUser) => act(() => root.render(
-      <ChatActionsContext.Provider value={chat}>
-        <MessageActions text="Original message" isUser={isUser} side={isUser} bar={bar} itemId="r1#3"><p>Original message</p></MessageActions>
-      </ChatActionsContext.Provider>,
-    ));
+  it("gives the last reply a copy button and a ⋯ on touch, which opens the same menu", async () => {
+    const render = async (isUser: boolean, bar = !isUser) => {
+      act(() => root.render(
+        <ChatActionsContext.Provider value={chat}>
+          <MessageActions text="Original message" isUser={isUser} side={isUser} bar={bar} itemId="r1#3"><p>Original message</p></MessageActions>
+        </ChatActionsContext.Provider>,
+      ));
+      await settle();
+    };
     // the reply bar is always in the page, hidden by CSS on touch screens; the touch row comes only there
     const copies = () => host.querySelectorAll('button[aria-label="拷贝回复"]').length;
-    render(false);
+    await render(false);
     expect(host.querySelectorAll('button[aria-label="复制消息"]')).toHaveLength(1);
     expect(copies()).toBe(0);
     expect(host.querySelector('button[aria-label="更多"]')).toBeNull();
     media.noHover = true;
-    render(true);
+    await render(true);
     expect(copies()).toBe(0);
-    render(false, false); // narration, words still streaming: the long press only
+    await render(false, false); // narration, words still streaming: the long press only
     expect(copies()).toBe(0);
     expect(host.querySelector("button")).toBeNull();
-    render(false);
+    await render(false);
     expect(copies()).toBe(1);
     act(() => host.querySelector<HTMLButtonElement>('button[aria-label="更多"]')!.click());
     expect([...document.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent?.trim())).toEqual(expect.arrayContaining(["转发", "作为上下文"]));

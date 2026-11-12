@@ -16,10 +16,10 @@ export function relativeTime(iso: string | undefined, now = Date.now()): string 
   const at = iso ? Date.parse(iso) : NaN;
   if (!Number.isFinite(at)) return "";
   const delta = now - at;
-  if (delta < MINUTE) return t("chat-messageactions.just_now");
-  if (delta < HOUR) return t("chat-messageactions.minutes_ago", { count: Math.floor(delta / MINUTE) });
-  if (delta < DAY) return t("chat-messageactions.hours_ago", { count: Math.floor(delta / HOUR) });
-  if (delta < WEEK) return t("chat-messageactions.days_ago", { count: Math.floor(delta / DAY) });
+  if (delta < MINUTE) return t("lib-relative-time.just_now");
+  if (delta < HOUR) return t("lib-relative-time.minutes_ago", { count: Math.floor(delta / MINUTE) });
+  if (delta < DAY) return t("lib-relative-time.hours_ago", { count: Math.floor(delta / HOUR) });
+  if (delta < WEEK) return t("lib-relative-time.days_ago", { count: Math.floor(delta / DAY) });
   const d = new Date(at);
   const day = `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
   return d.getFullYear() === new Date(now).getFullYear() ? day : `${d.getFullYear()}-${day}`;

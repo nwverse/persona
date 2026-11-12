@@ -8,7 +8,7 @@
 // (lib/forward.ts); it took the place of "Hand to Persona". "Use as context" attaches it to this chat's next message. Sharing
 // as a card is the phone's. "Start a new session" (#2137: a new conversation with what was said up to this reply) is there
 // when the session can branch. Beside your own bubbles, Forward and Use as context live in ⋯ to keep the hover bar compact.
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { t } from "../../i18n";
 import { sendDraft, type QuotedTask } from "../../lib/drafts";
 import type { ForwardPick } from "../../lib/forward";
@@ -19,7 +19,10 @@ import { Icon, type IconName } from "../../ui/icons";
 import type { RewindRestore } from "../../lib/rewind";
 import { isNoHover, NO_HOVER, useMedia } from "../../ui/media-query";
 import { useChatActions, type ChatActions } from "./chat-actions";
-import { ReplyBar } from "./ReplyBar";
+
+// Hidden until the pointer comes, so it is not part of the first screen (startup-preload.ts): its row is kept while it
+// loads, so nothing moves when it comes.
+const ReplyBar = lazy(() => import("./ReplyBar").then((m) => ({ default: m.ReplyBar })));
 
 
 function pointAnchor(x: number, y: number): HTMLElement {
@@ -248,7 +251,9 @@ export function MessageActions({
         {children}
       </div>
       {bar ? (
-        <ReplyBar text={text} ts={ts} hovered={hovered} fork={extras.find((a) => a.key === "fork")} more={actions.filter((a) => a.key !== "copy" && a.key !== "select")} />
+        <Suspense fallback={<div data-reply-bar="loading" className="mt-1.5 hidden h-6 [@media(hover:hover)]:block" />}>
+          <ReplyBar text={text} ts={ts} hovered={hovered} fork={extras.find((a) => a.key === "fork")} more={actions.filter((a) => a.key !== "copy" && a.key !== "select")} />
+        </Suspense>
       ) : (side || corner) && (
       <div
         className={cx(

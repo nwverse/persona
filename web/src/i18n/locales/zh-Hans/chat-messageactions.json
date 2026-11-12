@@ -13,13 +13,5 @@
   "use_as_context": "作为上下文",
   "context_title": "{title} · 消息",
   "fork_chat": "开启一个新对话",
-  "more_actions": "更多消息操作",
-  "just_now": "刚刚",
-  "minutes_ago_one": "{count} 分钟前",
-  "minutes_ago_other": "{count} 分钟前",
-  "hours_ago_one": "{count} 小时前",
-  "hours_ago_other": "{count} 小时前",
-  "days_ago_one": "{count} 天前",
-  "days_ago_other": "{count} 天前",
   "cut_short": "此回复未完成，内容仅供参考。"
 }

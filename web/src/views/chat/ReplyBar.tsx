@@ -43,7 +43,7 @@ export function ReplyBar({ text, ts, hovered, fork, more }: { text: string; ts?:
 
   const time = relativeTime(ts, now);
   const copyLabel = t("chat-messageactions.copy_message");
-  const moreLabel = t("chat-messageactions.more_actions");
+  const moreLabel = t("chat-replybar.more_actions");
   return (
     <div
       data-reply-bar
