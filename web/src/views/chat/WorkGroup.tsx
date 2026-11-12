@@ -1,4 +1,5 @@
-// One folded execution summary while running or completed; manual expansion reveals its complete trace (#2602).
+// One folded execution summary while running or completed; manual expansion reveals its complete trace (#2602): with
+// intermediate narration, cindy's timeline of that narration and an inner summary for each run of work between (#5155).
 import { lazy, memo, Suspense, useContext, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { useSessionLive } from "../../lib/live";
 import { useStore } from "../../lib/store";
@@ -18,7 +19,7 @@ import { PlanCard } from "./PlanCard";
 import { Answer } from "./SegmentView";
 import { NoticeRow, Thumb } from "./Steps";
 import { WorkflowCallCard } from "./WorkflowCard";
-import { ThinkingCard } from "./ThinkingCard";
+import { LiveThinking as LiveThinkingLine, ThinkingRow } from "./ThinkingCard";
 import { t } from "../../i18n";
 
 // Subagent cards sit inside the folded work (super rule 2), drawn only once a reader opens it: off the first screen.
@@ -31,10 +32,9 @@ export interface WorkProps {
   scope: string;
   expandFold: (f: Item) => Promise<void>;
   agentStatus: (s: ToolStep) => AgentStatus;
-  thinking: Map<string, number>;
   /** The Workflow calls whose run the hub lists (#3434): those draw the run's card. */
   workflowCalls?: WorkflowCalls;
-  /** Inside an open group (a finished timeline's inner groups stay folded). */
+  /** Inside an open group: a timeline's inner groups, which open with it (nestedLineDefault). */
   nested?: boolean;
   /** The exchange these steps are of (its segment's id): what of it the reader opened is kept under it. */
   segment?: string;
@@ -57,11 +57,11 @@ function foldsOf(g: WorkGroupNode): Item[] {
   return g.children.flatMap((c) => (c.kind === "group" ? foldsOf(c) : c.step.kind === "fold" ? [c.step.item] : []));
 }
 
-/** The screen's status line while this exchange is live (contract §3): a thinking card at the live group's end. Read
- *  here, not handed down: it changes about once a second while the agent works, and only this card shows it (#5417). */
+/** The screen's status line while this exchange is live (contract §3): a thinking line at the live group's end. Read
+ *  here, not handed down: it changes about once a second while the agent works, and only this line shows it (#5417). */
 function useThinkingNow(mid: string, sid: string) {
   const status = useSessionLive(mid, sid);
-  return status?.thinking ? <ThinkingCard live={status} /> : null;
+  return status?.thinking ? <LiveThinkingLine /> : null;
 }
 
 function LiveThinking({ mid, sid }: { mid: string; sid: string }) {
@@ -147,7 +147,8 @@ export const WorkGroup = memo(function WorkGroup({ g, p }: { g: WorkGroupNode; p
       <Collapse open={open} lazy>
         <div className="mt-1 flex min-w-0 flex-col gap-2 border-l-2 border-tool-rail py-[2px] pl-3" data-work-detail>
           <WorkNodes nodes={g.children} p={inside} live={g.live} />
-          {g.live && <LiveThinking mid={p.mid} sid={p.sid} />}
+          {/* once, in the innermost live group: a live timeline's last run is live too */}
+          {g.live && !g.children.some((c) => c.kind === "group" && c.live) && <LiveThinking mid={p.mid} sid={p.sid} />}
         </div>
       </Collapse>
     </div>
@@ -203,7 +204,7 @@ export const StepView = memo(function StepView({ step, p, live, fade }: { step: 
       if (workflowCard(step, p)) return <WorkflowCallCard step={step} mid={p.mid} sid={p.sid} scope={p.scope} />;
       return <ActionRow step={step} running={live && !step.result} mid={p.mid} sid={p.sid} />;
     case "thinking":
-      return <ThinkingCard item={step.item} durationMs={p.thinking.get(step.id)} scope={p.scope} />;
+      return <ThinkingRow item={step.item} scope={p.scope} />;
     case "text":
       return fade ? <FreshAnswer item={step.item} mid={p.mid} sid={p.sid} /> : <Answer item={step.item} mid={p.mid} sid={p.sid} />;
     case "notice":

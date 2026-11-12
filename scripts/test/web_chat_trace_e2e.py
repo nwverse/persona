@@ -68,8 +68,9 @@ def groups_page(page, tag, shot):
     detail = first.locator("[data-work-detail]")
     expect(detail).to_be_visible()
     expect(detail.locator("[data-action-row]").first).to_be_visible()
-    expect(detail.locator('[data-thinking="empty"]').first).to_contain_text("思考")
-    ok(f"{tag}: opening it shows its steps on the rail: tool rows, thoughts as 「思考 Ns」")
+    expect(detail.locator('[data-thinking="words"]').first).to_contain_text("刷新策略在 Provider 里")
+    expect(detail.locator('[data-thinking="empty"]')).to_have_count(0)
+    ok(f"{tag}: opening it shows its steps on the rail: tool rows, a thought with words as one row, none without (#5155)")
     shot("groups-open")
 
     # the command without a description opens in place: what went in, a line, what came out
