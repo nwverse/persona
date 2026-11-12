@@ -119,7 +119,6 @@ func TestLarkLiteralGetWithShellVariables(t *testing.T) {
 		{"single", `ex GET "/documents/read?url=https://example.test/docx/a"`},
 		{"for loop", `for x in a b; do ex GET "/documents/read?url=$x" > /tmp/o_$x.json; done`},
 		{"while loop", `x=a; while [ "$x" = a ]; do ex GET "/documents/read?url=$x" > /tmp/o_$x.json; x=b; done`},
-		{"route variable", `for id in a b; do ex GET "/documents/$id" > /tmp/o_$id.json; done`},
 		{"incident", `for x in "docx a b" "wiki c d"; do set -- $x; ex GET "/documents/read?url=https://example.larkoffice.com/$2/$1" > /tmp/d_$3.json; python3 -I x.py; echo "$3 $(jq -r '.data.title' /tmp/d_$3.json | tr '\n' ' ') $(wc -c < /tmp/d_$3.json)"; done`},
 		{"output substitutions", `ex GET /health; echo "$(jq -r '.data.title' /tmp/o.json | tr '\n' ' ') $(wc -c < /tmp/o.json)"`},
 	} {
@@ -148,6 +147,7 @@ func TestLarkLoopWritesStayBehindApproval(t *testing.T) {
 		{"variable read method", `for method in GET; do ex "$method" /health; done`},
 		{"variable write method", `for method in POST; do ex "$method" /documents '{}'; done`},
 		{"variable command", `for x in a b; do $CLI GET "/documents/$x"; done`},
+		{"dynamic route can hide deletion", `for action in delete; do ex GET "/documents/$action"; done`},
 		{"unquoted route becomes delete", `for route in '/health -X DELETE'; do ex GET $route; done`},
 		{"unquoted query becomes delete", `for query in 'q=a -X DELETE'; do ex GET /health --url-query $query; done`},
 		{"command substitution becomes delete", `ex GET /health --url-query $(printf 'q=a -X DELETE')`},

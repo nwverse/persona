@@ -450,13 +450,15 @@ func parseGateCall(g proto.CommandGate, args []string, vars map[string]string, c
 	}
 	// A literal method is part of the call's identity: even a previously
 	// assigned variable could change before a loop invokes it. A literal GET
-	// remains a read when its quoted route or query contains ordinary variables.
+	// can keep variables in its query, but an unresolved route could hide a
+	// deletion action or a configured deny rule.
 	if len(args) < 2 || !httpMethod.MatchString(strings.ToUpper(args[0])) {
 		return larkCall{}, "", false // a subcommand of its own (ol events …): not a call the rules know
 	}
 	method := strings.ToUpper(args[0])
 	path, resolved := expand(args[1])
-	if strings.Contains(path, "$(") || strings.Contains(path, "`") || !resolved && method != "GET" {
+	route, _, _ := strings.Cut(path, "?")
+	if strings.Contains(route, "$") || strings.Contains(path, "$(") || strings.Contains(path, "`") || !resolved && method != "GET" {
 		return larkCall{}, "", false
 	}
 	c := larkCall{Method: method}
