@@ -469,6 +469,9 @@ var codexTurnMarks sync.Map
 // source "exec" (their subagents keep the originator). Only the App's threads go through its IPC bus.
 type codexOrigin struct {
 	desktop bool
+	// persona: a chat Persona started in the App (originator codexAppClient, codexapp_new.go), which the App lists
+	// without a record in its state; desktop too, so its subagents are the App's as well.
+	persona bool
 	cli     bool
 	// exec: a one-shot run a program started (`codex exec`, an SDK, the App's background runs) or a subagent of one:
 	// nobody's conversation, not listed in Agents (programRun).
@@ -510,7 +513,8 @@ func readCodexOrigin(path string) codexOrigin {
 	if json.Unmarshal(line, &m) != nil || m.Type != "session_meta" {
 		return codexOrigin{} // not written yet: read again next time
 	}
-	o := codexOrigin{desktop: m.Payload.Originator == "Codex Desktop" || m.Payload.Originator == "codex_work_desktop", cli: m.Payload.Originator == "codex-tui" || m.Payload.Originator == "codex_cli_rs"}
+	o := codexOrigin{desktop: m.Payload.Originator == "Codex Desktop" || m.Payload.Originator == "codex_work_desktop" || m.Payload.Originator == codexAppClient,
+		persona: m.Payload.Originator == codexAppClient, cli: m.Payload.Originator == "codex-tui" || m.Payload.Originator == "codex_cli_rs"}
 	if at, err := time.Parse(time.RFC3339Nano, m.Timestamp); err == nil && !at.IsZero() {
 		o.started = &proto.SessionHierarchy{StartedAt: at.UTC()}
 	}
@@ -555,7 +559,7 @@ func codexDesktopChatIn(src codexSource, pass *codexListPass) bool {
 		return ok
 	}
 	o := readCodexOrigin(src.path)
-	return o.desktop && o.parent == "" && loadCodexAppState(src.home).listed(src.thread)
+	return o.desktop && o.parent == "" && (o.persona || loadCodexAppState(src.home).listed(src.thread))
 }
 
 // owner: the App window that owns the thread.

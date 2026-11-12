@@ -33,6 +33,9 @@ func (n *Node) launcherCheck(ctx context.Context, name string) proto.LauncherChe
 	if isDesktopLauncher(name) { // nothing of its own to run: the app's session runs on the app's settings
 		return proto.LauncherCheck{Agent: "claude", Error: desktopCheckMsg}
 	}
+	if isCodexAppLauncher(name) {
+		return proto.LauncherCheck{Agent: "codex", Error: codexAppCheckMsg}
+	}
 	agent := "claude"
 	if m, managed := n.managedLauncher(name); managed {
 		agent = m.AgentType()
