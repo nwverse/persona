@@ -211,6 +211,8 @@ export const upgradeExtension = async (id: string, pv: ExtensionPreview) =>
 export const rollbackExtension = async (id: string) => adminApi<AdminExtension>(`${await extRoot()}/${enc(id)}/rollback`, "POST");
 
 export const setExtensionEnabled = async (id: string, enabled: boolean) => adminApi<AdminExtension>(`${await extRoot()}/${enc(id)}/enabled`, "PUT", { enabled });
+/** On, off, or null back to the default for its source (docs/extensions/extensions.md "Sandbox"); the answer is the extension. */
+export const setExtensionSandbox = async (id: string, enabled: boolean | null) => adminApi<AdminExtension>(`${await extRoot()}/${enc(id)}/sandbox`, "PUT", { enabled });
 
 export const uninstallExtension = async (id: string, keepData: boolean) =>
   adminApi<ExtensionRemovalResult>(`${await extRoot()}/${enc(id)}`, "DELETE", { keep_data: keepData });

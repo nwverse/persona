@@ -62,12 +62,14 @@
     <string name="designsystem_decision_other">Needs you</string>
     <string name="designsystem_decision_open_chat">Open chat</string>
     <string name="designsystem_decision_open_full">Open full page</string>
-    <string name="designsystem_decision_previous">Previous</string>
-    <string name="designsystem_decision_next">Next</string>
     <string name="designsystem_decision_advice">Persona: %1$s</string>
     <string name="designsystem_decision_recommended">Suggested</string>
-    <string name="designsystem_decision_position">Request %1$d of %2$d</string>
     <string name="designsystem_decision_option_position">Option %1$d of %2$d</string>
+    <!-- The pending requests above a chat's composer while they scroll (iOS PendingCards). -->
+    <plurals name="designsystem_decision_pending">
+        <item quantity="one">%1$d pending</item>
+        <item quantity="other">%1$d pending</item>
+    </plurals>
     <!-- Where an outgoing message stands -->
     <string name="designsystem_pending_sending">Sending</string>
     <string name="designsystem_pending_waiting">Sends when connected</string>

@@ -303,6 +303,7 @@ internal class MergedShellServices(private val stacks: GroupStacks) {
         override suspend fun editQueue(session: Session, keep: List<Int>) = of(session).editQueue(session, keep)
         override suspend fun sendQueuedNow(session: Session) = of(session).sendQueuedNow(session)
         override suspend fun info(session: Session) = of(session).info(session)
+        override suspend fun completeRow(session: Session) = of(session).completeRow(session)
         override suspend fun interactionHistory(session: Session) = of(session).interactionHistory(session)
         override suspend fun restoreModel(session: Session) = of(session).restoreModel(session)
         override suspend fun fork(session: Session, atItemId: String) = of(session).fork(session, atItemId)
