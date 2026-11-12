@@ -24258,6 +24258,18 @@ ADD_COMPUTER_ERRORS = {
     "mesh_member": (409, "这台 hub 是组里的成员，到中心 hub 上添加电脑"),
     "too_many_pending": (429, "已经有 3 台电脑在等确认"),
 }
+# add.manager's own refusals, as the hub words them (server/internal/hub/machines_add.go, locales hub-pairing: no_assistant,
+# assistant_installing, assistant_away; owners_unknown is the hub's plain English), by the request's Accept-Language.
+ADD_MANAGER_ERRORS = {
+    "no_manager": (404, {"en": "There\u2019s no such assistant", "zh-Hans": "没有这个助手", "ja": "そのアシスタントはありません"}),
+    "installing": (409, {"en": "This assistant isn\u2019t installed yet. Add the computer once it is",
+                         "zh-Hans": "这个助手还没装好，装好后再添加电脑",
+                         "ja": "このアシスタントはまだインストールされていません。インストールが終わってからコンピュータを追加してください"}),
+    "assistant_offline": (503, {"en": "This computer is with an assistant that\u2019s offline right now, so it can\u2019t be moved. Try again when that assistant is back",
+                                "zh-Hans": "这台电脑现在所在的助手不在线，挪不过来。等那个助手上线后再试",
+                                "ja": "このコンピュータが今いるアシスタントがオフラインのため、移動できません。そのアシスタントがオンラインに戻ってからもう一度お試しください"}),
+    "owners_unknown": (503, "the hub could not read which manager carries which machine; try again"),
+}
 
 
 def _add_computer_push():
@@ -24317,7 +24329,11 @@ if ADD_COMPUTER:
                 return False  # an app's code: the handler's own
             code = os.environ.get("MOCK_ADD_COMPUTER_ERROR", "")
             if add and code:
-                status, text = ADD_COMPUTER_ERRORS.get(code, (409, code))
+                if code in ADD_MANAGER_ERRORS:
+                    status, text = ADD_MANAGER_ERRORS[code]
+                    if isinstance(text, dict): text = text[cron_lang(handler.headers.get("Accept-Language"))]
+                else:
+                    status, text = ADD_COMPUTER_ERRORS.get(code, (409, code))
                 reply = {"error": text, "code": code}
                 if code == "tls_required":
                     reply["action"] = "enable_tls"
@@ -24422,7 +24438,7 @@ if ADD_COMPUTER:
 
 MOCK_HELP.append("MOCK_ADD_COMPUTER=1|seed  机器 › 添加电脑（#287）：features 有 machines_add / machine_trust，pair-codes 的 add 加一台待确认的电脑，"
                  "MOCK_ADD_COMPUTER_JOIN 秒后（默认 8，0 = 不来）它连上来等确认；seed 另列一台没连过的待确认电脑、Mac Studio 离线（link_offline）；"
-                 "MOCK_ADD_COMPUTER_ERROR=tls_required|mesh_member|too_many_pending 拒绝添加，MOCK_ADD_COMPUTER_NO_SITE=1 不给安装命令；"
+                 "MOCK_ADD_COMPUTER_ERROR=tls_required|mesh_member|too_many_pending|no_manager|installing|assistant_offline|owners_unknown 拒绝添加，MOCK_ADD_COMPUTER_NO_SITE=1 不给安装命令；"
                  "add.manager 把电脑加到那个助手名下（回包 manager；助手离线时 /machines 先不列它），MOCK_ADD_COMPUTER_NO_MANAGER=1 模拟不认它的旧 hub（回包没有 manager）")
 
 # ---------- area: the main conversation's readiness (#287, docs/assistant/onboarding.md 4.4–4.6, 5.1–5.4) ----------

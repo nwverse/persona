@@ -18299,6 +18299,52 @@
       },
       "extractionState" : "manual"
     },
+    "This computer was added under %@." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This computer was added under %1$@."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このコンピューターは「%1$@」に追加されました。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台电脑加到了「%1$@」名下。"
+          }
+        }
+      }
+    },
+    "%@ is offline, so a computer can't be added to it right now." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ is offline, so a computer can't be added to it right now."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%1$@」はオフラインのため、今はコンピューターを追加できません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%1$@」离线，暂时不能给它添加电脑。"
+          }
+        }
+      }
+    },
     "Address" : {
       "localizations" : {
         "en" : {
