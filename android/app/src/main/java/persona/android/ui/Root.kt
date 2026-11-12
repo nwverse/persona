@@ -625,6 +625,8 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                 if (assistantRoot) besideAssistant(page) else page()
             }
         }
+        // A chat's terminal cover reads its machine's own hub group, as the terminal page does (`routed`).
+        fun chatTerminal(route: ChatRoute) = session.terminal?.let { shell.groupTerminal(SessionKey(route.machineId, route.sessionId)) ?: it }
         val provider = entryProvider<NavKey> {
             assistantEntries(navigator) {
                 AssistantScreen(assistantNavigator, session.assistant, session.sender, session.assistant::startConversation,
@@ -643,10 +645,10 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
             spaceEntries(navigator, agents)
             chatEntries(navigator) {
                 ShellChat(it, session, navigator, shell.feedback, onSessionClosed = navigator::sessionClosed, onOpenCard = ::openWithCard,
-                    onGroupGone = navigator::groupGone)
+                    onGroupGone = navigator::groupGone, terminal = chatTerminal(it))
             }
             entry<InteractionRoute> { ShellChat(it.chat, session, navigator, shell.feedback, it.requestId, navigator::sessionClosed,
-                ::openWithCard, navigator::groupGone) }
+                ::openWithCard, navigator::groupGone, chatTerminal(it.chat)) }
             inboxEntries(navigator, session.inbox, connectors = services.connectors.takeUnless { services.demo }, onOpenCard = { card ->
                 openWithCard(ResolvedRoute(AppTab.Agents, AgentsRoute, card = card))
             })

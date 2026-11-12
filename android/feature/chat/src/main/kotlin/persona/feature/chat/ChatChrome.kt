@@ -13,6 +13,7 @@ import androidx.compose.ui.unit.dp
 import persona.core.contracts.*
 import persona.core.contracts.api.*
 import persona.core.designsystem.*
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
 import persona.core.domain.sort.SessionRename
 import persona.core.domain.sort.canAttach
@@ -38,6 +39,10 @@ internal fun ChatHeader(
     onOpenTodo: ((String) -> Unit)? = null,
     agentShares: (() -> AgentShares)? = null,
     worktrees: (() -> persona.core.contracts.api.AgentCreationService?)? = null,
+    /** Opens the session's terminal: ⋯'s Terminal, and the header's button on Brief and Board ([ChatTerminalPlaces]). */
+    onTerminal: (() -> Unit)? = null,
+    /** The chat has a terminal it can't open from here: Brief's and Board's header button explains it instead. */
+    onTerminalHelp: (() -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     var menu by remember { mutableStateOf(false) }
@@ -94,6 +99,11 @@ internal fun ChatHeader(
         onTitleClick = onDetails,
         agentMark = session?.agentMark,
     ) {
+        // Glass opens the terminal from ⋯ and the work line, as iOS (#4339 C7); Brief and Board keep their header.
+        val headerTerminal = onTerminal ?: onTerminalHelp
+        if (headerTerminal != null && ChatTerminalPlaces.inHeader(PersonaTheme.style))
+            JIconButton(PersonaIcons.terminal, stringResource(if (onTerminal != null) R.string.chat_screen_open_terminal else R.string.chat_screen_terminal_help),
+                headerTerminal)
         actions()
         // The permission mode, always in view and changed here (#3957, iOS #3719).
         if (session != null && SessionModes.showsInHeader(session)) HeaderModeButton(session, state, online && !readOnly) { modeOverlay = it }
@@ -104,6 +114,8 @@ internal fun ChatHeader(
         session?.todo?.let { todo ->
             add(JAction(stringResource(R.string.chat_chrome_todo, todo.title), PhIcons.ListChecks) { onOpenTodo?.invoke(todo.id) })
         }
+        // iOS's first item after the to-do: the terminal comes up over the chat.
+        onTerminal?.let { add(JAction(stringResource(R.string.chat_chrome_terminal), PersonaIcons.terminal, onClick = it)) }
         onSearch?.let { add(JAction(stringResource(R.string.chat_chrome_search), PhIcons.MagnifyingGlass, onClick = it)) }
         onFiles?.let { add(JAction(stringResource(R.string.chat_chrome_files), PhIcons.FolderSimple, onClick = it)) }
         onGit?.let { add(JAction(gitLabel, onClick = it)) }
