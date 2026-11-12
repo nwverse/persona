@@ -1,6 +1,6 @@
 // The chat's ⋯ menu dialogs: session info, rename (the agent / its space), delete, close, and the header's permission mode.
 import { useEffect, useRef, useState } from "react";
-import { api, enc, errorText, sessionPath } from "../../lib/api";
+import { api, enc, errorText, HubTimeoutError, pastHub, sessionPath } from "../../lib/api";
 import { ago, externalLink, resumeCommand, sessionCan, sessionTitle, shortPath, tabLabel } from "../../lib/format";
 import { openLink } from "../../lib/links";
 import { effortTitle, modeTitle, renameBody } from "../../lib/session-actions";
@@ -273,18 +273,26 @@ function Field({ label, value, onChange, autoFocus }: { label: string; value: st
   );
 }
 
-/** POST …/modes with a patch, drawn at once and put back if it fails (the error toasted). `latest` is the session as it is
- *  now: a pick applies the model and then the effort, and the second must build on the session the first changed. */
+/** The hub gives a mode call 90 seconds. Five more lets its own refusal arrive first; a lost response still ends Apply. */
+const MODE_CONFIRM_MS = pastHub(90_000);
+
+function modeChangeError(e: unknown) {
+  toast(e instanceof HubTimeoutError ? t("chat-sessiondialogs.change_unconfirmed") : t("chat-sessiondialogs.change_failed", { error: errorText(e) }), "error");
+}
+
+/** POST …/modes with a patch, drawn at once and put back if it is refused (the error toasted). A timeout may mean the
+ *  change ran but its response was lost, so it stays drawn for the session push. `latest` is the session as it is now:
+ *  a pick applies the model and then the effort, and the second must build on the session the first changed. */
 export async function applyModes(latest: () => Session, patch: { permission_mode?: string; effort?: string; model?: string }): Promise<boolean> {
   const base = latest();
   const before = { permission_mode: base.permission_mode, effort: base.effort, model: base.model };
   upsertSession({ ...base, ...patch });
   try {
-    await api(`${sessionPath(base.machine_id, base.session_id)}/modes`, { method: "POST", json: patch });
+    await api(`${sessionPath(base.machine_id, base.session_id)}/modes`, { method: "POST", json: patch, timeout: MODE_CONFIRM_MS });
     return true;
   } catch (e) {
-    upsertSession({ ...latest(), ...Object.fromEntries(Object.keys(patch).map((k) => [k, before[k as keyof typeof before]])) });
-    toast(t("chat-sessiondialogs.change_failed", { error: errorText(e) }), "error");
+    if (!(e instanceof HubTimeoutError)) upsertSession({ ...latest(), ...Object.fromEntries(Object.keys(patch).map((k) => [k, before[k as keyof typeof before]])) });
+    modeChangeError(e);
     return false;
   }
 }
@@ -307,11 +315,11 @@ export function useModeSet(session: Session) {
     upsertSession(next);
     latest.current = next; // a step after this one builds on it before the push draws it
     try {
-      await api(`${sessionPath(base.machine_id, base.session_id)}/modes`, { method: "POST", json: step });
+      await api(`${sessionPath(base.machine_id, base.session_id)}/modes`, { method: "POST", json: step, timeout: MODE_CONFIRM_MS });
       return true;
     } catch (e) {
-      upsertSession({ ...latest.current, pending_switch: before });
-      toast(t("chat-sessiondialogs.change_failed", { error: errorText(e) }), "error");
+      if (!(e instanceof HubTimeoutError)) upsertSession({ ...latest.current, pending_switch: before });
+      modeChangeError(e);
       return false;
     }
   };
@@ -322,10 +330,10 @@ export function useModeSet(session: Session) {
  *  session's push after the agent took it owns what is shown (DESIGN_SYSTEM.md "Codex speed controls"). */
 export async function setServiceTier(s: Session, tier: string): Promise<boolean> {
   try {
-    await api(`${sessionPath(s.machine_id, s.session_id)}/modes`, { method: "POST", json: { service_tier: tier } });
+    await api(`${sessionPath(s.machine_id, s.session_id)}/modes`, { method: "POST", json: { service_tier: tier }, timeout: MODE_CONFIRM_MS });
     return true;
   } catch (e) {
-    toast(t("chat-sessiondialogs.change_failed", { error: errorText(e) }), "error");
+    modeChangeError(e);
     return false;
   }
 }

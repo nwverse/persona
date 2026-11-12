@@ -1,8 +1,8 @@
 // Claude Code asking on its terminal to run a command (#5266), as a screen card in plain words: "Waiting for your
 // approval", "Claude wants to run a command", the agent's words, the command, the warning plainly with Claude Code's own
 // under "Show original", the countdown running, and Deny / Allow for the prompt's No / Yes (a prompt with more choices
-// keeps its numbered rows). Off the first screen: Interactions.tsx loads it at idle (lazyPage) and draws the terminal's
-// question until it is in. The iPhone's ScreenForm says the same (apple/Persona/Views/Interactions/ScreenCommandAsk.swift).
+// keeps its numbered rows). Off the first screen and the idle tier: Interactions.tsx loads it only when a command card
+// appears (lazyPage) and draws the terminal's question until it is in. The iPhone's ScreenForm says the same (apple/Persona/Views/Interactions/ScreenCommandAsk.swift).
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { allowDeny, commandAsk, type CommandAsk } from "../../lib/command-ask";
