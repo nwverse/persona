@@ -299,9 +299,12 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
  * took the @ menu's rows off the first screen, beside #5325's / palette and #5327's queue panel, which together left
  * less room than it needs: 43,729 B merged with main at f18875688; 43,809 B with the review's fixes merged with main at
  * 0fef425ef, and 31 B over that so the next main does not tip it). It stays idle: a typed @ opens it at once.
+ * And 183 B for the single-category stacked bar's share predicate and horizontal segmented renderer (#5386,
+ * 2026-11-12: 43,782 B measured on main before the change, 43,965 B after; the chart chunk is idle by contract —
+ * code-views-lazy.test enforces `idle: true` — so the renderer has no intent tier to move into).
  * Every other lazy page loads on intent, not at idle; raise it on purpose, in the change that needs it.
  */
-export const IDLE_TIER_BUDGET = 43_840;
+export const IDLE_TIER_BUDGET = 43_965;
 
 const gzip = promisify(gzipCompress);
 
