@@ -2668,9 +2668,9 @@ starts drawing outcomes must bump its item cache version: items cached from olde
 
 ### Folded work
 
-The tool calls and thinking of a turn are normally folded into one line in the chat ("Tools 502 · Thinking 81"). But in one long Codex session, the page for the last two turns had 1412 items and 1.08 MB,
+The tool calls, thinking and intermediate Codex commentary of a turn are normally folded into one line in the chat ("Tools 502 · Thinking 81"). But in one long Codex session, the page for the last two turns had 1412 items and 1.08 MB,
 with only 6 actual replies: on a weak network the top of the chat page kept spinning. When a request carries `fold_work` (HTTP `fold_work=1`, `fold_work: true` when subscribing), pages read backward from the end
-(`turns` / `before_seq` / the last two turns resent on subscribe) replace each run of consecutive work (paired tool_use + tool_result, with the tool's images, and thinking)
+(`turns` / `before_seq` / the last two turns resent on subscribe) replace each run of consecutive work (paired tool_use + tool_result, with the tool's images, thinking, and Codex commentary)
 with one item of `kind: fold` (`transcript.FoldWork`):
 
 - `id` is `fold:` + the id of the run's first item, and `seq` / `ts` are also the first item's; `fold.through_seq` / `through_id` are the last item, `until` is the last item's time;
@@ -2712,12 +2712,13 @@ with one item of `kind: fold` (`transcript.FoldWork`):
 - `fold.usage` is what the folded items used (their `usage`, "Token usage on items"): entries without an `id` summed per
   `model` and `fast`, entries with one as they are. Omitted when none of them carried usage, and from older nodes. Old
   clients ignore it.
-- Not folded: user messages, replies (text), notifications, recaps; a tool_use whose result is not on this page (still running) and a tool_result whose tool_use is not on this page
+- Not folded: user messages, final replies (text), notifications, recaps; on the latest page, the newest Codex commentary when no final reply follows it, so a running turn's current answer stays visible. Once a final reply follows, earlier commentary is folded as narration and remains ordinary text when opened, not thinking. Historical pages fold all their narration because a final reply may be on a later page;
+  a tool_use whose result is not on this page (still running) and a tool_result whose tool_use is not on this page
   (the App has to pair them with the other half that comes later / came earlier); short runs under 3 items and under 4 KB (expanding costs another round trip; not worth it).
 - When the App expands a work row it fetches the run with `from_seq=<fold.seq>&through_seq=<fold.through_seq>` (about 1000 items per page; on `more`, continue from the last item's seq + 1),
-  merges it in and drops the fold. When a fold is merged in, local tool / thinking items within its range (by seq + block index) are replaced by it.
+  merges it in and drops the fold. When a fold is merged in, local tool / thinking / assistant text items within its range (by seq + block index) are replaced by it.
 - Resends via `after_seq` and live pushes are never folded: they continue from what the App already has, and may contain tool calls the App is waiting on.
-- A page like that 1412-item / 1.08 MB one becomes a dozen or so items and a few KB after folding (`TestFoldedFirstPageOfALongSession`: 1417 items, 880 KB → 13 items, 1.9 KB).
+- A page like that 1412-item / 1.08 MB one becomes a dozen or so items and a few KB after folding (`TestFoldedFirstPageOfALongSession`).
 
 ### Images viewed this turn
 
