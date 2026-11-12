@@ -195,6 +195,7 @@ async function run(browser, size, theme, language) {
     await cleanup.waitFor({ state: "detached" });
     assert.deepEqual(writes[1], { path: "/todos/demo-cleanup/accept", method: "POST", body: { asked_at: AT, option: "Delete after an export" } });
     const legacy = page.locator('[data-needs-row="task:demo-legacy"]');
+    await openFolded(page);
     await legacy.locator("[data-decision-actions]").scrollIntoViewIfNeeded();
     assert.equal(await legacy.locator("[data-decision-option]").count(), 0, "no invented options for a review without an ask");
     assert.match(await legacy.locator("[data-decision-legacy]").innerText(), /Example extension checks passed/);
@@ -205,6 +206,7 @@ async function run(browser, size, theme, language) {
     await page.reload();
     await page.locator('[data-tray-entry="needs"]').click();
     await legacy.waitFor();
+    await openFolded(page);
     await legacy.locator("[data-decision-actions]").scrollIntoViewIfNeeded();
     await page.screenshot({ path: name("dismiss-before") });
     let releaseDismiss;
