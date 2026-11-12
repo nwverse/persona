@@ -288,20 +288,24 @@ A manual Server CI dispatch on the authorized fork returned HTTP 404: its defaul
 No hosted CI result is claimed, and that default branch was not changed. A maintainer must provide an available CI ref/environment.
 
 Remote automated verifier comments on [PR #5845](https://github.com/nwverse/persona/pull/5845) report node-package
-failures at 540.403 s for `be1895949` and 539.305 s for the documentation-only `98e5d33bd`.
+failures at 540.403 s for `be1895949`, 539.305 s for the documentation-only `98e5d33bd`, and 504.553 s for
+the reply-event implementation `be8e80bbd` (2026-11-12T15:37:35Z). All three report package FAIL, not timeout.
 The complete comment bodies supply only a short output tail, without named failing assertions, the full command or
 environment. Ordinary refusal/resume/close messages in that tail are not identified failed assertions. The package
 elapsed values do not establish that the complete external verifier met its deadline or passed, and do not attribute
 its failure to the local Chrome result.
 
-Both SHAs were checked through GitHub's check-runs, check-suites, combined commit-status and Actions-run APIs:
+The first two SHAs were checked through GitHub's check-runs, check-suites, combined commit-status and Actions-run APIs:
 all contain zero associated entries; the combined status is `pending` with an empty statuses array. PR reviews and
 inline review comments are empty. Recent repository Actions runs precede this PR and use other SHAs. The repository
 contains no matching automated-verifier implementation or full-log link. Issue #5730 contains only its original claim.
-Consequently no complete watcher log or named remote failure is available through these public sources. The detailed external failure cause remains unknown; no additional logs are requested or awaited.
+Consequently no complete watcher log or named remote failure is available through these public sources. The new `be8e80bbd` comment likewise contains only the short normal-log tail and package FAIL, with no named
+failed assertion. Its lower package elapsed time is not a controlled before/after sample or proof that the complete
+external verifier met its deadline. The detailed external failure cause remains unknown; no additional logs are requested or awaited.
 Local failures and measured hotspots are investigated independently. Local direct calls at `be189594939b` still time out as recorded above.
 
 - [Verifier report, 2026-11-12T14:42:57Z](https://github.com/nwverse/persona/pull/5845#issuecomment-6826718109).
 - [Verifier report, 2026-11-12T14:52:24Z](https://github.com/nwverse/persona/pull/5845#issuecomment-6826959409).
+- [Verifier report at the reply-event source, 2026-11-12T15:37:35Z](https://github.com/nwverse/persona/pull/5845#issuecomment-6828106659).
 
 No UI or native code changed: screenshots, native builds and online deployment verification are not applicable. Nothing was merged or deployed.

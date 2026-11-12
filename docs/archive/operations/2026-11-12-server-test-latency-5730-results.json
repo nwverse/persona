@@ -9,6 +9,32 @@
     "Full main commands were not repeated after the follow-up. That source is covered by the complete fixture-consumer selection and isolated feature integrations.",
     "Go 1.27.1, Linux/amd64, 32 allowed CPUs; host is shared, load samples retained. Database URL unset, fresh owned HOME/temp/runtime per sample."
   ],
+  "external_verifier_reports": [
+    {
+      "source": "be189594939b3294f07c5e634c8c74cc89b1524c",
+      "package": "github.com/nwverse/persona/server/internal/node",
+      "reported_package_elapsed_s": 540.403,
+      "reported_result": "FAIL (no timeout reported)",
+      "specific_failed_assertion": "unknown",
+      "url": "https://github.com/nwverse/persona/pull/5845#issuecomment-6826718109"
+    },
+    {
+      "source": "98e5d33bdf26156c1c18110c88c120c62e559bf5",
+      "package": "github.com/nwverse/persona/server/internal/node",
+      "reported_package_elapsed_s": 539.305,
+      "reported_result": "FAIL (no timeout reported)",
+      "specific_failed_assertion": "unknown",
+      "url": "https://github.com/nwverse/persona/pull/5845#issuecomment-6826959409"
+    },
+    {
+      "source": "be8e80bbdb6d3452621be9227fe8a11e26167a07",
+      "package": "github.com/nwverse/persona/server/internal/node",
+      "reported_package_elapsed_s": 504.553,
+      "reported_result": "FAIL (no timeout reported)",
+      "specific_failed_assertion": "unknown",
+      "url": "https://github.com/nwverse/persona/pull/5845#issuecomment-6828106659"
+    }
+  ],
   "receipts": [
     {
       "detached_cleanup": 0,
@@ -1569,7 +1595,7 @@
         "python3",
         "scripts/test/test_doc_wire.py"
       ],
-      "wall_s": 0.364,
+      "wall_s": 0.365,
       "exit": 0,
       "label": "test_doc_wire"
     }
