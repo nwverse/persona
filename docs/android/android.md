@@ -95,6 +95,14 @@ Housekeeping notices (compaction, restarts, schedule setup) are hidden while dat
 metadata identifies supervision/patrol/follow-up turns; normal user messages are never hidden by their title or emoji.
 Original events and background records remain inspectable rather than being deleted from history.
 
+On Glass the conversation draws the hub's task records as iOS does ([chats](../plans/android-ios-alignment/chats.md) C13):
+`AssistantTaskCards.isBackgroundEvent(inline = true)` keeps only plans, task cards (the dispatched line stands for them) and
+message cards behind, and `FeedLine` draws the receipt (its PR button and **View**), the review line, the report as
+"task → @Persona" and Persona's hand-off as "Persona → @task" (both in Persona's box, the first three lines and **Expand**,
+`ExchangeHeader` / `ExchangeText` in `feature/chat/AgentExchange.kt`), the user's own word to a task as "Me → @task" in the
+user's bubble, and the hub's `notice` line, centered. Brief and Board keep the records behind the trays as above. Tests:
+`TaskRecordsTest` (core/domain), `TaskRecordsShotsTest`.
+
 #### Background rounds fold into one line (#4314)
 
 The main conversation folds the rounds it did not start, as web and iOS do (rules in

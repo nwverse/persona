@@ -327,9 +327,9 @@
     <string name="chat_tasks_say">Message</string>
     <string name="chat_tasks_restarting">“%1$s” is starting again</string>
     <string name="chat_tasks_restarted">“%1$s” started after a retry</string>
-    <string name="chat_tasks_receipt_failed_title">Didn\'t start: %1$s</string>
-    <string name="chat_tasks_receipt_done_title">Done: %1$s</string>
-    <string name="chat_tasks_receipt_stopped_title">Stopped, not done yet: %1$s</string>
+    <string name="chat_tasks_receipt_failed_title">%1$s didn\'t start</string>
+    <string name="chat_tasks_receipt_done_title">%1$s is done</string>
+    <string name="chat_tasks_receipt_stopped_title">%1$s stopped, not done yet</string>
     <string name="chat_tasks_look">View</string>
     <string name="chat_tasks_finished_line">“%1$s” is done</string>
     <string name="chat_tasks_resumed_line">“%1$s” continued after the interruption</string>
