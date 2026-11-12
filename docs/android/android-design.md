@@ -200,7 +200,9 @@ Components live in `Agents.kt` in `core:designsystem` (`MachineChip`, `AgentTree
   The avatar opens one shared history sidebar from either page; its bottom gear opens Settings. Inbox, To-dos, Computers and extension pages are secondary sidebar destinations.
   In a regular window the same sidebar is a column beside the Assistant page instead of a drawer (section 3.1).
 - Each tab has its own back stack and badge. Visited tabs stay composed: switching away only stops placement (no drawing or touch), and disables back handling for that tab
-  (`rememberNavigationEventDispatcherOwner(enabled = false)`). Switching back leaves the page exactly as it was, with no recreation, reload, empty-state flash or spinner.
+  (`rememberNavigationEventDispatcherOwner(enabled = false)`). Selecting Assistant retains its current conversation. Selecting Agents from Assistant removes destinations above its list root (#5638),
+  without replacing that root or its list state. Direct session entries and notification/link routing still open details; they do not use explicit tab selection.
+  Re-tapping an already selected Glass home segment still opens its menu.
 - The top switcher belongs only to the two primary roots (`NavEntryDecorator`). Secondary pages cover it and carry Back instead.
   There is no bottom dock or navigation rail. In Glass each page samples its own content, never blurring another page.
 - Transitions: on push, the entire opaque new page slides in from the right with the old page underneath; on back, the top page slides away to reveal the one below. No crossfades (two translucent pages overlap their text);
