@@ -38,6 +38,7 @@
         "launcher_switch",
         "engine_switch",
         "client_msg_id",
+        "message_send_state",
         "client_ops",
         "send_refusals",
         "screen_dialog",
@@ -108,7 +109,9 @@
         "sessions_manager",
         "sessions_page_counts",
         "sessions_hierarchy",
-        "machine_rename"
+        "machine_rename",
+        "assistant_views",
+        "assistant_html_bridge"
       ],
       "fp": "",
       "hub_id": "00000000-0000-4000-8000-000000000001",
@@ -126,6 +129,7 @@
           }
         ]
       },
+      "message_send_state": 1,
       "min_app_build": 0,
       "protocol": 1,
       "server_version": "fixture-version",
@@ -159,6 +163,7 @@
           "launcher_switch",
           "engine_switch",
           "client_msg_id",
+          "message_send_state",
           "client_ops",
           "send_refusals",
           "screen_dialog",
@@ -229,7 +234,9 @@
           "sessions_manager",
           "sessions_page_counts",
           "sessions_hierarchy",
-          "machine_rename"
+          "machine_rename",
+          "assistant_views",
+          "assistant_html_bridge"
         ],
         "/type": "hello"
       }
@@ -272,6 +279,7 @@
         "launcher_switch",
         "engine_switch",
         "client_msg_id",
+        "message_send_state",
         "client_ops",
         "send_refusals",
         "screen_dialog",
@@ -342,7 +350,9 @@
         "sessions_manager",
         "sessions_page_counts",
         "sessions_hierarchy",
-        "machine_rename"
+        "machine_rename",
+        "assistant_views",
+        "assistant_html_bridge"
       ],
       "fp": "",
       "hub_id": "00000000-0000-4000-8000-000000000001",
@@ -383,6 +393,7 @@
           "launcher_switch",
           "engine_switch",
           "client_msg_id",
+          "message_send_state",
           "client_ops",
           "send_refusals",
           "screen_dialog",
@@ -453,7 +464,9 @@
           "sessions_manager",
           "sessions_page_counts",
           "sessions_hierarchy",
-          "machine_rename"
+          "machine_rename",
+          "assistant_views",
+          "assistant_html_bridge"
         ],
         "/ok": true,
         "/version": "fixture-version"

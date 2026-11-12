@@ -159,6 +159,35 @@ class PersonaInstallTests(unittest.TestCase):
             for key in keys:
                 self.assertRegex(text, r'(?m)^\s*' + re.escape(lang + ':' + key) + r'\)', (lang, key))
 
+    def test_installer_text_preserves_placeholders_for_its_caller(self):
+        # The catalog is shared with deploy.sh: reading a format string must not consume its placeholders.
+        script = r'''
+set -eu
+install=$1
+eval "$(sed -n '/^# >>> install language/,/^# <<< install language/p' "$install")"
+set -- not-a-catalog-value
+for lang in en zh-Hans ja; do
+  INSTALL_LANG=$lang
+  for key in $INSTALL_TEXT_KEYS; do
+    text=$(install_text "$key")
+    count=$(printf '%s' "$text" | awk '{n += gsub(/%s/, "")} END {print n + 0}')
+    case $count in
+      0) ;;
+      1) [ "$(install_format "$key" one)" = "$(printf "$text" one)" ] ;;
+      2) [ "$(install_format "$key" one two)" = "$(printf "$text" one two)" ] ;;
+      3) [ "$(install_format "$key" one two three)" = "$(printf "$text" one two three)" ] ;;
+      4) [ "$(install_format "$key" one two three four)" = "$(printf "$text" one two three four)" ] ;;
+      5) [ "$(install_format "$key" one two three four five)" = "$(printf "$text" one two three four five)" ] ;;
+      *) printf 'unexpected format count: %s %s: %s\n' "$lang" "$key" "$count" >&2; exit 1 ;;
+    esac
+  done
+done
+printf 'catalog placeholders preserved in all languages\n'
+'''
+        result = subprocess.run(['sh', '-c', script, 'probe', str(INSTALL)], capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('catalog placeholders preserved', result.stdout)
+
     def test_installer_language_from_environment_and_override(self):
         cases = (
             ('English', {'LANG': 'en_US.UTF-8', 'LC_ALL': ''}, (), 'installed at'),

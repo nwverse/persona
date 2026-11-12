@@ -31,7 +31,7 @@ This table only points the way. Values and rules live in the sections it names, 
 
 ## Product design principles
 
-The six product design principles, with their rules, how to check each one and recent cases, live in `docs/design/PRINCIPLES.md`: 1 defaults first, 2 progressive disclosure, 3 user control, 4 consistency first, 5 model and product are separate, 6 rules are checkable. They decide product questions before any rule in this document applies. "Principle N" below refers to that numbering. Apple's Human Interface Guidelines are a source for this document, not its authority: what Persona takes from them is rewritten here as Persona rules (sections 2 to 6), and `docs/design/HIG_AUDIT.md` records where the code still falls short.
+The seven product design principles, with their rules, how to check each one and recent cases, live in `docs/design/PRINCIPLES.md`: 1 defaults first, 2 progressive disclosure, 3 user control, 4 consistency first, 5 model and product are separate, 6 rules are checkable, 7 fast, local-first and stateful. They decide product questions before any rule in this document applies. "Principle N" below refers to that numbering. Apple's Human Interface Guidelines are a source for this document, not its authority: what Persona takes from them is rewritten here as Persona rules (sections 2 to 6), and `docs/design/HIG_AUDIT.md` records where the code still falls short.
 
 ## 1. Purpose, scope and sources of truth
 
@@ -333,6 +333,11 @@ For every component: use the design-system one, not a lookalike. Counts are appr
 - Accessibility: every control labelled; hold-to-talk has a hint and a tap action (`apple/Persona/DesignSystem/ComposerHoldMic.swift:105-110`). Reduce Motion read in the bar.
 - Source: `apple/Persona/DesignSystem/ShellComposerBar.swift:11`, `apple/Persona/DesignSystem/ComposerButtons.swift`.
 - Platforms: web composer (14 px radius, 28 px buttons, `web/src/views/chat/Composer.tsx:648`); Android `ComposerFrame` (radius 32 in Glass).
+- Pictures and videos (iOS `mediaPicker`, `VideoAttachmentsBar`, `PasteImageChip`): + › Photos takes pictures and videos,
+  four together. A video waits above the field as a row with the video mark, its name and, once on the computer, "size ·
+  length", and ✕. While the clipboard holds a picture not yet offered, the focused composer offers **Paste** (the accent's
+  capsule on iOS, a Secondary button on Android) and ✕ **Don't paste** at its top, once per copy; the field itself pastes
+  only text. Android: the video row in every style, the Paste chip on Glass (`ComposerPaste.kt`).
 - Web bottom row (#5324, cindy's toolbar at the owner's request; cindy wins over this section's earlier rules for it):
   `[+][permission picker] … [model pill][Stop][voice][send / queue / stop]`. The + and the picker are bare 30 px round
   controls that show the model pill's frame (`line-strong` border, `hover` fill) on hover or while open; the action is one
@@ -427,6 +432,12 @@ For every component: use the design-system one, not a lookalike. Counts are appr
   Persona's place in the message actions; the card over the composer (`ForwardBar`) and in the bubble (`ForwardBlock`)
   are the quote bar's and quote card's shapes (`views/chat/Quote.tsx`) with the `forward` icon, and Forward to is a
   `Dialog` (a bottom sheet on phones) with palette-style rows; no Share as Image row, as the web has no share card.
+- Share as Image (iOS `MessageShareSheet`): a full-screen page with the message as a card (who said it, where and when, the
+  words with code blocks that wrap and have no Copy bar, a quiet Persona mark, on a pale blue-to-lilac gradient), Light /
+  Dark at the top, and Share (the picture), Save, Copy and Share Text along the bottom; the card is 390 pt wide, wider for
+  tables, code and very tall cards, at most 520 pt (`ShareCardWidth`). Android has no Forward: on Glass the message
+  menu's Share opens the page (`MessageSharePage`, Light / Dark in the top bar, the picture drawn from the card's
+  `GraphicsLayer`); Brief and Board share the words.
 - A message sent from here and not in the transcript yet (iOS `PendingBubble`): drawn as a sent bubble at once, with a
   mark before it, level with its last line: a quiet clock while it sends; a clock while it waits for the network, whose
   small menu is Retry Now and Don't Send, with "Sends when connected" under the bubble; a red mark once it failed, with
@@ -715,6 +726,17 @@ yet"); Android puts them first in the composer's one @ list under "Message a tas
 under "Mention a file or session", the typed word narrowing all of them, so the list takes no more room above the
 keyboard than before.
 
+New chat's @ (iOS `StarterComposer` with `MentionSource(machine:)`, Android `starterMentionSource`; #4339 C16): a
+conversation that doesn't exist yet has no tasks, files or folder, so the list offers the agents' sessions on every
+computer (newest first, at most eight, Persona's own conversations left out) and, once a typed word is an absolute or `~`
+path with a slash, that folder alone, read from the assistant's computer: folders first, then files, names that start with
+the word first, hidden ones only after a typed dot. A picked folder stays typed with its slash and the list browses it;
+a picked file types `@path `; a picked session waits over the composer as a chat's quote card and goes in front of the
+first message as a `<persona-context>` tag. While the list is open, what needs the user over the composer steps aside
+(iOS `MentionMenuOpen`): above the keyboard the lines, the list and the composer don't fit together. Same rows and words
+as a chat's @ list ("Reading folder…", "Nothing matches in this folder" while browsing); every style draws it in its own
+list, since it is behaviour.
+
 Agent header permission mode (#3719, `HeaderModeButton` in `apple/Persona/Views/Chat/SessionModes.swift`): an icon-only
 capsule at the trailing end of the open Agents header's second row, under `⋯`, as tall as the tabs, with a 44 pt target that
 overhangs the row. It draws the mode menu's own symbol (one per mode) in its `ModeTone`, tinted as `ModeChip` tints a
@@ -864,7 +886,7 @@ The watch widget extension doesn't build `Theme`, so complications take their fo
 
 ### 4.1 Navigation hierarchy (super rule 3)
 
-`docs/SUPER_RULES.md` rule 3: Assistant and Agents are the only primary home destinations on iOS, Android and web. Settings opens from the sidebar. Everything else (Inbox, To-dos, Scheduled Tasks, Knowledge, Machines, Health, extension pages) is pushed from the drawer. Push by value for new pages; mixing view-based and value-based pushes in one stack is a known trap. An optional Messages page can be switched on and becomes a third primary destination; whether that fits rule 3 needs the rule owner (DS-26).
+`docs/SUPER_RULES.md` rule 3: Assistant and Agents are the only primary home destinations on iOS, Android and web. Settings opens from the sidebar. Everything else (Recordings, Inbox, To-dos, Scheduled Tasks, Knowledge, Machines, Health, extension pages) is pushed from the drawer. Push by value for new pages; mixing view-based and value-based pushes in one stack is a known trap. An optional Messages page can be switched on and becomes a third primary destination; whether that fits rule 3 needs the rule owner (DS-26).
 
 A dispatched task's Open link (#3711) is a compact row using existing typography, fill, radius and 44 pt touch-target
  tokens, not a filter or a link to the whole In Progress list. One task shows its title and Open; a plan lists only its
@@ -917,6 +939,23 @@ This requested pagination correction does not add a setting or change placement.
 navigator on current main and is outside this fix's scope; it must not use its two-turn body window as a global count.
 
 ### 4.3 Feedback and haptics
+
+Message feedback (#5258, principle 7, super rule 5) reuses the chat's status line and pending bubble, not a new card or
+style. Show Sending immediately from local state, then Processing on the hub's `message_send_state` receipt; do not wait
+for a model token or overwrite `Session.status`. The pending-send overlay is scoped to the conversation and message,
+survives stale snapshots, and hands off to actual execution or queued state on delivery. Failure removes only its own
+overlay and keeps the existing draft, failed-bubble and uncertain-delivery recovery. The full wire and reconnect rules
+are in `docs/protocol/protocol.md` ("Message feedback (#5258)"). Apply the same definition in Assistant and Agent chats.
+
+| Message state | en | zh-Hans | ja |
+| --- | --- | --- | --- |
+| Local input pending | Sending | 发送中 | 送信中 |
+| Hub received; execution may still be preparing | Processing | 处理中 | 処理中 |
+
+These are message states, not answers to an approval or a claim that the model is already working. Receipt alone does
+not enable Stop or promise cancellation of the pending HTTP request. Keep existing answer
+labels and the authoritative Working/Needs you/queued state words. Verify dark/light in the existing styles and measure
+send-to-feedback separately from send-to-input delivery; a transport receipt's queue timestamp is not a client paint.
 
 `Haptics` (`apple/Persona/App/AppModel.swift`): `tap` (light impact), `success`, `error`, `attention` (warning). 443 call sites on 11-11 (tap 243, success 129, error 57, attention 14); no-op on visionOS; generators are created per call. One direct UIKit use remains (`apple/Persona/Views/Chat/ChatEdgeScrub.swift`). Android has the same four kinds (`android/core/designsystem/src/main/kotlin/persona/core/designsystem/Haptics.kt`: tap is a context click, success confirm, attention a gesture threshold, error reject; the system's touch-feedback setting decides whether they play).
 
@@ -1397,6 +1436,7 @@ done, not applicable, or deviated (with the reason). It is short on purpose. The
 - [ ] Consistency: lists the existing components, patterns and count definitions reused; a number shown under an existing name uses the same rule. Anything new has its reason written down and an update to this document (principle 4).
 - [ ] Model and product separate: names which of speed, model, presentation or features it touches, and changes none of the others (principle 5).
 - [ ] Checkable: each item above marked done carries its evidence (screenshot, test name, command output) in the PR (principle 6).
+- [ ] Fast, local-first and stateful: local Sending is immediate, hub receipt shows Processing, failure recovers; before/after feedback and execution timings are separate (principle 7).
 
 **Rules**
 
@@ -1617,9 +1657,15 @@ page the user watches during the meeting is the page they keep writing in after 
 
 Every place that starts a recording on the iPhone says **Record** and does one thing: it records a meeting (minutes, and
 Persona can attend with the hub's default role), named after the calendar event on now when there is one, or opens the
-recording running. That is the drawer's row, the Recordings page's button, the home screen's menu, the Control and Siri /
-Shortcuts. Reason: two large buttons, **Meeting Recording** and **Start Recording**, looked alike and owners couldn't tell
-which to press; impromptu talks are meetings too (principles 1 and 4).
+recording running. That is the Recordings page's button, the main conversation's + list, the home screen's menu, the
+Control and Siri / Shortcuts. Reason: two large buttons, **Meeting Recording** and **Start Recording**, looked alike and
+owners couldn't tell which to press; impromptu talks are meetings too (principles 1 and 4).
+
+- **The drawer's row is a place, not a start** (#5517): **Recordings** (录音 / 録音), first among the drawer's places,
+  opens the Recordings page, as each row under it opens its page; Record there starts. While a recording runs the row
+  reads **Recording… Open** and opens it. Reason: the row said Record and started at a tap, while in zh-Hans and ja it
+  reads as the page's name, so owners tapping it to see their recordings got one running (principle 4: a drawer row
+  goes somewhere; a verb belongs on the control that acts).
 
 - **The Recordings page**: Record is the one prominent button (`.themedButton(prominent: true)`, one line, the icon going
   at accessibility sizes), with the calendar line under it. The options follow as one row each: **Type**, a menu
@@ -1633,7 +1679,7 @@ which to press; impromptu talks are meetings too (principles 1 and 4).
   a note turns Persona off, and the sheet shows the live view; turning it back makes it a meeting with Persona's part as a
   start would get it, and a room meeting's page again.
 - Identifiers for tests: `recording-meeting-start` (Record), `recording-kind` and `recording-kind-detail` at the start,
-  `recording-page-menu` and `recording-kind-now` while recording; `sidebar-meeting-recording` for the drawer's row. UI
+  `recording-page-menu` and `recording-kind-now` while recording; `sidebar-meeting-recording` for the drawer's Recordings row. UI
   tests: `RecordEntryUITests`. The watch keeps its two entries for now.
 
 ## Checking typed credentials by themselves (#4881)
