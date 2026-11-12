@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // The sidebar's switcher (docs/assistant/managers.md "Clients"): the current assistant in the sidebar's head, the roster it
 // opens (status, where each runs, what waits there, the default tagged, the current one checked), switching, New
-// assistant and Manage assistants…, an installing one's install commands, and the earlier product row with one assistant.
+// assistant and Manage assistants…, an installing one's install commands, and the earlier product row without a roster.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -191,43 +191,59 @@ describe("the sidebar's assistant switcher", () => {
     expect(document.body.textContent).toContain("mi_again");
   });
 
-  it("restores the product row and menu with one assistant, without its name, avatar or roster dropdown", async () => {
+  it("shows one assistant's identity and roster, with New and Manage but no default tag or counts", async () => {
     setRoster({ default: "assistant", managers: [ROSTER.managers[0]] });
     await render();
-    expect(head().textContent).toBe("Persona2 / 3 台电脑在线");
-    expect(head().getAttribute("data-assistant-switcher")).toBe("");
-    expect(head().getAttribute("aria-label")).toBeNull();
-    expect(head().querySelector("[data-assistant-avatar]")).toBeNull();
+    expect(head().textContent).toContain("助手");
+    expect(head().textContent).toContain("在线 · server");
+    expect(head().getAttribute("data-assistant-switcher")).toBe("assistant");
+    expect(head().querySelector("[data-assistant-avatar]")?.getAttribute("data-assistant-avatar")).toBe("assistant");
+    expect(head().querySelector("[data-avatar-status=green]")).not.toBeNull();
     expect(head().querySelector("[data-avatar-waiting]")).toBeNull();
     await open();
-    expect(document.body.querySelectorAll("[role=menuitemradio]")).toHaveLength(0);
-    expect(rows().map((r) => r.textContent)).toEqual(["跟随系统", "浅色", "深色", "设置", "断开这个浏览器"]);
-    expect(document.body.textContent).not.toContain("助手");
+    expect(document.body.querySelector<HTMLElement>("[role=menu]")!.style.width).toBe("264px");
+    const radios = [...document.body.querySelectorAll<HTMLElement>("[role=menuitemradio]")];
+    expect(radios).toHaveLength(1);
+    expect(radios[0].getAttribute("aria-checked")).toBe("true");
+    expect(radios[0].textContent).toContain("助手");
+    expect(radios[0].textContent).not.toContain("默认");
+    expect(radios[0].querySelector("[data-menu-badge]")).toBeNull();
+    expect(rows().slice(1).map((r) => r.textContent)).toEqual(["新建助手", "管理助手…", "跟随系统", "浅色", "深色", "设置", "断开这个浏览器"]);
     await choose("设置");
     expect(navigate).toHaveBeenCalledWith({ name: "settings" });
   });
 
-  it("hides a renamed sole assistant even when it is not built in and is offline", async () => {
+  it("shows a renamed sole assistant's identity even when it is not built in and is offline", async () => {
     setRoster({ default: "m-only", managers: [{ id: "m-only", name: "Personal assistant name", online: false }] });
     await render();
-    expect(head().textContent).toBe("Persona2 / 3 台电脑在线");
-    expect(head().querySelector("[data-assistant-avatar]")).toBeNull();
+    expect(head().textContent).toContain("Personal assistant name");
+    expect(head().textContent).toContain("离线");
+    expect(head().textContent).not.toContain("Persona");
+    expect(head().getAttribute("data-assistant-switcher")).toBe("m-only");
+    expect(head().querySelector("[data-assistant-avatar]")?.getAttribute("data-assistant-avatar")).toBe("m-only");
+    expect(head().querySelector("[data-avatar-status=grey]")).not.toBeNull();
     await open();
-    expect(document.body.querySelectorAll("[role=menuitemradio]")).toHaveLength(0);
-    expect(document.body.textContent).not.toContain("Personal assistant name");
+    expect(document.body.querySelectorAll("[role=menuitemradio]")).toHaveLength(1);
+    expect(row("Personal assistant name").textContent).toContain("离线");
   });
 
-  it("does not expose assistant identity while a second assistant is still installing", async () => {
+  it("shows one installed and one installing assistant in the roster, still without counts", async () => {
     setRoster({ default: "assistant", managers: [ROSTER.managers[0], ROSTER.managers[3]] });
     await render();
-    expect(head().textContent).toContain("Persona");
-    expect(head().querySelector("[data-assistant-avatar]")).toBeNull();
+    expect(head().textContent).toContain("助手");
+    expect(head().querySelector("[data-assistant-avatar]")).not.toBeNull();
+    expect(head().querySelector("[data-avatar-waiting]")).toBeNull();
     await open();
-    expect(document.body.querySelectorAll("[role=menuitemradio]")).toHaveLength(0);
-    expect(rows().some((r) => r.textContent?.includes("测试"))).toBe(false);
+    const radios = [...document.body.querySelectorAll<HTMLElement>("[role=menuitemradio]")];
+    expect(radios).toHaveLength(1);
+    expect(radios[0].textContent).not.toContain("默认");
+    expect(row("测试").textContent).toContain("安装中");
+    expect(document.body.querySelector("[data-menu-badge]")).toBeNull();
+    expect(row("新建助手")).toBeDefined();
+    expect(row("管理助手…")).toBeDefined();
   });
 
-  it("shows identity and switching as soon as two assistants are installed, then hides them when one remains", async () => {
+  it("keeps identity and a one-row roster when two assistants become one", async () => {
     setRoster({ default: "assistant", managers: [ROSTER.managers[0], ROSTER.managers[1]] });
     await render();
     expect(head().textContent).toContain("助手");
@@ -240,10 +256,15 @@ describe("the sidebar's assistant switcher", () => {
     act(() => setRoster({ default: "assistant", managers: [ROSTER.managers[0]] }));
     await flush();
     expect(shownManager()).toBe("assistant");
-    expect(head().textContent).toContain("Persona");
-    expect(head().querySelector("[data-assistant-avatar]")).toBeNull();
+    expect(head().textContent).toContain("助手");
+    expect(head().textContent).not.toContain("Persona");
+    expect(head().querySelector("[data-assistant-avatar]")).not.toBeNull();
+    expect(head().querySelector("[data-avatar-waiting]")).toBeNull();
     await open();
-    expect(document.body.querySelectorAll("[role=menuitemradio]")).toHaveLength(0);
+    const radios = [...document.body.querySelectorAll<HTMLElement>("[role=menuitemradio]")];
+    expect(radios).toHaveLength(1);
+    expect(radios[0].getAttribute("aria-checked")).toBe("true");
+    expect(radios[0].textContent).toContain("助手");
     expect(document.body.textContent).not.toContain("工作");
   });
 
@@ -252,9 +273,12 @@ describe("the sidebar's assistant switcher", () => {
     await render();
     expect(head().textContent).toContain("Persona");
     expect(head().textContent).toContain("2 / 3 台电脑在线");
+    expect(head().getAttribute("data-assistant-switcher")).toBe("");
+    expect(head().querySelector("[data-assistant-avatar]")).toBeNull();
     await open();
+    expect(document.body.querySelector<HTMLElement>("[role=menu]")!.style.width).toBe("220px");
+    expect(rows().map((r) => r.textContent)).toEqual(["跟随系统", "浅色", "深色", "设置", "断开这个浏览器"]);
     expect(rows().some((r) => r.textContent === "新建助手")).toBe(false);
-    expect(rows().some((r) => r.textContent === "断开这个浏览器")).toBe(true);
   });
 
   it("fades an offline assistant's whole row, which can still be picked", async () => {

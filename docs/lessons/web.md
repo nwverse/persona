@@ -145,17 +145,28 @@ that UI. Pass existing task helpers into the editor instead of importing the who
 chunk. Static-render tests exercise the extracted editor directly; mounted tray tests wait for the lazy card and still
 exercise its actions. Leave Send/Dismiss admission, owner capture and revision fences in the synchronous feed layer.
 
-## Gate identity chrome by installed assistants, not by roster availability (#3967)
+## Gate identity chrome by roster availability, not installed-assistant count (#3967, #3978)
 
-A roster with one assistant does not need assistant identity or switching UI. Reuse the installed-assistant cardinality
-rule used by conversation titles and list grouping; offline installed assistants count and pending installs do not.
-Restore the earlier product header and its existing controls rather than hiding the whole header, which would also
-remove appearance, Settings and Disconnect. Keep product branding and the user's chosen Persona look separate from
-roster name/monogram attribution. Regress one → two → one on a mounted view, along with one installed plus a pending
-install, and assert the rendered labels, avatars and menu rows rather than only the count helper. A phone's menu and
-drawer own separate history entries: wait for each closing entry to pop before the next full-page navigation, or a
-late Back can replace the requested Inbox page with the previous main conversation. Prefer the built web preview for
-broad E2E runs on a busy machine; thousands of Vite development modules can exhaust Chromium's renderer resources.
+The #3978 simplification hid assistant identity again with one installed assistant; that is not the rule. The visual
+gate is whether the hub supplied a roster, not the installed-assistant count. With a roster, even one installed
+assistant shows its name, first-character avatar with a status dot, and status line at the desktop sidebar's and phone
+drawer's head, and opens the roster. A single-assistant roster has one row with no Default tag and still includes New
+assistant and Manage assistants…, so creation is not confined to Settings. On an older hub without a roster, restore
+the earlier product header and its existing controls rather than hiding the whole header, which would also remove
+appearance, Settings and Disconnect: keep AppMark, Persona, connection/computer status and the original menu. Keep
+product branding and the user's chosen Persona look separate from roster name/monogram attribution.
+
+The behavior gate remains `multiManager`: with one installed assistant or no roster, filtering, badges, extra requests,
+`X-Persona-Manager`, `?manager=` and `needs_you` reads stay off. Conversation titles and message identity also remain
+under `multiManager`, so one assistant keeps the Persona title and existing message identity. Do not reuse roster
+availability for those behaviors, or the installed-assistant count for identity chrome.
+
+Regress no roster → one → two → one on a mounted view, along with one installed plus a pending install, and assert the
+rendered labels, avatars, status, Default tag, New assistant / Manage assistants… rows and 264 / 220 px menu widths,
+not only the count helper. Also assert that single-assistant filtering and manager-routing requests stay off. A phone's
+menu and drawer own separate history entries: wait for each closing entry to pop before the next full-page navigation,
+or a late Back can replace the requested Inbox page with the previous main conversation. Prefer the built web preview
+for broad E2E runs on a busy machine; thousands of Vite development modules can exhaust Chromium's renderer resources.
 
 ## Retention mode changes must not save an intermediate window (#3780, #3862)
 
