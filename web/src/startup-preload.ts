@@ -201,9 +201,11 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * reply bar (#5426: ja 592,664 B against 591,753 B on main at cc83e770df, +911 B, of which 227 B fit the room main had:
  * collecting an exchange's usage while the chat's lines are built, a subagent's once in the chat, in the exchange that
  * launched it, and handing it to the reply; the prices, the sums by model, the card and their words load with the reply
- * bar). Raise it on purpose, in the change that needs it.
+ * bar). And 279 B for the same usage bar after the command card's wording landed (#5512, #5539: ja 592,943 B against
+ * 592,664 B on main at 0856795596: the command-answer labels and the usage computation share the reply bar's helpers;
+ * the command card itself and its usage card stay lazy, outside the idle tier). Raise it on purpose, in the change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 592_664;
+export const FIRST_SCREEN_BUDGET = 592_943;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
