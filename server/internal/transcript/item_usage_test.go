@@ -689,3 +689,54 @@ func TestSubagentChatUsageFullEqualsWindowed(t *testing.T) {
 		}
 	}
 }
+
+// Windows that start on either side of a request's second line, its first one huge, page back to the same usage as a
+// full read (from the #5426 review's reproduction).
+func TestClaudeUsageWindowsAroundHugeReply(t *testing.T) {
+	defer func(w int64) { windowBytes = w }(windowBytes)
+	huge := `{"type":"tool_use","id":"toolu_w","name":"Write","input":{"file_path":"/w/a.txt","content":"` + strings.Repeat("y", 300<<10) + `"}}`
+	big := `{"input_tokens":1000,"cache_read_input_tokens":50000,"output_tokens":9000}`
+	var lines []string
+	for p := 0; p < 30; p++ {
+		lines = append(lines, fmt.Sprintf(`{"type":"user","uuid":"p%d","timestamp":"2026-11-12T08:00:00Z","message":{"role":"user","content":"prompt %s"}}`, p, strings.Repeat("x", 200)),
+			claudeReplyLine(fmt.Sprintf("q%d", p), fmt.Sprintf("msg_q%d", p), "claude-opus-5-5", textBlock, `{"input_tokens":1,"output_tokens":1}`))
+		if p == 20 {
+			lines = append(lines,
+				claudeReplyLine("h1", "msg_h", "claude-opus-5-5", huge, big),
+				claudeReplyLine("h2", "msg_h", "claude-opus-5-5", toolBlock("toolu_b"), big),
+				claudeToolResultLine("hr1", "toolu_w"),
+				claudeToolResultLine("hr2", "toolu_b"))
+		}
+	}
+	data := []byte(strings.Join(lines, "\n") + "\n")
+	p := filepath.Join(t.TempDir(), "session.jsonl")
+	if err := os.WriteFile(p, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	windowBytes = 1 << 40
+	full := NewFile(p)
+	if _, err := full.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+	all, _, _ := full.Page(0, 1<<30)
+	h2 := bytes.LastIndexByte(data[:bytes.Index(data, []byte(`"uuid":"h2"`))], '\n') + 1
+	for _, delta := range []int{-1, 0, 1, 50} {
+		windowBytes = int64(len(data) - h2 + delta)
+		f := NewFile(p)
+		if _, err := f.Refresh(); err != nil {
+			t.Fatal(err)
+		}
+		var paged []proto.Item
+		for before := 0; ; {
+			items, more, _ := f.PageTurns(before, 3, 2000)
+			paged = append(append([]proto.Item(nil), items...), paged...)
+			if !more || len(items) == 0 {
+				break
+			}
+			before = items[0].Seq
+		}
+		if !reflect.DeepEqual(usageOf(paged), usageOf(all)) {
+			t.Errorf("windows of %d bytes: other usage than a full read", windowBytes)
+		}
+	}
+}
