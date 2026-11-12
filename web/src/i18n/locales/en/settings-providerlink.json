@@ -11,5 +11,6 @@
   "key_invalid": "A key has no spaces or line breaks.",
   "key_warning": "Anyone who gets this link can use this key. Links pass through chat apps, browsers and their history, and can't be taken back. Use a key you can revoke, with a spending limit, and send it only to people you trust.",
   "copy": "Copy link",
-  "copied": "Link copied"
+  "copied": "Link copied",
+  "link_waits": "The import link opens when you close this."
 }

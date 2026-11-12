@@ -1,21 +1,24 @@
 // @vitest-environment jsdom
-// A page opened with a provider import link (#5420) takes it out of the address bar as App loads, before anything
-// else runs (it may hold a key), puts the settings page's Model providers tab there instead, and holds the link in
-// memory for Settings to open Add on; opened on the same page (only the fragment changes), it is taken then.
+// A provider import link (#5420) leaves the address bar as the page starts, before main.tsx waits for anything (the
+// language's strings, App: lib/import-link.ts takes it, provider-link.test.ts checks how); App takes one pasted over a
+// page already open, where only the fragment changes and nothing loads.
 import { describe, expect, it, vi } from "vitest";
 vi.hoisted(() => {
   globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
   window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
-  history.replaceState(null, "", "/s/abc?x=1#import=eyJraW5kIjoiY3VzdG9tIn0&v=1");
+  history.replaceState(null, "", "/settings?tab=models");
 });
 vi.mock("./lib/store", async (load) => ({ ...(await load<typeof import("./lib/store")>()), connect: () => {}, disconnect: () => {} }));
 import { dropImportLink, importLinkHeld } from "./lib/import-link";
+import main from "./main.tsx?raw";
 import "./App";
 
 describe("a page opened with an import link", () => {
-  it("leaves the address bar on Model providers without the link, and holds the link", () => {
-    expect(location.pathname + location.search + location.hash).toBe("/settings?tab=models");
-    expect(importLinkHeld()).toBe(`${location.origin}/s/abc?x=1#import=eyJraW5kIjoiY3VzdG9tIn0&v=1`);
+  it("is taken by main.tsx before anything it waits for: the language's strings and App", () => {
+    const take = main.indexOf("\ntakeImportLinkOnStart();");
+    expect(take).toBeGreaterThan(0);
+    expect(take).toBeLessThan(main.indexOf("await "));
+    expect(take).toBeLessThan(main.indexOf("import(\"./App\")"));
   });
 
   it("takes one opened on the same page, where only the fragment changes, and its history entry with it", () => {
@@ -33,6 +36,11 @@ describe("a page opened with an import link", () => {
     dispatchEvent(new HashChangeEvent("hashchange"));
     expect(location.pathname + location.search + location.hash).toBe("/settings?tab=models");
     expect(importLinkHeld()).toBe(`${location.origin}/overview#import=eyJs`);
+    // the open page is signed in already: the rest of such a fragment goes too
+    dropImportLink();
+    history.pushState(null, "", "/settings?tab=models#token=jp_x&import=eyJt");
+    dispatchEvent(new HashChangeEvent("hashchange"));
+    expect(location.pathname + location.search + location.hash).toBe("/settings?tab=models");
     // a fragment of the page's own is left alone
     dropImportLink();
     history.pushState(null, "", "/settings?tab=models#settings-providers");

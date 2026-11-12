@@ -96,22 +96,19 @@ if (carried) {
   window.history.replaceState(window.history.state, "", carried.rest);
 }
 
-// A provider import link (`/settings?tab=models#import=…`, #5420) leaves the address bar the same way and waits in
-// memory for Settings › Model providers (lib/import-link.ts says why). Pasted into the address bar of a page already
-// open, only the fragment changes and nothing loads: it is taken then.
+// A provider import link (`/settings?tab=models#import=…`, #5420) left the address bar before anything loaded (main.tsx,
+// lib/import-link.ts says why). Pasted into the address bar of a page already open, only the fragment changes and
+// nothing loads: it is taken then, the rest of the fragment with it (this page is signed in: nothing reads it now).
 function takeImportLinkHere() {
   const importing = takeImportLink(window.location.href);
   if (!importing) return;
   // the fragment goes first: navigate does nothing for an address that differs only in it, and on an open page another
   // address goes through the router, or the page the link was pasted over would stay
   window.history.replaceState(window.history.state, "", location.pathname + location.search);
-  navigate(stripBase(importing.rest), true);
+  navigate(stripBase(importing.rest.replace(/#.*$/, "")), true);
   holdImportLink(importing.text);
 }
-if (typeof window !== "undefined") {
-  takeImportLinkHere();
-  window.addEventListener("hashchange", takeImportLinkHere);
-}
+if (typeof window !== "undefined") window.addEventListener("hashchange", takeImportLinkHere);
 
 const workspaceActions = { onWorkspaceMenu: openWorktreeActions };
 function openWorkspaceInTree(target: WorkspaceTarget) {

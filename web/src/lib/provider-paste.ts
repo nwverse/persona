@@ -225,6 +225,9 @@ export function noteText(n: PasteNote): string {
       return name === "oauth" ? t("lib-provider-paste.cindy_auth_oauth") : name === "none" ? t("lib-provider-paste.cindy_auth_none") : name ? t("lib-provider-paste.cindy_auth", { name }) : t("lib-provider-paste.cindy_auth_unknown");
     case "cindy_endpoint":
       return name ? t("lib-provider-paste.cindy_endpoint", { name }) : t("lib-provider-paste.cindy_endpoint_unknown");
+    // a cindy endpoint's own request path, which a provider here has no field for (#5420)
+    case "cindy_request_path":
+      return t("lib-provider-paste.cindy_request_path");
     case "too_many":
       return t("lib-provider-paste.drafts_limit", { max: MAX_DRAFTS });
     // an import link is used whole or not at all (#5420): `name` is where in it, never a value

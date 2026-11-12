@@ -129,6 +129,19 @@
         "base_url": "https://gateway.example.invalid"
       },
       "payload": null
+    },
+    {
+      "name": "a direct Messages API would come back as a Claude Code gateway, so it gets no link",
+      "provider": {
+        "name": "example-messages",
+        "display_name": "Example Messages",
+        "source": "persona",
+        "kind": "api",
+        "api": "messages",
+        "base_url": "https://api.example.invalid",
+        "model": "example-model"
+      },
+      "payload": null
     }
   ],
   "links": [

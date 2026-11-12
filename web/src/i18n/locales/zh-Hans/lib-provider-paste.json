@@ -46,5 +46,6 @@
   "link_version_unknown": "这个导入链接的格式版本 Persona 暂时还读不了。",
   "link_too_long": "这个导入链接超出了导入链接的长度上限。",
   "link_field": "这个导入链接里有 Persona 不认识的字段（{name}），所以里面的内容都没有使用。",
-  "link_field_unknown": "这个导入链接里有 Persona 不认识的字段，所以里面的内容都没有使用。"
+  "link_field_unknown": "这个导入链接里有 Persona 不认识的字段，所以里面的内容都没有使用。",
+  "cindy_request_path": "它的接口用的是自己的请求路径，Persona 没法设置，所以只有网关在常用路径上也能响应时才能用。"
 }
