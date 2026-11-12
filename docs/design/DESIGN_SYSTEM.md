@@ -1673,3 +1673,18 @@ enabled once something is chosen, with **Back** to the list. Reason: retyping an
 already has is slow and error-prone, and an import that fills the form instead of saving keeps the user in control
 (principles 1 and 3); reusing the wizard's rows, status line, radio cards and the import dialog keeps one way to set a
 provider up (principle 4). It adds no setting, style or motion.
+
+An import link (#5420) is the same paste view opened by a link instead of typed into. Opening the link goes straight to
+that view in its link mode: no text area, a row with the link icon saying it was opened from a link and, in secondary
+text, that nothing is saved until Save, with **Paste something else** (the status line's action) to go back to the text
+area. The link is read at once and its drafts, choices and notes look exactly like a paste's, so the wizard does not
+grow a second way to review a provider; a refused link is one plain line about what is wrong with it, never its
+content. Copying a link starts from the provider's dialog: a ⋯ `IconButton` before Edit opens a `Menu` (one row, **Copy
+import link**), and the row opens a `Dialog` in place of the provider's (Edit does the same), with one line on what the
+link brings, a `Switch` **Put a key in the link** that is off, and **Copy link** as the one primary button. Turning the
+switch on widens what the link exposes, so, as in "Sharing a conversation publicly" (4.9), the key field comes with an
+orange warning block (the warning mark, `--orange`) on where links travel, visible before Copy; the key is never
+fetched from the hub and goes when the dialog closes. Reason: a link is how gateways and friends hand a setup over
+(principle 1), the review and Save stay the user's (principle 3), and the risky part is opt-in and explained
+(principle 2); it reuses the paste view, `Menu`, `Dialog`, `Switch` and the copy notice, and adds no setting, style or
+motion.
