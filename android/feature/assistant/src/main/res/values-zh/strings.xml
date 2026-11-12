@@ -82,6 +82,7 @@
     <!-- The drawer's newest own chats, between 常驻 and All chats (#4922) -->
     <string name="assistant_recent">最近</string>
     <string name="assistant_directions">常驻</string>
+    <string name="assistant_background_supervisor">后台督办</string>
     <string name="assistant_origin_inbox">收件箱</string>
     <string name="assistant_empty_title">还没有对话</string>
     <string name="assistant_empty_detail">发一句话，开始和 Persona 聊聊。</string>
@@ -147,4 +148,17 @@
     <string name="assistant_health_history">健康对话</string>
     <string name="assistant_health_new">新的健康对话</string>
     <string name="assistant_health_load_failed">没读到健康对话</string>
+    <string name="assistant_rename_menu">重命名…</string>
+    <string name="assistant_rename_title">重命名</string>
+    <string name="assistant_rename_field">会话名</string>
+    <string name="assistant_save">保存</string>
+    <string name="assistant_renamed">已重命名</string>
+    <string name="assistant_copy_diagnostics">拷贝诊断</string>
+    <string name="assistant_diagnostics_copied">已拷贝诊断</string>
+    <string name="assistant_end_menu">结束…</string>
+    <string name="assistant_archived_count">已归档（%1$d）</string>
+    <string name="assistant_archived_empty">没有归档的对话</string>
+    <string name="assistant_archived_empty_detail">在对话列表里左滑一个对话就能归档，它会收在这里。</string>
+    <string name="assistant_unarchive">取消归档</string>
+    <string name="assistant_unarchived">已取消归档</string>
 </resources>

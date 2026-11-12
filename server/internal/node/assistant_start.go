@@ -175,6 +175,11 @@ func missingFrom(launcher string, lines []string, notFound bool) string {
 // spawnAssistant starts the conversation's process for its launcher's agent: claude -p (spawnClaude) or codex
 // app-server (spawnCodex). A new Codex conversation (id "") gets its id from Codex.
 func (n *Node) spawnAssistant(id, cwd, launcher string, resume, spare bool, options ...modelExecution) (*assistantProc, error) {
+	done, err := n.reload.enter()
+	if err != nil {
+		return nil, err
+	}
+	defer done()
 	if n.agentOf(launcher) == "codex" {
 		return n.spawnCodex(id, cwd, launcher, resume, spare, options...)
 	}

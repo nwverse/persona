@@ -44,8 +44,10 @@ Chat page:
 - A long finished answer in an Agent chat (from 6,000 bytes or 80 lines) is several lazy rows, about 24 lines each (`AnswerParts`, `AssistantTextPart`, #4970):
   one row of a 30,000-character report was laid out whole, twice, on opening and redrew every table's decoration on each scrolled frame. Cuts fall only
   between plain blocks whose reply-theme margins are fixed (paragraph, ATX heading, fenced code, table), each part drawn the gap MarkdownUI would put
-  there; lists, quotes, display math and HTML comments are never cut. A long press on any part acts on the whole answer; its file chips sit under the last
-  part. Persona's own conversation (boxed answers) and the Mac keep one row. `AnswerPartsLookTests` checks the parts draw the same pixels as the whole.
+  there; lists, quotes, display math and HTML comments are never cut. A long press on any part lifts the whole answer and acts on all of it: Copy, Select
+  Text, Quote and Forward (#5221, `AnswerPartsLift`: the parts stacked again in a lazy stack, only those near the screen laid out, placed from where the
+  pressed part is; all of them laid out once its words are to be selected, under one text view); its file chips sit
+  under the last part. Persona's own conversation (boxed answers) and the Mac keep one row. `AnswerPartsLookTests` checks the parts draw the same pixels as the whole.
 - Expanded work is one card: each step remains a separate lazy-loaded chat row (a turn may have hundreds; one giant view would hang), with each row drawing a card slice
   (`WorkCardSlice`: top corners on first step, bottom corners on Collapse N steps, backgrounds extending halfway into spacing to join neighbors), thin separators starting at the text column; tool rows 44pt high.
   **Liquid Glass (default) has no card** (requested 2026-10-31: cards did not match chat home, `StyleSpec.workList = .timeline`): steps sit directly on the page, with a thin left vertical line from first step
@@ -168,7 +170,7 @@ Chat page:
     the computer and time, and four lines; a tap opens the original chat at the message (`AppModel.openLinked`), or the
     whole text when this app does not have that chat. Nothing is written to the original chat.
   - Tests: `ForwardTests` (`spec/fixtures/forward`), `ForwardMessageTests` (the whole way on the mock hub, screenshots).
-  - Screenshots `-showSampleComments YES` (two code comments and an element over the box); `MOCK_COMMENTS=1` gives the widget chat a review sent from the web; end-to-end `CommentBubbleTests`.
+  - Screenshots `-showSampleComments YES` (two code comments and an element over the box); `MOCK_COMMENTS=1` gives the widget chat a review sent from the web, and Persona's main conversation a quote and a comment on its answer; end-to-end `CommentBubbleTests`.
 - Files: message paths and Read / Edit / Write tool paths become tappable file tags, read from the session's computer
   (`GET /api/v1/machines/{mid}/file`, at most 2 MB, iCloud directories denied), rendered Markdown / numbered code / images / PDF / directories.
 - Other Agents in the space (Agents): the left part of the header's second row is `SiblingTabs` (restored flat tabs at request 2026-10-31), one capsule each with state-color background
@@ -328,6 +330,7 @@ Chat page:
   Repeated identical errors separated only by Continue-like retries merge with count (`ChatView.foldAPIErrors`). Retry (sends "继续", "Continue") only when last item, idle Agent and transient.
   Currently text parsing; Claude Code also provides `apiErrorStatus`, `error`, `requestId` fields, preferred once hub reads them. DEBUG `-showErrorDetails YES` opens by default.
   Screenshots mock `MOCK_API_ERRORS=1`, assistant main and review chats.
+- Refusal fallback (#4489, the iOS half of #2528; web #4487, Android #4488): a notice with `model_refusal` is a line of its own after the exchange (`RefusalNotice`; `ChatStore` puts it with the turn's trailing rows, never in the work row): the upstream refused, which model Claude Code switched from and to (or that no switch is recorded), "later turns may keep using it" for scope `session`, the category, the explanation and the refusal's own words. Models go by their short names (`SessionModes.modelName`), where the web shows ids. While the session has `model_fallback`, a card above the composer (`ModelFallbackCard`, a `ReadinessCard`) names both models and the error since: a terminal session gets only the "type /model in Claude Code" step; a Persona conversation gets **Back to Configured Model** (`POST …/restore-model`, refusals said in words by `ModelFallbackText.restoreError`), and the main conversation also **New Main Chat**. While `model_restore` is pending the card says only that the next start uses the configured model, and names it. The API error card offers no Retry while `turn_error_code` is `model_fallback_unavailable`. Items keep the refusal's words as their text, never an older hub's whole record line (`Item.publicRefusal`); `ChatCache` went to `chats-v17` so notices cached without `model_refusal` are dropped. Tests: `ModelFallbackTests`, `ModelFallbackUITests` (mock `MOCK_MODEL_FALLBACK=1 MOCK_MAIN_ACTIONS=1`).
 - Claude suggestions (`SuggestionPill`): session `suggestion`, not working, empty input shows "✦ Suggestion … Use" above (AI purple, not accent), also placeholder;
   tap fills editable input, long-press Send now. Typing hides it. Headless assistant has no TUI/suggestions; mock `MOCK_SUGGESTION=1`, review session.
 - Sending clears input immediately and displays Sending bubble (`ChatStore.pending`), request background; same text in transcript
@@ -337,7 +340,9 @@ Chat page:
 - Monospace (files, diffs, terminal, `MonoTextView`): non-scrolling UITextView measured to longest line inside UIScrollView, no wrapping, both-axis scroll and selection.
 - Long-press messages (`MessageMenu.swift`, `MessageLift.swift`, #603): as in Telegram, the chat dims and blurs a little and the pressed message
   is drawn again above it (an answer on a card of its own), with the action bar right next to it (Copy / Select text / Quote / Share, own also Edit);
-  a message taller than the screen shows the part around the press and scrolls inside, the bar always on screen. A tap or a pull down puts it back.
+  a message taller than the screen shows the part around the press and scrolls inside, the bar always on screen; a long answer drawn in parts shows
+  from the pressed part's start (or from what was at the screen's top, when that part starts above it) to the screen's edge (#5221). A tap or a pull
+  down puts it back.
   In Persona's conversation the page draws it (`MessageLiftHost`, #3188), over the floating top bar, which dims and blurs with
   the chat: drawn inside the chat it ran under it. While its words are selected, a handle held at a long message's top or bottom edge
   scrolls it on, the selection following.
@@ -1452,6 +1457,36 @@ The hub's `main_background_folded` (`GET` / `PUT /api/v1/assistant`, on unless c
 counts as on and hides the switch) is Settings › Assistant › **Fold background rounds**. Off, the main conversation
 and Needs You look exactly as before. Tests: `ChatBackgroundRoundsTests`.
 
+## Background supervisor (#5083)
+
+The hub's built-in background supervisor (`docs/assistant/unified-entry.md`, "Background supervisor") on iPhone, iPad,
+Mac and Vision Pro. Nothing here shows on a hub from before it.
+
+- **Its conversation** is the one `GET /api/v1/assistant` names as `background_supervisor`
+  (`AssistantState.isBackgroundSupervisor`, never the main conversation). The hub opens it with `origin: "task"`, so it
+  is in All Chats under Scheduled Tasks and never in the sidebar's Directions or Recent (`AutoConversations`,
+  `AssistantSidebarGroups`). Its row has no Archive (swipe, menu, the Mac's Delete key), no Pin and no End, in the
+  sidebar's search results and in All Chats; Rename and the copy items stay. The hub refuses Archive and Pin itself;
+  End it does not refuse, the row only does not offer it. The hub makes the conversation on first use, usually while
+  the app is open, and only the assistant settings say which one it is: a new assistant conversation with
+  `origin: "task"` that the settings held do not list has them read again, once for a conversation
+  (`AppModel.unreadTaskConversations`), so the row has the three actions no longer than that request takes.
+- **The switch**: Settings › Assistant › **Main Chat Supervises Its Own Tasks** is the hub's `main_supervises_own_tasks`
+  (`GET` / `PUT /api/v1/assistant`), off by default: while it is off the background supervisor follows up the tasks
+  Persona hands out. It is read and written through `AppModel.assistantConfig` (`setMainSupervisesOwnTasks`: shown at
+  once, put back when the hub refuses), as the two switches above it. A hub that omits the field has no switch.
+- **Its model**: Settings › Models lists the use `assistant.supervise` after the categories and the other uses set
+  apart. The hub's catalog leaves it out, so `ModelConfigurationModel.load` asks for it by its id beside the catalog
+  (`listing`); a hub without it answers 404 and the list has no such row. Its page says "Follow Main Chat" where Lark
+  /agent says "Follow Agents", and saves to the use's own record.
+- **Its reviews in the main chat**: a review is the feed kind `review` in the conversation that planned the task,
+  whoever reviewed, so `ChatLines.mergeFeed` places it and `ReviewFeedLine` draws it as one line that opens the task.
+  Nothing marks the reviewer in the feed item, and the line does not name one.
+
+Mock hub: `MOCK_BACKGROUND_SUPERVISOR=1` adds the conversation (with `MOCK_ORIGINS=1` for the other sources); the
+switch and the model use are there without it, and `MOCK_LEGACY_HUB=1` has none of the three. Tests:
+`BackgroundSupervisorTests`, and `AssistantSettingsModelTests.testMainSupervisesOwnTasksSwitch` against the mock hub.
+
 ## Source mentions in the assistant conversation (#2130)
 
 Display provenance does not change model input roles. Relayed conversation messages and automated updates use the
@@ -1589,7 +1624,7 @@ Files mentioned in chats, tool rows and the chat's Files page all open in `FileV
   Outside backticks only ASCII is recognized, stopping at Chinese or full-width punctuation (`/tmp/a.md里`, meaning "in /tmp/a.md"); sentence-final `.` is excluded. A whole backticked span counts as one path (may include Chinese and spaces); if it does not exist, check paths within the span and select existing non-overlapping ones, longer first at the same position.
   URL fragments, `and/or` and version numbers do not count; code blocks, indented code, existing links and formulas in replies remain unchanged.
 - **Rendering**: existing paths in replies (`LinkedMarkdown`) become Markdown links (`persona-path:<path>?line=N`, `PathLinkURL`), colored like other links (`.persona` link color); an entire backticked path's inline code is tappable.
-  User bubbles (`PathText`) use underlined links in `Theme.userBubbleLink`: accent in light bubbles, bubble text color in colored bubbles (accent is invisible there).
+  User bubbles (`PathText`) use underlined links in `Theme.UserBubbleInk.link`: accent on the main conversation's box and in light bubbles, bubble text color in colored bubbles (accent is invisible there).
   Before answers or when checks fail, plain text; conversion to a link changes only color, not font size or line layout.
 - **Streaming**: the currently written chunk is not recognized (its final word might be an incomplete path); completed paragraphs (`StreamChunk`) are checked and linked normally.
   That chunk is made whole for the moment before it is parsed (`StreamRepair` in PersonaKit, ported from the web's `repairStreamingMarkdown`, #2916): an open fence closed (indented as its opener, so a fence in a list item closes in it), a half-written table row and a last line of only list / heading / quote markers held back, a table header given its delimiter row (indented as the header; a table also right under a paragraph line, as cmark-gfm reads it, but not in a lazy line of a list item or quote), and on the last line `**` `*` `~~` and code spans closed, a half-written link or image shown as its text. `_` is never closed (as the web): in coding replies it is mostly `src/_app.tsx` or `_private`, and closing it set the rest of the line in italics until the line ended. It only cuts or adds to the last line, so finished blocks stay byte for byte the same. The caret ` ▍` is added only in prose (`StreamRepair.end`), never inside a fence, a table or a formula; the chunk has its own small memo (`StreamTail`), not `MarkdownMemo`.
@@ -1922,6 +1957,42 @@ Key points:
 - Card `plain_text` in Markdown contexts must decode entities such as `&nbsp;` and `<br>` / `<a href>` / `<font color>` (markup left by the Lark gateway).
 - Card callback buttons are enabled only when `actionMethod == 2` (through the Lark gateway's card-actions API); select / input and other form controls show only their current values.
 - Custom `Layout` can receive `.infinity` for `proposal.width` (ScrollView / ideal-size measurement); check `isFinite` before converting to an integer or it crashes.
+
+## Settings by scope (#5236)
+
+The shared iPhone, iPad and Mac settings page has three groups:
+
+| Scope | Entries |
+| --- | --- |
+| Current Assistant's Settings | Models, Assistant Profile, Channels, Connectors, Extensions, Knowledge Selection, Meetings, Agent, Machines (platform and hub capabilities decide availability) |
+| This Device | Appearance & Display, Language & Dictation, Notifications, Translation, Storage, Health, This iPhone, About |
+| Hub | Hub Connection, Hub Version, Assistants, Avatar, Devices & Pairing |
+
+With several installed assistants, the first heading shows the current assistant's avatar, name and existing switcher,
+with scope guidance. With one, it keeps the chosen Persona face and name without a switcher. The health space remains
+bound to the default assistant. The avatar is shared across devices; theme color, interface style, text size, list layout
+and light/dark appearance remain device preferences. The layout page is titled **Agents List Layout**.
+
+Models replaces the two separate model-provider and model-configuration entries. Common purpose/model choices come first;
+providers and keys sit under Advanced, and a purpose's runtime/provider choices are folded in its editor. Agent collects
+Claude Code, Codex and Session Triage. Applying runtime settings to all online computers affects only this assistant's
+computers in the current Hub. Connectors, extensions, markets, channels and knowledge selection use a captured assistant
+request context; switching assistants returns Settings to the list, and a late response cannot replace the new scope.
+An explicitly manager-bound detail link still opens that assistant's copy without changing the app's pick.
+
+About shows the app version and a folded Diagnostics section containing the build commit and last new-chat check.
+Devices & Pairing retains the device list, pairing again, Watch sync and confirmed disconnect. Mobile permissions,
+Health, dictation and lock-screen privacy remain available in their appropriate device pages.
+
+Settings search matches localized entry names and common aliases (for example API Key, dictation, lock screen, cache,
+Watch, and commit), then navigates directly to the destination. It changes no settings. Legacy SettingsPage values,
+ModelLaunchersRoute and existing DEBUG page-opening arguments continue to work. For a search-state capture, the existing
+`-openAppearance` argument accepts `search:<query>`; no new DEBUG switch is introduced.
+
+Regression coverage: `SettingsNavigationTests`, `AssistantSettingsScopeTests`, `SettingsResourceScopeTests`,
+`ManagerSwitchTests`, and `SettingsNavigationUITests` / `ModelsSettingsHierarchyTests`. A remembered assistant pick
+routes settings before the roster arrives; only a confirmed legacy-roster 404 suppresses it, without erasing the pick.
+These tests do not claim that an installed TestFlight app was updated.
 
 ## Engine selection
 

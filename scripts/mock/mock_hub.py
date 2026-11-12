@@ -8,13 +8,20 @@ It serves machines, agents, conversations, interactions and the inbox, enough fo
 does not know are logged to stderr as MISSING. Timestamps are relative to when it starts. See docs/operations/testing.md.
 """
 import base64, unicodedata
-import argparse, copy, hashlib, json, math, os, re, shutil, signal, socket, ssl, struct, subprocess, sys, tempfile, threading, time, uuid, zlib
+import argparse, copy, hashlib, itertools, json, math, os, posixpath, re, shlex, shutil, signal, socket, ssl, struct, subprocess, sys, tempfile, threading, time, uuid, zlib
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, unquote
 
 PORT = int(os.environ.get("PORT", "18760"))
+# MOCK_CHILD_SESSIONS=1 (#5120) builds on the Paseo computer: its agent's created agents are its children.
+if os.environ.get("MOCK_CHILD_SESSIONS"):
+    os.environ.setdefault("MOCK_PASEO", "1")
+# MOCK_TEAM=1 (#5180) builds on MOCK_TAB_PANES's tab of three: it adds a worker's request, a third worker and a stopped pane.
+MOCK_TEAM = bool(os.environ.get("MOCK_TEAM"))
+if MOCK_TEAM:
+    os.environ.setdefault("MOCK_TAB_PANES", "1")
 NOW = datetime.now(timezone.utc)
 LOG = sys.stderr
 # MOCK_HUB_ID keeps the identity across restarts, so a paired App stays paired when the switches change.
@@ -38,7 +45,7 @@ def features():
                 ["assistant_compact", "assistant_main_new", "assistant_main_clear"] if os.environ.get("MOCK_MAIN_ACTIONS") == "1" else []) + (
                 ["messaging"] if os.environ.get("MOCK_MESSAGING") == "1" else []) + (
                 ["conversation_origin"] if os.environ.get("MOCK_AUTO_CONVERSATIONS") == "1" else []) + (
-                ["sessions_list", "sessions_lookup"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
+                ["sessions_list", "sessions_lookup", "sessions_hierarchy"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
                 ["preview"] if os.environ.get("MOCK_PREVIEW") else []) + (
                 ["task_cron"] if os.environ.get("MOCK_CRON") == "1" else []) + (
                 [] if os.environ.get("MOCK_LOOK_UPLOADS") == "off" else ["look_uploads"])
@@ -702,9 +709,9 @@ SESSIONS = [
          "搜索做好了，支持按食材和用时筛选。", space_kind=None, space_id=None, space_name=None, slot_id=None, slot_name=None),
 ]
 
-# #2430 agent-details: what the node reads off a transcript for the "Show details on agent rows" line and the session header's
-# context bar — the model id as Claude Code records it, the latest reply's input tokens, the model's window. Some
-# sessions say nothing (no reply yet, a model the node does not know), as real ones do.
+# #2430 agent-details: what the node reads off a transcript for the "Show details on agent rows" line and the usage row
+# below the composer (#5056) — the model id as Claude Code records it, the latest reply's input tokens, the model's window.
+# Some sessions say nothing (no reply yet, a model the node does not know), as real ones do.
 _CONTEXT = {
     WIDGET: ("claude-opus-5-5", 78_000, 200_000),            # 39% used, 61% left
     TESTS: ("claude-sonnet-5-5", 31_000, 200_000),           # 16% used
@@ -1079,16 +1086,38 @@ if os.environ.get("MOCK_PASEO"):
                background=[{"id": PASEO_ASKS, "kind": "agent", "description": "Add a remember-me option", "started_at": ago(minutes=5)},
                            {"id": PASEO_CODEX, "kind": "agent", "description": "Review the session handling", "started_at": ago(minutes=3)}]),
         _paseo(PASEO_ASKS, "Add a remember-me option", "Fix the login flow", "brave-fox", "fix/login", "blocked", "needs_you", 1,
-               "May I run the migration on the test database?", pending_interactions=1),
+               "May I run the migration on the test database?", pending_interactions=1, asking_parent_session_id=PASEO_LEAD,
+               started_at=ago(minutes=5)),
         _paseo(PASEO_CODEX, "Review the session handling", "Fix the login flow", "brave-fox", "fix/login", "working", "working", 0,
-               "Reading how the token is refreshed.", agent="codex", is_subagent=True, parent_session_id=PASEO_LEAD, root_session_id=PASEO_LEAD),
+               "Reading how the token is refreshed.", agent="codex", is_subagent=True, parent_session_id=PASEO_LEAD, root_session_id=PASEO_LEAD,
+               started_at=ago(minutes=3), effort="high"),
         _paseo("019a5e00-0000-7000-8000-000000000005", "Trace the refresh failure", "Fix the login flow", "brave-fox", "fix/login",
                "working", "working", 0, "Following the 401 through the retry.", agent="codex", agent_name="Codex CLI",
                source_kind="codex_history", source_thread_id="019a5e00-0000-7000-8000-000000000005", source_instance_id=None, host=None,
                slot_name=None, is_subagent=True, parent_session_id=PASEO_CODEX, root_session_id=PASEO_LEAD,
-               read_only_reason="View only: its parent Agent drives this sub-Agent", capabilities={"read": True}),
+               read_only_reason="View only: its parent Agent drives this sub-Agent", capabilities={"read": True},
+               started_at=ago(minutes=2), model="gpt-5.4-mini"),
         _paseo("9a5e0000-0000-4000-8000-000000000006", "Profile the CSV parser", "Speed up the importer", "calm-owl", "perf/importer",
                "done", "unread", 12, "The parser is three times faster on the sample files."),
+    ]
+# MOCK_CHILD_SESSIONS=1 (#5120): the Paseo agent that created two agents created two more, both finished (one of them
+# failed), and an agent whose creator is not listed stays a row of its own. With the hub's folding (fold_hierarchy) the
+# web lists none of the children: the lead's row needs you (its waiting child) and its chat draws a card for each.
+PASEO_DONE = "paseo-9a5e0000-0000-4000-8000-000000000007"
+PASEO_FAILED = "paseo-9a5e0000-0000-4000-8000-000000000008"
+PASEO_ORPHAN = "paseo-9a5e0000-0000-4000-8000-000000000009"
+PASEO_GRANDCHILD = "019a5e00-0000-7000-8000-000000000005"
+if os.environ.get("MOCK_CHILD_SESSIONS"):
+    SESSIONS += [
+        _paseo(PASEO_DONE, "Write the regression tests", "Fix the login flow", "brave-fox", "fix/login", "done", "idle", 6,
+               "Added three regression tests for the refresh path; all pass.", is_subagent=True, parent_session_id=PASEO_LEAD,
+               started_at=ago(minutes=8.8), model="claude-sonnet-4-5", effort="medium", seen_at=ago(minutes=5)),
+        _paseo(PASEO_FAILED, "Check the CI config", "Fix the login flow", "brave-fox", "fix/login", "idle", "idle", 7,
+               "The model service timed out.", agent="codex", is_subagent=True, parent_session_id=PASEO_LEAD,
+               started_at=ago(minutes=8.5), effort="low", turn_error="The model service timed out.", seen_at=ago(minutes=6)),
+        _paseo(PASEO_ORPHAN, "Update the changelog", "Fix the login flow", "brave-fox", "fix/login", "working", "working", 0,
+               "Adding the login change to the changelog.", is_subagent=True,
+               parent_session_id="9a5e0000-0000-4000-8000-0000000000ff", started_at=ago(minutes=1)),
     ]
 # MOCK_ORCA_CHILDREN=1: an Orca worktree with three child worktrees (#2073, parent_space_id), one of them with a child of
 # its own: the web folds them under the parent and sums their states on its row.
@@ -1241,6 +1270,24 @@ AGY_SESSION = "a6700000-1111-4000-8000-000000000006"
 NO_SPACE = dict(space_kind=None, space_id=None, space_name=None, space_index=None, slot_id=None, slot_name=None,
                 slot_index=None, pane_id=None, tab_id=None, workspace_id=None, launcher=None)
 _desktop_caps = {"read": True, "send": True}
+# MOCK_CODEX_WAITING=1 (#4961, docs/integrations/codex.md "Starting without a first message"): the Codex launchers say the
+# computer opens Codex with no first message (prompt_optional), a Codex start without one answers with a waiting row,
+# and one such row is listed already; its first message makes it the thread, in the same pane.
+MOCK_CODEX_WAITING = os.environ.get("MOCK_CODEX_WAITING") == "1"
+CODEX_WAITING = "c0de0000-0000-4000-8000-000000000001"
+CODEX_WAITING_CAPS = {"read": True, "send": True, "terminal": True}
+if MOCK_CODEX_WAITING:
+    SESSIONS.append(sess("macbook", CODEX_WAITING, "weather-app", "/Users/me/code/weather-app", "idle", "idle", "weather-app", 7, "codex", 3, 1,
+                         "", agent="codex", launcher="codex", awaiting_first_message=True, capabilities=CODEX_WAITING_CAPS))
+
+
+def codex_launcher(name="codex", model="gpt-5.5"):
+    l = {"name": name, "model": model, "agent": "codex", "agent_type": "codex"}
+    if MOCK_CODEX_WAITING:
+        l["prompt_optional"] = True
+    return l
+
+
 if os.environ.get("MOCK_MODE_CAPS"):
     _desktop_caps["modes"] = False
 if os.environ.get("MOCK_SOURCES"):
@@ -1464,7 +1511,10 @@ if os.environ.get("MOCK_SPLIT_TABS"):
 # MOCK_TAB_PANES=1: one herdr tab holding three agents (#2320): the "Initiator" in the tab's first pane (pane_index 0) and two
 # panes it split off (a Codex that stopped on a dialog on the computer, a Claude that is done), with herdr's real-looking
 # pane ids; beside it ordinary one-agent tabs and a tab whose top left pane is a shell (two peers, no "Initiator"). No cards,
-# so the overview files the three-agent tab under "On the computer".
+# so the overview files the three-agent tab under "On the computer". The three are a tab team (#5180, fold_hierarchy): the
+# two panes fold under the lead as its workers; the shell-first tab's two stay peers.
+# MOCK_TEAM=1 adds to that team a permission card of the Codex worker's, a third worker (working, pane 3) and a stopped pane
+# (offline, pane 4) that is no worker, and gives the lead and each worker a short transcript with a tool call.
 PANES_LEAD = "7ab5e000-0000-4000-8000-000000000001"
 PANES_REVIEW = "7ab5e000-0000-4000-8000-000000000002"
 PANES_TESTS = "7ab5e000-0000-4000-8000-000000000003"
@@ -1472,6 +1522,8 @@ PANES_DEPS = "7ab5e000-0000-4000-8000-000000000004"
 PANES_PEER_A = "7ab5e000-0000-4000-8000-000000000005"
 PANES_PEER_B = "7ab5e000-0000-4000-8000-000000000006"
 PANES_DOCS = "7ab5e000-0000-4000-8000-000000000007"
+PANES_API_DOCS = "7ab5e000-0000-4000-8000-000000000008"
+PANES_STOPPED = "7ab5e000-0000-4000-8000-000000000009"
 
 
 def tab_panes_sessions():
@@ -1492,14 +1544,47 @@ def tab_panes_sessions():
              "文档目录理好了。", seen_at=ago(minutes=20), pane_id="w2:pW", pane_index=0),
         sess("nas", SPLIT_NAS, "备份脚本", "/home/me/code/backup", "idle", "idle", "backup", 1, "1", 1, 200,
              "备份改成增量了。", seen_at=ago(minutes=190)),
+    ] + (team_sessions() if MOCK_TEAM else [])
+
+
+def team_sessions():
+    """MOCK_TEAM's rows of the lead's tab: a third worker, working, and a stopped pane, which is no worker (#5180)."""
+    return [
+        sess("server", PANES_API_DOCS, "更新新中间件的接口文档", "/home/me/code/app", "working", "working", "app", 1, "1", 1, 1,
+             "在补刷新接口的说明。", pane_id="w1:p52", pane_index=3, state_since=ago(minutes=6)),
+        sess("server", PANES_STOPPED, "查刷新接口的慢日志", "/home/me/code/app", "offline", "offline", "app", 1, "1", 1, 40,
+             "慢日志里没找到刷新接口。", pane_id="w1:p53", pane_index=4),
     ]
 
 
 def tab_panes_items():
+    if MOCK_TEAM:
+        return team_items()
     return {PANES_LEAD: [it("user", "text", 15, text="把 token 刷新挪到中间件里，开两个窗格分别审改动和补测试"),
                          it("assistant", "text", 0, text="开了两个窗格分头审改动、补测试，我在合中间件。")],
             PANES_REVIEW: [it("user", "text", 10, text="审一下登录重构的改动"), it("assistant", "text", 1, text="有两处会吞掉错误，要我直接改吗？")],
             PANES_TESTS: [it("user", "text", 10, text="补刷新失败的测试"), it("assistant", "text", 3, text="补了 6 个用例，都过了。")],
+            PANES_PEER_B: bench_items()}
+
+
+def team_items():
+    """MOCK_TEAM's transcripts: the lead's and each worker's (#5180). The Codex worker's ends on the command its permission
+    card asks for (toolu_panes_review_test)."""
+    return {PANES_LEAD: [it("user", "text", 15, text="把 token 刷新挪到中间件里，开几个窗格分别审改动、补测试、更新文档")]
+                        + tool("Edit", {"file_path": "src/auth/middleware.ts", "old_string": "next()", "new_string": "await refresh(req); next()"}, "ok", 14)
+                        + [it("assistant", "text", 0, text="开了三个窗格分头审改动、补测试、更新文档，我在合中间件。")],
+            PANES_REVIEW: [it("user", "text", 10, text="审一下登录重构的改动")]
+                          + tool("Bash", {"command": "git diff main -- src/auth"}, "src/auth/middleware.ts | 24 ++++++++----", 9)
+                          + [it("assistant", "text", 2, text="有两处会吞掉错误，先跑一遍现有的测试确认。"),
+                             it("assistant", "tool_use", 1, tool_use_id="toolu_panes_review_test", tool_name="Bash",
+                                tool_input={"command": "go test ./auth/..."})],
+            PANES_TESTS: [it("user", "text", 10, text="补刷新失败的测试")]
+                         + tool("Bash", {"command": "npm test -- src/auth"}, "6 passed", 4)
+                         + [it("assistant", "text", 3, text="补了 6 个用例，都过了。")],
+            PANES_API_DOCS: [it("user", "text", 8, text="给新中间件更新接口文档")]
+                            + tool("Read", {"file_path": "docs/api/auth.md"}, "## Refresh\n…", 6)
+                            + [it("assistant", "text", 1, text="在补刷新接口的说明。")],
+            PANES_STOPPED: [it("user", "text", 45, text="查一下刷新接口的慢日志"), it("assistant", "text", 40, text="慢日志里没找到刷新接口。")],
             PANES_PEER_B: bench_items()}
 
 
@@ -1539,6 +1624,12 @@ def bench_items():
 if os.environ.get("MOCK_TAB_PANES"):
     MACHINES[:] = [m for m in MACHINES if m["id"] in ("server", "nas")]
     SESSIONS[:] = tab_panes_sessions()
+    if MOCK_TEAM:  # the lead says it split off three panes; the Codex worker waits on a permission card, not a dialog
+        for _s in SESSIONS:
+            if _s["session_id"] == PANES_LEAD:
+                _s["last_text"] = "开了三个窗格分头审改动、补测试、更新文档，我在合中间件。"
+            elif _s["session_id"] == PANES_REVIEW:
+                _s.update(last_text="有两处会吞掉错误，先跑一遍现有的测试确认。", pending_interactions=1)
 ORIG_STATE = {s["session_id"]: (s["state"], s["status"]) for s in SESSIONS}
 SEEN = []  # session ids marked seen (GET /mock/seen)
 SESSION_CLOSE = {"fail": False, "attempts": [], "closed": [], "interactions": []}
@@ -1645,6 +1736,15 @@ if os.environ.get("MOCK_ORIGINS") == "1":
         ASSISTANT.append(c)
     for c in ASSISTANT[:4]:
         c.setdefault("origin", "user")
+
+# MOCK_BACKGROUND_SUPERVISOR=1 (#4927, docs/assistant/unified-entry.md "Background supervisor"): the hub's built-in
+# conversation that follows up the tasks no leader supervises. It has origin "task" with no origin_ref, so the apps list
+# it with the scheduled tasks' conversations; GET /api/v1/assistant names it as `background_supervisor`, and archiving
+# it is refused. Not with MOCK_LEGACY_HUB (a hub from before it).
+BACKGROUND_SUPERVISOR = ""
+if os.environ.get("MOCK_BACKGROUND_SUPERVISOR") == "1" and not os.environ.get("MOCK_LEGACY_HUB"):
+    BACKGROUND_SUPERVISOR = "bgsv0000-0000-4000-8000-000000000001"
+    ASSISTANT.append(dict(assistant_sess(BACKGROUND_SUPERVISOR, "后台督办", 12, "「补测试」已验收：测试补齐，PR 已合并。"), origin="task"))
 
 # MOCK_RECENT=1 (#4873): more of the user's own conversations, so the sidebar's Recent (the newest five that are not the main
 # conversation or a leader) has more than it lists and All chats holds the rest. Synthetic titles.
@@ -2043,6 +2143,9 @@ ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "A
                     # supervised task reach its supervisor (#4293), off by default; closed sessions archive themselves
                     # after this many idle days (#3618), 0 is never. Left out with MOCK_LEGACY_HUB.
                     "agent_tasks": False, "inbox_signals": False, "archive_closed_days": 3,
+                    # The main chat follows up its own tasks instead of the background supervisor (#4927), off by
+                    # default. Left out with MOCK_LEGACY_HUB.
+                    "main_supervises_own_tasks": False,
                     # idle Agents stop after this many hours, their terminal kept (#4754); 0 is never
                     "idle_close_hours": 12,
                     # The role a meeting recording pre-selects (#2981; MOCK_MEETING_ATTENDANCE_DEFAULT=listener starts there)
@@ -2071,7 +2174,10 @@ def assistant_state(space="", archived=False):
                              and (archived or not s.get("archived"))]}
     if not os.environ.get("MOCK_LEGACY_HUB"):
         out.update(agent_tasks=cfg["agent_tasks"], inbox_signals=cfg["inbox_signals"], archive_closed_days=cfg["archive_closed_days"],
-                   idle_close_hours=cfg["idle_close_hours"], kb_topics=cfg["kb_topics"])
+                   idle_close_hours=cfg["idle_close_hours"], kb_topics=cfg["kb_topics"],
+                   main_supervises_own_tasks=cfg["main_supervises_own_tasks"])
+        if BACKGROUND_SUPERVISOR and not space:  # once the hub has made it (#4927)
+            out.update(background_supervisor=BACKGROUND_SUPERVISOR, background_supervisor_machine_id=cfg["machine_id"])
     if cfg["notes"] is not None:
         out["notes"] = cfg["notes"]
     if isinstance(cfg.get("timezone_picked"), bool):  # once a client said so, as the hub (#1855)
@@ -5201,6 +5307,35 @@ EDIT_NEW = """    func makeEntry(for date: Date) -> WeatherEntry {
     }"""
 
 ITEMS = {}
+if os.environ.get("MOCK_CHILD_SESSIONS"):  # #5120: the lead's two exchanges, and what each child was asked and did
+    ITEMS[PASEO_LEAD] = (
+        [it("user", "text", 14, text="Rework the login flow: move the token refresh into the middleware.")]
+        + tool("Read", {"file_path": "src/auth/session.ts"}, "export function refresh(token) { … }", 13)
+        + tool("Edit", {"file_path": "src/auth/middleware.ts", "old_string": "next()", "new_string": "await refresh(req); next()"}, "ok", 12)
+        + [it("assistant", "text", 11, text="The refresh now runs in the middleware, before every handler.")]
+        + [it("user", "text", 9, text="Have agents add the tests and a remember-me option, check CI, and review the session handling.")]
+        + [it("assistant", "thinking", 8.9, text="Four parts that can run side by side: I'll start one agent for each.")]
+        + [it("assistant", "text", 4, text="Two agents are checking the change.")])
+    ITEMS[PASEO_DONE] = (
+        [it("user", "text", 8.8, text="Write regression tests for the token refresh now that it runs in the middleware: an expired token, a revoked one, and two requests at once.")]
+        + tool("Write", {"file_path": "src/auth/middleware.test.ts", "content": "describe(\"refresh\", () => { … })"}, "ok", 8)
+        + tool("Bash", {"command": "npm test -- src/auth"}, "3 passed", 7)
+        + [it("assistant", "text", 6, text="Added three regression tests for the refresh path (expired, revoked, concurrent); all pass.")])
+    ITEMS[PASEO_FAILED] = (
+        [it("user", "text", 8.5, text="Check that the CI config runs the auth tests on every pull request.")]
+        + tool("Read", {"file_path": ".github/workflows/ci.yml"}, "jobs: …", 8)
+        + [it("system", "notice", 7, text="The model service timed out.")])
+    ITEMS[PASEO_ASKS] = (
+        [it("user", "text", 5, text="Add a remember-me option to the login form and keep it in the sessions table.")]
+        + tool("Edit", {"file_path": "src/auth/LoginForm.tsx", "old_string": "</form>", "new_string": "<RememberMe />\n</form>"}, "ok", 3)
+        + [it("assistant", "tool_use", 1, tool_use_id="toolu_migrate_test", tool_name="Bash", tool_input={"command": "npm run migrate -- --env test"})])
+    ITEMS[PASEO_CODEX] = (
+        [it("user", "text", 3, text="Review the session handling after the refresh moved into the middleware. Report anything that can leak a token.")]
+        + tool("Bash", {"command": "rg -n refresh src/auth"}, "src/auth/middleware.ts:12: await refresh(req)", 2)
+        + [it("assistant", "text", 0.5, text="Reading how the token is refreshed.")])
+    ITEMS[PASEO_GRANDCHILD] = (
+        [it("user", "text", 2, text="Trace why a refresh after a retry returns 401.")]
+        + [it("assistant", "text", 0.2, text="Following the 401 through the retry.")])
 if os.environ.get("MOCK_ORCA_CHILDREN"):
     ITEMS["c2073000-0000-4000-8000-000000000006"] = [
         it("user", "text", 61, text="Review the prior work in this workspace."),
@@ -5553,6 +5688,18 @@ if os.environ.get("MOCK_COMMENTS") == "1":
             "整体可以，改完这三处再提交。"])),
         it("assistant", "text", 0.4, text="好，三处都改：城市名改成可选，解析失败回退到上次的缓存，保存按钮改成整行宽的主按钮。"),
     ]
+    # And Persona's main conversation has a quote of words picked in its answer and a comment on others (#5204): the
+    # blocks sit in the new layout's box, whatever the style's bubble.
+    _answer = next(i["id"] for i in ITEMS[ASK1] if i["role"] == "assistant" and i["kind"] == "text")
+    ITEMS[ASK1] = ITEMS[ASK1] + [
+        it("user", "text", 2.1, text=f'<persona-context kind="quote" title="Persona" url="" msg="{_answer}" part="selection">\n'
+           "照片同步脚本（Mac Studio）的计划写好了，等你批准。\n</persona-context>\n这个下周再看。"),
+        it("assistant", "text", 2.0, text="好，下周一提醒你看照片同步脚本的计划。"),
+        it("user", "text", 1.9, text="\n".join([
+            "> Comment 1", "> Selected text:", "> > 韩梅梅在飞书问你周五的发布能不能赶上", "> ", "> 她说的是哪个版本？", "",
+            "先帮我问清楚再答复她。"])),
+        it("assistant", "text", 1.7, text="好，我先在飞书问她是哪个版本，问清楚了再告诉你。"),
+    ]
 # MOCK_LIVE_STEP=bash|command|reads|parallel|thinking|thinking-folded (#2987): the widget chat is a minute into a new turn whose newest
 # step is still going, for the running work line that names it: `bash` a command Claude described (its description alone),
 # `command` a long command with no description (cut in its middle, the clock whole), `reads` three files read at once
@@ -5868,6 +6015,15 @@ if MOCK_TASKS:
             _feed("feed_r3", 3.5, "report", "todo_task_tests", {"kind": "question", "text": "统一用 snake_case 还是 camelCase 命名新接口？", "later": True}),
             _feed("feed_r2", 3, "routed", "todo_task_tests", {"text": "用协议注入，先改网络层那 6 个文件", "interrupted": True, "from": "assistant"}),
         ]
+    # MOCK_BACKGROUND_SUPERVISOR=1 (#5082): the reviews in the main chat's feed are the background supervisor's (`by`),
+    # so the chat shows each as its line; without MOCK_TASKS_REPORTS there is one, the release notes accepted.
+    if BACKGROUND_SUPERVISOR:
+        if not any(_i["kind"] == "review" for _i in TASK_FEED[ASK1]):
+            TASK_FEED[ASK1].append(_feed("feed_bg1", 18, "review", "todo_task_release", {
+                "title": "整理发布说明", "verdict": "accepted", "note": "写在 docs/release-notes.md，7 个 PR 都在里面"}))
+        for _i in TASK_FEED[ASK1]:
+            if _i["kind"] == "review":
+                _i["body"]["by"] = "background"
     # MOCK_BRIEFS=1 (#3822, docs/assistant/unified-entry.md "Briefs"): tasks carry the brief they are held to. The open
     # plan's task has a real one (the owner's own words, long enough to be cut, the goal, criteria, time and what is out
     # of bounds). The widget fix has a real one too, taken over twice (a lineage of three), with one scope change and an
@@ -7182,6 +7338,7 @@ if os.environ.get("MOCK_OPENCODE"):
 if os.environ.get("MOCK_PASEO"):
     INTERACTIONS.append(
         {"id": "paseo_migrate_test", "machine_id": "server", "session_id": PASEO_ASKS, "session_title": "Add a remember-me option",
+         "folded_under": PASEO_LEAD, "tool_use_id": "toolu_migrate_test",
          "cwd": "/home/me/.paseo/worktrees/1a2b3c4d/brave-fox", "kind": "permission", "agent": "claude",
          "created_at": ago(minutes=1), "expires_at": later(minutes=29), "tool_name": "Bash",
          "summary": "npm run migrate -- --env test", "tool_input": {"command": "npm run migrate -- --env test"}})
@@ -7251,7 +7408,11 @@ def mock_interactions():
         if MOCK_TASKS:  # a task's agent asking: the hub names the task (task_title)
             titles = {a["session_id"]: t["title"] for t in TODOS if t.get("origin") and not t.get("done_at") for a in t.get("agents", [])}
             out = [dict(x, task_title=titles[x["session_id"]]) if x.get("session_id") in titles else x for x in out]
-        return out
+    # the session a card's session folds under (Interaction.folded_under, #5120): its home is that session's page; a tab
+    # worker's card says so too (folded_as, #5180)
+    folds = {(r["machine_id"], r["session_id"]): {k: r[k] for k in ("folded_under", "folded_as") if r.get(k)}
+             for r in all_sessions() if r.get("folded_under")}
+    return [dict(x, **folds[(x.get("machine_id"), x.get("session_id"))]) if (x.get("machine_id"), x.get("session_id")) in folds else x for x in out]
 
 
 # MOCK_FLEET: the hub's fleet summary (server/internal/hub/liveactivity.go buildFleet) for Android's ongoing notification,
@@ -10494,6 +10655,31 @@ MODEL_CATEGORY_FOR = {pid: {"主对话": "assistant", "Agents": "agent.new", "�
                       for pid, _, group, _ in MODEL_DEFINITIONS}
 
 
+SUPERVISE_PURPOSE = "assistant.supervise"
+
+
+def supervise_model_purpose():
+    """The background supervisor's use (#4927): not in the catalog, read and set by its own id. A record of its own;
+    Main Chat's model while that is empty. None from a hub before it (MOCK_LEGACY_HUB)."""
+    if os.environ.get("MOCK_LEGACY_HUB"):
+        return None
+    catalog = model_configuration()
+    main = next(x for x in catalog["purposes"] if x["id"] == "assistant")
+    with MODEL_CONFIG_LOCK:
+        stored = MODEL_BINDINGS.get(SUPERVISE_PURPOSE, {"revision": 0, "override": {}})
+    binding = dict(stored["override"])
+    effective = {k: v for k, v in main["effective"].items() if k != "runtime"}
+    if binding.get("provider"):
+        provider = next((x for x in catalog["providers"] if x["id"] == binding["provider"]), {})
+        effective = {"provider": binding["provider"], "model": provider.get("model", "")}
+    effective.update(binding)
+    purpose = dict(id=SUPERVISE_PURPOSE, category_id="assistant", parent="assistant", name="后台督办", group="主对话",
+                   kind="launcher", override=binding, effective=effective, revision=stored["revision"],
+                   inherited_from=main["name"], fields=["provider", "model", "effort"],
+                   provider_ids=main["provider_ids"], status="未验证")
+    return {"purpose": purpose, "providers": catalog["providers"]}
+
+
 def model_configuration(include_uses=False):
     providers = [dict(id="launcher." + l["name"], name=l["name"], kind=l.get("kind", "launcher"),
                       model=l.get("model"), hidden=l.get("hidden", False)) for l in LAUNCHERS if l["source"] != "builtin"]
@@ -10535,9 +10721,9 @@ _CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"]
 LAUNCHER_MODELS = {
     "claude": {"agent": "claude", "models": [
         {"id": "default", "name": "Default (recommended)", "description": "Use the default model (currently claude-opus-5-5)", "resolved": "claude-opus-5-5", "default": True, "efforts": _CLAUDE_EFFORTS},
-        {"id": "fable", "name": "Fable", "description": "Fable 5.1 · Most capable for your hardest and longest-running tasks", "resolved": "claude-fable-5-1", "efforts": _CLAUDE_EFFORTS},
-        {"id": "opus", "name": "Opus 5.5", "description": "Opus 5.5 · Best for everyday complex work", "resolved": "claude-opus-5-5", "efforts": _CLAUDE_EFFORTS},
-        {"id": "sonnet", "name": "Sonnet 5.5", "description": "Sonnet 5.5 · Fast and capable", "resolved": "claude-sonnet-5-5", "efforts": ["low", "medium", "high", "max"]},
+        {"id": "fable", "name": "Fable", "description": "Fable 5.1 · Most capable for your hardest and longest-running tasks", "resolved": "claude-fable-5-1", "efforts": _CLAUDE_EFFORTS, "price": {"input": 10, "output": 50, "cache_read": 0.25}},
+        {"id": "opus", "name": "Opus 5.5", "description": "Opus 5.5 · Best for everyday complex work", "resolved": "claude-opus-5-5", "efforts": _CLAUDE_EFFORTS, "price": {"input": 4, "output": 20, "cache_read": 0.2}},
+        {"id": "sonnet", "name": "Sonnet 5.5", "description": "Sonnet 5.5 · Fast and capable", "resolved": "claude-sonnet-5-5", "efforts": ["low", "medium", "high", "max"], "price": {"input": 2, "output": 10, "cache_read": 0.1}},
         {"id": "haiku", "name": "Haiku 5.5", "description": "Haiku 5.5 · Fastest for quick answers", "resolved": "claude-haiku-5-5"},
         {"id": "gateway/glm-5.3", "name": "glm-5.3", "description": "From gateway", "efforts": ["low", "medium", "high"]},
         {"id": "gateway/deepseek-v4", "name": "deepseek-v4", "description": "From gateway", "efforts": ["low", "medium", "high"]},
@@ -10666,6 +10852,10 @@ LAUNCHER_QUOTAS = {  # as a quota plugin would answer (docs/extensions/extension
              "models": [{"model": "example-flash", "windows": [_w("TPM", 0.02, 8400, 500000, "tokens")]}]},
             {"name": "供应商 B", "state": "unsupported", "detail": "上游没有额度接口，只有网关统计"}]},
 }
+if os.environ.get("MOCK_MODEL_PANEL_USAGE"):
+    # A critical weekly bar beside cc_main's / cc_team's ordinary ones (#5056); all values are synthetic.
+    LAUNCHER_QUOTAS["claude"] = {"gateway": "example-subscription", "pools": [
+        {"name": "示例订阅", "state": "available", "windows": [_w("每周", 0.95, resets=later(hours=36))]}]}
 # "Add provider" › "Add from plugin" (docs/extensions/extensions.md "Model providers"): the providers made-up plugins offer (GET /api/v1/launchers/presets).
 LAUNCHER_PRESETS = [
     {"id": "example-gateway/team", "plugin": "example-gateway", "name": "示例网关 · 团队", "description": "团队共用的 Claude Code 网关，按 Key 计费",
@@ -10686,8 +10876,12 @@ LAUNCHER_PRESETS = [
 # node is too old (409 node_outdated), nas is offline (503). Keys and headers are kept only as has_key / has_headers.
 # With the feature launcher_auto_name (#5029): a provider added with no name gets one (launcher_name_for), and "New Agent"'s
 # launchers list the managed providers with their display names (gw_full has one, anthropic_main shows its ID).
+# With the feature launcher_import_parse (#5193): the import takes `alias` (one alias of the machine: its group, or its own
+# provider out of a group of several), and POST /api/v1/launchers/import/parse (also in every mode) reads pasted text into
+# provider drafts with the hub's rules (parse_paste): shell aliases / exports / K=V lines, settings.json, a curl command,
+# cindy's custom providers. A draft on gw_full's address matches it, with the same key when it carries sk-example-gw.
 MOCK_PROVIDERS = os.environ.get("MOCK_PROVIDERS") == "1"
-PROVIDER_LOG = {"post": None, "put": None, "test": [], "discover": [], "catalog": [], "import": None}
+PROVIDER_LOG = {"post": None, "put": None, "test": [], "discover": [], "catalog": [], "import": None, "parse": []}
 PROVIDER_FIELDS = ("kind", "api", "base_url", "model", "small_model", "subagent_model", "custom_model", "custom_model_name",
                    "custom_model_description", "args", "auth", "models", "opus_model", "sonnet_model", "haiku_model", "fable_model",
                    "subagent_force", "proxy", "no_proxy", "timeout_ms", "compact_window", "max_context", "effort")
@@ -10700,7 +10894,15 @@ PROVIDER_IMPORT = [
      "models": [{"id": "example-opus", "context_window": 1000000}, {"id": "example-haiku", "context_window": 200000}],
      "aliases": ["cc_full", "cc_full_haiku"],
      "sources": [{"alias": "cc_full", "file": "~/.zshrc", "hide": "ok"},
-                 {"alias": "cc_full_haiku", "file": "~/.zshrc", "hide": "in_use", "uses": ["模型档位「性能」的 Agent 预设「strong」"]}]},
+                 {"alias": "cc_full_haiku", "file": "~/.zshrc", "hide": "in_use", "uses": ["模型档位「性能」的 Agent 预设「strong」"]}],
+     "variants": [
+         {"name": "cc_full", "base_url": "https://gw.example.com", "auth": "bearer", "has_key": True, "own_service": "use", "model": "example-opus",
+          "models": [{"id": "example-opus", "context_window": 1000000}], "aliases": ["cc_full"],
+          "sources": [{"alias": "cc_full", "file": "~/.zshrc", "hide": "ok"}]},
+         {"name": "cc_full_haiku", "base_url": "https://gw.example.com", "auth": "bearer", "has_key": True, "own_service": "use",
+          "model": "example-haiku", "models": [{"id": "example-haiku", "context_window": 200000}], "aliases": ["cc_full_haiku"],
+          "sources": [{"alias": "cc_full_haiku", "file": "~/.zshrc", "hide": "in_use", "uses": ["模型档位「性能」的 Agent 预设「strong」"]}]},
+     ]},
     {"name": "cc_glm", "base_url": "https://open.bigmodel.example.com/api/anthropic", "auth": "bearer", "has_key": True, "own_service": "use",
      "model": "glm-5.3", "models": [{"id": "glm-5.3", "context_window": 200000}], "aliases": ["cc_glm"],
      "sources": [{"alias": "cc_glm", "file": "~/.zshrc", "hide": "ok"}]},
@@ -10751,10 +10953,10 @@ if MOCK_PROVIDERS:
         {"name": "cc_kimi_fast", "source": "zshrc", "base_url": "https://api.moonshot.example.com/anthropic", "model": "kimi-k3-turbo", "machines": ["macbook"], "rc_files": ["~/.zshrc"]},
         {"name": "cc_relay", "source": "zshrc", "base_url": "https://relay.example.org", "model": "relay-pro", "machines": ["macbook", "server"], "rc_files": ["~/.bashrc"]},
     ]
-    _features_without_auto_name = features
+    _features_without_providers = features
 
     def features():
-        return _features_without_auto_name() + ["launcher_auto_name"]
+        return _features_without_providers() + ["launcher_auto_name", "launcher_import_parse"]
 
 
 # The hub's names for providers it names itself (server/internal/assistant/models_presets.go): the slug rule, the
@@ -10793,8 +10995,9 @@ def machine_launchers(mid=""):
     """GET /api/v1/machines/{mid}/launchers's launchers: claude, sonnetcc and codex ("Create from the phone"; not on the
     Mac Studio under MOCK_NEW_AGENT_PANEL), and under MOCK_PROVIDERS the managed providers Agents can start, each with its
     display name."""
-    out = [{"name": "claude", "model": "opus"}, {"name": "sonnetcc", "model": "sonnet"},
-           {"name": "codex", "model": "gpt-5.5", "agent": "codex", "agent_type": "codex"}]
+    out = [{"name": "claude", "model": "opus"}, {"name": "sonnetcc", "model": "sonnet"}, codex_launcher()]
+    if os.environ.get("MOCK_MODEL_PANEL_USAGE"):
+        out += [{"name": "cc_main", "model": "opus"}, {"name": "cc_team", "model": "example-pro"}]
     if NEW_AGENT_PANEL and mid == "studio":
         out = [l for l in out if l["name"] != "codex"]
     if MOCK_PROVIDERS:
@@ -10827,12 +11030,17 @@ def _import_name(name, taken):
     return out
 
 
-def import_preview():
+def import_preview(alias=""):
     """The preview: each group and variant with its `existing`, its sources' hide checks and, for one that will be
     created under another name, `create_as`. A group and its variants are alternatives, so they are named against the
-    same launchers; the names a group may take are taken for the groups after it."""
+    same launchers; the names a group may take are taken for the groups after it. With alias (#5193) the hub reads only
+    that alias: its group, or its variant as a group of its own; none when the machine has no such alias."""
+    groups = copy.deepcopy(PROVIDER_IMPORT)
+    if alias:
+        groups = [g if len(g["aliases"]) == 1 else next(v for v in g["variants"] if v["aliases"] == [alias])
+                  for g in groups if alias in g["aliases"]]
     out, taken = [], {l["name"] for l in LAUNCHERS}
-    for g in copy.deepcopy(PROVIDER_IMPORT):
+    for g in groups:
         names = set()
         for x in [g] + g.get("variants", []):
             x["sources"] = [_import_hide(src) for src in x.get("sources", [])]
@@ -10861,7 +11069,7 @@ def _provider_apply(l, b):
         if k in b:
             if b[k] in ("", 0, False, [], None): l.pop(k, None)
             else: l[k] = b[k]
-    if b.get("api_key"): l["has_key"] = True
+    if b.get("api_key"): l["has_key"], PROVIDER_KEYS[l["name"]] = True, b["api_key"]
     if "headers" in b:
         if b["headers"]: l["has_headers"] = True
         else: l.pop("has_headers", None)
@@ -10880,20 +11088,21 @@ def _display_name_refused(h, b):
 
 
 def import_route(h, method, q, body):
-    """GET / POST /api/v1/launchers/import (#2455, #5024), in every mode. POST takes {machine, providers, split?, hide_aliases?}:
-    a split group comes in as its variants, a provider that is there takes the new models, a new one is saved under its
-    previewed `create_as` (a name taken gets -2); with hide_aliases the aliases whose check is still ok once saved are
-    hidden, the others kept with why."""
+    """GET / POST /api/v1/launchers/import (#2455, #5024), in every mode. POST takes {machine, providers, split?, hide_aliases?,
+    alias?}: a split group comes in as its variants, a provider that is there takes the new models, a new one is saved
+    under its previewed `create_as` (a name taken gets -2); with hide_aliases the aliases whose check is still ok once
+    saved are hidden, the others kept with why. `alias` (?alias= on GET) previews and imports only that alias."""
     b = json.loads(body or b"{}") if method == "POST" else {}
     machine = (q.get("machine") or [""])[0] if method == "GET" else b.get("machine", "")
+    alias = (q.get("alias") or [""])[0] if method == "GET" else b.get("alias", "")
     if machine == "studio":
         h.send_json({"code": "node_outdated", "error": "这台机器上的 personad 太旧，不能读取 alias，需要更新 node"}, 409); return
     if not machine_online(machine):
         h.send_json({"code": "offline", "error": "这台机器离线，连上后再导入"}, 503); return
     if method == "GET":
-        h.send_json({"machine": machine, "providers": import_preview()}); return
+        h.send_json({"machine": machine, "providers": import_preview(alias)}); return
     PROVIDER_LOG["import"] = b
-    groups = {g["name"]: g for g in import_preview()}
+    groups = {g["name"]: g for g in import_preview(alias)}
     names, split = b.get("providers") or [], b.get("split") or []
     unknown = [n for n in names if n not in groups] + [n for n in split if n not in names]
     if unknown:
@@ -10926,6 +11135,388 @@ def import_route(h, method, q, body):
             elif src["hide"] != "none":
                 kept.append({k: v for k, v in src.items() if k != "file"})
     h.send_json({"created": created, "updated": updated, "hidden": hidden, "kept": kept})
+
+
+# POST /api/v1/launchers/import/parse (#5193): the wizard's "Paste a configuration", in every mode like the import. A small
+# reader with the hub's rules (newImportGroup's env mapping, mergeZshrcAliases' grouping): drafts carry the pasted key as the
+# hub's do; notes name aliases, variables, headers and options, never a value. Only the text's length is logged.
+PROVIDER_KEYS = {"gw_full": "sk-example-gw"}  # the managed providers' keys, for matches' same_key only
+PASTE_FIELDS = {"opus_model": "ANTHROPIC_DEFAULT_OPUS_MODEL", "sonnet_model": "ANTHROPIC_DEFAULT_SONNET_MODEL",
+                "haiku_model": "ANTHROPIC_DEFAULT_HAIKU_MODEL", "fable_model": "ANTHROPIC_DEFAULT_FABLE_MODEL",
+                "small_model": "ANTHROPIC_SMALL_FAST_MODEL", "subagent_model": "CLAUDE_CODE_SUBAGENT_MODEL",
+                "custom_model": "ANTHROPIC_CUSTOM_MODEL_OPTION", "custom_model_name": "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME",
+                "custom_model_description": "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION", "effort": "CLAUDE_CODE_EFFORT_LEVEL",
+                "compact_window": "CLAUDE_CODE_AUTO_COMPACT_WINDOW", "max_context": "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
+                "timeout_ms": "API_TIMEOUT_MS"}
+PASTE_MAPPED = {*PASTE_FIELDS.values(), "ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL",
+                "ANTHROPIC_CUSTOM_HEADERS", "CLAUDE_CODE_SUBAGENT_MODEL_FORCE"}
+PASTE_PROXY, PASTE_NO_PROXY = ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"), ("NO_PROXY", "no_proxy")
+PASTE_COMPUTER = ("PATH", "HOME", "PWD", "OLDPWD", "SHELL", "USER", "LOGNAME", "TMPDIR", "CLAUDE_CONFIG_DIR")
+PASTE_SECRETS = {"KEY", "KEYS", "APIKEY", "TOKEN", "SECRET", "SECRETS", "PASSWORD", "PASSWD", "CREDENTIAL", "CREDENTIALS",
+                 "COOKIE", "COOKIES"}
+PASTE_PROTOCOL = ("anthropic-version", "anthropic-beta", "content-type", "accept", "accept-encoding", "user-agent")
+CURL_ARGS = {"-H": "header", "--header": "header", "-d": "data", "--data": "data", "--data-raw": "data", "--data-binary": "data",
+             "--json": "data", "-x": "proxy", "--proxy": "proxy", "--noproxy": "no_proxy", "--url": "url", "-X": "", "--request": ""}
+CURL_UNUSED_ARGS = ("-u", "--user", "-o", "--output", "-A", "--user-agent", "-b", "--cookie", "-e", "--referer", "-m", "--max-time",
+                    "--connect-timeout", "-F", "--form", "-w", "--write-out", "-E", "--cert", "--key", "--cacert")
+CURL_QUIET = re.compile(r"-[sSivNL]+|--(silent|show-error|no-buffer|compressed|location)")
+# (the path's end, the API): the base is what comes before it, a direct API's with its /v1
+CURL_ENDPOINTS = (("/messages", "messages"), ("/v1/chat/completions", "chat"), ("/v1/responses", "responses"), ("/v1/models", "messages"))
+CINDY_APIS = {"anthropic-messages": "messages", "openai-responses": "responses", "openai-chat": "chat"}
+
+
+def _note(code, **where):
+    return {"code": code, **{k: v for k, v in where.items() if v}}
+
+
+def _shell_value(v): return "$" in v or "`" in v or v.startswith("~")
+
+
+def _secret_name(name, extra=()):
+    return any(w.upper() in PASTE_SECRETS or w.upper() in extra for w in re.split(r"[-_]", name))
+
+
+def _url_user(v):
+    """urlWithUser: the address's authority has an @ (an e-mail address counts too)."""
+    v = v.strip()
+    rest = re.sub(r"^[A-Za-z][A-Za-z0-9+.-]*://", "", v)
+    return "@" in re.split(r"[/?#]", rest if rest != v else v.removeprefix("//"))[0]
+
+
+def _messages_base(url):
+    """proto.MessagesBaseURL: the address without the /v1 ending its path, which Claude Code adds itself."""
+    url = url.strip().rstrip("/")
+    u = urlparse(url)
+    if not u.netloc or u.query or u.fragment: return url
+    while url.endswith("/v1") and urlparse(url).path: url = url[:-3].rstrip("/")
+    return url
+
+
+def _strip1m(model):
+    model = model.strip()
+    return (model[:-4], 1000000) if model.endswith("[1m]") else (model, 0)
+
+
+def _shell_words(s):
+    """s split as the shell does (quotes; ; & | as words of their own), up to a comment."""
+    lex = shlex.shlex(s, posix=True, punctuation_chars=";&|")
+    lex.whitespace_split, lex.commenters = True, ""
+    return list(itertools.takewhile(lambda w: not w.startswith("#"), lex))
+
+
+def _commands(words):
+    """A line's commands: its words split at ; && || |."""
+    cmd = []
+    for w in words:
+        if w and set(w) <= set(";&|"): yield cmd; cmd = []
+        else: cmd.append(w)
+    yield cmd
+
+
+def _command(words):
+    """commandIndex: the variables a command sets in front of itself (env, exec… passed over) and its words from the
+    command on."""
+    env = {}
+    for i, w in enumerate(words):
+        if re.match(r"[A-Za-z_][A-Za-z0-9_]*=", w): env.update([w.split("=", 1)])
+        elif w not in ("env", "command", "exec", "noglob", "nocorrect"): return env, words[i:]
+    return env, []
+
+
+def _is_claude(cmd): return bool(cmd) and os.path.basename(cmd[0]) == "claude"
+
+
+def _alias_claude(value):
+    """claudeAlias: (env, args) of the first claude command in an alias's value, the exports before it included; None
+    when it runs no claude."""
+    exported = {}
+    for cmd in _commands(_shell_words(value)):
+        if cmd[:1] == ["export"]:
+            exported.update(_command(cmd[1:])[0])
+            continue
+        env, cmd = _command(cmd)
+        if _is_claude(cmd): return {**exported, **env}, cmd[1:]
+    return None
+
+
+def _paste_headers(pairs, protocol=False, direct=False):
+    """A draft's headers ("Name: value" lines) and the ones left out: the protocol's own (curl, cindy), credential-looking
+    names, and all of a direct API's, which takes none."""
+    kept, skipped = [], []
+    for name, value in pairs:
+        name = name.strip()
+        why = ("protocol" if protocol and name.lower() in PASTE_PROTOCOL else
+               "credential" if _secret_name(name, ("AUTHORIZATION", "AUTH")) else "unsupported" if direct else "")
+        if why: skipped.append({"name": name, "reason": why})
+        else: kept.append("%s: %s" % (name, str(value).strip()))
+    return "\n".join(kept), skipped
+
+
+def _paste_env(env):
+    """importEnv: the variables without a field as env lines (by name), their names, and the ones left out with why."""
+    lines, names, skipped = [], [], []
+    for k in sorted(env):
+        v = env[k]
+        if k in PASTE_PROXY + PASTE_NO_PROXY:
+            if _url_user(v): skipped.append({"name": k, "reason": "credential"})
+            continue
+        if k in PASTE_MAPPED: continue
+        why = ("computer" if k in PASTE_COMPUTER else "credential" if _secret_name(k) or _url_user(v) else
+               "shell" if _shell_value(v) or re.search(r"[\n\r\x00]", v) or ('"' in v and "'" in v) or
+               not re.match(r"[A-Za-z_][A-Za-z0-9_]*$", k) else "limit" if len(names) == 50 else "")
+        if why:
+            skipped.append({"name": k, "reason": why})
+            continue
+        quote = "" if not re.search(r"[\s#\"']", v) else "'" if '"' in v else '"'
+        lines.append("%s=%s%s%s" % (k, quote, v, quote))
+        names.append(k)
+    return "\n".join(lines), names, skipped
+
+
+def _draft(p, key, notes=(), **extra):
+    """A draft of provider p (empty fields left out) with its key, or a note why it has none; extra's empty ones left out."""
+    notes = list(notes)
+    if _shell_value(key): notes.append(_note("key_shell"))
+    elif key: p["api_key"] = key
+    elif not any(n["code"] in ("key_helper", "cindy_auth") for n in notes): notes.append(_note("no_key"))
+    return {**{k: v for k, v in extra.items() if v}, "provider": {k: v for k, v in p.items() if v}, "notes": notes}
+
+
+def _env_draft(env, base, args, notes):
+    """newImportGroup with importKey / importProxy / importEnv: a claude command's variables as a draft."""
+    token = env.get("ANTHROPIC_AUTH_TOKEN", "").strip()
+    key = token.removeprefix("Bearer ").strip() if token else env.get("ANTHROPIC_API_KEY", "").strip()
+    model, window = _strip1m(env.get("ANTHROPIC_MODEL", ""))
+    p = {"kind": "launcher", "agent": "claude", "api": "messages", "base_url": base, "auth": "bearer" if token else "api_key",
+         "model": model, "models": [{"id": model, **({"context_window": window} if window else {})}] if model else [], "args": args}
+    for f, k in PASTE_FIELDS.items():
+        v = env.get(k, "").strip()
+        p[f] = (int(v) if v.isdigit() else 0) if f in ("compact_window", "max_context", "timeout_ms") else \
+            _strip1m(v)[0] if f.endswith("_model") and f != "custom_model" else v
+    p["subagent_force"] = env.get("CLAUDE_CODE_SUBAGENT_MODEL_FORCE", "").strip().lower() in ("1", "true")
+    proxy = next((env[k].strip() for k in PASTE_PROXY if env.get(k, "").strip()), "")
+    p["proxy"] = "" if _url_user(proxy) else proxy
+    p["no_proxy"] = next((env[k].strip() for k in PASTE_NO_PROXY if env.get(k, "").strip()), "")
+    p["headers"], skipped_headers = _paste_headers(h.split(":", 1) for h in env.get("ANTHROPIC_CUSTOM_HEADERS", "").splitlines() if ":" in h)
+    p["env"], env_names, skipped_env = _paste_env(env)
+    return _draft(p, key, notes, env_names=env_names, skipped_env=skipped_env, skipped_headers=skipped_headers)
+
+
+def _past_model(d):
+    """A draft but for its model: what aliases merged into one draft share."""
+    return {**d, "provider": {**d["provider"], "model": None, "models": None}}
+
+
+def _env_drafts(exported, cmds, notes=()):
+    """The drafts of claude commands [(alias or None, line, own env, args)], each from the exported variables with its own
+    over them: aliases on one address and key merged unless they differ in more than the model (mergeZshrcAliases), with
+    a suggested name. ([draft], [(line, note)] for the commands that make none)."""
+    groups, marks = [], []
+    for alias, line, env, args in cmds:
+        env, where = {**exported, **env}, {"name": alias, "line": None if alias else line}
+        base = _messages_base(env.get("ANTHROPIC_BASE_URL", ""))
+        bad = "no_gateway" if not base else "url_shell" if _shell_value(base) else "url_user" if _url_user(base) else ""
+        if bad:
+            marks.append((line or math.inf, _note(bad, **where)))
+            continue
+        d = _env_draft(env, base, args, notes)
+        gateway = (base, d["provider"].get("api_key"))
+        g = next((g for g in groups if g[0] == gateway), None)
+        if g: g[1].append((alias, d))
+        else: groups.append((gateway, [(alias, d)]))
+    drafts, taken = [], {l["name"] for l in LAUNCHERS}
+    for _, g in groups:
+        for part in [g] if all(_past_model(d) == _past_model(g[0][1]) for _, d in g) else [[x] for x in g]:
+            d = part[0][1]
+            for _, x in part[1:]:
+                for m in x["provider"].get("models", []):
+                    old = next((o for o in d["provider"].setdefault("models", []) if o["id"] == m["id"]), None)
+                    if old is None: d["provider"]["models"].append(m)
+                    elif m.get("context_window", 0) > old.get("context_window", 0): old["context_window"] = m["context_window"]
+            aliases = [a for a, _ in part if a]
+            if aliases:
+                d["provider"]["name"] = _import_name("zshrc_" + aliases[0] if aliases[0] in RESERVED_LAUNCHER_NAMES else aliases[0], taken)
+                taken.add(d["provider"]["name"])
+                d = {"label": ", ".join(aliases), "aliases": aliases, **d}
+            drafts.append(d)
+    return drafts, marks
+
+
+def _paste_shell(lines):
+    """Shell lines: exports and K=V lines collect the variables, aliases and K=V … claude lines are the claude commands
+    (with none, the variables alone make the draft); another command is not Claude Code, a line it can't read unused.
+    None, as the hub, when there is no alias, no claude command and no variable of Claude Code's."""
+    exported, cmds, marks, aliased = {}, [], [], False
+    for n, line in lines:
+        try: words = next(_commands(_shell_words(line)))
+        except ValueError: words = []
+        if words[:1] == ["alias"]:
+            aliased = True
+            for name, eq, value in (w.partition("=") for w in words[1:]):
+                if not eq or not re.match(r"[A-Za-z_][A-Za-z0-9_-]*$", name): continue
+                try: found = _alias_claude(value)
+                except ValueError: found = None
+                if found: cmds.append((name, n) + found)
+                else: marks.append((n, _note("not_claude", name=name)))
+            continue
+        export = words[:1] == ["export"]
+        env, cmd = _command(words[1:] if export else words)
+        if export or (env and not cmd): exported.update(env)
+        elif _is_claude(cmd): cmds.append((None, n, env, cmd[1:]))
+        else: marks.append((n, _note("not_claude" if cmd else "line_unused", line=n)))
+    if not cmds and not aliased and not any(k.startswith(("ANTHROPIC_", "CLAUDE_")) for k in exported): return None
+    drafts, more = _env_drafts(exported, cmds or ([(None, None, {}, [])] if exported else []))
+    return drafts, [x for _, x in sorted(marks + more, key=lambda m: m[0])]
+
+
+def _paste_settings(data):
+    """settings.json: its env (string values) with `model` as ANTHROPIC_MODEL when env has none, read as shell's variables
+    alone; apiKeyHelper runs a command for the key, which a paste can't."""
+    env = {k: v for k, v in data["env"].items() if isinstance(v, str)} if isinstance(data.get("env"), dict) else {}
+    if isinstance(data.get("model"), str) and not env.get("ANTHROPIC_MODEL"): env["ANTHROPIC_MODEL"] = data["model"]
+    drafts, marks = _env_drafts(env, [(None, None, {}, [])], [_note("key_helper")] if data.get("apiKeyHelper") else [])
+    return drafts, [x for _, x in marks]
+
+
+def _paste_curl(words, line):
+    """A curl command: the endpoint its URL names (Messages as a Claude Code gateway, Chat / Responses as a direct API),
+    its key header and other headers, the body's model, its proxy."""
+    url, headers, model, proxy, notes, rest = "", [], "", {}, [], iter(words[1:])
+    for w in rest:
+        if w in CURL_ARGS:
+            what, v = CURL_ARGS[w], next(rest, "")
+            if what == "header" and ":" in v: headers.append(v.split(":", 1))
+            elif what in ("proxy", "no_proxy"): proxy[what] = (w, v)
+            elif what == "url": url = url or v
+            elif what == "data":
+                try: body = json.loads(v)
+                except ValueError: body = None
+                if isinstance(body, dict) and isinstance(body.get("model"), str): model = body["model"]
+        elif w.startswith("-"):
+            if not CURL_QUIET.fullmatch(w): notes.append(_note("curl_option", name=w))
+            if w in CURL_UNUSED_ARGS: next(rest, "")
+        else: url = url or w
+    if not url: return [], [_note("unrecognized")]
+    if _shell_value(url) or _url_user(url): return [], [_note("url_shell" if _shell_value(url) else "url_user", line=line)]
+    bare = re.split(r"[?#]", url)[0].rstrip("/")
+    path = urlparse(bare).path
+    end, api = next(((e, a) for e, a in CURL_ENDPOINTS if path.endswith(e)), ("", "messages"))
+    if end: bare = bare[:len(bare) - len(end.removeprefix("/v1"))]
+    else: notes.append(_note("curl_path", name=path))
+    key, auth, kept = "", "", []
+    for name, value in headers:
+        name, value = name.strip(), value.strip()
+        if name.lower() == "x-api-key": key, auth = value, "api_key"
+        elif name.lower() == "authorization" and value[:7].lower() == "bearer ": key, auth = value[7:].strip(), "bearer"
+        else: kept.append((name, value))
+    launcher = api == "messages"
+    p = {"kind": "launcher" if launcher else "api", "agent": "claude" if launcher else "", "api": api,
+         "base_url": _messages_base(bare) if launcher else bare, "auth": auth, "model": model, "models": [{"id": model}] if model else []}
+    p["headers"], skipped = _paste_headers(kept, protocol=True, direct=not launcher)
+    for what, (option, v) in proxy.items():
+        if not launcher: notes.append(_note("curl_option", name=option))
+        elif what == "no_proxy" or not _url_user(v): p[what] = v
+    return [_draft(p, key, notes, skipped_headers=skipped)], []
+
+
+def _cindy_model(m):
+    """A cindy model ("id" or {id, name, contextWindow, reasoningEfforts, reasoningDefaultEffort}) as a provider's."""
+    if isinstance(m, str): return {"id": m}
+    if not isinstance(m, dict) or not isinstance(m.get("id"), str): return None
+    efforts = [e for e in m.get("reasoningEfforts") or [] if e in _CLAUDE_EFFORTS]
+    out = {"id": m["id"], "name": m.get("name"), "context_window": m.get("contextWindow"), "efforts": efforts,
+           "default_effort": m.get("reasoningDefaultEffort") if m.get("reasoningDefaultEffort") in efforts else None}
+    return {k: v for k, v in out.items() if v}
+
+
+def _paste_cindy(data):
+    """cindy v1 (one provider or {providers: […]}): a custom provider's first Messages endpoint as a Claude Code gateway,
+    else its first Responses / Chat endpoint as a direct API; its other endpoints, presets, built-ins and OAuth as notes."""
+    drafts, notes = [], []
+    for c in data["providers"] if isinstance(data.get("providers"), list) else [data]:
+        if not isinstance(c, dict): continue
+        auth = c["auth"] if isinstance(c.get("auth"), dict) else {}
+        if c.get("kind", "custom") != "custom":
+            notes.append(_note("cindy_kind", name=str(c["kind"])))
+            continue
+        if auth.get("method") == "oauth":
+            notes.append(_note("cindy_auth", name="oauth"))
+            continue
+        eps = [e for e in c.get("endpoints") or [] if isinstance(e, dict)]
+        ep = next((e for e in eps if e.get("protocol") == "anthropic-messages"), None) or \
+            next((e for e in eps if e.get("protocol") in ("openai-responses", "openai-chat")), None)
+        others = [_note("cindy_endpoint", name=str(e.get("protocol") or "")) for e in eps if e is not ep]
+        if ep is None:
+            notes += others
+            continue
+        base = str(ep.get("baseUrl") or "").strip().rstrip("/")
+        if _url_user(base): notes.append(_note("url_user"))
+        if not base or _url_user(base): continue
+        api, none = CINDY_APIS[ep["protocol"]], auth.get("method") == "none"
+        models = [m for m in map(_cindy_model, ep.get("models") or c.get("models") or []) if m]
+        p = {"kind": "launcher" if api == "messages" else "api", "agent": "claude" if api == "messages" else "", "api": api,
+             "display_name": c.get("name"), "base_url": _messages_base(base) if api == "messages" else base,
+             "auth": "api_key" if api == "messages" else "bearer", "model": models[0]["id"] if models else "", "models": models}
+        p["headers"], skipped = _paste_headers(ep["headers"].items() if isinstance(ep.get("headers"), dict) else [], True, api != "messages")
+        key = "" if none else str(ep.get("apiKey") or auth.get("apiKey") or "")
+        drafts.append(_draft(p, key, ([_note("cindy_auth", name="none")] if none else []) + others, label=c.get("name"), skipped_headers=skipped))
+    return drafts, notes
+
+
+def _paste_lines(text):
+    """(line number, line) of each line that is not blank or a comment, a line ending in \\ joined with the next."""
+    out, start, buf = [], 0, ""
+    for n, line in enumerate(text.split("\n") + [""], 1):
+        start, buf = (start, buf + line) if buf else (n, line)
+        if buf.endswith("\\"):
+            buf = buf[:-1]
+            continue
+        if buf.strip() and not buf.strip().startswith("#"): out.append((start, buf.strip()))
+        buf = ""
+    return out
+
+
+def _paste_read(text):
+    """(format, drafts, notes): JSON as cindy's or settings.json, a curl command, else shell lines."""
+    if text.strip().startswith(("{", "[")):
+        try: data = json.loads(text)
+        except ValueError: return "", [], [_note("invalid_json")]
+        keys = set(data) if isinstance(data, dict) else set()
+        if keys & {"providers", "kind", "endpoints"}: return ("cindy", *_paste_cindy(data))
+        if keys & {"env", "apiKeyHelper", "model"}: return ("settings", *_paste_settings(data))
+        return "", [], [_note("unrecognized")]
+    lines = _paste_lines(text)
+    try: cmd = _command(next(_commands(_shell_words(lines[0][1]))))[1] if lines else []
+    except ValueError: cmd = []
+    if cmd and os.path.basename(cmd[0]) == "curl": return ("curl", *_paste_curl(cmd, lines[0][0]))
+    shell = _paste_shell(lines)
+    return ("shell", *shell) if shell else ("", [], [_note("unrecognized")])
+
+
+def parse_paste(text):
+    """The parse route's answer: what text was read as, its drafts (at most 50) with the managed providers on their
+    address (the ones with the draft's key first), and its notes."""
+    fmt, drafts, notes = _paste_read(text.replace("\r\n", "\n"))
+    for d in drafts:
+        key = d["provider"].get("api_key")
+        d["matches"] = sorted(({"name": l["name"], **({"display_name": l["display_name"]} if l.get("display_name") else {}),
+                                "same_key": bool(key) and PROVIDER_KEYS.get(l["name"]) == key}
+                               for l in LAUNCHERS if l["source"] == "persona" and l.get("base_url") == d["provider"]["base_url"]),
+                              key=lambda m: not m["same_key"])
+    if len(drafts) > 50: drafts, notes = drafts[:50], notes + [_note("too_many")]
+    return {"format": fmt, "drafts": drafts, "notes": notes or ([] if drafts else [_note("unrecognized")])}
+
+
+def parse_route(h, body):
+    """POST /api/v1/launchers/import/parse: 413 over 256 KiB, 400 without text."""
+    if len(body or b"") > 256 << 10:
+        h.send_json({"code": "too_large", "error": "粘贴的内容太长"}, 413); return
+    try: text = json.loads(body or b"{}").get("text")
+    except (ValueError, AttributeError): text = None
+    if not isinstance(text, str) or not text.strip():
+        h.send_json({"error": "先粘贴一段配置"}, 400); return
+    PROVIDER_LOG["parse"].append({"length": len(text)})
+    h.send_json(parse_paste(text))
 
 
 # POST /api/v1/launchers/catalog (#4975): the hub's built-in model catalog for ids typed by hand, read from the file the
@@ -10971,12 +11562,14 @@ def _catalog_route(h, body):
 
 
 def providers_route(h, method, p, q, body):
-    """The provider endpoints under MOCK_PROVIDERS; True when it answered. The import (import_route) and the catalog lookup
-    (_catalog_route) answer with or without MOCK_PROVIDERS, and so do a typed-in gateway's "Test connection" and "Fetch
-    models" (#4881): the catch-all {"ok": true} has no `ms`, which the wizard shows. A built-in preset's test keeps its own
-    answers then (_builtin_preset_route)."""
+    """The provider endpoints under MOCK_PROVIDERS; True when it answered. The import (import_route, parse_route) and the
+    catalog lookup (_catalog_route) answer with or without MOCK_PROVIDERS, and so do a typed-in gateway's "Test connection"
+    and "Fetch models" (#4881): the catch-all {"ok": true} has no `ms`, which the wizard shows. A built-in preset's test
+    keeps its own answers then (_builtin_preset_route)."""
     if p == "/api/v1/launchers/import":
         import_route(h, method, q, body); return True
+    if p == "/api/v1/launchers/import/parse" and method == "POST":
+        parse_route(h, body); return True
     if p == "/api/v1/launchers/catalog" and method == "POST":
         _catalog_route(h, body); return True
     probe = method == "POST" and p in ("/api/v1/launchers/test", "/api/v1/launchers/discover")
@@ -11481,6 +12074,57 @@ if os.environ.get("MOCK_SUBAGENT_CARDS") == "1":
     mock_subagent_cards()
 
 
+# MOCK_PLAN_CARDS=1: the plan as cindy draws it (#5156, web): an agent at work on a five-step plan (two done, one in
+# progress, two to go) after a long earlier answer, so scrolled up its card is out of view and the pill above the
+# composer shows; a second agent whose plan is all done (the pill is gone, the card says 5/5); and the Persona chat
+# "整理这个季度的读书笔记" with a plan of its own in its last turn.
+PLANRUN = "a1f3c2d4-0000-4000-8000-0000000c1e21"
+PLANDONE = "a1f3c2d4-0000-4000-8000-0000000c1e22"
+
+
+def mock_plan_cards():
+    steps = ["新建横屏的布局文件", "把温度和降雨概率并排放", "适配小号和中号两种尺寸，长标题在中号里换成两行，不再截断",
+             "跑快照测试", "在模拟器上截深浅色的图"]
+    plan = lambda states: {"todos": [{"content": c, "status": st, "activeForm": c} for c, st in zip(steps, states)]}
+    _p = [it("user", "text", 40, text="小组件横屏的时候为什么会挤在一起？")]
+    _p.append(it("assistant", "text", 39, text="\n\n".join([
+        "横屏时小组件的宽度变大、高度变小，现在的布局是竖着排的：温度在上，降雨概率在下，高度不够就被压在一起。",
+        "改成横屏时并排放：左边温度，右边接下来几小时的降雨概率，两块各占一半宽度，高度就够了。"] * 4)))
+    _p.append(it("user", "text", 20, text="那就按这个改，改完跑一下快照测试"))
+    _p.append(it("assistant", "text", 19.9, text="好，我分五步来。"))
+    _p += tool("TodoWrite", plan(["in_progress", "pending", "pending", "pending", "pending"]), "Todos have been modified successfully.", 19.8)
+    _p += tool("Write", {"file_path": "/Users/me/code/weather/WeatherWidget/LandscapeView.swift", "content": "import SwiftUI\n\nstruct LandscapeView: View { … }"}, "ok", 18)
+    _p += tool("TodoWrite", plan(["completed", "in_progress", "pending", "pending", "pending"]), "Todos have been modified successfully.", 17.5)
+    _p += tool("Edit", {"file_path": "/Users/me/code/weather/WeatherWidget/LandscapeView.swift", "old_string": "VStack {", "new_string": "HStack {"}, "ok", 12)
+    _p += tool("TodoWrite", plan(["completed", "completed", "in_progress", "pending", "pending"]), "Todos have been modified successfully.", 11.5)
+    _p.append(it("assistant", "text", 6, text="横屏的布局写好了，在适配中号的长标题。"))
+    _p.append(it("assistant", "tool_use", 1, tool_use_id="toolu_planrun", tool_name="Bash",
+                 tool_input={"command": "xcodebuild build -scheme WeatherWidget -quiet", "description": "编译小组件"}))
+    ITEMS[PLANRUN] = _p
+    SESSIONS.append(sess("macbook", PLANRUN, "小组件的横屏布局", "/Users/me/code/weather", "working", "working", "weather", 1, "plan", 9, 0,
+                         "横屏的布局写好了，在适配中号的长标题。"))
+    _d = [it("user", "text", 30, text="把小组件的横屏布局做完，跑快照测试")]
+    _d += tool("TodoWrite", plan(["in_progress", "pending", "pending", "pending", "pending"]), "Todos have been modified successfully.", 29.8)
+    _d += tool("Bash", {"command": "xcodebuild test -scheme WeatherWidget -quiet", "description": "跑快照测试"}, "Executed 52 tests, with 0 failures", 22)
+    _d += tool("TodoWrite", plan(["completed"] * 5), "Todos have been modified successfully.", 21)
+    _d.append(it("assistant", "text", 20, text="横屏布局做完了：温度和降雨概率并排，小号和中号都适配了，52 个快照测试全部通过，深浅色的截图在 `Screenshots/` 里。"))
+    ITEMS[PLANDONE] = _d
+    SESSIONS.append(sess("macbook", PLANDONE, "横屏布局做完了", "/Users/me/code/weather", "done", "done", "weather", 1, "plan", 9, 20,
+                         "横屏布局做完了。"))
+    # a Persona chat's own plan: everyday steps, no engineering words
+    reading = lambda states: {"todos": [{"content": c, "status": st, "activeForm": c} for c, st in zip(
+        ["找出这个季度读完的 30 本书", "每本写三句话的要点", "按主题分成几组", "做成一页目录发给你"], states)]}
+    ITEMS[ASK4] = ITEMS[ASK4] + (
+        [it("user", "text", 3, text="把这个季度的读书笔记整理成一页目录")]
+        + [it("assistant", "text", 2.9, text="好的，我分四步来。")]
+        + tool("TodoWrite", reading(["completed", "in_progress", "pending", "pending"]), "Todos have been modified successfully.", 2.8)
+        + [it("assistant", "text", 2, text="30 本书都找齐了，正在给每本写要点，写完按主题分组。")])
+
+
+if os.environ.get("MOCK_PLAN_CARDS") == "1":
+    mock_plan_cards()
+
+
 # MOCK_SUBAGENT_REPORTS=1: long subagent reports start folded (#6381): a background subagent's report in its card and in
 # its notice, and a hand-back that an older node handed on as a message from "general-purpose" (Claude Code's frame
 # first, the report indented under it). The launch receipt is Claude Code 2.1.319's ("the agentId below" before the id)
@@ -11569,6 +12213,28 @@ LIFT_KEY = "a1f3c2d4-0000-4000-8000-0000000c1e0c"
 # lifted and selected, the quote stays folded (or open, as it was in the chat) and its hidden lines are not selected.
 LIFT_FOLD = "a1f3c2d4-0000-4000-8000-0000000c1e0d"
 LIFT_ASK_KEY = "b2e4d6f8-0000-4000-8000-0000000c1e0c"
+# An answer long enough to be drawn in parts (#4970, `AnswerParts`: 95 lines, three parts): a long press on its middle
+# part lifts, copies and selects all of it (#5221). Its first and last sentences are in its first and last parts.
+LIFT_SPLIT = "a1f3c2d4-0000-4000-8000-0000000c1e0e"
+
+
+def lift_split_answer():
+    topics = [("范围", "这次只迁移订单、库存和结算三张表，用户表和日志表留在旧库，下个季度再动。"),
+              ("步骤", "先双写一周，再把读切到新库，最后停掉旧库的写入；每一步都有开关，可以单独回退。"),
+              ("风险", "最大的风险是结算表的历史数据里有重复的流水号，迁移脚本遇到会停下来，等人工确认。"),
+              ("验证", "每天对一次账：两边的行数、金额合计和最近一小时的流水逐条比对，差异写进日报。"),
+              ("回滚", "回滚只需要把读开关切回旧库，双写期间两边的数据一致，不需要再搬数据。"),
+              ("后续", "旧库保留三十天只读，确认没有人再查之后再下线，下线前会再提醒一次。")]
+    sections = []
+    for n, (name, lead) in enumerate(topics, 1):
+        sections.append(f"### {n}. {name}\n\n第 {n} 节的说明：{lead}"
+                        "这一节的细节都写在迁移手册里，下面只列要点，方便你快速核对。The steps keep the old reader working until every client moved.")
+        sections.append("\n".join(f"- 要点 {n}.{k}：检查第 {k} 项，结果记在 `notes/migration-{n}-{k}.md` 里，有异常就停下来。" for k in range(1, 4)))
+        sections.append(f"```sh\nscripts/migrate.sh --step {n} --dry-run\nscripts/migrate.sh --step {n} --verify\n```")
+        sections.append(f"第 {n} 节小结：这一步预计半天，做完在群里说一声，我再接着做下一节。"
+                        "如果中间有任何一项对不上，就先停在这一步，不要往下走，等我们一起看过日志再决定。")
+    return ("## 迁移总结\n\n开头第一句：这份总结按六个部分说明这次迁移，先说范围，再说步骤、风险、验证、回滚和后续。\n\n"
+            + "\n\n".join(sections) + "\n\n以上是这次迁移的全部总结，有问题随时找我。")
 LIFT_KEY_MINE = "你先把管理密钥存到本机文件，我跑命令读一下。放在 ~/.config/example-gateway/management.key，权限设成 600，别打印到日志里。"
 LIFT_KEY_ANSWER = ("管理 Key 已经存到本机（hub）了：\n`/home/me/.config/example-gateway/management.key`\n\n"
                    "- 文件权限 600，内容 64 位，没有换行，以 `cb3b` 开头、`047f` 结尾。\n"
@@ -11647,6 +12313,8 @@ def mock_message_lift():
     ITEMS[LIFT_ASK_KEY] = [it("user", "text", 6, text=LIFT_KEY_MINE), it("assistant", "text", 5, text=LIFT_KEY_ANSWER)]
     ASSISTANT.append(assistant_sess(LIFT_ASK_KEY, "保存管理密钥", 5, "存好之后要删掉这个文件就跟我说一声。"))
     SESSIONS.append(sess("macbook", LIFT_MIX, "定时核对", repo, "done", "done", "shop-app", 17, "lift", 3, 7, "下一次核对在整点之后五分钟。"))
+    ITEMS[LIFT_SPLIT] = [it("user", "text", 6, text="把这次数据迁移的安排整理成一份总结"), it("assistant", "text", 4, text=lift_split_answer())]
+    SESSIONS.append(sess("macbook", LIFT_SPLIT, "迁移总结", repo, "done", "done", "shop-app", 17, "lift", 6, 4, "以上是这次迁移的全部总结，有问题随时找我。"))
 
 
 if os.environ.get("MOCK_MESSAGE_LIFT") == "1":
@@ -11836,6 +12504,71 @@ if os.environ.get("MOCK_WORK_GROUPS") == "1":
     mock_work_groups()
 
 
+# MOCK_WORK_TIMELINE=1 (#5155): a work summary that opens to cindy's timeline. The weather agent (WORKTL) has a finished
+# turn whose work is narration with a run of steps between each piece (a long thought with words, one without, reads,
+# a search, commands, an edit), then a live turn: narration, a run, more narration and a call still running. Persona's
+# main conversation gets the same shape in everyday words (a finished trip plan, a live dinner booking). With a
+# connection that declared session_live, both sessions say they are thinking (work_timeline_live). Made-up content.
+WORKTL = "a1f3c2d4-0000-4000-8000-0000000c5155"
+
+
+def mock_work_timeline():
+    _w = [it("user", "text", 12, text="The widget refreshes late in the morning. Find out why and fix it.")]
+    _w.append(it("assistant", "thinking", 11.95, text="The refresh is late in the morning, so it is probably the timeline policy rather than the "
+                                                      "network: WidgetKit only reloads after the date the provider returns, and if that date is "
+                                                      "computed from the last entry instead of now, a long night pushes it past breakfast."))
+    _w += tool("Read", {"file_path": "/Users/me/code/weather/Widget/Provider.swift"}, "let next = Calendar.current.date(byAdding: .minute, value: 30, to: lastEntry)!", 11.9)
+    _w += tool("Grep", {"pattern": "policy:", "path": "Widget"}, "Widget/Provider.swift:12: policy: .after(next)", 11.85)
+    _w.append(it("assistant", "text", 11.8, text="The next refresh is counted from the last entry, not from now, so after a quiet night it lands late. Changing it to count from now."))
+    _w.append(it("assistant", "thinking", 11.75, text=""))
+    _w += tool("Edit", {"file_path": "/Users/me/code/weather/Widget/Provider.swift",
+                        "old_string": "let next = Calendar.current.date(byAdding: .minute, value: 30, to: lastEntry)!",
+                        "new_string": "let next = Calendar.current.date(byAdding: .minute, value: 15, to: now)!"}, "ok", 11.6)
+    _w += tool("Bash", {"command": "xcodebuild test -scheme WeatherWidget -quiet", "description": "Run the widget tests"},
+               "Test Suite 'All tests' passed.\n     Executed 48 tests, with 0 failures (0 unexpected) in 9.2 seconds", 11.1)
+    _w.append(it("assistant", "thinking", 11.05, text="Tests pass."))
+    _w.append(it("assistant", "text", 11, text="Fixed: the widget now schedules its next refresh 15 minutes from now, so a quiet night no longer "
+                                               "pushes the morning refresh late. All 48 tests pass."))
+    _w.append(it("user", "text", 1.5, text="Also make the fetch timeout a setting."))
+    _w.append(it("assistant", "thinking", 1.45, text="**Moving the timeout** — it is a literal in `Fetcher`; a setting means `WidgetSettings`."))
+    _w += tool("Grep", {"pattern": "timeout", "path": "Widget"}, "Widget/Fetcher.swift:8: let timeout = 10", 1.4)
+    _w.append(it("assistant", "text", 1.2, text="The timeout is hard-coded in `Fetcher.swift`. Moving it into `WidgetSettings`."))
+    _w += tool("Edit", {"file_path": "/Users/me/code/weather/Widget/Fetcher.swift", "old_string": "let timeout = 10",
+                        "new_string": "let timeout = WidgetSettings.fetchTimeout"}, "ok", 0.9)
+    _w.append(it("assistant", "text", 0.6, text="Now running the tests again."))
+    _w.append(it("assistant", "tool_use", 0.5, tool_use_id="toolu_wtl_run", tool_name="Bash",
+                 tool_input={"command": "xcodebuild test -scheme WeatherWidget -quiet", "description": "Run the widget tests"}))
+    ITEMS[WORKTL] = _w
+    SESSIONS.append(sess("macbook", WORKTL, "Widget refresh and timeout", "/Users/me/code/weather", "working", "working", "weather", 1,
+                         "timeline", 12, 0, "Now running the tests again.", state_since=ago(minutes=1.5)))
+
+    _a = [it("user", "text", 20, text="Plan a weekend at the coast for the two of us.")]
+    _a.append(it("assistant", "thinking", 19.95, text="**Two people, one weekend:** check the weather first, then trains, then somewhere to stay near the beach."))
+    _a += tool("WebSearch", {"query": "coast weather this weekend"}, "Saturday sunny 24°, Sunday cloudy 21°", 19.9)
+    _a.append(it("assistant", "text", 19.8, text="Saturday looks sunny, Sunday cloudier. Looking at trains for Saturday morning."))
+    _a.append(it("assistant", "thinking", 19.75, text=""))
+    _a += tool("WebSearch", {"query": "Saturday morning trains to the coast"}, "08:10, 09:40, 11:05", 19.6)
+    _a += tool("WebSearch", {"query": "small hotels near the beach"}, "Three places with rooms for Saturday", 19.4)
+    _a.append(it("assistant", "text", 19, text="Here is a plan: take the 09:40 train on Saturday, stay at a small hotel two streets from the "
+                                               "beach, and spend Sunday morning at the market before the 15:00 train home."))
+    _a.append(it("user", "text", 1.2, text="Book a table for dinner on Saturday."))
+    _a += tool("WebSearch", {"query": "seafood restaurants near the beach, Saturday 19:30"}, "Three places with tables at 19:30", 1.1)
+    _a.append(it("assistant", "text", 0.9, text="Three places have a table at 19:30. Checking which one is quieter."))
+    _a.append(it("assistant", "thinking", 0.85, text="The harbour one has the best reviews for a quiet dinner."))
+    _a += tool("WebFetch", {"url": "https://example.com/harbour-kitchen", "prompt": "Is it quiet in the evening?"}, "Quiet tables by the window", 0.8)
+    _a.append(it("assistant", "text", 0.7, text="The harbour restaurant is the quietest. Asking for a table by the window."))
+    _a.append(it("assistant", "tool_use", 0.6, tool_use_id="toolu_wtl_book", tool_name="WebFetch",
+                 tool_input={"url": "https://example.com/harbour-kitchen/book", "prompt": "A table for two at 19:30 on Saturday, by the window"}))
+    ITEMS[ASK1] = ITEMS[ASK1] + _a
+    ASSISTANT[0].update(state="working", status="working", state_since=ago(minutes=1.2), updated_at=ago(),
+                        last_text="The harbour restaurant is the quietest. Asking for a table by the window.")
+
+
+WORK_TIMELINE = os.environ.get("MOCK_WORK_TIMELINE") == "1"
+if WORK_TIMELINE:
+    mock_work_timeline()
+
+
 # MOCK_EDIT_DIFF=1 (#2915): one finished turn whose edits read as real diffs: an Edit that changes a word in two lines
 # of a block (context between and around them), a MultiEdit of two pieces, a Write (all additions) and an Edit of a
 # 56-line switch that changes its first and last lines (the unchanged middle folds; past 40 lines, Show All). The first
@@ -11908,6 +12641,70 @@ def mock_edit_diff():
 
 if os.environ.get("MOCK_EDIT_DIFF") == "1":
     mock_edit_diff()
+
+
+# MOCK_TURN_CHANGES=1 (#5157): the changed-files card at the end of a finished Agent turn. One chat edits five files of
+# this checkout (one of them twice; an edit that failed does not count), a line of narration between the edits so the
+# page does not fold them (fold_work leaves runs under 3 items, docs/protocol/protocol.md "Folded work") and the card
+# counts the calls themselves; a Codex chat changes two files by their diffs. MOCK_EDIT_DIFF's chat comes folded, and
+# its card comes from the fold's `changes`. The main conversation's last exchange writes a file too and shows no card
+# (super rules 0 and 4). With MOCK_REVIEW=1, Review opens the review of the same checkout. Made-up code.
+TURN_CHANGES = "a1f3c2d4-0000-4000-8000-000000005157"
+TURN_CHANGES_CODEX = "a1f3c2d4-0000-4000-8000-000000005158"
+
+
+def mock_turn_changes():
+    w = "/Users/me/code/weather"
+    say = lambda t, text: it("assistant", "text", t, text=text)
+    _c = [it("user", "text", 26, text="Show 12 hours of rain, in the units the user picked, and document it")]
+    _c += tool("Edit", {"file_path": w + "/WeatherWidget/Provider.swift", "old_string": "let hours = hourly.prefix(6)",
+                        "new_string": "let hours = hourly.prefix(12)\nlet rain = hours.map(\\.chance)"}, "ok", 25.9)
+    _c.append(say(25.85, "The widget takes 12 hours now; the forecast model needs the same."))
+    _c += tool("MultiEdit", {"file_path": w + "/Sources/App/Forecast.swift", "edits": [
+        {"old_string": "var hourly: [Double]", "new_string": "var hourly: [Double]\nvar unit: UnitTemperature"},
+        {"old_string": "func high() -> Double {\n    hourly.max() ?? 0\n}",
+         "new_string": "func high() -> Measurement<UnitTemperature> {\n    Measurement(value: hourly.max() ?? 0, unit: unit)\n}"}]}, "ok", 25.8)
+    _c.append(say(25.75, "Next the units."))
+    _c += tool("Edit", {"file_path": w + "/README.md", "old_string": "## Units", "new_string": "## Units and hours"},
+               "String to replace not found in file.", 25.7, err=True)
+    _c.append(say(25.65, "The README has no Units section; the units go in their own file."))
+    _c += tool("Write", {"file_path": w + "/Sources/App/Units.swift",
+                         "content": "import Foundation\n\nlet celsius = UnitTemperature.celsius\nlet fahrenheit = UnitTemperature.fahrenheit\n"}, "ok", 25.6)
+    _c.append(say(25.55, "And the doc."))
+    _c += tool("Write", {"file_path": w + "/docs/hourly.md", "content": "# Hourly rain\n\nThe widget shows the next 12 hours.\n"
+                                                                      "Each bar is the chance of rain in that hour.\n"}, "ok", 25.5)
+    _c.append(say(25.45, "One more case in the provider, then the tests."))
+    _c += tool("Edit", {"file_path": w + "/WeatherWidget/Provider.swift", "old_string": "let temp = current.temperature",
+                        "new_string": "let temp = current.feelsLike"}, "ok", 25.4)
+    _c.append(say(25.35, "Tests for the new hours."))
+    _c += tool("Write", {"file_path": w + "/Tests/AppTests/ForecastTests.swift", "content": "\n".join([
+        "import XCTest", "@testable import App", "", "final class ForecastTests: XCTestCase {",
+        "    func testTwelveHours() {", "        XCTAssertEqual(Forecast.sample.hourly.prefix(12).count, 12)", "    }", "}"]) + "\n"},
+        "ok", 25.3)
+    _c.append(say(25, "Done: the widget shows 12 hours of rain and the feels-like temperature, the forecast keeps its unit, "
+                      "the units have their own file, and docs/hourly.md says what the bars mean."))
+    ITEMS[TURN_CHANGES] = _c
+    SESSIONS.append(sess("macbook", TURN_CHANGES, "Twelve hours of rain", w, "done", "read", "weather", 1, "changes", 20, 25,
+                         "Done: the widget shows 12 hours of rain."))
+    _x = [it("user", "text", 24, text="Use the feels-like temperature in the forecast and the widget")]
+    _x += tool("Edit", {"file_path": w + "/Sources/App/Forecast.swift", "change": "update",
+                        "diff": "@@ -3,3 +3,4 @@\n struct Forecast {\n-    var temperature: Double\n+    var feelsLike: Double\n+    var hourly: [Double]\n }\n"},
+               "update " + w + "/Sources/App/Forecast.swift", 23.9)
+    _x.append(say(23.85, "Now the widget."))
+    _x += tool("Edit", {"file_path": w + "/WeatherWidget/WidgetView.swift", "change": "update",
+                        "diff": "@@ -8,2 +8,2 @@\n-        Text(entry.temperature, format: .number)\n+        Text(entry.feelsLike, format: .number)\n     }\n"},
+               "update " + w + "/WeatherWidget/WidgetView.swift", 23.8)
+    _x.append(say(23.5, "The forecast and the widget both use the feels-like temperature now."))
+    ITEMS[TURN_CHANGES_CODEX] = _x
+    SESSIONS.append(sess("macbook", TURN_CHANGES_CODEX, "Feels-like temperature", w, "done", "read", "weather", 1, "changes-codex", 21,
+                         23.5, "The forecast and the widget both use the feels-like temperature now.", agent="codex"))
+    ITEMS[ASK1] = ITEMS[ASK1] + [it("user", "text", 1.5, text="把周末的行程整理成一个文件")] + tool(
+        "Write", {"file_path": "/Users/me/Documents/weekend.md", "content": "# 周末\n\n- 周六：爬山\n- 周日：看展\n"}, "ok", 1.4) + [
+        it("assistant", "text", 1.3, text="整理好了：周六爬山，周日看展，放在“文稿”里的 weekend.md。")]
+
+
+if os.environ.get("MOCK_TURN_CHANGES") == "1":
+    mock_turn_changes()
 
 
 # MOCK_TOOL_NAMES=1 (#2986): one finished turn that calls Claude Code's newer tools (ToolSearch, TaskCreate, TaskUpdate,
@@ -12208,6 +13005,12 @@ if os.environ.get("MOCK_TAB_PANES"):
     ITEMS.update(tab_panes_items())
     INTERACTIONS[:] = []
     MOCK_INTERACTIONS[:] = []
+    if MOCK_TEAM:  # a worker's request (#5180): the hub sends it with folded_under (the lead) and folded_as "worker"
+        INTERACTIONS.append(
+            {"id": "team_review_test", "machine_id": "server", "session_id": PANES_REVIEW, "session_title": "审一下登录重构的改动",
+             "cwd": "/home/me/code/app", "kind": "permission", "agent": "codex", "tool_use_id": "toolu_panes_review_test",
+             "created_at": ago(minutes=1), "expires_at": later(minutes=29), "tool_name": "Bash",
+             "summary": "go test ./auth/...", "tool_input": {"command": "go test ./auth/..."}})
 if os.environ.get("MOCK_BOTMUX"):
     ITEMS[BOTMUX_BLOCKED] = [it("user", "text", 5, text="把周报导出改成按部门分 sheet")] + [
         it("assistant", "text", 3, text="导出脚本改好了，正在跑全量。")]
@@ -12761,6 +13564,106 @@ def fold_task_snapshots(items):
     return snapshots
 
 
+CLIPPED_NOTE = re.compile("\n…（已截断，共 \\d+ 字节）$")
+
+
+def _edit_lines(old, new):
+    """transcript.editLines: a final newline ends the last line on a side whose other side is empty or ends in one."""
+    def split(s, strip):
+        return (s[:-1] if strip else s).split("\n") if s else []
+    old_ends, new_ends = old.endswith("\n"), new.endswith("\n")
+    return split(old, old_ends and (not new or new_ends)), split(new, new_ends and (not old or old_ends))
+
+
+def _clean_path(p):
+    """path.Clean, as transcript.editPath cleans an edit's file (no "./", "../" or doubled slashes)."""
+    return posixpath.normpath(re.sub("/+", "/", p))
+
+
+def _line_changes(old, new):
+    """transcript.lineChanges: lines added and removed by Myers' line diff; everything past its limits."""
+    a, b = _edit_lines(old, new)
+    n, m = len(a), len(b)
+    if n + m <= 60000:
+        most = min(n + m, 6000)
+        off, v = most + 1, [0] * (2 * most + 3)
+        for d in range(most + 1):
+            for k in range(-d, d + 1, 2):
+                x = v[off + k + 1] if k == -d or (k != d and v[off + k - 1] < v[off + k + 1]) else v[off + k - 1] + 1
+                y = x - k
+                while x < n and y < m and a[x] == b[y]:
+                    x, y = x + 1, y + 1
+                v[off + k] = x
+                if x >= n and y >= m:
+                    return (m - n + d) // 2, (n - m + d) // 2
+    return m, n
+
+
+def _patch_changes(patch, change):
+    """transcript.patchLines: a Codex file change's unified diff, or the whole file without hunks."""
+    lines = patch.split("\n")
+    if not any(l.startswith("@@") for l in lines):
+        if not patch:
+            return 0, 0
+        count = len((patch[:-1] if patch.endswith("\n") else patch).split("\n"))
+        return (0, count) if change == "delete" else (count, 0)
+    add = rm = 0
+    inside = False
+    for l in lines:
+        if l.startswith("diff --git"):
+            inside = False
+        elif not inside and l.startswith(("index ", "--- ", "+++ ")):
+            continue
+        elif l.startswith("@@"):
+            inside = True
+        elif inside and l.startswith("+"):
+            add += 1
+        elif inside and l.startswith("-"):
+            rm += 1
+    return add, rm
+
+
+def fold_changes(run):
+    """transcript.foldChanges (#5157): the files the run's successful Edit / Write / MultiEdit calls changed, in the
+    order first edited, each with the lines added and removed and whether the input was whole."""
+    ok = {x.get("tool_use_id"): not x.get("is_error") for x in run if x["kind"] == "tool_result"}
+    out, at = [], {}
+
+    def clipped(v):
+        if isinstance(v, str):
+            return bool(CLIPPED_NOTE.search(v))
+        if isinstance(v, list):
+            return any(clipped(e) for e in v)
+        return isinstance(v, dict) and any(clipped(e) for e in v.values())
+    for x in run:
+        name = x.get("tool_name")
+        if x["kind"] != "tool_use" or name not in ("Edit", "Write", "MultiEdit") or not ok.get(x.get("tool_use_id")):
+            continue
+        inp = x.get("tool_input") or {}
+        path = next((_clean_path(inp[k].strip()) for k in ("file_path", "notebook_path", "path") if isinstance(inp.get(k), str) and inp[k].strip()), "")
+        if not path:
+            continue
+        add = rm = 0
+        if name == "Edit" and isinstance(inp.get("diff"), str):
+            add, rm = _patch_changes(inp["diff"], inp.get("change") or "")
+        elif name == "Edit" and (isinstance(inp.get("old_string"), str) or isinstance(inp.get("new_string"), str)):
+            add, rm = _line_changes(inp.get("old_string") or "", inp.get("new_string") or "")
+        elif name == "Write" and isinstance(inp.get("content"), str):
+            add, rm = _line_changes("", inp["content"])
+        elif name == "MultiEdit":
+            for e in inp.get("edits") or []:
+                a, r = _line_changes(e.get("old_string") or "", e.get("new_string") or "")
+                add, rm = add + a, rm + r
+        exact = not clipped(inp)
+        if path in at:
+            c = out[at[path]]
+            c["add"], c["del"], c["exact"] = c["add"] + add, c["del"] + rm, c["exact"] and exact
+        else:
+            at[path] = len(out)
+            out.append({"path": path, "add": add, "del": rm, "exact": exact})
+    return out
+
+
 def fold_work(items):
     """transcript.FoldWork: each run of tool calls (with their results) and thoughts becomes one fold item."""
     uses = {x.get("tool_use_id") for x in items if x["kind"] == "tool_use"}
@@ -12797,7 +13700,8 @@ def fold_work(items):
                         "fold": {"items": len(run), "tools": sum(x["kind"] == "tool_use" for x in run),
                                  "thoughts": sum(x["kind"] == "thinking" and bool((x.get("text") or "").strip()) for x in run),
                                  "until": run[-1]["ts"], "through_seq": run[-1]["seq"], "through_id": run[-1]["id"],
-                                 **({"tasks": tasks} if tasks else {}), **({"images": images} if images else {}), **narration}})
+                                 **({"tasks": tasks} if tasks else {}), **({"images": images} if images else {}), **narration,
+                                 "changes": fold_changes(run)}})
         i = j
     return out
 
@@ -12811,7 +13715,107 @@ MODES_LOG = []  # POST …/modes requests, GET /mock/modes (the model picker's a
 
 
 def all_sessions():
-    return [decorated_session(s) for s in (SESSIONS + ASSISTANT)]
+    return fold_hierarchy([decorated_session(s) for s in (SESSIONS + ASSISTANT)])
+
+
+def is_child_row(r):
+    root = r.get("root_session_id")
+    return bool(r.get("is_subagent") or r.get("parent_session_id") or r.get("asking_parent_session_id") or (root and root != r["session_id"]))
+
+
+def tab_leads(rows):
+    """The manager's tab teams (#5180, fold_hierarchy): for each worker's (machine, session id), its lead's row. A tab is the
+    rows of one machine, space kind, space and slot, both named; an assistant row or an archived one is in none. Its lead is
+    the one row in its first pane (pane_index 0) that is no child and not offline: none or two such rows, and its Agents
+    are peers. Every other row of a tab with a lead that is no child and not offline is its worker."""
+    def tab(r):
+        if (r.get("assistant") or r.get("archived") or not r.get("space_id") or not r.get("slot_id") or is_child_row(r)
+                or r.get("state") == "offline"):
+            return None
+        return (r["machine_id"], r.get("space_kind") or "", r["space_id"], r["slot_id"])
+    first = {}
+    for r in rows:
+        k = tab(r)
+        if k is not None and type(r.get("pane_index")) is int and r["pane_index"] == 0:
+            first[k] = None if k in first else r
+    lead = {}
+    for r in rows:
+        k = tab(r)
+        l = first.get(k) if k is not None else None
+        if l is not None and l["session_id"] != r["session_id"]:
+            lead[(r["machine_id"], r["session_id"])] = l
+    return lead
+
+
+def fold_hierarchy(rows):
+    """The manager's folding (#5120, #5180, docs/protocol/protocol.md "Session hierarchy"), on copies: a child
+    (is_subagent, a parent, or the parent a waiting runtime child names in asking_parent_session_id) whose topmost listed
+    ancestor on its machine is another listed row gets folded_under that ancestor, which gets children (its descendants by
+    their own state). A tab's worker (tab_leads) has its lead as its parent and gets folded_as "worker" too; the lead's
+    children count its workers. Orphans and cycles fold nowhere."""
+    by = {(r["machine_id"], r["session_id"]): r for r in rows}
+    lead = tab_leads(rows)
+
+    def parent(r):
+        if not is_child_row(r):
+            return lead.get((r["machine_id"], r["session_id"]))
+        for k in ("parent_session_id", "asking_parent_session_id", "root_session_id"):
+            v = r.get(k)
+            if v and v != r["session_id"] and (r["machine_id"], v) in by:
+                return by[(r["machine_id"], v)]
+        return None
+    top = {}
+    for r in rows:
+        cur, seen, found = r, {r["session_id"]}, None
+        while True:
+            p = parent(cur)
+            if p is None:
+                break
+            if p["session_id"] in seen:
+                found = None
+                break
+            seen.add(p["session_id"])
+            found = cur = p
+        if found is not None:
+            top[(r["machine_id"], r["session_id"])] = found["session_id"]
+    if not top and not any("folded_under" in r or "folded_as" in r or "children" in r for r in rows):
+        return rows
+    rollup = {}
+    for (mid, sid), root in top.items():
+        c = rollup.setdefault((mid, root), {"total": 0, "working": 0, "needs_you": 0, "workers": 0})
+        c["total"] += 1
+        state = by[(mid, sid)].get("state")
+        if state in ("working", "needs_you"):
+            c[state] += 1
+        if (mid, sid) in lead:
+            c["workers"] += 1
+    out = []
+    for r in rows:
+        k = (r["machine_id"], r["session_id"])
+        r = {x: v for x, v in r.items() if x not in ("folded_under", "folded_as", "children")}
+        if k in top:
+            r["folded_under"] = top[k]
+            if k in lead:
+                r["folded_as"] = "worker"
+        if k in rollup:
+            r["children"] = {x: v for x, v in rollup[k].items() if v or x == "total"}
+        out.append(r)
+    return out
+
+
+def with_fold(row):
+    """One decorated row with what the list's folding gives it."""
+    return next((x for x in all_sessions() if x["machine_id"] == row.get("machine_id") and x["session_id"] == row.get("session_id")), row)
+
+
+def folded_state(s):
+    """Session.FoldedState: what a parent shows and is counted as with its folded children."""
+    own, c = s.get("state") or "unknown", s.get("children") or {}
+    if own == "needs_you" or c.get("needs_you"):
+        return "needs_you"
+    if c.get("working") and own != "unread" and not (own == "idle" and s.get("awaits_reply")):
+        return "working"
+    return own
 
 
 LIST_JOURNAL = {}  # revision -> {identity: row} of the unfiltered list as it was (a bounded delta journal, #3759)
@@ -12883,12 +13887,20 @@ def paged_sessions(query):
     if os.environ.get("MOCK_SESSIONS_LIST") != "1" or not (set(query) - {"manager"}):
         return {"sessions": rows}, 200
     revision = list_revision(rows)
-    fields = {"machine_id": "machine_id", "session_id": "session_id", "state": "state",
+    fields = {"machine_id": "machine_id", "session_id": "session_id",
               "group": "space_id", "source": "source_kind", "provider": "agent"}
     search = query.get("q", [""])[0].lower()
+    # sessions_hierarchy (#5120): roots=1 leaves the folded children out and counts each parent by its folded state;
+    # parent_session_id=<id> (with machine_id) lists the sessions folded under it.
+    roots, under = query.get("roots", [""])[0] == "1", query.get("parent_session_id", [""])[0]
+    if under and not query.get("machine_id", [""])[0]:
+        return {"error": "parent_session_id needs machine_id", "code": "invalid_query"}, 400
+    state_of = folded_state if roots else (lambda s: s.get("state", "unknown"))
 
     def matching(rows):
-        rows = [s for s in rows if all(not query.get(k, [""])[0] or query[k][0] == s.get(v, "")
+        rows = [s for s in rows if (not roots or not s.get("folded_under")) and (not under or s.get("folded_under") == under)
+                and (not query.get("state", [""])[0] or query["state"][0] == state_of(s))
+                and all(not query.get(k, [""])[0] or query[k][0] == s.get(v, "")
                                       for k, v in fields.items())
                 and (not query.get("project", [""])[0] or query["project"][0] == (s.get("repo_root") or s.get("workspace_cwd") or s.get("cwd", "")))
                 and (not search or search in "\n".join(str(s.get(k, "")) for k in ("title", "cwd", "space_name", "slot_name", "last_text")).lower())]
@@ -12900,7 +13912,7 @@ def paged_sessions(query):
         counts = {"total": len(rows), "revision": revision, "machine": {}, "project": {}, "group": {}, "state": {}}
         for s in rows:
             values = {"machine": s["machine_id"], "project": s.get("repo_root") or s.get("workspace_cwd") or s.get("cwd", ""),
-                      "group": s.get("space_id") or s.get("workspace_id", ""), "state": s.get("state", "unknown")}
+                      "group": s.get("space_id") or s.get("workspace_id", ""), "state": state_of(s)}
             for key, value in values.items():
                 counts[key][value] = counts[key].get(value, 0) + 1
         return counts, 200
@@ -15793,7 +16805,7 @@ def set_session_state(query):
     session.update(state=state, status=STATUS_OF_STATE[state], updated_at=now, state_since=now,
                    rev=(session.get("rev") or 0) + 1)
     push_machine(mid)
-    return {"session": stamp_row(decorated_session(session))}, 200
+    return {"session": stamp_row(with_fold(decorated_session(session)))}, 200
 
 
 def incoming_message(query):
@@ -15818,7 +16830,7 @@ def incoming_message(query):
         if sid in subscribed:
             try: send({"type": "items", "machine_id": mid, "session_id": sid, "items": [item], **span([item], before)})
             except OSError: pass
-    return {"session": stamp_row(decorated_session(session)), "item": item}, 200
+    return {"session": stamp_row(with_fold(decorated_session(session))), "item": item}, 200
 
 
 def quiet_capsule():
@@ -16342,6 +17354,54 @@ if os.environ.get("MOCK_CHURN") == "1":
     for _n, _x in enumerate(ITEMS[WIDGET]):  # seqs in transcript order again (the new ones were numbered last)
         _x["seq"] = _w[0]["seq"] + _n
 
+
+# MOCK_TALL_HISTORY=1: the weather chat with twelve tall exchanges in front, like an Agent chat used for a day of work
+# (#4788): long messages of the user's (Chinese and English, lists, paths), replies with headings and nested lists, and
+# tool calls whose results are screenshots. Rows of very different heights, so the lazy list's guesses are far off.
+# With MOCK_STREAM=1 the chat keeps working at its newest end (ScrollToBottomTests 13).
+if os.environ.get("MOCK_TALL_HISTORY") == "1":
+    _tall = []
+    for _k in range(12):
+        _m = 900 - _k * 40
+        _ask = "\n".join([
+            "第 %d 轮：请把下面几件事按顺序推进，做完一件回我一句。" % (_k + 1),
+            "1) 先看 `apps/weather/Sources/Forecast%d.swift` 里的重试逻辑：断网时 retry 没有上限，改成最多 3 次、指数退避。" % _k,
+            "2) Then check the widget timeline: it reloads every 5 minutes even when nothing changed, which drains the battery.",
+            "3) 截图对比：改前 / 改后各一张，深色和浅色都要，放到 `.shots/round-%d/` 下面，拼成一张给我看。" % (_k + 1),
+            "4) 跑相关测试（ForecastTests、WidgetTimelineTests），不用跑整套。",
+            "说明：如果第 2 件需要改接口，先停下来问我；其余的直接做，不用等我确认。",
+            "补充：上一轮的截图里标题被截断了（「天气预报 · 未来七…」），这次一起看一下是不是同一个原因。",
+        ])
+        _tall.append(it("user", "text", _m, text=_ask))
+        _tall.append(it("assistant", "thinking", _m - 1, text="先看重试逻辑，再看小组件的刷新，最后截图。"))
+        _tall += tool("Read", {"file_path": "/Users/me/code/weather/Sources/Forecast%d.swift" % _k}, "struct Forecast%d {}" % _k, _m - 1)
+        _shot = tool("Bash", {"command": "xcrun simctl io booted screenshot .shots/round-%d/after.png" % (_k + 1),
+                              "description": "截改后的图"}, "", _m - 2)
+        _tall += _shot
+        for _dark in (False, True):
+            _tall.append(it("user", "image", _m - 2, tool_use_id=_shot[0]["tool_use_id"],
+                            image={"mime": "image/png", "data": base64.b64encode(_page_png(360, 480, dark=_dark)).decode()}))
+        _tall.append(it("assistant", "text", _m - 3, text="\n".join([
+            "第 %d 轮做完了，按顺序说：" % (_k + 1),
+            "",
+            "**重试逻辑：** 改成最多 3 次，间隔 1 s、2 s、4 s；断网时第三次失败就停下，界面显示「暂时连不上」。",
+            "- 改了 `Forecast%d.swift` 和它的测试，`ForecastTests` 全过。" % _k,
+            "- 顺手把两处重复的超时判断合并成一个函数。",
+            "",
+            "**Widget timeline:** it now reloads only when the forecast changed or at the next hour, instead of every 5 minutes.",
+            "- Measured on the simulator: 12 reloads an hour before, 1–2 after.",
+            "- `WidgetTimelineTests` passes, including a new case for an unchanged forecast.",
+            "",
+            "**截图：** 改前 / 改后、深浅色各一张，拼图在上面。",
+            "- 标题截断是同一个原因：标题行没有给日期留位置，改成最多两行。",
+            "- 第 2 件没有动接口，所以没停下来问你。",
+            "",
+            "**接下来：** 等你看完截图，没问题我就开 PR；有要改的直接说。",
+        ])))
+    _w = ITEMS[WIDGET]
+    ITEMS[WIDGET] = _tall + _w
+    for _n, _x in enumerate(ITEMS[WIDGET]):  # transcript order: the tall history first
+        _x["seq"] = _n + 1
 
 # MOCK_COMPUTER=ready|permissions|locked: the hub's plugin cua is on (docs/extensions/computer-use.md) and macbook is turned on
 # in that state; Mac Studio is a Mac it is not on for yet. =off: on, but for no machine yet. Unset: the plugin is off.
@@ -18231,6 +19291,7 @@ MOCK_HELP = [
     "MOCK_SESSIONS_MANY=<n>  n more idle sessions to page through; GET /mock/sessions/touch expires the old cursors (#4410)",
     "MOCK_MANUAL_HERDR=1  没挂待办的 herdr Agent 算手动开的（started_by_persona 为假），Agents「按待办」里出「手动开的」一段（#2917）",
     "MOCK_ORCA_CHILDREN=1  MacBook 上一个 Orca 工作区带三个子工作区（其中一个还有子项，parent_space_id，#2073）",
+    "MOCK_CHILD_SESSIONS=1  The Paseo computer (MOCK_PASEO) with its agent's four created agents (one waiting for you, one working with a Codex subagent of its own, one done, one failed) and an agent whose creator is not listed: the hub folds them (folded_under / children) and the lead's chat draws a card for each (#5120)",
     "MOCK_PASEO=1  A computer whose engine is Paseo: a project with its main checkout and two titled worktree workspaces, an agent with the two agents it created (one waiting for you), and a Codex agent whose thread has a subagent",
     "MOCK_LIVE_STEP=bash|command|reads|parallel|thinking|thinking-folded  The widget chat a minute into a turn whose newest step is still going: the running work line names it (#2987)",
     "MOCK_TOOL_OUTCOMES=1  A turn whose tool results carry outcomes: a failed test run (exit code, the cut output's end), a denied edit, a refused write, an interrupted and a timed-out command; only the failure is red (#4303)",
@@ -19054,6 +20115,8 @@ class H(BaseHTTPRequestHandler):
             q = parse_qs(urlparse(self.path).query)
             return self.send_json(assistant_state(q.get("space", [""])[0], q.get("archived", [""])[0] == "1"))
         if p == "/api/v1/model-config": return self.send_json(model_configuration())
+        if p == "/api/v1/model-config/purposes/" + SUPERVISE_PURPOSE and (own := supervise_model_purpose()):
+            return self.send_json(own)
         if p.startswith("/api/v1/model-config/purposes/"):
             catalog = model_configuration(include_uses=True)
             purpose = next((x for x in catalog["purposes"] if x["id"] == unquote(p.rsplit("/", 1)[1])), None)
@@ -19833,6 +20896,8 @@ class H(BaseHTTPRequestHandler):
             if c is None: return self.send_json({"error": "not found"}, 404)
             if m.group(2) == "archive" and c["session_id"] == ASSISTANT_CONFIG["main"]:
                 return self.send_json({"error": "the main conversation can't be archived"}, 400)
+            if m.group(2) == "archive" and c["session_id"] == BACKGROUND_SUPERVISOR:  # built in, stays listed (#4927)
+                return self.send_json({"error": "the background supervisor can't be archived"}, 400)
             c["archived"] = m.group(2) == "archive"
             push_machine(c["machine_id"])
             return self.send_json({"ok": True, "archived": c["archived"]})
@@ -20028,6 +21093,21 @@ class H(BaseHTTPRequestHandler):
                 return self.send_json({"ok": True})
         if self.command == "POST" and p.startswith("/api/v1/inbox/") and p.endswith("/draft"):
             return self.send_json(*inbox_draft(unquote(p[len("/api/v1/inbox/"):-len("/draft")]), json.loads(self.last_body or b"{}")))
+        if p == "/api/v1/model-config/purposes/" + SUPERVISE_PURPOSE and self.command == "PATCH" and (own := supervise_model_purpose()):
+            body, purpose = json.loads(self.last_body or b"{}"), own["purpose"]
+            with MODEL_CONFIG_LOCK:
+                if body.get("revision") != purpose["revision"]:
+                    return self.send_json({"error": "配置已在别处修改"}, 409)
+                binding = dict(purpose["override"])
+                if "provider" in body and body["provider"] != binding.get("provider"):
+                    binding.pop("model", None)
+                    binding.pop("effort", None)
+                for field in purpose["fields"]:
+                    if field not in body: continue
+                    if body[field] is None: binding.pop(field, None)
+                    else: binding[field] = body[field]
+                MODEL_BINDINGS[SUPERVISE_PURPOSE] = {"revision": purpose["revision"] + 1, "override": binding}
+            return self.send_json(supervise_model_purpose())
         if p.startswith("/api/v1/model-config/purposes/") and self.command == "PATCH":
             pid, body = unquote(p.rsplit("/", 1)[1]), json.loads(self.last_body or b"{}")
             with MODEL_CONFIG_LOCK:
@@ -20452,6 +21532,17 @@ class H(BaseHTTPRequestHandler):
                         push_machine(q["machine_id"])
                 # MOCK_QUEUE_SENDS=1: one to a working agent joins its own queue (#3022), as Claude Code holds it.
                 s = next((x for x in SESSIONS if len(parts) >= 7 and x["machine_id"] == parts[4] and x["session_id"] == parts[5]), None)
+                if s is not None and s.get("awaiting_first_message"):  # MOCK_CODEX_WAITING: the row becomes the thread it began
+                    SESSIONS.remove(s)
+                    START_IDS[0] += 1
+                    thread = dict(s, session_id="019a2b3c-0000-7000-8000-%012d" % START_IDS[0], status="working", state="working",
+                                  title=(body.get("text") or "").split("\n")[0][:60] or s["title"], updated_at=ago(minutes=0))
+                    thread.pop("awaiting_first_message", None)
+                    thread.pop("capabilities", None)
+                    ITEMS[thread["session_id"]] = [it("user", "text", 0, text=body.get("text") or "")]
+                    SESSIONS.append(thread)
+                    push_machine(thread["machine_id"])
+                    return self.send_json({"ok": True, "session": decorated_session(thread)})
                 if os.environ.get("MOCK_QUEUE_SENDS") and s and s["state"] == "working" and not s.get("assistant"):
                     s["queued"] = (s.get("queued") or []) + [claude_queued(s["machine_id"], body.get("text"), body.get("images") or [])]
                     push_machine(s["machine_id"])
@@ -20810,6 +21901,8 @@ class H(BaseHTTPRequestHandler):
                 ASSISTANT_CONFIG["agent_tasks"] = body["agent_tasks"]
             if isinstance(body.get("inbox_signals"), bool):
                 ASSISTANT_CONFIG["inbox_signals"] = body["inbox_signals"]
+            if isinstance(body.get("main_supervises_own_tasks"), bool) and not os.environ.get("MOCK_LEGACY_HUB"):
+                ASSISTANT_CONFIG["main_supervises_own_tasks"] = body["main_supervises_own_tasks"]
             if isinstance(body.get("kb_topics"), bool):
                 ASSISTANT_CONFIG["kb_topics"] = body["kb_topics"]
             if body.get("machine_id"):
@@ -20899,10 +21992,19 @@ class H(BaseHTTPRequestHandler):
                 if os.environ.get("MOCK_RESUME_ERROR"): return self.send_json({"error": os.environ["MOCK_RESUME_ERROR"]}, 502)
                 resume.update(status="idle", state="idle")
                 push_machine(resume["machine_id"])
-                return self.send_json({"session": decorated_session(resume)})
+                return self.send_json({"session": with_fold(decorated_session(resume))})
             codex = body.get("launcher") == "codex"  # the node starts Codex with its first message and answers with its thread
-            if codex and (body.get("async") or not (body.get("prompt") or "").strip()):
+            if codex and (body.get("async") or not (body.get("prompt") or "").strip() and not MOCK_CODEX_WAITING):
                 return self.send_json({"error": "新建 Codex 会话要连第一条消息一起发：Codex 收到第一条消息才建会话。", "code": "codex_needs_prompt"}, 400)
+            if codex and not (body.get("prompt") or "").strip():  # MOCK_CODEX_WAITING: Codex open, waiting for its first message
+                START_IDS[0] += 1
+                cwd = body.get("cwd", "")
+                w = sess(body["machine_id"], "c0de0000-0000-4000-8000-%012d" % (100 + START_IDS[0]), cwd.rsplit("/", 1)[-1] or "codex", cwd,
+                         "idle", "idle", cwd.rsplit("/", 1)[-1] or "new", 9, body.get("tab_name") or "codex", 20 + len(STARTED), 0, "",
+                         agent="codex", launcher="codex", awaiting_first_message=True, capabilities=CODEX_WAITING_CAPS)
+                SESSIONS.append(w)
+                push_machine(w["machine_id"])
+                return self.send_json({"session": decorated_session(w)})
             n = len(STARTED)
             START_IDS[0] += 1
             s = sess(body["machine_id"], "d4e6f8a0-0000-4000-8000-%012d" % START_IDS[0], (body.get("prompt") or "新会话").split("\n")[0], body.get("cwd", ""),
@@ -20939,7 +22041,7 @@ class H(BaseHTTPRequestHandler):
                     t["updated_at"] = now_str
                     push_machine(s["machine_id"])
                     push_todos()
-            return self.send_json({"session": decorated_session(s)})
+            return self.send_json({"session": with_fold(decorated_session(s))})
         if p.startswith("/api/v1/auth/tokens/") and self.command == "DELETE":
             for t in TOKENS:
                 if t["id"] == p.split("/")[-1]:
@@ -21483,6 +22585,8 @@ class H(BaseHTTPRequestHandler):
                     subscribed.add(sid)
                     if LIVE_STATUS and "session_live" in asked:
                         live_status_subscribe(send, mid, sid)
+                    if WORK_TIMELINE and "session_live" in asked:
+                        work_timeline_live(send, mid, sid)
                     items = find_items(sid)
                     since = msg.get("since_seq") or 0
                     if GAP and sid == SESSIONS[0]["session_id"] and not GAP_STATE["started"]:
@@ -21741,6 +22845,9 @@ MOCK_HELP.append("MOCK_MARKDOWN=1  任务往来和回执里带 **粗体**、`代
 MOCK_HELP.append("MOCK_TASK_RENAMED=1  整理发布说明这个任务在回执写好后改了名：回执应显示新名字「写本周发布说明」（#3036）")
 MOCK_HELP.append("MOCK_AUTO_CONVERSATIONS=1  助手对话带来源 origin（feature conversation_origin）：另有 10 段自动对话（收件箱 6、定时任务 2、飞书 /agent、对话派生），侧边栏收进「自动对话」（#3264）")
 MOCK_HELP.append("MOCK_EXTERNAL=1  和 MOCK_AUTO_CONVERSATIONS=1 一起用：飞书 /agent 那段带上请求和上下文，另加一段别的扩展开的（origin extension），两段都是外部的（#3758）")
+MOCK_HELP.append("MOCK_BACKGROUND_SUPERVISOR=1  The hub's built-in background supervisor conversation exists (#4927): origin task with no origin_ref, "
+                 "named by GET /api/v1/assistant as background_supervisor, and archiving it is refused. Without it the setting "
+                 "main_supervises_own_tasks and the model use assistant.supervise (answered by its own id, not in the catalog) are still there; MOCK_LEGACY_HUB has none of them")
 
 
 
@@ -22126,6 +23233,26 @@ def live_status_subscribe(send, mid, sid):
 MOCK_HELP.append("MOCK_LIVE_STATUS=1  Claude 会话的实时状态行（session_live，#1963）：声明了 session_live 的连接订阅后按 MOCK_LIVE_STATUS_TICK 秒（默认 1）一条推 live（思考中、thought for、token 增长、动词变化），最后推 null、会话变空闲；结束后再订阅会重来一轮")
 
 
+def work_timeline_live(send, mid, sid):
+    """MOCK_WORK_TIMELINE: the two live sessions say they are thinking, every 5 s for 10 minutes or until the page goes."""
+    if sid not in (WORKTL, ASK1):
+        return
+
+    def run():
+        import time
+        for _ in range(120):
+            try:
+                send({"type": "live", "machine_id": mid, "session_id": sid,
+                      "live": {"verb": "Thinking", "thinking": True, "elapsed_s": 30, "at": utc_now()}})
+            except Exception:
+                return
+            time.sleep(5)
+    threading.Thread(target=run, daemon=True).start()
+
+
+MOCK_HELP.append("MOCK_WORK_TIMELINE=1  work summaries that open to cindy's timeline (#5155): the weather Agent (WORKTL) and the Persona main conversation each have a finished and a live turn, with narration between runs of steps and thoughts with and without words; a connection that declared session_live and subscribes to either is told every 5 s that it is thinking")
+
+
 # ---------- MOCK_CHAT_CARDS: a crowded composer on a phone (#1996) ----------
 # MOCK_CHAT_CARDS=1 (with MOCK_SPLIT_TABS=1): the working claude of server's tab w1:t1 waits on three cards (a plan, a
 # question, a permission), has two messages queued, a /loop and a background task: everything that sits above the
@@ -22166,7 +23293,8 @@ def chat_cards_mock():
 
 if os.environ.get("MOCK_CHAT_CARDS") == "1":
     chat_cards_mock()
-MOCK_HELP.append("MOCK_TAB_PANES=1  一个 herdr 标签页里三个 Agent（#2320）：发起者（pane_index 0，工作中）和它分出的两个窗格（Codex 停在电脑上的对话框、Claude 做完未看），旁边是一个 Agent 的普通标签页和左上是 shell 的两个平级 Agent；没有卡片")
+MOCK_HELP.append("MOCK_TAB_PANES=1  一个 herdr 标签页里三个 Agent（#2320）：发起者（pane_index 0，工作中）和它分出的两个窗格（Codex 停在电脑上的对话框、Claude 做完未看），旁边是一个 Agent 的普通标签页和左上是 shell 的两个平级 Agent；没有卡片。两个窗格作为 worker 折叠在发起者下面（folded_under / folded_as，#5180）")
+MOCK_HELP.append("MOCK_TEAM=1  A tab team (#5180, implies MOCK_TAB_PANES): the lead's tab adds a permission card of the Codex worker's (folded_under the lead, folded_as worker), a third worker that is working and a stopped pane that stays a row of its own; the lead and every worker have a short transcript")
 MOCK_HELP.append("MOCK_CHAT_CARDS=1  （配合 MOCK_SPLIT_TABS=1）server 上 w1:t1 那个工作中的 Claude 同时有计划、提问、授权三张卡，两条排队消息，/loop 和一个后台任务：手机上输入区最挤的样子（#1996）")
 
 # ---------- MOCK_GOAL: an agent working toward a goal (docs/integrations/agent-goal.md, #2420) ----------
@@ -23151,6 +24279,216 @@ MOCK_HELP.append("MOCK_ULTRACODE=1  Claude Code 的 ultracode 开关（#3428）�
 MOCK_HELP.append("MOCK_CUSTOM_MODELS=1|forgetfail|empty|fail  手动输入模型 ID（#1644）：features 带 typed_models；Claude Code / Codex 的模型列表后面带输入过的 ID（custom），"
                  "DELETE …/models/custom?model= 忘掉；新建和 …/modes 用了列表里没有的 ID 就记下。forgetfail：忘掉回 500；empty：Claude Code 的列表是空的；"
                  "fail：读不到列表（502）。GET /mock/custom_models 看记着的，?reset=1 复原")
+
+# A Persona chat's own model (#5033, docs/assistant/model-config.md "A conversation's own model"): MOCK_MODEL_PICK=1
+# advertises `assistant_model_pick`; the main chat's launchers (`?purpose=assistant`) are plain claude, the locked
+# sonnetcc, a Messages-protocol direct API ("Team API", which has no /model list) and codex, with the default and an
+# `unavailable` list (a Responses direct API, a provider out of the computer's scope); PUT / DELETE
+# /api/v1/assistant/conversations/{id}/model keep or drop `model_pick` on the conversation (the out-of-scope one is 409
+# launcher_out_of_scope, an unknown one 409 launcher_missing, another agent than the chat's 409 launcher_other_kind, a
+# model with sonnetcc 400). =picked: the second chat starts
+# with a pick. GET /mock/model_pick: the requests; ?reset=1 drops every pick.
+MODEL_PICK_MODE = os.environ.get("MOCK_MODEL_PICK", "")
+MODEL_PICK_LOG = []
+MODEL_PICK_LAUNCHERS = [
+    {"name": "claude", "model": "opus", "source": "builtin"},
+    {"name": "sonnetcc", "model": "sonnet", "source": "zshrc"},
+    {"name": "team-api", "display_name": "Team API", "model": "claude-sonnet-5-5", "source": "persona"},
+    {"name": "codex", "model": "gpt-5.5", "agent": "codex", "agent_type": "codex", "source": "builtin"},
+]
+MODEL_PICK_REASONS = {
+    "api_protocol": {"en": "This direct API speaks the Responses protocol, which can't run Persona chats",
+                     "zh-Hans": "这个直连 API 用的是 Responses 协议，跑不了 Persona 对话",
+                     "ja": "この直接 API は Responses プロトコルのため、Persona のチャットを実行できません"},
+    "launcher_out_of_scope": {"en": "This provider is only for MacBook, not this computer",
+                              "zh-Hans": "这个服务商只给 MacBook 用，不在这台电脑上",
+                              "ja": "このプロバイダーは MacBook 専用で、このコンピューターでは使えません"},
+    "launcher_other_kind": {"en": "This conversation runs on another agent; start a new conversation to use this launcher",
+                            "zh-Hans": "这个对话跑在另一种 Agent 上，要用这个启动器得新开对话",
+                            "ja": "この会話は別のエージェントで動いています。このランチャーを使うには新しい会話を始めてください"},
+}
+if MODEL_PICK_MODE:
+    LAUNCHER_MODELS["team-api"] = {"agent": "claude", "models": []}
+
+
+def model_pick_reset():
+    for s in ASSISTANT:
+        s.pop("model_pick", None)
+    if MODEL_PICK_MODE == "picked":
+        for s in ASSISTANT:
+            if s["session_id"] == ASK2:
+                s["model_pick"] = {"launcher": "team-api", "effort": "medium"}
+
+
+def model_pick_route(handler, p, body):
+    """MOCK_MODEL_PICK: the main chat's launchers with `unavailable`, PUT / DELETE …/conversations/{id}/model. False otherwise."""
+    if not MODEL_PICK_MODE: return False
+    query = parse_qs(urlparse(handler.path).query)
+    lang = cron_lang(handler.headers.get("Accept-Language"))
+    if p == "/mock/model_pick":
+        if query.get("reset"):
+            model_pick_reset()
+            push_machine(ASSISTANT_CONFIG["machine_id"])
+        return handler.send_json({"requests": MODEL_PICK_LOG}) or True
+    if handler.command == "GET" and re.fullmatch(r"/api/v1/machines/[^/]+/launchers", p) and query.get("purpose") == ["assistant"]:
+        return handler.send_json({
+            "launchers": [dict(l) for l in MODEL_PICK_LAUNCHERS],
+            "default": {"provider": "claude", "model": "opus", "effort": "high"},
+            "unavailable": [
+                {"name": "gpt-direct", "display_name": "GPT direct", "kind": "api", "api": "responses", "code": "api_protocol", "reason": MODEL_PICK_REASONS["api_protocol"][lang]},
+                {"name": "far-gw", "display_name": "Far gateway", "kind": "launcher", "code": "launcher_out_of_scope", "reason": MODEL_PICK_REASONS["launcher_out_of_scope"][lang]},
+            ]}) or True
+    m = re.fullmatch(r"/api/v1/assistant/conversations/([^/]+)/model", p)
+    if not m or handler.command not in ("PUT", "DELETE"): return False
+    s = next((x for x in ASSISTANT if x["session_id"] == m.group(1)), None)
+    if s is None: return handler.send_json({"error": "conversation not found"}, 404) or True
+    req = json.loads(body or b"{}") if handler.command == "PUT" else {}
+    MODEL_PICK_LOG.append({"method": handler.command, "session_id": s["session_id"], **{k: req[k] for k in ("launcher", "model", "effort") if k in req}})
+    if handler.command == "DELETE":
+        s.pop("model_pick", None)
+        push_machine(s["machine_id"])
+        return handler.send_json({"ok": True}) or True
+    launcher = req.get("launcher") or ""
+    if launcher == "far-gw":
+        return handler.send_json({"error": MODEL_PICK_REASONS["launcher_out_of_scope"][lang], "code": "launcher_out_of_scope"}, 409) or True
+    if launcher not in {l["name"] for l in MODEL_PICK_LAUNCHERS}:
+        return handler.send_json({"error": "%s is not on this computer" % launcher, "code": "launcher_missing"}, 409) or True
+    picked = next((l.get("agent_type") or "claude" for l in MODEL_PICK_LAUNCHERS if l["name"] == launcher), "claude")
+    if picked != (s.get("agent") or "claude"):
+        return handler.send_json({"error": MODEL_PICK_REASONS["launcher_other_kind"][lang], "code": "launcher_other_kind"}, 409) or True
+    if launcher == "sonnetcc" and req.get("model"):
+        return handler.send_json({"error": "sonnetcc sets its own model"}, 400) or True
+    pick = {k: req[k] for k in ("launcher", "model", "effort") if req.get(k)}
+    s["model_pick"] = pick
+    push_machine(s["machine_id"])
+    return handler.send_json({"ok": True, "model_pick": pick}) or True
+
+
+if MODEL_PICK_MODE:
+    model_pick_reset()
+
+_plugins_route_without_model_pick = plugins_route
+
+
+def plugins_route(handler, p, body):
+    return model_pick_route(handler, p, body) or _plugins_route_without_model_pick(handler, p, body)
+
+
+_features_without_model_pick = features
+
+
+def features():
+    return _features_without_model_pick() + (["assistant_model_pick"] if MODEL_PICK_MODE else [])
+
+
+MOCK_HELP.append("MOCK_MODEL_PICK=1|picked  Persona 对话自己的模型（#5033）：features 带 assistant_model_pick；主对话的启动器（?purpose=assistant）带默认和 unavailable"
+                 "（一个 Responses 直连 API、一个不对这台电脑开放的服务商）；PUT / DELETE /api/v1/assistant/conversations/{id}/model 记下或清掉 model_pick。"
+                 "picked：第二个对话一开始就有自己的选择。GET /mock/model_pick 看请求，?reset=1 复原")
+
+
+# Switching a running Agent to another provider (#5035, docs/protocol/protocol.md "Switching a running Agent to another
+# provider"): MOCK_LAUNCHER_SWITCH=1 advertises `launcher_switch`, gives every computer a second Claude Code launcher
+# ("work", through a made-up gateway, with its own models) beside claude, the locked sonnetcc and codex, and takes
+# POST …/modes {launcher, model?, effort?}: another Claude launcher records `pending_switch` on the row (nothing typed;
+# codex is 409 switch_other_agent, a model with sonnetcc 409 switch_model_locked, an unknown one 409
+# switch_launcher_missing), the session's own drops it. The next message carries it out: the row's launcher (and model)
+# become the new ones and pending_switch goes. =pending: the PR review starts with a switch to work waiting; =refuse: a
+# message carrying a switch is refused (409 switch_busy, delivered none) and the switch keeps waiting; =pending,refuse
+# both. GET /mock/launcher_switch: the requests; ?reset=1 drops every pending switch (and puts =pending's back).
+LAUNCHER_SWITCH_MODE = os.environ.get("MOCK_LAUNCHER_SWITCH", "")
+LAUNCHER_SWITCH_LOG = []
+LAUNCHER_SWITCH_ALL = [{"name": "claude", "model": "opus"}, {"name": "work", "model": "glm-5.3"}, {"name": "sonnetcc", "model": "sonnet"},
+                       {"name": "codex", "model": "gpt-5.5", "agent": "codex", "agent_type": "codex"}]
+if LAUNCHER_SWITCH_MODE:
+    LAUNCHER_MODELS["work"] = {"agent": "claude", "models": [
+        {"id": "default", "name": "Default (recommended)", "description": "Use the gateway's default model (currently glm-5.3)", "resolved": "glm-5.3", "default": True, "efforts": ["low", "medium", "high"]},
+        {"id": "glm-5.3", "name": "glm-5.3", "description": "From the gateway", "efforts": ["low", "medium", "high"]},
+        {"id": "deepseek-v4", "name": "deepseek-v4", "description": "From the gateway", "efforts": ["low", "medium", "high"]},
+        {"id": "opus", "name": "Opus 5.5", "description": "Opus 5.5 · through the gateway", "resolved": "claude-opus-5-5", "efforts": _CLAUDE_EFFORTS},
+    ]}
+
+
+def launcher_switch_reset():
+    for s in SESSIONS:
+        s.pop("pending_switch", None)
+    if "pending" in LAUNCHER_SWITCH_MODE:
+        for s in SESSIONS:
+            if s["session_id"] == REVIEW:
+                s["pending_switch"] = {"launcher": "work", "model": "glm-5.3", "at": ago(minutes=2)}
+
+
+def launcher_switch_route(handler, p, body):
+    """MOCK_LAUNCHER_SWITCH: the second launcher, POST …/modes {launcher}, a message carrying the switch. False otherwise."""
+    if not LAUNCHER_SWITCH_MODE: return False
+    if p == "/mock/launcher_switch":
+        if "reset=1" in (handler.path.split("?", 1) + [""])[1]:
+            launcher_switch_reset()
+            for m in MACHINES: push_machine(m["id"])
+        return handler.send_json({"requests": LAUNCHER_SWITCH_LOG}) or True
+    if handler.command == "GET" and re.fullmatch(r"/api/v1/machines/[^/]+/launchers", p):
+        return handler.send_json({"launchers": launcher_health_list([dict(l) for l in LAUNCHER_SWITCH_ALL])}) or True
+    m = re.fullmatch(r"/api/v1/sessions/([^/]+)/([^/]+)/(modes|messages)", p)
+    if not m or handler.command != "POST": return False
+    s = next((x for x in SESSIONS if x["machine_id"] == m.group(1) and x["session_id"] == m.group(2)), None)
+    if s is None: return False
+    req = json.loads(body or b"{}")
+    if m.group(3) == "messages":
+        ps = s.get("pending_switch")
+        if not ps: return False
+        if "refuse" in LAUNCHER_SWITCH_MODE:
+            return handler.send_json({"error": "Agent 正在工作，等它停下再发，发出时会先切换到 %s" % ps["launcher"], "code": "switch_busy",
+                                      "delivered": "none"}, 409) or True
+        s["launcher"] = ps["launcher"]
+        s["model"] = ps.get("model") or LAUNCHER_MODELS.get(ps["launcher"], {}).get("models", [{}])[0].get("resolved", s.get("model"))
+        if ps.get("effort"): s["effort"] = ps["effort"]
+        s.pop("pending_switch", None)
+        push_machine(s["machine_id"])
+        return False  # the message goes on as any other
+    launcher = req.get("launcher") or ""
+    if not launcher: return False
+    LAUNCHER_SWITCH_LOG.append({"session_id": s["session_id"], **{k: req[k] for k in ("launcher", "model", "effort") if k in req}})
+    if launcher == (s.get("launcher") or "claude"):
+        s.pop("pending_switch", None)
+        push_machine(s["machine_id"])
+        rest = {k: v for k, v in req.items() if k in ("permission_mode", "effort", "model") and v}
+        if rest:
+            s.update(rest)
+            MODES_LOG.append({"session_id": s["session_id"], **rest})
+        return handler.send_json({}) or True
+    known = {l["name"]: l for l in LAUNCHER_SWITCH_ALL}
+    if launcher not in known:
+        return handler.send_json({"error": "这台电脑上没有启动器 %s" % launcher, "code": "switch_launcher_missing"}, 409) or True
+    if known[launcher].get("agent", "claude") != "claude":
+        return handler.send_json({"error": "%s 运行的不是 Claude Code" % launcher, "code": "switch_other_agent"}, 409) or True
+    if req.get("model") and LAUNCHER_MODELS.get(launcher, {}).get("locked"):
+        return handler.send_json({"error": "%s 固定了自己的模型，不能另选" % launcher, "code": "switch_model_locked"}, 409) or True
+    s["pending_switch"] = {"launcher": launcher, **{k: req[k] for k in ("model", "effort") if req.get(k)}, "at": ago(minutes=0)}
+    if req.get("permission_mode"): s["permission_mode"] = req["permission_mode"]
+    push_machine(s["machine_id"])
+    return handler.send_json({}) or True
+
+
+if LAUNCHER_SWITCH_MODE:
+    launcher_switch_reset()
+
+_plugins_route_without_launcher_switch = plugins_route
+
+
+def plugins_route(handler, p, body):
+    return launcher_switch_route(handler, p, body) or _plugins_route_without_launcher_switch(handler, p, body)
+
+
+_features_without_launcher_switch = features
+
+
+def features():
+    return _features_without_launcher_switch() + (["launcher_switch"] if LAUNCHER_SWITCH_MODE else [])
+
+
+MOCK_HELP.append("MOCK_LAUNCHER_SWITCH=1|pending|refuse|pending,refuse  运行中的 Agent 换服务商（#5035）：features 带 launcher_switch；每台电脑多一个 Claude Code 启动器 work（走网关，"
+                 "自己的模型列表）；POST …/modes {launcher} 换到另一个 Claude 启动器就记下 pending_switch（codex 回 409 switch_other_agent，"
+                 "sonnetcc 带模型回 409 switch_model_locked），换回自己的就清掉；下一条消息执行切换。pending：检查 PR 那个一开始就有待切换；"
+                 "refuse：带切换的消息回 409 switch_busy。GET /mock/launcher_switch 看请求，?reset=1 复原")
 
 # Agent session archives (docs/protocol/protocol.md "Agent session archives"; web "Archived agents"): MOCK_AGENT_ARCHIVES=1
 # advertises archives and "Archive and close" (=archive: archives only, as behind an older manager), with two agents

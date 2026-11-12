@@ -112,9 +112,12 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	}
 	// The main conversation may review any supervised task: after the main conversation changes, the old tasks'
 	// supervision messages come to the new one, which has to be able to close them (#4262).
+	// The background supervisor reviews the tasks no leader supervises, whose ledgers name the main conversation
+	// (supervise_background.go); the main conversation may still review them, as it may a leader's.
 	isMain := s.isMain(ctx, self)
+	background := s.backgroundSupervises(ctx, self, t)
 	if t.Origin == "" || t.Origin != self && (t.Supervision == nil || t.Supervision.Supervisor != self && !isMain) {
-		if !s.mayReviewForLeader(ctx, self, t) {
+		if !background && !s.mayReviewForLeader(ctx, self, t) {
 			return "", fmt.Errorf("task %s was not handed out from this conversation", t.ID)
 		}
 	}
@@ -239,6 +242,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	if verdict == reviewParked { // what it waits for is what the line says; an older app shows it as the note
 		body.Note, body.Until, body.WaitingOn = cmp.Or(note, park.Reason), park.Until, park.WaitingOn
 	}
+	if background { // it took no turn of t.Origin: the apps may draw this entry there as the only word of it
+		body.By = reviewByBackground
+	}
 	_, _ = s.appendFeed(ctx, t.Origin, feedReview, t.ID, body)
 	if verdict != reviewNeedsUser && verdict != reviewAccepted {
 		s.dropDecision(ctx, t.ID) // the review moved on: a decision still waiting on the owner is over (conclusion.go)
@@ -325,16 +331,21 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		}
 		// One that can wait is held for the next briefing: no card and no push now (#4930, decision_wait.go).
 		held, notHeld := false, ""
+		escalates := !isMain && (background || s.isLeader(ctx, v.Supervisor)) // the main conversation hears of it too
 		if a.CanWait {
 			held, notHeld = s.decisionWaits(ctx, decision.WhyOwner, deadline, reversible, time.Now())
 			conclusion.ForBriefing = held
+			if held && escalates {
+				conclusion.RaisedBy = self // told when it is pushed, whoever the task's ledger names by then
+			}
 		}
 		carded := s.askConclusion(ctx, t, conclusion)
 		if held && !s.waitsForBriefing(t.ID) { // the ask was not kept as held: nothing would push it later
 			held, notHeld = false, waitNotKept
 		}
-		// A leader's: the main conversation hears of it too (supervise_leader.go); of one that is held, when it is pushed.
-		if !held && !isMain && s.isLeader(ctx, v.Supervisor) {
+		// A leader's or the background supervisor's: the main conversation hears of it too (supervise_leader.go); of one
+		// that is held, when it is pushed.
+		if !held && escalates {
 			s.escalateToMain(t, v.Round, cmp.Or(conclusion.Reason, note), decision.Recommend)
 		}
 		// A recommendation is also pushed to their phone, whose OK takes it (todo_ask.go), with the bot on or off. The hub
@@ -422,12 +433,18 @@ func reworkChecks(list []ReviewCheck) []prompts.SuperviseCheck {
 // feedReview is a review in the conversation's feed: ref the todo id, body reviewFeedBody.
 const feedReview = "review"
 
+// reviewByBackground is reviewFeedBody.By of a review the background supervisor wrote.
+const reviewByBackground = "background"
+
 type reviewFeedBody struct {
 	Title   string        `json:"title"`
 	Verdict string        `json:"verdict"`
 	Round   int           `json:"round,omitempty"`
 	Note    string        `json:"note,omitempty"`
 	Checks  []ReviewCheck `json:"checks,omitempty"`
+	// By: reviewByBackground when the background supervisor wrote it (supervise_background.go); "" for the review of
+	// the conversation that handed the task out, a leader's, the main conversation's and a sampled acceptance.
+	By string `json:"by,omitempty"`
 	// A parked review's (parked.go): until when it waits and on what kind of thing; Note says for what.
 	Until     time.Time `json:"until,omitzero"`
 	WaitingOn string    `json:"waiting_on,omitempty"`

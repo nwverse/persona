@@ -350,6 +350,11 @@ The `scripts/ci/` lanes are written for the hosted runners; on a Mac developer m
 - A database copied with `CREATE DATABASE ... TEMPLATE` keeps none of its template's `ALTER DATABASE ... SET` settings: set `synchronous_commit` on every copy (`dbtest.create`). Nothing may be connected to the template; Postgres waits up to 5 s on its own for backends that are closing, so no sleep after `Close` is needed. Use `STRATEGY wal_log`: `file_copy` checkpoints the whole server twice.
 - Since Postgres 15, every `DROP DATABASE` forces a checkpoint of the whole server, which writes whatever other tests left dirty. On a loaded machine, one drop took 0.07-3.8 s. Count that before giving more tests a database of their own.
 
+## Green here, red on the hub: judge server tests on the hub machine (2026-11-12, #5182, #5188)
+
+- A test that needs Postgres skips without `PERSONA_TEST_DATABASE_URL`, and a plain `go test` prints `ok` for its package. #5031 changed what `task_plan` answers and checked `internal/hub` without a database, so `TestSupervisedTaskOverTheBus`, which drives that answer end to end, never ran and went red on `main` (#5182). Before a change that touches what a database test covers, run its package with `scripts/test/test-server.sh <package>`, or `go test -v` and check for `SKIP` lines.
+- Allocation budgets are set from numbers measured on the hub machine (linux/amd64). The same tests read about 2 KB lower on an arm64 Mac, so #5150 passed `TestReindexOneRevAllocation` and `TestIndexWholeListAllocation` there and failed them on the hub (#5188). Judge a budget only from a `test-server.sh` run. To find where a regression comes from, compare `allocated(...)` in a probe at both commits; the Mac shows the same difference, so a `pprof -sample_index=alloc_space` profile of the measured call can be taken there.
+
 ## The mock hub does not enforce device roles (2026-11-12, #4869)
 
 `scripts/mock/mock_hub.py` answers every request whatever the credential, so a watch feature checked only in a simulator against it can be refused on a real hub. The watch's Milk Frog shipped that way: its art requests got 403 from `allowed()` (the watch's `answer` token reads only `answerReads`), and the frog never appeared on a real watch. A new request from the watch (or any `answer`, `link` or extension credential) needs its path in the hub's allowlist, a case in `TestAnswerRoleOnlyWhatTheWatchDoes`, and one end-to-end call with a real token through `h.routes()` (`TestDeviceTokens`).
@@ -690,6 +695,14 @@ Pin the visual style, not an alternate navigation tree. A shared launch helper t
 - **Fake extensions installed through `dir:` in e2e are sandboxed by default** (bwrap, writes only to own data/runtime directories). A fake channel plugin writing received messages to a test directory throws and exits;
   hub restarts it, replayed input is deduplicated, and it looks like lost messages. Store files in `extension.data_dir` from `initialize` (tests read `~/.persona/extensions/data/<id>/`), retaining sandboxing.
 
+## A switch row's tap lands on its label (2026-11-12, #4741)
+
+- `SettingsSwitchRow` (and any `Toggle` with a label) puts its identifier on the whole row, so `app.switches["allday-switch"]`
+  spans the mark, the title, the line under it and the switch. `tap()` taps the element's center, which is the label, and a list
+  row's label doesn't flip the switch: the value stays, and a test that expects a sheet or a command after it fails, or passes for
+  the wrong reason. Tap the switch itself: `(row.switches.firstMatch.exists ? row.switches.firstMatch : row).tap()`, as
+  `ExtensionControlsUITests` and `AgentWorktreeUITests` do, and assert the value it reports (`"1"` / `"0"`) afterwards.
+
 ## XCUITest cannot tap while a list glides (2026-11-10, #3027)
 
 - **Every XCUITest gesture waits for the app to be idle, before and after**, and a scroll view gliding after a flick
@@ -944,3 +957,13 @@ To check that a failure is this, move `dev.json` aside in the app's data contain
 
 - `docker run --entrypoint <test binary>` without `--init` makes the test binary PID 1, and every orphan is reparented to it. Go waits only for the children its `exec.Cmd`s started, so a background child killed after its shell exited stays a zombie, `kill(-pgid, 0)` still finds its group, and process-group tests fail. On `main`, `TestSecretRunTimeoutKillsTheGroup` and `TestSecretRunTimeoutEndsWhatIgnoresSIGTERM` failed in a `postgres:18-alpine` container this way and passed with `--init`.
 - Run such tests with `docker run --init` (Docker's own init, no image to pull), and compare with `main` in the same container before blaming a change.
+
+## A throw-away HOME also hides the Go settings (2026-11-12, #5191)
+
+- `testhome.Main` gives a test binary an empty `HOME`. The Go defaults hang off the home directory: the env file
+  `go env -w` writes (`GOENV`, where settings such as `GOPROXY` live), `GOPATH` and so the module cache, and the build
+  cache. A `go list` the hub's architecture guard started lost all of them, went to the default proxy with an empty
+  cache and failed after a minute with only `exit status 1`, on `main` too, so it looked like someone else's breakage.
+- `testhome` now resolves `GOENV`, `GOPATH`, `GOMODCACHE` and `GOCACHE` with the real home before swapping it and pins
+  them. Anything else that reads the home directory for its own config (git, ssh, a CLI's login) has the same problem
+  under testhome: pin what the child needs, or give the test its own config.

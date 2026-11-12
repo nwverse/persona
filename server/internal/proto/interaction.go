@@ -135,6 +135,12 @@ type Interaction struct {
 	// /api/v1/interactions so an answer-only device (the watch) can hide the card and not buzz for it; the phone
 	// keeps its own mutes. Absent on older hubs' lists and on the manager's bus copy.
 	Muted bool `json:"muted,omitempty"`
+	// FoldedUnder is its session's Session.FoldedUnder: the listed session whose chat shows the card when the asking
+	// session is a child folded under it (docs/protocol/protocol.md "Session hierarchy"). Set when sent to clients.
+	FoldedUnder string `json:"folded_under,omitempty"`
+	// FoldedAs is its session's Session.FoldedAs: "worker" when the asking session is a tab's worker folded under its
+	// lead (#5180). Set beside FoldedUnder when sent to clients.
+	FoldedAs string `json:"folded_as,omitempty"`
 }
 
 // Delegate is the assistant's context on a question it left to the user (Interaction.Delegate): it is a red line or

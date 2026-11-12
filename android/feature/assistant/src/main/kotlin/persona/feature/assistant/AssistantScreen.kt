@@ -32,6 +32,7 @@ import persona.core.contracts.api.ReadinessStep
 import persona.core.contracts.api.ChannelSources
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcon
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
 import persona.core.contracts.api.MainConversationSender
 import persona.core.contracts.api.PendingMainConversation
@@ -180,6 +181,8 @@ fun AssistantScreen(
     var endingBusy by remember { mutableStateOf(false) }
     var ended by remember(pageManagement) { mutableStateOf(emptySet<SessionKey>()) }
     var archived by remember(pageManagement) { mutableStateOf(emptySet<SessionKey>()) }
+    // Rename… and Archived (N) (iOS `AssistantSidebar`): titles given here and the archived conversations.
+    val history = rememberConversationHistory(pageManagement?.takeUnless { demo }, repository)
     var assistantMachine by remember(pageManagement) { mutableStateOf("") }
     // The launcher the next new conversation starts with, for it alone (iOS StarterComposer); null: the default.
     // Both belong to this hub: another one has other launchers and conversations.
@@ -201,6 +204,9 @@ fun AssistantScreen(
     }
     fun copyId(key: SessionKey) {
         copy(key.sessionId, resources.getString(R.string.assistant_copied_session_id))
+    }
+    fun copyDiagnostics(session: Session) {
+        copy(conversationDiagnostics(session), resources.getString(R.string.assistant_diagnostics_copied))
     }
     val active = activeSession?.let { SessionKey(activeMachine.orEmpty(), it) }
     // The health space (docs/assistant/health.md, #4329): its chats as last read, and every chat known to be one, so New
@@ -246,10 +252,10 @@ fun AssistantScreen(
             compaction = compaction.dismissed()
         }
     }
-    val groups = remember(snapshot, query, ended, archived, words) {
-        conversationGroups(snapshot.copy(conversations = snapshot.conversations.filter { it.key !in archived }.map {
+    val groups = remember(snapshot, query, ended, archived, words, history.titles) {
+        conversationGroups(snapshot.copy(conversations = history.titled(snapshot.conversations.filter { it.key !in archived }.map {
             if (it.key in ended) it.copy(status = "offline", state = "offline") else it
-        }), query, words)
+        })), query, words)
     }
     // Persona's face (top bar and the conversation list) shows the conversation on screen, as on iOS: none on the
     // new-conversation page.
@@ -603,6 +609,7 @@ fun AssistantScreen(
         newConversation()
         from?.let(::openConversation)
     }
+    val openKeys = remember(snapshot.conversations) { openKeys(snapshot.conversations) }
     val sidebar: @Composable () -> Unit = {
         AssistantDrawer(query, { query = it }, groups, active, snapshot.mainSession != null,
             onEnd = if (pageManagement != null) ({ ending = it }) else null,
@@ -627,10 +634,22 @@ fun AssistantScreen(
             onCopy = { copyId(it.key) },
             onArchive = if (pageManagement != null && !demo) ::archive else null,
             onLeader = if (pageManagement != null && !demo) ::setLeader else null,
+            onRename = if (pageManagement != null && !demo) ({ history.renaming = it }) else null,
+            onDiagnostics = ::copyDiagnostics,
+            archivedCount = history.shownArchived(openKeys).size, onArchived = { history.archivedOpen = true },
             onTodos = onTodos?.let { action -> { scope.launch { drawerOpen = false }; action() } },
             todoCount = todoCount,
             showTodos = showTodos,
         )
+        ConversationHistoryDialogs(history, snapshot.conversations, scope,
+            onOpen = { openConversation(it); scope.launch { drawerOpen = false } },
+            notice = { message ->
+                if (feedback?.notice(message, persona.core.designsystem.FeedbackStyle.Success) != true)
+                    toast.show(persona.core.designsystem.FeedbackNotice(message, style = persona.core.designsystem.FeedbackStyle.Success))
+            },
+            failure = { error ->
+                if (feedback?.failure(error) != true) toast.show(persona.core.designsystem.FeedbackNotice(persona.core.designsystem.operationFeedback(error).text.resolve(resources), style = persona.core.designsystem.FeedbackStyle.Error))
+            })
     }
     val body: @Composable (Boolean) -> Unit = { wide ->
         val hasComposer = active == null || !hasChat || demo
@@ -1021,6 +1040,12 @@ internal fun AssistantDrawer(
     onArchive: ((Session) -> Unit)? = null,
     /** Makes a chat a leader (常驻) or ends it, on the hub (#4331); null: the menu offers neither. */
     onLeader: ((Session) -> Unit)? = null,
+    /** Rename… on a chat's menu (not the main one's); null: no Rename. */
+    onRename: ((Session) -> Unit)? = null,
+    /** Copy diagnostics on a chat's menu; null: none. */
+    onDiagnostics: ((Session) -> Unit)? = null,
+    /** "Archived (N)" at the end of the list when there are any (iOS `archivedRow`); [onArchived] opens them. */
+    archivedCount: Int = 0, onArchived: (() -> Unit)? = null,
     onTodos: (() -> Unit)? = null, todoCount: Int = 0, showTodos: Boolean = true,
     onInbox: (() -> Unit)? = null, inboxCount: Int = 0,
     settingsCount: Int = 0, settingsDot: Boolean = false, settingsBadge: String? = null,
@@ -1053,7 +1078,8 @@ internal fun AssistantDrawer(
             item(key = "persona") {
                 PersonaRow(groups.main, selected = groups.main != null && groups.main.key == active, hasMain = hasMain,
                     onMain = onMain, onEnd = groups.main?.let { m -> onEnd?.let { action -> { action(m) } } },
-                    onCopy = { groups.main?.let(onCopy) })
+                    onCopy = { groups.main?.let(onCopy) },
+                    onDiagnostics = groups.main?.let { m -> onDiagnostics?.let { action -> { action(m) } } })
                 JDivider(Modifier.padding(vertical = Tokens.Space.s))
             }
             if (!drawer) item { JSectionHeader(stringResource(R.string.assistant_more)) }
@@ -1097,6 +1123,8 @@ internal fun AssistantDrawer(
                     position = GroupPosition.of(index, groups.directions.size),
                     onOpen = { onOpen(session.key) }, onEnd = onEnd?.let { action -> { action(session) } },
                     onCopy = { onCopy(session) }, onArchive = onArchive?.let { action -> { action(session) } },
+                    onRename = onRename?.let { action -> { action(session) } },
+                    onDiagnostics = onDiagnostics?.let { action -> { action(session) } },
                     leader = true, onLeader = onLeader?.let { action -> { action(session) } },
                     counts = leaderCountsLabel(groups.counts[session.sessionId], resources),
                     named = groups.names[session.sessionId])
@@ -1108,6 +1136,8 @@ internal fun AssistantDrawer(
                     position = GroupPosition.of(index, groups.recent.size),
                     onOpen = { onOpen(session.key) }, onEnd = onEnd?.let { action -> { action(session) } },
                     onCopy = { onCopy(session) }, onArchive = onArchive?.let { action -> { action(session) } },
+                    onRename = onRename?.let { action -> { action(session) } },
+                    onDiagnostics = onDiagnostics?.let { action -> { action(session) } },
                     onLeader = onLeader?.let { action -> { action(session) } })
             }
             // Every other chat is under one "All chats" row, which opens the list in place (a search lists what it finds
@@ -1120,11 +1150,24 @@ internal fun AssistantDrawer(
                 }
             }
             if (searching || showAllChats) itemsIndexed(groups.others, key = { _, session -> session.key.path }) { index, session ->
+                // The background supervisor (#4927) is built in: listed here with the chats Persona opened itself, under
+                // its own name, and its menu only copies (the hub refuses to pin, archive or end it; its row shows the
+                // built-in name, so a rename would show nowhere).
+                val builtIn = session.sessionId == groups.background
                 ConversationRow(session, selected = session.key == active,
                     position = GroupPosition.of(index, groups.others.size),
-                    onOpen = { onOpen(session.key) }, onEnd = onEnd?.let { action -> { action(session) } },
-                    onCopy = { onCopy(session) }, onArchive = onArchive?.let { action -> { action(session) } },
-                    onLeader = onLeader?.let { action -> { action(session) } })
+                    onOpen = { onOpen(session.key) }, onEnd = onEnd?.takeUnless { builtIn }?.let { action -> { action(session) } },
+                    onCopy = { onCopy(session) }, onArchive = onArchive?.takeUnless { builtIn }?.let { action -> { action(session) } },
+                    onRename = onRename?.takeUnless { builtIn }?.let { action -> { action(session) } },
+                    onDiagnostics = onDiagnostics?.let { action -> { action(session) } },
+                    onLeader = onLeader?.takeUnless { builtIn }?.let { action -> { action(session) } },
+                    named = if (builtIn) stringResource(R.string.assistant_background_supervisor) else null)
+            }
+            // Archived (N) at the end, where the archived conversations are (iOS `archivedRow`); a search lists only what it finds.
+            if (!searching && archivedCount > 0 && onArchived != null) item(key = "archived") {
+                JGroupItem(GroupPosition.Single) {
+                    DrawerItem(stringResource(R.string.assistant_archived_count, archivedCount), PersonaIcons.archive, onClick = onArchived)
+                }
             }
             if (groups.directions.isEmpty() && groups.others.isEmpty() && (groups.main == null || query.isNotBlank())) {
                 item { JEmptyState(stringResource(if (query.isBlank()) R.string.assistant_empty_title else R.string.assistant_no_match),
@@ -1149,15 +1192,17 @@ internal fun AssistantDrawer(
 }
 
 /**
- * One conversation of the history. Its menu (⋯, or a long press) makes it a leader, 常驻, or ends that ([onLeader]; not
- * the main conversation), copies its session id, archives it ([onArchive]; not the main one either), and ends it while
- * it runs ([onEnd]). [counts] is what the leader has open (#4331).
+ * One conversation of the history (iOS `AssistantSidebar.row`). A swipe left archives it ([onArchive]; not the main one).
+ * Its menu (⋯, or a long press) shows what it last said and when, over iOS's items: Pin / Unpin ([onLeader]), Rename…
+ * ([onRename]), Archive, Copy session ID, Copy diagnostics ([onDiagnostics]) and End… while it runs ([onEnd]). [counts]
+ * is what the leader has open (#4331).
  */
 @Composable
 private fun ConversationRow(
     session: Session, selected: Boolean, onOpen: () -> Unit, onEnd: (() -> Unit)?,
     modifier: Modifier = Modifier, position: GroupPosition = GroupPosition.Single,
     leader: Boolean = false, onLeader: (() -> Unit)? = null, onCopy: () -> Unit = {}, onArchive: (() -> Unit)? = null,
+    onRename: (() -> Unit)? = null, onDiagnostics: (() -> Unit)? = null,
     counts: String? = null, named: String? = null,
 ) {
     var menu by remember { mutableStateOf(false) }
@@ -1166,11 +1211,12 @@ private fun ConversationRow(
     val channel = remember(session.channels, channels) { ChannelSources.latest(session.channels, channels) }
     // [named]: a direction's name, shown instead of its leader conversation's title
     val title = named ?: session.conversationTitle(conversationWords())
-    if (LocalHomeDrawer.current) {
+    val swipe = onArchive?.let { SwipeAction(stringResource(R.string.assistant_archive), PersonaIcons.archive, Status.Working, it) }
+    if (LocalHomeDrawer.current) JSwipeActions(modifier, end = swipe) {
         JSidebarHistoryRow(title, session.conversationStatus(), selected, onOpen, { menu = true },
             stringResource(R.string.assistant_conversation_actions), hint = counts,
             titleAccessory = channel?.let { c -> { JChannelMark(c, size = MarkSize.Inline) } })
-    } else JGroupItem(position, modifier) {
+    } else JSwipeActions(modifier, end = swipe) { JGroupItem(position) {
         // The time goes on the line under the title, with the state: beside the title it left the title two or three
         // characters in the wide window's 300dp list (2026-11-02), and a narrow drawer cut it short too.
         JRow(title, onClick = onOpen, onLongClick = { menu = true },
@@ -1189,32 +1235,47 @@ private fun ConversationRow(
                     maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.End)
             }
         }
-    }
+    } }
     if (menu) JActionSheet(
         title = title, onDismiss = { menu = false },
-        actions = conversationActions(androidx.compose.ui.platform.LocalResources.current, leader, session.isLive, onLeader, onCopy, onEnd, onArchive),
+        actions = conversationActions(androidx.compose.ui.platform.LocalResources.current, leader, session.isLive, onLeader, onCopy, onEnd,
+            onArchive, onRename = onRename, onDiagnostics = onDiagnostics, glass = PersonaTheme.style == AppStyle.Glass),
+        // The long press's preview (iOS's context menu): what it last said (the row shows only the title) and when.
+        preview = session.lastText?.let { persona.core.domain.plainMarkdown(it) }?.takeIf { it.isNotBlank() },
+        previewCaption = conversationTime(session.updated, currentLocale),
     )
 }
 
-/** The history row's menu: "Pin" / "Unpin" (making a chat a leader or ending that, when it can), "Copy session ID", "Archive" (when it can be), then "End chat" while it runs. */
+/**
+ * The history row's menu, in iOS's order (`AssistantSidebar.row`): "Pin" / "Unpin" (making a chat a leader or ending
+ * that, when it can), "Rename…", "Archive" (when it can be), "Copy session ID", "Copy diagnostics", then "End…" while it
+ * runs. Each is there only with its action. [glass]: iOS's icons for the copy and End… (decision 8: Brief and Board keep
+ * theirs).
+ */
 internal fun conversationActions(
     resources: android.content.res.Resources, leader: Boolean, live: Boolean, onLeader: (() -> Unit)?, onCopy: () -> Unit,
-    onEnd: (() -> Unit)?, onArchive: (() -> Unit)? = null,
+    onEnd: (() -> Unit)?, onArchive: (() -> Unit)? = null, onRename: (() -> Unit)? = null, onDiagnostics: (() -> Unit)? = null,
+    glass: Boolean = false,
 ): List<JAction> =
     buildList {
-        onLeader?.let { add(JAction(resources.getString(if (leader) R.string.assistant_end_leader else R.string.assistant_make_leader), PhIcons.PushPin, onClick = it)) }
-        add(JAction(resources.getString(R.string.assistant_copy_session_id), PhIcons.Copy, onClick = onCopy))
-        onArchive?.let { add(JAction(resources.getString(R.string.assistant_archive), PhIcons.Archive, onClick = it)) }
-        if (onEnd != null && live) add(JAction(resources.getString(R.string.assistant_end), PhIcons.Stop, destructive = true, separatorBefore = true, onClick = onEnd))
+        onLeader?.let { add(JAction(resources.getString(if (leader) R.string.assistant_end_leader else R.string.assistant_make_leader), PersonaIcons.pin, onClick = it)) }
+        onRename?.let { add(JAction(resources.getString(R.string.assistant_rename_menu), PersonaIcons.edit, onClick = it)) }
+        onArchive?.let { add(JAction(resources.getString(R.string.assistant_archive), PersonaIcons.archive, onClick = it)) }
+        add(JAction(resources.getString(R.string.assistant_copy_session_id), if (glass) PersonaIcons.id else PhIcons.Copy, onClick = onCopy))
+        onDiagnostics?.let { add(JAction(resources.getString(R.string.assistant_copy_diagnostics), PersonaIcons.diagnostics, onClick = it)) }
+        if (onEnd != null && live) add(JAction(resources.getString(R.string.assistant_end_menu), if (glass) PersonaIcons.end else PhIcons.Stop,
+            destructive = true, separatorBefore = true, onClick = onEnd))
     }
 
 /**
  * The drawer's first row: the main conversation ([main]; null before it has started, or not yet loaded), read as
  * Persona's name after the app's mark. Beside it what it waits on (its pending count, else working / needs you /
- * unread); its menu (⋯ or a long press) copies its session id and ends it while it runs. It cannot be pinned or archived.
+ * unread); its menu (⋯ or a long press) copies its session id and its diagnostics, and ends it while it runs (iOS
+ * `mainItem`). It cannot be pinned, renamed, archived or swiped.
  */
 @Composable
-private fun PersonaRow(main: Session?, selected: Boolean, hasMain: Boolean, onMain: () -> Unit, onEnd: (() -> Unit)?, onCopy: () -> Unit) {
+private fun PersonaRow(main: Session?, selected: Boolean, hasMain: Boolean, onMain: () -> Unit, onEnd: (() -> Unit)?, onCopy: () -> Unit,
+    onDiagnostics: (() -> Unit)? = null) {
     var menu by remember { mutableStateOf(false) }
     val name = LocalPersonaName.current
     val status = main?.conversationStatus()
@@ -1233,7 +1294,7 @@ private fun PersonaRow(main: Session?, selected: Boolean, hasMain: Boolean, onMa
     if (menu && main != null) JActionSheet(
         title = name, onDismiss = { menu = false },
         actions = conversationActions(androidx.compose.ui.platform.LocalResources.current, leader = false, live = main.isLive,
-            onLeader = null, onCopy = onCopy, onEnd = onEnd),
+            onLeader = null, onCopy = onCopy, onEnd = onEnd, onDiagnostics = onDiagnostics, glass = PersonaTheme.style == AppStyle.Glass),
     )
 }
 

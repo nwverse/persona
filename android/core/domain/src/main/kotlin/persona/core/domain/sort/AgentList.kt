@@ -96,6 +96,8 @@ data class AgentListGroup(
     val repo: RepoLevel? = null,
     /** The group this one sits in: a working tree's repository, whose own [rows] are then empty (its trees hold them). */
     val under: String? = null,
+    /** "By repository": what a working tree's line says beside its name (#4338 A7); null for every other group. */
+    val worktree: WorktreeLine? = null,
     /** Server membership for this exact group; null means its rows/counts describe the loaded window. */
     val totalCount: Int? = null,
 )
@@ -221,7 +223,8 @@ fun buildFlatAgentList(
             // A repository with nothing going on is quiet: folded, after the busy ones, like a quiet space; a quiet working
             // tree is folded too but keeps its place (main checkout first, then by name, as on iOS).
             fun quiet(members: List<AgentSession>) = !quick && members.none(::stays)
-            fun section(id: String, title: CoreText, members: List<AgentSession>, level: RepoLevel, under: String?, machineFolded: Boolean): AgentListGroup {
+            fun section(id: String, title: CoreText, members: List<AgentSession>, level: RepoLevel, under: String?, machineFolded: Boolean,
+                        tree: AgentWorktree? = null, online: Boolean = true): AgentListGroup {
                 val isQuiet = quiet(members)
                 val rows = ordered(members)
                 val folded = if (isQuiet) id !in settings.expandedQuiet && settings.query.isEmpty() else id in settings.folded
@@ -230,7 +233,8 @@ fun buildFlatAgentList(
                     isQuiet || quick || showIdle(id) -> rows
                     else -> rows.filter(::stays)
                 }
-                return AgentListGroup(id, title, rows, visible, folded, if (isQuiet) "quiet" else null, stateCounts(rows), repo = level, under = under)
+                return AgentListGroup(id, title, rows, visible, folded, if (isQuiet) "quiet" else null, stateCounts(rows), repo = level, under = under,
+                    worktree = tree?.let { worktreeLine(it, isQuiet, rows.count { row -> !row.isNestedSubtask }, online) })
             }
             val known = machines + live.map { it.session.machineId }.distinct()
                 .filter { id -> machines.none { it.id == id } }.map { Machine(it, "") }
@@ -253,7 +257,8 @@ fun buildFlatAgentList(
                     else listOf(AgentListGroup(repo.id, repoTitle(repo.name), emptyList(), emptyList(), repo.id in settings.folded,
                         stateCounts = stateCounts(repo.members), repo = RepoLevel.Repository)) +
                         repo.worktrees.map { tree ->
-                            section(tree.id, repoTitle(tree.name), tree.members, if (tree.main) RepoLevel.MainCheckout else RepoLevel.Worktree, repo.id, machineFolded)
+                            section(tree.id, repoTitle(tree.name), tree.members, if (tree.main) RepoLevel.MainCheckout else RepoLevel.Worktree, repo.id, machineFolded,
+                                tree, online = machine.online || machines.none { it.id == machine.id })
                         }
                 }
                 result += groups

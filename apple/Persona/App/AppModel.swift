@@ -410,6 +410,11 @@ final class AppModel {
         let language = LanguageStore.shared.apply()
         WatchSync.shared.onActivated = { [weak self] in
             WatchSync.shared.push(language: language)
+            #if os(iOS) || os(visionOS)
+            // All-day recording: the erases and deletes the watch hasn't confirmed go now that a send reaches it
+            // (docs/assistant/day-recap.md「Erasing」「Deleting」), paired with a hub or not.
+            RecordingDayReceiver.shared.sessionActivated()
+            #endif
             guard let self, self.isPaired, !self.isDemo else { return }
             WatchSync.shared.push(persona: self.personas.chosenID)
             self.pushWatchConfigs()
@@ -1201,6 +1206,28 @@ final class AppModel {
         }
     }
 
+    /// Whether conversation `id` is the hub's built-in background supervisor (#5083, docs/assistant/unified-entry.md
+    /// "Background supervisor"): its row has no Archive, End or Pin (the hub refuses the first and the last).
+    func isBackgroundSupervisor(_ id: String) -> Bool { assistantConfig?.isBackgroundSupervisor(id) ?? false }
+
+    /// Settings › Assistant › Main Chat Supervises Its Own Tasks (#5083): on, the main conversation follows up the
+    /// tasks no leader supervises instead of the background supervisor. Shown at once, put back if the hub says no;
+    /// supervision messages already sent stay where they went.
+    func setMainSupervisesOwnTasks(_ on: Bool) async {
+        guard let api, var shown = assistantConfig else { return }
+        let was = shown.mainSupervisesOwnTasks
+        shown.mainSupervisesOwnTasks = on
+        assistantConfig = shown
+        do {
+            let st = try await api.setAssistant(mainSupervisesOwnTasks: on)
+            guard showsPage(of: api) else { return }
+            assistantConfig = st
+        } catch {
+            if showsPage(of: api) { assistantConfig?.mainSupervisesOwnTasks = was }
+            show(error)
+        }
+    }
+
     /// Settings › Meetings (#2981): the role every meeting recording starts with. Shown at once, put back if the hub says no.
     func setMeetingAttendanceDefault(_ role: MeetingAttendance) async {
         guard let api else { return }
@@ -1381,6 +1408,7 @@ final class AppModel {
     var managerRosters: [String: ManagerRoster] = [:]
     /// Each group's latest roster read: an earlier one answering after it is dropped.
     @ObservationIgnored var managerRosterReads: [String: Int] = [:]
+    var managerRosterUnsupported = Set<String>()
     /// Each group's current assistant, as picked in the sidebar's switcher (`selectAssistantManager`): the manager's id,
     /// kept on this device across launches (`AssistantPickStore`). A group without one follows its hub's default manager.
     var assistantPicks: [String: String] = [:] {
@@ -1829,6 +1857,35 @@ final class AppModel {
             notifyTransitions(old: old, new: new)
             AgentSync.shared.sessions(new)
         }
+        readSettingsForNewTaskConversations(olds)
+    }
+
+    /// Conversations the assistant settings were read again for (`readSettingsForNewTaskConversations`): once each.
+    @ObservationIgnored private var taskConversationsAskedFor: Set<String> = []
+
+    /// The hub makes its background supervisor on first use, usually while the app is open (#5083): its conversation
+    /// arrives as any other, and only the assistant settings say it is the built-in one. A task's conversation the
+    /// settings held do not list has them read again, once, so its row never offers Archive, Pin or End for longer
+    /// than that request takes. Nothing is read before the settings were read at all, or for another hub's sessions.
+    private func readSettingsForNewTaskConversations(_ changes: [(old: [Session], new: [Session])]) {
+        guard let held = assistantConfig, let group = hub?.group, assistantShows(nil) else { return }
+        var unread: [String] = []
+        for (old, new) in changes where new.first?.machineRef.group == group {
+            unread += Self.unreadTaskConversations(old: old, new: new, held: held)
+        }
+        unread.removeAll { taskConversationsAskedFor.contains($0) }
+        guard !unread.isEmpty else { return }
+        taskConversationsAskedFor.formUnion(unread)
+        Task { await refreshAssistant() }
+    }
+
+    /// The assistant's task conversations (`origin: "task"`) new in `new` that `held` neither lists nor names as the
+    /// background supervisor: the ones the settings may have something to say about.
+    static func unreadTaskConversations(old: [Session], new: [Session], held: APIClient.AssistantState) -> [String] {
+        let tasks = new.filter { $0.assistant && $0.origin == "task" && !held.isBackgroundSupervisor($0.sessionID) }
+        guard !tasks.isEmpty else { return [] }
+        let had = Set(old.map(\.sessionID)).union(held.conversations.map(\.sessionID))
+        return tasks.map(\.sessionID).filter { !had.contains($0) }
     }
 
     /// The complete fallback is authoritative on a list-negotiated hub. Older delta sockets retain their live rows
@@ -1884,6 +1941,7 @@ final class AppModel {
             // Back on the hub: an install that moved on while the connection was down shows where it is now (#3307).
             if isHub, Set(hello.features).hasExtensionFeature("operations") { Task { await ExtensionOperations.shared.reload() } }
             if isHub { flushErrorReports(group) } // the feature may have come or gone with this hello (#5621)
+            if isHub, link(group)?.isDemo == false { learnedRecordingDay(hello) }
             #if DEBUG && (os(iOS) || os(visionOS))
             // Registered on connect, before this hello said whether the hub keeps the runtime CLI from the agents.
             if RuntimeCLI.overHub, let link = link(group) { registerPhone(link) }
@@ -3638,6 +3696,22 @@ enum Haptics {
     static func attention() { UINotificationFeedbackGenerator().notificationOccurred(.warning) }
 }
 #endif
+
+extension AppModel {
+    /// All-day recording (docs/assistant/day-recap.md「Phone to hub」): whether the hub-level hub takes day recordings,
+    /// from each of its hellos (an empty feature list included: a manager that lost the flag says so). Cached for launches
+    /// in the background, told to the watch (`recordingDayHub`, with the consent and `recordingDayKeepDays`), and the
+    /// upload tries a day an older manager or a refusal stopped once more.
+    func learnedRecordingDay(_ hello: HubHello) {
+        let offered = hello.features.contains(RecordingDayContract.feature)
+        let changed = RecordingDayDefaults.offered([]) != offered
+        RecordingDayDefaults.remember(offered: offered)
+        RecordingDayPhoneCapabilities.shared.hubChanged(offered: offered)
+        // Every day's sync state reads the flag.
+        if changed { RecordingDaySummaries.shared.refreshAll() }
+        RecordingDaySync.shared.helloReceived(offered: offered)
+    }
+}
 
 /// One session's latest state, observed on its own (`AppModel.session(_:)`). Its `rev`, `updatedAt` and last line are
 /// as of its last other change: a push of only those (most of a working agent's) draws nothing that reads the cell

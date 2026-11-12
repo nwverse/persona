@@ -17,7 +17,7 @@ import { ExtensionThemePicker } from "../ui/ExtensionThemePicker";
 import { setTheme, useTheme, type Theme } from "./theme";
 import { Group, Row, Pill, RowConfirm, Switch } from "./settings/SettingsParts";
 import { LanguageRow } from "./settings/LanguageRow";
-import { TextSizeRow, ThemeColorPicker } from "./settings/LookSettings";
+import { RecentChatsRow, TextSizeRow, ThemeColorPicker } from "./settings/LookSettings";
 import { setReplyMotionEnabled, useReplyMotionSetting } from "../ui/stream/motion";
 import { setAgentDetails, setContextAsUsed, useAgentDetails, useContextAsUsed } from "../lib/context-usage";
 import { setSidebarTerminals, useSidebarTerminals } from "../lib/sidebar-terminals";
@@ -47,8 +47,10 @@ import { LauncherQuota } from "./settings/LauncherQuota";
 import { LauncherExtensionSections } from "./settings/ExtensionView";
 import { hubHasExt } from "../lib/extension-api";
 import { hostOf, type ProviderView } from "../lib/providers";
+import { referenceState } from "../lib/secret-reference";
 import { forgetProviderNames, providerIdNote, providerTitle } from "../lib/provider-names";
 import { harnessGroups, harnessLabel, scopeSummary } from "../lib/provider-scope";
+import { foundAliases, type EditDraft, type FoundAlias } from "../lib/provider-paste";
 import { ProviderWizard } from "./settings/ProviderWizard";
 import { ProviderImport } from "./settings/ProviderImport";
 import { builtinRows, loadLaunchers, rcFilesOf, rcGroups, syncStateText, type LauncherSync } from "../lib/launcher-list";
@@ -561,6 +563,7 @@ function General({ onModel }: { onModel: () => void }) {
         <Row label={t("settings.reply_motion")} hint={t("settings.reply_motion_hint")}>
           <Switch on={replyMotion} onChange={setReplyMotionEnabled} label={t("settings.reply_motion")} />
         </Row>
+        <RecentChatsRow />
       </Group>
 
       <SidebarPagesGroup />
@@ -696,16 +699,38 @@ function Models() {
   const [open, setOpen] = useState<string | null>(() => new URLSearchParams(location.search).get("launcher"));
   const [editing, setEditing] = useState<LauncherView | "new" | null>(() => (new URLSearchParams(location.search).get("add") === "1" ? "new" : null));
   const [importing, setImporting] = useState(false);
+  // the import opened for one alias the wizard found (#5193); null: the computer's whole list
+  const [importAlias, setImportAlias] = useState<FoundAlias | null>(null);
+  // what a stored provider opens with when a paste goes on with it
+  const [editDraft, setEditDraft] = useState<EditDraft | null>(null);
 
+  // the list read again; rejects when it couldn't be
+  const refresh = () => loadLaunchers<LauncherView>().then((r) => (setList(r.launchers), setSync(r.sync ?? []), r.launchers));
   const load = () => {
     setLoading(true);
     setError("");
-    return loadLaunchers<LauncherView>()
-      .then((r) => (setList(r.launchers), setSync(r.sync ?? [])))
+    return refresh()
       .catch((e) => setError(errorText(e)))
       .finally(() => setLoading(false));
   };
   useEffect(() => void load(), []);
+  const found = useMemo(() => foundAliases(list ?? [], machines), [list, machines]);
+  const closeWizard = () => (setEditing(null), setEditDraft(null), dropLinkParams());
+  // The wizard swaps to a stored provider the paste matched; one added since this list loaded is in a fresh one.
+  const editWith = async (name: string, draft: EditDraft) => {
+    const find = (ls?: LauncherView[] | null) => ls?.find((l) => managedProvider(l.source) && l.name === name);
+    let l = find(list);
+    if (!l) {
+      try {
+        l = find(await refresh());
+      } catch (e) {
+        return toast(t("settings.launchers_failed", { error: errorText(e) }), "error");
+      }
+    }
+    if (!l) return toast(t("settings-providerpaste.provider_missing", { name }), "error");
+    setEditDraft(draft);
+    setEditing(l);
+  };
 
   const name = (id: string) => sync.find((s) => s.machine === id)?.name || machines.find((m) => m.id === id)?.name || id;
   const shown = useMemo(() => {
@@ -756,7 +781,7 @@ function Models() {
         </label>
         {list && (
           // for people who already run claude from aliases on a computer: turns them into providers (the dialog explains when there is no computer)
-          <Button tone="secondary" icon="download" title={t("settings-providerimport.title")} onClick={() => setImporting(true)}>
+          <Button tone="secondary" icon="download" title={t("settings-providerimport.title")} onClick={() => (setImportAlias(null), setImporting(true))}>
             <span className="max-sm:sr-only">{t("settings-providerimport.import")}</span>
           </Button>
         )}
@@ -833,8 +858,9 @@ function Models() {
           setEditing(l);
         }}
       />
-      <ProviderWizard existing={editing} onClose={() => (setEditing(null), dropLinkParams())} onSaved={() => void load()} />
-      <ProviderImport open={importing} onClose={() => setImporting(false)} onImported={() => void load()} />
+      <ProviderWizard existing={editing} draft={editDraft} found={found} onClose={closeWizard} onSaved={() => void load()}
+        onImportAlias={(a) => (closeWizard(), setImportAlias(a), setImporting(true))} onEditWith={(name, draft) => void editWith(name, draft)} />
+      <ProviderImport open={importing} machine={importAlias?.machine} alias={importAlias?.name} onClose={() => setImporting(false)} onImported={() => void load()} />
       </div>
     </>
   );
@@ -1029,7 +1055,7 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit }: { nam
               {l.kind !== "api" && (!l.agent || l.agent === "claude") && l.subagent_model && <KVRow k={t("settings.subagent_model")} v={l.subagent_model} mono />}
               {l.kind !== "api" && (!l.agent || l.agent === "claude") && l.custom_model && <KVRow k={t("settings.custom_model")} v={l.custom_model} mono />}
               {l.kind !== "api" && (!l.agent || l.agent === "claude") && l.custom_model_name && <KVRow k={t("settings.custom_model_name")} v={l.custom_model_name} />}
-              <KVRow k="API Key" v={l.has_key ? t("settings.key_set_hidden") : t("settings.not_set")} />
+              <KVRow k="API Key" v={l.key_reference ? referenceState(l.key_reference) : l.has_key ? t("settings.key_set_hidden") : t("settings.not_set")} />
               {l.share && <KVRow k={t("settings.devices")} v={scopeSummary(l, mname)} />}
               {l.share && l.key_machines?.length ? <KVRow k={t("settings.machine_keys")} v={formatList(l.key_machines.map(mname), { type: "conjunction", style: "narrow" })} /> : null}
               {l.api !== "responses" && l.api !== "chat" && (!l.agent || l.agent === "claude") && <KVRow k={t("settings.auth")} v={l.auth === "bearer" ? "Bearer" : "x-api-key"} />}

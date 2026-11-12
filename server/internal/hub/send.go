@@ -86,6 +86,25 @@ func withoutControls(s string) string {
 	}, s)
 }
 
+// switchSendWait is how long the hub waits for a message carrying out a launcher switch: the node's checks before the
+// quit take at most a minute and the rest at most five (node/launcher_switch.go switchProbeWait, switchBudget).
+const switchSendWait = 7 * time.Minute
+
+// sendWait is how long the hub waits for the node to take message p to session s (as listed; zero when not): 90
+// seconds; 5 minutes for one that is starting or not running (a resume, node's claudeStartWait, #1396); switchSendWait
+// for the user's message that carries out a switch to another launcher (apply_switch): it quits the agent and starts
+// it again, and brings it back on its own launcher when that fails. Decided by the request, not the cached row, which
+// may not show a switch picked a moment ago.
+func sendWait(p map[string]any, s proto.Session) time.Duration {
+	if apply, _ := p["apply_switch"].(bool); apply {
+		return switchSendWait
+	}
+	if s.Starting || s.Status == proto.StatusOffline {
+		return 5 * time.Minute
+	}
+	return 90 * time.Second
+}
+
 func (h *Hub) sendMessage(w http.ResponseWriter, r *http.Request, m *Machine) {
 	p := map[string]any{}
 	if r.ContentLength != 0 {
@@ -195,11 +214,8 @@ func (h *Hub) sendMessage(w http.ResponseWriter, r *http.Request, m *Machine) {
 	// its outcome is what the retry gets. Resuming an offline session can take a while (shell + claude startup).
 	// One sent while the session still starts waits for claude to be ready (node/starting.go); one to a session that is
 	// not running resumes it first. Either can wait minutes on a busy machine (node's claudeStartWait, #1396).
-	wait := 90 * time.Second
-	if s, ok := m.session(sid); ok && (s.Starting || s.Status == proto.StatusOffline) {
-		wait = 5 * time.Minute
-	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), wait)
+	row, _ := m.session(sid)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), sendWait(p, row))
 	defer cancel()
 	id, _ := p["client_msg_id"].(string)
 	if ch := channel.FromClientMsgID(id, []string{"voice"}); ch != "" {
@@ -231,14 +247,7 @@ func (h *Hub) sendMessage(w http.ResponseWriter, r *http.Request, m *Machine) {
 			h.fresh.done(m.cfg.ID, sid)
 		}
 		if status == http.StatusOK && todoID != "" {
-			var title, cwd, agent string
-			if s, ok := m.session(sid); ok {
-				title, cwd, agent = s.Title, s.Cwd, s.Agent
-			}
-			if _, err := h.asst().TodoLink(ctx, assistantwire.TodoLinkParams{TodoID: todoID, MachineID: m.cfg.ID, SessionID: sid,
-				Title: title, Cwd: cwd, Agent: agent}); err != nil {
-				h.logf("sendMessage: link todo %s for %s/%s failed: %v", todoID, m.cfg.ID, sid, err)
-			}
+			h.linkSentTodo(ctx, m, todoID, sid, body)
 		}
 		writeRaw(w, status, body)
 		return
@@ -300,16 +309,29 @@ func (h *Hub) sendMessage(w http.ResponseWriter, r *http.Request, m *Machine) {
 		h.fresh.done(m.cfg.ID, sid)
 	}
 	if f.status == http.StatusOK && todoID != "" {
-		var title, cwd, agent string
-		if s, ok := m.session(sid); ok {
-			title, cwd, agent = s.Title, s.Cwd, s.Agent
-		}
-		if _, err := h.asst().TodoLink(ctx, assistantwire.TodoLinkParams{TodoID: todoID, MachineID: m.cfg.ID, SessionID: sid,
-			Title: title, Cwd: cwd, Agent: agent}); err != nil {
-			h.logf("sendMessage: link todo %s for %s/%s failed: %v", todoID, m.cfg.ID, sid, err)
-		}
+		h.linkSentTodo(ctx, m, todoID, sid, f.body)
 	}
 	writeRaw(w, f.status, f.body)
+}
+
+// linkSentTodo links a todo to the session its message went to: a Codex that waited for its first message answers
+// with the thread that message began (node/codex_waiting.go), and that thread is the todo's from now on.
+func (h *Hub) linkSentTodo(ctx context.Context, m *Machine, todoID, sid string, body []byte) {
+	var reply struct {
+		Session *proto.Session `json:"session"`
+	}
+	var title, cwd, agent string
+	if json.Unmarshal(body, &reply) == nil && reply.Session != nil && reply.Session.SessionID != "" {
+		sid = reply.Session.SessionID
+		title, cwd, agent = reply.Session.Title, reply.Session.Cwd, reply.Session.Agent
+	}
+	if s, ok := m.session(sid); ok {
+		title, cwd, agent = s.Title, s.Cwd, s.Agent
+	}
+	if _, err := h.asst().TodoLink(ctx, assistantwire.TodoLinkParams{TodoID: todoID, MachineID: m.cfg.ID, SessionID: sid,
+		Title: title, Cwd: cwd, Agent: agent}); err != nil {
+		h.logf("sendMessage: link todo %s for %s/%s failed: %v", todoID, m.cfg.ID, sid, err)
+	}
 }
 
 // deliverOnce asks the node to send and says what became of it: delivered, unknown (it may have been typed), or ""
