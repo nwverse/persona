@@ -157,7 +157,7 @@ func TestGoldenInboxJudge(t *testing.T) {
 	items := goldenItems(t)
 	for _, c := range []struct{ name, item, owner, rules string }{
 		{"summary_rules", "dm", "示例用户", " 告警都不用交 "},
-		{"plain", "bot", "", ""},
+		{"plain", "dm", "", ""}, // bot broadcasts never reach the task judge
 	} {
 		h := goldenInbox(t)
 		model, calls := captureModel(t, `{"handle":false,"reason":"r"}`)

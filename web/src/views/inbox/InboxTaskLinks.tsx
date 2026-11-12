@@ -18,7 +18,7 @@ export function InboxTaskLinks({ item }: { item: InboxItem }) {
     title: todo?.agents?.find((a) => a.session_id === x.session_id && a.machine_id === x.machine)?.title || x.agent || x.session_id,
   }] : []) : (todo?.agents ?? []).filter((x) => !x.released_at && !x.start_error).map((x) => ({ machine: x.machine_id, session: x.session_id, title: x.title || x.session_id }));
   const taskRoute: Route = { name: "todos", id };
-  const link = "flex min-w-0 max-w-full items-center gap-1.5 rounded-control text-[12px] text-accent hover:underline focus-visible:outline-2 focus-visible:outline-accent";
+  const link = "flex min-w-0 max-w-full items-center gap-1.5 rounded-control text-xs text-accent hover:underline focus-visible:outline-2 focus-visible:outline-accent";
   return (
     <div className="mt-3 flex flex-col items-start gap-1.5" data-inbox-task-links>
       <a href={href(taskRoute)} onClick={(e) => onLinkClick(e, taskRoute)} className={link}>
