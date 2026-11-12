@@ -29,19 +29,22 @@ func TestTierBelowNeedsATierThatIsNotTheSmallest(t *testing.T) {
 		current string
 		want    string
 	}{
-		"three tiers, on the largest":            {tierLadder(), "big-model", "mid-model"},
-		"the 1M marker aside":                    {proto.ManagedLauncher{HaikuModel: "small-model", SonnetModel: "mid-model[1m]", OpusModel: "big-model"}, "big-model", "mid-model"},
-		"four tiers, on the top":                 {proto.ManagedLauncher{HaikuModel: "small-model", SonnetModel: "mid-model", OpusModel: "big-model", FableModel: "top-model"}, "top-model", "big-model"},
-		"a tier the launcher does not name":      {proto.ManagedLauncher{HaikuModel: "small-model", SonnetModel: "mid-model", FableModel: "top-model"}, "top-model", "mid-model"},
-		"on the middle: below is the smallest":   {tierLadder(), "mid-model", ""},
-		"on the smallest":                        {tierLadder(), "small-model", ""},
-		"two tiers only":                         {proto.ManagedLauncher{SonnetModel: "mid-model", OpusModel: "big-model"}, "big-model", ""},
-		"two tiers under one model":              {proto.ManagedLauncher{HaikuModel: "mid-model", SonnetModel: "mid-model", OpusModel: "big-model"}, "big-model", ""},
-		"the model fills two slots":              {proto.ManagedLauncher{HaikuModel: "small-model", SonnetModel: "big-model", OpusModel: "big-model"}, "big-model", ""},
-		"the model fills the slots over a third": {proto.ManagedLauncher{HaikuModel: "small-model", SonnetModel: "mid-model", OpusModel: "big-model", FableModel: "big-model"}, "big-model", "mid-model"},
-		"a model that is no tier model":          {tierLadder(), "other-model", ""},
-		"no tier models":                         {proto.ManagedLauncher{Model: "big-model"}, "big-model", ""},
-		"no model known":                         {tierLadder(), "", ""},
+		"three tiers, on the largest":               {tierLadder(), "big-model", "mid-model"},
+		"the 1M marker aside":                       {proto.ManagedLauncher{HaikuModel: "small-model", SonnetModel: "mid-model[1m]", OpusModel: "big-model"}, "big-model", "mid-model"},
+		"four tiers, on the top":                    {proto.ManagedLauncher{HaikuModel: "small-model", SonnetModel: "mid-model", OpusModel: "big-model", FableModel: "top-model"}, "top-model", "big-model"},
+		"a tier the launcher does not name":         {proto.ManagedLauncher{HaikuModel: "small-model", SonnetModel: "mid-model", FableModel: "top-model"}, "top-model", "mid-model"},
+		"the light tier as the web's form keeps it": {proto.ManagedLauncher{SmallModel: "small-model", SonnetModel: "mid-model", OpusModel: "big-model"}, "big-model", "mid-model"},
+		"the Haiku tier over the small model":       {proto.ManagedLauncher{HaikuModel: "mid-model", SmallModel: "small-model", SonnetModel: "mid-model", OpusModel: "big-model"}, "big-model", ""},
+		"on the light tier the form keeps":          {proto.ManagedLauncher{SmallModel: "small-model", SonnetModel: "mid-model", OpusModel: "big-model"}, "small-model", ""},
+		"on the middle: below is the smallest":      {tierLadder(), "mid-model", ""},
+		"on the smallest":                           {tierLadder(), "small-model", ""},
+		"two tiers only":                            {proto.ManagedLauncher{SonnetModel: "mid-model", OpusModel: "big-model"}, "big-model", ""},
+		"two tiers under one model":                 {proto.ManagedLauncher{HaikuModel: "mid-model", SonnetModel: "mid-model", OpusModel: "big-model"}, "big-model", ""},
+		"the model fills two slots":                 {proto.ManagedLauncher{HaikuModel: "small-model", SonnetModel: "big-model", OpusModel: "big-model"}, "big-model", ""},
+		"the model fills the slots over a third":    {proto.ManagedLauncher{HaikuModel: "small-model", SonnetModel: "mid-model", OpusModel: "big-model", FableModel: "big-model"}, "big-model", "mid-model"},
+		"a model that is no tier model":             {tierLadder(), "other-model", ""},
+		"no tier models":                            {proto.ManagedLauncher{Model: "big-model"}, "big-model", ""},
+		"no model known":                            {tierLadder(), "", ""},
 	} {
 		got, ok := tierBelow(c.l, c.current)
 		if got != c.want || ok != (c.want != "") {
@@ -169,7 +172,7 @@ func TestSetupBlockSuggestsALowerTierWhenTheReviewsHeld(t *testing.T) {
 	if sg.Count != setupTierMin || sg.Setting != purposeSupervise || sg.Link != testWeb+"/settings?tab=models&purpose=assistant.supervise" {
 		t.Fatalf("suggestion: %+v", sg)
 	}
-	for _, want := range []string{"20 tasks", "1 of them", "big-model", "mid-model", "Cost and risk:", "Model settings"} {
+	for _, want := range []string{"20 acceptances", "reopened among them: 1", "big-model", "mid-model", "Cost and risk:", "Model settings"} {
 		if !strings.Contains(sg.Text, want) {
 			t.Errorf("no %q in %q", want, sg.Text)
 		}
@@ -325,5 +328,32 @@ func TestSetupTierLineIsLocalized(t *testing.T) {
 		if strings.Contains(sg.Text, "{") || strings.Contains(sg.Text, purposeSupervise) {
 			t.Errorf("%s: %q", l, sg.Text)
 		}
+	}
+}
+
+// A provider saved from the web's form keeps its light tier in small_model and no haiku_model; the node runs the
+// Haiku tier on it all the same, so it is the smallest tier here too. The line names the two models under the names
+// the provider's record has for them, which is how the model picker of Model Settings lists them.
+func TestSetupTierReadsTheFormsLightTierAndNamesModelsAsTheProviderDoes(t *testing.T) {
+	ctx := context.Background()
+	l := proto.ManagedLauncher{Name: "gw", BaseURL: "https://models.example", Model: "big-model",
+		SmallModel: "small-model", SonnetModel: "mid-model", OpusModel: "big-model",
+		Models: []proto.ProviderModel{{ID: "big-model", Name: "Big"}, {ID: "mid-model[1m]", Name: "Mid"}, {ID: "small-model"}}}
+	s, ev := newTierService(t, l)
+	now := time.Now()
+	tierHeld(ev, now, "big-model", setupTierMin, 0)
+	b := s.setupFor(ctx, now, s.location(ctx), i18n.En, testWeb)
+	if got := setupIDs(b); !slices.Equal(got, []string{setupSupervisorTier}) {
+		t.Fatalf("a provider with its light tier in small_model: %v", got)
+	}
+	sg := b.Suggestions[0]
+	if sg.Count != setupTierMin || !strings.Contains(sg.Text, " on Big ") || !strings.Contains(sg.Text, "also has Mid,") {
+		t.Fatalf("suggestion: %+v", sg)
+	}
+	if strings.Contains(sg.Text, "big-model") || strings.Contains(sg.Text, "mid-model") {
+		t.Errorf("a named model is called by its id: %q", sg.Text)
+	}
+	if got := tierModelName(l, "small-model"); got != "small-model" {
+		t.Errorf("a model with no name: %q", got)
 	}
 }

@@ -134,7 +134,8 @@ func setupWeek(now time.Time, loc *time.Location) string {
 // ---- counting ----
 
 // setupNumber is one mechanism's count: n things, and for rounds the seconds they took. The supervisor's tier
-// (setupTierCount): n settled acceptances on model of which reopened were reopened, and lower, the model a tier down.
+// (setupTier): n settled acceptances on model of which reopened were reopened, and lower, the model a tier down; the
+// two models as the line names them, an empty lower when none is known.
 type setupNumber struct {
 	n       int
 	seconds float64
@@ -493,7 +494,7 @@ func setupWord(l i18n.Lang, web, id string, c setupNumber) setupSuggestion {
 	case setupLeaders:
 		sg.Minutes = int(c.seconds/60 + 0.5)
 		args["minutes"] = sg.Minutes
-	case setupSupervisorTier: // the models are the owner's own names for them, as their provider has them
+	case setupSupervisorTier: // the models under the names the owner's provider has for them (tierModelName)
 		args["reopened"], args["model"], args["lower"] = c.reopened, c.model, c.lower
 	}
 	sg.Text = i18n.T(l, "assistant-setup_suggest."+id, args)

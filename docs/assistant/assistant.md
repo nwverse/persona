@@ -1124,7 +1124,8 @@ All four must hold:
 - **A lower tier that is not the smallest is known.** All the manager knows of tiers is the tier models of a provider
   added in Persona (`opus_model`, `sonnet_model`, `haiku_model`, `fable_model` of the provider's record, which the
   owner or the import of their shell alias filled in; smallest first: `haiku_model`, `sonnet_model`, `opus_model`,
-  `fable_model`). The supervisor's model must be one of them; the tier below is the nearest filled slot under it with
+  `fable_model`). The smallest slot is read as the node runs it: `haiku_model`, else `small_model`, which is where
+  the web app's provider form keeps its light tier. The supervisor's model must be one of them; the tier below is the nearest filled slot under it with
   another model; and under that one there must be yet another filled slot with a third model. So on a provider with
   three tier models only the largest gets the line, pointing at the middle one. The smallest tier is never suggested
   (an acceptance is a judgment call: `docs/assistant/model-config.md` "Models for each role"), nor is a tier the
@@ -1133,10 +1134,14 @@ All four must hold:
   of the provider's tier models, a direct API provider, and Agent presets (`docs/assistant/model-profiles.md`), which
   have names and descriptions but no order.
 
-The line names the two models as the owner's provider has them (no model is named in code), the two numbers, and in
-one sentence the cost and the risk: a lower tier spends less on every review, but the numbers say how the current
-model reviewed, not how the lower one will. It says its own 30 days, since the block's introduction speaks of the
-last 7 days and of mechanisms that are off. The `brief` item's `count` is the settled acceptances and `setting` the
+The line names the two models as the owner's provider has them (no model is named in code): by the name the
+provider's record has for the model (`models[].name`, which the model picker of Model Settings lists it under), else
+by its id. It gives the two numbers, both counts of acceptances, not of tasks (a task accepted, reopened after its
+day and accepted again is two), and in one sentence the cost and the risk: a lower tier spends less on every review,
+but the numbers say how the current model reviewed, not how the lower one will. It says its own 30 days, and the
+block's introduction says the numbers are of the last 7 days "unless a line names its own period" and that each item
+"stays as it is until you change it yourself", which holds for a mechanism that is off and for a binding alike (the
+same sentence on the Lark card and, from the web app's own strings, on its briefing card). The `brief` item's `count` is the settled acceptances and `setting` the
 purpose id. Out of scope: the reverse. Nothing suggests a stronger tier, whatever is reopened; the table of "Models
 for each role" says when to raise it. Once the owner has moved the supervisor down, the same rule may name the next
 tier down after its own 20 settled acceptances, but never the smallest.
