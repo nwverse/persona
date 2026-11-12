@@ -63,8 +63,11 @@ const items: Item[] = [
 let host: HTMLDivElement;
 let root: Root;
 let fetcher: ReturnType<typeof vi.fn>;
+// the pill loads lazily (PlanCard.tsx): wait for that import too
 const flush = async () => {
   for (let i = 0; i < 6; i++) await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+  await act(async () => { await vi.dynamicImportSettled(); });
+  await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
 };
 const pill = () => host.querySelector<HTMLButtonElement>("[data-plan-pill]");
 const flyout = () => document.querySelector<HTMLElement>("[data-plan-flyout]");
