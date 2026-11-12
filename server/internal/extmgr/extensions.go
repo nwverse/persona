@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/connector/proc"
@@ -196,6 +197,12 @@ type extensions struct {
 	// skillsSent remembers which skill digests each machine was sent (machine id → *sync.Map of name → digest), so
 	// the files go once (again after the hub restarts).
 	skillsSent sync.Map
+	// dataMu guards dataState, what the assistant reads now of the extensions' data instructions
+	// (extension_assistant_data.go); nil until first read from the store.
+	dataMu    sync.Mutex
+	dataState *assistantDataState
+	// dataLogged: the last line logged about each data contribution, so a lasting problem is logged once (dataLog).
+	dataLogged sync.Map
 	// markets are the plugin markets (extension_market.go); upgrades their plugins' auto-upgrade
 	// (extension_autoupgrade.go).
 	markets  markets
@@ -557,6 +564,7 @@ func (ps *extensions) changed(c extension.Change) {
 	ps.kept.forgetProvider(c.ID) // and give other values, or none
 	// A removed provider's Always rules for hand-offs go with it (secret_handoff_rules.go).
 	if c.Kind == "removed" {
+		ps.forgetAssistantData(ctx, c.ID) // what the assistant read of its data directory goes with it
 		if n, err := ps.h.removeHandoffRules(ctx, c.ID, ""); err != nil {
 			ps.logf("plugin %s removed: its hand-off rules were not: %v", c.ID, err)
 		} else if n > 0 {
@@ -1103,10 +1111,16 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 		switch method {
 		case "kb.list", "kb.get", "kb.day", "kb.search", "kb.update", "kb.owner", "kb.recent":
 			return ps.extensionKBCall(ctx, id, method, params)
-		case "assistant.conversations", "assistant.messages": // assistant.read (extension_assistant_read.go)
+		case "assistant.conversations", "assistant.messages", "assistant.memory": // assistant.read, assistant.memory.read (extension_assistant_read.go)
 			return ps.extensionAssistantCall(ctx, id, method, params)
 		case "model.complete": // assistantwire.MethodModelComplete (extension_model_calls.go)
 			return ps.extensionModelCall(ctx, id, params)
+		case assistantwire.MethodAssistantDataStatus: // its own data contributions only, no scope (extension_assistant_data.go)
+			items := ps.assistantDataStatus(ctx, id, false)
+			if items == nil {
+				items = []AssistantDataView{}
+			}
+			return assistantwire.AssistantDataStatusResult{Items: items}, nil
 		case connector.MethodSentRecord:
 			return ps.extensionSentRecord(ctx, id, params)
 		case "cli.call":

@@ -685,7 +685,7 @@ func (s *Service) memory(ctx context.Context, op map[string]any, out any) error 
 	}
 	cwd := s.spaceCwd(d, space) // the health space keeps a memory of its own (docs/assistant/health.md)
 	if cwd == "" {
-		return errors.New("assistant machine is offline")
+		return errMemoryMachineOffline
 	}
 	op["cwd"] = cwd
 	return s.call(ctx, d.ID, DeviceAssistantMemory, op, out)
