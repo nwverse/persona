@@ -62,7 +62,7 @@ class InboxDataOwner @Inject constructor(
     private val app = application as PersonaApp
     private data class Repositories(val data: ScopedHubData, val inbox: persona.feature.inbox.InboxRepository,
         val assistant: AssistantConversations, val mail: StateFlow<MailTransport?>,
-        val composers: ReplyComposers, val reading: LarkReadingStore, val names: GroupNames,
+        val composers: ReplyComposers, val handOffBars: InboxHandOffBars, val reading: LarkReadingStore, val names: GroupNames,
         val conversations: InboxConversations)
     // The inbox and Persona are the selected group's (docs/android/android.md "Multiple hubs"): its own transports speak its plain
     // ids, which are moved into the merged lists' ids on the way out. Agent requests in the inbox stay merged.
@@ -134,8 +134,9 @@ class InboxDataOwner @Inject constructor(
                 stack.repositories.preferences ?: preferences.takeIf { names.plain }, events = socket.events)
             persona = assistant.inGroup(names, data.coroutineScope)
             val composers = ReplyComposers(wrapped, data.coroutineScope)
+            val handOffBars = InboxHandOffBars(data.coroutineScope, app.resources)
             Repositories(data, wrapped, checkNotNull(persona), mail,
-                composers, reading, names, InboxConversations(wrapped, data.scope.path, data.coroutineScope, composers))
+                composers, handOffBars, reading, names, InboxConversations(wrapped, data.scope.path, data.coroutineScope, composers))
         }?.await()
     }.stateIn(app.scope, SharingStarted.Eagerly, null)
 
@@ -178,11 +179,12 @@ class InboxDataOwner @Inject constructor(
         }
     }
 
-    val inbox = object : persona.feature.inbox.InboxRepository {
+    val inbox = object : persona.feature.inbox.InboxRepository, InboxHandOffBarOwner {
         override val supportsThreadOutbox = true
         override val conversationInbox = observe<InboxConversations?>(null) { flowOf(it.conversations) }
         override val messageReads = observe(emptySet<InboxMessageRead>()) { it.inbox.messageReads }
         override val replyComposers = observe<ReplyComposers?>(null) { flowOf(it.composers) }
+        override val handOffBars = observe<InboxHandOffBars?>(null) { flowOf(it.handOffBars) }
         override suspend fun readingStore() = use { it.reading }
         override fun replyUpdates(target: ReplyTarget) = current.flatMapLatest {
             if (it == null || runtime.scopedData.value !== it.data) emptyFlow() else it.inbox.replyUpdates(target)
