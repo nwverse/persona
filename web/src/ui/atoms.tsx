@@ -158,6 +158,8 @@ export function Button({
   title,
   href,
   expanded,
+  testId,
+  size,
 }: {
   children: React.ReactNode;
   tone?: BtnTone;
@@ -172,8 +174,13 @@ export function Button({
   href?: string;
   /** A button that shows or hides something: whether it is shown (aria-expanded). */
   expanded?: boolean;
+  /** `data-testid`, for the tests and screenshot scripts that press it. */
+  testId?: string;
+  /** "sm": 28 px tall (a row of actions inside a card, as the error notice's). A height in `className` does not win
+   *  over the 32 px one here: the classes are joined, not merged, and the stylesheet's order decides. */
+  size?: "sm";
 }) {
-  const base = "inline-flex h-8 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-control px-3 text-[12.5px] font-medium transition-[background-color,color,transform,opacity,filter] duration-150";
+  const base = cx("inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-control px-3 text-[12.5px] font-medium transition-[background-color,color,transform,opacity,filter] duration-150", size === "sm" ? "h-7" : "h-8");
   if (href && !disabled && !busy) {
     // an <a> is never :enabled, so the link has its own hover / press
     const links: Record<BtnTone, string> = {
@@ -184,7 +191,7 @@ export function Button({
       danger: "bg-danger-fill text-white hover:brightness-105",
     };
     return (
-      <a href={href} target="_blank" rel="noopener noreferrer" title={title} onClick={onClick} className={cx(base, "active:scale-[0.96]", links[tone], className)}>
+      <a href={href} target="_blank" rel="noopener noreferrer" title={title} data-testid={testId} onClick={onClick} className={cx(base, "active:scale-[0.96]", links[tone], className)}>
         {icon ? <Icon name={icon} size={14} stroke={2.1} /> : null}
         {children}
       </a>
@@ -206,6 +213,7 @@ export function Button({
       // the spinner is aria-hidden, so without this a busy button just reads as disabled
       aria-busy={busy || undefined}
       aria-expanded={expanded}
+      data-testid={testId}
       onClick={onClick}
       className={cx(
         base,
@@ -764,7 +772,7 @@ function MenuRow({ item: it, asking, working, refCb, onHover, onChoose }: { item
       ref={refCb}
       role={it.radio ? "menuitemradio" : "menuitem"}
       type="button"
-      title={it.state ? `${it.label} · ${STATE_LABEL[it.state]}` : undefined}
+      title={it.state ? `${it.label} · ${STATE_LABEL[it.state]}` : it.tip}
       disabled={it.disabled}
       aria-haspopup={it.children ? "menu" : undefined}
       aria-keyshortcuts={it.accel}

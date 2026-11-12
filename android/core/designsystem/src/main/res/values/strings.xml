@@ -142,9 +142,18 @@
     </plurals>
     <!-- A herdr tab of several agents (#2320) -->
     <string name="designsystem_tab_launcher">Lead</string>
+    <!-- An Agents row's third line on Glass (#4338 A9): the to-do chip and the muted bell, for TalkBack -->
+    <string name="designsystem_row_todo">To-do: %1$s</string>
+    <string name="designsystem_row_muted">Notifications muted</string>
     <plurals name="designsystem_tab_agents">
         <item quantity="one">%1$d agent</item>
         <item quantity="other">%1$d agents</item>
+    </plurals>
+    <!-- An agent's card on the space page (#4338 A11): its state, then the tab's starter and its pending requests -->
+    <string name="designsystem_space_card_starter">%1$s · Started it</string>
+    <plurals name="designsystem_space_card_pending">
+        <item quantity="one">%1$s · %2$d pending</item>
+        <item quantity="other">%1$s · %2$d pending</item>
     </plurals>
     <string name="designsystem_group_expand">Expand group</string>
     <string name="designsystem_group_collapse">Collapse group</string>

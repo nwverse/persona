@@ -41,9 +41,10 @@ describe("draftForm", () => {
     expect(f.models.map((m) => [m.id, m.checked, m.context_window])).toEqual([["example-large", true, ""], ["example-small", true, "128000"]]);
   });
 
-  it("takes the first model as the default when none is named, and Bearer when no sign-in is", () => {
+  it("takes the first model as the default when none is named, and Automatic when no sign-in is (#5329)", () => {
     const f = draftForm(draft({}, { auth: undefined, api_key: undefined, models: [{ id: "a" }, { id: "b" }] }));
-    expect(f).toMatchObject({ model: "a", auth: "bearer", api_key: "" });
+    expect(f).toMatchObject({ model: "a", auth: "auto", auth_found: "", api_key: "" });
+    expect(draftForm(draft({}, { auth: "api_key" }))).toMatchObject({ auth: "api_key" });
   });
 
   it("keeps the tiers it sets as the user's, so only the others fill in by themselves", () => {

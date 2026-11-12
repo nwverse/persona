@@ -125,8 +125,15 @@
     </plurals>
     <!-- A herdr tab of several agents (#2320) -->
     <string name="designsystem_tab_launcher">发起者</string>
+    <!-- An Agents row's third line on Glass (#4338 A9): the to-do chip and the muted bell, for TalkBack -->
+    <string name="designsystem_row_todo">待办：%1$s</string>
+    <string name="designsystem_row_muted">已屏蔽通知</string>
     <plurals name="designsystem_tab_agents">
         <item quantity="other">%1$d 个 Agent</item>
+    </plurals>
+    <string name="designsystem_space_card_starter">%1$s · 发起者</string>
+    <plurals name="designsystem_space_card_pending">
+        <item quantity="other">%1$s · %2$d 件待处理</item>
     </plurals>
     <string name="designsystem_group_expand">展开分组</string>
     <string name="designsystem_group_collapse">折叠分组</string>

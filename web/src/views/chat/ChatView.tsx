@@ -24,7 +24,8 @@ import { getSession, getState, hubHas, listenSession, refresh, refreshTodos, sav
 import { codexThreadOf, waitsForFirstMessage } from "../../lib/codex-waiting";
 import { foldRows } from "../../lib/folded-rows";
 import { PREVIEW_FEATURE } from "../../lib/preview";
-import { agentsWorking, buildTaskIndex, stableSubagents, STOP_LOOP_MESSAGE, subagentCall, subagentCardKey, terminalCalls, type TaskIndex } from "../../lib/tasks";
+import { buildTaskIndex, stableSubagents, STOP_LOOP_MESSAGE, subagentCall, subagentCardKey, terminalCalls, type TaskIndex } from "../../lib/tasks";
+import { runStep, sameStep, turnDone, type RunStep } from "../../lib/run-step";
 import { stabilizeLines, stableValue } from "../../lib/stable-lines";
 import { planProgress, workLineStyle } from "../../lib/work-groups";
 import { echoed, taggedSeen } from "../../lib/echo";
@@ -85,9 +86,10 @@ import { containsInput, indexedNavTicks, userInputRevision, windowUserInputs, US
 import { useRevealedInputSeq, useUserInputs } from "./useUserInputs";
 import { NavRail } from "./NavRail";
 import { useChatScrollbar } from "./useChatScrollbar";
-import { ChatLineView, closedRecap, closeRecap, OpenRecapLine } from "./Lines";
+import { ChatLineView, closedRecap, closeRecap, dismissedError, dismissError, ErrorBanner, errorKey, OpenRecapLine } from "./Lines";
 import { useTranscript } from "./useTranscript";
-import { ArchiveCloseDialog, CloseAgentDialog, DeleteSessionDialog, HeaderModeButton, ModeChips, RenameDialog, RenameSpaceDialog, SessionInfoDialog } from "./SessionDialogs";
+import { ArchiveCloseDialog, CloseAgentDialog, DeleteSessionDialog, HeaderModeButton, RenameDialog, RenameSpaceDialog, SessionInfoDialog } from "./SessionDialogs";
+import { PermissionPicker, usePlanMode } from "./PermissionPicker";
 import { showsInHeader } from "../../lib/header-mode";
 import { archiveItems } from "../AgentMenus";
 import { ChatSidebarButton } from "../ShellSwitch";
@@ -119,6 +121,7 @@ import { useVoiceEntry, VoiceEnded, VoiceTail } from "./voice/VoiceParts";
 import { ChatOnlyNote, FailureCard, ReadinessCard, useReadinessGate, type ReadinessGate } from "../assistant/Readiness";
 import { codedFailure, refreshReadiness, turnErrorFix, type CodedFailure } from "../../lib/readiness";
 import { FALLBACK_UNAVAILABLE } from "../../lib/model-fallback";
+import { BASE } from "../../lib/base";
 import { ModelFallbackCard } from "./ModelFallbackCard";
 import { usageLimitLabel } from "../../lib/usage-limit";
 import { displayLines, getFeedState, loadedFrom, loadFeed, loadToday, sendRouted, startOfDay, useFeed, type FeedItem } from "../../lib/feed";
@@ -192,7 +195,7 @@ const ULTRACODE_SEND_TRIES = 4;
 /** How long after the hub took a stop the button stays blocked if the agent keeps working: it may have ignored it. */
 const STOP_SETTLE_MS = 15_000;
 
-/** "Branch to new chat" (#2137): the node copies the conversation up to this reply's turn into a new one, which opens here. */
+/** "Start a new session" (#2137, #5314): the node copies the conversation up to this reply's turn into a new one, which opens here. */
 async function forkAt(mid: string, sid: string, itemId: string, assistant: boolean, space?: string, manager?: string) {
   try {
     const r = await api<{ session_id: string }>(`${sessionPath(mid, sid)}/fork`, { method: "POST", json: { at_item_id: itemId } });
@@ -321,14 +324,15 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const shownPending = queued.length ? pending.filter((p) => !queued.some((q) => sameMessage(q, p.msg.text))) : pending;
   // a queued message taken back or deleted (QueueStrip) is not on its way any more: its sending bubble goes with it,
   // rather than showing again until the turn ends (#4342)
-  // the photos a Persona chat's queued message went with, when it was sent from here (its queue holds only the words)
-  const queuedPhotos = (raw: string) => pending.find((p) => sameMessage(raw, p.msg.text))?.msg.images?.length ?? 0;
-  const withdrawn = (text: string) => {
+  // the photos a Persona chat's queued message went with, when it was sent from here (its queue holds only the words).
+  // Both stay the same while `pending` does: the queue is drawn in the memoized composer.
+  const queuedPhotos = useCallback((raw: string) => pending.find((p) => sameMessage(raw, p.msg.text))?.msg.images?.length ?? 0, [pending]);
+  const withdrawn = useCallback((text: string) => {
     const gone = pending.find((p) => !p.posting && sameMessage(text, p.msg.text));
     if (!gone) return;
     forgetOutgoing(outboxKey(mid, sid), gone.id);
     setPending((ps) => ps.filter((p) => p.id !== gone.id));
-  };
+  }, [pending, mid, sid]);
   const outgoing = shownPending.length + outbox.filter((e) => e.state !== "failed").length;
   const persona = usePersona();
   const state = session ? stateOf(session) : "unknown";
@@ -512,6 +516,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       speaker: assistant ? persona.name : "Agent",
       images: () => items.current.filter((i) => i.kind === "image"),
       fork: canFork ? (itemId: string) => void forkAt(mid, sid, itemId, Boolean(assistant), session?.space, session?.manager) : undefined,
+      assistant: Boolean(assistant),
       rewind: canRewind ? { block: rewindLive, run: (messageId, text, restore) => rewindTo(mid, sid, draftKey, items.current, messageId, text, restore) } : undefined,
     }),
     [draftKey, title, canCompose, canFork, canRewind, rewindLive, mid, sid, assistant, persona.name],
@@ -1103,6 +1108,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     [tr.items, lastLive, outgoing, foldBackground],
   );
   lastLines.current = lines;
+  // the last exchange while the chat is at work, even while a message of yours on its way draws it finished (live needs
+  // !outgoing above): its words get no reply bar until the work is over (#5314, SegmentView `busy`)
+  const busySegment = useMemo(() => (lastLive ? lines.findLast((line) => line.kind === "segment")?.id : undefined), [lastLive, lines]);
   // the last two exchanges are always drawn (the one going on, the one just done); those before them skip drawing while
   // off screen (SegmentView `offscreen`). Not on a touch-only screen: a script moving the view (keeping it still as one
   // is drawn) can stop a fling there.
@@ -1192,10 +1200,10 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     [mid, sid, inputIndex, follow, landRow],
   );
   const railSource = useMemo<NavRailSource>(() => ({ ticks: railTicks, total: inputIndex?.total, select: railJump }), [railTicks, inputIndex?.total, railJump]);
-  // the subagents the agent is waiting on (#5602): running, launched in the foreground, their calls not answered yet
+  // the calls with a terminal result: a subagent call without one is one the agent still waits on (the bar's step)
   const callsAnswered = useMemo(() => terminalCalls(tr.items, tasks), [tr.items, tasks]);
-  const waitingOn = useMemo(() => (assistant ? null : agentsWorking(subagents, callsAnswered)), [assistant, subagents, callsAnswered]);
-  // the live work lines' clocks on screen (WorkGroup's Elapsed): while one ticks, the running bar shows no time (#3534)
+  // the live work lines' clocks on screen (WorkGroup's Elapsed): while one ticks, an older hub's guess at a background
+  // workflow yields to the turn (the running bar's inBackground)
   const [clocks, setClocks] = useState(0);
   const countClock = useCallback((delta: 1 | -1) => setClocks((n) => n + delta), []);
   // while a message of yours is on its way the live line steps aside (lastLive needs !outgoing): the time stays where it was
@@ -1446,15 +1454,67 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // Close Plan in the pill's flyout hides it until the plan changes (cindy's PinnedPlanPanel)
   const [planClosed, closePlan] = usePlanClosed(`${mid}/${sid}`, plan);
   const lastLine = lines[lines.length - 1];
-  // "Retry" on an API error card: only when it is the last thing, the agent is not working (someone may have retried already)
-  const retry = useCallback(() => void deliver({ text: t("chat-chatview.continue_text"), images: [] }, uuid()), [deliver]);
+  // "Retry" on the error banner and the failure note: sends "continue" alone, not what is in the box. Whether it went:
+  // deliver can refuse without leaving a bubble (the setup gate, a row that cannot send, a refused launcher switch)
+  const retry = useCallback(() => deliver({ text: t("chat-chatview.continue_text"), images: [] }, uuid()), [deliver]);
   // the failure notice "Retry" was pressed on: kept here, not in the note, so it stays gone while the session goes through
   // needs-you and back before the hub clears it (iOS ChatView @State retried)
   const [retriedOn, setRetried] = useState<{ chat: string; reason?: string }>();
   const retried = retriedOn?.chat === `${mid}/${sid}` ? retriedOn.reason : undefined;
-  // a turn that failed on the refusal fallback's missing model (#2528): "Continue" would send it to the same model
+  const failureNote = Boolean(session && !assistant && showsFailureNote(session, { retried }));
+  // a turn that failed on the refusal fallback's missing model (#2528): "Continue" would send it to the same model; the
+  // main conversation's setup gate would only open its missing step, as it does for the refused-send card's Send again
   const canRetry =
-    lastLine?.kind === "apiError" && state !== "working" && !outgoing && sessionCan(session, "send") && session?.turn_error_code !== FALLBACK_UNAVAILABLE;
+    lastLine?.kind === "apiError" && state !== "working" && !outgoing && sessionCan(session, "send") && session?.turn_error_code !== FALLBACK_UNAVAILABLE && !gate.blocked;
+  // The model error the chat stopped on (cindy's ErrorBanner, #5313): its last line, over the composer with Retry and ✕,
+  // and left out of the chat meanwhile. Not once it is dismissed (remembered in this browser), Retry was pressed on it
+  // (gone at once, before "continue" reaches the transcript), something is on its way or being worked on, or the host's
+  // failure note already says why the turn stopped; then, and once anything comes after it, it is a card in the chat.
+  const errorChat = `${BASE}/${mid}/${sid}`;
+  const [errorClosed, setErrorClosed] = useState(() => dismissedError(errorChat));
+  useEffect(() => setErrorClosed(dismissedError(errorChat)), [errorChat]);
+  const [errorRetried, setErrorRetried] = useState<string>();
+  const tailError = lastLine?.kind === "apiError" ? lastLine : undefined;
+  const tailKey = tailError ? `${errorChat}|${errorKey(tailError)}` : "";
+  const bannerError =
+    tailError && !working && canCompose && !stoppedLine && !failureNote && errorKey(tailError) !== errorClosed && tailKey !== errorRetried ? tailError : undefined;
+  // the banner's buttons go with it: the keyboard goes back to the composer, not on a touch screen alone (that would raise
+  // the keyboard). Called on a press, by when the composer's box (declared below) is there.
+  const backToComposer = () => {
+    if (fine) composerBox.current?.querySelector("textarea")?.focus({ preventScroll: true });
+  };
+  // gone at once; a retry that did not go brings it back, as nothing else on the page could retry then
+  const retryError = () => {
+    const key = tailKey;
+    if (key) setErrorRetried(key);
+    backToComposer();
+    return retry().then((went) => {
+      if (!went && key) setErrorRetried((k) => (k === key ? undefined : k));
+      return went;
+    });
+  };
+  const dismissBanner = () => {
+    if (!tailError) return;
+    dismissError(errorChat, errorKey(tailError));
+    setErrorClosed(errorKey(tailError));
+    backToComposer();
+  };
+  // A new banner is brought into view in the box over the composer, which scrolls from its top when what is in it is
+  // taller than the dock may be (a short phone, the main conversation's setup card and action bar above it): the chat no
+  // longer shows the error. Once per error, so a reader scrolling that box is left alone; the chat itself never moves.
+  const dockAbove = useRef<HTMLDivElement>(null);
+  const bannerKey = bannerError ? errorKey(bannerError) : "";
+  useLayoutEffect(() => {
+    const box = dockAbove.current;
+    const el = bannerKey ? box?.querySelector("[data-error-banner]") : null;
+    if (!box || !el) return;
+    const b = box.getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    const up = r.top - b.top;
+    const down = r.bottom - b.bottom;
+    if (up < 0) box.scrollTop += up;
+    else if (down > 0) box.scrollTop += Math.min(down, up);
+  }, [bannerKey]);
   // Claude Code's "while you were away" recap, open in full while it is the newest thing and not closed: the chat's last
   // line, in the flow with the agent's words (#1360: above the composer it covered the end of the reply)
   const recapKey = `${mid}/${sid}`;
@@ -1504,10 +1564,16 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   });
   // the run's time counts from the turn's start, as its "Working…" does (not from the session's last state change)
   const stateSince = session?.state_since;
-  const runStart = useMemo(() => {
+  const liveSeg = useMemo(() => {
     const live = lines.flatMap((l) => l.kind === "supervision" ? l.lines : [l]).findLast((l) => l.kind === "segment" && l.live);
-    return (live?.kind === "segment" ? turnStart(live.seg) : undefined) ?? stateSince;
-  }, [lines, stateSince]);
+    return live?.kind === "segment" ? live.seg : undefined;
+  }, [lines]);
+  const runStart = (liveSeg ? turnStart(liveSeg) : undefined) ?? stateSince;
+  // what the turn is doing, for the bar's words (cindy's status): kept as it was while it says the same
+  const streamingNow = Boolean(tr.streaming);
+  const lastStep = useRef<RunStep | undefined>(undefined);
+  const step = useMemo(() => sameStep(lastStep.current, runStep(liveSeg, streamingNow, subagents, callsAnswered)), [liveSeg, streamingNow, subagents, callsAnswered]);
+  lastStep.current = step;
   // as cindy's: gone once every step is done or a later message of the user's started another turn
   const planPill = plan && planOut && !plan.superseded && !planClosed && !planProgress(plan.todos).allDone ? (
     <Suspense key={plan.id} fallback={null}>
@@ -1517,12 +1583,16 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // Persona's own chats too (#3654), and from the moment the message is in, not from the hub's next push
   const background = useMemo(() => backgroundLine(session), [session]);
   const wait = useMemo(() => (outgoing || awaiting ? null : backgroundWaitLine(session)), [outgoing, awaiting, session]);
-  const running = session ? <RunningStatusBar mid={mid} sid={sid} working={state === "working" || awaiting} startedAt={runStart} clock={barClock.current} agents={waitingOn} background={background} wait={wait} subtasks={subtasks && !outgoing && !awaiting} /> : null;
-  const queue =
-    session && queued.length > 0 ? (
-      <QueueStrip session={session} draftKey={draftKey} canEdit={canCompose} compact={short} persona={assistant ? persona.name : undefined} onWithdrawn={withdrawn}
-        photosOf={assistant ? queuedPhotos : undefined} />
-    ) : null;
+  // ✓ Done only for a turn that finished: one waiting on you, stopped or cut off by an error keeps its last words
+  const done = turnDone(state, session, lastLine, tr.items);
+  const running = session ? <RunningStatusBar mid={mid} sid={sid} working={state === "working" || awaiting} done={done} startedAt={runStart} clock={barClock.current} plain={assistant} step={step} background={background} wait={wait} subtasks={subtasks && !outgoing && !awaiting} /> : null;
+  // at the top of the composer's card, as cindy's pending queue (#5327); a phone on its side keeps it to one line beside
+  // the run's status. The same element while nothing in it changes: the composer is memoized.
+  const hasQueue = queued.length > 0;
+  const queue = useMemo(
+    () => (session && hasQueue ? <QueueStrip session={session} draftKey={draftKey} canEdit={canCompose} compact={short} persona={assistant ? persona.name : undefined} onWithdrawn={withdrawn} photosOf={assistant ? queuedPhotos : undefined} /> : null),
+    [session, hasQueue, draftKey, canCompose, short, assistant, persona.name, withdrawn, queuedPhotos],
+  );
   // with the plan's pill showing, "Jump to bottom" goes beside it (over the chat, they hid each other); the pill keeps
   // one wrapper either way, so a flyout pinned open on it stays when the reader scrolls
   const jumpInDock = Boolean(planPill);
@@ -1543,7 +1613,11 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const faceLast = useMemo(() => (lastRole && lastKind ? { role: lastRole, kind: lastKind } : undefined), [lastRole, lastKind]);
   // the main conversation's /clear (#5095, lib/main-clear.ts): Persona's other conversations take no commands
   const commands = useMemo(() => (assistant ? (clears ? mainCommands() : []) : agentCommands(AGENT_COMMANDS, session)), [assistant, clears, session]);
-  const footer = useMemo(() => (session ? <ComposerFooter session={session} assistant={assistant} /> : null), [session, assistant]);
+  // the permission picker after the + (#5324), where the mode can be switched: a Persona conversation whatever its state
+  // (the hub applies it, #2416), an agent with modes while it runs; Plan mode is the + panel's check row
+  const modesOn = Boolean(session) && (Boolean(assistant) || (hasModes(session) && stateOf(session!) !== "offline"));
+  const leading = useMemo(() => (session && modesOn ? <PermissionPicker session={session} assistant={assistant} /> : null), [session, modesOn, assistant]);
+  const planMode = usePlanMode(modesOn ? session : undefined, assistant);
   // the model pill: an Agent's (#5032), a Persona conversation's (#5033, its pick kept for the conversation)
   const trailing = useMemo(() => (session ? assistant ? <AssistantModelPill session={session} /> : <AgentModelPill session={session} /> : null), [session, assistant]);
 
@@ -1663,7 +1737,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
                       <QuickResultCard key={d.id} result={d.result} />
                     ) : d.kind === "day" ? (
                       <DayLine key={d.id} date={d.date} />
-                    ) : (
+                    ) : d.line.id === bannerError?.id ? null : (
                       <ChatLineView
                         key={d.id}
                         line={d.line}
@@ -1671,18 +1745,17 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
                         sid={sid}
                         streaming={(d.line.kind === "segment" || d.line.kind === "supervision") && d.line.live ? tr.streaming || undefined : undefined}
                         expandFold={tr.expandFold}
-                        onRetry={canRetry && d.line.id === lines.at(-1)?.id ? retry : undefined}
-                        onEditLastMessage={d.line.id === lines.at(-1)?.id ? onEditLastMessage : undefined}
-                        fix={d.line.id === lines.at(-1)?.id ? turnFix : undefined}
+                        fix={d.line.id === lastLine?.id ? turnFix : undefined}
                         limit={d.line.kind === "apiError" && d.line.id === limitOn ? limitLine : undefined}
                         assistant={assistant}
                         offscreen={offscreen(d.line)}
+                        busy={d.line.id === busySegment || undefined}
                       />
                     ),
                   ])
-                : lines.flatMap((line, i) => [...failedBefore(line.id), open?.line === line.id ? (
+                : lines.flatMap((line) => [...failedBefore(line.id), open?.line === line.id ? (
                 <OpenRecapLine key={line.id} open={open} onClose={dismissRecap} />
-              ) : (
+              ) : line.id === bannerError?.id ? null : (
                 <ChatLineView
                   key={line.id}
                   line={line}
@@ -1691,11 +1764,10 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
                   sid={sid}
                   streaming={(line.kind === "segment" || line.kind === "supervision") && line.live ? tr.streaming || undefined : undefined}
                   expandFold={tr.expandFold}
-                  onRetry={canRetry && i === lines.length - 1 ? retry : undefined}
-                  onEditLastMessage={i === lines.length - 1 ? onEditLastMessage : undefined}
                   limit={line.kind === "apiError" && line.id === limitOn ? limitLine : undefined}
                   assistant={assistant}
                   offscreen={offscreen(line)}
+                  busy={line.id === busySegment || undefined}
                 />
               )])}
               </CardConversation.Provider>
@@ -1738,7 +1810,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
         {/* everything over the composer: it shrinks and scrolls before the composer does (the composer grew, and its
             cards, task questions and notes stood taller than the dock, drawn up over the chat or pushing it to nothing);
             the box clips what is in it, so its children keep a little room for their shadows (p-1; -m-1 gives it back) */}
-        <div data-chat-dock-above data-scroll-box className="-m-1 flex min-h-0 shrink flex-col gap-2 overflow-y-auto overscroll-contain p-1 empty:hidden">
+        <div ref={dockAbove} data-chat-dock-above data-scroll-box className="-m-1 flex min-h-0 shrink flex-col gap-2 overflow-y-auto overscroll-contain p-1 empty:hidden">
         {/* a phone on its side: the plan's pill, the run's status and the queue share one line. One wrapper either way
             (no box of its own otherwise), so the pill and a flyout pinned on it stay when the phone turns */}
         {(pills || running || (short && queue)) && (
@@ -1767,17 +1839,35 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
         {session && !assistant && <ConflictNote session={session} />}
         {/* a resume turned ultracode off (#3428): one line with "Turn back on" */}
         {session && !assistant && <UltracodeLostNote session={session} />}
-        {session && !assistant && showsFailureNote(session, { retried }) && (
+        {session && failureNote && (
           <FailureNote
             session={session}
             onRetry={() => {
-              setRetried({ chat: `${mid}/${sid}`, reason: failureReason(session) });
-              retry();
+              const chat = `${mid}/${sid}`;
+              const reason = failureReason(session);
+              setRetried({ chat, reason });
+              // a retry that did not go brings the note back
+              void retryError().then((went) => {
+                if (!went) setRetried((r) => (r?.chat === chat && r.reason === reason ? undefined : r));
+              });
             }}
           />
         )}
-        {!short && queue}
         {voiceState === "ended" && <VoiceEnded owner={voiceOwner} />}
+        {/* the error the chat stopped on, right over the composer as cindy places it (#5313); keyed by the error, so a new
+            one opens with its details folded */}
+        {bannerError && (
+          <ErrorBanner
+            key={errorKey(bannerError)}
+            line={bannerError}
+            assistant={assistant}
+            limit={bannerError.id === limitOn ? limitLine : undefined}
+            fix={turnFix}
+            onRetry={canRetry ? () => void retryError() : undefined}
+            onEditLastMessage={onEditLastMessage}
+            onDismiss={dismissBanner}
+          />
+        )}
         </div>
         {voiceEntry.dialog}
         {voiceState === "live" && voiceCall && (
@@ -1811,13 +1901,19 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           autoFocus
           onFocusChange={setTyping}
           blocked={gate.blocked ?? noRowBlock}
-          footer={footer}
+          leading={leading}
           trailing={trailing}
+          planMode={planMode}
           voice={voiceEntry.offer}
+          top={short ? undefined : queue}
         />
         )}
-        {!stoppedLine && session && !assistant && contextUsage(session) !== null && (
-          <div data-composer-usage className="flex items-center justify-end px-2 pt-0.5"><ContextMeter session={session} /></div>
+        {!stoppedLine && session && (composerSource(session, assistant).length > 0 || (!assistant && contextUsage(session) !== null)) && (
+          // where the chat comes from and its folder at the left (cindy's working-folder line, #5324), the context meter at the right
+          <div data-composer-usage className="flex min-w-0 items-center justify-between gap-3 px-2 pt-0.5">
+            <ComposerSource session={session} assistant={assistant} />
+            {!assistant && contextUsage(session) !== null && <ContextMeter session={session} />}
+          </div>
         )}
         </div>
       </div>
@@ -1927,25 +2023,31 @@ function JumpPill({ label, onClick, inline }: { label: string; onClick: () => vo
   );
 }
 
-export function ComposerFooter({ session, assistant }: { session: Session; assistant?: boolean }) {
-  // the launcher, model and effort are the composer's model pill (an Agent's, #5032; a Persona conversation's, #5033):
-  // they switch there, so the line keeps only where the chat comes from and runs
-  const parts = [sourceSubtitle(session), ...(assistant ? [] : [shortPath(session.cwd)])].filter(Boolean);
+/** What the line under the composer says: where the chat comes from and, for an Agent, its folder (a Persona conversation
+ *  shows no folder). The launcher and model are the composer's model pill (#5032, #5033). */
+function composerSource(session: Session, assistant?: boolean): string[] {
+  return [sourceSubtitle(session), ...(assistant ? [] : [shortPath(session.cwd)])].filter((p): p is string => Boolean(p));
+}
+
+/** Under the composer at the left (#5324, as cindy's working-folder line): the source and folder in muted 12 px, truncating,
+ *  with the full values on hover. At phone width (#3533) it would show a letter or two, so it is a button that lists them. */
+export function ComposerSource({ session, assistant }: { session: Session; assistant?: boolean }) {
+  const parts = composerSource(session, assistant);
   const info = useMenu();
-  // a Persona conversation (the main one too) switches its permission mode whatever its state: the hub applies it (#2416)
-  const modes = assistant || (hasModes(session) && stateOf(session) !== "offline");
+  if (!parts.length) return <span />;
   return (
-    <span className="flex min-w-0 items-center gap-2">
-      {modes && <ModeChips session={session} assistant={assistant} />}
-      {parts.length > 0 && <span className="min-w-0 truncate max-sm:hidden" title={[sourceSubtitle(session), session.cwd].filter(Boolean).join(" · ")}>{parts.join(" · ")}</span>}
-      {/* phone width (#3533): the line would show a letter or two, so it is a button that lists the parts in full */}
-      {parts.length > 0 && <IconButton icon="info" label={t("chat-chatview.session_info")} onClick={info.open} active={Boolean(info.anchor)} size={22} iconSize={13} className="sm:hidden" />}
-      {info.anchor && <Menu anchor={info.anchor} onClose={info.close} side="top" align="right" width={280} header={t("chat-chatview.session_info")} items={footerRows(session, assistant)} />}
+    <span data-composer-source className="flex min-w-0 items-center gap-1 text-[12px] text-ink-3">
+      <span className="flex min-w-0 items-center gap-1 max-sm:hidden" title={[sourceSubtitle(session), session.cwd].filter(Boolean).join(" · ")}>
+        {!assistant && session.cwd && <Icon name="folder" size={12} className="shrink-0" />}
+        <span className="min-w-0 truncate">{parts.join(" · ")}</span>
+      </span>
+      <IconButton icon="info" label={t("chat-chatview.session_info")} onClick={info.open} active={Boolean(info.anchor)} size={22} iconSize={13} className="sm:hidden" />
+      {info.anchor && <Menu anchor={info.anchor} onClose={info.close} side="top" align="left" width={280} header={t("chat-chatview.session_info")} items={footerRows(session, assistant)} />}
     </span>
   );
 }
 
-/** The composer footer's parts as menu rows (#3533): the value in full (wrapped), what it is beside it; choosing one
+/** The line under the composer as menu rows (#3533): the value in full (wrapped), what it is beside it; choosing one
  *  copies it, except the source, which is a sentence to read rather than a value to paste. The launcher and model are
  *  the model pill's (#5032). */
 export function footerRows(session: Session, assistant?: boolean): MenuItem[] {
