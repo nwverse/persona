@@ -2,13 +2,22 @@ package persona.core.designsystem
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.stringResource
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.res.pluralStringResource
 import androidx.annotation.StringRes
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -30,7 +39,10 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.toggleableState
 import androidx.compose.ui.state.ToggleableState
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -191,9 +203,10 @@ fun Fields(values: List<String>, modifier: Modifier = Modifier) {
 }
 
 /**
- * The pending request in a conversation, in place of the composer: a floating glass sheet, a panel docked to
- * the bottom (brief), or a clearance strip under an amber rule (board). [position] is "current / total" when
- * several requests wait.
+ * One pending request above a conversation's composer, a card of [DecisionStack] (iOS `InteractionPanel`): a floating glass
+ * card inset like the composer, a rounded paper card with a light shadow (brief), or a bordered card under an amber rule
+ * (board). With [onCollapsedChange] a tap anywhere on its header folds it to that line, [preview] after the headline, and
+ * opens it again; the caret is the control TalkBack reads.
  */
 @Composable
 fun DecisionDock(
@@ -201,49 +214,48 @@ fun DecisionDock(
     headline: String,
     modifier: Modifier = Modifier,
     expires: String? = null,
-    position: Pair<Int, Int>? = null,
-    onPrevious: (() -> Unit)? = null,
-    onNext: (() -> Unit)? = null,
-    onList: (() -> Unit)? = null,
     collapsed: Boolean = false,
     onCollapsedChange: ((Boolean) -> Unit)? = null,
+    /** What the card asks in one line, after the headline while it is folded (iOS `previewText`). */
+    preview: String? = null,
     onExpand: (() -> Unit)? = null,
     headerActions: (@Composable () -> Unit)? = null,
     /** One line over the headline saying what the request waits for ("Waiting for your approval", #4883), as the web's
-     *  and iOS's cards do; null draws the dock as before. */
+     *  and iOS's cards do; null draws the dock as before. Folded, the card is its header's line alone. */
     kicker: String? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
     val style = PersonaTheme.style
+    val fold by rememberUpdatedState(onCollapsedChange?.let { change -> { change(!collapsed) } })
+    val folds = if (onCollapsedChange == null) Modifier else Modifier.pointerInput(Unit) { detectTapGestures { fold?.invoke() } }
     val header: @Composable () -> Unit = {
-        kicker?.let { Text(it, style = type.caption, color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            when (style) {
-                AppStyle.Glass -> JStatusDot(Status.NeedsYou, size = 8.dp)
-                AppStyle.Brief -> JIcon(kind.icon, null, size = 18.dp, tint = palette.ink2)
-                AppStyle.Board -> JIcon(PhIcons.Hand, null, size = 18.dp, tint = palette.needsYou.dot, selected = true)
-            }
-            Spacer(Modifier.width(8.dp.dense))
-            Text(
-                headline, style = if (style == AppStyle.Brief) type.caption else type.label, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f).semantics { heading() },
-                color = if (style == AppStyle.Brief) palette.ink2 else palette.ink,
-            )
-            expires?.let { Text(it, style = type.micro, color = palette.ink3, maxLines = 1); Spacer(Modifier.width(4.dp.dense)) }
-            onExpand?.let { JIconButton(PhIcons.ArrowSquareOut, stringResource(R.string.designsystem_decision_open_full), it, tint = palette.ink2) }
-            onCollapsedChange?.let { change -> JIconButton(if (collapsed) PhIcons.CaretUp else PhIcons.CaretDown, stringResource(if (collapsed) R.string.designsystem_expand else R.string.designsystem_collapse), { change(!collapsed) }, tint = palette.ink2) }
-            headerActions?.invoke()
-        }
-        position?.takeIf { it.second > 1 }?.let { (current, total) ->
+        Column(folds) {
+            if (!collapsed) kicker?.let { Text(it, style = type.caption, color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis) }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                JTextButton(stringResource(R.string.designsystem_decision_previous), onPrevious ?: {}, enabled = onPrevious != null && current > 1)
-                Spacer(Modifier.weight(1f))
-                val spokenPosition = stringResource(R.string.designsystem_decision_position, current, total)
-                JTextButton("$current / $total", onList ?: {}, Modifier.semantics { contentDescription = spokenPosition }, enabled = onList != null)
-                Spacer(Modifier.weight(1f))
-                JTextButton(stringResource(R.string.designsystem_decision_next), onNext ?: {}, enabled = onNext != null && current < total)
+                when (style) {
+                    AppStyle.Glass -> JStatusDot(Status.NeedsYou, size = 8.dp)
+                    AppStyle.Brief -> JIcon(kind.icon, null, size = 18.dp, tint = palette.ink2)
+                    AppStyle.Board -> JIcon(PhIcons.Hand, null, size = 18.dp, tint = palette.needsYou.dot, selected = true)
+                }
+                Spacer(Modifier.width(8.dp.dense))
+                // Folded, what it asks follows the title on the same line and gives way first (iOS `previewText`).
+                val previewShown = collapsed && !preview.isNullOrBlank()
+                val ink = if (style == AppStyle.Brief) palette.ink2 else palette.ink
+                Text(
+                    if (!previewShown) AnnotatedString(headline) else buildAnnotatedString {
+                        append(headline)
+                        append("  ")
+                        withStyle(type.callout.toSpanStyle().copy(color = palette.ink)) { append(preview.orEmpty()) }
+                    },
+                    style = if (style == AppStyle.Brief) type.caption else type.label, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f).semantics { heading() }, color = ink,
+                )
+                expires?.let { Text(it, style = type.micro, color = palette.ink3, maxLines = 1); Spacer(Modifier.width(4.dp.dense)) }
+                if (!collapsed) onExpand?.let { JIconButton(PhIcons.ArrowSquareOut, stringResource(R.string.designsystem_decision_open_full), it, tint = palette.ink2) }
+                onCollapsedChange?.let { change -> JIconButton(if (collapsed) PhIcons.CaretUp else PhIcons.CaretDown, stringResource(if (collapsed) R.string.designsystem_expand else R.string.designsystem_collapse), { change(!collapsed) }, tint = palette.ink2) }
+                headerActions?.invoke()
             }
         }
     }
@@ -251,27 +263,77 @@ fun DecisionDock(
         header()
         if (!collapsed) { Spacer(Modifier.height(10.dp.dense)); content() }
     }
+    val shape = PersonaTheme.shapes.panelShape
+    // Each style inset from the page's sides as its composer is.
     when (style) {
         AppStyle.Glass -> Column(
-            modifier.fillMaxWidth().padding(horizontal = 10.dp.dense, vertical = 8.dp.dense)
-                .floatingSurface(RoundedCornerShape(32.dp.corner), accentEdge = palette.needsYou.dot.copy(alpha = 0.85f))
+            modifier.fillMaxWidth().padding(horizontal = Tokens.Space.m)
+                .floatingSurface(shape, accentEdge = palette.needsYou.dot.copy(alpha = 0.85f))
                 .padding(start = 18.dp.dense, end = 10.dp.dense, top = 10.dp.dense, bottom = 14.dp.dense).animateContentSize(PersonaTheme.motion.size()),
-        ) {
-            Box(Modifier.align(Alignment.CenterHorizontally).padding(bottom = 6.dp.dense).size(36.dp, 4.dp).clip(CircleShape).background(palette.ink3.copy(alpha = 0.55f)))
-            Column(Modifier.padding(end = 8.dp.dense)) { body() }
-        }
+        ) { Column(Modifier.padding(end = 8.dp.dense)) { body() } }
         AppStyle.Brief -> Column(
-            modifier.fillMaxWidth()
-                .shadow(20.dp, RoundedCornerShape(topStart = 28.dp.corner, topEnd = 28.dp.corner), ambientColor = Color.Black.copy(alpha = 0.16f), spotColor = Color.Black.copy(alpha = 0.16f))
-                .clip(RoundedCornerShape(topStart = 28.dp.corner, topEnd = 28.dp.corner)).background(palette.surface)
+            modifier.fillMaxWidth().padding(horizontal = Tokens.Space.m)
+                .shadow(HomeTokens.composerShadow, shape, ambientColor = Color.Black.copy(alpha = HomeTokens.composerShadowAlpha), spotColor = Color.Black.copy(alpha = HomeTokens.composerShadowAlpha))
+                .clip(shape).background(palette.surface)
                 .padding(start = 20.dp.dense, end = 12.dp.dense, top = 16.dp.dense, bottom = 12.dp.dense).animateContentSize(PersonaTheme.motion.size()),
         ) { Column(Modifier.padding(end = 8.dp.dense)) { body() } }
-        AppStyle.Board -> Column(modifier.fillMaxWidth().background(palette.surface).animateContentSize(PersonaTheme.motion.size())) {
-            Box(Modifier.fillMaxWidth().height(3.dp).background(palette.needsYou.dot))
+        AppStyle.Board -> Column(modifier.fillMaxWidth().padding(horizontal = Tokens.Space.m).clip(shape).background(palette.surface)
+            .border(Tokens.Size.line, palette.line, shape).animateContentSize(PersonaTheme.motion.size())) {
+            Box(Modifier.fillMaxWidth().height(Tokens.Size.bar).background(palette.needsYou.dot))
             Column(Modifier.padding(start = 16.dp.dense, end = 8.dp.dense, top = 10.dp.dense, bottom = 10.dp.dense)) { Column(Modifier.padding(end = 8.dp.dense)) { body() } }
         }
     }
 }
+
+/**
+ * A conversation's pending requests above its composer, the composer still usable (iOS `PendingCards`, `DESIGN_SYSTEM.md`
+ * section 4.8): stacked [Tokens.Space.m] apart as they come while they fit in [maxHeight] (about half the page); past it,
+ * or while the [keyboard] is up, they scroll on their own under "N pending" ([count]; not over a lone card with the
+ * keyboard up), their edges fading, and [content] is told so (`true`) to put the most urgent first. A new card among
+ * [keys] while they scroll brings the stack back to its top, where the most urgent is.
+ */
+@Composable
+fun DecisionStack(
+    count: Int,
+    maxHeight: Dp,
+    modifier: Modifier = Modifier,
+    keyboard: Boolean = false,
+    keys: List<Any> = emptyList(),
+    content: @Composable ColumnScope.(scrolling: Boolean) -> Unit,
+) {
+    val palette = PersonaTheme.palette
+    var contentHeight by remember { mutableIntStateOf(0) }
+    val cap = with(LocalDensity.current) { maxHeight.roundToPx() }
+    val scrolling = keyboard || contentHeight > cap + 1
+    val scroll = rememberScrollState()
+    var seen by remember { mutableStateOf(keys.toSet()) }
+    LaunchedEffect(keys) {
+        val arrived = keys.any { it !in seen }
+        seen = keys.toSet()
+        if (arrived && scrolling) scroll.animateScrollTo(0)
+    }
+    // The count is inside [maxHeight] too: the stack never takes more than it was given.
+    Column(modifier.fillMaxWidth().heightIn(max = maxHeight), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+        if (scrolling && !(keyboard && count == 1)) Text(pluralStringResource(R.plurals.designsystem_decision_pending, count, count),
+            Modifier.padding(horizontal = Tokens.Space.m + Tokens.Space.xs).semantics { heading() },
+            style = PersonaTheme.type.caption, color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        // Fitting, the cards are measured whole and nothing scrolls or clips; past the cap, what scrolls out fades at the edges.
+        val area = if (scrolling) Modifier.edgeFade(palette.ink).verticalScroll(scroll)
+            else Modifier.wrapContentHeight(Alignment.Top, unbounded = true)
+        Box(Modifier.fillMaxWidth().weight(1f, fill = false).then(area)) {
+            Column(Modifier.fillMaxWidth().padding(vertical = if (scrolling) Tokens.Space.s else Tokens.Space.flush)
+                .onSizeChanged { contentHeight = it.height }, verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) { content(scrolling) }
+        }
+    }
+}
+
+/** Fades what scrolls out at the top and bottom: [ink] gives only the mask's opacity, never a color. */
+private fun Modifier.edgeFade(ink: Color): Modifier = graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+    .drawWithContent {
+        drawContent()
+        val edge = (Tokens.Space.s.toPx() / size.height.coerceAtLeast(1f)).coerceAtMost(0.5f)
+        drawRect(Brush.verticalGradient(0f to ink.copy(alpha = 0f), edge to ink, 1f - edge to ink, 1f to ink.copy(alpha = 0f)), blendMode = BlendMode.DstIn)
+    }
 
 /** Persona's suggestion: ink on paper in Brief, a neutral well in Glass and Board. */
 @Composable
