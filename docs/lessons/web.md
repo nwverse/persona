@@ -1,5 +1,15 @@
 # Lessons: web UI and interactions
 
+## The live screen's later words go in a lazy component, not in a startup namespace (#5685)
+
+`main.tsx` imports `screen/ScreenView` without waiting for the rest of the catalog, so the build counts every namespace
+ScreenView names as first-screen code, and a namespace in `src/i18n/startup-namespaces.json` ships in every page's first
+screen: the live screen and the App share that catalog. Four Displays-menu strings in `screen-screenview` took the ja first
+screen 49 B over its budget. Words the live screen needs only once it is connected go in a component ScreenView loads with
+`lazy()` (`screen/DisplayMenu.tsx`, namespace `screen-displays`): the build makes that import wait for the rest of the
+catalog, so the first screen does not grow and nothing has to wait for it at run time. Gating ScreenView's own rendering
+on `i18nRest()` does not pass the build: the check reads which namespaces a chunk names, not when it reads them.
+
 ## Check the keyboard-sized viewport before declaring that a composer grows (#5645)
 
 A 390 × 844 phone showed seven draft lines, but the same phone with 500px visible above the keyboard stopped at
