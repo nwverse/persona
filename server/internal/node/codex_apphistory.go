@@ -127,13 +127,18 @@ func (n *Node) codexAppHistoryPath(src codexSource, pass *codexListPass) string 
 	if p == "" {
 		return ""
 	}
-	if _, paginated := codexPaginatedThreadOf(src); !paginated {
+	if _, err := pass.stat(p); err != nil {
+		return ""
+	}
+	t, paginated := codexPaginatedThreadOf(src)
+	mark, _ := readCodexHistoryMark(p)
+	if !paginated || !codexContinuationPath(t.RolloutPath) && !codexContinuationPath(mark.Lineage) {
+		if withoutGoneRollout(src, pass).path != "" {
+			return ""
+		}
 		if _, ok := codexAppThreadOf(withoutGoneRollout(src, pass)); !ok {
 			return ""
 		}
-	}
-	if _, err := pass.stat(p); err != nil {
-		return ""
 	}
 	return p
 }
@@ -148,7 +153,9 @@ func (n *Node) codexAppHistoryChat(id string) (codexSource, codexAppThread, bool
 		if _, thread, err := n.codexOwner(id); err == nil && thread.path != "" {
 			t.RolloutPath = thread.path
 		}
-		return src, t, true
+		if codexContinuationPath(t.RolloutPath) {
+			return src, t, true
+		}
 	}
 	src = withoutGoneRollout(src, nil)
 	if src.path != "" || rolloutPath(src.home, src.thread) != "" {
