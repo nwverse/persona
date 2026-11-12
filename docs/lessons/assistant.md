@@ -350,3 +350,5 @@ mid-turn got no reply for minutes because the mid-turn note went in only with th
 the only line between tool calls was English to a Chinese owner. The node now always adds the note to a busy Claude
 (`midTurn`), asking for one sentence in the user's language before the next tool call, and the CLAUDE.md asks for the
 user's language in process text too.
+
+- Match Inbox PR/issue comments by full task URLs before the AI twin gate (#5578). A to-do may record its link only in `pr_url`, its title or its notes. Keep host, repository and PR/issue kind in the identity, leave ambiguous matches to the judge, and use a separate per-message signal cursor: the twin's `Of` cursor tracks handling, which does not run while it is off. Persist associations before forwarding them, and retain the existing supervision opt-in and exclusions.
