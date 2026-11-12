@@ -301,6 +301,8 @@ class InboxHandOffBarModelTest {
         repeat(INBOX_HAND_OFF_RETAINED_MODELS + 8) { store.get("item-$it") }
 
         assertNotSame(settled, store.get("settled"))
+        assertEquals(HandOffBarPhase.Idle, store.get("settled").state.value.phase)
+        assertTrue(repository.handOffRequests.isEmpty())
         assertSame(queued, store.get("active"))
         queued.undo()
     }

@@ -157,11 +157,12 @@ class InboxHandOffBarShotsTest {
 
     private fun largeText(language: String) {
         val longTarget = "An agent with a deliberately long target name"
+        var style by mutableStateOf(AppStyle.Glass)
         rule.mainClock.autoAdvance = false
         rule.setContent {
             val density = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale = 2f)) {
-                PersonaTheme(reduceMotion = true) {
+                PersonaTheme(reduceMotion = true, style = style) {
                     val repository = remember { HandOffBarTestRepository() }
                     val scope = rememberCoroutineScope()
                     val resources = LocalResources.current
@@ -181,27 +182,34 @@ class InboxHandOffBarShotsTest {
                 }
             }
         }
-        rule.mainClock.advanceTimeByFrame()
-        rule.waitForIdle()
-        rule.onNodeWithText(when (language) {
-            "zh" -> "撤销"
-            "ja" -> "元に戻す"
-            else -> "Undo"
-        }).assertHasClickAction()
-        rule.onNodeWithText(when (language) {
-            "zh" -> "查看"
-            "ja" -> "表示"
-            else -> "View"
-        }).assertHasClickAction()
-        val layouts = mutableListOf<TextLayoutResult>()
-        rule.onNodeWithText(longTarget, useUnmergedTree = true).fetchSemanticsNode()
-            .config[SemanticsActions.GetTextLayoutResult].action!!(layouts)
-        assertTrue("The target label must ellipsize in its bounded chip", layouts.single().isLineEllipsized(0))
-        val targetBounds = rule.onNodeWithTag("inbox-handoff-target").getUnclippedBoundsInRoot()
-        val fieldBounds = rule.onNodeWithTag("inbox-handoff-field").getUnclippedBoundsInRoot()
-        val sendBounds = rule.onNodeWithTag("inbox-handoff-send").getUnclippedBoundsInRoot()
-        assertTrue("The target must not cover the input", targetBounds.right <= fieldBounds.left)
-        assertTrue("The input must not cover Send", fieldBounds.right <= sendBounds.left)
-        capture("inbox-handoff-queued-$language-large-text")
+        for (nextStyle in AppStyle.entries) {
+            rule.runOnIdle {
+                style = nextStyle
+                Snapshot.sendApplyNotifications()
+            }
+            rule.mainClock.advanceTimeByFrame()
+            rule.waitForIdle()
+            rule.onNodeWithText(when (language) {
+                "zh" -> "撤销"
+                "ja" -> "元に戻す"
+                else -> "Undo"
+            }).assertHasClickAction()
+            rule.onNodeWithText(when (language) {
+                "zh" -> "查看"
+                "ja" -> "表示"
+                else -> "View"
+            }).assertHasClickAction()
+            val layouts = mutableListOf<TextLayoutResult>()
+            rule.onNodeWithText(longTarget, useUnmergedTree = true).fetchSemanticsNode()
+                .config[SemanticsActions.GetTextLayoutResult].action!!(layouts)
+            assertTrue("$nextStyle: the target label must ellipsize in its bounded chip",
+                layouts.single().isLineEllipsized(0))
+            val targetBounds = rule.onNodeWithTag("inbox-handoff-target").getUnclippedBoundsInRoot()
+            val fieldBounds = rule.onNodeWithTag("inbox-handoff-field").getUnclippedBoundsInRoot()
+            val sendBounds = rule.onNodeWithTag("inbox-handoff-send").getUnclippedBoundsInRoot()
+            assertTrue("$nextStyle: the target must not cover the input", targetBounds.right <= fieldBounds.left)
+            assertTrue("$nextStyle: the input must not cover Send", fieldBounds.right <= sendBounds.left)
+            capture("inbox-handoff-queued-$language-large-text-${nextStyle.key}")
+        }
     }
 }
