@@ -36,9 +36,10 @@ import (
 )
 
 type Node struct {
-	Version string
-	updater *nodeupdate.Manager // resident-owned, shared across attach connections
-	reload  *ResidentReload     // admission/draining while the attach transport stays available
+	Version      string
+	skillImports assistantskills.Importer
+	updater      *nodeupdate.Manager // resident-owned, shared across attach connections
+	reload       *ResidentReload     // admission/draining while the attach transport stays available
 
 	// dataDirOnce finds the data folder the path guard refuses the credentials of (pathguard.go dataDirs).
 	dataDirOnce sync.Once
@@ -1697,6 +1698,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return map[string]any{"commits": list}, err
 	case "git.stage", "git.commit", "git.push", "git.branches", "git.switch", "git.stash", "git.pr", "git.pr_create", "git.pr_merge":
 		return n.gitWrite(ctx, method, params) // the Git panel's writes and pull request (gitwrite.go, gitpr.go)
+	case "skills.import":
+		return n.importSkill(ctx, params)
 	case "skills.list": // the skills the assistant gets on this machine (docs/operations/hub-update.md "Skills move out of the binary")
 		cwd := p.Cwd
 		if cwd == "" {
