@@ -58,8 +58,11 @@ struct ExtensionTileView: View {
     private var content: some View {
         VStack(alignment: .leading, spacing: Theme.Space.flush) {
             if let img = tile.image {
+                // As tall as the tile's width makes it: offered only part of the tile's height, a 16:9 shape fits
+                // narrower than the tile.
                 picture(img)
                     .aspectRatio(16 / 9, contentMode: .fit)
+                    .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity)
                     .clipped()
                     .accessibilityHidden(true)
