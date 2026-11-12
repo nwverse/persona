@@ -138,12 +138,38 @@ describe("the deferred search dialog", () => {
     expect(document.querySelector("[data-chat-search]")).toBeNull();
     const more = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-chatview.more_actions")}"]`)!;
     expect(more).toBeTruthy(); act(() => more.click()); await flush();
-    const search = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(item => item.textContent === t("chat-chatsearch.menu"))!;
+    const search = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(item => item.textContent === t("chat-chatview.search_menu"))!;
     expect(search).toBeTruthy();
     await act(async () => { search.click(); await import("./ChatSearch"); }); await flush();
     expect(searchRenders.count).toBeGreaterThan(0);
     expect(document.querySelector('[role="dialog"] [data-chat-search]')).not.toBeNull();
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain(t("chat-chatsearch.title"));
+  });
+  it("opens the search, picks a hit and keeps the return label in the primary namespace", async () => {
+    const previous = transcript.items;
+    transcript.items = [{ id: "search-user", seq: 1, role: "user", kind: "text", text: "Synthetic search target", ts: "2026-11-12T09:00:00Z" }];
+    vi.stubGlobal("CSS", { ...globalThis.CSS, escape: (value: string) => value });
+    try {
+      captured.session = { machine_id: "hub", session_id: "c1", title: "Conversation", cwd: "/code", state: "idle", status: "idle" } as Session;
+      await act(async () => root.render(<ChatView mid="hub" sid="c1" />)); await flush();
+      const more = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-chatview.more_actions")}"]`)!;
+      await act(async () => more.click()); await flush();
+      const search = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(item => item.textContent === t("chat-chatview.search_menu"))!;
+      await act(async () => { search.click(); await import("./ChatSearch"); }); await flush();
+      const input = document.querySelector<HTMLInputElement>("[data-chat-search] input")!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "Synthetic");
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 250)); }); await flush();
+      const hit = [...document.querySelectorAll<HTMLButtonElement>("[data-chat-search] button")].find(button => button.textContent?.includes("Synthetic search target"))!;
+      expect(hit).toBeTruthy(); await act(async () => hit.click()); await flush();
+      const back = host.querySelector<HTMLButtonElement>("[data-search-return]")!;
+      expect(back.textContent).toBe(t("chat-chatview.search_return"));
+      expect(document.querySelector("[data-chat-search]")).toBeNull();
+      await act(async () => back.click()); await flush();
+      expect(host.querySelector("[data-search-return]")).toBeNull();
+    } finally { transcript.items = previous; }
   });
 });
 

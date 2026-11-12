@@ -120,5 +120,14 @@
   "background_tasks": "后台任务",
   "background_running": "后台任务，{count} 个在运行",
   "rename_title": "重命名",
-  "agent_device_label": "{agent}。{where}"
+  "agent_device_label": "{agent}。{where}",
+  "search_stopped": "已停止，载入的记录已保留",
+  "search_busy": "记录正在更新，请稍后继续",
+  "search_load_failed": "更早的记录未能载入，请重试",
+  "search_no_progress": "本次没有载入更早的记录，可稍后重试",
+  "search_page_cap": "本次已加载 20 页，可继续加载",
+  "search_not_found": "这条记录暂时无法定位，可返回搜索前位置",
+  "search_origin_changed": "原来的记录已变化，请继续浏览当前记录",
+  "search_return": "返回搜索前位置",
+  "search_menu": "会话内搜索"
 }

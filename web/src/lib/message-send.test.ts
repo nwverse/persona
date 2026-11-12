@@ -34,6 +34,22 @@ describe("per-message hub feedback", () => {
     expect(fake.send).toHaveBeenCalledWith(expect.objectContaining({ type: "subscribe", machine_id: "example", session_id: "chat" }));
     expect(flight.request.headers).toEqual({ "X-Persona-Manager": "assistant" });
   });
+  it("selects the newest active feedback while preserving ended, missing and per-ID projections", () => {
+    const older = beginMessageSend("example", "chat", "older");
+    const newer = beginMessageSend("example", "chat", "newer");
+    newer.finish("delivered"); older.finish("unknown");
+    expect(messageFeedback("example", "chat")).toBe("processing");
+    expect(messageFeedback("example", "chat", "older")).toBe("unknown");
+    newer.finish("failed");
+    expect(messageFeedback("example", "chat")).toBe("unknown");
+    expect(messageFeedback("example", "chat", "newer")).toBe("");
+    older.finish("failed");
+    expect(messageFeedback("example", "chat")).toBe("");
+    expect(messageFeedback("example", "chat", "missing")).toBeUndefined();
+    beginMessageSend("other", "chat", "other");
+    expect(messageFeedback("example", "chat")).toBe("");
+    expect(messageFeedback("missing", "chat")).toBeUndefined();
+  });
   it("keeps an evicted pending request valid without reviving its feedback on HTTP completion", () => {
     const first = beginMessageSend("example", "chat", "message");
     for (let i = 0; i < 256; i++) beginMessageSend("example", "chat", `queued-${i}`);
@@ -101,6 +117,12 @@ describe("per-message hub feedback", () => {
     receiveMessageSend(event("processing", "2026-11-12T10:00:01Z"));
     expect(feedback()).toBe("");
   });
+  it.each(["delivered", "failed", "unknown"])("keeps the %s receipt terminal when later processing arrives", state => {
+    beginMessageSend("example", "chat", "message"); receiveMessageSend(event(state));
+    const terminal = feedback();
+    receiveMessageSend(event("processing", "2026-11-12T10:00:01Z"));
+    expect(feedback()).toBe(terminal);
+  });
   it("fences old HTTP completions and terminal frames across a same-id retry", () => {
     const first = beginMessageSend("example", "chat", "message");
     receiveMessageSend(event("failed")); first.finish("failed");
@@ -143,6 +165,8 @@ describe("per-message hub feedback", () => {
     const flight = beginMessageSend("example", "chat", "message");
     receiveMessageSend(event("processing")); flight.finish("delivered");
     stopMessageFeedback("example", "chat");
+    settleMessageEcho("example", "chat", "message"); expect(feedback()).toBe("");
+    receiveMessageSend(event("processing", "2026-11-12T10:00:01Z")); expect(feedback()).toBe("");
     flight.finish("delivered"); expect(feedback()).toBe(""); expect(fake.row).toEqual(original);
   });
   it("does not claim that stopping an older turn cancelled input still being dispatched", () => {
@@ -170,6 +194,17 @@ describe("per-message hub feedback", () => {
     fake.owner = "replacement"; fake.credentials.forEach(f => f());
     expect(feedback()).toBeUndefined(); flight.finish("delivered"); expect(feedback()).toBeUndefined();
   });
+  it.each([false, true])("does not let a completed observation from an old manager end a new same-ID flight (switch back: %s)", switchBack => {
+    observeMessageItems("example", "chat", [{ id: "user", seq: 1, role: "user", kind: "text", client_msg_id: "message" }, { id: "reply", seq: 2, role: "assistant", kind: "text" }]);
+    fake.manager = "another"; fake.managers.forEach(f => f());
+    if (switchBack) { fake.manager = "assistant"; fake.managers.forEach(f => f()); }
+    const flight = beginMessageSend("example", "chat", "message");
+    expect(feedback()).toBe("sending");
+    observeMessageItems("example", "chat", []);
+    expect(feedback()).toBe("sending");
+    receiveMessageSend(event("processing")); expect(feedback()).toBe("processing");
+    flight.finish("delivered"); expect(feedback()).toBe("processing");
+  });
   it("does not mistake metadata edits or someone else's queued input for execution", () => {
     const flight = beginMessageSend("example", "chat", "message", "This input");
     flight.finish("delivered");
@@ -193,6 +228,14 @@ describe("per-message hub feedback", () => {
     receiveMessageSend(event("processing"));
     observeMessageItems("example", "chat", [{ id: "input", seq: 2, role: "user", kind: "text", text: "Legacy input" }, { id: "new", seq: 3, role: "assistant", kind: "text", text: "Completed reply" }]);
     flight.finish("delivered"); expect(feedback()).toBe("");
+  });
+  it("retains the previous page's maximum sequence and accepts unordered newer legacy input and reply", () => {
+    observeMessageItems("example", "chat", [{ id: "old", seq: 5, role: "assistant", kind: "text", text: "Earlier reply" }]);
+    beginMessageSend("example", "chat", "message", "New input"); receiveMessageSend(event("processing"));
+    observeMessageItems("example", "chat", [{ id: "older-input", seq: 2, role: "user", kind: "text", text: "New input" }, { id: "older-reply", seq: 3, role: "assistant", kind: "text", text: "Old reply" }]);
+    expect(feedback()).toBe("processing");
+    observeMessageItems("example", "chat", [{ id: "reply", seq: 7, role: "assistant", kind: "text", text: "New reply" }, { id: "input", seq: 6, role: "user", kind: "text", text: "New input" }]);
+    expect(feedback()).toBe("");
   });
   it("does not hand a new input to an older reply that landed late", () => {
     observeMessageItems("example", "chat", [{ id: "old", seq: 1, role: "assistant", kind: "text", text: "Earlier reply" }]);

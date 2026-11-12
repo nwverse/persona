@@ -120,5 +120,14 @@
   "background_tasks": "バックグラウンドタスク",
   "background_running": "バックグラウンドタスク、{count} 件実行中",
   "rename_title": "名前を変更",
-  "agent_device_label": "{agent}。{where}"
+  "agent_device_label": "{agent}。{where}",
+  "search_stopped": "停止しました。読み込んだ記録はそのままです",
+  "search_busy": "記録を更新中です。しばらくしてから続けてください",
+  "search_load_failed": "以前の記録を読み込めませんでした。もう一度お試しください",
+  "search_no_progress": "以前の記録は読み込まれませんでした。後でもう一度お試しください",
+  "search_page_cap": "今回は 20 ページ読み込みました。続けて読み込めます",
+  "search_not_found": "この記録の位置を特定できません。検索前の位置に戻れます",
+  "search_origin_changed": "元の記録が変わりました。現在の記録をご覧ください",
+  "search_return": "検索前の位置に戻る",
+  "search_menu": "会話内を検索"
 }

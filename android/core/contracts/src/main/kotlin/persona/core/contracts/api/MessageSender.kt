@@ -27,6 +27,14 @@ interface MessageSender : MessageSendReceiptSource {
     /** When this phone wrote each send, including ones already in the transcript. Epoch millis, by client message id. */
     val writtenAt: StateFlow<Map<String, Long>> get() = NoWrittenAt
     suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String? = null)
+    /** [launcher] and [model] apply to this message; null keeps the hub's configured default. */
+    suspend fun send(
+        session: SessionKey, text: String, clientMessageId: String, clearDraft: String?,
+        launcher: String?, model: String?,
+    ) {
+        require(launcher == null && model == null) { "Launcher/model overrides are not supported" }
+        send(session, text, clientMessageId, clearDraft)
+    }
     suspend fun cancel(clientMessageId: String): Boolean = false
     /**
      * Undo of a [cancel] (#4645): [message], as the outbox listed it before, back in its state with its refusal, so it

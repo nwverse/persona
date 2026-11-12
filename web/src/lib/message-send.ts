@@ -20,7 +20,7 @@ export type SendFeedback = "sending" | "processing" | "unknown" | "";
 type Phase = "sending" | "processing" | "delivered" | "failed" | "unknown";
 interface Flight {
   mid: string; sid: string; id: string; scope: string; phase: Phase; feedback: SendFeedback;
-  at?: string; echoed?: boolean; stopped?: boolean; settled?: boolean; retry?: boolean; retired?: boolean; text?: string;
+  at?: string; echoed?: boolean; settled?: boolean; retry?: boolean; retired?: boolean; text?: string;
   since?: string; state?: string; failure?: string; work?: string; baseSeq?: number; queued: string[]; timer?: ReturnType<typeof setTimeout>;
 }
 const observed = new Map<string, { scope: string; mid: string; sid: string; seq: number; done: boolean }>();
@@ -45,6 +45,10 @@ function listenOwners() {
 }
 const key = (mid: string, sid: string, id: string) => JSON.stringify([mid, sid, id]);
 const scope = () => JSON.stringify([globalThis.location?.origin, BASE, credentialOwner(), shownManager(), managerGeneration]);
+function scopedObservation(k: string, owner = scope()) {
+  const item = observed.get(k);
+  return item?.scope === owner ? item : undefined;
+}
 const publish = () => { handoffAuthority(); listeners.forEach((f) => f()); };
 const owned = (e: Flight) => e.scope === scope() && !e.retired;
 const current = (e: Flight) => owned(e) && flights.get(key(e.mid, e.sid, e.id)) === e;
@@ -72,7 +76,7 @@ function create(mid: string, sid: string, id: string, old = flights.get(key(mid,
   const page = pages.get(key(mid, sid, ""));
   e.baseSeq = page?.scope === e.scope ? page.seq : undefined;
   e.work = row?.work?.phase;
-  if (observed.get(key(mid, sid, id))?.done && observed.get(key(mid, sid, id))?.scope === e.scope) { e.settled = true; e.feedback = ""; }
+  if (scopedObservation(key(mid, sid, id), e.scope)?.done) { e.settled = true; e.feedback = ""; }
   flights.set(key(mid, sid, id), e);
   return e;
 }
@@ -99,7 +103,7 @@ export function beginMessageSend(mid: string, sid: string, id: string, text?: st
       if (requests.get(k) === e) requests.delete(k);
       if (!phase || !current(e)) return;
       e.phase = phase;
-      if (e.settled || e.stopped || phase === "failed") end(e);
+      if (e.settled || phase === "failed") end(e);
       else { e.feedback = phase === "unknown" ? "unknown" : "processing"; wait(e); }
       publish();
     },
@@ -114,19 +118,18 @@ export function receiveMessageSend(msg: Record<string, unknown>) {
   if (!stamp || !Number.isFinite(Date.parse(at)) || !["processing", "delivered", "failed", "unknown"].includes(String(state))) return;
   const time = `${stamp[1]}.${(stamp[2] ?? "").padEnd(9, "0")}Z`;
   listenOwners();
-  const known = observed.get(key(mid, sid, id));
-  if (known?.done && known.scope === scope()) return;
+  if (scopedObservation(key(mid, sid, id))?.done) return;
   let e = flights.get(key(mid, sid, id));
   // Another subscribed client has no local draft. Only processing can open its short-lived feedback line.
   if (!e && state === "processing") e = create(mid, sid, id);
-  if (!e || !current(e) || e.echoed || e.settled || e.stopped || (e.at && time <= e.at)) return;
+  if (!e || !current(e) || e.echoed || e.settled || (e.at && time <= e.at)) return;
   if (e.phase === "delivered" || e.phase === "failed" || e.phase === "unknown") return;
   // A same-id retry must see its new processing receipt before an old terminal frame may apply.
   if (e.retry && e.phase === "sending" && state !== "processing") return;
   e.at = time;
   e.phase = state as Phase;
-  e.feedback = state === "failed" ? "" : state === "unknown" ? "unknown" : "processing";
-  if (state === "failed") end(e); else wait(e);
+  if (state === "failed") end(e);
+  else { e.feedback = state === "unknown" ? "unknown" : "processing"; wait(e); }
   if (state === "unknown") reconcile(e);
   publish();
 }
@@ -136,18 +139,20 @@ export function settleMessageEcho(mid: string, sid: string, id: string, queued =
   e.echoed = true;
   if (!current(e)) return;
   if (queued) e.settled = true;
-  if (e.settled || e.stopped) end(e);
+  if (e.settled) end(e);
   else { e.feedback = "processing"; wait(e); }
   publish();
 }
 export function stopMessageFeedback(mid: string, sid: string) {
-  for (const e of flights.values()) if (e.mid === mid && e.sid === sid && current(e) && (e.phase === "delivered" || e.echoed)) { e.stopped = true; end(e); }
+  for (const e of flights.values()) if (e.mid === mid && e.sid === sid && current(e) && (e.phase === "delivered" || e.echoed)) { e.settled = true; end(e); }
   publish();
 }
 export function messageFeedback(mid: string, sid: string, id?: string): SendFeedback | undefined {
-  const entries = id !== undefined ? [flights.get(key(mid, sid, id))] : [...flights.values()].reverse();
-  const matches = (e: Flight | undefined) => e && e.mid === mid && e.sid === sid && current(e);
-  return entries.find((e) => matches(e) && (id || e?.feedback))?.feedback ?? entries.find(matches)?.feedback;
+  const entries = id !== undefined ? [flights.get(key(mid, sid, id))] : flights.values();
+  let feedback: SendFeedback | undefined;
+  // Later nonempty feedback wins; keep "" when all matching flights have ended.
+  for (const e of entries) if (e && e.mid === mid && e.sid === sid && current(e)) feedback = e.feedback || feedback || "";
+  return feedback;
 }
 export function useMessageFeedback(mid: string, sid: string, id?: string) {
   return useSyncExternalStore((f) => { listeners.add(f); return () => { listeners.delete(f); }; }, () => messageFeedback(mid, sid, id), () => undefined);
@@ -156,14 +161,17 @@ export function observeMessageItems(mid: string, sid: string, items: Item[]) {
   const owner = scope();
   const pageKey = key(mid, sid, "");
   const old = pages.get(pageKey);
-  const seq = Math.max(old?.scope === owner ? old.seq : 0, ...items.map(i => i.seq));
-  const assistant = Math.max(0, ...items.filter(i => i.role === "assistant").map(i => i.seq));
+  let seq = old?.scope === owner ? old.seq : 0, assistant = 0;
+  for (const item of items) {
+    seq = Math.max(seq, item.seq);
+    if (item.role === "assistant") assistant = Math.max(assistant, item.seq);
+  }
   pages.set(pageKey, { scope: owner, seq });
   if (pages.size > 128) pages.delete(pages.keys().next().value!);
   for (const item of items) if (item.client_msg_id) {
     const id = key(mid, sid, item.client_msg_id);
-    const known = observed.get(id);
-    observed.set(id, { scope: owner, mid, sid, seq: known?.scope === owner ? Math.min(known.seq, item.seq) : item.seq, done: (known?.scope === owner && known.done) || Boolean(item.queued) || assistant > item.seq });
+    const known = scopedObservation(id, owner);
+    observed.set(id, { scope: owner, mid, sid, seq: known ? Math.min(known.seq, item.seq) : item.seq, done: known?.done || Boolean(item.queued) || assistant > item.seq });
     settleMessageEcho(mid, sid, item.client_msg_id, item.queued);
   }
   for (const known of observed.values()) if (known.scope === owner && known.mid === mid && known.sid === sid && assistant > known.seq) known.done = true;
@@ -171,7 +179,7 @@ export function observeMessageItems(mid: string, sid: string, items: Item[]) {
   let changed = false;
   for (const e of flights.values()) {
     const input = e.text && e.baseSeq !== undefined ? items.find(i => i.seq > e.baseSeq! && i.role === "user" && i.kind === "text" && sameMessage(i.text ?? "", e.text!)) : undefined;
-    if (current(e) && e.mid === mid && e.sid === sid && e.feedback && (observed.get(key(mid, sid, e.id))?.done || (e.state !== "working" && input && assistant > input.seq))) { e.settled = true; end(e); changed = true; }
+    if (current(e) && e.mid === mid && e.sid === sid && e.feedback && (scopedObservation(key(mid, sid, e.id), owner)?.done || (e.state !== "working" && input && assistant > input.seq))) { e.settled = true; end(e); changed = true; }
   }
   if (changed) publish();
 }

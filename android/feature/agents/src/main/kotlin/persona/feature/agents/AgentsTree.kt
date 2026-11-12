@@ -314,7 +314,8 @@ internal val AgentMachineGroup.headingCounts: List<Pair<Status, Int>>
 
 /**
  * A By Status section's one count, in its state's color (iOS `SectionHeader` with the section's tone): Awaiting reply
- * takes Unread's, Waiting in the background Working's, Muted and Seen the idle one. Null for every other group.
+ * takes Unread's, Waiting in the background Working's (its header draws it lighter: `AgentTreeHeader.waitsInBackground`),
+ * Muted and Seen the idle one. Null for every other group.
  */
 internal val AgentListGroup.stateSectionCounts: List<Pair<Status, Int>>?
     get() {

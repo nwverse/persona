@@ -174,11 +174,11 @@ const GIVE_UP_MS = 2000;
 const HIT_MS = 3000;
 const SEARCH_NOTICE: Record<SearchLoadOutcome, string | null> = {
   start: null,
-  stopped: "chat-chatsearch.stopped",
-  busy: "chat-chatsearch.busy",
-  load_failed: "chat-chatsearch.load_failed",
-  no_progress: "chat-chatsearch.no_progress",
-  page_cap: "chat-chatsearch.page_cap",
+  stopped: "chat-chatview.search_stopped",
+  busy: "chat-chatview.search_busy",
+  load_failed: "chat-chatview.search_load_failed",
+  no_progress: "chat-chatview.search_no_progress",
+  page_cap: "chat-chatview.search_page_cap",
 };
 const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
 
@@ -1424,7 +1424,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     }).then((r) => {
       if (r === "cancelled") return;
       clearReveal();
-      if (r === "missing") return void (quiet || toast(t("chat-chatsearch.not_found")));
+      if (r === "missing") return void (quiet || toast(t("chat-chatview.search_not_found")));
       const el = r.value;
       const tall = el.getBoundingClientRect().height > sc.clientHeight;
       el.scrollIntoView({ block: tall ? "start" : "center", behavior: "auto" });
@@ -1472,7 +1472,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
         sc.scrollTop += el.getBoundingClientRect().top - scTop - o.offset;
         return { y: el.getBoundingClientRect().top - scTop + sc.scrollTop, value: true };
       },
-    }).then((r) => r === "missing" && toast(t("chat-chatsearch.origin_changed")));
+    }).then((r) => r === "missing" && toast(t("chat-chatview.search_origin_changed")));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [unlight]);
   // "Load earlier and keep searching" (lib/chat-search.ts loadEarlierForSearch): the history's own pages, one after another, the
@@ -2062,7 +2062,7 @@ function ReturnPill({ onClick }: { onClick: () => void }) {
         className="flex h-8 items-center gap-1.5 rounded-full border border-line bg-surface px-3 py-1.5 text-[12px] leading-none font-medium whitespace-nowrap text-ink-2 shadow-raised transition-colors duration-150 hover:bg-hover active:scale-[0.98]"
       >
         <Icon name="arrowLeft" size={14} className="shrink-0" />
-        <span className="translate-y-[0.5px]">{t("chat-chatsearch.return")}</span>
+        <span className="translate-y-[0.5px]">{t("chat-chatview.search_return")}</span>
       </button>
     </div>
   );
@@ -2321,7 +2321,7 @@ export const Header = memo(function Header({
         ...(showFiles && previews ? [{ key: "preview", label: t("chat-chatview.preview"), icon: "web" as const, checked: here(panel, "preview"), onSelect: openPreview }] : []),
         ...(allowed.includes("stop") ? [{ key: "stop", label: t("chat-chatview.interrupt"), icon: "stop" as const, hint: "Esc", onSelect: onInterrupt }] : []),
         ...(feishu ? [{ key: "feishu", label: t("chat-chatview.open_in_lark"), icon: "external" as const, onSelect: () => openLink(feishu) }] : []),
-        ...(onSearch ? [{ key: "search", label: t("chat-chatsearch.menu"), icon: "search" as const, onSelect: onSearch }] : []),
+        ...(onSearch ? [{ key: "search", label: t("chat-chatview.search_menu"), icon: "search" as const, onSelect: onSearch }] : []),
         { key: "info", label: t("chat-chatview.session_info"), icon: "info", onSelect: () => setDialog("info") },
         ...(canRename ? [{ key: "rename", label: t("chat-chatview.rename"), icon: "pencil" as const, onSelect: () => setDialog("rename") }] : []),
         ...(!assistant && session.space_id && !session.source_kind ? [{ key: "space", label: t("chat-chatview.rename_space"), icon: "folder" as const, onSelect: () => setDialog("space") }] : []),
