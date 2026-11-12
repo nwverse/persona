@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Outgoing } from "./Composer";
 import type { Item, Session } from "../../lib/types";
 import { getFeedState, setRoute } from "../../lib/feed";
+import { outboxKey, type OutboxEntry } from "../../lib/outbox";
 import { toast } from "../../ui/atoms";
 import { t } from "../../i18n";
 import { ChatView, ComposerFooter, footerRows } from "./ChatView";
@@ -11,6 +12,8 @@ const captured = vi.hoisted(() => ({
   onSend: undefined as ((out: Outgoing) => Promise<boolean>) | undefined,
   session: { machine_id: "hub", session_id: "c1", title: "Conversation", cwd: "/code", status: "idle" } as Session,
   items: [] as Item[],
+  /** The chat's outbox (lib/outbox.ts), by outboxKey. */
+  outbox: {} as Record<string, OutboxEntry[]>,
   error: "",
   loading: false,
   /** Set: the hub could not say what this chat is (useRuntimeSession's notice, no row). */
@@ -38,7 +41,7 @@ vi.mock("../../lib/store", async (importOriginal) => {
   return {
     ...store,
     getSession: () => captured.session,
-    useStore: <T,>(select: (s: ReturnType<typeof store.getState>) => T) => select({ ...store.getState(), sessions: { hub: [captured.session] } }),
+    useStore: <T,>(select: (s: ReturnType<typeof store.getState>) => T) => select({ ...store.getState(), sessions: { hub: [captured.session] }, outbox: captured.outbox }),
   };
 });
 vi.mock("../../lib/runtime-session", async (importOriginal) => {
@@ -72,7 +75,7 @@ vi.mock("./MessageActions", async (importOriginal) => {
   function MessageActions(p: Parameters<typeof real.MessageActions>[0]) {
     const chat = useChatActions();
     const pick = p.itemId ? { itemId: p.itemId, text: p.text, isUser: false } : undefined;
-    return <>{p.children}{real.messageContextActions(p.text, chat, pick).map((a) => <button key={a.key} type="button" aria-label={a.label} />)}</>;
+    return <>{p.children}{real.messageContextActions(p.text, chat, pick).map((a) => <button key={a.key} type="button" aria-label={a.label} />)}{p.bar && <div data-reply-bar="" />}</>;
   }
   return { ...real, MessageActions };
 });
@@ -103,6 +106,7 @@ beforeEach(() => {
   setRoute("c1", null);
   captured.onSend = undefined;
   captured.items = [];
+  captured.outbox = {};
   captured.error = "";
   captured.loading = false;
   delete captured.session.source_kind;
@@ -162,6 +166,22 @@ describe("ChatView message context availability", () => {
     expect(html.includes('aria-label="转发"')).toBe(forward);
     expect(html.includes('aria-label="交给 Persona"')).toBe(false);
     expect(html.includes('aria-label="作为上下文"')).toBe(context);
+  });
+});
+
+// #5314: a message of yours on its way draws the turn it answers finished for a moment (the live line steps aside):
+// its last words get no reply bar until the chat's work is over, so the bar does not come and go.
+describe("the reply bar while a message is sent", () => {
+  it("is held back on the last exchange while the chat is at work, and there once it is idle", () => {
+    captured.items = [
+      { id: "u1#0", seq: 1, kind: "text", role: "user", text: "Look at it" },
+      { id: "a2#0", seq: 2, kind: "text", role: "assistant", text: "It is fine." },
+    ];
+    expect(renderToStaticMarkup(<ChatView mid="hub" sid="c1" />)).toContain("data-reply-bar");
+    captured.outbox = { [outboxKey("hub", "c1")]: [{ id: "m1", text: "And the tests?", images: [], at: Date.now(), state: "sending" }] };
+    const html = renderToStaticMarkup(<ChatView mid="hub" sid="c1" />);
+    expect(html).toContain("It is fine.");
+    expect(html).not.toContain("data-reply-bar");
   });
 });
 

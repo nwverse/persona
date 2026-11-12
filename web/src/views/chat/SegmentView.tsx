@@ -277,6 +277,7 @@ export const SegmentView = memo(function SegmentView({
   beforeWords,
   trace,
   offscreen,
+  busy,
 }: {
   seg: Segment;
   live: boolean;
@@ -295,6 +296,10 @@ export const SegmentView = memo(function SegmentView({
   /** A finished exchange before the last two: off screen it is not drawn (the `seg-cv` class), and the chat watches its
    *  height through this (ChatView `watchSegment`, returning the unwatch) to keep the view still when it changes. */
   offscreen?: (section: HTMLElement) => () => void;
+  /** The chat's last exchange while the chat is still at work (working, a message of yours on its way or being
+   *  answered): drawn finished for a moment when a send drops the live line, its words get no reply bar yet, so the
+   *  bar does not come and go (#5314). */
+  busy?: boolean;
 }) {
   const { subagents, tasks, scope, workflowCalls = NO_WORKFLOW_CALLS, lineStyle, closeoutSegment, children } = useChatContext();
   const own = useMemo(() => exchangeSteps(seg), [seg]);
@@ -365,7 +370,7 @@ export const SegmentView = memo(function SegmentView({
       {imageStrip}
       {!live && <Fragment key="before-words">{beforeWords}</Fragment>}
       {streaming !== undefined && liveRow}
-      {(latestItem || streaming !== undefined) && !onlyCloseout && <div key="latest-text" data-latest-text><LatestAnswer item={latestItem} streaming={streaming} mid={mid} sid={sid} noCloseout={noCloseout || undefined} done={!live || undefined} cut={(!live && seg.cut) || undefined} /></div>}
+      {(latestItem || streaming !== undefined) && !onlyCloseout && <div key="latest-text" data-latest-text><LatestAnswer item={latestItem} streaming={streaming} mid={mid} sid={sid} noCloseout={noCloseout || undefined} done={(!live && !busy) || undefined} cut={(!live && seg.cut) || undefined} /></div>}
       {changes && <TurnChanges key="turn-changes" changes={changes} mid={mid} sid={sid} cwd={cwd} />}
     </section>
   );

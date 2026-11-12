@@ -22,9 +22,14 @@ describe("relativeTime", () => {
     expect(ages.map((ms) => relativeTime(before(ms), now))).toEqual(words);
   });
 
-  it("gives the date and time from a week on, with the year only when it is another one", () => {
-    expect(relativeTime(new Date(2026, 10, 5, 9, 7).toISOString(), now)).toBe("11-05 09:07");
-    expect(relativeTime(new Date(2025, 0, 2, 23, 59).toISOString(), now)).toBe("2025-01-02 23:59");
+  it.each([
+    ["en", "Nov 5, 09:07", "Jan 2, 2025, 23:59"],
+    ["zh-Hans", "11月5日 09:07", "2025年1月2日 23:59"],
+    ["ja", "11月5日 09:07", "2025年1月2日 23:59"],
+  ])("gives the date and time from a week on as the chat writes them in %s, the year only when it is another", async (lang, thisYear, another) => {
+    await initI18n(lang);
+    expect(relativeTime(new Date(2026, 10, 5, 9, 7).toISOString(), now)).toBe(thisYear);
+    expect(relativeTime(new Date(2025, 0, 2, 23, 59).toISOString(), now)).toBe(another);
   });
 
   it("says just now for a time ahead of this computer's clock, and nothing for none", () => {

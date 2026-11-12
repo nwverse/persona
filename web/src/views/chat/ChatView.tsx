@@ -1104,6 +1104,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     [tr.items, lastLive, outgoing, foldBackground],
   );
   lastLines.current = lines;
+  // the last exchange while the chat is at work, even while a message of yours on its way draws it finished (live needs
+  // !outgoing above): its words get no reply bar until the work is over (#5314, SegmentView `busy`)
+  const busySegment = useMemo(() => (lastLive ? lines.findLast((line) => line.kind === "segment")?.id : undefined), [lastLive, lines]);
   // the last two exchanges are always drawn (the one going on, the one just done); those before them skip drawing while
   // off screen (SegmentView `offscreen`). Not on a touch-only screen: a script moving the view (keeping it still as one
   // is drawn) can stop a fling there.
@@ -1678,6 +1681,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
                         limit={d.line.kind === "apiError" && d.line.id === limitOn ? limitLine : undefined}
                         assistant={assistant}
                         offscreen={offscreen(d.line)}
+                        busy={d.line.id === busySegment || undefined}
                       />
                     ),
                   ])
@@ -1697,6 +1701,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
                   limit={line.kind === "apiError" && line.id === limitOn ? limitLine : undefined}
                   assistant={assistant}
                   offscreen={offscreen(line)}
+                  busy={line.id === busySegment || undefined}
                 />
               )])}
               </CardConversation.Provider>

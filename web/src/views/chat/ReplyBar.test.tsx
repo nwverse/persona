@@ -181,10 +181,10 @@ const exchange = (extra: Partial<Segment> = {}): Segment => ({
   start: T,
   ...extra,
 });
-const segment = (seg: Segment, live = false, streaming?: string) =>
+const segment = (seg: Segment, live = false, streaming?: string, busy?: boolean) =>
   renderToStaticMarkup(
     <ChatActionsContext.Provider value={chat}>
-      <SegmentView seg={seg} live={live} streaming={streaming} mid="m" sid="s" expandFold={async () => {}} />
+      <SegmentView seg={seg} live={live} streaming={streaming} busy={busy} mid="m" sid="s" expandFold={async () => {}} />
     </ChatActionsContext.Provider>,
   );
 const bars = (html: string) => html.split("data-reply-bar").length - 1;
@@ -210,6 +210,8 @@ describe("which replies have the bar", () => {
 
   it("not while the turn runs, nor words still streaming", () => {
     expect(bars(segment(exchange(), true))).toBe(0);
+    // drawn finished while a message of yours is on its way, the chat still at work: no bar to come and go
+    expect(bars(segment(exchange(), false, undefined, true))).toBe(0);
     expect(bars(segment(exchange({ answer: undefined }), true, "Still writ"))).toBe(0);
     expect(bars(renderToStaticMarkup(<Answer streaming="Still writ" mid="m" sid="s" />))).toBe(0);
   });
