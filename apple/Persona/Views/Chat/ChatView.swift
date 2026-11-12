@@ -6678,8 +6678,9 @@ struct WorkCardSlice: View {
     /// Where the timeline's icons start. Flush with the assistant reply bubble, which begins at the list's content
     /// margin. A card keeps `inset` inside its ring, so that style does not move.
     static var iconLeading: CGFloat { timeline ? Theme.Space.flush : inset }
-    /// The card's text column, unchanged: inset + icon + 10. Separators start there.
-    private static let cardTextColumn: CGFloat = 46
+    /// The card's text column, unchanged: inset + icon + 10. The hairline between card steps starts there.
+    /// The separator only draws for cards, so it reads this directly instead of a text size.
+    static let cardTextColumn: CGFloat = 46
     /// The icon's width at this text size, the same scale `scaledFrame` gives the step icons.
     static func iconWidth(_ typeSize: DynamicTypeSize) -> CGFloat { Theme.Size.icon * Theme.sizeScale(typeSize) }
     /// Where a tool row's words start. On the timeline that is the scaled icon plus the header's gap, so the title,
@@ -6730,7 +6731,7 @@ struct WorkCardSlice: View {
     @ViewBuilder static var separator: some View {
         if !timeline {
             Rectangle().fill(beautiful ? Theme.cardStroke : Color(uiColor: .separator)).frame(height: beautiful ? Theme.Size.line : Theme.Size.hairline)
-                .padding(.leading, textColumn(.large))
+                .padding(.leading, cardTextColumn)
                 .offset(y: -bridge)
                 .allowsHitTesting(false)
         }
