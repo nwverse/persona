@@ -225,6 +225,7 @@ private struct SourcesGraphContent: View {
     var assistant: String?
     var manager: String?
     @Environment(AppModel.self) private var app
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         LoadableContent(state: state, retry: { Task { await model.load() } }) { _ in
@@ -250,7 +251,8 @@ private struct SourcesGraphContent: View {
         }
         .sheet(item: Binding(get: { model.pickedSource }, set: { model.picked = $0?.id })) { s in
             SourcesGraphDetails(model: model, source: s, assistant: assistant, manager: manager)
-                .presentationDetents([.medium, .large])
+                // At accessibility sizes half the screen holds only the name and a step: the sheet opens full height.
+                .presentationDetents(typeSize.isAccessibilitySize ? [.large] : [.medium, .large])
         }
     }
 
