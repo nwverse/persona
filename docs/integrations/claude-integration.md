@@ -53,9 +53,15 @@ gateway, adds the `context-1m-2025-08-07` beta, and counts the window as 1,000,0
 `claude-sonnet-5-5`, count 1,000,000 either way). Measured with `claude -p` against a local fake gateway that logs each
 request's model and betas: a tier through `--model opus|sonnet|haiku|fable`, the sub-Agent model through an Agent tool
 call the gateway returns, the small model (and the Haiku tier when there is none) through the page summary of a WebFetch
-call. `ANTHROPIC_SMALL_FAST_MODEL` wins over the Haiku tier for those background requests. So the node adds `[1m]` to
-every one of these variables whose model the provider's `models` gives a window over 200K (#5149), as it always did for
-the session's model; an ID already ending in `[1m]` is left alone, and one with no known window is passed as it is.
+call. `ANTHROPIC_SMALL_FAST_MODEL` wins over the Haiku tier for those background requests.
+
+`CLAUDE_CODE_MAX_CONTEXT_TOKENS` is one value for the whole process: it sets the window of every unmarked model Claude
+Code does not know (`400000` makes it count 400,000, and the session's `1000000` makes a 128K sub-Agent model count
+1,000,000 too), while a marked model counts 1,000,000 whatever it says. So the node marks the session's model when its
+window is over 200K and sets the compact window to that window (#3066); a tier, the small model or the sub-Agent model
+set to a model of its own is marked only when that model's window is 1M or more (#5149), since nothing per model would
+hold a smaller one to its size. An ID already ending in `[1m]` is left alone, and one with no known window is passed as
+it is.
 
 ## Persona tools Agents call without a card
 

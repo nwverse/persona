@@ -1671,6 +1671,15 @@ if os.environ.get("MOCK_ORIGINS") == "1":
     for c in ASSISTANT[:4]:
         c.setdefault("origin", "user")
 
+# MOCK_BACKGROUND_SUPERVISOR=1 (#4927, docs/assistant/unified-entry.md "Background supervisor"): the hub's built-in
+# conversation that follows up the tasks no leader supervises. It has origin "task" with no origin_ref, so the apps list
+# it with the scheduled tasks' conversations; GET /api/v1/assistant names it as `background_supervisor`, and archiving
+# it is refused. Not with MOCK_LEGACY_HUB (a hub from before it).
+BACKGROUND_SUPERVISOR = ""
+if os.environ.get("MOCK_BACKGROUND_SUPERVISOR") == "1" and not os.environ.get("MOCK_LEGACY_HUB"):
+    BACKGROUND_SUPERVISOR = "bgsv0000-0000-4000-8000-000000000001"
+    ASSISTANT.append(dict(assistant_sess(BACKGROUND_SUPERVISOR, "后台督办", 12, "「补测试」已验收：测试补齐，PR 已合并。"), origin="task"))
+
 # MOCK_RECENT=1 (#4873): more of the user's own conversations, so the sidebar's Recent (the newest five that are not the main
 # conversation or a leader) has more than it lists and All chats holds the rest. Synthetic titles.
 if os.environ.get("MOCK_RECENT") == "1":
@@ -2068,6 +2077,9 @@ ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "A
                     # supervised task reach its supervisor (#4293), off by default; closed sessions archive themselves
                     # after this many idle days (#3618), 0 is never. Left out with MOCK_LEGACY_HUB.
                     "agent_tasks": False, "inbox_signals": False, "archive_closed_days": 3,
+                    # The main chat follows up its own tasks instead of the background supervisor (#4927), off by
+                    # default. Left out with MOCK_LEGACY_HUB.
+                    "main_supervises_own_tasks": False,
                     # idle Agents stop after this many hours, their terminal kept (#4754); 0 is never
                     "idle_close_hours": 12,
                     # The role a meeting recording pre-selects (#2981; MOCK_MEETING_ATTENDANCE_DEFAULT=listener starts there)
@@ -2096,7 +2108,10 @@ def assistant_state(space="", archived=False):
                              and (archived or not s.get("archived"))]}
     if not os.environ.get("MOCK_LEGACY_HUB"):
         out.update(agent_tasks=cfg["agent_tasks"], inbox_signals=cfg["inbox_signals"], archive_closed_days=cfg["archive_closed_days"],
-                   idle_close_hours=cfg["idle_close_hours"], kb_topics=cfg["kb_topics"])
+                   idle_close_hours=cfg["idle_close_hours"], kb_topics=cfg["kb_topics"],
+                   main_supervises_own_tasks=cfg["main_supervises_own_tasks"])
+        if BACKGROUND_SUPERVISOR and not space:  # once the hub has made it (#4927)
+            out.update(background_supervisor=BACKGROUND_SUPERVISOR, background_supervisor_machine_id=cfg["machine_id"])
     if cfg["notes"] is not None:
         out["notes"] = cfg["notes"]
     if isinstance(cfg.get("timezone_picked"), bool):  # once a client said so, as the hub (#1855)
@@ -10551,6 +10566,31 @@ MODEL_CATEGORY_FOR = {pid: {"主对话": "assistant", "Agents": "agent.new", "�
                       for pid, _, group, _ in MODEL_DEFINITIONS}
 
 
+SUPERVISE_PURPOSE = "assistant.supervise"
+
+
+def supervise_model_purpose():
+    """The background supervisor's use (#4927): not in the catalog, read and set by its own id. A record of its own;
+    Main Chat's model while that is empty. None from a hub before it (MOCK_LEGACY_HUB)."""
+    if os.environ.get("MOCK_LEGACY_HUB"):
+        return None
+    catalog = model_configuration()
+    main = next(x for x in catalog["purposes"] if x["id"] == "assistant")
+    with MODEL_CONFIG_LOCK:
+        stored = MODEL_BINDINGS.get(SUPERVISE_PURPOSE, {"revision": 0, "override": {}})
+    binding = dict(stored["override"])
+    effective = {k: v for k, v in main["effective"].items() if k != "runtime"}
+    if binding.get("provider"):
+        provider = next((x for x in catalog["providers"] if x["id"] == binding["provider"]), {})
+        effective = {"provider": binding["provider"], "model": provider.get("model", "")}
+    effective.update(binding)
+    purpose = dict(id=SUPERVISE_PURPOSE, category_id="assistant", parent="assistant", name="后台督办", group="主对话",
+                   kind="launcher", override=binding, effective=effective, revision=stored["revision"],
+                   inherited_from=main["name"], fields=["provider", "model", "effort"],
+                   provider_ids=main["provider_ids"], status="未验证")
+    return {"purpose": purpose, "providers": catalog["providers"]}
+
+
 def model_configuration(include_uses=False):
     providers = [dict(id="launcher." + l["name"], name=l["name"], kind=l.get("kind", "launcher"),
                       model=l.get("model"), hidden=l.get("hidden", False)) for l in LAUNCHERS if l["source"] != "builtin"]
@@ -16476,6 +16516,54 @@ if os.environ.get("MOCK_CHURN") == "1":
         _x["seq"] = _w[0]["seq"] + _n
 
 
+# MOCK_TALL_HISTORY=1: the weather chat with twelve tall exchanges in front, like an Agent chat used for a day of work
+# (#4788): long messages of the user's (Chinese and English, lists, paths), replies with headings and nested lists, and
+# tool calls whose results are screenshots. Rows of very different heights, so the lazy list's guesses are far off.
+# With MOCK_STREAM=1 the chat keeps working at its newest end (ScrollToBottomTests 13).
+if os.environ.get("MOCK_TALL_HISTORY") == "1":
+    _tall = []
+    for _k in range(12):
+        _m = 900 - _k * 40
+        _ask = "\n".join([
+            "第 %d 轮：请把下面几件事按顺序推进，做完一件回我一句。" % (_k + 1),
+            "1) 先看 `apps/weather/Sources/Forecast%d.swift` 里的重试逻辑：断网时 retry 没有上限，改成最多 3 次、指数退避。" % _k,
+            "2) Then check the widget timeline: it reloads every 5 minutes even when nothing changed, which drains the battery.",
+            "3) 截图对比：改前 / 改后各一张，深色和浅色都要，放到 `.shots/round-%d/` 下面，拼成一张给我看。" % (_k + 1),
+            "4) 跑相关测试（ForecastTests、WidgetTimelineTests），不用跑整套。",
+            "说明：如果第 2 件需要改接口，先停下来问我；其余的直接做，不用等我确认。",
+            "补充：上一轮的截图里标题被截断了（「天气预报 · 未来七…」），这次一起看一下是不是同一个原因。",
+        ])
+        _tall.append(it("user", "text", _m, text=_ask))
+        _tall.append(it("assistant", "thinking", _m - 1, text="先看重试逻辑，再看小组件的刷新，最后截图。"))
+        _tall += tool("Read", {"file_path": "/Users/me/code/weather/Sources/Forecast%d.swift" % _k}, "struct Forecast%d {}" % _k, _m - 1)
+        _shot = tool("Bash", {"command": "xcrun simctl io booted screenshot .shots/round-%d/after.png" % (_k + 1),
+                              "description": "截改后的图"}, "", _m - 2)
+        _tall += _shot
+        for _dark in (False, True):
+            _tall.append(it("user", "image", _m - 2, tool_use_id=_shot[0]["tool_use_id"],
+                            image={"mime": "image/png", "data": base64.b64encode(_page_png(360, 480, dark=_dark)).decode()}))
+        _tall.append(it("assistant", "text", _m - 3, text="\n".join([
+            "第 %d 轮做完了，按顺序说：" % (_k + 1),
+            "",
+            "**重试逻辑：** 改成最多 3 次，间隔 1 s、2 s、4 s；断网时第三次失败就停下，界面显示「暂时连不上」。",
+            "- 改了 `Forecast%d.swift` 和它的测试，`ForecastTests` 全过。" % _k,
+            "- 顺手把两处重复的超时判断合并成一个函数。",
+            "",
+            "**Widget timeline:** it now reloads only when the forecast changed or at the next hour, instead of every 5 minutes.",
+            "- Measured on the simulator: 12 reloads an hour before, 1–2 after.",
+            "- `WidgetTimelineTests` passes, including a new case for an unchanged forecast.",
+            "",
+            "**截图：** 改前 / 改后、深浅色各一张，拼图在上面。",
+            "- 标题截断是同一个原因：标题行没有给日期留位置，改成最多两行。",
+            "- 第 2 件没有动接口，所以没停下来问你。",
+            "",
+            "**接下来：** 等你看完截图，没问题我就开 PR；有要改的直接说。",
+        ])))
+    _w = ITEMS[WIDGET]
+    ITEMS[WIDGET] = _tall + _w
+    for _n, _x in enumerate(ITEMS[WIDGET]):  # transcript order: the tall history first
+        _x["seq"] = _n + 1
+
 # MOCK_COMPUTER=ready|permissions|locked: the hub's plugin cua is on (docs/extensions/computer-use.md) and macbook is turned on
 # in that state; Mac Studio is a Mac it is not on for yet. =off: on, but for no machine yet. Unset: the plugin is off.
 MOCK_COMPUTER = os.environ.get("MOCK_COMPUTER", "")
@@ -19188,6 +19276,8 @@ class H(BaseHTTPRequestHandler):
             q = parse_qs(urlparse(self.path).query)
             return self.send_json(assistant_state(q.get("space", [""])[0], q.get("archived", [""])[0] == "1"))
         if p == "/api/v1/model-config": return self.send_json(model_configuration())
+        if p == "/api/v1/model-config/purposes/" + SUPERVISE_PURPOSE and (own := supervise_model_purpose()):
+            return self.send_json(own)
         if p.startswith("/api/v1/model-config/purposes/"):
             catalog = model_configuration(include_uses=True)
             purpose = next((x for x in catalog["purposes"] if x["id"] == unquote(p.rsplit("/", 1)[1])), None)
@@ -19967,6 +20057,8 @@ class H(BaseHTTPRequestHandler):
             if c is None: return self.send_json({"error": "not found"}, 404)
             if m.group(2) == "archive" and c["session_id"] == ASSISTANT_CONFIG["main"]:
                 return self.send_json({"error": "the main conversation can't be archived"}, 400)
+            if m.group(2) == "archive" and c["session_id"] == BACKGROUND_SUPERVISOR:  # built in, stays listed (#4927)
+                return self.send_json({"error": "the background supervisor can't be archived"}, 400)
             c["archived"] = m.group(2) == "archive"
             push_machine(c["machine_id"])
             return self.send_json({"ok": True, "archived": c["archived"]})
@@ -20162,6 +20254,21 @@ class H(BaseHTTPRequestHandler):
                 return self.send_json({"ok": True})
         if self.command == "POST" and p.startswith("/api/v1/inbox/") and p.endswith("/draft"):
             return self.send_json(*inbox_draft(unquote(p[len("/api/v1/inbox/"):-len("/draft")]), json.loads(self.last_body or b"{}")))
+        if p == "/api/v1/model-config/purposes/" + SUPERVISE_PURPOSE and self.command == "PATCH" and (own := supervise_model_purpose()):
+            body, purpose = json.loads(self.last_body or b"{}"), own["purpose"]
+            with MODEL_CONFIG_LOCK:
+                if body.get("revision") != purpose["revision"]:
+                    return self.send_json({"error": "配置已在别处修改"}, 409)
+                binding = dict(purpose["override"])
+                if "provider" in body and body["provider"] != binding.get("provider"):
+                    binding.pop("model", None)
+                    binding.pop("effort", None)
+                for field in purpose["fields"]:
+                    if field not in body: continue
+                    if body[field] is None: binding.pop(field, None)
+                    else: binding[field] = body[field]
+                MODEL_BINDINGS[SUPERVISE_PURPOSE] = {"revision": purpose["revision"] + 1, "override": binding}
+            return self.send_json(supervise_model_purpose())
         if p.startswith("/api/v1/model-config/purposes/") and self.command == "PATCH":
             pid, body = unquote(p.rsplit("/", 1)[1]), json.loads(self.last_body or b"{}")
             with MODEL_CONFIG_LOCK:
@@ -20944,6 +21051,8 @@ class H(BaseHTTPRequestHandler):
                 ASSISTANT_CONFIG["agent_tasks"] = body["agent_tasks"]
             if isinstance(body.get("inbox_signals"), bool):
                 ASSISTANT_CONFIG["inbox_signals"] = body["inbox_signals"]
+            if isinstance(body.get("main_supervises_own_tasks"), bool) and not os.environ.get("MOCK_LEGACY_HUB"):
+                ASSISTANT_CONFIG["main_supervises_own_tasks"] = body["main_supervises_own_tasks"]
             if isinstance(body.get("kb_topics"), bool):
                 ASSISTANT_CONFIG["kb_topics"] = body["kb_topics"]
             if body.get("machine_id"):
@@ -21875,6 +21984,9 @@ MOCK_HELP.append("MOCK_MARKDOWN=1  任务往来和回执里带 **粗体**、`代
 MOCK_HELP.append("MOCK_TASK_RENAMED=1  整理发布说明这个任务在回执写好后改了名：回执应显示新名字「写本周发布说明」（#3036）")
 MOCK_HELP.append("MOCK_AUTO_CONVERSATIONS=1  助手对话带来源 origin（feature conversation_origin）：另有 10 段自动对话（收件箱 6、定时任务 2、飞书 /agent、对话派生），侧边栏收进「自动对话」（#3264）")
 MOCK_HELP.append("MOCK_EXTERNAL=1  和 MOCK_AUTO_CONVERSATIONS=1 一起用：飞书 /agent 那段带上请求和上下文，另加一段别的扩展开的（origin extension），两段都是外部的（#3758）")
+MOCK_HELP.append("MOCK_BACKGROUND_SUPERVISOR=1  The hub's built-in background supervisor conversation exists (#4927): origin task with no origin_ref, "
+                 "named by GET /api/v1/assistant as background_supervisor, and archiving it is refused. Without it the setting "
+                 "main_supervises_own_tasks and the model use assistant.supervise (answered by its own id, not in the catalog) are still there; MOCK_LEGACY_HUB has none of them")
 
 
 
