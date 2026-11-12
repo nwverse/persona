@@ -265,10 +265,15 @@ internal fun DeliveryState.pendingStatus(): PendingStatus? = when (this) {
     DeliveryState.Sent -> null
 }
 
-internal fun assistantStatus(session: Session?, messages: List<OutboxMessage>) = StatusLineState(
+internal fun assistantStatus(session: Session?, messages: List<OutboxMessage>,
+    submittingId: String? = null, receipts: List<persona.core.contracts.api.MessageSendReceipt> = emptyList()) = StatusLineState(
     ended = session?.agentState == AgentState.Offline,
-    submitting = messages.any { it.state == DeliveryState.Sending },
-    unconfirmed = messages.any { it.state in setOf(DeliveryState.Unknown, DeliveryState.Verifying, DeliveryState.NeedsConfirmation) },
+    submitting = (submittingId != null && receipts.none { it.clientMessageId == submittingId && it.state != "sending" }) ||
+        receipts.any { it.state == "sending" } ||
+        messages.any { message -> message.state == DeliveryState.Sending && receipts.none { it.clientMessageId == message.clientMessageId && it.state != "sending" } },
+    processing = receipts.any { it.processing },
+    unconfirmed = messages.any { it.state in setOf(DeliveryState.Unknown, DeliveryState.Verifying, DeliveryState.NeedsConfirmation) } ||
+        receipts.any { it.state == "unknown" },
     blocked = session?.agentState == AgentState.NeedsYou,
     working = session?.agentState == AgentState.Working,
 )

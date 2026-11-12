@@ -431,7 +431,8 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     val assistantRequests = shownPending.filter { currentKind(SessionKey(it.machineId, it.sessionId)) == ConversationKind.Assistant }
     val agentRequests = shownPending - assistantRequests.toSet()
     // The Agents tab counts its waiting agents, one per session (ShellCounts.agentsWaiting), as iOS and the web do.
-    val agentNeeds = counts.agentsWaiting(agentRequests)
+    val agentRows = counts.agentRows(agentRequests)
+    val agentNeeds = agentRows.size
     // What waits at each assistant, for the switcher's badges and the dot on the sidebar's button: its agents waiting
     // (each once), counted here, and its inbox's "Needs you" from the roster.
     val managerRoster = persona.core.designsystem.LocalManagerRoster.current
@@ -456,10 +457,15 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     }
     val badges = mapOf(AppTab.Agents to agentNeeds, AppTab.Persona to assistantRequests.size)
     // "Needs you now" on the Persona home: the agents waiting (not Persona's own, not muted), then the inbox's "Needs you".
-    val needsYou = remember(agentRequests, sessions, preferences.mutes, shownRecords) {
-        persona.feature.assistant.needsYou(agentRequests, sessions, preferences.mutes,
-            shownRecords.map { persona.feature.assistant.NeedsYouMessage(it.item, lark = it.feedId != null,
-                working = it.agentWorking) })
+    val needsMessages = remember(shownRecords) {
+        shownRecords.map { persona.feature.assistant.NeedsYouMessage(it.item, lark = it.feedId != null, working = it.agentWorking) }
+    }
+    val needsYou = remember(agentRequests, sessions, preferences.mutes, needsMessages) {
+        persona.feature.assistant.needsYou(agentRequests, sessions, preferences.mutes, needsMessages)
+    }
+    // On Glass over the blank page's composer (#4339 C17): the sessions the Agents tab's badge counts, then the inbox's.
+    val shellNeedsYou = remember(agentRows, sessions, needsMessages) {
+        persona.feature.assistant.needsYouBySession(agentRows, sessions, needsMessages)
     }
     // Voice chat is offered while the hub runs a voice extension: asked each time the Persona tab shows while connected.
     val voiceExtension = persona.feature.voice.rememberVoiceExtension(session.voice,
@@ -632,16 +638,23 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         fun chatTerminal(route: ChatRoute) = session.terminal?.let { shell.groupTerminal(SessionKey(route.machineId, route.sessionId)) ?: it }
         val provider = entryProvider<NavKey> {
             assistantEntries(navigator) {
-                AssistantScreen(assistantNavigator, session.assistant, session.sender, session.assistant::startConversation,
-                    connectionLabel = connection.title(),
-                    hubOnline = connection == ConnectionState.Online || connection == ConnectionState.Updating, demo = session.demo != null,
-                    requestedSession = assistantRequest, onKnowledge = { sidebarDestination(KnowledgeRoute) },
-                    needsYou = needsYou, onOpenNeed = { line -> openWithCard(needsYouRoute(line)) },
-                    onOpenInbox = { sidebarDestination(InboxRoute) },
-                    onVoice = voiceExtension?.let { extension -> { navigator.navigate(VoiceRoute(extension.id, extension.name)) } },
-                    onTodos = { sidebarDestination(persona.core.navigation.TodosRoute) },
-                    todoCount = uncompletedTodosCount,
-                    showTodos = todosSupported)
+                // Persona's conversation offers the next card an Agent waits on you with, as an Agent's chat does (#4339 C18).
+                val waiting = rememberWaitingRequests(session, sessions)
+                val elsewhere = remember(waiting) {
+                    persona.feature.chat.WaitingElsewhere(waiting) { chat, request -> openWithCard(persona.android.navigation.waitingRoute(chat, request)) }
+                }
+                CompositionLocalProvider(persona.feature.chat.LocalWaitingElsewhere provides elsewhere) {
+                    AssistantScreen(assistantNavigator, session.assistant, session.sender, session.assistant::startConversation,
+                        connectionLabel = connection.title(), connection = connection,
+                        hubOnline = connection == ConnectionState.Online || connection == ConnectionState.Updating, demo = session.demo != null,
+                        requestedSession = assistantRequest, onKnowledge = { sidebarDestination(KnowledgeRoute) },
+                        needsYou = needsYou, shellNeedsYou = shellNeedsYou, onOpenNeed = { line -> openWithCard(needsYouRoute(line)) },
+                        onOpenInbox = { sidebarDestination(InboxRoute) },
+                        onVoice = voiceExtension?.let { extension -> { navigator.navigate(VoiceRoute(extension.id, extension.name)) } },
+                        onTodos = { sidebarDestination(persona.core.navigation.TodosRoute) },
+                        todoCount = uncompletedTodosCount,
+                        showTodos = todosSupported, mentionSessions = session.sessions.sessions)
+                }
             }
             agentsEntries(navigator, agents, machine, { machine = it },
                 terminalPanes = if (session.demo == null) shell.terminalPanes.available else kotlinx.coroutines.flow.flowOf(false))

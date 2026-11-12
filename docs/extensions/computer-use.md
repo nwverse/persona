@@ -360,6 +360,11 @@ displays left to right, then top to bottom, by their top-left corners.
 - **Chat page**: VNC (`ScreenEntry`) also appears below tool details for two types of tool, provided the extension and Screen Sharing are enabled for that Mac:
   - assistant `computer_state` / `computer_run`: the named machine;
   - Cua Driver MCP tools registered directly by a computer's Agent (`mcp__cua-driver__…`): that Agent's machine.
+- **The pill above the composer** (`ComputerActivityPill`): while the chat's newest computer tool call runs, and six seconds
+  after it ends, "Controlling MacBook · Click AC → 6" sits over an Agent chat's composer and after the entries in a Persona
+  conversation; a tap opens that Mac's VNC (disabled where its screen can't be shown). The app reads it from the transcript, as above:
+  no hub field says a session is operating a computer. Android (Glass, #4339) draws the same pill from the same items
+  (`ComputerActivity` in core/domain) and has no VNC, so its tap opens the work line that holds the call; the web shows none.
 - **Full page** (`VNCPage`, #1343): native client fills the screen in its own window (`ScreenWindow`, #1604: iOS `UIWindow` above the shell, below toasts; separate Mac window; follows `AppModel.screenOpen`). Previously a `fullScreenCover` on `RootView`, whose presentation was swallowed when the machine page was in a sheet. The old web drawer (WKWebView + noVNC + bridge) is removed; the web still uses noVNC.
   - Top bar: Close, Picture in Picture (iOS, right of Close, #3075), connection stage (connecting / login required / connected / disconnected) and machine name, Help, "…" (Mouse Mode / Trackpad Mode, Center Pointer, Picture in Picture Diagnostics; Picture in Picture itself on the Mac). Where the row is too narrow (the largest text sizes) the name and stage go on a line under the buttons, never cut to less than the name's first four letters, and where even the buttons don't fit, Picture in Picture goes into "…". When the assistant or an Agent operates this Mac, another line: "Now: tap AC → 6 → × → 7 → =".
   - Bottom bar: Clipboard, I'm Done (only when the Agent that opened it is waiting for you), Keyboard.
