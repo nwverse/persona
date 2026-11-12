@@ -181,6 +181,22 @@ nonisolated enum Theme {
     static let monogramFill = Color(uiColor: .secondarySystemFill)
     #endif
 
+    /// A name's disc without a picture (`Monogram`) and its letter's color: the neutral disc in the label's color, or on
+    /// the Mac in a style with hued monograms (Lark, `StyleSpec.MacChrome.monogramHues`) the hue the name picks, the same
+    /// one on every launch, with a white letter. The iPhone, iPad and watch keep the neutral disc in every style.
+    static func monogram(_ name: String) -> (fill: Color, ink: Color?) {
+        #if os(macOS)
+        let hues = spec.mac.monogramHues
+        if !hues.isEmpty {
+            // FNV-1a over the name: `hashValue` is seeded per process, so a person's color would change on every launch.
+            var h: UInt32 = 2_166_136_261
+            for s in name.unicodeScalars { h = (h ^ s.value) &* 16_777_619 }
+            return (hues[Int(h % UInt32(hues.count))], onSolid)
+        }
+        #endif
+        return (monogramFill, nil)
+    }
+
     /// Diffs and Git: their own colors, text strength (≥ 4.5:1 on the code background) for signs and counts.
     enum Diff {
         static let add = Color(light: 0x1D7A4C, dark: 0x4CC38A)
@@ -499,6 +515,8 @@ nonisolated enum Theme {
         static let barWide: CGFloat = 4
         /// A share bar's thickness (the assistant's stacked-bar card).
         static let meter: CGFloat = 12
+        /// An Agent chat's header folded into its slim bar (Android `Tokens.Size.slimBar`).
+        static let slimBar: CGFloat = 40
         /// How far a sideways strip fades out at an end with more to scroll to (`.edgeFade()`): a cut-off chip reads as
         /// "more", not as a broken row.
         static let fadeEdge: CGFloat = 24
@@ -556,6 +574,8 @@ nonisolated enum Theme {
         /// The height of the map in a saved place's editor: the reminder's circle with the streets around it, and room to
         /// pan the map and tap where the place is (#4248).
         static let placeMap: CGFloat = 220
+        /// The map a place answer draws in the chat (`PlaceMapCard`, #5543): small enough to scroll past.
+        static let chatMap: CGFloat = 160
         static let box110: CGFloat = 110
         static let box120: CGFloat = 120
         /// The longest a tab's name gets in the chat header's strip of the space's tabs: one long name cannot push the

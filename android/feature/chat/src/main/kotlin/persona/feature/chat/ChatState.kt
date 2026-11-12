@@ -155,13 +155,18 @@ internal fun chatStatusState(
     operationUnknown: Boolean = false,
     /** A turn of yours the hub has not reported yet ([awaitingTurn], [awaitingDelivered]). */
     awaiting: Boolean = false,
+    submittingId: String? = null,
+    receipts: List<MessageSendReceipt> = emptyList(),
 ): StatusLineState = StatusLineState(
     ended = snapshot.ended,
     replaced = snapshot.replaced,
     machineOffline = machine?.online == false,
-    submitting = messages.any { it.state == DeliveryState.Sending },
+    submitting = (submittingId != null && receipts.none { it.clientMessageId == submittingId && it.state != "sending" }) ||
+        receipts.any { it.state == "sending" } ||
+        messages.any { message -> message.state == DeliveryState.Sending && receipts.none { it.clientMessageId == message.clientMessageId && it.state != "sending" } },
+    processing = receipts.any { it.processing },
     answering = answering,
-    unconfirmed = operationUnknown || messages.any { it.state.resultUnknown },
+    unconfirmed = operationUnknown || messages.any { it.state.resultUnknown } || receipts.any { it.state == "unknown" },
     pendingRequests = requests.size,
     blocked = session.needsYou(),
     requestSummary = requests.singleOrNull()?.headline?.shown,
@@ -192,6 +197,7 @@ internal fun ChatLine.contentType(): String = when (this) {
     is ChatLine.Wakes -> "wakes"
     is ChatLine.ApiError -> "api_error"
     is ChatLine.Recaps -> "recaps"
+    is ChatLine.Viewed -> "viewed"
     is ChatLine.Extra -> "extra"
 }
 

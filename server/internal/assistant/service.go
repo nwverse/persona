@@ -102,6 +102,8 @@ type Service struct {
 
 	// rules: the answers to suggested rules, and the last count of what earns one (rule_suggest.go).
 	rules ruleSuggestState
+	// setupMu serializes the reads and the one write of the weekly setup block's book (setup_suggest.go).
+	setupMu sync.Mutex
 
 	// prepared is what this hub last gave a machine's node for a directory (key: machine id NUL directory), the
 	// CLAUDE.md and the plugin skills, by prepareSpaceIf; refreshInstructions gives again what differs.
@@ -199,6 +201,7 @@ type Service struct {
 	orphans       orphanBook      // tasks_orphan.go: the open to-dos nobody works on
 	agentNative   agentNativeBook // the tools' own archives (agent_archive_native.go)
 	fleet         fleetBook       // what comes from the nodes (fleet.go)
+	nextSug       nextSuggestBook // suggest_next.go: the hub-made next-message suggestions
 	askUp         escalationBook  // cards that reached the user through an escalation (ask_route.go), under fleet.mu
 	// delegateHook stands in for Delegate in tests (fleet_delegate.go).
 	delegateHook func(context.Context, DelegateParams) (DelegateResult, error)
@@ -357,6 +360,11 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 				p["message_source"] = source
 				p["text"] = prompts.MessageSourceText(text, source)
 			}
+		}
+	}
+	if p, ok := params.(map[string]any); ok && method == DeviceSessionSend {
+		if id, _ := p["session_id"].(string); id != "" {
+			s.workTold(device, id) // the turn it starts is this manager's doing, not the owner's hand (setup_suggest.go)
 		}
 	}
 	if p, ok := params.(map[string]any); ok && method == DeviceAssistantSend {
@@ -636,6 +644,9 @@ func (s *Service) UserSpoke(ctx context.Context, r SessionRef) {
 	s.withdrawAskUser(r.SessionID)    // a question it waits on is taken back: the user's words are not left behind its turn
 	s.askLaterSpoke(ctx, r.SessionID) // one asked without waiting stays up; that they wrote is kept (ask_later.go)
 	s.unarchiveOnSend(r.MachineID, r.SessionID)
+	if s.suggestDrop(r.MachineID, r.SessionID) { // a message went in: its suggestion is spent (suggest_next.go)
+		s.publishSessions(r.MachineID)
+	}
 	s.userSpoke(r.SessionID)
 	if s.reporterStopped(ctx, r.SessionID) { // talked to again: its tasks are told to it again (#3308)
 		s.setReporterStopped(ctx, r.SessionID, "")

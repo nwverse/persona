@@ -379,7 +379,7 @@ private fun SettingsContent(
             onBack = { page = "hubs" }, skipWelcome = true, attempts = services.pairingAttempts)
         "diag" -> DiagnosticsScreen(services, onBack = back, onPairing = { open(SettingsPage.Pairing) }, footer = deviceFeedback)
         "style" -> JListPage(title = stringResource(R.string.settings_style_title), onBack = back) {
-            item { AppearanceSettings() }
+            item { AppearanceSettings(agentsDisplay = services.agentsDisplay) }
             item { deviceFeedback() }
         }
         "language" -> LanguagePage(onBack = back, footer = deviceFeedback)

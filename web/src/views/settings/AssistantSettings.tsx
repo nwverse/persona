@@ -69,6 +69,9 @@ interface AssistantState extends AgentAutoNamingState {
   /** Days a closed session stays listed before it archives itself (#3618, docs/assistant/todos.md "Closed sessions
    *  archive themselves"): 0 is never, at most 3650; unset from a hub before it. */
   archive_closed_days?: number;
+  /** "Suggest the next message" (#4644, docs/assistant/assistant.md "Next-message suggestions"): off by default; unset
+   *  from a hub before it. */
+  next_suggestions?: boolean;
   /** Hours an idle Agent Persona started runs before Persona stops it (#4754, docs/integrations/engines.md "Agents run
    *  in a terminal"); its terminal stays. 0 is never, at most 8760; unset from a hub before it. */
   idle_close_hours?: number;
@@ -152,6 +155,21 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
     } catch (e) {
       toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
     } finally { setRetentionBusy(false); setRetentionTries((n) => n + 1); }
+  };
+
+  const [suggestBusy, setSuggestBusy] = useState(false);
+  const setSuggestions = async (on: boolean) => {
+    setSuggestBusy(true);
+    setInfo((i) => (i ? { ...i, next_suggestions: on } : i));
+    try {
+      const r = await scopedApi<AssistantState>("/assistant", { method: "PUT", json: { next_suggestions: on } });
+      setInfo((i) => (i ? { ...i, next_suggestions: r.next_suggestions ?? on } : i));
+    } catch (e) {
+      setInfo((i) => (i ? { ...i, next_suggestions: !on } : i));
+      toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
+    } finally {
+      setSuggestBusy(false);
+    }
   };
 
   const setFolded = async (on: boolean) => {
@@ -287,6 +305,15 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
           <Switch on={info?.main_background_folded ?? true} onChange={(on) => void setFolded(on)} disabled={!info || foldBusy} label={t("settings-assistantsettings.background_folded")} />
         </Row>
       </Group>
+
+      {/* The next-message suggestion for chats without one of their own (#4644): only from a hub that has the setting */}
+      {typeof info?.next_suggestions === "boolean" && (
+        <Group anchor="next-suggestions" footer={t("settings-assistantsettings.next_suggestions_footer")}>
+          <Row label={t("settings-assistantsettings.next_suggestions")}>
+            <Switch on={info.next_suggestions} onChange={(on) => void setSuggestions(on)} disabled={suggestBusy} label={t("settings-assistantsettings.next_suggestions")} />
+          </Row>
+        </Group>
+      )}
 
       <Group title={t("settings-assistantsettings.start_title")} footer={t("settings-assistantsettings.start_footer")}>
         <Row label={t("settings-assistantsettings.start_requested")}>

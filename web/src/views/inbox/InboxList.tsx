@@ -177,9 +177,9 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
     if (!days) return { groups: loaded.map((g, i) => ({ ...g, count: g.items.length, plus: i === loaded.length - 1 && historyMore.includes(group), more: false, range: timeRange(g.key, now) })) };
     const counts = dayGroupCounts(days, now, filtered ? 0 : loaded.find((g) => g.key === "just")?.items.length ?? 0);
     const byKey = new Map(loaded.map((g) => [g.key, g.items]));
-    // complete: a page of its own reached its start, or the list holds it (the done items of its last days, the hub's
-    // inboxKeepDone), or (unfiltered) as many are loaded as the hub counts
-    const complete = (key: string, loadedCount: number) => groupComplete.includes(`${group}|${key}`) || timeRange(key, now).start >= now - LIST_DONE_MS
+    // complete: a page of its own reached its start, or (unfiltered) as many are loaded as the hub counts. The list's
+    // done items don't make a group complete: it carries only the newest of the last days' (#5549), the rest page in.
+    const complete = (key: string, loadedCount: number) => groupComplete.includes(`${group}|${key}`)
       || (!filtered && loadedCount >= (counts.get(key) ?? 0));
     const groupOf = (key: string): DoneGroup => {
       const items = byKey.get(key) ?? [];
@@ -551,9 +551,6 @@ function scrollListTo(el: Element | null) {
   if (!el || !box) return;
   box.scrollTo?.({ top: box.scrollTop + el.getBoundingClientRect().top - box.getBoundingClientRect().top, behavior: scrollBehavior() });
 }
-
-/** How long the list keeps done items (the hub's inboxKeepDone): Done's groups within it are complete without a page. */
-const LIST_DONE_MS = 3 * 86_400_000;
 
 /** A group of Done (#2969): its items loaded so far, its count (the hub's when it has day counts), whether the count
  *  reads "n+" (plus), whether more of its items can load (more) and its time range (where its pages start). */

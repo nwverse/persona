@@ -9,6 +9,7 @@ import { memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRe
 import { useQuickPrompts } from "../../lib/extension-declared";
 import { promptCommands, type ComposerCommand as Command } from "../../lib/extension-prompts";
 import { LOOP_TEXT, loopHint } from "../../lib/loop-command";
+import { WORKFLOWS_COMMAND } from "../../lib/background-panel";
 import { ApiError, errorText } from "../../lib/api";
 import { composerEntryDrop, dragHasEntry, droppedEntry } from "../../lib/entry-drag";
 import { uuid } from "../../lib/format";
@@ -16,7 +17,6 @@ import { lazyPage } from "../../lib/lazy-page";
 import { enterSends, hasFinePointer, useMedia } from "../../lib/viewport";
 import { useModalFocus } from "../../ui/overlay";
 import { COMPACT_COMPOSER, growLines, lineCount, offersExpand } from "./composer-grow";
-import { INPUT_MAX } from "./dock";
 import { imagePayload, MAX_IMAGE, quotePath, releaseAttachments, sendFile } from "../../lib/attachments";
 import { activateComposer, addContext, getContexts, newContext, registerComposer, removeContext, useContexts, withContexts, type ComposerHandle } from "../../lib/links";
 import { addQuote, applyDraft, getQuotes, onDraftEvent, parseQuotes, removeQuote, replaceNeedsConfirm, sendDraft, setQuotes, splitQuotes, storeDraft, useQuotes, withQuoteBlock, withUnsent, type DraftImage } from "../../lib/drafts";
@@ -81,6 +81,8 @@ export const AGENT_COMMANDS: Command[] = [
   { word: t("chat-composer.cmd_continue_word"), desc: t("chat-composer.cmd_continue_desc"), text: t("chat-composer.cmd_continue_text") },
   { word: t("chat-composer.cmd_commit_word"), desc: t("chat-composer.cmd_commit_desc"), text: t("chat-composer.cmd_commit_text") },
   { word: t("chat-composer.cmd_report_word"), desc: t("chat-composer.cmd_report_desc"), text: t("chat-composer.cmd_report_text") },
+  // Persona's own (cindy's /workflows): the chat page opens the Background tasks panel instead of sending it (#5421)
+  { word: WORKFLOWS_COMMAND, desc: t("chat-composer.cmd_workflows_desc"), text: WORKFLOWS_COMMAND },
   // the agent's own commands: the palette names it beside them (agentCommands)
   { word: "/compact", desc: t("chat-composer.cmd_compact_desc"), text: "/compact", agent: true },
   { word: "/context", desc: t("chat-composer.cmd_context_desc"), text: "/context", agent: true },
@@ -126,6 +128,7 @@ export const Composer = memo(function Composer({
   leading,
   trailing,
   suggestion,
+  suggestionRisky,
   mention,
   planMode,
   onFocusChange,
@@ -166,6 +169,8 @@ export const Composer = memo(function Composer({
    *  changes, as `footer`. */
   trailing?: React.ReactNode;
   suggestion?: string;
+  /** The suggestion is risky (Session.suggestion_risky): it is only filled in, with no one-tap send. */
+  suggestionRisky?: boolean;
   /** Turns on the @ menu: the chat's files and folder, and other sessions. */
   mention?: MentionSource;
   /** The + / @ panel's Plan mode check row (#5324, PermissionPicker.tsx `usePlanMode`), where the session has modes. */
@@ -217,10 +222,10 @@ export const Composer = memo(function Composer({
   editNow.current = editingLast;
   useEffect(() => { lastEscape.current = null; }, [draftKey, working, disabled, onEditLastMessage]);
   const box = useRef<HTMLDivElement>(null);
-  // Phones (#5688): the box grows to a line limit from the visible height, then scrolls and offers Expand, the draft
-  // full screen. `grow` is what the last measure found: the limit, a line's height, the padding, and whether it is past it.
+  // The box grows to six lines (less only in a very short viewport), then scrolls; phones also offer Expand.
+  // `grow` holds the measured line height, padding and overflow state, shared by both widths.
   const compact = useMedia(COMPACT_COMPOSER);
-  const visible = useVisibleHeight(compact);
+  const visible = useVisibleHeight();
   const [grow, setGrow] = useState({ limit: 0, line: 0, pad: 0, over: false });
   const [expanded, setExpanded] = useState(false);
   // the caret to put back in the box when the full editor closes
@@ -400,12 +405,10 @@ export const Composer = memo(function Composer({
     if (holder) holder.style.minHeight = `${holder.getBoundingClientRect().height}px`;
     el.style.height = "0px";
     const h = el.scrollHeight;
-    // the CSS max-height (INPUT_MAX) caps it: 240px, less when the visible height is small (a keyboard, a phone on
-    // its side), so the send button stays on screen; past it the box scrolls (overflow-y-auto: when the keyboard
-    // lowers the cap, no new draft comes to say so)
+    // The layout effect measures before paint, so both widths use the same six-whole-line cap without a second
+    // fixed-pixel fallback. Very short visible viewports still leave space for Send; longer drafts scroll inside.
     el.style.height = `${Math.max(h, 24)}px`;
     if (holder) holder.style.minHeight = held;
-    if (!compact) return;
     const css = getComputedStyle(el);
     const line = parseFloat(css.lineHeight) || 24;
     const pad = (parseFloat(css.paddingTop) || 0) + (parseFloat(css.paddingBottom) || 0);
@@ -685,6 +688,8 @@ export const Composer = memo(function Composer({
     const refs = getContexts(draftKey);
     const q = getQuotes(draftKey).list;
     if (disabled || blocked || loadingDraft || (!text.trim() && !atts.length && !refs.length && !q.length)) return;
+    // Any message spends the suggestion shown: it stays on the hub until the agent starts (#4644).
+    if (suggestion) setSentPill(suggestion);
     // An edit of the last message: the rewind to before the old one first, the box kept as it is (read-only meanwhile).
     // Refused or not possible: nothing changed on the computer, and the edit stays in the box (ChatView says why).
     const edit = editNow.current;
@@ -780,7 +785,7 @@ export const Composer = memo(function Composer({
         </Suspense>
       )}
 
-      {pill && <SuggestionPill text={pill} onFill={() => fillSuggestion(pill)} onSend={() => { setSentPill(pill); void submit(pill); }} />}
+      {pill && <SuggestionPill text={pill} onFill={() => fillSuggestion(pill)} onSend={suggestionRisky ? undefined : () => { setSentPill(pill); void submit(pill); }} />}
 
       <div
         className={cx(
@@ -959,7 +964,7 @@ export const Composer = memo(function Composer({
           placeholder={pill && hasFinePointer() ? t("chat-composer.suggestion", { suggestion: pill }) : placeholder}
           aria-label={t("chat-composer.message")}
           title={hasFinePointer() ? (onEditLastMessage ? t("composer.history_hint_edit") : t("composer.history_hint")) : undefined}
-          style={{ maxHeight: compact && grow.line ? `${grow.limit * grow.line + grow.pad}px` : INPUT_MAX }}
+          style={{ maxHeight: `${grow.limit * grow.line + grow.pad}px` }}
           className={cx("min-h-6 w-full resize-none overflow-y-auto bg-transparent px-2 pt-1.5 text-[14px] leading-[21px] text-ink outline-none [@media(pointer:coarse)]:text-[16px] [@media(pointer:coarse)]:leading-[24px] [overflow-wrap:anywhere] placeholder:text-ink-3 disabled:opacity-50", showExpand && "pr-8")}
         />
         {showExpand && (
@@ -1132,12 +1137,11 @@ function StopButton({ stopping, onStop }: { stopping?: boolean; onStop: () => vo
   );
 }
 
-/** The visible height (above the keyboard), followed while `on`: the grow limit comes from it. */
-function useVisibleHeight(on: boolean): number {
+/** The visible height above the keyboard, followed on both phone and desktop. */
+function useVisibleHeight(): number {
   const read = () => (typeof window === "undefined" ? 0 : Math.round(window.visualViewport?.height ?? window.innerHeight));
   const [h, setH] = useState(read);
   useEffect(() => {
-    if (!on) return;
     const vv = window.visualViewport;
     const update = () => setH(read());
     update();
@@ -1147,7 +1151,7 @@ function useVisibleHeight(on: boolean): number {
       vv?.removeEventListener("resize", update);
       removeEventListener("resize", update);
     };
-  }, [on]);
+  }, []);
   return h;
 }
 
@@ -1228,8 +1232,9 @@ function ExpandedComposer({ value, placeholder, selection, onChange, onCollapse,
   );
 }
 
-/** Claude's suggestion over the box (iOS SuggestionPill): the row fills it in, the arrow sends it as it is. */
-function SuggestionPill({ text, onFill, onSend }: { text: string; onFill: () => void; onSend: () => void }) {
+/** The suggested next message over the box (iOS SuggestionPill): the row fills it in, the arrow sends it as it is; a
+ *  risky one (no onSend) has no arrow (#4644). */
+function SuggestionPill({ text, onFill, onSend }: { text: string; onFill: () => void; onSend?: () => void }) {
   return (
     <div data-testid="composer-suggestion" className="mb-2 flex items-center gap-1 rounded-full bg-surface p-1 pl-1 shadow-card" style={{ animation: `fade-up 200ms ${EASE} both` }}>
       <button
@@ -1244,16 +1249,18 @@ function SuggestionPill({ text, onFill, onSend }: { text: string; onFill: () => 
         <span className="min-w-0 flex-1 truncate text-[12.5px] text-ink-2">{text}</span>
         <span className="shrink-0 whitespace-nowrap text-[12px] font-medium text-accent">{t("chat-composer.suggestion_use")}</span>
       </button>
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={onSend}
-        aria-label={t("chat-composer.suggestion_send")}
-        title={t("chat-composer.suggestion_send")}
-        className="touch-hit flex size-7 shrink-0 items-center justify-center rounded-full text-ink-3 transition-[background-color,color,transform] duration-150 hover:bg-hover hover:text-ink active:scale-[0.94]"
-      >
-        <Icon name="send" size={14} stroke={2} />
-      </button>
+      {onSend && (
+        <button
+          type="button"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={onSend}
+          aria-label={t("chat-composer.suggestion_send")}
+          title={t("chat-composer.suggestion_send")}
+          className="touch-hit flex size-7 shrink-0 items-center justify-center rounded-full text-ink-3 transition-[background-color,color,transform] duration-150 hover:bg-hover hover:text-ink active:scale-[0.94]"
+        >
+          <Icon name="send" size={14} stroke={2} />
+        </button>
+      )}
     </div>
   );
 }

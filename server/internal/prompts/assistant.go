@@ -27,9 +27,6 @@ type AssistantClaudeMD struct {
 	OnHub        bool
 	// LarkCLI: hub.json configures lark-cli (docs/plans/plan-lark-cli.md), on the assistant's PATH.
 	LarkCLI bool
-	// PersonaView: every app draws ```persona-view (hub.json assistant.persona_view); else the assistant writes
-	// ```persona-card, which they all draw.
-	PersonaView bool
 	// Language is the language the user reads, by its own name ("English", or Japanese written in Japanese); "" is Chinese, as before i18n.
 	Language string
 	// BackgroundSupervisor: the background supervisor follows up the tasks no leader supervises (#4927), so the main
@@ -412,6 +409,8 @@ type BriefFacts struct {
 	Briefs, BriefsDone []BriefTask
 	// Day: the evening routine's today's all-day recording (#4741), for the model only; nil leaves the section out.
 	Day *BriefDay
+	// Setup: the lines of the weekly recommended-setup block (#5085), ready to read; none leaves the section out.
+	Setup []string
 }
 
 // BriefDay is today's all-day recording in the evening routine's facts (#4741), the day's parts merged by time; the
