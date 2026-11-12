@@ -1023,6 +1023,7 @@ before common choices. It introduces no visual style, color palette, model defau
 | Link card drag | to 0.6 it stops blocking the chat; further down it closes |
 | Terminal cover drag | its bar follows the finger; past 140 pt or a fast flick it closes. The bar, with a 44 pt Close, is there in every state; with no terminal the whole area drags (#4328). Android the same (140 dp, a flick whose half second of glide passes 420 dp; `TerminalCover`, #4339 C7), its bar under a handle, with Back closing it too |
 | Tap on a saved place's map | moves the place there (#4248); search and Use Current Location do the same without the gesture |
+| Hold a to-do on the calendar | after 0.35 s held still it follows the finger (a pointer: once it moves) to another time, day or All Day row; saved on release with Undo in the toast; "Change Due Date…" for VoiceOver (`docs/assistant/todos.md`, "Calendar") |
 
 Every gesture-only action needs a plain alternative for VoiceOver and Switch Control (see the audit).
 
@@ -1051,7 +1052,7 @@ not enable Stop or promise cancellation of the pending HTTP request. Keep existi
 labels and the authoritative Working/Needs you/queued state words. Verify dark/light in the existing styles and measure
 send-to-feedback separately from send-to-input delivery; a transport receipt's queue timestamp is not a client paint.
 
-`Haptics` (`apple/Persona/App/AppModel.swift`): `tap` (light impact), `success`, `error`, `attention` (warning). 443 call sites on 11-11 (tap 243, success 129, error 57, attention 14); no-op on visionOS; generators are created per call. One direct UIKit use remains (`apple/Persona/Views/Chat/ChatEdgeScrub.swift`). Android has the same four kinds (`android/core/designsystem/src/main/kotlin/persona/core/designsystem/Haptics.kt`: tap is a context click, success confirm, attention a gesture threshold, error reject; the system's touch-feedback setting decides whether they play).
+`Haptics` (`apple/Persona/App/AppModel.swift`): `tap` (light impact), `selection` (a tick), `success`, `error`, `attention` (warning). 443 call sites on 11-11 (tap 243, success 129, error 57, attention 14); no-op on visionOS; generators are created per call. One direct UIKit use remains (`apple/Persona/Views/Chat/ChatEdgeScrub.swift`). Android has the same four kinds (`android/core/designsystem/src/main/kotlin/persona/core/designsystem/Haptics.kt`: tap is a context click, success confirm, attention a gesture threshold, error reject; the system's touch-feedback setting decides whether they play).
 
 Which action gives which haptic, on both (#4209; the rule iOS follows):
 
@@ -1059,6 +1060,7 @@ Which action gives which haptic, on both (#4209; the rule iOS follows):
 | --- | --- |
 | Copy | success, with a "Copied" notice (Android: every copy goes through `rememberCopy()`) |
 | Send, Stop, switching pages, opening the avatar menu | tap |
+| Carrying something to a new place: a to-do held on the calendar (#2045) | tap on the pick-up; selection at each new quarter hour or day it would land on |
 | Pressing Approve, Deny or a choice | tap on the press; success when the answer went through |
 | Archive a conversation or an Agent | tap, then its "Archived" notice (iOS `archiveConversation`; marking a to-do done plays none) |
 | Save, an answer or approval that went through | success |
