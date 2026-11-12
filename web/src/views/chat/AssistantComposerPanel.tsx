@@ -32,18 +32,25 @@ export function AssistantComposerPanel(props: ComponentProps<typeof ComposerPane
   }, [key]);
   const current: SkillCatalogState = !machine ? { status: "error" } : state.key === key ? state : { status: "loading" };
   const rows = useCallback((query: string): MentionRow[] => matchingSkills(current.catalog?.skills ?? [], query).map((skill) => ({ kind: "skill", id: `skill:${skill.id}`, skill })), [current.catalog]);
-  return <ComposerPanel {...props} skillRows={{ rows, loading: current.status === "loading" }} resourceStatus={current.status && (
-    <div role="status" className="mt-1.5 shrink-0 border-t border-line px-[10px] pt-2 pb-1 text-[12px] text-ink-3">{t(`chat-composerpanel.skills_${current.status}`)}</div>
-  )} skillRow={(skill, common) => (
-    <button key={skill.id} {...common} title={`${skill.name} · ${skill.source}\n${skill.description ?? ""}`} className="relative z-10 flex min-h-14 w-full items-center gap-2 rounded-[8px] px-[10px] py-2 text-left text-[14px] text-ink">
-      <Icon name="spark" size={16} className="shrink-0 text-ink-3" />
-      <span className="min-w-0 flex-1">
-        <span className="flex items-baseline gap-2">
-          <span className="truncate font-medium">{skill.name}</span>
-          <span className="min-w-0 truncate text-[12px] text-ink-3">{skill.source}</span>
-        </span>
-        <span className="block truncate text-[12px] text-ink-3">{skill.description}</span>
-      </span>
-    </button>
-  )} />;
+  return (
+    <ComposerPanel {...props} skills={{
+      rows,
+      loading: current.status === "loading",
+      status: current.status && (
+        <div role="status" className="mt-1.5 shrink-0 border-t border-line px-[10px] pt-2 pb-1 text-[12px] text-ink-3">{t(`chat-composerpanel.skills_${current.status}`)}</div>
+      ),
+      row: (skill, common) => (
+        <button key={skill.id} {...common} title={`${skill.name} · ${skill.source}\n${skill.description ?? ""}`} className="relative z-10 flex min-h-14 w-full items-center gap-2 rounded-[8px] px-[10px] py-2 text-left text-[14px] text-ink">
+          <Icon name="spark" size={16} className="shrink-0 text-ink-3" />
+          <span className="min-w-0 flex-1">
+            <span className="flex items-baseline gap-2">
+              <span className="truncate font-medium">{skill.name}</span>
+              <span className="min-w-0 truncate text-[12px] text-ink-3">{skill.source}</span>
+            </span>
+            <span className="block truncate text-[12px] text-ink-3">{skill.description}</span>
+          </span>
+        </button>
+      ),
+    }} />
+  );
 }
