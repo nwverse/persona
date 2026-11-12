@@ -46,6 +46,7 @@
   "plan_dismissed_other": "開始せず・{count}件のタスク",
   "plan_task_failed": "「{title}」を開始できませんでした：{error}",
   "start_failed": "開始できませんでした：{error}",
+  "handoff_not_started": "開始できませんでした",
   "plan_split_other": "{count}件に分けて、このように開始します",
   "plan_single": "このように開始します",
   "plan_remember": "今後この種類はすぐに開始",

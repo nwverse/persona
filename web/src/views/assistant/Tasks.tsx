@@ -63,7 +63,7 @@ const PlanBrief = lazy(() => import("./TaskBrief").then((m) => ({ default: m.Pla
 // A decision's row comes with the tray's first decision, not with the first screen (startup-preload's budget).
 const TaskDecision = lazy(() => import("./TaskDecision").then((m) => ({ default: m.TaskDecision })));
 import { SentLine } from "./Sent";
-import { feedWake, HandoffCard, HandoffCards, taskHandoffs, whyNotStarted } from "./Handoff";
+import { feedWake, HandoffCard, HandoffCards, taskHandoffs, whyNotStarted, type Handoff } from "./Handoff";
 import { latestReview, parkedLine, progressLine } from "../../lib/supervision";
 import { namedLauncher, providerIdNote, providerTitle, useProviderNames } from "../../lib/provider-names";
 import { useChosenManager, useLinkManager } from "../../lib/manager-choice";
@@ -577,12 +577,12 @@ export function InterruptBatchCard({ batch }: { batch: InterruptBatch }) {
     : t("assistant-tasks.interrupt_batch_title", { cause, count: batch.total });
   const counts = pending ? t("assistant-tasks.interrupt_batch_counts", { resolved: batch.resolved, pending: batch.pending }) : t("assistant-tasks.interrupt_batch_all");
   return (
-    <div data-interrupt="batch" data-pending={pending || undefined} className={cx("flex flex-col rounded-card", pending ? "bg-red-tint" : "bg-field")}>
+    <div data-interrupt="batch" data-pending={pending || undefined} className={cx("flex flex-col rounded-card", pending ? "bg-danger-wash" : "bg-field")}>
       <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="flex items-start gap-3 p-4 text-left">
         <Icon name="info" size={18} stroke={2.4} className={cx("shrink-0", pending ? "text-red" : "text-ink-3")} />
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <div className={cx("text-[14.5px] font-semibold", !pending && "text-ink-2")}>{title}</div>
-          <div className="text-[13px] text-ink-2">{counts}</div>
+          <div className={cx("text-[13px]", pending ? "text-ink" : "text-ink-2")}>{counts}</div>
         </div>
         <Icon name="chevronRight" size={14} stroke={2.2} className="mt-1 shrink-0 text-ink-3 transition-transform duration-200" style={{ transform: open ? "rotate(90deg)" : "none" }} />
       </button>
@@ -653,11 +653,11 @@ function InterruptedReceipt({ item }: { item: FeedItem }) {
   const reason = cut?.reason ?? parseAPIError(raw)?.reason;
   const canContinue = todo && (cut ? cut.canContinue : true);
   return (
-    <div className="flex gap-3 rounded-card bg-red-tint p-4">
+    <div className="flex gap-3 rounded-card bg-danger-wash p-4">
       <Icon name="info" size={18} stroke={2.4} className="text-red" />
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <div className="text-[14.5px] font-semibold">{t("assistant-tasks.interrupted_title", { title })}</div>
-        <Clamped className="text-[13px] text-ink-2">{reason ? t("assistant-tasks.interrupted_reason", { reason }) : t("assistant-tasks.interrupted")}</Clamped>
+        <Clamped wash className="text-[13px] text-ink">{reason ? t("assistant-tasks.interrupted_reason", { reason }) : t("assistant-tasks.interrupted")}</Clamped>
         <div className="mt-1 flex gap-2">
           {canContinue && (
             <Button icon="retry" busy={retrying} disabled={retrying} onClick={() => retryTaskNow(todo, "continue")}>
@@ -708,11 +708,11 @@ function OutcomeReceipt({ item, failed }: { item: FeedItem; failed: boolean }) {
   // "Copy" / "Quote" like a reply's (#2462): the quote names the task and its todo id for the assistant
   return (
     <MessageActions text={summary?.trim() ? summary : heading} ts={item.at} task={{ title, ...(item.ref ? { id: item.ref } : {}) }} corner>
-      <div className={cx("flex gap-3 rounded-card p-4", failed ? "bg-red-tint" : stopped ? "bg-field" : "bg-green-tint")} data-receipt>
+      <div className={cx("flex gap-3 rounded-card p-4", failed ? "bg-danger-wash" : stopped ? "bg-field" : "bg-green-tint")} data-receipt>
         <Icon name={failed ? "info" : stopped ? "clock" : "check"} size={18} stroke={2.4} className={failed ? "text-red" : stopped ? "text-ink-2" : "text-green"} />
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <div className="text-[14.5px] font-semibold">{heading}</div>
-          {summary && <ReceiptSummary text={summary} plain={failed} />}
+          {summary && <ReceiptSummary text={summary} plain={failed} wash={failed} />}
           <div className="mt-1 flex gap-2">
             {failed && todo && (
               <Button icon="retry" busy={retrying} disabled={retrying} onClick={() => retryTaskNow(todo)}>
@@ -742,17 +742,17 @@ function OutcomeReceipt({ item, failed }: { item: FeedItem; failed: boolean }) {
 
 /** What the task's agent said last, as Markdown (a start error is plain text), in about four lines (#1508); "Show all"
  *  shows the rest in place when it is cut (#4715). */
-export function ReceiptSummary({ text, plain }: { text: string; plain?: boolean }) {
-  if (plain) return <Clamped className="text-[13px] text-ink-2">{text}</Clamped>;
+export function ReceiptSummary({ text, plain, wash }: { text: string; plain?: boolean; wash?: boolean }) {
+  if (plain) return <Clamped wash={wash} className={cx("text-[13px]", wash ? "text-ink" : "text-ink-2")}>{text}</Clamped>;
   return (
-    <Clamped className="text-ink-2">
+    <Clamped wash={wash} className={wash ? "text-ink" : "text-ink-2"}>
       <Markdown text={text} compact />
     </Clamped>
   );
 }
 
 /** Four lines of a card's text; when they cut it, a "Show all" / "Hide" under them opens the rest in place (#4715). */
-function Clamped({ className, children }: { className: string; children: ReactNode }) {
+function Clamped({ className, children, wash }: { className: string; children: ReactNode; wash?: boolean }) {
   const [open, setOpen] = useState(false);
   const { ref, cut: long } = useClamped<HTMLDivElement>(open);
   return (
@@ -765,7 +765,7 @@ function Clamped({ className, children }: { className: string; children: ReactNo
           type="button"
           onClick={() => setOpen((o) => !o)}
           aria-expanded={open}
-          className="-ml-1 w-fit rounded-[6px] px-1 text-[12px] font-medium whitespace-nowrap text-ink-3 transition-colors hover:bg-hover-2 hover:text-ink-2"
+          className={cx("-ml-1 w-fit rounded-[6px] px-1 text-[12px] font-medium whitespace-nowrap transition-colors hover:bg-hover-2", wash ? "text-ink" : "text-ink-3 hover:text-ink-2")}
         >
           {open ? t("assistant-tasks.summary_collapse") : t("assistant-tasks.summary_expand")}
         </button>
@@ -973,23 +973,37 @@ const TRAY_DOT: Record<AssistantTray, string> = { needs: "bg-attention", running
 const EMPTY_FEED: FeedItem[] = [];
 const EMPTY_CARDS: TaskCardMetadata[] = [];
 
+/** The to-dos the conversation has a failed conclusion card for (as one string, so a selector compares it by value). */
+function useFailedReceipts(conversation: string): string {
+  return useFeed((s) => (s.feeds[conversation] ?? EMPTY_FEED).filter((i) => i.kind === "receipt" && i.ref && receiptState(i) === "failed").map((i) => i.ref).join(","));
+}
+
+/** A hand-off card for a task that did not start, whose failed conclusion card says why: it only says it did not start. */
+function withFailureBelow(handoffs: Handoff[], failedBelow: string): Handoff[] {
+  if (!failedBelow) return handoffs;
+  const ids = failedBelow.split(",");
+  return handoffs.map((h) => (h.failure && h.todo && ids.includes(h.todo) ? { ...h, failureBelow: true } : h));
+}
+
 /** A started plan's tasks in the conversation (#3700, #5096): a hand-off card for each Agent they started (one per task
  *  while its Agent is starting, or says why it did not start), in plan order; live to-do titles over the plan's. */
 function PlanHandoffs({ plan }: { plan: TaskPlan }) {
   const plans = useFeed((s) => s.plans);
+  const failedBelow = useFailedReceipts(plan.conversation);
   const handoffs = useStoreRows((s) =>
     plan.tasks.flatMap((task, i) => taskHandoffs(task.todo_id ? s.todos.find((x) => x.id === task.todo_id) : undefined, { key: `${plan.id}/${i}`, title: task.title, error: task.error, todoId: task.todo_id }, "created", plans, s.todosLoaded)),
   );
-  return <HandoffCards handoffs={handoffs} />;
+  return <HandoffCards handoffs={withFailureBelow(handoffs, failedBelow)} />;
 }
 
 /** A task the conversation dispatched on its own (agent_start), or one made of an Agent already running
  *  (`body.wake` "active": agent_supervise, agent_send with a task): its Agents' hand-off cards. */
 function TaskHandoffs({ item }: { item: FeedItem }) {
   const plans = useFeed((s) => s.plans);
+  const failedBelow = useFailedReceipts(item.conversation);
   const wake = feedWake(field(item, "wake"));
   const handoffs = useStoreRows((s) => (item.ref ? taskHandoffs(s.todos.find((x) => x.id === item.ref), { key: item.id, title: "", todoId: item.ref }, wake, plans, s.todosLoaded) : []));
-  return <HandoffCards handoffs={handoffs} />;
+  return <HandoffCards handoffs={withFailureBelow(handoffs, failedBelow)} />;
 }
 
 /** One slot, one row: live task/session state wins over historical feed metadata. */
@@ -1110,7 +1124,7 @@ function FailedTaskRow({ rowKey, todo }: { rowKey: string; todo: Todo }) {
   const retrying = useRetrying(todo.id);
   const why = useFeed((s) => whyNotStarted(todo, s.plans));
   return (
-    <div data-needs-row={rowKey} data-failed-task={todo.id} className="flex flex-col gap-1.5 rounded-control bg-field px-3 py-2 text-sm">
+    <div data-needs-row={rowKey} data-failed-task={todo.id} className="flex flex-col gap-1.5 rounded-control bg-danger-wash px-3 py-2 text-sm">
       <div className="flex min-w-0 items-center gap-2">
         <Icon name="info" className="shrink-0 text-red" />
         <button type="button" onClick={() => openTask(todo.id)} className="min-w-0 flex-1 truncate text-left hover:underline">{todo.title}</button>

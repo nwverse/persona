@@ -51,6 +51,7 @@
   "plan_dismissed_other": "Not started · {count} tasks",
   "plan_task_failed": "\"{title}\" didn't start: {error}",
   "start_failed": "Didn't start: {error}",
+  "handoff_not_started": "Didn't start",
   "plan_split_other": "Split into {count} tasks, started like this",
   "plan_single": "Start like this",
   "plan_remember": "Start these right away from now on",

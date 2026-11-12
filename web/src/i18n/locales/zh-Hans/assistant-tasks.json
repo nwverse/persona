@@ -46,6 +46,7 @@
   "plan_dismissed_other": "没开 · {count} 个任务",
   "plan_task_failed": "「{title}」没开起来：{error}",
   "start_failed": "没开起来：{error}",
+  "handoff_not_started": "没开起来",
   "plan_split_other": "拆成 {count} 件事，这样开",
   "plan_single": "这样开",
   "plan_remember": "这类以后直接开",
