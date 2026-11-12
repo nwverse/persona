@@ -174,8 +174,9 @@ type uiRequest struct {
 		// UIVersion is the UI version the app draws: 1 (the first eight items) when it says nothing.
 		UIVersion int `json:"ui_version,omitempty"`
 		// Assistant is the name the app shows for the assistant (its "Ask {name}…"), sent only to the manager's own
-		// pages (subscriptions_ui.go), which name it; never handed to an extension (uiParams).
-		Assistant string `json:"assistant,omitempty"`
+		// pages (subscriptions_ui.go), which name it; never handed to an extension (uiParams). Sent at all (even ""),
+		// it says the app opens their Set Up with … (#5661).
+		Assistant *string `json:"assistant,omitempty"`
 		// Graph: the app pushes its own view of Inbox Sources as relations (#5741, the iPhone), so the subscription pages
 		// draw its row; never handed to an extension either.
 		Graph bool `json:"graph,omitempty"`

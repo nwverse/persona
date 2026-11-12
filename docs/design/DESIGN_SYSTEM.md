@@ -1193,14 +1193,21 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   any other, also while a permission holds the Agent (iOS sends it the same way). Each style keeps its own card: on
   Android, Glass a floating card inset like the composer, Brief a rounded card with a light shadow, Board a bordered card
   under its amber rule.
-  A Persona conversation's own requests (its model's tool approvals, `ask_user`) are the same: above its composer, under
-  the Needs you / In progress entries, on every client (#4883: on the web and Android they sat only in the closed Needs
-  you tray, and an owner waited minutes on an approval no screen in the chat showed). Needs you still counts them, and
-  its row for one closes the tray onto the card instead of drawing it a second time. The oldest question of the
-  conversation's tasks' Agents is answered there too (iOS `TaskQuestions`; Android in the same stack, #4339 C10), under
-  its task's name with "N more", which counts the tasks' other questions; the next comes up when it is answered. The
-  tray keeps a row with Review for every task, and Review on one whose card is not in the stack brings that card in,
-  first, until it is answered or folded.
+  A Persona conversation's own requests (its model's tool approvals, `ask_user`) are the same: the stack above its
+  composer, under the Needs you / In progress entries and the route chip, on every client (#4883: on the web and Android
+  they sat only in the closed Needs you tray, and an owner waited minutes on an approval no screen in the chat showed).
+  Needs you still counts them, and its row for one closes the tray onto the card instead of drawing it a second time.
+  The stack holds the conversation's own cards alone, so its "N pending" (shown only past half the page) counts only them.
+  What the conversation's tasks ask is a card of its own above the entries (iOS `TaskQuestions`, #4339 C10): the oldest
+  question of their Agents, under its task's name with the ask mark in the needs-you tone and, at the end of that line,
+  "N more" for the tasks' other questions; it is answered there, and the next comes up once it is. The three numbers
+  count three things and say so: "N pending" the conversation's own cards in the stack, "N more" the tasks' other
+  questions, and Needs you its rows (one for each task or Agent that asks, plus the conversation's own cards, plans and
+  drafts). A task's or an Agent's row in the tray opens that task's or Agent's detail, as iOS's rows do, where its page
+  and its cards are; it never brings a card into the stack, which is the conversation's own. On Android the two places
+  of cards share the room the footer leaves above the composer (iOS draws the question uncapped): each takes at most half
+  the page, and with both on screen each has at least half of that room, a card that needs less leaving the rest to the
+  other, so the composer stays on the page.
   A child session's request (web, #5120: `folded_under`) has its parent's page as its home: shown there with the
   parent's own, "From subagent · <title>", counted once under the parent, and every link to it opens the parent.
   A lead's worker's request (web, #5180) has the lead's page as its home too. While the Team panel shows that worker,

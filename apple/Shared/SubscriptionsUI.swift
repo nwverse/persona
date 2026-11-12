@@ -39,19 +39,20 @@ nonisolated enum SubscriptionsUI {
     }
 
     /// A page request with the assistant's name in its context (`context.assistant`): the name the composer shows
-    /// ("Ask {name}…"), which the pages' Set Up with … takes. Only these pages get it, never an extension.
+    /// ("Ask {name}…"), which the pages' Set Up with … takes. Only these pages get it, never an extension. It is sent even
+    /// without a name (""): the key says this app opens Set Up with …, and the pages draw it only then (#5661).
     struct Request: Encodable {
         var request: ExtensionUIRequest
         var assistant: String?
 
         private struct Context: Encodable {
             var base: ExtensionUIContext?
-            var assistant: String?
+            var assistant: String
             private enum Keys: String, CodingKey { case assistant, graph }
             func encode(to encoder: Encoder) throws {
                 try base?.encode(to: encoder)
                 var c = encoder.container(keyedBy: Keys.self)
-                try c.encodeIfPresent(assistant, forKey: .assistant)
+                try c.encode(assistant, forKey: .assistant)
                 // The iPhone app pushes its own relationship view from the list's Source Relationships row (#5741);
                 // the frozen Mac app gets no new feature (docs/apple/mac.md).
                 #if os(iOS)
@@ -64,7 +65,7 @@ nonisolated enum SubscriptionsUI {
 
         func encode(to encoder: Encoder) throws {
             var c = encoder.container(keyedBy: Keys.self)
-            try c.encode(Context(base: request.context, assistant: assistant?.isEmpty == false ? assistant : nil), forKey: .context)
+            try c.encode(Context(base: request.context, assistant: assistant ?? ""), forKey: .context)
             try c.encodeIfPresent(request.state, forKey: .state)
             try c.encodeIfPresent(request.action, forKey: .action)
             try c.encodeIfPresent(request.values, forKey: .values)

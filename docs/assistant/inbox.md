@@ -675,7 +675,7 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
 
 ## Item actions (`Persona/Views/Inbox/InboxActions.swift`)
 
-- **AI Draft Reply**: `POST /api/v1/inbox/{id}/draft {instruction}`. The manager uses the Draft reply model in the user's voice (Lark short and conversational; mail matches the incoming language and formality).
+- **AI Draft Reply**: `POST /api/v1/inbox/{id}/draft {instruction}`. The manager uses the Draft reply model in the user's voice (Lark short and conversational; mail matches the incoming language and formality). With nothing the hub can call directly for it (only launchers such as Claude Code default, no Direct API provider or keyed Messages launcher) it answers `503 model_unavailable`, localized and naming Settings › Model providers and Model configuration; the web shows where to set one up instead of a bare HTTP error. Other failures stay `502`.
   Do not invent unknown facts or leave 【】 placeholders for the user; omit unknown details. Include `assistant.notes` as About the user. Edit directly in the sheet or enter "Have AI revise: …" to rewrite.
   Send uses `POST /api/v1/inbox/{id}/reply {text}`: the manager asks hub to post in the original Lark chat through its plugin, or reply by mail (Re: subject, In-Reply-To / References,
   quote first 40 lines, using the receiving account), then mark done (`done_by=replied`). Phone and Watch use the same API.
