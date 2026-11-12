@@ -1408,6 +1408,7 @@ final class AppModel {
     var managerRosters: [String: ManagerRoster] = [:]
     /// Each group's latest roster read: an earlier one answering after it is dropped.
     @ObservationIgnored var managerRosterReads: [String: Int] = [:]
+    var managerRosterUnsupported = Set<String>()
     /// Each group's current assistant, as picked in the sidebar's switcher (`selectAssistantManager`): the manager's id,
     /// kept on this device across launches (`AssistantPickStore`). A group without one follows its hub's default manager.
     var assistantPicks: [String: String] = [:] {

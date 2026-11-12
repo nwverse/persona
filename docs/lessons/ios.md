@@ -2,6 +2,19 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## Settings requests must capture their scope (#5236)
+
+- Renaming a section does not scope a merged list. Filter connector/extension rows by the captured assistant, and name
+  that assistant on reads, previews, consent and mutations. A default (`nil`) is a captured choice too: it must not
+  inherit a later picker value. Keep explicit manager-bound deep links bound to their owner.
+- A remembered pick must apply before the roster returns, or opening settings during launch can read another assistant's
+  data. Distinguish a confirmed legacy-roster 404 from a transient failure; compatibility may suppress the request header
+  without erasing the user's saved pick.
+- A reusable Settings row that already wraps itself in Section needs an unwrapped variant when moved into an existing
+  scope group. Nesting Sections produces a different grouping instead of retaining one group.
+- Check existing icon identifiers, not just symbol literals, before adding a vocabulary token. Pairing was already a
+  registered meaning; QR scanning is a different one. Run the icon vocabulary and token ratchets after moving code.
+
 ## What a VNC client can count on from macOS Screen Sharing (#3075)
 
 - ClientCutText reaches the Mac's pasteboard only as the legacy `com.apple.traditional-mac-plain-text` type, without `public.utf8-plain-text`: AppleScript's `the clipboard` reads it, `pbpaste` and Terminal do not, so a ⌘V after it pasted nothing. Write the clipboard through the node, which answers once the text is there.
@@ -426,8 +439,9 @@ Use an invalidation revision as the task key and handle the flag after completio
     many distinct CJK glyphs the first time is most of the main thread's work in fast programmatic jumps (#5076). Finger scrolling stays in budget.
   - Whatever acted on the row acts on the message, not the part (#5221): with each part's long press lifting its own words, the lifted card showed a
     fragment of the answer and Select Text selected only it, while Copy (the bar's text) still took all of it. The part's press lifts a copy of every
-    part (`AnswerPartsLift`) with one text view for selecting over all of them. When splitting any message into rows, list what reads the row's view
-    (long press, selection, accessibility, share as image) and check each against the whole message.
+    part (`AnswerPartsLift`), lazily: a copy laying out every part at once would bring back the cost the parts took out of the chat. Its words
+    are selected only after all of its parts are laid out, since the text view over them follows every line. When splitting any message into
+    rows, list what reads the row's view (long press, selection, accessibility, share as image) and check each against the whole message.
 - Check that a scroll measurement moved the list before trusting it (#4970). `-showPagePerf`'s glide and `-showListOffset` move the `UIScrollView`
   themselves; a chat not told a finger is on it keeps following its newest end and puts its stored `ScrollPosition` back as rows size themselves, so
   the list barely moves and the numbers look excellent. Chats register a per-list hook (`PagePerf.touchers`): a single static one was taken by Persona's

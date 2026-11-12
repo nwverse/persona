@@ -52,30 +52,48 @@ struct MessageLift {
     var card: Bool
     var offer: ProposedViewSize? = nil
     var environment: EnvironmentValues? = nil
-    /// One part of a message drawn in parts (a long answer, #4970) was pressed: `frame` and `press` are that part's,
-    /// `preview` draws the whole message with that part marked (`liftPressedPart`), and the lift puts it where that
-    /// part is.
-    var part = false
+    /// One part of a message drawn in parts (a long answer, #4970) was pressed, this one (its scroll target id in the
+    /// copy): `frame` and `press` are that part's, `preview` draws the whole message with that part marked
+    /// (`liftPressedPart`), and the lift puts it where that part is. The copy lays out only the parts near the screen
+    /// until its words are selected (`MessageMenu.liftWhole`, `AnswerPartsLift`).
+    var part: Int? = nil
 }
 
-/// Where the pressed part starts in the lifted copy of a message drawn in parts (`MessageLift.part`).
+/// Where the pressed part starts in the lifted copy of a message drawn in parts (`MessageLift.part`): in the copy
+/// (`top`) and in the card's scroll view as it shows (`window`, which changes as it scrolls), and whether the copy
+/// has all of its parts laid out (`MessageMenu.liftWhole`) or only those near the screen.
 struct LiftPressedPart: PreferenceKey {
+    struct Mark: Equatable {
+        var top: CGFloat
+        var window: CGFloat
+        var whole: Bool
+    }
+
     static let space = "lift-copy"
-    static var defaultValue: CGFloat? { nil }
-    static func reduce(value: inout CGFloat?, nextValue: () -> CGFloat?) { value = value ?? nextValue() }
+    static let window = "lift-window"
+    static var defaultValue: Mark? { nil }
+    static func reduce(value: inout Mark?, nextValue: () -> Mark?) { value = value ?? nextValue() }
 }
 
 extension View {
     /// The part of a message drawn in parts that was pressed, in its lifted copy (`MessageLift.part`).
-    func liftPressedPart(_ on: Bool) -> some View {
+    func liftPressedPart(_ on: Bool, whole: Bool) -> some View {
         background {
             if on {
                 GeometryReader { g in
-                    Color.clear.preference(key: LiftPressedPart.self, value: g.frame(in: .named(LiftPressedPart.space)).minY)
+                    Color.clear.preference(key: LiftPressedPart.self,
+                                           value: LiftPressedPart.Mark(top: g.frame(in: .named(LiftPressedPart.space)).minY,
+                                                                       window: g.frame(in: .named(LiftPressedPart.window)).minY,
+                                                                       whole: whole))
                 }
             }
         }
     }
+}
+
+extension EnvironmentValues {
+    /// The lifted copy of a message drawn in parts lays out all of its parts (`MessageMenu.liftWhole`).
+    @Entry var liftWhole = false
 }
 
 /// Where a pressable part is, written on every scrolled frame without drawing anything again (not observed). Written
@@ -92,6 +110,14 @@ nonisolated final class LiftPlace {
     /// The size the chat offered it (`RecordsOffer`) and the environment around it (`LongPressAt`).
     var offer: ProposedViewSize?
     var environment: EnvironmentValues?
+}
+
+/// The pressed part of a lifted copy of a message drawn in parts (`LiftedMessage`), written on every scrolled frame
+/// without drawing anything again (not observed): its top in the copy, and where it shows in the card while the copy
+/// above it stays as it is.
+nonisolated final class LiftScrolled {
+    var top: CGFloat = 0
+    var window: CGFloat?
 }
 
 /// Lays out its one view as its parent asks, and keeps what that parent offered it (`LiftPlace.offer`), for the same
@@ -523,9 +549,20 @@ private struct LiftedMessage: View {
     @State private var height: CGFloat = 0
     /// Where the pressed part starts in the copy of a message drawn in parts (`MessageLift.part`), once it is laid out.
     @State private var partTop: CGFloat?
-    /// The copy of a message drawn in parts opens where `LiftLayout.place` says once that part is measured (the others
-    /// open at their `defaultScrollAnchor`).
-    @State private var scroll = ScrollPosition()
+    /// The copy of a message drawn in parts opens at its pressed part (its scroll target), the only one of its parts
+    /// laid out then with those around it; once that part is measured it moves to where `LiftLayout.place` puts it
+    /// (`placing`). Other messages open at their `defaultScrollAnchor`.
+    @State private var scroll: ScrollPosition
+    @State private var placing = false
+    /// The pressed part, kept on every scrolled frame without drawing anything again (not observed).
+    @State private var scrolled = LiftScrolled()
+
+    init(lift: MessageLift, menu: MessageMenu, space: CGRect) {
+        self.lift = lift
+        self.menu = menu
+        self.space = space
+        _scroll = State(initialValue: lift.part.map { ScrollPosition(id: $0, anchor: .top) } ?? ScrollPosition())
+    }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private struct Fade: Equatable {
@@ -557,7 +594,7 @@ private struct LiftedMessage: View {
         let bounds = bounds
         let f = lift.frame.offsetBy(dx: -space.minX, dy: -space.minY)
         // A message drawn in parts: all of it, the pressed part where it was (`frame` is that part's).
-        let above = lift.part ? partTop ?? 0 : 0
+        let above = lift.part != nil ? partTop ?? 0 : 0
         let message = CGRect(x: f.minX - pad.leading, y: f.minY - pad.top - above, width: f.width + pad.leading + pad.trailing,
                              height: height > 0 ? height : f.height + pad.top + pad.bottom)
         let count = MessageActionBar.count(id: lift.bar.id, isUser: lift.bar.isUser, menu: menu, pending: lift.bar.pending,
@@ -565,7 +602,7 @@ private struct LiftedMessage: View {
         let barWidth = min(MessageActionBar.width(count: count), bounds.width - 2 * Theme.Space.s)
         let p = LiftLayout.place(message: message, press: lift.press.y + pad.top + above,
                                  bar: CGSize(width: barWidth, height: MessageActionBar.height), bounds: bounds, margin: Theme.Space.s,
-                                 gap: Theme.Space.s, trailing: lift.bar.isUser, part: lift.part ? above : nil,
+                                 gap: Theme.Space.s, trailing: lift.bar.isUser, part: lift.part != nil ? above : nil,
                                  pressInSight: Theme.Size.tapTarget)
         ZStack(alignment: .topLeading) {
             #if DEBUG
@@ -610,14 +647,18 @@ private struct LiftedMessage: View {
         let cut = p.preview.height < whole - 1
         let shape = RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
         ScrollView(.vertical) {
-            Offers(offer: lift.offer) { lift.preview }
+            Group {
+                // A message drawn in parts lays itself out lazily: nothing between it and the scroll view's own layout.
+                if lift.part != nil { lift.preview } else { Offers(offer: lift.offer) { lift.preview } }
+            }
                 .environment(\.liftSelect, menu.inPlace)
+                .environment(\.liftWhole, menu.liftWhole)
                 .environment(\.liftCopy, true)
                 .environment(menu)
                 .environment(from: lift.environment) // outside those: they are this copy's own
                 .frame(width: lift.frame.width, alignment: .leading)
                 .coordinateSpace(.named(LiftPressedPart.space))
-                .onPreferenceChange(LiftPressedPart.self) { top in if let top { partTop = top } } // only a part's copy has one
+                .onPreferenceChange(LiftPressedPart.self) { measured($0) } // only a part's copy has one
                 .padding(pad)
                 .allowsHitTesting(selecting)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
@@ -627,13 +668,12 @@ private struct LiftedMessage: View {
         #endif
         .scrollDisabled(!cut)
         .scrollIndicators(.hidden)
-        // Opens at the part that was pressed (the same place on screen). A message drawn in parts is placed once its
-        // pressed part has been laid out in the copy: it opens there then.
-        .defaultScrollAnchor(lift.part ? nil : UnitPoint(x: 0, y: cut ? p.offset / max(whole - p.preview.height, 1) : 0))
+        // Opens at the part that was pressed (the same place on screen). A message drawn in parts opens at its pressed
+        // part (`scroll`) and moves once that part is measured (`placing`).
+        .defaultScrollAnchor(lift.part != nil ? nil : UnitPoint(x: 0, y: cut ? p.offset / max(whole - p.preview.height, 1) : 0))
         .scrollPosition($scroll)
-        .onChange(of: lift.part && partTop != nil ? p.offset : nil) { _, offset in
-            if let offset { scroll.scrollTo(y: offset) }
-        }
+        .coordinateSpace(.named(LiftPressedPart.window))
+        .onChange(of: placing && height > 0 ? p.offset : nil) { _, offset in placed(offset) }
         .onScrollGeometryChange(for: Fade.self) { g in
             Fade(top: g.contentOffset.y > 1, bottom: g.contentOffset.y + g.containerSize.height < g.contentSize.height - 1)
         } action: { _, f in fade = f }
@@ -651,6 +691,44 @@ private struct LiftedMessage: View {
         // One element when it all shows; a long one keeps its parts, for VoiceOver to go through them and scroll it there.
         .accessibilityElement(children: selecting || cut ? .contain : .combine)
         .accessibilityIdentifier("message-lift")
+    }
+
+    /// The pressed part of a message drawn in parts, measured in the copy. Its first measure places the copy
+    /// (`placing`). The lazy copy keeps what shows itself as it lays out the parts it had guessed (and as the card
+    /// scrolls, where the part shows is kept). Once all of the parts are laid out to select the words, and again when
+    /// MarkdownUI spaces their blocks a pass later, the copy above the pressed part changes: the copy is scrolled for
+    /// that part to show where it did, what showed stays where it was. Selecting asked for meanwhile starts then.
+    private func measured(_ v: LiftPressedPart.Mark?) {
+        guard let v else { return }
+        defer { partTop = v.top }
+        if partTop == nil {
+            placing = true
+            scrolled.top = v.top
+            return
+        }
+        if placing {
+            scrolled.top = v.top
+            return
+        }
+        if v.whole, abs(v.top - scrolled.top) > 0.25, let shown = scrolled.window {
+            // The content offset that puts the part `shown` below the card's top: its place in the content (inside
+            // the copy's padding) less that.
+            scroll.scrollTo(y: pad.top + v.top - shown)
+        } else {
+            scrolled.window = v.window
+        }
+        scrolled.top = v.top
+        if v.whole, let pending = menu.pendingSelect {
+            menu.pendingSelect = nil
+            withAnimation(Theme.Motion.state) { menu.inPlace = pending }
+        }
+    }
+
+    /// Moved where `LiftLayout.place` puts the copy, once.
+    private func placed(_ offset: CGFloat?) {
+        guard let offset else { return }
+        scroll.scrollTo(y: offset)
+        placing = false
     }
 
     /// Opaque, fading over the fade's width at an end with more of the message beyond it.
