@@ -209,9 +209,14 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * only the history has or, once, the hub's copy by id, and the state that says it is being read). And 32 B because #5592
  * and #4743 landed together: #5592 (+64 B, a Done group's first page starting past the done items the list holds)
  * counted the 69 B of room main had at 0bfcf2879 as its own, and #4743 (+37 B) used part of it, merged in between; ja
- * 593,057 B on main at 18de01b8d, with 0 B of room. Raise it on purpose, in the change that needs it.
+ * 593,057 B on main at 18de01b8d, with 0 B of room. And 143 B of minifier drift after that: no change to vite.config.ts,
+ * the lazy/idle tier markers or this budget, just the web business commits that landed between f630797ca and main at
+ * 77cb9514d, whose renamed locals and re-shared helpers move the counted bytes (the tracked wobble in #5760, ±300 B).
+ * On main at 77cb9514d: en 589,441 B, ja 593,151 B (94 B over the old 593,057), zh-Hans 590,411 B — only ja is over, so
+ * there is no eager module to move back on demand; raise to 593,200 B, leaving ja 49 B of room. Raise it on purpose, in
+ * the change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 593_057;
+export const FIRST_SCREEN_BUDGET = 593_200;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
