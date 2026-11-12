@@ -26,5 +26,10 @@
   "forward_count_one": "Forward {count}",
   "forward_count_other": "Forward {count}",
   "remove_group": "Remove forwarded messages",
-  "at_most": "Up to {count} messages at a time"
+  "at_most": "Up to {count} messages at a time",
+  "group_heading_chat_one": "{count} forwarded message · {chat}",
+  "group_heading_chat_other": "{count} forwarded messages · {chat}",
+  "line": "{who}: {text}",
+  "more_one": "{count} more",
+  "more_other": "{count} more"
 }

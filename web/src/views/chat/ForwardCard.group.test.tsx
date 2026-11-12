@@ -8,7 +8,8 @@ import { forwardRef } from "../../lib/forward-block";
 import { loadPages } from "../../lib/lazy-page";
 import { addContext, getContexts, removeContext } from "../../lib/links";
 import { parseUserText } from "../../lib/turns";
-import { ForwardBars, ForwardGroupBlock } from "./ForwardCard";
+import { ForwardBars } from "./ForwardCard";
+import { ForwardGroupBlock } from "./ForwardGroup";
 
 // Several forwards of one chat (#3838): one bar over the box with a line each and one × for all of them, one card in the
 // bubble with the first three and "N more".

@@ -3,7 +3,7 @@
 // engine come with it; views/NewAgentModel.tsx), where the profile's presets (#2225), the thinking effort and Claude Code's
 // ultracode switch (#3428: off each time, never remembered) also are. On top, the recent setups (#2134): a tap fills every
 // field with one that started an agent before, and never starts.
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { hubLabel } from "../lib/mesh";
 import { api, ApiError, credentialOwner, enc, errorText, getToken, isAbort, subscribeCredentialOwner } from "../lib/api";
 import { defaultManager, useKnownDefault } from "../lib/manager-choice";
@@ -12,7 +12,7 @@ import type { DraftImage } from "../lib/drafts";
 import { withContexts } from "../lib/context-xml";
 import type { ContextRef } from "../lib/links";
 import { ForwardBar } from "./chat/ForwardBar";
-import { ForwardGroupBar } from "./chat/ForwardGroupBar";
+import { lazyPage } from "../lib/lazy-page";
 import { browserStartKeys, launchAgent, presetPrompt, type NewAgentPreset } from "../lib/new-agent";
 import type { WorkspaceTarget } from "../lib/workspace-target";
 import { AttachmentTray } from "../ui/AttachmentTray";
@@ -47,6 +47,9 @@ import { LauncherBlockedHelp } from "./LauncherBlockedHelp";
 import { launcherTitle, namedLauncher, namesFromProviders, providerIdNote, providerLabel, providerTitle, type Named } from "../lib/provider-names";
 import { WorkSessionForm } from "./WorkSessionForm";
 import { NewAgentModel, useModelList } from "./NewAgentModel";
+
+// several forwarded at once (#3838): their bar, from the group's chunk, which Forward to has loaded by then
+const ForwardGroupBar = lazyPage(() => import("./chat/ForwardGroup").then((m) => m.ForwardGroupBar));
 
 /** A forwarded picture (lib/drafts.ts DraftImage, base64) as a file for the first message's tray. */
 function draftImageFile(img: DraftImage): File {
@@ -746,7 +749,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
               onDragOver={(e) => { if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setDragging(true); } }}
               onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragging(false); }}
               onDrop={(e) => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }}>
-              {forwards.length > 0 && <div className="px-2 pt-2" data-new-agent-forward>{forwards.length > 1 ? <ForwardGroupBar forwards={forwards} onRemove={() => setForwards([])} /> : <ForwardBar forward={forwards[0]} onRemove={() => setForwards([])} />}</div>}
+              {forwards.length > 0 && <div className="px-2 pt-2" data-new-agent-forward>{forwards.length > 1 ? <Suspense fallback={null}><ForwardGroupBar forwards={forwards} onRemove={() => setForwards([])} /></Suspense> : <ForwardBar forward={forwards[0]} onRemove={() => setForwards([])} />}</div>}
               {attachments.length > 0 && <div className="px-3 pt-2"><AttachmentTray attachments={attachments} onRemove={(id) => {
                 releaseAttachments(attachments.filter((a) => a.id === id));
                 setAttachments((current) => current.filter((a) => a.id !== id));

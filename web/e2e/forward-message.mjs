@@ -173,7 +173,8 @@ async function startPicking(page, phone, where, quiet) {
 /** Several at once (#3838), from the review chat to the blog's Agent. */
 async function forwardSeveral(page, phone, tag) {
   const where = `several-${tag}`;
-  const box = (text) => page.locator('main [role="checkbox"]').filter({ hasText: text }).last();
+  // the checkbox over a message is named by its words
+  const box = (text) => page.locator(`main [role="checkbox"][aria-label^="${text}"]`).last();
   const count = async (bar) => (await bar.locator("[data-pick-count]").textContent())?.trim();
   await go(page, `/s/macbook/${REVIEW}?view=chat`);
   let bar = await startPicking(page, phone, where, false);

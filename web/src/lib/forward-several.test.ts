@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fixture from "../../../spec/fixtures/forward/several.json";
 import { initI18n, t } from "../i18n";
-import { FORWARD_MOST, forwardGroupHeading, forwardLine, forwardRuns, type ForwardPick } from "./forward";
+import type { ForwardPick } from "./forward";
+import { forwardGroupHeading, forwardLine, forwardRuns } from "./forward-group";
 import { FORWARD_LIMIT, FORWARD_TOTAL, forwardBody, forwardLimit, forwardRef } from "./forward-block";
 import { contextXML, withContexts } from "./links";
-import { inChatOrder } from "../views/chat/PickBar";
-import { messagePick } from "./message-pick";
+import { inChatOrder } from "../views/chat/Picking";
+import { FORWARD_MOST, messagePick } from "./message-pick";
 import { parseUserText } from "./turns";
 
 // router.ts listens to popstate at load (no window in node); links.ts only needs navigate from it.

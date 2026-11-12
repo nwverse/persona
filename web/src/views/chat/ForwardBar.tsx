@@ -1,7 +1,7 @@
 // Forwarded messages over a box (#3899; iOS QuoteBarRow with the forward arrow and route): the quote bar's shape
 // (Quote.tsx QuoteBar), the arrow before "Forwarded from Claude · chat", its first words, and the line saying which
 // computer it comes from and where it goes. Several of one chat forwarded at once (#3838) are one bar
-// (ForwardGroupBar.tsx, its own chunk). Over a chat's composer (ForwardCard.tsx ForwardBars), New agent's first message
+// (ForwardGroup.tsx, its own chunk). Over a chat's composer (ForwardCard.tsx ForwardBars), New agent's first message
 // and Forward to's preview. No store or router here: New agent takes it alone.
 import { t } from "../../i18n";
 import { forwardHeading, forwardSummary } from "../../lib/forward";
@@ -22,7 +22,7 @@ export function ForwardBar({ forward, lines = 2, onRemove }: { forward: Forward;
   );
 }
 
-/** The bar's shape, heading, route and ×; ForwardGroupBar.tsx draws a group in it. */
+/** The bar's shape, heading, route and ×; ForwardGroup.tsx draws a group in it. */
 export function Bar({ heading, title, route, remove, group, children }: { heading: string; title: string; route?: string; remove?: { label: string; run: () => void }; group?: number; children: React.ReactNode }) {
   return (
     <div

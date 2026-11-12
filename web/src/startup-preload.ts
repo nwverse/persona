@@ -197,10 +197,15 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * and their words; the earlier stretches' windows, reading and drawing, the handoff panel and their words, the "Switch
  * Agent?" dialog and the panel's engine code load lazily). And 453 B because #5303 and #5457 landed together (#5488):
  * #5303 counted the room main had at d7536a601c as its own, and #5457 (#5420, the provider import link) used that room
- * too, merged in between; ja 591,939 B on main at 48f1e053b5, plus 41 B of room. Raise it on purpose, in the change that
- * needs it.
+ * too, merged in between; ja 591,939 B on main at 48f1e053b5, plus 41 B of room. And 225 B for forwarding several
+ * messages at once (#3838: ja 592,205 B against 591,939 B on main at 5824cdd677, +266 B, 41 B of it in that room): while
+ * a chat picks, each message's row gives its first place to the checkbox and goes inert, and the chat hands the
+ * composer's place to the bar; several forwards over the box or in a bubble go to a chunk of their own, the bubble saying
+ * "2 forwarded messages" until it is in; and with no note, "Please look at the forwarded messages above.". The checkbox,
+ * the bar, the picks and the group's bar and card come with Forward to or that chunk. Raise it on purpose, in the change
+ * that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 591_980;
+export const FIRST_SCREEN_BUDGET = 592_205;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").

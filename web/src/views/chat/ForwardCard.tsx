@@ -3,11 +3,12 @@
 // at the top of a sent bubble, "Forwarded from Claude · chat", the computer and time and the first lines, a click opening
 // the original chat at that message (or the whole text, when this page does not have that chat). Drawn as the quote's
 // bar and card (Quote.tsx) with the forward arrow before the heading, so a forward reads as a quote of another chat.
-// Several of one chat next to each other (#3838) are one bar and one card, with a line for each message.
+// Several forwarded at once (#3838), those of one chat next to each other one bar and one card with a line for each
+// message, are drawn by a chunk of their own (ForwardGroup.tsx).
 import { Suspense, useLayoutEffect, useRef, useState } from "react";
 import { t } from "../../i18n";
-import { forwardGroupHeading, forwardHeading, forwardLine, forwardMeta, forwardOrigin, forwardRuns, forwardSummary, jumpWhenOpen } from "../../lib/forward";
-import { removeContext, useContexts, type ContextRef } from "../../lib/links";
+import { forwardHeading, forwardMeta, forwardOrigin, forwardSummary, jumpWhenOpen } from "../../lib/forward";
+import { removeContext, useContexts } from "../../lib/links";
 import { navigate } from "../../lib/router";
 import { getSession, getState } from "../../lib/store";
 import type { Context } from "../../lib/turns";
@@ -16,30 +17,30 @@ import { Markdown } from "../../ui/Markdown";
 import { lazyPage } from "../../lib/lazy-page";
 import { ForwardBar } from "./ForwardBar";
 
-// several of one chat over the box (#3838): Forward to, which puts them there, has loaded it by then
-const ForwardGroupBar = lazyPage(() => import("./ForwardGroupBar").then((m) => m.ForwardGroupBar));
+// several (#3838): over the box Forward to, which puts them there, has loaded it by then
+const group = () => import("./ForwardGroup");
+const ForwardGroupBars = lazyPage(() => group().then((m) => m.ForwardGroupBars));
+const ForwardGroupCards = lazyPage(() => group().then((m) => m.ForwardGroupCards));
 
-/** The forwards waiting above a composer's input (lib/links.ts addContext), several of one chat as one bar (#3838);
- *  other contexts are ContextChips'. */
+/** The forwards waiting above a composer's input (lib/links.ts addContext); other contexts are ContextChips'. */
 export function ForwardBars({ draftKey, onRemove }: { draftKey: string; onRemove?: () => void }) {
   const forwards = useContexts(draftKey).filter((r) => r.kind === "forward");
   if (!forwards.length) return null;
-  const drop = (rs: ContextRef[]) => {
-    rs.forEach((r) => removeContext(draftKey, r.id));
-    onRemove?.();
-  };
   return (
     <div className="flex flex-col gap-1.5 px-0.5 pt-0.5" data-forwards>
-      {forwardRuns(forwards).map((run) => {
-        const rs = run.map((i) => forwards[i]);
-        return rs.length > 1 ? (
-          <Suspense key={rs[0].id} fallback={null}>
-            <ForwardGroupBar forwards={rs} onRemove={() => drop(rs)} />
-          </Suspense>
-        ) : (
-          <ForwardBar key={rs[0].id} forward={rs[0]} lines={forwards.length === 1 ? 2 : 1} onRemove={() => drop(rs)} />
-        );
-      })}
+      {forwards.length > 1 ? (
+        <Suspense fallback={null}>
+          <ForwardGroupBars forwards={forwards} draftKey={draftKey} onRemove={onRemove} />
+        </Suspense>
+      ) : (
+        <ForwardBar
+          forward={forwards[0]}
+          onRemove={() => {
+            removeContext(draftKey, forwards[0].id);
+            onRemove?.();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -118,66 +119,12 @@ export function ForwardBlock({ c }: { c: Context }) {
   );
 }
 
-/** The messages of a group a bubble shows before "2 more" (iOS ForwardGroupBlock). */
-const GROUP_SHOWN = 3;
-
-/** Several forwards of one chat at the top of a bubble as one card (#3838; iOS ForwardGroupBlock): the arrow and "3
- *  forwarded messages · chat", then each message on up to two lines ("Claude: Three times…"), a click opening it in its
- *  chat (or its whole text in place, when this page does not have that chat); past GROUP_SHOWN, "2 more" shows the rest. */
-export function ForwardGroupBlock({ group }: { group: Context[] }) {
-  const [all, setAll] = useState(false);
-  const heading = forwardGroupHeading(group);
-  const shown = all ? group : group.slice(0, GROUP_SHOWN);
-  const more = group.length - shown.length;
+/** Several forwards at the top of a bubble (#3838; `count` of the message's `blocks`): their cards (ForwardGroup.tsx),
+ *  and until that chunk is in, a line saying how many ("2 forwarded messages"). */
+export function ForwardCards({ blocks, count }: { blocks: Context[]; count: number }) {
   return (
-    <div className="flex min-w-0 gap-2 rounded-[8px] bg-ink/[0.05] py-1.5 pr-2.5 pl-2 whitespace-normal" data-forward data-forward-group={group.length}>
-      <span aria-hidden className="w-[3px] shrink-0 self-stretch rounded-full bg-ink/20" />
-      <div className="flex min-w-0 flex-1 flex-col items-start gap-1">
-        <span className="flex max-w-full min-w-0 items-center gap-1 text-[12px] font-medium whitespace-nowrap text-ink-3">
-          <Icon name="forward" size={12} className="shrink-0" />
-          <span className="min-w-0 truncate">{heading}</span>
-        </span>
-        {shown.map((c, i) => (
-          <GroupLine key={i} c={c} />
-        ))}
-        {more > 0 && (
-          <button
-            type="button"
-            onClick={() => setAll(true)}
-            className="-ml-1 rounded-[6px] px-1 text-[12px] font-medium whitespace-nowrap text-ink-3 transition-colors hover:bg-hover-2 hover:text-ink-2"
-          >
-            {t("chat-forward.more", { count: more })}
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/** One message of a group card: its line, a click opening the original (openForwarded) or its whole text here. */
-function GroupLine({ c }: { c: Context }) {
-  const [open, setOpen] = useState(false);
-  const line = forwardLine(c);
-  const meta = forwardMeta(c.attrs);
-  return (
-    <div className="flex w-full min-w-0 flex-col items-start gap-0.5">
-      <button
-        type="button"
-        onClick={() => {
-          if (!openForwarded(c)) setOpen((o) => !o);
-        }}
-        title={[t("chat-forward.open_original"), meta].filter(Boolean).join(" · ")}
-        aria-label={[line, meta].filter(Boolean).join(" · ")}
-        aria-expanded={open || undefined}
-        className="grid w-full min-w-0 grid-cols-[minmax(0,auto)] rounded-[6px] text-left"
-      >
-        <span className="line-clamp-2 text-[13px] leading-[1.55] text-ink-2 [overflow-wrap:anywhere]">{line}</span>
-      </button>
-      {open && (
-        <div className="max-h-[320px] w-full overflow-y-auto text-ink-2 [overflow-wrap:anywhere]" data-scroll-box>
-          <Markdown text={c.text} small compact />
-        </div>
-      )}
-    </div>
+    <Suspense fallback={<span className="text-[12px] font-medium text-ink-3" data-forward-group-pending>{t("chat-forward.group_heading", { count })}</span>}>
+      <ForwardGroupCards blocks={blocks} />
+    </Suspense>
   );
 }

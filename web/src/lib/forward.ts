@@ -1,6 +1,7 @@
 // Forwarding a message (#3899, the web's side of #3807; iOS Forward.swift; docs/protocol/protocol.md "Forwarded messages"):
 // a message's actions › Forward › a target, and that chat opens with the message over its box as a card. Several at once
-// (#3838): Forward to's Select messages… picks more in the chat (lib/message-pick.ts), one block each, in the chat's order. What goes out
+// (#3838): Forward to's Select messages… picks more in the chat (lib/message-pick.ts), one block each, in the chat's order;
+// which make one card and their words are lib/forward-group.ts, which only their own chunk loads. What goes out
 // is the user's own message there: a `<persona-context kind="forward">` block (the original and where it came from)
 // before the note typed under it, sent with the chat's usual send (lib/links.ts withContexts). Nothing is written back
 // to the original chat. The picker is views/chat/ForwardDialog.tsx, its lists lib/forward-targets.ts; this file is what
@@ -10,6 +11,7 @@ import { t } from "../i18n";
 import { isAppLink } from "./compatibility";
 import { clock, tabLabel } from "./format";
 import { agentLabel } from "./mentions";
+import type { MessagePick } from "./message-pick";
 import type { Item, Session } from "./types";
 
 export const FORWARD_KIND = "forward";
@@ -80,46 +82,6 @@ export function forwardMeta(a: Attrs): string {
 export function forwardSummary(text: string): string {
   const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
   return lines.length ? lines.join("\n").slice(0, 1200) : t("chat-forward.no_content");
-}
-
-// ── several at once (#3838) ──────────────────────────────
-
-/** The most messages forwarded at once (spec/fixtures/forward several.json `budget.most`; iOS ForwardMessage.most). */
-export const FORWARD_MOST = 30;
-
-/** A block of a message as the bubble or the box holds it: a forward has a `url` naming its session. */
-type Block = { kind: string; url?: string; attrs?: Attrs };
-
-/** Forwards next to each other from the same session read as one card (several.json "groups"; iOS ForwardMessage.runs):
- *  the indices into `blocks` of each run of forwards, in order. Another session's forward or any other block ends a run;
- *  a forward whose `url` names no session is a run of its own. */
-export function forwardRuns(blocks: readonly Block[]): number[][] {
-  const runs: number[][] = [];
-  let open = "";
-  blocks.forEach((b, i) => {
-    if (b.kind !== FORWARD_KIND) {
-      open = "";
-      return;
-    }
-    const o = forwardOrigin(b.url ?? "", b.attrs?.msg);
-    const at = o ? `${o.machine}/${o.session}` : "";
-    if (at && at === open) runs[runs.length - 1].push(i);
-    else runs.push([i]);
-    open = at;
-  });
-  return runs;
-}
-
-/** A group's first line: "3 forwarded messages · Network tests". */
-export function forwardGroupHeading(group: readonly { attrs?: Attrs }[]): string {
-  const chat = group[0]?.attrs?.chat;
-  const count = group.length;
-  return chat ? t("chat-forward.group_heading_chat", { count, chat }) : t("chat-forward.group_heading", { count });
-}
-
-/** One message of a group, on a line: "Claude: Three times, from RetryPolicy.swift." */
-export function forwardLine(f: { text: string; attrs?: Attrs }): string {
-  return t("chat-forward.line", { who: shownAuthor(f.attrs), text: forwardSummary(f.text).replace(/\n/g, " ") });
 }
 
 // ── opening the picker ───────────────────────────────────
@@ -199,12 +161,13 @@ export function forwardDraftOf(c: ForwardChat, p: ForwardPick): ForwardDraft {
   };
 }
 
-/** What Forward to opens with: the messages, in the chat's order (one from a message's Forward, up to FORWARD_MOST
- *  picked with Select messages…). `select`: the chat can pick more (#3838), so Forward to offers Select messages…, which
- *  closes it and starts picking there with this message picked; `sent`: called once they went to a target. */
+/** What Forward to opens with: the messages, in the chat's order (one from a message's Forward, or up to 30 picked
+ *  with Select messages…). `select`: the chat can pick more (#3838), so Forward to offers Select messages…, which closes
+ *  it, makes the picks with `first` picked (lib/message-pick.ts, a chunk that comes with Forward to) and hands them to
+ *  `start`; `sent`: called once they went to a target. */
 export interface ForwardBatch {
   drafts: ForwardDraft[];
-  select?: () => void;
+  select?: { first: ForwardPick; start: (pick: MessagePick) => void };
   sent?: () => void;
 }
 

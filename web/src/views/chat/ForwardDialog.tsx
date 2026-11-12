@@ -6,7 +6,8 @@
 // from and goes; nothing is sent until the user sends there. New agent opens New agent with the forward over its first
 // message. The lists are the sessions this page holds, read once as it opens: nothing is fetched for them.
 // Several at once (#3838): opened for one message of a chat that can pick, its first row is Select messages…, which closes
-// it and starts picking there with that message picked (lib/message-pick.ts); opened for the picked ones, it shows them as
+// it and starts picking there with that message picked (lib/message-pick.ts, views/chat/Picking.tsx: they come with this
+// dialog, so the chat draws them at once); opened for the picked ones, it shows them as
 // one card, and each goes as a block of its own, in the chat's order, each cut at its share (forward-block.ts forwardLimit).
 import { useMemo, useState } from "react";
 import { t } from "../../i18n";
@@ -14,7 +15,9 @@ import { errorText, fullItem, imageURL } from "../../lib/api";
 import { imagePayload, MAX_IMAGE } from "../../lib/attachments";
 import { MAX_IMAGES } from "../../lib/composer-commands";
 import { sendDraft, type DraftImage } from "../../lib/drafts";
-import { forwardRuns, type ForwardBatch, type ForwardDraft } from "../../lib/forward";
+import type { ForwardBatch, ForwardDraft } from "../../lib/forward";
+import { forwardRuns } from "../../lib/forward-group";
+import { messagePick } from "../../lib/message-pick";
 import { forwardLimit, forwardRef, forwardRoute } from "../../lib/forward-block";
 import { forwardSessions, PERSONA_TARGET, rememberForward, sessionTarget } from "../../lib/forward-memory";
 import { forwardSections, keyOf, targetDetail, targetTitle, type TargetSection } from "../../lib/forward-targets";
@@ -37,7 +40,9 @@ import { SearchField } from "../../ui/SearchField";
 import { StatusMark } from "../../ui/StatusMark";
 import { conversationTitle } from "../assistant/conversations";
 import { ForwardBar } from "./ForwardBar";
-import { ForwardGroupBar } from "./ForwardGroupBar";
+import { ForwardGroupBar } from "./ForwardGroup";
+import { PickBar, PickRow } from "./Picking";
+import { pickParts } from "./picking-parts";
 import { readPhoto } from "./QueueStrip";
 
 type Target = { kind: "persona" } | { kind: "new" } | { kind: "session"; s: Session };
@@ -204,7 +209,12 @@ export function ForwardDialog({ batch, open, onClose }: { batch: ForwardBatch; o
                   disabled={Boolean(busy)}
                   onClick={() => {
                     onClose();
-                    select();
+                    // what the chat draws while it picks comes with this dialog: handed over before it starts
+                    pickParts.Row = PickRow;
+                    pickParts.Bar = PickBar;
+                    const pick = messagePick();
+                    pick.start(select.first);
+                    select.start(pick);
                   }}
                   data-forward-select
                 >

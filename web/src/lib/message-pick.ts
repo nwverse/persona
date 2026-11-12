@@ -1,9 +1,13 @@
-// Picking messages to forward at once (#3838; iOS MessagePick.swift): Forward to's Select messages… starts it with the
-// message it was opened for picked. Each message with a Forward is then a checkbox (views/chat/MessageActions.tsx), and a
-// bar in the composer's place (views/chat/PickBar.tsx) says how many are picked and forwards them; Cancel leaves the chat
-// as it was. One per chat (ChatView), read with useSyncExternalStore where it shows: a pick draws that message and the
-// bar again, not the chat. No DOM here.
-import { FORWARD_MOST, type ForwardPick } from "./forward";
+// Picking messages to forward at once (#3838; iOS MessagePick.swift): Forward to's Select messages… makes it with the
+// message it was opened for picked and hands it to the chat (ChatView), which holds it while it picks. Each message with
+// a Forward then has a checkbox over it (views/chat/Picking.tsx PickRow), and a bar in the composer's place (PickBar) says
+// how many are picked and forwards them; Cancel drops it, leaving the chat as it was. Read with useSyncExternalStore
+// where it shows: a pick draws that message's checkbox and the bar again, not the chat. Not on the first screen: it comes
+// with Forward to. No DOM here.
+import type { ForwardPick } from "./forward";
+
+/** The most messages forwarded at once (spec/fixtures/forward several.json `budget.most`; iOS ForwardMessage.most). */
+export const FORWARD_MOST = 30;
 
 export interface MessagePick {
   subscribe: (listener: () => void) => () => void;

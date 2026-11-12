@@ -1106,22 +1106,27 @@ message into view, or shows the whole text when this page does not have that cha
 folds it like other contexts. There is no Share as Image on the web, so the dialog has no such row.
 
 **Several at once** (#3838, as iOS; [the protocol](../protocol/protocol.md), "Forwarded messages"): opened for one
-message, Forward to's first row is **Select messages…**. It closes the dialog and the chat picks (`lib/message-pick.ts`,
-one per chat in `ChatView`): each message with a Forward becomes a checkbox with a tick before it, the one Forward to was
-opened for already ticked, and a click anywhere on a message picks or unpicks it (its contents are inert; its menus and
-bars are off). A bar takes the composer's place (`views/chat/PickBar.tsx`, its own chunk): **Cancel**, "2 selected" and
-**Forward 2**, off with none picked; Cancel or Escape leaves the chat as it was, the draft kept. At most 30: one more
-says "Up to 30 messages at a time". **Forward N** opens Forward to with them in the chat's order (not the order they were
-picked) as one card and no Select messages… row; picking a target puts one forward per message over its box, each cut
-at its share (`forwardLimit`: the smaller of 20,000 and 60,000 / N characters), and the photos of all of them up to the
-composer's limit. Forwards of one chat next to each other are one bar over the box (`ForwardGroupBar`: "2 forwarded
-messages · chat", a line each, the first three and "N more", the route, one × for all) and one card in the bubble
-(`ForwardGroupBlock`: a line each over two lines, each opening its original; past three, "N more"); another chat's
-forward or any other block starts a new one (`forwardRuns`). With no note: "Please look at the forwarded messages above.".
+message, Forward to's first row is **Select messages…**. It closes the dialog and hands the chat its picks
+(`lib/message-pick.ts`), the message Forward to was opened for already picked; `ChatView` holds them while it picks.
+Each message with a Forward then has a checkbox over it with a tick before it (`views/chat/Picking.tsx` `PickRow`), and a
+click anywhere on a message picks or unpicks it (its contents are inert; its menus and bars are off). A bar takes the
+composer's place (`PickBar`): **Cancel**, "2 selected" and **Forward 2**, off with none picked; Cancel or Escape
+leaves the chat as it was, the draft kept. At most 30: one more says "Up to 30 messages at a time". None of this is on
+the first screen: `Picking.tsx` comes with Forward to, which hands it to the chat (`views/chat/picking-parts.ts`) as it
+starts picking; not picking, a message is drawn as it always was. **Forward N** opens Forward to with them in the chat's
+order (not the order they were picked) as one card and no Select messages… row; picking a target puts one forward per
+message over its box, each cut at its share (`forwardLimit`: the smaller of 20,000 and 60,000 / N characters), and the
+photos of all of them up to the composer's limit. Forwards of one chat next to each other are one bar over the box
+(`ForwardGroupBar`: "2 forwarded messages · chat", a line each, the first three and "N more", the route, one × for all)
+and one card in the bubble (`ForwardGroupBlock`: a line each over two lines, each opening its original; past three,
+"N more"); another chat's forward or any other block starts a new one (`forwardRuns`). Both are a chunk of their own
+(`views/chat/ForwardGroup.tsx`): the bar comes after Forward to, which loads it, and until the card is in, the bubble
+says "2 forwarded messages" in a line of plain words. With no note: "Please look at the forwarded messages above.".
 
 `src/lib/forward.test.ts` writes and reads every case of `spec/fixtures/forward` byte for byte, and
 `src/lib/forward-several.test.ts` those of `several.json` (the budget, the blocks and note, the cards they make);
-`src/views/chat/MessagePick.test.tsx` checks picking and its bar. Browser check (wide and phone width, light and dark;
+`src/views/chat/MessagePick.test.tsx` checks picking and its bar, `ForwardCard.group.test.tsx` and
+`ForwardCard.pending.test.tsx` the group's bar and card. Browser check (wide and phone width, light and dark;
 `--shots` saves the menu, the dialog, the composer and the sent bubble, and the steps of several at once):
 `MOCK_ECHO_SENT=1 PORT=<port> python3 scripts/mock/mock_hub.py`, `npx vite` against it, then
 `node web/e2e/forward-message.mjs <web URL> --hub <mock hub URL> [--shots <dir>] [--channel msedge | --executable <chromium>]`.

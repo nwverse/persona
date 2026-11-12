@@ -8,21 +8,22 @@
 // (lib/forward.ts); it took the place of "Hand to Persona". "Use as context" attaches it to this chat's next message. Sharing
 // as a card is the phone's. "Start a new session" (#2137: a new conversation with what was said up to this reply) is there
 // when the session can branch. Beside your own bubbles, Forward and Use as context live in ⋯ to keep the hover bar compact.
-// While the chat picks messages to forward at once (#3838, Forward to's Select messages…), a message with a Forward is a
-// checkbox instead: a click anywhere on it picks it or unpicks it, the tick before it; its menus and bars are off.
+// While the chat picks messages to forward at once (#3838, Forward to's Select messages…), a message with a Forward has a
+// checkbox over it (Picking.tsx PickRow, which comes with Forward to): a click anywhere on it picks it or unpicks it, the
+// tick before it; its menus and bars are off. Not picking, the row is drawn as it always was.
 import { lazy, Suspense, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { t } from "../../i18n";
 import { clock } from "../../lib/format";
 import { sendDraft, type QuotedTask } from "../../lib/drafts";
-import { forwardSummary, type ForwardPick } from "../../lib/forward";
+import type { ForwardPick } from "../../lib/forward";
 import { addContext, newContext } from "../../lib/links";
 import type { Item } from "../../lib/types";
 import { Button, copyText, cx, Dialog, Menu, type MenuItem } from "../../ui/atoms";
-import { CheckMark } from "../../ui/CheckMark";
 import { Icon, type IconName } from "../../ui/icons";
 import type { RewindRestore } from "../../lib/rewind";
 import { isNoHover, NO_HOVER, useMedia } from "../../ui/media-query";
 import { useChatActions, type ChatActions } from "./chat-actions";
+import { pickParts } from "./picking-parts";
 import { useIsLatestMessage } from "./latest-message-time";
 
 // Hidden until the pointer comes, so it is not part of the first screen (startup-preload.ts): its row is kept while it
@@ -113,11 +114,6 @@ export function rewindActions(messageId: string | undefined, text: string, rewin
 
 const NO_STORE = () => () => {};
 
-/** A message while picking (#3838): the pointer says it picks, and a tint around it on hover and once picked, as Inbox's
- *  picked cards (views/inbox/InboxList.tsx ItemRow). */
-const PICK_ROW = "cursor-pointer rounded-[10px] transition-[background-color,box-shadow] duration-150 outline-offset-[6px] [@media(hover:hover)]:hover:bg-hover [@media(hover:hover)]:hover:shadow-[0_0_0_6px_var(--hover)]";
-const PICKED = "bg-accent-tint! shadow-[0_0_0_6px_var(--accent-tint)]!";
-
 /** `live`'s value while `open` (a menu that shows it), `closed` otherwise: a closed menu does not render again when it
  *  changes (why "Rewind to here" is off changes each time the session starts or stops working). */
 function useWhileOpen(live: Rewind["block"] | undefined, open: boolean, closed: string): string {
@@ -173,14 +169,10 @@ export function MessageActions({
   const pick: ForwardPick | undefined = forwarded ? { itemId: forwarded, text, isUser: Boolean(isUser), ts, images, photos } : undefined;
   const actions = useActions(text, Boolean(isUser), ts, task, () => setSelecting(true), pick);
   const chat = useChatActions();
-  // picking messages to forward (#3838): 0 not picking, 1 picking (this one not picked, or not one to pick), 2 picked
+  // the chat picks messages to forward (#3838): the checkbox over this one, when it is one to forward
   const picker = chat?.forward ? chat.pick : undefined;
-  const readPick = () => (!picker?.on() ? 0 : forwarded && picker.has(forwarded) ? 2 : 1);
-  const pickMode = useSyncExternalStore(picker ? picker.subscribe : NO_STORE, readPick, readPick);
-  const picking = pickMode > 0;
-  const pickable = picking && Boolean(pick && text.trim());
-  // past FORWARD_MOST the store refuses it, and the bar says so (PickBar)
-  const togglePick = () => void (pick && picker?.toggle(pick));
+  const picking = Boolean(picker);
+  const PickRow = picker && pick && text.trim() ? pickParts.Row : null;
   const [moreAnchor, setMoreAnchor] = useState<HTMLElement | null>(null);
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const rewind = isUser ? chat?.rewind : undefined;
@@ -208,14 +200,6 @@ export function MessageActions({
     setAnchor(null);
   };
   useEffect(() => () => anchorRef.current?.remove(), []);
-  // picking starts with no menu open: one open before would come back once it ends
-  useEffect(() => {
-    if (!picking) return;
-    anchorRef.current?.remove();
-    anchorRef.current = null;
-    setAnchor(null);
-    setMoreAnchor(null);
-  }, [picking]);
 
   const cancelPress = () => {
     if (press.current) clearTimeout(press.current.timer);
@@ -227,24 +211,8 @@ export function MessageActions({
   const items: MenuItem[] = [...actions, ...extras].map((a, i) => ({ ...a, divider: i === actions.length && i > 0 }));
 
   return (
-    <div
-      className={cx("group/msg", (side || corner || pickable) && "relative", pickable && PICK_ROW, pickable && !side && "pl-7", pickMode === 2 && PICKED, className)}
-      // picking: the message is a checkbox; what is in it is inert, so a click anywhere on it lands here
-      {...(pickable ? {
-        role: "checkbox",
-        "aria-checked": pickMode === 2,
-        "aria-label": forwardSummary(text).replace(/\n/g, " ").slice(0, 120),
-        tabIndex: 0,
-        onClick: togglePick,
-        onKeyDown: (e: React.KeyboardEvent) => {
-          if (e.key !== " " && e.key !== "Enter") return;
-          e.preventDefault();
-          togglePick();
-        },
-        "data-pick": pickMode === 2 ? "on" : "off",
-      } : {})}
-    >
-      {pickable && <CheckMark on={pickMode === 2} className={side ? "absolute top-3.5 right-full mr-3" : "absolute top-1 left-0"} />}
+    <div className={cx("group/msg", (side || corner || PickRow) && "relative", PickRow && (side ? "isolate" : "isolate pl-7"), className)}>
+      {PickRow && picker && pick && <PickRow pick={picker} message={pick} side={side} />}
       <div
         inert={picking || undefined}
         className="[@media(hover:none)]:select-none [@media(hover:none)]:[-webkit-touch-callout:none]"

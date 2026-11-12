@@ -24,5 +24,8 @@
   "selected": "{count}件を選択",
   "forward_count": "{count}件を転送",
   "remove_group": "転送をすべて解除",
-  "at_most": "一度に転送できるのは{count}件までです"
+  "at_most": "一度に転送できるのは{count}件までです",
+  "group_heading_chat": "転送された{count}件のメッセージ · {chat}",
+  "line": "{who}：{text}",
+  "more": "ほか{count}件"
 }
