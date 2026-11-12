@@ -522,6 +522,22 @@ speed history (`web/src/lib/token-rate.ts`) is ported from `packages/maker-share
 over time; the state words follow `localizeAgentStatus.ts` and `workingStatus.ts`, and are worked out from Persona's own
 transcript items (`web/src/lib/run-step.ts`).
 
+The web chat's top bar and its background work follow cindy's design at the owner's request (2026-11-12, #5421): the
+top bar (`Header` in `web/src/views/chat/ChatView.tsx`, after cindy's `SessionContentHeader`, `AgentDeviceIndicator`,
+`SessionRenameInput` and `GitContextBadge`), the goal bar over the composer (`web/src/views/chat/GoalBar.tsx`, after
+`GoalIndicator`) and the Background tasks side panel (`web/src/views/chat/BackgroundPanel.tsx`, after the right sidebar's
+`background-tasks` plugin, `BackgroundTasksBody` and `openBackgroundTasksTab`): layout, states, wording and how they
+open. No code is copied for those. The "on another computer" arc on an Agent's mark (`RemoteSignal` in
+`web/src/ui/AgentMark.tsx`) takes its path and placement from cindy's `components/icons/RemoteSourceMark.tsx`.
+
+The handoff note an Agent session's conversation carries when it switches between Claude Code and Codex
+(`server/internal/node/engine_handoff_build.go`, read by `server/internal/node/engine_handoff.go`, with its words in
+`server/internal/prompts/agents/engine_handoff.md`, `engine_handoff_command.md` and `engine_handoff_speaker.md`) is
+ported from cindy's `apps/desktop/src/main/maker-ipc/agentHandoff.ts` with changes: the same sections, framing and
+bounds (the work ledger, the index of earlier turns, the latest turns word for word, the 16000-character cap), read
+from Persona's transcript items; the transcript files on the computer take the place of cindy's history tools, and the
+cap squeezes the data instead of cutting the text.
+
 https://github.com/makecindy/cindy
 
 Licensed under the Apache License, Version 2.0 (the "License"); you may not use these files except in compliance with

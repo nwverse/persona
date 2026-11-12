@@ -328,6 +328,14 @@
       },
       "$description": "Theme.Size.bar: the accent bar beside a quote-like card"
     },
+    "box120": {
+      "$type": "dimension",
+      "$value": {
+        "value": 120,
+        "unit": "px"
+      },
+      "$description": "Theme.Size.box120: the widest a tool argument's label column gets"
+    },
     "box150": {
       "$type": "dimension",
       "$value": {

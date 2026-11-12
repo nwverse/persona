@@ -10,6 +10,8 @@ import { navigationCrumb } from "./lib/error-reports";
 import { lazyPage, preloadPages } from "./lib/lazy-page";
 import { drawerA11y, focusBack, useDrawerDrag } from "./lib/drawer";
 import { acceptHubs, here, rememberHub, takeHubs } from "./lib/hubs";
+import { holdImportLink, takeImportLink } from "./lib/import-link";
+import { stripBase } from "./lib/base";
 import { useSessionPanels } from "./lib/panel-memory";
 import { paneRoute, resolveTab, tabOfSessionLink, tabPagePane } from "./lib/herdr-tree";
 import { askTeamWorker, isWorker } from "./lib/team";
@@ -93,6 +95,20 @@ if (carried) {
   acceptHubs(carried.hubs, carried.removed);
   window.history.replaceState(window.history.state, "", carried.rest);
 }
+
+// A provider import link (`/settings?tab=models#import=…`, #5420) left the address bar before anything loaded (main.tsx,
+// lib/import-link.ts says why). Pasted into the address bar of a page already open, only the fragment changes and
+// nothing loads: it is taken then, the rest of the fragment with it (this page is signed in: nothing reads it now).
+function takeImportLinkHere() {
+  const importing = takeImportLink(window.location.href);
+  if (!importing) return;
+  // the fragment goes first: navigate does nothing for an address that differs only in it, and on an open page another
+  // address goes through the router, or the page the link was pasted over would stay
+  window.history.replaceState(window.history.state, "", location.pathname + location.search);
+  navigate(stripBase(importing.rest.replace(/#.*$/, "")), true);
+  holdImportLink(importing.text);
+}
+if (typeof window !== "undefined") window.addEventListener("hashchange", takeImportLinkHere);
 
 const workspaceActions = { onWorkspaceMenu: openWorktreeActions };
 function openWorkspaceInTree(target: WorkspaceTarget) {

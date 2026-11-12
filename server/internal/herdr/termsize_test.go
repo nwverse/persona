@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -49,6 +50,37 @@ func TestTermSizeReadsThePanesTerminal(t *testing.T) {
 	}
 	if _, _, err := c.TermSize(ctx, "w9:p9"); !IsNotFound(err) {
 		t.Fatalf("a pane herdr does not know: %v", err)
+	}
+}
+
+// A process with no terminal (started in a session of its own, stdin not a tty) has no size; nor has one that is gone.
+// On macOS the device is looked up by number each call (no ps): a second read is the same.
+func TestTTYSizeWithoutATerminal(t *testing.T) {
+	cmd := exec.Command("sleep", "30")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	pid := cmd.Process.Pid
+	if _, _, err := ttySize(context.Background(), pid); err == nil {
+		t.Fatal("a process with no terminal has a size")
+	}
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
+	if _, _, err := ttySize(context.Background(), pid); err == nil {
+		t.Fatal("a process that is gone has a size")
+	}
+
+	shell := exec.Command("sleep", "30")
+	f, err := pty.StartWithSize(shell, &pty.Winsize{Cols: 100, Rows: 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = shell.Process.Kill(); _ = shell.Wait(); _ = f.Close() })
+	for range 2 {
+		if cols, rows, err := ttySize(context.Background(), shell.Process.Pid); err != nil || cols != 100 || rows != 30 {
+			t.Fatalf("ttySize = %d×%d, %v", cols, rows, err)
+		}
 	}
 }
 

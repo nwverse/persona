@@ -682,6 +682,8 @@ SESSIONS = [
                     + ([{"id": "wdemo1", "kind": "workflow", "description": "widget-audit", "run_id": "wf_demo1", "started_at": ago(minutes=14)}]
                        if os.environ.get("MOCK_WORKFLOWS") in ("1", "legacy") else []),
          **({"workflows": MOCK_WORKFLOW_RUNS} if os.environ.get("MOCK_WORKFLOWS") == "1" else {}),
+         # MOCK_BRANCH=1: the git branch its folder is on (#5421: the chat's top bar shows it on a wide screen)
+         **({"branch": "feat/hourly-widget"} if os.environ.get("MOCK_BRANCH") else {}),
          # MOCK_QUEUE=1: input typed while it works and not taken yet (POST …/queue edits it)
          **({"queued": ["顺便把 README 里的截图也换成新的小组件", "改完以后跑一遍 UI 测试，把失败的截图发给我"]}
             if os.environ.get("MOCK_QUEUE") else {})),
@@ -1734,7 +1736,7 @@ if NEXT_SUGGESTIONS:
 
 # MOCK_ORIGINS=1 (#3264, docs/protocol/protocol.md "Origin of assistant chats"): conversations the hub opened by itself — the inbox's AI twin,
 # scheduled tasks, a Feishu /agent, one another conversation started — next to the user's own; one of them runs, one
-# waits for the user. The sidebar keeps them out of "Recent" under "Automatic conversations".
+# waits for the user. The sidebar's Recent lists them with the user's own, each with its origin's mark (#5195).
 if os.environ.get("MOCK_ORIGINS") == "1":
     ASSISTANT[1]["origin"], ASSISTANT[1]["origin_ref"] = "task", "morning"
     ASSISTANT[1]["title"] = "1106 | 定时 | 早报"
@@ -1858,7 +1860,7 @@ if os.environ.get("MOCK_ASSISTANT_SIDEBAR") == "1":
 # MOCK_AUTO_CONVERSATIONS=1 (#3264, docs/protocol/protocol.md "Origin of assistant chats"): the hub says who opened each assistant
 # conversation (`origin`, feature conversation_origin): the user's own say "user", and ten more were opened by Persona
 # itself: Inbox's AI twin (one waits for the user, one works), scheduled tasks, Lark /agent and one conversation another
-# started. The sidebar keeps those in "Automatic conversations"; the list of conversations filters them by source.
+# started. The sidebar's Recent lists them with the user's own, each with its source's mark (#5195); All Chats filters them by source.
 if os.environ.get("MOCK_AUTO_CONVERSATIONS") == "1":
     for _s in ASSISTANT:
         _s.setdefault("origin", "user")
@@ -8855,7 +8857,10 @@ if os.environ.get("MOCK_GITHUB") == "guide":  # a status with the steps to fix i
                         "capabilities": ["status", "hosts"], "hosts": ["github.com"]}
 # Feishu and mail as connectors (GET /api/v1/connectors?all=1, migration M6): the app draws them as their own rows.
 LEGACY_CONNECTORS = [{"id": "lark", "name": "飞书", "status": "ok", "capabilities": ["tools", "inbox", "archive"], "enabled": True},
-                     {"id": "mail", "name": "邮件", "status": "ok", "capabilities": ["tools", "actions", "inbox", "archive"], "enabled": True}]
+                     {"id": "mail", "name": "邮件", "status": "ok", "capabilities": ["tools", "actions", "archive"], "enabled": True,
+                      "archive": True, "inbox": True}]  # mail's Add to Inbox (#5307): MOCK_MAIL_INBOX=off starts it off
+if os.environ.get("MOCK_MAIL_INBOX") == "off":
+    LEGACY_CONNECTORS[1]["inbox"] = False
 
 # Telegram (the Telegram extension, #1704; docs/archive/extensions/plan-telegram.md): the user's own account, signed in from Settings › Connectors › Telegram a step at a time.
 # All made up: api_id 1234567 (a hash of 32 zeros is refused), any phone starting with +, the code 12345, the 2FA
@@ -10932,6 +10937,7 @@ LAUNCHER_PRESETS = [
 # cindy's custom providers. A draft on gw_full's address matches it, with the same key when it carries sk-example-gw.
 # With the feature launcher_auth_auto (#5329): a typed-in gateway's test and model list take `auth` "auto" (Bearer, then
 # x-api-key) and the test says which one worked; the methods the fake gateway takes come from its address (_gateway_takes).
+# With the feature launcher_import_link (#5420): the parse route also reads provider import links (_paste_link).
 MOCK_PROVIDERS = os.environ.get("MOCK_PROVIDERS") == "1"
 PROVIDER_LOG = {"post": None, "put": None, "test": [], "discover": [], "catalog": [], "import": None, "parse": []}
 PROVIDER_FIELDS = ("kind", "api", "base_url", "model", "small_model", "subagent_model", "custom_model", "custom_model_name",
@@ -11008,7 +11014,7 @@ if MOCK_PROVIDERS:
     _features_without_providers = features
 
     def features():
-        return _features_without_providers() + ["launcher_auto_name", "launcher_import_parse", "launcher_auth_auto"]
+        return _features_without_providers() + ["launcher_auto_name", "launcher_import_parse", "launcher_auth_auto", "launcher_import_link"]
 
 
 # The hub's names for providers it names itself (server/internal/assistant/models_presets.go): the slug rule, the
@@ -11508,10 +11514,244 @@ def _paste_cindy(data):
         models = [m for m in map(_cindy_model, ep.get("models") or c.get("models") or []) if m]
         p = {"kind": "launcher" if api == "messages" else "api", "agent": "claude" if api == "messages" else "", "api": api,
              "display_name": c.get("name"), "base_url": _messages_base(base) if api == "messages" else base,
-             "auth": "api_key" if api == "messages" else "bearer", "model": models[0]["id"] if models else "", "models": models}
+             # a gateway's header is the wizard's check to find (#5329): v1 does not say it; no sign-in, none
+             "auth": "" if api == "messages" or none else "bearer", "model": models[0]["id"] if models else "", "models": models}
         p["headers"], skipped = _paste_headers(ep["headers"].items() if isinstance(ep.get("headers"), dict) else [], True, api != "messages")
         key = "" if none else str(ep.get("apiKey") or auth.get("apiKey") or "")
-        drafts.append(_draft(p, key, ([_note("cindy_auth", name="none")] if none else []) + others, label=c.get("name"), skipped_headers=skipped))
+        # the endpoint's own request path, never named: the draft calls the API's usual one
+        path = [_note("cindy_request_path")] if isinstance(ep.get("requestPath"), str) and ep["requestPath"].strip() else []
+        drafts.append(_draft(p, key, path + ([_note("cindy_auth", name="none")] if none else []) + others, label=c.get("name"),
+                             skipped_headers=skipped))
+    return drafts, notes
+
+
+# Provider import links (#5420, the hub's models_import_link.go): cindy's cindy://provider/import?v=1&data=… and the web's
+# …#import=…[&v=1] carry one provider in cindy's v1 JSON, base64url-encoded. A link is checked as the hub checks it (the
+# parameters, the version, canonical base64url, UTF-8, the sizes, v1's fields and values) and read as a cindy paste;
+# a refused one answers one note naming at most a field's path, never a value.
+LINK_MOST, LINK_JSON_MOST = 32 << 10, 24 << 10
+LINK_FIELDS = {"builtin": ("kind", "provider", "apiKey"), "preset": ("kind", "preset", "apiKey"),
+               "custom": ("kind", "id", "name", "auth", "endpoints")}
+LINK_ANY_FIELDS = ("kind", "provider", "preset", "apiKey", "id", "name", "auth", "endpoints")
+LINK_AUTH_FIELDS = {"apiKey": ("method", "apiKey"), "none": ("method",),
+                    "authorization-code": ("method", "flow", "authorizeUrl", "tokenUrl", "clientId", "scopes", "modelsDiscoveryUrl",
+                                           "redirectPort", "extraAuthParams"),
+                    "device-code": ("method", "flow", "deviceAuthorizationUrl", "tokenUrl", "clientId", "scopes", "modelsDiscoveryUrl",
+                                    "extraDeviceParams")}
+LINK_ENDPOINT_FIELDS = ("protocol", "baseUrl", "targets", "models", "modelsUrl", "requestPath", "headers", "apiKey")
+LINK_MODEL_FIELDS = ("id", "name", "nativeApi", "mode", "modalities", "officialDocs", "description", "group", "contextWindow",
+                     "contextWindowMax", "maxOutputTokens", "efforts", "defaultEffort", "supportsFastMode", "supportsImageInput",
+                     "supportsToolCalls", "reasoningRequired", "defaultEnabled", "reasoning", "reasoningEfforts",
+                     "reasoningDefaultEffort", "discoveredMetadata")
+LINK_PROTOCOLS = ("anthropic-messages", "openai-responses", "openai-chat", "google-generative-ai")
+LINK_AGENTS, LINK_EFFORTS = ("claude-code", "codex", "pi"), ("minimal", "low", "medium", "high", "xhigh", "max")
+# how well a protocol serves an agent (any other: 10); two endpoints equally good for one agent leave it unsaid
+LINK_PRIORITY = {"claude-code": {"anthropic-messages": 100, "google-generative-ai": 30, "openai-chat": 20, "openai-responses": 10},
+                 "codex": {"openai-responses": 30, "openai-chat": 20}, "pi": {"openai-chat": 30, "openai-responses": 20}}
+LINK_KEY_PREFIXES = ("sk-", "ghp_", "gho_", "ghs_", "github_pat_", "xox", "AKIA", "AIza", "glpat-")  # never named
+LINK_CONTROL = re.compile(r"[\x00-\x08\x0a-\x1f\x7f]")  # what a header line can't hold (a tab it can)
+
+
+class LinkRefused(Exception):
+    """A link failing a check; args[0] is its one note."""
+
+
+def _link_bad(path=None, code="link_invalid"):
+    raise LinkRefused(_note(code, name=path))
+
+
+def _link_query(q):
+    """q read as URLSearchParams reads it ({name: [values]}), and whether a %-escape in it is broken (that breaks a link)."""
+    return parse_qs(q, keep_blank_values=True), bool(re.search(r"%(?![0-9A-Fa-f]{2})", q))
+
+
+def _link_data(q, key, need_v):
+    """A link's data: key once, v once (or, unless need_v, never) and nothing else, v being 1."""
+    params, broken = _link_query(q)
+    v = params.get("v", [])
+    if broken or len(params.get(key, [])) != 1 or len(v) > 1 or (need_v and not v) or set(params) - {key, "v"}: _link_bad()
+    if v and v[0] != "1": _link_bad(v[0] if re.fullmatch(r"[0-9]{1,4}", v[0]) else None, "link_version")
+    return params[key][0]
+
+
+def _js_len(s): return len(s.encode("utf-16-le")) // 2
+
+
+def _link_text(v, most):
+    """cindy's boundedString: a string, not blank, at most `most` long as JavaScript counts; trimmed (None when not)."""
+    return v.strip() if isinstance(v, str) and v.strip() and _js_len(v) <= most else None
+
+
+def _link_key(v, most):
+    s = _link_text(v, most)
+    return s is not None and not LINK_CONTROL.search(s)
+
+
+def _link_fields(obj, path, allowed):
+    """link_field on obj's first field (in key order) not allowed: named only when its key is a plain word, not a key."""
+    for k in sorted(obj):
+        if k not in allowed:
+            plain = re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]{0,63}", k) and not k.startswith(LINK_KEY_PREFIXES)
+            _link_bad((path + "." + k if path else k) if plain else None, "link_field")
+
+
+def _link_url(v):
+    """An endpoint's address as (scheme, host, port): absolute http(s), no user, query or fragment; None when not."""
+    raw = _link_text(v, 2048)
+    if raw is None or re.search(r"[?#]", raw) or _url_user(raw): return None
+    u = urlparse(raw)
+    try: port = u.port
+    except ValueError: return None
+    if u.scheme not in ("http", "https") or not u.hostname: return None
+    return u.scheme, u.hostname, port or {"http": 80, "https": 443}[u.scheme]
+
+
+def _link_loopback(origin):
+    return origin[1] in ("localhost", "::1") or bool(re.fullmatch(r"127(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}", origin[1]))
+
+
+def _link_model(m, path):
+    """One model's checks; its id."""
+    if isinstance(m, str):
+        if _link_text(m, 256) is None: _link_bad(path)
+        return m.strip()
+    if not isinstance(m, dict): _link_bad(path)
+    _link_fields(m, path, LINK_MODEL_FIELDS)
+    if _link_text(m.get("id"), 256) is None: _link_bad(path + ".id")
+    if "name" in m and _link_text(m["name"], 256) is None: _link_bad(path + ".name")
+    w = m.get("contextWindow")
+    if "contextWindow" in m and (isinstance(w, bool) or not isinstance(w, (int, float)) or not math.isfinite(w) or w <= 0 or w != int(w)):
+        _link_bad(path + ".contextWindow")
+    for f in ("defaultEnabled", "supportsImageInput", "reasoning"):
+        if f in m and not isinstance(m[f], bool): _link_bad(path + "." + f)
+    if m.get("reasoning") is not True:  # thinking levels belong to a model that thinks
+        for f in ("reasoningEfforts", "reasoningDefaultEffort"):
+            if f in m: _link_bad(path + "." + f)
+        return m["id"].strip()
+    efforts = m.get("reasoningEfforts", [])
+    if not isinstance(efforts, list) or any(e not in LINK_EFFORTS for e in efforts) or len(set(efforts)) != len(efforts):
+        _link_bad(path + ".reasoningEfforts")
+    if "reasoningDefaultEffort" in m and m["reasoningDefaultEffort"] not in efforts: _link_bad(path + ".reasoningDefaultEffort")
+    return m["id"].strip()
+
+
+def _link_endpoint(e, path):
+    """One endpoint's checks, in cindy's order; what the provider's checks need of it."""
+    if not isinstance(e, dict): _link_bad(path)
+    _link_fields(e, path, LINK_ENDPOINT_FIELDS)
+    if e.get("protocol") not in LINK_PROTOCOLS: _link_bad(path + ".protocol")
+    t = e.get("targets")
+    if "targets" in e and (not isinstance(t, list) or not t or any(x not in LINK_AGENTS for x in t) or len(set(t)) != len(t)):
+        _link_bad(path + ".targets")
+    models = e.get("models")
+    if models is not None:
+        if not isinstance(models, list) or len(models) > 256: _link_bad(path + ".models")
+        ids = [_link_model(m, "%s.models[%d]" % (path, i)) for i, m in enumerate(models)]
+        if len(set(ids)) != len(ids): _link_bad(path + ".models")
+    p = _link_text(e.get("requestPath"), 256)
+    if "requestPath" in e and (p is None or not p.startswith("/") or p.startswith("//") or re.search(r"[?#\s]", p)):
+        _link_bad(path + ".requestPath")
+    if "apiKey" in e and not _link_key(e["apiKey"], 4096): _link_bad(path + ".apiKey")
+    base = _link_url(e.get("baseUrl"))
+    if base is None: _link_bad(path + ".baseUrl")
+    if "modelsUrl" in e and _link_url(e["modelsUrl"]) != base: _link_bad(path + ".modelsUrl")  # the same origin
+    h = e.get("headers")
+    if "headers" in e and (not isinstance(h, dict) or not 0 < len(h) <= 24 or any(
+            not re.fullmatch(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]{1,128}", k) or not isinstance(v, str) or _js_len(v) > 2048 or LINK_CONTROL.search(v)
+            for k, v in h.items())):
+        _link_bad(path + ".headers")
+    return {"protocol": e["protocol"], "targets": t, "base": base, "apiKey": "apiKey" in e, "headers": "headers" in e}
+
+
+def _link_serves(e, method):
+    """The agents an endpoint serves: its targets, else its protocol's (with OAuth, pi none)."""
+    if e["targets"]: return e["targets"]
+    agents = LINK_AGENTS if e["protocol"] in ("anthropic-messages", "google-generative-ai") else ("codex", "pi")
+    return [a for a in agents if method != "oauth" or a != "pi"]
+
+
+def _link_custom(c):
+    if _link_text(c.get("name"), 60) is None: _link_bad("name")
+    if "id" in c and not re.fullmatch(r"[a-z0-9_-]{1,40}", _link_text(c["id"], 40) or ""): _link_bad("id")
+    method = "apiKey"
+    if "auth" in c:
+        auth = c["auth"]
+        if not isinstance(auth, dict): _link_bad("auth")
+        method = auth.get("method")
+        if method not in ("apiKey", "none", "oauth"): _link_bad("auth.method")
+        fields = method
+        if method == "oauth":
+            fields = "authorization-code" if auth.get("flow") is None else auth["flow"]
+            if fields not in ("authorization-code", "device-code"): _link_bad("auth.flow")
+        _link_fields(auth, "auth", LINK_AUTH_FIELDS[fields])
+        if "apiKey" in auth and not _link_key(auth["apiKey"], 4096): _link_bad("auth.apiKey")
+    eps = c.get("endpoints")
+    if not isinstance(eps, list) or not 0 < len(eps) <= 8: _link_bad("endpoints")
+    eps = [_link_endpoint(e, "endpoints[%d]" % i) for i, e in enumerate(eps)]
+    # with no key, a link could send the prompts anywhere (a modelsUrl is on its baseUrl's host)
+    if method == "none" and any(not _link_loopback(e["base"]) for e in eps): _link_bad("auth")
+    for i, e in enumerate(eps):
+        for f in ("apiKey", "headers"):
+            if method != "apiKey" and e[f]: _link_bad("endpoints[%d].%s" % (i, f))
+    for i, e in enumerate(eps):
+        if method == "oauth" and "pi" in (e["targets"] or ()): _link_bad("endpoints[%d].targets" % i)
+    for agent in LINK_AGENTS:
+        ranks = sorted((LINK_PRIORITY[agent].get(e["protocol"], 10) for e in eps if agent in _link_serves(e, method)), reverse=True)
+        if len(ranks) > 1 and ranks[0] == ranks[1]: _link_bad("endpoints")
+
+
+def _link_check(obj):
+    """v1's rules for a link's JSON object (the first failure raises LinkRefused)."""
+    kind = obj.get("kind") if isinstance(obj.get("kind"), str) else None
+    _link_fields(obj, "", LINK_FIELDS.get(kind, LINK_ANY_FIELDS))
+    if kind == "builtin":
+        if obj.get("provider") not in ("gemini", "openai-images"): _link_bad("provider")
+        if not _link_key(obj.get("apiKey"), 1024): _link_bad("apiKey")
+    elif kind == "preset":
+        if _link_text(obj.get("preset"), 128) is None: _link_bad("preset")
+        if not _link_key(obj.get("apiKey"), 4096): _link_bad("apiKey")
+    elif kind == "custom": _link_custom(obj)
+    else: _link_bad("kind")
+
+
+def _link_payload(data):
+    """A link's data decoded (canonical base64url of UTF-8 JSON) and checked: the JSON object."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", data) or len(data) % 4 == 1: _link_bad()
+    b = base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))
+    if base64.urlsafe_b64encode(b).decode().rstrip("=") != data: _link_bad()  # stray bits
+    if len(b) > LINK_JSON_MOST: _link_bad(code="link_too_long")
+    try: obj = json.loads(b.decode("utf-8"))
+    except ValueError: _link_bad()  # UnicodeDecodeError is a ValueError
+    if not isinstance(obj, dict): _link_bad()
+    _link_check(obj)
+    return obj
+
+
+def _paste_link(t):
+    """(drafts, notes) of an import link (t trimmed), None when t is no link: one word, cindy:// or an http(s) address
+    whose fragment has import. A link going on after a blank is one a chat app broke: refused whole."""
+    word = re.split(r"\s", t, maxsplit=1)[0]
+    head = word[:8].lower()
+    if not head.startswith(("cindy://", "http://", "https://")): return None
+    cindy = head.startswith("cindy://")
+    part = word[len("cindy://"):] if cindy else word.partition("#")[2]  # what follows cindy://, a web link's fragment
+    if not cindy and "import" not in _link_query(part)[0]: return None
+    try:
+        if word != t: _link_bad()  # which part of a broken link is its data is unknown
+        if len(part.encode()) > LINK_MOST: _link_bad(code="link_too_long")
+        if cindy:
+            path, sep, q = part.partition("?")
+            if not sep or path != "provider/import" or "#" in part: _link_bad()
+            data = _link_data(q, "data", True)
+        else:
+            data = _link_data(part, "import", False)
+        obj = _link_payload(data)
+    except LinkRefused as refused:
+        return [], [refused.args[0]]
+    drafts, notes = _paste_cindy(obj)
+    eps = obj.get("endpoints") if isinstance(obj.get("endpoints"), list) else []
+    if "apiKey" not in (obj.get("auth") or {}) and not any("apiKey" in e for e in eps):  # the usual link: whoever opens it types a key
+        for d in drafts: d["notes"] = [n for n in d["notes"] if n["code"] != "no_key"]
     return drafts, notes
 
 
@@ -11529,7 +11769,9 @@ def _paste_lines(text):
 
 
 def _paste_read(text):
-    """(format, drafts, notes): JSON as cindy's or settings.json, a curl command, else shell lines."""
+    """(format, drafts, notes): an import link, JSON as cindy's or settings.json, a curl command, else shell lines."""
+    link = _paste_link(text.strip())
+    if link is not None: return ("link", *link)
     if text.strip().startswith(("{", "[")):
         try: data = json.loads(text)
         except ValueError: return "", [], [_note("invalid_json")]
@@ -21253,6 +21495,15 @@ class H(BaseHTTPRequestHandler):
             port = int(p.split("/")[6])
             if not port_listening(port): return self.send_json({"error": "nothing is listening on port %d" % port}, 404)
             return self.send_json({"port": port, "listening": True, "http": True})
+        if self.command == "PUT" and p == "/api/v1/connectors/mail/settings":  # mail's Add to Inbox (#5307)
+            body = json.loads(self.last_body or b"{}")
+            mail_c = LEGACY_CONNECTORS[1]
+            for feed in ("inbox", "archive"):
+                if feed in body:
+                    if not isinstance(body[feed], bool):
+                        return self.send_json({"error": feed + ": true or false"}, 400)
+                    mail_c[feed] = body[feed]
+            return self.send_json(mail_c)
         if self.command == "PUT" and p == "/api/v1/connectors/github/settings":  # GitHub's inbox options
             body = json.loads(self.last_body or b"{}")
             if "inbox" in body:  # "Send to inbox" (MOCK_GITHUB_EXTENSION), from the connector's page or the extension's
@@ -22964,7 +23215,7 @@ MOCK_HELP.append("MOCK_CHANNELS=1  设置 › 插件 › 渠道：App、飞书�
 MOCK_HELP.append("MOCK_EXCHANGES=1  主对话新布局的素材（#1666）：Persona 发给任务的长消息、任务带链接和证据的长汇报、督办消息")
 MOCK_HELP.append("MOCK_MARKDOWN=1  任务往来和回执里带 **粗体**、`代码`、标题的原话（#2363）：应渲染成 Markdown，不露标记")
 MOCK_HELP.append("MOCK_TASK_RENAMED=1  整理发布说明这个任务在回执写好后改了名：回执应显示新名字「写本周发布说明」（#3036）")
-MOCK_HELP.append("MOCK_AUTO_CONVERSATIONS=1  助手对话带来源 origin（feature conversation_origin）：另有 10 段自动对话（收件箱 6、定时任务 2、飞书 /agent、对话派生），侧边栏收进「自动对话」（#3264）")
+MOCK_HELP.append("MOCK_AUTO_CONVERSATIONS=1  助手对话带来源 origin（feature conversation_origin）：另有 10 段自动对话（收件箱 6、定时任务 2、飞书 /agent、对话派生），侧边栏「最近」和用户自己的一起列、带来源标记，「全部对话」按来源筛（#3264、#5195）")
 MOCK_HELP.append("MOCK_EXTERNAL=1  和 MOCK_AUTO_CONVERSATIONS=1 一起用：飞书 /agent 那段带上请求和上下文，另加一段别的扩展开的（origin extension），两段都是外部的（#3758）")
 MOCK_HELP.append("MOCK_BACKGROUND_SUPERVISOR=1  The hub's built-in background supervisor conversation exists (#4927): origin task with no origin_ref, "
                  "named by GET /api/v1/assistant as background_supervisor, and archiving it is refused. Without it the setting "
@@ -23476,6 +23727,7 @@ if os.environ.get("MOCK_AGENT_PLANS") == "1":
         if _s["session_id"] == TESTS:
             _s["plan"] = {"done": 1, "total": 4, "at": ago(minutes=10)}
     MOCK_HELP.append("MOCK_AGENT_PLANS=1  小组件的 Agent 计划 3/5（在复现崩溃），网络层测试的 Agent 1/4（#5302）")
+MOCK_HELP.append("MOCK_BRANCH=1  macbook 上「给天气 App 加主屏幕小组件」的文件夹在 git 分支 feat/hourly-widget 上，聊天顶栏宽屏时显示它（#5421）")
 MOCK_HELP.append("MOCK_GOAL=1|stopped  macbook 上「给天气 App 加主屏幕小组件」有一个进行中的 goal（带最近一次检查的理由），「检查 PR #42 的改动」的 goal 已达成；stopped 时小组件那个 goal 用完了 token 预算（#2420）")
 
 # ---------- MOCK_EXTENSIONS: a hub from #1844 on (docs/extensions/extensions.md "Naming and compatibility") ----------
