@@ -10,7 +10,8 @@ import Observation
         static var live: Deps {
             let app = AppModel.shared
             // A saved use moves the pickers' 「默认：…」 too: they read the machines' launchers again.
-            return .init(api: { app.api }, updated: { app.launcherDefaultsChanged(); await app.refreshAssistant() })
+            let scope = AssistantSettingsRequestScope(app)
+            return .init(api: { scope.api(app) }, updated: { app.launcherDefaultsChanged(); await app.refreshAssistant() })
         }
     }
 
@@ -25,6 +26,7 @@ import Observation
     var draft = ModelBinding()
     @ObservationIgnored private let deps: Deps
     @ObservationIgnored private var loadedPurposeID: String?
+    @ObservationIgnored private(set) var requestAPI: APIClient?
 
     init(deps: Deps = .live) { self.deps = deps }
 
@@ -75,12 +77,11 @@ import Observation
     }
 
     func modelSummary(_ p: ModelPurpose) -> String {
-        let model = p.effective.model ?? p.effective.provider.flatMap { id in providers.first { $0.id == id }?.name }
+        let model = p.effective.model
         let effort = p.effective.effort.map { value in SessionModes.effortLevels.first { $0.id == value }?.title ?? value }
-        // Main Chat on the Agent SDK says so; the CLI is the default and goes unsaid.
-        let runtime = p.effective.runtime == AssistantRuntime.agentSDK ? AssistantRuntime.title(AssistantRuntime.agentSDK) : nil
-        let result = [model, effort, runtime].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
-        return result.isEmpty ? String(localized: "Not set up") : result
+        let result = [model, effort].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+        if !result.isEmpty { return result }
+        return p.effective.provider == nil ? String(localized: "Not set up") : String(localized: "Default [Prompt Composer 844b8c]")
     }
 
     func summary(_ p: ModelPurpose) -> String {
@@ -123,7 +124,10 @@ import Observation
         loading = true
         defer { loading = false; loaded = true }
         do {
-            guard let api = deps.api() else { throw APIError(status: 0, message: String(localized: "Not connected to the hub yet")) }
+            guard let api = requestAPI ?? deps.api().map({ $0.manager($0.managerID ?? $0.shownManager) }) else {
+                throw APIError(status: 0, message: String(localized: "Not connected to the hub yet"))
+            }
+            requestAPI = api
             if let purposeID {
                 var result = try await api.modelPurpose(purposeID)
                 if !result.purpose.hasWritableFields, let category = result.purpose.categoryID, category != result.purpose.id {
@@ -164,7 +168,10 @@ import Observation
         saving = true
         defer { saving = false }
         do {
-            guard let api = deps.api() else { throw APIError(status: 0, message: String(localized: "Not connected to the hub yet")) }
+            guard let api = requestAPI ?? deps.api().map({ $0.manager($0.managerID ?? $0.shownManager) }) else {
+                throw APIError(status: 0, message: String(localized: "Not connected to the hub yet"))
+            }
+            requestAPI = api
             let binding = ModelBinding(provider: Self.trim(draft.provider), model: Self.trim(draft.model), effort: Self.trim(draft.effort),
                                        runtime: Self.trim(draft.runtime))
             let patch = ModelConfigurationPatch(revision: purpose.revision, binding: binding,

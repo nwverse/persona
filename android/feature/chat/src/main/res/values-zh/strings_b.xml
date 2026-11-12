@@ -44,6 +44,7 @@
     <string name="chat_chrome_more">更多操作</string>
     <string name="chat_chrome_actions_title">会话操作</string>
     <string name="chat_chrome_todo">待办 · %1$s</string>
+    <string name="chat_chrome_terminal">终端</string>
     <string name="chat_chrome_search">搜索</string>
     <string name="chat_chrome_files">文件</string>
     <string name="chat_chrome_details">会话详情</string>

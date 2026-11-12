@@ -117,6 +117,10 @@
       "sf": "trash",
       "phosphor": "trash"
     },
+    "diagnostics": {
+      "sf": "stethoscope",
+      "phosphor": "gauge"
+    },
     "dictate": {
       "sf": "mic",
       "phosphor": "microphone"
@@ -140,6 +144,10 @@
     "down": {
       "sf": "arrow.down",
       "phosphor": "arrow-down"
+    },
+    "draftReply": {
+      "sf": "pencil.and.scribble",
+      "phosphor": "note-pencil"
     },
     "edit": {
       "sf": "pencil",
@@ -233,9 +241,17 @@
       "sf": "target",
       "phosphor": "target"
     },
+    "groupChat": {
+      "sf": "rectangle.3.group.bubble",
+      "phosphor": "chats-circle"
+    },
     "handToAI": {
       "sf": "paperplane",
       "phosphor": "paper-plane-tilt"
+    },
+    "handledElsewhere": {
+      "sf": "checkmark.bubble",
+      "phosphor": "checks"
     },
     "health": {
       "sf": "heart",
@@ -608,6 +624,10 @@
     "translate": {
       "sf": "translate",
       "phosphor": "translate"
+    },
+    "unarchive": {
+      "sf": "tray.and.arrow.up",
+      "phosphor": "arrow-u-up-left"
     },
     "undo": {
       "sf": "arrow.uturn.backward",

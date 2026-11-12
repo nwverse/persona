@@ -8,6 +8,13 @@
 // difference is only an upgrade hint.
 package nodeproto
 
+// EventRestarting announces a planned resident exec; CodeRestarting refuses a request before it starts.
+// Both are optional: older managers ignore the event and newer managers never replay an ambiguous dropped call.
+const (
+	EventRestarting = "node.restarting"
+	CodeRestarting  = "node_restarting"
+)
+
 // PersonaContracts is the optional bidirectional naming capability. It does not
 // change the node protocol floor or become a required capability.
 const PersonaContracts = "persona_contracts_v1"

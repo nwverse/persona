@@ -27,13 +27,11 @@ export interface LineProps {
   sid: string;
   streaming?: string;
   expandFold: (f: Item) => Promise<void>;
-  /** "Retry" on an API error card (only on the last line, while the agent is not working). */
-  onRetry?: () => void;
-  onEditLastMessage?: () => void;
-  /** The hub's word on what to fix for this line's model error (the session's turn_error_code, last line only). */
-  fix?: { title: string; detail: string; action: string } | null;
-  /** A Persona conversation: a model error's text may name a fix in Persona's settings. Agent sessions keep "Retry". */
+  /** A Persona conversation: a model error's text may name a fix in Persona's settings. */
   assistant?: boolean;
+  /** The hub's word on what to fix for the turn's model error (the session's turn_error_code): the chat's last line only,
+   *  so its record reads as its banner did. */
+  fix?: { title: string; detail: string; action: string } | null;
   /** The session is waiting out a subscription usage limit: the last error card says that, not that the turn was interrupted. */
   limit?: string;
   /** Inside an opened supervision trace, show complete injected inputs. */
@@ -51,7 +49,7 @@ export const ChatLineView = memo(function ChatLineView(props: LineProps) {
   );
 });
 
-function LineBody({ line, mid, sid, streaming, expandFold, onRetry, onEditLastMessage, fix, assistant, limit, trace, offscreen }: LineProps) {
+function LineBody({ line, mid, sid, streaming, expandFold, assistant, fix, limit, trace, offscreen }: LineProps) {
   switch (line.kind) {
     case "supervision":
       return <SupervisionLine line={line} mid={mid} sid={sid} streaming={streaming} expandFold={expandFold} assistant={assistant} />;
@@ -75,12 +73,12 @@ function LineBody({ line, mid, sid, streaming, expandFold, onRetry, onEditLastMe
       return <CompactDivider item={line.item} />;
     case "recaps":
       return <RecapChip items={line.items} />;
-    case "apiError": {
+    case "apiError":
+      // a record in the chat, as cindy's ErrorMessageCard: Retry and Edit last message belong to the banner over the
+      // composer (ErrorBanner), while this error is the one the chat stopped on
       if (limit) return <UsageLimitLine text={limit} />;
-      // the text-derived fix points at Persona's model settings: only for Persona's own conversations
-      const f = assistant ? (fix ?? turnErrorFix(line.info.code)) : null;
-      return <APIErrorCard info={line.info} count={line.count} at={line.item.ts} fix={f} onRetry={onRetry && retryable(line.info) && !f ? onRetry : undefined} onEditLastMessage={!assistant && line.info.code === "safeguards" ? onEditLastMessage : undefined} />;
-    }
+      // the fix points at Persona's model settings: only for Persona's own conversations
+      return <APIErrorCard info={line.info} count={line.count} at={line.item.ts} fix={assistant ? (fix ?? turnErrorFix(line.info.code)) : null} />;
   }
 }
 
@@ -252,20 +250,21 @@ function RecapStrip({ item, onClose }: { item: Item; onClose: () => void }) {
 }
 
 const CLOSED_RECAPS = "persona.closedRecaps";
+const DISMISSED_ERRORS = "persona.dismissedErrors";
 
-/** The recap closed per conversation (its id), kept in this browser. */
-export function closedRecap(key: string): string | undefined {
+/** What was closed in one conversation (`key`), by id, kept in this browser: the newest 200 or so conversations. */
+function closedIn(store: string, key: string): string | undefined {
   try {
-    return (JSON.parse(localStorage.getItem(CLOSED_RECAPS) ?? "{}") as Record<string, string>)[key];
+    return (JSON.parse(localStorage.getItem(store) ?? "{}") as Record<string, string>)[key];
   } catch {
     return undefined;
   }
 }
 
-export function closeRecap(key: string, id: string) {
+function closeIn(store: string, key: string, id: string) {
   let all: Record<string, string> = {};
   try {
-    all = JSON.parse(localStorage.getItem(CLOSED_RECAPS) ?? "{}");
+    all = JSON.parse(localStorage.getItem(store) ?? "{}");
   } catch {
     /* start over */
   }
@@ -273,41 +272,91 @@ export function closeRecap(key: string, id: string) {
   all[key] = id;
   const keys = Object.keys(all);
   if (keys.length > 300) for (const k of keys.slice(0, keys.length - 200)) delete all[k];
-  localStorage.setItem(CLOSED_RECAPS, JSON.stringify(all));
+  localStorage.setItem(store, JSON.stringify(all));
 }
+
+/** The recap closed per conversation (its id), kept in this browser. */
+export const closedRecap = (key: string) => closedIn(CLOSED_RECAPS, key);
+export const closeRecap = (key: string, id: string) => closeIn(CLOSED_RECAPS, key, id);
+
+/** The error banner dismissed per conversation (its `errorKey`), kept in this browser: only the newest error can be
+ *  dismissed, so one per conversation is all there is to keep. */
+export const dismissedError = (key: string) => closedIn(DISMISSED_ERRORS, key);
+export const dismissError = (key: string, error: string) => closeIn(DISMISSED_ERRORS, key, error);
 
 // ── model API errors ──
 
+type APIErrorLine = Extract<ChatLine, { kind: "apiError" }>;
+
+/** Which error a banner is about: the same error again after a retry folds into its line (foldAPIErrors) with a higher
+ *  count, and that is a new failure to say, so the count is part of it. */
+export const errorKey = (line: APIErrorLine) => `${line.id}#${line.count}`;
+
+/** The error the chat stopped on, over the composer (cindy's ErrorBanner, #5313): the card the chat would draw, with what
+ *  can be done about it now (Fix it, Retry, Edit last message) and ✕. While it is here the chat leaves the line out. */
+export function ErrorBanner({ line, assistant, limit, fix, onRetry, onEditLastMessage, onDismiss }: {
+  line: APIErrorLine;
+  assistant?: boolean;
+  /** Waiting out a subscription usage limit: the banner says when it resets, as the line would. */
+  limit?: string;
+  /** The hub's word on what to fix for the turn's model error (the session's turn_error_code). */
+  fix?: { title: string; detail: string; action: string } | null;
+  /** Sends "continue"; offered only for an error that may pass by itself and needs no fix. */
+  onRetry?: () => void;
+  onEditLastMessage?: () => void;
+  onDismiss: () => void;
+}) {
+  if (limit) return <UsageLimitLine text={limit} onDismiss={onDismiss} />;
+  // the text-derived fix points at Persona's model settings: only for Persona's own conversations
+  const f = assistant ? (fix ?? turnErrorFix(line.info.code)) : null;
+  return (
+    <APIErrorCard
+      info={line.info}
+      count={line.count}
+      at={line.item.ts}
+      fix={f}
+      onRetry={onRetry && retryable(line.info) && !f ? onRetry : undefined}
+      onEditLastMessage={!assistant && line.info.code === "safeguards" ? onEditLastMessage : undefined}
+      onDismiss={onDismiss}
+    />
+  );
+}
+
 /** A subscription usage limit, where an error card would have said the turn was interrupted: the same notice, with
  *  when it resets or goes on (cindy draws the limit as its error notice too). */
-function UsageLimitLine({ text }: { text: string }) {
-  return <ErrorNotice role="status" message={text} />;
+function UsageLimitLine({ text, onDismiss }: { text: string; onDismiss?: () => void }) {
+  return <ErrorNotice role="status" message={text} onDismiss={onDismiss} data-error-banner={onDismiss ? "" : undefined} />;
 }
 
 /** A model API error (cindy's error notice): why, in words, whether it passes by itself under it, then its actions; the
  *  ids, the status code, how many times in a row and the original are under "Error details". One the user must fix (not
  *  signed in, a wrong key, a model that is not there) says so instead, with "Fix it" (docs/assistant/onboarding.md 4.4). */
-function APIErrorCard({ info, count, at, onRetry, onEditLastMessage, fix }: { info: APIErrorInfo; count: number; at?: string; onRetry?: () => void; onEditLastMessage?: () => void; fix?: { title: string; detail: string; action: string } | null }) {
+function APIErrorCard({ info, count, at, onRetry, onEditLastMessage, fix, onDismiss }: { info: APIErrorInfo; count: number; at?: string; onRetry?: () => void; onEditLastMessage?: () => void; fix?: { title: string; detail: string; action: string } | null; onDismiss?: () => void }) {
   const sub = fix ? fix.detail : info.transient === true ? t("chat-lines.api_transient") : info.transient === false ? t("chat-lines.api_permanent") : "";
   const reason = (fix ? fix.title : info.reason) || t("chat-lines.reply_failed");
   return (
     <ErrorNotice
+      // the banner over the composer is the one with ✕ (ErrorBanner); it says the error out of the transcript, so it is a
+      // status of its own, as the usage limit and the failure note are
+      data-error-banner={onDismiss ? "" : undefined}
+      role={onDismiss ? "status" : undefined}
       message={reason}
       description={sub || undefined}
+      onDismiss={onDismiss}
       actions={
         <>
           {fix && (
-            <Button tone="primary" className="touch-hit h-7" onClick={() => runAction(fix.action, { onHelp: () => {} })}>
+            <Button tone="primary" size="sm" className="touch-hit" onClick={() => runAction(fix.action, { onHelp: () => {} })}>
               {t("chat-lines.fix_it")}
             </Button>
           )}
           {onRetry && (
-            <Button icon="retry" className="touch-hit h-7" onClick={onRetry}>
+            <Button icon="retry" size="sm" className="touch-hit" title={t("chat-lines.retry_title")} onClick={onRetry}>
               {t("chat-lines.retry")}
             </Button>
           )}
           {onEditLastMessage && (
-            <Button icon="pencil" className="touch-hit h-7" onClick={onEditLastMessage}>
+            <Button icon="pencil" size="sm" className="touch-hit" onClick={onEditLastMessage}>
               {t("rewind.edit_last")}
             </Button>
           )}
