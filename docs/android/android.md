@@ -52,6 +52,8 @@ For `shots-live`, DEBUG automation installs `AssistantStackProbe` and writes `as
 adaptive probe. It carries the visible route, stable selected item key and the open Inbox reply's HMAC and focus, so tapped
 Lark / mail / event details and rotation / resize / Back assertions use real evidence. Release installs no backend or listener
 and writes no file; reply plaintext is never persisted. `ReplyComposerField` only adds the optional probe page and field tag.
+A scene reads this evidence only with `requires.stackProbe=true`; without that explicit opt-in, the runner keeps the original
+shell-position route contract, including `<tab>/chat`, and ignores the stack probe's navigation and draft pages.
 
 The Assistant tab's menu (the selected tab on Glass, the title elsewhere) has iOS's items in iOS's order (#4339 C18,
 `assistantMenu`): **Connection details** while the hub is out of reach, **Knowledge**, **Details** (the assistant's settings
