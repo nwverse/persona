@@ -867,6 +867,17 @@ func (d *Devices) Session(id, session string) (proto.Session, bool) {
 	return m.session(session)
 }
 
+// Watched says whether the hub watches a machine's session for its apps (session.watch): an app has it open.
+func (d *Devices) Watched(id, session string) bool {
+	m := d.machineByID(id)
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.watched[session]
+}
+
 // Sessions are a machine's sessions as its node listed them; false when there is no such machine.
 func (d *Devices) Sessions(id string) ([]proto.Session, bool) {
 	m := d.machineByID(id)

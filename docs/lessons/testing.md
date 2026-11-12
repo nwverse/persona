@@ -797,6 +797,10 @@ The test binary does not recognize `voice`, reruns the whole package recursively
 
 `t.TempDir` removes all of a test's temporary directories in one cleanup, added at its first call, and cleanups run last added, first called. A test that first calls it after starting extension programs (`extensionTestHub` adds the cleanup that stops them) has its directories removed while the programs still run. A program the test's last change restarted (a provider switched back on restarts the extensions holding its references) then writes into a directory being removed, and the run fails with only `TempDir RemoveAll cleanup: … directory not empty`, about one run in three. `startTestExtensions` therefore calls `t.TempDir` before adding its cleanup. Anything else that starts processes writing into a test's directories must also add its stop cleanup after the first `t.TempDir` call.
 
+## A stub PATH and HOME do not hide fixed paths a script checks (2026-11-12, #5434)
+
+`install.sh` and `ensure-herdr.sh` look for herdr in `PATH`, `$HOME/.local/bin`, `$HOME/bin` and the fixed `/opt/homebrew/bin` and `/usr/local/bin`. Their tests set a stub `PATH` and a temporary `HOME`, so they passed on hosted runners but failed on any Mac with herdr from Homebrew: the scripts found the real one and never ran the fake installer. A test of a shell script that looks at absolute paths runs a copy pointing those paths into its temporary root, asserting the rewritten text is found exactly once so a moved path fails loudly instead of quietly testing the real machine again (`InstallHerdrTests` in `scripts/deploy/test_compressed_publish.py`). Keep anything the script finds relative to itself (`$(dirname "$0")/../persona_identity.py`) at the same relative place in the copy.
+
 ## Web screenshots on Linux unsupported by Playwright (2026-11-06, #3140)
 
 - Symptom: `npx playwright install chromium` on Debian 11 says "does not support chromium on debian11-x64"; ubuntu20.04 packages also fail. Playwright MCP looks for `/opt/google/chrome/chrome` and cannot launch either.

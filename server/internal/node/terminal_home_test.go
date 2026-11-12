@@ -91,13 +91,24 @@ func TestTerminalControlGivesThePaneItsSizeBack(t *testing.T) {
 	_ = hub.Notify("terminal.resize", map[string]any{"session_id": "s1", "cols": 40, "rows": 20}) // the phone rotates
 	waitFor(t, "the phone's resize", func() bool { return strings.Contains(readLog(log), `"cols":40`) })
 	waitFor(t, "its frame", func() bool { return countFrames(events()) == 2 })
+	stream := n.termStreamOf("s1")
+	if stream == nil {
+		t.Fatal("the control is not streaming")
+	}
 	n.terminalUnwatch("s1")
 	waitFor(t, "the release", func() bool { return strings.Contains(readLog(log), "released") })
 	got := logAfter(readLog(log), "start ")
 	if len(got) < 3 || got[len(got)-2] != homeResize || got[len(got)-1] != "released" {
 		t.Fatalf("herdr got %q, want the resize to 189×52 right before the release", got)
 	}
-	time.Sleep(100 * time.Millisecond) // a frame sent late would be here by now
+	if !stream.isLeaving() {
+		t.Fatal("the control did not begin leaving")
+	}
+	waitFor(t, "the last frame's timer", func() bool {
+		stream.mu.Lock()
+		defer stream.mu.Unlock()
+		return time.Since(stream.lease) >= 30*time.Millisecond
+	})
 	if k := countFrames(events()); k != 2 {
 		t.Fatalf("%d frames went to the hub, want 2 (none after letting go)", k)
 	}
@@ -184,6 +195,31 @@ func TestTerminalControlHandOverThatFailsGivesTheSizeBack(t *testing.T) {
 	got := logAfter(readLog(log), "")
 	if len(got) != 4 || got[1] != "released" || got[2] != "start terminal session control w1:p1 --cols 189 --rows 52" || got[3] != "released" {
 		t.Fatalf("herdr got %q, want the first released, then a control at 189×52 let go at once", got)
+	}
+}
+
+// #5409: a pane is mirrored at its terminal's size, which pane.layout (120 × 40 here, herdr's default while no client
+// is attached) is not; when the terminal changes size the observe starts over at the new one.
+func TestTerminalWatchObservesAtTheTerminalsSize(t *testing.T) {
+	shell, tty := paneShell(t, 189, 52)
+	bin, log := fakeHomeHerdr(t, shell.Process.Pid)
+	n, _, _ := controlNode(t, bin)
+	t.Cleanup(func() { n.terminalUnwatch("s1") })
+	res, err := n.terminalWatch(context.Background(), "s1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res["cols"] != 189 || res["rows"] != 52 || res["control"] != false {
+		t.Fatalf("watch = %v", res)
+	}
+	waitFor(t, "the observe", func() bool { return strings.Contains(readLog(log), "observe w1:p1 --cols 189 --rows 52") })
+	if err := pty.Setsize(tty, &pty.Winsize{Cols: 150, Rows: 45}); err != nil { // a herdr client attached at its size
+		t.Fatal(err)
+	}
+	waitFor(t, "the observe at the new size", func() bool { return strings.Contains(readLog(log), "observe w1:p1 --cols 150 --rows 45") })
+	n.terminalUnwatch("s1")
+	if strings.Contains(readLog(log), "--cols 120") {
+		t.Fatalf("observed at the layout's size: %q", readLog(log))
 	}
 }
 
