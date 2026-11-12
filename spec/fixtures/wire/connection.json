@@ -108,7 +108,9 @@
         "sessions_manager",
         "sessions_page_counts",
         "sessions_hierarchy",
-        "machine_rename"
+        "machine_rename",
+        "assistant_views",
+        "assistant_html_bridge"
       ],
       "fp": "",
       "hub_id": "00000000-0000-4000-8000-000000000001",
@@ -229,7 +231,9 @@
           "sessions_manager",
           "sessions_page_counts",
           "sessions_hierarchy",
-          "machine_rename"
+          "machine_rename",
+          "assistant_views",
+          "assistant_html_bridge"
         ],
         "/type": "hello"
       }
@@ -342,7 +346,9 @@
         "sessions_manager",
         "sessions_page_counts",
         "sessions_hierarchy",
-        "machine_rename"
+        "machine_rename",
+        "assistant_views",
+        "assistant_html_bridge"
       ],
       "fp": "",
       "hub_id": "00000000-0000-4000-8000-000000000001",
@@ -453,7 +459,9 @@
           "sessions_manager",
           "sessions_page_counts",
           "sessions_hierarchy",
-          "machine_rename"
+          "machine_rename",
+          "assistant_views",
+          "assistant_html_bridge"
         ],
         "/ok": true,
         "/version": "fixture-version"
