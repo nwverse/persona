@@ -1880,7 +1880,13 @@ A worktree's display name and its Agents' conversation names are different comma
   were in a picker's own menu (a `Picker` in a `Form`), not an inline picker inside a `Menu`.
 - The modes became `Toggle`s, the current one on, in a `Section { … } header: { Text }`: a menu draws that header, as the
   composer's ultracode section does, and a check mark beside the switch that is on, as a picker does. The Agents menu's
-  Display note (#3182) is the second shape above; look at it in a shot before counting on it.
+  Display note (#3182) was the second shape above (#3753 has since removed it).
+- The composer's model menus had both shapes (2026-11-12, #4322): `Section("Model") { Button("Other Model…"); Picker … }`
+  drew "Model" over Other Model… only, below the whole model list, and `Section("Thinking Effort") { Picker … }` drew no
+  title. A check that only looks for the words passes on the first: a UI test checks that each title stands above its own
+  rows (`MenuSectionTitleTests`). These menus open upward, list their items the other way round and scroll, and only the
+  rows on screen are in the element tree, so the test drags the menu down until each title has shown. Titled choices in
+  a menu are `MenuChoice` switches (`apple/Persona/Views/Chat/SessionModes.swift`).
 
 ## A menu inside a menu keeps the items it was first built with (2026-11-09, #1644)
 
