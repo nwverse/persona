@@ -34,6 +34,7 @@ This is a reference contract, not a claim of identical platform rasterization. A
 - Entry: Settings › Interface style (`AppearanceSettings`). Each of the three options has a small preview drawn with that style's real components; tapping one applies it immediately, no restart. The preview is a one-third-size Agents page: one computer, one of its spaces and three sessions, with the same two-destination navigation above it.
 - The choice is stored on the device (`AppStyleStore`, SharedPreferences `persona-appearance`), not on the hub, and survives re-pairing.
 - Debug builds can set it at launch: `am start … --es debug.style glass|brief|board` (used by the screenshot script).
+- Layout density (#5564), in the same page under Light/Dark: Standard (the default) or Compact. Compact scales spacing (`Tokens.Space` and `N.dp.dense`, `LayoutDensity.spaceScale` 0.5), the page margin (`pagePadding`, `pageScale` 0.625), corner radii (`Tokens.Radius`, `PersonaTheme.shapes`, `N.dp.corner`, `radiusScale` 0.6; pills stay pills) and minimum row heights (`N.dp.row`, `rowScale` 0.8), applied at once in every window (the scales are snapshot state that the getters read); text and icons keep their sizes. Kept with the style in `AppStyleStore` (`layout-density`). Something sized with a spacing or radius token uses `Tokens.Space.Standard` / `Tokens.Radius.Standard`, which keep their size; a file-level `val` that holds a gap is a getter, so it follows the setting (`docs/design/DESIGN_SYSTEM.md` §2.3).
 
 ### 1.2 Glass transparency and fallbacks
 
@@ -199,7 +200,9 @@ Components live in `Agents.kt` in `core:designsystem` (`MachineChip`, `AgentTree
   The avatar opens one shared history sidebar from either page; its bottom gear opens Settings. Inbox, To-dos, Computers and extension pages are secondary sidebar destinations.
   In a regular window the same sidebar is a column beside the Assistant page instead of a drawer (section 3.1).
 - Each tab has its own back stack and badge. Visited tabs stay composed: switching away only stops placement (no drawing or touch), and disables back handling for that tab
-  (`rememberNavigationEventDispatcherOwner(enabled = false)`). Switching back leaves the page exactly as it was, with no recreation, reload, empty-state flash or spinner.
+  (`rememberNavigationEventDispatcherOwner(enabled = false)`). Selecting Assistant retains its current conversation. Selecting Agents from Assistant removes destinations above its list root (#5638),
+  without replacing that root or its list state. Direct session entries and notification/link routing still open details; they do not use explicit tab selection.
+  Re-tapping an already selected Glass home segment still opens its menu.
 - The top switcher belongs only to the two primary roots (`NavEntryDecorator`). Secondary pages cover it and carry Back instead.
   There is no bottom dock or navigation rail. In Glass each page samples its own content, never blurring another page.
 - Transitions: on push, the entire opaque new page slides in from the right with the old page underneath; on back, the top page slides away to reveal the one below. No crossfades (two translucent pages overlap their text);

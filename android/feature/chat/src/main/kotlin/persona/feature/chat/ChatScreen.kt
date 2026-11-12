@@ -1,5 +1,6 @@
 package persona.feature.chat
 
+import persona.core.designsystem.dense
 import persona.core.designsystem.text
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalDensity
@@ -62,7 +63,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 // Finish the fade in the existing gap below the tab strip, without changing the chat's content padding.
-private val TabbedChatScrollEdgeStyle = ScrollEdgeStyle.Gradient.copy(overlap = Tokens.Space.s)
+private val TabbedChatScrollEdgeStyle = ScrollEdgeStyle.Gradient.copy(overlap = Tokens.Space.Standard.s)
 
 /** The shell supplies repositories and optional terminal/navigation affordances, never wire clients. */
 @OptIn(ExperimentalMaterial3Api::class, FlowPreview::class)
@@ -1124,7 +1125,7 @@ private fun ChatPage(
                             if (historyOnly) footer?.invoke()
                             else if (readOnly) Text(stringResource(R.string.chat_screen_subagent_read_only), Modifier.padding(Tokens.Space.m), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
                             else {
-                                // What waits in the agent's queue sits right above the composer, while the composer shows (Agents only, as iOS).
+                                // What waits in the agent's queue sits right above the composer, while the composer shows (Persona's further down).
                                 // Not while a "/" quick message is being picked: the list opens above the field, and with the
                                 // keyboard up the queue, the list and the status line together climbed over the top bar.
                                 if (renderStyle != ChatRenderStyle.Assistant && (requests.isEmpty() || requestCollapsed) &&
@@ -1155,6 +1156,11 @@ private fun ChatPage(
                                     // Where the next message goes, with the composer, never only inside the In progress tray (iOS RouteChip, #4339 C15).
                                     if (composerShown(panel, requestCollapsed)) TaskRouteChip(host)
                                 }
+                                // Persona's queue: its own messages, then those relayed from elsewhere, under its entries and right
+                                // above the composer, as iOS's footer has it (Glass, #4339 C6).
+                                if (renderStyle == ChatRenderStyle.Assistant && glass && composerShown(panel, requestCollapsed) &&
+                                    SlashCommand.suggestions(composer.value.text, clear = true).isEmpty())
+                                    ChatQueueStrip(session, chrome.actions, composer, { notice = it }, sessions::refresh)
                                 val claudeCommands = session?.canTypeClaudeCommands == true
                                 ChatComposer(key, composer, session?.status == "working", sending || submittedDraft != null,
                                     // /clear and /model type into Claude's pane: Claude in a terminal engine only (positive check).
@@ -1244,8 +1250,8 @@ private fun ChatPage(
                             }
                             ChatList(state = chatList, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(
                                 start = horizontalPadding, end = horizontalPadding,
-                                top = padding.calculateTopPadding() + 12.dp,
-                                bottom = padding.calculateBottomPadding() + 12.dp,
+                                top = padding.calculateTopPadding() + 12.dp.dense,
+                                bottom = padding.calculateBottomPadding() + 12.dp.dense,
                             )) {
                                 errorLine?.let { error -> item(key = ERROR_ROW, contentType = ERROR_ROW) { ChatSystemLine(error, failed = true) } }
                                 readyLine?.let { words -> item(key = READY_ROW, contentType = READY_ROW) { TypingLine(words) } }
@@ -1331,7 +1337,7 @@ private fun ChatPage(
                             }
                             if (!chatList.followsEnd) JumpToLatest(timeline.newMessageCount(snapshot.items, newestVisibleItem, readThrough),
                                 onClick = chatList::returnToLatest,
-                                modifier = Modifier.align(Alignment.BottomEnd).padding(end = horizontalPadding, bottom = padding.calculateBottomPadding() + 16.dp))
+                                modifier = Modifier.align(Alignment.BottomEnd).padding(end = horizontalPadding, bottom = padding.calculateBottomPadding() + 16.dp.dense))
                         }
                     }
                 }

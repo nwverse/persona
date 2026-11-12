@@ -1,5 +1,6 @@
 package persona.feature.chat
 
+import persona.core.designsystem.dense
 import persona.core.designsystem.text
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -116,7 +117,7 @@ internal fun InteractionPanel(
         }
     }
     if (all) JSheet(onDismiss = { all = false }, title = stringResource(R.string.chat_request_list_title)) {
-        LazyColumn(Modifier.fillMaxWidth().heightIn(max = maxHeight), contentPadding = PaddingValues(bottom = 16.dp)) {
+        LazyColumn(Modifier.fillMaxWidth().heightIn(max = maxHeight), contentPadding = PaddingValues(bottom = 16.dp.dense)) {
             itemsIndexed(requests, key = { _, interaction -> interaction.id }) { i, interaction ->
                 JRow(interaction.headline.text(), value = "${i + 1}", onClick = { select(i); all = false; full = true })
             }
