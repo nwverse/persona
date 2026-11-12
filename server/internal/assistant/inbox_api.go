@@ -118,6 +118,8 @@ func (s *Service) inboxRoutes() {
 			// Nothing the hub can call is set up for drafting: a coded answer the apps can explain, not a bare 502
 			// (an internal error's text never reaches the screen).
 			apierr.WriteCode(w, http.StatusServiceUnavailable, assistantwire.CodeModelUnavailable, i18n.Err("assistant-inbox.draft_no_model"))
+		case errors.Is(err, errDraftWithheld): // the drafts kept repeating what an extension marked never to quote
+			apierr.WriteCode(w, http.StatusUnprocessableEntity, "draft_withheld", err)
 		case err != nil:
 			apierr.Write(w, http.StatusBadGateway, err)
 		default:
