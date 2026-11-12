@@ -97,7 +97,7 @@ private fun GlassQueueStrip(
     val active = enabled && !busy
     val line = type.micro.copy(fontWeight = FontWeight.SemiBold)
     Column(
-        modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = Tokens.Space.xs)
+        modifier.fillMaxWidth().padding(horizontal = 10.dp.dense, vertical = Tokens.Space.xs)
             .floatingSurface(RoundedCornerShape(Tokens.Radius.panel)).animateContentSize(PersonaTheme.motion.size()),
     ) {
         Row(
@@ -108,7 +108,7 @@ private fun GlassQueueStrip(
         ) {
             JIcon(PhIcons.Tray, null, size = Tokens.Space.l, tint = palette.ink2)
             Text(title, style = line, color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-            if (busy) JSpinner(Modifier.size(Tokens.Space.m), stroke = Tokens.Space.xxs)
+            if (busy) JSpinner(Modifier.size(Tokens.Space.Standard.m), stroke = Tokens.Space.Standard.xxs)
             else sendNow?.let { SendNowButton(it, line, onSendNow) }
             JIcon(if (expanded) PersonaIcons.expand else PhIcons.CaretRight, null, size = Tokens.Space.m, tint = palette.ink3)
         }
@@ -151,38 +151,38 @@ private fun GlassQueueStrip(
 private fun PlainQueueStrip(title: String, items: List<String>, onItem: (Int) -> Unit, modifier: Modifier, busy: Boolean, enabled: Boolean) {
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
-    val shape = RoundedCornerShape(if (style == AppStyle.Brief) 20.dp else 8.dp)
+    val shape = RoundedCornerShape(if (style == AppStyle.Brief) 20.dp.corner else 8.dp.corner)
     val outer = when (style) {
-        AppStyle.Brief -> Modifier.padding(horizontal = 12.dp, vertical = 4.dp).clip(shape).background(palette.surface)
-        else -> Modifier.padding(horizontal = 10.dp, vertical = 4.dp).clip(shape).background(palette.surface).border(1.dp, palette.line, shape)
+        AppStyle.Brief -> Modifier.padding(horizontal = 12.dp.dense, vertical = 4.dp.dense).clip(shape).background(palette.surface)
+        else -> Modifier.padding(horizontal = 10.dp.dense, vertical = 4.dp.dense).clip(shape).background(palette.surface).border(1.dp, palette.line, shape)
     }
     val active = enabled && !busy
-    Column(modifier.fillMaxWidth().then(outer).padding(top = 10.dp, bottom = 4.dp)) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+    Column(modifier.fillMaxWidth().then(outer).padding(top = 10.dp.dense, bottom = 4.dp.dense)) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp.dense), verticalAlignment = Alignment.CenterVertically) {
             JIcon(PhIcons.Tray, null, size = 16.dp, tint = palette.ink2)
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(8.dp.dense))
             Text(title, style = PersonaTheme.type.caption, color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             if (busy) JSpinner(Modifier.size(14.dp), stroke = 1.8.dp)
         }
-        Column(Modifier.fillMaxWidth().heightIn(max = 184.dp).verticalScroll(rememberScrollState()).padding(top = 4.dp)) {
+        Column(Modifier.fillMaxWidth().heightIn(max = 184.dp).verticalScroll(rememberScrollState()).padding(top = 4.dp.dense)) {
             val itemActions = stringResource(R.string.designsystem_queue_actions)
             items.forEachIndexed { index, text ->
                 val spoken = stringResource(R.string.designsystem_queue_item, index + 1, text)
-                if (index > 0) JDivider(Modifier.padding(start = 50.dp, end = 14.dp))
+                if (index > 0) JDivider(Modifier.padding(start = 50.dp.dense, end = 14.dp.dense))
                 Row(
-                    Modifier.fillMaxWidth().heightIn(min = 44.dp)
+                    Modifier.fillMaxWidth().heightIn(min = 44.dp.row)
                         .clickable(enabled = active, role = Role.Button, onClickLabel = itemActions) { onItem(index) }
                         .semantics(mergeDescendants = true) { contentDescription = spoken }
-                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                        .padding(horizontal = 14.dp.dense, vertical = 8.dp.dense),
                     verticalAlignment = Alignment.Top,
                 ) {
                     QueueNumber(index + 1)
-                    Spacer(Modifier.width(12.dp))
+                    Spacer(Modifier.width(12.dp.dense))
                     Text(text, style = PersonaTheme.type.callout, color = palette.ink, maxLines = 2, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f).padding(top = 1.dp))
+                        modifier = Modifier.weight(1f).padding(top = 1.dp.dense))
                     if (enabled) {
-                        Spacer(Modifier.width(8.dp))
-                        JIcon(PhIcons.DotsThree, null, size = 18.dp, tint = palette.ink3, modifier = Modifier.padding(top = 2.dp))
+                        Spacer(Modifier.width(8.dp.dense))
+                        JIcon(PhIcons.DotsThree, null, size = 18.dp, tint = palette.ink3, modifier = Modifier.padding(top = 2.dp.dense))
                     }
                 }
             }

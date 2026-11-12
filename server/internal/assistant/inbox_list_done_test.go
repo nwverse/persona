@@ -251,3 +251,30 @@ func TestInboxHistoryHoldsWhatTheListLeavesOut(t *testing.T) {
 		t.Fatal("a Feishu card's button finds an item done past the window")
 	}
 }
+
+// Folders count the list's window, not the list: a folder also counts its done items past the cut (GET
+// /api/v1/inbox/folders and the inbox_folders tool say how many items a folder has, not how many rows are listed).
+func TestInboxFoldersCountTheWindow(t *testing.T) {
+	now := time.Now()
+	items := cappedItems(now)
+	for _, it := range items {
+		if it.Connector == nil {
+			it.Folder = "work"
+		}
+	}
+	h := memoInbox(t, items)
+	listed := 0
+	for _, it := range h.inboxList(false) {
+		if it.Folder == "work" {
+			listed++
+		}
+	}
+	h.inbox.mu.Lock()
+	folders := h.inbox.folders(false)
+	h.inbox.mu.Unlock()
+	// two open items and inboxListDone+20 done within the window (mail:aged is past it); the list has the newest
+	// inboxListDone of the done ones
+	if len(folders) != 1 || folders[0].Count != 2+inboxListDone+20 || folders[0].Open != 2 || listed != 2+inboxListDone {
+		t.Fatalf("folders %+v, %d listed in the folder", folders, listed)
+	}
+}
