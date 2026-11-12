@@ -464,8 +464,8 @@ struct TodoCalendarTimeline: View {
                 let column = (geo.size.width - gutter) / CGFloat(max(days.count, 1))
                 ForEach(Array(days.enumerated()), id: \.offset) { i, day in
                     dayColumn(day, width: column, now: now)
-                        .frame(width: column, height: hour * 24)
-                        .offset(x: gutter + column * CGFloat(i))
+                        .calendarPlaced(at: CGPoint(x: gutter + column * CGFloat(i), y: .zero),
+                                        size: CGSize(width: column, height: hour * 24))
                 }
             }
         }
@@ -553,22 +553,21 @@ struct TodoCalendarTimeline: View {
                         if group.count == 1 {
                             // one to-do can be moved; several sharing a block open their day
                             carried(CalendarEntryBlock(entry: group[0], narrow: true), group[0])
-                                .frame(width: width - Theme.Space.xs, height: Theme.Size.tapTarget - Theme.Space.xxs)
                         } else {
                             Button { pickDay(day) } label: { CalendarGroupBlock(entries: group) }
                                 .buttonStyle(.plain)
-                                .frame(width: width - Theme.Space.xs, height: Theme.Size.tapTarget - Theme.Space.xxs)
                         }
                     }
-                    .offset(x: Theme.Space.xxs, y: y(start) + pixel)
+                    .calendarPlaced(at: CGPoint(x: Theme.Space.xxs, y: y(start) + pixel),
+                                    size: CGSize(width: width - Theme.Space.xs, height: Theme.Size.tapTarget - Theme.Space.xxs))
                 }
             } else {
                 ForEach(TodoCalendar.lanes(mine, minutes: blockMinutes)) { placed in
                     let lane = (width - Theme.Space.xs) / CGFloat(placed.lanes)
                     let start = TodoCalendar.minutes(placed.entry.start, in: day, calendar: calendar)
                     carried(CalendarEntryBlock(entry: placed.entry), placed.entry)
-                        .frame(width: lane - Theme.Space.xxs, height: Theme.Size.tapTarget - Theme.Space.xxs)
-                        .offset(x: Theme.Space.xxs + lane * CGFloat(placed.lane), y: y(start) + pixel)
+                        .calendarPlaced(at: CGPoint(x: Theme.Space.xxs + lane * CGFloat(placed.lane), y: y(start) + pixel),
+                                        size: CGSize(width: lane - Theme.Space.xxs, height: Theme.Size.tapTarget - Theme.Space.xxs))
                 }
             }
             // where a dragged to-do would land, over what is there, the whole column wide

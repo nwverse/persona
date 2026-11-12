@@ -140,6 +140,45 @@ nonisolated struct MonthDropMap: Equatable {
     static func point(_ p: CGPoint) -> String { "(\(Int(p.x)),\(Int(p.y)))" } // i18n-ignore: DEBUG trace
     static func rect(_ r: CGRect) -> String { "\(point(r.origin))+\(Int(r.width))x\(Int(r.height))" } // i18n-ignore: DEBUG trace
 }
+
+#if os(iOS)
+/// Notes in the drag trace, for each touch on the calendar's window, which view it went to and how many of the
+/// calendar's holds were given it (an iPad's finger never reached the axis's blocks, #2045). It never recognizes
+/// anything: it fails as the touch comes down.
+struct CalendarTouchProbe: UIViewRepresentable {
+    func makeUIView(context: Context) -> Anchor { Anchor() }
+    func updateUIView(_ view: Anchor, context: Context) {}
+
+    final class Anchor: UIView {
+        private let probe = Probe()
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            probe.view?.removeGestureRecognizer(probe)
+            window?.addGestureRecognizer(probe)
+        }
+    }
+
+    final class Probe: UIGestureRecognizer {
+        init() {
+            super.init(target: nil, action: nil)
+            cancelsTouchesInView = false
+            delaysTouchesBegan = false
+            delaysTouchesEnded = false
+        }
+
+        override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+            super.touchesBegan(touches, with: event)
+            for touch in touches {
+                let view = touch.view.map { String(String(describing: type(of: $0)).prefix(32)) } ?? "none" // i18n-ignore: DEBUG trace
+                let holds = touch.gestureRecognizers?.filter { $0 is CalendarHoldRecognizer }.count ?? .zero
+                CalendarDragTrace.shared.note("touch \(view) holds \(holds) at \(CalendarDragTrace.point(touch.location(in: nil)))") // i18n-ignore: DEBUG trace
+            }
+            state = .failed
+        }
+    }
+}
+#endif
 #endif
 
 extension View {
@@ -186,6 +225,15 @@ extension View {
         #endif
     }
 
+    /// The view `size` big with its top leading corner at `origin` in its parent, placed by layout. Not `.offset`: that
+    /// moves only the drawing, and in a scroll view a gesture's touches can still be looked for where the view was laid
+    /// out (an iPad's finger never reached the axis's blocks, #2045; SwiftUI's offset buttons in scroll views, FB17939266).
+    func calendarPlaced(at origin: CGPoint, size: CGSize) -> some View {
+        let frame = CGRect(origin: origin, size: size)
+        return self.frame(width: size.width, height: size.height)
+            .position(x: frame.midX, y: frame.midY)
+    }
+
     /// A to-do that opens on a tap, as a plain button; nil: not a button.
     @ViewBuilder private func calendarButton(_ open: (() -> Void)?) -> some View {
         if let open {
@@ -229,6 +277,10 @@ final class CalendarHoldRecognizer: UIGestureRecognizer {
     private var start: CGPoint?
     private var pointer = false
     private var timer: Timer?
+
+    /// How far down the touch has gone since it came down: a pointer is picked up only once it has moved, a held finger
+    /// may have wandered a little. The carried to-do keeps the touch where it was first put on it.
+    var travel: CGFloat { start.map { location(in: nil).y - $0.y } ?? .zero }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
         super.touchesBegan(touches, with: event)
@@ -340,7 +392,7 @@ struct CalendarHold: UIGestureRecognizerRepresentable {
         let point = context.converter.location(in: .named(space))
         switch recognizer.state {
         case .began:
-            began(point, context.converter.localLocation.y)
+            began(point, context.converter.localLocation.y - recognizer.travel)
         case .changed:
             moved(point)
         case .ended where recognizer.tapped:
@@ -357,9 +409,7 @@ struct CalendarHold: UIGestureRecognizerRepresentable {
 
 /// A to-do's button on the calendar that can be moved (#2045): the hold takes its touches, and a tap that is let go
 /// before the pick-up opens it. A hold attached around a plain button never began: `gesture(_:)` ranks below the
-/// button's own press, so a drag ended as a tap, which opened the to-do. No `.hoverEffect()` (a plain button has none
-/// either): with it an iPad's finger never reached the axis's blocks, which are placed by an offset, and a tap on one
-/// went to the axis under it (#2045's UI tests, round 5).
+/// button's own press, so a drag ended as a tap, which opened the to-do. No hover effect, as a plain button.
 struct CalendarCarryStyle: PrimitiveButtonStyle {
     var hold: CalendarHold
 
