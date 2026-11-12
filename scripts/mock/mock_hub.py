@@ -10868,6 +10868,8 @@ LAUNCHER_PRESETS = [
 # provider out of a group of several), and POST /api/v1/launchers/import/parse (also in every mode) reads pasted text into
 # provider drafts with the hub's rules (parse_paste): shell aliases / exports / K=V lines, settings.json, a curl command,
 # cindy's custom providers. A draft on gw_full's address matches it, with the same key when it carries sk-example-gw.
+# With the feature launcher_auth_auto (#5329): a typed-in gateway's test and model list take `auth` "auto" (Bearer, then
+# x-api-key) and say which one worked; the methods the fake gateway takes come from its address (_gateway_takes).
 MOCK_PROVIDERS = os.environ.get("MOCK_PROVIDERS") == "1"
 PROVIDER_LOG = {"post": None, "put": None, "test": [], "discover": [], "catalog": [], "import": None, "parse": []}
 PROVIDER_FIELDS = ("kind", "api", "base_url", "model", "small_model", "subagent_model", "custom_model", "custom_model_name",
@@ -10944,7 +10946,7 @@ if MOCK_PROVIDERS:
     _features_without_providers = features
 
     def features():
-        return _features_without_providers() + ["launcher_auto_name", "launcher_import_parse"]
+        return _features_without_providers() + ["launcher_auto_name", "launcher_import_parse", "launcher_auth_auto"]
 
 
 # The hub's names for providers it names itself (server/internal/assistant/models_presets.go): the slug rule, the
@@ -11549,6 +11551,53 @@ def _catalog_route(h, body):
     h.send_json({"models": out})
 
 
+# A probe's `auth` (#5329): "" (what is stored for `name`, else both headers as older clients get), a method, or "auto".
+PROBE_AUTHS = ("", "api_key", "bearer", "auto")
+
+
+def _gateway_takes(base_url):
+    """The sign-in methods the fake gateway at this address takes: only x-api-key with "xapikey" in it, only Bearer with
+    "bearer-only", else both."""
+    u = base_url or ""
+    if "xapikey" in u: return ("api_key",)
+    if "bearer-only" in u: return ("bearer",)
+    return ("bearer", "api_key")
+
+
+def _probe_signed_in(b):
+    """Whether the fake gateway takes a typed-in gateway's probe, and the method to report: the hub's probeTarget picks the
+    headers (Responses and Chat Completions Bearer only; a method as asked; "" what `name` stores, else both), and "auto"
+    sends Bearer, then x-api-key once that is refused, reporting the one that worked. (ok, method or None)."""
+    auth = b.get("auth") or ""
+    auto = False
+    if b.get("api") in ("responses", "chat"):
+        tries = [("bearer",)]
+    elif auth in ("api_key", "bearer"):
+        tries = [(auth,)]
+    elif auth == "auto":
+        tries, auto = [("bearer",), ("api_key",)], True
+    else:
+        stored = next((x for x in LAUNCHERS if b.get("name") and x["name"] == b.get("name")), None)
+        tries = [("bearer",) if stored.get("auth") == "bearer" else ("api_key",)] if stored else [("bearer", "api_key")]
+    takes = _gateway_takes(b.get("base_url"))
+    for sent in tries:  # each the headers of one request
+        took = next((m for m in sent if m in takes), None)
+        if took: return True, (took if auto else None)
+    return False, None
+
+
+def _probe_auth_refused(h, b):
+    """The hub's words for an `auth` it does not know (assistant-models_launchers.err_auth), or None."""
+    if (b.get("auth") or "") in PROBE_AUTHS: return None
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import readiness_mock  # the hub's own catalogs (server/internal/i18n)
+    return readiness_mock.t(readiness_mock.lang_of(h.headers.get("Accept-Language", "")), "assistant-models_launchers.err_auth")
+
+
+# What a typed-in gateway answers a sign-in it does not take.
+GATEWAY_REFUSED = "401 认证失败：网关不认这个 Key"
+
+
 def providers_route(h, method, p, q, body):
     """The provider endpoints under MOCK_PROVIDERS; True when it answered. The import (import_route, parse_route) and the
     catalog lookup (_catalog_route) answer with or without MOCK_PROVIDERS, and so do a typed-in gateway's "Test connection"
@@ -11574,20 +11623,32 @@ def providers_route(h, method, p, q, body):
         if not isinstance(b, dict) or b.get("preset"): return False
     if p == "/api/v1/launchers/test" and method == "POST":
         PROVIDER_LOG["test"].append(_provider_redacted(b))
+        refused = _probe_auth_refused(h, b)
+        if refused:
+            h.send_json({"ok": False, "ms": 0, "model": b.get("model", ""), "error": refused}); return True
         stored = next((x for x in LAUNCHERS if x["name"] == b.get("name")), None)
         if not b.get("api_key") and not (stored and stored.get("has_key")):
             h.send_json({"ok": False, "ms": 0, "model": b.get("model", ""), "error": "要填 API Key"}); return True
         if "bad" in (b.get("api_key") or "") or "bad" in (b.get("base_url") or ""):
-            h.send_json({"ok": False, "ms": 233, "model": b.get("model", ""), "error": "401 认证失败：网关不认这个 Key"}); return True
+            h.send_json({"ok": False, "ms": 233, "model": b.get("model", ""), "error": GATEWAY_REFUSED}); return True
         if BUILTIN_PRESETS and "region" in (b.get("api_key") or ""):  # Anthropic refusing the network's region (#4482), in the hub's words
             msg, code = readiness_mock.region_blocked(readiness_mock.lang_of(h.headers.get("Accept-Language", "")))
             h.send_json({"ok": False, "ms": 180, "model": b.get("model", ""), "error": msg, "code": code}); return True
-        h.send_json({"ok": True, "ms": 412, "model": b.get("model", "")}); return True
+        signed_in, found = _probe_signed_in(b)
+        if not signed_in:
+            h.send_json({"ok": False, "ms": 233, "model": b.get("model", ""), "error": GATEWAY_REFUSED, "code": "auth"}); return True
+        h.send_json(dict({"ok": True, "ms": 412, "model": b.get("model", "")}, **({"auth": found} if found else {}))); return True
     if p == "/api/v1/launchers/discover" and method == "POST":
         PROVIDER_LOG["discover"].append(_provider_redacted(b))
+        refused = _probe_auth_refused(h, b)
+        if refused:
+            h.send_json({"models": [], "error": refused}); return True
         if "bad" in (b.get("base_url") or ""):
             h.send_json({"models": [], "error": "网关没有 /v1/models", "code": "not_found"}); return True
-        h.send_json({"models": PROVIDER_DISCOVERED}); return True
+        signed_in, found = _probe_signed_in(b)
+        if not signed_in:
+            h.send_json({"models": [], "error": GATEWAY_REFUSED, "code": "auth"}); return True
+        h.send_json(dict({"models": PROVIDER_DISCOVERED}, **({"auth": found} if found else {}))); return True
     if p == "/api/v1/launchers" and method == "POST" and not b.get("preset"):
         PROVIDER_LOG["post"] = _provider_redacted(b)
         name = (b.get("name") or "").strip()
