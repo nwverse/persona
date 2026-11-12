@@ -191,8 +191,8 @@ Components live in `Agents.kt` in `core:designsystem` (`MachineChip`, `AgentTree
 - Transitions: on push, the entire opaque new page slides in from the right with the old page underneath; on back, the top page slides away to reveal the one below. No crossfades (two translucent pages overlap their text);
   tab switches do not animate.
 - Back on the first page of Agents goes to Assistant; secondary Inbox and Settings pages return to their originating page and tab.
-  Back on Assistant home exits the App.
-  With a chat open in Persona, back first goes to Persona home (handled by the assistant page itself), then another back exits.
+  There is no Assistant home page (#4339 C11, as iOS): Back on the main conversation exits the App.
+  With another conversation open, Back first goes to the main conversation, and on New chat's page to the conversation it was opened on (handled by the assistant page itself).
 - The top switcher consumes the status-bar inset once. Page composers continue to use their own navigation-bar and keyboard insets; no retired dock height is reserved.
 - There is only one background layer (requested 2026-11-01: one continuous background, divided by business cards above it): the shell, every page and detail placeholders draw `PageBackdrop`; Glass's status light is laid out across the whole window,
   so pages draw identical pixels at the same position. There are no seams between panes or between pages and embedded pages, and no separate backing panels; session cards, message cards and settings groups provide separation.
