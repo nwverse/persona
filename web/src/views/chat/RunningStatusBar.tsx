@@ -5,8 +5,8 @@
 // "Replying…", "Reading files…"), for everyday people (super rules 0 and 4). Right, how long the turn has run, in the
 // work summary's format, then in an Agent session either the latest speed ("42 tok/s", lib/token-rate.ts), a button
 // whose card shows the speed history, or the tokens written so far ("↓ 1.2k tok"); never both. It breathes once each
-// time its words or count move (output, not just time passing); when the turn ends it says ✓ Done for a second, then
-// fades out. Without a status line (another agent, an older hub) it counts from when the turn started.
+// time its words or count move (output, not just time passing); when the turn finishes it says ✓ Done for a second (a
+// turn waiting on you, stopped or cut off by an error keeps its last words), then fades out. Without a status line (another agent, an older hub) it counts from when the turn started.
 // Once the turn is over and a workflow keeps the agent working (#3434, `background_working`), it says what runs:
 // "Background workflow · Verify · 169/185+", timed from the workflow's start (the turn's own time read as if the agent
 // were still at it). The count stays whole on a narrow screen: the words before it give way first. An agent whose
@@ -106,6 +106,8 @@ function plainWord(step: RunStep): string {
 
 export interface RunningStatusProps {
   working: boolean;
+  /** Once it is not working: the turn finished (ChatView turnDone), so the bar says ✓ Done; otherwise its last words. */
+  done?: boolean;
   startedAt?: string;
   /** No live work line ticks in the chat: only an older hub's guess at a background workflow reads it (inBackground). */
   clock?: boolean;
@@ -177,7 +179,7 @@ type Phase = "on" | "linger" | "fading" | "off";
 
 /** The bar for a given status line (RunningStatusBar subscribes; tests render this). `speedKey`: the conversation its
  *  speed history is kept for while the page is open. */
-export function RunningStatusView({ live, working, startedAt, clock = true, plain, step, background, subtasks, offline, speedKey = "" }: RunningStatusProps & { live: SessionLive | null; offline?: boolean; speedKey?: string }) {
+export function RunningStatusView({ live, working, done: finished, startedAt, clock = true, plain, step, background, subtasks, offline, speedKey = "" }: RunningStatusProps & { live: SessionLive | null; offline?: boolean; speedKey?: string }) {
   const phase = usePhase(working);
   const [pinned, setPinned] = useState(false);
   // after the turn: what it last said, while it lingers and fades. Its status line goes a moment before the turn ends,
@@ -202,7 +204,7 @@ export function RunningStatusView({ live, working, startedAt, clock = true, plai
   if (working) lastElapsed.current = counted;
   const elapsed = working ? counted : lastElapsed.current;
   const tokens = useCountUp(shown?.tokens_down ?? 0);
-  const done = !working && !behind && !usage;
+  const done = !working && Boolean(finished) && !behind && !usage;
   const state = statusWords(shown, kept.step, plain);
   const words = behind ? "" : usage ? t("chat-runningstatusbar.background_subtasks") : done ? t("chat-runningstatusbar.done") : state.text;
   const compacting = !behind && !usage && !done && state.compacting;
@@ -242,7 +244,7 @@ export function RunningStatusView({ live, working, startedAt, clock = true, plai
       </div>
       <div className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-ink-3 tabular-nums" style={pinned ? undefined : fade}>
         {usage ? null : own && SpeedView ? (
-          <SpeedView speedKey={speedKey} turn={startedAt} live={shown} working={working} offline={offline} now={now} elapsed={elapsedText(elapsed)} time={time} count={count} onPinned={onPinned} />
+          <SpeedView speedKey={speedKey} turn={startedAt} live={shown} working={working} paused={kept.step?.kind === "tool"} offline={offline} now={now} elapsed={elapsedText(elapsed)} time={time} count={count} onPinned={onPinned} />
         ) : (
           <>
             {time}

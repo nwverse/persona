@@ -3,8 +3,8 @@
 // ("Thinking...", "Bash running...", "Spawning agent..."); Persona works it out from the newest steps it has.
 import { canonicalTool } from "./compatibility";
 import { subagentFor } from "./tasks";
-import type { Segment, Step } from "./turns";
-import type { Item, Subagent } from "./types";
+import type { ChatLine, Segment, Step } from "./turns";
+import type { AgentState, Item, Session, Subagent } from "./types";
 
 export interface RunStep {
   /** `start`: nothing yet; `streaming`: a reply is coming in word by word; `text`: its newest words are the last thing;
@@ -51,4 +51,14 @@ export function runStep(seg: Segment | undefined, streaming: boolean, subagents?
 /** The same step as `prev` when nothing of it changed, so the bar's props stay as they were. */
 export function sameStep(prev: RunStep | undefined, next: RunStep): RunStep {
   return prev && prev.kind === next.kind && prev.tool === next.tool && prev.spawning === next.spawning ? prev : next;
+}
+
+/** The notice the hub makes of a turn the user stopped (transcript.InterruptedNotice, "已中断"). */
+const isInterrupt = (it: Item | undefined) => it?.kind === "notice" && !it.task && (it.text ?? "").includes("中断"); // i18n-ignore: the hub's notice
+
+/** Whether the turn that just ran was done, for the bar's ✓ Done (cindy says it only when its host reports the turn
+ *  done): the session back to idle and not waiting on you, no failure, and the chat ending neither on a model error nor
+ *  on the user's stop. */
+export function turnDone(state: AgentState, s: Pick<Session, "failure_reason" | "turn_error"> | undefined, lastLine: ChatLine | undefined, items: Item[]): boolean {
+  return (state === "idle" || state === "unread") && !s?.failure_reason && !s?.turn_error && lastLine?.kind !== "apiError" && !isInterrupt(items.at(-1));
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { runStep, sameStep } from "./run-step";
-import { segments } from "./turns";
+import { runStep, sameStep, turnDone } from "./run-step";
+import { segments, type ChatLine } from "./turns";
 import type { Item, Subagent } from "./types";
 
 let seq = 0;
@@ -49,5 +49,28 @@ describe("the running turn's step (#5312)", () => {
     expect(sameStep(a, { kind: "tool", tool: "Bash" })).toBe(a);
     expect(sameStep(a, { kind: "tool", tool: "Read" })).toEqual({ kind: "tool", tool: "Read" });
     expect(sameStep(undefined, a)).toBe(a);
+  });
+});
+
+describe("whether a turn was done, for the bar's ✓ Done (cindy's, #5312)", () => {
+  const items = [user(), call("Read", "r9"), result("r9"), item("text", { text: "All set." })];
+  const reply = { kind: "segment", id: "s", live: false, seg: segments(items)[0] } as ChatLine;
+  const apiError = { kind: "apiError", id: "e", item: item("notice", { text: "API 错误：overloaded" }), info: {}, count: 1 } as unknown as ChatLine;
+
+  it("is done when the session is back to idle, or unread, with nothing wrong at the end", () => {
+    expect(turnDone("idle", {}, reply, items)).toBe(true);
+    expect(turnDone("unread", undefined, reply, items)).toBe(true);
+  });
+
+  it("is not done while it waits on you (a permission, a question, a plan) or still works", () => {
+    expect(turnDone("needs_you", {}, reply, items)).toBe(false);
+    expect(turnDone("working", {}, reply, items)).toBe(false);
+  });
+
+  it("is not done when it ended on a model error, a failure or the user's stop", () => {
+    expect(turnDone("idle", {}, apiError, items)).toBe(false);
+    expect(turnDone("unread", { turn_error: "overloaded" }, reply, items)).toBe(false);
+    expect(turnDone("idle", { failure_reason: "The host stopped" }, reply, items)).toBe(false);
+    expect(turnDone("idle", {}, reply, [...items, item("notice", { text: "已中断" })])).toBe(false);
   });
 });

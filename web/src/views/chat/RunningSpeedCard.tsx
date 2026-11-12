@@ -4,11 +4,12 @@
 // then the turn's average, its output and its peak. The card opens above the button, its right edge on the button's,
 // on hover as a tooltip or pinned by a click with a ✕. RunningStatusBar.tsx loads this once an Agent's turn runs, off
 // the chat's first screen.
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { t } from "../../i18n";
 import { formatRate, shownRate, turnAverage, useRateHistory, type RateHistory, type RateSample } from "../../lib/token-rate";
 import type { SessionLive } from "../../lib/types";
+import { hasFinePointer } from "../../lib/viewport";
 import { compactTokens } from "../../lib/tokens";
 import { EASE, EXIT_MS, useExit } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
@@ -171,34 +172,52 @@ export function RunningSpeedCard({ id, anchor, closeRef, open, pinned, data, onC
 /** The time and speed as a button (cindy's RunningTokenRatePopover trigger): hovering shows the speed history card, a
  *  click pins it open with a ✕, and ✕, Esc or a second click close it; while pinned, clicks elsewhere leave it (cindy).
  *  Closed by hand, it does not open again on the same hover. `onPinned` tells the bar, which keeps a pinned card's button
- *  after the turn. */
-function SpeedButton({ elapsed, card, onPinned, children }: { elapsed: string; card: SpeedCardData; onPinned: (pinned: boolean) => void; children: ReactNode }) {
+ *  after the turn; `onEngaged`, whether the pointer is on it or its card, it has the focus or it is pinned, so it stays
+ *  while a call pauses the speed. */
+function SpeedButton({ elapsed, card, onPinned, onEngaged, children }: { elapsed: string; card: SpeedCardData; onPinned: (pinned: boolean) => void; onEngaged: (engaged: boolean) => void; children: ReactNode }) {
   const button = useRef<HTMLButtonElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
   const [mode, setMode] = useState<Reveal>("idle");
-  const timer = useRef<number | undefined>(undefined);
+  const [over, setOver] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const hoverTimer = useRef<number | undefined>(undefined);
+  const leaveTimer = useRef<number | undefined>(undefined);
   const pinned = mode === "pinned";
   const revealed = pinned || mode === "hover";
+  const engaged = pinned || over || focused;
   useEffect(() => {
     if (!pinned) return;
     onPinned(true);
     return () => onPinned(false);
   }, [pinned, onPinned]);
-  useEffect(() => () => clearTimeout(timer.current), []);
+  useEffect(() => {
+    if (!engaged) return;
+    onEngaged(true);
+    return () => onEngaged(false);
+  }, [engaged, onEngaged]);
+  useEffect(() => () => {
+    clearTimeout(hoverTimer.current);
+    clearTimeout(leaveTimer.current);
+  }, []);
   // pinned it is a dialog: Esc closes it first, and the chat's Esc, which stops the turn, leaves it be (ChatView)
   useEscapeClose(pinned, () => setMode("dismissed"));
-  const later = (next: (m: Reveal) => Reveal, ms: number) => {
-    clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => setMode(next), ms);
-  };
   const enter = (e: React.PointerEvent) => {
     if (e.pointerType !== "mouse") return;
-    clearTimeout(timer.current);
+    clearTimeout(leaveTimer.current);
+    setOver(true);
     setMode((m) => (m === "dismissed" ? "idle" : m));
-    later((m) => (m === "idle" ? "hover" : m), HOVER_MS);
+    clearTimeout(hoverTimer.current);
+    hoverTimer.current = window.setTimeout(() => setMode((m) => (m === "idle" ? "hover" : m)), HOVER_MS);
   };
+  // the pointer has a moment to cross from the button to the card
   const leave = (e: React.PointerEvent) => {
-    if (e.pointerType === "mouse") later((m) => (m === "hover" ? "idle" : m), LEAVE_MS);
+    if (e.pointerType !== "mouse") return;
+    clearTimeout(hoverTimer.current);
+    clearTimeout(leaveTimer.current);
+    leaveTimer.current = window.setTimeout(() => {
+      setOver(false);
+      setMode((m) => (m === "hover" ? "idle" : m));
+    }, LEAVE_MS);
   };
   const id = useId();
   const label = card.rate !== null
@@ -211,10 +230,16 @@ function SpeedButton({ elapsed, card, onPinned, children }: { elapsed: string; c
         type="button"
         onPointerEnter={enter}
         onPointerLeave={leave}
-        onFocus={(e) => e.currentTarget.matches(":focus-visible") && setMode((m) => (m === "idle" ? "hover" : m))}
-        onBlur={() => setMode((m) => (m === "hover" || m === "dismissed" ? "idle" : m))}
+        onFocus={(e) => {
+          setFocused(true);
+          if (e.currentTarget.matches(":focus-visible")) setMode((m) => (m === "idle" ? "hover" : m));
+        }}
+        onBlur={() => {
+          setFocused(false);
+          setMode((m) => (m === "hover" || m === "dismissed" ? "idle" : m));
+        }}
         onClick={() => {
-          clearTimeout(timer.current);
+          clearTimeout(hoverTimer.current);
           setMode((m) => (m === "pinned" ? "dismissed" : "pinned"));
         }}
         onKeyDown={(e) => {
@@ -241,23 +266,33 @@ function SpeedButton({ elapsed, card, onPinned, children }: { elapsed: string; c
         data={card}
         onClose={() => {
           setMode("dismissed");
-          button.current?.focus({ preventScroll: true });
+          const own = button.current;
+          const composer = own?.closest("[data-chat-dock]")?.querySelector("textarea");
+          own?.focus({ preventScroll: true });
+          // after the turn the button goes with the card: the keyboard goes back to the composer, not on a touch screen
+          // alone (that would raise the keyboard)
+          window.setTimeout(() => {
+            if (own && !own.isConnected && (!document.activeElement || document.activeElement === document.body) && hasFinePointer()) composer?.focus({ preventScroll: true });
+          });
         }}
-        onPointerEnter={() => clearTimeout(timer.current)}
+        onPointerEnter={() => clearTimeout(leaveTimer.current)}
         onPointerLeave={leave}
       />
     </>
   );
 }
 
-/** The bar's right side in an Agent session once this is loaded: the time, then the latest speed while the turn runs and
- *  there is a fresh one, else the tokens (`count`), never both (cindy). With a speed, or while its card is pinned, the two
- *  are a button. Fed with each status line while the turn runs (`working`) and the hub is in reach. */
-export function RunningSpeed({ speedKey, turn, live, working, offline, now, elapsed, time, count, onPinned }: {
+/** The bar's right side in an Agent session once this is loaded: the time, then the latest speed while the turn runs, no
+ *  call pauses it and there is a fresh one, else the tokens (`count`), never both (cindy). With a speed the two are a
+ *  button, and it stays one while it is pointed at, focused or pinned (its card says "—" then); otherwise the tokens
+ *  stand without one. Fed with each status line while the turn runs (`working`) and the hub is in reach. */
+export function RunningSpeed({ speedKey, turn, live, working, paused, offline, now, elapsed, time, count, onPinned }: {
   speedKey: string;
   turn: string | undefined;
   live: SessionLive | null;
   working: boolean;
+  /** A call is running: the count stands still for it. */
+  paused?: boolean;
   offline?: boolean;
   now: number;
   elapsed: string;
@@ -265,14 +300,10 @@ export function RunningSpeed({ speedKey, turn, live, working, offline, now, elap
   count: ReactNode;
   onPinned: (pinned: boolean) => void;
 }) {
-  const history = useRateHistory(speedKey, turn, live?.tokens_down, live?.at, working && !offline);
+  const history = useRateHistory(speedKey, turn, live?.tokens_down, live?.at, working && !offline, paused);
   // a turn that is over generates nothing: its tokens stand where its speed was
-  const rate = working && !offline ? shownRate(history, now) : null;
-  const [pinned, setPinned] = useState(false);
-  const pin = useCallback((p: boolean) => {
-    setPinned(p);
-    onPinned(p);
-  }, [onPinned]);
+  const rate = working && !offline ? shownRate(history, now, paused) : null;
+  const [engaged, setEngaged] = useState(false);
   const speed = rate !== null ? <span data-running-rate>{rateText(rate)}</span> : count;
   const shown = (
     <>
@@ -282,9 +313,9 @@ export function RunningSpeed({ speedKey, turn, live, working, offline, now, elap
     </>
   );
   // the hub out of reach: no speed, and a pinned card closes (cindy)
-  if (offline || (rate === null && !pinned)) return shown;
+  if (offline || (rate === null && !engaged)) return shown;
   return (
-    <SpeedButton elapsed={elapsed} onPinned={pin} card={{ rate, average: turnAverage(history), output: live?.tokens_down ?? 0, history }}>
+    <SpeedButton elapsed={elapsed} onPinned={onPinned} onEngaged={setEngaged} card={{ rate, average: turnAverage(history), output: live?.tokens_down ?? 0, history }}>
       {shown}
     </SpeedButton>
   );

@@ -367,11 +367,12 @@ For every component: use the design-system one, not a lookalike. Counts are appr
   `bg-surface` card with the hairline border and `shadow-overlay`, 16 × 12 px padding. "Latest speed" (12 px `--ink-2`, the
   activity mark), the number 28 px medium with "tok/s" 12 px `--ink-2`; beside it a 128 × 48 sparkline in `--ink` (a 12 %
   baseline, an 8 % area, a 1.5 px line and a 2.5 px dot at the latest sample); below, three 12 px columns, label in
-  `--ink-2` over a medium value: Turn average, Output, Peak ("—" until measured). Hover shows it after 500 ms as a tooltip;
-  a click pins it with a 24 px round ✕ in its top right corner (44 px to a finger); ✕, Esc and a second click close it, a
-  click outside does not.
-  It opens with the cards' `pop-in` and goes with their fade.
-- Done: the linger second shows the check and **Done** with a 0.4 s pop (scale 0.85 → 1.08 → 1, transform only, none with
+  `--ink-2` over a medium value: Turn average, Output, Peak ("—" until measured). Hover shows it after 500 ms as a
+  tooltip; a click pins it with a 24 px round ✕ in its top right corner (44 px to a finger); ✕, Esc and a second click
+  close it, a click outside does not. While pointed at, focused or pinned the button stays when the speed goes. It opens
+  with the cards' `pop-in` and goes with their fade.
+- Done: when the turn finished (not waiting on you, stopped or cut off by an error, which keep their last words), the
+  linger second shows the check and **Done** with a 0.4 s pop (scale 0.85 → 1.08 → 1, transform only, none with
   reduced motion); then both sides fade out over 0.4 s, except a pinned card's button. The row breathes once (opacity to
   0.45 and back over 1.5 s) when its words or count move.
 - Kept from Persona where cindy differs: the background workflow line ("Background workflow · Verify · 169/185+", timed
