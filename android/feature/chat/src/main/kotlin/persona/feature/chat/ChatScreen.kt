@@ -291,6 +291,8 @@ private fun ChatPage(
     var hostRetried by rememberSaveable(key.path) { mutableStateOf<String?>(null) }
     val deliveryActions = remember(sender) { ChatDeliveryActions(sender) }
     var statusSheet by remember { mutableStateOf(false) }
+    // The loop and background work's sheet, from the header's pill (Glass, #4339 C8).
+    var activitySheet by remember { mutableStateOf(false) }
     // The shell presents transient notices once; persistent sync errors stay inline.
     val feedback = persona.core.designsystem.LocalAppFeedback.current
     // A message only on this phone taken off (Cancel send / Delete): nothing was sent; Undo puts it back (#4645,
@@ -343,6 +345,7 @@ private fun ChatPage(
     // Glass folds an Agent chat's header into its slim bar (#4339 C4, iOS ChatChrome): on the list's scrolling, and by
     // itself after 3 s without a touch while animations are on.
     val foldsHeader = HeaderFoldRules.folds(PersonaTheme.style, showTopBar, renderStyle)
+    val activityInHeader = ChatActivity.inHeader(PersonaTheme.style, showTopBar, renderStyle)
     val reduceMotion = PersonaTheme.reduceMotion
     val headerFold = remember { ChatHeaderFold(scope) }
     val headerMotion = PersonaTheme.motion.layout?.spec<Float>()
@@ -842,7 +845,7 @@ private fun ChatPage(
     val turnFix = if (renderStyle == ChatRenderStyle.Assistant) TurnErrorFix.of(session?.turnErrorCode) else null
     val fixModel = chrome.onFixModel?.let { open -> { action: persona.core.designsystem.ReadinessActionId -> open(action, session?.launcher, session?.manager) } }
     // Nothing is up over the page: the header may fold by itself (iOS waits while a sheet or menu is presented).
-    val headerBusy by rememberUpdatedState(chrome.covered || overlay || chromeOverlay || linkVisible || statusSheet ||
+    val headerBusy by rememberUpdatedState(chrome.covered || overlay || chromeOverlay || linkVisible || statusSheet || activitySheet ||
         terminalHelp || taskPageVisible || fullText != null || search.visible)
     LaunchedEffect(headerFold, foldsHeader, reduceMotion) {
         if (!foldsHeader || reduceMotion) return@LaunchedEffect
@@ -960,10 +963,15 @@ private fun ChatPage(
                 val siblingSessions = if (showTopBar && renderStyle != ChatRenderStyle.Assistant && onOpenSibling != null) {
                     remember(session, sessionList) { spaceTabs(session, sessionList) }
                 } else emptyList()
+                // Glass: a loop and background work are a pill at the end of the tabs' row (iOS ActivityChips, #4339 C8),
+                // a row of its own without tabs; the other styles keep their chips above the composer.
+                val activityPill: (@Composable () -> Unit)? = session
+                    ?.takeIf { activityInHeader && ChatActivity.shown(it) }?.let { s -> { ChatActivityPill(s) { activitySheet = true } } }
+                val tabs = session != null && onOpenSibling != null && siblingSessions.size > 1
                 JPage(
                     title = session?.displayTitle ?: stringResource(R.string.chat_screen_untitled),
                     scrollEdgeStyle = ScrollEdgeStyle.Gradient,
-                    topScrollEdgeStyle = if (siblingSessions.size > 1) TabbedChatScrollEdgeStyle else ScrollEdgeStyle.Gradient,
+                    topScrollEdgeStyle = if (tabs || activityPill != null) TabbedChatScrollEdgeStyle else ScrollEdgeStyle.Gradient,
                     topBar = {
                         Column {
                             val header: @Composable () -> Unit = {
@@ -976,9 +984,9 @@ private fun ChatPage(
                                         onSearch = { search.open(chatList) { timeline.freeze(currentItems); timelineVersion++ } },
                                         onTerminal = agentTerminal, onTerminalHelp = if (hasTerminal && terminal == null) ({ terminalHelp = true }) else null)
                                     // The space's other tabs under the title (iOS SiblingTabs); not for the assistant's conversation.
-                                    if (session != null && onOpenSibling != null && siblingSessions.size > 1) {
-                                        ChatSiblingTabs(session, siblingSessions, onOpenSibling)
-                                    }
+                                    if (tabs && session != null && onOpenSibling != null) {
+                                        ChatSiblingTabs(session, siblingSessions, onOpenSibling, trailing = activityPill)
+                                    } else activityPill?.let { ChatActivityRow(it) }
                                     // The ports it listens on (its dev servers, docs/operations/ports.md): a tap opens the page.
                                     if (showTopBar && renderStyle != ChatRenderStyle.Assistant) ChatPortChips(session?.ports)
                                     // The goal it works toward (Claude Code's /goal, a Codex thread goal; docs/integrations/agent-goal.md): a tap opens it.
@@ -1000,7 +1008,8 @@ private fun ChatPage(
                     bottomBar = {
                         Column {
                             if (renderStyle != ChatRenderStyle.Assistant) ChatSessionStatusLine(status, session, snapshot.turnDurationSeconds, projection.turns.lastOrNull()?.toolCount ?: 0,
-                                onDetails = { statusSheet = true }, terminal = terminal, draftSaveError = statusBindings.draftSaveError)
+                                onDetails = { statusSheet = true }, terminal = terminal, draftSaveError = statusBindings.draftSaveError,
+                                activityInHeader = activityInHeader)
                             AnimatedVisibility(interactionFeedback != null, exit = fadeOut()) {
                                 // Inset like the status line and the composer around it, not edge to edge.
                                 JNotice(interactionFeedback.orEmpty(), Modifier.padding(horizontal = Tokens.Space.m))
@@ -1273,6 +1282,14 @@ private fun ChatPage(
             if (search.visible) ChatSearchScreen(search, searchableItems, projection.turns.size, snapshot.hasOlder,
                 repository, key, onClose = { search.close(chatList) })
             if (terminalHelp) TerminalHelpDialog { terminalHelp = false }
+            if (activitySheet) session?.takeIf(ChatActivity::shown)?.let { s ->
+                ChatActivitySheet(s, onStop = if (readOnly || !canSend) null else ({ send(ChatActivity.STOP_LOOP) }),
+                    onOpenOutput = chrome.onOpenPath?.let { open -> { path -> activitySheet = false; open(path, null) } },
+                    onDismiss = { activitySheet = false })
+            }
+            // The loop stopped and the background work ended: nothing left for the sheet.
+            val activityShown = ChatActivity.shown(session)
+            LaunchedEffect(activityShown) { if (!activityShown) activitySheet = false }
             if (statusSheet) ChatStatusSheet(status, session, messages, deliveryActions.busyIds,
                 onAction = if (readOnly) null else ::deliveryAction, onDismiss = { statusSheet = false },
                 replacement = replacement,

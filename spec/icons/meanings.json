@@ -45,6 +45,10 @@
       "sf": "chevron.left",
       "phosphor": "caret-left"
     },
+    "backgroundTask": {
+      "sf": "gearshape.2",
+      "phosphor": "gear-six"
+    },
     "backgroundWaiting": {
       "sf": "clock.fill",
       "phosphor": "clock"
