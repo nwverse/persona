@@ -242,4 +242,33 @@ class HttpChatActionsTest {
             assertEquals(404, (runCatching { actions.info(Session(machineId = "m", sessionId = "gone")) }.exceptionOrNull() as HubFailure).status)
         }
     }
+
+    /** Session info's questions the assistant answered (iOS `DelegatedHistoryModel`): the session's cards, a row it can't read left out. */
+    @Test fun interactionHistoryReadsTheSessionsCards() = runBlocking {
+        MockWebServer().use { server ->
+            val actions = actions(server)
+            server.enqueue(MockResponse().setBody("""{"interactions":[
+                {"interaction":{"id":"q1","machine_id":"m","session_id":"s","kind":"question",
+                  "questions":[{"question":"Which branch?","options":[{"label":"main"},{"label":"dev"}]}]},
+                 "status":"resolved","resolution":{"answers":{"Which branch?":"main"},"answered_by":"assistant","reason":"main is what CI builds"},
+                 "resolved_at":"2026-11-12T01:02:03Z","future":1},
+                {"status":"resolved"},
+                {"interaction":{"id":"p1","kind":"permission"},"status":"resolved","resolution":{"allow":true}}
+            ]}"""))
+            val rows = actions.interactionHistory(Session(machineId = "m", sessionId = "s", manager = "work"))
+            assertEquals(listOf("q1", "p1"), rows.map { it.interaction.id })
+            assertEquals("assistant", rows[0].resolution?.answeredBy)
+            assertEquals("main is what CI builds", rows[0].resolution?.reason)
+            assertEquals("2026-11-12T01:02:03Z", rows[0].resolvedAt)
+            val request = server.takeRequest()
+            assertEquals("/api/v1/interactions/history?machine_id=m&session_id=s&limit=500&manager=work", request.path)
+            // A hub that keeps the history from this device, or has none, gives none rather than an error.
+            server.enqueue(MockResponse().setResponseCode(403).setBody("""{"error":"forbidden"}"""))
+            assertEquals(emptyList<InteractionRecord>(), actions.interactionHistory(Session(machineId = "m", sessionId = "s")))
+            server.enqueue(MockResponse().setResponseCode(404).setBody("404 page not found"))
+            assertEquals(emptyList<InteractionRecord>(), actions.interactionHistory(Session(machineId = "m", sessionId = "s")))
+            server.enqueue(MockResponse().setResponseCode(503).setBody("""{"error":"assistant offline","code":"assistant_offline"}"""))
+            assertEquals(503, (runCatching { actions.interactionHistory(Session(machineId = "m", sessionId = "s")) }.exceptionOrNull() as HubFailure).status)
+        }
+    }
 }

@@ -124,10 +124,10 @@ Defined once in `apple/Shared/StatusPalette.swift:19-36` and shared by the app, 
 | Needs you | system blue `#007AFF`/`#0A84FF` | `#0064C8`/`#409CFF` | blue since #6231 |
 | Working | `#E8890C`/`#FFB224` | `#A35A00`/`#FFB224` | amber |
 | Unread / awaiting reply | `#30A46C`/`#4CC38A` | `#1D7A4C`/`#4CC38A` | green |
-| Waiting in the background | working dot at 0.6 | secondary | clock mark |
+| Waiting in the background | working dot at 0.6 | secondary | clock mark; its soft fill the working dot at 0.08 |
 | Idle / Offline | secondary at 0.55 / 0.3 | secondary | gray |
 
-Needs you is blue on every client (`docs/design/DECISIONS.md`, 11-11). Android reads these values from the generated tokens (`spec/tokens/color.status.json`); the web still uses amber (`web/src/styles.css:233`), DS-01.
+Needs you is blue on every client (`docs/design/DECISIONS.md`, 11-11). Android reads these values from the generated tokens (`spec/tokens/color.status.json`); the web still uses amber (`web/src/styles.css:233`), DS-01. Waiting in the background is `status.<mode>.backgroundWaiting` there; Android Glass draws it as iOS does (`PersonaPalette.backgroundWaiting`, picked by `PersonaPalette.status(status, waitsInBackground)` as iOS's `Session.stateTone`), and Brief and Board keep Working's colors for it.
 
 #### Fills, diff, hues, shell neutrals
 
@@ -234,7 +234,7 @@ Outside the scale: composer 32 (`Shell.composerRadius`, `apple/Shared/Design/The
 
 - Hit target: `tapTarget` 44 (`:507`), drawn through `tapTargetFrame()` (a square for a small control) or `tapTargetHeight()` (a row or a heading that is a button and draws less, as wide as it is; #3753). A line of text that is a link in a row under a card, where a taller row would push the card's buttons under the composer, uses `tapTargetOutset()`: its touch area grows `Space.l` above and below, its layout does not (#5392). Same number under other names: `searchField`, `switchHeight`, `Watch.minRowHeight`, `Sidebar.row` (iOS), `voiceThreadRoom`. Android uses 48 as its platform floor (`Tokens.MinTouch`).
 - Dots 6-10, marks 12-18, icons 20-26, wells 28-38, avatars 40-48. Neighbors differ by 1 to 2 pt (DS-10).
-- Named by value: `box50` to `box380` (DS-10). Android's generated tokens carry only the sizes it draws with, under the same names (`spec/tokens/dimension.json`, checked against `Theme.Size`); the space page's cards added `hairline`, `line`, `dotL` and `box150`.
+- Named by value: `box50` to `box380` (DS-10). Android's generated tokens carry only the sizes it draws with, under the same names (`spec/tokens/dimension.json`, checked against `Theme.Size`); the space page's cards added `hairline`, `line`, `dotL` and `box150`, the strip of the images a turn looked at `box64` and `box80`.
 - The Mac's pointer over its picture in the app's VNC: at least `pointer` 22 tall, about macOS's own size (`VNCPointerArt`, #3075).
 - Widths: `readable` 560 (web chat column 880, pages 760), sidebar 340/400/480, drawer `min(0.82 x width, 380)` (Android the same).
 - Sidebar rows: `Theme.Sidebar` (`apple/Shared/Design/SidebarMetrics.swift`), 44 on iOS; 24/28/32 on Mac; web 32 (touch 44 via a hit-area expander).
@@ -427,6 +427,17 @@ For every component: use the design-system one, not a lookalike. Counts are appr
   Persona's place in the message actions; the card over the composer (`ForwardBar`) and in the bubble (`ForwardBlock`)
   are the quote bar's and quote card's shapes (`views/chat/Quote.tsx`) with the `forward` icon, and Forward to is a
   `Dialog` (a bottom sheet on phones) with palette-style rows; no Share as Image row, as the web has no share card.
+- A message sent from here and not in the transcript yet (iOS `PendingBubble`): drawn as a sent bubble at once, with a
+  mark before it, level with its last line: a quiet clock while it sends; a clock while it waits for the network, whose
+  small menu is Retry Now and Don't Send, with "Sends when connected" under the bubble; a red mark once it failed, with
+  Resend and Delete. Waiting or failed, the bubble is at 0.6. The long press ends in the mark's own word (Don't Send or
+  Delete). A failed one with messages sent after it sits before the first of them, at the end of the exchange it was
+  written in (`ChatLines.placeFailed`; Android in every style, `placeFailed`). Android draws the bubble so on Glass
+  (`OutboxBubble`, #4339 C9) and keeps its status line for a delivery the phone has to check.
+- The images a turn's work looked at (iOS `ViewedImagesRow`, docs/protocol/protocol.md "Images viewed this turn"): bare
+  thumbnails between the work line and the answer, `box64` tall in a strip that scrolls sideways, one alone `box80`, each
+  as wide as its picture (¾ to 1.6 of its height), with a small mark for a screenshot or a web page and nothing written
+  around them; a tap opens the viewer on the turn's images. Android draws it on Glass (`ViewedImagesRow`, #4339 C9).
 - No shared bubble component exists. Messages, Tasks and Lark rebuild it with different paddings and gutters (DS-20).
 - Web: user bubble 14 px radius; replies unboxed. Android: 20 dp in Glass, max width 86%.
 - Web reply bar (#5314, `ReplyBar`; the owner's requested alignment with cindy's `MessageActionBar`, 2026-11-12): only
@@ -436,7 +447,16 @@ For every component: use the design-system one, not a lookalike. Counts are appr
   icons, `--ink-3`, `--ink` on `--hover-2` under the pointer. Shown on hover or keyboard focus, it stays 250 ms after
   the pointer leaves and fades over 250 ms; an open ⋯ keeps it. Touch screens keep the copy + ⋯ row under that reply;
   the right-click / long-press menu keeps every action. A reply cut short by an error or an interruption carries
-  cindy's "This reply did not complete" line above it (13 px `--ink-2`). Details: `docs/web/web.md` ("Reply bar").
+  cindy's "This reply did not complete" line above it (13 px `--ink-2`). After the time (#5426, `TurnUsage`, cindy's
+  usage cell): what the exchange cost, 6 px on, 12 px `--ink-3`, half a pixel down, "Worth $0.12" in an Agent session
+  with cindy's usage card (320 px, `--surface`, `--line` border, 12 px radius, `shadow-overlay`, 16 px padding, 12 px
+  `--ink-2` lines; under the text from its start, above it when the chat has no room below; 250 ms into a hover, held
+  on the card, gone 220 ms after the pointer leaves, pinned by a click, Esc or a press elsewhere closes it, the bar
+  stays while it is open), or without a cost "23.4k tokens" with their lines in the dark tooltip (`--tooltip-bg`,
+  13 px, at most 420 px, 500 ms into a hover, never pinned by a pointer). A Persona conversation shows only "≈ $0.12"
+  and one plain line, and nothing without a cost (super rules 0 and 4). On touch screens the text ends the copy + ⋯
+  row: a tap holds the card or the tooltip, and a second tap on the text or a press elsewhere closes it.
+  Details: `docs/web/web.md` ("Reply bar").
 - Model change divider (web, #5034, `ModelChangeDivider`): where an exchange's reply came from another model than the
   previous visible reply, between that exchange's message and its reply: two `--line-strong` hairlines and a centered
   pill chip (`⇄` 12 px, "Opus 5.5 → Sonnet 4.5", 11 px `--ink-3`, `--line-strong` border, `bg-page/50`, padding 10 × 4),
@@ -662,6 +682,17 @@ Workflow phase text may ellipsize, but the done/started count stays visible; sim
 use another subtitle line rather than pushing the workflow count out of the row.
 
 Agent header loop and background pill (iOS `ActivityChips` in `apple/Persona/Views/Session/SessionPanes.swift`; Android Glass `JActivityPill`, #4339 C8): one neutral pill held at the trailing end of the header's second row, as tall as the tabs beside it: the loop's arrows in the loop color with its next time (Running once due, Loop without one), a divider, and the background tasks' count by a neutral gear (whether they work or only wait is the title line's state). Its sheet holds the loop with Stop Loop (asks first, then asks the agent to stop scheduling) and each background task with View Output. The folded slim bar shows none of it.
+
+Where a message goes in Persona's conversations (iOS `RouteChip` and `TaskMentionList`, web `RouteChip`, Android
+`TaskRouteChip`; #4339 C15): while the next message goes straight to a task, one accent-tinted chip sits right above the
+composer, under the action or tray bar: the send mark, "Message “task”", and a × of its own read "Hand to Persona" that
+gives the message back to Persona. The route never shows only inside a tray. It is behaviour, so every style shows it,
+each with its own chip (Android `JChip(accent, onRemove)`). @ lists the conversation's open tasks (not done or failed,
+newest first) with their state's dot and where they run, and a pick takes the @word out and sets the same route a task's
+Message sets. iOS draws them as a panel of their own above the action bar ("Message a Task", or "No tasks in this chat
+yet"); Android puts them first in the composer's one @ list under "Message a task", the files and sessions after them
+under "Mention a file or session", the typed word narrowing all of them, so the list takes no more room above the
+keyboard than before.
 
 Agent header permission mode (#3719, `HeaderModeButton` in `apple/Persona/Views/Chat/SessionModes.swift`): an icon-only
 capsule at the trailing end of the open Agents header's second row, under `⋯`, as tall as the tabs, with a 44 pt target that

@@ -425,7 +425,8 @@ private fun ChatPage(
     // (#5045, DESIGN_SYSTEM.md 4.7 "Task cards"); Brief and Board do not.
     val subagentCards = PersonaTheme.style == AppStyle.Glass
     val nestedSubagents = if (subagentCards) session?.subagents.orEmpty() else emptyList()
-    val lines = remember(assistantPresentation, search.selected, jumpItem, feed, tasks, taskPlans, taskTodos, taskCardProjection, renderStyle, inlineRecords, nestedSubagents) {
+    val viewedStrips = PersonaTheme.style == AppStyle.Glass
+    val lines = remember(assistantPresentation, search.selected, jumpItem, feed, tasks, taskPlans, taskTodos, taskCardProjection, renderStyle, inlineRecords, nestedSubagents, viewedStrips) {
         searchVisibleLines(assistantPresentation.foreground, search.selected?.itemId ?: jumpItem)
             .let {
                 when {
@@ -435,7 +436,9 @@ private fun ChatPage(
                     else -> persona.core.domain.tasks.AssistantLines.lines(it,
                         persona.core.domain.tasks.SentToAgents.shown(feed))
                 }
-            }.let { persona.core.domain.lines.Subagents.withNested(it, nestedSubagents) }.asReversed()
+            }.let { persona.core.domain.lines.Subagents.withNested(it, nestedSubagents) }
+            // The strip of what a turn's work looked at is Glass's, as iOS draws it (#4339 C9); Brief and Board keep their lines.
+            .let { if (viewedStrips) it else it.filterNot { line -> line is ChatLine.Viewed } }.asReversed()
     }
     val searchableItems by produceState(emptyList<Item>(), snapshot.items, timelineVersion, search.visible) {
         if (search.visible) value = withContext(Dispatchers.Default) { timeline.searchItems(snapshot.items) }
@@ -698,7 +701,7 @@ private fun ChatPage(
             thumbnails = chrome.files?.let { files ->
                 val cwd = session?.cwd.orEmpty().ifBlank { "~" }
                 ({ path -> "${key.machineId}\n$cwd\n$path" to { pixels: Int -> files.thumbnail(key.machineId, cwd, path, pixels) } })
-            })
+            }, viewerImage = { item, description -> chatViewerImage(key, item, repository, description) })
     }
     LaunchedEffect(snapshot.items) {
         // Replies render each text part under "<item id>/<part index>" (MessageContent), so prewarm those keys, each with
@@ -924,9 +927,16 @@ private fun ChatPage(
                 listed, opener, portPresence)
         }
     }
-    // The @ menu: files this chat's tools used (newest first) and the other sessions, to quote (iOS PromptItems).
+    // The @ menu: files this chat's tools used (newest first) and the other sessions, to quote (iOS PromptItems); in
+    // Persona's conversation its open tasks first, to route the next message to one (iOS TaskMentionList, #4339 C15).
     val mentionFiles = remember(snapshot.items) { chatFiles(snapshot.items) }
-    val mentions = if (readOnly || !canSend) null else ComposerMentions(mentionFiles, session?.cwd.orEmpty(), sessionList, key)
+    val taskMentions = remember(renderStyle, tasks, taskTodos, sessionList, taskAgentSessions, machines) {
+        if (renderStyle != ChatRenderStyle.Assistant) null else taskHost?.let { host ->
+            mentionTasks(taskTodos, host.conversation) { host.tasks.stateOf(it, host.sessions) }
+                .map { (todo, state) -> MentionTask(todo.id, todo.title, todo.place(host, null), state.status()) }
+        }
+    }
+    val mentions = if (readOnly || !canSend) null else ComposerMentions(mentionFiles, session?.cwd.orEmpty(), sessionList, key, taskMentions)
     // An assistant conversation's cards answer through its hub's store (docs/assistant/assistant-views.md); elsewhere they only draw.
     val cardsHost = remember(tasks, key.sessionId, readOnly, canSend) {
         tasks?.let { persona.core.domain.views.AssistantCardsHost(key.sessionId, it.cards, it.cardActions, interactive = !readOnly && canSend) }
@@ -1107,6 +1117,8 @@ private fun ChatPage(
                                         }, onSend = ::sendTray, onSchedule = { traySchedule = it }, onPlan = { trayPlan = it },
                                         backgroundRecords = host.backgroundRecords.isNotEmpty(), onBackground = host.onOpenBackground,
                                         groupByOrigin = foldsBackground)
+                                    // Where the next message goes, with the composer, never only inside the In progress tray (iOS RouteChip, #4339 C15).
+                                    if (composerShown(panel, requestCollapsed)) TaskRouteChip(host)
                                 }
                                 val claudeCommands = session?.canTypeClaudeCommands == true
                                 ChatComposer(key, composer, session?.status == "working", sending || submittedDraft != null,
@@ -1136,6 +1148,7 @@ private fun ChatPage(
                                     }, onOverlay = { composerOverlay = it }, agentName = session?.agentLabel ?: "Claude",
                                     canInterrupt = session?.canInterrupt ?: true,
                                     mentions = mentions, onMention = { ref -> linkContexts = linkContexts + ref },
+                                    onMentionTask = { id -> tasks?.setRoute(key.sessionId, id) },
                                     // /model opens the "Mode" sheet's model choices; both need Claude in a pane (as the sheet does).
                                     onModel = if (claudeCommands && session?.canChangeModes == true) ({ openModes = true }) else null,
                                     loop = claudeCommands)
@@ -1159,14 +1172,23 @@ private fun ChatPage(
                                 val delivery = composerDeliveries[message.clientMessageId]
                                 val deliveryState = if (message.state in setOf(DeliveryState.Refused, DeliveryState.Rejected))
                                     delivery?.state ?: message.state else message.state
+                                val busy = message.clientMessageId in deliveryActions.busyIds
+                                val onAction: ((DeliveryAction) -> Unit)? = if (readOnly) null else { action -> deliveryAction(message, action) }
+                                val failed = deliveryState == DeliveryState.Rejected || deliveryState == DeliveryState.Refused
                                 Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-                                    UserBubble(composerMessagePreview(message.text), message.clientMessageId, deliveryState)
-                                    OutboxStatus(message.copy(state = deliveryState,
-                                        error = delivery?.refusal?.code ?: message.error),
-                                        busy = message.clientMessageId in deliveryActions.busyIds,
-                                        onAction = if (readOnly) null else { action -> deliveryAction(message, action) },
-                                        onDetails = { statusSheet = true })
-                                    if (!readOnly && (deliveryState == DeliveryState.Rejected || deliveryState == DeliveryState.Refused)) {
+                                    // Glass: iOS's bubble, its mark and small menu in place of the status line, which still says why
+                                    // one did not go (#4339 C9); a delivery to check keeps the status line.
+                                    if (glass && drawsAsPendingBubble(deliveryState)) {
+                                        OutboxBubble(composerMessagePreview(message.text), message.clientMessageId, deliveryState, busy, onAction)
+                                        if (failed) PendingBadge(PendingStatus.Refused, Modifier.align(Alignment.End),
+                                            reason = message.copy(error = delivery?.refusal?.code ?: message.error).refusalReason())
+                                    } else {
+                                        UserBubble(composerMessagePreview(message.text), message.clientMessageId, deliveryState)
+                                        OutboxStatus(message.copy(state = deliveryState,
+                                            error = delivery?.refusal?.code ?: message.error),
+                                            busy = busy, onAction = onAction, onDetails = { statusSheet = true })
+                                    }
+                                    if (!readOnly && failed) {
                                         // Edit puts the words back in the box and drops the refused bubble (nothing reached the computer).
                                         ComposerRefusalActions(message, composerService, delivery, terminal,
                                             edit = { deliveryAction(message, DeliveryAction.Edit) }, notice = { notice = it })
