@@ -2070,9 +2070,10 @@ installing opens its install code: the one this header made while it lasts, else
 keeps no code to show again). What the list presents (the name alert, the code sheet, Settings) waits until the popover is
 gone (its `onDisappear`), not for a fixed delay: UIKit refuses a presentation while the popover is still leaving. At the
 accessibility text sizes the header leaves out the face so the name fits, and the list gives way to the screen's width. The
-header and its list show from two installed assistants on (an offline one counts, one still installing doesn't); with one, or on
-a hub without a roster, the sidebar keeps the look without assistant identity (#3975, `AppModel.showsAssistantIdentity`), as the
-web app and Android do.
+header and its list appear once a roster is known (read in this run, or kept from the last launch) and the current assistant
+can be shown, including with one installed assistant (an offline one counts, one still installing doesn't). A one-assistant
+roster has no Default chip, and **New Assistant** and **Manage Assistants…** stay below it. On a hub without a roster,
+`AppModel.showsAssistantSwitcher` is false and the sidebar keeps the persona's name as its title.
 
 The pick is the manager's id per group (`AppModel.assistantPicks`), kept on this device across launches (`AssistantPickStore`,
 the app's defaults); no pick follows the hub's default. A pick whose manager leaves the roster goes back to the default, and one
