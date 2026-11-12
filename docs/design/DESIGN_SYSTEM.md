@@ -685,7 +685,7 @@ A dispatched task's Open link (#3711) is a compact row using existing typography
 | Tap a photo in the + panel's grid | its ring (and a 45 pt corner round it) picks it, as before; the rest of the photo opens it in the image editor. VoiceOver's activation picks, Edit is an action (#4963) |
 | Drag in the image editor | Box and Pen draw (Box is the default tool); in Crop, a corner or edge within 22 pt resizes the crop, inside moves it. Crop's shapes, Rotate and Reset are the controls that need no drag (#4963). The web's the same in CSS pixels, a mouse's cursor showing which handle it would take (#4991) |
 | Link card drag | to 0.6 it stops blocking the chat; further down it closes |
-| Terminal cover drag | its bar follows the finger; past 140 pt or a fast flick it closes. The bar, with a 44 pt Close, is there in every state; with no terminal the whole area drags (#4328) |
+| Terminal cover drag | its bar follows the finger; past 140 pt or a fast flick it closes. The bar, with a 44 pt Close, is there in every state; with no terminal the whole area drags (#4328). Android the same (140 dp, a flick whose half second of glide passes 420 dp; `TerminalCover`, #4339 C7), its bar under a handle, with Back closing it too |
 | Tap on a saved place's map | moves the place there (#4248); search and Use Current Location do the same without the gesture |
 
 Every gesture-only action needs a plain alternative for VoiceOver and Switch Control (see the audit).

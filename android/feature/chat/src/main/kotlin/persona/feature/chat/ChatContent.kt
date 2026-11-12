@@ -286,6 +286,8 @@ internal fun ChatLineContent(
     hideTaskPrompts: Boolean = false,
     /** This line is the turn's error and the hub named its fix ([TurnErrorFix]): an answer, a notice or an API error draws the card. */
     turnFix: TurnErrorFix? = null,
+    /** Opens the session's terminal: the live work line's mark on Glass ([ChatTerminalPlaces.onWorkLine]). */
+    onTerminal: (() -> Unit)? = null,
 ) {
     val res = LocalResources.current
     if (turnFix != null) {
@@ -341,7 +343,9 @@ internal fun ChatLineContent(
                 val waits = waiting && line.live
                 val now by rememberNow(1_000, enabled = line.live && !waits)
                 WorkGroup(workSummary(res, line, recordedDuration, now.takeIf { line.live }, waiting = waits), line.open,
-                    { onToggle(line.id) }, running = line.live && !waits) {}
+                    { onToggle(line.id) }, running = line.live && !waits,
+                    onTerminal = onTerminal?.takeIf { ChatTerminalPlaces.onWorkLine(line.live, PersonaTheme.style) },
+                    terminalLabel = stringResource(R.string.chat_screen_open_terminal)) {}
             }
         }
         // Every open step sits on the work line's rail, the plan and its items too (Glass, iOS's timeline, #4339 C5).

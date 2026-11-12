@@ -28,7 +28,7 @@ import persona.core.chatlist.*
 import persona.core.contracts.*
 import persona.core.contracts.api.*
 import persona.core.designsystem.*
-import persona.core.designsystem.icons.PhIcons
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import persona.core.domain.ChatTaps
 import persona.core.domain.chatBubbles
 import persona.core.domain.lines.ChatLine
@@ -458,6 +458,9 @@ private fun ChatPage(
     var folding by remember { mutableStateOf(emptySet<String>()) }
     var foldErrors by remember { mutableStateOf(emptyMap<String, String>()) }
     val terminal: (() -> Unit)? = if (readOnly || !canTerminal) null else onTerminal?.let { action -> { action(key) } }
+    // A session without a terminal (a Codex thread, an agent runtime's) has nothing to open or explain (#4339 C7).
+    val hasTerminal = ChatTerminalPlaces.has(readOnly, canTerminal, renderStyle)
+    val agentTerminal = terminal?.takeIf { hasTerminal }
     val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
 
     fun followEnd() {
@@ -854,8 +857,10 @@ private fun ChatPage(
         LocalContentColor provides PersonaTheme.palette.ink, LocalChatPorts provides chatPorts,
         persona.core.designsystem.LocalAssistantCards provides cardsHost, LocalChatSubagents provides subagentLinks, LocalChatWorkflows provides workflowCards,
         LocalChatTaskIndex provides projection.tasks, LocalChatJumpToCall provides callJumps::jump) {
+        // Under the files pane or the terminal's cover: hidden from screen readers too.
         ChatLinkHost(Modifier.fillMaxSize().background(PersonaTheme.palette.background)
-            .then(if (embedded) Modifier else Modifier.imePadding()), preloadUrls, list.isScrollInProgress,
+            .then(if (embedded) Modifier else Modifier.imePadding())
+            .then(if (chrome.covered) Modifier.clearAndSetSemantics {} else Modifier), preloadUrls, list.isScrollInProgress,
             onContext = { if (readOnly || !canSend) notice = res.getString(R.string.chat_screen_read_only_context) else linkContexts = linkContexts + it },
             onEdit = { selection, instruction ->
                 if (readOnly || !canSend) notice = res.getString(R.string.chat_screen_read_only_edit)
@@ -876,11 +881,8 @@ private fun ChatPage(
                                 onFiles = chrome.onFiles, onGit = chrome.onGit, gitLabel = chrome.gitLabel,
                                 statusState = status, onDetails = { statusSheet = true },
                                 onOpenTodo = chrome.onOpenTodo, agentShares = chrome.agentShares, worktrees = chrome.worktrees,
-                                onSearch = { search.open(chatList) { timeline.freeze(currentItems); timelineVersion++ } }) {
-                                // A session without a terminal (a Codex thread, an agent runtime's) has nothing to open or explain.
-                                if (!readOnly && canTerminal && renderStyle != ChatRenderStyle.Assistant) JIconButton(PhIcons.TerminalWindow, stringResource(if (terminal != null) R.string.chat_screen_open_terminal else R.string.chat_screen_terminal_help),
-                                    terminal ?: { terminalHelp = true })
-                            }
+                                onSearch = { search.open(chatList) { timeline.freeze(currentItems); timelineVersion++ } },
+                                onTerminal = agentTerminal, onTerminalHelp = if (hasTerminal && terminal == null) ({ terminalHelp = true }) else null)
                             // The space's other tabs under the title (iOS SiblingTabs); not for the assistant's conversation.
                             if (showTopBar && renderStyle != ChatRenderStyle.Assistant) ChatSiblingTabs(session, sessionList, chrome.onOpenSession)
                             // The ports it listens on (its dev servers, docs/operations/ports.md): a tap opens the page.
@@ -1090,7 +1092,7 @@ private fun ChatPage(
                                         } == true,
                                         plan = (line as? ChatLine.Step)?.let { contentPlans[it.groupId] },
                                         showSourceLabel = line.id in contentSourceLabels, waiting = waitingOnYou,
-                                        closeoutReply = closeoutReply, hideTaskPrompts = foldsBackground)
+                                        closeoutReply = closeoutReply, hideTaskPrompts = foldsBackground, onTerminal = agentTerminal)
                                         }
                                     }
                                 }
