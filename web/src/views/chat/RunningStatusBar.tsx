@@ -42,7 +42,8 @@ const loadSpeed = () => import("./RunningSpeedCard").then((m) => (Speed = m.Runn
 function useSpeed(want: boolean): SpeedType | undefined {
   const [, loaded] = useState(0);
   useEffect(() => {
-    if (want && !Speed) void loadSpeed().then(() => loaded((n) => n + 1));
+    // a chunk that fails to load leaves the time and the tokens; the next turn tries again
+    if (want && !Speed) loadSpeed().then(() => loaded((n) => n + 1), () => {});
   }, [want]);
   return Speed;
 }
