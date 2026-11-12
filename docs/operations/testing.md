@@ -1070,7 +1070,7 @@ answer and the next turn arrive, the row tapped last never going down or past th
 and that a closed row's space goes within two frames of the tap.
 Each measurement also says where the row was at the tap (`from`), the list's distance from its newest end when it ended (`gap`) and how high a
 row there may rise (`top`, `ChatPin.riseTop`). `KeepTappedRowTests` (#3757, docs/design/DESIGN_SYSTEM.md 4.7.1) checks the rule in Persona's chat
-(`PERSONA_FOLDS_HUB`: `MOCK_LONG_ASSISTANT=1 MOCK_FOLD_DELAY=0.8`, its work folded by the hub and fetched late when opened) and an Agent's
+(`PERSONA_FOLDS_HUB`: `MOCK_LONG_ASSISTANT=1 MOCK_FOLD_DELAY=2`, its work folded by the hub and fetched when opened, after a 1.5 s hold would be over) and an Agent's
 (`PERSONA_MOCK_HUB` at the newest end, as `UnfoldTests`; `PERSONA_TOOL_TURN_HUB` in the middle and at the oldest end, where the long history has
 no work line): in the middle and at the oldest end the tapped row stays within 2 pt; at the newest end one opened only
 rises, at most to the top bar, the newest end on screen until it gets there, and one closed takes the list back to the newest end.

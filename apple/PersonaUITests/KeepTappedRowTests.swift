@@ -5,9 +5,10 @@ import XCTest
 /// in the flipped list are wrong. In the middle and at the oldest end the row stays within 2 pt; at the newest end,
 /// following, a row opened rises to the top bar at most while the newest end stays on screen, and one closed takes the
 /// list back to the newest end, smoothly both. Prints `KEEP <case> <what>: moved … end … step … gap … top … ys …` per tap.
-///   Persona's main conversation: PORT=… MOCK_LONG_ASSISTANT=1 MOCK_FOLD_DELAY=0.8 python3 scripts/mock/mock_hub.py
+///   Persona's main conversation: PORT=… MOCK_LONG_ASSISTANT=1 MOCK_FOLD_DELAY=2 python3 scripts/mock/mock_hub.py
 ///   (`PERSONA_FOLDS_HUB`, else `PERSONA_MOCK_HUB`): sixty finished turns, each one's work folded by the hub and its
-///   steps fetched when it is opened, a moment later.
+///   steps fetched when it is opened, 2 s later: after a hold of the usual 1.5 s is over, which let the steps push the
+///   header away (TestFlight 224); sooner, the usual hold covered them, and the test passed without the fix.
 ///   An Agent's chat at its newest end: PORT=… MOCK_LONG_HISTORY=1 MOCK_AGENTS=1 python3 scripts/mock/mock_hub.py
 ///   (`PERSONA_MOCK_HUB`), as `UnfoldTests`; in the middle and at its oldest end, where that one has no work line:
 ///   PORT=… MOCK_TOOL_TURN=1 python3 scripts/mock/mock_hub.py (`PERSONA_TOOL_TURN_HUB`, as `ToolFoldTests`), twelve
@@ -63,7 +64,7 @@ final class KeepTappedRowTests: XCTestCase {
     private func launchPersona() throws {
         let env = ProcessInfo.processInfo.environment
         guard let hub = env["PERSONA_FOLDS_HUB"] ?? env["PERSONA_MOCK_HUB"] else {
-            throw XCTSkip("needs MOCK_LONG_ASSISTANT=1 MOCK_FOLD_DELAY=0.8 (PERSONA_FOLDS_HUB)")
+            throw XCTSkip("needs MOCK_LONG_ASSISTANT=1 MOCK_FOLD_DELAY=2 (PERSONA_FOLDS_HUB)")
         }
         app = XCUIApplication()
         launch(["-pairURL", pair(hub), "-dev.openChat", "", "-app.tab", "assistant", "-tab", "assistant", "-openAssistant", Self.main],
