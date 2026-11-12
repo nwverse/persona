@@ -1480,8 +1480,9 @@ Mac and Vision Pro. Nothing here shows on a hub from before it.
   Persona hands out. It is read and written through `AppModel.assistantConfig` (`setMainSupervisesOwnTasks`: shown at
   once, put back when the hub refuses), as the two switches above it. A hub that omits the field has no switch.
 - **Its model**: Settings › Models lists the use `assistant.supervise` after the categories and the other uses set
-  apart. The hub's catalog leaves it out, so `ModelConfigurationModel.load` asks for it by its id beside the catalog
-  (`listing`); a hub without it answers 404 and the list has no such row. Its page says "Follow Main Chat" where Lark
+  apart. A hub before #5806 leaves it out of its catalog, so `ModelConfigurationModel.load` asks for it by its id
+  beside the catalog (`listing`); a hub without it answers 404 and the list has no such row, and one that lists it in
+  the catalog (#5806 on) gets the catalog's row only. Its page says "Follow Main Chat" where Lark
   /agent says "Follow Agents", and saves to the use's own record.
 - **Its reviews in the main chat**: a review is the feed kind `review` in the conversation that planned the task,
   whoever reviewed, so `ChatLines.mergeFeed` places it and `ReviewFeedLine` draws it as one line that opens the task.

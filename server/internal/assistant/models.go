@@ -97,9 +97,10 @@ func (p ModelPurpose) launch() string {
 
 var modelCategoryIDs = []string{"assistant", "agent.new", "kb", "inbox.triage", "agent.delegate"}
 
-// The catalog also includes the opt-in overrides of Agents (agentsOverride), in the order of Agents' uses;
-// category-default assignment must not write them.
-var modelConfigIDs = append(slices.Clone(modelCategoryIDs), purposeAgent, purposeLarkAgent)
+// The catalog also includes the uses set apart from their category: the opt-in overrides of Agents (agentsOverride),
+// in the order of Agents' uses, then the background supervisor's (#5806), last so the rows the apps drew before it was
+// listed keep their order; category-default assignment must not write them.
+var modelConfigIDs = append(slices.Clone(modelCategoryIDs), purposeAgent, purposeLarkAgent, purposeSupervise)
 
 // agentsOverride: a use of Agents the user may set apart, the AI twin (#4232) or Lark /agent. With nothing saved it
 // follows Agents; every other use follows its category only.
@@ -141,8 +142,8 @@ var modelPurposes = []ModelPurpose{
 	// by default, which is not logged in on every hub machine).
 	{ID: "schedule", Group: "group_assistant", Kind: "launcher", Parent: "assistant"},
 	// The background supervisor (supervise_background.go, #4927): the main chat's model until it is given its own, which
-	// may be a cheaper or a stronger one. Not in the catalog the apps list (modelConfigIDs): they read and set it
-	// through its own purpose, and an app from before they did has no words for the row (#5086 left it so).
+	// may be a cheaper or a stronger one. In the catalog the apps list (modelConfigIDs, #5806): each app that asked for
+	// it by its own id draws it once, and one from before draws the row with the name sent here.
 	{ID: purposeSupervise, Group: "group_assistant", Kind: "launcher", Parent: "assistant"},
 }
 

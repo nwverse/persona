@@ -224,6 +224,7 @@ func (s *Service) validateModel(ctx context.Context, p ModelPurpose, b ModelBind
 
 // providerModelUses are the current configurable purposes assigned to provider: a provider in use is not deleted underneath them.
 // Automatic selection by the built-in API categories is not an assignment; current extension purposes also protect an inherited provider.
+// The background supervisor's use is one of them (modelConfigIDs, #5806): its own provider, or the main chat's while it follows it.
 func (s *Service) providerModelUses(ctx context.Context, provider string) ([]string, error) {
 	uses := []string{}
 	ids := slices.Clone(modelConfigIDs)

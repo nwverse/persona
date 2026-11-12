@@ -107,14 +107,14 @@ work out as today; it no longer receives supervision messages for it.
   supervisor" has the whole of it): the web sidebar has had no group of automatic conversations since #4331, so the
   conversation is listed under All chats › Scheduled, marked built in, not in a sidebar group. The main chat draws
   each `review` entry marked `by: "background"` (the mark #5084 added) as one line. The model
-  purpose `assistant.supervise` stays out of the catalog `GET /api/v1/model-config` returns and is read by its own id
-  beside it.
+  purpose `assistant.supervise` stayed out of the catalog `GET /api/v1/model-config` returns (until #5806) and is read
+  by its own id beside it.
 - **As built on Android (step B2, #5084)** (`docs/android/android.md` "The background supervisor (#5084)"): that app's
   drawer has no group of its own for scheduled tasks' conversations (they are under All chats), so the conversation is
   under All chats with them. The feed's `review` entry did not say who wrote it, so this step adds `by: "background"`
   to the entry of a review the background supervisor wrote (`reviewFeedBody.By`), and the app draws exactly those as one
   line; against a hub without the mark every review stays in the background record as before. The hub's model catalog
-  leaves `assistant.supervise` out, so the app asks for it by its ID to list it.
+  left `assistant.supervise` out (until #5806), so the app asks for it by its ID to list it.
 
 Alternatives considered:
 
@@ -344,8 +344,9 @@ As built (K1, #5086; `docs/assistant/model-config.md` "Models for each role" and
   reopened is within 24 hours of the acceptance and over the acceptances at least that old (`settled`), so models in
   use for different lengths of time compare; rework rounds are those since the task's previous acceptance; a task
   leader's agent is counted by its model too.
-- `assistant.supervise` stays out of the catalog `GET /api/v1/model-config` returns. The web, the Apple apps and
-  Android as of B2 each skip their own request's row when the catalog already lists the purpose, so adding it would
-  not break them; an app from before B2 has no words for the row, and the catalog's list is also what a provider's
-  "in use" check reads, so it is left as B1 built it.
+- `assistant.supervise` stayed out of the catalog `GET /api/v1/model-config` returns until #5806. The web, the Apple
+  apps and Android as of B2 each skip their own request's row when the catalog already lists the purpose, and an app
+  from before B2 draws the row with the name the hub sends, so #5806 lists it; the catalog's list is also what a
+  provider's "in use" check reads, so a provider only the background supervisor runs on is no longer deleted
+  underneath it (`docs/assistant/model-config.md` "The background supervisor in the catalog").
 
