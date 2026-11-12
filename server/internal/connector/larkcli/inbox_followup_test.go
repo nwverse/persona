@@ -50,7 +50,7 @@ func TestInboxPollFollowupAfterOwnReply(t *testing.T) {
 						thread += ":thread:" + topic
 					}
 					got := inboxThings(t, c)[thread]
-					if got.Last != followup.MessageID || got.Done != "" || got.ReplyTo != followup.MessageID {
+					if got.Last != followup.MessageID || got.Done != "" { // Last marks the follow-up; ReplyTo says where a reply goes (#5779)
 						t.Fatalf("unanswered follow-up was lost or settled: %+v", got)
 					}
 					if topic == "" && got.Kind != "dm" {

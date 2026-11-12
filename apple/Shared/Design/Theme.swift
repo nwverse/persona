@@ -505,6 +505,10 @@ nonisolated enum Theme {
         /// The width the small window's card is drawn at (VNCPiPCard: Connecting…, why not), in points, about the small
         /// window's own on an iPhone so its text reads at its size there.
         static let pictureInPictureCard: CGFloat = 240
+        /// A task sheet closes on a rightward swipe that starts within `edgeBackZone` of the leading edge and travels at
+        /// least `edgeBackDistance` (a sheet has no system edge-back; #5603).
+        static let edgeBackZone: CGFloat = 24
+        static let edgeBackDistance: CGFloat = 72
         static let line: CGFloat = 1
         static let lineMedium: CGFloat = 1.5
         static let rule: CGFloat = 2
@@ -953,9 +957,9 @@ nonisolated enum Theme {
         /// The colors that travel around the composer while a reply is generating (Glow While Replying, `ComposerGlow`):
         /// blue through violet to pink, each in its light and dark shade.
         static let composerGlow: [Color] = [Hue.blue, Hue.indigo, Hue.purple, Hue.pink]
-        /// Reserve most of the keyboard-visible viewport for the conversation, not the draft.
-        static let composerHeightFraction: CGFloat = 0.22
-        static let composerMinimumLines = 3
+        /// iPhone and iPad drafts grow through six lines before scrolling; keyboard height does not lower the cap.
+        static let composerPhoneMaximumLines = 6
+        /// The shared Mac/visionOS composer retains its existing eight-line cap.
         static let composerMaximumLines = 8
         /// Text and TextField round line heights differently; half a line distinguishes adjacent counts.
         static let composerLineTolerance: CGFloat = 0.5

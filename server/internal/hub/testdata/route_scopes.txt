@@ -40,6 +40,7 @@ extensions.call:{id} /api/v1/extensions/{id}/
 -                    DELETE /api/v1/admin/devices/{credential_id}/owner
 -                    DELETE /api/v1/admin/devices/{id}
 -                    DELETE /api/v1/admin/extensions/{id}
+-                    DELETE /api/v1/admin/extensions/{id}/egress/allow
 -                    DELETE /api/v1/admin/machines/{id}
 -                    DELETE /api/v1/admin/peers/{hub_id}
 -                    DELETE /api/v1/admin/usage-sources/{id}
@@ -85,6 +86,7 @@ inbox.write          DELETE /api/v1/inbox/policies/{id}
 -                    DELETE /api/v1/task-trust
 -                    DELETE /api/v1/todos/{id}
 todos.write          DELETE /api/v1/todos/{id}/agents/{mid}/{sid}
+-                    DELETE /api/v1/todos/{id}/seen
 todos.write          DELETE /api/v1/todos/{id}/spaces/{mid}/{space...}
 -                    DELETE /api/v1/todos/{id}/thread
 -                    DELETE {base}/markets/{mid}
@@ -171,6 +173,7 @@ assistant.ask        GET /api/v1/assistant/reporters
 -                    GET /api/v1/extensions/-/ui
 -                    GET /api/v1/extensions/-/upgrades
 -                    GET /api/v1/extensions/-/widgets
+-                    GET /api/v1/extensions/{id}/-/assistant-data
 -                    GET /api/v1/extensions/{id}/-/auth
 -                    GET /api/v1/extensions/{id}/-/dev/logs
 -                    GET /api/v1/extensions/{id}/-/icon
@@ -286,6 +289,7 @@ agents.read          GET /api/v1/sessions/{mid}/{sid}/screen
 -                    GET /api/v1/sessions/{mid}/{sid}/share-preview/{preview_id}
 -                    GET /api/v1/skills
 -                    GET /api/v1/subscriptions
+-                    GET /api/v1/subscriptions/-/graph
 -                    GET /api/v1/subscriptions/catalog
 -                    GET /api/v1/subscriptions/summary
 -                    GET /api/v1/subscriptions/{id}
@@ -319,6 +323,7 @@ todos.write          PATCH /api/v1/todos/{id}
 -                    POST /api/v1/admin/doctor
 -                    POST /api/v1/admin/extensions/install
 -                    POST /api/v1/admin/extensions/preview
+-                    POST /api/v1/admin/extensions/{id}/egress/allow
 -                    POST /api/v1/admin/extensions/{id}/rollback
 -                    POST /api/v1/admin/extensions/{id}/upgrade
 -                    POST /api/v1/admin/login
@@ -404,6 +409,7 @@ assistant.ask        POST /api/v1/assistant/conversations/{id}/stop
 -                    POST /api/v1/extensions/-/install
 -                    POST /api/v1/extensions/-/operations/{op}/retry
 -                    POST /api/v1/extensions/-/preview
+-                    POST /api/v1/extensions/{id}/-/assistant-data/apply
 -                    POST /api/v1/extensions/{id}/-/attach
 -                    POST /api/v1/extensions/{id}/-/auth/logout
 -                    POST /api/v1/extensions/{id}/-/auth/step
@@ -618,6 +624,7 @@ kb.write             PUT /api/v1/kb/{kind}/{id}
 -                    PUT /api/v1/recordings/{id}/private
 -                    PUT /api/v1/subscriptions/{id}
 todos.write          PUT /api/v1/todos/{id}/agents/{mid}/{sid}
+-                    PUT /api/v1/todos/{id}/seen
 todos.write          PUT /api/v1/todos/{id}/spaces/{mid}/{space...}
 -                    PUT /api/v1/todos/{id}/thread
 -                    PUT /api/v1/workspace-board/settings

@@ -659,6 +659,20 @@ nonisolated struct SessionCapabilities: Codable, Hashable, Sendable {
     }
 }
 
+/// Resume in Terminal (#5521, docs/integrations/engines.md "Agents run in a terminal"): what the chat's ⋯ offers for an Agent
+/// that isn't running, the one rule its ⋯, its stopped line and its terminal page go by (web `terminalResume`,
+/// lib/agent-resume.ts). `Session.terminalResume(on:)` decides.
+nonisolated enum TerminalResume: Equatable, Sendable {
+    /// A stopped Agent: the node marks one so only where a terminal engine can host the resume.
+    case available
+    /// Not running, on a computer that enables no terminal engine (the empty engine set, #3302): offered disabled, saying so.
+    case noEngine
+    /// Not offered: it runs (in Persona's terminal or in one of its own: a second claude would write the same transcript),
+    /// it starts, an assistant conversation, a desktop app's session (a message reopens it there, #4300), another source,
+    /// or a row from an older node, which does not say.
+    case hidden
+}
+
 nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     var machineID: String
     var sessionID: String
@@ -925,10 +939,12 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     var canApprove: Bool { capabilities.map(\.approve) ?? !hasSource }
     var canTerminal: Bool { capabilities.map(\.terminal) ?? !hasSource }
     /// A stopped Agent (#4754): its conversation and terminal stay, it takes no messages; Resume on its terminal page runs
-    /// it again (node stopped.go).
+    /// it again (node stopped.go). A Codex thread nothing has open is marked the same way (node codex_registry.go, #5521),
+    /// though its row keeps its Codex history source.
     var isStopped: Bool {
         // "interrupted" (cut off by a restart) reads as unknown here; only the node's stopped rows carry capabilities.
-        !hasSource && !assistant && capabilities.map { !$0.send } == true && (status == .offline || status == .unknown)
+        guard !assistant, let c = capabilities, !c.send, status == .offline || status == .unknown else { return false }
+        return !hasSource || (sourceKind == "codex_history" && c.terminal)
     }
     var canAttach: Bool { hasSource && capabilities?.attach == true && attached != true }
     /// Delete Chat (docs/protocol/protocol.md `DELETE /sessions`) only for one that is not running: offline, finished (seen or not) or unknown,
@@ -996,6 +1012,14 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         if isTraex { return "TRAEX" }
         if isClaude { return "Claude" }
         return agentLabelHint ?? agent ?? "Claude"
+    }
+    /// Resume in Terminal (#5521): whether the chat's ⋯ offers to bring it back in a terminal on its computer
+    /// (`TerminalResume`); `machine` is its computer.
+    func terminalResume(on machine: Machine?) -> TerminalResume {
+        guard !assistant, starting != true, status == .offline || status == .unknown else { return .hidden }
+        let agentRow = (!hasSource || sourceKind == "codex_history") && (isClaude || isCodex || isTraex)
+        if agentRow && agentSurface != "desktop" && machine?.engineHosts?.isEmpty == true { return .noEngine }
+        return isStopped ? .available : .hidden
     }
     /// How to pick the conversation up again on the computer (offered only with a terminal, canTerminal: a runtime's
     /// sessions are picked up in the runtime's own UI).
@@ -2033,6 +2057,9 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     var delegating: Bool?
     /// What the assistant filled in when it left the question to the user.
     var delegate: Delegate?
+    /// A standing rule the hub suggests on a question a supervisor passed up (#4929, #5802); the card comes again
+    /// without it once it was answered. Absent on every other card and from a hub before it.
+    var suggestion: RuleSuggestion?
     /// The manager that reported it (docs/protocol/protocol.md "Per-manager routing"). Once it is no longer pending
     /// the hub routes by the manager a request names, so Change Answer names this one.
     var manager: String?
@@ -2059,6 +2086,7 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case id, kind, questions, plan, summary, screen, cwd, dialog, secret, fields, agent, reason, delegating, delegate, manager
+        case suggestion
         case machineID = "machine_id", sessionID = "session_id", sessionTitle = "session_title", taskTitle = "task_title",
              createdAt = "created_at", expiresAt = "expires_at", toolName = "tool_name", toolUseID = "tool_use_id",
              toolInput = "tool_input", alwaysLabel = "always_label", alwaysKeys = "always_keys", alwaysHonored = "always_honored",

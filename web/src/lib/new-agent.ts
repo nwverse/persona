@@ -7,6 +7,7 @@ import { uuid } from "./format";
 import { apiOp } from "./ops";
 import { currentPlatform, modName, type Platform } from "./shortcuts";
 import { href, navigate } from "./router";
+import { withStarPrompt } from "./star-prompt-load";
 import { getState, putLaunch, upsertSession } from "./store";
 import { ultracodeErrorText, ultracodeRefused } from "./ultracode";
 import type { DraftImage } from "./drafts";
@@ -148,6 +149,8 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
       if (!getState().launches[id]) return;
       update({ session });
       upsertSession(session);
+      // one more Agent this browser started, for the GitHub star line (#5761)
+      withStarPrompt((m) => m.starPromptLaunched());
     }
     if (!launch.outgoing) {
       update({ phase: "uploading" });

@@ -10,6 +10,7 @@ import { RecordingDayRecap } from "./RecordingDayRecap";
 import { RecordingAsks } from "./RecordingAsks";
 import { MeetingPrivate, RecordingConversation, useRecordingMeeting } from "./RecordingConversation";
 import { RecordingPhotos } from "./RecordingPhotos";
+import { RecordingLiveView } from "./RecordingLiveView";
 import { scrollBehavior } from "../../ui/stream/motion";
 import { Relationships } from "./Relationships";
 import { TopicPoints } from "./TopicPoints";
@@ -301,6 +302,8 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
                 onJump={jumpToTranscript}
                 photos={meeting.photos}
               />)}
+              {/* While a room meeting records (phase 2): its topics and newest live lines, above its conversation. */}
+              {rec && <RecordingLiveView rec={rec} meeting={meeting} />}
               {rec && <RecordingConversation detail={d} rec={rec} meeting={meeting} auth={auth} current={current} manager={manager} />}
               {/* A room meeting's questions are in its thread; a #2981 meeting's stay here. */}
               {rec && !meeting.roomMeeting && <RecordingAsks
