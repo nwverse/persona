@@ -47,8 +47,9 @@ extension AppModel {
                 try await api.send(key, text: msg.text, images: msg.images, launcher: launcher, model: model,
                                    clientMsgID: msg.id.uuidString, clearDraft: clearDraft, via: msg.via, opID: msg.id)
             }
-            if waits {
-                // Sent, but the Agent reads it only after the question on the computer is answered (#5890).
+            if waits, visibleSession == key {
+                // Sent, but the Agent reads it only after the question on the computer is answered (#5890). Only on
+                // that chat's screen: the toast does not name the chat, and an outbox flush can run from anywhere.
                 toast = Toast(String(localized: "Sent. The Agent will read it after the question on the computer is answered."))
             }
             return .sent

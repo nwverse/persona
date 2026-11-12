@@ -186,7 +186,7 @@ func TestOutsideClaudeSendNotTaken(t *testing.T) {
 }
 
 // A session waiting on a question or permission prompt takes the message into its queue, but reads it only once that
-// is answered at the computer: the send succeeds and says so (waits_on_computer); one that is working does not.
+// is answered at the computer: the send succeeds and says so (waits_on_computer); one that is working or idle does not.
 func TestOutsideClaudeSendBehindDialog(t *testing.T) {
 	n, f, home := herdrNode(t)
 	noPaneEnv(t)
@@ -197,7 +197,7 @@ func TestOutsideClaudeSendBehindDialog(t *testing.T) {
 	for i, c := range []struct {
 		status string
 		waits  bool
-	}{{"waiting", true}, {"busy", false}} {
+	}{{"waiting", true}, {"busy", false}, {"idle", false}} {
 		writeOutsideClaude(t, home, sidA, "cli", c.status, inbox, nil)
 		res, err := request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "why nothing to tap? " + c.status,
 			"client_msg_id": "m-" + strconv.Itoa(i)})
