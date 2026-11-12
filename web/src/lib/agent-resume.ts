@@ -4,7 +4,23 @@
 // both show the same progress and the same error. A pure store, tested without a DOM.
 import { useSyncExternalStore } from "react";
 import { api, errorText } from "./api";
-import type { Session } from "./types";
+import { isStoppedAgent } from "./format";
+import type { Machine, Session } from "./types";
+
+/** Resume in terminal (#5521): whether an Agent's ⋯ offers to bring it back in a terminal on its computer. "available"
+ *  for a stopped Agent (the node marks one so only where a terminal engine can host the resume); "no_engine" for an Agent
+ *  that isn't running on a computer that enables no terminal engine (the empty engine set, #3302), offered disabled with
+ *  why; "hidden" while it runs (in Persona's terminal or in one of its own: a second claude would write the same
+ *  transcript), while it starts, for assistant conversations, for the desktop apps' sessions (a message reopens those in
+ *  the app, #4300) and for the rows of older nodes, which don't say. iOS: `TerminalResume`. */
+export type TerminalResume = "available" | "no_engine" | "hidden";
+
+export function terminalResume(s: Session | undefined, machine?: Pick<Machine, "engine_hosts">): TerminalResume {
+  if (!s || s.assistant || s.starting || (s.status !== "offline" && s.status !== "interrupted")) return "hidden";
+  const agent = (!s.source_kind || s.source_kind === "codex_history") && [undefined, "", "claude", "codex", "traex"].includes(s.agent);
+  if (agent && s.agent_surface !== "desktop" && machine?.engine_hosts?.length === 0) return "no_engine";
+  return isStoppedAgent(s) ? "available" : "hidden";
+}
 
 export type ResumeState =
   | { phase: "idle" }

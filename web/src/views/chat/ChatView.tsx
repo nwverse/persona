@@ -8,6 +8,7 @@ import { attentionReason, backgroundWaiting, externalLink, failureReason, isStop
 import { conversationPage } from "../../lib/conversation-page";
 import { navigate, type SessionView } from "../../lib/router";
 import { canShowTerminal, composerSlot, otherView, useSessionView, viewOnlyRow } from "../../lib/session-view";
+import { resumeAgent, terminalResume } from "../../lib/agent-resume";
 import { openLink } from "../../lib/links";
 import { getPanel, openPanel, togglePanel, usePanel } from "../../lib/panel";
 import { backgroundPanelOf, hasBackgroundWork, isWorkflowsCommand, latestWorkflowRun, openBackgroundPanel, provideBackgroundChat, toggleBackgroundPanel, WORKFLOWS_COMMAND } from "../../lib/background-panel";
@@ -2218,6 +2219,14 @@ export const Header = memo(function Header({
   const [sharingOpen, setSharingOpen] = useState(false);
   const allowed = session ? sessionMenuActions(session) : [];
   const attach = () => session && attachLive(session);
+  // Resume in terminal (#5521): a stopped Agent comes back in a terminal on its computer, shown in place of the chat
+  const machine = useStore((s) => s.machines.find((m) => m.id === session?.machine_id));
+  const resumeOffer = terminalResume(session, machine);
+  const resumeHere = () => {
+    if (!session) return;
+    if (view === "chat") onView?.("term"); // where the resumed Agent shows up; Resume's progress and error show there too
+    void resumeAgent(session.machine_id, session.session_id);
+  };
   // a task's or an Agent's side panel leaves the space's other agents out of ⋯
   const others = chrome ? [] : siblings.filter((s) => s.session_id !== session?.session_id);
   // the session's files and Git open in the side panel (docs/web/web.md "Side panel"); the assistant has none. Its terminal is
@@ -2303,6 +2312,9 @@ export const Header = memo(function Header({
             : []),
         ...(allowed.includes("attach") ? [{ key: "attach", label: t("chat-chatview.attach"), icon: "link" as const, onSelect: () => void attach() }] : []),
         ...(showTerminal ? [{ key: "terminal", label: t("chat-chatview.terminal"), icon: "terminal" as const, checked: view === "term", onSelect: flipView }] : []),
+        ...(resumeOffer !== "hidden"
+          ? [{ key: "resume-terminal", label: t("chat-chatview.resume_in_terminal"), icon: "play" as const, disabled: resumeOffer === "no_engine", detail: resumeOffer === "no_engine" ? t("chat-chatview.resume_no_engine", { computer: machineName }) : undefined, onSelect: resumeHere }]
+          : []),
         ...(showFiles ? [{ key: "files", label: t("chat-chatview.files"), icon: "folder" as const, checked: here(panel, "files"), onSelect: openFiles }, { key: "git", label: "Git", icon: "git" as const, checked: here(panel, "git"), onSelect: openGit }, ...(reviews ? [{ key: "review", label: t("chat-chatview.review_changes"), icon: "pullRequest" as const, checked: here(panel, "review"), onSelect: openReview }] : [])] : []),
         ...(showFiles && previews ? [{ key: "preview", label: t("chat-chatview.preview"), icon: "web" as const, checked: here(panel, "preview"), onSelect: openPreview }] : []),
         ...(allowed.includes("stop") ? [{ key: "stop", label: t("chat-chatview.interrupt"), icon: "stop" as const, hint: "Esc", onSelect: onInterrupt }] : []),

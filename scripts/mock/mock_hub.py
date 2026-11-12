@@ -302,6 +302,12 @@ MACHINES = [
 ]
 if os.environ.get("MOCK_NODE_MISMATCH"):  # a machine whose personad is another build than the hub's
     MACHINES[2]["node_mismatch"] = True
+# MOCK_RESUME_TERMINAL=1 (#5521): Resume in Terminal's cases (the sessions below); a Mac mini that enables no terminal engine.
+RESUME_TERMINAL = bool(os.environ.get("MOCK_RESUME_TERMINAL"))
+if RESUME_TERMINAL:
+    MACHINES.append({"id": "mini", "name": "Mac mini", "kind": "ssh", "icon": "desktop", "ssh_host": "mini", "online": True,
+                     "hostname": "Mini", "os": "darwin", "arch": "arm64", "home": "/Users/me", "claude_version": "2.1.320",
+                     "last_seen": ago()})
 
 # ---------- workspaces (GET /api/v1/workspaces, docs/web/workspace-board.md) ----------
 # A few host spaces and session folders on the mock machines: what the assistant's @ menu lists (#5594). Placeholders.
@@ -432,6 +438,8 @@ for _i in range(int(os.environ.get("MOCK_PERF_MACHINES", "0"))):
     _mid = f"perf-machine-{_i + 1:03d}"
     SYSTEMS[_mid] = dict(SYSTEMS["server"])
     MACHINES.append(dict(MACHINES[0], id=_mid, name=f"示例机器 {_i + 1:03d}", hostname=f"example-node-{_i + 1:03d}"))
+if RESUME_TERMINAL:  # the Mac mini (#5521)
+    SYSTEMS["mini"] = dict(SYSTEMS["macbook"], model="Mac mini", cpu="Apple M4", cores=10, memory=32 * GB)
 for _m in MACHINES:
     _m["system"] = dict(SYSTEMS[_m["id"]], boot_time=int((NOW - timedelta(days=3, hours=4)).timestamp()))
 # Machines added later (MOCK_MACHINES) have no system and never sent a sample.
@@ -1278,6 +1286,32 @@ CLAUDE_TERMINAL = "c1a0de00-2222-4000-8000-000000000005"
 AGY_SESSION = "a6700000-1111-4000-8000-000000000006"
 NO_SPACE = dict(space_kind=None, space_id=None, space_name=None, space_index=None, slot_id=None, slot_name=None,
                 slot_index=None, pane_id=None, tab_id=None, workspace_id=None, launcher=None)
+# MOCK_RESUME_TERMINAL=1 (#5521, docs/integrations/engines.md "Agents run in a terminal"): Agents started outside Persona's
+# terminals, as the node lists them. On the MacBook (herdr): a Claude Code typed into a terminal of its own that has been
+# closed since, and a Codex thread nothing has open, both stopped (read and terminal: Resume in Terminal); a claude still
+# running in a terminal of its own (claude_cli: no terminal, no resume). On the Mac mini, which enables no terminal engine,
+# a Claude Code whose terminal was closed: no capabilities, as the node lists it there (Resume in Terminal disabled).
+RT_STOPPED = "5e000000-0000-4000-8000-000000005521"
+RT_CODEX = "019a5521-0000-7000-8000-000000000001"
+RT_LIVE = "5e000000-0000-4000-8000-000000005522"
+RT_NO_ENGINE = "5e000000-0000-4000-8000-000000005523"
+if RESUME_TERMINAL:
+    _rt_stopped = dict(capabilities={"read": True, "terminal": True}, started_by_persona=False, agent_surface="cli",
+                       read_only_reason="Agent 已停止：对话和终端可以看，它不再收消息；要它接着做，在终端页点「恢复」")
+    SESSIONS += [
+        sess("macbook", RT_STOPPED, "整理发布说明", "/Users/me/code/weather", "offline", "offline", "", 0, "", 0, 50,
+             "这周的发布说明按模块分好了，还差截图。", **dict(NO_SPACE, launcher="claude"), **_rt_stopped),
+        sess("macbook", RT_CODEX, "压缩图片的脚本", "/Users/me/code/tools", "offline", "offline", "", 0, "", 0, 90,
+             "脚本写好了，批量压缩会保留原图。", agent="codex", agent_name="Codex CLI", source_kind="codex_history",
+             source_thread_id=RT_CODEX, **dict(NO_SPACE, launcher="codex"), **_rt_stopped),
+        sess("macbook", RT_LIVE, "排查登录超时", "/Users/me/code/weather", "idle", "idle", "", 0, "", 0, 4,
+             "超时是重试间隔太短，改成指数退避了。", agent="claude", source_kind="claude_cli", agent_surface="cli",
+             started_by_persona=False, capabilities={"read": True, "send": True}, **NO_SPACE),
+        sess("mini", RT_NO_ENGINE, "备份照片库", "/Users/me/Pictures", "offline", "offline", "", 0, "", 0, 70,
+             "照片库备份到外接硬盘了，校验也跑完了。", agent_surface="cli", started_by_persona=False,
+             **dict(NO_SPACE, launcher="claude")),
+    ]
+RT_START = {x["session_id"]: copy.deepcopy(x) for x in SESSIONS if x["session_id"] in (RT_STOPPED, RT_CODEX, RT_LIVE, RT_NO_ENGINE)}
 _desktop_caps = {"read": True, "send": True}
 # MOCK_CODEX_WAITING=1 (#4961, docs/integrations/codex.md "Starting without a first message"): the Codex launchers say the
 # computer opens Codex with no first message (prompt_optional), a Codex start without one answers with a waiting row,
@@ -5627,6 +5661,15 @@ ITEMS[CODEX_LIVE] = (
 )
 ITEMS[CODEX_HISTORY] = [it("user", "text", 60 * 6, text="日志采集改成按天切分")] + [
     it("assistant", "text", 60 * 5, text="日志采集改成按天切分，旧文件压缩后保留 30 天。")]
+if RESUME_TERMINAL:  # #5521
+    ITEMS[RT_STOPPED] = [it("user", "text", 60, text="把这周合并的 PR 整理成发布说明，按模块分")] + [
+        it("assistant", "text", 50, text="这周的发布说明按模块分好了：小组件、预报、设置各一节。还差两张截图，你来了我再补。")]
+    ITEMS[RT_CODEX] = [it("user", "text", 100, text="写个脚本，把 photos 目录里的图片批量压缩到 2 MB 以内")] + [
+        it("assistant", "text", 90, text="脚本写好了：`compress.sh` 批量压缩，原图放进 originals/ 保留。")]
+    ITEMS[RT_LIVE] = [it("user", "text", 10, text="登录偶尔超时，查一下")] + [
+        it("assistant", "text", 4, text="超时是重试间隔太短，改成指数退避了。")]
+    ITEMS[RT_NO_ENGINE] = [it("user", "text", 80, text="把照片库备份到外接硬盘，备份完校验一遍")] + [
+        it("assistant", "text", 70, text="照片库备份到外接硬盘了，校验也跑完了，没有出错的文件。")]
 ITEMS[DSH_SESSION] = [it("user", "text", 5, text="用 finance 目录里的表格生成第三季度报表")] + [
     it("assistant", "text", 2, text="要读取 finance 目录里的表格，等你授权。")]
 if os.environ.get("MOCK_OPENCODE"):
@@ -18154,6 +18197,10 @@ if ENGINE_SETS:
     for _s in SESSIONS:
         if _s.get("session_id") == WIDGET:
             _s["host"], _s["also_open_in"] = "herdr", ["herdr-core"]
+if RESUME_TERMINAL:  # the Mac mini enables no terminal engine: the empty set (#3302), herdr still named for older clients
+    for _m in MACHINES:
+        if _m["id"] == "mini":
+            _m["engine_hosts"], _m["engine_default"] = [], ""
 
 # ---------- MOCK_NEEDS / MOCK_HISTORY: the Persona page (docs/android/android.md "Persona page") ----------
 # By default five agent requests and several inbox items in "Needs you" wait: the Persona home's "Things that need you now" shows three
@@ -20376,6 +20423,8 @@ class H(BaseHTTPRequestHandler):
                     for k in ("hostname", "os", "arch", "home", "herdr_version", "claude_version"): m.pop(k, None)
                     m.update(online=False, error="ssh: connect to host lab port 22: Connection refused")
             SESSIONS[:] = [x for x in SESSIONS if not x["session_id"].startswith("d4e6f8a0-")]
+            # MOCK_RESUME_TERMINAL: the stopped Agents a test resumed are stopped again (#5521).
+            SESSIONS[:] = [copy.deepcopy(RT_START[x["session_id"]]) if x["session_id"] in RT_START else x for x in SESSIONS]
             del RECONNECTS[:], STARTED[:], SEEN[:]
             INTERACTIONS.extend(SESSION_CLOSE["interactions"])
             SESSION_CLOSE.update(fail=False, attempts=[], closed=[], interactions=[])
@@ -22365,6 +22414,13 @@ class H(BaseHTTPRequestHandler):
             if resume is not None:
                 if os.environ.get("MOCK_RESUME_ERROR"): return self.send_json({"error": os.environ["MOCK_RESUME_ERROR"]}, 502)
                 resume.update(status="idle", state="idle")
+                if resume.get("capabilities", {}).get("terminal") and not resume["capabilities"].get("send"):
+                    # A stopped Agent (#4754, #5521) runs again in a terminal tab: a row like any of the engine's, no
+                    # longer read-only, and a Codex thread is the pane's agent now, not a history source.
+                    for k in ("capabilities", "read_only_reason", "source_kind", "source_thread_id"):
+                        resume.pop(k, None)
+                    resume.update(pane_id="w9:p1", tab_id="w9:t1", workspace_id="w9", space_kind="herdr", space_id="w9",
+                                  space_name=resume["cwd"].rsplit("/", 1)[-1], slot_id="w9:t1", slot_name=resume["title"])
                 push_machine(resume["machine_id"])
                 return self.send_json({"session": with_fold(decorated_session(resume))})
             codex = body.get("launcher") == "codex"  # the node starts Codex with its first message and answers with its thread
