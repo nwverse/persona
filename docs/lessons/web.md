@@ -26,6 +26,15 @@ hub: send `roots=1` on every page and count read while hello lists `sessions_hie
 - A layer that closes on Esc from a capture-phase `keydown` on the window runs before an open menu's handler (also capture,
   registered later). It has to leave Esc alone while its menu is open, or Esc closes the editor instead of the menu.
 
+## Review dismissal must not be bypassed by an old runtime error (#5311)
+
+A task can have both a current `needs_user` review and an idle Agent with a transient `turn_error`. The latter makes its
+status `interrupted`; guarding dismissal and Later with `!waits` therefore leaves the decision visible even after a
+successful persisted dismissal. Protect actual Agent input (`asks` or `needs_you`), not every attention status. Hide the
+review round optimistically in the existing local deferral store, replace that mask with the confirmed receipt, and
+remove the mask on failure. Finish loading in `finally`; unmounting is not a completion signal. Regress both note-only
+and structured reviews with a runtime error, delayed writes, stale list reads, failure recovery, Undo and new rounds.
+
 ## Review state is not an answerable decision (#4808)
 
 An old task can remain `supervision.state: needs_user` without any acceptance-book `ask`. Render its original review
