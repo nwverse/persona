@@ -494,20 +494,35 @@ func (s *Service) startMain(ctx context.Context, p StartParams) (proto.Session, 
 	p.Origin, p.OriginRef, p.OpenedBy = OriginUser, "", "" // the main conversation is the user's, whatever channel opened it
 	// A cleared main conversation's pick, unless this start names its own launcher or model.
 	carried := handoff.Pick
-	if carried != nil && p.Launcher == "" && p.Model == "" {
+	if carried != nil && (p.Launcher != "" || p.Model != "") {
+		carried = nil
+	}
+	if carried != nil {
+		// Held to what a message on it is held to: one that can't run here any more refuses this start, saying why
+		// with the same codes, and is dropped, so the next start runs on the default. Never a silent fallback.
+		if err := s.modelPickRefusal(ctx, s.settings(ctx).MachineID, carried.Launcher, s.requestCtxLang(ctx), true); err != nil {
+			s.dropCarriedPick(ctx, handoff)
+			if !storedPickRefused(err) {
+				err = refusePick(http.StatusBadRequest, err) // it can't run assistant chats
+			}
+			return proto.Session{}, err
+		}
+		// The start's own effort (iOS sends its last one with every start) is the first message's; the pick keeps its.
 		p.Launcher, p.Model = carried.Launcher, carried.Model
 		if p.Effort == "" {
 			p.Effort = carried.Effort
 		}
-	} else {
-		carried = nil
 	}
 	sess, err := s.startConversationOn(ctx, p, true)
 	if err != nil {
+		var refused *pickError
+		if carried != nil && errors.As(err, &refused) {
+			s.dropCarriedPick(ctx, handoff) // its model can't reach that launcher's agent (pickedModelRefusal)
+		}
 		return proto.Session{}, err
 	}
 	if carried != nil {
-		s.keepStartPick(ctx, &sess, carried.Launcher, carried.Model, p.Effort)
+		s.keepStartPick(ctx, &sess, carried.Launcher, carried.Model, carried.Effort)
 	}
 	if _, err := s.updateSettings(ctx, func(v *Settings) error {
 		*v = s.effective(ctx, *v)
@@ -529,6 +544,15 @@ func (s *Service) startMain(ctx context.Context, p StartParams) (proto.Session, 
 	return sess, nil
 }
 
+// dropCarriedPick saves h, what a main conversation left, without the pick a /clear carried (clearMain): it can't run,
+// or New main chat starts on the default. The caller holds s.main.mu.
+func (s *Service) dropCarriedPick(ctx context.Context, h mainHandoff) {
+	h.Pick = nil
+	if err := s.saveHandoff(ctx, h); err != nil {
+		s.logf("assistant: drop the cleared main conversation's model pick: %v", err)
+	}
+}
+
 // newMain puts the main conversation away: what it left is kept for the next one (carry), it is no longer the main
 // one, renamed and archived. The next message to the main conversation starts a new one (startMain). It answers the
 // old conversation's id ("" when there was none) and whether anything of it is carried over.
@@ -541,6 +565,9 @@ func (s *Service) newMain(ctx context.Context, carry bool, expect string) (strin
 		return "", false, &rpc.Error{Code: "main_changed", Message: i18n.T(s.lang(ctx), "assistant-start.main_changed")}
 	}
 	if old == "" {
+		if h := s.loadHandoff(ctx); h.Pick != nil { // after /clear: the next one starts fresh, on the default
+			s.dropCarriedPick(ctx, h)
+		}
 		return "", false, nil
 	}
 	machine, c, found := s.findSession(ctx, old, cfg.mainRouteMachine())
@@ -605,7 +632,9 @@ func (s *Service) clearMainLocked(ctx context.Context, expect string) (old, mach
 		return "", "", c, false, &rpc.Error{Code: "main_changed", Message: i18n.T(s.lang(ctx), "assistant-start.main_changed")}
 	}
 	cleared := mainHandoff{}
-	if p, ok := s.modelPickOf(ctx, cfg.mainRouteMachine(), old); old != "" && ok {
+	if old == "" {
+		cleared.Pick = s.loadHandoff(ctx).Pick // cleared again before a new one started: the pick still waits for it
+	} else if p, ok := s.modelPickOf(ctx, cfg.mainRouteMachine(), old); ok {
 		cleared.Pick = &p // the context is cleared, not the model the user picked for the main conversation
 	}
 	if err := s.saveHandoff(ctx, cleared); err != nil {

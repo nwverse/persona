@@ -628,10 +628,16 @@ func (s *Service) warm(launcher string) {
 	cfg := s.settings(ctx)
 	machine := cfg.MachineID
 	pick, picked := modelPick{}, false
-	if launcher == "" && cfg.Main != "" {
+	switch {
+	case launcher != "":
+	case cfg.Main != "":
 		// Kept under the main conversation's machine, where its next message runs: that one is warmed then.
 		if pick, picked = s.modelPickOf(ctx, cfg.mainRouteMachine(), cfg.Main); picked {
 			machine = cfg.mainRouteMachine()
+		}
+	default: // after /clear: the next main conversation starts on the assistant's machine with the carried pick
+		if h := s.loadHandoff(ctx); h.Pick != nil {
+			pick, picked = *h.Pick, true
 		}
 	}
 	if launcher == "" && !picked {

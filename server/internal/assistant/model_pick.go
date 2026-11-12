@@ -132,10 +132,10 @@ func (s *Service) updateModelPick(ctx context.Context, sid string, change func(p
 	}
 	b := &s.modelPicks
 	b.write.Lock()
-	defer b.write.Unlock()
 	b.mu.Lock()
 	if !s.modelPicksLocked(ctx) {
 		b.mu.Unlock()
+		b.write.Unlock()
 		return i18n.Err("assistant-model_pick.err_unreadable")
 	}
 	cur := b.m
@@ -143,6 +143,7 @@ func (s *Service) updateModelPick(ctx context.Context, sid string, change func(p
 	old, had := cur[sid]
 	p, changed := change(old, had)
 	if !changed {
+		b.write.Unlock()
 		return nil
 	}
 	next := maps.Clone(cur)
@@ -153,12 +154,14 @@ func (s *Service) updateModelPick(ctx context.Context, sid string, change func(p
 		s.evictModelPicks(ctx, next, sid)
 	}
 	if err := st.PutSetting(ctx, modelPicksKey, next); err != nil {
+		b.write.Unlock()
 		return err
 	}
 	b.mu.Lock()
 	b.m = next
 	b.mu.Unlock()
-	s.publish(ctx) // the apps get the conversation with its model_pick now
+	b.write.Unlock() // before publishing: the snapshot reads the book, and the next change need not wait for it
+	s.publish(ctx)   // the apps get the conversation with its model_pick now
 	return nil
 }
 

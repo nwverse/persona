@@ -146,8 +146,9 @@ func TestClearCarriesTheMainPick(t *testing.T) {
 	if _, err := s.clearMain(ctx, ""); err != nil {
 		t.Fatal(err)
 	}
+	// The start's effort (iOS sends its last one with every start) is the first message's; the pick keeps its own.
 	code, sess := startConv(t, s, `{"prompt":"hi","main":true,"effort":"low"}`)
-	if code != 200 || sess.ModelPick == nil || *sess.ModelPick != (proto.ModelPick{Launcher: "cx", Model: "gpt-5", Effort: "low"}) {
+	if code != 200 || sess.ModelPick == nil || *sess.ModelPick != (proto.ModelPick{Launcher: "cx", Model: "gpt-5", Effort: "high"}) {
 		t.Fatalf("after /clear: %d %+v", code, sess.ModelPick)
 	}
 	if p := f.lastSend(t); p["launcher"] != "cx" || p["model"] != "gpt-5" || p["effort"] != "low" {
@@ -245,5 +246,146 @@ func TestPicksReadWhileOneIsWritten(t *testing.T) {
 	}
 	if p, ok := s.modelPickOf(context.Background(), "server", "side"); !ok || p.Launcher != "claude" {
 		t.Fatalf("after the write: %+v %v", p, ok)
+	}
+}
+
+// A cleared main conversation's pick that can't run any more refuses the next main start once, saying why with the
+// codes a message on it gets, and is dropped then: the start after runs on the default. Never a silent fallback.
+func TestACarriedPickThatCantRunIsRefusedOnce(t *testing.T) {
+	ctx := context.Background()
+	for _, c := range []struct {
+		launcher, code, words string
+		status                int
+	}{
+		{"cc-relay", "", "can’t run assistant chats", 400},
+		{"far", proto.CodeLauncherOutOfScope, "far stays with the hub", 409},
+		{"gone", proto.CodeLauncherMissing, "gone", 409},
+	} {
+		t.Run(c.launcher, func(t *testing.T) {
+			s, f := pickFixture(t)
+			if err := s.setModelPick(ctx, "main", &modelPick{MachineID: "server", Launcher: c.launcher, At: time.Now()}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.clearMain(ctx, ""); err != nil {
+				t.Fatal(err)
+			}
+			r := appRequest(t, s, "POST", "/api/v1/assistant/conversations", `{"prompt":"hi","main":true}`, "en")
+			code, words := errorBody(t, r)
+			if r.Code != c.status || c.code != "" && code != c.code || !strings.Contains(words+r.Body.String(), c.words) {
+				t.Fatalf("start after /clear: %d %s", r.Code, r.Body.String())
+			}
+			if len(f.sends) != 0 {
+				t.Fatalf("it ran: %v", f.sends)
+			}
+			code2, sess := startConv(t, s, `{"prompt":"hi","main":true}`)
+			if code2 != 200 || sess.ModelPick != nil || f.lastSend(t)["launcher"] != "gw" {
+				t.Fatalf("the start after: %d %+v %v", code2, sess.ModelPick, f.lastSend(t))
+			}
+		})
+	}
+}
+
+// New main chat with no main conversation (after /clear) drops the carried pick: the next one starts on the default.
+func TestNewMainChatAfterClearDropsTheCarriedPick(t *testing.T) {
+	ctx := context.Background()
+	s, f := pickFixture(t)
+	if r := putPick(t, s, "main", `{"launcher":"cx"}`); r.Code != 200 {
+		t.Fatal(r.Body.String())
+	}
+	if _, err := s.clearMain(ctx, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.newMain(ctx, false, ""); err != nil {
+		t.Fatal(err)
+	}
+	if code, sess := startConv(t, s, `{"prompt":"hi","main":true}`); code != 200 || sess.ModelPick != nil || f.lastSend(t)["launcher"] != "gw" {
+		t.Fatalf("%d %+v %v", code, sess.ModelPick, f.lastSend(t))
+	}
+}
+
+// /clear twice in a row (the second with no main conversation) keeps the pick waiting for the next one.
+func TestClearTwiceKeepsTheCarriedPick(t *testing.T) {
+	ctx := context.Background()
+	s, f := pickFixture(t)
+	if r := putPick(t, s, "main", `{"launcher":"cx","model":"gpt-5"}`); r.Code != 200 {
+		t.Fatal(r.Body.String())
+	}
+	for range 2 {
+		if _, err := s.clearMain(ctx, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	code, sess := startConv(t, s, `{"prompt":"hi","main":true}`)
+	if code != 200 || sess.ModelPick == nil || sess.ModelPick.Launcher != "cx" || f.lastSend(t)["model"] != "gpt-5" {
+		t.Fatalf("%d %+v %v", code, sess.ModelPick, f.lastSend(t))
+	}
+}
+
+// Warming after /clear (no main conversation yet) gets the carried pick ready, which the next one starts on.
+func TestWarmAfterClearTakesTheCarriedPick(t *testing.T) {
+	ctx := context.Background()
+	s, f := pickFixture(t)
+	if r := putPick(t, s, "main", `{"launcher":"cx","model":"gpt-5"}`); r.Code != 200 {
+		t.Fatal(r.Body.String())
+	}
+	if _, err := s.clearMain(ctx, ""); err != nil {
+		t.Fatal(err)
+	}
+	s.warm("")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := len(f.calls) - 1; i >= 0; i-- {
+		if f.calls[i].Method == DeviceAssistantWarm {
+			var p map[string]any
+			_ = json.Unmarshal(f.calls[i].Params, &p)
+			if f.calls[i].Device != "server" || p["launcher"] != "cx" || p["model"] != "gpt-5" {
+				t.Fatalf("warmed %s with %v", f.calls[i].Device, p)
+			}
+			return
+		}
+	}
+	t.Fatal("nothing warmed")
+}
+
+// writeWatch is a hub that, as each snapshot is published, records whether a pick change still held the book's write
+// lock (a publish under it holds up every other change, and anything the publish waits on).
+type writeWatch struct {
+	*fakeHub
+	s    *Service
+	held []bool
+}
+
+func (h *writeWatch) Snapshot(ctx context.Context, snap Snapshot) (SnapshotResult, error) {
+	if h.s != nil {
+		free := h.s.modelPicks.write.TryLock()
+		if free {
+			h.s.modelPicks.write.Unlock()
+		}
+		h.fakeHub.mu.Lock()
+		h.held = append(h.held, !free)
+		h.fakeHub.mu.Unlock()
+	}
+	return h.fakeHub.Snapshot(ctx, snap)
+}
+
+// A pick change tells the apps after it let go of the book.
+func TestModelPickPublishesOutsideTheWriteLock(t *testing.T) {
+	f := newFakeHub().withMachine()
+	h := &writeWatch{fakeHub: f}
+	st := &memStore{}
+	s := withSettings(t, f, New(Options{Hub: h, Store: func() Store { return st }, Logf: testLogf(t)}))
+	h.s = s
+	if err := s.setModelPick(context.Background(), "side", &modelPick{MachineID: "server", Launcher: "claude", At: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(h.held) == 0 {
+		t.Fatal("nothing published")
+	}
+	for _, held := range h.held {
+		if held {
+			t.Fatal("published while still holding the book's write lock")
+		}
 	}
 }
