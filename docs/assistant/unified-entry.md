@@ -684,6 +684,12 @@ call; nothing is turned on for the owner without the tap.
 - **A card already rung** keeps the suggestion it went out with (a plan and a to-do's decision are worded each time
   they are read). When a suggestion is answered, the manager takes it off every pending card that carries it and
   sends those cards again, so the line is gone on every device.
+- **Drawn by**: the Apple apps (#5802's Apple part, `docs/apple/ios.md` "Suggested standing rule and held decisions"):
+  one line under the plan card, the to-do's decision and the question card, with what Always creates, Always and Not
+  Now, and after Always where the rule is listed and removed. They have no list of standing authorizations, so that
+  result names the web app's. Android draws it too (#5802, `docs/android/android.md` "Rule suggestions, held
+  decisions, recommended setup and purpose descriptions"). No event is sent for a plan when its suggestion is
+  answered, so the Apple apps take the line off the plans they hold themselves (`TasksStore.ruleSuggestionSettled`).
 - **Two taps on Always at once** make one rule: the grant is stored only if no standing authorization covers the
   directory and action yet, checked under the lock every change of the list takes; the second tap gets 404.
 
@@ -945,8 +951,13 @@ Hub-inserted chat entries do not enter Claude's transcript (that would trigger a
   Dynamic Type), 12 pt horizontal and 6 pt vertical padding, a full capsule radius, `Theme.Fill.chip` behind secondary
   text, 28 pt tall at the default size, 8 pt apart. Open is the filter chip's on look in the same size (accent fill, white
   semibold); Needs You with rows takes the waiting pill's tint, empty it is the plain grey capsule and opens "All Caught Up".
+  At the accessibility text sizes the entries (and the computer pill after them) are a `FlowLayoutRow`: one that doesn't
+  fit goes on to the next line, each whole. Side by side they made the row, and with it the whole chat page, wider than
+  the screen, the header and the composer cut off at both edges (#5702; `docs/design/DESIGN_SYSTEM.md` 1.2 rule 3 (c),
+  wrapping rather than a sideways scroll so Needs You and its count stay in view). Below those sizes the row is as before.
   Tests: `AssistantEntriesFixtureTests` (the shared fixture), `AssistantActionBarTests`, UI `AssistantActionBarUITests`
-  (`MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1`).
+  (`MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1`; `testEntriesStayOnScreenAtEveryTextSize` in zh-Hans, English and Japanese at
+  the default and the largest size, light and dark).
 - Task details have one header layer: the embedded Agent page takes over the task name, Close, and task ⋯ (#3255; see "Task details" above).
 - Screenshots: `MOCK_TASKS=1`, `MOCK_TASKS_AT`, `-showTaskDetail`, `-showTaskBoard` (`docs/operations/testing.md`).
 

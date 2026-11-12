@@ -8,6 +8,7 @@ import { attentionReason, backgroundWaiting, externalLink, failureReason, isStop
 import { conversationPage } from "../../lib/conversation-page";
 import { navigate, type SessionView } from "../../lib/router";
 import { canShowTerminal, composerSlot, otherView, useSessionView, viewOnlyRow } from "../../lib/session-view";
+import { resumeInTerminal, terminalResume } from "../../lib/agent-resume";
 import { openLink } from "../../lib/links";
 import { getPanel, openPanel, togglePanel, usePanel } from "../../lib/panel";
 import { backgroundPanelOf, hasBackgroundWork, isWorkflowsCommand, latestWorkflowRun, openBackgroundPanel, provideBackgroundChat, toggleBackgroundPanel, WORKFLOWS_COMMAND } from "../../lib/background-panel";
@@ -435,7 +436,11 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const canCompose = sessionCan(session, "send");
   // a stopped Agent (#4754): a read-only line with Terminal and Resume where the composer goes
   const stoppedLine = composerSlot(session, { assistant: Boolean(assistant), offline: Boolean(offlineLine) }) === "stopped";
-  const openTerminal = () => (switchable ? setView("term") : navigate({ name: "session", mid, sid, view: "term" }));
+  // one function while this chat stays put: the header takes it, and must not draw again for every pushed item
+  const openTerminal = useCallback(
+    () => (switchable ? setView("term") : navigate({ name: "session", mid, sid, view: "term" })),
+    [switchable, setView, mid, sid],
+  );
   // The main conversation is always Persona (#1313): not its first message, the node's title for it.
   const mainConversation = useStore((s) => s.assistant?.main);
   const isMain = Boolean(assistant && (mainCache || sid === mainConversation));
@@ -1725,6 +1730,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
         topCenter={topCenter}
         view={switchable ? view : undefined}
         onView={switchable ? setView : undefined}
+        onTerminal={openTerminal}
         viewDot={view === "term" && (interactions.length > 0 || state === "needs_you")}
         actions={headerActions}
         team={team}
@@ -2173,6 +2179,7 @@ export const Header = memo(function Header({
   topCenter,
   view,
   onView,
+  onTerminal,
   viewDot,
   actions,
   team,
@@ -2195,6 +2202,8 @@ export const Header = memo(function Header({
   /** On an agent's page with a terminal to show: the view in the middle, and how to change it (the terminal button). */
   view?: SessionView;
   onView?: (view: SessionView) => void;
+  /** Shows the agent's terminal as its stopped line's Terminal does (in place, or its page's terminal view). */
+  onTerminal?: () => void;
   /** The conversation has something that wants an answer while the terminal is shown. */
   viewDot?: boolean;
   /** The page's own buttons, at the end of the right side (ChatView `headerActions`). */
@@ -2232,6 +2241,13 @@ export const Header = memo(function Header({
   const [sharingOpen, setSharingOpen] = useState(false);
   const allowed = session ? sessionMenuActions(session) : [];
   const attach = () => session && attachLive(session);
+  // Resume in terminal (#5521): a stopped Agent comes back in a terminal on its computer. The same action as its stopped
+  // line's Resume: the terminal shown as that line's Terminal shows it, then the Resume both share.
+  const machine = useStore((s) => s.machines.find((m) => m.id === session?.machine_id));
+  const resumeOffer = onTerminal ? terminalResume(session, machine) : "hidden";
+  const resumeHere = () => {
+    if (session && onTerminal) void resumeInTerminal(session.machine_id, session.session_id, onTerminal);
+  };
   // a task's or an Agent's side panel leaves the space's other agents out of ⋯
   const others = chrome ? [] : siblings.filter((s) => s.session_id !== session?.session_id);
   // the session's files and Git open in the side panel (docs/web/web.md "Side panel"); the assistant has none. Its terminal is
@@ -2317,6 +2333,9 @@ export const Header = memo(function Header({
             : []),
         ...(allowed.includes("attach") ? [{ key: "attach", label: t("chat-chatview.attach"), icon: "link" as const, onSelect: () => void attach() }] : []),
         ...(showTerminal ? [{ key: "terminal", label: t("chat-chatview.terminal"), icon: "terminal" as const, checked: view === "term", onSelect: flipView }] : []),
+        ...(resumeOffer !== "hidden"
+          ? [{ key: "resume-terminal", label: t("chat-chatview.resume_in_terminal"), icon: "play" as const, disabled: resumeOffer === "no_engine", detail: resumeOffer === "no_engine" ? t("chat-chatview.resume_no_engine", { computer: machineName }) : undefined, onSelect: resumeHere }]
+          : []),
         ...(showFiles ? [{ key: "files", label: t("chat-chatview.files"), icon: "folder" as const, checked: here(panel, "files"), onSelect: openFiles }, { key: "git", label: "Git", icon: "git" as const, checked: here(panel, "git"), onSelect: openGit }, ...(reviews ? [{ key: "review", label: t("chat-chatview.review_changes"), icon: "pullRequest" as const, checked: here(panel, "review"), onSelect: openReview }] : [])] : []),
         ...(showFiles && previews ? [{ key: "preview", label: t("chat-chatview.preview"), icon: "web" as const, checked: here(panel, "preview"), onSelect: openPreview }] : []),
         ...(allowed.includes("stop") ? [{ key: "stop", label: t("chat-chatview.interrupt"), icon: "stop" as const, hint: "Esc", onSelect: onInterrupt }] : []),

@@ -303,6 +303,12 @@ MACHINES = [
 ]
 if os.environ.get("MOCK_NODE_MISMATCH"):  # a machine whose personad is another build than the hub's
     MACHINES[2]["node_mismatch"] = True
+# MOCK_RESUME_TERMINAL=1 (#5521): Resume in Terminal's cases (the sessions below); a Mac mini that enables no terminal engine.
+RESUME_TERMINAL = bool(os.environ.get("MOCK_RESUME_TERMINAL"))
+if RESUME_TERMINAL:
+    MACHINES.append({"id": "mini", "name": "Mac mini", "kind": "ssh", "icon": "desktop", "ssh_host": "mini", "online": True,
+                     "hostname": "Mini", "os": "darwin", "arch": "arm64", "home": "/Users/me", "claude_version": "2.1.320",
+                     "last_seen": ago()})
 
 # ---------- workspaces (GET /api/v1/workspaces, docs/web/workspace-board.md) ----------
 # A few host spaces and session folders on the mock machines: what the assistant's @ menu lists (#5594). Placeholders.
@@ -433,6 +439,8 @@ for _i in range(int(os.environ.get("MOCK_PERF_MACHINES", "0"))):
     _mid = f"perf-machine-{_i + 1:03d}"
     SYSTEMS[_mid] = dict(SYSTEMS["server"])
     MACHINES.append(dict(MACHINES[0], id=_mid, name=f"示例机器 {_i + 1:03d}", hostname=f"example-node-{_i + 1:03d}"))
+if RESUME_TERMINAL:  # the Mac mini (#5521)
+    SYSTEMS["mini"] = dict(SYSTEMS["macbook"], model="Mac mini", cpu="Apple M4", cores=10, memory=32 * GB)
 for _m in MACHINES:
     _m["system"] = dict(SYSTEMS[_m["id"]], boot_time=int((NOW - timedelta(days=3, hours=4)).timestamp()))
 # Machines added later (MOCK_MACHINES) have no system and never sent a sample.
@@ -1304,6 +1312,32 @@ CLAUDE_TERMINAL = "c1a0de00-2222-4000-8000-000000000005"
 AGY_SESSION = "a6700000-1111-4000-8000-000000000006"
 NO_SPACE = dict(space_kind=None, space_id=None, space_name=None, space_index=None, slot_id=None, slot_name=None,
                 slot_index=None, pane_id=None, tab_id=None, workspace_id=None, launcher=None)
+# MOCK_RESUME_TERMINAL=1 (#5521, docs/integrations/engines.md "Agents run in a terminal"): Agents started outside Persona's
+# terminals, as the node lists them. On the MacBook (herdr): a Claude Code typed into a terminal of its own that has been
+# closed since, and a Codex thread nothing has open, both stopped (read and terminal: Resume in Terminal); a claude still
+# running in a terminal of its own (claude_cli: no terminal, no resume). On the Mac mini, which enables no terminal engine,
+# a Claude Code whose terminal was closed: no capabilities, as the node lists it there (Resume in Terminal disabled).
+RT_STOPPED = "5e000000-0000-4000-8000-000000005521"
+RT_CODEX = "019a5521-0000-7000-8000-000000000001"
+RT_LIVE = "5e000000-0000-4000-8000-000000005522"
+RT_NO_ENGINE = "5e000000-0000-4000-8000-000000005523"
+if RESUME_TERMINAL:
+    _rt_stopped = dict(capabilities={"read": True, "terminal": True}, started_by_persona=False, agent_surface="cli",
+                       read_only_reason="Agent 已停止：对话和终端可以看，它不再收消息；要它接着做，在终端页点「恢复」")
+    SESSIONS += [
+        sess("macbook", RT_STOPPED, "整理发布说明", "/Users/me/code/weather", "offline", "offline", "", 0, "", 0, 50,
+             "这周的发布说明按模块分好了，还差截图。", **dict(NO_SPACE, launcher="claude"), **_rt_stopped),
+        sess("macbook", RT_CODEX, "压缩图片的脚本", "/Users/me/code/tools", "offline", "offline", "", 0, "", 0, 90,
+             "脚本写好了，批量压缩会保留原图。", agent="codex", agent_name="Codex CLI", source_kind="codex_history",
+             source_thread_id=RT_CODEX, **dict(NO_SPACE, launcher="codex"), **_rt_stopped),
+        sess("macbook", RT_LIVE, "排查登录超时", "/Users/me/code/weather", "idle", "idle", "", 0, "", 0, 4,
+             "超时是重试间隔太短，改成指数退避了。", agent="claude", source_kind="claude_cli", agent_surface="cli",
+             started_by_persona=False, capabilities={"read": True, "send": True}, **NO_SPACE),
+        sess("mini", RT_NO_ENGINE, "备份照片库", "/Users/me/Pictures", "offline", "offline", "", 0, "", 0, 70,
+             "照片库备份到外接硬盘了，校验也跑完了。", agent_surface="cli", started_by_persona=False,
+             **dict(NO_SPACE, launcher="claude")),
+    ]
+RT_START = {x["session_id"]: copy.deepcopy(x) for x in SESSIONS if x["session_id"] in (RT_STOPPED, RT_CODEX, RT_LIVE, RT_NO_ENGINE)}
 _desktop_caps = {"read": True, "send": True}
 # MOCK_CODEX_WAITING=1 (#4961, docs/integrations/codex.md "Starting without a first message"): the Codex launchers say the
 # computer opens Codex with no first message (prompt_optional), a Codex start without one answers with a waiting row,
@@ -2803,6 +2837,83 @@ TODO_ASKS = {
     "todo_task_release": {"verdict": "✅ 做完了：已部署，按下面验收"},
 } if os.environ.get("MOCK_TODO_ASKS") == "1" else {}
 TODO_ASKED_AT = ago(hours=2)
+# MOCK_ASK_HELD=1 (#4930, #5803, docs/assistant/todos.md "Decisions that can wait"): with MOCK_TODO_ASKS, the PR
+# check's decision is held for the next briefing (`ask.for_briefing`), so the apps mark it.
+if os.environ.get("MOCK_ASK_HELD") == "1" and "todo_review" in TODO_ASKS:
+    TODO_ASKS["todo_review"]["for_briefing"] = True
+
+# MOCK_RULE_SUGGESTIONS=1 (#4929, #5802, docs/assistant/unified-entry.md "A rule after the same answer three times"):
+# the standing rule the hub suggests after the same answer three times, one of each kind: on the PR check's decision
+# (with MOCK_TODO_ASKS; `ask.suggestion`), on the network tests' question card (`interaction.suggestion`) and, with
+# MOCK_TASKS, on the open plan (`TaskPlan.suggestion`, filled in where the plan is read). POST
+# /api/v1/assistant/rule-suggestions/{id}/always and …/not-now answer one: it is gone from every card, and a second
+# answer is 404, as one the answers no longer earn.
+RULE_SUGGESTIONS = {
+    "rs_mock_merge": {
+        "id": "rs_mock_merge", "kind": "standing_authorization",
+        "text": "You approved this 3 times. Always allow merging in /Users/me/code/weather on MacBook once checks pass and there are no conflicts?",
+        "scope": {"machine_id": "macbook", "machine": "MacBook", "directory": "/Users/me/code/weather", "action": "merge",
+                  "conditions": ["ci_green", "no_conflicts"], "quote": "Merge the PR now? → Yes"},
+        "creates": "standing_authorization", "count": 3},
+    "rs_mock_start": {
+        "id": "rs_mock_start", "kind": "plan_start",
+        "text": "You started tasks like this 3 times. Always start tasks that change files in /Users/me/code/weather on MacBook directly?",
+        "scope": {"machine_id": "macbook", "machine": "MacBook", "directory": "/Users/me/code/weather"},
+        "creates": "tasks.trust", "count": 3},
+    "rs_mock_delegate": {
+        "id": "rs_mock_delegate", "kind": "delegate",
+        # The hub's own words (server/internal/i18n/locales/en/assistant-rule_suggest.json "delegate"), Settings and all.
+        "text": "You took the recommendation 3 times. Let Persona answer agents' own-call questions for you? You can turn this on in Settings.",
+        "scope": {}, "creates": "", "setting": "agents.delegate", "count": 3},
+} if os.environ.get("MOCK_RULE_SUGGESTIONS") == "1" else {}
+RULE_SUGGESTIONS_ANSWERED = set()  # answered with Always or Not now
+RULE_SUGGESTION_ON = {"todo_review": "rs_mock_merge", "ix_tests": "rs_mock_delegate", "plan_mock_3": "rs_mock_start"}
+
+
+def rule_suggestion(card):
+    """The suggestion the card (a to-do, a pending card or a plan, by id) carries now; None once it was answered."""
+    sid = RULE_SUGGESTION_ON.get(card)
+    return RULE_SUGGESTIONS.get(sid) if sid not in RULE_SUGGESTIONS_ANSWERED else None
+
+
+def suggested_plan(plan):
+    """A plan as the apps read it: an open one with the rule suggested for it, never kept with the plan."""
+    sg = rule_suggestion(plan["id"]) if plan.get("state") == "open" else None
+    return dict(plan, suggestion=sg) if sg else plan
+
+
+def rule_suggestions_area(h, method, p):
+    """POST /api/v1/assistant/rule-suggestions/{id}/always | not-now (MOCK_RULE_SUGGESTIONS=1)."""
+    m = re.fullmatch(r"/api/v1/assistant/rule-suggestions/([^/]+)/(always|not-now)", p)
+    if not m or method != "POST":
+        return False
+    sg = RULE_SUGGESTIONS.get(m.group(1))
+    if not sg or sg["id"] in RULE_SUGGESTIONS_ANSWERED:
+        h.send_json({"error": "This suggestion is no longer offered."}, 404)
+        return True
+    RULE_SUGGESTIONS_ANSWERED.add(sg["id"])
+    if m.group(2) == "not-now":
+        h.send_json({"ok": True})
+    elif sg["kind"] == "plan_start":
+        key = "macbook|/Users/me/code/weather|edit"
+        if MOCK_TASKS and not any(k["key"] == key for k in TASK_TRUST):
+            TASK_TRUST.append({"key": key, "machine": "macbook", "cwd": "/Users/me/code/weather", "readonly": False})
+        h.send_json({"ok": True, "kind": sg["kind"], "creates": "tasks.trust", "key": key})
+    elif sg["kind"] == "standing_authorization":
+        h.send_json({"ok": True, "kind": sg["kind"], "creates": "standing_authorization", "revision": 2,
+                     "authorization": {"id": "sa_mock_1", "action": "merge", "machine_id": "macbook", "directory": "/Users/me/code/weather",
+                                       "conditions": ["ci_green", "no_conflicts"], "quote": sg["scope"]["quote"]}})
+    else:
+        h.send_json({"ok": True, "kind": sg["kind"], "creates": "", "setting": sg["setting"]})
+    push_todos()  # a decision is worded again without the line; a pending card is sent again without it
+    for send, _ in list(LIVE):
+        try:
+            for ix in mock_interactions():
+                if RULE_SUGGESTION_ON.get(ix["id"]) == sg["id"]:
+                    send({"type": "interaction", "interaction": ix})
+        except Exception:
+            pass
+    return True
 if _TODO_LIST and _TODO_LIST != "calm":  # MOCK_TODO_LIST: the cache decision waits on the owner
     TODO_ASKS["tl_cache"] = {"outcome": "decide", "verdict": "🤔 要你拍板：测试已通过，是否继续更换缓存方案？",
                              "recommend": "保留当前缓存，下次再评估新方案"}
@@ -2824,6 +2935,8 @@ def sorted_todos():
     for t in out:
         if t.get("done_at") is None and t["id"] in TODO_ASKS and t["id"] not in BRIEF_ACCEPTED:
             t["ask"] = dict(TODO_ASKS[t["id"]], asked_at=TODO_ASKED_AT)
+            if sg := rule_suggestion(t["id"]):
+                t["ask"]["suggestion"] = sg
         if t.get("done_at") is None and t["id"] in TODO_ORPHANED:
             t["orphaned"] = {"reason": TODO_ORPHANED[t["id"]], "since": TODO_ORPHANED_SINCE}
     return out
@@ -5856,6 +5969,15 @@ ITEMS[CODEX_LIVE] = (
 )
 ITEMS[CODEX_HISTORY] = [it("user", "text", 60 * 6, text="日志采集改成按天切分")] + [
     it("assistant", "text", 60 * 5, text="日志采集改成按天切分，旧文件压缩后保留 30 天。")]
+if RESUME_TERMINAL:  # #5521
+    ITEMS[RT_STOPPED] = [it("user", "text", 60, text="把这周合并的 PR 整理成发布说明，按模块分")] + [
+        it("assistant", "text", 50, text="这周的发布说明按模块分好了：小组件、预报、设置各一节。还差两张截图，你来了我再补。")]
+    ITEMS[RT_CODEX] = [it("user", "text", 100, text="写个脚本，把 photos 目录里的图片批量压缩到 2 MB 以内")] + [
+        it("assistant", "text", 90, text="脚本写好了：`compress.sh` 批量压缩，原图放进 originals/ 保留。")]
+    ITEMS[RT_LIVE] = [it("user", "text", 10, text="登录偶尔超时，查一下")] + [
+        it("assistant", "text", 4, text="超时是重试间隔太短，改成指数退避了。")]
+    ITEMS[RT_NO_ENGINE] = [it("user", "text", 80, text="把照片库备份到外接硬盘，备份完校验一遍")] + [
+        it("assistant", "text", 70, text="照片库备份到外接硬盘了，校验也跑完了，没有出错的文件。")]
 ITEMS[DSH_SESSION] = [it("user", "text", 5, text="用 finance 目录里的表格生成第三季度报表")] + [
     it("assistant", "text", 2, text="要读取 finance 目录里的表格，等你授权。")]
 if os.environ.get("MOCK_OPENCODE"):
@@ -6223,6 +6345,39 @@ if MOCK_TASKS:
             "progress": [{"id": "todo_task_widget", "title": "小组件横屏崩溃", "stage": "develop"}, {"id": "todo_task_tests", "title": "补齐网络层的单元测试"}],
             "progress_total": 2}),
     ]
+    # MOCK_BRIEF_SETUP=1 (#5085, #5804, docs/assistant/assistant.md "Recommended setup"): the briefing is the week's
+    # first, so its `brief` item carries the computed setup lines, in the hub's own words
+    # (server/internal/i18n/locales/en/assistant-setup_suggest.json): one with a settings page in every app (the triage's
+    # switch), the lower tier for the background supervisor (its purpose's page of Model Settings), the remembered kinds
+    # of task (a plan card's checkbox), the standing authorizations (a page only the web app has) and one that no app
+    # has a switch for.
+    if os.environ.get("MOCK_BRIEF_SETUP") == "1":
+        next(_i for _i in TASK_FEED[ASK1] if _i["kind"] == "brief")["body"]["setup"] = [
+            {"id": "triage_wake", "setting": "agents.triage.wake", "count": 4,
+             "text": "Session triage, \"Wake on schedule\": 4 times an agent waiting on something else (CI, a deploy, another agent) "
+                     "was set going again by hand; it would have been woken to check for itself. Cost: each wake runs a turn of "
+                     "the agent on its own model. Where: Session triage in Settings."},
+            {"id": "supervisor_tier", "setting": "assistant.supervise", "count": 24,
+             "text": "A lower tier for the background supervisor: in the last 30 days it made 24 acceptances on Opus that have "
+                     "since had their day to be reopened in; reopened among them: 1. Its provider also has Sonnet, one tier down "
+                     "and not its smallest. Cost and risk: a lower tier spends less on every review, but accepting a task is a "
+                     "judgment call, so more accepted tasks may be reopened. Where: Background supervisor in Model settings; "
+                     "Persona changed nothing."},
+            {"id": "task_trust", "setting": "tasks.trust", "count": 3,
+             "text": "Start tasks directly: 3 plans waited for Start although you had already started tasks of the same kind "
+                     "(same computer and directory); a remembered kind starts without asking. Cost: those tasks start, and "
+                     "spend tokens, before you have read the plan. Where: \"Start these right away from now on\" on a plan card."},
+            {"id": "standing_authorizations", "setting": "assistant.standing_authorizations", "count": 6,
+             "text": "Standing authorizations: 6 times you approved a merge, a push or a test deploy that you had already "
+                     "approved in the same directory; a standing authorization would not have asked again. Cost: Persona then "
+                     "does that step there without asking, within the conditions on the authorization. Where: Standing "
+                     "authorizations in Settings."},
+            {"id": "delegate", "setting": "agents.delegate", "count": 5,
+             "text": "Let Persona answer agents' own-call questions: 5 times you answered an agent's question with exactly what "
+                     "the conversation supervising it recommended; Persona would have answered those for you. Cost: one model "
+                     "call per question, and the answer reaches the agent before you see it. Where: there is no switch for it "
+                     "in the apps yet; it is turned on in the assistant's configuration file on the hub's computer "
+                     "(agents.delegate, enabled: true), as the configuration guide describes."}]
     # MOCK_TASKS_REPORTS=1: supervised tasks whose agents report to Persona (#5112): the widget task's latest progress
     # on its card, the tests task's question and Persona cutting in on it in the feed; reviews (#3124): the widget fix
     # sent back once, the release notes accepted and closed by the review.
@@ -6837,7 +6992,7 @@ def tasks_area(h, method, p, raw):
     if method == "GET" and p.startswith("/api/v1/assistant/conversations/") and p.endswith("/feed"):
         conv = p.split("/")[5]
         items = TASK_FEED.get(conv, [])
-        plans = {i["ref"]: TASK_PLANS[i["ref"]] for i in items if i["kind"] == "plan" and i["ref"] in TASK_PLANS}
+        plans = {i["ref"]: suggested_plan(TASK_PLANS[i["ref"]]) for i in items if i["kind"] == "plan" and i["ref"] in TASK_PLANS}
         h.send_json({"items": items, "plans": plans})
         return True
     if method == "POST" and p.startswith("/api/v1/assistant/conversations/") and p.endswith("/today"):
@@ -6855,7 +7010,7 @@ def tasks_area(h, method, p, raw):
         return True
     if method == "GET" and p.startswith("/api/v1/task-plans/"):
         plan = TASK_PLANS.get(p.split("/")[4])
-        h.send_json({"plan": plan} if plan else {"error": "plan not found"}, 200 if plan else 404)
+        h.send_json({"plan": suggested_plan(plan)} if plan else {"error": "plan not found"}, 200 if plan else 404)
         return True
     if method == "POST" and p.startswith("/api/v1/task-plans/") and p.endswith(("/start", "/dismiss")):
         pid = p.split("/")[4]
@@ -7771,6 +7926,7 @@ def mock_interactions():
     # worker's card says so too (folded_as, #5180)
     folds = {(r["machine_id"], r["session_id"]): {k: r[k] for k in ("folded_under", "folded_as") if r.get(k)}
              for r in all_sessions() if r.get("folded_under")}
+    out = [dict(x, suggestion=sg) if (sg := rule_suggestion(x["id"])) else x for x in out]  # MOCK_RULE_SUGGESTIONS
     return [dict(x, **folds[(x.get("machine_id"), x.get("session_id"))]) if (x.get("machine_id"), x.get("session_id")) in folds else x for x in out]
 
 
@@ -11130,6 +11286,17 @@ MODEL_CATEGORY_FOR = {pid: {"主对话": "assistant", "Agents": "agent.new", "�
 
 
 SUPERVISE_PURPOSE = "assistant.supervise"
+# MOCK_SUPERVISE_LISTED=1 (#5806, docs/assistant/model-config.md "The background supervisor in the catalog"): a hub that
+# lists the background supervisor's use in the catalog, as its last built-in purpose, and sends each built-in purpose's
+# one-sentence `description` (#5086). Without it the catalog is a hub's from before: the use is answered by its id only.
+SUPERVISE_LISTED = os.environ.get("MOCK_SUPERVISE_LISTED") == "1"
+MODEL_DESCRIPTIONS = {
+    "assistant": "Talks with you, splits work and hands it out.",
+    "agent.new": "The Agents Persona starts on your computers.",
+    "kb": "Translation, drafts, summaries and titles.",
+    "inbox.triage": "Sorts the Inbox and judges what needs you.",
+    SUPERVISE_PURPOSE: "Follows up the tasks no leader supervises, in the background.",
+}
 
 
 def supervise_model_purpose():
@@ -11151,7 +11318,19 @@ def supervise_model_purpose():
                    kind="launcher", override=binding, effective=effective, revision=stored["revision"],
                    inherited_from=main["name"], fields=["provider", "model", "effort"],
                    provider_ids=main["provider_ids"], status="未验证")
+    if SUPERVISE_LISTED:
+        purpose["description"] = MODEL_DESCRIPTIONS[SUPERVISE_PURPOSE]
     return {"purpose": purpose, "providers": catalog["providers"]}
+
+
+def listed_model_configuration():
+    """GET /api/v1/model-config. MOCK_SUPERVISE_LISTED: with the background supervisor's use, the row the hub answers
+    by its id, as the last built-in purpose (before an extension's)."""
+    catalog = model_configuration()
+    if SUPERVISE_LISTED and (own := supervise_model_purpose()):
+        at = next((n for n, x in enumerate(catalog["purposes"]) if x["id"].startswith("plugin.")), len(catalog["purposes"]))
+        catalog["purposes"].insert(at, own["purpose"])
+    return catalog
 
 
 def model_configuration(include_uses=False):
@@ -11180,6 +11359,8 @@ def model_configuration(include_uses=False):
                            provider_ids=[p["id"] for p in providers if p["kind"] == kind], status="未验证")
             if pid in MODEL_SCOPES:
                 purpose["uses"] = [{"name": use} for use in MODEL_SCOPES[pid]]
+            if SUPERVISE_LISTED and pid in MODEL_DESCRIPTIONS:
+                purpose["description"] = MODEL_DESCRIPTIONS[pid]
             # MOCK_MODEL_LIMIT=1: the default API connection is out of quota for 23 more minutes (docs/assistant/model-config.md "Upstream rate limits").
             if os.environ.get("MOCK_MODEL_LIMIT") and effective["provider"] == "legacy.ai":
                 purpose["limit"] = {"reason": "quota", "until": later(minutes=23)}
@@ -18635,6 +18816,10 @@ if ENGINE_SETS:
     for _s in SESSIONS:
         if _s.get("session_id") == WIDGET:
             _s["host"], _s["also_open_in"] = "herdr", ["herdr-core"]
+if RESUME_TERMINAL:  # the Mac mini enables no terminal engine: the empty set (#3302), herdr still named for older clients
+    for _m in MACHINES:
+        if _m["id"] == "mini":
+            _m["engine_hosts"], _m["engine_default"] = [], ""
 
 # ---------- MOCK_NEEDS / MOCK_HISTORY: the Persona page (docs/android/android.md "Persona page") ----------
 # By default five agent requests and several inbox items in "Needs you" wait: the Persona home's "Things that need you now" shows three
@@ -20858,6 +21043,8 @@ class H(BaseHTTPRequestHandler):
                     for k in ("hostname", "os", "arch", "home", "herdr_version", "claude_version"): m.pop(k, None)
                     m.update(online=False, error="ssh: connect to host lab port 22: Connection refused")
             SESSIONS[:] = [x for x in SESSIONS if not x["session_id"].startswith("d4e6f8a0-")]
+            # MOCK_RESUME_TERMINAL: the stopped Agents a test resumed are stopped again (#5521).
+            SESSIONS[:] = [copy.deepcopy(RT_START[x["session_id"]]) if x["session_id"] in RT_START else x for x in SESSIONS]
             del RECONNECTS[:], STARTED[:], SEEN[:]
             INTERACTIONS.extend(SESSION_CLOSE["interactions"])
             SESSION_CLOSE.update(fail=False, attempts=[], closed=[], interactions=[])
@@ -20958,7 +21145,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/assistant":
             q = parse_qs(urlparse(self.path).query)
             return self.send_json(assistant_state(q.get("space", [""])[0], q.get("archived", [""])[0] == "1"))
-        if p == "/api/v1/model-config": return self.send_json(model_configuration())
+        if p == "/api/v1/model-config": return self.send_json(listed_model_configuration())
         if p == "/api/v1/model-config/purposes/" + SUPERVISE_PURPOSE and (own := supervise_model_purpose()):
             return self.send_json(own)
         if p.startswith("/api/v1/model-config/purposes/"):
@@ -21744,6 +21931,7 @@ class H(BaseHTTPRequestHandler):
         if plugin_connector_area(self, self.command, p, self.last_body): return
         if mail_area(self, self.command, p, parse_qs(urlparse(self.path).query)): return
         if MOCK_LARK and fs_post(self, p, parse_qs(urlparse(self.path).query), self.last_body): return  # area: feishu chat page
+        if rule_suggestions_area(self, self.command, p): return
         if tasks_area(self, self.command, p, self.last_body): return
         if main_actions_area(self, self.command, p, self.last_body): return
         m = re.fullmatch(r"/api/v1/assistant/conversations/([^/]+)/(archive|unarchive)", p)
@@ -22871,6 +23059,13 @@ class H(BaseHTTPRequestHandler):
             if resume is not None:
                 if os.environ.get("MOCK_RESUME_ERROR"): return self.send_json({"error": os.environ["MOCK_RESUME_ERROR"]}, 502)
                 resume.update(status="idle", state="idle")
+                if resume.get("capabilities", {}).get("terminal") and not resume["capabilities"].get("send"):
+                    # A stopped Agent (#4754, #5521) runs again in a terminal tab: a row like any of the engine's, no
+                    # longer read-only, and a Codex thread is the pane's agent now, not a history source.
+                    for k in ("capabilities", "read_only_reason", "source_kind", "source_thread_id"):
+                        resume.pop(k, None)
+                    resume.update(pane_id="w9:p1", tab_id="w9:t1", workspace_id="w9", space_kind="herdr", space_id="w9",
+                                  space_name=resume["cwd"].rsplit("/", 1)[-1], slot_id="w9:t1", slot_name=resume["title"])
                 push_machine(resume["machine_id"])
                 return self.send_json({"session": with_fold(decorated_session(resume))})
             codex = body.get("launcher") == "codex"  # the node starts Codex with its first message and answers with its thread
@@ -23738,6 +23933,11 @@ MOCK_HELP.append("MOCK_MARKDOWN=1  任务往来和回执里带 **粗体**、`代
 MOCK_HELP.append("MOCK_TASK_RENAMED=1  整理发布说明这个任务在回执写好后改了名：回执应显示新名字「写本周发布说明」（#3036）")
 MOCK_HELP.append("MOCK_AUTO_CONVERSATIONS=1  助手对话带来源 origin（feature conversation_origin）：另有 10 段自动对话（收件箱 6、定时任务 2、飞书 /agent、对话派生），侧边栏「最近」和用户自己的一起列、带来源标记，「全部对话」按来源筛（#3264、#5195）")
 MOCK_HELP.append("MOCK_EXTERNAL=1  和 MOCK_AUTO_CONVERSATIONS=1 一起用：飞书 /agent 那段带上请求和上下文，另加一段别的扩展开的（origin extension），两段都是外部的（#3758）")
+MOCK_HELP.append("MOCK_RULE_SUGGESTIONS=1  A standing rule suggested after the same answer three times (#5802): on the PR check's decision "
+                 "(with MOCK_TODO_ASKS=1), on the network tests' question card and, with MOCK_TASKS=1, on the open plan; Always and Not now answer it")
+MOCK_HELP.append("MOCK_ASK_HELD=1  With MOCK_TODO_ASKS=1: the PR check's decision is held for the next briefing (for_briefing, #5803)")
+MOCK_HELP.append("MOCK_BRIEF_SETUP=1  With MOCK_TASKS=1: the morning briefing carries the week's recommended setup lines (#5804)")
+MOCK_HELP.append("MOCK_SUPERVISE_LISTED=1  The model catalog lists assistant.supervise itself and every built-in purpose has a description (#5806)")
 MOCK_HELP.append("MOCK_BACKGROUND_SUPERVISOR=1  The hub's built-in background supervisor conversation exists (#4927): origin task with no origin_ref, "
                  "named by GET /api/v1/assistant as background_supervisor, and archiving it is refused. Without it the setting "
                  "main_supervises_own_tasks and the model use assistant.supervise (answered by its own id, not in the catalog) are still there; MOCK_LEGACY_HUB has none of them")
