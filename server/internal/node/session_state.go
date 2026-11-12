@@ -67,6 +67,9 @@ type sessionState struct {
 	// has it: the switch that moves the conversation on gives it to the next session and clears it here. A start that
 	// resumes the session keeps it.
 	EngineHistory []proto.EngineLeg `json:"engine_history,omitempty"`
+	// PendingHandoff: the handoff of a switch to this session whose first message a dialog held back (engine_switch.go
+	// startEngine): put in front of the next message sent to the session, then cleared (send.go).
+	PendingHandoff *pendingHandoff `json:"pending_handoff,omitempty"`
 }
 
 func newState() *stateFile { return &stateFile{Sessions: map[string]sessionState{}} }
@@ -239,14 +242,15 @@ func (s *stateFile) restoreLaunch(id string, prev sessionState, had bool, launch
 
 // adoptSwitch takes v, what a launcher switch carried out on another Node wrote of session id (switch_share.go), and
 // writes it through this Node's hub: the fields the switch owns (launcher, model, directory, start time, plan mode,
-// pane, pending switch, the conversation's earlier stretches) over this Node's record, the rest of it as this Node has
+// pane, pending switch, the conversation's earlier stretches and a handoff waiting for the next message) over this
+// Node's record, the rest of it as this Node has
 // it (an ultracode observation the new claude's hooks made on this connection); v whole when there is no record.
 func (s *stateFile) adoptSwitch(id string, v sessionState) {
 	s.mu.Lock()
 	if cur, ok := s.Sessions[id]; ok {
 		cur.Launcher, cur.Model, cur.ModelFingerprint, cur.ModelEffort = v.Launcher, v.Model, v.ModelFingerprint, v.ModelEffort
 		cur.Cwd, cur.StartedAt, cur.PlanThen, cur.Pane, cur.PendingSwitch = v.Cwd, v.StartedAt, v.PlanThen, v.Pane, v.PendingSwitch
-		cur.EngineHistory = v.EngineHistory // a switch to another engine (engine_switch.go)
+		cur.EngineHistory, cur.PendingHandoff = v.EngineHistory, v.PendingHandoff // a switch to another engine (engine_switch.go)
 		v = cur
 	}
 	s.Sessions[id] = v

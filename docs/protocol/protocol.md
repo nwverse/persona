@@ -640,10 +640,12 @@ oldest first: `{session_id, agent, until}`, `until` being when the conversation 
 running session's own stretch is the time after the last `until`). A session may be named more than once (switched back
 to and away again): after Claude Code A → Codex B → back to A the row is A with `[A until t1, B until t2]`. Only that
 session's row carries the history (the node clears it on the session it switched away from), and the node leaves every
-session named in another listed session's history, other than that session itself, out of its list while nothing runs
-it and nothing of it waits for the user: their transcripts stay on the computer, and a switch back resumes the most
-recent one of that engine. A named session that runs again (resumed by hand elsewhere, a Codex thread an app-server
-still has loaded) or needs the user is listed as its own row. The row shows the title of the
+session named in another listed session's history, other than that session itself, out of its list while it is
+parked: idle, done, offline or cut off by a restart, with no pane and no claude process that has it open (a Codex
+thread an app-server keeps loaded after the switch included: a message to it would fork the conversation). Their
+transcripts stay on the computer, and a switch back resumes the most recent one of that engine. A named session that
+runs again (in a pane, resumed by hand, a claude in another terminal), works or waits for the user is listed as its own
+row. The row shows the title of the
 conversation's first stretch unless it has a manual title of its own. The history is kept in the session's state
 record (the hub's Postgres), so a node restart keeps the row joined. While the switch is carried out, the session
 switched away from is listed as `starting` with the new launcher and `agent`.
@@ -659,11 +661,19 @@ the message falls back like this. One that may have it (codex-start read its fil
 message was typed to a claude that did not take it in time) ends the switch where it is, so the message never runs
 twice: nothing more is pressed or typed in the terminal, the switch is dropped, the message is answered with
 `delivered: "unknown"` (look at the terminal before sending it again), and when the session that start was for is
-known the conversation's history goes on it as after a switch carried out (a fresh Codex thread that did not show is a
-row of its own once it does).
+known the conversation's history goes on it as after a switch carried out. A fresh Codex thread that did not show is
+looked for five more minutes and given the conversation when it shows; meanwhile the pane no longer stands for the
+session switched away from. codex-start claims its file by a
+rename before it reads it and the node withdraws a file it gives up on the same way, so exactly one of them has the
+message; what codex-start printed is not read for this.
 
-**The earlier session while it is resumed.** From the switch's start of it until that start ends, the session being
-resumed is held as switching: a message to it and the user's Resume of it wait for the switch and then find it running
+**A first message held back.** When the new Claude Code session comes up behind a dialog of its own, its first message
+is not typed: the switch is done and the row says the first message did not go in, as for any start. The handoff waits
+on the session's record and goes in front of the next message sent to it, whoever sends it, once.
+
+**The earlier session while it is resumed.** From just before the first Ctrl+C until the switch ends, the session
+being resumed is held as switching (and one the user's Resume is starting right then is not resumed: a fresh session
+takes the conversation): a message to it and the user's Resume of it wait for the switch and then find it running
 (nothing starts a second writer of its conversation), and a stop, a pick or keys are refused as for the session
 switching. It is looked at again first: one that runs again by then is not resumed, and a fresh session takes the
 conversation.

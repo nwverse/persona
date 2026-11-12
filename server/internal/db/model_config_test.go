@@ -180,3 +180,33 @@ func TestNodeEngineHistoryIsPersisted(t *testing.T) {
 		t.Fatalf("cleared history came back: %q %v", out["session"].EngineHistory, err)
 	}
 }
+
+// A switch's handoff waiting for the next message (its first one was held back by a dialog, node/engine_switch.go)
+// comes back after a node restart, and a record written without one has none (#5054).
+func TestNodePendingHandoffIsPersisted(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	handoff := `{"text":"what happened","from":"codex","to":"claude","resumed":true}`
+	s := NodeSession{Launcher: "claude", Cwd: "/tmp/project", StartedAt: time.Now().UTC(), PendingHandoff: json.RawMessage(handoff)}
+	if err := d.PutNodeSession(ctx, "machine", "session", s); err != nil {
+		t.Fatal(err)
+	}
+	out, err := d.NodeSessions(ctx, "machine")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got, want map[string]any
+	if err := json.Unmarshal(out["session"].PendingHandoff, &got); err != nil {
+		t.Fatalf("pending handoff %q: %v", out["session"].PendingHandoff, err)
+	}
+	_ = json.Unmarshal([]byte(handoff), &want)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("pending handoff = %v, want %v", got, want)
+	}
+	s.PendingHandoff = nil
+	if err := d.PutNodeSession(ctx, "machine", "session", s); err != nil {
+		t.Fatal(err)
+	}
+	if out, err = d.NodeSessions(ctx, "machine"); err != nil || out["session"].PendingHandoff != nil {
+		t.Fatalf("cleared handoff came back: %q %v", out["session"].PendingHandoff, err)
+	}
+}

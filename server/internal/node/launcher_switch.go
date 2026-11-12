@@ -695,6 +695,21 @@ func (n *Node) awaitSwitch(ctx context.Context, id string) {
 	n.typing.lock(id)() // the message's turn, whose switch registers only once it is under way
 }
 
+// resumeTurn is the user's Resume of session id taking its turn: once no switch quits it, starts it again or holds it
+// (awaitSwitch), it is registered as resuming it until done is called, so a switch to the other engine does not resume
+// the same session beside it (switchShare.hold). ctx ending gives up the wait, not the Resume.
+func (n *Node) resumeTurn(ctx context.Context, id string) (done func()) {
+	for {
+		n.awaitSwitch(ctx, id)
+		if done, ok := n.switches().resuming(id); ok || ctx.Err() != nil {
+			if !ok {
+				return func() {}
+			}
+			return done
+		}
+	}
+}
+
 // applySwitch carries out session id's pending switch ps before the user's message is typed, inside send's turn, and
 // returns the pane the message goes to, and whether the switch was carried out. A switch that waits (a busy agent)
 // or no longer applies (too old, the launcher the agent runs on by now) leaves the message to go as always; one that
