@@ -19,6 +19,11 @@ const (
 // AnsweredByAssistant marks a resolution the assistant gave for the user (Resolution.AnsweredBy).
 const AnsweredByAssistant = "assistant"
 
+// AnsweredByDefault marks a resolution nobody gave: the question's deadline passed unanswered and, as going ahead can
+// be undone, its recommended options were taken by default (Resolution.AnsweredBy; docs/protocol/protocol.md "Who
+// answered a card"). Only the history carries it, on a card that expired first (Resolution.Late).
+const AnsweredByDefault = "default"
+
 // DismissedInChat is the Reason of a Dismiss for an assistant question taken back because the user wrote in the
 // conversation instead of answering it (#9): channels say "replied in the chat" on its card, not "dismissed".
 const DismissedInChat = "replied_in_chat"
@@ -48,6 +53,9 @@ type Question struct {
 	Header      string           `json:"header,omitempty"`
 	MultiSelect bool             `json:"multi_select"`
 	Options     []QuestionOption `json:"options"`
+	// Recommend is the label of the option the asker recommends (the assistant's ask_user recommend, always one of
+	// Options' labels); absent when it recommended none.
+	Recommend string `json:"recommend,omitempty"`
 }
 
 type Interaction struct {
@@ -65,6 +73,11 @@ type Interaction struct {
 	Kind            string          `json:"kind"`
 	CreatedAt       time.Time       `json:"created_at"`
 	ExpiresAt       time.Time       `json:"expires_at"`
+	// Deadline is when an ask_user's questions take their recommended options by default (when Reversible) or are
+	// reminded again (when not); absent without one. Reversible is whether the asker said going ahead can be undone;
+	// absent when it did not say. Both are the asker's own words, kept on the card for the history.
+	Deadline   *time.Time `json:"deadline,omitempty"`
+	Reversible *bool      `json:"reversible,omitempty"`
 	ToolName        string          `json:"tool_name,omitempty"`
 	ToolUseID       string          `json:"tool_use_id,omitempty"`
 	Questions       []Question      `json:"questions,omitempty"`
@@ -187,8 +200,12 @@ type Resolution struct {
 	Keys     []string          `json:"keys,omitempty"`
 	Text     string            `json:"text,omitempty"`
 	// AnsweredBy is who answered when it was not the user in the app: AnsweredByAssistant for a question the
-	// assistant answered on their behalf (docs/assistant/assistant.md). Absent when the app answered.
+	// assistant answered on their behalf (docs/assistant/assistant.md), AnsweredByDefault for recommended options taken
+	// at a deadline. Absent when the user answered.
 	AnsweredBy string `json:"answered_by,omitempty"`
+	// Late: the history's record of an answer that came after the card expired: the user's own answer on the to-do the
+	// question became, or its recommendation taken at its deadline (AnsweredByDefault). The card stays "expired".
+	Late bool `json:"late,omitempty"`
 	// Reason is why the assistant answered so (AnsweredByAssistant): the Y of "Answered by the assistant: X, because Y".
 	// With Dismiss and no AnsweredBy it is why the card was dismissed (DismissedInChat).
 	Reason string `json:"reason,omitempty"`

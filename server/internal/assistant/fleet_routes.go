@@ -39,6 +39,7 @@ func (s *Service) fleetHandler(next http.Handler) http.Handler {
 		}
 		res.AnsweredBy, res.Reason = "", "" // only the assistant's interaction_answer says it answered
 		res.Remembered = false              // only the manager's own "Always allow" answers say so
+		res.Late = false                    // only the history's record of an answer after expiry says so
 		id := r.PathValue("id")
 		var approver *assistantwire.HandoffApprover // the device the hub vouched may approve a hand-off card
 		if a, ok := assistantwire.HandoffApproverOf(r.Context()); ok {

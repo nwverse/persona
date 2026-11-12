@@ -751,9 +751,11 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 			ix.SessionTitle = t
 		}
 	}
-	for _, q := range a.Questions {
-		ix.Questions = append(ix.Questions, proto.Question{Question: q.Question, Header: q.Header, MultiSelect: q.MultiSelect, Options: q.Options})
+	for i, q := range a.Questions {
+		ix.Questions = append(ix.Questions, proto.Question{Question: q.Question, Header: q.Header, MultiSelect: q.MultiSelect, Options: q.Options,
+			Recommend: askRecommend(da, i, q.Options)})
 	}
+	keepAskDecision(&ix, da, deadline)
 	markRecommended(s.lang(ctx), s.location(ctx), ix.Questions, deadline)
 	// Answers come back keyed by question text: two questions with the same text would lose one answer.
 	if proto.HasDuplicateQuestionText(ix.Questions) {

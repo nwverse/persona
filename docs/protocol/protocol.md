@@ -1145,6 +1145,24 @@ Manager-owned `persona_triage` cards also advertise cancellation, including rest
 
 Terminal-only Codex questions (including asynchronous rollout questions) do not advertise cancellation: sending Escape may fold a pane, clear notes, or stop a turn. Upgrade the hub, manager, and the node running the supported runtime before expecting the button; older components omit the capability. Existing runtime questions created before the upgrade keep their original capability; manager-owned triage cards are upgraded when restored.
 
+### Decision fields
+
+The assistant's `ask_user` card keeps what the assistant said of the decision, on the card itself and so in `GET /api/v1/interactions/history` (`assistant/decision_deadline.go`, `keepAskDecision`):
+
+| Field | Meaning |
+| --- | --- |
+| `deadline` (card) | RFC 3339: when, unanswered, its recommended options are taken by default (reversible) or the user is reminded again (not). Absent without a deadline |
+| `reversible` (card) | Whether going ahead can be undone, as the assistant said it. Absent when it did not say (it must with a deadline): never guessed |
+| `questions[].recommend` | The label of the option the assistant recommends, always one of the question's options. Absent when it recommended none |
+
+Cards from before this change, and every other card (Agents' questions, permissions, plans, screens), have none of them. They are optional keys on the `interaction` object; the apps read past them (`spec/fixtures/wire/interactions.json` `interaction_question_decision`). A card the assistant passed on to the user keeps its single recommendation in `delegate.recommend`, as before.
+
+### Who answered a card
+
+`resolution.answered_by` says who answered: absent for the user (in an app, a channel, or the to-do the question became), `assistant` for the assistant on the user's behalf (`reason` says why), `default` when nobody answered and the recommended options were taken at a reversible deadline (`reason` says so).
+
+An `ask_user` card that expires unanswered becomes a to-do (`docs/assistant/todos.md`). Its history stays `expired`; what was answered after that is recorded on it with `resolution.late: true` (`assistant/late_answer.go`, `db.LateAnswer`): the user's own answers on the to-do (`answered_by` absent; one per question as each is given) or the default taken at the deadline (`answered_by: "default"`, with the deadline's `reason`), and `resolved_at` becomes when that happened. A question that cannot be undone is never taken by default, so its history keeps no answer until the user gives one. An expired card from before this change has no `late` answer. Only the manager writes `late` and `answered_by`: an app's answer has them dropped.
+
 ### MCP elicitation
 
 `hello.features` adds `elicitation`. Clients must declare it explicitly in `client_hello.features`; Android and the web client declare it by default (the web client's `X-Persona-Client` gives platform web, version 1, matching the `platform` / `version` in its `client_hello`), and so does the iOS app (`ios-app` and its version, the two halves of its `X-Persona-Client`, `RequestClientMetadata`). The Mac and visionOS apps and the watch don't declare it. The `interaction` object in the existing `interaction` event gains the following optional fields; no keys are added at the envelope's top level:

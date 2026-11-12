@@ -192,6 +192,14 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 			if verdict == reviewNeedsUser {
 				r.WhyOwner, r.Reason, r.Recommend = decision.WhyOwner, decision.Reason, decision.Recommend
 				r.Options, r.CostOfWaiting = decision.Options, decision.CostOfWaiting
+				if !deadline.IsZero() {
+					at := deadline.UTC()
+					r.Deadline = &at
+				}
+				if a.Reversible != nil { // as the supervisor said it; absent when it did not say
+					rev := *a.Reversible
+					r.Reversible = &rev
+				}
 			}
 			if verdict == reviewRework {
 				v.Round++
