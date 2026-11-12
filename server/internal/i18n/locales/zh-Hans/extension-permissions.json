@@ -100,5 +100,7 @@
   "network_config_unset": "未填",
   "secret_provider_title": "提供密钥的值",
   "secret_provider_more_title": "提供密钥的值（新增）",
-  "secret_provider_detail": "你的设置里填了 {schemes} 引用，或你在手机上批准把某个引用交给 Agent 时，Persona 向它要值。它会知道用的是哪个引用、用在哪里，看不到你别的密钥"
+  "secret_provider_detail": "你的设置里填了 {schemes} 引用，或你在手机上批准把某个引用交给 Agent 时，Persona 向它要值。它会知道用的是哪个引用、用在哪里，看不到你别的密钥",
+  "assistant_data_title": "往助手读的内容里加它写的东西",
+  "assistant_data_detail": "它的程序写的文字可以进助手的说明和技能、Agent 的项目背景，或收件箱的分拣和起草，各有大小上限。每一项都能在它的详情里单独关掉"
 }

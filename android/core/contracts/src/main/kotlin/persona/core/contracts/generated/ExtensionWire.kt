@@ -526,16 +526,29 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
 
 /**
  * A skill (docs "Declarative contributions"): a directory of the package with SKILL.md, put in with the assistant's
- * skills.
+ * skills. With source data (docs "Assistant content from the data directory"): a directory of the extension's data
+ * directory whose subdirectories with a SKILL.md are skills its program writes (Markdown files only, 256 KB and 32
+ * skills per extension).
  */
 @Serializable
 data class ExtensionSkillItem(
     val id: String = "",
     /**
-     * The directory, relative to the package.
+     * The directory, relative to the package (or to the data directory with source data).
      */
     val dir: String = "",
+    val source: String? = null,
 )
+
+/**
+ * Where a skill's or a prompt's files are: package (the default) or data, the extension's data directory, which its
+ * program writes and upgrades keep.
+ */
+object ExtensionContentSource {
+    const val PACKAGE = "package"
+    const val DATA = "data"
+    val ALL = listOf("package", "data")
+}
 
 /**
  * Values of PromptKind.
@@ -547,15 +560,16 @@ object ExtensionPromptKind {
 }
 
 /**
- * A prompt: instructions (a .md of the package added to the assistant's CLAUDE.md) or quick (a template the apps
- * offer in the message box).
+ * A prompt: instructions (a .md of the package, or with source data of the data directory, added to the assistant's
+ * CLAUDE.md) or quick (a template the apps offer in the message box).
  */
 @Serializable
 data class ExtensionPromptItem(
     val id: String = "",
     val kind: String = "",
+    val source: String? = null,
     /**
-     * instructions: the .md file.
+     * instructions: the .md file (with source data: at most 6 KB, adopted at most once a day).
      */
     val file: String? = null,
     /**
