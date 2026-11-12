@@ -115,6 +115,10 @@ var Features = []string{
 // Paseo or Cindy, or a host without checkout support); the message starts with "unsupported".
 const CodeWorktreeUnsupported = "worktree_unsupported"
 
+// CodeWorktreeNoCommits: worktree.prepare / worktree.create on a repository nobody has committed to (HEAD names an
+// unborn branch): there is nothing to check out, so the folder itself is the only workspace (#5548).
+const CodeWorktreeNoCommits = "worktree_no_commits"
+
 // Codes of a failed credential.gh_token (hub → node, node/credential.go).
 const (
 	CodeNoGh        = "no_gh"

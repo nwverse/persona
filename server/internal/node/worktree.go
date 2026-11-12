@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -84,7 +85,21 @@ func (n *Node) repoOfWorkspace(ctx context.Context, kind, workspace, cwd string)
 	if repo, err = repoAt(ctx, dir); err != nil {
 		return nil, "", repo, err
 	}
+	if err = requireCommit(ctx, repo); err != nil {
+		return nil, "", repo, err
+	}
 	return h, workspace, repo, nil
+}
+
+// requireCommit refuses a repository nobody has committed to: its HEAD names an unborn branch, so a new worktree has
+// no base (git: "invalid reference: main") and would hold none of the folder's files anyway. The code lets the hub run
+// an inferred task in the folder itself instead (#5548).
+func requireCommit(ctx context.Context, repo worktreeRepo) error {
+	if _, err := git(ctx, repo.root, "rev-parse", "--verify", "--quiet", "HEAD^{commit}"); err == nil {
+		return nil
+	}
+	return &rpc.Error{Code: proto.CodeWorktreeNoCommits,
+		Message: i18n.T(i18n.From(ctx), "worktree-composer.no_commits", i18n.Args{"path": repo.root})}
 }
 
 // repoAt is the repository dir is in: its root, the branch checked out there and its name (a linked worktree is named
