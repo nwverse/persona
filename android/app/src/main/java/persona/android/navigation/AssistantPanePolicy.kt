@@ -6,6 +6,7 @@ import persona.core.navigation.AppTab
 import persona.core.navigation.AssistantRoute
 import persona.core.navigation.EngineRoute
 import persona.core.navigation.ExtensionUiRoute
+import persona.core.navigation.LauncherRoute
 import persona.core.navigation.MachineDetailRoute
 import persona.core.navigation.MachinesRoute
 import persona.core.navigation.TodoDetailRoute
@@ -22,7 +23,7 @@ internal data class AssistantPanePolicy(
 
 /**
  * In regular windows the shared sidebar stays beside the Assistant root and its sidebar destinations. Their lists and
- * details use one right-hand stack. A wide phone keeps its existing Inbox list-detail instead; Agents never inherits
+ * details use one right-hand stack. A wide phone keeps its existing Inbox list-detail instead; Agents never inherit
  * either Assistant rule.
  */
 internal fun assistantPanePolicy(
@@ -45,7 +46,7 @@ internal fun assistantPanePolicy(
 
 private fun isAssistantSecondaryDestination(key: NavKey): Boolean = when (key) {
     MachinesRoute, TodosRoute, KnowledgeRoute -> true
-    is MachineDetailRoute, is AddComputerRoute, is EngineRoute,
+    is MachineDetailRoute, is AddComputerRoute, is EngineRoute, is LauncherRoute,
     is TodoDetailRoute, is KnowledgeDetailRoute, is ExtensionUiRoute -> true
     else -> isInboxDestination(key)
 }

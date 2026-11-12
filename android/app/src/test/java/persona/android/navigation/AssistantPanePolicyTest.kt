@@ -16,6 +16,7 @@ import persona.core.navigation.InboxItemRoute
 import persona.core.navigation.InboxItemUiRoute
 import persona.core.navigation.InboxRoute
 import persona.core.navigation.LarkChatRoute
+import persona.core.navigation.LauncherRoute
 import persona.core.navigation.MachineDetailRoute
 import persona.core.navigation.MachinesRoute
 import persona.core.navigation.RouteInput
@@ -71,6 +72,7 @@ class AssistantPanePolicyTest {
             MachineDetailRoute("machine"),
             AddComputerRoute(),
             EngineRoute("machine"),
+            LauncherRoute("machine", "launcher"),
             KnowledgeRoute,
             KnowledgeDetailRoute(KnowledgeKind.Projects, "project"),
             TodosRoute,
