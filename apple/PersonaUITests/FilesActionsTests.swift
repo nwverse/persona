@@ -84,10 +84,17 @@ final class FilesActionsTests: XCTestCase {
         let field = app.alerts.firstMatch.textFields.firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 8), "the name field:\n\(app.debugDescription)")
         field.tap()
-        field.typeText(XCUIKeyboardKey.delete.rawValue)
+        let typed = (field.value as? String)?.count ?? 0
+        // One name per run: light and dark share the mock, which answers "exists" for a name taken.
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: typed) + (scheme == "dark" ? "todo.txt" : "notes.txt"))
         shot(app, "new-text-\(scheme)")
-        app.alerts.buttons["创建"].firstMatch.tap()
-        XCTAssertTrue(app.descendants(matching: .any)["file-close"].waitForExistence(timeout: 15), "the new file did not open:\n\(app.debugDescription)")
+        // A tap on Create while the alert is still settling can be lost (seen once in dark): tap again while it stays up.
+        let opened = app.descendants(matching: .any)["file-close"]
+        for _ in 0..<3 where app.alerts.firstMatch.exists {
+            app.alerts.buttons["创建"].firstMatch.tap()
+            if opened.waitForExistence(timeout: 5) { break }
+        }
+        XCTAssertTrue(opened.waitForExistence(timeout: 15), "the new file did not open:\n\(app.debugDescription)")
         app.terminate()
 
         // The editor: Edit from ⋯, find and replace, a conflict, Overwrite Anyway asked twice.
