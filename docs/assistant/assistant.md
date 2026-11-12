@@ -580,8 +580,10 @@ mark the inventory incomplete. At send time the resolved file becomes a typed `s
 Claude resolves the same effective profile as `assistantSend`, then reads only immediate skill directories under
 that profile's `skills` and the working directory's ancestor `.claude/skills` roots (at most 64 ancestors, 512 entries,
 16 KiB frontmatter per file). Names/descriptions are data, not executed YAML or shell substitutions; bodies are not
-read for the menu. `user-invocable: false` and local `skillOverrides: off` are respected. Known strict-plugin policy
-or `Skill` deny/ask rules refuse this adapter rather than work around native customization/approval gates.
+read for the menu. `user-invocable: false` and local `skillOverrides: off` are respected.
+Nonempty `user-invocable` scalar forms other than `true` are conservatively omitted by this bounded parser.
+Known strict-plugin policy or `Skill` deny/ask rules refuse this adapter rather than work around native
+customization/approval gates.
 The launcher's existing `--settings` file or inline object is checked through the same settings reader as startup;
 its values are never returned in the catalog or diagnostics.
 Known managed-policy files/drop-in directories or a server-policy cache also refuse the bounded adapter:

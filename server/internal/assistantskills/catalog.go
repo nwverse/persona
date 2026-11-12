@@ -58,7 +58,8 @@ func LocalCatalog(roots []Root) ([]Entry, error) {
 			if header == "" {
 				continue
 			}
-			if HeaderValue(header, "user-invocable") == "false" {
+			// Unknown scalar forms cannot opt a skill into explicit invocation.
+			if invocable := HeaderValue(header, "user-invocable"); invocable != "" && invocable != "true" {
 				continue
 			}
 			real, err := filepath.EvalSymlinks(file)

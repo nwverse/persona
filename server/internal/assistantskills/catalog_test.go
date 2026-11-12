@@ -19,6 +19,7 @@ func TestLocalCatalogIsBoundedAndReadsMetadataOnly(t *testing.T) {
 		}
 	}
 	write("review", "---\nname: review\ndescription: |\n  Review a document\n  for clarity.\n---\n!`touch should-not-run`\n")
+	write("hidden", "---\nname: hidden\nuser-invocable: false # internal skill\n---\nInstructions\n")
 	write("nested/not-a-root", "---\nname: hidden\n---\n")
 	entries, err := LocalCatalog([]Root{{Path: root, Source: "project"}})
 	if err != nil || len(entries) != 1 || entries[0].Description != "Review a document for clarity." {
