@@ -144,17 +144,18 @@ struct CommentCard: View {
     }
 }
 
-/// A comment block at the top of a sent bubble, drawn as its quotes are: its kind, number and place, then its note; a
-/// tap opens it to the whole note and the code (the agent got the block as written).
+/// A comment block at the top of a sent bubble, drawn as its quotes are, in the bubble's colors (`ink`): its kind,
+/// number and place, then its note; a tap opens it to the whole note and the code (the agent got the block as written).
 struct CommentQuote: View {
     var comment: MessageComment
     var number: Int
+    var ink: Theme.UserBubbleInk
     @State private var open = false
 
     var body: some View {
         let heading = [comment.heading(number), comment.shortLocation].joined(separator: " · ")
         QuoteCard(heading: heading, summary: open ? comment.full : comment.summary, lines: open ? .max : 2,
-                  tint: Theme.Quote.tint, ink: Theme.Quote.summary) {
+                  tint: ink.words, ink: ink.words, fill: ink.quoteFill) {
             Haptics.tap()
             withAnimation(Theme.Motion.state) { open.toggle() }
         }

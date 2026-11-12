@@ -75,7 +75,10 @@ final class AppModel {
             for (machine, sessions) in sessionsByMachine {
                 for session in sessions {
                     let key = SessionKey(group: machine.group, machineID: machine.id, sessionID: session.sessionID)
-                    if index[key] == nil { index[key] = session }
+                    if index[key] == nil {
+                        index[key] = session
+                        chats[key]?.updateSendFeedback(session, previous: sessionIndex[key])
+                    }
                 }
             }
             sessionIndex = index
@@ -1408,6 +1411,7 @@ final class AppModel {
     var managerRosters: [String: ManagerRoster] = [:]
     /// Each group's latest roster read: an earlier one answering after it is dropped.
     @ObservationIgnored var managerRosterReads: [String: Int] = [:]
+    var managerRosterUnsupported = Set<String>()
     /// Each group's current assistant, as picked in the sidebar's switcher (`selectAssistantManager`): the manager's id,
     /// kept on this device across launches (`AssistantPickStore`). A group without one follows its hub's default manager.
     var assistantPicks: [String: String] = [:] {
@@ -2570,6 +2574,7 @@ final class AppModel {
             return
         }
         chat(key).pending[i].state = .sending
+        chat(key).beginSendFeedback(chat(key).pending[i])
         Task {
             // First ask the hub what became of the old id (`GET /api/v1/ops/{id}`): done means it went, and a resend
             // would type it twice; pending means the first try is still running: the same id again waits for its
@@ -2617,6 +2622,7 @@ final class AppModel {
     }
 
     private func deliver(_ key: SessionKey, _ msg: PendingMessage, clearDraft: String? = nil) {
+        chat(key).beginSendFeedback(msg)
         Task {
             // The hub is out of reach: the message waits (clock, Sends when connected) instead of failing after a timeout.
             let socket = socket(key.group)

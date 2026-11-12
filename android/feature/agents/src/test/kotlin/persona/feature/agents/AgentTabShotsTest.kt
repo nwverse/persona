@@ -104,7 +104,7 @@ class AgentTabShotsTest {
         val tab = agentTreeEntries(list, "", tabs = true).filterIsInstance<TreeTabEntry>().first().tab
         for (nextStyle in AppStyle.entries) for (nextDark in listOf(false, true)) {
             rule.runOnIdle { style = nextStyle; dark = nextDark; folded = emptySet() }
-            rule.onAllNodesWithText("发起者")[0].assertIsDisplayed()
+            rule.onAllNodesWithText("发起者", substring = true)[0].assertIsDisplayed()
             rule.onNodeWithContentDescription("3 个 Agent").assertIsDisplayed()
             capture("list-${nextStyle.name.lowercase()}-${if (nextDark) "dark" else "light"}")
             rule.runOnIdle { folded = setOf(tab.foldKey) }
@@ -128,7 +128,8 @@ class AgentTabShotsTest {
         }
         for (nextStyle in AppStyle.entries) for (nextDark in listOf(false, true)) {
             rule.runOnIdle { style = nextStyle; dark = nextDark }
-            rule.onAllNodesWithText("发起者")[0].assertIsDisplayed()
+            // Glass's cards say it after the state ("工作中 · 发起者"), the rows in a tag of its own.
+            rule.onAllNodesWithText("发起者", substring = true)[0].assertIsDisplayed()
             capture("space-${nextStyle.name.lowercase()}-${if (nextDark) "dark" else "light"}")
         }
     }

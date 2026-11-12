@@ -183,9 +183,13 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * first-screen code changed: #5310 +255 B, which failed main's build, #5193 +138 B, the two merged -321 B, #5320 +29 B.
  * Counted so, ja is 589,323 B on main at c7164e477e (595,073 B the old way; en 585,737 B, zh-Hans 586,565 B), and the
  * same within 1 B at 1c78a837d6, 482f3b93df and 4b72a763c8. The budget is that, with 0 B of room: the 175 B main had,
- * #5193's 98 B among them, are taken back. Raise it on purpose, in the change that needs it.
+ * #5193's 98 B among them, are taken back. And 529 B for the error banner over the composer (#5313: ja 589,852 B
+ * against 589,323 B on main at fc16299dd: which error a chat stopped on and the rules that keep it there or in the chat,
+ * its dismissal kept per conversation, a Retry that did not go bringing it back, the banner scrolled into view in its
+ * box once, the keyboard back to the composer, the notice's ✕ and 28 px buttons, the failure note and the refused-send
+ * card drawn as the same notice, and their words). Raise it on purpose, in the change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 589_323;
+export const FIRST_SCREEN_BUDGET = 589_852;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
@@ -288,10 +292,13 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
  * the idle ModelPicker, out of the first screen into a chunk of its own), and 64 B for managing launchers from the
  * pickers (#4389's controls took the idle tier 8 B over; take it back if those controls get lighter), and 13,113 B for
  * the extension view renderer (#3614: it left the first screen for the idle tier, which went from 18,615 B to 31,728 B;
- * 31,802 B after merging main).
+ * 31,802 B after merging main). And 535 B for the composer's + / @ panel (#5324, 2026-11-12: ComposerPanel, which
+ * took the @ menu's rows off the first screen, beside #5325's / palette and #5327's queue panel, which together left
+ * less room than it needs: 43,729 B merged with main at f18875688; 43,809 B with the review's fixes merged with main at
+ * 0fef425ef, and 31 B over that so the next main does not tip it). It stays idle: a typed @ opens it at once.
  * Every other lazy page loads on intent, not at idle; raise it on purpose, in the change that needs it.
  */
-export const IDLE_TIER_BUDGET = 43_194;
+export const IDLE_TIER_BUDGET = 43_840;
 
 const gzip = promisify(gzipCompress);
 

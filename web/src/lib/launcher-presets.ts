@@ -4,7 +4,7 @@
 // another of its models; the hub fills in the name, the address, the kind and the rest.
 import { formatList, t } from "../i18n";
 import { api, ApiError } from "./api";
-import type { ProviderAPI, TestResult } from "./providers";
+import type { AuthMethod, ProviderAPI, TestResult } from "./providers";
 
 export interface PresetModel {
   id: string;
@@ -25,7 +25,7 @@ export interface LauncherPreset {
   key_hint?: string;
   models_error?: string;
   /** How the gateway takes the key (built-in presets). */
-  auth?: "api_key" | "bearer";
+  auth?: AuthMethod;
   /** Where to open an account or get a key (built-in presets). */
   signup_url?: string;
   /** The name in the request's language ("Zhipu GLM"); `name` stays the plain one. */
