@@ -126,12 +126,13 @@ describe("the paste state", () => {
 describe("headerLines", () => {
   it("says the headers it sends and leaves out, by reason", () => {
     const lines = headerLines(draft({
-      skipped_headers: [{ name: "X-Org-Token", reason: "credential" }, { name: "anthropic-version", reason: "protocol" }, { name: "anthropic-beta", reason: "protocol" }, { name: "X-New", reason: "later" }],
+      skipped_headers: [{ name: "X-Org-Token", reason: "credential" }, { name: "anthropic-version", reason: "protocol" }, { name: "anthropic-beta", reason: "protocol" }, { name: "X-Odd", reason: "unsafe" }, { name: "X-New", reason: "later" }],
     }, { headers: "X-Team: a\nX-Trace: on\nnot a header" }));
     expect(lines).toEqual([
       t("lib-provider-paste.headers_kept", { names: "X-Team、X-Trace", count: 2 }),
       t("lib-provider-paste.headers_left_credential", { names: "X-Org-Token", count: 1 }),
       t("lib-provider-paste.headers_left_protocol", { names: "anthropic-version、anthropic-beta", count: 2 }),
+      t("lib-provider-paste.headers_left_unsafe", { names: "X-Odd", count: 1 }),
       t("lib-provider-paste.headers_left_other", { names: "X-New", count: 1 }),
     ]);
     expect(headerLines(draft())).toEqual([]);

@@ -3,6 +3,7 @@
   "headers_left_credential_other": "ヘッダー{names}は引き継ぎません。キーやパスワードのようです。",
   "headers_left_protocol_other": "ヘッダー{names}は引き継ぎません。いずれにせよ送られます。",
   "headers_left_unsupported_other": "ヘッダー{names}は引き継ぎません。この種類のプロバイダーは追加のヘッダーを送りません。",
+  "headers_left_unsafe_other": "ヘッダー{names}は引き継ぎません。値をそのまま保存できません。",
   "headers_left_other_other": "ヘッダー{names}は引き継ぎません。",
   "unrecognized": "プロバイダーの設定ではないようです。alias、exportの行、settings.json、curlコマンド、プロバイダーのJSONを貼り付けてください。",
   "invalid_json": "JSONのようですが、読み取れませんでした。すべて貼り付けたか確認してください。",

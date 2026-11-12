@@ -165,7 +165,7 @@ export function pasteActions(d: PasteDraft): (PasteAction & { match?: PasteMatch
 
 export const sameAction = (a: PasteAction | null, b: PasteAction) => !!a && a.type === b.type && (a.type === "new" || (b.type !== "new" && a.provider === b.provider));
 
-const HEADER_REASONS = ["credential", "protocol", "unsupported"];
+const HEADER_REASONS = ["credential", "protocol", "unsupported", "unsafe"];
 
 /** The headers a draft sends and leaves out, a line each (as the import says its variables, lib/providers.ts). */
 export function headerLines(d: PasteDraft): string[] {

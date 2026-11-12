@@ -7,6 +7,8 @@
   "headers_left_protocol_other": "Leaves out the headers {names}, since they're sent anyway.",
   "headers_left_unsupported_one": "Leaves out the header {names}, since this kind of provider sends no extra headers.",
   "headers_left_unsupported_other": "Leaves out the headers {names}, since this kind of provider sends no extra headers.",
+  "headers_left_unsafe_one": "Leaves out the header {names}, since its value can't be kept as written.",
+  "headers_left_unsafe_other": "Leaves out the headers {names}, since their values can't be kept as written.",
   "headers_left_other_one": "Leaves out the header {names}.",
   "headers_left_other_other": "Leaves out the headers {names}.",
   "unrecognized": "This doesn't look like a provider's settings. Paste an alias, export lines, a settings.json, a curl command or a provider's JSON.",

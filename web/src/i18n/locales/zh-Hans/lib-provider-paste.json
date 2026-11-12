@@ -3,6 +3,7 @@
   "headers_left_credential_other": "不带上请求头 {names}：看起来是密钥或密码。",
   "headers_left_protocol_other": "不带上请求头 {names}：本来就会发送。",
   "headers_left_unsupported_other": "不带上请求头 {names}：这类供应商不发送额外的请求头。",
+  "headers_left_unsafe_other": "不带上请求头 {names}：它的值无法原样保存。",
   "headers_left_other_other": "不带上请求头 {names}。",
   "unrecognized": "这看起来不像供应商的配置。可以粘贴 alias、export 行、settings.json、curl 命令或供应商的 JSON。",
   "invalid_json": "这像是 JSON，但没能读出来。请检查是否粘贴完整。",
