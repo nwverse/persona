@@ -43,6 +43,20 @@ type Fold struct {
 	LatestThinking *Item `json:"latest_thinking,omitempty"`
 	// SupervisionUser preserves an explicit user-visible action hidden inside this work range.
 	SupervisionUser bool `json:"supervision_user,omitempty"`
+	// Changes: the files the run's successful edits changed, in the order first edited (FoldChange), so a chat shows its
+	// turn's changed-files card without opening the run. Always a list, empty when the run edited nothing: a fold
+	// without it (an older node) leaves the edits unknown.
+	Changes []FoldChange `json:"changes"`
+}
+
+// FoldChange is one file a folded run's successful edits changed (docs/protocol/protocol.md "Folded work"): the lines
+// they added and removed, counted as the apps count an edit's diff and summed over the run's edits of that path.
+// Exact is false when an edit's input was clipped for good: its counts would be a guess, which the apps do not show.
+type FoldChange struct {
+	Path  string `json:"path"`
+	Add   int    `json:"add"`
+	Del   int    `json:"del"`
+	Exact bool   `json:"exact"`
 }
 
 // FoldImage is an image a tool call of a folded run looked at (docs/protocol/protocol.md "Images viewed this turn"): one its result
@@ -167,6 +181,10 @@ type Item struct {
 	Compact *Compact `json:"compact,omitempty"`
 	// ModelRefusal preserves Claude Code's refusal record on a notice.
 	ModelRefusal *ModelRefusal `json:"model_refusal,omitempty"`
+	// Model is the model that wrote this assistant item as the transcript records it: Claude Code's message.model
+	// (never its "<synthetic>" placeholder), a Codex turn's turn_context model. Absent when the transcript does not
+	// say, on other roles, and from older nodes. Clients draw a divider where the model of the replies changes.
+	Model string `json:"model,omitempty"`
 }
 
 // ModelRefusal is a Claude Code model_refusal_* record as clients see it: its known fields, values kept as recorded

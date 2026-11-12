@@ -1,5 +1,6 @@
 package persona.feature.agents
 
+import persona.core.contracts.clipped
 import persona.core.designsystem.text
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -186,7 +187,7 @@ internal fun AgentsScreen(
     val quickCounts = page.list.counts + (AgentQuickFilter.NeedsYou to waitingRows.size)
     val messagesBySession = remember(outbox) { outbox.groupBy { it.session } }
     // Each row's own card (the one that came first) and how many it has, as on the space page (#3964).
-    val cards = remember(pending) { pending.firstBySession() }
+    val requestCards = remember(pending) { pending.firstBySession() }
     val cardCounts = remember(pending) { pending.groupingBy { it.sessionKey }.eachCount() }
     val unknownRequests = remember(pending, delivery) {
         pending.filter { delivery[it.id] == RequestDelivery.Unknown }.map { it.sessionKey }.toSet()
@@ -250,6 +251,33 @@ internal fun AgentsScreen(
                     onUnlink = linked?.let { todo -> { model.unlinkSpace(todo.id, session.machineId, name) } })
             })
     }
+    // A repository header's long press on Glass (iOS `repoMenu`): the actions of the one space its agents are in and its
+    // to-do; agents in several spaces, Mark all as read.
+    val repoActions: @Composable (AgentListGroup) -> List<JAction> = { repo ->
+        val space = page.spacesById[repo.id]
+        if (space != null) {
+            val session = space.members.first().session
+            val unread = space.members.filter { it.state == AgentState.Unread }
+            val todoSpace = session.todoSpaceName?.takeIf { model.tasks?.spacesSupported == true }
+            val linked = todoSpace?.let { todos.forSpace(session.machineId, it) }
+            agentSpaceActions(session, space.preferenceKey in page.preferences.pins.spaces, space.preferenceKey in page.preferences.mutes.spaces,
+                operations.busy, onPin = { model.spacePin(session) }, onMute = { model.spaceMute(session) },
+                onRename = { operationDialog = AgentOperationDialog.RenameSpace(session) },
+                onMarkRead = unread.takeIf { it.isNotEmpty() }?.let { rows -> { confirmRead = rows } },
+                onOpen = { navigator.navigate(SpaceRoute(space.id, space.name)) },
+                todo = todoSpace?.let { name ->
+                    SpaceTodoActions(linked != null, onLink = { pickingTodoForSpace = session.machineId to name },
+                        onUnlink = linked?.let { todo -> { model.unlinkSpace(todo.id, session.machineId, name) } })
+                }) + listOfNotNull(linked?.let { todo ->
+                    JAction(stringResource(R.string.agents_flag_space_todo, todo.title), PersonaIcons.todo,
+                        onClick = { navigator.navigate(persona.core.navigation.TodoDetailRoute(todo.id)) })
+                })
+        } else {
+            val unread = (repo.rows + page.list.groups.filter { it.under == repo.id }.flatMap { it.rows }).filter { it.state == AgentState.Unread }
+            listOfNotNull(JAction(stringResource(R.string.agents_mark_all_read), PhIcons.Check, onClick = { confirmRead = unread })
+                .takeIf { unread.isNotEmpty() })
+        }
+    }
     // "By machine" shows a herdr tab's agents as a group (#2320), as the web's sidebar; the other groupings list one agent a row
     val tabs = page.preferences.grouping == AgentGrouping.MachineSpace
     var expandedTasks by remember { mutableStateOf(emptySet<String>()) }
@@ -260,6 +288,10 @@ internal fun AgentsScreen(
             })
     }
     val spacesById = page.spacesById
+    // By Repository on Glass draws iOS's tree (#4338 A7): each repository a card, its header and working trees' lines in it,
+    // the agents' rows under their line. Brief and Board keep their headings (decision 8).
+    val repoTree = PersonaTheme.style == AppStyle.Glass && page.preferences.grouping == AgentGrouping.Repo
+    val repoSlots = remember(tree, repoTree) { if (repoTree) repoCardSlots(tree) else emptyMap() }
 
     val working = page.list.counts[AgentQuickFilter.Working] ?: 0
     val unread = page.list.counts[AgentQuickFilter.Unread] ?: 0
@@ -481,7 +513,26 @@ internal fun AgentsScreen(
                         val space = spacesById[group.id]
                         // A history group of a session without a directory has no title of its own (AgentHistory.kt).
                         val groupTitle = group.title.text().ifBlank { stringResource(R.string.agents_history_unknown_folder) }
-                        if (entry.space) AgentSpaceHeader(groupTitle, group.folded, { model.fold(group) }, depth = entry.depth, first = entry.first,
+                        val slot = repoSlots[entry.key]
+                        if (slot != null && group.repo == RepoLevel.Repository) {
+                            val actions = repoActions(group)
+                            var sheet by remember { mutableStateOf(false) }
+                            AgentRepoHeader(groupTitle, group.folded, { model.fold(group) }, Modifier.repoCard(slot.first, slot.last),
+                                quiet = entry.quiet, agents = (group.totalCount ?: group.rows.count { !it.isNestedSubtask }).takeIf { entry.quiet },
+                                onLongClick = if (actions.isEmpty()) null else ({ sheet = true }),
+                                actionsLabel = stringResource(R.string.agents_repo_actions))
+                            if (sheet) JActionSheet(actions, { sheet = false }, title = groupTitle)
+                        } else if (slot != null && group.repo != null) {
+                            val line = group.worktree
+                            AgentWorktreeLine(groupTitle, main = group.repo == RepoLevel.MainCheckout, folded = group.folded,
+                                onToggle = { model.fold(group) }, modifier = Modifier.repoCard(slot.first, slot.last), level = slot.level,
+                                branch = line?.branch, detached = line?.detached == true, tally = line?.tally?.let { tally ->
+                                    when (tally) {
+                                        WorktreeTally.Idle -> stringResource(persona.core.designsystem.R.string.designsystem_worktree_idle)
+                                        is WorktreeTally.Agents -> pluralStringResource(persona.core.designsystem.R.plurals.designsystem_tab_agents, tally.count, tally.count)
+                                    }
+                                }, quiet = entry.quiet, offline = line?.offline == true)
+                        } else if (entry.space) AgentSpaceHeader(groupTitle, group.folded, { model.fold(group) }, depth = entry.depth, first = entry.first,
                             quiet = entry.quiet, sessions = group.totalCount ?: group.rows.size, counts = group.headingCounts,
                             flags = buildList {
                                 if (space != null && space.preferenceKey in page.preferences.pins.spaces) add(RowFlag(stringResource(R.string.agents_flag_space_pinned), PhIcons.PushPin))
@@ -512,28 +563,39 @@ internal fun AgentsScreen(
                         }
                         val infoWithDelivery = info.withDelivery(messagesBySession[row.session.key].orEmpty(), row.session.key in unknownRequests)
                             .let { if (operationUncertain) it.copy(needsConfirmation = true) else it }
-                        SlotRow(row, names[row.session.machineId], infoWithDelivery, now, page.preferences.compact,
-                            row.id in page.preferences.pins.sessions, page.preferences.mutes.mutes(row),
-                            depth = entry.depth, position = GroupPosition(entry.first, entry.last), located = entry.located,
-                            onOpen = { openRow(row) }, menuItems = { rowMenu(row, entry.nested) },
-                            onClose = closeSwipe(row, operations.busy) { operationDialog = AgentOperationDialog.Close(row.session) },
-                            launcher = entry.launcher, branch = entry.branch, hideState = entry.inStateSection,
-                            requestCount = cardCounts[row.session.key] ?: 0, card = cards[row.session.key])
+                        val slot = repoSlots[entry.key]
+                        // In a repository's card the rows sit under their line at its level, without rules between them (iOS).
+                        Box(if (slot != null) Modifier.repoCard(slot.first, slot.last) else Modifier) {
+                            SlotRow(row, names[row.session.machineId], infoWithDelivery, now, page.preferences.compact,
+                                row.id in page.preferences.pins.sessions, page.preferences.mutes.mutes(row),
+                                depth = slot?.level ?: entry.depth, position = if (slot != null) GroupPosition(true, entry.last) else GroupPosition(entry.first, entry.last),
+                                located = entry.located,
+                                onOpen = { openRow(row) }, menuItems = { rowMenu(row, entry.nested) },
+                                onClose = closeSwipe(row, operations.busy) { operationDialog = AgentOperationDialog.Close(row.session) },
+                                launcher = entry.launcher, branch = entry.branch, hideState = entry.inStateSection,
+                                requestCount = cardCounts[row.session.key] ?: 0, card = requestCards[row.session.key])
+                        }
                     }
                     is TreeChildrenEntry -> item(entry.key, contentType = "children") {
+                        val slot = repoSlots[entry.key]
                         AgentSpaceHeader(stringResource(R.string.agents_child_tasks, entry.count), !entry.expanded,
                             onToggle = { expandedTasks = if (entry.expanded) expandedTasks - entry.parent.id else expandedTasks + entry.parent.id },
-                            depth = entry.depth, kind = stringResource(R.string.agents_child_tasks_kind))
+                            modifier = if (slot != null) Modifier.repoCard(slot.first, slot.last) else Modifier,
+                            depth = slot?.level ?: entry.depth, kind = stringResource(R.string.agents_child_tasks_kind))
                     }
                     is TreeTabEntry -> item(entry.key, contentType = "tab") {
                         AgentTabEntryRow(entry, now, page.preferences.compact, onOpen = { openRow(entry.tab.lead) }, onToggle = { model.foldTab(entry.tab) },
-                            card = cards[entry.tab.lead.session.key], muted = page.preferences.mutes.mutes(entry.tab.lead))
+                            card = requestCards[entry.tab.lead.session.key], muted = page.preferences.mutes.mutes(entry.tab.lead))
                     }
                     is TreeIdleEntry -> item(entry.key, contentType = "idle") {
-                        AgentIdleRow(entry.hidden, onClick = { model.showIdle(entry.group) }, depth = entry.depth)
+                        val slot = repoSlots[entry.key]
+                        AgentIdleRow(entry.hidden, onClick = { model.showIdle(entry.group) },
+                            modifier = if (slot != null) Modifier.repoCard(slot.first, slot.last) else Modifier, depth = slot?.level ?: entry.depth)
                     }
                     is TreeShowAllEntry -> item(entry.key, contentType = "idle") {
-                        AgentShowAllRow(entry.count, entry.expanded, onClick = { model.showAll(entry.group, !entry.expanded) }, depth = entry.depth)
+                        val slot = repoSlots[entry.key]
+                        AgentShowAllRow(entry.count, entry.expanded, onClick = { model.showAll(entry.group, !entry.expanded) },
+                            modifier = if (slot != null) Modifier.repoCard(slot.first, slot.last) else Modifier, depth = slot?.level ?: entry.depth)
                     }
                 }
             }
@@ -817,7 +879,7 @@ internal fun SlotRow(
             if (metadata.pendingCount > 0) add(RowFact(stringResource(R.string.agents_row_queued, metadata.pendingCount), caution = true))
             if (metadata.sending) add(RowFact(PendingStatus.Sending.localizedLabel))
             if (metadata.hasDraft) {
-                val draft = metadata.draft.replace('\n', ' ').take(20)
+                val draft = metadata.draft.replace('\n', ' ').clipped(20)
                 add(RowFact(when {
                     draft.isBlank() -> stringResource(if (metadata.hasAttachments) R.string.agents_row_draft_attachments else R.string.agents_row_draft)
                     metadata.hasAttachments -> stringResource(R.string.agents_row_draft_attachments_text, draft)

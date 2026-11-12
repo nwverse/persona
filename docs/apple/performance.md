@@ -184,7 +184,10 @@ in one place, move that read into a small child view. Actions read unobserved va
 - Fixed before: the chat subtitle read `machines`, so every machine heartbeat recomputed the page and all its rows
   (`docs/apple/ios-state.md`, step 5); writing a trace array in `body` made `RootView` observe it and redraw for ever (commit `d2289dee5`).
 
-**Do.** Follow `docs/apple/ios-state.md` ("Keeping redraws small"). Write-only records are `@ObservationIgnored`.
+**Do.** Follow `docs/apple/ios-state.md` ("Keeping redraws small"). Write-only records are `@ObservationIgnored`. A store
+many pages share hands each one a projection of its own key, built per change: `MeetingPhotos.Album` is one recording's
+photos with each row's content worked out, so the meeting thread reads only their order, each photo row reads the rest,
+and another recording's uploads redraw neither.
 
 **Check.** `RenderBudgetTests` (views per push) and `AllSessionsReadersTests` (who may read `allSessions`) fail on
 regressions; add a `PerfTrace.body("Name")` to a new heavy view so its count shows up.
@@ -203,6 +206,8 @@ wrongly and all are rebuilt. `AnyView` hides the type, so SwiftUI cannot diff th
 - `apple/Persona/Views/Chat/ComposerParts.swift:168`: the composer's attached images, which can be removed, use `id: \.offset`.
 - `apple/Persona/Views/Inbox/Lark/LarkCard.swift:305-335`: Lark cards inside chat rows are trees of `AnyView`.
 - Fixed before: one `VStack` of all rows inside a `LazyVStack` laid out hundreds of rows at once and blanked the page (`docs/lessons/ios.md`, "Chat lists and scrolling").
+- Fixed before: an Agent's 33,000-character report was one row (one MarkdownUI document laid out whole, twice, with every table's decoration
+  re-run per scrolled frame); long finished answers are now lazy rows of about 24 lines (`AnswerParts`, #4970).
 
 **Do.** Give each element an `Identifiable` id from the hub (`SessionKey`, item ids). `\.offset` is fine only over a
 constant array built in the same expression (a fixed set of chips).
@@ -308,7 +313,9 @@ they draw and never load whole transcripts.
 lower limits than the app. A cache with no bound is a leak with extra steps.
 
 **Do.** Give caches a cost; drop them on `UIApplication.didReceiveMemoryWarningNotification`; release retained stores on
-`onTabVisibility` disappear.
+`onTabVisibility` disappear. Full-size decodes of user pictures run one at a time and let the original go as soon as it
+is downscaled (`MeetingPhotos` prepares a pick's photos in turn, and `MeetingPhotoPipeline.prepare` drops the original
+before Vision reads the small copy), so four 48 MP photos picked during a recording never sit in memory at once.
 
 **Check.** Allocations with generations (open and close a page 10 times; "Budgets"), the memory graph debugger for leaked
 stores and models, `XCTMemoryMetric` for a scenario test.
@@ -333,6 +340,9 @@ Start from a reproduction, measure the base, change one thing, measure again.
    "Jank measurement (dropped frames)").
 2. **Use your own simulator** through `scripts/app/sim-boot.sh` and an isolated mock hub (`scripts/mock/mock_hub.py` on your
    own port) with heavy data (`MOCK_AGENTS=1`, `MOCK_LONG_ASSISTANT=1`, `MOCK_LONG_HISTORY=1`).
+   Before measuring, check that the app is active (`scripts/app/personactl.py`'s `state` answers `appState: active`). An app
+   left inactive, for example under an unanswered system prompt (#5089), keeps its hub links suspended and measures nothing;
+   restart the simulator with `sim-boot.sh --reslim`, or use `--profile stock`.
 3. **Find the main thread's time.**
    - `sample <pid> 10 1 -file out.txt` while reproducing: no Instruments authorization needed; aggregate the main thread.
    - Instruments: Time Profiler (attach to the simulator app's PID); Hangs (reports main-thread blocks over the

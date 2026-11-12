@@ -286,6 +286,8 @@ internal fun ChatLineContent(
     hideTaskPrompts: Boolean = false,
     /** This line is the turn's error and the hub named its fix ([TurnErrorFix]): an answer, a notice or an API error draws the card. */
     turnFix: TurnErrorFix? = null,
+    /** Opens the session's terminal: the live work line's mark on Glass ([ChatTerminalPlaces.onWorkLine]). */
+    onTerminal: (() -> Unit)? = null,
 ) {
     val res = LocalResources.current
     if (turnFix != null) {
@@ -315,7 +317,7 @@ internal fun ChatLineContent(
                     MessageContent(it, false, textUpdates[it.id], boxed = true, hideCloseout = hideCloseout)
                 }
             }
-            "thinking" -> if (!style.hideThoughts) ThoughtContent(line.row.item?.text.orEmpty(), line.id, style.collapseThoughts)
+            "thinking" -> if (!style.hidesThoughts()) ThoughtContent(line.row.item?.text.orEmpty(), line.id, style.collapseThoughts)
             "image" -> line.row.item?.item?.let { ChatPicture(session, it, loader) }
             "recap" -> line.row.item?.item?.let { RecapLine(listOf(it)) }
             else -> line.row.item?.item?.refusal?.let { RefusalNotice(it) }
@@ -333,23 +335,33 @@ internal fun ChatLineContent(
             line.images.forEach { ChatPicture(session, it.item, loader, alignEnd = true) }
         }
         is ChatLine.Work -> Column(Modifier.fillMaxWidth()) {
-            // No live preview: ordinary tools, thoughts and intermediate text stay inside the expandable summary.
-            if (style.compactToolSummary) AssistantWorkSummary(line, onToggle)
+            // No live preview: ordinary tools, thoughts and intermediate text stay inside the expandable summary. On Glass
+            // Persona's work line is the Agent chat's, ticking while it runs (iOS has one `WorkLine`, #4339 C13).
+            if (style.compactToolSummary && PersonaTheme.style != AppStyle.Glass) AssistantWorkSummary(line, onToggle)
             else {
                 // Waiting on you, the turn stays the live one (it folds and opens as while it runs), but its line says it
                 // waits: no "Working", no clock, no spinner, as the header says "Waiting for you".
                 val waits = waiting && line.live
                 val now by rememberNow(1_000, enabled = line.live && !waits)
                 WorkGroup(workSummary(res, line, recordedDuration, now.takeIf { line.live }, waiting = waits), line.open,
-                    { onToggle(line.id) }, running = line.live && !waits) {}
+                    { onToggle(line.id) }, running = line.live && !waits,
+                    onTerminal = onTerminal?.takeIf { ChatTerminalPlaces.onWorkLine(line.live, PersonaTheme.style) },
+                    terminalLabel = stringResource(R.string.chat_screen_open_terminal)) {}
             }
         }
-        is ChatLine.Step -> WorkStep(line.step, session, loader, onFold, folding, foldErrors, onFullText, style, textUpdates, workRunning, lastWorkStep, plan)
+        // Every open step sits on the work line's rail, the plan and its items too (Glass, iOS's timeline, #4339 C5).
+        is ChatLine.Step -> Box(Modifier.fillMaxWidth().workRail(lastWorkStep)) {
+            WorkStep(line.step, session, loader, onFold, folding, foldErrors, onFullText, style, textUpdates, workRunning, lastWorkStep, plan)
+        }
         is ChatLine.End -> TimelineMark(pluralStringResource(R.plurals.chat_content_collapse_steps, line.count, line.count),
             Modifier.heightIn(min = 44.dp).clickable(role = Role.Button) { onToggle(line.groupId) })
         is ChatLine.Wakes -> ChatSystemLine(pluralStringResource(R.plurals.chat_content_wakes, line.turn.wakes.size, line.turn.wakes.size))
     }
 }
+
+/** Persona's thoughts stay out of its conversation, except on Glass: there its work line counts them and opens to them, as iOS's does. */
+@Composable
+private fun ChatRenderStyle.hidesThoughts(): Boolean = hideThoughts && PersonaTheme.style != AppStyle.Glass
 
 @Composable
 private fun AssistantWorkSummary(line: ChatLine.Work, onToggle: (String) -> Unit) {
@@ -471,7 +483,7 @@ private fun WorkStep(step: WorkItem, session: SessionKey, loader: ImageLoader, o
 
         is WorkItem.Narration -> MessageContent(step.item.item, false, textUpdates[step.item.id])
         is WorkItem.Thought -> if (step.item.kind == "thinking") {
-            if (!style.hideThoughts) ThoughtContent(textUpdates[step.item.id]?.text ?: step.item.text.orEmpty(), step.item.id, style.collapseThoughts, last)
+            if (!style.hidesThoughts()) ThoughtContent(textUpdates[step.item.id]?.text ?: step.item.text.orEmpty(), step.item.id, style.collapseThoughts, last)
         }
         else step.item.compaction?.let { TimelineMark(it.label.text()) }
             ?: step.item.takeIf { it.task != null }?.let { TaskNoteLine(it, last, onFullText) }
@@ -497,10 +509,13 @@ private fun PlanStep(plan: LinePlan, running: Boolean, nested: Boolean = false) 
 private fun userPictures(images: List<Item>, session: SessionKey, loader: ImageLoader): (@Composable () -> Unit)? =
     if (images.isEmpty()) null else ({ images.forEach { image -> ChatPicture(session, image, loader, alignEnd = true) } })
 
-/** A message not in the transcript yet (the outbox): no long-press menu, its own status line has the actions. */
+/**
+ * A message not in the transcript yet (the outbox): its status line has the delivery actions; with its [pending] state its long
+ * press opens the menu for a message not sent ("Copy", "Select", "Share", "Delete"), without one none.
+ */
 @Composable
-internal fun UserBubble(text: String) {
-    MergedUserBubble(listOf(Item("pending", role = "user", kind = "text", text = text)), menu = false)
+internal fun UserBubble(text: String, id: String = "pending", pending: persona.core.contracts.api.DeliveryState? = null) {
+    MergedUserBubble(listOf(Item(id, role = "user", kind = "text", text = text)), menu = pending != null, pending = pending)
 }
 
 @Composable

@@ -17,7 +17,7 @@ import { ExtensionThemePicker } from "../ui/ExtensionThemePicker";
 import { setTheme, useTheme, type Theme } from "./theme";
 import { Group, Row, Pill, RowConfirm, Switch } from "./settings/SettingsParts";
 import { LanguageRow } from "./settings/LanguageRow";
-import { TextSizeRow, ThemeColorPicker } from "./settings/LookSettings";
+import { RecentChatsRow, TextSizeRow, ThemeColorPicker } from "./settings/LookSettings";
 import { setReplyMotionEnabled, useReplyMotionSetting } from "../ui/stream/motion";
 import { setAgentDetails, setContextAsUsed, useAgentDetails, useContextAsUsed } from "../lib/context-usage";
 import { setSidebarTerminals, useSidebarTerminals } from "../lib/sidebar-terminals";
@@ -47,7 +47,10 @@ import { LauncherQuota } from "./settings/LauncherQuota";
 import { LauncherExtensionSections } from "./settings/ExtensionView";
 import { hubHasExt } from "../lib/extension-api";
 import { hostOf, type ProviderView } from "../lib/providers";
+import { referenceState } from "../lib/secret-reference";
+import { forgetProviderNames, providerIdNote, providerTitle } from "../lib/provider-names";
 import { harnessGroups, harnessLabel, scopeSummary } from "../lib/provider-scope";
+import { foundAliases, type EditDraft, type FoundAlias } from "../lib/provider-paste";
 import { ProviderWizard } from "./settings/ProviderWizard";
 import { ProviderImport } from "./settings/ProviderImport";
 import { builtinRows, loadLaunchers, rcFilesOf, rcGroups, syncStateText, type LauncherSync } from "../lib/launcher-list";
@@ -560,6 +563,7 @@ function General({ onModel }: { onModel: () => void }) {
         <Row label={t("settings.reply_motion")} hint={t("settings.reply_motion_hint")}>
           <Switch on={replyMotion} onChange={setReplyMotionEnabled} label={t("settings.reply_motion")} />
         </Row>
+        <RecentChatsRow />
       </Group>
 
       <SidebarPagesGroup />
@@ -695,22 +699,44 @@ function Models() {
   const [open, setOpen] = useState<string | null>(() => new URLSearchParams(location.search).get("launcher"));
   const [editing, setEditing] = useState<LauncherView | "new" | null>(() => (new URLSearchParams(location.search).get("add") === "1" ? "new" : null));
   const [importing, setImporting] = useState(false);
+  // the import opened for one alias the wizard found (#5193); null: the computer's whole list
+  const [importAlias, setImportAlias] = useState<FoundAlias | null>(null);
+  // what a stored provider opens with when a paste goes on with it
+  const [editDraft, setEditDraft] = useState<EditDraft | null>(null);
 
+  // the list read again; rejects when it couldn't be
+  const refresh = () => loadLaunchers<LauncherView>().then((r) => (setList(r.launchers), setSync(r.sync ?? []), r.launchers));
   const load = () => {
     setLoading(true);
     setError("");
-    return loadLaunchers<LauncherView>()
-      .then((r) => (setList(r.launchers), setSync(r.sync ?? [])))
+    return refresh()
       .catch((e) => setError(errorText(e)))
       .finally(() => setLoading(false));
   };
   useEffect(() => void load(), []);
+  const found = useMemo(() => foundAliases(list ?? [], machines), [list, machines]);
+  const closeWizard = () => (setEditing(null), setEditDraft(null), dropLinkParams());
+  // The wizard swaps to a stored provider the paste matched; one added since this list loaded is in a fresh one.
+  const editWith = async (name: string, draft: EditDraft) => {
+    const find = (ls?: LauncherView[] | null) => ls?.find((l) => managedProvider(l.source) && l.name === name);
+    let l = find(list);
+    if (!l) {
+      try {
+        l = find(await refresh());
+      } catch (e) {
+        return toast(t("settings.launchers_failed", { error: errorText(e) }), "error");
+      }
+    }
+    if (!l) return toast(t("settings-providerpaste.provider_missing", { name }), "error");
+    setEditDraft(draft);
+    setEditing(l);
+  };
 
   const name = (id: string) => sync.find((s) => s.machine === id)?.name || machines.find((m) => m.id === id)?.name || id;
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!list || !q) return list ?? [];
-    return list.filter((l) => [l.name, l.model, l.small_model, l.base_url, ...(l.machines ?? []).map(name)].some((v) => v?.toLowerCase().includes(q)));
+    return list.filter((l) => [l.name, l.display_name, l.model, l.small_model, l.base_url, ...(l.machines ?? []).map(name)].some((v) => v?.toLowerCase().includes(q)));
   }, [list, query, machines, sync]);
   const managed = shown.filter((l) => managedProvider(l.source));
   const builtin = builtinRows(shown);
@@ -753,6 +779,12 @@ function Models() {
           <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("settings.search_placeholder")} className="min-w-0 flex-1 bg-transparent text-[13px] text-ink outline-none placeholder:text-ink-3" aria-label={t("settings.search_providers")} />
           {query && <IconButton icon="x" label={t("settings.clear")} size={22} iconSize={12} onClick={() => setQuery("")} />}
         </label>
+        {list && (
+          // for people who already run claude from aliases on a computer: turns them into providers (the dialog explains when there is no computer)
+          <Button tone="secondary" icon="download" title={t("settings-providerimport.title")} onClick={() => (setImportAlias(null), setImporting(true))}>
+            <span className="max-sm:sr-only">{t("settings-providerimport.import")}</span>
+          </Button>
+        )}
         <Button tone="accent" icon="plus" onClick={() => setEditing("new")}>
           <span className="max-sm:hidden">{t("settings.add_provider")}</span>
           <span className="sm:hidden">{t("settings.add_provider_short")}</span>
@@ -801,16 +833,6 @@ function Models() {
           {hidden.map(row)}
         </Group>
       )}
-      {list && !query && (
-        // "Import from ~/.zshrc" reads a computer's ~/.zshrc, so it is for people who already run claude there, and needs a computer
-        <Group title={t("settings.providers_advanced")} footer={machines.length ? t("settings.zshrc_import_hint") : t("settings.zshrc_import_no_machines")}>
-          <Row label={t("settings-providerimport.title")} icon="terminal">
-            <Button tone="secondary" icon="download" disabled={machines.length === 0} onClick={() => setImporting(true)}>
-              {t("settings-providerimport.import")}
-            </Button>
-          </Row>
-        </Group>
-      )}
       {list && !query && sync.length > 0 && (
         <Group title={t("settings.sync_title", { count: sync.length })} footer={t("settings.sync_footer")}>
           {sync.map((s) => {
@@ -836,8 +858,9 @@ function Models() {
           setEditing(l);
         }}
       />
-      <ProviderWizard existing={editing} onClose={() => (setEditing(null), dropLinkParams())} onSaved={() => void load()} />
-      <ProviderImport open={importing} onClose={() => setImporting(false)} onImported={() => void load()} />
+      <ProviderWizard existing={editing} draft={editDraft} found={found} onClose={closeWizard} onSaved={() => void load()}
+        onImportAlias={(a) => (closeWizard(), setImportAlias(a), setImporting(true))} onEditWith={(name, draft) => void editWith(name, draft)} />
+      <ProviderImport open={importing} machine={importAlias?.machine} alias={importAlias?.name} onClose={() => setImporting(false)} onImported={() => void load()} />
       </div>
     </>
   );
@@ -849,6 +872,8 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit }: { nam
   const [error, setError] = useState("");
   const [checks, setChecks] = useState<Record<string, LauncherCheck | null>>({});
   const [confirm, setConfirm] = useState(false);
+  // what still names an rc-file launcher, asked when its Hide is confirmed: they keep running on it (#4661)
+  const [uses, setUses] = useState<string[] | null>(null);
   const [showDef, setShowDef] = useState(false);
   const mname = (id: string) => machines.find((m) => m.id === id)?.name ?? id;
   // extensions draw a section here (docs/extensions/extensions.md "Declarative UI" launcher_section)
@@ -863,6 +888,7 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit }: { nam
     setError("");
     setChecks({});
     setConfirm(false);
+    setUses(null);
     setShowDef(false);
     if (!name) return;
     let live = true;
@@ -904,11 +930,21 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit }: { nam
     );
   };
 
+  const askRemove = () => {
+    setConfirm((c) => !c);
+    if (!l || !name || managedProvider(l.source) || uses !== null) return;
+    const asked = name;
+    api<{ uses?: string[] }>(`${enLauncher(name)}/uses`)
+      .then((r) => shown.current === asked && setUses(r.uses ?? []))
+      .catch(() => {}); // an older hub: the plain confirmation, as before
+  };
+
   const remove = async () => {
     if (!l) return;
     try {
       await api(enLauncher(l.name), { method: "DELETE" });
-      toast(managedProvider(l.source) ? t("settings.deleted", { name: l.name }) : t("settings.hid", { name: l.name }), "ok");
+      forgetProviderNames();
+      toast(managedProvider(l.source) ? t("settings.deleted", { name: providerTitle(l) }) : t("settings.hid", { name: providerTitle(l) }), "ok");
       onChanged();
       onClose();
     } catch (e) {
@@ -919,7 +955,8 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit }: { nam
     if (!l) return;
     try {
       await api(`${enLauncher(l.name)}/restore`, { method: "POST" });
-      toast(t("settings.restored", { name: l.name }), "ok");
+      forgetProviderNames();
+      toast(t("settings.restored", { name: providerTitle(l) }), "ok");
       onChanged();
       onClose();
     } catch (e) {
@@ -932,7 +969,8 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit }: { nam
       open={name !== null}
       onClose={onClose}
       width={620}
-      title={<span className="font-mono">{name}</span>}
+      // a provider's display name with its startup ID after it (#5029); an rc alias, or one not read yet, by its ID
+      title={l && providerIdNote(l) ? <>{providerTitle(l)} <span className="font-mono text-[11.5px] font-normal text-ink-3">{providerIdNote(l)}</span></> : <span className="font-mono">{name}</span>}
       footer={
         l && (
           <>
@@ -942,12 +980,13 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit }: { nam
               </Button>
             ) : (
               <span className="relative">
-                <Button tone="quiet" icon={managedProvider(l.source) ? "x" : undefined} onClick={() => setConfirm((c) => !c)} className="text-red enabled:hover:text-red">
+                <Button tone="quiet" icon={managedProvider(l.source) ? "x" : undefined} onClick={askRemove} className="text-red enabled:hover:text-red">
                   {managedProvider(l.source) ? t("settings.delete_provider") : t("settings.hide_in_persona")}
                 </Button>
                 {/* the confirmation comes up right at the button (like the app), not as another dialog */}
                 {confirm && (
-                  <span className="absolute bottom-full left-0 mb-1.5 rounded-control bg-surface p-1 shadow-overlay" style={{ animation: `pop-in 160ms ${EASE} both` }}>
+                  <span className="absolute bottom-full left-0 mb-1.5 flex flex-col items-start gap-1 rounded-control bg-surface p-1 shadow-overlay" style={{ animation: `pop-in 160ms ${EASE} both` }}>
+                    {!managedProvider(l.source) && !!uses?.length && <span className="w-72 px-1 text-[12px] text-ink-2">{t("settings.hide_uses", { uses: uses.join(", ") })}</span>}
                     <Button tone="danger" onClick={() => void remove()}>
                       {managedProvider(l.source) ? t("settings.confirm_delete") : t("settings.confirm_hide")}
                     </Button>
@@ -1016,7 +1055,7 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit }: { nam
               {l.kind !== "api" && (!l.agent || l.agent === "claude") && l.subagent_model && <KVRow k={t("settings.subagent_model")} v={l.subagent_model} mono />}
               {l.kind !== "api" && (!l.agent || l.agent === "claude") && l.custom_model && <KVRow k={t("settings.custom_model")} v={l.custom_model} mono />}
               {l.kind !== "api" && (!l.agent || l.agent === "claude") && l.custom_model_name && <KVRow k={t("settings.custom_model_name")} v={l.custom_model_name} />}
-              <KVRow k="API Key" v={l.has_key ? t("settings.key_set_hidden") : t("settings.not_set")} />
+              <KVRow k="API Key" v={l.key_reference ? referenceState(l.key_reference) : l.has_key ? t("settings.key_set_hidden") : t("settings.not_set")} />
               {l.share && <KVRow k={t("settings.devices")} v={scopeSummary(l, mname)} />}
               {l.share && l.key_machines?.length ? <KVRow k={t("settings.machine_keys")} v={formatList(l.key_machines.map(mname), { type: "conjunction", style: "narrow" })} /> : null}
               {l.api !== "responses" && l.api !== "chat" && (!l.agent || l.agent === "claude") && <KVRow k={t("settings.auth")} v={l.auth === "bearer" ? "Bearer" : "x-api-key"} />}
