@@ -306,8 +306,9 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 	} else {
 		args = append(args, "--session-id", id)
 	}
-	// Persona's own tools are few and used all the time: load them up front instead of behind ToolSearch.
-	env := identity.Environment(os.Environ(), append([]string{"PERSONA_ASSISTANT=1", "ENABLE_TOOL_SEARCH=false"}, compaction.env()...)...)
+	// Persona's own tools are few and used all the time: personad mcp marks them alwaysLoad (#5838). Other MCP
+	// servers keep Claude Code's normal ToolSearch deferral instead of having every tool forced into the context.
+	env := identity.Environment(os.Environ(), append([]string{"PERSONA_ASSISTANT=1"}, compaction.env()...)...)
 	env = n.claudeProcessEnv(env, configDir)
 	guest := n.guestOf(id) != nil
 	if guest && execution.Runtime == proto.AssistantRuntimeAgentSDK && n.guestKindOf(id) == guestMeeting {
