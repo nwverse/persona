@@ -174,28 +174,44 @@ case "$COMMAND" in
       [ -z "$FROZEN_SET" ] || "$ADB" -s "$SERIAL" shell date -u "$FROZEN_SET" >/dev/null
     }
     cleanup_shots() {
-      "$ADB" -s "$SERIAL" shell am force-stop "$APP_ID" >/dev/null 2>&1 || true
+      local original_status=$?
+      local cleanup_failed=0
+      cleanup_step() {
+        if "$@" >/dev/null 2>&1; then return 0; fi
+        if [ "$COMMAND" = shots-live ]; then
+          echo "FAIL shots-live cleanup: $*" >&2
+          cleanup_failed=1
+        fi
+        return 0
+      }
+      cleanup_step "$ADB" -s "$SERIAL" shell am force-stop "$APP_ID"
       if [ "$COMMAND" = shots-live ]; then
-        "$ADB" -s "$SERIAL" shell run-as "$APP_ID" rm -f no_backup/hub-data/adaptive-probe.json >/dev/null 2>&1 || true
-        "$ADB" -s "$SERIAL" shell rm -f /data/local/tmp/persona-adaptive-ui.xml >/dev/null 2>&1 || true
+        cleanup_step "$ADB" -s "$SERIAL" shell run-as "$APP_ID" rm -f no_backup/hub-data/adaptive-probe.json
+        cleanup_step "$ADB" -s "$SERIAL" shell rm -f /data/local/tmp/persona-adaptive-ui.xml
       fi
-      if [ -n "$MOCK_PORT" ]; then "$ADB" -s "$SERIAL" reverse --remove "tcp:$MOCK_PORT" >/dev/null 2>&1 || true; fi
-      if [ -n "$MOCK_PID" ]; then kill "$MOCK_PID" 2>/dev/null || true; wait "$MOCK_PID" 2>/dev/null || true; fi
+      if [ -n "$MOCK_PORT" ]; then cleanup_step "$ADB" -s "$SERIAL" reverse --remove "tcp:$MOCK_PORT"; fi
+      if [ -n "$MOCK_PID" ]; then
+        if kill -0 "$MOCK_PID" 2>/dev/null; then cleanup_step kill "$MOCK_PID"; fi
+        wait "$MOCK_PID" 2>/dev/null || true
+      fi
       if [ -n "$CLOCK_PID" ]; then
-        "$ADB" -s "$SERIAL" shell touch "$CLOCK_STOP" >/dev/null 2>&1 || true
-        kill "$CLOCK_PID" 2>/dev/null || true; wait "$CLOCK_PID" 2>/dev/null || true
+        cleanup_step "$ADB" -s "$SERIAL" shell touch "$CLOCK_STOP"
+        if kill -0 "$CLOCK_PID" 2>/dev/null; then cleanup_step kill "$CLOCK_PID"; fi
+        wait "$CLOCK_PID" 2>/dev/null || true
       fi
       if [ -n "$SAVED_SETTINGS" ]; then
         # Give the emulator back its clock, animations and status bar.
-        demo exit 2>/dev/null || true
+        cleanup_step demo exit
         for pair in $SAVED_SETTINGS; do
           key=${pair%%=*} value=${pair#*=}
-          if [ "$value" = null ]; then "$ADB" -s "$SERIAL" shell settings delete global "$key" >/dev/null 2>&1 || true
-          else "$ADB" -s "$SERIAL" shell settings put global "$key" "$value" >/dev/null 2>&1 || true; fi
+          if [ "$value" = null ]; then cleanup_step "$ADB" -s "$SERIAL" shell settings delete global "$key"
+          else cleanup_step "$ADB" -s "$SERIAL" shell settings put global "$key" "$value"; fi
         done
       fi
+      if [ "$cleanup_failed" -ne 0 ] && [ "$original_status" -eq 0 ]; then original_status=1; fi
+      return "$original_status"
     }
-    trap cleanup_shots EXIT
+    trap 'cleanup_shots; exit $?' EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
     if [ -n "$FROZEN_SET" ]; then

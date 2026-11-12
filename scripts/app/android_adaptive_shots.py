@@ -349,6 +349,7 @@ class AdaptiveRunner:
         self.size_changed = False
         self.density_changed = False
         self.posture_changed = False
+        self.fake_posture_changed = False
         self._step_pid_before = None
 
     def _read_fixtures(self):
@@ -425,6 +426,19 @@ class AdaptiveRunner:
                 route, key = self.read_navigation()
                 return True if key == target else None
             poll("selected session " + target, selected, timeout=20)
+        probe_page = step.get("probePage") or {
+            "machines": "Machines", "settings": "Settings", "phone": "Phone data",
+        }.get(step.get("page"))
+        if (step.get("page") or step.get("link")) and not probe_page:
+            raise AdaptiveFailure("open page/link needs probePage evidence")
+        if probe_page:
+            def target_ready():
+                probe = self.read_probe(self.pid())
+                now = self.elapsed_nanos()
+                texts = [node.attrib.get("text", "") for node in self.ui_tree()]
+                self.page_evidence(probe, probe_page, now, texts)
+                return True
+            poll("open target " + probe_page, target_ready, timeout=float(step.get("timeout", 20)))
 
     def reset_modifiers(self):
         for key in MODIFIER_KEYS:
@@ -612,14 +626,18 @@ class AdaptiveRunner:
         return window
 
     def posture(self, step):
-        value = step.get("value", step.get("posture"))
+        raw = step.get("value", step.get("posture"))
+        fake_tabletop = step.get("fake") and raw == "tabletop"
+        value = 3 if fake_tabletop else raw
         names = {"book": 2, "half-open": 2, "open": 3, "unfold": 3, "closed": 1}
         value = names.get(value, value)
         if value not in (1, 2, 3):
-            raise AdaptiveFailure("posture must be 1, 2, 3, book, open or closed")
+            raise AdaptiveFailure("posture must be 1, 2, 3, book, tabletop, open or closed")
         if step.get("fake"):
             self.adb.shell(*self._launch_arguments(step), timeout=20)
-            self.posture_evidence = "fake"
+            fake_active = raw in ("book", "tabletop")
+            self.fake_posture_changed = fake_active
+            self.posture_evidence = "fake" if fake_active else "none"
             self.transformed = True
             return self.device_state()
         self.adb.run(["emu", "posture", str(value)], timeout=10)
@@ -760,6 +778,7 @@ class AdaptiveRunner:
                     "updatedAtNanos": page["updatedAtNanos"], "list": list_evidence, "composer": composer,
                     "firstVisibleKey": list_evidence.get("firstVisibleKey") if list_evidence else None,
                     "firstVisibleOffsetPx": list_evidence.get("firstVisibleOffsetPx") if list_evidence else None,
+                    "columns": list_evidence.get("columns") if list_evidence else None,
                     "draftHmac": composer.get("draftHmac") if composer else None,
                     "selection": composer.get("selection") if composer else None,
                     "focused": composer.get("focused") if composer else None,
@@ -774,13 +793,10 @@ class AdaptiveRunner:
                 if alias == "default":
                     snapshot["probeSession"] = probe["session"]
                     snapshot["probeUpdatedAtNanos"] = page["updatedAtNanos"]
-                    for field in ("firstVisibleKey", "firstVisibleOffsetPx", "draftHmac", "selection", "focused",
+                    for field in ("firstVisibleKey", "firstVisibleOffsetPx", "columns", "draftHmac", "selection", "focused",
                                   "attachments", "contentBounds", "hingeBounds"):
                         snapshot[field] = flattened[field]
         required = ["pidAfter", "window.widthDp", "window.heightDp", "route"] + list(requires.get("fields", []))
-        row_key = snapshot.get("firstVisibleKey")
-        if isinstance(row_key, str) and row_key.startswith("machine-row|"):
-            snapshot["columns"] = len([part for part in row_key.split("|")[1:] if part])
         for path in required:
             if path in ("selectedKey", "detailAgentsExpanded") and path in snapshot:
                 continue
@@ -795,33 +811,53 @@ class AdaptiveRunner:
         checks = step.get("checks")
         if not isinstance(checks, dict) or not checks:
             raise AdaptiveFailure("assert step needs a non-empty checks object")
-        snapshot = self.collect("assert", str(step.get("state", "assert")), self._step_pid_before, step.get("requires"))
-        for path, expectation in checks.items():
-            operation = "equals"
-            expected = expectation
-            if isinstance(expectation, dict) and len(expectation) == 1 and next(iter(expectation)) in ("equals", "unchanged", "matches", "notOverlaps"):
-                operation, expected = next(iter(expectation.items()))
-            actual = path_value(snapshot, path)
-            if operation == "unchanged":
-                if path == "pid":
-                    expected = self.initial_pid
-                elif self.previous_snapshot is not None:
-                    expected = path_value(self.previous_snapshot, path)
+
+        def evaluate(snapshot):
+            results = []
+            for path, expectation in checks.items():
+                operation = "equals"
+                expected = expectation
+                if isinstance(expectation, dict) and len(expectation) == 1 and next(iter(expectation)) in ("equals", "unchanged", "matches", "notOverlaps"):
+                    operation, expected = next(iter(expectation.items()))
+                actual = path_value(snapshot, path)
+                if operation == "unchanged":
+                    if path == "pid":
+                        expected = self.initial_pid
+                    elif self.previous_snapshot is not None:
+                        expected = path_value(self.previous_snapshot, path)
+                    else:
+                        raise AdaptiveFailure("unchanged assertion has no previous evidence: %s" % path)
+                if operation == "matches":
+                    passed = actual is not None and re.search(str(expected), str(actual)) is not None
+                elif operation == "notOverlaps":
+                    other = path_value(snapshot, str(expected))
+                    passed = actual is not None and other is not None and not rectangles_overlap(actual, other)
                 else:
-                    raise AdaptiveFailure("unchanged assertion has no previous evidence: %s" % path)
-            if operation == "matches":
-                passed = actual is not None and re.search(str(expected), str(actual)) is not None
-            elif operation == "notOverlaps":
-                other = path_value(snapshot, str(expected))
-                passed = actual is not None and other is not None and not rectangles_overlap(actual, other)
-            else:
-                passed = actual == expected
-            self.assertions.append({"path": path, "operation": operation, "expected": expected,
-                                    "actual": actual, "passed": passed})
-            if not passed:
-                raise AdaptiveFailure("assertion failed: %s %s %r, actual %r" % (path, operation, expected, actual))
-        snapshot["assertions"] = list(self.assertions)
-        self.previous_snapshot = snapshot
+                    passed = actual == expected
+                results.append({"path": path, "operation": operation, "expected": expected,
+                                "actual": actual, "passed": passed})
+            return results
+
+        timeout = float(step.get("timeout", 10))
+        deadline = time.monotonic() + timeout
+        last_error = AdaptiveFailure("no assertion evidence was collected")
+        while True:
+            try:
+                snapshot = self.collect("assert", str(step.get("state", "assert")), self._step_pid_before, step.get("requires"))
+                results = evaluate(snapshot)
+                if all(result["passed"] for result in results):
+                    self.assertions.extend(results)
+                    snapshot["assertions"] = list(self.assertions)
+                    self.previous_snapshot = snapshot
+                    return
+                failed = next(result for result in results if not result["passed"])
+                last_error = AdaptiveFailure("assertion failed: %s %s %r, actual %r" % (
+                    failed["path"], failed["operation"], failed["expected"], failed["actual"]))
+            except AdaptiveFailure as error:
+                last_error = error
+            if time.monotonic() >= deadline:
+                raise AdaptiveFailure("assertion or fresh evidence timed out: %s" % last_error)
+            time.sleep(0.2)
 
     def stable_png(self):
         if self.settle:
@@ -913,10 +949,10 @@ class AdaptiveRunner:
                 print("PASS %s %02d %s" % (self.scenario["id"], index + 1, kind), flush=True)
             if self.screenshots == 0:
                 raise AdaptiveFailure("scenario produced no screenshots")
-            print("PASS %s %s: %d screenshots, PID %s" % (self.scenario["id"], self.theme, self.screenshots, self.initial_pid), flush=True)
-            return self.screenshots
         finally:
             self.cleanup()
+        print("PASS %s %s: %d screenshots, PID %s" % (self.scenario["id"], self.theme, self.screenshots, self.initial_pid), flush=True)
+        return self.screenshots
 
     def cleanup(self):
         errors = []
@@ -925,23 +961,25 @@ class AdaptiveRunner:
                 operation()
             except Exception as error:
                 errors.append(str(error))
-        attempt(lambda: self.adb.shell("rm", "-f", UI_PATH, timeout=5, check=False))
-        attempt(lambda: self.adb.shell("run-as", self.app_id, "rm", "-f", PROBE_PATH, timeout=5, check=False))
+        attempt(lambda: self.adb.shell("rm", "-f", UI_PATH, timeout=5))
+        attempt(lambda: self.adb.shell("run-as", self.app_id, "rm", "-f", PROBE_PATH, timeout=5))
         attempt(self.reset_modifiers)
         if self.size_changed:
             original = self.original_size.get("override")
-            attempt(lambda: self.adb.shell("wm", "size", "%dx%d" % original if original else "reset", timeout=10, check=False))
+            attempt(lambda: self.adb.shell("wm", "size", "%dx%d" % original if original else "reset", timeout=10))
         if self.density_changed:
             original = self.original_density.get("override")
-            attempt(lambda: self.adb.shell("wm", "density", str(original) if original else "reset", timeout=10, check=False))
+            attempt(lambda: self.adb.shell("wm", "density", str(original) if original else "reset", timeout=10))
+        if self.fake_posture_changed:
+            attempt(lambda: self.adb.shell(*self._launch_arguments({"value": 3, "fake": True}), timeout=20))
         if self.posture_changed:
-            attempt(lambda: self.adb.run(["emu", "posture", "3"], timeout=10, check=False))
+            attempt(lambda: self.adb.run(["emu", "posture", "3"], timeout=10))
         if self.orientation_changed:
             def restore_orientation():
                 for _ in range(4):
                     if self.read_window()["orientation"] == self.original_orientation:
                         return
-                    self.adb.run(["emu", "rotate"], timeout=10, check=False)
+                    self.adb.run(["emu", "rotate"], timeout=10)
                     poll("cleanup orientation", lambda: True if self.read_window()["orientation"] == self.original_orientation else None,
                          timeout=5)
                 if self.read_window()["orientation"] != self.original_orientation:

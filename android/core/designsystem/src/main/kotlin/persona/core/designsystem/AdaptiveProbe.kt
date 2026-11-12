@@ -33,6 +33,7 @@ private const val ADAPTIVE_HMAC_ALGORITHM = "HmacSHA256"
 internal data class AdaptiveListEvidence(
     val firstVisibleKey: String? = null,
     val firstVisibleOffsetPx: Int? = null,
+    val columns: Int? = null,
 )
 
 @Serializable
@@ -124,8 +125,30 @@ object AdaptiveProbe {
         synchronized(lock) {
             if (!enabled) return
             val old = pages[page]
-            if (old?.list == evidence && old.bounds == bounds) return
-            pages[page] = AdaptivePageEvidence(now(), list = evidence, composer = old?.composer, bounds = bounds)
+            val retained = evidence.copy(columns = evidence.columns ?: old?.list?.columns)
+            if (old?.list == retained && old.bounds == bounds) return
+            pages[page] = AdaptivePageEvidence(now(), list = retained, composer = old?.composer, bounds = bounds)
+            writeLocked()
+        }
+    }
+
+    internal fun publishMachineGridColumns(page: String, columns: Int) {
+        synchronized(lock) {
+            if (!enabled) return
+            val old = pages[page]
+            val list = (old?.list ?: AdaptiveListEvidence()).copy(columns = columns)
+            if (old?.list == list) return
+            pages[page] = AdaptivePageEvidence(now(), list = list, composer = old?.composer, bounds = old?.bounds)
+            writeLocked()
+        }
+    }
+
+    internal fun removeMachineGridColumns(page: String) {
+        synchronized(lock) {
+            if (!enabled) return
+            val old = pages[page] ?: return
+            val list = old.list ?: return
+            pages[page] = old.copy(updatedAtNanos = now(), list = list.copy(columns = null))
             writeLocked()
         }
     }
@@ -252,6 +275,14 @@ fun AdaptiveListProbe(page: String, state: LazyListState) {
     }
 }
 
+/** The actual grid policy, independent of how many cards happen to be in a short final row. */
+@Composable
+fun AdaptiveMachineGridProbe(page: String, columns: Int) {
+    if (!AdaptiveProbe.enabled) return
+    SideEffect { AdaptiveProbe.publishMachineGridColumns(page, columns) }
+    DisposableEffect(page) { onDispose { AdaptiveProbe.removeMachineGridColumns(page) } }
+}
+
 @Composable
 fun AdaptiveComposerProbe(
     page: String,
@@ -288,8 +319,9 @@ private fun Rect.adaptiveRect() = AdaptiveRectEvidence(
 
 internal fun isAdaptiveChromeKey(key: Any): Boolean {
     val value = key as? String ?: return false
-    return value in setOf("page-title", "page-header", "page-summary", "page-search", "page-filters", "page-chips", "page-actions") ||
-        value.startsWith("chrome-") || value.startsWith("chrome:")
+    return value in setOf("page-title", "page-header", "page-summary", "page-search", "page-filters", "page-chips", "page-actions",
+        "loading", "failure", "sessions-failure") ||
+        value.startsWith("chrome-") || value.startsWith("chrome:") || value.startsWith("usage-")
 }
 
 internal fun adaptiveStableKey(key: Any): String = when (key) {

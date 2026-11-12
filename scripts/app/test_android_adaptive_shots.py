@@ -1,6 +1,8 @@
+import io
 import json
 import os
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -65,7 +67,7 @@ class FakeAdb:
             return '<hierarchy><node resource-id="field" text="%s" content-desc="" class="EditText" bounds="[0,0][10,10]" focused="true" /></hierarchy>' % self.ui_text
         if arguments[:2] == ("cat", "/proc/uptime"):
             return "100.00 100.00\n"
-        if arguments[:2] == ("run-as", APP_ID) and "cat" in arguments and "shell-position.json" in arguments:
+        if arguments[:2] == ("run-as", APP_ID) and "cat" in arguments and any(arg.endswith("shell-position.json") for arg in arguments):
             return '{"tab":"Agents","chats":{"Agents":{"machineId":"machine","sessionId":"session"}}}'
         if arguments[:2] == ("run-as", APP_ID) and "shell-position.json" in arguments:
             return "no_backup/hub-data/scope/shell-position.json\n"
@@ -278,10 +280,10 @@ class AdaptiveShotsTest(unittest.TestCase):
             runner.check_assertions({"checks": {"contentBounds": {"notOverlaps": "hingeBounds"}}})
             runner.collect = mock.Mock(return_value={"contentBounds": content, "hingeBounds": overlap})
             with self.assertRaisesRegex(shots.AdaptiveFailure, "notOverlaps"):
-                runner.check_assertions({"checks": {"contentBounds": {"notOverlaps": "hingeBounds"}}})
+                runner.check_assertions({"checks": {"contentBounds": {"notOverlaps": "hingeBounds"}}, "timeout": 0})
             runner.collect = mock.Mock(return_value={"contentBounds": content, "hingeBounds": None})
             with self.assertRaises(shots.AdaptiveFailure):
-                runner.check_assertions({"checks": {"contentBounds": {"notOverlaps": "hingeBounds"}}})
+                runner.check_assertions({"checks": {"contentBounds": {"notOverlaps": "hingeBounds"}}, "timeout": 0})
 
     def test_machine_columns_detail_expansion_and_compact_dsl(self):
         compact = shots.normalize_scenario({"id": "machines", "description": "test", "requires": {"fields": []}, "steps": [
@@ -307,11 +309,11 @@ class AdaptiveShotsTest(unittest.TestCase):
             runner.elapsed_nanos = mock.Mock(return_value=100_000_000_000)
             runner.page_evidence = mock.Mock(return_value={
                 "updatedAtNanos": 99_000_000_000,
-                "list": {"firstVisibleKey": "machine-row|15:concern-pending|15:concern-offline", "firstVisibleOffsetPx": 0},
+                "list": {"firstVisibleKey": "machine-row|1:only", "firstVisibleOffsetPx": 0, "columns": 3},
             })
             runner.note_open({"page": "machines"})
             snapshot = runner.collect("capture", "grid", 42)
-            self.assertEqual(2, snapshot["columns"])
+            self.assertEqual(3, snapshot["columns"])
             self.assertTrue(snapshot["detailAgentsExpanded"])
             self.assertEqual("machines", snapshot["route"])
             self.assertIsNone(snapshot["selectedKey"])
@@ -321,6 +323,95 @@ class AdaptiveShotsTest(unittest.TestCase):
             self.assertEqual("concern-needs", runner.selected_key_override)
             with self.assertRaisesRegex(shots.AdaptiveFailure, "same page"):
                 runner.note_open({"page": "machine:concern-needs"})
+
+    def test_fake_tabletop_can_be_set_and_cleared_without_a_real_posture_command(self):
+        with tempfile.TemporaryDirectory() as output:
+            adb = FakeAdb()
+            runner = make_runner(adb, output)
+            runner.posture({"posture": "tabletop", "fake": True})
+            self.assertEqual("fake", runner.posture_evidence)
+            self.assertTrue(runner.fake_posture_changed)
+            launch = next(command for command in adb.commands if "debug.posture" in command)
+            self.assertIn("tabletop", launch)
+            runner.posture({"value": 3, "fake": True})
+            self.assertEqual("none", runner.posture_evidence)
+            self.assertFalse(runner.fake_posture_changed)
+            self.assertNotIn(["emu", "posture", "3"], adb.commands)
+
+    def test_assertions_poll_for_delayed_evidence(self):
+        with tempfile.TemporaryDirectory() as output:
+            runner = make_runner(FakeAdb(), output)
+            runner._step_pid_before = 42
+            runner.collect = mock.Mock(side_effect=[{"value": "old"}, {"value": "new"}])
+            with mock.patch.object(shots.time, "sleep"):
+                runner.check_assertions({"checks": {"value": {"equals": "new"}}, "timeout": 0.1})
+            self.assertEqual(2, runner.collect.call_count)
+            self.assertEqual("new", runner.previous_snapshot["value"])
+
+    def test_open_page_waits_for_its_probe_evidence(self):
+        with tempfile.TemporaryDirectory() as output:
+            runner = make_runner(FakeAdb(), output)
+            runner.shell_ready = mock.Mock(return_value="shell-position.json")
+            runner.read_probe = mock.Mock(return_value={"pages": {}})
+            runner.elapsed_nanos = mock.Mock(return_value=100_000_000_000)
+            runner.ui_tree = mock.Mock(return_value=[])
+            runner.page_evidence = mock.Mock(side_effect=[shots.AdaptiveFailure("not ready"), {"updatedAtNanos": 99_000_000_000}])
+            with mock.patch.object(shots.time, "sleep"):
+                runner.wait_ready({"page": "machines", "probePage": "Machines"})
+            self.assertEqual(2, runner.page_evidence.call_count)
+
+    def test_cleanup_commands_are_checked_and_final_success_follows_cleanup(self):
+        with tempfile.TemporaryDirectory() as output:
+            adb = FakeAdb()
+            runner = make_runner(adb, output)
+            runner.size_changed = True
+            runner.density_changed = True
+            checks = []
+            original = adb.shell
+            def tracked(*arguments, **kwargs):
+                checks.append(kwargs.get("check", True))
+                return original(*arguments, **kwargs)
+            adb.shell = tracked
+            runner.cleanup()
+            self.assertNotIn(False, checks)
+        with tempfile.TemporaryDirectory() as output:
+            runner = make_runner(FakeAdb(), output)
+            runner.wait_ready = mock.Mock()
+            runner.capture = mock.Mock(side_effect=lambda step, index: setattr(runner, "screenshots", 1))
+            runner.cleanup = mock.Mock(side_effect=shots.AdaptiveFailure("cleanup failed"))
+            with io.StringIO() as stdout, mock.patch("sys.stdout", stdout):
+                with self.assertRaisesRegex(shots.AdaptiveFailure, "cleanup failed"):
+                    runner.run()
+                captured = stdout.getvalue()
+            self.assertNotIn("PASS test-scene light", captured)
+
+    def test_shell_live_cleanup_preserves_failure_verdicts(self):
+        source = Path(__file__).with_name("android.sh").read_text()
+        start = source.index("    cleanup_shots() {")
+        end = source.index("    trap 'cleanup_shots; exit $?' EXIT", start)
+        function = source[start:end]
+        for command, adb_status, expected in (("shots-live", 0, 0), ("shots-live", 1, 1), ("shots", 1, 0)):
+            with self.subTest(command=command, adb_status=adb_status):
+                script = """
+set -euo pipefail
+COMMAND=%s
+SERIAL=emulator-test
+APP_ID=com.example.persona.shots
+ADB=fake-adb
+MOCK_PORT=19000
+MOCK_PID=
+CLOCK_PID=
+CLOCK_STOP=/data/local/tmp/test.stop
+SAVED_SETTINGS=
+demo() { return 0; }
+fake-adb() { return %s; }
+%s
+cleanup_shots
+""" % (command, adb_status, function)
+                completed = subprocess.run(["bash", "-s"], input=script, text=True, capture_output=True, timeout=10)
+                self.assertEqual(expected, completed.returncode, completed.stderr)
+                if expected:
+                    self.assertIn("FAIL shots-live cleanup", completed.stderr)
 
     def test_cleanup_targets_only_owned_device_resources(self):
         with tempfile.TemporaryDirectory() as output:

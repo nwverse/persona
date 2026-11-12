@@ -110,6 +110,7 @@ internal fun MachinesScreen(
         MoveToManagerSheet(r, current, onMove = { m -> actions.moveTo(machineId, m.id, m.shownName) }, onDismiss = { choosingManager = false })
     }
     MachineGridWidth { contentWidth ->
+    if (machineId == null) AdaptiveMachineGridProbe(stringResource(R.string.machines_title), machineGridColumns(contentWidth))
     val listState = rememberMachineGridListState(ids, machineGridColumns(contentWidth))
     JListPage(
         title = if (machineId == null) stringResource(R.string.machines_title) else machine?.displayName ?: stringResource(R.string.machines_title_detail),

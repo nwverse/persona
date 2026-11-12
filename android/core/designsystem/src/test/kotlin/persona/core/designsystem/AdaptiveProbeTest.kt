@@ -123,6 +123,19 @@ class AdaptiveProbeTest {
         assertEquals(400, page.bounds!!.hinge!!.top)
     }
 
+    @Test fun machineGridPublishesActualColumnsForAShortLastRow() {
+        enable()
+        AdaptiveProbe.publishList("Machines", AdaptiveListEvidence("machine-row|1:only", 0))
+        AdaptiveProbe.publishMachineGridColumns("Machines", 3)
+        val list = assertNotNullSnapshot().pages.getValue("Machines").list!!
+        assertEquals("machine-row|1:only", list.firstVisibleKey)
+        assertEquals(3, list.columns)
+        assertTrue(isAdaptiveChromeKey("usage-title"))
+        assertTrue(isAdaptiveChromeKey("usage-0-account"))
+        assertTrue(isAdaptiveChromeKey("loading"))
+        assertTrue(isAdaptiveChromeKey("failure"))
+    }
+
     @Test fun listProbeUsesFirstBusinessItemKeyAndPixelOffset() {
         enable()
         lateinit var listState: LazyListState
@@ -131,13 +144,16 @@ class AdaptiveProbeTest {
             AdaptiveListProbe("Agents", listState)
             LazyColumn(state = listState) {
                 item(key = "page-title") { Box(Modifier.height(40.dp)) }
+                item(key = "usage-title") { Box(Modifier.height(40.dp)) }
+                item(key = "usage-0-account") { Box(Modifier.height(40.dp)) }
+                item(key = "loading") { Box(Modifier.height(40.dp)) }
                 item(key = "session-stable") { Box(Modifier.height(80.dp)) }
             }
         }
         rule.waitUntil(timeoutMillis = 3_000) {
             runCatching { assertNotNullSnapshot().pages["Agents"]?.list?.firstVisibleKey == "session-stable" }.getOrDefault(false)
         }
-        assertEquals(40, assertNotNullSnapshot().pages.getValue("Agents").list!!.firstVisibleOffsetPx)
+        assertEquals(160, assertNotNullSnapshot().pages.getValue("Agents").list!!.firstVisibleOffsetPx)
     }
 
     private fun assertNotNullSnapshot(): AdaptiveProbeSnapshot {
