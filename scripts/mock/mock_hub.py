@@ -1350,6 +1350,11 @@ if MOCK_CODEX_WAITING:
                          "", agent="codex", launcher="codex", awaiting_first_message=True, capabilities=CODEX_WAITING_CAPS))
 
 
+# MOCK_RUN_HERE_CODEX=<mid,…> (#5504): those computers start Codex in a shell pane the user picked and keep that pane when
+# the start fails (run_here), so Run agent here offers their Codex launchers; the others' stay out, as an older node's.
+RUN_HERE_CODEX = {x.strip() for x in os.environ.get("MOCK_RUN_HERE_CODEX", "").split(",") if x.strip()}
+
+
 def codex_launcher(name="codex", model="gpt-5.5"):
     l = {"name": name, "model": model, "agent": "codex", "agent_type": "codex"}
     if MOCK_CODEX_WAITING:
@@ -2983,7 +2988,57 @@ def sorted_todos():
                 t["ask"]["suggestion"] = sg
         if t.get("done_at") is None and t["id"] in TODO_ORPHANED:
             t["orphaned"] = {"reason": TODO_ORPHANED[t["id"]], "since": TODO_ORPHANED_SINCE}
+        review = current_decision_review(t)
+        if review:
+            t["decision_review"] = review
     return out
+
+
+# ---------- a decision row's Later / Don't handle (server/internal/assistant/task_review_dismissals.go) ----------
+DECISION_DISMISSALS = {}  # todo id -> {"review_at", "dismissal_id", "undone"}; reset with the mock hub
+
+
+def current_decision_review(t):
+    """decision_review of GET /todos: only an open task whose latest review and supervision state are needs_user, with the
+    dismissal receipt when that very round was dismissed and not undone."""
+    sup = t.get("supervision") or {}
+    reviews = sup.get("reviews") or []
+    if t.get("done_at") is not None or sup.get("state") != "needs_user" or not reviews or reviews[-1].get("verdict") != "needs_user":
+        return None
+    out = {"review_at": reviews[-1]["at"]}
+    d = DECISION_DISMISSALS.get(t["id"])
+    if d and d["review_at"] == out["review_at"] and not d["undone"]:
+        out["dismissal_id"] = d["dismissal_id"]
+    return out
+
+
+def decision_dismissal_route(h, tid, undo):
+    """POST /api/v1/todos/{id}/decision-dismiss and …/decision-undo-dismiss: {review_at[, dismissal_id]}; 400 for a missing
+    field, 409 when the round is no longer the task's current one (or the receipt is not the live dismissal)."""
+    try:
+        body = json.loads(h.last_body or b"{}")
+    except ValueError:
+        body = {}
+    at, receipt = str(body.get("review_at") or ""), str(body.get("dismissal_id") or "")
+    if not at or (undo and not receipt):
+        h.send_json({"error": "review_at is required (and dismissal_id to undo)", "code": "bad_request"}, 400)
+        return
+    todo = next((t for t in sorted_todos() if t["id"] == tid), None)
+    current = (todo or {}).get("decision_review")
+    if not current or current["review_at"] != at:
+        h.send_json({"error": "the decision changed; reload and look again", "code": "conflict"}, 409)
+        return
+    book = DECISION_DISMISSALS.get(tid)
+    if undo:
+        if not book or book["undone"] or book["dismissal_id"] != receipt or book["review_at"] != at:
+            h.send_json({"error": "the decision changed; reload and look again", "code": "conflict"}, 409)
+            return
+        book["undone"] = True
+        h.send_json({"review_at": at})
+    else:
+        DECISION_DISMISSALS[tid] = {"review_at": at, "dismissal_id": "dsm_" + uuid.uuid4().hex[:8], "undone": False}
+        h.send_json({"review_at": at, "dismissal_id": DECISION_DISMISSALS[tid]["dismissal_id"]})
+    push_todos()
 
 
 def push_todos():
@@ -6630,6 +6685,24 @@ if MOCK_TASKS:
         TODOS_INIT.append(_adopted)
         TODOS.append(copy.deepcopy(_adopted))
         TASK_FEED[ASK1].append(_feed("feed_adopted", 4, "task", "todo_task_adopted", {"wake": "active"}))
+    # MOCK_TASK_DECISION=1: the decision row's review round (the hub's decision_review), so Later / Don't handle have a round
+    # to dismiss; a dismissal belongs to that round and is undone by its receipt.
+    if os.environ.get("MOCK_TASK_DECISION") == "1":
+        for _t in TODOS_INIT + TODOS:
+            if _t["id"] == "todo_task_tests":
+                _sup = _t.setdefault("supervision", {"supervisor": ASK1, "done_when": ["覆盖率到 80%"], "round": 0, "reviews": []})
+                _sup["state"] = "needs_user"
+                _sup["reviews"] = [{"at": ago(minutes=20), "verdict": "needs_user", "round": 0, "checks": [],
+                                    "note": "要你拍板：是否继续更换缓存方案"}]  # i18n-ignore
+    # MOCK_TASKS_STARTING=1: a task whose Agent is not up yet (no agent, no start error: the apps say Starting) and a task
+    # the main chat picked up again after its Agent stopped (hand-off wake "resumed", the web's Resumed card).
+    if os.environ.get("MOCK_TASKS_STARTING") == "1":
+        _starting = _task_todo("todo_task_starting", "检查启动状态", "看看启动流程里哪一步最慢。", "macbook", "", "/Users/me/code/weather", 1, "")
+        _starting["agents"] = []
+        TODOS_INIT.append(_starting)
+        TODOS.append(copy.deepcopy(_starting))
+        TASK_FEED[ASK1].append(_feed("feed_starting", 1, "task", "todo_task_starting", {"wake": "created"}))
+        TASK_FEED[ASK1].append(_feed("feed_resumed", 2, "task", "todo_task_blog", {"wake": "resumed"}))
     # MOCK_TASKS_MESSAGE=filed / sent: the message card's inbox item was handled elsewhere (filed_at, #4797), or its reply
     # went out from the card (sent_at): the apps draw it handled / sent, with no Send.
     _msg = os.environ.get("MOCK_TASKS_MESSAGE", "")
@@ -7108,6 +7181,9 @@ def tasks_area(h, method, p, raw):
         return True
     if method == "POST" and p.startswith("/api/v1/todos/") and p.endswith("/retry"):
         retry_task(h, p.split("/")[4])
+        return True
+    if method == "POST" and p.startswith("/api/v1/todos/") and p.endswith(("/decision-dismiss", "/decision-undo-dismiss")):
+        decision_dismissal_route(h, p.split("/")[4], p.endswith("/decision-undo-dismiss"))
         return True
     if p == "/mock/cut" and os.environ.get("MOCK_TASKS_CUT") == "1":
         SESSIONS[:] = [copy.deepcopy(CUT_SESSION) if x["session_id"] == RELEASE else x for x in SESSIONS]
@@ -11755,6 +11831,8 @@ def machine_launchers(mid=""):
         out = [l for l in out if l["name"] != "codex"]
     if mid and mid in os.environ.get("MOCK_NO_CODEX", "").split(","):  # computers without a Codex launcher (#5275)
         out = [l for l in out if l["name"] != "codex"]
+    if mid in RUN_HERE_CODEX:
+        out = [dict(l, run_here=True, prompt_optional=True) if l.get("agent") == "codex" else l for l in out]
     if MOCK_PROVIDERS:
         out += [{k: l[k] for k in ("name", "display_name", "base_url", "model", "source") if l.get(k)}
                 for l in LAUNCHERS if l["source"] == "persona" and l.get("kind") != "api"]
@@ -19112,7 +19190,8 @@ PLUGINS["example-gateway"] = {
            {"plugin": "example-gateway", "plugin_name": "Example 网关面板", "id": "notes", "title": "笔记（组件 v3）", "placement": "plugin_page", "size": "full"}]}
 # MOCK_SECRET_HANDOFF=1 (with MOCK_EXTENSIONS=1): secret references (docs/extensions/secret-providers.md). Example Notes'
 # API key holds a reference of a made-up provider, Example Vault, whose page lists who uses its references and one Always
-# rule; Persona's main conversation waits on a hand-off card (secret_handoff) for an Agent on the MacBook.
+# rule; Persona's main conversation waits on a hand-off card (secret_handoff) for an Agent on the MacBook. The model
+# provider `gateway` keeps its key as one of Example Vault's references, the server's own key as another.
 SECRET_HANDOFF = os.environ.get("MOCK_SECRET_HANDOFF") == "1"
 if SECRET_HANDOFF and PLUGINS_MODE:
     PLUGINS["example-notes"]["secrets"][0].update({"set": True, "reference": {
@@ -19130,6 +19209,22 @@ if SECRET_HANDOFF and PLUGINS_MODE:
              "reference": "op://Example/Gateway/key"}],
         "handoff_rules": [{"id": "0123456789abcdef", "reference": "op://Example/Registry token/credential", "launcher": "claude",
                            "machine": "macbook", "by": "device:d1", "at": "2026-01-01T10:00:00Z"}]}
+    # The provider that uses Example Vault's reference: added in Persona, its key a reference, the server's own key
+    # another (launcher_secret_references, docs/extensions/secret-providers.md "Launcher keys"; #3962 step 4c), with the
+    # features its form's computers page (launcher_scope) and a preset's key step (builtin_presets) need.
+    LAUNCHERS.insert(0, {
+        "name": "gateway", "display_name": "Example 网关", "source": "persona", "kind": "launcher", "base_url": "https://gateway.example.com",
+        "model": "example-large", "has_key": True, "auth": "bearer", "models": [{"id": "example-large", "context_window": 200000}],
+        "key_reference": {"provider": "example-vault", "provider_name": "Example Vault", "reference": "op://Example/Gateway/key",
+                          "title": "Gateway › key"},
+        "share": "all", "delivery": "on_demand", "own_service": "skip", "key_machines": ["server"],
+        "machine_key_references": {"server": {"provider": "example-vault", "provider_name": "Example Vault",
+                                              "reference": "op://Example/Server gateway/key", "title": "Server gateway › key"}}})
+    _features_without_launcher_references = features
+
+    def features():
+        f = _features_without_launcher_references()
+        return f + [x for x in ("launcher_secret_references", "launcher_scope", "builtin_presets") if x not in f]
 
 
 # MOCK_EXTENSION_PICKERS=1 (with MOCK_EXTENSIONS): a chat extension whose form picks one machine (format machine, Macs and
@@ -21201,7 +21296,7 @@ class H(BaseHTTPRequestHandler):
             INTERACTIONS[:] = [x for x in INTERACTIONS if not x["id"].startswith(("ix_bump_", "ix_churn"))]
             BUMPED["asks"].clear()
             BUMPED.pop("blocked", None)
-            TODOS[:] = copy.deepcopy(TODOS_INIT)
+            TODOS[:] = copy.deepcopy(TODOS_INIT); DECISION_DISMISSALS.clear()
             TODO_DECISIONS[:] = copy.deepcopy(TODO_DECISIONS_INIT)
             again = CODEX_INTERACTIONS + SCREEN_MULTI_INTERACTIONS + ASK_LONG_INTERACTIONS  # the cards back, unanswered
             ids = {x["id"] for x in again}
@@ -24066,6 +24161,7 @@ MOCK_HELP.append("MOCK_INBOX_EXTRA=<n>  收件箱多 n 封知悉即可的示例�
 MOCK_HELP.append("MOCK_CHANNELS=1  设置 › 插件 › 渠道：App、飞书机器人和微信已连接、飞书 /agent 只读、一个待绑定（令牌 example-token）、一个出错、一个在市场里；主对话第一条来自微信")
 MOCK_HELP.append("MOCK_EXCHANGES=1  主对话新布局的素材（#1666）：Persona 发给任务的长消息、任务带链接和证据的长汇报、督办消息")
 MOCK_HELP.append("MOCK_MARKDOWN=1  任务往来和回执里带 **粗体**、`代码`、标题的原话（#2363）：应渲染成 Markdown，不露标记")
+MOCK_HELP.append("MOCK_TASKS_STARTING=1  再加一个 Agent 还没起来的任务「检查启动状态」（Starting）和一张 wake=resumed 的交接卡（#5569）；MOCK_TASK_DECISION=1 的拍板任务带 decision_review，可点 Later / Don't handle（POST /todos/{id}/decision-dismiss、decision-undo-dismiss）")
 MOCK_HELP.append("MOCK_TASK_RENAMED=1  整理发布说明这个任务在回执写好后改了名：回执应显示新名字「写本周发布说明」（#3036）")
 MOCK_HELP.append("MOCK_AUTO_CONVERSATIONS=1  助手对话带来源 origin（feature conversation_origin）：另有 10 段自动对话（收件箱 6、定时任务 2、飞书 /agent、对话派生），侧边栏「最近」和用户自己的一起列、带来源标记，「全部对话」按来源筛（#3264、#5195）")
 MOCK_HELP.append("MOCK_EXTERNAL=1  和 MOCK_AUTO_CONVERSATIONS=1 一起用：飞书 /agent 那段带上请求和上下文，另加一段别的扩展开的（origin extension），两段都是外部的（#3758）")
