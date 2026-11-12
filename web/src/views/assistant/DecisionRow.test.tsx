@@ -94,6 +94,8 @@ async function mount() {
   act(() => root.render(<AssistantActionBar conversation={conversation} />));
   act(() => host.querySelector<HTMLButtonElement>('[data-tray-entry="needs"]')!.click());
   await act(async () => void (await import("./TaskDecision"))); // the row's code arrives with the first decision
+  // the row is folded to a line until opened (#5569)
+  await act(async () => host.querySelector<HTMLButtonElement>('button[data-needs-row="task:decision-task"]')?.click());
 }
 
 beforeEach(() => {
@@ -128,7 +130,7 @@ const flush = () => act(async () => { await Promise.resolve(); await Promise.res
 describe("a decision in the Needs you tray", () => {
   it("shows the question, the background, what each option leads to and the default, with the recommended option first", async () => {
     await mount();
-    expect(row().hasAttribute("data-decision-row")).toBe(true);
+    expect(row().querySelector("[data-decision-row]")).not.toBeNull();
     expect(row().querySelector("[data-decision-question]")!.textContent).toBe(decision.question);
     expect(row().querySelector("[data-decision-background]")!.textContent).toBe(decision.background);
     const leads = [...row().querySelectorAll("[data-decision-leads]")].map((li) => li.textContent);
@@ -273,7 +275,10 @@ describe("a decision in the Needs you tray", () => {
     await act(async () => row().querySelector("[data-decision-actions]")!.querySelectorAll<HTMLButtonElement>("button")[1].click());
     const next = "2026-11-11T09:00:00Z";
     await act(async () => putTodo({ ...todo, supervision: { ...todo.supervision!, reviews: [{ at: next, verdict: "needs_user" }] }, ask: { ...decision, asked_at: next } }));
+    // a new round of the same task asks folded again (#5569)
     expect(row()).not.toBeNull();
+    expect(row().querySelector("[data-decision-option]")).toBeNull();
+    await act(async () => host.querySelector<HTMLButtonElement>('button[data-needs-row="task:decision-task"]')?.click());
     expect(row().querySelector("[data-decision-option]")).not.toBeNull();
   });
 
@@ -376,7 +381,7 @@ describe("a decision in the Needs you tray", () => {
   it("leaves an ask without options as it was: one Take button, no decision row", async () => {
     ask = { outcome: "decide", verdict: decision.verdict, recommend: "10% first", asked_at: at };
     await mount();
-    expect(row().hasAttribute("data-decision-row")).toBe(false);
+    expect(row().querySelector("[data-decision-row]")).toBeNull();
     expect(row().querySelector('[data-brief-row="accept"]')).not.toBeNull();
     expect(row().textContent).toContain(t("assistant-brief.take"));
     expect(row().querySelector("[data-decision-option]")).toBeNull();
