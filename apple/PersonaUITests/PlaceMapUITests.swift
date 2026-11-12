@@ -2,7 +2,8 @@ import XCTest
 
 /// Place maps in the main conversation (#5543): "where am I" and a nearby search each draw a map card under the turn's
 /// work line, with the tool calls still folded; tapping a map opens the full map with the same places, and Done closes
-/// it. Against scripts/mock/mock_hub.py with MOCK_TASKS=1 MOCK_PLACE_MAP=1 MOCK_TASKS_NO_ASKS=1 (PERSONA_MOCK_HUB).
+/// it. Directions handed to Maps draw the destination's card (#5545), the conversation's last.
+/// Against scripts/mock/mock_hub.py with MOCK_TASKS=1 MOCK_PLACE_MAP=1 MOCK_TASKS_NO_ASKS=1 (PERSONA_MOCK_HUB).
 /// PERSONA_SHOTS saves the cards and the sheet there (PERSONA_SHOTS_APPEARANCE names the simulator's appearance);
 /// PERSONA_SHOTS_LARGE=1 runs at the largest accessibility text size.
 final class PlaceMapUITests: XCTestCase {
@@ -52,6 +53,13 @@ final class PlaceMapUITests: XCTestCase {
 
         let any = app.descendants(matching: .any)
         let maps = any.matching(NSPredicate(format: "identifier BEGINSWITH %@", "chat.place-map."))
+        // The hand-off names only its destination; the nearby card names every café, the first one too.
+        let handoff = maps.matching(NSPredicate(format: "label CONTAINS %@ AND NOT (label CONTAINS %@)", "安静书房咖啡", "街角咖啡")).firstMatch
+        XCTAssertTrue(handoff.waitForExistence(timeout: 20), "no card for the directions handed to Maps:\n\(app.debugDescription)")
+        for _ in 0..<40 where !handoff.isHittable { nudge(app, older: true) } // at large text sizes it is above the answer
+        sleep(2) // the snapshot comes in
+        try shot(app, "handoff")
+
         let nearby = maps.matching(NSPredicate(format: "label CONTAINS %@", "街角咖啡")).firstMatch
         XCTAssertTrue(nearby.waitForExistence(timeout: 20), "no map for the nearby search:\n\(app.debugDescription)")
         for _ in 0..<40 where !nearby.isHittable { nudge(app, older: true) } // at large text sizes it is above the answer
