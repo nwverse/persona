@@ -2527,14 +2527,16 @@ final class AppModel {
     /// Puts the message on screen immediately and sends it in the background; a failure marks it for retry. Returns whether
     /// the send was accepted, so a composer clears only then (a refusal must leave everything typed or restored in place).
     @discardableResult
-    func sendNow(_ key: SessionKey, text: String, images: [ImagePayload] = []) -> Bool {
+    /// via: how the app wrote it when the user did not type it (`APIClient.MessageVia`).
+    func sendNow(_ key: SessionKey, text: String, images: [ImagePayload] = [], via: APIClient.MessageVia? = nil) -> Bool {
         guard allowSend(key) else { return false }
         // Take-back can retain pathless hub photos past the picker's cap; the person removes some before sending.
         guard images.count <= MessagePhotos.limit else {
             toast = Toast(String(localized: "Up to 4 at a time"), style: .error)
             return false
         }
-        let msg = PendingMessage(text: text, images: images)
+        var msg = PendingMessage(text: text, images: images)
+        msg.via = via
         chat(key).pending.append(msg)
         saveOutbox()
         Haptics.tap()

@@ -544,6 +544,14 @@ Switching an Agent between Claude Code and Codex in the web chat follows cindy's
 its handoff panel (`web/src/views/chat/EngineSwitchDivider.tsx`, after the agent switch card in cindy's `SystemCard.tsx`:
 layout, states and wording). No code is copied for those.
 
+What a turn cost on the web chat's reply bar (`web/src/views/chat/TurnUsage.tsx` and `web/src/lib/turn-cost.ts`, #5426)
+is ported from cindy's `MessageActionBar.tsx` usage cell, `UsageCostPopover.tsx`, `lib/turnUsageTooltip.ts`
+(`buildTurnUsageTooltipLines`, `formatPercent`, `getTurnUsageSuggestion`), `lib/usageFormat.ts` (`formatTurnCostMoney`)
+and the per-model pricing of `main/usage/turnCostCalculator.ts`, with changes: the usage is summed in the browser from the
+transcript items (`web/src/lib/turn-usage.ts`) and priced at the hub catalog's reference prices, the duration line uses
+the work summary's time, and the Persona conversation's plain variant is Persona's own. The card's English, Chinese and
+Japanese lines take cindy's `chat.messageActionBar` and `usageDetails` strings.
+
 https://github.com/makecindy/cindy
 
 Licensed under the Apache License, Version 2.0 (the "License"); you may not use these files except in compliance with
