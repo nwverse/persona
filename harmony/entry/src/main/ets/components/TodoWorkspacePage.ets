@@ -343,6 +343,12 @@ export struct TodoWorkspacePage {
       } } });
   }
 
+  @Builder advancedMenu() {
+    Menu() {
+      MenuItem({ content: tr('new_agent') }).enabled(!this.workspace.saving && !this.workspace.targetGone)
+        .onClick(() => this.onCreateAgent(this.workspace.todoResource(this.workspace.selected)))
+    }
+  }
   @Builder todoMenu(todo: TodoWorkspaceItem) {
     Menu() {
       MenuItem({ content: tr('delete') }).enabled(!this.workspace.targetGone).onClick(() => this.confirmDelete(todo))
@@ -488,9 +494,8 @@ export struct TodoWorkspacePage {
               Button(tr('todo_link_agent')).enabled(!!this.selectedSession() && !this.workspace.saving && !this.workspace.targetGone)
                 .onClick(() => this.confirmLinkAgent(this.workspace.selected)).height(Tokens.touch).width('100%')
             }
-            Button(tr('new_agent')).enabled(!this.workspace.saving && !this.workspace.targetGone)
-              .onClick(() => this.onCreateAgent(this.workspace.todoResource(this.workspace.selected)))
-              .height(Tokens.touch).width('100%')
+            Button(tr('more'), { buttonStyle: ButtonStyleMode.TEXTUAL }).bindMenu(this.advancedMenu)
+              .enabled(!this.workspace.saving && !this.workspace.targetGone).height(Tokens.touch)
             if (this.workspace.spaceChoices().length) {
               Select(this.spaceOptions()).selected(Math.max(0, this.workspace.spaceChoices().findIndex((item: TodoWorkspaceSpaceChoice) => this.choiceKey(item) === this.workspace.selectedSpaceKey)))
                 .value(this.selectedSpace()?.label || tr('todo_choose_project'))

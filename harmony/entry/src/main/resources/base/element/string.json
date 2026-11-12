@@ -4287,6 +4287,154 @@
     {
       "name": "color_mode",
       "value": "Color mode"
+    },
+    {
+      "name": "applications",
+      "value": "Apps"
+    },
+    {
+      "name": "application_unavailable",
+      "value": "This app is unavailable."
+    },
+    {
+      "name": "no_applications",
+      "value": "No apps"
+    },
+    {
+      "name": "file_transfer_send_to_computer",
+      "value": "Send to computer"
+    },
+    {
+      "name": "file_transfer_unavailable",
+      "value": "File transfer is unavailable for this computer right now."
+    },
+    {
+      "name": "file_transfer_journal_unavailable",
+      "value": "The transfer status could not be saved on this device. Try again after storage is available."
+    },
+    {
+      "name": "file_transfer_check_unknown_first",
+      "value": "Check the unknown result before sending again."
+    },
+    {
+      "name": "file_transfer_confirm_duplicate",
+      "value": "A previous attempt may still finish. Sending again could create a second copy."
+    },
+    {
+      "name": "file_transfer_confirm_title",
+      "value": "Send this file?"
+    },
+    {
+      "name": "file_transfer_confirm_send",
+      "value": "Send"
+    },
+    {
+      "name": "file_transfer_source",
+      "value": "From"
+    },
+    {
+      "name": "file_transfer_target",
+      "value": "To"
+    },
+    {
+      "name": "file_transfer_inbox",
+      "value": "Receive folder"
+    },
+    {
+      "name": "file_transfer_status_creating",
+      "value": "Starting transfer"
+    },
+    {
+      "name": "file_transfer_status_running",
+      "value": "Transferring"
+    },
+    {
+      "name": "file_transfer_status_done",
+      "value": "Transfer complete"
+    },
+    {
+      "name": "file_transfer_status_failed",
+      "value": "Transfer failed"
+    },
+    {
+      "name": "file_transfer_status_cancelled",
+      "value": "Transfer cancelled"
+    },
+    {
+      "name": "file_transfer_status_unknown",
+      "value": "Transfer result unknown"
+    },
+    {
+      "name": "file_transfer_error",
+      "value": "Transfer error"
+    },
+    {
+      "name": "file_transfer_setting_loading",
+      "value": "Checking setting"
+    },
+    {
+      "name": "file_transfer_setting_saving",
+      "value": "Saving setting"
+    },
+    {
+      "name": "file_transfer_setting_unknown",
+      "value": "Setting status unknown"
+    },
+    {
+      "name": "file_transfer_inbox_enable_hint",
+      "value": "Turn on file transfer to see the receive folder."
+    },
+    {
+      "name": "file_transfer_inbox_unknown",
+      "value": "The receive folder could not be confirmed."
+    },
+    {
+      "name": "file_transfer_choose_target",
+      "value": "Choose a computer"
+    },
+    {
+      "name": "file_transfer_no_targets",
+      "value": "No trusted computers are online in this workspace."
+    },
+    {
+      "name": "file_transfer_source_switch",
+      "value": "Allow sending from this computer"
+    },
+    {
+      "name": "file_transfer_shared_switch",
+      "value": "File transfer"
+    },
+    {
+      "name": "file_transfer_target_switch",
+      "value": "Allow receiving on this computer"
+    },
+    {
+      "name": "file_transfer_check_status",
+      "value": "Check status"
+    },
+    {
+      "name": "file_transfer_i_checked",
+      "value": "I checked"
+    },
+    {
+      "name": "file_transfer_possible_duplicate",
+      "value": "A previous attempt may still finish. Sending again could create a second copy."
+    },
+    {
+      "name": "file_transfer_cancel_unknown",
+      "value": "The cancel result is not confirmed. Checking the transfer status."
+    },
+    {
+      "name": "file_transfer_cancel_transfer",
+      "value": "Cancel transfer"
+    },
+    {
+      "name": "file_transfer_title",
+      "value": "Send file"
+    },
+    {
+      "name": "session_tools_parent_folder",
+      "value": "Parent folder"
     }
   ]
 }

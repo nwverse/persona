@@ -203,8 +203,8 @@ export struct AgentListPage {
   }
 
   private rowSubtitle(row: ResourceRow): string {
-    const metadata = this.workspace.rowMetadata(row);
-    if (metadata[3]) metadata[3] = tr(metadata[3]);
+    const metadata = this.workspace.listMetadata(row);
+    if (metadata[2]) metadata[2] = tr(metadata[2]);
     return metadata.filter((value: string) => !!value).join(' · ');
   }
 

@@ -16,6 +16,7 @@ export struct ExtensionPage {
   @Param initialView: ExtensionViewRecord | undefined = undefined;
   @Param compact: boolean = false;
   @Param active: boolean = true;
+  @Param authorized: boolean = true;
   @Param refreshRevision: number = 0;
   @Event onTitle: (title: string) => void = (_title: string): void => {};
   @Event onNavigate: (effect: ExtensionUINavigationEffect) => void = (_effect: ExtensionUINavigationEffect): void => {};
@@ -28,14 +29,19 @@ export struct ExtensionPage {
   aboutToDisappear(): void { this.extensionUI.dispose(); this.bound = false; }
   private bindPage(): void {
     this.extensionUI.setNavigationHandler((effect: ExtensionUINavigationEffect) => this.dispatchNavigation(effect));
-    this.extensionUI.bind(this.model, this.extensionId, this.uiId, this.context, this.initialView, this.compact, this.onLink, this.active, this.state);
-    this.extensionUI.setVisible(this.active); this.bound = true;
+    this.extensionUI.bind(this.model, this.extensionId, this.uiId, this.context, this.initialView, this.compact, this.onLink, this.active && this.authorized, this.state);
+    if (!this.authorized) this.extensionUI.invalidateAuthorization();
+    this.extensionUI.setVisible(this.active && this.authorized); this.bound = true;
     this.onTitle(this.extensionUI.pageTitle || this.extensionId);
   }
   private dispatchNavigation(effect: ExtensionUINavigationEffect): void {
     if (effect.kind === 'pop') this.onBack(); else this.onNavigate(effect);
   }
-  @Monitor('active') activeChanged(): void { if (this.bound) this.extensionUI.setVisible(this.active); }
+  @Monitor('active', 'authorized') activeChanged(): void {
+    if (!this.bound) return;
+    if (!this.authorized) this.extensionUI.invalidateAuthorization();
+    this.extensionUI.setVisible(this.active && this.authorized);
+  }
   @Monitor('refreshRevision') refreshRequested(): void { if (this.bound) this.extensionUI.refresh(); }
   @Monitor('extensionUI.pageTitle') titleChanged(): void { if (this.bound) this.onTitle(this.extensionUI.pageTitle || this.extensionId); }
   @Monitor('model.connected', 'model.features', 'model.profile') connectionChanged(): void {

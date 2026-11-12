@@ -29,7 +29,10 @@ class ConversationLine {
   id: string;
   message: ChatMessage | undefined;
   card: Record<string, Object> | undefined;
-  constructor(id: string, message?: ChatMessage, card?: Record<string, Object>) { this.id = id; this.message = message; this.card = card; }
+  decision: Decision | undefined;
+  constructor(id: string, message?: ChatMessage, card?: Record<string, Object>, decision?: Decision) {
+    this.id = id; this.message = message; this.card = card; this.decision = decision;
+  }
 }
 
 @ComponentV2
@@ -37,6 +40,11 @@ export struct Conversation {
   @Require @Param model: ClientModel;
   @Param active: boolean = true;
   @Param showContextMenu: boolean = false;
+  @Param actionItems: SheetInfo[] = [];
+  @Param actionsVisible: boolean = false;
+  @Param actionsRequest: number = 0;
+  @Event onShowActions: () => void = () => {};
+  @Event onHideActions: (request: number) => void = () => {};
   @Event onOpenFile: (path: string) => void = () => {};
   @Event onLink: (address: string) => void = () => {};
   @Event onOpenResource: (row: ResourceRow) => void = () => {};
@@ -57,8 +65,6 @@ export struct Conversation {
   private imageIndices: Map<string, number> = new Map();
   private feedKey: string = '';
   private feedTimer: number = -1;
-  @BuilderParam contextMenu: CustomBuilder = this.emptyMenu;
-  @Builder emptyMenu() { Menu() {} }
   @Local expanded: string[] = [];
   private scroller: Scroller = new Scroller();
   @Local atEnd: boolean = true;
@@ -84,6 +90,10 @@ export struct Conversation {
   @Monitor('feed.items') feedChanged(): void { this.syncTimeline(); }
   @Monitor('active', 'model.selected', 'model.connected') feedContextChanged(): void { this.syncFeed(); this.syncAttachments(); this.syncRevision(); }
   @Monitor('model.decision') decisionChanged(): void { this.refreshFeed(); }
+  @Monitor('model.personaQuestions') personaQuestionsChanged(): void {
+    this.syncTimeline(); this.refreshFeed();
+    if (this.atEnd) setTimeout((): void => { this.scroller.scrollEdge(Edge.Bottom); }, 0); else this.hasNew = true;
+  }
   private syncFeed(): void {
     if (!this.active || !this.model.connected || this.model.demo || this.model.selected.kind !== 'conversation') {
       if (this.feedTimer !== -1) clearTimeout(this.feedTimer); this.feedTimer = -1;
@@ -263,7 +273,9 @@ export struct Conversation {
     });
     const activities: TimelineCard[] = this.feed.items.filter((item: Record<string, Object>) => !['task', 'today', 'brief'].includes(Wire.text(item, 'kind')))
       .map((item: Record<string, Object>): TimelineCard => { const id = Wire.text(item, 'id'), stamp = Date.parse(Wire.text(item, 'at')); cards.set(id, item); return { id: id, at: Number.isFinite(stamp) ? stamp : 0 }; });
-    this.lines = mergeConversationTimeline(inputs, activities).map((entry) => new ConversationLine(entry.id, messages.get(entry.messageId), cards.get(entry.cardId)));
+    const lines = mergeConversationTimeline(inputs, activities).map((entry) => new ConversationLine(entry.id, messages.get(entry.messageId), cards.get(entry.cardId)));
+    this.model.personaQuestions.forEach((request: Decision) => lines.push(new ConversationLine('persona-question:' + request.id, undefined, undefined, request)));
+    this.lines = lines;
   }
   aboutToAppear(): void {
     this.syncFeed(); this.syncAttachments(); this.syncTimeline(); this.syncRevision();
@@ -338,17 +350,26 @@ export struct Conversation {
     }.width('100%').alignItems(HorizontalAlign.Start).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.gap, bottom: Tokens.gap })
       .bindContextMenu(this.messageMenu(message), ResponseType.LongPress)
   }
+  @Builder actionsMenu() {
+    Menu() {
+      ForEach(this.actionItems, (item: SheetInfo) => {
+        MenuItem({ content: item.title }).constraintSize({ minHeight: Tokens.touch }).onClick(() => item.action())
+      }, (_item: SheetInfo, index: number) => String(this.actionsRequest) + ':' + String(index))
+    }
+  }
+  private actionMenuOptions(request: number): MenuOptions {
+    return { onDisappear: () => this.onHideActions(request) };
+  }
   @Builder readingContent() {
     Column() {
       if (this.revisions.forkState === 'branching' || this.revisions.rewindState === 'rewinding') LoadingProgress().width(Tokens.touch).height(Tokens.touch)
       if (this.revisionResult || this.revisions.forkError || this.revisions.rewindError) Text(tr(this.revisions.forkError || this.revisions.rewindError || this.revisionResult)).fontSize(Tokens.meta).padding(Tokens.inset).width('100%')
       if (this.revisionCacheError) Text(tr(this.revisionCacheError)).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger')).padding(Tokens.inset).width('100%')
-      if (this.model.selected.machine || this.showContextMenu) {
-        Row({ space: Tokens.gap }) {
-          Text([this.model.profile.name, this.model.machineName(this.model.selected.machine), this.model.shortPath(this.model.selected.path)].filter((value: string) => value.length > 0).join(' · '))
-            .fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).maxLines(3).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
-          if (this.showContextMenu) Button(tr('more'), { buttonStyle: ButtonStyleMode.TEXTUAL }).bindMenu(this.contextMenu).height(Tokens.touch)
-        }.padding({ left: Tokens.page, right: Tokens.page }).width('100%')
+      if (this.showContextMenu) {
+        Row() {
+          Button(tr('more'), { buttonStyle: ButtonStyleMode.TEXTUAL }).onClick(() => this.onShowActions()).constraintSize({ minHeight: Tokens.touch })
+            .bindMenu(this.actionsVisible, this.actionsMenu, this.actionMenuOptions(this.actionsRequest))
+        }.justifyContent(FlexAlign.End).padding({ left: Tokens.page, right: Tokens.page }).width('100%')
       }
       if (this.model.error) {
         Row() {
@@ -378,7 +399,8 @@ export struct Conversation {
             if (entry.item.message) this.message(entry.item.message)
             else if (entry.item.card) AssistantCards({ model: this.model, feed: this.feed, active: this.active && this.model.connected, onOpenResource: (row: ResourceRow) => this.onOpenResource(row), item: entry.item.card, onOpenSession: (row: ResourceRow) => this.onOpenResource(row),
               onOpenTodo: (row: ResourceRow) => this.onOpenResource(row), onOpenInbox: (row: ResourceRow) => this.onOpenResource(row), onLink: (address: string) => this.onLink(address) })
-          }
+            else if (entry.item.decision) InteractionDecisionForm({ model: this.model, request: entry.item.decision, onLink: (address: string) => this.onLink(address) })
+          }.id('chat.line.' + entry.item.id)
         }).key((line: ConversationLine) => line.id)
       }.layoutWeight(1).width('100%').onReachEnd(() => { this.atEnd = true; this.hasNew = false; })
         .onScrollFrameBegin((offset: number) => { if (offset < 0) this.atEnd = false; return { offsetRemain: offset }; })

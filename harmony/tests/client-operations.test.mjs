@@ -71,6 +71,7 @@ function fixture() {
   const model = new ClientModel();
   model.profile = new HubProfile('synthetic-hub'); model.profile.manager='personal';
   model.selected = new ResourceRow('chat-one','Chat','session'); model.selected.machine='machine-one'; model.selected.session='chat-one';
+  model.decisionReadyTarget = model.target();
   model.connected = true; model.canSend=()=>true; model.canApprove=()=>true; model.canInterrupt=()=>true;
   model.draft='exact draft '; model.sourceContext=contextReference;
   const writes=[];
@@ -537,4 +538,27 @@ test('language publication waits for storage and a failed save restores the prev
  const {model}=fixture();model.language='en-US';globalThis.clientLanguageChanges=[];const entered=deferred(),gate=deferred();model.local.put=async()=>{entered.resolve();await gate.promise;throw Error('storage unavailable');};
  const changing=model.setLanguage('ja-JP');await entered.promise;assert.equal(model.language,'en-US');gate.resolve();await changing;
  assert.equal(model.language,'en-US');assert.deepEqual(globalThis.clientLanguageChanges,['ja-JP','en-US']);assert.equal(model.error,'cache_unavailable');delete globalThis.clientLanguageChanges;
+});
+
+test('captured outcome storage keeps its original scope and is retired by that scope purge',async()=>{
+  const {model}=fixture();const retired=new Set();model.local.accepts=key=>!retired.has(key);
+  const old=model.captureView('synthetic-outcome');await old.write('pending');const oldKey=[...model.local.data.keys()][0];
+  model.profile=new HubProfile('other-synthetic-hub');model.profile.manager='personal';
+  const current=model.captureView('synthetic-outcome');await old.write('acknowledged');
+  assert.equal(await old.read(),'acknowledged');assert.equal(await current.read(),'');
+  retired.add(oldKey);model.local.data.delete(oldKey);assert.equal(old.valid(),false);
+  await assert.rejects(old.write('late-result'),/request_updated/);await assert.rejects(old.read(),/request_updated/);
+  await current.write('current-scope');assert.equal(await current.read(),'current-scope');assert.equal(model.local.data.has(oldKey),false);
+});
+
+test('a machine-directory notification requests fresh scoped facts instead of applying foreign payload rows',async(t)=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const {model}=fixture(),scopes=[];
+  model.machines=[new ResourceRow('owned','Original','machine')];
+  model.refresh=async()=>{scopes.push(model.scope());};
+  const owner=model.scope();
+  model.event(JSON.stringify({type:'machines',manager:'another-owner',machines:[{id:'foreign',name:'Foreign'}]}));
+  assert.equal(model.machines[0].id,'owned');
+  t.mock.timers.tick(100);await Promise.resolve();
+  assert.deepEqual(scopes,[owner]);assert.equal(model.machines[0].id,'owned');
 });

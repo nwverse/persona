@@ -4287,6 +4287,154 @@
     {
       "name": "color_mode",
       "value": "カラーモード"
+    },
+    {
+      "name": "applications",
+      "value": "アプリ"
+    },
+    {
+      "name": "application_unavailable",
+      "value": "このアプリは利用できません。"
+    },
+    {
+      "name": "no_applications",
+      "value": "アプリがありません"
+    },
+    {
+      "name": "file_transfer_send_to_computer",
+      "value": "コンピュータに送信"
+    },
+    {
+      "name": "file_transfer_unavailable",
+      "value": "このコンピュータでは現在ファイルを転送できません。"
+    },
+    {
+      "name": "file_transfer_journal_unavailable",
+      "value": "このデバイスに転送状態を保存できませんでした。ストレージが利用可能になってから再試行してください。"
+    },
+    {
+      "name": "file_transfer_check_unknown_first",
+      "value": "再送信する前に、結果不明の転送を確認してください。"
+    },
+    {
+      "name": "file_transfer_confirm_duplicate",
+      "value": "前回の転送がまだ完了する可能性があります。再送信するとコピーがもう一つ作成される場合があります。"
+    },
+    {
+      "name": "file_transfer_confirm_title",
+      "value": "このファイルを送信しますか？"
+    },
+    {
+      "name": "file_transfer_confirm_send",
+      "value": "送信"
+    },
+    {
+      "name": "file_transfer_source",
+      "value": "送信元"
+    },
+    {
+      "name": "file_transfer_target",
+      "value": "送信先"
+    },
+    {
+      "name": "file_transfer_inbox",
+      "value": "受信フォルダ"
+    },
+    {
+      "name": "file_transfer_status_creating",
+      "value": "転送を開始しています"
+    },
+    {
+      "name": "file_transfer_status_running",
+      "value": "転送中"
+    },
+    {
+      "name": "file_transfer_status_done",
+      "value": "転送が完了しました"
+    },
+    {
+      "name": "file_transfer_status_failed",
+      "value": "転送に失敗しました"
+    },
+    {
+      "name": "file_transfer_status_cancelled",
+      "value": "転送をキャンセルしました"
+    },
+    {
+      "name": "file_transfer_status_unknown",
+      "value": "転送結果を確認できません"
+    },
+    {
+      "name": "file_transfer_error",
+      "value": "転送エラー"
+    },
+    {
+      "name": "file_transfer_setting_loading",
+      "value": "設定を確認しています"
+    },
+    {
+      "name": "file_transfer_setting_saving",
+      "value": "設定を保存しています"
+    },
+    {
+      "name": "file_transfer_setting_unknown",
+      "value": "設定状態を確認できません"
+    },
+    {
+      "name": "file_transfer_inbox_enable_hint",
+      "value": "ファイル転送を有効にすると受信フォルダを確認できます。"
+    },
+    {
+      "name": "file_transfer_inbox_unknown",
+      "value": "受信フォルダを確認できませんでした。"
+    },
+    {
+      "name": "file_transfer_choose_target",
+      "value": "コンピュータを選択"
+    },
+    {
+      "name": "file_transfer_no_targets",
+      "value": "このワークスペースでオンラインの信頼済みコンピュータはありません。"
+    },
+    {
+      "name": "file_transfer_source_switch",
+      "value": "このコンピュータからの送信を許可"
+    },
+    {
+      "name": "file_transfer_shared_switch",
+      "value": "ファイル転送"
+    },
+    {
+      "name": "file_transfer_target_switch",
+      "value": "このコンピュータでの受信を許可"
+    },
+    {
+      "name": "file_transfer_check_status",
+      "value": "状態を確認"
+    },
+    {
+      "name": "file_transfer_i_checked",
+      "value": "確認しました"
+    },
+    {
+      "name": "file_transfer_possible_duplicate",
+      "value": "前回の転送がまだ完了する可能性があります。再送信するとコピーがもう一つ作成される場合があります。"
+    },
+    {
+      "name": "file_transfer_cancel_unknown",
+      "value": "キャンセル結果を確認できません。転送状態を確認しています。"
+    },
+    {
+      "name": "file_transfer_cancel_transfer",
+      "value": "転送をキャンセル"
+    },
+    {
+      "name": "file_transfer_title",
+      "value": "ファイル送信"
+    },
+    {
+      "name": "session_tools_parent_folder",
+      "value": "親フォルダー"
     }
   ]
 }

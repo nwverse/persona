@@ -45,6 +45,22 @@ function rawInteraction(request: Decision): Record<string, Object> {
 
 function rawRecord(request: Decision): Record<string, Object> { return Wire.parse(request.raw); }
 
+/** The exact tool name is protocol data; it does not use the localized card title. */
+export function interactionToolName(request: Decision): string {
+  return Wire.text(rawInteraction(request), 'tool_name');
+}
+
+/** Only the assistant's own ask_user question is non-blocking in a Persona conversation. */
+export function isPersonaAskUserQuestion(request: Decision, selectedKind: string): boolean {
+  return selectedKind === 'conversation' && request.kind === 'question' && interactionToolName(request) === 'ask_user';
+}
+
+/** Keep every other open request blocking, even when an ask_user question precedes it. */
+export function firstBlockingDecision(requests: Decision[], selectedKind: string): Decision | undefined {
+  return requests.find((request: Decision): boolean =>
+    !isPersonaAskUserQuestion(request, selectedKind) && !['resolved', 'closed', 'dismissed', 'expired', 'cancelled', 'ended'].includes(request.status));
+}
+
 function recommendedLabel(value: string): boolean {
   return value.endsWith('(Recommended)') || value.endsWith('（推荐）') || value.endsWith('(推荐)');
 }

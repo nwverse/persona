@@ -11,7 +11,7 @@ import { utf8Bytes } from '../core/TranscriptCache';
 import { ChatDraftStore, ChatDraft, ChatOutboxEntry } from './ChatDraftStore';
 import { clearImagePreviews } from '../platform/NativePreview';
 import { parseMessageContent } from '../core/MessageContent';
-import { decodeInteractionDecision } from './InteractionDecision';
+import { decodeInteractionDecision, firstBlockingDecision, isPersonaAskUserQuestion } from './InteractionDecision';
 import { ChatAttachments } from './ChatAttachments';
 import type { PreparedAttachmentSend } from './ChatAttachments';
 import { nativeNotifications } from '../platform/NativeNotifications';
@@ -37,6 +37,13 @@ import type { SessionCapabilityInput, EffectiveSessionCapabilities, TranscriptIt
 
 interface DevicePreferenceChange { appearance?: number; style?: string; alerts?: boolean; }
 
+export interface ClientViewLease {
+  readonly epoch: number;
+  valid: () => boolean;
+  read: () => Promise<string>;
+  write: (value: string) => Promise<void>;
+}
+
 @ObservedV2
 export class ClientModel {
   readonly ssh: SshTunnel = new SshTunnel();
@@ -47,6 +54,7 @@ export class ClientModel {
     const root = this.directoryParent || this;
     if (root.profile.id === id) {
       root.stopReconnect(); root.reconnectAttempt = 0; root.generation++; root.selectionGeneration++; root.connected = false;
+      root.clearPendingDecisions();
       root.ssh.stop(); root.repository?.close(); root.repository = undefined;
       root.releaseTerminal();
       root.scheduleReconnect();
@@ -89,6 +97,11 @@ export class ClientModel {
   @Trace messages: ChatMessage[] = [];
   @Trace cards: ResourceRow[] = [];
   @Trace decision: Decision | undefined;
+  @Trace pendingDecisions: Decision[] = [];
+  @Trace personaQuestions: Decision[] = [];
+  private pendingDecisionTarget: string = '';
+  @Trace private decisionReadyTarget: string = '';
+  private decisionRefreshSequence: number = 0;
   @Trace draft: string = '';
   @Trace draftRevision: string = '';
   private localMessages: ChatOutboxEntry[] = [];
@@ -283,11 +296,56 @@ export class ClientModel {
   private chatVisible: boolean = false;
   private decisionsVisible: boolean = false;
   watchDecisions(visible: boolean): void { this.decisionsVisible = visible; if (visible && this.connected && this.isChat()) this.refreshDecisions().catch((error: Error) => this.failure(error)); }
+  private clearPendingDecisions(): void {
+    this.decisionRefreshSequence++;
+    this.pendingDecisionTarget = '';
+    this.decisionReadyTarget = '';
+    this.pendingDecisions = [];
+    this.personaQuestions = [];
+    this.decision = undefined;
+  }
+  private replacePendingDecisions(interactions: Record<string, Object>[], row: ResourceRow, target: string,
+    generation: number, scope: string, sequence: number): void {
+    if (!this.owns(generation, scope) || this.target() !== target || sequence !== this.decisionRefreshSequence) return;
+    const next: Decision[] = [], seen = new Set<string>(), previous = this.pendingDecisions;
+    const session = row.session || row.id;
+    for (const data of interactions) {
+      const nested = Wire.object(data, 'interaction');
+      const machine = Wire.text(data, 'machine_id', Wire.text(nested, 'machine_id'));
+      const sessionId = Wire.text(data, 'session_id', Wire.text(nested, 'session_id'));
+      const manager = Wire.text(data, 'manager', Wire.text(data, 'manager_id'));
+      if (machine !== row.machine || sessionId !== session || manager && manager !== this.profile.manager) continue;
+      let request = this.decodeDecision(data);
+      request.machine = machine; request.session = sessionId;
+      if (!request.id || seen.has(request.id)) continue;
+      seen.add(request.id);
+      const old = previous.find((item: Decision): boolean => item.id === request.id);
+      if (old && old.revision === request.revision && old.raw === request.raw) {
+        if (old.status === 'resolved' && request.status === 'open' || old.status === 'pending' && request.status === 'open') {
+          request = old;
+        } else {
+          old.status = request.status;
+          request = old;
+        }
+      }
+      next.push(request);
+    }
+    this.pendingDecisionTarget = target;
+    this.pendingDecisions = next;
+    this.personaQuestions = next.filter((request: Decision): boolean => isPersonaAskUserQuestion(request, this.selected.kind));
+    this.decision = firstBlockingDecision(next, this.selected.kind);
+    this.decisionReadyTarget = target;
+  }
   async refreshDecisions(): Promise<void> {
     const generation = this.generation, scope = this.scope(), target = this.target(), row = this.selected;
-    const interactions = await this.repo().decisions(); if (!this.owns(generation, scope) || this.target() !== target) return;
-    const request = interactions.find((item: Record<string, Object>) => Wire.text(item, 'machine_id') === row.machine && Wire.text(item, 'session_id') === (row.session || row.id));
-    this.decision = request ? this.decodeDecision(request) : undefined;
+    const sequence = ++this.decisionRefreshSequence;
+    try {
+      const interactions = await this.repo().decisions();
+      this.replacePendingDecisions(interactions, row, target, generation, scope, sequence);
+    } catch (error) {
+      if (this.owns(generation, scope) && this.target() === target && sequence === this.decisionRefreshSequence) this.failure(error as Error);
+      throw error as Error;
+    }
   }
 
   async initialize(context: common.UIAbilityContext): Promise<void> {
@@ -430,9 +488,10 @@ export class ClientModel {
     const saved = this.persistDraft(); this.closeTranscript(); this.releaseTerminal(); this.repository?.close(); this.repository = undefined;
     const generation = ++this.generation; this.selectionGeneration++; const selection = this.selected;
     this.profile = profile; const scope = this.scope(); this.connected = false;
+    this.clearPendingDecisions();
     this.unresolvedWrites = []; this.operationState = ''; this.mainId = ''; this.features = []; this.managers = [];
     this.demo = false; this.demoRepository = undefined; this.error = '';
-    if (!keep) { this.sessionsReady = false; this.sessions = []; this.machines = []; this.conversations = []; this.todos = []; this.inbox = []; this.knowledge = []; this.messages = []; this.decision = undefined; } this.selected = keep ? selection : new ResourceRow(); this.draftLoading = false;
+    if (!keep) { this.sessionsReady = false; this.sessions = []; this.machines = []; this.conversations = []; this.todos = []; this.inbox = []; this.knowledge = []; this.messages = []; } this.selected = keep ? selection : new ResourceRow(); this.draftLoading = false;
     if (!keep && !this.detached) { this.directoryReady = false; this.directoryLoading = false; this.directoryUnavailable = 0; this.publishDirectory(); }
     if (!keep) { this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; this.localMessages = []; this.renderedMessages = []; this.echoedMessages.clear(); }
     await saved; if (!this.owns(generation, scope)) return;
@@ -480,7 +539,12 @@ export class ClientModel {
       if (!this.owns(generation, scope)) return;
       this.connected = state === 'ready' || state === 'online';
       if (this.connected) { this.reconnectAttempt = 0; this.stopReconnect(); }
-      if (state === 'offline' || state === 'closed') { this.releaseTerminal(); this.error = 'offline'; this.scheduleReconnect(); }
+      if (state === 'offline' || state === 'closed') { this.clearPendingDecisions(); this.releaseTerminal(); this.error = 'offline'; this.scheduleReconnect(); }
+      else if (this.connected && this.isChat() && (this.chatVisible || this.decisionsVisible)) {
+        const row = this.selected;
+        if (this.chatVisible) this.loadChat(row).catch((error: Error) => this.failure(error));
+        else this.refreshDecisions().catch((error: Error) => this.failure(error));
+      }
       this.publishDirectory();
     }).catch((error: Error) => { if (this.owns(generation, scope)) this.failure(error); });
     if (this.owns(generation, scope)) await this.flushNotification();
@@ -519,7 +583,8 @@ export class ClientModel {
       this.repository?.close(); this.repository = undefined; this.generation++; this.selectionGeneration++;
       this.profile = new HubProfile(); this.connected = false; this.selected = new ResourceRow();
       this.sessionsReady = false; this.sessions = []; this.conversations = []; this.machines = []; this.managers = []; this.todos = []; this.knowledge = []; this.inbox = [];
-      this.messages = []; this.decision = undefined; this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; this.localMessages = []; this.renderedMessages = []; this.echoedMessages.clear(); this.detail = ''; this.reply = ''; this.mainId = '';
+      this.clearPendingDecisions();
+      this.messages = []; this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; this.localMessages = []; this.renderedMessages = []; this.echoedMessages.clear(); this.detail = ''; this.reply = ''; this.mainId = '';
       this.unresolvedWrites = []; this.operationState = ''; this.notificationTarget = ''; this.draftLoading = false; this.features = []; this.error = '';
     }
     this.publishDirectory();
@@ -561,7 +626,7 @@ export class ClientModel {
       else if (type === 'items' || type === 'items_replace') { this.transcript?.receive(data); } else if (type === 'terminal') {
         if (Wire.text(data, 'machine_id') === this.selected.machine && Wire.text(data, 'session_id') === this.selected.session)
           this.terminalText = (this.terminalText + Wire.text(data, 'data')).slice(-200000);
-      } else if (['interaction', 'interactions', 'interaction_resolved', 'sessions', 'sessions_delta', 'item', 'items', 'session_delta', 'todo', 'inbox', 'task_plan', 'assistant_feed', 'managers'].includes(type)) {
+      } else if (['interaction', 'interactions', 'interaction_resolved', 'sessions', 'sessions_delta', 'item', 'items', 'session_delta', 'todo', 'inbox', 'task_plan', 'assistant_feed', 'managers', 'machines'].includes(type)) {
         if (this.feedTimer !== -1) clearTimeout(this.feedTimer);
         this.feedTimer = setTimeout(() => { this.feedTimer = -1; this.refresh().catch((error: Error) => this.failure(error)); }, 100);
       }
@@ -588,7 +653,7 @@ export class ClientModel {
       if (this.selected.kind === 'session') {
         const selected = sessions.find((item: ResourceRow) => item.id === this.selected.id && item.machine === this.selected.machine);
         if (selected) this.selected = selected;
-        else { this.selected.raw = JSON.stringify(Wire.payload(['read_only'], [true])); this.selected.state = 'unknown'; this.decision = undefined; }
+        else { this.selected.raw = JSON.stringify(Wire.payload(['read_only'], [true])); this.selected.state = 'unknown'; this.clearPendingDecisions(); }
       }
       this.mainId = Wire.text(assistant, 'main');
       this.conversations = Wire.rows(assistant, 'conversations').map((data: Record<string, Object>) => {
@@ -658,7 +723,7 @@ export class ClientModel {
     if (row.group && row.group !== this.profile.id || row.manager && row.manager !== this.profile.manager) throw new Error('request_updated');
     const generation = this.generation, scope = this.scope(), selection = ++this.selectionGeneration;
     this.cancelDraftTimer(); await this.persistDraft(); if (!this.owns(generation, scope) || selection !== this.selectionGeneration) return;
-    this.closeTranscript(); this.releaseTerminal(); this.selected = row; this.messages = []; this.decision = undefined; this.error = '';
+    this.closeTranscript(); this.releaseTerminal(); this.selected = row; this.messages = []; this.clearPendingDecisions(); this.error = '';
     this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; this.draftLoading = true;
     this.localMessages = []; this.renderedMessages = []; this.echoedMessages.clear(); this.operationState = '';
     try {
@@ -763,15 +828,18 @@ export class ClientModel {
     const saved = await this.local.get('transcript:' + target);
     if (!this.owns(generation, scope) || target !== this.target()) return;
     if (saved) { const reducer = new TranscriptReducer(); reducer.restore(JSON.parse(saved) as TranscriptSnapshot); this.publishTranscript(reducer.items, false); this.hasMoreMessages = false; }
-    this.decision = undefined; this.error = 'offline';
+    this.clearPendingDecisions(); this.error = 'offline';
   }
   async loadChat(row: ResourceRow): Promise<void> {
     if (this.demo && this.demoRepository) { this.publishTranscript(this.demoRepository.historyItems(row) as Object as TranscriptItem[], false); this.hasMoreMessages = false; await this.refreshDecisions(); return; }
     const generation = this.generation, scope = this.scope(), target = this.target(row);
     if (!this.connected) { await this.cachedChat(row); return; }
-    let interactions: Record<string, Object>[] = [];
-    try { interactions = await this.repo().decisions(); } catch (error) { if (this.owns(generation, scope) && this.target() === target) this.failure(error as Error); }
+    const sequence = ++this.decisionRefreshSequence;
+    let interactions: Record<string, Object>[] = [], decisionsRead = false;
+    try { interactions = await this.repo().decisions(); decisionsRead = true; }
+    catch (error) { if (this.owns(generation, scope) && this.target() === target) this.failure(error as Error); }
     if (!this.owns(generation, scope) || this.target() !== target) return;
+    if (decisionsRead) this.replacePendingDecisions(interactions, row, target, generation, scope, sequence);
     if (!this.transcript || this.transcriptKey !== target) {
       this.closeTranscript(); this.transcriptKey = target;
       this.transcript = new TranscriptModel(row, this.repo(), this.local, target, (items: readonly TranscriptItem[], hasMore: boolean) => {
@@ -780,8 +848,6 @@ export class ClientModel {
       }, (error: Error) => { if (this.owns(generation, scope) && this.target() === target) this.failure(error); });
       await this.transcript.open();
     } else await this.transcript.latest();
-    const request = interactions.find((item: Record<string, Object>) => Wire.text(item, 'machine_id') === row.machine && Wire.text(item, 'session_id') === row.session);
-    if (this.owns(generation, scope) && this.target() === target) this.decision = request ? this.decodeDecision(request) : undefined;
   }
   private projectMessages(items: readonly TranscriptItem[], running: boolean): ChatMessage[] {
     const turns: TranscriptItem[][] = []; let turn: TranscriptItem[] = [];
@@ -819,7 +885,7 @@ export class ClientModel {
   }
   private closeTranscript(): void { this.transcript?.close(); this.transcript = undefined; this.transcriptKey = ''; this.revisionItems = []; }
   showConversation(row: ResourceRow): void { this.chatVisible = true; this.loadChat(row).catch((error: Error) => this.failure(error)); }
-  hideConversation(releaseTools: boolean = true): void { this.chatVisible = false; this.closeTranscript(); if (releaseTools) this.releaseTerminal(); this.persistDraft().catch(() => this.error = 'failed'); }
+  hideConversation(releaseTools: boolean = true): void { this.chatVisible = false; this.closeTranscript(); this.clearPendingDecisions(); if (releaseTools) this.releaseTerminal(); this.persistDraft().catch(() => this.error = 'failed'); }
   async loadOlder(): Promise<void> { try { await this.transcript?.older(); } catch (error) { this.failure(error as Error); } }
   async expandWork(message: ChatMessage): Promise<void> {
     try {
@@ -829,6 +895,10 @@ export class ClientModel {
   }
   private decodeDecision(data: Record<string, Object>): Decision {
     const decision = decodeInteractionDecision(data);
+    const nested = Wire.object(data, 'interaction');
+    if (!decision.revision) decision.revision = Wire.text(data, 'revision', Wire.text(nested, 'revision'));
+    decision.machine = Wire.text(data, 'machine_id', decision.machine);
+    decision.session = Wire.text(data, 'session_id', decision.session);
     if (this.operationBlocked('/api/v1/interactions/' + segment(decision.id) + '/resolve')) decision.status = 'unknown';
     return decision;
   }
@@ -836,7 +906,7 @@ export class ClientModel {
   async send(): Promise<boolean> {
     const text = this.draft;
     if (utf8Bytes(text) > 100000) { this.error = 'chat_attachment_text_too_large'; return false; }
-    if (this.draftLoading || !this.canSend() || !text.trim() || ['pending', 'unknown'].includes(this.operationState)) return false;
+    if (this.draftLoading || this.decision || !this.canSend() || !text.trim() || ['pending', 'unknown'].includes(this.operationState)) return false;
     if (this.demo && this.demoRepository) {
       const prepared = this.prepareMessageText(text); if (utf8Bytes(prepared) > 100000) { this.error = 'chat_attachment_request_too_large'; return false; }
       try { this.demoRepository.sendLocal(this.selected, prepared); this.sourceContext = ''; this.updateDraft(''); await this.loadChat(this.selected); return true; }
@@ -846,7 +916,7 @@ export class ClientModel {
     return this.dispatchMessage(this.repo(), this.selected, preparedText, [], this.generation, this.scope(), this.target(), text, this.sourceContext);
   }
   async sendPrepared(prepared: PreparedAttachmentSend, draft: string, context: string): Promise<boolean> {
-    if (!prepared.repository || this.draftLoading || !this.canSend() || ['pending', 'unknown'].includes(this.operationState) ||
+    if (!prepared.repository || this.draftLoading || this.decision || !this.canSend() || ['pending', 'unknown'].includes(this.operationState) ||
       !this.owns(prepared.generation, prepared.scope) || this.target() !== prepared.modelTarget || this.repository !== prepared.repository ||
       this.target(prepared.row) !== prepared.modelTarget || (!prepared.text.trim() && !prepared.images.length)) return false;
     if (this.draft !== draft || this.sourceContext !== context) { this.error = 'chat_attachment_selection_changed'; return false; }
@@ -862,9 +932,9 @@ export class ClientModel {
       await store.save(target, captured);
       if (!this.owns(generation, scope) || this.target() !== target || this.repository !== repo) { this.activeMessages.delete(entry.id); if (this.owns(generation, scope) && this.target() === target) { this.operationState = 'failed'; this.error = 'request_updated'; } return false; }
       await store.stage(scope, entry); staged = true;
-      if (!this.owns(generation, scope) || this.target() !== target || this.repository !== repo || this.draftRevision !== entry.revision || !this.canSend()) { await store.settle(scope, entry.id, 'failed'); this.activeMessages.delete(entry.id); entry.state = 'failed'; if (this.owns(generation, scope) && this.target() === target) { this.operationState = 'failed'; this.error = 'request_updated'; this.publishMessages(); } return false; }
+      if (!this.owns(generation, scope) || this.target() !== target || this.repository !== repo || this.draftRevision !== entry.revision || this.decision || !this.canSend()) { await store.settle(scope, entry.id, 'failed'); this.activeMessages.delete(entry.id); entry.state = 'failed'; if (this.owns(generation, scope) && this.target() === target) { this.operationState = 'failed'; this.error = 'request_updated'; this.publishMessages(); } return false; }
       this.localMessages = this.localMessages.concat([entry]); this.publishMessages();
-      dispatched = true; await repo.send(row, text, entry.id, '', images, (): boolean => this.owns(generation, scope) && this.target() === target && this.repository === repo && this.draftRevision === entry.revision && this.canSend());
+      dispatched = true; await repo.send(row, text, entry.id, '', images, (): boolean => this.owns(generation, scope) && this.target() === target && this.repository === repo && this.draftRevision === entry.revision && !this.decision && this.canSend());
     } catch (error) {
       if (entry.state === 'done') {
         this.activeMessages.delete(entry.id);
@@ -907,25 +977,41 @@ export class ClientModel {
     if (this.demo && this.demoRepository === repo) this.refreshDemo();
   }
   async answer(option: string, values: Record<string, Object>, expected?: Decision): Promise<void> {
-    const decision = this.decision; if (!this.canApprove() || !decision || decision.status !== 'open') return;
-    if (expected && (expected.id !== decision.id || expected.raw !== decision.raw)) { this.error = 'request_updated'; return; }
+    if (!this.canApprove()) return;
+    const row = this.selected, target = this.target();
+    let decision = expected ? this.pendingDecisions.find((item: Decision): boolean => item.id === expected.id && item.raw === expected.raw) : this.decision;
+    if (!decision && expected && !this.pendingDecisionTarget && this.pendingDecisions.length === 0 && this.decision === expected) decision = expected;
+    if (!decision || expected && (expected.id !== decision.id || expected.raw !== decision.raw || expected.machine !== decision.machine || expected.session !== decision.session)) { this.error = 'request_updated'; return; }
+    const session = row.session || row.id;
+    if (this.pendingDecisionTarget && (this.pendingDecisionTarget !== target || !this.pendingDecisions.some((item: Decision): boolean => item === decision) ||
+      decision.machine !== row.machine || decision.session !== session || row.manager && row.manager !== this.profile.manager)) {
+      this.error = 'request_updated'; return;
+    }
+    if (decision.status !== 'open') return;
+    const personaQuestion = isPersonaAskUserQuestion(decision, row.kind);
     const request = new Decision();
     request.id = decision.id; request.raw = decision.raw; request.kind = decision.kind; request.revision = decision.revision;
     request.machine = decision.machine; request.session = decision.session; request.prompt = decision.prompt;
     request.options = decision.options.slice(); request.fields = decision.fields.slice(); request.status = decision.status;
-    const generation = this.generation, scope = this.scope(), target = this.target(), row = this.selected, repo = this.repo();
-    decision.status = 'pending'; this.operationState = 'pending';
+    const generation = this.generation, scope = this.scope(), repo = this.repo();
+    const current = (): boolean => this.owns(generation, scope) && this.target() === target && this.repository === repo &&
+      (this.pendingDecisionTarget === target ? this.pendingDecisions.some((item: Decision): boolean => item === decision) :
+        !this.pendingDecisionTarget && this.pendingDecisions.length === 0 && this.decision === decision);
+    decision.status = 'pending';
+    if (!personaQuestion) this.operationState = 'pending';
     try {
       await repo.resolve(request, option, values, util.generateRandomUUID());
     } catch (error) {
-      if (!this.owns(generation, scope) || this.target() !== target || this.repository !== repo) return;
+      if (!current()) return;
       decision.status = error instanceof HttpFailure && error.resultPending ? 'pending' : error instanceof HttpFailure && error.resultUnknown ? 'unknown' : 'open';
-      this.operationState = ['pending', 'unknown'].includes(decision.status) ? decision.status : 'failed'; this.failure(error as Error);
+      if (!personaQuestion) this.operationState = ['pending', 'unknown'].includes(decision.status) ? decision.status : 'failed';
+      this.failure(error as Error);
       if (error instanceof HttpFailure && (error.status === 409 || error.status === 410)) await this.loadChat(row);
       return;
     }
-    if (!this.owns(generation, scope) || this.target() !== target || this.repository !== repo) return;
-    decision.status = 'resolved'; this.operationState = 'done';
+    if (!current()) return;
+    decision.status = 'resolved';
+    if (!personaQuestion) this.operationState = 'done';
     if (this.demo && this.demoRepository === repo) this.refreshDemo();
     // A refresh failure cannot turn an acknowledged approval into another sendable decision.
     try { await this.loadChat(row); } catch (error) { if (this.owns(generation, scope) && this.target() === target) this.failure(error as Error); }
@@ -1001,9 +1087,14 @@ export class ClientModel {
       await this.refresh(); if (this.owns(generation, scope) && this.target(row) === this.target()) { const updated = this.sessions.find((item: ResourceRow) => item.key() === row.key()); if (updated) await this.select(updated); }
     } catch (error) { if (this.owns(generation, scope)) this.failure(error as Error); }
   }
-  canSend(): boolean { return this.connected && this.capabilities().canSend; }
+  private decisionsReady(): boolean {
+    if (!this.isChat() || this.decisionReadyTarget === this.target()) return true;
+    // Preserve compatibility with callers that still provide only the blocking decision.
+    return !this.pendingDecisionTarget && this.pendingDecisions.length === 0 && this.decision !== undefined;
+  }
+  canSend(): boolean { return this.connected && this.capabilities().canSend && this.decisionsReady(); }
   canCompose(): boolean { return this.isChat() && this.capabilities().canSend; }
-  canApprove(): boolean { return this.connected && this.capabilities().canApprove; }
+  canApprove(): boolean { return this.connected && this.capabilities().canApprove && this.decisionsReady(); }
   canInterrupt(): boolean { return this.connected && this.capabilities().canInterrupt; }
   contextTitle(): string {
     if (!this.sourceContext) return ''; const data = Wire.parse(this.sourceContext);
@@ -1057,6 +1148,23 @@ export class ClientModel {
   }
   private viewKey(key: string): string { return 'view:' + (key === 'ssh-tunnel' ? scopeKey({ groupId: this.profile.id, managerId: '' }) : this.scope()) + ':' + key; }
   viewRevision(key: string): number { return this.local.revision(this.viewKey(key)); }
+  /** Outcome bookkeeping stays on the admitted scope, even after navigation; Forget retires the captured epoch. */
+  captureView(key: string): ClientViewLease {
+    const path = this.viewKey(key), local = this.local, epoch = local.revision(path);
+    const valid = (): boolean => local.accepts(path, epoch);
+    return { epoch: epoch, valid: valid,
+      read: async (): Promise<string> => {
+        if (!valid()) throw new Error('request_updated');
+        const result = await local.get(path);
+        if (!valid()) throw new Error('request_updated');
+        return result;
+      },
+      write: async (value: string): Promise<void> => {
+        if (!valid()) throw new Error('request_updated');
+        await local.put(path, value, epoch);
+        if (!valid()) throw new Error('request_updated');
+      } };
+  }
   async saveView(key: string, value: string, expectedEpoch: number = this.viewRevision(key)): Promise<void> { await this.local.put(this.viewKey(key), value, expectedEpoch); }
   async loadView(key: string): Promise<string> { return this.local.get(this.viewKey(key)); }
   removeContext(): void { this.sourceContext = ''; this.draftRevision = util.generateRandomUUID(); this.persistDraft().catch(() => this.error = 'failed'); }
@@ -1115,13 +1223,13 @@ export class ClientModel {
     this.ssh.stop(); this.stopReconnect(); this.cancelDraftTimer(); this.closeTranscript(); this.releaseTerminal(); this.retireViews(); this.repository?.close(); this.generation++; this.selectionGeneration++;
     this.demo = true; this.connected = true; this.profile = new HubProfile('demo', tr('local_demo')); this.profile.hubId = 'demo'; this.profile.manager = 'demo';
     this.demoRepository = new DemoRepository(this.local); this.repository = this.demoRepository;
-    this.selected = new ResourceRow(); this.messages = []; this.revisionItems = []; this.decision = undefined; this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; this.draftLoading = false;
+    this.selected = new ResourceRow(); this.messages = []; this.revisionItems = []; this.clearPendingDecisions(); this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; this.draftLoading = false;
     this.localMessages = []; this.renderedMessages = []; this.echoedMessages.clear(); this.unresolvedWrites = []; this.operationState = ''; this.resourceRows = []; this.detail = ''; this.reply = '';
     this.knowledgeKind = 'projects'; this.refreshDemo(); this.error = ''; this.section = 0;
   }
   releaseTerminal(): void { this.workspace?.hide(); this.terminalControl = false; }
   async background(): Promise<void> {
-    this.foreground = false; this.ssh.stop(); this.stopReconnect(); this.cancelDraftTimer(); this.closeTranscript(); this.releaseTerminal();
+    this.foreground = false; this.ssh.stop(); this.stopReconnect(); this.cancelDraftTimer(); this.closeTranscript(); this.clearPendingDecisions(); this.releaseTerminal();
     const repository = this.repository; repository?.close();
     const children = Array.from(this.views.values()).map((view: ClientModel): Promise<void> => view.background());
     await this.persistDraft(); await Promise.all(children);

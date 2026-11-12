@@ -136,6 +136,12 @@ export class AgentWorkspace {
     return [identity, machine, shortPath, state, content];
   }
 
+  listMetadata(row: ResourceRow): string[] {
+    const metadata = this.rowMetadata(row);
+    const machineId = rowMachine(row);
+    return [this.client?.groupName(row) || '', metadata[1] === machineId ? '' : metadata[1], metadata[3], metadata[4]];
+  }
+
   async open(client: ClientModel, readingDetail: boolean = false): Promise<void> {
     const revision = ++this.revision;
     this.client = client; this.scope = client.scope(); this.owner = client.profile.manager;

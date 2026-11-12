@@ -1,6 +1,9 @@
 import { util } from '@kit.ArkTS';
 import { AdminWorkspacePage } from '../components/AdminWorkspacePage';
 import { ExtensionPage } from '../components/ExtensionPage';
+import { ExtensionNavigationPage } from '../components/ExtensionNavigationPage';
+import { ExtensionNavigation, ExtensionNavigationEntry } from '../models/ExtensionNavigation';
+import { extensionIcon } from '../design/ExtensionIcons';
 import type { ExtensionUINavigationEffect } from '../models/ExtensionUI';
 import { ComputerScreenPage } from '../components/ComputerScreenPage';
 import { isPairingAddress } from '../core/WireCompatibility';
@@ -52,8 +55,13 @@ struct Index {
   @Local extensionTitle: string = '';
   @Local todoTitle: string = '';
   @Local extensionRefreshRevision: number = 0;
+  @Local applications: ExtensionNavigation = new ExtensionNavigation();
   @Local shownName: string = '';
   @Local shownParam: string = '';
+  @Local chatMenuActions: SheetInfo[] = [];
+  @Local chatTitleMenuVisible: boolean = false;
+  @Local chatBodyMenuVisible: boolean = false;
+  @Local chatMenuRevision: number = 0;
   private routeRevision: number = 0;
   @Local stack: NavPathStack = new NavPathStack();
   @Local breakpoint: WidthBreakpoint = WidthBreakpoint.WIDTH_SM;
@@ -130,12 +138,18 @@ struct Index {
   aboutToAppear(): void {
     this.syncConversationRows(); this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE); this.updateBreakpoint(); this.consumePairingLink(); this.restoreScope(); this.consumeNotification();
     this.bindDeviceOwner(this.model);
+    this.applications.bind(this.model); this.applications.refresh();
   }
-  @Monitor('model.profile') scopeChanged(): void { if (this.activeScope !== this.model.scope()) { this.showSheet = false; this.agentFormRevision++; this.creatingAgent = false; this.agentTodo = undefined; this.readerShown = false; this.readerAddress = ''; this.readerTitle = ''; this.detailModel.hideConversation(); this.detailModel = this.model; this.chatReady = false; this.detailRoute = ''; this.routeRevision++; this.bindDeviceOwner(this.model); } this.syncConversationRows(); this.restoreScope(); deviceFeatures.context(); }
+  aboutToDisappear(): void { this.applications.dispose(); this.dismissChatActions(); }
+  @Monitor('model.profile', 'model.connected', 'model.features') applicationOwnerChanged(): void {
+    this.applications.bind(this.model); this.applications.connectionChanged();
+  }
+  @Monitor('model.profile') scopeChanged(): void { if (this.activeScope !== this.model.scope()) { this.dismissChatActions(); this.showSheet = false; this.agentFormRevision++; this.creatingAgent = false; this.agentTodo = undefined; this.readerShown = false; this.readerAddress = ''; this.readerTitle = ''; this.detailModel.hideConversation(); this.detailModel = this.model; this.chatReady = false; this.detailRoute = ''; this.routeRevision++; this.bindDeviceOwner(this.model); } this.syncConversationRows(); this.restoreScope(); deviceFeatures.context(); }
   @Monitor('model.conversations', 'model.mainId') conversationsChanged(): void { this.syncConversationRows(); }
   @Monitor('model.appearance') appearanceChanged(): void {
     this.getUIContext().getHostContext()?.getApplicationContext().setColorMode(this.model.appearance === 1 ? ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT : this.model.appearance === 2 ? ConfigurationConstant.ColorMode.COLOR_MODE_DARK : ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
   }
+  @Monitor('detailModel.connected') chatMenuConnectionChanged(): void { if (!this.detailModel.connected && (this.chatTitleMenuVisible || this.chatBodyMenuVisible)) this.dismissChatActions(); }
   @Monitor('model.connected') connectionChanged(): void { deviceFeatures.context(); if (this.model.connected && this.shownName && this.activeChild === this.childKey(this.shownName, this.shownParam)) this.restoreTarget(this.shownName, this.shownParam); }
   @Monitor('model.forgottenEpoch') forgetNavigation(): void {
     for (const key of this.paths.keys()) if (isHubStateKey('view:' + key, this.model.forgottenProfile)) this.paths.delete(key);
@@ -236,14 +250,36 @@ struct Index {
   private adminMenus(name: string, param: Object): NavigationMenuItem[] { return [{ value: tr('refresh'), action: () => { if (this.activeChild === this.childKey(name, param)) this.adminRefreshRevision++; } }]; }
   private settingsTitle(param: Object): string { const descriptor = NavigationContext.from('settings', param as string); return descriptor.scoped && ['extension_detail', 'connector_detail', 'channel_detail', 'extension_catalog'].includes(descriptor.page) ? descriptor.row.title : tr(this.settingsLabel(descriptor.page)); }
   private openSettingsDetail(page: string, row: ResourceRow): void { this.stack.pushPath({ name: 'settings', param: NavigationContext.settings(page, row) }); this.savePath(); }
-  private openExtension(owner: ClientModel, extensionId: string, uiId: string, title: string, state: string = '', context: Record<string, Object> = Wire.payload([], [])): void {
+  private openApplications(): void {
+    const param = JSON.stringify([this.model.profile.id, this.model.profile.manager]);
+    const found = this.stack.getAllPathName().findIndex((name: string): boolean => name === 'applications');
+    if (found >= 0) this.stack.popToIndex(found);
+    else this.stack.pushPath({ name: 'applications', param: param });
+    this.savePath(); this.applications.refresh();
+  }
+  private openApplication(entry: ExtensionNavigationEntry): void {
+    if (!this.applications.accepts(entry)) return;
+    const found = this.stack.getAllPathName().findIndex((name: string): boolean => name === 'applications');
+    if (found < 0) return;
+    this.stack.popToIndex(found);
+    this.openExtension(this.model, entry.extensionId, entry.uiId, entry.title, '', {}, entry.extensionId, entry.uiId);
+  }
+  private applicationAllowed(param: Object): boolean {
+    const row = this.routeRow(param), data = row.data(), root = Wire.text(data, 'navigation_extension');
+    return !root || this.applications.allows(row.group, row.manager, root, Wire.text(data, 'navigation_ui'));
+  }
+  private openExtension(owner: ClientModel, extensionId: string, uiId: string, title: string, state: string = '', context: Record<string, Object> = Wire.payload([], []), navigationExtension: string = '', navigationUI: string = ''): void {
     if (!extensionId || !uiId || !owner.profile.id) return;
     if (this.stack.getAllPathName().filter((name: string) => name === 'extension').length >= 8) { this.getUIContext().getPromptAction().showToast({ message: tr('extension_ui_stack_limit') }); return; }
     const row = new ResourceRow(extensionId, title || extensionId, 'extension'); row.group = owner.profile.id; row.manager = owner.profile.manager;
-    row.raw = JSON.stringify(Wire.payload(['ui', 'state', 'context', 'instance'], [uiId, state, context, util.generateRandomUUID()]));
+    row.raw = JSON.stringify(Wire.payload(['ui', 'state', 'context', 'instance', 'navigation_extension', 'navigation_ui'], [uiId, state, context, util.generateRandomUUID(), navigationExtension, navigationUI]));
     this.stack.pushPath({ name: 'extension', param: JSON.stringify(row) }); this.savePath();
   }
-  private extensionNavigate(name: string, param: Object, effect: ExtensionUINavigationEffect): void { if (this.activeChild === this.childKey(name, param) && effect.kind === 'push') this.openExtension(this.detailModel, effect.extensionId, effect.uiId, effect.title, effect.state, effect.context); }
+  private extensionNavigate(name: string, param: Object, effect: ExtensionUINavigationEffect): void {
+    if (this.activeChild !== this.childKey(name, param) || !this.applicationAllowed(param) || effect.kind !== 'push') return;
+    const source = this.routeRow(param).data();
+    this.openExtension(this.detailModel, effect.extensionId, effect.uiId, effect.title, effect.state, effect.context, Wire.text(source, 'navigation_extension'), Wire.text(source, 'navigation_ui'));
+  }
   private extensionMenus(name: string, param: Object): NavigationMenuItem[] { return [{ value: tr('refresh'), action: () => { if (this.activeChild === this.childKey(name, param)) this.extensionRefreshRevision++; } }]; }
   private settingsKind(param: Object): string { return NavigationContext.from('settings', param as string).page; }
   private targetReady(name: string, param: Object): boolean { return this.chatReady && this.detailRoute === this.childKey(name, param); }
@@ -276,25 +312,54 @@ struct Index {
   private menus(): NavigationMenuItem[] {
     const result: NavigationMenuItem[] = [];
     if (!this.rail()) result.push({ value: this.model.profile.name || tr('hub'), symbolIcon: new SymbolGlyphModifier($r('sys.symbol.trunk')), action: () => this.openSheet('hub') });
+    if (!this.rail() && this.applications.visible) result.push({ value: tr('applications'), symbolIcon: new SymbolGlyphModifier(extensionIcon('plugin')), action: () => this.openApplications() });
     if (this.model.section === 1 && !this.rail()) result.push({ value: tr('new_agent'), symbolIcon: new SymbolGlyphModifier($r('sys.symbol.plus')), action: () => this.openSheet('newagent') });
     if (this.wide() && !this.rail()) result.push({ value: tr('collapse'), symbolIcon: new SymbolGlyphModifier($r('sys.symbol.chevron_left')), action: () => this.collapsed = true });
     return result;
   }
   private openHistory(): void { this.stack.pushPath({ name: 'history', param: JSON.stringify(this.detailModel.selected) }); this.savePath(); }
   private openTools(path: string = ''): void { const data = Wire.record(JSON.parse(JSON.stringify(this.detailModel.selected)) as Object); if (path) data['open_file'] = path; this.stack.pushPath({ name: 'tools', param: JSON.stringify(data) }); this.savePath(); }
-  @Builder moreMenu() {
+  private destinationMenuItems(name: string, param: Object): NavigationMenuItem[] {
+    if (name === 'settings' && this.isAdminPage(this.settingsKind(param))) return this.adminMenus(name, param);
+    if (name === 'extension' && this.applicationAllowed(param)) return this.extensionMenus(name, param);
+    if (name === 'session' || name === 'conversation') return [{ value: tr('more'), isEnabled: this.targetReady(name, param), action: () => this.showChatActions(name, param) }];
+    return [];
+  }
+  private chatMenuOptions(revision: number): MenuOptions {
+    return { onDisappear: () => this.closeChatActions(revision) };
+  }
+  @Builder chatActionsMenu() {
     Menu() {
-      MenuItem({ content: tr('interaction_history') }).enabled(this.detailModel.isChat() && !!this.detailModel.selected.machine).onClick(() => this.openHistory())
-      if (this.selectedComputer()) MenuItem({ content: tr('computer_screen_open') }).onClick(() => this.openComputer(this.selectedComputer() as ResourceRow))
-      MenuItem({ content: tr('workspace') }).enabled(!!this.detailModel.selected.machine).onClick(() => this.openTools())
-      MenuItem({ content: tr('model') }).onClick(() => this.openSettings('models', true))
-      MenuItem({ content: tr('permissions') }).onClick(() => this.openSettings('session_permissions', true))
-      MenuItem({ content: tr('effort') }).onClick(() => this.openSettings('session_effort', true))
-      MenuItem({ content: tr('voice') }).onClick(() => this.openSettings('voice', true))
-      if (this.detailModel.canInterrupt()) MenuItem({ content: tr('stop') }).onClick(() => this.detailModel.stop())
+      ForEach(this.chatMenuActions, (item: SheetInfo) => {
+        MenuItem({ content: item.title }).constraintSize({ minHeight: Tokens.touch }).onClick(() => item.action())
+      }, (_item: SheetInfo, index: number) => String(this.chatMenuRevision) + ':' + String(index))
     }
   }
-  @Builder moreButton() { Button(tr('more'), { buttonStyle: ButtonStyleMode.TEXTUAL }).bindMenu(this.moreMenu).height(Tokens.touch) }
+  private closeChatActions(revision: number): void {
+    if (revision !== this.chatMenuRevision) return;
+    this.chatTitleMenuVisible = false; this.chatBodyMenuVisible = false;
+  }
+  private dismissChatActions(): void {
+    this.chatMenuRevision++; this.chatTitleMenuVisible = false; this.chatBodyMenuVisible = false; this.chatMenuActions = [];
+  }
+  private showChatActions(name: string, param: Object): void {
+    const owner = this.detailModel, key = owner.selected.key(), generation = owner.connectionGeneration(), scope = owner.scope();
+    const valid = (): boolean => this.activeChild === this.childKey(name, param) && this.targetReady(name, param) &&
+      this.detailModel === owner && owner.owns(generation, scope) && owner.selected.key() === key;
+    if (!valid()) { this.dismissChatActions(); return; }
+    const sheets: SheetInfo[] = [];
+    if (owner.isChat() && owner.selected.machine) sheets.push({ title: tr('interaction_history'), action: () => { if (valid()) this.openHistory(); } });
+    const computer = this.selectedComputer();
+    if (computer) sheets.push({ title: tr('computer_screen_open'), action: () => { if (valid()) this.openComputer(computer); } });
+    if (owner.selected.machine) sheets.push({ title: tr('workspace'), action: () => { if (valid()) this.openTools(); } });
+    for (const page of ['model', 'permissions', 'effort', 'voice']) sheets.push({ title: tr(page), action: () => {
+      if (valid()) this.openSettings(page === 'model' ? 'models' : page === 'permissions' ? 'session_permissions' : page === 'effort' ? 'session_effort' : page, true);
+    } });
+    if (owner.canInterrupt()) sheets.push({ title: tr('stop'), action: () => { if (valid()) owner.stop(); } });
+    this.chatMenuRevision++; this.chatMenuActions = sheets;
+    const body = name === 'session' && this.hideAgentTitle();
+    this.chatTitleMenuVisible = !body; this.chatBodyMenuVisible = body;
+  }
   private syncConversationRows(): void {
     const scope = JSON.stringify([this.model.scope(), this.model.profile.id, this.model.profile.manager]);
     const rows = this.model.conversations.filter((row: ResourceRow) => row.id !== this.model.mainId);
@@ -474,8 +539,10 @@ struct Index {
     } catch (error) { if (revision === this.routeRevision && this.activeChild === key && this.model.owns(generation, scope)) this.model.reportError(error as Error); }
   }
   private routeShown(name: string, param: Object): void {
+    if (this.activeChild !== this.childKey(name, param)) this.dismissChatActions();
     this.activeChild = this.childKey(name, param); if (name === 'extension') this.extensionTitle = this.routeRow(param).title; if (name === 'todo') this.todoTitle = this.routeRow(param).title; this.shownName = name; this.shownParam = param as string;
     if (!['session', 'conversation'].includes(name)) this.detailModel.hideConversation(name !== 'tools');
+    if (name === 'applications') this.applications.refresh();
     const descriptor = NavigationContext.from(name, param as string);
     if (descriptor.scoped) this.restoreTarget(name, param);
     else { this.routeRevision++; this.chatReady = true; this.detailRoute = this.activeChild; if (name === 'resources') this.model.listResources(param as string); }
@@ -491,7 +558,7 @@ struct Index {
   @Builder destination(name: string, param: Object) {
     NavDestination() {
       if (name === 'session' || name === 'conversation') {
-        if (this.targetReady(name, param)) Conversation({ model: this.detailModel, onOpenFile: (path: string) => this.openTools(path), active: this.activeChild === this.childKey(name, param), onOpenResource: (row: ResourceRow) => this.openFrom(name, param, row), onLink: (address: string) => this.openReader(address), showContextMenu: name === 'session' && this.hideAgentTitle(), contextMenu: this.moreMenu })
+        if (this.targetReady(name, param)) Conversation({ model: this.detailModel, onOpenFile: (path: string) => this.openTools(path), active: this.activeChild === this.childKey(name, param), onOpenResource: (row: ResourceRow) => this.openFrom(name, param, row), onLink: (address: string) => this.openReader(address), showContextMenu: name === 'session' && this.hideAgentTitle(), onShowActions: () => this.showChatActions(name, param), actionItems: this.chatMenuActions, actionsVisible: this.chatBodyMenuVisible && this.activeChild === this.childKey(name, param), actionsRequest: this.chatMenuRevision, onHideActions: (request: number) => this.closeChatActions(request) })
         else this.targetLoading(name, param)
       } else if (name === 'history') {
         if (this.targetReady(name, param)) InteractionHistoryPage({ model: this.detailModel, active: this.activeChild === this.childKey(name, param), onLink: (address: string) => this.openReader(address) })
@@ -499,9 +566,19 @@ struct Index {
       } else if (name === 'tools') {
         if (this.targetReady(name, param)) SessionTools({ model: this.detailModel, onOpenLink: (address: string) => this.openReader(address), initialFile: Wire.text(Wire.parse(param as string), 'open_file'), onWorkspaceReady: (workspace: SessionWorkspace | undefined) => this.detailModel.setWorkspace(workspace) })
         else this.targetLoading(name, param)
+      } else if (name === 'applications') {
+        ExtensionNavigationPage({ directory: this.applications, onOpen: (entry: ExtensionNavigationEntry): void => { if (this.activeChild === this.childKey(name, param)) this.openApplication(entry); } })
       } else if (name === 'extension') {
-        if (this.targetReady(name, param)) ExtensionPage({ model: this.detailModel, extensionId: this.routeRow(param).id, uiId: Wire.text(this.routeRow(param).data(), 'ui'), state: Wire.text(this.routeRow(param).data(), 'state'), context: Wire.object(this.routeRow(param).data(), 'context'), active: this.activeChild === this.childKey(name, param), refreshRevision: this.extensionRefreshRevision, onTitle: (title: string) => { if (this.activeChild === this.childKey(name, param)) this.extensionTitle = title; }, onNavigate: (effect: ExtensionUINavigationEffect) => this.extensionNavigate(name, param, effect), onLink: (address: string) => { if (this.activeChild === this.childKey(name, param)) this.openReader(address); }, onBack: () => { if (this.activeChild === this.childKey(name, param)) { this.stack.pop(); this.savePath(); } } })
-        else this.targetLoading(name, param)
+        Column() {
+          if (!this.applicationAllowed(param)) Row({ space: Tokens.gap }) {
+            Text(tr('application_unavailable')).fontSize(Tokens.meta).layoutWeight(1)
+            Button(tr('retry')).height(Tokens.touch).enabled(!this.applications.loading).onClick(() => this.applications.refresh())
+          }.width('100%').padding(Tokens.page)
+          Column() {
+        if (this.targetReady(name, param)) ExtensionPage({ model: this.detailModel, extensionId: this.routeRow(param).id, uiId: Wire.text(this.routeRow(param).data(), 'ui'), state: Wire.text(this.routeRow(param).data(), 'state'), context: Wire.object(this.routeRow(param).data(), 'context'), active: this.activeChild === this.childKey(name, param), authorized: this.applicationAllowed(param), refreshRevision: this.extensionRefreshRevision + (Wire.text(this.routeRow(param).data(), 'navigation_extension') ? this.applications.revision : 0), onTitle: (title: string) => { if (this.activeChild === this.childKey(name, param)) this.extensionTitle = title; }, onNavigate: (effect: ExtensionUINavigationEffect) => this.extensionNavigate(name, param, effect), onLink: (address: string) => { if (this.activeChild === this.childKey(name, param)) this.openReader(address); }, onBack: () => { if (this.activeChild === this.childKey(name, param)) { this.stack.pop(); this.savePath(); } } })
+            else this.targetLoading(name, param)
+          }.width('100%').layoutWeight(1).visibility(this.applicationAllowed(param) ? Visibility.Visible : Visibility.None)
+        }.width('100%').height('100%')
       } else if (name === 'computer') {
         if (this.targetReady(name, param)) ComputerScreenPage({ model: this.detailModel, row: this.routeRow(param), active: this.activeChild === this.childKey(name, param), onClose: () => { if (this.activeChild === this.childKey(name, param)) { this.stack.pop(); this.savePath(); } } })
         else this.targetLoading(name, param)
@@ -540,11 +617,12 @@ struct Index {
         if (!NavigationContext.from(name, param as string).scoped || this.targetReady(name, param)) SettingsPage({ model: this.settingsModel(param), onChat: (row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openLinkedResource(row); }, active: this.activeChild === this.childKey(name, param), page: this.settingsKind(param), onDetail: (page: string, row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openSettingsDetail(page, row); }, onExtension: (extensionId: string, uiId: string, title: string) => { if (this.activeChild === this.childKey(name, param)) this.openExtension(this.settingsModel(param), extensionId, uiId, title); }, onBack: () => { if (this.activeChild === this.childKey(name, param)) { this.stack.pop(); this.savePath(); } }, onComputer: (row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openComputer(row); }, onOpen: (page: string) => this.openSettings(page, NavigationContext.from(name, param as string).scoped) })
         else this.targetLoading(name, param)
       }
-    }.title(name === 'session' || name === 'conversation' ? this.chatTitle(param) : name === 'resources' ? tr(param === 'todo' ? 'todos' : param === 'inbox' ? 'inbox' : param === 'health' ? 'health_home_title' : 'knowledge') : name === 'extension' ? this.extensionTitle : name === 'todo' ? this.todoTitle || this.routeRow(param).title || this.routeRow(param).id : name === 'settings' ? this.settingsTitle(param) : name === 'tools' ? tr('workspace') : name === 'history' ? tr('interaction_history') : this.routeRow(param).title || this.routeRow(param).id)
+    }.title(name === 'session' || name === 'conversation' ? this.chatTitle(param) : name === 'resources' ? tr(param === 'todo' ? 'todos' : param === 'inbox' ? 'inbox' : param === 'health' ? 'health_home_title' : 'knowledge') : name === 'applications' ? tr('applications') : name === 'extension' ? this.extensionTitle : name === 'todo' ? this.todoTitle || this.routeRow(param).title || this.routeRow(param).id : name === 'settings' ? this.settingsTitle(param) : name === 'tools' ? tr('workspace') : name === 'history' ? tr('interaction_history') : this.routeRow(param).title || this.routeRow(param).id)
       .hideTitleBar(name === 'session' && this.hideAgentTitle()).hideBackButton(name === 'session' && this.wide() && this.model.section === 1)
-      .menus(name === 'settings' && this.isAdminPage(this.settingsKind(param)) ? this.adminMenus(name, param) : name === 'extension' ? this.extensionMenus(name, param) : (name === 'session' || name === 'conversation') && this.targetReady(name, param) ? this.moreButton : [])
+      .menus(this.destinationMenuItems(name, param))
+      .bindMenu(this.chatTitleMenuVisible && this.activeChild === this.childKey(name, param), this.chatActionsMenu, this.chatMenuOptions(this.chatMenuRevision))
       .onShown(() => this.routeShown(name, param))
-      .onHidden(() => { if (this.activeChild === this.childKey(name, param)) this.activeChild = ''; if ((name === 'session' || name === 'conversation') && this.routeRow(param).key() === this.detailModel.selected.key()) this.detailModel.hideConversation(false); if (name === 'tools') this.detailModel.releaseTerminal(); })
+      .onHidden(() => { if (this.activeChild === this.childKey(name, param)) { this.activeChild = ''; this.dismissChatActions(); } if ((name === 'session' || name === 'conversation') && this.routeRow(param).key() === this.detailModel.selected.key()) this.detailModel.hideConversation(false); if (name === 'tools') this.detailModel.releaseTerminal(); })
       .onBackPressed((): boolean => { this.detailModel.releaseTerminal(); this.stack.pop(); this.savePath(); return true; })
   }
   build() {

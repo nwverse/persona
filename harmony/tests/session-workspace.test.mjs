@@ -5,7 +5,8 @@ import { readFileSync } from 'node:fs';
 
 registerHooks({
   resolve(specifier, context, next) {
-    if (context.parentURL?.endsWith('/SessionWorkspace.ets')) {
+    if (context.parentURL?.endsWith('/SessionWorkspace.ets') || context.parentURL?.endsWith('/FileTransfer.ets')) {
+      if (specifier === '@kit.ArkTS') return { url: 'persona-session:arkts', shortCircuit: true };
       if (specifier === './ClientModel') return { url: 'persona-session:client', shortCircuit: true };
       if (specifier === './HubRepository') return { url: 'persona-session:repository', shortCircuit: true };
       if (specifier === '../platform/HubTransport') return { url: 'persona-session:transport', shortCircuit: true };
@@ -15,6 +16,7 @@ registerHooks({
     return next(specifier, context);
   },
   load(url, context, next) {
+    if (url === 'persona-session:arkts') return { format: 'module', source: 'export const util={generateRandomUUID:()=>crypto.randomUUID()};', shortCircuit: true };
     if (url === 'persona-session:client') return { format: 'module', source: 'export class ClientModel {}', shortCircuit: true };
     if (url === 'persona-session:repository') return { format: 'module', source: 'export const segment = encodeURIComponent;', shortCircuit: true };
     if (url === 'persona-session:transport') return { format: 'module', source: `
@@ -104,6 +106,11 @@ function fixture(options = {}) {
     owns: (generation, scope) => generation === state.generation && scope === state.scope,
     target(row = client.selected) { return JSON.stringify([state.scope, row.key()]); },
     repo: () => repository,
+    viewRevision: () => 0,
+    captureView: () => ({epoch:0,valid:()=>true,read:async()=>'',write:async()=>{}}),
+    loadView: async () => '',
+    saveView: async () => {},
+    observeEvents: () => () => {},
     machineName: () => 'MacBook'
   };
   const workspace = new SessionWorkspace();
@@ -257,4 +264,17 @@ test('dev preview opens the authorized native stream without putting the Hub tok
   assert.equal(state.previewStream.path, '/api/v1/machines/m1/preview/connect?port=5173&path=%2Fguide&w=390&h=844&dpr=1&mobile=1');
   assert.equal(state.previewStream.path.includes('token'), false);
   workspace.hide();
+});
+
+test('file transfer follows late capabilities of the captured connection and immediately revokes them',async()=>{
+  const {client,state,workspace}=fixture({features:[]});
+  const entry={name:'sample.txt',path:'/repo/sample.txt',directory:false,symlink:false,size:20,ignored:false};
+  try {
+    assert.equal(workspace.canSendFile(entry),false);
+    client.features=['file_transfer'];
+    assert.equal(workspace.canSendFile(entry),true);
+    client.features=[];assert.equal(workspace.canSendFile(entry),false);
+    client.features=['file_transfer'];state.generation++;
+    assert.equal(workspace.canSendFile(entry),false);
+  } finally {workspace.hide();}
 });

@@ -313,7 +313,7 @@ export class HubTransport {
     }
   }
 
-  private async requestData(path: string, method: string, body: rcp.RequestContent | undefined, contentType: string, limit: number, opId: string): Promise<BytesResponse> {
+  private async requestData(path: string, method: string, body: rcp.RequestContent | undefined, contentType: string, limit: number, opId: string, acceptTransfer: boolean = false): Promise<BytesResponse> {
     const generation = this.generation; this.assertLive(generation);
     const verb = method.toUpperCase();
     if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'].includes(verb)) throw new Error('invalid_method');
@@ -339,7 +339,7 @@ export class HubTransport {
     try {
       this.assertLive(generation); dispatched = true; const response = await session.fetch(request); this.assertLive(generation);
       if (overLimit) throw new HttpFailure(0, 'response_too_large');
-      if (response.statusCode === 202 && !['GET', 'HEAD'].includes(verb)) throw new HttpFailure(202, 'pending', true, true);
+      if (response.statusCode === 202 && !['GET', 'HEAD'].includes(verb) && !acceptTransfer) throw new HttpFailure(202, 'pending', true, true);
       if (response.statusCode >= 300 && response.statusCode < 400) throw new HttpFailure(response.statusCode, 'redirect_refused');
       const bytes = concatArrays(chunks), text = response.statusCode < 200 || response.statusCode >= 300 ? utf8String(bytes, false) : '';
       if (response.statusCode < 200 || response.statusCode >= 300)
@@ -357,7 +357,16 @@ export class HubTransport {
   async request(path: string, method: string = 'GET', body: string = '', opId: string = ''): Promise<string> {
     if (utf8(body).length > MAX_HTTP_BYTES) throw new HttpFailure(0, 'request_too_large');
     const response = await this.requestData(path, method, body || undefined, 'application/json', MAX_HTTP_BYTES, opId);
-    return utf8String(new Uint8Array(response.data), true);
+    try { return utf8String(new Uint8Array(response.data), true); }
+    catch (_) { throw new HttpFailure(0, 'response_invalid', !['GET', 'HEAD'].includes(method.toUpperCase())); }
+  }
+  /** Only the transfer protocol defines 202 as a task snapshot; it is still not completion. */
+  async requestAccepted(path: string, method: string, body: string): Promise<string> {
+    if (path.split('?')[0] !== '/api/v1/files/transfer' || method !== 'POST') throw new Error('invalid_path');
+    if (utf8(body).length > MAX_HTTP_BYTES) throw new HttpFailure(0, 'request_too_large');
+    const response = await this.requestData(path, method, body || undefined, 'application/json', MAX_HTTP_BYTES, '', true);
+    try { return utf8String(new Uint8Array(response.data), true); }
+    catch (_) { throw new HttpFailure(0, 'response_invalid', true); }
   }
   async requestBytes(path: string, method: string = 'GET', body?: ArrayBuffer, contentType: string = 'application/octet-stream', opId: string = ''): Promise<BytesResponse> {
     if (body && body.byteLength > MAX_BINARY_BYTES) throw new HttpFailure(0, 'request_too_large');

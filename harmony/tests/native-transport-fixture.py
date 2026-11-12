@@ -72,7 +72,7 @@ def main():
             pass
 
         def reply(self, status, value):
-            data = json.dumps(value).encode()
+            data = value if isinstance(value, bytes) else json.dumps(value).encode()
             self.send_response(status)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Content-Length', str(len(data)))
@@ -112,11 +112,29 @@ def main():
                 self.reply(200, {'id': 'fixture-device', 'token': TOKEN})
             elif path == '/api/v1/test/pending':
                 self.reply(202, {'state': 'pending'})
+            elif path == '/api/v1/files/transfer':
+                if 'invalid_utf8=1' in self.path:
+                    self.reply(202, b'\xff')
+                else:
+                    self.reply(202, {'id': 'synthetic-transfer', 'state': 'running', 'from': 'source', 'to': 'target', 'name': 'example.txt', 'bytes': 0, 'total': 12})
             elif path == '/api/v1/test/rotate':
                 context.load_cert_chain(str(second[1]), str(second[0]))
                 self.reply(200, {'state': 'rotated'})
             else:
                 self.reply(404, {'code': 'not_found'})
+
+        def do_PUT(self):
+            path = self.route()
+            if path is None or not self.authorized():
+                return
+            size = min(65536, max(0, int(self.headers.get('Content-Length', '0'))))
+            self.rfile.read(size)
+            if path == '/api/v1/test/invalid-utf8':
+                self.reply(200, b'\xff')
+            else:
+                self.reply(404, {'code': 'not_found'})
+
+        do_DELETE = do_PUT
 
         def do_GET(self):
             path = self.route()

@@ -156,7 +156,7 @@ test('history loads only when the hub advertises the archive capability and hono
   assert.deepEqual(workspace.groups.flatMap((group) => group.rows).map((row) => row.id), ['archive-1']);
 });
 
-test('the default session list is flat and carries machine, short path, status, and content metadata', async () => {
+test('the flat list shows friendly identity and state while retaining complete inspection metadata', async () => {
   const row = agent('s1', { cwd: '/work/persona', repo_root: '/work/persona', worktree: '/work/persona', last_text: 'Checking the build' });
   const { workspace } = await opened({ sessions: [row], machines: [machine('m1')] });
   assert.equal(workspace.groupingMode, 'flat');
@@ -165,6 +165,7 @@ test('the default session list is flat and carries machine, short path, status, 
   assert.equal(workspace.groups[0].showRepository, false);
   assert.equal(workspace.groups[0].showWorktree, false);
   assert.deepEqual(workspace.rowMetadata(row), ['Hub · work', 'Computer m1', 'work/persona', 'working', 'Checking the build']);
+  assert.deepEqual(workspace.listMetadata(row), ['Hub', 'Computer m1', 'working', 'Checking the build']);
 });
 
 test('native grouping choices show only their selected levels and grouping changes release the membership freeze', async () => {

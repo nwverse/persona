@@ -1,5 +1,17 @@
 import { Wire } from './Wire';
 
+export function hasExtensionSlots(features: string[]): boolean {
+  return features.includes('extension_ui_slots') || features.includes('plugin_ui_slots');
+}
+export function extensionSlotsPath(features: string[]): string {
+  return '/api/v1/' + (features.includes('extensions') ? 'extensions' : 'plugins') + '/-/ui?placement=nav_page';
+}
+export function extensionIdentity(data: Record<string, Object>): string { return Wire.text(data, 'extension') || Wire.text(data, 'plugin'); }
+export function extensionCatalogueEvent(kind: string): boolean {
+  return ['extension_auth', 'extension_operation', 'extension_upgrade', 'plugin_upgrade', 'extensions', 'plugins'].includes(kind);
+}
+export function extensionUIEvent(kind: string): boolean { return kind === 'extension_ui' || kind === 'plugin_ui'; }
+
 function attribute(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }

@@ -26,7 +26,7 @@ export class NativeNotifications {
     catch (_) { this.granted = false; }
   }
   features(enabled: boolean): string[] {
-    const features: string[] = ['managers', 'extension_operations', 'extension_ui_stream_v1', 'elicitation'];
+    const features: string[] = ['managers', 'extension_operations', 'extension_ui_stream_v1', 'elicitation', 'file_transfer'];
     if (enabled && this.granted) features.push('ws_notify');
     return features;
   }

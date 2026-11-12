@@ -380,7 +380,7 @@ export struct InteractionDecisionForm {
       }.width('100%')
     }
     if (this.request.kind !== 'elicitation') Button(this.request.kind === 'screen' && interactionScreenMulti(this.request) ? interactionScreenSubmitLabel(this.request) : tr('confirm')).enabled(this.canSubmit())
-      .width('100%').height(Tokens.touch).onClick(() => this.submit(this.request.kind === 'question' ? 'answer' :
+      .width('100%').constraintSize({ minHeight: Tokens.touch }).onClick(() => this.submit(this.request.kind === 'question' ? 'answer' :
         this.request.kind === 'screen' && interactionScreenMulti(this.request) ? 'submit' :
           this.request.kind === 'screen' ? this.selectedScreen : this.selected)).id('interaction.submit')
   }
@@ -394,7 +394,7 @@ export struct InteractionDecisionForm {
 
   build() {
     Column({ space: Tokens.gap }) {
-      Row({ space: Tokens.gap }) {
+      if (this.request.status !== 'open' || this.readOnly) Row({ space: Tokens.gap }) {
         Text(this.statusLabel()).fontSize(Tokens.meta).fontWeight(FontWeight.Medium).layoutWeight(1)
         if (this.readOnly) Text(tr('read_only')).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
       }.width('100%')

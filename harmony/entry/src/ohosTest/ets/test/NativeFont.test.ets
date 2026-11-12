@@ -18,6 +18,9 @@ export default function nativeFontTests(): void {
       const context = nativeTestContext(), application = context.getApplicationContext();
       const scale = Number(fixtureArgument('fontScale'));
       expect(scale === 2 || scale === 3.2).assertTrue();
+      const holdArgument = fixtureArgument('fontHoldSeconds');
+      const holdSeconds = holdArgument ? Number(holdArgument) : 45;
+      expect(Number.isInteger(holdSeconds) && holdSeconds >= 15 && holdSeconds <= 120).assertTrue();
       const original = context.config.fontSizeScale || 1;
       const foldChanged = (_status: display.FoldStatus): void => logDisplay();
       const displayChanged = (_id: number): void => logDisplay();
@@ -33,7 +36,7 @@ export default function nativeFontTests(): void {
         });
         logDisplay(); display.on('foldStatusChange', foldChanged); display.on('change', displayChanged);
         // The owning test driver captures and inspects the running application during this interval.
-        await new Promise<void>((resolve) => setTimeout(resolve, 45000));
+        await new Promise<void>((resolve) => setTimeout(resolve, holdSeconds * 1000));
       } finally {
         display.off('foldStatusChange', foldChanged); display.off('change', displayChanged);
         application.setFontSizeScale(original);

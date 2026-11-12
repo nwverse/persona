@@ -96,6 +96,41 @@ export default function nativeTransportTests(): void {
         expect(repo.mutations?.blocked().length).assertEqual(1);
       } finally { repo.close(); await local.close(); await relationalStore.deleteRdbStore(context, name); }
     });
+    it('transfer_acceptance_returns_its_task_id_without_releasing_other_pending_writes', 0, async (): Promise<void> => {
+      const transport = fixture();
+      try {
+        const accepted = Wire.parse(await transport.requestAccepted('/api/v1/files/transfer', 'POST', '{}'));
+        expect(Wire.text(accepted, 'id')).assertEqual('synthetic-transfer');
+        expect(Wire.text(accepted, 'state')).assertEqual('running');
+        let blocked = false;
+        try { await transport.request('/api/v1/files/transfer', 'POST', '{}'); } catch (error) { blocked = error instanceof HttpFailure && error.resultPending; }
+        expect(blocked).assertTrue();
+        let restricted = false;
+        try { await transport.requestAccepted('/api/v1/test/pending', 'POST', '{}'); } catch (_) { restricted = true; }
+        expect(restricted).assertTrue();
+      } finally { transport.close(); }
+    });
+    it('an_invalid_utf8_transfer_receipt_remains_an_unknown_dispatched_result', 0, async (): Promise<void> => {
+      const transport = fixture();
+      try {
+        let uncertain = false;
+        try { await transport.requestAccepted('/api/v1/files/transfer?invalid_utf8=1', 'POST', '{}'); }
+        catch (error) { uncertain = error instanceof HttpFailure && error.resultUnknown; }
+        expect(uncertain).assertTrue();
+      } finally { transport.close(); }
+    });
+    it('invalid_utf8_put_and_delete_responses_keep_dispatched_writes_unknown', 0, async (): Promise<void> => {
+      const transport = fixture();
+      try {
+        const methods: string[] = ['PUT', 'DELETE'];
+        for (const method of methods) {
+          let uncertain = false;
+          try { await transport.request('/api/v1/test/invalid-utf8', method, '{}'); }
+          catch (error) { uncertain = error instanceof HttpFailure && error.resultUnknown; }
+          expect(uncertain).assertTrue();
+        }
+      } finally { transport.close(); }
+    });
     it('fragmented_hello_is_reassembled_and_close_discards_queued_application_frames', 0, async (): Promise<void> => {
       const transport = fixture(), before = await count('data'); let hello = false;
       try {

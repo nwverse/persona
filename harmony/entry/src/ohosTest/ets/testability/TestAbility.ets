@@ -15,7 +15,8 @@ export default class TestAbility extends UIAbility {
   onCreate(): void {
     bindNativeTestContext(this.context);
     const testArguments = abilityDelegatorRegistry.getArguments();
-    if (fixtureArgument('fontScale') || fixtureArgument('sshFixtureFile')) testArguments.parameters['-s timeout'] = '60000';
+    if (fixtureArgument('fontScale')) testArguments.parameters['-s timeout'] = '150000';
+    if (fixtureArgument('sshFixtureFile')) testArguments.parameters['-s timeout'] = '60000';
     if (fixtureArgument('recordingFixtureId')) testArguments.parameters['-s timeout'] = '120000';
     if (fixtureArgument('phoneCheck')) testArguments.parameters['-s timeout'] = '90000';
     Hypium.hypiumTest(abilityDelegatorRegistry.getAbilityDelegator(), testArguments, (): void => {

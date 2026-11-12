@@ -54,6 +54,7 @@ class ExtensionUIPageState {
   dirtyRevision: number = 0;
   dirty: boolean = false;
   refreshDeadline: number = 0;
+  presentationGeneration: number = 0;
   constructor(ui: string, state: string = '', title: string = '') {
     this.key = util.generateRandomUUID(); this.ui = ui; this.state = state; this.title = title;
   }
@@ -220,7 +221,7 @@ export class ExtensionUIModel implements ExtensionPresentation {
   private currentPage(): ExtensionUIPageState | undefined { return this.stack.length ? this.stack[this.stack.length - 1] : undefined; }
   get presentationKey(): string {
     const snapshot = this.currentPage()?.snapshot;
-    return JSON.stringify([this.profileId, this.managerId, this.extensionId, this.currentPage()?.key || '', snapshot?.session || '', snapshot?.epoch || '']);
+    return JSON.stringify([this.profileId, this.managerId, this.extensionId, this.currentPage()?.key || '', snapshot?.session || '', snapshot?.epoch || '', this.currentPage()?.presentationGeneration || 0]);
   }
   currentUI(): string { return this.currentPage()?.ui || this.rootUI; }
   getSnapshot(): ExtensionUIStreamSnapshot | undefined { return this.currentPage()?.snapshot; }
@@ -317,7 +318,7 @@ export class ExtensionUIModel implements ExtensionPresentation {
     if (!client.connected) { this.phase = 'disconnected'; this.error = 'extension_ui_offline'; return; }
     if (!this.ownerCurrent()) { this.error = 'request_updated'; return; }
     if (this.compact || page.preferLegacy || !client.features.includes(STREAM_FEATURE)) {
-      page.stream = false; this.phase = 'opening'; await this.renderPage(page); return;
+      page.stream = false; this.phase = 'opening'; await this.renderPage(page, page.dirty); return;
     }
     page.stream = true; this.phase = 'opening'; this.loading = true; this.error = '';
     if (!page.openRequest) page.openRequest = this.makeOpenRequest(page);
@@ -395,7 +396,46 @@ export class ExtensionUIModel implements ExtensionPresentation {
     if (kind === 'receipt') { this.receiveReceipt(frame, requestId); return; }
     if (kind === 'error') { this.receiveError(frame, requestId); return; }
     if (kind === 'suspended') { this.ackLifecycle(frame, requestId, 'suspend'); return; }
-    if (kind === 'closed') this.ackLifecycle(frame, requestId, 'close');
+    if (kind === 'closed') {
+      if (requestId) this.ackLifecycle(frame, requestId, 'close');
+      else this.receiveRetirement(frame);
+    }
+  }
+  private receiveRetirement(frame: ExtensionViewRecord): void {
+    const session = Wire.text(frame, 'session');
+    const page = this.stack.find((candidate: ExtensionUIPageState): boolean => !!session && candidate.snapshot?.session === session);
+    if (!page) return;
+    this.retirePageView(page);
+  }
+  invalidateAuthorization(): void {
+    this.operationSequence++;
+    for (const page of this.stack) {
+      if (page.snapshot) {
+        const request = this.makeLifecycle('close', page);
+        if (request) this.sendLifecycle(request, 'close', page.key);
+      } else this.detachPendingOpen(page);
+      this.retirePageView(page);
+    }
+  }
+  private retirePageView(page: ExtensionUIPageState): void {
+    page.presentationGeneration++;
+    if (this.lineResultPageKey === page.key) {
+      this.lineResultJSON = ''; this.lineResultKey = ''; this.lineResultPageKey = ''; this.lineResultPath = ''; this.lineResultRevision++;
+    }
+    page.snapshot = undefined; page.openRequest = undefined; page.hasView = false; page.dirty = true; page.dirtyRevision++;
+    for (const requestId of Array.from(this.requestPages.keys())) {
+      const pending = this.requestPages.get(requestId);
+      if (pending?.pageKey === page.key && pending.kind !== 'event') this.requestPages.delete(requestId);
+    }
+    for (const event of this.events.values()) if (event.pageKey === page.key && event.status === 'pending') {
+      this.clearEventTimeout(event); this.markUncertain(event, 'extension_ui_action_uncertain');
+    }
+    if (this.currentPage() === page) {
+      this.clearLegacyRefresh(); this.cancelConfirmation(); this.clearSecrets();
+      this.openRead = false; this.recoveryRead = false; this.loading = false; this.busy = false;
+      this.view = { sections: [] }; this.viewVersion = 0; this.revision++;
+      this.phase = 'failed'; this.error = 'application_unavailable';
+    }
   }
   private receiveHostInteractions(raw: string): void {
     if (raw.length > 1024 * 1024 || !this.events.size || !this.ownerCurrent() || !this.active || this.phase !== 'ready' || !this.client?.connected) return;
@@ -524,6 +564,22 @@ export class ExtensionUIModel implements ExtensionPresentation {
       const oldPending = this.requestPages.get(oldRequestId);
       if (!oldPending) continue;
       if (oldPending.kind === 'event' && oldPending.eventId === request.eventId) this.requestPages.delete(oldRequestId);
+    }
+    const page = this.pageByKey(pending.pageKey);
+    if (page && page.snapshot?.session !== Wire.text(interaction, 'session')) {
+      // A late receipt can settle the old write, but cannot revive its page or execute navigation on a new one.
+      if (status === 'ambiguous') {
+        pending.status = 'uncertain'; this.uncertainEvents.set(request.eventId, pending);
+        this.uncertainEventId = request.eventId;
+      } else {
+        this.events.delete(request.eventId); this.uncertainEvents.delete(request.eventId);
+        if (this.uncertainEventId === request.eventId) this.uncertainEventId = '';
+        if (this.currentPage() === page) {
+          if (status === 'accepted') this.notice = tr('extension_ui_action_completed');
+          else this.error = 'extension_ui_action_rejected';
+        }
+      }
+      return;
     }
     const presentationKey = JSON.stringify([Wire.text(interaction, 'session'), Wire.text(interaction, 'epoch'), request.eventId]);
     this.presentations.set(presentationKey, receipt);

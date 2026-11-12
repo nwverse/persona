@@ -8,7 +8,7 @@ From this directory, build the runtime binary for the test Hub's platform. For a
 bun build --compile app.ts --outfile bin/harmony-native-check-darwin-arm64
 ```
 
-Use the equivalent manifest command path for another platform. Install this directory through `personad extension install` while pointing `PERSONA_HOME` at the owned test Hub. Pair the native HarmonyOS app with that Hub, then open **Settings → Extensions → Native UI Check**. Do not install it on a normal personal Hub.
+Use the equivalent manifest command path for another platform. Install this directory through `personad extension install` while pointing `PERSONA_HOME` at the owned test Hub. Pair the native HarmonyOS app with that Hub, then open the native root navigation menu → **Apps → Native UI Check** (or **Native Stream Check**). Its installation details remain under **Settings → Extensions**. Do not install it on a normal personal Hub.
 
 The legacy **Native UI Check** page exercises a Slider, Switch, note field, confirmed submit, unkeyed row, code, table, negative chart values and two independent diff files. Keep the note field focused and change Level. The count, button caption, unkeyed value, code, table and chart must update without replacing the field or losing its draft. Apply asks once and saves the current note. Diff context should open the requested range first, keep each file independent and expose adjacent bounded pages.
 

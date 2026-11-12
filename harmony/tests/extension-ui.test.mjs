@@ -466,3 +466,126 @@ test('late stream negotiation falling back to an existing legacy view preserves 
     assert.equal(model.fieldValue('note'), 'Unsent note'); assert.equal(model.stack[0].preferLegacy, true);
   } finally { model.dispose(); }
 });
+
+test('an unsolicited server close retires the page before old snapshots or actions can revive it', async()=>{
+  const f=fixtureClient({features:['extension_ui_stream_v1']}),model=new ExtensionUIModel();
+  const view=viewWith({type:'field',key:'note',name:'note',value:'server'});
+  model.bind(f.client,'example','home',{},view,false,()=>{},true);
+  const page=model.currentPage();page.stream=true;page.snapshot=streamSnapshot(view);page.view=view;model.phase='ready';model.setFieldValue('note','Retained draft');
+  model.receive(JSON.stringify({type:'extension_ui_stream',kind:'closed',session:'another-page',request_id:''}));assert.equal(model.canInteract(),true);
+  model.receive(JSON.stringify({type:'extension_ui_stream',kind:'closed',session:'session-1',request_id:''}));
+  assert.equal(model.canInteract(),false);assert.equal(model.phase,'failed');assert.equal(model.fieldValue('note'),'Retained draft');
+  assert.deepEqual(model.view,{sections:[]});assert.equal(model.viewVersion,0);
+  model.receive(JSON.stringify({type:'extension_ui_stream',kind:'snapshot',snapshot:streamSnapshot(view,2)}));assert.equal(model.canInteract(),false);
+  model.refresh();const request=f.state.sent.at(-1).request;assert.equal(request.request,'open');
+  model.receive(JSON.stringify({type:'extension_ui_stream',kind:'snapshot',request_id:request.request_id,snapshot:{...streamSnapshot(view),session:'fresh-session'}}));
+  assert.equal(model.canInteract(),true);assert.equal(model.fieldValue('note'),'Retained draft');model.dispose();
+});
+
+test('revoked legacy pages wait for a fresh render and retain only the unsent ordinary draft', async()=>{
+  const reads=[];
+  const f=fixtureClient({request:()=>new Promise(resolve=>reads.push(resolve))});
+  const model=new ExtensionUIModel(),view=viewWith({type:'field',key:'note',name:'note',value:'server'});
+  model.bind(f.client,'example','home',{},view,false,()=>{},true);model.setFieldValue('note','Local edit');
+  try {
+    model.refresh();assert.equal(reads.length,1);
+    model.invalidateAuthorization();model.setVisible(false);
+    reads.shift()(JSON.stringify({view}));await new Promise(resolve=>setImmediate(resolve));
+    assert.deepEqual(model.view,{sections:[]});assert.equal(model.canInteract(),false);
+    model.setVisible(true);assert.equal(reads.length,1);
+    assert.deepEqual(model.view,{sections:[]});assert.equal(model.canInteract(),false);
+    reads.shift()(JSON.stringify({view:{...view,title:'Fresh page'}}));await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(model.canInteract(),true);assert.equal(model.view.title,'Fresh page');
+    assert.equal(model.fieldValue('note'),'Local edit');
+  } finally { model.dispose(); }
+});
+
+test('directory revocation closes a known stream once and closes a detached late open',async()=>{
+  for(const established of [false,true]){
+    const f=fixtureClient({features:['extension_ui_stream_v1']}),model=new ExtensionUIModel();
+    model.bind(f.client,'example','home',{},undefined,false,()=>{},true);
+    const open=f.state.sent.at(-1).request,view=viewWith({type:'text',key:'text',text:'Old page'});
+    try {
+    if(established) model.receive(JSON.stringify({type:'extension_ui_stream',kind:'snapshot',request_id:open.request_id,snapshot:streamSnapshot(view)}));
+    model.invalidateAuthorization();model.setVisible(false);model.invalidateAuthorization();
+    assert.deepEqual(model.view,{sections:[]});
+    if(!established){
+      const raw=JSON.stringify({type:'extension_ui_stream',kind:'snapshot',request_id:open.request_id,snapshot:streamSnapshot(view)});
+      assert.equal(model.detachedOpens.size,1);
+      for(const handler of [...f.state.handlers])handler(raw);
+      assert.equal(model.detachedOpens.size,0);
+    }
+    const closes=f.state.sent.filter(frame=>frame.request.request==='close');
+    assert.equal(closes.length,1);assert.equal(closes[0].request.session,'session-1');
+    assert.equal(model.canInteract(),false);assert.deepEqual(model.view,{sections:[]});
+    } finally { for(const key of model.detachedOpens.keys())model.clearDetachedOpen(key);model.dispose(); }
+  }
+});
+
+test('retired legacy and stream pages cannot expose earlier code context under the same component identity',async()=>{
+  for(const streamed of [false,true]){
+    const view=viewWith({type:'code',key:'code',path:'file.ts',context:{id:'context'}});
+    const f=fixtureClient({features:streamed?['extension_ui_stream_v1']:[],request:async()=>JSON.stringify({view})}),model=new ExtensionUIModel();
+    model.bind(f.client,'example','home',{},view,false,()=>{},true);
+    const page=model.currentPage();
+    if(streamed){page.stream=true;page.snapshot=streamSnapshot(view);}
+    const identity=model.presentationKey;
+    model.storeLineResult(page,'code','file.ts','new',{path:'file.ts',side:'new',start:1,lines:['Earlier private context']},streamed);
+    assert.deepEqual(model.lineResultFor('code').lines,['Earlier private context']);
+    model.invalidateAuthorization();model.setVisible(false);
+    assert.notEqual(model.presentationKey,identity);assert.deepEqual(model.lineResultFor('code'),{});
+    model.setVisible(true);
+    if(streamed){const open=f.state.sent.at(-1).request;model.receive(JSON.stringify({type:'extension_ui_stream',kind:'snapshot',request_id:open.request_id,snapshot:{...streamSnapshot(view),session:'new-session'}}));}
+    else await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(model.canInteract(),true);assert.deepEqual(model.lineResultFor('code'),{});assert.notEqual(model.presentationKey,identity);model.dispose();
+  }
+});
+
+test('unchanged directory polling does not invalidate a native confirmation waiting longer than five seconds',async(t)=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const {ExtensionNavigation}=await import('../entry/src/main/ets/models/ExtensionNavigation.ets');
+  let writes=0;const view=viewWith({type:'button',key:'save',title:'Save',action:{id:'save',confirm:'Save this item?'}});
+  const f=fixtureClient({features:['extensions','extension_ui_slots'],call:async(path,method)=>{
+    if(method==='POST'){writes++;return {view};}return {ui:[{extension:'example',id:'home',title:'Example',placement:'nav_page'}]};}});
+  const directory=new ExtensionNavigation(),model=new ExtensionUIModel();directory.bind(f.client);await directory.refresh();
+  model.bind(f.client,'example','home',{},view,false,()=>{},true);let published=directory.revision;
+  try{
+    const result=model.performAction('save','save','press').then(()=>null,error=>error),token=model.confirmationToken;assert.ok(token);
+    t.mock.timers.tick(5000);await new Promise(resolve=>setImmediate(resolve));
+    // The Index refreshRevision -> ExtensionPage monitor connection, using both actual models.
+    if(published!==directory.revision){published=directory.revision;model.refresh();await new Promise(resolve=>setImmediate(resolve));}
+    model.confirmAction(token,true);assert.equal(await result,null);assert.equal(writes,1);
+  }finally{directory.dispose();model.dispose();}
+});
+
+test('a page retired during a write stays inactive while a late receipt settles only its captured outcome',async()=>{
+  for(const status of ['accepted','ambiguous']){
+    const links=[],f=fixtureClient({features:['extension_ui_stream_v1']}),model=new ExtensionUIModel();
+    const view=viewWith({type:'button',key:'save',title:'Save',action:{id:'save'}});
+    model.bind(f.client,'example','home',{},view,false,address=>links.push(address),true);
+    const page=model.currentPage();page.stream=true;page.snapshot=streamSnapshot(view);page.view=view;model.phase='ready';
+    await model.performAction('save','save','press');const request=f.state.sent.at(-1).request;
+    model.receive(JSON.stringify({type:'extension_ui_stream',kind:'closed',session:'session-1',request_id:''}));
+    assert.equal(model.uncertainEventId,request.interaction.event_id);assert.equal(model.canInteract(),false);
+    const receipt={session:'session-1',epoch:'epoch-1',event_id:request.interaction.event_id,status,version:2};
+    if(status==='accepted')receipt.result={open_url:'https://example.com/retired'};
+    model.receive(JSON.stringify({type:'extension_ui_stream',kind:'receipt',request_id:request.request_id,receipt}));
+    assert.equal(model.canInteract(),false);assert.deepEqual(links,[]);
+    if(status==='accepted'){assert.equal(model.uncertainEventId,'');assert.equal(model.notice,'extension_ui_action_completed');}
+    else assert.equal(model.uncertainEventId,request.interaction.event_id);
+    model.dispose();
+  }
+});
+
+test('a pure stream mount applies normal receipts only after their version is consumed and releases busy',async()=>{
+  const links=[],f=fixtureClient({features:['extension_ui_stream_v1']}),model=new ExtensionUIModel();
+  const view=viewWith({type:'button',key:'save',title:'Save',action:{id:'save'}});
+  model.bind(f.client,'example','home',{},undefined,false,address=>links.push(address),true);
+  await Promise.resolve();const open=f.state.sent.at(-1).request;assert.equal(open.request,'open');
+  model.receive(JSON.stringify({type:'extension_ui_stream',kind:'snapshot',request_id:open.request_id,snapshot:streamSnapshot(view)}));
+  assert.equal(model.canInteract(),true);await model.performAction('save','save','press');const request=f.state.sent.at(-1).request;
+  model.receive(JSON.stringify({type:'extension_ui_stream',kind:'receipt',request_id:request.request_id,receipt:{session:'session-1',epoch:'epoch-1',event_id:request.interaction.event_id,status:'accepted',version:2,result:{open_url:'https://example.com/completed'}}}));
+  assert.deepEqual(links,[]);assert.equal(model.busy,true);
+  model.receive(JSON.stringify({type:'extension_ui_stream',kind:'snapshot',snapshot:streamSnapshot(view,2)}));
+  assert.deepEqual(links,['https://example.com/completed']);assert.equal(model.busy,false);assert.equal(model.canInteract(),true);model.dispose();
+});

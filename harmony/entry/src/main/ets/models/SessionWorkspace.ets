@@ -2,6 +2,7 @@ import { ClientModel } from './ClientModel';
 import { ResourceRow, Wire } from './Wire';
 import { segment } from './HubRepository';
 import { HubTransport, HttpFailure } from '../platform/HubTransport';
+import { FileTransfer, transferMachineTrustedOnline } from './FileTransfer';
 
 const TRANSFER_LIMIT: number = 32 * 1024 * 1024;
 const TERMINAL_COLS_MIN: number = 10;
@@ -134,6 +135,7 @@ function codePointAt(bytes: Uint8Array, index: number): DecodedCodePoint {
 
 @ObservedV2
 export class SessionWorkspace {
+  @Trace fileTransfer: FileTransfer = new FileTransfer();
   @Trace tab: number = 0;
   @Trace cwd: string = '';
   @Trace currentPath: string = '';
@@ -250,6 +252,8 @@ export class SessionWorkspace {
     this.ownerFeatures = model.features.slice();
     this.machineId = machine;
     this.sessionId = session;
+    const manager = row.manager || model.profile.manager;
+    this.fileTransfer.bind(model, machine, manager);
     this.cwd = cwd;
     this.currentPath = cwd;
     this.entries = [];
@@ -304,14 +308,19 @@ export class SessionWorkspace {
 
   private machineTrustedOnline(): boolean {
     const model = this.model;
-    if (!model || !model.connected || model.demo || !this.current()) return false;
+    if (!model || !this.current()) return false;
     const manager = model.selected.manager || model.profile.manager;
-    const machine = model.machines.find((row: ResourceRow) => row.id === this.machineId && (!manager || row.manager === manager));
-    if (!machine) return false;
-    const data = machine.data();
-    return Wire.bool(data, 'online') && Wire.text(data, 'trust') !== 'pending' &&
-      ['', 'confirmed', 'personal', 'work'].includes(Wire.text(data, 'trust')) &&
-      !Wire.bool(data, 'pending_confirm') && !Wire.bool(data, 'pending');
+    return transferMachineTrustedOnline(model, this.machineId, manager);
+  }
+
+  canSendFile(entry: WorkspaceEntry): boolean {
+    return this.current() && this.visible && this.tab === 0 && this.model?.features.includes('file_transfer') === true &&
+      !entry.directory && !entry.symlink && !!entry.path && !!entry.name && this.machineTrustedOnline();
+  }
+
+  async openFileTransfer(entry: WorkspaceEntry): Promise<void> {
+    if (!this.canSendFile(entry)) throw new Error('transfer_unavailable');
+    await this.fileTransfer.openSource(entry.path, entry.name, this.cwd);
   }
 
   private sessionWritable(): boolean {
@@ -403,6 +412,7 @@ export class SessionWorkspace {
     this.connectionReady = this.model?.connected === true;
     this.ownerFeatures = this.model?.features.slice() || [];
     if (!this.current()) return;
+    this.fileTransfer.show().catch(() => {});
     this.activateTab(this.tab);
   }
 
@@ -458,6 +468,7 @@ export class SessionWorkspace {
   hide(): void {
     this.visible = false;
     this.revision++;
+    this.fileTransfer.hide();
     this.resetBusyState();
     if (this.fsRefreshTimer !== -1) clearTimeout(this.fsRefreshTimer);
     if (this.terminalPollTimer !== -1) clearTimeout(this.terminalPollTimer);
@@ -473,9 +484,10 @@ export class SessionWorkspace {
   onConnected(): void {
     if (!this.visible) return;
     if (!this.current()) { const model = this.model; if (model) { this.bind(model); this.show(); } return; }
-    if (this.connectionReady) return;
+    if (this.connectionReady) { this.fileTransfer.onConnected(); return; }
     this.connectionReady = true;
     this.ownerFeatures = this.model?.features.slice() || [];
+    this.fileTransfer.onConnected();
     if (this.tab === 2) {
       this.sendFsWatch([], false);
       this.startTerminal(this.terminalEpoch.length > 0);
@@ -484,6 +496,7 @@ export class SessionWorkspace {
 
   onDisconnected(): void {
     this.revision++;
+    this.fileTransfer.onDisconnected();
     this.resetBusyState();
     this.connectionReady = false;
     this.terminalSubscribed = false;

@@ -77,3 +77,21 @@ A split detail can become active while the Agents workspace is awaiting its save
 ## Complete the stream host gate
 
 The native page's local confirmation and the Hub's saved-action permission gate are separate protocol steps for the same operation. After explicit consent, complete only the exact current pending page event's host interaction, with the current manager/session/epoch/version and structurally equal saved action. Reject expired, secret or input-bearing requests and recheck before dispatch. Do not route these native page sessions through generic Agent approval. Test a real component page as well as legacy render/action: a portable stream reducer test did not expose the missing host-interaction subscription.
+
+## Invalidation retires presentation as well as authority
+
+Disabling a navigation contribution must remove the old form, including loaded code/diff context. Clear that result cache and change the presentation generation so retained native controls cannot restore it under the same component key. Preserve ordinary drafts and captured write outcomes separately. Close known stream sessions before dropping their identifiers; detach pending opens so a late snapshot can be closed. A legacy page must also wait for a fresh render after reauthorization.
+
+## Observe shared state at the rendering boundary
+
+A shared transfer journal is not itself an ArkUI observed array. Read its published `@Trace` mirror before querying shared authoritative records, so the first addition registers a native dependency. Checking only later mutations of an already observed record misses the transition from no task to the first task. Verify that transition on a HAP as well as testing journal ownership and recovery in portable models.
+
+## Pair emphasized fills with their foreground
+
+Setting a dark-mode brand fill does not automatically choose readable native button text. Supply `fontOnPrimary` and `iconOnPrimary` together with `compBackgroundEmphasize`, using the foreground with sufficient contrast against the actual palette fill. Keep canvas emphasis and filled-control text as different roles. Check enabled controls in native sheets in both modes; disabled text is not evidence for the enabled foreground.
+
+Use native Scroll content and a separate confirmation footer for a large-text transfer sheet. A List nested in that Scroll needs explicit boundary handoff. Let the sheet own safe-area avoidance rather than adding the root floating Tabs inset again. Inspect title menus at runtime too: a conditional expression mixing a CustomBuilder function and an item array can compile without displaying a menu. A native menu-item array and a system ActionSheet provide a verifiable alternative.
+
+A transmission setting is machine-wide, even when its sheet is transient. Share the in-flight write barrier with retained views, invalidate their old read authorization, and wait before reopening or reading settings. A sequence number alone can suppress a late write result while a faster GET has already revived an old enabled value. Preserve an acknowledged terminal transfer against a later failed status read.
+
+A Builder argument containing an already-computed name or replaceable settings object can retain its original value. Keep the source/target branch stable and read the current traced settings and label inside native Text/Toggle attributes and callbacks. Verify both the list row and its named switch after a live rename. Shared-state admission must observe its published mirror before a plain Map gate can return early; otherwise clearing an in-flight write may leave the native Send button disabled even though a direct model call is ready.

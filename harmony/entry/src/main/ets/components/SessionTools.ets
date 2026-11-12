@@ -2,9 +2,11 @@ import { common } from '@kit.AbilityKit';
 import { fileIo, fileUri, picker } from '@kit.CoreFileKit';
 import { filePreview } from '@kit.PreviewKit';
 import { util } from '@kit.ArkTS';
+import { ComposeListItemV2, ContentItemV2, LengthMetrics } from '@kit.ArkUI';
 import { image } from '@kit.ImageKit';
 import { ClientModel } from '../models/ClientModel';
 import { SessionWorkspace, WorkspaceEntry, WorkspaceGitFile, WorkspacePreviewServer, WorkspaceBranch, WorkspaceTrashItem } from '../models/SessionWorkspace';
+import { FileTransferMachine, FileTransferRecord, FileTransferSetting } from '../models/FileTransfer';
 import { Wire } from '../models/Wire';
 import { BoundRow, reconcileBoundRows } from '../models/RowBinding';
 import { Tokens } from '../design/Tokens';
@@ -39,6 +41,7 @@ export struct SessionTools {
   @Local terminalInput: string = '';
   @Local transferError: string = '';
   @Local fileOpen: boolean = false;
+  @Local transferOpen: boolean = false;
   @Local fileEditSheetOpen: boolean = false;
   @Local fileEditMode: string = '';
   @Local fileActionEntry: WorkspaceEntry | undefined = undefined;
@@ -82,6 +85,7 @@ export struct SessionTools {
     this.workspace.show();
     this.fileOpen = false; this.fileEditSheetOpen = false; this.diffOpen = false;
     this.fileActionEntry = undefined; this.fileEditMode = '';
+    this.transferOpen = false;
     this.fileEditBusy = false; this.pickerBusy = false; this.previewBusy = false; this.transferError = '';
     this.previewPathDraft = '/'; this.previewInput = '';
     this.previewPixels?.release(); this.previewPixels = undefined;
@@ -95,6 +99,8 @@ export struct SessionTools {
   }
 
   @Monitor('model.selected') selectedChanged(): void {
+    const cwd = this.model.selected.path || Wire.text(this.model.selected.data(), 'cwd');
+    if (this.workspace.isCurrent() && this.workspace.cwd === cwd) return;
     this.bindWorkspace();
   }
 
@@ -116,8 +122,8 @@ export struct SessionTools {
   }
 
   @Monitor('workspace.entries', 'workspace.gitFiles', 'workspace.gitStashes', 'workspace.previewServers',
-    'workspace.currentPath', 'workspace.cwd', 'model.profile', 'model.selected')
-  rowsChanged(): void { this.syncRowBindings(); }
+    'workspace.currentPath', 'workspace.cwd', 'model.profile', 'model.selected', 'model.machines')
+  rowsChanged(): void { this.syncRowBindings(); this.workspace.fileTransfer.refreshTargets(); }
 
   private syncRowBindings(): void {
     const scope = JSON.stringify([this.model.scope(), this.model.profile.id, this.model.profile.manager,
@@ -142,6 +148,10 @@ export struct SessionTools {
 
   private errorText(error: Error): string {
     if (error.message === 'transfer_limit' || error.message === 'response_too_large') return tr('session_tools_transfer_limit');
+    if (error.message === 'transfer_unavailable' || error.message === 'transfer_active' || error.message === 'target_unavailable') return tr('file_transfer_unavailable');
+    if (error.message === 'journal_unavailable') return tr('file_transfer_journal_unavailable');
+    if (error.message === 'transfer_unknown_requires_acknowledgement') return tr('file_transfer_check_unknown_first');
+    if (error.message === 'duplicate_confirmation_required') return tr('file_transfer_confirm_duplicate');
     if (error.message === 'scope_changed' || error.message === 'request_updated') return tr('request_updated');
     if (error.message === 'file_read_failed') return tr('session_tools_file_read_failed');
     if (error.message === 'preview_unavailable') return tr('session_tools_preview_unavailable');
@@ -153,6 +163,81 @@ export struct SessionTools {
     if (!entry.directory) this.fileOpen = true;
     this.workspace.openEntry(entry).then(() => this.pathDraft = this.workspace.currentPath)
       .catch((error: Error) => this.transferError = this.errorText(error));
+  }
+
+  private openFileTransfer(entry: WorkspaceEntry): void {
+    this.transferError = '';
+    this.transferOpen = true;
+    this.workspace.openFileTransfer(entry).catch((error: Error) => this.transferError = this.errorText(error));
+  }
+
+  private selectTransferTarget(machineId: string): void {
+    if (this.workspace.fileTransfer.targetSelectionFrozen()) return;
+    this.workspace.fileTransfer.selectTarget(machineId).catch((error: Error) => this.transferError = this.errorText(error));
+  }
+
+  private currentTransfer(): FileTransferRecord | undefined { return this.workspace.fileTransfer.latestForSource(); }
+
+  private confirmFileTransfer(): void {
+    const transfer = this.workspace.fileTransfer;
+    const machineId = transfer.targetId;
+    if (!transfer.canStart(machineId)) return;
+    const duplicate = transfer.requiresDuplicateConfirmation(machineId);
+    const revision = this.workspace.currentRevision(), target = this.workspace.currentTarget();
+    this.getUIContext().showAlertDialog({ title: tr('file_transfer_confirm_title'),
+      message: this.transferConfirmation(duplicate),
+      primaryButton: { value: tr('cancel'), action: () => {} },
+      secondaryButton: { value: tr('file_transfer_confirm_send'), action: () => {
+        if (!this.workspace.isCurrent() || revision !== this.workspace.currentRevision() || target !== this.workspace.currentTarget() ||
+          machineId !== transfer.targetId) return;
+        transfer.start(machineId, duplicate).then((record: FileTransferRecord) => {
+          if (!this.workspace.isCurrent() || revision !== this.workspace.currentRevision() || target !== this.workspace.currentTarget()) return;
+          this.transferError = '';
+          if (record.state === 'failed' && record.code) this.transferError = tr('file_transfer_error') + ': ' + record.code;
+        }).catch((error: Error) => {
+          if (this.workspace.isCurrent() && revision === this.workspace.currentRevision() && target === this.workspace.currentTarget())
+            this.transferError = this.errorText(error);
+        });
+      } }
+    });
+  }
+
+  private transferConfirmation(duplicate: boolean): string {
+    const transfer = this.workspace.fileTransfer;
+    const lines = [tr('file_transfer_source') + ': ' + transfer.sourceMachineName(), transfer.sourceFilePath(),
+      tr('file_transfer_target') + ': ' + transfer.targetMachineName(),
+      tr('file_transfer_inbox') + ': ' + transfer.settingForTarget().inbox];
+    if (duplicate) lines.push(tr('file_transfer_confirm_duplicate'));
+    return lines.filter((line: string) => !!line).join('\n');
+  }
+
+  private currentTransferProgress(): number {
+    const record = this.currentTransfer();
+    return record ? this.workspace.fileTransfer.progress(record) : 0;
+  }
+
+  private currentTransferStatus(): string {
+    const record = this.currentTransfer();
+    if (!record) return '';
+    let status = tr('file_transfer_status_' + record.state);
+    if (record.total > 0) status += ' · ' + String(record.bytes) + ' / ' + String(record.total);
+    return status;
+  }
+
+  private currentTransferCancelKey(): string { return this.currentTransfer()?.key || ''; }
+
+  private checkTransfer(key: string): void {
+    this.workspace.fileTransfer.refresh(key).catch((error: Error) => this.transferError = this.errorText(error));
+  }
+
+  private acknowledgeTransfer(key: string): void {
+    this.workspace.fileTransfer.acknowledgeUnknown(key).then((saved: boolean) => {
+      if (!saved) this.transferError = tr('file_transfer_journal_unavailable');
+    });
+  }
+
+  private cancelTransfer(key: string): void {
+    this.workspace.fileTransfer.cancel(key).then(() => {});
   }
 
   private openPath(): void {
@@ -533,6 +618,8 @@ export struct SessionTools {
   @Builder fileEntryMenu(binding: BoundRow<WorkspaceEntry>) {
     Menu() {
       MenuItem({ content: tr('open') }).onClick(() => this.openEntry(binding.value))
+      if (this.workspace.canSendFile(binding.value)) MenuItem({ content: tr('file_transfer_send_to_computer') })
+        .onClick(() => this.openFileTransfer(binding.value))
       if (this.workspace.canEditFiles()) MenuItem({ content: tr('rename') }).onClick(() => this.openFileActions('rename', binding.value))
       if (this.workspace.canEditFiles()) {
         MenuItem({ content: tr('session_tools_move') }).onClick(() => this.openFileActions('move', binding.value))
@@ -580,29 +667,26 @@ export struct SessionTools {
   }
 
   @Builder fileRow(binding: BoundRow<WorkspaceEntry>) {
-    Row({ space: Tokens.gap }) {
-      Text(binding.value.directory ? '▸' : '·').fontSize(Tokens.body).width(20).textAlign(TextAlign.Center)
-      Column({ space: Tokens.fine }) {
-        Text(binding.value.name).fontSize(Tokens.body).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-        Row({ space: Tokens.gap }) {
-          if (binding.value.symlink) Text(tr('symlink')).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
-          if (binding.value.ignored) Text(tr('ignored')).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
-          if (!binding.value.directory) Text(this.sizeText(binding.value.size)).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
-        }
-      }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-      Text(binding.value.directory ? '›' : '').fontSize(Tokens.title).fontColor($r('sys.color.font_secondary'))
-    }.height(Tokens.touch).width('100%').padding({ left: Tokens.inset, right: Tokens.inset })
+    ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: binding.value.name,
+      secondaryText: binding.value.directory ? tr('directory') : [binding.value.symlink ? tr('symlink') : '',
+        binding.value.ignored ? tr('ignored') : '', this.sizeText(binding.value.size)].filter((value: string) => !!value).join(' · ') }) })
   }
 
   @Builder fileView() {
     Column() {
       Row({ space: Tokens.gap }) {
-        Button(tr('back')).enabled(this.workspace.currentPath !== this.workspace.cwd)
-          .onClick(() => { this.workspace.openParent(); this.pathDraft = this.workspace.currentPath; }).height(Tokens.touch)
+        Button({ buttonStyle: ButtonStyleMode.TEXTUAL }) {
+          Image($r('sys.media.ohos_ic_public_arrow_up')).width(Tokens.title).height(Tokens.title).fillColor($r('sys.color.icon_primary'))
+        }.enabled(this.workspace.currentPath !== this.workspace.cwd).accessibilityText(tr('session_tools_parent_folder'))
+          .onClick(() => { this.workspace.openParent(); this.pathDraft = this.workspace.currentPath; }).width(Tokens.touch).height(Tokens.touch).id('session.files.parent')
         TextInput({ text: this.pathDraft, placeholder: tr('path') }).onChange((value: string) => this.pathDraft = value)
-          .layoutWeight(1).height(Tokens.touch)
-        Button(tr('open')).onClick(() => this.openPath()).height(Tokens.touch)
-        Button(tr('more')).bindMenu(this.fileMenu).height(Tokens.touch)
+          .layoutWeight(1).constraintSize({ minHeight: Tokens.touch }).id('session.files.path')
+        Button({ buttonStyle: ButtonStyleMode.TEXTUAL }) {
+          Image($r('sys.media.ohos_ic_public_arrow_right')).width(Tokens.title).height(Tokens.title).fillColor($r('sys.color.icon_primary'))
+        }.onClick(() => this.openPath()).accessibilityText(tr('open')).width(Tokens.touch).height(Tokens.touch).id('session.files.open')
+        Button({ buttonStyle: ButtonStyleMode.TEXTUAL }) {
+          Image($r('sys.media.ohos_ic_public_more')).width(Tokens.title).height(Tokens.title).fillColor($r('sys.color.icon_primary'))
+        }.bindMenu(this.fileMenu).accessibilityText(tr('more')).width(Tokens.touch).height(Tokens.touch).id('session.files.more')
       }.padding({ left: Tokens.inset, right: Tokens.inset, top: Tokens.inset, bottom: Tokens.gap })
 
       if (this.workspace.trashUndo.length && this.workspace.canEditFiles()) Row({ space: Tokens.gap }) {
@@ -632,6 +716,119 @@ export struct SessionTools {
       .bindSheet($$this.fileEditSheetOpen, this.fileEditForm(), {
         title: { title: tr(this.fileEditMode === 'rename' ? 'session_tools_rename' : 'session_tools_move') }, height: SheetSize.MEDIUM, showClose: true
       })
+      .bindSheet($$this.transferOpen, this.fileTransferForm(), {
+        title: { title: tr('file_transfer_title') }, height: SheetSize.LARGE, showClose: true
+      })
+  }
+
+  private transferSetting(source: boolean): FileTransferSetting {
+    return source ? this.workspace.fileTransfer.sourceSetting : this.workspace.fileTransfer.targetSetting;
+  }
+
+  private transferSettingLabel(source: boolean): string {
+    return tr('file_transfer_shared_switch') + ' · ' + (source ? this.workspace.fileTransfer.sourceMachineName() : this.workspace.fileTransfer.targetMachineName());
+  }
+
+  @Builder transferSettingRow(source: boolean) {
+    Column({ space: Tokens.fine }) {
+      Row({ space: Tokens.gap }) {
+        Text(this.transferSettingLabel(source)).fontSize(Tokens.body).layoutWeight(1)
+        Toggle({ type: ToggleType.Switch, isOn: this.transferSetting(source).enabled })
+          .enabled(this.transferSetting(source).state === 'ready' && this.workspace.fileTransfer.isAvailable() && !this.workspace.fileTransfer.createBusy)
+          .accessibilityText(this.transferSettingLabel(source))
+          .onChange((enabled: boolean) => this.workspace.fileTransfer.setEnabled(this.transferSetting(source).machineId, enabled))
+      }.width('100%')
+      if (this.transferSetting(source).state === 'loading' || this.transferSetting(source).state === 'saving') Row({ space: Tokens.gap }) {
+        LoadingProgress().width(Tokens.touch).height(Tokens.touch)
+        Text(tr('file_transfer_setting_' + this.transferSetting(source).state)).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
+      }
+      if (this.transferSetting(source).state === 'unknown') Text(tr('file_transfer_setting_unknown') + (this.transferSetting(source).error ? ': ' + this.transferSetting(source).error : ''))
+        .fontSize(Tokens.meta).fontColor($r('app.color.persona_danger'))
+      if (this.transferSetting(source).state === 'ready' && this.transferSetting(source).error) Text(tr('file_transfer_error') + ': ' + this.transferSetting(source).error)
+        .fontSize(Tokens.meta).fontColor($r('app.color.persona_danger'))
+      if (this.transferSetting(source).state === 'ready' && this.transferSetting(source).inbox) Text(tr('file_transfer_inbox') + ': ' + this.transferSetting(source).inbox)
+        .fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
+      else if (this.transferSetting(source).state === 'ready' && !this.transferSetting(source).enabled) Text(tr('file_transfer_inbox_enable_hint'))
+        .fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
+      else if (this.transferSetting(source).state === 'ready' && this.transferSetting(source).enabled && !this.transferSetting(source).inbox) Text(tr('file_transfer_inbox_unknown'))
+        .fontSize(Tokens.meta).fontColor($r('app.color.persona_danger'))
+    }.width('100%').padding({ top: Tokens.gap, bottom: Tokens.gap })
+  }
+
+  @Builder transferTargetRow(machine: FileTransferMachine) {
+    Row({ space: Tokens.gap }) {
+      Radio({ value: machine.id, group: 'session-file-transfer-target' })
+        .checked(this.workspace.fileTransfer.targetId === machine.id)
+        .enabled(!this.workspace.fileTransfer.targetSelectionFrozen())
+        .accessibilityText(machine.title)
+        .onChange((checked: boolean) => { if (checked && !this.workspace.fileTransfer.targetSelectionFrozen()) this.selectTransferTarget(machine.id); })
+      Text(machine.title).fontSize(Tokens.body).layoutWeight(1)
+    }.width('100%').padding({ left: Tokens.inset, right: Tokens.inset, top: Tokens.fine, bottom: Tokens.fine })
+      .enabled(!this.workspace.fileTransfer.targetSelectionFrozen())
+      .opacity(this.workspace.fileTransfer.targetSelectionFrozen() ? 0.55 : 1)
+      .onClick(() => { if (!this.workspace.fileTransfer.targetSelectionFrozen()) this.selectTransferTarget(machine.id); })
+  }
+
+  @Builder transferUnknownRow(record: FileTransferRecord) {
+    Column({ space: Tokens.fine }) {
+      Text(tr('file_transfer_status_unknown') + ' · ' + record.targetName).fontSize(Tokens.body).width('100%')
+      Flex({ wrap: FlexWrap.Wrap, space: { main: LengthMetrics.vp(Tokens.gap), cross: LengthMetrics.vp(Tokens.gap) } }) {
+        if (record.id) Button(tr('file_transfer_check_status')).flexGrow(1).flexShrink(0).constraintSize({ minHeight: Tokens.touch }).onClick(() => this.checkTransfer(record.key))
+        if (!record.acknowledged) Button(tr('file_transfer_i_checked')).flexGrow(1).flexShrink(0).constraintSize({ minHeight: Tokens.touch }).onClick(() => this.acknowledgeTransfer(record.key))
+      }.width('100%')
+      if (record.code) Text(tr('file_transfer_error') + ': ' + record.code).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger'))
+      if (record.acknowledged) Text(tr('file_transfer_possible_duplicate')).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
+    }.width('100%').padding({ top: Tokens.gap, bottom: Tokens.gap })
+  }
+
+  @Builder fileTransferForm() {
+    Column({ space: Tokens.gap }) {
+      Scroll() {
+        Column({ space: Tokens.gap }) {
+      Text(this.workspace.fileTransfer.sourceFileName()).fontSize(Tokens.title)
+      Text(this.workspace.fileTransfer.sourceMachineName() + ' · ' + this.workspace.fileTransfer.sourceFilePath())
+        .fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
+      this.transferSettingRow(true)
+      Text(tr('file_transfer_choose_target')).fontSize(Tokens.body).fontWeight(FontWeight.Medium)
+      if (!this.workspace.fileTransfer.targets.length) Text(tr('file_transfer_no_targets')).fontSize(Tokens.meta)
+      List() {
+        ForEach(this.workspace.fileTransfer.targets, (machine: FileTransferMachine) => {
+          ListItem() { this.transferTargetRow(machine) }.id('session.file-transfer.target.' + machine.id)
+        }, (machine: FileTransferMachine) => machine.id)
+      }.width('100%').height(180)
+        .nestedScroll({ scrollForward: NestedScrollMode.SELF_FIRST, scrollBackward: NestedScrollMode.SELF_FIRST })
+      if (this.workspace.fileTransfer.targetId && this.workspace.fileTransfer.targetId !== this.workspace.currentMachineId())
+        this.transferSettingRow(false)
+      if (this.currentTransfer()) {
+        if (this.workspace.fileTransfer.targetId !== this.currentTransfer()?.targetMachine) {
+          Text(this.currentTransfer()?.targetName || this.currentTransfer()?.targetMachine || '').fontSize(Tokens.body)
+          if (this.currentTransfer()?.targetInbox) Text(this.currentTransfer()?.targetInbox || '').fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
+        }
+        if (this.currentTransfer()?.state === 'running') Progress({ value: this.currentTransferProgress(), total: 100, type: ProgressType.Linear }).width('100%')
+        Text(this.currentTransferStatus()).fontSize(Tokens.body)
+        if (this.currentTransfer()?.resultPath) Text(this.currentTransfer()?.resultPath || '').fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
+        if (this.currentTransfer()?.code) Text(tr('file_transfer_error') + ': ' + (this.currentTransfer()?.code || ''))
+          .fontSize(Tokens.meta).fontColor($r('app.color.persona_danger'))
+        if (this.currentTransfer()?.cancelUnknown) Text(tr('file_transfer_cancel_unknown')).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger'))
+        if (this.currentTransfer()?.state === 'running' && this.currentTransfer()?.id) Button(tr('file_transfer_cancel_transfer'))
+          .enabled(!this.currentTransfer()?.cancelBusy).constraintSize({ minHeight: Tokens.touch }).onClick(() => this.cancelTransfer(this.currentTransferCancelKey()))
+      }
+      ForEach(this.workspace.fileTransfer.unknownForSource(), (record: FileTransferRecord) => {
+        this.transferUnknownRow(record)
+      }, (record: FileTransferRecord) => record.key)
+      if (this.transferError) Text(this.transferError).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger'))
+      if (this.workspace.fileTransfer.createBusy) LoadingProgress().width(Tokens.touch).height(Tokens.touch)
+      if (this.workspace.fileTransfer.journalError) Text(tr('file_transfer_journal_unavailable'))
+        .fontSize(Tokens.meta).fontColor($r('app.color.persona_danger'))
+        }.width('100%').alignItems(HorizontalAlign.Start)
+      }.width('100%').layoutWeight(1).align(Alignment.TopStart).scrollBar(BarState.Auto)
+      Flex({ wrap: FlexWrap.Wrap, space: { main: LengthMetrics.vp(Tokens.gap), cross: LengthMetrics.vp(Tokens.gap) } }) {
+        Button(tr('cancel')).flexGrow(1).flexShrink(0).constraintSize({ minHeight: Tokens.touch }).onClick(() => this.transferOpen = false)
+        Button(tr('file_transfer_confirm_send')).flexGrow(1).flexShrink(0).constraintSize({ minHeight: Tokens.touch })
+          .enabled(this.workspace.fileTransfer.canStart() && !this.workspace.fileTransfer.createBusy)
+          .onClick(() => this.confirmFileTransfer()).id('session.files.transfer.confirm')
+      }.width('100%')
+    }.padding(Tokens.page).width('100%').height('100%')
   }
 
   @Builder fileViewer() {
@@ -1046,7 +1243,7 @@ export struct SessionTools {
       TabContent() { this.terminalView() }.tabBar(tr('terminal'))
       TabContent() { this.terminalScreenView() }.tabBar(tr('session_tools_terminal_screen'))
       TabContent() { this.previewView() }.tabBar(tr('preview'))
-    }.barMode(BarMode.Fixed).onChange((index: number) => {
+    }.barMode(BarMode.Scrollable).barHeight('auto').onChange((index: number) => {
       this.workspace.selectTab(index);
       this.pathDraft = this.workspace.currentPath;
     }).width('100%').height('100%')

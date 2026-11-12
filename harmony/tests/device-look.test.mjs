@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chooseDeviceLookAvatarFile, contrastRatio, deviceLookPackageJSON, deviceLookPalette, parseDeviceLookPackage,
+import { chooseDeviceLookAvatarFile, contrastRatio, deviceLookAccentText, deviceLookPackageJSON, deviceLookPalette, parseDeviceLookPackage,
   validDeviceLookFile, validDeviceLookOwner, validDeviceLookPackageId } from '../entry/src/main/ets/core/DeviceLook.ts';
 
 function info(overrides = {}) {
@@ -76,6 +76,7 @@ test('preset accents keep readable brand and bubble colors in both appearances',
     }
     assert.ok(contrastRatio(palette.light.emphasize, '#FFFFFF') >= 4.5, accent + ' light emphasize');
     assert.ok(contrastRatio(palette.dark.emphasize, '#000000') >= 4.5, accent + ' dark emphasize');
+    for (const mode of ['light', 'dark']) assert.ok(contrastRatio(palette[mode].brand, deviceLookAccentText(palette[mode].brand)) >= 4.5, accent + ' ' + mode + ' emphasized control');
     assert.ok(contrastRatio(palette.light.userBubble, palette.light.userBubbleText) >= 4.5, accent + ' light bubble');
     assert.ok(contrastRatio(palette.dark.userBubble, palette.dark.userBubbleText) >= 4.5, accent + ' dark bubble');
   }

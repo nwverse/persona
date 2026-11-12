@@ -202,6 +202,11 @@ export function contrastRatio(left: string, right: string): number {
   return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
 }
 
+/** Foreground for native emphasized controls; text on the canvas uses a separate token. */
+export function deviceLookAccentText(brand: string): string {
+  return contrastRatio(brand, '#000000') >= contrastRatio(brand, '#FFFFFF') ? '#000000' : '#FFFFFF';
+}
+
 function mix(left: string, right: string, amount: number): string {
   const a = rgb(left), b = rgb(right);
   const channels = [0, 1, 2].map((index: number) => Math.round(a[index] * (1 - amount) + b[index] * amount));

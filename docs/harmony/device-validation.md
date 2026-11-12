@@ -10,9 +10,15 @@ Use an isolated Hub, synthetic tasks and dedicated Agent profiles. A passed port
 |Mate X-style conventional foldable|Cover, expanded portrait, expanded landscape, half fold, rotation with an unsent draft|An expanded MD window remains a native stack|
 |Pura X Max-style wide foldable|Native split, drag the master width, collapse/restore, select/filter/scroll the current Agent, child navigation|LG/XL use native Navigation split; title follows whether the selected row identifies the detail|
 
-The repository's [native screenshots](screenshots/README.md) record measured pixels, density and window class. An emulator lacking a valid crease region cannot establish hover or hinge avoidance. Verify that capability separately on an image or device that supplies real geometry.
+Record measured pixels, density and window class with the native captures attached to the PR. Keep development images, UI trees and capture indexes outside the checkout, as required by the documentation media policy. An emulator lacking a valid crease region cannot establish hover or hinge avoidance. Verify that capability separately on an image or device that supplies real geometry.
 
 Across the matrix, inspect Glass/Brief/Board, light/dark, English/Chinese/Japanese, system font scale and the keyboard. Reopen the application after an SDK runner exits before collecting UI evidence. The runner may close the main Ability. Restore the saved main HAP after building a test HAP if the build replaced its default output artifact.
+
+For assistant questions, cover ordinary and secondary Persona chats, multiple pending cards, ordinary withdrawal after a message, and `wait:false` retention. Mix a question with permission/plan requests in both orders and return two answer receipts out of order. Keep an unsent draft and the native IME active as cards update. Inspect both 2× and 3.2× text scales.
+
+For Apps, install the checked-in native extension fixture on the isolated Hub. Open its navigation pages from the root menu, then return through the native destination stack. Cover a directory longer than eight entries, badge updates, an empty directory, old-Hub feature absence, failure/Retry, disable/uninstall, disconnection and an owner change. A previously visible page must not retain authority after invalidation.
+
+For computer transfer, use two owned nodes under the same manager, separate synthetic source and receive directories, and switches initially off. Start the transfer from the HAP and verify the received file against the source bytes. Test cancel, source revision change, a switch disabled during transfer, manager restart/404, response loss during enable and disable, accepted creation followed by failed refresh, and creation response loss without an ID. Confirm that no unknown operation automatically creates a replacement. Close and reopen the sheet while disabling either switch; a retained second view must not recover an old enabled value before the write settles. Deliver a terminal event before a delayed 404 and confirm the terminal result remains visible. Reopen an active task and confirm its target and receive folder remain identifiable. Retain native screenshots and UI trees on all three device categories; a service-side or fake-node test alone does not establish this journey.
 
 ## Environments to prepare
 

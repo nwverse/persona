@@ -4287,6 +4287,154 @@
     {
       "name": "color_mode",
       "value": "外观模式"
+    },
+    {
+      "name": "applications",
+      "value": "应用"
+    },
+    {
+      "name": "application_unavailable",
+      "value": "此应用暂不可用。"
+    },
+    {
+      "name": "no_applications",
+      "value": "暂无应用"
+    },
+    {
+      "name": "file_transfer_send_to_computer",
+      "value": "发送到电脑"
+    },
+    {
+      "name": "file_transfer_unavailable",
+      "value": "这台电脑目前无法传输文件。"
+    },
+    {
+      "name": "file_transfer_journal_unavailable",
+      "value": "无法在此设备保存传输状态。存储恢复后请重试。"
+    },
+    {
+      "name": "file_transfer_check_unknown_first",
+      "value": "请先核对结果未知的传输，再重新发送。"
+    },
+    {
+      "name": "file_transfer_confirm_duplicate",
+      "value": "之前的传输可能仍会完成。再次发送可能会产生第二份副本。"
+    },
+    {
+      "name": "file_transfer_confirm_title",
+      "value": "发送此文件？"
+    },
+    {
+      "name": "file_transfer_confirm_send",
+      "value": "发送"
+    },
+    {
+      "name": "file_transfer_source",
+      "value": "来源"
+    },
+    {
+      "name": "file_transfer_target",
+      "value": "目标"
+    },
+    {
+      "name": "file_transfer_inbox",
+      "value": "接收文件夹"
+    },
+    {
+      "name": "file_transfer_status_creating",
+      "value": "正在开始传输"
+    },
+    {
+      "name": "file_transfer_status_running",
+      "value": "正在传输"
+    },
+    {
+      "name": "file_transfer_status_done",
+      "value": "传输完成"
+    },
+    {
+      "name": "file_transfer_status_failed",
+      "value": "传输失败"
+    },
+    {
+      "name": "file_transfer_status_cancelled",
+      "value": "传输已取消"
+    },
+    {
+      "name": "file_transfer_status_unknown",
+      "value": "传输结果未知"
+    },
+    {
+      "name": "file_transfer_error",
+      "value": "传输错误"
+    },
+    {
+      "name": "file_transfer_setting_loading",
+      "value": "正在检查设置"
+    },
+    {
+      "name": "file_transfer_setting_saving",
+      "value": "正在保存设置"
+    },
+    {
+      "name": "file_transfer_setting_unknown",
+      "value": "设置状态未知"
+    },
+    {
+      "name": "file_transfer_inbox_enable_hint",
+      "value": "开启文件传输后可查看接收文件夹。"
+    },
+    {
+      "name": "file_transfer_inbox_unknown",
+      "value": "无法确认接收文件夹。"
+    },
+    {
+      "name": "file_transfer_choose_target",
+      "value": "选择一台电脑"
+    },
+    {
+      "name": "file_transfer_no_targets",
+      "value": "此工作区中没有可信且在线的电脑。"
+    },
+    {
+      "name": "file_transfer_source_switch",
+      "value": "允许从这台电脑发送"
+    },
+    {
+      "name": "file_transfer_shared_switch",
+      "value": "文件传输"
+    },
+    {
+      "name": "file_transfer_target_switch",
+      "value": "允许这台电脑接收文件"
+    },
+    {
+      "name": "file_transfer_check_status",
+      "value": "检查状态"
+    },
+    {
+      "name": "file_transfer_i_checked",
+      "value": "我已核对"
+    },
+    {
+      "name": "file_transfer_possible_duplicate",
+      "value": "之前的传输可能仍会完成。再次发送可能会产生第二份副本。"
+    },
+    {
+      "name": "file_transfer_cancel_unknown",
+      "value": "尚未确认取消结果，正在检查传输状态。"
+    },
+    {
+      "name": "file_transfer_cancel_transfer",
+      "value": "取消传输"
+    },
+    {
+      "name": "file_transfer_title",
+      "value": "发送文件"
+    },
+    {
+      "name": "session_tools_parent_folder",
+      "value": "上一级文件夹"
     }
   ]
 }

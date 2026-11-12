@@ -1,5 +1,7 @@
 # HarmonyOS client
 
+The [interactive design projection](prototype.html) covers the three device categories and question, application and transfer flows. It is a self-contained design artifact; actual HAP captures and runtime evidence belong in the PR.
+
 Persona's HarmonyOS client uses ArkTS and native ArkUI on HarmonyOS 7 / API 26. It runs on straight phones, conventional foldables and wide foldables; watches are outside this client. The Hub remains the only application backend. Agents run on the user's computers, with their existing runtime and host capabilities.
 
 ## Product and information architecture
@@ -7,9 +9,19 @@ Persona's HarmonyOS client uses ArkTS and native ArkUI on HarmonyOS 7 / API 26. 
 The four primary destinations are Persona, Agents, Inbox and Settings. Each keeps an independent navigation stack in its Hub and manager scope.
 
 - Persona contains the unique main chat, recent conversations, new chat, Todos, Knowledge and the separate Health space.
-- Agents starts with a flat session list. Rows retain the computer, repository and worktree identity; the native grouping menu exposes computer, repository and worktree groups. Search, state, computer, unread and history filters are explicit user actions. Reading freezes membership and order while live status can update in place.
+- Agents starts with a flat session list. Rows show friendly Hub/computer names and plain state words. Repository and worktree identity remains available to search, explicit native grouping and Workspace, rather than appearing as raw paths or manager IDs on the primary list. Search, state, computer, unread and history filters are explicit user actions. Reading freezes membership and order while live status can update in place.
 - Inbox owns its filters, contextual source viewer, handled state, drafts and confirmed outbound actions. A Todo source reference opens that source conversation rather than fabricating an Inbox item.
 - Settings separates device preferences from Hub/manager configuration. Management actions retain their captured owner, connection and target while asynchronous work completes.
+
+An extension that contributes a navigation page is also reachable from **Apps** in the native root navigation menu. Apps opens a native destination and a scrolling list, then the existing extension renderer; it does not add a primary tab for each extension. A successful empty directory and an older Hub without slot support leave that menu entry absent. Discovery failure offers Retry. The directory retains the Hub, manager, extension and contribution identities; cached rows do not authorize an action after disconnection, invalidation or an owner change. The page count is independent of the existing nested extension-navigation safety limit.
+
+Conversation actions use a native title-menu item and an ArkUI Menu bound to the NavDestination. MenuItem rows have a minimum 48vp touch height; the platform owns popup placement, scrolling and dismissal. Choosing an action rechecks the captured conversation, route, owner and connection generation. A split detail with its title hidden retains one native More button for those same actions. Transfer selection uses a scrolling native sheet with a fixed confirmation footer; its target List hands scrolling to the containing Scroll at either boundary. The sheet owns its system inset, so the footer does not add another copy of the Navigation or Tabs safe area.
+
+Chat content has no permanent Hub/computer/path subtitle. The selected navigation item, native title and explicit operation confirmations carry the necessary identity. Open editable questions start with their prompt and choices; pending, unknown and read-only states remain visible.
+
+Capability negotiation during reconnect retains disabled cached rows. An authoritative unsupported hello or successful empty directory removes the entry. Server-initiated stream closure immediately retires its page and triggers a directory read. Lifecycle operations also invalidate the directory; ordinary stream deltas and badges keep the page mounted. Since older install/enable routes do not always announce a directory event, an authenticated foreground connection with confirmed slot support rechecks every five seconds, including after an empty directory. Disconnection and disposal stop that poll.
+
+Todos keep handing work to the assistant as the ordinary path. Manual New Agent is in the native More menu; its existing computer, directory and launcher form remains available on request.
 
 The phone is a controller and reader, not another Agent runtime. A lack of a trusted online computer, a read-only source or a missing server feature must be represented before an action becomes available. An unavailable integration is distinct from an empty successful result.
 
@@ -41,6 +53,10 @@ Do not add descriptive subtitles, explanatory child controls or a second action 
 
 A detail context captures its Hub, manager, machine and session. Opening a manager-owned resource does not change the workspace's selected manager. Global Settings remain workspace-owned; settings opened from a chat retain that chat's target.
 
+In Persona assistant conversations, including secondary chats, `ask_user` cards live in the transcript while the same composer stays available for additional messages. Each pending card owns its interaction ID and request snapshot. Sending a message does not resolve a card locally: the Hub withdraws an ordinary waiting question, while a `wait:false` question remains answerable. Multiple cards can be answered independently. Agent questions, permissions, plans and unknown tools retain their blocking and approval rules; an assistant question cannot hide another pending approval.
+
+Recovery does not interpret a missing local card as permission to act. Send and answer admission wait for a successful interaction read for the current connection and target. A delayed or failed read keeps the draft editable and cannot unlock a previous blocking request; a successful empty read can clear it.
+
 Each chat draft has a revision. A submitted message is persisted in the local outbox before network admission and appears immediately. Its stable `client_msg_id`, rather than matching text, reconciles a server echo. The outbox uses an index plus individual bounded rows, not one growing database cursor row. The operation journal contains identity and outcome, not another copy of message text or photo Base64.
 
 A known acknowledgement clears only the captured draft revision. Newer edits survive, including identical text typed again. An unknown result blocks that destination until it is reconciled; another chat can still send. Reconnection never silently creates a replacement operation. Explicit confirmation of a local-only crash window may release it only after the server's receipt lookup proves there is no recorded operation.
@@ -56,6 +72,16 @@ Native picker pauses and same-owner reconnects do not detach the local attachmen
 ## Workspace, source and permission boundaries
 
 Files and Git use the existing machine routes. Writes, branch switches, stash operations and push require a native confirmation with computer, directory, branch and operation. The client does not automatically force-push, clean or reset. Acknowledgement remains success if a follow-up read fails. Conflicts keep the user's draft.
+
+The file menu's **Send to computer** sends a normal file directly between two online, trusted computers belonging to the same manager. Native target selection shows the target's receive folder and the two computers' transfer switches. Each switch defaults to off and can be turned back off. A rejected setting change preserves the last confirmed value; a lost response makes the setting unknown until a fresh query confirms it. The client does not issue a compensating write or treat an unknown setting as authorization. Reopening a panel waits for in-flight setting writes for that manager and computer; another retained view loses its old setting authorization immediately. A late read cannot restore a stale enabled value.
+
+Each switch names its computer and controls that computer's shared sending/receiving permission. Choosing the source computer as the destination displays that setting once. Creation, progress and terminal state publish through an observed journal mirror so the first task becomes visible immediately. A page retired by an extension change discards its old rendered form and loaded code context; a fresh authoritative read is required before it becomes interactive again, while ordinary unsent drafts and captured write receipts retain their separate lifetimes.
+
+The file workspace uses native composed list items and labeled icon controls, with scrollable tabs and automatic tab-bar height. Transfer file names, computer names and paths wrap in native scrolling content. Footer actions wrap when their natural text widths need separate lines. A capability arriving after route restoration can enable the transfer entry for that captured connection; removing it revokes the entry immediately. Target rows retain observed identities within the same owner so a computer rename updates an already displayed chooser.
+
+The manager relays the file; the phone never downloads and uploads its bytes. The dedicated transfer journal records creation before dispatch. HTTP 202 and a task ID mean accepted/running, not completed; only `done` means the file arrived. Progress and cancellation use that captured ID. A failed follow-up query does not erase an accepted task, and cancellation is shown only after its actual outcome is known. A lost creation response without an ID remains unknown: this protocol has no collection or request-ID lookup. Checking that local record does not claim success or resend; another attempt requires a new explicit confirmation. Reconnection queries known IDs and never creates a replacement. A missing task after a manager restart also remains unknown. A terminal outcome already acknowledged by an event survives a late failed read. Reopening an active task shows its captured target computer and receive folder without authorizing a new target.
+
+Workspace → Preview lists the selected computer's existing development servers and opens their authenticated remote browser preview. Navigation and input belong to that captured preview session. Hiding, disconnecting or replacing the workspace releases its browser stream; it does not silently restart a development server or replay input. This is separate from opening conversation links and from local document preview.
 
 Terminal viewing begins read-only. Taking control is explicit and revocable; hidden, disconnected or replaced contexts cannot replay queued keys. The desktop RFB screen is a separate capability from a terminal's text screen. It uses the authenticated native binary WebSocket transport to the Hub's existing port relay, with read-only viewing and separately confirmed control.
 
@@ -130,7 +156,7 @@ hdc -t '<device serial>' install entry/build/default/outputs/ohosTest/entry-ohos
 hdc -t '<device serial>' shell aa test -b '<development bundle>' -m entry_test -s unittest OpenHarmonyTestRunner -w 60
 ```
 
-The tests use unique database names and owned aliases/copies. They must not erase a normal profile. Native transport tests additionally use the local fixture in `harmony/tests/native-transport-fixture.py`; its last case rotates its own certificate, so restart only that fixture before another run. Do not rotate a paired Hub certificate as test setup. The `previewCheck` test argument enables the image preview suite. Reopen the main Ability after a test run before taking UI evidence. The optional `fontScale` argument (`2` or `3.2`, with `aa test -s timeout 60000 -w 90`) opens the actual application at that verified native scale for a 45-second layout inspection, then restores its original application scale. This probe is confined to the test HAP and does not change system font preferences.
+The tests use unique database names and owned aliases/copies. They must not erase a normal profile. Native transport tests additionally use the local fixture in `harmony/tests/native-transport-fixture.py`; its last case rotates its own certificate, so restart only that fixture before another run. Do not rotate a paired Hub certificate as test setup. The `previewCheck` test argument enables the image preview suite. Reopen the main Ability after a test run before taking UI evidence. The optional `fontScale` argument (`2` or `3.2`, with `aa test -s timeout 60000 -w 90`) opens the actual application at that verified native scale for a 45-second layout inspection, then restores its original application scale. For a longer scripted journey, `fontHoldSeconds` accepts 15–120 seconds; use a matching runner timeout, for example `-s fontHoldSeconds 120 -s timeout 150000 -w 180`. This probe is confined to the test HAP and does not change system font preferences.
 
 Keep one owner and one active run per build/test. A worker writing a module does not run a competing build. Portable tests verify behavior with platform boundaries stubbed; they do not replace native SDK results or device screenshots.
 
@@ -152,7 +178,7 @@ Inbox lists re-read their aggregate endpoint when the owning client receives an 
 
 Environment prerequisites and physical performance procedures are in [device validation](device-validation.md).
 
-See [native device views](screenshots/README.md) for the actual window classes and title/material variants.
+Attach native light/dark captures, measured window classes and title/material variants to the PR. Keep verification images and capture indexes outside the checkout; maintain the reproducible procedure in [device validation](device-validation.md).
 
 ## Platform references
 
