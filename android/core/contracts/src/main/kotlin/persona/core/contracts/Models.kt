@@ -572,8 +572,13 @@ data class Session(
      */
     val canDelete: Boolean get() = !assistant && !starting && status in setOf("offline", "done", "idle", "unknown", "interrupted")
     val updated: Instant? get() = parseTime(updatedAt)
-    /** Its workflows still running, newest first. */
-    val runningWorkflows: List<Workflow> get() = workflows.orEmpty().filter { it.isRunning }
+    /**
+     * Its workflows still running, newest first. On a summary row (`summary=1`, one with [waiting]) its [workflowProgress],
+     * the newest running run without its agents and phases, stands for them (#5888), even when the row kept an older
+     * complete row's [workflows] (`keepingDetails`): fresh summary counts win, as in `backgroundWork()`.
+     */
+    val runningWorkflows: List<Workflow> get() = if (waiting != null) listOfNotNull(workflowProgress?.takeIf { it.isRunning })
+        else workflows.orEmpty().filter { it.isRunning }
     /**
      * How much runs in the background without counting a workflow twice: its other background tasks and its running
      * workflows. An older hub sends no [workflows]: every background entry counts, as before.
@@ -820,6 +825,14 @@ data class ScreenDialog(
     @SerialName("multi") val multi: Boolean = false,
     /** The submit row's own label ("Submit", or "Next" when another question follows). */
     @SerialName("submit") val submit: String? = null,
+    /** Claude Code's command prompt, read off the terminal (#5265); absent on older hubs and other dialogs. */
+    @SerialName("command") val command: String? = null,
+    @SerialName("description") val description: String? = null,
+    @SerialName("warning") val warning: String? = null,
+    @SerialName("risk") val risk: String? = null,
+    @SerialName("deadline") val deadline: String? = null,
+    @SerialName("deadline_action") val deadlineAction: String? = null,
+    @WireTime @SerialName("deadline_at") val deadlineAt: String? = null,
 )
 
 /** Something a permission card asks to fill in before approving (`proto.Field`, a password); see [Interaction.fields]. */

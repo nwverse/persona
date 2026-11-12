@@ -47,6 +47,20 @@ struct TaskDetailSheet: View {
         .presentationDetents([.fraction(0.6), .large], selection: $detent)
         .presentationDragIndicator(.visible)
         .presentationBackgroundInteraction(.enabled(upThrough: .fraction(0.6)))
+        #if os(iOS)
+        // A sheet has no edge-back of its own: a rightward swipe from the leading edge closes it like ✕ (#5603). The
+        // gesture runs beside the page's own, so taps, scrolling and selection inside it are not taken.
+        .simultaneousGesture(DragGesture(minimumDistance: Theme.Size.edgeBackZone / 2).onEnded { drag in
+            if !pushed && Self.edgeSwipeCloses(start: drag.startLocation, translation: drag.translation) { dismiss() }
+        })
+        #endif
+    }
+
+    /// Whether a drag is the edge swipe that closes the sheet: it starts at the leading edge, goes mostly right.
+    static func edgeSwipeCloses(start: CGPoint, translation: CGSize) -> Bool {
+        start.x <= Theme.Size.edgeBackZone
+            && translation.width >= Theme.Size.edgeBackDistance
+            && translation.width > abs(translation.height) * 2
     }
 
     @ViewBuilder private func content(_ todo: TodoItem) -> some View {

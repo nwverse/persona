@@ -1387,6 +1387,15 @@ if os.environ.get("MOCK_SOURCES"):
              read_only_reason="这个 Claude 没有开放会话之间的消息通道（版本较旧或功能关着）：手机上只能看，回复请在电脑上",
              capabilities={"read": True}, **NO_SPACE),
     ]
+# MOCK_OUTSIDE_DIALOG=1 (#5890): a Claude Code session started in a plain terminal, waiting on a question only the
+# computer can answer; a message to it goes into its queue, and the answer says so (waits_on_computer).
+OUTSIDE_DIALOG = "c1a0de00-0000-4000-8000-000000005890"
+if os.environ.get("MOCK_OUTSIDE_DIALOG"):
+    SESSIONS.append(sess("macbook", OUTSIDE_DIALOG, "整理更新日志", "/Users/me/code/notes", "blocked", "needs_you", "", 0, "", 0, 1,
+                         "要不要把旧版本的条目也一起改？", agent="claude", source_kind="claude_cli", agent_surface="cli",
+                         started_by_persona=False, attention_reason="它在等电脑上的一个问题或权限请求：手机上答不了，请到电脑上处理",
+                         capabilities={"read": True, "send": True, "interrupt": False, "approve": False, "terminal": False,
+                                       "attach": False, "modes": False}, **NO_SPACE))
 if os.environ.get("MOCK_MODE_CAPS"):
     # A runtime that explicitly takes Claude-style modes, and a desktop Claude that explicitly cannot (#1843).
     SESSIONS.append(
@@ -1395,6 +1404,18 @@ if os.environ.get("MOCK_MODE_CAPS"):
              source_kind="runtime", source_instance_id="agy", permission_mode="plan", effort="high",
              capabilities={"read": True, "send": True, "interrupt": True, "approve": True,
                            "terminal": False, "attach": False, "modes": True}, **NO_SPACE))
+
+# MOCK_OUTSIDE_ASK=1 (#5889): a Claude Code run in a plain terminal, outside Persona's terminal engines, waiting on an
+# AskUserQuestion only its computer can answer: needs you with the hub's reason, no card, no pane (terminal false).
+OUTSIDE_ASK = "c1a0de00-bbbb-4000-8000-00000000000b"
+if os.environ.get("MOCK_OUTSIDE_ASK"):
+    SESSIONS.append(
+        sess("studio", OUTSIDE_ASK, "整理本周周报", "/Users/me/code/report", "blocked", "needs_you", "", 0, "", 0, 0,
+             "要不要合进 main 并发布一次 Web？", agent="claude", source_kind="claude_cli", agent_surface="cli",
+             started_by_persona=False,
+             capabilities={"read": True, "send": True, "interrupt": False, "approve": False, "terminal": False,
+                           "attach": False, "modes": False},
+             attention_reason="它在等电脑上的一个问题或权限请求：手机上答不了，请到电脑上处理", **NO_SPACE))  # i18n-ignore: the hub's zh-Hans text
 
 # MOCK_OVERVIEW_DENSE=1: the overview on a wide screen with many finished rows: agents run through a runtime (a source
 # tag), tabs named after the agent's first words (the title must not be said twice), long titles and one with none.
@@ -5926,6 +5947,11 @@ if os.environ.get("MOCK_REWIND"):
         it("user", "text", 60, text="继续"), it("assistant", "text", 55, text="把 `fetchAll` 改成了 `loadAll`。"),
         it("user", "text", 40, text="把 tmp 也改了"), it("assistant", "text", 35, text="`tmp` 已经改成 `cached`。"),
         it("user", "text", 20, text="继续"), it("assistant", "text", 15, text="CI 绿了，可以合。")]
+    native = os.environ.get("MOCK_REWIND")
+    if native in ("codex", "agy"):
+        review = next(s for s in SESSIONS if s["session_id"] == REVIEW)
+        review.update(agent=native, source_kind="codex_app_server" if native == "codex" else "runtime",
+                      capabilities={"read": True, "send": True, "rewind": True, "rewind_code": False}, status="idle")
     if os.environ.get("MOCK_REWIND") == "safeguards":
         ITEMS[REVIEW][-2]["text"] = "> Example quote\n\nRevise this paragraph"
         ITEMS[REVIEW][-1]["text"] = "API Error: Opus 5.5's safeguards flagged this message. Details: [frontier_llm]"
@@ -6002,6 +6028,12 @@ if os.environ.get("MOCK_OPENCODE"):
     ITEMS[GEMINI_PANE] = [it("system", "notice", 1, text="Persona 还不能读 gemini 的对话：手机上只能看终端、按键盘")]
     ITEMS[OC_IDLE] = [it("user", "text", 60 * 4, text="CI 里的依赖缓存为什么一直没命中？")] + [
         it("assistant", "text", 60 * 3, text="缓存键里带了时间戳，每次都是新的；改成 lockfile 的哈希就好了。")]
+if os.environ.get("MOCK_OUTSIDE_ASK"):
+    ITEMS[OUTSIDE_ASK] = [it("user", "text", 3, text="把这周的周报整理成文档")] + [it("assistant", "tool_use", 1,
+        tool_use_id="toolu_outside_ask", tool_name="AskUserQuestion", tool_input={"questions": [{
+            "question": "要不要合进 main 并发布一次 Web？", "header": "发布", "multiSelect": False,
+            "options": [{"label": "合并并发布 (Recommended)", "description": "线上才认新接口"},
+                        {"label": "先不合", "description": "只留在分支"}, {"label": "只合不发", "description": ""}]}]})]
 ITEMS[RECIPE] = [it("user", "text", 60 * 27, text="菜谱网站加个搜索")] + [it("assistant", "text", 60 * 26, text="搜索做好了，支持按食材和用时筛选。")]
 # MOCK_MODEL_CHANGE=1 (#5034): the recipes agent's two exchanges were answered by two models, as the transcript records
 # them (Item.model), so its chat draws the model change divider between them (web lib/model-change.ts).
@@ -14016,7 +14048,9 @@ if os.environ.get("MOCK_CHAT_CONTENT") == "1":
         + tool("AskUserQuestion", {"questions": [{"question": "快照测试放在哪个 target？", "header": "Target", "multiSelect": False,
                                                   "options": [{"label": "WeatherWidgetTests (Recommended)", "description": "和小组件放在一起"},
                                                               {"label": "新建 SnapshotTests", "description": "单独的 target，跑得更快"}]}]},
-               "User answered: WeatherWidgetTests", 28)
+               # Claude Code's own answer shape (#5937)
+               'User has answered your questions: "快照测试放在哪个 target？"="WeatherWidgetTests (Recommended)". '
+               "You can now continue with the user's answers in mind.", 28)
         + tool("Task", {"description": "补齐深色模式的快照测试", "subagent_type": "general-purpose",
                         "prompt": "在 WeatherWidgetTests 里给 WidgetView 补快照测试：\n1. 深色、浅色各一套\n2. 六个城市：上海、北京、Tokyo、"
                                   "Lisbon、Reykjavík、Nairobi\n3. 每张图检查温度文字和背景的对比度，低于 4.5:1 就失败\n4. 跑一遍 "
@@ -14885,6 +14919,23 @@ def sessions_reads(reset):
     return out
 
 
+def summary_row(s):
+    """A summary=1 row as the hub's runtimeSummary (server/internal/hub/sessions_list.go) writes it: no background,
+    subagents or workflows arrays; counts and the newest running run's progress, without its agents and phases."""
+    runs = [w for w in s.get("workflows") or [] if w.get("running")]
+    bg = s.get("background") or []
+    out = {k: v for k, v in s.items() if k not in ("background", "subagents", "workflows", "queued")}
+    out["background_count"] = len(bg)
+    out["running_subagents"] = sum(1 for a in s.get("subagents") or [] if a.get("running"))
+    out["running_workflows"] = len(runs) or (0 if s.get("workflows") else sum(1 for b in bg if b.get("kind") == "workflow"))
+    out["background_tasks_count"] = sum(1 for b in bg if b.get("kind") not in ("workflow", "agent"))
+    if runs:
+        out["workflow_progress"] = {**{k: v for k, v in runs[0].items() if k not in ("agents", "phases")},
+                                    "phase_count": runs[0].get("phase_count") or len(runs[0].get("phases") or [])}
+    out["waiting"] = bool(s.get("loop") or bg or out["running_subagents"] or out["running_workflows"])
+    return out
+
+
 def paged_sessions(query):
     """Small screenshot fixture for paging hubs; unqueried reads retain the legacy full list.
 
@@ -14957,6 +15008,8 @@ def paged_sessions(query):
     selected = [s for kind, s in page if kind == "row"]
     if query.get("summary", [""])[0] == "1":
         selected = [{**s, "waiting": bool(s.get("background_waiting"))} for s in selected]
+        if os.environ.get("MOCK_SUMMARY_STRICT") == "1":  # the hub's runtimeSummary (#5888): scalars, no chat-only arrays
+            selected = [summary_row(s) for s in selected]
         for i, s in enumerate(selected):  # a row's closeout says where it stands, not what it did (hub sessions_list.go)
             if (s.get("work") or {}).get("closeout"):
                 row = {k: v for k, v in s["work"]["closeout"].items() if k not in ("did", "verified")}
@@ -18668,6 +18721,19 @@ def browser_now(machine):
 
 # Sign-ins in ego (#1304): the sites with cookies on MacBook, as browser.cookies.list gives them (no names, no values).
 MOCK_COOKIE_SITES = {"github.com": [4, "2027-05-12T08:00:00Z"], "notion.so": [7, "2026-12-30T10:00:00Z"], "example.com": [2, None]}
+
+# MOCK_COOKIE_SITES=<n> (#5821): n made-up sites under the reserved .example name instead, for a long list (the folded
+# section and its list page): two expired, every 17th one ending with the browser, the rest expiring over two years.
+_COOKIE_WORDS = ("acme alder amber apex arbor aspen atlas aurora beacon birch bramble brook cedar cinder clover cobalt comet "
+                 "coral cove crest delta dune echo ember fern fjord flint garnet glade harbor hazel heron indigo iris juniper "
+                 "kestrel lagoon lark linden lumen maple meadow mesa nimbus onyx orchid pebble quartz raven ridge sage slate").split()
+if os.environ.get("MOCK_COOKIE_SITES", "").isdigit():
+    _day = datetime.now(timezone.utc).replace(hour=8, minute=0, second=0, microsecond=0)
+    MOCK_COOKIE_SITES = {}
+    for _i in range(int(os.environ["MOCK_COOKIE_SITES"])):
+        _w = _COOKIE_WORDS[_i % len(_COOKIE_WORDS)] + ("" if _i < len(_COOKIE_WORDS) else str(_i // len(_COOKIE_WORDS) + 1))
+        _e = None if _i % 17 == 5 else _day - timedelta(days=3 + _i) if _i in (7, 30) else _day + timedelta(days=12 + _i * 37 % 700)
+        MOCK_COOKIE_SITES[f"{_w}.example"] = [_i * 7 % 9 + 1, _e.strftime("%Y-%m-%dT%H:%M:%SZ") if _e else None]
 
 
 def cookie_sites():
@@ -22884,6 +22950,7 @@ class H(BaseHTTPRequestHandler):
             # Claude Code keeps the rewound turns in its transcript file (a tree); the node leaves them out and the history
             # token changes (".r<n>"), which makes every client read the session again.
             global HISTORY
+            CHURN_ITEMS.setdefault(sid, list(items))
             ITEMS[sid] = items[:users[at]]
             HISTORY = "mock-1.r%d" % (len(REWINDS))
             last = ITEMS[sid][-1]["seq"] if ITEMS[sid] else 0
@@ -23924,7 +23991,7 @@ MOCK_HELP.append("MOCK_MANAGER_EXPIRED=1  设置 › 管理者：多一个安装
 MOCK_HELP.append("MOCK_MANAGER_COMMANDS=1  设置 › 管理者：新建 / 换个地方装的回答带安装命令（commands.service / docker）；MOCK_MANAGERS=0 是还没有名册的旧 hub（/api/v1/managers 404）")
 MOCK_HELP.append("MOCK_SENT=1|empty|nodb|forbidden|old  Settings > Sent as you (#5278, scripts/mock/sent_ledger_mock.py): 1 is about 70 made-up rows (four ways through the gate, one text of 4000 characters), empty has none, nodb is 503 no_database, forbidden 403, old a hub from before the ledger (404 with no code); POST …/sent/{id}/recall takes back row 66 and refuses row 60 (502 recall_refused), row 54 is already recalled")
 MOCK_HELP.append("MOCK_SHARED_BOTS=1  Settings > Managers: two managers share a Feishu app and a WeChat account (#5826)")
-MOCK_HELP.append("MOCK_REWIND=1|safeguards  检查 PR 的对话里有四条你的消息（两条同样的「继续」），试「回退到这里」（#2436）；safeguards 显示安全拦截；POST …/rewind 记在 REWINDS，MOCK_REWIND_ERROR=<code>:<提示> 让它像节点一样拒绝，MOCK_REWIND_DELAY=<秒> 调等待")
+MOCK_HELP.append("MOCK_REWIND=1|safeguards|codex|agy  检查 PR 的对话里有四条你的消息（两条同样的「继续」），试「回退到这里」（#2436）；safeguards 显示安全拦截；POST …/rewind 记在 REWINDS，MOCK_REWIND_ERROR=<code>:<提示> 让它像节点一样拒绝，MOCK_REWIND_DELAY=<秒> 调等待")
 MOCK_HELP.append("MOCK_INBOX_SOURCES=none  还没接任何消息来源：收件箱空、没有邮箱账号、飞书没设置、GitHub 没登录（#4480）")
 MOCK_HELP.append("MOCK_INBOX_EXTRA=<n>  收件箱多 n 封知悉即可的示例通知，试「全部清理」的「将清理 N 件」确认")
 MOCK_HELP.append("MOCK_CHANNELS=1  设置 › 插件 › 渠道：App、飞书机器人和微信已连接、飞书 /agent 只读、一个待绑定（令牌 example-token）、一个出错、一个在市场里；主对话第一条来自微信")
@@ -25940,6 +26007,21 @@ _plugins_route_without_agent_archives = plugins_route
 
 def plugins_route(handler, p, body):
     return agent_archives_route(handler, p, body) or _plugins_route_without_agent_archives(handler, p, body)
+
+
+_plugins_route_without_outside_dialog = plugins_route
+
+
+def plugins_route(handler, p, body):
+    """MOCK_OUTSIDE_DIALOG: a message to the waiting terminal Claude is delivered into its queue (#5890)."""
+    if (os.environ.get("MOCK_OUTSIDE_DIALOG") and handler.command == "POST"
+            and p == "/api/v1/sessions/macbook/%s/messages" % OUTSIDE_DIALOG):
+        return handler.send_json({"ok": True, "waits_on_computer": True}) or True
+    return _plugins_route_without_outside_dialog(handler, p, body)
+
+
+MOCK_HELP.append("MOCK_OUTSIDE_DIALOG=1  A Claude Code session in a plain terminal on the MacBook waits on a question only the computer "
+                 "can answer (#5890): a message to it answers {ok, waits_on_computer}")
 
 
 _features_without_agent_archives = features
