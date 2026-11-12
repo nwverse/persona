@@ -16,7 +16,6 @@ import { useFreshWords } from "./fresh-words";
 import { inOpenedFold, openFoldRange, useExpanded, useLiveOverride } from "./expanded";
 import { useReveal } from "./search-reveal";
 import { nodeItemIds } from "../../lib/chat-search";
-import { PlanCard } from "./PlanCard";
 import { Answer } from "./SegmentView";
 import { NoticeRow, Thumb } from "./Steps";
 import { WorkflowCallCard } from "./WorkflowCard";
@@ -25,6 +24,8 @@ import { t } from "../../i18n";
 
 // Subagent cards sit inside the folded work (super rule 2), drawn only once a reader opens it: off the first screen.
 const SubagentCard = lazy(() => import("./SubagentCard").then((m) => ({ default: m.SubagentCard })));
+// the plan's card loads with an opened summary, off the first screen (#5156)
+const PlanCard = lazy(() => import("./PlanCard").then((m) => ({ default: m.PlanCard })));
 // Thought rows too (#5155), with their emphasis parser: only an opened summary draws them.
 const ThinkingRow = lazy(() => import("./ThinkingRow").then((m) => ({ default: m.ThinkingRow })));
 // A child session's card (#5120) the same way: drawn only once the work summary it sits in is opened.
@@ -41,6 +42,9 @@ export interface WorkProps {
   workflowCalls?: WorkflowCalls;
   /** Inside an open group: a timeline's inner groups, which open with it (nestedLineDefault). */
   nested?: boolean;
+  /** Inside an open group: whether its outermost group is live. A call without its result spins while it is, in every
+   *  inner group, a finished one too (the run was over, the call may not be); nested groups keep their outer's. */
+  rowsLive?: boolean;
   /** The exchange these steps are of (its segment's id): what of it the reader opened is kept under it. */
   segment?: string;
   /** Show every tool's original input/result in place in an opened supervision trace. */
@@ -49,13 +53,17 @@ export interface WorkProps {
   lineStyle?: WorkLineStyle;
   /** The exchange these steps are of is still running. */
   turnLive?: boolean;
+  /** The step that draws the exchange's plan card (work-groups.ts planCardStep; "" for none): its other plan updates are
+   *  rows. Unset: every plan update draws a card. */
+  plan?: string;
 }
 
 /** A Workflow call that draws its run's card (the hub lists the run); one that does not is the row it always was. */
 const workflowCard = (s: ToolStep, p: WorkProps) => isWorkflowStep(s) && Boolean(s.use.tool_use_id && p.workflowCalls?.known.has(s.use.tool_use_id));
 
 /** A step drawn as an action row, sitting with the rows next to it. */
-const drawnAsRow = (s: Step, p: WorkProps): s is ToolStep => (p.trace && s.kind === "tool") || isRowStep(s) || (isWorkflowStep(s) && !workflowCard(s, p));
+const drawnAsRow = (s: Step, p: WorkProps): s is ToolStep =>
+  (p.trace && s.kind === "tool") || isRowStep(s) || (isWorkflowStep(s) && !workflowCard(s, p)) || (isPlanStep(s) && p.plan !== undefined && s.id !== p.plan);
 
 /** Every fold under a group, nested ones too: opening it fetches their steps. */
 function foldsOf(g: WorkGroupNode): Item[] {
@@ -86,7 +94,8 @@ export const WorkGroup = memo(function WorkGroup({ g, p }: { g: WorkGroupNode; p
   const [loading, setLoading] = useState(false);
   const opens = workLineOpens(g, style, turnLive);
   const open = workLineOpen({ style, turnLive, remembered, liveOverride }) && opens;
-  const inside = useMemo(() => ({ ...p, nested: true }), [p]);
+  const rowsLive = p.nested ? Boolean(p.rowsLive) : g.live;
+  const inside = useMemo(() => ({ ...p, nested: true, rowsLive }), [p, rowsLive]);
   const toggle = () => {
     const next = !open;
     setOpen(next);
@@ -151,7 +160,7 @@ export const WorkGroup = memo(function WorkGroup({ g, p }: { g: WorkGroupNode; p
       )}
       <Collapse open={open} lazy>
         <div className="mt-1 flex min-w-0 flex-col gap-2 border-l-2 border-tool-rail py-[2px] pl-3" data-work-detail>
-          <WorkNodes nodes={g.children} p={inside} live={g.live} />
+          <WorkNodes nodes={g.children} p={inside} live={rowsLive} />
           {/* once, in the innermost live group: a live timeline's last run is live too */}
           {g.live && !g.children.some((c) => c.kind === "group" && c.live) && <LiveThinking mid={p.mid} sid={p.sid} />}
         </div>
@@ -206,12 +215,11 @@ export const StepView = memo(function StepView({ step, p, live, fade }: { step: 
       if (p.trace) return <ActionRow step={step} running={live && !step.result} mid={p.mid} sid={p.sid} trace />;
       if (isChildSessionStep(step)) return <Suspense fallback={null}><ChildSessionCard mid={p.mid} sid={childSessionOf(step)} scope={p.scope} /></Suspense>;
       if (isAgentStep(step)) return <Suspense fallback={null}><SubagentCard step={step} status={p.agentStatus(step)} mid={p.mid} sid={p.sid} scope={p.scope} /></Suspense>;
-      if (isPlanStep(step)) return <PlanCard id={step.id} todos={planTodos(step)} live={live} mid={p.mid} sid={p.sid} />;
+      if (isPlanStep(step)) return <Suspense fallback={null}><PlanCard id={step.id} todos={planTodos(step)} live={live} /></Suspense>;
       if (workflowCard(step, p)) return <WorkflowCallCard step={step} mid={p.mid} sid={p.sid} scope={p.scope} />;
       return <ActionRow step={step} running={live && !step.result} mid={p.mid} sid={p.sid} />;
     case "thinking":
-      // a thought without words is no row: not worth a chunk
-      return step.item.text?.trim() ? <Suspense fallback={null}><ThinkingRow item={step.item} scope={p.scope} /></Suspense> : null;
+      return <Suspense fallback={null}><ThinkingRow item={step.item} scope={p.scope} /></Suspense>;
     case "text":
       return fade ? <FreshAnswer item={step.item} mid={p.mid} sid={p.sid} /> : <Answer item={step.item} mid={p.mid} sid={p.sid} />;
     case "notice":

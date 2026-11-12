@@ -58,6 +58,8 @@ export interface ProviderView extends ScopeView {
   effort?: string;
   /** ManagedLauncher.Source: "" made by hand, "zshrc:<alias>@<machine>", "preset:<id>". */
   origin?: string;
+  /** A direct API connection's "Send through": the computer whose node sends its requests; none: the hub itself. */
+  via_machine?: string;
 }
 
 /** One model row of step 3: numbers as typed. */
@@ -109,6 +111,8 @@ export interface ProviderForm {
   custom_model_name: string;
   custom_model_description: string;
   args: string;
+  /** Send through (kind api): a computer's id, "" the hub itself. */
+  via_machine: string;
 }
 
 /** A compatible gateway's form, typed by hand (the providers the hub knows are presets, lib/launcher-presets.ts). */
@@ -147,6 +151,7 @@ export function newForm(): ProviderForm {
     custom_model_name: "",
     custom_model_description: "",
     args: "",
+    via_machine: "",
   };
 }
 
@@ -192,6 +197,7 @@ export function formFromView(v: ProviderView): ProviderForm {
     custom_model: v.custom_model ?? "",
     custom_model_name: v.custom_model_name ?? "",
     custom_model_description: v.custom_model_description ?? "",
+    via_machine: v.via_machine ?? "",
     args: (v.args ?? []).join(" "),
   };
 }
@@ -458,6 +464,7 @@ export function providerBody(f: ProviderForm, old: ProviderView | null, clearLeg
   if (!chat && f.headers_touched) body.headers = f.headers.trim();
   if (!chat && f.env_touched) body.env = f.env.replace(/\s+$/, ""); // the start kept: the hub's line numbers match the box
   if (chat && clearLegacyChat) Object.assign(body, legacyChatClears(old));
+  if (api && f.via_machine !== (old?.via_machine ?? "")) body.via_machine = f.via_machine;
   return body;
 }
 
@@ -468,6 +475,7 @@ export function probeBody(f: ProviderForm, stored: string | null, model?: string
   if (f.api_key.trim()) b.api_key = f.api_key.trim();
   if (!(f.kind === "api" && f.api === "chat") && f.headers_touched) b.headers = f.headers.trim();
   if (model !== undefined) b.model = model;
+  if (f.kind === "api") b.via_machine = f.via_machine; // tested from where it will be sent
   return b;
 }
 
@@ -544,7 +552,8 @@ export interface ImportRow {
 }
 
 export const hostOf = (u?: string) => (u ? urlHost(u) : "");
-const names = (xs: string[]) => xs.join(t("lib-providers.alias_separator"));
+/** Names in a line: aliases, variables, headers. */
+export const names = (xs: string[]) => xs.join(t("lib-providers.alias_separator"));
 
 /** The group asks "A provider for each alias" / "One provider": its aliases set more than the model differently. */
 export const importCanSplit = (p: ImportedProvider) => !!p.differs?.length && (p.variants?.length ?? 0) > 1;
@@ -577,18 +586,23 @@ export function importFrom(p: ImportedProvider): string[] {
 }
 
 /** The variables the provider brings along, or "" when none. */
-export const importBrings = (p: ImportedProvider) => (p.env_names?.length ? t("lib-providers.brings", { names: names(p.env_names) }) : "");
+export const importBrings = (p: Pick<ImportedProvider, "env_names">) => (p.env_names?.length ? t("lib-providers.brings", { names: names(p.env_names) }) : "");
 
 const SKIP_ORDER = ["credential", "shell", "computer", "limit"];
 
-/** The variables left out, a line per reason in plain words; an unknown reason reads as the generic one. */
-export function importLeftOut(p: ImportedProvider): string[] {
+/** Names left out grouped by why: the reasons of `order` that have any, in that order, then "other" for the unknown ones. */
+export function byReason(items: readonly { name: string; reason: string }[], order: readonly string[]): [string, string[]][] {
   const by = new Map<string, string[]>();
-  for (const s of p.skipped_env ?? []) {
-    const reason = SKIP_ORDER.includes(s.reason) ? s.reason : "other";
+  for (const s of items) {
+    const reason = order.includes(s.reason) ? s.reason : "other";
     by.set(reason, [...(by.get(reason) ?? []), s.name]);
   }
-  return [...SKIP_ORDER, "other"].filter((r) => by.has(r)).map((r) => t(`lib-providers.left_out_${r}`, { names: names(by.get(r)!), max: ENV_LIMIT }));
+  return [...order, "other"].filter((r) => by.has(r)).map((r) => [r, by.get(r)!]);
+}
+
+/** The variables left out, a line per reason in plain words; an unknown reason reads as the generic one. */
+export function importLeftOut(p: Pick<ImportedProvider, "skipped_env">): string[] {
+  return byReason(p.skipped_env ?? [], SKIP_ORDER).map(([r, list]) => t(`lib-providers.left_out_${r}`, { names: names(list), max: ENV_LIMIT }));
 }
 
 const DIFFERS = ["tiers", "effort", "args", "limits", "proxy", "headers", "env", "auth", "custom_model"];

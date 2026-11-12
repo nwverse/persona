@@ -34,12 +34,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.LinkAnnotation
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.TextLinkStyles
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.font.FontStyle
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -229,6 +223,9 @@ private fun FeedLine(item: FeedItem, host: AssistantTaskHost) {
     val plans by host.tasks.plans.collectAsStateWithLifecycle()
     val later by host.tasks.later.collectAsStateWithLifecycle()
     val title = todos.firstOrNull { it.id == item.ref }?.title ?: stringResource(R.string.chat_tasks_default_title)
+    // Glass draws the records as iOS's new conversation layout does (#4339 C13); Brief and Board keep their looks.
+    val glass = PersonaTheme.style == persona.core.designsystem.AppStyle.Glass
+    val openTodo = todos.firstOrNull { it.id == item.ref }?.let { todo -> { openTask(host, todo) } }
     when (item.kind) {
         "plan" -> (item.ref?.let { plans[it] } ?: item.plan)?.let { PlanCard(it, host) }
         "task" -> todos.firstOrNull { it.id == item.ref }?.let { todo ->
@@ -241,9 +238,10 @@ private fun FeedLine(item: FeedItem, host: AssistantTaskHost) {
         // list no longer has it (then there is nothing to open).
         "review" -> ReviewLine(item, todos.firstOrNull { it.id == item.ref }?.title ?: item.field("title")?.takeIf(String::isNotBlank) ?: title,
             todos.firstOrNull { it.id == item.ref }?.let { todo -> { openTask(host, todo) } })
-        "report" -> ReportCard(item, title, todos.firstOrNull { it.id == item.ref }?.let { todo -> { openTask(host, todo) } })
+        "report" -> if (glass) ReportExchange(item, title, openTodo) else ReportCard(item, title, openTodo)
         // Persona's own message to the task's agent is folded, never the user's bubble (#1542, #1623).
-        "routed" -> if (item.sentByPersona) SentLine(item, title, todos.firstOrNull { it.id == item.ref }?.let { todo -> { openTask(host, todo) } })
+        "routed" -> if (item.sentByPersona) { if (glass) RoutedExchange(item, title, openTodo) else SentLine(item, title, openTodo) }
+        else if (glass) UserRoutedExchange(item, title)
         else Column(Modifier.fillMaxWidth().padding(start = Tokens.Space.xxl), horizontalAlignment = Alignment.End,
             verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
             Text(stringResource(R.string.chat_tasks_routed_to, title), style = PersonaTheme.type.caption, color = PersonaTheme.palette.accent, maxLines = 1)
@@ -255,6 +253,7 @@ private fun FeedLine(item: FeedItem, host: AssistantTaskHost) {
         "message" -> if (item.ref != null && item.id !in later) MessageCard(item, host, todos)
         // A live card: drawn where it was created, as the hub's latest version of it (docs/assistant/assistant-views.md "Live cards").
         "view" -> item.ref?.let { id -> persona.core.designsystem.LocalViewBlocks.current?.live?.invoke(id) }
+        "notice" -> NoticeLine(item)
     }
 }
 
@@ -624,31 +623,22 @@ private fun ReceiptCard(item: FeedItem, host: AssistantTaskHost, todos: List<Tod
                 else ReceiptSummary(it) }
             if (failed && todo != null) JButton(stringResource(R.string.chat_tasks_retry), { host.tasks.retryTask(todo, host.onError) }, kind = JButtonKind.Secondary,
                 size = JButtonSize.Small, icon = PhIcons.ArrowClockwise, loading = TasksStore.retryKey(todo.id) in busy)
-            if (!failed && todo != null) TaskReceiptLook(todo, host)
+            // its pull request and the task, as iOS's receipt offers them
+            val pr = item.field("pr")?.let { url -> trayPullRequestNumber(url)?.let { url to it } }
+            if (pr != null) Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+                val uri = androidx.compose.ui.platform.LocalUriHandler.current
+                JButton(stringResource(R.string.chat_tray_pr_number, pr.second), { uri.openUri(pr.first) }, Modifier.testTag("receipt-pr"),
+                    kind = JButtonKind.Secondary, size = JButtonSize.Small, icon = persona.core.designsystem.icons.PersonaIcons.pullRequest)
+                if (!failed && todo != null) TaskReceiptLook(todo, host)
+            } else if (!failed && todo != null) TaskReceiptLook(todo, host)
         }
     }
 }
 
-/** What the task's agent said last, its Markdown styled, in four lines (#1508). */
+/** What the task's agent said last, its Markdown styled and its web links linked, in four lines (#1508). */
 @Composable
 private fun ReceiptSummary(md: String) {
-    val palette = PersonaTheme.palette
-    val type = PersonaTheme.type
-    val text = remember(md, palette, type) {
-        val styled = ReceiptMarkdown.parse(md)
-        buildAnnotatedString {
-            append(styled.text)
-            for (span in styled.spans) when (span.mark) {
-                ReceiptMarkdown.Mark.Strong -> addStyle(SpanStyle(fontWeight = type.bodyStrong.fontWeight), span.start, span.end)
-                ReceiptMarkdown.Mark.Emphasis -> addStyle(SpanStyle(fontStyle = FontStyle.Italic), span.start, span.end)
-                ReceiptMarkdown.Mark.Strike -> addStyle(SpanStyle(textDecoration = TextDecoration.LineThrough), span.start, span.end)
-                ReceiptMarkdown.Mark.Code -> addStyle(SpanStyle(fontFamily = type.code.fontFamily, background = palette.sunken), span.start, span.end)
-                ReceiptMarkdown.Mark.Link -> addLink(LinkAnnotation.Url(span.url.orEmpty(),
-                    TextLinkStyles(SpanStyle(color = palette.accent, textDecoration = TextDecoration.Underline))), span.start, span.end)
-            }
-        }
-    }
-    Text(text, style = type.callout, color = palette.ink2, maxLines = 4, overflow = TextOverflow.Ellipsis)
+    Text(agentWords(md), style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink2, maxLines = 4, overflow = TextOverflow.Ellipsis)
 }
 
 /** A task the model service cut off (#1516): red, why in words, "Continue" while it is still cut off; once its agent went on,

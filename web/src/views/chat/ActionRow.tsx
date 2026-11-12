@@ -17,6 +17,7 @@ import { cx, Dialog, EASE, IconButton, Spinner } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { NARROW, useMedia } from "../../ui/media-query";
 import { patchDiffs } from "../../lib/tool-detail";
+import { editLines } from "../../lib/turn-changes";
 import { useChatContext } from "./chat-context";
 import { useFullText } from "./FullText";
 import { hasStepDetail, showsResult, StepDetail } from "./StepDetail";
@@ -25,7 +26,7 @@ import { edgeMask, useEdgeFade } from "./edge-fade";
 import { Thumb } from "./Steps";
 import { t } from "../../i18n";
 
-/** The row's chrome, shared with the thought rows (ThinkingCard.tsx) so a mixed list reads as one (cindy's
+/** The row's chrome, shared with the thought rows (ThinkingRow.tsx) so a mixed list reads as one (cindy's
  *  activityRowChrome): radius, padding, the hover lift. On a touch screen a row is a finger tall (40). */
 export const ROW_CHROME = "flex w-full min-w-0 gap-1.5 rounded-[8px] px-2 py-[3px] [@media(pointer:coarse)]:min-h-10 text-left";
 export const ROW_HOVER = "group select-none transition-colors duration-150 hover:bg-tool-hover motion-reduce:transition-none";
@@ -146,10 +147,11 @@ export function presentAction(use: Item): ActionPresentation {
 
 // ── diffs ──
 
-/** A line diff of an edit's old and new text (lib/compare.ts's Myers diff); too big to diff: all out, all in. */
+/** A line diff of an edit's old and new text (lib/compare.ts's Myers diff); too big to diff: all out, all in. Its
+ *  lines are lib/turn-changes.ts editLines' (a final newline ends the last line where both sides allow it), which the
+ *  changed-files card and the hub's folds count the same way. */
 export function lineDiff(oldText: string, newText: string): Op[] {
-  const a = oldText ? oldText.split("\n") : [];
-  const b = newText ? newText.split("\n") : [];
+  const [a, b] = editLines(oldText, newText);
   return diffLines(a, b) ?? [...a.map((text) => ({ kind: "del" as const, text })), ...b.map((text) => ({ kind: "add" as const, text }))];
 }
 

@@ -49,6 +49,7 @@ import { hubHasExt } from "../lib/extension-api";
 import { hostOf, type ProviderView } from "../lib/providers";
 import { forgetProviderNames, providerIdNote, providerTitle } from "../lib/provider-names";
 import { harnessGroups, harnessLabel, scopeSummary } from "../lib/provider-scope";
+import { foundAliases, type EditDraft, type FoundAlias } from "../lib/provider-paste";
 import { ProviderWizard } from "./settings/ProviderWizard";
 import { ProviderImport } from "./settings/ProviderImport";
 import { builtinRows, loadLaunchers, rcFilesOf, rcGroups, syncStateText, type LauncherSync } from "../lib/launcher-list";
@@ -697,16 +698,38 @@ function Models() {
   const [open, setOpen] = useState<string | null>(() => new URLSearchParams(location.search).get("launcher"));
   const [editing, setEditing] = useState<LauncherView | "new" | null>(() => (new URLSearchParams(location.search).get("add") === "1" ? "new" : null));
   const [importing, setImporting] = useState(false);
+  // the import opened for one alias the wizard found (#5193); null: the computer's whole list
+  const [importAlias, setImportAlias] = useState<FoundAlias | null>(null);
+  // what a stored provider opens with when a paste goes on with it
+  const [editDraft, setEditDraft] = useState<EditDraft | null>(null);
 
+  // the list read again; rejects when it couldn't be
+  const refresh = () => loadLaunchers<LauncherView>().then((r) => (setList(r.launchers), setSync(r.sync ?? []), r.launchers));
   const load = () => {
     setLoading(true);
     setError("");
-    return loadLaunchers<LauncherView>()
-      .then((r) => (setList(r.launchers), setSync(r.sync ?? [])))
+    return refresh()
       .catch((e) => setError(errorText(e)))
       .finally(() => setLoading(false));
   };
   useEffect(() => void load(), []);
+  const found = useMemo(() => foundAliases(list ?? [], machines), [list, machines]);
+  const closeWizard = () => (setEditing(null), setEditDraft(null), dropLinkParams());
+  // The wizard swaps to a stored provider the paste matched; one added since this list loaded is in a fresh one.
+  const editWith = async (name: string, draft: EditDraft) => {
+    const find = (ls?: LauncherView[] | null) => ls?.find((l) => managedProvider(l.source) && l.name === name);
+    let l = find(list);
+    if (!l) {
+      try {
+        l = find(await refresh());
+      } catch (e) {
+        return toast(t("settings.launchers_failed", { error: errorText(e) }), "error");
+      }
+    }
+    if (!l) return toast(t("settings-providerpaste.provider_missing", { name }), "error");
+    setEditDraft(draft);
+    setEditing(l);
+  };
 
   const name = (id: string) => sync.find((s) => s.machine === id)?.name || machines.find((m) => m.id === id)?.name || id;
   const shown = useMemo(() => {
@@ -757,7 +780,7 @@ function Models() {
         </label>
         {list && (
           // for people who already run claude from aliases on a computer: turns them into providers (the dialog explains when there is no computer)
-          <Button tone="secondary" icon="download" title={t("settings-providerimport.title")} onClick={() => setImporting(true)}>
+          <Button tone="secondary" icon="download" title={t("settings-providerimport.title")} onClick={() => (setImportAlias(null), setImporting(true))}>
             <span className="max-sm:sr-only">{t("settings-providerimport.import")}</span>
           </Button>
         )}
@@ -834,8 +857,9 @@ function Models() {
           setEditing(l);
         }}
       />
-      <ProviderWizard existing={editing} onClose={() => (setEditing(null), dropLinkParams())} onSaved={() => void load()} />
-      <ProviderImport open={importing} onClose={() => setImporting(false)} onImported={() => void load()} />
+      <ProviderWizard existing={editing} draft={editDraft} found={found} onClose={closeWizard} onSaved={() => void load()}
+        onImportAlias={(a) => (closeWizard(), setImportAlias(a), setImporting(true))} onEditWith={(name, draft) => void editWith(name, draft)} />
+      <ProviderImport open={importing} machine={importAlias?.machine} alias={importAlias?.name} onClose={() => setImporting(false)} onImported={() => void load()} />
       </div>
     </>
   );
