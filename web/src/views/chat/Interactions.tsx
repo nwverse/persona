@@ -743,9 +743,9 @@ export function CloseBlockedAgent({ ix, disabled }: { ix: Interaction; disabled:
   </div>;
 }
 
-/** Claude Code asking to run a command (#5266), said in plain words: its own chunk, loaded at idle, since most chats never
- *  show one. Until it is in, the card is the terminal's question as before. */
-const CommandScreenCard = lazyPage(() => import("./CommandScreenCard").then((m) => m.CommandScreenCard), { idle: true });
+/** Claude Code asking to run a command (#5266), said in plain words: its own chunk, loaded only when a command card
+ *  appears, since most chats never show one. Until it is in, the card is the terminal's question as before. */
+const CommandScreenCard = lazyPage(() => import("./CommandScreenCard").then((m) => m.CommandScreenCard));
 
 function ScreenCard({ ix }: { ix: Interaction }) {
   // The hub sets `command` only on a shell command's permission prompt (one choice, no free-text field).

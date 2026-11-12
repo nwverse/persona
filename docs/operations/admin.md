@@ -236,6 +236,13 @@ Page `web/src/admin/pages/Assistant.tsx` (#2023; design in [assistant-views.md](
 
 The prompt explains all four options and their risks (see the admin access section of `scripts/deploy/install.sh`; `deploy.sh` uses it unchanged, so the public installer and deployment ask the same question).
 
+The public installer chooses English, Simplified Chinese or Japanese from `LC_ALL` (when set), then `LANG`; Chinese
+locales use `zh-Hans`, Japanese locales use `ja`, and every other, missing or unknown locale uses `en`. Pass
+`--lang en`, `--lang zh-Hans` or `--lang ja` after `sh -s --` to override it, for example
+`curl … | sh -s -- --lang ja --hub`. The override changes only the installer's own prompts, errors, explanations and summary;
+programs it runs choose their language separately. `scripts/deploy/deploy.sh` uses the same admin-access catalog and
+follows its environment locale.
+
 ## Security trade-offs
 
 - **Why default to `lan`, not `loopback`**: on a NAS or headless server, a local browser is not useful; `lan` already blocks the internet and other subnets.
