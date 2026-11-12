@@ -8,7 +8,7 @@ It serves machines, agents, conversations, interactions and the inbox, enough fo
 does not know are logged to stderr as MISSING. Timestamps are relative to when it starts. See docs/operations/testing.md.
 """
 import base64, unicodedata
-import argparse, copy, hashlib, json, math, os, re, shutil, signal, socket, ssl, struct, subprocess, sys, tempfile, threading, time, uuid, zlib
+import argparse, copy, hashlib, json, math, os, posixpath, re, shutil, signal, socket, ssl, struct, subprocess, sys, tempfile, threading, time, uuid, zlib
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -12925,13 +12925,22 @@ def fold_task_snapshots(items):
 CLIPPED_NOTE = re.compile("\n…（已截断，共 \\d+ 字节）$")
 
 
-def _text_lines(s):
-    return s[:-1].split("\n") if s.endswith("\n") else s.split("\n") if s else []
+def _edit_lines(old, new):
+    """transcript.editLines: a final newline ends the last line on a side whose other side is empty or ends in one."""
+    def split(s, strip):
+        return (s[:-1] if strip else s).split("\n") if s else []
+    old_ends, new_ends = old.endswith("\n"), new.endswith("\n")
+    return split(old, old_ends and (not new or new_ends)), split(new, new_ends and (not old or old_ends))
+
+
+def _clean_path(p):
+    """path.Clean, as transcript.editPath cleans an edit's file (no "./", "../" or doubled slashes)."""
+    return posixpath.normpath(re.sub("/+", "/", p))
 
 
 def _line_changes(old, new):
     """transcript.lineChanges: lines added and removed by Myers' line diff; everything past its limits."""
-    a, b = _text_lines(old), _text_lines(new)
+    a, b = _edit_lines(old, new)
     n, m = len(a), len(b)
     if n + m <= 60000:
         most = min(n + m, 6000)
@@ -12989,7 +12998,7 @@ def fold_changes(run):
         if x["kind"] != "tool_use" or name not in ("Edit", "Write", "MultiEdit") or not ok.get(x.get("tool_use_id")):
             continue
         inp = x.get("tool_input") or {}
-        path = next((inp[k].strip() for k in ("file_path", "notebook_path", "path") if isinstance(inp.get(k), str) and inp[k].strip()), "")
+        path = next((_clean_path(inp[k].strip()) for k in ("file_path", "notebook_path", "path") if isinstance(inp.get(k), str) and inp[k].strip()), "")
         if not path:
             continue
         add = rm = 0

@@ -2347,11 +2347,12 @@ with one item of `kind: fold` (`transcript.FoldWork`):
   `full_size` preserves the original byte count (including any earlier clipping). It carries no tool, image or other payload, and is omitted when there is no thought with words.
   The original item remains inside the fold: counts, range and expansion are unchanged. Clients that do not use this preview ignore it.
 - `fold.changes` is the files this run's successful edits changed (`transcript.foldChanges`, #5157), in the order first edited: `path` as the
-  edit named it, `add` / `del` the lines added and removed, summed over the run's edits of that file, and `exact`, false when an edit's input
+  edit named it, cleaned (`path.Clean`: no `./`, `../` or doubled slashes, so one file is one entry), `add` / `del` the lines added and removed, summed over the run's edits of that file, and `exact`, false when an edit's input
   was clipped for good (its counts would be a guess, and the apps leave them out). An edit is an Edit, Write or MultiEdit call whose result is in
   the run and is not an error; a Codex file change is the Edit with its `diff` (headers not counted; without hunks the whole file, added, or
   removed when `change` is `delete`). Lines are counted as the web counts an edit's line diff: Myers' diff of the old and new text, a final
-  newline ending the last line, and everything removed and added past 60,000 lines or 6,000 edits (`web/src/lib/compare.ts`). The list is
+  newline ending the last line on a side whose other side is empty or ends in a newline too (a Write of `"a\nb\n"` is 2 lines; `"foo"` becoming
+  `"foo\n"` is 1 added), and everything removed and added past 60,000 lines or 6,000 edits (`web/src/lib/compare.ts`). The list is
   always there, `[]` when the run edited nothing, so an app tells that from a fold an older node made, which has no list and leaves the edits
   unknown. The web's changed-files card counts a folded run by it, so the card is the same before and after a reload; the cases both read
   are in `spec/fixtures/fold-changes/cases.json`. Old clients ignore it.

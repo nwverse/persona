@@ -23,6 +23,9 @@ export interface ReviewSpot {
   line?: number;
   /** The line number is the old file's. */
   old?: boolean;
+  /** A changed-files card's file: when the review does not list it (or cannot be read), the file itself opens in the
+   *  side panel instead of a review with nothing to show for it. */
+  file?: boolean;
 }
 
 export type Panel =

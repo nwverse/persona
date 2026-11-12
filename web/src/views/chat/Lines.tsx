@@ -297,17 +297,17 @@ function APIErrorCard({ info, count, at, onRetry, onEditLastMessage, fix }: { in
       actions={
         <>
           {fix && (
-            <Button tone="primary" className="h-7" onClick={() => runAction(fix.action, { onHelp: () => {} })}>
+            <Button tone="primary" className="touch-hit h-7" onClick={() => runAction(fix.action, { onHelp: () => {} })}>
               {t("chat-lines.fix_it")}
             </Button>
           )}
           {onRetry && (
-            <Button icon="retry" className="h-7" onClick={onRetry}>
+            <Button icon="retry" className="touch-hit h-7" onClick={onRetry}>
               {t("chat-lines.retry")}
             </Button>
           )}
           {onEditLastMessage && (
-            <Button icon="pencil" className="h-7" onClick={onEditLastMessage}>
+            <Button icon="pencil" className="touch-hit h-7" onClick={onEditLastMessage}>
               {t("rewind.edit_last")}
             </Button>
           )}

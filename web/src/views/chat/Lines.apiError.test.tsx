@@ -59,6 +59,8 @@ describe("a model error is cindy's error notice (#5157)", () => {
     expect(html).toContain("推理服务暂时没有可用的 GPU");
     expect(html).toContain("临时故障，过一会儿多半会好");
     expect(html).toContain("重试");
+    // a 28 px action keeps a finger-sized target on a touch screen
+    expect(html).toMatch(/<button[^>]*class="[^"]*touch-hit[^"]*"[^>]*>(?:(?!<\/button>).)*重试<\/button>/);
     expect(html).toContain('aria-expanded="false"');
     expect(html).toContain("错误详情");
     // the head stays quiet: the status code, the ids and the original wait under Error details

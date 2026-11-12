@@ -2,6 +2,7 @@ package transcript
 
 import (
 	"encoding/json"
+	"path"
 	"regexp"
 	"strings"
 
@@ -15,8 +16,11 @@ const (
 	changeDiffMaxEdits = 6_000
 )
 
-// clippedNote is how clipParts ends a string of a tool input it cut for good.
-var clippedNote = regexp.MustCompile("\n…（已截断，共 \\d+ 字节）$")
+// clippedNote matches clipNoteFormat at the end of a string: a tool input clipJSON cut for good.
+var clippedNote = func() *regexp.Regexp {
+	before, after, _ := strings.Cut(clipNoteFormat, "%d")
+	return regexp.MustCompile(regexp.QuoteMeta(before) + `\d+` + regexp.QuoteMeta(after) + "$")
+}()
 
 var editTools = map[string]bool{"Edit": true, "Write": true, "MultiEdit": true}
 
@@ -42,36 +46,37 @@ func foldChanges(run []proto.Item) []proto.FoldChange {
 		if json.Unmarshal(it.ToolInput, &in) != nil {
 			continue
 		}
-		path := editPath(in)
-		if path == "" {
+		file := editPath(in)
+		if file == "" {
 			continue
 		}
-		add, del := editLines(it.ToolName, in)
+		add, del := editCounts(it.ToolName, in)
 		exact := !clipped(in)
-		if i, seen := at[path]; seen {
+		if i, seen := at[file]; seen {
 			out[i].Add += add
 			out[i].Del += del
 			out[i].Exact = out[i].Exact && exact
 			continue
 		}
-		at[path] = len(out)
-		out = append(out, proto.FoldChange{Path: path, Add: add, Del: del, Exact: exact})
+		at[file] = len(out)
+		out = append(out, proto.FoldChange{Path: file, Add: add, Del: del, Exact: exact})
 	}
 	return out
 }
 
-// editPath is the file an edit names, as the apps read it (web/src/lib/files.ts toolFile).
+// editPath is the file an edit names, as the apps read it (web/src/lib/files.ts toolFile), cleaned (path.Clean: no
+// "./", "../" or doubled slashes), so one file is one entry however its edits wrote it.
 func editPath(in map[string]any) string {
 	for _, k := range []string{"file_path", "notebook_path", "path"} {
 		if s, _ := in[k].(string); strings.TrimSpace(s) != "" {
-			return strings.TrimSpace(s)
+			return path.Clean(strings.TrimSpace(s))
 		}
 	}
 	return ""
 }
 
-// editLines is the lines an edit adds and removes.
-func editLines(tool string, in map[string]any) (add, del int) {
+// editCounts is the lines an edit adds and removes.
+func editCounts(tool string, in map[string]any) (add, del int) {
 	switch tool {
 	case "Edit":
 		if d, isDiff := in["diff"].(string); isDiff {
@@ -100,18 +105,27 @@ func editLines(tool string, in map[string]any) (add, del int) {
 	return add, del
 }
 
-// textLines is a text's lines; a newline at its end ends the last line, it does not start another.
-func textLines(s string) []string {
-	if s == "" {
-		return nil
+// editLines is an edit's two texts as lines. A newline at a text's end ends its last line, not starts another, on a
+// side whose other side is empty or ends in a newline too: a Write of "a\nb\n" is two lines, and "foo" becoming
+// "foo\n" is still a change (web/src/lib/turn-changes.ts editLines).
+func editLines(old, new string) (a, b []string) {
+	oldEnds, newEnds := strings.HasSuffix(old, "\n"), strings.HasSuffix(new, "\n")
+	split := func(s string, strip bool) []string {
+		if s == "" {
+			return nil
+		}
+		if strip {
+			s = s[:len(s)-1]
+		}
+		return strings.Split(s, "\n")
 	}
-	return strings.Split(strings.TrimSuffix(s, "\n"), "\n")
+	return split(old, oldEnds && (new == "" || newEnds)), split(new, newEnds && (old == "" || oldEnds))
 }
 
 // lineChanges is the lines added and removed between two texts by Myers' line diff (the one git uses), or all of
 // both when that is too big to work out.
 func lineChanges(old, new string) (add, del int) {
-	a, b := textLines(old), textLines(new)
+	a, b := editLines(old, new)
 	d, found := editDistance(a, b)
 	if !found {
 		return len(b), len(a)

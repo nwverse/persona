@@ -1,89 +1,20 @@
 // The files a finished Agent turn changed (cindy's TurnChangesCard, at the owner's request, 2026-11-12; docs/web/web.md
 // "Changed files"): a bordered card at the end of the exchange with "Changed 3 files", the lines added and removed,
-// Review, and the files, three of them, then "Show N more files". Counted from the exchange's own successful edits
-// (Edit / Write / MultiEdit; a Codex file change, which the hub maps to an Edit with its diff), the numbers each edit's
-// row shows; work the hub folded, by the counts its fold carries. Never in a Persona conversation, never while the turn
-// runs. cindy's Undo and Reapply are not here: nothing in Persona applies or reverts a turn's patch.
+// Review, and the files, three of them, then "Show N more files". What it counts is lib/turn-changes.ts. Never in a
+// Persona conversation, never while the turn runs. cindy's Undo and Reapply are not here: nothing in Persona applies
+// or reverts a turn's patch.
 import { memo, useState } from "react";
-import { relativeTo } from "../../lib/comments";
-import { joinPath, toolFile } from "../../lib/files";
+import { below } from "../../lib/files";
 import { openPanel } from "../../lib/panel";
 import { REVIEW_FEATURE } from "../../lib/session-review";
 import { hubHas, useStore } from "../../lib/store";
-import type { Step } from "../../lib/turns";
+import type { ChangedFile, TurnChangeSet } from "../../lib/turn-changes";
 import { Button } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { t } from "../../i18n";
-import { DIFF_TOOLS, diffStats, editDiffs } from "./ActionRow";
 
 /** Files listed before "Show N more files" (cindy's MAX_VISIBLE_FILES). */
 export const VISIBLE_FILES = 3;
-
-export interface ChangedFile {
-  /** As the edit named it, made absolute against the session's folder when it was relative. */
-  path: string;
-  /** Relative to the session's folder when inside it. */
-  shown: string;
-  add: number;
-  del: number;
-  /** False when the hub clipped one of its edits' text for good: its counts would be a guess. */
-  exact: boolean;
-}
-
-export interface TurnChangeSet {
-  files: ChangedFile[];
-  add: number;
-  del: number;
-  /** Every file's counts are known. */
-  exact: boolean;
-}
-
-/** The note the hub ends a tool input's string with when it clipped it for good (transcript clipJSON). */
-const CLIPPED = /\n…（已截断，共 \d+ 字节）$/; // i18n-ignore: matches the hub's text
-
-function clipped(v: unknown): boolean {
-  if (typeof v === "string") return CLIPPED.test(v);
-  if (Array.isArray(v)) return v.some(clipped);
-  return Boolean(v) && typeof v === "object" && Object.values(v as Record<string, unknown>).some(clipped);
-}
-
-const absolute = (p: string) => p.startsWith("/") || p.startsWith("~") || /^[A-Za-z]:[\\/]/.test(p) || p.startsWith("\\\\");
-
-/** What an exchange's own edits changed, by file in the order first edited, or null when there is nothing to show: no
- *  successful edit. Work the hub folded counts by its fold's `changes`, which the node works out the same way
- *  (server/internal/transcript/fold_changes.go, spec/fixtures/fold-changes); a fold without them (an older node) leaves
- *  the edits unknown, and there is no card rather than a wrong count. `steps` are the exchange's own (`exchangeSteps`),
- *  never its subagents'. */
-export function turnChanges(steps: readonly Step[], cwd?: string): TurnChangeSet | null {
-  const files = new Map<string, ChangedFile>();
-  const add = (named: string, n: { add: number; del: number }, exact: boolean) => {
-    const path = cwd && !absolute(named) ? joinPath(cwd, named) : named;
-    const had = files.get(path);
-    if (had) {
-      had.add += n.add;
-      had.del += n.del;
-      had.exact &&= exact;
-    } else files.set(path, { path, shown: relativeTo(cwd, path), add: n.add, del: n.del, exact });
-  };
-  for (const s of steps) {
-    if (s.kind === "fold") {
-      const changes = s.item.fold?.changes;
-      if (!Array.isArray(changes)) return null;
-      for (const c of changes) if (c.path) add(c.path, c, c.exact !== false);
-      continue;
-    }
-    if (s.kind !== "tool") continue;
-    const name = s.use.tool_name ?? "";
-    if (!DIFF_TOOLS.has(name) || !s.result || s.result.is_error) continue;
-    const f = toolFile(name, s.use.tool_input);
-    if (!f) continue;
-    const diffs = editDiffs(s.use);
-    add(f.path, diffs ? diffStats(diffs) : { add: 0, del: 0 }, !clipped(s.use.tool_input));
-  }
-  if (!files.size) return null;
-  const list = [...files.values()];
-  return { files: list, add: list.reduce((a, f) => a + f.add, 0), del: list.reduce((a, f) => a + f.del, 0), exact: list.every((f) => f.exact) };
-}
 
 /** The card's height as drawn (Chrome, 2026-11-12), for an exchange's estimate before it is first drawn: its 4 px
  *  margins, border, the 64 px head, and the files' padding, rows and Show more row. */
@@ -102,9 +33,11 @@ export const TurnChanges = memo(function TurnChanges({ changes, mid, sid, cwd }:
   const { files } = changes;
   const visible = expanded ? files : files.slice(0, VISIBLE_FILES);
   const hidden = files.length - visible.length;
-  const review = (path?: string) => cwd && openPanel({ kind: "review", mid, sid, cwd, scope: "uncommitted", ...(path ? { at: { path } } : {}) });
-  // a file opens the review at it; without a review, the file itself
-  const open = (f: ChangedFile) => (reviews ? review(f.path) : openPanel({ kind: "file", mid, path: f.path, cwd, sid }));
+  // the branch's review: an Agent often commits its edits before its turn ends, and Uncommitted would then be empty
+  const review = (path?: string) => cwd && openPanel({ kind: "review", mid, sid, cwd, scope: "branch", ...(path ? { at: { path, file: true } } : {}) });
+  // a file in the session's folder opens the review at it (the file itself when the review does not list it); one
+  // outside it, or without a review, the file itself
+  const open = (f: ChangedFile) => (reviews && cwd && below(cwd, f.path) ? review(f.path) : openPanel({ kind: "file", mid, path: f.path, cwd, sid }));
   return (
     <section data-turn-changes={files.length} className="my-1 overflow-hidden rounded-xl border border-line bg-surface">
       <div className="flex min-h-16 items-center gap-3 px-4 py-3">

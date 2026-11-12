@@ -1,7 +1,7 @@
 import { type CSSProperties, Fragment, memo, type ReactNode, useContext, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { clock } from "../../lib/format";
 import { stripCloseout } from "../../lib/closeout";
-import { getSession, getState } from "../../lib/store";
+import { getSession, getState, useStore } from "../../lib/store";
 import { withChildSessions } from "../../lib/child-cards";
 import { agentStatus, isNestedSubagentStep, nestedSubagentStatus, nestingKey, subagentFor, withNestedSubagents } from "../../lib/tasks";
 import { turnImages } from "../../lib/turn-images";
@@ -36,7 +36,8 @@ import { useChatContext } from "./chat-context";
 import { useFreshWords } from "./fresh-words";
 import { Icon } from "../../ui/icons";
 import { WorkGroup, WorkNodes, type WorkProps } from "./WorkGroup";
-import { TurnChanges, turnChanges, turnChangesHeight } from "./TurnChanges";
+import { TurnChanges, turnChangesHeight } from "./TurnChanges";
+import { turnChanges } from "../../lib/turn-changes";
 import { useCallSeeker } from "./jump";
 import { t } from "../../i18n";
 
@@ -326,9 +327,12 @@ export const SegmentView = memo(function SegmentView({
   }, [offscreen]);
   const divided = Boolean(seg.modelChange);
   // the files this finished Agent exchange changed (cindy's TurnChangesCard): its own edits, never a Persona
-  // conversation's (super rules 0 and 4), never while it runs, never in a supervision trace
-  const cwd = getSession(mid, sid)?.cwd;
-  const changes = useMemo(() => (!live && !trace && lineStyle === "agents" ? turnChanges(own, cwd) : null), [live, trace, lineStyle, own, cwd]);
+  // conversation's (super rules 0 and 4), never while it runs, never in a supervision trace, and never when the page
+  // starts inside it (no message of the user's): edits before the page would be missing from its counts
+  const counted = !live && !trace && lineStyle === "agents" && Boolean(seg.user);
+  // the session's folder from the store, so the card follows it when it comes in after the transcript
+  const cwd = useStore(() => (counted ? getSession(mid, sid)?.cwd : undefined));
+  const changes = useMemo(() => (counted ? turnChanges(own, cwd) : null), [counted, own, cwd]);
   const guess = useMemo(() => (offscreen ? ({ "--seg-est": `${segmentHeight(seg.user, nodes, divided) + (changes ? 12 + turnChangesHeight(changes) : 0)}px` } as CSSProperties) : undefined), [offscreen, seg.user, nodes, divided, changes]);
   return (
     <section ref={box} className={offscreen ? "seg-cv flex flex-col gap-3" : "flex flex-col gap-3"} style={guess} data-segment>

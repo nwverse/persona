@@ -117,3 +117,20 @@ func TestLineChangesGiveUpLikeTheApps(t *testing.T) {
 		t.Fatalf("nothing: +%d -%d", add, del)
 	}
 }
+
+// An input clipJSON cut for good is known by clipParts' own note (clipNoteFormat), wherever the clipped string sits;
+// the words in the middle of a text are not the note.
+func TestClippedFollowsClipJSON(t *testing.T) {
+	long := strings.Repeat("a line of a big new file\n", 4000)
+	raw, _ := json.Marshal(map[string]any{"file_path": "/w/big.txt", "edits": []any{map[string]any{"new_string": long}}})
+	var in map[string]any
+	if err := json.Unmarshal(clipJSON(raw), &in); err != nil {
+		t.Fatal(err)
+	}
+	if !clipped(in) {
+		t.Fatal("clipJSON's note not recognized")
+	}
+	if clipped(map[string]any{"content": "said: \n…（已截断，共 12 字节）, then more"}) || clipped(map[string]any{"content": long}) {
+		t.Fatal("an unclipped text read as clipped")
+	}
+}

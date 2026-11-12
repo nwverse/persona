@@ -47,7 +47,7 @@
     },
     {
       "name": "write_trailing_newline",
-      "description": "A Write of three lines ending in a newline: three added, as git counts, not four.",
+      "description": "A Write of three lines ending in a newline: three added, as git counts, not four (the old side is empty).",
       "source": [
         "server/internal/transcript/fold_changes.go: foldChanges",
         "web/src/views/chat/TurnChanges.tsx: turnChanges",
@@ -90,7 +90,7 @@
     },
     {
       "name": "edit_adds_a_line_with_newline",
-      "description": "An Edit whose new text ends in a newline: the newline ends its last line.",
+      "description": "An Edit from \"x\" to \"x\\ny\\n\": the old side neither is empty nor ends in a newline, so the new side's last newline starts a line; two added, as each call's diff draws it.",
       "source": [
         "server/internal/transcript/fold_changes.go: foldChanges",
         "web/src/views/chat/TurnChanges.tsx: turnChanges",
@@ -125,8 +125,123 @@
         "changes": [
           {
             "path": "/home/user/project/b.swift",
+            "add": 2,
+            "del": 0,
+            "exact": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "edit_adds_only_a_final_newline",
+      "description": "\"foo\" becoming \"foo\\n\" is still a change: one line added, as each call's diff draws it.",
+      "source": [
+        "server/internal/transcript/fold_changes.go: foldChanges",
+        "web/src/views/chat/TurnChanges.tsx: turnChanges",
+        "docs/protocol/protocol.md: Folded work"
+      ],
+      "input": {
+        "items": [
+          {
+            "id": "use21#0",
+            "seq": 21,
+            "role": "assistant",
+            "kind": "tool_use",
+            "tool_use_id": "call_21",
+            "tool_name": "Edit",
+            "tool_input": {
+              "file_path": "/home/user/project/n.txt",
+              "old_string": "foo",
+              "new_string": "foo\n"
+            }
+          },
+          {
+            "id": "res21#0",
+            "seq": 21,
+            "role": "user",
+            "kind": "tool_result",
+            "tool_use_id": "call_21",
+            "text": "ok"
+          }
+        ]
+      },
+      "expected": {
+        "changes": [
+          {
+            "path": "/home/user/project/n.txt",
             "add": 1,
             "del": 0,
+            "exact": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "both_sides_end_in_newline",
+      "description": "Both texts end in a newline: it ends their last lines; one added.",
+      "source": [
+        "server/internal/transcript/fold_changes.go: foldChanges",
+        "web/src/views/chat/TurnChanges.tsx: turnChanges",
+        "docs/protocol/protocol.md: Folded work"
+      ],
+      "input": {
+        "items": [
+          {
+            "id": "use22#0",
+            "seq": 22,
+            "role": "assistant",
+            "kind": "tool_use",
+            "tool_use_id": "call_22",
+            "tool_name": "Edit",
+            "tool_input": {
+              "file_path": "/home/user/project/m.txt",
+              "old_string": "x\n",
+              "new_string": "x\ny\n"
+            }
+          },
+          {
+            "id": "res22#0",
+            "seq": 22,
+            "role": "user",
+            "kind": "tool_result",
+            "tool_use_id": "call_22",
+            "text": "ok"
+          },
+          {
+            "id": "use23#0",
+            "seq": 23,
+            "role": "assistant",
+            "kind": "tool_use",
+            "tool_use_id": "call_23",
+            "tool_name": "Edit",
+            "tool_input": {
+              "file_path": "/home/user/project/e.txt",
+              "old_string": "a\nb\n",
+              "new_string": ""
+            }
+          },
+          {
+            "id": "res23#0",
+            "seq": 23,
+            "role": "user",
+            "kind": "tool_result",
+            "tool_use_id": "call_23",
+            "text": "ok"
+          }
+        ]
+      },
+      "expected": {
+        "changes": [
+          {
+            "path": "/home/user/project/m.txt",
+            "add": 1,
+            "del": 0,
+            "exact": true
+          },
+          {
+            "path": "/home/user/project/e.txt",
+            "add": 0,
+            "del": 2,
             "exact": true
           }
         ]
@@ -269,6 +384,97 @@
           {
             "path": "/home/user/project/q.swift",
             "add": 2,
+            "del": 0,
+            "exact": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "paths_are_normalized",
+      "description": "One file written as \"./\", \"../\" and doubled slashes is one entry, its path cleaned.",
+      "source": [
+        "server/internal/transcript/fold_changes.go: foldChanges",
+        "web/src/views/chat/TurnChanges.tsx: turnChanges",
+        "docs/protocol/protocol.md: Folded work"
+      ],
+      "input": {
+        "items": [
+          {
+            "id": "use24#0",
+            "seq": 24,
+            "role": "assistant",
+            "kind": "tool_use",
+            "tool_use_id": "call_24",
+            "tool_name": "Edit",
+            "tool_input": {
+              "file_path": "/home/user/project/src/../a.swift",
+              "old_string": "a",
+              "new_string": "b"
+            }
+          },
+          {
+            "id": "res24#0",
+            "seq": 24,
+            "role": "user",
+            "kind": "tool_result",
+            "tool_use_id": "call_24",
+            "text": "ok"
+          },
+          {
+            "id": "use25#0",
+            "seq": 25,
+            "role": "assistant",
+            "kind": "tool_use",
+            "tool_use_id": "call_25",
+            "tool_name": "Write",
+            "tool_input": {
+              "file_path": "/home/user/project//b.swift",
+              "content": "one\n"
+            }
+          },
+          {
+            "id": "res25#0",
+            "seq": 25,
+            "role": "user",
+            "kind": "tool_result",
+            "tool_use_id": "call_25",
+            "text": "ok"
+          },
+          {
+            "id": "use26#0",
+            "seq": 26,
+            "role": "assistant",
+            "kind": "tool_use",
+            "tool_use_id": "call_26",
+            "tool_name": "Edit",
+            "tool_input": {
+              "file_path": "/home/user/project/./a.swift",
+              "old_string": "c",
+              "new_string": "d"
+            }
+          },
+          {
+            "id": "res26#0",
+            "seq": 26,
+            "role": "user",
+            "kind": "tool_result",
+            "tool_use_id": "call_26",
+            "text": "ok"
+          }
+        ]
+      },
+      "expected": {
+        "changes": [
+          {
+            "path": "/home/user/project/a.swift",
+            "add": 2,
+            "del": 2,
+            "exact": true
+          },
+          {
+            "path": "/home/user/project/b.swift",
+            "add": 1,
             "del": 0,
             "exact": true
           }

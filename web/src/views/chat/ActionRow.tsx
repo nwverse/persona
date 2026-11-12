@@ -17,6 +17,7 @@ import { cx, Dialog, EASE, IconButton, Spinner } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { NARROW, useMedia } from "../../ui/media-query";
 import { patchDiffs } from "../../lib/tool-detail";
+import { editLines } from "../../lib/turn-changes";
 import { useChatContext } from "./chat-context";
 import { useFullText } from "./FullText";
 import { hasStepDetail, showsResult, StepDetail } from "./StepDetail";
@@ -144,13 +145,11 @@ export function presentAction(use: Item): ActionPresentation {
 
 // ── diffs ──
 
-/** A line diff of an edit's old and new text (lib/compare.ts's Myers diff); too big to diff: all out, all in. A newline
- *  at a text's end ends its last line rather than starting another, as git counts (the hub's fold counts the same,
- *  server/internal/transcript/fold_changes.go). */
+/** A line diff of an edit's old and new text (lib/compare.ts's Myers diff); too big to diff: all out, all in. Its
+ *  lines are lib/turn-changes.ts editLines' (a final newline ends the last line where both sides allow it), which the
+ *  changed-files card and the hub's folds count the same way. */
 export function lineDiff(oldText: string, newText: string): Op[] {
-  const lines = (s: string) => (s ? s.replace(/\n$/, "").split("\n") : []);
-  const a = lines(oldText);
-  const b = lines(newText);
+  const [a, b] = editLines(oldText, newText);
   return diffLines(a, b) ?? [...a.map((text) => ({ kind: "del" as const, text })), ...b.map((text) => ({ kind: "add" as const, text }))];
 }
 

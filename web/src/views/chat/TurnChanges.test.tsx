@@ -26,8 +26,8 @@ import { segments, type Step } from "../../lib/turns";
 import type { Item } from "../../lib/types";
 import { ChatContext, type ChatContextValue } from "./chat-context";
 import { SegmentView } from "./SegmentView";
-import { turnChanges } from "./TurnChanges";
-import { lineDiff } from "./ActionRow";
+import { editCounts, turnChanges } from "../../lib/turn-changes";
+import { diffStats, editDiffs, lineDiff } from "./ActionRow";
 import shared from "../../../../spec/fixtures/fold-changes/cases.json";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -104,10 +104,13 @@ describe("turnChanges: what an exchange's own edits changed", () => {
     expect(turnChanges(steps([ask(), empty, done()]), CWD)).toBeNull();
   });
 
-  it("counts a final newline as the end of the last line, as git does", () => {
+  it("counts a final newline as the end of the last line where both sides allow it, and still shows one added alone", () => {
     expect(lineDiff("", "a\nb\n").map((l) => l.kind)).toEqual(["add", "add"]);
     expect(lineDiff("x\n", "x\ny\n").map((l) => `${l.kind}:${l.text}`)).toEqual(["same:x", "add:y"]);
     expect(lineDiff("\n", "")).toEqual([{ kind: "del", text: "" }]);
+    // "foo" becoming "foo\n" changed something: the row and an approval's diff must not come out empty
+    expect(lineDiff("foo", "foo\n").map((l) => `${l.kind}:${l.text}`)).toEqual(["same:foo", "add:"]);
+    expect(lineDiff("foo\n", "foo").map((l) => `${l.kind}:${l.text}`)).toEqual(["same:foo", "del:"]);
   });
 
   it("keeps a file whose edit the hub clipped for good, without counts it cannot know", () => {
@@ -130,6 +133,11 @@ describe("the shared cases (spec/fixtures/fold-changes)", () => {
     expect(out(live)).toEqual(c.expected.changes);
     const fold = item({ kind: "fold", fold: { items: c.input.items.length, tools: 0, thoughts: 0, through_seq: 0, changes: c.expected.changes } });
     expect(turnChanges(segments([user, fold, answer])[0].steps)).toEqual(live);
+    // the card counts without drawing a diff, and comes to what each call's row draws
+    for (const use of c.input.items.filter((i) => i.kind === "tool_use" && ["Edit", "Write", "MultiEdit"].includes(i.tool_name ?? ""))) {
+      const diffs = editDiffs(use);
+      expect(editCounts(use), use.id).toEqual(diffs ? diffStats(diffs) : { add: 0, del: 0 });
+    }
   });
 });
 
@@ -215,13 +223,26 @@ describe("the card in the chat", () => {
     expect(rows()).toHaveLength(3);
   });
 
-  it("Review opens the session's review, a file opens it at that file", () => {
+  it("Review opens the branch's review (the turn's commits and what is not committed), a file opens it at that file", () => {
     fake.features = ["git_review"];
     draw(five());
     act(() => button("评审")!.click());
-    expect(getPanel()).toEqual({ kind: "review", mid: "m", sid: "s", cwd: CWD, scope: "uncommitted" });
+    expect(getPanel()).toEqual({ kind: "review", mid: "m", sid: "s", cwd: CWD, scope: "branch" });
     act(() => host.querySelector<HTMLButtonElement>('[data-changed-file="src/b.ts"]')!.click());
-    expect(getPanel()).toEqual({ kind: "review", mid: "m", sid: "s", cwd: CWD, scope: "uncommitted", at: { path: `${CWD}/src/b.ts` } });
+    expect(getPanel()).toEqual({ kind: "review", mid: "m", sid: "s", cwd: CWD, scope: "branch", at: { path: `${CWD}/src/b.ts`, file: true } });
+  });
+
+  it("a file outside the session's folder opens in the files panel, not the review", () => {
+    fake.features = ["git_review"];
+    draw([ask(), ...edit("/Users/me/.config/tool.json", "1", "2"), ...edit(`${CWD}/./src//a.ts`, "1", "2"), done()]);
+    expect(rows()).toEqual(["/Users/me/.config/tool.json", "src/a.ts"]);
+    act(() => host.querySelector<HTMLButtonElement>('[data-changed-file="/Users/me/.config/tool.json"]')!.click());
+    expect(getPanel()).toEqual({ kind: "file", mid: "m", path: "/Users/me/.config/tool.json", cwd: CWD, sid: "s" });
+  });
+
+  it("is not drawn when the page starts inside the exchange: edits before it would be missing", () => {
+    draw([...edit(`${CWD}/a.ts`, "1", "2"), done()]);
+    expect(card()).toBeNull();
   });
 
   it("without a review on this hub, has no Review and a file opens in the files panel", () => {
