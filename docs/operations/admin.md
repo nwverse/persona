@@ -243,8 +243,9 @@ The prompt explains all four options and their risks (see the admin access secti
 The public installer chooses English, Simplified Chinese or Japanese from `LC_ALL` (when set), then `LANG`; Chinese
 locales use `zh-Hans`, Japanese locales use `ja`, and every other, missing or unknown locale uses `en`. Pass
 `--lang en`, `--lang zh-Hans` or `--lang ja` after `sh -s --` to override it, for example
-`curl … | sh -s -- --lang ja --hub`. The override changes only the installer's own prompts, errors, explanations and summary;
-programs it runs choose their language separately. `scripts/deploy/deploy.sh` uses the same admin-access catalog and
+`curl … | sh -s -- --lang ja --hub`. The installer's language also becomes a new hub's starting language: it runs
+`personad hub setup` with `PERSONA_INSTALL_LANG` set, which writes hub.json `initial_locale` (used until a device reports
+its own language, [i18n.md](../protocol/i18n.md) "User language"). Otherwise programs it runs choose their language separately. `scripts/deploy/deploy.sh` uses the same admin-access catalog and
 follows its environment locale.
 
 ## Security trade-offs

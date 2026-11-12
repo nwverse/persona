@@ -828,12 +828,14 @@ fi
 
 # The machine that runs the hub: personad hub setup does the rest (hub.json, the database, the service, the phone's
 # QR code and the admin URL, docs/assistant/onboarding.md 4.1). Running it again is safe, so an upgrade with --hub runs it too.
+# PERSONA_INSTALL_LANG: a new hub starts in the language this installer ran in (hub.json initial_locale, #5519); an
+# environment variable, which an older personad ignores rather than refusing an unknown flag.
 if [ "$ROLE" = hub ]; then
 	unswitch_node
 	get_hub_programs # the person said so at the question above, after personad was installed
 	echo ""
 	say hub_setup_next "$DEST/personad"
-	if "$DEST/personad" hub setup; then
+	if PERSONA_INSTALL_LANG="$INSTALL_LANG" "$DEST/personad" hub setup; then
 		exit 0
 	fi
 	warn hub_setup_incomplete "$DEST/personad"

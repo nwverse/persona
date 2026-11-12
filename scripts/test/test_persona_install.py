@@ -79,7 +79,9 @@ class PersonaInstallTests(unittest.TestCase):
         name = (FORMER_NAME + 'd-' if legacy_artifacts else 'personad-') + target
         with tempfile.TemporaryDirectory() as directory:
             downloads = Path(directory)
-            data = gzip.compress(b'#!/bin/sh\necho "$*" >> "$HOME/personad-calls"\nif [ "$1" = version ]; then printf "fixture-version\\n"; fi\n', mtime=0)
+            data = gzip.compress(b'#!/bin/sh\necho "$*" >> "$HOME/personad-calls"\nif [ "$1" = version ]; then printf "fixture-version\\n"; fi\n'
+                                 # the language hub setup is given (#5519)
+                                 b'if [ "$1 $2" = "hub setup" ]; then echo "${PERSONA_INSTALL_LANG-unset}" >> "$HOME/personad-setup-lang"; fi\n', mtime=0)
             (downloads / (name + '.gz')).write_bytes(data)
             digest = '0' * 64 if corrupt else hashlib.sha256(data).hexdigest()
             sums = digest + '  ' + name + '.gz\n'
@@ -176,6 +178,21 @@ class PersonaInstallTests(unittest.TestCase):
                 result = self.run_install(home, extra=env, args=args)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn(expected, result.stdout)
+
+    def test_hub_setup_gets_the_installer_language(self):
+        # The hub starts in the language the installer ran in (#5519): hub setup gets it in PERSONA_INSTALL_LANG, an
+        # environment variable an older personad ignores rather than refusing an unknown flag.
+        cases = (
+            ('from LANG', {'LANG': 'ja_JP.UTF-8', 'LC_ALL': ''}, (), 'ja'),
+            ('unknown is English', {'LANG': 'C', 'LC_ALL': ''}, (), 'en'),
+            ('override', {'LANG': 'en_US.UTF-8', 'LC_ALL': ''}, ('--lang', 'zh-Hans'), 'zh-Hans'),
+        )
+        for name, env, args, expected in cases:
+            with self.subTest(name), tempfile.TemporaryDirectory() as directory:
+                home = Path(directory)
+                result = self.run_install(home, extra=env, args=args)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual((home / 'personad-setup-lang').read_text(), expected + '\n')
 
     def test_invalid_installer_language_stops_before_installing(self):
         for args in (('--lang',), ('--lang', 'fr'), ('--lang=',)):
