@@ -1,5 +1,12 @@
 # Lessons: Android
 
+## Keep a worktree fixed while Gradle verifies it (#5233)
+
+Do not merge main or edit source while a multi-task Gradle invocation is running in that worktree. Earlier tasks can
+compile the old contracts and later tasks read newly merged tests, producing misleading missing-field and constructor
+errors. Finish or stop that invocation first, update the branch, then verify the fixed revision. A failure is not an
+inherited main defect until a clean, independent main worktree reproduces it.
+
 ## Reusing an onboarding checklist for ordinary settings (#5233)
 
 Reusing the full phone-check list is not enough: an ordinary Notifications and background page must also suppress
