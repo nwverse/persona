@@ -351,6 +351,13 @@ struct ComposeDraft: Identifiable {
     var body = ""
     var inReplyTo: String?
     var references: [String]?
+    /// The manager whose account it is sent from, when that is another than the default (a new mail written on the
+    /// inbox page of another assistant): kept from when it was started, so it goes out through that one whichever
+    /// assistant is current by then. nil: the default's, as before.
+    var manager: String? = nil
+    /// The accounts it can be sent from, where they are not the page's of the moment: a new mail's assistant's, kept
+    /// with it when another assistant becomes current while it is written.
+    var accounts: [MailAccount]? = nil
 
     static func reply(to s: MailSummary, message: MailMessage?) -> ComposeDraft {
         var d = ComposeDraft(accountID: s.accountID)
@@ -414,7 +421,8 @@ struct ComposeView: View {
     }
 
     private func send() async {
-        guard let api = model.api else { return }
+        guard let hub = model.api else { return }
+        let api = draft.manager.map { hub.manager($0) } ?? hub
         sending = true
         defer { sending = false }
         do {

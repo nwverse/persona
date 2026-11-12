@@ -14,6 +14,9 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
@@ -43,7 +46,11 @@ import persona.core.contracts.api.ChatComposerService
 import persona.feature.chat.ChatComposer
 import persona.feature.chat.ChatComposerState
 import persona.feature.chat.ChatDraftEditor
+import persona.feature.chat.MentionFolders
+import persona.feature.chat.StarterQuoteCards
 import persona.feature.chat.rememberChatComposerState
+import persona.feature.chat.rememberStarterMentions
+import persona.feature.chat.starterMentionSource
 import persona.core.navigation.AppTab
 import persona.core.navigation.InboxRoute
 import persona.core.navigation.SettingsRoute
@@ -59,8 +66,10 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import java.time.LocalTime
+import kotlin.math.roundToInt
 import java.util.UUID
 
 /** One assistant's in-flight operation and retry target survive switching away and back. */
@@ -125,6 +134,11 @@ fun AssistantScreen(
     composerFocus: ComposerFocusRequests = AssistantComposerFocus,
     /** "Needs you now" over the blank page's suggestions; [onOpenNeed] opens a line where it lives (none: not shown). */
     needsYou: NeedsYou = NeedsYou(),
+    /**
+     * On Glass, what needs the user over the blank page's composer instead (#4339 C17, [needsYouBySession]): a line per
+     * session the Agents tab's badge counts, then the inbox's, all of them; the page shows as many as fit.
+     */
+    shellNeedsYou: List<NeedsYouLine> = emptyList(),
     onOpenNeed: ((NeedsYouLine) -> Unit)? = null,
     /** "N more in the inbox": opens the inbox as a secondary page. */
     onOpenInbox: (() -> Unit)? = null,
@@ -138,6 +152,10 @@ fun AssistantScreen(
         (repository as? persona.core.contracts.api.AssistantConversations)?.let { conversations -> { launcher -> conversations.startConversation(launcher) } },
     /** The hub's link: while it is not up, the title menu offers Connection details (iOS); null: never. */
     connection: persona.core.contracts.api.ConnectionState? = null,
+    /** The sessions New chat's @ lists (every computer's, iOS `StarterComposer`); null: no @ on New chat's page. */
+    mentionSessions: StateFlow<List<Session>>? = null,
+    /** Reads the assistant's computer's folders for a path typed after @ on New chat's page; null: sessions only. */
+    mentionFiles: persona.core.contracts.api.SessionFiles? = assistantSessionFiles(),
 ) = PersonaTheme {
     val receivedSnapshot by repository.assistant.collectAsStateWithLifecycle()
     val conversationsOf = repository as? persona.core.contracts.api.AssistantConversations
@@ -219,6 +237,8 @@ fun AssistantScreen(
     // The launcher the next new conversation starts with, for it alone (iOS StarterComposer); null: the default.
     // Both belong to this hub: another one has other launchers and conversations.
     var starterLauncher by sendState.launcher
+    // The sessions picked in New chat's @ list, to go in front of its first message (iOS `StarterDraft.quotes`).
+    val starterMentions = rememberStarterMentions(managerChoice.hubId, managerChoice.shown)
     // The conversation that launcher started for a message that then failed to send: its retry goes there.
     var starterStarted by sendState.started
     var launchers by remember(pageManagement, assistantMachine) { mutableStateOf<List<persona.core.contracts.api.AgentLauncher>?>(null) }
@@ -249,6 +269,9 @@ fun AssistantScreen(
     var healthKeys by remember(managerChoice.hubId) { mutableStateOf(emptySet<SessionKey>()) }
     var healthBusy by remember { mutableStateOf(false) }
     val healthPage = active == null && newChat?.space == persona.core.contracts.api.AssistantSpace.HEALTH
+    // New chat's page takes @ (iOS: the shell's starter composer; Health's has none). Its picked sessions go with its message.
+    val mentionsHere = active == null && !viewingMainQueue && !healthPage && mentionSessions != null
+    val starterQuotes = if (mentionsHere) starterMentions.quotes else emptyList()
     val onHealthChat = active != null && active in healthKeys
     // "Compact context" and "New main chat" (#1727): the main conversation's menu, on hubs that offer them.
     val mainActions = if (pageManagement != null && !demo) MainActions.of(LocalHubFeatures.current) else MainActions(false, false)
@@ -479,9 +502,11 @@ fun AssistantScreen(
         if (managers.offline != null) return
         if (sending || !draftReady) return
         // A failed first message holds the blank page until it is sent again or deleted (iOS).
-        if (resend == null && (active == null && firstMessage != null || !composer.hasContent || !composer.ready)) return
+        if (resend == null && (active == null && firstMessage != null || !composer.hasContent && starterQuotes.isEmpty() || !composer.ready)) return
         val sentDraft = composer.draft.takeIf { resend == null }
-        val text = resend?.text ?: composer.message()
+        val sentQuotes = starterQuotes.takeIf { resend == null }.orEmpty()
+        // The sessions picked with @ go in front of the words as <persona-context> tags, as in a chat (iOS `StarterDraft.message`).
+        val text = resend?.text ?: if (sentQuotes.isEmpty()) composer.message() else starterMentions.message(composer.message(), resources)
         // A launcher picked on the new-conversation page: a conversation of its own on it, then the message to it.
         val launcher = if (resend != null) resend.launcher else starterLauncher.takeIf { active == null && newChat?.space == null }
         val startWith = startConversationWith
@@ -504,6 +529,7 @@ fun AssistantScreen(
             firstMessage = FirstMessage(submitted, space = fresh?.space, launcher = launcher)
             failedStarts.write(page, null)
             if (sentDraft != null) { composer.clearIfUnchanged(sentDraft); draftEditor?.changed(composer.draft) }
+            starterMentions.sent(sentQuotes)
         }
         // A start that failed keeps the message as a failed bubble with why, Resend and Delete (iOS #1368).
         fun failed(reason: String) {
@@ -546,6 +572,7 @@ fun AssistantScreen(
                     composer.clearIfUnchanged(sentDraft)
                     draftEditor?.changed(composer.draft)
                 }
+                starterMentions.sent(sentQuotes)
                 // The conversation takes the message over: its outbox bubble and "Persona is getting ready…".
                 if (startsOne) firstMessage = null
                 pendingClientId = null
@@ -746,9 +773,18 @@ fun AssistantScreen(
                 if (feedback?.failure(error) != true) toast.show(persona.core.designsystem.FeedbackNotice(persona.core.designsystem.operationFeedback(error).text.resolve(resources), style = persona.core.designsystem.FeedbackStyle.Error))
             })
     }
+    // On Glass what needs the user sits over the blank page's composer, as many lines as fit (#4339 C17, iOS ShellNeedsYou);
+    // Brief and Board keep "Needs you now" in the page's scroll.
+    val needsRoom = remember { NeedsRoom() }
+    var mentionOpen by remember { mutableStateOf(false) }
+    val needsFade = with(androidx.compose.ui.platform.LocalDensity.current) { NeedsFade.roundToPx() }
     val body: @Composable (Boolean) -> Unit = { wide ->
         val hasComposer = active == null || !hasChat || demo
-        Box(Modifier.fillMaxSize()) {
+        val blankPage = active == null && !viewingMainQueue && !healthPage
+        val needsOverComposer = PersonaTheme.style == AppStyle.Glass
+        // The @ list takes their room while it is open (iOS `MentionMenuOpen`): with the keyboard up all three did not fit.
+        val shellLines = if (needsOverComposer && blankPage && onOpenNeed != null && !mentionOpen) shellNeedsYou else emptyList()
+        Box(Modifier.fillMaxSize().then(if (shellLines.isEmpty()) Modifier else Modifier.onSizeChanged { needsRoom.pageSize(it) })) {
         JPage(
             title = LocalPersonaName.current,
             modifier = Modifier.fillMaxSize().imePadding(),
@@ -776,10 +812,14 @@ fun AssistantScreen(
                     )
                 }
             },
-            bottomBar = if (hasComposer) ({
+            bottomBar = if (hasComposer) ({ Box {
+                // On Glass with lines over the composer, the dock is on the page's own backdrop (NeedsBackdrop).
+                if (shellLines.isNotEmpty()) NeedsBackdrop(NeedsFade, Modifier.matchParentSize())
                 Column {
                     if (hasComposer && active == null && !viewingMainQueue) {
-                        val cardModifier = Modifier.padding(horizontal = pagePadding).padding(bottom = Tokens.Space.s)
+                        val cardModifier = (if (shellLines.isEmpty()) Modifier else Modifier.onSizeChanged { needsRoom.above = it.height })
+                            .padding(horizontal = pagePadding).padding(bottom = Tokens.Space.s)
+                        if (shellLines.isNotEmpty() && blocking == null && !(mainReadiness.chatOnly && readinessOn)) SideEffect { needsRoom.above = 0 }
                         if (blocking != null) ReadinessStepCard(blocking, { runReadinessAction(it) }, cardModifier,
                             busy = ReadinessActionId.TestAssistant.takeIf { mainReadiness.probing },
                             note = readiness?.probe?.let { probe ->
@@ -791,10 +831,31 @@ fun AssistantScreen(
                             actionLabel = stringResource(ReadinessActionId.AddComputer.label),
                             onAction = { runReadinessAction(ReadinessActionId.AddComputer) })
                     }
+                    if (shellLines.isNotEmpty()) {
+                        ShellNeedsYou(shellLines, { needsRoom.height(needsFade) }, requireNotNull(onOpenNeed), onMore = { more ->
+                            if (more.opensAgents) navigator.selectTab(AppTab.Agents) else onOpenInbox?.invoke() ?: navigator.navigate(InboxRoute)
+                        }, Modifier.padding(horizontal = Tokens.Space.m))
+                    }
                     if (hasComposer) {
-                        draftError?.let { JNotice(androidx.compose.ui.res.stringResource(it), Modifier.padding(horizontal = pagePadding), status = Status.NeedsYou) }
+                        draftError?.let { JNotice(androidx.compose.ui.res.stringResource(it),
+                            (if (shellLines.isEmpty()) Modifier else Modifier.onSizeChanged { needsRoom.below = it.height }).padding(horizontal = pagePadding),
+                            status = Status.NeedsYou) }
+                        if (shellLines.isNotEmpty() && draftError == null) SideEffect { needsRoom.below = 0 }
+                        // Where the composer starts with the keyboard down: the floor of the room the lines above may take.
+                        if (shellLines.isNotEmpty()) Spacer(Modifier.fillMaxWidth().onGloballyPositioned {
+                            needsRoom.composerAt(it.positionInRoot().y.roundToInt())
+                        })
                         val uploadTarget = active ?: snapshot.mainSession
                             ?: SessionKey(assistantMachine, PendingMainConversation.sessionId)
+                        // New chat's @: the sessions, and a typed path's folder on the assistant's computer (where uploads go).
+                        val mentionMachine = persona.core.contracts.GroupKeys.raw(uploadTarget.machineId)
+                        val folders = remember(mentionFiles, mentionMachine) {
+                            mentionFiles?.takeIf { mentionMachine.isNotBlank() }?.let { files ->
+                                MentionFolders { dir, cwd -> files.directory(mentionMachine, cwd, dir).entries }
+                            }
+                        }
+                        val mentions = if (mentionsHere) mentionSessions?.collectAsStateWithLifecycle()?.value
+                            ?.let { starterMentionSource(it, folders) } else null
                         ChatComposer(uploadTarget, composer, working = false, sending = sending || !draftReady,
                             // The health page sends no files: an upload goes to the main chat's machine, outside the health space.
                             canClear = false, service = composerService?.takeIf { uploadTarget.machineId.isNotBlank() && !healthPage },
@@ -806,18 +867,21 @@ fun AssistantScreen(
                                 else stringResource(R.string.assistant_composer_placeholder, LocalPersonaName.current),
                             blockedLabel = blocking?.takeIf { active == null }?.let { stringResource(blockedSendLabel(it)) },
                             onBlocked = { blocking?.primaryAction()?.let { runReadinessAction(it) } },
+                            extraContent = starterQuotes.isNotEmpty(), mentions = mentions, onMention = starterMentions::add,
+                            onMentionOpen = { mentionOpen = it },
                             // A new conversation's launcher, for it alone (iOS StarterComposer, web StarterLauncherChip).
                             accessory = if (active == null && !healthPage && pageManagement != null && startConversationWith != null && !demo) ({
+                                if (mentionsHere) StarterQuoteCards(starterMentions)
                                 StarterLauncherChip(starterLauncher, defaultLauncher, launchers, launchersFailed, enabled = !sending,
                                     onOpen = { scope.launch { loadStarterLaunchers() } }) { picked ->
                                     // Another launcher (or the default) does not reuse what the last one started.
                                     if (picked != starterLauncher) starterStarted = null
                                     starterLauncher = picked
                                 }
-                            }) else null)
+                            }) else if (starterQuotes.isNotEmpty()) ({ StarterQuoteCards(starterMentions) }) else null)
                     }
                 }
-            }) else null,
+            } }) else null,
             // An embedded conversation is a page of its own and softens the edges under these bars itself.
             edges = !(active != null && hasChat),
             scrollEdgeStyle = ScrollEdgeStyle.Gradient,
@@ -873,8 +937,8 @@ fun AssistantScreen(
                     onSuggestion = {
                         composer.value = androidx.compose.ui.text.input.TextFieldValue(it, androidx.compose.ui.text.TextRange(it.length))
                         submit()
-                    }, needsYou = needsYou, onNeed = onOpenNeed,
-                    onMore = onOpenInbox ?: { navigator.navigate(InboxRoute) })
+                    }, needsYou = needsYou, onNeed = onOpenNeed.takeUnless { needsOverComposer },
+                    onMore = onOpenInbox ?: { navigator.navigate(InboxRoute) }, room = needsRoom.takeIf { shellLines.isNotEmpty() })
             }
         }
             // The page's own toast (no app feedback), at the top, where the root draws the app's.
@@ -1069,9 +1133,23 @@ private fun NewChatPage(
     /** The hub's example questions (readiness `suggestions`), in place of the app's own; null: the app's. */
     hubSuggestions: List<ReadinessSuggestion>? = null,
     onLocalSuggestion: (String) -> Unit = {},
+    /** On Glass, the room Needs you over the composer may take: told where the first two rows of things to ask end. */
+    room: NeedsRoom? = null,
 ) {
+    val grid = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
+    var gridTop by remember { mutableIntStateOf(0) }
+    if (room != null) {
+        // The items before the things to ask: the demo's notice, the lead, and "Needs you now" where the scroll has it.
+        val first = (if (demo) 1 else 0) + 1 + (if (onNeed != null && !needsYou.isEmpty) 1 else 0)
+        val fold = welcomeFold(first, hubSuggestions?.size ?: suggestions.size)
+        LaunchedEffect(grid, room, fold) {
+            snapshotFlow { if (grid.canScrollBackward) null else foldBottom(grid.layoutInfo, fold)?.let { gridTop + it } }
+                .collect { bottom -> if (bottom != null) room.fold = bottom }
+        }
+    }
     LazyVerticalGrid(
-        columns = GridCells.Fixed(2), modifier = Modifier.fillMaxSize(),
+        columns = GridCells.Fixed(2), state = grid,
+        modifier = Modifier.fillMaxSize().then(if (room == null) Modifier else Modifier.onGloballyPositioned { gridTop = it.positionInRoot().y.roundToInt() }),
         contentPadding = PaddingValues(start = pagePadding, end = pagePadding,
             top = contentPadding.calculateTopPadding() + 16.dp, bottom = contentPadding.calculateBottomPadding() + 24.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp),
