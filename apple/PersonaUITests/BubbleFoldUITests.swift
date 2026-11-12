@@ -1,9 +1,9 @@
 import XCTest
 
 /// Your own long message folds (#5676) against scripts/mock/mock_hub.py with MOCK_LONG_INPUT=1 (PERSONA_MOCK_HUB): past
-/// 14 lines it shows 10 with Show More (展开) at the bubble's bottom, a twelve-line one stays whole; a long press on the
+/// 14 lines it shows 10 with Show More (「展开」) at the bubble's bottom, a twelve-line one stays whole; a long press on the
 /// folded bubble opens it with no action bar, its top where it was; open, a long press lifts it with the bar as before;
-/// Show Less (收起) folds it again. `testShots` takes the screenshots for review: before (`-showWholeBubbles`) and after,
+/// Show Less (「收起」) folds it again. `testShots` takes the screenshots for review: before (`-showWholeBubbles`) and after,
 /// folded and open, in an Agent chat and in Persona's conversation, light and dark, at the default and the largest text
 /// size. PERSONA_SHOTS: a folder the shots are also written to.
 final class BubbleFoldUITests: XCTestCase {

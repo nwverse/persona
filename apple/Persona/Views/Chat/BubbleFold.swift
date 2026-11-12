@@ -87,10 +87,11 @@ struct BubbleFoldKey {
         return true
     }
 
-    /// Opens or folds it in place (`toggleInPlace`), as Show More / Show Less do.
+    /// Opens or folds it in place (`toggleInPlace`), as Show More / Show Less do: its top stays where it is on screen,
+    /// at the newest end too (no rise to the top bar, the owner's ask).
     @MainActor static func flip(_ key: String, pinKey: String, open: Bool, pin: ChatPin?) {
         Haptics.tap()
-        toggleInPlace(pin, pinKey, animation: Theme.Motion.state, closing: open) { OpenReports.shared.set(key, !open) }
+        toggleInPlace(pin, pinKey, animation: Theme.Motion.state, closing: open, rises: false) { OpenReports.shared.set(key, !open) }
     }
 }
 
