@@ -44,6 +44,7 @@ class ModelConfigurationScreenTest {
     @get:Rule val rule = createAndroidComposeRule<ComponentActivity>()
     @Before fun start() = AssistantManagerChoice.choose("example-hub", "work", "assistant")
     @After fun reset() = AssistantManagerChoice.reset()
+    private fun out(): File = File(System.getProperty("persona.shots") ?: "build/model-configuration-shots").also { it.mkdirs() }
 
     private val roster = ManagerRoster(listOf(
         HubManager("assistant", "Personal", online = true, isDefault = true),
@@ -163,7 +164,7 @@ class ModelConfigurationScreenTest {
                 }
             }
         }
-        val out = File("build/model-configuration-shots").also { it.mkdirs() }
+        val out = out()
         val defaultSizes = mutableMapOf<AppStyle, Bitmap>()
         for (look in AppStyle.entries) for (fontScale in listOf(1f, 2f)) {
             var light: Bitmap? = null
