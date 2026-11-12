@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coder/websocket"
 
@@ -117,7 +118,7 @@ func TestTranscriptionContributions(t *testing.T) {
 
 	// The installation a choice is pinned to: the extension's, stable while it stays installed; none for a ref that
 	// names no transcription contribution.
-	if got := h.TranscriptionInstall("tx/tx"); !strings.HasPrefix(got, "tx@") || got != h.TranscriptionInstall("tx/tx") {
+	if got := h.TranscriptionInstall("tx/tx"); got != "hub.json:tx" || h.TranscriptionInstall("talk/gpt-live") != "builtin:talk" {
 		t.Errorf("TranscriptionInstall(tx/tx) = %q", got)
 	}
 	for _, ref := range []string{"tx/nope", "other/other", "nope/x", "bad"} {
@@ -198,6 +199,78 @@ func TestTranscriptionContributions(t *testing.T) {
 	h.extensions.get("tx").proc.Stop()
 	if _, err := h.TranscriptionInfo(ctx, "tx/tx"); !errors.Is(err, ErrNoTranscriber) {
 		t.Fatalf("stopped: %v", err)
+	}
+}
+
+// The installation a choice is pinned to never moves while the extension stays installed: not when the manager
+// restarts (the database keeps microseconds, an install's clock nanoseconds, and a built-in's row is first written
+// meanwhile), not when its market renames it. Installing it again moves it.
+func TestTranscriptionInstallSurvivesARestart(t *testing.T) {
+	manifest := func(id string) json.RawMessage {
+		return json.RawMessage(`{"manifest_version": 1, "id": "` + id + `", "name": "ASR", "version": "1.0.0",
+			"engines": {"plugin_protocol": 1}, "runtime": {"command": "bin/asr", "rpc": "none", "http": true},
+			"activation_events": ["on_startup"], "contributes": {"transcription": [{"id": "asr", "name": "ASR"}]}}`)
+	}
+	h := newTestManager(t)
+	h.extensions = newExtensions(h.cfg.dir, nil, h.logf)
+	// load is the registry as the manager reads it when it starts: its built-in "talk", then the rows.
+	load := func(rows ...extension.Record) {
+		t.Helper()
+		store := newExtensionStore()
+		for _, r := range rows {
+			store.rows[r.ID] = r
+		}
+		reg := extension.NewRegistry(h.extensions.root, store, nil, 0)
+		m, err := extension.Parse(manifest("talk"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := reg.AddBuiltin(m, "", true); err != nil {
+			t.Fatal(err)
+		}
+		if err := reg.Load(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		h.extensions.reg = reg
+	}
+	installed := time.Date(2026, 11, 13, 10, 0, 0, 123456789, time.UTC)
+	acme := extension.Record{ID: "acme", Source: extension.SourceInstalled, Version: "1.0.0", Manifest: manifest("acme"),
+		Enabled: true, InstalledAt: installed}
+	talk := extension.Record{ID: "talk", Source: extension.SourceBuiltin, Version: "1.0.0", Enabled: true, InstalledAt: installed}
+
+	// As the install left it in memory; the built-in has no row yet.
+	load(acme)
+	pinned, builtin := h.TranscriptionInstall("acme/asr"), h.TranscriptionInstall("talk/asr")
+	if pinned == "" || builtin == "" {
+		t.Fatalf("pins %q %q", pinned, builtin)
+	}
+
+	// Restarted: the row as the database reads it back (to the microsecond, in its zone), the built-in's written.
+	reread := acme
+	reread.InstalledAt = installed.Truncate(time.Microsecond).In(time.FixedZone("UTC+8", 8*3600))
+	load(reread, talk)
+	if got := h.TranscriptionInstall("acme/asr"); got != pinned {
+		t.Errorf("after a restart %q, pinned %q", got, pinned)
+	}
+	if got := h.TranscriptionInstall("talk/asr"); got != builtin {
+		t.Errorf("the built-in after a restart %q, pinned %q", got, builtin)
+	}
+
+	// Renamed by its market: the old id still names it, and it is the same installation.
+	renamed := reread
+	renamed.ID, renamed.StorageID, renamed.PreviousID, renamed.Aliases = "acme-asr", "acme", "acme", []string{"acme"}
+	renamed.Manifest = manifest("acme-asr")
+	load(renamed, talk)
+	if got := h.TranscriptionInstall("acme/asr"); got != pinned {
+		t.Errorf("after a rename %q, pinned %q", got, pinned)
+	}
+
+	// Uninstalled and installed again: another installation.
+	again := acme
+	again.InstalledAt = installed.Add(time.Minute)
+	load(again, talk)
+	if got := h.TranscriptionInstall("acme/asr"); got == "" || got == pinned {
+		t.Errorf("installed again %q, pinned %q", got, pinned)
 	}
 }
 

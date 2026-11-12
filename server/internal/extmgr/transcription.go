@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"path"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -111,9 +112,9 @@ func (h *Manager) IsTranscriptionContribution(ref string) bool {
 }
 
 // TranscriptionInstall is the installation of the extension ref names, "" when it names no installed extension's
-// transcription contribution: its id and when it was installed, kept across upgrades and rollbacks, new when it is
-// uninstalled and installed again (or another extension is installed with its id). The assistant pins the owner's
-// choice to it, so installing an extension never sends it meeting audio.
+// transcription contribution (transcriptionInstallOf): kept across upgrades, rollbacks, a rename by its market and
+// restarts, new when it is uninstalled and installed again (or another extension is installed with its id). The
+// assistant pins the owner's choice to it, so installing an extension never sends it meeting audio.
 func (h *Manager) TranscriptionInstall(ref string) string {
 	ps := h.extensions
 	if ps == nil || !h.IsTranscriptionContribution(ref) {
@@ -124,7 +125,20 @@ func (h *Manager) TranscriptionInstall(ref string) string {
 	if p == nil {
 		return ""
 	}
-	return p.Record.ID + "@" + p.Record.InstalledAt.UTC().Format(time.RFC3339Nano)
+	return transcriptionInstallOf(p.Record)
+}
+
+// transcriptionInstallOf is the installation r is, of parts that never move while it stays installed. A built-in or
+// hub.json's extension is never installed again: its source and id (a built-in's row gets its installed_at only
+// when first written, which a restart then reads back). Any other is its storage key (its first id, kept through a
+// rename, whose old id resolves to it) and when it was installed, to the microsecond the database keeps
+// (extensionIdentityTimestamp): the install's clock has nanoseconds, so a reload would otherwise move it.
+func transcriptionInstallOf(r extension.Record) string {
+	switch r.Source {
+	case extension.SourceBuiltin, extension.SourceHubJSON:
+		return r.Source + ":" + r.ID
+	}
+	return r.Source + ":" + r.StorageKey() + "@" + strconv.FormatInt(extensionIdentityTimestamp(r.InstalledAt), 10)
 }
 
 // transcriptionRef is the extension and contribution ref names: "" the built-in voice extension's
