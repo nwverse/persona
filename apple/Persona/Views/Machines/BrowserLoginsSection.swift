@@ -69,7 +69,11 @@ struct BrowserLoginsSection: View {
             // `-openCookieFile <path>`: as if that file were picked (UI tests and screenshots; the system's picker is
             // not theirs to drive). `-openBrowserLogins list|select|confirm|search`: straight into the whole list.
             if let path = UserDefaults.standard.string(forKey: "openCookieFile"), file == nil, logins.sites != nil { read(URL(fileURLWithPath: path)) }
-            if let open = UserDefaults.standard.string(forKey: "openBrowserLogins"), open != "YES", logins.folded { listOpen = true }
+            if let open = UserDefaults.standard.string(forKey: "openBrowserLogins"), open != "YES", logins.folded {
+                // after the launch's own push to this page has settled: pushing during it left the stack showing its root
+                try? await Task.sleep(for: .seconds(1.5))
+                listOpen = true
+            }
             #endif
         }
         .fileImporter(isPresented: $picking, allowedContentTypes: [.plainText, .json, .text, .data]) { result in
