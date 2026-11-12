@@ -6,8 +6,9 @@ import XCTest
 /// Live Activity says the current topic; a hub without the live view shows none. A made-up meeting stands in for the
 /// microphone (`-showMeetingSample room-taking-part`): its lines reach the hub as a real one's do, and the mock's room sets
 /// made-up topics after each batch (`meeting_topics_set`). Every test starts from a fresh mock (`POST
-/// /mock/recording_minutes`), with `/mock/meeting_live_view` switching the phase on or off. The app runs in zh-Hans:
-/// elements are found by their identifiers. PERSONA_SHOTS=<dir> saves live-<appearance>-<name>.png.
+/// /mock/recording_minutes`), with `/mock/meeting_live_view` switching the phase on or off, and the highlights (phase 2b,
+/// `/mock/meeting_highlights`) off, so the page keeps phase 2's Live box (`MeetingHighlightsUITests` covers them). The app
+/// runs in zh-Hans: elements are found by their identifiers. PERSONA_SHOTS=<dir> saves live-<appearance>-<name>.png.
 final class MeetingLiveViewUITests: XCTestCase {
     private let live = "00000000-0000-0000-0000-000000000002"
 
@@ -17,6 +18,7 @@ final class MeetingLiveViewUITests: XCTestCase {
         try post(hub, "/mock/meeting_conversation", ["on": true, "room": "ok", "end_seconds": 180])
         try post(hub, "/mock/meeting_attendance", ["on": true, "default": "participant", "answer": "ok", "kb_read_only": false])
         try post(hub, "/mock/meeting_live_view", ["on": true])
+        try post(hub, "/mock/meeting_highlights", ["on": false])
     }
 
     override func tearDownWithError() throws {
@@ -24,6 +26,7 @@ final class MeetingLiveViewUITests: XCTestCase {
         try post(hub, "/mock/meeting_conversation", ["on": true, "room": "ok", "end_seconds": 180])
         try post(hub, "/mock/meeting_attendance", ["on": true, "default": "off"])
         try post(hub, "/mock/meeting_live_view", ["on": true])
+        try post(hub, "/mock/meeting_highlights", ["on": true])
     }
 
     /// The room sets topics after a batch of the meeting's lines: the page shows them as chips under its header, the

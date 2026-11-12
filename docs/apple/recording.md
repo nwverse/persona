@@ -170,16 +170,18 @@ hub that lists `meeting_conversation` beside `meeting_attendance`. The page's de
   app doesn't know reads as `starting`), the private mark, the follow-up and the asks, from the upload's `200`, the `200`
   of `POST …/live` and `GET …/live`. A page on screen watches its recording (one watch per page) and reads it whole once;
   a `meeting_live` event reads only the parts it names that are newer than those read (`?parts=`), and only the parts
-  the page shows (phase 1's `room`, `asks`, `private`, `followup`; `topics` with the live view, `photos` with photos); a reconnect reads every watched meeting again. An upload's or a
+  the page shows (phase 1's `room`, `asks`, `private`, `followup`; `topics` with the live view, `highlights` with the
+  highlights, `photos` with photos); a reconnect reads every watched meeting again. An upload's or a
   live POST's late answer never takes the room back to an earlier state. `404` / `410` mean the hub has no such recording.
 - **The meeting page in the sheet**: `RecordingLiveSheet` shows `MeetingPage` for a room meeting in place of the live
   view, and after Stop in its after mode in place of the wrap-up; every way in (the drawer row, the Live Activity, a
   notification, Recordings) still opens the sheet. The page has the state line, a subtitle with the role, "On this
   iPhone" and "Private", the room's problem (`runtime_unsupported`, `node_too_old`, `machine_offline`, `start_failed`: then
   questions are answered from the meeting so far), **Topics** for a meeting started with the live view ("Live view (phase
-  2)" below), the **Live** box (the last three lines, how far behind the transcript is, **Full Transcript**), the thread,
-  and the bar: Just me, the composer and its `[+]` menu (**What Was Just Said**, the
-  heard ask), Pause, Bookmark, Stop.
+  2)" below), the top card, the thread, and the bar: Just me, the composer and its `[+]` menu (**What Was Just Said**,
+  the heard ask), Pause, Bookmark, Stop. The top card is the **Live** box (the last three lines, how far behind the
+  transcript is, **Full Transcript**), or **Highlights** once the room set them for a meeting started with them
+  ("Highlights (phase 2b)" below); while the keyboard is up, the Live box with its newest line only.
 - **The thread** (`MeetingThreadView`, read apart by `MeetingThread`, a port of the web's `meeting-thread.ts`): once the
   room has ids the page subscribes to it like any chat (WS `subscribe`, **Show Earlier** pages back) and shows its items:
   Persona joined, batches as "N lines from the meeting", heard questions as "What was just said (m:ss)", the owner's
@@ -273,6 +275,50 @@ Recordings page's start through `RecordingStart.make`). The Topics row is in [DE
   phase). Unit tests `MeetingLiveViewTests` (the flag and its snapshot, which meetings write 15-second segments, the
   topics' decoding, merging and event, the chips' words, the activity's topic and line, the third-line rule, the
   throttle, the state's size).
+
+#### Highlights (phase 2b)
+
+The contract's "Phase 2b: highlights" and "The meeting card" ([meeting-minutes.md](../assistant/meeting-minutes.md)),
+for a room meeting started while the hub listed `meeting_highlights` beside `meeting_live_view`. The card's design and
+identifiers are in [DESIGN_SYSTEM.md](../design/DESIGN_SYSTEM.md) "Meeting page (#3862)".
+
+- **The flag**: kept from every hello only with the conversation and the live view
+  (`MeetingAttendanceDefaults.highlightsFeature`, `highlightsKey` for a start without the app in front;
+  `MeetingAttendees.highlights`), and snapshotted at the start as `RecordingAttendance.highlights` (decoded leniently,
+  false in a file from before; `.room(…)` sets it only beside `liveView`), through `startAttendance` and the Recordings
+  page's `RecordingStart.make`. A meeting keeps it for life, as it keeps `liveView`.
+- **Reading them**: `MeetingConversation` reads `highlights` and `highlights_at` with the rest of `GET …/live` (`LiveRead`,
+  leniently into `MeetingHighlight`: trimmed words, none without them; an `at` that isn't a finite time from 0 drops the
+  highlight; an `end` missing, of another shape or before `at` is `at`) and follows `highlights` in `meeting_live`
+  (`partsRead(for:)` adds it only for such a meeting), reading `?parts=highlights` when its revision is newer.
+  `applyHighlights` keeps them unless the field came or the part was asked for (then an absent list is none), keeps
+  none for a meeting started without them, and keeps at most four, earliest first. The background read after an
+  accepted batch (`liveAccepted`) stays `?parts=topics`: the Live Activity never shows highlights, and its
+  `ContentState` is as phase 2 has it; a page back on screen reads them again.
+- **The card** (`MeetingTopCard`, `MeetingHighlightsCard.swift`): where the Live box was, both layouts. With the flag and
+  at least one highlight it is **Highlights**: each highlight's time as the minutes cards' chip and its words
+  (`Theme.Recording.highlightLines` lines at the regular sizes), earliest first, then Live Transcript (closed by default,
+  kept while the page is open) and Full Transcript on one row. Open, the regular layout keeps only the newest highlight
+  above the Live box's newest lines (`MeetingLiveLine`, `MeetingLiveBehind`, shared with `MeetingLiveBox`); the
+  accessibility sizes keep them all. While the keyboard is up at the regular sizes the card is the folded Live box,
+  whatever it was. What it shows is `MeetingHighlights` (the mode, the rows with their ids and clocks, the newest),
+  worked out when the highlights change, not in `body`. The Live box switches to the first highlights with a
+  cross-fade on `Theme.Motion.state` (at once with Reduce Motion); nothing about them is announced. After Stop the page
+  goes on as the thread and shows no highlights.
+- **A highlight's time** pushes `MeetingTranscriptPage` with a `MeetingTranscriptFocus` (`at`, `end`;
+  `.navigationDestination(item:)`): 100 ms after it appears it scrolls to the first of the phone's lines whose start is
+  from `at` to `end` and lights every such line for two seconds (`Theme.accentTint`, cleared on `Theme.Motion.standard`),
+  or, with none there, the line `RecordingMinutes.sentenceIndex` picks for `at` (`RecordingTimeline.focus`, compared in
+  milliseconds). `RecordingTimelineRows` takes the lit rows (none for every other page) and gives each row its id.
+- **Screenshots and tests**: `-showMeetingSample room-highlights` (the room meeting started with the live view and the
+  highlights, 24:20 in, a line in each of fourteen minutes). The mock hub serves the phase (`POST /mock/meeting_highlights
+  {"on"}` and `{"id", "highlights": [{"text", "at"}]}`; its room makes highlights after a batch). UI tests
+  `MeetingHighlightsUITests` (the card in time order above the thread, a time opening the transcript with its minute lit
+  and Back, Live Transcript open and closed, the folded Live box with the keyboard, a hub without the flag, the time
+  under the words at the largest text; shots `highlights-<look>-card|transcript-lit|open|keyboard|no-highlights` in
+  light, dark and `large`); `MeetingLiveViewUITests` turns the highlights off to keep covering phase 2. Unit tests
+  `MeetingHighlightsTests` (the flag and its snapshot, the decoding, the merge, the cap and the order, the parts, the
+  card's mode, its rows and newest highlight, which lines a time lights).
 
 #### Talk about this meeting (phase 6)
 

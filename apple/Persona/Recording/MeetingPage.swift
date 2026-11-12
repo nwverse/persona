@@ -134,7 +134,7 @@ struct MeetingPage: View {
                         }
                         problems(entry)
                         topics(entry)
-                        MeetingLiveBox(entry: entry, exchanges: exchanges, folded: false)
+                        MeetingTopCard(entry: entry, exchanges: exchanges, writing: false)
                         threadHeader(entry)
                         thread(entry)
                         noticeBanner
@@ -144,9 +144,9 @@ struct MeetingPage: View {
                 }
             }
         } else {
-            // While the field has the keyboard the subtitle steps aside and the Live box keeps only its newest line: the
-            // keyboard takes about half the screen, and the thread under them would get none of it. The structure stays
-            // the same, so the thread's scroll view keeps its place.
+            // While the field has the keyboard the subtitle steps aside and the top card is the Live box with only its
+            // newest line: the keyboard takes about half the screen, and the thread under them would get none of it. The
+            // structure stays the same, so the thread's scroll view keeps its place.
             VStack(alignment: .leading, spacing: Theme.Space.m) {
                 VStack(alignment: .leading, spacing: Theme.Space.s) {
                     titleRow(entry)
@@ -157,7 +157,7 @@ struct MeetingPage: View {
                 .padding(.top, Theme.Space.s)
                 problems(entry)
                 if !writing { topics(entry) }
-                MeetingLiveBox(entry: entry, exchanges: exchanges, folded: writing)
+                MeetingTopCard(entry: entry, exchanges: exchanges, writing: writing)
                     .padding(.horizontal, Theme.Space.page)
                 threadHeader(entry)
                     .padding(.horizontal, Theme.Space.page)
@@ -722,17 +722,14 @@ struct MeetingPage: View {
 /// The Live box: the newest transcript lines, how far the text is behind the room, and the whole transcript one tap away.
 /// A view of its own, so its lines are taken from the transcript (every segment sorted and filtered, `entry.sentences`)
 /// only when the recording changes, not on every pass of the page (P4). `folded` (the keyboard is up): only the newest
-/// line, so the thread under it keeps its height.
-private struct MeetingLiveBox: View {
+/// line, so the thread under it keeps its height. The Highlights card (phase 2b) draws its opened lines with the same
+/// pieces: `MeetingLiveLine`, `MeetingLiveBehind` and `MeetingFullTranscriptLink`.
+struct MeetingLiveBox: View {
     var entry: RecordingEntry
     var exchanges: [MeetingAsk.Exchange]
     var folded: Bool
 
-    @Environment(\.dynamicTypeSize) private var size
-    @State private var capture = RecordingCapture.shared
     @State private var rows: [LiveRow] = []
-
-    private var paused: Bool { capture.state == .paused }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
@@ -740,24 +737,13 @@ private struct MeetingLiveBox: View {
                 Text("Live").font(Theme.Font.captionStrong).foregroundStyle(.secondary)
                     .accessibilityAddTraits(.isHeader)
                 Spacer(minLength: Theme.Space.s)
-                behind(rows.last)
+                MeetingLiveBehind(last: rows.last)
             }
-            ForEach(folded ? Array(rows.suffix(1)) : rows) { row in liveRow(row) }
+            ForEach(folded ? Array(rows.suffix(1)) : rows) { row in MeetingLiveLine(row: row) }
             if !folded {
                 HStack {
                     Spacer(minLength: Theme.Space.flush)
-                    NavigationLink { MeetingTranscriptPage(id: entry.id, exchanges: exchanges) } label: {
-                        HStack(spacing: Theme.Space.xs) {
-                            Text("Full Transcript").lineLimit(1)
-                            ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.captionStrong).accessibilityHidden(true)
-                        }
-                        .font(Theme.Font.secondaryStrong)
-                        .foregroundStyle(Theme.accent)
-                        .scaledFrame(minHeight: Theme.Size.tapTarget)
-                        .contentShape(.rect)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("meeting-transcript")
+                    MeetingFullTranscriptLink(id: entry.id, exchanges: exchanges)
                 }
             }
         }
@@ -774,14 +760,22 @@ private struct MeetingLiveBox: View {
     }
 
     /// The last `Theme.Recording.liveLines` sentences, each keyed by its place in the transcript.
-    private static func rows(_ entry: RecordingEntry) -> [LiveRow] {
+    static func rows(_ entry: RecordingEntry) -> [LiveRow] {
         let all = entry.sentences
         let newest = all.suffix(Theme.Recording.liveLines)
         let first = all.count - newest.count
         return newest.enumerated().map { LiveRow(id: "live-\(first + $0.offset)", start: $0.element.start, end: $0.element.end, text: $0.element.text) }
     }
+}
 
-    private func liveRow(_ row: LiveRow) -> some View {
+/// One of the newest lines as the Live box draws it: its time (monospaced digits, secondary) and its words, at most
+/// `Theme.Recording.liveLineLength` lines; the time above the words at the accessibility sizes.
+struct MeetingLiveLine: View {
+    var row: LiveRow
+
+    @Environment(\.dynamicTypeSize) private var size
+
+    var body: some View {
         let stamp = Text(RecordingFormat.clock(row.start)).font(Theme.Font.caption.monospacedDigit()).foregroundStyle(.secondary)
         let words = Text(row.text).font(Theme.Font.body).lineLimit(Theme.Recording.liveLineLength)
         return Group {
@@ -793,10 +787,18 @@ private struct MeetingLiveBox: View {
         }
         .accessibilityElement(children: .combine)
     }
+}
 
-    /// "About 10 s behind" while the meeting records and its text lags; "Listening…" before the first line. The capture's
-    /// clock is not observed, so a slow clock refreshes the number.
-    private func behind(_ last: LiveRow?) -> some View {
+/// "About 10 s behind" while the meeting records and its text lags; "Listening…" before the first line. The capture's
+/// clock is not observed, so a slow clock refreshes the number.
+struct MeetingLiveBehind: View {
+    var last: LiveRow?
+
+    @State private var capture = RecordingCapture.shared
+
+    private var paused: Bool { capture.state == .paused }
+
+    var body: some View {
         TimelineView(.periodic(from: .now, by: Theme.Recording.gapRefresh)) { _ in
             Group {
                 if let last {
@@ -808,6 +810,27 @@ private struct MeetingLiveBox: View {
             }
             .font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
         }
+    }
+}
+
+/// **Full Transcript**: pushes the whole timeline of the meeting being recorded (`MeetingTranscriptPage`).
+struct MeetingFullTranscriptLink: View {
+    var id: UUID
+    var exchanges: [MeetingAsk.Exchange]
+
+    var body: some View {
+        NavigationLink { MeetingTranscriptPage(id: id, exchanges: exchanges) } label: {
+            HStack(spacing: Theme.Space.xs) {
+                Text("Full Transcript").lineLimit(1)
+                ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.captionStrong).accessibilityHidden(true)
+            }
+            .font(Theme.Font.secondaryStrong)
+            .foregroundStyle(Theme.accent)
+            .scaledFrame(minHeight: Theme.Size.tapTarget)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("meeting-transcript")
     }
 }
 
@@ -896,7 +919,7 @@ private nonisolated struct FollowupVoiceProbe: Hashable, Sendable {
 }
 
 /// One of the Live box's lines; its id is its place in the transcript, which only grows at the end.
-private struct LiveRow: Identifiable, Equatable {
+struct LiveRow: Identifiable, Equatable {
     var id: String
     var start: Double
     var end: Double
@@ -919,27 +942,56 @@ private struct OpensRecording: ViewModifier {
     }
 }
 
+/// Where the meeting's transcript opens (#3862 phase 2b): a highlight's minute, `at` to `end` in seconds from the
+/// recording's start. Its own id each time, so the same highlight tapped again opens the page again.
+nonisolated struct MeetingTranscriptFocus: Identifiable, Hashable, Sendable {
+    var id = UUID()
+    var at: Double
+    var end: Double
+}
+
 /// The whole transcript of the meeting being recorded, with its bookmarks and questions: the live view's timeline, one
-/// tap from the Live box.
-private struct MeetingTranscriptPage: View {
+/// tap from the Live box. Opened at a highlight's time (`focus`), it scrolls to the first of the phone's lines in its
+/// minute and lights them all for two seconds (`RecordingTimeline.focus`), as the recording's page lights a line.
+struct MeetingTranscriptPage: View {
     var id: UUID
     var exchanges: [MeetingAsk.Exchange]
+    var focus: MeetingTranscriptFocus? = nil
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var library = RecordingLibrary.shared
     @State private var capture = RecordingCapture.shared
     @State private var items: [RecordingTimeline.Item] = []
+    @State private var lit: Set<RecordingTimeline.Item.ID> = []
 
     var body: some View {
-        ScrollView {
-            if let entry = library.entry(id) {
-                RecordingTimelineRows(entry: entry, exchanges: exchanges, paused: capture.state == .paused, items: $items)
-                    .padding(.horizontal, Theme.Space.page)
-                    .padding(.vertical, Theme.Space.s)
+        ScrollViewReader { proxy in
+            ScrollView {
+                if let entry = library.entry(id) {
+                    RecordingTimelineRows(entry: entry, exchanges: exchanges, paused: capture.state == .paused, items: $items,
+                                          lit: lit)
+                        .padding(.horizontal, Theme.Space.page)
+                        .padding(.vertical, Theme.Space.s)
+                }
             }
+            .task(id: focus) { await jump(proxy) }
         }
         .themedGroupedPage()
         .navigationTitle(String(localized: "Transcript"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
+    }
+
+    /// To the focus's lines, lit for two seconds.
+    private func jump(_ proxy: ScrollViewProxy) async {
+        guard let focus else { return }
+        // The rows are laid out after the page appears; a scroll asked for before that lands nowhere.
+        try? await Task.sleep(for: .milliseconds(100))
+        guard !Task.isCancelled, let target = RecordingTimeline.focus(at: focus.at, end: focus.end, in: items) else { return }
+        withAnimation(reduceMotion ? nil : Theme.Motion.layout) { proxy.scrollTo(target.scroll, anchor: .center) }
+        lit = target.lit
+        try? await Task.sleep(for: .seconds(2))
+        guard !Task.isCancelled, lit == target.lit else { return }
+        withAnimation(reduceMotion ? nil : Theme.Motion.standard) { lit = [] }
     }
 }
 #endif
