@@ -53,10 +53,7 @@ internal fun ProviderPasteDraft.newProviderDraft(): NewProviderDraft {
     )
 }
 
-internal fun ProviderPasteDraft.modelsForProvider(): List<PresetModel> {
-    val default = provider.model?.takeIf { it.isNotBlank() }
-    return if (default != null && provider.models.none { it.id == default }) listOf(PresetModel(default)) + provider.models else provider.models
-}
+internal fun ProviderPasteDraft.modelsForProvider(): List<PresetModel> = modelsWithDefault(provider.models, provider.model.orEmpty())
 
 internal fun ProviderPasteDraft.actions(): List<ProviderPasteAction> {
     val keyless = provider.apiKey.isNullOrEmpty()
@@ -152,14 +149,15 @@ internal data class FoundAlias(
 )
 
 /** The same discovery rule as the web's "Found on your computers". */
-internal fun foundAliases(list: List<HubLauncher>, machines: List<Machine>): List<FoundAlias> {
+internal fun foundAliases(list: List<HubLauncher>, machines: List<Machine>, ownsMachine: (String) -> Boolean = { true }): List<FoundAlias> {
     val imported = list.filter { it.managed && it.origin?.startsWith("zshrc:") == true }.mapNotNull { it.origin }.toSet()
+    val ownedMachines = machines.filter { ownsMachine(it.id) }
     return list.mapNotNull { launcher ->
         val on = launcher.machines
         val baseUrl = launcher.baseUrl?.takeIf { it.isNotBlank() }
         if (launcher.source != "zshrc" || launcher.hidden || baseUrl == null || on.isEmpty() ||
             on.any { "zshrc:${launcher.name}@$it" in imported }) return@mapNotNull null
-        fun machine(id: String) = machines.firstOrNull { it.id == id || GroupKeys.raw(it.id) == id }
+        fun machine(id: String) = ownedMachines.firstOrNull { it.id == id || GroupKeys.raw(it.id) == id }
         val id = on.firstOrNull { machine(it)?.online == true } ?: on.first()
         val selected = machine(id)
         FoundAlias(launcher.name, baseUrl, id, selected?.displayName ?: id, selected?.online == true)

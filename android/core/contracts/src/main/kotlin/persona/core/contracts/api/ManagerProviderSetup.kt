@@ -10,6 +10,7 @@ internal class ManagerProviderSetup(private val source: ProviderSetup, manager: 
     override val launcherScope get() = source.launcherScope
     override val launcherImportParse get() = source.launcherImportParse
     override fun forManager(manager: String) = source.forManager(manager)
+    override fun ownsMachine(id: String) = source.ownsMachine(id)
     override suspend fun presets() = withContext(owner) { source.presets() }
     override suspend fun add(provider: NewProvider) = withContext(owner) { source.add(provider) }
     override suspend fun create(provider: NewProvider) = withContext(owner) { source.create(provider) }

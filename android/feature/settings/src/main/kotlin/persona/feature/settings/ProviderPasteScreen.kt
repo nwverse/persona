@@ -8,6 +8,7 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import persona.core.contracts.api.ProviderPasteDraft
@@ -46,9 +47,12 @@ internal fun LazyListScope.otherProviderWays(
         state.foundAliases.forEachIndexed { index, alias ->
             item("found-${alias.name}") {
                 JGroupItem(GroupPosition.of(index, state.foundAliases.size)) {
-                    JRow(alias.name, leadingIcon = PersonaIcons.machine, subtitle = providerHost(alias.baseUrl),
-                        value = alias.computer + " · " + stringResource(if (alias.online) R.string.settings_online else R.string.settings_offline),
-                        onClick = { onAlias(alias) })
+                    JRow(alias.name, leadingIcon = PersonaIcons.machine,
+                        subtitle = listOfNotNull(
+                            providerHost(alias.baseUrl),
+                            alias.computer,
+                            stringResource(if (alias.online) R.string.settings_online else R.string.settings_offline),
+                        ).joinToString("\n"), subtitleLines = 3, onClick = { onAlias(alias) })
                 }
             }
         }
@@ -92,7 +96,7 @@ internal fun LazyListScope.pasteStep(
         SettingsCaption(stringResource(R.string.settings_paste_nothing), Modifier.padding(horizontal = rowPadding, vertical = Tokens.Space.s))
     }
     if (answer.drafts.size > 1) item("paste-several") {
-        SettingsCaption(stringResource(R.string.settings_paste_several, answer.drafts.size), Modifier.padding(horizontal = rowPadding, vertical = Tokens.Space.s))
+        SettingsCaption(pluralStringResource(R.plurals.settings_paste_several, answer.drafts.size, answer.drafts.size), Modifier.padding(horizontal = rowPadding, vertical = Tokens.Space.s))
     }
     answer.drafts.forEachIndexed { index, draft ->
         item("paste-draft-$index") { ProviderPasteDraftCard(draft, answer.drafts.size > 1, paste.draft == index, !state.busy) { onDraft(index) } }
@@ -129,14 +133,15 @@ private fun ProviderPasteDraftCard(draft: ProviderPasteDraft, radio: Boolean, se
     val auth = provider.auth?.takeUnless { provider.kind == "api" && provider.api in listOf("responses", "chat") }?.let {
         if (it == "api_key") "x-api-key" else "Bearer"
     }
+    val modelCount = draft.modelsForProvider().size
     val subtitle = listOfNotNull(
         host?.takeIf { it != title },
-        stringResource(R.string.settings_paste_models_count, draft.modelsForProvider().size),
+        pluralStringResource(R.plurals.settings_paste_models_count, modelCount, modelCount),
         if (provider.kind == "api") stringResource(R.string.settings_providers_api_tag) else null,
         auth,
-    ).joinToString(" · ")
+    ).joinToString("\n")
     JGroupItem(GroupPosition.Single, Modifier.padding(top = Tokens.Space.s)) {
-        JRow(title, subtitle = subtitle, subtitleLines = 3, selected = selected, enabled = enabled, chevron = false,
+        JRow(title, subtitle = subtitle, subtitleLines = 4, selected = selected, enabled = enabled, chevron = false,
             role = if (radio) Role.RadioButton else Role.Button, onClick = if (radio) onPick else null,
             trailing = if (radio && selected) ({ JIcon(PersonaIcons.success, stringResource(R.string.settings_src_provider_selected), tint = PersonaTheme.palette.accent) }) else ({}))
         val lines = draft.configurationLines(androidx.compose.ui.platform.LocalResources.current)

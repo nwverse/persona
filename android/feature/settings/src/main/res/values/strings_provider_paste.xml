@@ -55,8 +55,14 @@
     <string name="settings_paste_format_cindy">A cindy provider</string>
     <string name="settings_paste_format_link">A provider import link</string>
     <string name="settings_paste_nothing">No provider was found in this text.</string>
-    <string name="settings_paste_several">Choose one of the %1$d providers found.</string>
-    <string name="settings_paste_models_count">%1$d models</string>
+    <plurals name="settings_paste_several">
+        <item quantity="one">Choose the %1$d provider found.</item>
+        <item quantity="other">Choose one of the %1$d providers found.</item>
+    </plurals>
+    <plurals name="settings_paste_models_count">
+        <item quantity="one">%1$d model</item>
+        <item quantity="other">%1$d models</item>
+    </plurals>
     <string name="settings_paste_action_label">This address is already in use.</string>
     <string name="settings_paste_merge">Add models to %1$s</string>
     <string name="settings_paste_merge_hint">Same key. Add only models this provider does not have yet.</string>

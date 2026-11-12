@@ -8,6 +8,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import persona.core.contracts.GroupKeys
 import persona.core.contracts.Machine
 import persona.core.contracts.api.HubLauncher
 import persona.core.contracts.api.NewProvider
@@ -41,6 +42,18 @@ class ProviderPasteStateTest {
         ), foundAliases(list, machines))
         assertEquals("an import on another of the alias's computers still hides it", emptyList<FoundAlias>(),
             foundAliases(listOf(list[2], list[7].copy(origin = "zshrc:cc_imported@mac")), machines))
+    }
+
+    @Test fun sameRawMachineIdInAnotherHubCannotSupplyOnlineStatus() {
+        val machines = listOf(
+            Machine("mac", "Other hub Mac", online = true),
+            Machine(GroupKeys.machine("mac", "g12345678"), "Mac", online = false),
+            Machine(GroupKeys.machine("linux", "g12345678"), "Linux", online = true),
+        )
+        val aliases = listOf(HubLauncher("cc_work", source = "zshrc", baseUrl = "https://work.example.com", machines = listOf("mac", "linux")))
+        val ownsSecondHub = { id: String -> GroupKeys.namespaceOf(id) == "g12345678" }
+        assertEquals(listOf(FoundAlias("cc_work", "https://work.example.com", "linux", "Linux", true)),
+            foundAliases(aliases, machines, ownsSecondHub))
     }
 
     private val pasted = ProviderPasteDraft(

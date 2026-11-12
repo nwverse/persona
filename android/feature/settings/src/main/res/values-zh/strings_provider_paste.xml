@@ -55,8 +55,14 @@
     <string name="settings_paste_format_cindy">一个 cindy 供应商</string>
     <string name="settings_paste_format_link">一个供应商导入链接</string>
     <string name="settings_paste_nothing">这段内容里没有找到供应商。</string>
-    <string name="settings_paste_several">找到 %1$d 个供应商，请选择一个。</string>
-    <string name="settings_paste_models_count">%1$d 个模型</string>
+    <plurals name="settings_paste_several">
+        <item quantity="one">找到 %1$d 个供应商，请选择。</item>
+        <item quantity="other">找到 %1$d 个供应商，请选择一个。</item>
+    </plurals>
+    <plurals name="settings_paste_models_count">
+        <item quantity="one">%1$d 个模型</item>
+        <item quantity="other">%1$d 个模型</item>
+    </plurals>
     <string name="settings_paste_action_label">这个地址已有供应商，请选择操作。</string>
     <string name="settings_paste_merge">把模型添加到 %1$s</string>
     <string name="settings_paste_merge_hint">密钥相同，只添加它还没有的模型。</string>

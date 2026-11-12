@@ -36,6 +36,13 @@ class ProviderPasteNotesTest {
         assertEquals("这部分内容未被使用（第 9 行）", providerPasteNoteText(ProviderPasteNote("future_code", line = 9), resources))
     }
 
+    @Test @Config(qualifiers = "en") fun providerAndModelCountsUsePluralResources() {
+        assertEquals("1 model", resources.getQuantityString(R.plurals.settings_paste_models_count, 1, 1))
+        assertEquals("2 models", resources.getQuantityString(R.plurals.settings_paste_models_count, 2, 2))
+        assertEquals("Choose the 1 provider found.", resources.getQuantityString(R.plurals.settings_paste_several, 1, 1))
+        assertEquals("Choose one of the 2 providers found.", resources.getQuantityString(R.plurals.settings_paste_several, 2, 2))
+    }
+
     @Test fun draftDetailsNameEveryKeptAndSkippedVariableAndHeaderButNoValues() {
         val draft = ProviderPasteDraft(
             provider = PastedProvider(headers = "X-Team: secret-value\nX-Other: another-secret"),

@@ -101,12 +101,15 @@ internal fun NewProviderDraft.advancedProblem(): ResText? {
     return null
 }
 
+/** Put a missing default model first without deciding whether an empty selection should stay empty. */
+internal fun modelsWithDefault(models: List<PresetModel>, default: String): List<PresetModel> =
+    if (default.isNotBlank() && models.none { it.id == default }) listOf(PresetModel(default)) + models else models
+
 /** The form an existing provider opens with: its models picked (the default among them even when not listed), secrets empty. */
 internal fun providerDraftOf(l: HubLauncher): NewProviderDraft {
     val url = l.baseUrl.orEmpty()
-    val models = l.models.toMutableList()
     val model = l.model.orEmpty()
-    if (models.isNotEmpty() && model.isNotBlank() && models.none { it.id == model }) models.add(0, PresetModel(model))
+    val models = if (l.models.isEmpty()) l.models else modelsWithDefault(l.models, model)
     val noProxy = l.noProxy.orEmpty()
     val mode = proxyModeOf(l.proxy.orEmpty(), noProxy, gatewayHost(url))
     return NewProviderDraft(
@@ -127,7 +130,7 @@ internal fun providerDraftOf(l: HubLauncher): NewProviderDraft {
 internal fun NewProviderDraft.modelsOut(): List<PresetModel> {
     val picked = models.filter { it.id.isNotBlank() }.map { it.copy(id = it.id.trim(), name = it.name?.trim()?.takeIf(String::isNotEmpty)) }
     val default = model.trim()
-    return if (picked.isEmpty() || default.isEmpty() || picked.any { it.id == default }) picked else listOf(PresetModel(default)) + picked
+    return if (picked.isEmpty()) picked else modelsWithDefault(picked, default)
 }
 
 /** #2455's fields as the hub takes them (its pointer ones: left out keeps what is stored), for comparing old and new. */

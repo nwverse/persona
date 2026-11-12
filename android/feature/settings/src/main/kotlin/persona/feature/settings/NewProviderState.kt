@@ -298,7 +298,7 @@ internal class NewProviderModel(
             try {
                 val list = api.launchers()
                 listedLaunchers = list
-                mutable.update { it.copy(foundAliases = foundAliases(list, it.machines)) }
+                mutable.update { it.copy(foundAliases = foundAliases(list, it.machines, api::ownsMachine)) }
             } catch (cancelled: CancellationException) { throw cancelled }
             // Finding an alias is optional; the usual add choices still work when the list cannot be read.
             catch (_: Exception) {}
@@ -398,7 +398,7 @@ internal class NewProviderModel(
 
     /** The machines changed (one came online, another was confirmed): the lists follow, what was chosen stays. */
     fun setMachines(machines: List<Machine>) = mutable.update {
-        it.copy(machines = machines, foundAliases = if (it.importParse) foundAliases(listedLaunchers, machines) else emptyList())
+        it.copy(machines = machines, foundAliases = if (it.importParse) foundAliases(listedLaunchers, machines, api::ownsMachine) else emptyList())
     }
 
     fun editScope(scope: ScopeForm) = mutable.update { if (it.busy || it.scope == null) it else it.copy(scope = scope, error = null) }

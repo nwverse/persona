@@ -30,6 +30,9 @@ interface ProviderSetup {
     /** Pin the wizard and its follow-up requests to the assistant that opened it. */
     fun forManager(manager: String): ProviderSetup = ManagerProviderSetup(this, manager)
 
+    /** Whether a merged computer list entry belongs to this setup's hub group; plain setups own every entry they receive. */
+    fun ownsMachine(id: String): Boolean = true
+
     /** `GET /api/v1/launchers/presets`: the providers the hub's extensions offer; none from a hub without them (404). */
     suspend fun presets(): List<ProviderPreset>
 

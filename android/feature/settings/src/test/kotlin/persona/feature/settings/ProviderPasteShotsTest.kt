@@ -51,7 +51,7 @@ class ProviderPasteShotsTest {
     private val existing = HubLauncher("work", displayName = "Work", source = "persona", baseUrl = "https://work.example.com",
         model = "old-model", models = listOf(PresetModel("old-model")), hasKey = true, auth = "bearer", sonnetModel = "old-mid")
 
-    private class Providers(private val supported: Boolean = true) : ProviderSetup {
+    private class Providers(private val supported: Boolean = true, private val parsedModels: List<PresetModel> = listOf(PresetModel("new-mid"))) : ProviderSetup {
         override val builtinPresets = flowOf(true)
         override val launcherImportParse = flowOf(supported)
         val previews = mutableListOf<Pair<String, String?>>()
@@ -70,8 +70,8 @@ class ProviderPasteShotsTest {
         override suspend fun launcher(name: String) = launchers().first { it.name == name }
         override suspend fun parse(text: String) = ProviderPasteResult(format = "shell", drafts = listOf(ProviderPasteDraft(
             label = "cc_work",
-            provider = PastedProvider(name = "cc_work", displayName = "Work gateway", baseUrl = "https://work.example.com", apiKey = "eg-secret",
-                model = "new-model", models = listOf(PresetModel("new-mid")), env = "MAX_OUTPUT=8000", headers = "X-Team: synthetic"),
+            provider = PastedProvider(name = "cc_work", displayName = "Work gateway", baseUrl = "https://work.example.com", apiKey = "eg-secret", auth = "bearer",
+                model = "new-model", models = parsedModels, env = "MAX_OUTPUT=8000", headers = "X-Team: synthetic"),
             envNames = listOf("MAX_OUTPUT"), skippedEnv = listOf(ProviderPasteSkipped("OTHER_TOKEN", "credential")),
             skippedHeaders = listOf(ProviderPasteSkipped("X-Api-Key", "credential")),
             matches = listOf(ProviderPasteMatch("work", "Work", sameKey = true)),
@@ -111,6 +111,20 @@ class ProviderPasteShotsTest {
         rule.onNodeWithText("Found on your computers").assertDoesNotExist()
     }
 
+    @Test fun oneModelUsesSingular() {
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                NewProviderPage(Providers(parsedModels = emptyList()), onBack = {}, onSaved = {}, machines = machines)
+            }
+        }
+        rule.onNodeWithText("Paste a configuration").performClick()
+        rule.onAllNodes(hasSetTextAction()).onFirst().performTextInput("export ANTHROPIC_BASE_URL=https://work.example.com")
+        rule.mainClock.advanceTimeBy(1_000)
+        rule.waitForIdle()
+        rule.onNodeWithText("1 model", substring = true).assertExists()
+        rule.onNodeWithText("1 models", substring = true).assertDoesNotExist()
+    }
+
     @Config(sdk = [35], qualifiers = "en-w400dp-h1500dp-night-xhdpi")
     @Test fun darkDrawsBothSetups() = drawsBothSetups(true)
 
@@ -138,6 +152,8 @@ class ProviderPasteShotsTest {
             rule.onNodeWithText("cc_work").assertExists()
             rule.onNodeWithText("cc_hidden").assertDoesNotExist()
             rule.onNodeWithText("cc_imported").assertDoesNotExist()
+            rule.onNodeWithText("Build box\nOnline", substring = true).assertExists()
+            rule.onNodeWithText("Build box · Online", substring = true).assertDoesNotExist()
             val suffix = "${s.name.lowercase()}-${if (dark) "dark" else "light"}"
             capture("provider-paste-entry-$suffix")
 
@@ -151,6 +167,8 @@ class ProviderPasteShotsTest {
             rule.onNodeWithText("Arguments that could contain sensitive values were left out (line 2)").assertExists()
             rule.onNodeWithText("Environment variables left out (credential): OTHER_TOKEN").assertExists()
             rule.onNodeWithText("Headers left out (credential): X-Api-Key").assertExists()
+            rule.onNodeWithText("2 models\nBearer", substring = true).assertExists()
+            rule.onNodeWithText("2 models · Bearer", substring = true).assertDoesNotExist()
             capture("provider-paste-review-$suffix")
 
             rule.onNodeWithText("Continue").performClick()
