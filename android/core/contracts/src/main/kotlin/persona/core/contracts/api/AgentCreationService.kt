@@ -4,7 +4,8 @@ import persona.core.contracts.CoreText
 import persona.core.contracts.Session
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.JsonNames
+import kotlinx.serialization.KeepGeneratedSerializer
+import kotlinx.serialization.json.*
 
 /** Bound to one hub and pairing generation; never reuse it after pairing changes. */
 interface AgentCreationService {
@@ -115,12 +116,13 @@ fun modelName(id: String?, name: String? = null): String {
 }
 
 @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
-@Serializable
+@KeepGeneratedSerializer
+@Serializable(with = AgentLauncherSerializer::class)
 data class AgentLauncher(
     val name: String,
     @SerialName("base_url") val baseUrl: String? = null,
     val model: String? = null,
-    @SerialName("agent") @JsonNames("agent_type") val agentType: String = "claude",
+    @SerialName("agent") val agentType: String = "claude",
     /** A runtime's own declaration that it can run the assistant; false or absent on other launchers. */
     val assistant: Boolean = false,
     /** Its health on this computer (docs/server/launcher-health.md); null when never checked or from an older hub. */
@@ -132,6 +134,16 @@ data class AgentLauncher(
 ) {
     /** What people read for it: its display name, else its startup name (the web's `providerTitle`). */
     val title: String get() = displayName?.trim()?.takeIf(String::isNotEmpty) ?: name
+}
+
+/** The detected agent wins over an older configured type, as on the web. */
+@OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+object AgentLauncherSerializer : JsonTransformingSerializer<AgentLauncher>(AgentLauncher.generatedSerializer()) {
+    override fun transformDeserialize(element: JsonElement): JsonElement {
+        val fields = element as? JsonObject ?: return element
+        val agent = fields["agent"]?.takeUnless { it == JsonNull } ?: fields["agent_type"] ?: return element
+        return JsonObject((fields - "agent_type") + ("agent" to agent))
+    }
 }
 
 /**

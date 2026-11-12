@@ -32,7 +32,7 @@ class CodexFirstMessageTransportTest {
                 val service = HttpChatComposerService(pairing, transport, request = { _, _, _ ->
                     if (refuse) {
                         refuse = false
-                        response(409, """{"code":"input_draft","delivered":"none","draft":"draft","clearable":"draft"}""")
+                        response(409, """{"error":"draft","code":"input_draft","delivered":"none","draft":"draft","clearable":"draft"}""")
                     } else response(200, """{"ok":true,"session":${JsonCodec.encodeToString(thread)}}""")
                 })
                 assertEquals(MessageTransportResult.Accepted, service.send(MessageRequest(pairing, waiting.key, "Review", "first")))
