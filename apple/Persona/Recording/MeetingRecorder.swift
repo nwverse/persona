@@ -70,7 +70,7 @@ import UserNotifications
         let picked = attendance != nil
         let attendance = attendance ?? MeetingAttendees.startAttendance(AppModel.shared)
         await capture.start(locale: Self.locale, input: RecordingInput.chosen, title: meeting.title ?? "", meeting: meeting,
-                            playsAloud: attendance.sentRole.speaks)
+                            playsAloud: attendance.sentRole.speaks, shortSegments: attendance.shortSegments)
         guard capture.state == .recording, let id = capture.recordingID else {
             return .failed(capture.error ?? String(localized: "Can't open the microphone. Try again later."))
         }
@@ -135,6 +135,7 @@ import UserNotifications
                 e.attendance = a
             }
             capture.setPlaysAloud(role.speaks)
+            capture.setShortSegments(RecordingLibrary.shared.entry(id)?.attendance?.shortSegments == true)
             if !role.speaks { MeetingSpeaker.shared.stop() }
             RecordingSync.shared.attendanceChanged(id)
             return true
@@ -166,6 +167,7 @@ import UserNotifications
         library.change(recordingID) { $0 = Self.switched($0, meeting: on, at: at, named: named, start: start) }
         let speaks = library.entry(recordingID).map { $0.isMeeting && $0.attendance?.sentRole.speaks == true } ?? false
         capture.setPlaysAloud(speaks)
+        capture.setShortSegments(library.entry(recordingID).map { $0.isMeeting && $0.attendance?.shortSegments == true } ?? false)
         if !speaks { MeetingSpeaker.shared.stop() }
         // Live lines and questions wait for the hub to have it as it is now (`attendanceSettled`): a mark stored while it
         // was this meeting before counts for nothing.

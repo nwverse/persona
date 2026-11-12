@@ -3,8 +3,9 @@ import SwiftUI
 import WidgetKit
 
 /// Draws the recording activity (docs/apple/live-activity.md「Recording」): on the Lock Screen its name, what it is (a meeting,
-/// bookmarks, paused by a call), the time and Bookmark / Stop; in the Dynamic Island a red mark and the time, opened up the
-/// same buttons. The time is the system's (`Text(timerInterval:)`), so a recording that runs on needs no updates.
+/// bookmarks, paused by a call; with the live view the current topic), the time, the third line (Persona's answer or the
+/// latest line) and Bookmark / Stop; in the Dynamic Island a red mark and the time, opened up the same. The time is the
+/// system's (`Text(timerInterval:)`), so a recording that runs on needs no updates.
 /// Colors are fixed (`Palette`): the extension builds neither the app's Theme nor its style.
 struct RecordingLiveActivity: Widget {
     var body: some WidgetConfiguration {
@@ -115,8 +116,13 @@ struct RecordingSubtitle: View {
         case .recording:
             if let persona = state.persona {
                 // Persona attends (#2981): said in place of what it is, so whoever sees the phone knows (the bookmarks
-                // stay on the recording's page).
-                Text(persona == "participant" ? "Persona taking part" : "Persona listening")
+                // stay on the recording's page). With the live view (#3862 phase 2) the current topic follows it, so a long
+                // one is what gets cut (on the Lock Screen after a second line), never the role.
+                if let topic = state.topic, !topic.isEmpty {
+                    Text("\(RecordingRole.text(persona)) · \(Text("Now: \(topic) [Meeting Topic]"))")
+                } else {
+                    RecordingRole(persona: persona)
+                }
             } else if state.marks > 0 {
                 Text(state.meeting ? "Meeting · \(state.marks) bookmarks" : "Recording · \(state.marks) bookmarks")
             } else {
@@ -178,8 +184,19 @@ struct RecordingButtons: View {
     }
 }
 
-/// Persona in a meeting it attends, under the name: its latest answer (the hub posts no notification for answers), or,
-/// while the recording is paused and the subtitle says why, that Persona still attends.
+/// "Persona taking part" / "Persona listening": the role, said wherever Persona attends.
+struct RecordingRole: View {
+    var persona: String
+
+    var body: some View { Self.text(persona) }
+
+    static func text(_ persona: String) -> Text { Text(persona == "participant" ? "Persona taking part" : "Persona listening") }
+}
+
+/// The third line, in a meeting Persona attends: its latest answer (the hub posts no notification for answers; with the
+/// live view only for 60 s after it came, `RecordingActivity.content`), else the meeting's latest line (#3862 phase 2),
+/// or, while the recording is paused and the subtitle says why, that Persona still attends. Two lines at most, so the
+/// Lock Screen keeps within its height (docs/apple/live-activity.md「Pitfalls」). Never Just me: it isn't in the state.
 struct RecordingAnswer: View {
     var state: RecordingActivityAttributes.ContentState
 
@@ -188,11 +205,13 @@ struct RecordingAnswer: View {
             if let answer = state.answer, !answer.isEmpty {
                 Label { Text(answer).lineLimit(2) } icon: { Image(systemName: RecordingSymbol.persona) }
                     .font(.caption.weight(.medium))
+                    .accessibilityLabel(Text("Persona: \(answer)"))
             } else if state.phase != .recording {
-                Label { Text(persona == "participant" ? "Persona taking part" : "Persona listening").lineLimit(1) } icon: {
-                    Image(systemName: RecordingSymbol.persona)
-                }
-                .font(.caption.weight(.medium))
+                Label { RecordingRole(persona: persona).lineLimit(1) } icon: { Image(systemName: RecordingSymbol.persona) }
+                    .font(.caption.weight(.medium))
+            } else if let line = state.line, !line.isEmpty {
+                Label { Text(line).lineLimit(2) } icon: { Image(systemName: RecordingSymbol.line) }
+                    .font(.caption.weight(.medium))
             }
         }
     }
@@ -257,4 +276,6 @@ enum RecordingSymbol {
     static let attendanceOff = "waveform.slash"
     /// The app's Persona (`Theme.Icon.persona`): its answer.
     static let persona = "sparkle"
+    /// The app's quote (`Theme.Icon.quote`): the meeting's latest line (#3862 phase 2).
+    static let line = "text.quote"
 }

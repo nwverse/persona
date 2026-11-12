@@ -240,6 +240,32 @@ export interface RecordingLive {
   room?: MeetingRoom;
   followup?: MeetingConversation;
   revs?: Record<string, number>;
+  /** Phase 2 (`meeting_live_view`, "Phase 2: live view"): the live log from `?from=` (no `lines` without it), at most
+   *  500, `more` when there are more; the room's topics (always present) and when they last changed. Read through
+   *  `liveLines` / `meetingTopics` (lib/meeting-thread.ts, off the first screen). */
+  lines?: unknown;
+  more?: boolean;
+  topics?: unknown;
+  topics_at?: string;
+}
+
+/** One line of a meeting's live log (`GET …/live?from=`): `n` its position (from 0, append-only), `start` / `end` seconds
+ *  from the start; `source` (phase 5) is an open set. */
+export interface LiveLine {
+  n: number;
+  start: number;
+  end: number;
+  text: string;
+  source?: string;
+}
+
+/** One of a meeting's topics as the room set them: `state` `done`, `current` (at most one) or `open`; `at` the seconds
+ *  the topic began. */
+export interface MeetingTopic {
+  title: string;
+  state: "done" | "current" | "open";
+  at?: number;
+  note?: string;
 }
 
 /** One of a meeting's photos as `GET /api/v1/recordings/{id}/photos` lists them (docs/assistant/meeting-minutes.md

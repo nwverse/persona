@@ -494,7 +494,8 @@ struct RecordingCaptureControls: View {
     /// Record: a meeting with the options shown, or a note when Note is picked. The picks are for this start only.
     private func record() {
         let start = RecordingStart.make(pickedKind, offered: MeetingAttendees.offered(model), conversation: MeetingAttendees.conversation(model),
-                                        photos: MeetingAttendees.photos(model), role: role, privateMark: pickedPrivate,
+                                        photos: MeetingAttendees.photos(model), liveView: MeetingAttendees.liveView(model),
+                                        role: role, privateMark: pickedPrivate,
                                         attendee: chosenAttendee)
         pickedRole = nil; pickedAttendee = nil; pickedPrivate = false; pickedKind = .meeting
         switch start {

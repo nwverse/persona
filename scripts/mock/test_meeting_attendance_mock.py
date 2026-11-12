@@ -196,8 +196,10 @@ class MeetingAttendanceMockTests(Hub, unittest.TestCase):
         self.upload(rid)
         self.assertEqual(self.call("POST", f"/api/v1/recordings/{rid}/live", {"from": 3})[1]["code"], "not_attending")
         live = self.call("GET", f"/api/v1/recordings/{rid}/live")[1]
-        # revs: a manager with meeting_conversation (MOCK_NO_MEETING_CONVERSATION=1 is one without it).
-        revs = {} if os.environ.get("MOCK_NO_MEETING_CONVERSATION") == "1" else {"revs": {"asks": 0}}
+        # revs: a manager with meeting_conversation (MOCK_NO_MEETING_CONVERSATION=1 is one without it), and with live view
+        # (#3862 phase 2) the lines' and the topics' revisions and the topics too.
+        revs = {} if os.environ.get("MOCK_NO_MEETING_CONVERSATION") == "1" else {"revs": {"asks": 0}} \
+            if os.environ.get("MOCK_NO_MEETING_LIVE_VIEW") == "1" else {"revs": {"asks": 0, "lines": 3, "topics": 0}, "topics": []}
         self.assertEqual(live, {"next": 3, "attendance": "off", "fed": 3, "asks": [], **revs})
         self.assertEqual(self.call("GET", f"/api/v1/recordings/{rid}/live", headers={"X-Mock-Role": "watch"})[1]["code"], "forbidden")
         self.call("DELETE", f"/api/v1/recordings/{rid}")

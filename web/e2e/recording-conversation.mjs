@@ -4,7 +4,8 @@
 // thread), an ended one's follow-up composer that opens the follow-up, the thread after the divider, and a room that is
 // unavailable showing its asks. With meeting_photos (phase 3): the photos the room was sent in its thread (one deleted
 // since: "Photo removed", never the room's copy), **Photos**, a photos revision read again from GET …/photos only, the
-// minutes items that cite a photo and the image viewer. Run against an already running Vite server.
+// minutes items that cite a photo and the image viewer. With meeting_live_view (phase 2): a running meeting's **Topics** and
+// **Live** lines, the new ones read from the page's own position on meeting_live. Run against an already running Vite server.
 // BASE_URL=http://127.0.0.1:5791 PERSONA_E2E_CHROMIUM=<chrome> SHOTS_DIR=/tmp/mm/shots node web/e2e/recording-conversation.mjs
 import assert from "node:assert/strict";
 import { mkdir, readFile } from "node:fs/promises";
@@ -151,7 +152,7 @@ async function context(theme, lang, width, scene) {
     localStorage.setItem("persona.language", lang);
     localStorage.setItem("persona.theme", theme);
   }, { theme, lang });
-  const state = { live: [], private: [], followup: [], items: [], made: false, asksRev: 0, photos: [], images: [], roomImages: [], details: 0, photosRev: 0 };
+  const state = { live: [], private: [], followup: [], items: [], made: false, asksRev: 0, photos: [], images: [], roomImages: [], details: 0, photosRev: 0, linesMore: 0, topicsRev: 0 };
   await ctx.route("**/*", (route) => new URL(route.request().url()).origin === base.origin ? route.continue() : route.abort());
   await ctx.route("**/api/v1/**", async (route) => {
     const request = route.request();
@@ -184,7 +185,11 @@ async function context(theme, lang, width, scene) {
       assert.equal(request.headers()["x-persona-manager"], "assistant");
       state.live.push(url.search);
       const revs = { ...(scene.live.revs ?? live().revs), ...(state.asksRev ? { asks: state.asksRev } : {}), ...(state.made ? { followup: 1 } : {}), ...(state.photosRev ? { photos: state.photosRev } : {}) };
-      return route.fulfill({ json: live({ ...scene.live, ...(state.made ? { followup } : {}), revs }) });
+      // Phase 2: the live log's lines only from ?from=, its length as their revision.
+      const from = url.searchParams.get("from");
+      const log = scene.lines ? scene.lines(state) : undefined;
+      const lines = log && from !== null ? { lines: log.slice(Number(from)) } : {};
+      return route.fulfill({ json: live({ ...scene.live, ...(state.made ? { followup } : {}), ...(scene.topics ? { topics: scene.topics(state) } : {}), ...lines, revs: { ...revs, ...(log ? { lines: log.length } : {}), ...(state.topicsRev ? { topics: state.topicsRev } : {}) } }) });
     }
     if (path === `/recordings/${id}/private`) {
       assert.equal(request.method(), "PUT");
@@ -513,7 +518,68 @@ async function photosAfter(theme, lang = "en", width = 1440) {
   runs++;
 }
 
+/** Phase 2 while the meeting runs: **Topics** (done, now, still to come) and **Live**, the newest lines; a meeting_live event
+ *  reads only the new lines, from the page's own next position, and the topics once they moved. */
+async function liveView(theme, lang = "en", width = 1440) {
+  const s = JSON.parse(await readFile(new URL(`../src/i18n/locales/${lang}/knowledge-kbdetail.json`, import.meta.url), "utf8"));
+  const said = [
+    [5, "Ada: Today we look at the export flow of the example project."], [12, "Bo: The cap is still 4 MB."], [31, "Ada: Let's keep it for this release."],
+    [312, "Bo: Pricing next: two options on the table."], [340, "Ada: The yearly plan keeps the discount."], [1790, "Bo: Did we decide on the cap last time, or is it still open?"],
+  ];
+  const more = [[1850, "Ada: Then hiring: we open one more role in Q1."], [1858, "Bo: I'll write the job post this week."]];
+  const scene = {
+    meta: {}, live: { revs: { room: 2, asks: 4 } },
+    lines: (st) => [...said, ...more.slice(0, st.linesMore)].map(([start, text], n) => ({ n, start, end: start + 4, text })),
+    topics: (st) => [
+      { title: "Export cap", state: "done", at: 0 },
+      { title: "Pricing", state: st.topicsRev >= 2 ? "done" : "current", at: 312, note: "Two options: monthly and yearly" },
+      { title: "Hiring", state: st.topicsRev >= 2 ? "current" : "open", ...(st.topicsRev >= 2 ? { at: 1850 } : {}) },
+      { title: "Vendor contract", state: "open" },
+    ],
+    features: [...FEATURES, "meeting_live_view"],
+  };
+  const { ctx, state, push } = await context(theme, lang, width, scene);
+  state.topicsRev = 1;
+  const errors = [];
+  const page = await ctx.newPage();
+  page.setDefaultTimeout(15_000);
+  page.on("pageerror", (err) => errors.push(err.message));
+  await page.goto(new URL(detailPath, base).href);
+  const topics = page.locator("[data-live-topics]");
+  const lines = page.locator("[data-live-lines]");
+  await lines.locator("[data-live-line]").nth(5).waitFor();
+  await page.locator("[data-meeting-conversation]").getByText(ask().answer, { exact: true }).waitFor();
+  assert.equal(await topics.locator("h2").innerText(), s.live_topics_title);
+  assert.deepEqual(await topics.locator("li").evaluateAll((els) => els.map((el) => el.getAttribute("data-topic"))), ["done", "current", "open", "open"]);
+  assert.ok(await topics.getByText(s.live_topic_current, { exact: true }).isVisible());
+  assert.equal(await lines.locator("h2").innerText(), s.live_title);
+  const first = lines.locator("[data-live-line]").first().locator("span");
+  assert.deepEqual([await first.first().innerText(), await first.last().innerText()], ["14:00:05", said[0][1]]);
+  assert.equal(state.live[0], "", "The first read takes no from");
+  assert.ok(state.live.includes("?parts=lines&from=0"), "then the lines from the start of this short meeting");
+  for (const box of [topics, lines]) assert.ok(await box.evaluate((el) => el.scrollWidth <= el.clientWidth + 1), "No live view overflow");
+  if (lang === "en" && width === 1440) {
+    // New lines and the next topic: only those, from the page's own next position.
+    const reads = state.live.length;
+    state.linesMore = 2; state.topicsRev = 2;
+    push({ type: "meeting_live", recording_id: id, changed: ["lines", "topics"], revs: { lines: 8, topics: 2 } });
+    await lines.getByText(more[1][1], { exact: true }).waitFor();
+    assert.equal(state.live[reads], "?parts=lines,topics&from=6");
+    await until(async () => (await topics.locator('li[data-topic="current"]').innerText()).endsWith("Hiring"), "the next topic");
+  }
+  await settle(page);
+  const tag = width === 1440 ? theme : `${lang}-${width}-${theme}`;
+  await shootFrom(page, "[data-live-topics]", `live-view-${tag}.png`);
+  assert.deepEqual(errors, []);
+  await ctx.close();
+  runs++;
+}
+
 try {
+  for (const theme of ["light", "dark"]) await liveView(theme);
+  for (const theme of ["light", "dark"]) await liveView(theme, "en", 390);
+  await liveView("light", "zh-Hans", 390);
+  await liveView("dark", "ja", 390);
   for (const theme of ["light", "dark"]) await photosRunning(theme);
   for (const theme of ["light", "dark"]) await photosRunning(theme, "en", 390);
   await photosRunning("light", "zh-Hans", 390);
@@ -528,7 +594,7 @@ try {
   for (const theme of ["light", "dark"]) await after(theme);
   for (const lang of ["zh-Hans", "ja"]) await after("light", lang, 390);
   for (const theme of ["light", "dark"]) await down(theme);
-  console.log(`PASS recording conversation: ${runs} browser runs, ${screenshots} screenshots; private switch, room thread, questions without an answer, meeting_live parts, follow-up composer, follow-up thread, unavailable room, photos (thread, list, revision, minutes citations, viewer) and overflow checked`);
+  console.log(`PASS recording conversation: ${runs} browser runs, ${screenshots} screenshots; private switch, room thread, questions without an answer, meeting_live parts, follow-up composer, follow-up thread, unavailable room, photos (thread, list, revision, minutes citations, viewer), the live view (topics, lines, meeting_live parts) and overflow checked`);
 } catch (err) {
   console.error(`FAIL recording conversation: ${err?.stack || err}`);
   process.exitCode = 1;

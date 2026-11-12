@@ -1398,9 +1398,9 @@ page the user watches during the meeting is the page they keep writing in after 
 
 - **Structure, live**: a header (title in `Theme.Font.title`, the page menu, **Hide**), a state line (the recording dot,
   the system-ticked clock, the state word), a subtitle (the role, "On this iPhone", "Private" when marked), a problem as a
-  caution `NoticeBanner` when the room can't take part, the **Live** box, the thread's section header, the thread, and the
-  bar pinned through `safeAreaInset`. While the field has the keyboard the top of the page steps aside as the bar's
-  controls do: the subtitle hides and the Live box keeps only its newest line, so the thread keeps its height (the
+  caution `NoticeBanner` when the room can't take part, **Topics** (phase 2, below), the **Live** box, the thread's
+  section header, the thread, and the bar pinned through `safeAreaInset`. While the field has the keyboard the top of the
+  page steps aside as the bar's controls do: the subtitle and Topics hide and the Live box keeps only its newest line, so the thread keeps its height (the
   structure stays the same, so the thread's scroll position holds). At accessibility sizes a one-line header (dot, time,
   menu, Hide) stays fixed, the rest scrolls as one, and the bar stays pinned.
 - **Structure, after**: **Done** when it is in the sheet, a status card (title, start–end, the minutes' state with
@@ -1430,6 +1430,15 @@ page the user watches during the meeting is the page they keep writing in after 
   no `room`): the subtitle and the thread's header say "Persona can't take part right now", the field asks nothing of the
   room and [+] goes, with a caption that says so; Just me stays. The same rule (`MeetingAsk.canAsk`) decides the asks
   themselves and the Live Activity.
+- **Topics (phase 2)**: in a meeting started while the hub listed `meeting_live_view`, once the room set any, a section
+  under the header and above the Live box: "Topics" (caption strong, secondary, a header for VoiceOver) and one
+  horizontal row of `Chip`s in the room's order, scrolled so the current one is in view (without motion under Reduce
+  Motion), each at most `Theme.Size.meetingTopicChip` wide (scaled with the text; a longer title is cut). The state is in
+  words, never the color alone: **Done: <title>** on the neutral fill, **Now: <title>** in the accent tint, an open topic
+  its title alone in the outline look (the sketch's `[ ]`); VoiceOver reads each as one element with its state, an open
+  one "Not yet: <title>". It steps aside while the field has the keyboard, as the subtitle does; at accessibility sizes
+  it scrolls with the rest. Nothing shows before the first topics. Reason: the topics say where the meeting is at a
+  glance, and words keep them readable in either appearance and to VoiceOver.
 - **Live box**: a `.surface` card with the radius `Theme.Radius.card`: "Live" and, on the right, how far the transcript
   is behind ("About N s behind", or "Listening…" before any line), then the last `Theme.Recording.liveLines` sentences
   (time in monospaced digits, secondary; two lines of text at most) and **Full Transcript**, which pushes the whole
@@ -1525,15 +1534,16 @@ page the user watches during the meeting is the page they keep writing in after 
   `meeting-photo-uploading`, `meeting-photo-material`, `meeting-photo-failed`, `meeting-photo-deleting`,
   `meeting-photo-unlisted`), `meeting-photo-retry`, `meeting-photo-remove`, `meeting-photo-note`,
   `meeting-photo-reading`, `meeting-photo-removed`, `meeting-photo-delete`, `meeting-photo-delete-confirm`,
-  `meeting-photo-delete-problem`, `meeting-photo-viewer`, `meeting-photo-viewer-done`, `meeting-photo-problem`; in the
-  minutes `minutes-photo` and `minutes-photo-removed`,
+  `meeting-photo-delete-problem`, `meeting-photo-viewer`, `meeting-photo-viewer-done`, `meeting-photo-problem`; the
+  topics `meeting-topics` and each chip `meeting-topic-done|current|open`; in the minutes `minutes-photo` and
+  `minutes-photo-removed`,
   `meeting-ask-field`, `meeting-ask-send`
   (the two shared with the live bar's typed question), `meeting-ask-caption`, `meeting-ask-notice`, `recording-more`,
   `meeting-page-stop-speaking`, `meeting-after-status`, `meeting-after-divider`, `meeting-followup-retry`; at the start
   `meeting-private-start`; on the recording's page `recording-private` and `recording-meeting-conversation`; the sheet's
   shared ones (`recording-now-title`, `recording-live-timer`, `recording-live-hide`, `recording-pause`,
   `recording-bookmark`, `recording-stop`, `recording-wrapup-title`, `recording-wrapup-open`, `recording-wrapup-done`)
-  keep their names. UI tests: `MeetingConversationUITests`.
+  keep their names. UI tests: `MeetingConversationUITests`, `MeetingLiveViewUITests` (the topics).
 - Platforms: the web shows the same thread on the recording detail (**Conversation**); Android has no meeting page yet.
 
 ## One Record entry (#5243)

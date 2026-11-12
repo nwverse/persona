@@ -21,6 +21,10 @@ final class MeetingConversation {
         var followup: RecordingUpload.SessionRef?
         /// `asks` of `GET …/live`, oldest first (the thread uses them to tell spoken/typed and to show asks answered from material).
         var asks: [MeetingAskWire.Ask] = []
+        /// `topics` of `GET …/live` (phase 2), in the room's order, and `topics_at`, when they last changed: read only for a
+        /// meeting started with the live view (`RecordingAttendance.liveView`); empty before the room set any.
+        var topics: [MeetingTopic] = []
+        var topicsAt: String?
         /// The revision of each part read so far (`meeting_live` reads only newer ones); `photos`: the newest one a
         /// `GET …/photos` that began after it was known has applied (`MeetingPhotos`), so a failed read leaves it behind
         /// and the next event or `…/live` read tries again.
@@ -74,8 +78,9 @@ final class MeetingConversation {
 
     /// Longest Just me or `…/followup` text (the contract's limit, in characters).
     nonisolated static let maxText = 8000
-    /// The parts of `GET …/live` phase 1 reads; a later phase's (`lines`, `topics`, …) are left to it. `photos` (phase 3)
-    /// is read only for a meeting that takes photos (`partsRead(for:)`), and never as a part: `GET …/photos` holds them.
+    /// The parts of `GET …/live` phase 1 reads. `topics` (phase 2) is read only for a meeting started with the live view and
+    /// `photos` (phase 3) only for one that takes photos (`partsRead(for:)`), the photos never as a part: `GET …/photos`
+    /// holds them. `lines` is never read: the page shows the phone's own lines (other devices read them).
     static let readParts = ["room", "asks", "private", "followup"]
     /// How long after its end a room meeting recorded here still follows `meeting_live` unwatched (the hub's 12 hours).
     static let followsEnded: TimeInterval = 12 * 3600
@@ -199,12 +204,34 @@ final class MeetingConversation {
         }
     }
 
-    /// The parts of a `meeting_live` event the phone follows for `id`: phase 1's, and `photos` for a meeting that started
-    /// with them (`RecordingAttendance.photos`).
-    func partsRead(for id: UUID) -> [String] { takesPhotos(id) ? Self.readParts + ["photos"] : Self.readParts }
+    /// The parts of a `meeting_live` event the phone follows for `id`: phase 1's, `topics` for a meeting started with the
+    /// live view (`RecordingAttendance.liveView`) and `photos` for one that started with them (`RecordingAttendance.photos`).
+    func partsRead(for id: UUID) -> [String] {
+        let attendance = library.entry(id)?.attendance
+        return Self.readParts + (attendance?.liveView == true ? ["topics"] : []) + (attendance?.photos == true ? ["photos"] : [])
+    }
 
     /// The meeting started while the hub took photos: the page shows them, and the hub's changes to them are read.
     private func takesPhotos(_ id: UUID) -> Bool { library.entry(id)?.attendance?.photos == true }
+
+    /// The meeting started while the hub had the live view: the page shows its topics, and the hub's changes are read.
+    private func showsTopics(_ id: UUID) -> Bool { library.entry(id)?.attendance?.liveView == true }
+
+    /// The topics a read brings into `m` (pure, for the tests): an answer without `topics` (a part not asked for, or a hub
+    /// that lists none) keeps what was read before unless `replace` (a whole read, or `topics` asked for: the hub's word,
+    /// an absent list being none); a meeting without the live view keeps none.
+    nonisolated static func applyTopics(_ m: inout Meeting, topics: [MeetingTopic]?, at: String?, replace: Bool, shown: Bool) {
+        guard shown else {
+            m.topics = []; m.topicsAt = nil
+            return
+        }
+        guard topics != nil || replace else { return }
+        m.topics = Array((topics ?? []).prefix(Self.maxTopics))
+        m.topicsAt = at
+    }
+
+    /// The most topics the hub keeps (the contract's limit): a longer list is cut, not refused.
+    nonisolated static let maxTopics = 20
 
     /// The photos moved at the hub (added, noted, cited, deleted), as of `rev` when it is known: `GET …/photos` reads
     /// them, and only once that list applied is `rev` kept, so the same event isn't read twice. A read that fails
@@ -437,6 +464,7 @@ final class MeetingConversation {
             m.privateRead = true
             m.followup = answer.followup
             m.asks = answer.asks ?? []
+            Self.applyTopics(&m, topics: answer.topics, at: answer.topicsAt, replace: true, shown: showsTopics(id))
             m.loaded = true
         case .parts(let parts):
             // A part asked for and absent is one the hub has no value for (`private` not chosen, no follow-up yet).
@@ -447,6 +475,7 @@ final class MeetingConversation {
             }
             if parts.contains("followup") { m.followup = answer.followup }
             if parts.contains("asks") { m.asks = answer.asks ?? [] }
+            Self.applyTopics(&m, topics: answer.topics, at: answer.topicsAt, replace: parts.contains("topics"), shown: showsTopics(id))
         }
         m.missing = false
         // The photos' revision moves only with a read of the photos that applied: a `…/live` read answered just after a
@@ -705,15 +734,20 @@ final class MeetingConversation {
         enum CodingKeys: String, CodingKey { case privateMark = "private" }
     }
 
-    /// `GET …/live`'s phase-1 parts, each read on its own: a field of another shape is left out, not the whole answer.
-    private nonisolated struct LiveRead: Decodable, Sendable {
+    /// `GET …/live`'s parts the phone reads (phase 1's, and phase 2's `topics` / `topics_at`), each read on its own: a field
+    /// of another shape is left out, not the whole answer, and a topic of another shape leaves the list, not the others.
+    nonisolated struct LiveRead: Decodable, Sendable {
         var room: MeetingRoom?
         var privateMark: Bool?
         var followup: RecordingUpload.SessionRef?
         var asks: [MeetingAskWire.Ask]?
+        var topics: [MeetingTopic]?
+        var topicsAt: String?
         var revs: [String: Int64]?
 
-        enum CodingKeys: String, CodingKey { case room, privateMark = "private", followup, asks, revs }
+        enum CodingKeys: String, CodingKey {
+            case room, privateMark = "private", followup, asks, topics, topicsAt = "topics_at", revs
+        }
 
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -721,6 +755,8 @@ final class MeetingConversation {
             privateMark = try? c.decodeIfPresent(Bool.self, forKey: .privateMark)
             followup = try? c.decodeIfPresent(RecordingUpload.SessionRef.self, forKey: .followup)
             asks = (try? c.decodeIfPresent([Lenient<MeetingAskWire.Ask>].self, forKey: .asks))?.compactMap(\.value)
+            topics = (try? c.decodeIfPresent([Lenient<MeetingTopic>].self, forKey: .topics))?.compactMap(\.value)
+            topicsAt = try? c.decodeIfPresent(String.self, forKey: .topicsAt)
             revs = try? c.decodeIfPresent([String: Int64].self, forKey: .revs)
         }
     }

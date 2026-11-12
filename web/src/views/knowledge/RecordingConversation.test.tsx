@@ -325,3 +325,100 @@ describe("a recorded meeting's conversation", () => {
     expect(kinds()).toEqual(["material", "question", "answer"]);
   });
 });
+
+describe("a recorded meeting's live view (phase 2)", () => {
+  const withLive = () => Object.assign(getState(), { features: ["meeting_attendance", "meeting_conversation", "meeting_live_view"] });
+  const line = (n: number, text = `Line ${n}.`) => ({ n, start: 10 * n, end: 10 * n + 4, text });
+  const topics = [
+    { title: "Export cap", state: "done", at: 0 },
+    { title: "Pricing", state: "current", at: 300, note: "Two options on the table" },
+    { title: "Hiring", state: "open" },
+  ];
+  const topicsBox = () => host.querySelector<HTMLElement>("[data-live-topics]");
+  const linesBox = () => host.querySelector<HTMLElement>("[data-live-lines]");
+  const shownLines = () => [...host.querySelectorAll("[data-live-line]")].map((li) => li.lastElementChild!.textContent);
+  const reads = () => requests.filter((r) => r.url.startsWith(livePath)).map((r) => r.url.slice(livePath.length));
+
+  it("shows nothing of it on a hub without meeting_live_view, and reads no lines", async () => {
+    await load();
+    await reply(pending(livePath)[0], live({ revs: { asks: 1, room: 2, lines: 3, topics: 1 }, topics }));
+    fire({ type: "meeting_live", recording_id: id, changed: ["lines", "topics"], revs: { lines: 5, topics: 2 } });
+    expect(topicsBox()).toBeNull();
+    expect(linesBox()).toBeNull();
+    expect(reads()).toEqual([""]);
+  });
+
+  it("shows a running room meeting's topics in order and its newest lines, and reads only what an event says is newer", async () => {
+    withLive();
+    await load();
+    expect(reads()).toEqual([""]);
+    await reply(pending(livePath)[0], live({ revs: { asks: 1, room: 2, lines: 3, topics: 1 }, topics, topics_at: "2026-11-10T06:05:00Z" }));
+    const chips = [...topicsBox()!.querySelectorAll("li")];
+    expect(topicsBox()!.querySelector("h2")!.textContent).toBe("Topics");
+    expect(chips.map((li) => li.getAttribute("data-topic"))).toEqual(["done", "current", "open"]);
+    expect(chips.map((li) => li.textContent)).toEqual(["DoneExport cap", "NowPricing", "Still to comeHiring"]);
+    expect(chips[1].getAttribute("title")).toMatch(/^Now · Pricing · from \d\d:\d\d:\d\d · Two options on the table$/);
+    // The lines once the live log's length is known, from the start of this short one.
+    expect(reads()).toEqual(["", "?parts=lines&from=0"]);
+    await reply(pending(`${livePath}?parts=lines&from=0`)[0], { lines: [line(0), line(1), line(2)], revs: { lines: 3 } });
+    expect(linesBox()!.querySelector("h2")!.textContent).toBe("Live");
+    expect(shownLines()).toEqual(["Line 0.", "Line 1.", "Line 2."]);
+    expect(linesBox()!.querySelector("[role=log]")).not.toBeNull();
+    // Nothing newer: nothing read. Newer lines and topics: from this page's own next position.
+    fire({ type: "meeting_live", recording_id: id, changed: ["lines", "topics"], revs: { lines: 3, topics: 1 } });
+    expect(reads()).toHaveLength(2);
+    fire({ type: "meeting_live", recording_id: id, changed: ["lines", "topics"], revs: { lines: 5, topics: 2 } });
+    expect(reads().at(-1)).toBe("?parts=lines,topics&from=3");
+    await reply(pending(`${livePath}?parts=lines,topics&from=3`)[0], {
+      lines: [line(3), line(4, "Ada: we keep the vendor.")], topics: [{ ...topics[0] }, { ...topics[1], state: "done" }, { ...topics[2], state: "current" }], revs: { lines: 5, topics: 2 },
+    });
+    expect(shownLines()).toEqual(["Line 0.", "Line 1.", "Line 2.", "Line 3.", "Ada: we keep the vendor."]);
+    expect([...topicsBox()!.querySelectorAll("li")].map((li) => li.getAttribute("data-topic"))).toEqual(["done", "done", "current"]);
+    fire({ type: "meeting_live", recording_id: id, changed: ["lines"], revs: { lines: 5 } });
+    expect(reads()).toHaveLength(3);
+  });
+
+  it("starts a long meeting near its newest lines and reads on while there are more", async () => {
+    withLive();
+    await load();
+    await reply(pending(livePath)[0], live({ revs: { asks: 1, room: 2, lines: 1000, topics: 0 }, topics: [] }));
+    expect(topicsBox()!.textContent).toContain("Persona notes the topics here as the meeting moves on.");
+    expect(linesBox()!.querySelector("[role=log]")).toBeNull();
+    expect(reads().at(-1)).toBe("?parts=lines&from=800");
+    await reply(pending(`${livePath}?parts=lines&from=800`)[0], { lines: [800, 801, 802].map((n) => line(n)), more: true, revs: { lines: 1000 } });
+    expect(reads().at(-1)).toBe("?parts=lines&from=803");
+    await reply(pending(`${livePath}?parts=lines&from=803`)[0], { lines: Array.from({ length: 197 }, (_, i) => line(803 + i)), revs: { lines: 1000 } });
+    expect(reads()).toHaveLength(3);
+    expect(shownLines()).toHaveLength(200);
+    expect(linesBox()!.textContent).toContain("Earlier lines are in the transcript below.");
+  });
+
+  it("polls with its own next position while the meeting records, and is gone once the recording is complete", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    withLive();
+    await load();
+    await reply(pending(livePath)[0], live({ revs: { asks: 1, room: 2, lines: 0, topics: 0 }, topics: [] }));
+    expect(linesBox()!.textContent).toContain("Lines show here as the meeting is heard.");
+    act(() => vi.advanceTimersByTime(5000));
+    expect(reads()).toEqual(["", ""]);
+    await reply(pending(livePath)[1], live({ revs: { asks: 1, room: 2, lines: 2, topics: 0 }, topics: [] }));
+    expect(reads().at(-1)).toBe("?parts=lines&from=0");
+    await reply(pending(`${livePath}?parts=lines&from=0`)[0], { lines: [line(0), line(1)], revs: { lines: 2 } });
+    act(() => vi.advanceTimersByTime(5000));
+    expect(reads().at(-1)).toBe("?from=2");
+    await reply(pending(`${livePath}?from=2`)[0], live({ lines: [line(2)], revs: { asks: 1, room: 2, lines: 3, topics: 0 }, topics: [] }));
+    expect(shownLines()).toEqual(["Line 0.", "Line 1.", "Line 2."]);
+    // Complete, or a #2981 meeting: no live view, no lines read.
+    fresh();
+    await load(fixture({ complete: true, ended_at: recent(), room: ended }));
+    await reply(pending(livePath)[0], live({ room: ended, revs: { asks: 1, room: 3, lines: 3, topics: 0 }, topics: [] }));
+    expect(linesBox()).toBeNull();
+    expect(topicsBox()).toBeNull();
+    fresh();
+    await load(fixture({ room: undefined, attending_session: { machine_id: "server", session_id: "conv-2" } }));
+    for (const r of pending(livePath)) await reply(r, live({ room: undefined, revs: { asks: 1, lines: 3 } }));
+    expect(linesBox()).toBeNull();
+    expect(reads().every((u) => !u.includes("from="))).toBe(true);
+  });
+});
