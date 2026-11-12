@@ -72,7 +72,7 @@ internal fun ToolInputDetail(item: Item, result: Item? = null) {
             val arguments = remember(item.toolInput) { ToolNaming.arguments(item.toolInput) }
             if (arguments.isNotEmpty()) Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
                 ToolArguments(arguments)
-                RawInputToggle(item.id, rawInputText(item.toolInput))
+                RawInputToggle(item.id, remember(item.toolInput) { rawInputText(item.toolInput) })
             } else plain()
         } else plain()
     }
@@ -152,6 +152,7 @@ internal fun ComputerToolDetail(call: ToolCall, session: SessionKey, loader: Ima
     val palette = PersonaTheme.palette
     val resources = LocalResources.current
     val steps = remember(item, resources) { ComputerSteps.describe(item.toolName.orEmpty(), item.toolInput as? JsonObject).resolve(resources) }
+    val raw = remember(item.toolInput) { rawInputText(item.toolInput) }
     val result = call.result?.item
     Column(Modifier.fillMaxWidth().semantics { testTag = "computer-detail" }, verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
         Row(Modifier.fillMaxWidth().semantics(mergeDescendants = true) { testTag = "computer-steps" },
@@ -171,7 +172,7 @@ internal fun ComputerToolDetail(call: ToolCall, session: SessionKey, loader: Ima
                 maxLines = 3, overflow = TextOverflow.Ellipsis)
         }
         call.images.forEach { ChatPicture(session, it.item, loader) }
-        RawInputToggle(item.id, rawInputText(item.toolInput)) {
+        RawInputToggle(item.id, raw) {
             result?.text?.takeIf { it.isNotEmpty() }?.let { CodeText(it, stringResource(R.string.chat_content_output)) }
         }
     }
