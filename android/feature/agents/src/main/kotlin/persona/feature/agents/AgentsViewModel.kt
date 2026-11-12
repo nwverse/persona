@@ -669,12 +669,14 @@ internal class AgentsViewModel(
         settings.update { it.copy(expandedIdle = if (open) it.expandedIdle + key else it.expandedIdle - key) }
     }
     fun showIdle(group: AgentListGroup) {
-        val key = when {
-            group.id.startsWith("machine/") -> "machine-${group.id.removePrefix("machine/")}"
-            else -> group.id
-        }
-        settings.update { it.copy(expandedIdle = it.expandedIdle + key) }
+        settings.update { it.copy(expandedIdle = it.expandedIdle + group.idleKey) }
     }
+    /** Folds [group]'s idle agents behind their line again (By Repository's "Hide N Idle", iOS `collapseRow`, #4338 A8). */
+    fun hideIdle(group: AgentListGroup) {
+        settings.update { it.copy(expandedIdle = it.expandedIdle - group.idleKey) }
+    }
+    private val AgentListGroup.idleKey: String
+        get() = if (id.startsWith("machine/")) "machine-${id.removePrefix("machine/")}" else id
     fun clearNotice() { _notice.value = null }
 
     fun linkTodo(todoId: String, session: Session) {

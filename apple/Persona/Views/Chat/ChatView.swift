@@ -1395,6 +1395,7 @@ struct ChatView: View {
             SentPhotos(images: items.compactMap(\.image)).padding(.bottom, -8)
         case .work(let id, let items, let live, let start, let end):
             WorkLine(items: items, live: live, start: start, end: end, open: isOpen(id, live: live), agents: live ? agentsWorking : nil,
+                     accepting: live && items.isEmpty && sendPhase == .processing && !status.isActive,
                      openTerminal: live && style == .dev && session?.canTerminal == true ? { openTerminal() } : nil) {
                 toggleWork(id, fromHeader: true)
             }
@@ -1847,6 +1848,15 @@ struct ChatView: View {
     /// (docs/integrations/claude-integration.md "Live replies (MessageDisplay)"), the same way.
     private var drawsLive: Bool { style == .assistant || store.liveIsAgents }
 
+    /// Local feedback is per conversation, never a speculative change to the runtime's session state.
+    private var sendPhase: ChatSendFeedback.Phase? {
+        _ = awaitTick
+        guard viewedAgent == nil, let feedback = store.sendFeedback else { return nil }
+        // The queue strip already owns queued messages; do not add another progress home for them.
+        if store.pending.contains(where: { $0.id == feedback.id }), !shownPending.contains(where: { $0.id == feedback.id }) { return nil }
+        return feedback.visible(now: .now)
+    }
+
     /// A message of yours is the newest thing and the agent has not begun on it: no turn running yet, the session at
     /// work or starting up, or the message just sent and the hub not saying working yet (#3853).
     private func startingTurn(_ pending: [PendingMessage]) -> Bool {
@@ -1863,6 +1873,12 @@ struct ChatView: View {
            ChatAwaitingTurn.workIsForPending(shownPending, status: status, stateSince: session?.stateSince,
                                              newestLine: store.newestLineAt) { return nil }
         // Your message is in and nothing answered it yet: running already, before the hub's working comes (#3853).
+        if let feedback = store.sendFeedback, feedback.belongs(to: t) {
+            if sendPhase == .sending { return nil }
+            if sendPhase == .processing { return t.id }
+            // Finished local attempts must not be revived by transcript-only speculation.
+            return status.isActive ? t.id : nil
+        }
         return status.isActive || awaiting.turnID == t.id ? t.id : nil
     }
 
@@ -1877,6 +1893,10 @@ struct ChatView: View {
     private var awaiting: ChatAwaitingTurn {
         _ = awaitTick
         guard viewedAgent == nil else { return .none }
+        if let feedback = store.sendFeedback {
+            if store.pending.contains(where: { $0.id == feedback.id }) || store.arriving.contains(where: { $0.id == feedback.id }) { return .none }
+            if case .turn(let turn) = store.blocks.last, feedback.belongs(to: turn) { return .none }
+        }
         let failed = session?.failureReason == nil ? nil : (session?.stateSince ?? .distantFuture)
         return ChatAwaitingTurn.of(pending: store.arriving + store.pending, last: store.blocks.last, status: status,
                                    failedSince: failed, now: .now)
@@ -1884,7 +1904,8 @@ struct ChatView: View {
 
     /// When that wait runs out by itself, so the chat stops showing it as started then.
     private var awaitDeadline: Date? {
-        ChatAwaitingTurn.deadline(pending: store.arriving + store.pending, last: store.blocks.last)
+        if let feedback = store.sendFeedback, feedback.phase != .finished { return feedback.deadline }
+        return ChatAwaitingTurn.deadline(pending: store.arriving + store.pending, last: store.blocks.last)
     }
 
     private var lastPromptID: String? { store.items.last { $0.role == "user" && $0.kind == .text }?.id }
@@ -2617,7 +2638,15 @@ struct ChatView: View {
             // Sent, and the agent not on it yet: the line the new-conversation page showed under the first message
             // (`FirstMessagePending`), where the turn's work line comes in. Without it the chat that took over showed
             // the message a line lower, then pushed it up when the turn began (#1911).
-            if frozen == nil, startingTurn(pending) {
+            if frozen == nil, let phase = sendPhase, phase == .sending || liveTurnID == nil {
+                TypingIndicator(text: phase.label)
+                    .flippedBack()
+                    .id("send-feedback")
+                    #if DEBUG
+                    .onAppear { store.traceSendFeedback(phase) }
+                    .onChange(of: phase) { _, phase in store.traceSendFeedback(phase) }
+                    #endif
+            } else if frozen == nil, startingTurn(pending) {
                 TypingIndicator(text: String(localized: "\(style == .assistant ? model.persona.name : (session?.agentLabel ?? "Claude")) is getting ready…"))
                     .flippedBack()
                     .id("starting-turn")
@@ -6536,13 +6565,14 @@ nonisolated struct WorkSummary: Equatable {
 struct WorkLine: View, Equatable {
     /// The closures are the line's own (keyed by its id): a hub push re-evaluating the page leaves unchanged lines alone.
     nonisolated static func == (a: Self, b: Self) -> Bool {
-        a.isEmpty == b.isEmpty && a.counts == b.counts && a.live == b.live && a.start == b.start && a.end == b.end
+        a.isEmpty == b.isEmpty && a.counts == b.counts && a.live == b.live && a.accepting == b.accepting && a.start == b.start && a.end == b.end
             && a.open == b.open && (a.openTerminal == nil) == (b.openTerminal == nil) && a.agents == b.agents && a.doing == b.doing
     }
 
     private let isEmpty: Bool
     private let counts: WorkSummary
     let live: Bool
+    let accepting: Bool
     let start: Date?
     let end: Date?
     let open: Bool
@@ -6558,10 +6588,11 @@ struct WorkLine: View, Equatable {
     let toggle: () -> Void
 
     init(items: [WorkItem], live: Bool, start: Date?, end: Date?, open: Bool, agents: AgentsWorking? = nil,
-         openTerminal: (() -> Void)?, toggle: @escaping () -> Void) {
+         accepting: Bool = false, openTerminal: (() -> Void)?, toggle: @escaping () -> Void) {
         isEmpty = items.isEmpty
         counts = WorkSummary(items)
         self.live = live
+        self.accepting = accepting
         self.start = start
         self.end = end
         self.open = open
@@ -6602,7 +6633,7 @@ struct WorkLine: View, Equatable {
             Button(action: toggle) {
                 ToolRunTitle(isOpen: open, isRunning: live) {
                     // Whole words, never cut: the full summary, or a shorter one when the row is narrow.
-                    if live {
+                    if live && !accepting {
                         VisibleTimelineView(interval: 1) { now in summary(now: now) }
                     } else {
                         summary(now: end ?? .now)
@@ -6634,7 +6665,7 @@ struct WorkLine: View, Equatable {
                         // Working: the state's amber spinner, the words stay secondary (the dot says the state).
                         if live { ProgressView().controlSize(.mini).tint(Theme.busy) }
                         // Whole words, never cut: the full summary, or a shorter one when the row is narrow.
-                        if live {
+                        if live && !accepting {
                             VisibleTimelineView(interval: 1) { now in summary(now: now) }
                         } else {
                             summary(now: end ?? .now)
@@ -6700,6 +6731,7 @@ struct WorkLine: View, Equatable {
     }
 
     private func label(now: Date, short: Bool) -> String {
+        if accepting { return String(localized: "Processing…") }
         // The step in full: the line may have cut it.
         if let step { return step.text + step.trailer(took: Self.duration(from: start, to: now)) }
         let parts = agents.map { [SubagentGridText.working(count: $0.count, doing: $0.doing, short: short)] } ?? (short ? counts.short : counts.full)

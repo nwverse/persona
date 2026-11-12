@@ -20,8 +20,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.Placeable
+import androidx.compose.ui.layout.layoutId
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -55,6 +62,14 @@ data class RowFlag(val label: String, val icon: PhIcon, val caution: Boolean = f
 data class RowFact(val text: String, val caution: Boolean = false)
 
 /**
+ * An Agents row's third line on Glass (iOS `SlotRow.placeLine` in the Avatar style, #4338 A9), after the row's source tag:
+ * where it runs ([words]: the tab, space › tab, the computer, joined with " · "), the [model] it runs on, its [todo]'s
+ * title and, when [muted], the bell. The words come from core/domain's `rowContent`.
+ */
+@Immutable
+data class RowPlace(val words: String = "", val model: String? = null, val todo: String? = null, val muted: Boolean = false)
+
+/**
  * Background Workflow fields under a session row, after an AI-coloured [icon]. The row gives its critical facts their
  * space first, then ellipsizes these details in the remaining part of the same metadata line.
  */
@@ -70,6 +85,15 @@ private val Action = 40.dp
 private val Dot = 7.dp
 private val Holder = 26.dp
 private val None = 0.dp
+
+/** Glass's leading well (iOS `Theme.Size.wellL`), the agent's mark in it (`markL`) and the rim around its corner (`rule`). */
+private val AvatarWell = Tokens.Space.xxl + Tokens.Space.xs
+private val AvatarMark = Tokens.Space.l + Tokens.Space.xxs / 2
+private val AvatarRim = Tokens.Space.xxs
+/** Between the well and the row's words (iOS's Avatar row: `Theme.Space.m`). */
+private val AvatarGap = Tokens.Space.m
+/** iOS's outlined chip: secondary words in a hairline of the secondary color at this opacity. */
+private const val OutlineAlpha = 0.4f
 
 /** Width of [JStatusMark] in the active style, so a row's mark can sit centred under its space's caret. */
 private val markSize: Dp @Composable get() = when (PersonaTheme.style) { AppStyle.Glass -> 28.dp; AppStyle.Brief -> 36.dp; AppStyle.Board -> 22.dp }
@@ -336,6 +360,9 @@ fun AgentShowAllRow(count: Int, expanded: Boolean, onClick: () -> Unit, modifier
  * first in its group ([position]); the board keeps its agent strip, compacted, because each strip is the agent itself.
  * Long-pressing (or a secondary click) opens the row's actions ([onLongClick]). [muted] fades the row with
  * [stableAlpha], like every dimmed control: a toggled `Modifier.alpha` after clip + background can lose them.
+ * Glass draws iOS's Avatar row (#4338 A9): with an [agentMark], the mark in a round well with the state on its corner
+ * ([AgentAvatar]); with a [place], a third line that starts with the [source] tag ([PlaceLine]). Compact rows, Brief
+ * and Board keep the mark beside the state mark and the tag beside the latest words.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -362,8 +389,12 @@ fun AgentRow(
     branch: Boolean = false,
     /** Where it was opened (Lark group / Terminal, #3132): under the time, right-aligned, so the title keeps the whole line (#3043). */
     source: RowSource? = null,
-    /** Which agent runs there, and in which client (#6390): its mark before the state mark. */
+    /** Which agent runs there, and in which client (#6390): its mark before the state mark (Glass: in its well). */
     agentMark: AgentMarkSpec? = null,
+    /** Glass's third line ([RowPlace]); null: none, the facts say where it runs. */
+    place: RowPlace? = null,
+    /** It only waits in the background (#6045): Glass's well shows the clock on its corner instead of the dot. */
+    waiting: Boolean = false,
     end: (@Composable () -> Unit)? = null,
 ) {
     val palette = PersonaTheme.palette
@@ -372,9 +403,12 @@ fun AgentRow(
     val shown = if (muted) Status.Muted else status
     val tone = palette.status(shown)
     val strong = !muted && (status == Status.NeedsYou || status == Status.Unread)
-    val mark = markSize
+    val glass = PersonaTheme.style == AppStyle.Glass
+    val avatar = glass && !compact && agentMark != null
+    val placeLine = glass && !compact && place != null
+    val mark = if (avatar) AvatarWell else markSize
     val start = if (board) Step * depth else (Step * depth + (Caret - mark) / 2).coerceAtLeast(None)
-    val gap = Tokens.Space.s - Tokens.Space.xxs
+    val gap = if (avatar) AvatarGap else Tokens.Space.s - Tokens.Space.xxs
     val hasMetadata = note != null || facts.isNotEmpty()
     val boardMetadata = board && hasMetadata && !compact
     val statusLabel = stringResource(shown.labelRes)
@@ -401,7 +435,8 @@ fun AgentRow(
                     JIcon(flag.icon, flag.label, size = Caret, tint = when { flag.caution -> palette.cautionText; flag.ai -> palette.ai; else -> palette.ink3 })
                 }
             }
-            agent?.let { Spacer(Modifier.width(Tokens.Space.s)); Text(it, style = type.micro, color = palette.ink2, maxLines = 1) }
+            // The well's mark names the agent (iOS's Avatar row writes no kind beside the title).
+            agent?.takeIf { !avatar }?.let { Spacer(Modifier.width(Tokens.Space.s)); Text(it, style = type.micro, color = palette.ink2, maxLines = 1) }
             // one line only: the tag goes before the time
             if (compact || boardMetadata) source?.let { Spacer(Modifier.width(Tokens.Space.s)); SourceTag(it) }
             time?.takeIf { it.isNotEmpty() }?.let { Spacer(Modifier.width(Tokens.Space.s)); Text(it, style = type.micro, color = palette.ink3, maxLines = 1) }
@@ -416,7 +451,7 @@ fun AgentRow(
                 Text(line, style = type.caption.copy(fontWeight = FontWeight.Normal), color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             if (!boardMetadata) {
-                if (source != null) Row(verticalAlignment = Alignment.CenterVertically) {
+                if (source != null && !placeLine) Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.weight(1f)) { if (line.isNotEmpty()) lineText() }
                     Spacer(Modifier.width(Tokens.Space.s))
                     SourceTag(source)
@@ -462,20 +497,23 @@ fun AgentRow(
             .stableAlpha(if (muted) 0.72f else 1f),
     ) {
         Row(
-            Modifier.padding(start = start, top = Tokens.Space.s, bottom = if (hasMetadata && !compact) None else Tokens.Space.s),
+            Modifier.padding(start = start, top = Tokens.Space.s, bottom = if ((hasMetadata || placeLine) && !compact) None else Tokens.Space.s),
             verticalAlignment = if (compact) Alignment.CenterVertically else Alignment.Top,
         ) {
-            // The agent's mark before its state (#6390): what runs there, then how it is doing.
-            agentMark?.let { Box(Modifier.height(mark), contentAlignment = Alignment.Center) { JAgentMark(it) }; Spacer(Modifier.width(Tokens.Space.xs)) }
-            Box(Modifier.size(mark), contentAlignment = Alignment.Center) { JStatusMark(shown) }
+            if (avatar) AgentAvatar(requireNotNull(agentMark), shown, waiting) else {
+                // The agent's mark before its state (#6390): what runs there, then how it is doing.
+                agentMark?.let { Box(Modifier.height(mark), contentAlignment = Alignment.Center) { JAgentMark(it) }; Spacer(Modifier.width(Tokens.Space.xs)) }
+                Box(Modifier.size(mark), contentAlignment = Alignment.Center) { JStatusMark(shown) }
+            }
             Spacer(Modifier.width(gap))
             Column(Modifier.weight(1f).padding(top = if (compact) None else Tokens.Space.xxs), content = text)
             end?.let { Box(Modifier.align(Alignment.CenterVertically)) { it() } }
         }
         if (hasMetadata && !compact) {
-            val indent = (if (agentMark != null) Caret + Tokens.Space.xs else None) + mark + gap
-            RowMetadata(note, facts, indent, Modifier.padding(start = start, bottom = Tokens.Space.s))
+            val indent = (if (agentMark != null && !avatar) Caret + Tokens.Space.xs else None) + mark + gap
+            RowMetadata(note, facts, indent, Modifier.padding(start = start, bottom = if (placeLine) None else Tokens.Space.s))
         }
+        if (placeLine) PlaceLine(requireNotNull(place), source, Modifier.padding(start = start + mark + gap, top = Tokens.Space.xs, bottom = Tokens.Space.s))
     }
 }
 
@@ -626,6 +664,130 @@ private fun HolderGlyph(status: Status) {
         Status.Unread -> JIcon(PhIcons.Check, null, size = Caret, tint = ink)
         Status.Offline -> JIcon(PhIcons.Power, null, size = Caret, tint = ink)
         else -> JIcon(PhIcons.Checks, null, size = Caret, tint = ink)
+    }
+}
+
+/**
+ * Glass's leading mark on an Agents row (iOS `AgentAvatar`, #4338 A9): the agent's mark in a round well, its state on the
+ * well's corner, the clock for one that only waits in the background ([waiting]). The corner is rimmed by a ring cut out of
+ * the well, so it reads apart from the well on whatever the row sits on (the page, a repository's card, a selected row's
+ * plate), as iOS rims it in the row's own background. TalkBack hears the mark's agent; the row says the state.
+ */
+@Composable
+private fun AgentAvatar(mark: AgentMarkSpec, status: Status, waiting: Boolean) {
+    val palette = PersonaTheme.palette
+    val corner = Tokens.Size.dotXL + AvatarRim * 2
+    Box(Modifier.size(AvatarWell)) {
+        Box(
+            Modifier.matchParentSize().graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                .drawWithContent {
+                    drawContent()
+                    val radius = corner.toPx() / 2
+                    val center = Offset(size.width - radius + AvatarRim.toPx(), size.height - radius + AvatarRim.toPx())
+                    drawCircle(palette.ink, radius, center, blendMode = BlendMode.Clear)
+                }
+                .clip(CircleShape).background(palette.sunken),
+            contentAlignment = Alignment.Center,
+        ) { JAgentMark(mark, size = AvatarMark) }
+        Box(Modifier.align(Alignment.BottomEnd).offset(AvatarRim, AvatarRim).size(corner), contentAlignment = Alignment.Center) {
+            if (waiting) JIcon(persona.core.designsystem.icons.PersonaIcons.backgroundWaiting, null, size = corner,
+                tint = palette.status(Status.Working).dot, decorative = true)
+            else JStatusDot(status, size = Tokens.Size.dotXL)
+        }
+    }
+}
+
+/**
+ * Glass's third line of an Agents row ([RowPlace], iOS `SlotRow.placeLine`, #4338 A9): the [source] tag, where it runs,
+ * the model, the to-do as an outlined chip and the bell of a muted one, a step apart. The words give way first; the
+ * to-do keeps its chip while it fits beside them (or in half the room), else it is its mark alone (iOS `ViewThatFits`).
+ */
+@Composable
+private fun PlaceLine(place: RowPlace, source: RowSource?, modifier: Modifier) {
+    val palette = PersonaTheme.palette
+    val type = PersonaTheme.type
+    val mutedLabel = stringResource(R.string.designsystem_row_muted)
+    Layout(
+        content = {
+            source?.let { Box(Modifier.layoutId(PlaceSource)) { SourceTag(it) } }
+            place.words.takeIf(String::isNotEmpty)?.let {
+                Text(it, Modifier.layoutId(PlaceWords), style = type.caption.copy(fontWeight = FontWeight.Normal), color = palette.ink3,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            place.model?.let {
+                Text(it, Modifier.layoutId(PlaceModel).padding(horizontal = Tokens.Space.sm), style = PersonaTheme.type.micro,
+                    color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            place.todo?.let { TodoChip(it, Modifier.layoutId(PlaceTodo)) }
+            if (place.muted) JIcon(PhIcons.Prohibit, mutedLabel, Modifier.layoutId(PlaceBell), size = Caret, tint = palette.ink3)
+        },
+        modifier = modifier.fillMaxWidth(),
+    ) { measurables, constraints ->
+        val gap = Tokens.Space.xs.roundToPx()
+        val byId = measurables.associateBy { it.layoutId }
+        var left = constraints.maxWidth
+        fun fit(id: Any, width: Int = left): Placeable? =
+            byId[id]?.measure(Constraints(maxWidth = width.coerceAtLeast(0)))?.also { left -= it.width + gap }
+        val sourceP = fit(PlaceSource)
+        val bellP = fit(PlaceBell)
+        val modelP = fit(PlaceModel)
+        val words = byId[PlaceWords]
+        val todoP = byId[PlaceTodo]?.let { todo ->
+            val chip = todo.maxIntrinsicWidth(constraints.maxHeight)
+            val room = left - if (words != null) gap else 0
+            val full = if (words == null) chip <= room else chip + words.maxIntrinsicWidth(constraints.maxHeight) <= room || chip <= room / 2
+            // Too narrow for the chip, the chip draws its mark alone.
+            fit(PlaceTodo, if (full) left else Caret.roundToPx())
+        }
+        val wordsP = words?.measure(Constraints(maxWidth = left.coerceAtLeast(0)))
+        val parts = listOfNotNull(sourceP, wordsP, modelP, todoP, bellP)
+        val height = parts.maxOfOrNull { it.height } ?: 0
+        layout(constraints.maxWidth, height) {
+            var x = 0
+            parts.forEach { it.placeRelative(x, (height - it.height) / 2); x += it.width + gap }
+        }
+    }
+}
+
+private const val PlaceSource = "source"
+private const val PlaceWords = "words"
+private const val PlaceModel = "model"
+private const val PlaceTodo = "todo"
+private const val PlaceBell = "bell"
+
+/**
+ * A row's to-do on its third line (iOS `Chip(look: .outline)` with the to-do's mark): the mark and the title in a hairline
+ * capsule; offered less than its width, the mark alone. TalkBack hears "To-do: <title>" either way.
+ */
+@Composable
+private fun TodoChip(title: String, modifier: Modifier = Modifier) {
+    val palette = PersonaTheme.palette
+    val spoken = stringResource(R.string.designsystem_row_todo, title)
+    val pad = Tokens.Space.s
+    Layout(
+        content = {
+            Box(Modifier.border(Hairline, palette.ink3.copy(alpha = OutlineAlpha), CircleShape))
+            JIcon(persona.core.designsystem.icons.PersonaIcons.todo, null, size = Caret, tint = palette.ink3)
+            Text(title, style = PersonaTheme.type.micro.copy(fontWeight = FontWeight.Medium), color = palette.ink3, maxLines = 1)
+        },
+        modifier = modifier.clearAndSetSemantics { contentDescription = spoken },
+    ) { measurables, constraints ->
+        val (outline, icon, text) = measurables
+        val inset = pad.roundToPx()
+        val space = Tokens.Space.xs.roundToPx()
+        val iconP = icon.measure(Constraints())
+        val textP = text.measure(Constraints())
+        val vertical = Tokens.Space.xxs.roundToPx()
+        val chipWidth = inset + iconP.width + space + textP.width + inset
+        val chipHeight = maxOf(iconP.height, textP.height) + vertical * 2
+        if (chipWidth <= constraints.maxWidth) {
+            val outlineP = outline.measure(Constraints.fixed(chipWidth, chipHeight))
+            layout(chipWidth, chipHeight) {
+                outlineP.place(0, 0)
+                iconP.placeRelative(inset, (chipHeight - iconP.height) / 2)
+                textP.placeRelative(inset + iconP.width + space, (chipHeight - textP.height) / 2)
+            }
+        } else layout(iconP.width, iconP.height) { iconP.placeRelative(0, 0) }
     }
 }
 

@@ -99,6 +99,7 @@
     <string name="designsystem_core_agents_no_todo">没有待办</string>
     <string name="designsystem_core_agents_manual">手动开的</string>
     <string name="designsystem_core_agents_quiet_spaces">空闲的空间</string>
+    <string name="designsystem_core_agents_started_tab">发起者</string>
     <plurals name="designsystem_core_count_needs_you">
         <item quantity="other">%1$d 个需要你</item>
     </plurals>

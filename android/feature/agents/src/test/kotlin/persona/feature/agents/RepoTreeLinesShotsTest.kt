@@ -71,7 +71,7 @@ class RepoTreeLinesShotsTest {
         rule.onNodeWithContentDescription("Main worktree, main, Primary, 2 agents").assertHasClickAction()
         rule.onNodeWithContentDescription("Worktree, Speed up the importer, perf/importer, 1 agent").assertExists()
         rule.onNodeWithContentDescription("Worktree, hotfix, This computer is offline, 1 agent").assertExists()
-        rule.onNodeWithContentDescription("scripts, Repository, 1 agent").assertExists()
+        rule.onNodeWithContentDescription("scripts, Repository, 1 agent", substring = true).assertExists()
         rule.onNodeWithContentDescription("persona, Repository", substring = true).performTouchInput { longClick() }
         rule.waitForIdle()
         rule.onNodeWithText("Mark all as read").assertExists()

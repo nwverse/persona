@@ -77,6 +77,27 @@ private class AssistantSendState {
  *  [space] is the assistant space the chat starts in (`health`, docs/assistant/health.md), null for the assistant's own. */
 internal data class NewChatStart(val from: SessionKey?, val started: SessionKey? = null, val space: String? = null)
 
+/** Where Back goes on the assistant page; see [assistantBack]. */
+internal sealed interface AssistantBack {
+    /** The conversation New chat was opened on. */
+    data class Open(val key: SessionKey) : AssistantBack
+    /** The main conversation; with none yet, the blank page whose first message starts it. */
+    data object Main : AssistantBack
+}
+
+/**
+ * Where Back goes on the assistant page, as iOS has it: there is no home page (#4339 C11), so Back from any other
+ * conversation opens the main one, and Back on New chat's page ([newChat]) returns to the conversation it was opened on.
+ * Null on the main conversation ([mainQueue]: its messages still on their way) and on the page that starts it when
+ * there is none: Back is the shell's there, and leaves the app.
+ */
+internal fun assistantBack(active: SessionKey?, main: SessionKey?, newChat: NewChatStart?, mainQueue: Boolean): AssistantBack? = when {
+    mainQueue -> null
+    active == null -> newChat?.let { page -> page.from?.takeUnless { it == main }?.let(AssistantBack::Open) ?: AssistantBack.Main }
+    active == main -> null
+    else -> AssistantBack.Main
+}
+
 /** Supply the shared chat content when available, or use the shell's ChatRoute entry. */
 @Composable
 fun AssistantScreen(
@@ -100,7 +121,7 @@ fun AssistantScreen(
     composerService: ChatComposerService? = assistantComposerService(),
     /** The launcher's "Ask Persona": put the cursor in the composer and bring up the keyboard. */
     composerFocus: ComposerFocusRequests = AssistantComposerFocus,
-    /** "Needs you now" over the home's suggestions; [onOpenNeed] opens a line where it lives (none: not shown). */
+    /** "Needs you now" over the blank page's suggestions; [onOpenNeed] opens a line where it lives (none: not shown). */
     needsYou: NeedsYou = NeedsYou(),
     onOpenNeed: ((NeedsYouLine) -> Unit)? = null,
     /** "N more in the inbox": opens the inbox as a secondary page. */
@@ -110,7 +131,7 @@ fun AssistantScreen(
     onTodos: (() -> Unit)? = null,
     todoCount: Int = 0,
     showTodos: Boolean = true,
-    /** A new conversation on a launcher picked for it alone (the home composer's "Launcher" chip); null: no chip. */
+    /** A new conversation on a launcher picked for it alone (the blank page composer's "Launcher" chip); null: no chip. */
     startConversationWith: (suspend (String) -> SessionKey)? =
         (repository as? persona.core.contracts.api.AssistantConversations)?.let { conversations -> { launcher -> conversations.startConversation(launcher) } },
 ) = PersonaTheme {
@@ -193,6 +214,8 @@ fun AssistantScreen(
     var launchersFailed by remember(pageManagement, assistantMachine) { mutableStateOf(false) }
     var defaultLauncher by remember(pageManagement) { mutableStateOf<String?>(null) }
     val hasChat = chatContent != null || assistantChatContent != null
+    // Ask Persona's cursor for the main conversation's composer, inside the shared chat page.
+    val focusAsk = remember { persona.feature.chat.ComposerFocusAsk() }
     var menu by remember { mutableStateOf(false) }
     var info by rememberSaveable { mutableStateOf<AssistantInfo?>(null) }
     val copy = rememberCopy()
@@ -286,11 +309,20 @@ fun AssistantScreen(
         pendingClientId = null
         pendingText = null
     }
+    // The blank page with no New chat on it: with no main conversation yet, the page whose first message starts it.
     fun newConversation() {
         if (sending) return
         newChat = null
         clearConversation()
         scope.launch { drawerOpen = false }
+    }
+    // There is no home page (#4339 C11, as iOS): Back, "Back to main chat", a closed or put-away conversation and Ask
+    // Persona land on the main conversation; with none yet, on the page that starts it (or its messages on their way).
+    fun openMain() {
+        snapshot.mainSession?.let(::openConversation) ?: run {
+            newConversation()
+            if (mainMessages.isNotEmpty()) viewingMainQueue = true
+        }
     }
     fun refusal(error: Exception): String =
         if (error is AssistantRefused) error.message.orEmpty() else persona.core.designsystem.operationFeedback(error).text.resolve(resources)
@@ -352,8 +384,8 @@ fun AssistantScreen(
                 target.archiveConversation(session.key)
                 if (feedback?.notice(archivedWords, persona.core.designsystem.FeedbackStyle.Success) != true)
                     toast.show(persona.core.designsystem.FeedbackNotice(archivedWords, style = persona.core.designsystem.FeedbackStyle.Success))
-                // Clear only the archived selection; keep the list open for the next archive.
-                if (activeMachine == session.machineId && activeSession == session.sessionId) clearConversation()
+                // The main conversation in place of the archived one; keep the list open for the next archive.
+                if (activeMachine == session.machineId && activeSession == session.sessionId) openMain()
                 assistantAttempt { repository.refresh() }.onSuccess { archived = archived - session.key }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
@@ -558,7 +590,6 @@ fun AssistantScreen(
     LaunchedEffect(sharedSidebar?.action) {
         val action = sharedSidebar?.action ?: return@LaunchedEffect
         when (action) {
-            AssistantSidebarAction.Home -> newConversation()
             AssistantSidebarAction.NewConversation -> startNewConversation()
             AssistantSidebarAction.Health -> openHealth()
             AssistantSidebarAction.MainConversation -> {
@@ -573,7 +604,7 @@ fun AssistantScreen(
     }
     LaunchedEffect(sharedSidebar?.retired) {
         val retired = sharedSidebar?.retired.orEmpty()
-        if (active != null && active in retired) newConversation()
+        if (active != null && active in retired) openMain()
         sharedSidebar?.retired = emptySet()
     }
     LaunchedEffect(snapshot.mainSession, snapshot.conversations, managerChoice) {
@@ -584,13 +615,29 @@ fun AssistantScreen(
     }
     val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     val focusTarget by rememberUpdatedState(composer)
+    val latestMain by rememberUpdatedState(snapshot.mainSession)
+    // The main conversation's composer, inside the shared chat page, takes the cursor ([LocalComposerFocusAsk]); the ask
+    // lapses if it takes no messages now (its manager offline), as the request itself does.
+    fun askMain(main: SessionKey) {
+        openConversation(main)
+        focusAsk.session = main
+        scope.launch { kotlinx.coroutines.delay(10_000); if (focusAsk.session == main) focusAsk.session = null }
+    }
     LaunchedEffect(composerFocus) {
         composerFocus.requests.collect { at ->
             if (at == null || !composerFocus.take(at)) return@collect
-            // The home's composer (an embedded conversation keeps its composer inside the shared chat page); what is
-            // sent there goes to the main conversation, as from any home entry.
+            // Ask Persona goes to the main conversation, as iOS's does (#4339 C11: no home page); with none yet, to the
+            // composer of the page that starts it, here.
             proactiveOpen = false; settingsOpen = false; drawerOpen = false
-            if ((activeSession != null || newChat != null) && hasChat && !demo) newConversation()
+            if (hasChat && !demo) {
+                latestMain?.let { askMain(it); return@collect }
+                // On a cold start the conversations may still be on their way: the main one takes the cursor when it comes.
+                if (!openedMain) scope.launch {
+                    kotlinx.coroutines.withTimeoutOrNull(3_000) { snapshotFlow { latestMain }.first { it != null } }
+                        ?.let { main -> if (!openedMain || main == SessionKey(activeMachine.orEmpty(), activeSession.orEmpty())) askMain(main) }
+                }
+                if (activeSession != null || newChat != null) newConversation()
+            }
             // After the tab's first layout and the saved draft: the text field has to be attached (the old app waited 300 ms).
             kotlinx.coroutines.withTimeoutOrNull(3_000) { snapshotFlow { draftEditor == null || savedComposer != null }.first { it } }
             kotlinx.coroutines.delay(300)
@@ -599,15 +646,17 @@ fun AssistantScreen(
             keyboard?.show()
         }
     }
-    BackHandler(drawerOpen || active != null || viewingMainQueue) {
-        if (drawerOpen) scope.launch { drawerOpen = false } else newConversation()
-    }
-    // Back on New chat's page undoes it: the conversation it was tapped on comes back (nothing is started until a message).
-    BackHandler(newChat != null && active == null && !viewingMainQueue && !drawerOpen) {
+    // Back as on iOS (#4339 C11): to the main conversation, or from New chat's page to the conversation it was tapped on
+    // (nothing is started until its first message); on the main conversation Back is the shell's, which leaves the app.
+    val back = assistantBack(active, snapshot.mainSession, newChat, viewingMainQueue)
+    BackHandler(drawerOpen || back != null) {
+        if (drawerOpen) { scope.launch { drawerOpen = false }; return@BackHandler }
         if (sending) return@BackHandler
-        val from = newChat?.from
-        newConversation()
-        from?.let(::openConversation)
+        when (back) {
+            is AssistantBack.Open -> openConversation(back.key)
+            AssistantBack.Main -> openMain()
+            null -> Unit
+        }
     }
     val openKeys = remember(snapshot.conversations) { openKeys(snapshot.conversations) }
     val sidebar: @Composable () -> Unit = {
@@ -627,7 +676,6 @@ fun AssistantScreen(
                 scope.launch { drawerOpen = false }
             },
             onNew = ::startNewConversation,
-            onHome = { newConversation() },
             onHealth = if (conversationsOf != null && !demo) ({ scope.launch { drawerOpen = false }; openHealth() }) else null,
             onSettings = { drawerOpen = false; navigator.navigate(SettingsRoute) },
             onInbox = { drawerOpen = false; onOpenInbox?.invoke() ?: navigator.navigate(InboxRoute) },
@@ -667,12 +715,13 @@ fun AssistantScreen(
                         title = LocalPersonaName.current, subtitle = connectionLabel,
                         titleBusy = !connectionLabel.isNullOrBlank(), onTitleClick = { menu = true },
                         actions = {
-                            // On a health chat (or the health space's new-chat page) New starts another health chat.
+                            // On a health chat (or the health space's new-chat page) New starts another health chat. Off on
+                            // the blank page itself, as iOS's (#4339 C18).
                             val health = onHealthChat || healthPage
                             JIconButton(PhIcons.NotePencil,
                                 stringResource(if (health) R.string.assistant_health_new else R.string.assistant_new_conversation),
                                 { if (health) startHealthConversation() else startNewConversation() },
-                                enabled = !sending && managers.offline == null)
+                                enabled = !sending && managers.offline == null && (active != null || viewingMainQueue))
                             if (LocalHomeChrome.current == null) JIconButton(PhIcons.UserCircle, stringResource(R.string.assistant_profile), {
                                 if (pageManagement != null) settingsOpen = true else info = AssistantInfo.Settings
                             })
@@ -724,6 +773,7 @@ fun AssistantScreen(
             }) else null,
             // An embedded conversation is a page of its own and softens the edges under these bars itself.
             edges = !(active != null && hasChat),
+            scrollEdgeStyle = ScrollEdgeStyle.Gradient,
         ) { padding ->
             if (active != null && hasChat) {
                 // The conversation fills the page and scrolls under the bar above it and the dock below, like any
@@ -736,7 +786,8 @@ fun AssistantScreen(
                         CompositionLocalProvider(LocalChromeInsets provides if (demo) host else host.copy(top = padding.calculateTopPadding())) {
                             // The refusal fallback card's "New main chat" (#2528): the main conversation's own dialog.
                             CompositionLocalProvider(persona.feature.chat.LocalNewMainChat provides
-                                (if (onMain && mainActions.newMain) ({ newMainOpen = true }) else null)) {
+                                (if (onMain && mainActions.newMain) ({ newMainOpen = true }) else null),
+                                persona.feature.chat.LocalComposerFocusAsk provides focusAsk) {
                                 if (assistantChatContent != null) assistantChatContent(active, AssistantChatOptions(readOnlyNote = managers.offline))
                                 else chatContent?.invoke(active)
                             }
@@ -764,7 +815,7 @@ fun AssistantScreen(
             } else if (healthPage) {
                 HealthHome(healthChats, contentPadding = padding, onOpen = ::openConversation, onCopy = ::copyId)
             } else {
-                AssistantHome(enabled = !sending && draftReady && composer.ready, machines = machines,
+                NewChatPage(enabled = !sending && draftReady && composer.ready, machines = machines,
                     phoneToolsAvailable = phoneToolsAvailable, contentPadding = padding, demo = demo,
                     setup = blocking != null, mainNote = newChat == null, hubSuggestions = readiness?.suggestions?.takeIf { it.isNotEmpty() },
                     onLocalSuggestion = { readinessHelp = ReadinessHelp.ofSuggestion(it) },
@@ -825,7 +876,6 @@ fun AssistantScreen(
     if (menu) JActionSheet(
         title = LocalPersonaName.current, onDismiss = { menu = false },
         actions = buildList {
-            if (sharedSidebar != null) add(JAction(resources.getString(R.string.assistant_home), PhIcons.House, onClick = { newConversation() }))
             listOf(AssistantInfo.Settings, AssistantInfo.Knowledge).forEach { topic ->
                 add(JAction(resources.getString(topic.title), onClick = {
                     if (topic == AssistantInfo.Knowledge && onKnowledge != null) onKnowledge()
@@ -834,6 +884,10 @@ fun AssistantScreen(
                 }))
             }
             onVoice?.let { open -> add(JAction(resources.getString(R.string.assistant_voice_chat), onClick = open)) }
+            // In place of the home page's Home (#4339 C11), as iOS's menu has it: off the main conversation only.
+            snapshot.mainSession?.takeIf { it != active }?.let { main ->
+                add(JAction(resources.getString(R.string.assistant_back_to_main), PhIcons.House, onClick = { openConversation(main) }))
+            }
             add(JAction(resources.getString(R.string.assistant_info_session), onClick = { info = AssistantInfo.Session }))
             if (onMain && mainActions.compact) add(JAction(resources.getString(R.string.assistant_compact), separatorBefore = true,
                 enabled = !compacting && compaction.line != CompactionLine.Running, onClick = ::compactMain))
@@ -863,7 +917,7 @@ fun AssistantScreen(
                         requireNotNull(pageManagement).endConversation(session.key)
                         ended = ended + session.key
                         ending = null
-                        if (active == session.key) newConversation()
+                        if (active == session.key) openMain()
                         assistantAttempt { repository.refresh() }
                     } catch (cancelled: CancellationException) { throw cancelled }
                     catch (_: Exception) {
@@ -914,15 +968,20 @@ private val suggestions = listOf(
     Suggestion(PhIcons.FileText, R.string.assistant_suggest_doc, R.string.assistant_suggest_doc_detail, R.string.assistant_suggest_doc_prompt),
 )
 
+/**
+ * The assistant's one blank page (iOS `ShellHome`; #4339 C11: Android has no home page): New chat's, whose first message
+ * starts a new conversation, or with no main conversation yet the page whose first message starts that one. A greeting,
+ * what needs the user, things to ask and the devices Persona can reach, over the composer.
+ */
 @Composable
 @OptIn(ExperimentalLayoutApi::class)
-private fun AssistantHome(
+private fun NewChatPage(
     enabled: Boolean, machines: List<Machine>, phoneToolsAvailable: Boolean?, contentPadding: PaddingValues,
     demo: Boolean, onSuggestion: (String) -> Unit,
     needsYou: NeedsYou = NeedsYou(), onNeed: ((NeedsYouLine) -> Unit)? = null, onMore: () -> Unit = {},
     /** The main conversation still misses a step (docs/assistant/onboarding.md 4.4): the lead says so. */
     setup: Boolean = false,
-    /** What is sent here goes to the main conversation (not on New chat's page): the lead's note says so. */
+    /** What is sent here goes to the main conversation (the page that starts it, not New chat's): the lead's note says so. */
     mainNote: Boolean = true,
     /** The hub's example questions (readiness `suggestions`), in place of the app's own; null: the app's. */
     hubSuggestions: List<ReadinessSuggestion>? = null,
@@ -1014,7 +1073,7 @@ private fun HubSuggestionCard(suggestion: ReadinessSuggestion, enabled: Boolean,
         onClick = if (enabled || suggestion.local) onOpen else null)
 }
 
-/** A suggestion card on the home: an icon, a one-line title and a line under it. */
+/** A suggestion card on the blank page: an icon, a one-line title and a line under it. */
 @Composable
 private fun SuggestionCard(icon: PhIcon, title: String, detail: String?, onClick: (() -> Unit)?) {
     JCard(Modifier.fillMaxWidth().heightIn(min = 144.dp), padding = 16.dp, onClick = onClick) {
@@ -1033,7 +1092,7 @@ internal fun AssistantDrawer(
     query: String, onQuery: (String) -> Unit, groups: ConversationGroups, active: SessionKey?, hasMain: Boolean,
     onEnd: ((Session) -> Unit)?,
     onMain: () -> Unit, onOpen: (SessionKey) -> Unit, onInfo: (AssistantInfo) -> Unit,
-    onNew: () -> Unit, onHome: () -> Unit, onSettings: () -> Unit,
+    onNew: () -> Unit, onSettings: () -> Unit,
     /** The health space (docs/assistant/health.md): its newest chat, else its new-chat page; null: no Health row. */
     onHealth: (() -> Unit)? = null,
     onCopy: (Session) -> Unit = {},
@@ -1084,7 +1143,7 @@ internal fun AssistantDrawer(
             }
             if (!drawer) item { JSectionHeader(stringResource(R.string.assistant_more)) }
             // The compact drawer keeps only iPhone destinations; extra actions remain in the selected Assistant menu.
-            val totalMore = (if (drawer) 2 else 5) + (if (showTodos && onTodos != null) 1 else 0) +
+            val totalMore = (if (drawer) 2 else 4) + (if (showTodos && onTodos != null) 1 else 0) +
                 (if (onInbox != null) 1 else 0) + (if (onHealth != null) 1 else 0) + pages.size
             // Each row's place in the group is taken while the list is built: counted inside an item's own content, it
             // was counted again whenever only some rows recomposed, and the group's corners landed on the wrong rows.
@@ -1094,7 +1153,6 @@ internal fun AssistantDrawer(
                 item { JGroupItem(position) { content() } }
             }
             if (onInbox != null) more { DrawerItem(stringResource(R.string.assistant_origin_inbox), PhIcons.Tray, badge = inboxCount, onClick = onInbox) }
-            if (!drawer) more { DrawerItem(stringResource(R.string.assistant_home), PhIcons.House, onHome) }
             if (showTodos && onTodos != null) more { DrawerItem(stringResource(R.string.assistant_todos), PhIcons.ListChecks, badge = todoCount, onClick = onTodos) }
             more { DrawerItem(stringResource(AssistantInfo.Schedule.title), PhIcons.Clock) { onInfo(AssistantInfo.Schedule) } }
             more { DrawerItem(stringResource(AssistantInfo.Knowledge.title), PhIcons.BookOpen) { onInfo(AssistantInfo.Knowledge) } }

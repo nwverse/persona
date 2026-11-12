@@ -255,7 +255,7 @@ extension RecordingSamples {
     }
 
     private static func installDays(_ mode: String?) async {
-        await removeEarlierDays()
+        await removeEarlierDays(rebuilding: mode.map(dayModes.contains) ?? false)
         guard let mode, dayModes.contains(mode) else { return }
         let consent = RecordingDayConsent.shared
         if mode == "consent" {
@@ -282,7 +282,9 @@ extension RecordingSamples {
 
     /// An earlier run's made-up days, with everything the store kept of them: built again on every run (another day,
     /// another mode).
-    private static func removeEarlierDays() async {
+    /// `rebuilding`: the made-up days are built again now, so an earlier run's erases over a stretch of time go too (every
+    /// launch of a DEBUG build comes here; without a sample it leaves them, a real erase kept for a day still to come).
+    private static func removeEarlierDays(rebuilding: Bool) async {
         let library = RecordingLibrary.shared, store = RecordingDayStore.shared
         for id in [pastDay, todayDay] {
             let stored = await store.record(id) != nil
@@ -295,7 +297,7 @@ extension RecordingSamples {
             _ = await store.record(id)
         }
         // An earlier run's erases (Erase Last 10 Minutes) would otherwise reach the same hours of the day built again.
-        await store.forgetSampleRequests([pastDay, todayDay])
+        await store.forgetSampleRequests([pastDay, todayDay], ranges: rebuilding)
     }
 
     /// A made-up day: its chunks and control events as the watch would send them, and the text the phone would have

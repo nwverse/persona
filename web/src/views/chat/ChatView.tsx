@@ -24,7 +24,8 @@ import { getSession, getState, hubHas, listenSession, refresh, refreshTodos, sav
 import { codexThreadOf, waitsForFirstMessage } from "../../lib/codex-waiting";
 import { foldRows } from "../../lib/folded-rows";
 import { PREVIEW_FEATURE } from "../../lib/preview";
-import { agentsWorking, buildTaskIndex, stableSubagents, STOP_LOOP_MESSAGE, subagentCall, subagentCardKey, terminalCalls, type TaskIndex } from "../../lib/tasks";
+import { buildTaskIndex, stableSubagents, STOP_LOOP_MESSAGE, subagentCall, subagentCardKey, terminalCalls, type TaskIndex } from "../../lib/tasks";
+import { runStep, sameStep, turnDone, type RunStep } from "../../lib/run-step";
 import { stabilizeLines, stableValue } from "../../lib/stable-lines";
 import { planProgress, workLineStyle } from "../../lib/work-groups";
 import { echoed, taggedSeen } from "../../lib/echo";
@@ -87,7 +88,8 @@ import { NavRail } from "./NavRail";
 import { useChatScrollbar } from "./useChatScrollbar";
 import { ChatLineView, closedRecap, closeRecap, dismissedError, dismissError, ErrorBanner, errorKey, OpenRecapLine } from "./Lines";
 import { useTranscript } from "./useTranscript";
-import { ArchiveCloseDialog, CloseAgentDialog, DeleteSessionDialog, HeaderModeButton, ModeChips, RenameDialog, RenameSpaceDialog, SessionInfoDialog } from "./SessionDialogs";
+import { ArchiveCloseDialog, CloseAgentDialog, DeleteSessionDialog, HeaderModeButton, RenameDialog, RenameSpaceDialog, SessionInfoDialog } from "./SessionDialogs";
+import { PermissionPicker, usePlanMode } from "./PermissionPicker";
 import { showsInHeader } from "../../lib/header-mode";
 import { archiveItems } from "../AgentMenus";
 import { ChatSidebarButton } from "../ShellSwitch";
@@ -1198,10 +1200,10 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     [mid, sid, inputIndex, follow, landRow],
   );
   const railSource = useMemo<NavRailSource>(() => ({ ticks: railTicks, total: inputIndex?.total, select: railJump }), [railTicks, inputIndex?.total, railJump]);
-  // the subagents the agent is waiting on (#5602): running, launched in the foreground, their calls not answered yet
+  // the calls with a terminal result: a subagent call without one is one the agent still waits on (the bar's step)
   const callsAnswered = useMemo(() => terminalCalls(tr.items, tasks), [tr.items, tasks]);
-  const waitingOn = useMemo(() => (assistant ? null : agentsWorking(subagents, callsAnswered)), [assistant, subagents, callsAnswered]);
-  // the live work lines' clocks on screen (WorkGroup's Elapsed): while one ticks, the running bar shows no time (#3534)
+  // the live work lines' clocks on screen (WorkGroup's Elapsed): while one ticks, an older hub's guess at a background
+  // workflow yields to the turn (the running bar's inBackground)
   const [clocks, setClocks] = useState(0);
   const countClock = useCallback((delta: 1 | -1) => setClocks((n) => n + delta), []);
   // while a message of yours is on its way the live line steps aside (lastLive needs !outgoing): the time stays where it was
@@ -1562,10 +1564,16 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   });
   // the run's time counts from the turn's start, as its "Working…" does (not from the session's last state change)
   const stateSince = session?.state_since;
-  const runStart = useMemo(() => {
+  const liveSeg = useMemo(() => {
     const live = lines.flatMap((l) => l.kind === "supervision" ? l.lines : [l]).findLast((l) => l.kind === "segment" && l.live);
-    return (live?.kind === "segment" ? turnStart(live.seg) : undefined) ?? stateSince;
-  }, [lines, stateSince]);
+    return live?.kind === "segment" ? live.seg : undefined;
+  }, [lines]);
+  const runStart = (liveSeg ? turnStart(liveSeg) : undefined) ?? stateSince;
+  // what the turn is doing, for the bar's words (cindy's status): kept as it was while it says the same
+  const streamingNow = Boolean(tr.streaming);
+  const lastStep = useRef<RunStep | undefined>(undefined);
+  const step = useMemo(() => sameStep(lastStep.current, runStep(liveSeg, streamingNow, subagents, callsAnswered)), [liveSeg, streamingNow, subagents, callsAnswered]);
+  lastStep.current = step;
   // as cindy's: gone once every step is done or a later message of the user's started another turn
   const planPill = plan && planOut && !plan.superseded && !planClosed && !planProgress(plan.todos).allDone ? (
     <Suspense key={plan.id} fallback={null}>
@@ -1575,7 +1583,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // Persona's own chats too (#3654), and from the moment the message is in, not from the hub's next push
   const background = useMemo(() => backgroundLine(session), [session]);
   const wait = useMemo(() => (outgoing || awaiting ? null : backgroundWaitLine(session)), [outgoing, awaiting, session]);
-  const running = session ? <RunningStatusBar mid={mid} sid={sid} working={state === "working" || awaiting} startedAt={runStart} clock={barClock.current} agents={waitingOn} background={background} wait={wait} subtasks={subtasks && !outgoing && !awaiting} /> : null;
+  // ✓ Done only for a turn that finished: one waiting on you, stopped or cut off by an error keeps its last words
+  const done = turnDone(state, session, lastLine, tr.items);
+  const running = session ? <RunningStatusBar mid={mid} sid={sid} working={state === "working" || awaiting} done={done} startedAt={runStart} clock={barClock.current} plain={assistant} step={step} background={background} wait={wait} subtasks={subtasks && !outgoing && !awaiting} /> : null;
   // at the top of the composer's card, as cindy's pending queue (#5327); a phone on its side keeps it to one line beside
   // the run's status. The same element while nothing in it changes: the composer is memoized.
   const hasQueue = queued.length > 0;
@@ -1603,7 +1613,11 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const faceLast = useMemo(() => (lastRole && lastKind ? { role: lastRole, kind: lastKind } : undefined), [lastRole, lastKind]);
   // the main conversation's /clear (#5095, lib/main-clear.ts): Persona's other conversations take no commands
   const commands = useMemo(() => (assistant ? (clears ? mainCommands() : []) : agentCommands(AGENT_COMMANDS, session)), [assistant, clears, session]);
-  const footer = useMemo(() => (session ? <ComposerFooter session={session} assistant={assistant} /> : null), [session, assistant]);
+  // the permission picker after the + (#5324), where the mode can be switched: a Persona conversation whatever its state
+  // (the hub applies it, #2416), an agent with modes while it runs; Plan mode is the + panel's check row
+  const modesOn = Boolean(session) && (Boolean(assistant) || (hasModes(session) && stateOf(session!) !== "offline"));
+  const leading = useMemo(() => (session && modesOn ? <PermissionPicker session={session} assistant={assistant} /> : null), [session, modesOn, assistant]);
+  const planMode = usePlanMode(modesOn ? session : undefined, assistant);
   // the model pill: an Agent's (#5032), a Persona conversation's (#5033, its pick kept for the conversation)
   const trailing = useMemo(() => (session ? assistant ? <AssistantModelPill session={session} /> : <AgentModelPill session={session} /> : null), [session, assistant]);
 
@@ -1887,14 +1901,19 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           autoFocus
           onFocusChange={setTyping}
           blocked={gate.blocked ?? noRowBlock}
-          footer={footer}
+          leading={leading}
           trailing={trailing}
+          planMode={planMode}
           voice={voiceEntry.offer}
           top={short ? undefined : queue}
         />
         )}
-        {!stoppedLine && session && !assistant && contextUsage(session) !== null && (
-          <div data-composer-usage className="flex items-center justify-end px-2 pt-0.5"><ContextMeter session={session} /></div>
+        {!stoppedLine && session && (composerSource(session, assistant).length > 0 || (!assistant && contextUsage(session) !== null)) && (
+          // where the chat comes from and its folder at the left (cindy's working-folder line, #5324), the context meter at the right
+          <div data-composer-usage className="flex min-w-0 items-center justify-between gap-3 px-2 pt-0.5">
+            <ComposerSource session={session} assistant={assistant} />
+            {!assistant && contextUsage(session) !== null && <ContextMeter session={session} />}
+          </div>
         )}
         </div>
       </div>
@@ -2004,25 +2023,31 @@ function JumpPill({ label, onClick, inline }: { label: string; onClick: () => vo
   );
 }
 
-export function ComposerFooter({ session, assistant }: { session: Session; assistant?: boolean }) {
-  // the launcher, model and effort are the composer's model pill (an Agent's, #5032; a Persona conversation's, #5033):
-  // they switch there, so the line keeps only where the chat comes from and runs
-  const parts = [sourceSubtitle(session), ...(assistant ? [] : [shortPath(session.cwd)])].filter(Boolean);
+/** What the line under the composer says: where the chat comes from and, for an Agent, its folder (a Persona conversation
+ *  shows no folder). The launcher and model are the composer's model pill (#5032, #5033). */
+function composerSource(session: Session, assistant?: boolean): string[] {
+  return [sourceSubtitle(session), ...(assistant ? [] : [shortPath(session.cwd)])].filter((p): p is string => Boolean(p));
+}
+
+/** Under the composer at the left (#5324, as cindy's working-folder line): the source and folder in muted 12 px, truncating,
+ *  with the full values on hover. At phone width (#3533) it would show a letter or two, so it is a button that lists them. */
+export function ComposerSource({ session, assistant }: { session: Session; assistant?: boolean }) {
+  const parts = composerSource(session, assistant);
   const info = useMenu();
-  // a Persona conversation (the main one too) switches its permission mode whatever its state: the hub applies it (#2416)
-  const modes = assistant || (hasModes(session) && stateOf(session) !== "offline");
+  if (!parts.length) return <span />;
   return (
-    <span className="flex min-w-0 items-center gap-2">
-      {modes && <ModeChips session={session} assistant={assistant} />}
-      {parts.length > 0 && <span className="min-w-0 truncate max-sm:hidden" title={[sourceSubtitle(session), session.cwd].filter(Boolean).join(" · ")}>{parts.join(" · ")}</span>}
-      {/* phone width (#3533): the line would show a letter or two, so it is a button that lists the parts in full */}
-      {parts.length > 0 && <IconButton icon="info" label={t("chat-chatview.session_info")} onClick={info.open} active={Boolean(info.anchor)} size={22} iconSize={13} className="sm:hidden" />}
-      {info.anchor && <Menu anchor={info.anchor} onClose={info.close} side="top" align="right" width={280} header={t("chat-chatview.session_info")} items={footerRows(session, assistant)} />}
+    <span data-composer-source className="flex min-w-0 items-center gap-1 text-[12px] text-ink-3">
+      <span className="flex min-w-0 items-center gap-1 max-sm:hidden" title={[sourceSubtitle(session), session.cwd].filter(Boolean).join(" · ")}>
+        {!assistant && session.cwd && <Icon name="folder" size={12} className="shrink-0" />}
+        <span className="min-w-0 truncate">{parts.join(" · ")}</span>
+      </span>
+      <IconButton icon="info" label={t("chat-chatview.session_info")} onClick={info.open} active={Boolean(info.anchor)} size={22} iconSize={13} className="sm:hidden" />
+      {info.anchor && <Menu anchor={info.anchor} onClose={info.close} side="top" align="left" width={280} header={t("chat-chatview.session_info")} items={footerRows(session, assistant)} />}
     </span>
   );
 }
 
-/** The composer footer's parts as menu rows (#3533): the value in full (wrapped), what it is beside it; choosing one
+/** The line under the composer as menu rows (#3533): the value in full (wrapped), what it is beside it; choosing one
  *  copies it, except the source, which is a sentence to read rather than a value to paste. The launcher and model are
  *  the model pill's (#5032). */
 export function footerRows(session: Session, assistant?: boolean): MenuItem[] {

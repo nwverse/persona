@@ -98,6 +98,7 @@ data class CoreText(val key: Key, val args: List<Any> = emptyList()) {
         AgentsNoTodo("No to-do"),
         AgentsManual("Opened by hand"),
         AgentsQuietSpaces("Idle spaces"),
+        AgentsStartedTab("Started it"),
         CountNeedsYou("%1\$d need you"),
         CountWorking("%1\$d working"),
         CountUnread("%1\$d unread"),
