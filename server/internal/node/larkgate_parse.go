@@ -59,6 +59,8 @@ func classifyLarkDepth(cmd string, gates []proto.CommandGate, cwd string, risk l
 		v.deny = "不要读或改 lark-cli 的配置和凭据（~/.lark-cli）：飞书用 lark-cli 命令，它自己带登录。"
 		return v
 	}
+	cmd = normalizeLarkCommand(cmd)
+	v.unknown = shellCommandUnknown(cmd, false, depth)
 	segs, ok := shellcmd.Split(cmd)
 	if !ok {
 		v.other, v.unparsed, v.unknown = true, true, v.unknown || larkCLIRe.MatchString(cmd) || shellCommandUnknown(cmd, true, depth)
