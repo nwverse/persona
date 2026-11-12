@@ -2,5 +2,5 @@
 <!-- The GitHub star toast when first setup finishes (#5761, docs/design/DESIGN_SYSTEM.md "GitHub star prompts"). -->
 <resources>
     <string name="settings_star_on_github">GitHubでスター</string>
-    <string name="settings_star_welcome">準備完了です。気に入ったら、スターで応援してください。</string>
+    <string name="settings_star_welcome">準備完了です。Personaが気に入ったら、ぜひスターを。</string>
 </resources>
