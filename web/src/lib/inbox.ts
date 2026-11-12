@@ -918,9 +918,11 @@ interface InboxState {
   groupLoading: string[];
   /** Done groups whose items have all come, by "<manager>|<group key>": a page of theirs reached the group's start. */
   groupComplete: string[];
+  /** Items a route names being read from the hub (loadRoutedItem), by "<manager>\u0000<id>". */
+  routing: string[];
 }
 
-const EMPTY: InboxState = { items: [], triage: null, loaded: false, loading: false, error: "", sending: [], moving: [], history: [], historyMore: [""], historyLoading: false, historyError: {}, doneDays: {}, groupLoading: [], groupComplete: [] };
+const EMPTY: InboxState = { items: [], triage: null, loaded: false, loading: false, error: "", sending: [], moving: [], history: [], historyMore: [""], historyLoading: false, historyError: {}, doneDays: {}, groupLoading: [], groupComplete: [], routing: [] };
 let state: InboxState = EMPTY;
 const listeners = new Set<() => void>();
 /** A Map that tells its watchers when it changes. The unsent replies live outside InboxState: a keystroke in the draft
@@ -1295,7 +1297,7 @@ export async function loadDoneGroup(manager: string | undefined, key: string, ra
   if (state.groupLoading.includes(id) || state.groupComplete.includes(id)) return;
   set({ groupLoading: [...state.groupLoading, id] });
   const q = new URLSearchParams({ sources: "all", limit: "100" });
-  const cur = groupNext.get(id);
+  const cur = groupNext.get(id) ?? pastListed(manager, range);
   if (cur) {
     q.set("before", cur.before);
     q.set("before_id", cur.before_id);
@@ -1323,11 +1325,51 @@ export async function loadDoneGroup(manager: string | undefined, key: string, ra
   }
 }
 
+/**
+ * Where a group's first page starts when the list already holds its newest done items: just past the oldest one the
+ * list holds of that manager, if it falls in the group. The list's done items are the newest of the history (every
+ * open item and the newest 200 done within three days, #5549), so a page from the group's end would bring only rows
+ * the list has, and its Show older would seem to do nothing.
+ */
+function pastListed(manager: string | undefined, range: { start: number; end: number }): DoneCursor | undefined {
+  // the history's order is done_at, then id, both descending; a mark of this app's is not the hub's done_at
+  let oldest: InboxItem | undefined;
+  let at = Infinity;
+  for (const it of state.items) {
+    if (!it.done_at || !sameManager(it.manager, manager) || pendingDone.has(itemKey(it))) continue;
+    const t = Date.parse(it.done_at);
+    if (t < at || (t === at && oldest && it.id < oldest.id)) [oldest, at] = [it, t];
+  }
+  return oldest && at >= range.start && at < range.end ? { before: oldest.done_at!, before_id: oldest.id } : undefined;
+}
+
 /** Done as the list shows it: the list's done items, then the history's it doesn't have (the list's copy is newer). */
 export function doneWithHistory(done: InboxItem[], history: InboxItem[], f: InboxFilter): InboxItem[] {
   const listedKeys = new Set(done.map(itemKey));
   const older = history.filter((it) => isDone(it) && matches(it, f) && !listedKeys.has(itemKey(it)));
   return older.length ? [...done, ...older].sort(byDoneAt) : done;
+}
+
+/** The routes asked for an item neither the list nor the loaded history had (loadRoutedItem): each once. */
+const routesAsked = new Set<string>();
+
+/**
+ * An item a route names that neither the list nor the loaded history has, such as a link to one done past what the
+ * list carries (only the newest done items, #5549): the hub's copy joins `history`, where the route finds it. Asked
+ * once per item; an open one comes with the list, and one the hub doesn't have stays gone. `routing` holds it meanwhile.
+ */
+export function loadRoutedItem(id: string, manager: string | undefined): void {
+  const key = `${manager ?? ""}\u0000${id}`;
+  if (routesAsked.has(key)) return;
+  routesAsked.add(key);
+  set({ routing: [...state.routing, key] });
+  void api<InboxItem>(itemPath(id), { headers: itemHeaders(manager) })
+    .then((r) => {
+      const it = r?.id === id && isDone(r) ? (manager && !r.manager ? { ...r, manager } : r) : undefined;
+      if (it && !state.history.some((x) => sameItem(x, it)) && !listed(it)) set({ history: [...state.history, it] });
+    })
+    .catch(() => undefined)
+    .finally(() => set({ routing: state.routing.filter((x) => x !== key) }));
 }
 
 /** Move back on an item only the history has (done before the list's days): the hub takes it back into its list. */
@@ -1602,8 +1644,10 @@ export async function setAllDone(items: InboxItem[], action: BulkAction | boolea
   const a: BulkAction = action === true ? "done" : action === false ? "reopen" : action;
   const done = a !== "reopen";
   const seen = new Set<string>();
+  // Undo reopens what the hub said it moved, listed or not: the list carries only the newest done items (#5549), so
+  // after a large Clean up all most of them are no longer in it.
   const targets = items
-    .map((it) => listed(it))
+    .map((it) => listed(it) ?? (!done && !undoable ? it : undefined))
     .filter((it): it is InboxItem => !!it && isDone(it) !== done && !seen.has(itemKey(it)) && !!seen.add(itemKey(it)));
   if (!targets.length) return;
   const before = new Map(targets.map((it) => [itemKey(it), it]));
@@ -1766,6 +1810,7 @@ export function resetInboxForTests() {
   state = EMPTY;
   historyNext.clear();
   groupNext.clear();
+  routesAsked.clear();
   started = false;
   inFlight = null;
   again = false;

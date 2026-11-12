@@ -102,6 +102,7 @@ Each becomes an iOS issue or a row in the intentional-differences list, decided 
 - Tests: the needs-you fixtures, plus a page test that the header count equals the badge.
 - Done (11-11): `agentNeedsYouRows` in `AgentsListInfo.kt` builds the section from `needsYouRows`: muted sessions included, the computer filter applied, shown under All and Needs You and never while searching. A session waiting only in its terminal is a "Terminal needs you" row that opens it. The section's title is the state name. The header, the page's summary and the Needs You filter count these rows. Left: "Requests and history" stays a row (not yet under ⋯), and the Assistant home's list goes with decision 10 (#4339 C11) instead of being recounted.
 - Done (11-12): iOS has no list of requests or their history (its requests live in Needs You and in each session); its ⋯ ends with the pages it opens, Machines and Terminals. On Glass "Requests and history" left the list for the end of ⋯, after Machine monitor and Terminal, in Android's own words since iOS has none, and opens the same sheet under any range. Brief and Board keep the row and add nothing to ⋯ (decision 8) (`AgentsHomeAffordancesTest`, `AgentsRequestSheetTest`, `RequestsMenuShotsTest`).
+- Done (11-12, #4339 C17): the Assistant home's list went with C11 and came back over New chat's composer on Glass, recounted: its agent lines are the rows the tab's badge counts (`ShellCounts.agentRows`), a session each, so the two numbers agree (`ShellCountsTest`).
 
 ### A2, A7, A8, A9
 

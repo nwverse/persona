@@ -195,10 +195,13 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
                 maps.fold(emptyMap<String, Long>()) { acc, one -> acc + one }
             }
         }.stateIn(scope, SharingStarted.Eagerly, emptyMap())
-        override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?) {
+        override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?) =
+            send(session, text, clientMessageId, clearDraft, null, null)
+        override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?, launcher: String?, model: String?) {
             gate.withLock {
                 val group = groupOf(session.machineId) ?: throw IllegalStateException(AppText.get(R.string.app_error_pair_first))
-                checkNotNull(group.data) { AppText.get(R.string.app_error_pair_first) }.messages.send(GroupKeys.rawKey(session), text, clientMessageId, clearDraft)
+                checkNotNull(group.data) { AppText.get(R.string.app_error_pair_first) }.messages.send(
+                    GroupKeys.rawKey(session), text, clientMessageId, clearDraft, launcher, model)
             }
         }
         override suspend fun cancel(clientMessageId: String) = gate.withLock {

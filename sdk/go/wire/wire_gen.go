@@ -26,6 +26,9 @@ type Manifest struct {
 	Description     string `json:"description,omitempty"`
 	Publisher       string `json:"publisher,omitempty"`
 	Homepage        string `json:"homepage,omitempty"`
+	// Source-only square PNG artwork: 256–4096 pixels, at most 2 MiB. Catalog entry icon carries this path; strip it
+	// from packaged and runtime manifests for compatibility.
+	Icon string `json:"icon,omitempty"`
 	// What the market shows and searches (docs "Extension market"): at most 16, each 1 to 24 characters. Packages and
 	// indexes carry the manifest without them (hubs before tags refuse an unknown field); the index entry carries them
 	// instead.

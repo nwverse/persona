@@ -1625,7 +1625,7 @@ private struct AssistantProfileFooter: View {
                         PersonaAvatar(size: Theme.Size.avatarL)
                         VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                             HStack(spacing: Theme.Space.xs) {
-                                Text(model.persona.name).font(Theme.Font.bodyStrong).foregroundStyle(Color.primary).lineLimit(1)
+                                Text(model.assistantShownName).font(Theme.Font.bodyStrong).foregroundStyle(Color.primary).lineLimit(1)
                                 ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
                             }
                             HStack(spacing: Theme.Space.xs) {
@@ -1641,7 +1641,7 @@ private struct AssistantProfileFooter: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityElement(children: .combine)
-                .accessibilityLabel("\(model.persona.name), \(state), view profile")
+                .accessibilityLabel("\(model.assistantShownName), \(state), view profile")
                 Spacer(minLength: Theme.Space.s)
                 if let search {
                     // The shell's foot's round button (Settings beside New Chat), as the row above has it.
@@ -1693,7 +1693,7 @@ private struct AssistantStatusLine: View {
                 HStack(spacing: Theme.Space.s) {
                     Circle().fill(online ? Theme.positive : Color.secondary.opacity(0.5))
                         .scaledFrame(width: Theme.Size.dotXS, height: Theme.Size.dotXS)
-                    Text("\(model.persona.name) \(state) · \(place)").lineLimit(1)
+                    Text("\(model.assistantShownName) \(state) · \(place)").lineLimit(1)
                     Spacer(minLength: 0)
                 }
                 .font(Theme.Font.caption)
@@ -1703,8 +1703,8 @@ private struct AssistantStatusLine: View {
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            .help("View \(model.persona.name)'s Profile")
-            .accessibilityLabel("\(model.persona.name), \(state), \(place), view profile")
+            .help("View \(model.assistantShownName)'s Profile")
+            .accessibilityLabel("\(model.assistantShownName), \(state), \(place), view profile")
         }
     }
 }
