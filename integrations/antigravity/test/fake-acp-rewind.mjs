@@ -20,11 +20,12 @@ const server = createServer(async (req, res) => {
     return
   }
   if (method === 'GetCascadeTrajectory') {
+    if (!snapshot.trajectory.steps?.length) delete snapshot.trajectory.steps
     res.end(JSON.stringify(snapshot))
     return
   }
   if (method === 'RevertToCascadeStep') {
-    snapshot.trajectory.steps = snapshot.trajectory.steps.slice(0, params.stepIndex + 1)
+    snapshot.trajectory.steps = (snapshot.trajectory.steps || []).slice(0, params.stepIndex + 1)
     writeFileSync(`${directory}/trajectory.json`, JSON.stringify(snapshot))
     const db = new DatabaseSync(`${directory}/config/conversation_summaries.db`)
     db.prepare('UPDATE conversation_summaries SET step_count = ?, last_modified_time = ? WHERE conversation_id = ?')

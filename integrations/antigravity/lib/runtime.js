@@ -358,7 +358,7 @@ export function createAgyRuntime(options = {}) {
       try {
         await acp.ensureSessionLoaded(rawId, sessionCwds.get(rawId) || home, [])
         const snapshot = await acp.nativeRequest('GetCascadeTrajectory', { cascadeId: rawId, disableRehydration: true })
-        if (snapshot.trajectory?.cascadeId === rawId && snapshot.trajectory.steps?.length === count) {
+        if (snapshot.trajectory?.cascadeId === rawId && (snapshot.trajectory.steps || []).length === count) {
           rememberCut(rawId, transcript, count)
           syncTranscriptAppend(rawId)
           rt.sessionsChanged()

@@ -127,3 +127,13 @@ test('a companion restart verifies a native cut whose timestamp precedes the aba
   assert.deepEqual(page.items.map((i) => i.text), ['Repeat', 'First answer'])
   assert.ok(page.history.endsWith(':cut:2'))
 })
+
+test('a companion restart preserves an empty native trajectory with no steps field', async (t) => {
+  const { node, rewind, db, restart } = await fixture(t)
+  await rewind({ occurrence: 2, prompts_after: 1 })
+  db.prepare('UPDATE conversation_summaries SET last_modified_time = ?').run('2025-01-01T00:00:00Z')
+  await restart()
+  const page = await node.peer.call('session.items', { session_id: SESSION })
+  assert.deepEqual(page.items, [])
+  assert.ok(page.history.endsWith(':cut:0'))
+})
