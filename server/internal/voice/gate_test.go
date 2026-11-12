@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"slices"
 	"strings"
@@ -438,9 +440,42 @@ func TestGateExplainsItsDecision(t *testing.T) {
 				"own voice 300ms after (not counted: after the handover)"},
 		{"a caption after the handover", speechGate{agent: agent, agentBy: agentSent, caption: sec(0.4)}, agent, "caption 400ms after (counted)"},
 	} {
-		if got := c.g.explain(c.at, acted, sec(0.5)); !strings.Contains(got, c.want) {
+		if got := c.g.explain(c.at, acted, sec(0.5), c.g.voice); !strings.Contains(got, c.want) {
 			t.Errorf("%s: %s\nwant %s", c.name, got, c.want)
 		}
+	}
+}
+
+// #5904 review: the gate's line says what its decision went by: the user's own voice as it was when the model handed
+// it over (heardSince), not as it is when the line is written. Their voice 1 s before the handover opens the gate,
+// their caption is due and does not come, and they go on speaking while it is waited for: the line says the voice it
+// went by counted, never that it came after the handover.
+func TestGateLogsTheOwnVoiceItWentBy(t *testing.T) {
+	setVar(t, &gateWait, 300*time.Millisecond)
+	pl := &Plugin{logger: log.New(io.Discard, "", 0)}
+	logs := captureLog(t, pl)
+	c := &conversation{version: 2, pl: pl, ctx: t.Context()}
+	handover := time.Now()
+	agent := handover.Add(-3 * time.Second)
+	c.gate.told(agent, agentSent)
+	c.gate.voice = handover.Add(-time.Second)
+	c.pace.voice = c.gate.voice // the app's audio had their voice in it after their last caption: one is due
+	went := make(chan bool, 1)
+	c.mu.Lock()
+	c.waitGate("delegation dlg1", agent, true, "", func(spoken bool) { went <- spoken })
+	c.mu.Unlock()
+	time.Sleep(100 * time.Millisecond)
+	c.mu.Lock()
+	c.gate.voice = time.Now() // heardOwn: they go on speaking
+	c.pace.voice = c.gate.voice
+	c.mu.Unlock()
+	if !<-went {
+		t.Fatal("refused")
+	}
+	line := logs.wait("delegation dlg1: the user-speech gate let it through (own voice; their caption had not come)",
+		"waited ", "it had not come")
+	if _, voice, _ := strings.Cut(line, ", own voice "); !strings.HasPrefix(voice, "1s before (counted)") {
+		t.Errorf("own voice %q in: %s", voice, line)
 	}
 }
 

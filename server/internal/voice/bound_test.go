@@ -268,7 +268,7 @@ func TestUnpromptedRunCanBeSentAnyway(t *testing.T) {
 	})
 	pl := testPlugin(t, liveProvider(up), hub.server(t))
 	logs := captureLog(t, pl)
-	a := dialApp(t, pl, boundStart("a1", nil))
+	a := dialApp(t, pl, boundStart("a1", map[string]any{"speech_gate": true})) // an app with Send Anyway says it
 	a.until(ofType("ready"))
 	refused := a.until(runIn(runRefused))
 	id, _ := refused["id"].(string)
@@ -292,6 +292,70 @@ func TestUnpromptedRunCanBeSentAnyway(t *testing.T) {
 	logs.wait("call 1: run " + id + ": the app sends it again (the user's own confirmation, past the user-speech gate)")
 	if all := logs.String(); strings.Contains(all, task) {
 		t.Errorf("the log has the task:\n%s", all)
+	}
+}
+
+// #5904 review: an app from before Send Anyway (its start says nothing of speech_gate, as every older one) has no such
+// button: what the gate held back is not kept for a resend, and the model does not tell the user to tap it.
+func TestUnpromptedRunToAnAppWithoutSendAnyway(t *testing.T) {
+	setVar(t, &gateWait, 300*time.Millisecond)
+	hub := agentHub(t)
+	up := newFakeUpstream(t, func(u *fakeUpstream, c *websocket.Conn, f map[string]any) {
+		if f["type"] == "session.start" {
+			u.send(c, map[string]any{"type": "session.started", "session": map[string]any{}})
+			delegate(u, c, "dlg1", "跑一下测试") // nobody spoke
+		}
+	})
+	pl := testPlugin(t, liveProvider(up), hub.server(t))
+	logs := captureLog(t, pl)
+	a := dialApp(t, pl, boundStart("a1", nil))
+	a.until(ofType("ready"))
+	refused := a.until(runIn(runRefused))
+	id, _ := refused["id"].(string)
+	if refused["code"] != "unprompted" {
+		t.Fatalf("refused: %v", refused)
+	}
+	if got := content(up.nextMatch(on("dlg1"))); !strings.Contains(got, unpromptedWords) || strings.Contains(got, "仍然发送") {
+		t.Errorf("told: %s", got)
+	}
+	a.send(map[string]any{"type": "resend", "id": id})
+	logs.wait("call 1: resend " + id + ": no such refused run")
+	if msgs := hub.messages(); len(msgs) != 0 {
+		t.Fatalf("sent %+v", msgs)
+	}
+}
+
+// #5904 review: Send Anyway of what the gate held back still has the approval-word check its first send never reached:
+// an agent's words read out asked for "OK", the voice handed over 好的 with nobody speaking, and a permission card
+// waits; the tap does not type it into the terminal (cards are tapped, decision 5): refused on_screen, nothing sent.
+func TestSendAnywayKeepsTheApprovalWordCheck(t *testing.T) {
+	setVar(t, &gateWait, 300*time.Millisecond)
+	hub := agentHub(t)
+	hub.cards = []proto.Interaction{{ID: "x1", MachineID: "m", SessionID: "a1", Kind: proto.IxPermission, ToolName: "Bash"}}
+	up := newFakeUpstream(t, func(u *fakeUpstream, c *websocket.Conn, f map[string]any) {
+		if f["type"] == "session.start" {
+			u.send(c, map[string]any{"type": "session.started", "session": map[string]any{}})
+			delegate(u, c, "dlg1", "好的") // nobody spoke
+		}
+	})
+	pl := testPlugin(t, liveProvider(up), hub.server(t))
+	logs := captureLog(t, pl)
+	a := dialApp(t, pl, boundStart("a1", map[string]any{"speech_gate": true}))
+	a.until(ofType("ready"))
+	refused := a.until(runIn(runRefused))
+	id, _ := refused["id"].(string)
+	if refused["code"] != "unprompted" {
+		t.Fatalf("refused: %v", refused)
+	}
+	a.send(map[string]any{"type": "resend", "id": id})
+	// Its next frame says it is refused again, now on_screen (the bar's line then says to tap the card): never sending.
+	if f := a.until(func(f map[string]any) bool { return f["type"] == "run" && f["id"] == id }); f["state"] != runRefused || f["code"] != "on_screen" {
+		t.Fatalf("after the resend: %v", f)
+	}
+	up.nextMatch("the model told to tap the card", func(f map[string]any) bool { return strings.Contains(fmt.Sprint(f), "卡片要在屏幕上点") })
+	logs.wait("call 1: run " + id + ": only an approval word while a card waits: not sent")
+	if msgs := hub.messages(); len(msgs) != 0 {
+		t.Fatalf("sent %+v", msgs)
 	}
 }
 

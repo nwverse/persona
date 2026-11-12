@@ -148,6 +148,7 @@ func (c *conversation) whenSaid(name string, at time.Time, reply string, f func(
 func (c *conversation) waitGate(name string, at time.Time, caption bool, reply string, f func(spoken bool)) {
 	acted := time.Now()                   // mu held: when the model acted
 	heard := c.gate.heardSince(at, acted) // the user's voice by then
+	voice := c.gate.voice                 // what heard went by, for the log: it moves as the user goes on speaking
 	// off: the app's setting turned the gate off (#5904): it goes without the user's words, still with the caption of
 	// what they said when that is due, and the log says what the gate would have decided.
 	off := c.gate.off
@@ -172,7 +173,7 @@ func (c *conversation) waitGate(name string, at time.Time, caption bool, reply s
 			}
 			waitedDue = waitedDue || due
 			if pass && !due || !now.Before(deadline) {
-				basis := c.gate.explain(at, acted, now)
+				basis := c.gate.explain(at, acted, now, voice)
 				c.mu.Unlock()
 				c.logGate(name, off, open, by, now.Sub(acted), basis, waitedDue, due)
 				f(pass)

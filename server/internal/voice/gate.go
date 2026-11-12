@@ -115,8 +115,9 @@ func (g *speechGate) heardSince(agent, now time.Time) bool {
 // explain is what the gate's decision on a handover went by, for the log (calllog.go: times and sources, never
 // words): from when the model acted (acted; at its agent time then), the agent's words and what moved the agent time
 // there, and the user's last caption, typed line and own voice, each with whether it counted and why not, as
-// openSince (at now) and heardSince (at acted) count them.
-func (g *speechGate) explain(at, acted, now time.Time) string {
+// openSince (at now) and heardSince (at acted) count them. voice is the user's own voice as heardSince had it when the
+// model acted: heard again while a caption is waited for, the gate's own voice is not what the decision went by.
+func (g *speechGate) explain(at, acted, now, voice time.Time) string {
 	agent := "none"
 	if !at.IsZero() {
 		agent = fromHandover(at, acted)
@@ -127,7 +128,7 @@ func (g *speechGate) explain(at, acted, now time.Time) string {
 	return "from the handover: agent words " + agent +
 		", caption " + g.wordsLog(g.caption, at, now, acted, g.echoes) +
 		", typed line " + g.wordsLog(g.typed, at, now, acted, false) +
-		", own voice " + g.voiceLog(at, acted)
+		", own voice " + voiceLog(voice, at, acted)
 }
 
 // wordsLog is a caption's or typed line's time from acted and whether it counted for openSince at now (echoes: a
@@ -143,12 +144,13 @@ func (g *speechGate) wordsLog(words, at, now, acted time.Time, echoes bool) stri
 	return fromHandover(words, acted) + " (" + counted(excluded, !words.After(at), false, now.Sub(words) > gateWindow) + ")"
 }
 
-// voiceLog is the user's own voice's time from acted and whether it counted for heardSince at acted.
-func (g *speechGate) voiceLog(at, acted time.Time) string {
-	if g.voice.IsZero() {
+// voiceLog is the user's own voice's time (voice, as it was when the model acted) from acted and whether it counted
+// for heardSince at acted.
+func voiceLog(voice, at, acted time.Time) string {
+	if voice.IsZero() {
 		return "none"
 	}
-	return fromHandover(g.voice, acted) + " (" + counted("", !g.voice.After(at), g.voice.After(acted), acted.Sub(g.voice) > gateWindow) + ")"
+	return fromHandover(voice, acted) + " (" + counted("", !voice.After(at), voice.After(acted), acted.Sub(voice) > gateWindow) + ")"
 }
 
 // counted says whether the user's words counted, or the first reason they did not: excluded (not "": what keeps

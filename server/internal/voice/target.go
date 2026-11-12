@@ -38,8 +38,9 @@ type startFrame struct {
 	} `json:"resume"`
 	// EchoCancellation false: the app records without echo cancellation (absent: not said, taken as with it).
 	EchoCancellation *bool `json:"echo_cancellation"`
-	// SpeechGate false: the user turned the user-speech gate off on this device (#5904, gate.go; absent: on). Only a
-	// full device's call can: another extension's call keeps it.
+	// SpeechGate false: the user turned the user-speech gate off on this device (#5904, gate.go; true or absent: on).
+	// Only a full device's call can: another extension's call keeps it. Said at all, the app has Send Anyway
+	// (conversation.sendsAnyway): an app from before #5904 says nothing.
 	SpeechGate *bool `json:"speech_gate"`
 }
 

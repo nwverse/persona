@@ -21,9 +21,9 @@ import (
 //   - "Stop:" stops it (the app's "Stop" button), behind the gate;
 //   - while a question of it is asked by voice, anything else is the answer (asks.go), behind the gate;
 //   - "Answer:" otherwise is the user's answer to what it asked in words: sent without the mark;
-//   - anything else is an instruction, sent as it is: refused by the hub (409), or by the gate (unprompted), it is
-//     told why and the app may send it again (resend: the user's own act, so past the gate); while a card waits, a
-//     word that only approves or refuses is not sent (cards are tapped).
+//   - anything else is an instruction, sent as it is: refused by the hub (409), or by the gate (unprompted, to an app
+//     with Send Anyway), it is told why and the app may send it again (resend: the user's own act, so past the gate);
+//     while a card waits, a word that only approves or refuses is not sent (cards are tapped), resent or not.
 // A run that the hub took (200) folds the ones not answered yet on the same conversation (tracker.adopt): one refused
 // or not known to have been sent is never folded (its message would be waited for in vain).
 
@@ -108,13 +108,14 @@ func (c *conversation) handOverBound(name, task, delegation string, gen int, at 
 			task = c.lastUserLine()
 		}
 		recent := c.recent(recentLines)
+		anyway := c.sendsAnyway
 		c.mu.Unlock()
 		r := c.newBoundRun(task, delegation, gen)
 		c.logf("run %s: for %s, in session %d", r.ID, name, sessionNo(gen))
 		switch {
-		case !spoken && task != "":
+		case !spoken && task != "" && anyway:
 			// Kept as it would have gone: the user may send it anyway (the app's Send Anyway, #5904), their own
-			// confirmation past the gate.
+			// confirmation past the gate. An app from before it has no such button: nothing kept, nothing said of it.
 			r.message = c.message(task, recent)
 			c.runs.notSent(r, sendFail{state: runRefused, code: "unprompted", prompt: "unprompted", resendable: true})
 		case !spoken:
@@ -164,7 +165,7 @@ func (c *conversation) cardsWaiting(ctx context.Context, kinds ...string) bool {
 
 // sendFail is why a run was not sent: its run frame's state and code, the hub's words, a 409's details; prompt is
 // voice/refused's code; resendable: the app may send it again (a refusal of the hub's, or the user-speech gate's
-// with a task: unprompted), and the model is told the screen offers that.
+// with a task for an app with Send Anyway: unprompted), and the model is told the screen offers that.
 type sendFail struct {
 	state, code, reason, prompt string
 	draft, clearable            string
@@ -218,10 +219,12 @@ func (t *tracker) notSent(r *voiceRun, f sendFail) {
 	}
 }
 
-// sendBound sends r's message to the bound conversation in the background and follows the run it starts. first: the
-// model's handover (a resend is the user's own: no approval-word check, the same id). While it is sent, what the
-// conversation works on is not observed (observe.go): it may be this message's turn.
-func (t *tracker) sendBound(r *voiceRun, opts sendOpts, first bool) {
+// sendBound sends r's message to the bound conversation in the background and follows the run it starts (a resend
+// keeps its id). approval: a word that only approves or refuses is not sent while a card waits (cards are tapped,
+// decision 5): the model's handover, and the resend of one the user-speech gate held back, which never got that far
+// (#5904); a 409's resend had it on its first send. While it is sent, what the conversation works on is not observed
+// (observe.go): it may be this message's turn.
+func (t *tracker) sendBound(r *voiceRun, opts sendOpts, approval bool) {
 	c := t.c
 	t.obs.sending.Add(1)
 	t.obs.sends.Add(1)
@@ -233,8 +236,9 @@ func (t *tracker) sendBound(r *voiceRun, opts sendOpts, first bool) {
 			}
 		}()
 		ctx := c.ctx
-		if first && channel.IsApprovalWord(r.task) && c.cardsWaiting(ctx, approvalCards...) {
+		if approval && channel.IsApprovalWord(r.task) && c.cardsWaiting(ctx, approvalCards...) {
 			c.logf("run %s: only an approval word while a card waits: not sent", r.ID)
+			r.State = "" // a resend's run was refused already: the app is told it is now on_screen
 			t.notSent(r, sendFail{state: runRefused, code: "on_screen", prompt: "on_screen"})
 			return
 		}
@@ -334,7 +338,8 @@ func optsLog(o sendOpts) string {
 
 // resend sends again a run the hub refused, as the app asks (its "Resend" / "Clear and send"), or one the user-speech
 // gate refused (unprompted: its "Send Anyway", #5904): the same id, a new run (restart). It is the user's own act, so
-// not held to the gate: for an unprompted run, the user's confirmation that they asked for it.
+// not held to the gate: for an unprompted run, the user's confirmation that they asked for it. Such a run still has
+// the approval-word check its first send never reached: a lone "OK" while a card waits is not typed (on_screen).
 // clearDraft not "": clear the box first, what the refusal said can be cleared (its clearable, which the node checks
 // against the box: an IDE's selection marker in the draft is not part of it). A run this connection does not know (not
 // refused, or before a reconnect) is let be.
@@ -352,12 +357,14 @@ func (t *tracker) resend(id, clearDraft string) {
 			t.c.logf("run %s: the app sends it again", id)
 		}
 		delete(t.refused, id)
+		// What the user-speech gate held back stopped before the approval-word check: its resend has it.
+		approval := r.Code == "unprompted"
 		r.Delegation = "" // it had its one commentary (the refusal): what comes is said
 		if clearDraft != "" && r.Clearable != "" {
 			clearDraft = r.Clearable // what the hub said can be cleared, to the letter (the app may hand back the draft)
 		}
 		r.restart(clock())
-		t.sendBound(r, sendOpts{ClearDraft: clearDraft}, false)
+		t.sendBound(r, sendOpts{ClearDraft: clearDraft}, approval)
 	}:
 	case <-t.c.ctx.Done():
 	}
