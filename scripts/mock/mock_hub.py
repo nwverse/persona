@@ -1736,7 +1736,7 @@ if NEXT_SUGGESTIONS:
 
 # MOCK_ORIGINS=1 (#3264, docs/protocol/protocol.md "Origin of assistant chats"): conversations the hub opened by itself — the inbox's AI twin,
 # scheduled tasks, a Feishu /agent, one another conversation started — next to the user's own; one of them runs, one
-# waits for the user. The sidebar keeps them out of "Recent" under "Automatic conversations".
+# waits for the user. The sidebar's Recent lists them with the user's own, each with its origin's mark (#5195).
 if os.environ.get("MOCK_ORIGINS") == "1":
     ASSISTANT[1]["origin"], ASSISTANT[1]["origin_ref"] = "task", "morning"
     ASSISTANT[1]["title"] = "1106 | 定时 | 早报"
@@ -1860,7 +1860,7 @@ if os.environ.get("MOCK_ASSISTANT_SIDEBAR") == "1":
 # MOCK_AUTO_CONVERSATIONS=1 (#3264, docs/protocol/protocol.md "Origin of assistant chats"): the hub says who opened each assistant
 # conversation (`origin`, feature conversation_origin): the user's own say "user", and ten more were opened by Persona
 # itself: Inbox's AI twin (one waits for the user, one works), scheduled tasks, Lark /agent and one conversation another
-# started. The sidebar keeps those in "Automatic conversations"; the list of conversations filters them by source.
+# started. The sidebar's Recent lists them with the user's own, each with its source's mark (#5195); All Chats filters them by source.
 if os.environ.get("MOCK_AUTO_CONVERSATIONS") == "1":
     for _s in ASSISTANT:
         _s.setdefault("origin", "user")
@@ -8857,7 +8857,10 @@ if os.environ.get("MOCK_GITHUB") == "guide":  # a status with the steps to fix i
                         "capabilities": ["status", "hosts"], "hosts": ["github.com"]}
 # Feishu and mail as connectors (GET /api/v1/connectors?all=1, migration M6): the app draws them as their own rows.
 LEGACY_CONNECTORS = [{"id": "lark", "name": "飞书", "status": "ok", "capabilities": ["tools", "inbox", "archive"], "enabled": True},
-                     {"id": "mail", "name": "邮件", "status": "ok", "capabilities": ["tools", "actions", "inbox", "archive"], "enabled": True}]
+                     {"id": "mail", "name": "邮件", "status": "ok", "capabilities": ["tools", "actions", "archive"], "enabled": True,
+                      "archive": True, "inbox": True}]  # mail's Add to Inbox (#5307): MOCK_MAIL_INBOX=off starts it off
+if os.environ.get("MOCK_MAIL_INBOX") == "off":
+    LEGACY_CONNECTORS[1]["inbox"] = False
 
 # Telegram (the Telegram extension, #1704; docs/archive/extensions/plan-telegram.md): the user's own account, signed in from Settings › Connectors › Telegram a step at a time.
 # All made up: api_id 1234567 (a hash of 32 zeros is refused), any phone starting with +, the code 12345, the 2FA
@@ -21255,6 +21258,15 @@ class H(BaseHTTPRequestHandler):
             port = int(p.split("/")[6])
             if not port_listening(port): return self.send_json({"error": "nothing is listening on port %d" % port}, 404)
             return self.send_json({"port": port, "listening": True, "http": True})
+        if self.command == "PUT" and p == "/api/v1/connectors/mail/settings":  # mail's Add to Inbox (#5307)
+            body = json.loads(self.last_body or b"{}")
+            mail_c = LEGACY_CONNECTORS[1]
+            for feed in ("inbox", "archive"):
+                if feed in body:
+                    if not isinstance(body[feed], bool):
+                        return self.send_json({"error": feed + ": true or false"}, 400)
+                    mail_c[feed] = body[feed]
+            return self.send_json(mail_c)
         if self.command == "PUT" and p == "/api/v1/connectors/github/settings":  # GitHub's inbox options
             body = json.loads(self.last_body or b"{}")
             if "inbox" in body:  # "Send to inbox" (MOCK_GITHUB_EXTENSION), from the connector's page or the extension's
@@ -22966,7 +22978,7 @@ MOCK_HELP.append("MOCK_CHANNELS=1  设置 › 插件 › 渠道：App、飞书�
 MOCK_HELP.append("MOCK_EXCHANGES=1  主对话新布局的素材（#1666）：Persona 发给任务的长消息、任务带链接和证据的长汇报、督办消息")
 MOCK_HELP.append("MOCK_MARKDOWN=1  任务往来和回执里带 **粗体**、`代码`、标题的原话（#2363）：应渲染成 Markdown，不露标记")
 MOCK_HELP.append("MOCK_TASK_RENAMED=1  整理发布说明这个任务在回执写好后改了名：回执应显示新名字「写本周发布说明」（#3036）")
-MOCK_HELP.append("MOCK_AUTO_CONVERSATIONS=1  助手对话带来源 origin（feature conversation_origin）：另有 10 段自动对话（收件箱 6、定时任务 2、飞书 /agent、对话派生），侧边栏收进「自动对话」（#3264）")
+MOCK_HELP.append("MOCK_AUTO_CONVERSATIONS=1  助手对话带来源 origin（feature conversation_origin）：另有 10 段自动对话（收件箱 6、定时任务 2、飞书 /agent、对话派生），侧边栏「最近」和用户自己的一起列、带来源标记，「全部对话」按来源筛（#3264、#5195）")
 MOCK_HELP.append("MOCK_EXTERNAL=1  和 MOCK_AUTO_CONVERSATIONS=1 一起用：飞书 /agent 那段带上请求和上下文，另加一段别的扩展开的（origin extension），两段都是外部的（#3758）")
 MOCK_HELP.append("MOCK_BACKGROUND_SUPERVISOR=1  The hub's built-in background supervisor conversation exists (#4927): origin task with no origin_ref, "
                  "named by GET /api/v1/assistant as background_supervisor, and archiving it is refused. Without it the setting "

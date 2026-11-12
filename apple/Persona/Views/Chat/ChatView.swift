@@ -4673,6 +4673,7 @@ struct Composer: View, Equatable {
     @State private var showPhotos = false
     @State private var showCamera = false
     @State private var showGlasses = false // Glasses Photo (Persona/Glasses), only when MetaGlasses.isBuiltIn
+    @State private var showScan = false // Scan Document (#3720), only where the device can scan
     /// The photos, videos and file uploads for the next message: the app keeps them per conversation, as it keeps the
     /// text (#2626), so a composer built again still has them.
     private var held: ComposerAttachments { model.composerAttachments(key) }
@@ -5286,7 +5287,7 @@ struct Composer: View, Equatable {
             }
         }
         #endif
-        .modifier(ComposerCaptureSheets(camera: $showCamera, glasses: $showGlasses) { add($0) })
+        .modifier(ComposerCaptureSheets(camera: $showCamera, glasses: $showGlasses, scan: $showScan, pages: { addScan($0) }) { add($0) })
         .sheet(isPresented: $typingModel) { SessionTypedModelSheet(key: key, session: model.session(key)) }
         .onChange(of: picks) { _, items in
             guard !items.isEmpty else { return }
@@ -5331,12 +5332,15 @@ struct Composer: View, Equatable {
 
     /// What + offers besides photos and files (#3225), one list for three places: the panel's More tab, the iPhone's touch
     /// and hold on +, and the iPad's + menu under Photos and Files. The most used first (the menu puts it nearest the
-    /// finger): calls and the camera, Mention, an Agent's Quick Commands, then extension prompts. Rows a chat or device
-    /// can never use are left out; /clear while the Agent works is dimmed.
+    /// finger): calls, the camera and (Persona's main conversation) Meeting Recording, Mention, an Agent's Quick Commands,
+    /// then extension prompts. Rows a chat or device can never use are left out; /clear while the Agent works is dimmed.
     private var attachMoreSections: [AttachMoreSection] {
         var sections = AttachMoreSection.common(voice: VoicePlatform.current == .phone ? { startVoice() } : nil,
                                                 camera: CameraPicker.isAvailable ? { showCamera = true } : nil,
+                                                scan: DocumentScanner.isAvailable ? { showScan = true } : nil,
                                                 glasses: MetaGlasses.isBuiltIn ? { showGlasses = true } : nil,
+                                                // As the sidebar's (#3723): records the meeting with Recordings open, or opens the one running.
+                                                meeting: isMain ? { Task { await MeetingRecorder.shared.startMeeting(inForeground: true) } } : nil,
                                                 mention: { typeMention() })
         if !shellChat {
             var rows = SlashCommand.commands(loop: canLoop).map { cmd in
@@ -5448,6 +5452,16 @@ struct Composer: View, Equatable {
     }
 
     private func add(_ img: UIImage) { MessagePhotos.add(img, to: &images, model: model) }
+
+    /// A scan's pages: the next message's photos while they fit, else one PDF uploaded as a picked file is (#3720).
+    private func addScan(_ pages: [UIImage]) {
+        #if os(iOS)
+        // A PDF goes up as the panel's Files do (`upload` is the Mac's drop).
+        DocumentScanner.deliver(pages, room: MessagePhotos.limit - images.count, model: model, add: { add($0) }) { urls in
+            uploads.start(urls, machine: key.machineRef, model: model, dest: uploadDest) { insertPath($0) }
+        }
+        #endif
+    }
 }
 
 /// The composer's "/" menu: Claude Code's own commands, and Persona' quick messages under a short word. Picking one
@@ -5598,7 +5612,8 @@ struct SlashMenu: View {
 }
 
 extension UIImage {
-    func scaledDown(maxSide: CGFloat) -> UIImage {
+    /// Nonisolated: a scan's PDF is drawn off the main actor (`DocumentScanner.pdf`, #3720).
+    nonisolated func scaledDown(maxSide: CGFloat) -> UIImage {
         let side = max(size.width, size.height)
         guard side > maxSide else { return self }
         let scale = maxSide / side

@@ -4,11 +4,9 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { closePanel, getPanel } from "../../lib/panel";
 import { refresh } from "../../lib/store";
 import { TaskCard } from "./Tasks";
-
-// where a click went: a page of its own (#5096), never a side panel
-const opened = () => location.pathname + location.search;
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -32,7 +30,7 @@ beforeEach(async () => {
     vi.fn((url: string) => Promise.resolve(new Response(JSON.stringify(String(url).includes("/todos") ? { todos: [TODO] } : {}), { headers: { "Content-Type": "application/json" } }))),
   );
   await refresh();
-  history.replaceState(null, "", "/");
+  closePanel();
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -42,7 +40,7 @@ beforeEach(async () => {
 afterEach(() => {
   act(() => root.unmount());
   host.remove();
-  history.replaceState(null, "", "/");
+  closePanel();
   vi.unstubAllGlobals();
 });
 
@@ -53,13 +51,13 @@ describe("a task card from the keyboard", () => {
 
   it("opens the task on Enter on the card itself", () => {
     const e = press(card(), "Enter");
-    expect(opened()).toBe(`/todos?id=${TODO.id}`);
+    expect(getPanel()).toEqual({ kind: "task", todo: TODO.id });
     expect(e.defaultPrevented).toBe(true);
   });
 
   it("opens the task on Space on the card itself, without scrolling the page", () => {
     const e = press(card(), " ");
-    expect(opened()).toBe(`/todos?id=${TODO.id}`);
+    expect(getPanel()).toEqual({ kind: "task", todo: TODO.id });
     expect(e.defaultPrevented).toBe(true);
   });
 
@@ -69,7 +67,7 @@ describe("a task card from the keyboard", () => {
     for (const b of buttons) {
       for (const key of ["Enter", " "]) {
         const e = press(b, key);
-        expect(opened()).toBe("/");
+        expect(getPanel()).toBeNull();
         // The button keeps its own activation (the browser turns Enter / Space into its click).
         expect(e.defaultPrevented).toBe(false);
       }
@@ -79,6 +77,6 @@ describe("a task card from the keyboard", () => {
   it("ignores other keys", () => {
     press(card(), "a");
     press(card(), "Tab");
-    expect(opened()).toBe("/");
+    expect(getPanel()).toBeNull();
   });
 });

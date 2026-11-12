@@ -19,7 +19,7 @@ import { Icon } from "../../ui/icons";
 import { arrange, conversationTitle, filterConversations, mergeConversations, splitTitle, type Conversation } from "./conversations";
 import { Empty, inputClass, SectionTitle } from "./parts";
 import { Chip } from "../inbox/InboxParts";
-import { autoConversations, externalOrigin, matchesOrigin, originLabel, parseOriginFilter, type OriginFilter } from "../../lib/conversation-origins";
+import { autoConversations, autoOrigin, matchesOrigin, originLabel, parseOriginFilter, type OriginFilter } from "../../lib/conversation-origins";
 import { backgroundSupervisorTitle, isBackgroundSupervisor } from "../../lib/background-supervisor";
 import { t } from "../../i18n";
 
@@ -255,8 +255,9 @@ function ConvRow({ s, main, now, onRename, onArchive }: { s: Conversation; main?
   const st = stateOf(s);
   const flagged = st === "needs_you" || st === "working" || st === "unread";
   const last = plainMarkdown(s.last_text);
-  // opened by an extension (#3758): where it came from, in the channel's place
-  const origin = externalOrigin(s);
+  // opened by the hub itself (#3758, #5195): what opened it, in the channel's place, as on its sidebar row; decided as the
+  // filters decide it, the background supervisor with the scheduled tasks' whatever its row says (#5082)
+  const origin = autoOrigin(s, builtIn ? s.session_id : undefined);
   // the chats outside the sidebar live here: 设为常驻 puts one in its 常驻 group (#4331)
   const leader = useStore((x) => !!x.assistant?.leaders?.includes(s.session_id));
   const own = !main && !builtIn;
