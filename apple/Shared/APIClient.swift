@@ -267,8 +267,19 @@ nonisolated struct APIClient: Sendable {
         return !(parts.count > 1 && parts[0] == "conversations")
     }
 
-    /// What a request to `path` carries besides the caller's own headers: the manager it names.
+    /// The recordings' part of the knowledge base (`/api/v1/kb/recordings…`: a recording's minutes, a day's recap, the
+    /// hub's list of them). This device syncs its recordings to the default manager whichever assistant is current
+    /// (`/api/v1/recordings` names none), so what was made of them is read there too.
+    nonisolated static func recordingsRoute(_ path: String) -> Bool {
+        let base = "/api/v1/kb/recordings"
+        return path == base || path.hasPrefix(base + "/") || path.hasPrefix(base + "?")
+    }
+
+    /// What a request to `path` carries besides the caller's own headers: the manager it names. None for the
+    /// recordings' part of the knowledge base, whichever manager this client is for (`recordingsRoute`): the knowledge
+    /// page's client names the current assistant on everything else.
     func routing(_ path: String, _ query: [String: String]) -> [String: String] {
+        if Self.recordingsRoute(path) { return [:] }
         let named = managerID ?? (Self.assistantRoute(path, query: query) ? shownManager : nil)
         return named.map { [Self.managerHeader: $0] } ?? [:]
     }
