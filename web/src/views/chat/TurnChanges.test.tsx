@@ -1,0 +1,208 @@
+// @vitest-environment jsdom
+// The changed-files card after cindy's TurnChangesCard (#5157): counted from the exchange's own successful edits, by
+// file; only at the end of a finished Agent exchange (never a Persona conversation's, never while it runs, never in a
+// supervision trace, never with work the hub folded); three files, then Show N more; Review opens the session's review.
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+vi.hoisted(() => {
+  globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
+});
+
+const fake = vi.hoisted(() => ({ features: [] as string[], cwd: "/Users/me/code/weather" as string | undefined }));
+vi.mock("../../lib/store", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../../lib/store")>();
+  return {
+    ...real,
+    useStore: <T,>(select: (s: ReturnType<typeof real.getState>) => T) => select({ ...real.getState(), features: fake.features }),
+    getSession: (mid: string, sid: string) => (fake.cwd === undefined ? undefined : ({ machine_id: mid, session_id: sid, cwd: fake.cwd } as ReturnType<typeof real.getSession>)),
+  };
+});
+
+import { closePanel, getPanel } from "../../lib/panel";
+import { emptyTaskIndex } from "../../lib/tasks";
+import { segments, type Step } from "../../lib/turns";
+import type { Item } from "../../lib/types";
+import { ChatContext, type ChatContextValue } from "./chat-context";
+import { SegmentView } from "./SegmentView";
+import { turnChanges } from "./TurnChanges";
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+const CWD = "/Users/me/code/weather";
+let seq = 0;
+const item = (over: Partial<Item>): Item => ({ id: `i${++seq}#0`, seq, role: "assistant", kind: "text", ts: "2026-11-12T10:00:00Z", ...over });
+/** A call and its result, as the transcript has them. */
+function call(tool: string, input: Record<string, unknown>, result: Partial<Item> | null = {}): Item[] {
+  const id = `c${seq + 1}`;
+  const use = item({ kind: "tool_use", tool_use_id: id, tool_name: tool, tool_input: input });
+  return result ? [use, item({ role: "user", kind: "tool_result", tool_use_id: id, text: "ok", ...result })] : [use];
+}
+const edit = (path: string, from: string, to: string, result?: Partial<Item> | null) => call("Edit", { file_path: path, old_string: from, new_string: to }, result);
+const write = (path: string, lines: number) => call("Write", { file_path: path, content: Array.from({ length: lines }, (_, n) => `line ${n}`).join("\n") });
+const steps = (items: Item[]): Step[] => segments(items)[0].steps;
+const ask = () => item({ role: "user", kind: "text", text: "Show 12 hours of rain" });
+const done = () => item({ kind: "text", text: "Done." });
+
+describe("turnChanges: what an exchange's own edits changed", () => {
+  it("sums each file's edits (Edit, MultiEdit, Write and a Codex diff), in the order first edited, relative to the folder", () => {
+    const c = turnChanges(steps([
+      ask(),
+      ...edit(`${CWD}/Widget/Provider.swift`, "a\nb", "a\nc"),
+      ...call("MultiEdit", { file_path: `${CWD}/Widget/Rain.swift`, edits: [{ old_string: "x", new_string: "y\nz" }, { old_string: "q", new_string: "" }] }),
+      ...write(`${CWD}/Tests/RainTests.swift`, 3),
+      ...edit(`${CWD}/Widget/Provider.swift`, "", "d"),
+      ...call("Edit", { file_path: "/elsewhere/notes.md", diff: "@@ -1,2 +1,2 @@\n-old\n+new\n same\n", change: "update" }),
+      done(),
+    ]), CWD)!;
+    expect(c.files.map((f) => [f.shown, f.add, f.del])).toEqual([
+      ["Widget/Provider.swift", 2, 1],
+      ["Widget/Rain.swift", 2, 2],
+      ["Tests/RainTests.swift", 3, 0],
+      ["/elsewhere/notes.md", 1, 1],
+    ]);
+    expect([c.add, c.del, c.exact]).toEqual([8, 4, true]);
+    expect(c.files[0].path).toBe(`${CWD}/Widget/Provider.swift`);
+  });
+
+  it("counts only edits that succeeded, and never reads or other tools", () => {
+    const c = turnChanges(steps([
+      ask(),
+      ...edit(`${CWD}/a.ts`, "1", "2", { is_error: true, text: "String to replace not found" }),
+      ...edit(`${CWD}/b.ts`, "1", "2", null),
+      ...call("Read", { file_path: `${CWD}/c.ts` }),
+      ...call("Bash", { command: "git apply fix.patch" }),
+      ...edit(`${CWD}/d.ts`, "1", "2"),
+      done(),
+    ]), CWD)!;
+    expect(c.files.map((f) => f.shown)).toEqual(["d.ts"]);
+  });
+
+  it("has nothing to show without a successful edit", () => {
+    expect(turnChanges(steps([ask(), ...call("Read", { file_path: `${CWD}/c.ts` }), done()]), CWD)).toBeNull();
+  });
+
+  it("draws no card for work the hub folded and nobody opened: its edits are not on the page", () => {
+    const fold = item({ kind: "fold", fold: { items: 6, tools: 3, thoughts: 0, through_seq: seq + 3 } });
+    expect(turnChanges(steps([ask(), ...edit(`${CWD}/a.ts`, "1", "2"), fold, done()]), CWD)).toBeNull();
+  });
+
+  it("keeps a file whose edit the hub clipped for good, without counts it cannot know", () => {
+    const clipped = "line\n".repeat(10) + "\n…（已截断，共 40210 字节）"; // i18n-ignore: the hub's note
+    const c = turnChanges(steps([ask(), ...call("Write", { file_path: `${CWD}/big.json`, content: clipped }), ...edit(`${CWD}/a.ts`, "1", "2"), done()]), CWD)!;
+    expect(c.files.map((f) => [f.shown, f.exact])).toEqual([["big.json", false], ["a.ts", true]]);
+    expect(c.exact).toBe(false);
+  });
+});
+
+let host: HTMLDivElement;
+let root: Root;
+beforeEach(() => {
+  fake.features = [];
+  fake.cwd = CWD;
+  closePanel();
+  host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+});
+afterEach(() => {
+  act(() => root.unmount());
+  host.remove();
+});
+
+const ctx = (lineStyle: ChatContextValue["lineStyle"]): ChatContextValue => ({ tasks: emptyTaskIndex(), subagents: [], scope: "t:", lineStyle });
+function draw(items: Item[], o: { lineStyle?: ChatContextValue["lineStyle"]; live?: boolean; trace?: boolean } = {}) {
+  const seg = segments(items)[0];
+  act(() =>
+    root.render(
+      <ChatContext.Provider value={ctx("lineStyle" in o ? o.lineStyle : "agents")}>
+        <SegmentView seg={seg} live={o.live ?? false} trace={o.trace} mid="m" sid="s" expandFold={async () => {}} />
+      </ChatContext.Provider>,
+    ),
+  );
+}
+const card = () => host.querySelector<HTMLElement>("[data-turn-changes]");
+const rows = () => [...host.querySelectorAll<HTMLElement>("[data-changed-file]")].map((r) => r.dataset.changedFile);
+const button = (text: string) => [...host.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.includes(text));
+const five = () => [ask(), ...["a", "b", "c", "d", "e"].flatMap((n) => edit(`${CWD}/src/${n}.ts`, "1", "2")), done()];
+
+describe("the card in the chat", () => {
+  it("ends a finished Agent exchange, after its last words", () => {
+    draw([ask(), ...edit(`${CWD}/a.ts`, "1\n2", "1\n3"), ...write(`${CWD}/b.ts`, 2), done()]);
+    expect(card()).not.toBeNull();
+    expect(card()!.textContent).toContain("已更改 2 个文件");
+    expect(card()!.textContent).toContain("+3 -1");
+    expect(rows()).toEqual(["a.ts", "b.ts"]);
+    const section = host.querySelector("[data-segment]")!;
+    expect(section.lastElementChild).toBe(card());
+    expect(card()!.previousElementSibling?.hasAttribute("data-latest-text")).toBe(true);
+  });
+
+  it("never shows in a Persona conversation, nor without a known conversation type", () => {
+    draw([ask(), ...edit(`${CWD}/a.ts`, "1", "2"), done()], { lineStyle: "assistant" });
+    expect(card()).toBeNull();
+    draw([ask(), ...edit(`${CWD}/a.ts`, "1", "2"), done()], { lineStyle: undefined });
+    expect(card()).toBeNull();
+  });
+
+  it("never shows while the exchange runs, nor in a supervision trace", () => {
+    const items = [ask(), ...edit(`${CWD}/a.ts`, "1", "2"), done()];
+    draw(items, { live: true });
+    expect(card()).toBeNull();
+    draw(items, { trace: true });
+    expect(card()).toBeNull();
+    draw(items);
+    expect(card()).not.toBeNull();
+  });
+
+  it("lists three files, then Show N more files, and Show less", () => {
+    draw(five());
+    expect(rows()).toEqual(["src/a.ts", "src/b.ts", "src/c.ts"]);
+    const more = button("再显示 2 个文件")!;
+    expect(more.getAttribute("aria-expanded")).toBe("false");
+    act(() => more.click());
+    expect(rows()).toHaveLength(5);
+    expect(button("再显示")).toBeUndefined();
+    act(() => button("收起")!.click());
+    expect(rows()).toHaveLength(3);
+  });
+
+  it("Review opens the session's review, a file opens it at that file", () => {
+    fake.features = ["git_review"];
+    draw(five());
+    act(() => button("评审")!.click());
+    expect(getPanel()).toEqual({ kind: "review", mid: "m", sid: "s", cwd: CWD, scope: "uncommitted" });
+    act(() => host.querySelector<HTMLButtonElement>('[data-changed-file="src/b.ts"]')!.click());
+    expect(getPanel()).toEqual({ kind: "review", mid: "m", sid: "s", cwd: CWD, scope: "uncommitted", at: { path: `${CWD}/src/b.ts` } });
+  });
+
+  it("without a review on this hub, has no Review and a file opens in the files panel", () => {
+    draw(five());
+    expect(button("评审")).toBeUndefined();
+    act(() => host.querySelector<HTMLButtonElement>('[data-changed-file="src/a.ts"]')!.click());
+    expect(getPanel()).toEqual({ kind: "file", mid: "m", path: `${CWD}/src/a.ts`, cwd: CWD, sid: "s" });
+  });
+
+  it("is part of the exchange's guessed height off screen, folded at three rows and Show more", () => {
+    const est = (lineStyle: ChatContextValue["lineStyle"]) => {
+      const seg = segments(five())[0];
+      act(() =>
+        root.render(
+          <ChatContext.Provider value={ctx(lineStyle)}>
+            <SegmentView seg={seg} live={false} mid="m" sid="s" expandFold={async () => {}} offscreen={() => () => {}} />
+          </ChatContext.Provider>,
+        ),
+      );
+      return parseFloat(host.querySelector<HTMLElement>("[data-segment]")!.style.getPropertyValue("--seg-est"));
+    };
+    expect(est("agents") - est("assistant")).toBe(12 + 8 + 2 + 64 + 1 + 16 + 3 * 36 + 32);
+  });
+
+  it("without the session's folder, has no Review either", () => {
+    fake.features = ["git_review"];
+    fake.cwd = undefined;
+    draw([ask(), ...edit("/Users/me/code/weather/a.ts", "1", "2"), done()]);
+    expect(card()).not.toBeNull();
+    expect(button("评审")).toBeUndefined();
+  });
+});

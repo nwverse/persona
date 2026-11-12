@@ -17,12 +17,21 @@ export interface GitSpot {
   old?: boolean;
 }
 
+/** Where a review opens (Panel "review" `at`). */
+export interface ReviewSpot {
+  path: string;
+  line?: number;
+  /** The line number is the old file's. */
+  old?: boolean;
+}
+
 export type Panel =
   /** `path`: the folder to open at; `file`: a file open in it (a panel brought back, lib/panel-memory.ts). */
   | { kind: "files"; mid: string; sid: string; cwd: string; path?: string; file?: string }
   | { kind: "git"; mid: string; sid: string; cwd: string; at?: GitSpot }
-  /** Reviewing the session's changes (#151): `scope` to open at, `at` a comment's file and line to go to. */
-  | { kind: "review"; mid: string; sid: string; cwd: string; scope?: "uncommitted" | "branch" | "commit"; at?: { path: string; line: number; old?: boolean } }
+  /** Reviewing the session's changes (#151): `scope` to open at, `at` a comment's file and line to go to, or a changed
+   *  file to scroll to (`path` from the repository's root, or a full path inside it; no `line`). */
+  | { kind: "review"; mid: string; sid: string; cwd: string; scope?: "uncommitted" | "branch" | "commit"; at?: ReviewSpot }
   /** `sid`: the session whose message box takes the comments made in it (else the one last used). */
   | { kind: "file"; mid: string; path: string; cwd?: string; line?: number; to?: number; sid?: string }
   /** `manager`: the chat's it was opened from, which reads it (none: the default's). */

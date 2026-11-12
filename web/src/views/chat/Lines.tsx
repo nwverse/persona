@@ -12,7 +12,8 @@ import { wakeSummary } from "../../lib/tasks";
 import { type ChatLine, type OpenRecap } from "../../lib/turns";
 import { sourceLabel } from "../../lib/message-source";
 import type { Item } from "../../lib/types";
-import { Button, Collapse, copyText, cx, Dialog } from "../../ui/atoms";
+import { Button, copyText, cx, Dialog } from "../../ui/atoms";
+import { ErrorDetailsText, ErrorNotice } from "../../ui/ErrorNotice";
 import { Icon } from "../../ui/icons";
 import { Markdown } from "../../ui/Markdown";
 import { SegmentView } from "./SegmentView";
@@ -277,72 +278,64 @@ export function closeRecap(key: string, id: string) {
 
 // ── model API errors ──
 
-/** A subscription usage limit, where an error card would have said the turn was interrupted. */
+/** A subscription usage limit, where an error card would have said the turn was interrupted: the same notice, with
+ *  when it resets or goes on (cindy draws the limit as its error notice too). */
 function UsageLimitLine({ text }: { text: string }) {
-  return (
-    <div role="status" className="flex items-start gap-2 rounded-card bg-field px-3.5 py-3 shadow-hairline">
-      <Icon name="clock" size={15} stroke={2.2} className="mt-[2px] shrink-0 text-orange" />
-      <span className="min-w-0 text-[14px] font-semibold text-ink">{text}</span>
-    </div>
-  );
+  return <ErrorNotice role="status" message={text} />;
 }
 
-/** A model API error: why, whether it passes by itself, the original under the fold, "Retry". One the user must fix (not
+/** A model API error (cindy's error notice): why, in words, whether it passes by itself under it, then its actions; the
+ *  ids, the status code, how many times in a row and the original are under "Error details". One the user must fix (not
  *  signed in, a wrong key, a model that is not there) says so instead, with "Fix it" (docs/assistant/onboarding.md 4.4). */
 function APIErrorCard({ info, count, at, onRetry, onEditLastMessage, fix }: { info: APIErrorInfo; count: number; at?: string; onRetry?: () => void; onEditLastMessage?: () => void; fix?: { title: string; detail: string; action: string } | null }) {
-  const [open, setOpen] = useState(false);
   const sub = fix ? fix.detail : info.transient === true ? t("chat-lines.api_transient") : info.transient === false ? t("chat-lines.api_permanent") : "";
-  const reason = fix ? fix.title : info.reason;
+  const reason = (fix ? fix.title : info.reason) || t("chat-lines.reply_failed");
   return (
-    <div className="flex flex-col gap-2.5 rounded-card bg-red-tint px-3.5 py-3 shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--red)_22%,transparent)]">
-      <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-label={t("chat-lines.api_error", { reason })} className="flex min-w-0 items-start gap-2 text-left">
-        <Icon name="info" size={15} stroke={2.2} className="mt-[2px] shrink-0 text-red" />
-        <span className="flex min-w-0 flex-1 flex-col gap-1">
-          <span className="text-[14px] font-semibold text-ink">{reason}</span>
-          {sub && <span className="text-[12px] text-ink-2">{sub}</span>}
-        </span>
-        <span className="flex shrink-0 items-center gap-1">
-          {info.status !== undefined && <span className="rounded-[4px] bg-red-tint px-1 font-mono text-[11px] font-medium text-red">{info.status}</span>}
-          {count > 1 && <span className="rounded-[4px] bg-field px-1 text-[11px] font-medium whitespace-nowrap text-ink-2">{t("chat-lines.api_repeated", { count })}</span>}
-          <Icon name="chevron" size={13} stroke={2.2} className="text-ink-3 transition-transform duration-200" style={{ transform: open ? "rotate(180deg)" : "none" }} />
-        </span>
-      </button>
-      <Collapse open={open}>
-        <div className="flex flex-col gap-1.5 pt-0.5">
+    <ErrorNotice
+      message={reason}
+      description={sub || undefined}
+      actions={
+        <>
+          {fix && (
+            <Button tone="primary" className="h-7" onClick={() => runAction(fix.action, { onHelp: () => {} })}>
+              {t("chat-lines.fix_it")}
+            </Button>
+          )}
+          {onRetry && (
+            <Button icon="retry" className="h-7" onClick={onRetry}>
+              {t("chat-lines.retry")}
+            </Button>
+          )}
+          {onEditLastMessage && (
+            <Button icon="pencil" className="h-7" onClick={onEditLastMessage}>
+              {t("rewind.edit_last")}
+            </Button>
+          )}
+        </>
+      }
+      details={
+        <div className="flex flex-col gap-1.5">
           {info.requestId && <Field label={t("chat-lines.request_id")} value={info.requestId} />}
           {info.session && <Field label="Session" value={info.session} />}
           {at && <Field label={t("chat-lines.time")} value={clock(at)} copy={false} />}
-          <pre className="max-h-56 overflow-auto rounded-[8px] bg-surface px-2.5 py-2 font-mono text-[11.5px] leading-[1.6] whitespace-pre-wrap text-ink-2 shadow-hairline [overflow-wrap:anywhere]">{info.raw}</pre>
-          <button type="button" onClick={() => copyText(info.raw)} className="flex w-fit items-center gap-1 text-[12px] font-medium whitespace-nowrap text-accent-ink hover:underline">
+          {info.status !== undefined && <Field label={t("chat-lines.status")} value={String(info.status)} copy={false} />}
+          {count > 1 && <Field label={t("chat-lines.repeated")} value={t("chat-lines.api_repeated", { count })} copy={false} mono={false} />}
+          <ErrorDetailsText text={info.raw} />
+          <button type="button" onClick={() => copyText(info.raw)} className="touch-hit flex w-fit items-center gap-1 text-[12px] font-medium whitespace-nowrap text-accent-ink hover:underline">
             <Icon name="copy" size={12} />
             {t("chat-lines.copy_raw")}
           </button>
         </div>
-      </Collapse>
-      {fix && (
-        <div>
-          <Button tone="primary" onClick={() => runAction(fix.action, { onHelp: () => {} })}>
-            {t("chat-lines.fix_it")}
-          </Button>
-        </div>
-      )}
-      {onRetry && (
-        <div>
-          <Button icon="retry" onClick={onRetry}>
-            {t("chat-lines.retry")}
-          </Button>
-        </div>
-      )}
-      {onEditLastMessage && <div><Button icon="pencil" onClick={onEditLastMessage}>{t("rewind.edit_last")}</Button></div>}
-    </div>
+      }
+    />
   );
 }
 
-function Field({ label, value, copy = true }: { label: string; value: string; copy?: boolean }) {
+function Field({ label, value, copy = true, mono = true }: { label: string; value: string; copy?: boolean; mono?: boolean }) {
   return (
-    <div className="flex min-w-0 items-center gap-2 text-[12px]">
-      <span className="w-14 shrink-0 text-ink-3">{label}</span>
-      <span className="min-w-0 truncate font-mono text-ink-2">{value}</span>
+    <div className="flex min-w-0 items-center gap-2 text-[12px] leading-5">
+      <span className="w-20 shrink-0 truncate text-ink-3">{label}</span>
+      <span className={cx("min-w-0 truncate text-ink-2", mono && "font-mono")}>{value}</span>
       {copy && (
         <button type="button" onClick={() => copyText(value)} aria-label={t("chat-lines.copy_field", { label })} className="flex size-5 shrink-0 items-center justify-center rounded-[5px] text-ink-3 hover:bg-hover-2 hover:text-ink">
           <Icon name="copy" size={11} />

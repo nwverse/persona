@@ -13,6 +13,8 @@ import type { FileContent, GitCommit } from "../../lib/files";
 import { splitLines } from "../../lib/files";
 import { shortPath } from "../../lib/format";
 import { whenComposer } from "../../lib/links";
+import type { ReviewSpot } from "../../lib/panel";
+import { relativeTo } from "../../lib/comments";
 import {
   loadReview, loadReviewFile, orderedComments, pendingComment, pendingReview, reviewDiff, reviewItems, reviewMessage, reviewQuote, reviewTotals, setPendingReview, usePendingReview,
   type GitReview, type GitReviewFile, type ReviewScope, type ReviewTarget,
@@ -44,7 +46,7 @@ function storedTarget(session: string, scope?: ReviewScope): ReviewTarget {
 
 type Failure = { code?: string; message: string };
 
-export function ReviewPanel({ mid, sid, cwd, scope, at, onClose }: { mid: string; sid: string; cwd: string; scope?: ReviewScope; at?: { path: string; line: number; old?: boolean }; onClose: () => void }) {
+export function ReviewPanel({ mid, sid, cwd, scope, at, onClose }: { mid: string; sid: string; cwd: string; scope?: ReviewScope; at?: ReviewSpot; onClose: () => void }) {
   const session = `${mid}/${sid}`;
   const [target, setTargetState] = useState<ReviewTarget>(() => storedTarget(session, scope));
   const setTarget = (t: ReviewTarget) => {
@@ -122,14 +124,16 @@ export function ReviewPanel({ mid, sid, cwd, scope, at, onClose }: { mid: string
     [items, key, res, count, pending.note],
   );
 
-  // a comment's card brought the review back: its file and line
-  const went = useRef(false);
+  // a comment's card brought the review back: its file and line; a changed-files card's file (#5157): the file, by its
+  // full path. Each opening goes there once, also when the panel was already open.
+  const went = useRef<ReviewSpot | undefined>(undefined);
   useEffect(() => {
-    if (!at || went.current || !res) return;
-    went.current = true;
+    if (!at || went.current === at || !res) return;
+    went.current = at;
+    const path = relativeTo(res.root, at.path);
     requestAnimationFrame(() => {
-      const d = document.querySelector(`[data-diff-path="${CSS.escape(at.path)}"]`);
-      const line = d?.querySelector(`[data-ln="${at.old ? "old" : "new"}"][data-n="${at.line}"]`);
+      const d = document.querySelector(`[data-diff-path="${CSS.escape(path)}"]`);
+      const line = at.line === undefined ? null : d?.querySelector(`[data-ln="${at.old ? "old" : "new"}"][data-n="${at.line}"]`);
       (line ?? d)?.scrollIntoView({ block: line ? "center" : "start" });
     });
   }, [at, res]);

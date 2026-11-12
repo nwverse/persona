@@ -36,6 +36,7 @@ import { useChatContext } from "./chat-context";
 import { useFreshWords } from "./fresh-words";
 import { Icon } from "../../ui/icons";
 import { WorkGroup, WorkNodes, type WorkProps } from "./WorkGroup";
+import { TurnChanges, turnChanges, turnChangesHeight } from "./TurnChanges";
 import { useCallSeeker } from "./jump";
 import { t } from "../../i18n";
 
@@ -324,7 +325,11 @@ export const SegmentView = memo(function SegmentView({
     return offscreen && el ? offscreen(el) : undefined;
   }, [offscreen]);
   const divided = Boolean(seg.modelChange);
-  const guess = useMemo(() => (offscreen ? ({ "--seg-est": `${segmentHeight(seg.user, nodes, divided)}px` } as CSSProperties) : undefined), [offscreen, seg.user, nodes, divided]);
+  // the files this finished Agent exchange changed (cindy's TurnChangesCard): its own edits, never a Persona
+  // conversation's (super rules 0 and 4), never while it runs, never in a supervision trace
+  const cwd = getSession(mid, sid)?.cwd;
+  const changes = useMemo(() => (!live && !trace && lineStyle === "agents" ? turnChanges(own, cwd) : null), [live, trace, lineStyle, own, cwd]);
+  const guess = useMemo(() => (offscreen ? ({ "--seg-est": `${segmentHeight(seg.user, nodes, divided) + (changes ? 12 + turnChangesHeight(changes) : 0)}px` } as CSSProperties) : undefined), [offscreen, seg.user, nodes, divided, changes]);
   return (
     <section ref={box} className={offscreen ? "seg-cv flex flex-col gap-3" : "flex flex-col gap-3"} style={guess} data-segment>
       {trace && seg.user?.rawInput && !seg.user.promptHidden && !seg.user.sourceInTrace ? <RawInjectedInput items={seg.user.rawInput} mid={mid} sid={sid} /> : seg.user && (seg.user.source ? <SourceMessage msg={seg.user} mid={mid} sid={sid} /> : seg.user.injected ? <InjectedHint msg={seg.user} sid={sid} /> : seg.user.parts ? <MergedBubble msg={seg.user} mid={mid} sid={sid} /> : seg.user.from ? <PeerMessage msg={seg.user} /> : isLoopTick(seg.user) ? <LoopTick msg={seg.user} /> : <UserBubble msg={seg.user} mid={mid} sid={sid} />)}
@@ -340,6 +345,7 @@ export const SegmentView = memo(function SegmentView({
       {!live && <Fragment key="before-words">{beforeWords}</Fragment>}
       {streaming !== undefined && liveRow}
       {(latestItem || streaming !== undefined) && !onlyCloseout && <div key="latest-text" data-latest-text><LatestAnswer item={latestItem} streaming={streaming} mid={mid} sid={sid} noCloseout={noCloseout || undefined} /></div>}
+      {changes && <TurnChanges key="turn-changes" changes={changes} mid={mid} sid={sid} cwd={cwd} />}
     </section>
   );
 });
