@@ -140,53 +140,6 @@ nonisolated struct MonthDropMap: Equatable {
     static func point(_ p: CGPoint) -> String { "(\(Int(p.x)),\(Int(p.y)))" } // i18n-ignore: DEBUG trace
     static func rect(_ r: CGRect) -> String { "\(point(r.origin))+\(Int(r.width))x\(Int(r.height))" } // i18n-ignore: DEBUG trace
 }
-
-#if os(iOS)
-/// Notes in the drag trace, for each touch on the calendar's window, which view it went to and how many of the
-/// calendar's holds were given it (an iPad's finger never reached the axis's blocks, #2045). It never recognizes
-/// anything: it fails as the touch comes down.
-struct CalendarTouchProbe: UIViewRepresentable {
-    func makeUIView(context: Context) -> Anchor { Anchor() }
-    func updateUIView(_ view: Anchor, context: Context) {}
-
-    final class Anchor: UIView {
-        private let probe = Probe()
-
-        override func didMoveToWindow() {
-            super.didMoveToWindow()
-            probe.view?.removeGestureRecognizer(probe)
-            window?.addGestureRecognizer(probe)
-        }
-    }
-
-    final class Probe: UIGestureRecognizer {
-        init() {
-            super.init(target: nil, action: nil)
-            cancelsTouchesInView = false
-            delaysTouchesBegan = false
-            delaysTouchesEnded = false
-        }
-
-        /// For each touch: the view it went to, its type and radius, and the recognizers given it (how many are the
-        /// calendar's holds). SwiftUI's recognizers sit on its gesture containers, not on views.
-        override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
-            super.touchesBegan(touches, with: event)
-            for touch in touches {
-                let at = touch.location(in: nil)
-                let given = touch.gestureRecognizers ?? []
-                let got = given.filter { $0 is CalendarHoldRecognizer }.count
-                let names = given.prefix(6).map { String(String(describing: type(of: $0)).prefix(18)) }.joined(separator: ",")
-                CalendarDragTrace.shared.note("touch \(Self.name(touch.view)) t\(touch.type.rawValue) r\(Int(touch.majorRadius)) got \(got) of \(given.count) \(names) at \(CalendarDragTrace.point(at))") // i18n-ignore: DEBUG trace
-            }
-            state = .failed
-        }
-
-        private static func name(_ view: UIView?) -> String {
-            view.map { String(String(describing: type(of: $0)).prefix(28)) } ?? "none" // i18n-ignore: DEBUG trace
-        }
-    }
-}
-#endif
 #endif
 
 extension View {

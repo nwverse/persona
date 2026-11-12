@@ -106,9 +106,6 @@ struct TodoCalendarView: View {
                     #if os(iOS)
                     .simultaneousGesture(paging, including: carrying ? .subviews : .all)
                     #endif
-                    #if DEBUG && os(iOS)
-                    .background { CalendarTouchProbe() }
-                    #endif
                 undatedBar
             }
         }

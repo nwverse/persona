@@ -81,13 +81,15 @@ it; the compiler and the unit tests had nothing to say.
   interaction instead: a `PrimitiveButtonStyle` whose label carries it and calls `configuration.trigger()` on a tap
   (`CalendarCarryStyle`). The recognizer recognizes the tap itself, so no gesture under it takes the touch as well.
 - Never wrap `Button(configuration)` inside the style (`Styling.swift`).
-- Place such views by layout (`calendarPlaced`: a frame and `.position`), not `.offset`. On an iPad in landscape a
-  finger never reached the blocks placed on the axis's scroll view by an offset: a tap went to the axis under them,
-  while a pointer, the month's chips (not offset) and a phone were fine, and a plain `Button` at the same offset had
-  been reachable. An offset moves only the drawing; SwiftUI's own offset buttons in scroll views have the same trouble
-  on iOS 26 (FB17939266). Taking a hover effect off the label changed nothing.
+- Such a button no longer wins the hit test the way a plain `Button` does. On an iPad, a finger on the axis's
+  blocks went to the empty column beside them, whose tap gesture added a to-do; a pointer and a phone's finger still
+  reached the block. Put a tap meant for the empty space on the view that contains the buttons, as the month's day
+  is around its chips, as a `simultaneousGesture` that ignores taps on them. Placing the blocks by layout instead of
+  `.offset` (FB17939266) and taking a hover effect off the label changed nothing.
 - When a gesture misbehaves only in UI tests, note its steps in a DEBUG trace shown as an accessibility value
-  (`CalendarDragTrace`) and print it in the failure message. An empty trace says the recognizer never saw the touch.
+  (`CalendarDragTrace`) and print it in the failure message. An empty trace says the recognizer never saw the touch. To
+  find where a touch went, a passive recognizer on the window (`cancelsTouchesInView` false, failing in
+  `touchesBegan`) can note `touch.view` and `touch.gestureRecognizers`; take it out once it has answered.
 
 ## A file only tests read still counts as a blocking read (#4695)
 
