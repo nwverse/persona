@@ -366,3 +366,12 @@ mid-turn got no reply for minutes because the mid-turn note went in only with th
 the only line between tool calls was English to a Chinese owner. The node now always adds the note to a busy Claude
 (`midTurn`), asking for one sentence in the user's language before the next tool call, and the CLAUDE.md asks for the
 user's language in process text too.
+
+## A leader's split must be somewhere the owner can see (#5846)
+
+Owners lost track of their directions because a leader kept its breakdown in its own files and turns: the direction tree
+only listed tasks with an Agent, so the pieces nobody had started yet were invisible, and the owner could only ask the
+leader and read an answer full of its own labels. A leader's `todo_create` now opens a to-do under its direction, and the
+tree shows pieces no Agent has worked on as `planned`. Two traps found on the way: such a piece has an `origin`, so the
+To-dos SOP shelves it after 48 h untouched like any agent-made to-do (it leaves the tree; the leader touching it keeps it),
+and the stuck rule must not count a piece that never started, or every planned piece older than a day reported stuck.

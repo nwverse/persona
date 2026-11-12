@@ -2634,7 +2634,8 @@ def _lead_supervision(leader, state=""):
 
 
 # MOCK_LEADERS=1 also hands some to-dos to the directions (#4352, the direction tree): a task asking for you, one awaiting
-# review, one stuck for a day and some running under the four leaders; the rest have no leader and fall to the secretary.
+# review, one stuck for a day, a piece the leader recorded and no agent has taken up yet (#5846) and some running under the
+# four leaders; the rest have no leader and fall to the secretary.
 if MOCK_LEADERS:
     _leads = {"todo_weather": 0, "todo_review": 0, "todo_photos": 1, "todo_orders": 1, "todo_blog": 2}
     for _t in TODOS_INIT:
@@ -2645,22 +2646,31 @@ if MOCK_LEADERS:
          "created_at": ago(hours=6), "updated_at": ago(minutes=20), "spaces": [], "agents": [],
          "supervision": _lead_supervision(MOCK_LEADERS[0], "pending_review")},
         {"id": "lead_stuck", "title": "对账差异排查", "notes": "上游的流水还没给到。", "done_at": None,  # i18n-ignore: mock data
-         "created_at": ago(days=3), "updated_at": ago(hours=30), "spaces": [], "agents": [],
+         "created_at": ago(days=3), "updated_at": ago(hours=30), "spaces": [],
+         "agents": [{"machine_id": "server", "session_id": "lead-stuck-0001", "linked_at": ago(days=2), "released_at": ago(hours=30),
+                     "title": "对账差异排查", "cwd": "/home/me/code/billing", "agent": "claude", "start_error": "",  # i18n-ignore: mock data
+                     "source": "manual", "via": ""}],
          "supervision": _lead_supervision(MOCK_LEADERS[3])},
+        {"id": "lead_planned", "title": "平板两栏布局", "notes": "先出设计稿，再派 Agent 实现。", "done_at": None,  # i18n-ignore: mock data
+         "origin": MOCK_LEADERS[0], "created_at": ago(hours=3), "updated_at": ago(hours=3), "spaces": [], "agents": [],
+         "supervision": _lead_supervision(MOCK_LEADERS[0])},
     ])
 TODOS = copy.deepcopy(TODOS_INIT)
 
-_DIRECTION_STATE_ORDER = {"needs_you": 0, "review": 1, "stuck": 2, "working": 3}
+_DIRECTION_STATE_ORDER = {"needs_you": 0, "review": 1, "stuck": 2, "working": 3, "planned": 4}
 
 
 def _direction_task_state(t, sessions):
-    """The mock's stand-in for the hub's one task-state rule (assistant/direction_tree.go): needs you, review, stuck, working."""
+    """The mock's stand-in for the hub's one task-state rule (assistant/direction_tree.go): needs you, review, planned (no
+    agent ever on it, #5846), stuck, working."""
     sup = t.get("supervision") or {}
     states = [(sessions.get((a["machine_id"], a["session_id"])) or {}).get("state", "") for a in _direction_active_agents(t)]
     if "needs_you" in states or sup.get("state") == "needs_user" or (TODO_ASKS.get(t["id"]) or {}).get("outcome") == "decide":
         return "needs_you"
     if sup.get("state") == "pending_review" and "working" not in states:
         return "review"
+    if not t.get("agents"):
+        return "planned"
     if "working" not in states and (t.get("updated_at") or "") < ago(hours=24):
         return "stuck"
     return "working"
@@ -2712,7 +2722,7 @@ def mock_direction_tree():
         tasks.sort(key=lambda x: x["id"])
         tasks.sort(key=lambda x: x["_at"], reverse=True)
         tasks.sort(key=lambda x: _DIRECTION_STATE_ORDER[x["state"]])
-        counts = {k: sum(1 for x in tasks if x["state"] == k) for k in ("working", "needs_you", "stuck", "review")}
+        counts = {k: sum(1 for x in tasks if x["state"] == k) for k in _DIRECTION_STATE_ORDER}
         return {"id": did, "name": name, **extra, "counts": counts,
                 "tasks": [{k: v for k, v in x.items() if k != "_at"} for x in tasks]}
 
