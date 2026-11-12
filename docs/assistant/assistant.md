@@ -552,6 +552,8 @@ that profile's `skills` and the working directory's ancestor `.claude/skills` ro
 16 KiB frontmatter per file). Names/descriptions are data, not executed YAML or shell substitutions; bodies are not
 read for the menu. `user-invocable: false` and local `skillOverrides: off` are respected. Known strict-plugin policy
 or `Skill` deny/ask rules refuse this adapter rather than work around native customization/approval gates.
+Known managed-policy files/drop-in directories or a server-policy cache also refuse the bounded adapter:
+it checks their presence without reading a potentially credential-bearing cache or executing policy helpers.
 This bounded adapter deliberately does **not** claim to enumerate plugin, bundled or remote skills.
 It sends an explicit, server-resolved exact-file reading instruction under existing permissions rather than a native
 slash command, which could resolve a same-name skill elsewhere or apply frontmatter tool/permission overrides.
@@ -571,6 +573,17 @@ and `web/src/views/chat/MentionSkill.test.tsx`. Opt-in real runtime checks:
 the installed launcher's default model/authentication; they print only allowlisted results. A successful native
 smoke is not a production Web-to-hub end-to-end test. Synthetic browser fixture:
 `PORT=25357 python3 scripts/mock/skill_mentions.py`.
+
+Inspected browser captures use only that fictional fixture, not the requester's reference image or account data:
+[light](../web/screenshots/skill-mentions/light-menu.png),
+[dark](../web/screenshots/skill-mentions/dark-menu.png),
+[narrow large-text light](../web/screenshots/skill-mentions/narrow-light-menu.png),
+[narrow large-text dark](../web/screenshots/skill-mentions/narrow-dark-menu.png),
+[selected](../web/screenshots/skill-mentions/narrow-selected.png),
+[loading](../web/screenshots/skill-mentions/narrow-loading.png),
+[unavailable](../web/screenshots/skill-mentions/narrow-error.png), and
+[partial](../web/screenshots/skill-mentions/narrow-light-partial.png).
+These demonstrate rendered interaction, not production connectivity or model execution.
 
 Runtime contracts were checked against the official
 [Codex app-server skills documentation](https://developers.openai.com/codex/app-server/#skills) and
