@@ -35,6 +35,7 @@ type fakeHub struct {
 	inboxHook     func(ctx context.Context) // runs first in InboxChanged, no lock held (#4924)
 	readHooks     receiptHooks              // around session.items reads and on receipt broadcasts, no lock held
 	itemReads     int                       // session.items reads since the hooks were set
+	onDevicesList func()                    // runs once, then clears, before the next devices.list; no lock held
 	hello         Hello
 	settings      *Settings
 	launcherList  []proto.Launcher                   // the nodes' launchers.list (nil: the list fails, so it can't be told)
@@ -197,6 +198,15 @@ func (f *fakeHub) Hello(context.Context) (Hello, error) {
 }
 
 func (f *fakeHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
+	if p.Device == DeviceAll && p.Method == DeviceDevicesList {
+		f.mu.Lock()
+		hook := f.onDevicesList
+		f.onDevicesList = nil
+		f.mu.Unlock()
+		if hook != nil {
+			hook() // what happens while a card is being made: its "where" reads the machines
+		}
+	}
 	if p.Method != DeviceSessionItems {
 		return f.deviceCall(ctx, p)
 	}
