@@ -567,8 +567,9 @@ final class MessageLiftUITests: XCTestCase {
             shot("short-answer-normal")
             liftAt("收到，都提交了")
             XCTAssertTrue(lifted.waitForExistence(timeout: 3), "no lifted copy")
-            XCTAssertTrue(shows(lifted.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "收到，都提交了")).firstMatch),
-                          "the lifted copy shows the answer")
+            // A lifted message that all shows is one element, its words its label.
+            XCTAssertTrue(lifted.label.contains("收到，都提交了") && app.frame.contains(lifted.frame),
+                          "the lifted copy shows the answer:\n\(lifted.debugDescription)")
             shot("short-answer-lifted")
             app.buttons["复制"].firstMatch.tap()
             XCTAssertTrue(lifted.waitForNonExistence(timeout: 3), "复制 did not put the answer back")
