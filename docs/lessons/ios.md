@@ -1313,8 +1313,10 @@ When a computer disconnects, hub marks sessions unknown, not offline; `AgentStat
   the tap, below), a far one put SwiftUI's layout of the far line, three evaluations of the page and the leap's drawing
   on one frame: 206–252 ms against SwiftUI's own worst frame of 112–169 ms there (a quote of the report's start, the
   oldest tool call). Landing far away has to lay that place out either way; spread over SwiftUI's animation it costs
-  more in total but less on any one frame. A line already on screen was slower too in the real report (longest frame
-  117 ms median, 163 worst, against SwiftUI's 17 and 42): the placing adds two layout passes to the tap's frame.
+  more in total but less on any one frame. A line partly on screen (the oldest one, as the navigator picks it) is not
+  a fair race: SwiftUI's animated `scrollTo(id:anchor: .center)` left the list where it was, while placing it first
+  moved the list about 1,000 pt to center it (longest frame 117 ms median against SwiftUI's 17 in the real report).
+  All jumps to a line keep SwiftUI's, so they behave exactly as before.
 - **Where a line is, before the frame is drawn** (tried, not used): a lazy list knows a far row's offset only once it lays it out. A
   non-animated `position.scrollTo(id:anchor:)` followed by `window.layoutIfNeeded()` makes SwiftUI place it at once, and
   the list's `contentOffset` is then the target. Putting the offset back does not hold: SwiftUI keeps the list on the

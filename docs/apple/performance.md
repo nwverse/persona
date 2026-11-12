@@ -256,7 +256,7 @@ value written back into state that changes the layout loops for ever and hangs t
   a SwiftUI update every frame that put the content at a new fractional pixel offset and drew every text layer on screen
   again. With CoreGraphics' 1 MB glyph cache, a long Chinese answer had its glyphs rendered anew each frame (#5076,
   docs/lessons/ios.md「Animated jumps redraw every text they pass」). Jumps to the newest end now move the
-  `UIScrollView` (`ChatJumpRun`); jumps to a line keep SwiftUI's, which measured faster for them.
+  `UIScrollView` (`ChatJumpRun`); jumps to a line keep SwiftUI's (a far one measured a longer frame on the list).
 
 **Do.** Batch into one main-actor hop per frame or per short window (`applyPendingSessions`); compare before assigning;
 round geometry to whole points and write it back only when it moved by at least a point. Animate a long list's

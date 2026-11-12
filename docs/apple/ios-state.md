@@ -360,8 +360,8 @@ most of each frame: docs/lessons/ios.md「Animated jumps redraw every text they 
   catching up more than a screen away, a held row let go. As ↓: the position is forgotten first, the jump runs, the
   geometry is read once there and looked at again 0.3 s later.
 - To a line (the edge navigator's line, a quote's message, a call): SwiftUI's animated `scrollTo(id:anchor: .center)`
-  as before. Run on the list, a far one cost a longer frame than SwiftUI's own worst there, and even one on screen was
-  slower (docs/lessons/ios.md「Animated jumps redraw every text they pass」).
+  as before. Run on the list, a far one cost a longer frame than SwiftUI's own worst there, and one partly on screen
+  moved where SwiftUI's did not (docs/lessons/ios.md「Animated jumps redraw every text they pass」).
 - Offsets stay on whole pixels on the way; the last frame is the exact target. Reduce Motion: there at once.
 - `-showSwiftUIJumps YES` (DEBUG) keeps SwiftUI's animated scroll for these too, to measure against in one build
   (`-showJumpPerf`, `-showAutoScroll`'s sweep, which runs on the list by default; docs/operations/testing.md「Long Agent
