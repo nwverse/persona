@@ -142,7 +142,7 @@ func TestFormerMainConversationTasksHandedOverByThePass(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.superviseTodo(ctx, moved.ID, "conv2", []string{"做完"}, 30)
-	s.taskCard(ctx, "conv2", moved.ID)
+	s.taskCard(ctx, "conv2", moved.ID, wakeActive)
 	cards = strings.Count(feedKinds(s, "conv2"), feedTask)
 	s.handOverFormerMainTasks(ctx)
 	if x := todoNow(s, moved.ID); x.Origin != "conv2" || x.Supervision.Supervisor != "conv2" || strings.Count(feedKinds(s, "conv2"), feedTask) != cards {
@@ -175,5 +175,55 @@ func TestSettingsMainSwitchHandsOverTasks(t *testing.T) {
 	}
 	if x := todoNow(s, todo.ID); x.Origin != "conv2" || x.Supervision.Supervisor != "conv2" {
 		t.Fatalf("after the switch: origin %q, supervisor %q", x.Origin, x.Supervision.Supervisor)
+	}
+}
+
+// The background supervisor follows the current main conversation's tasks without owning their ledger. A main
+// switch must move that ledger too, so digests still reach the background conversation and it can review the task.
+func TestMainTaskHandoverKeepsBackgroundSupervision(t *testing.T) {
+	s, f, todo, led, _, _ := handoverFixture(t)
+	ctx := context.Background()
+	s.noBackground = false
+	f.known["conv2"], f.known["bg1"] = true, true
+	f.setSessions("server",
+		proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{SessionID: "conv2", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{SessionID: "bg1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+	setSettings(t, s, func(v *Settings) {
+		v.BackgroundSupervisor = "bg1"
+		v.BackgroundSupervisorMachineID = "server"
+	})
+	w, view := permissionSettingsRequest(t, s, "PUT", "/api/v1/assistant", "", "full", `{"main":"conv2"}`)
+	if w.Code != 200 || view.Main != "conv2" {
+		t.Fatalf("PUT main: %d %s", w.Code, w.Body.String())
+	}
+	got := todoNow(s, todo.ID)
+	if got.Origin != "conv2" || got.Supervision.Supervisor != "conv2" || got.Supervision.State != reviewPending {
+		t.Fatalf("task after the switch: origin %q, supervision %+v", got.Origin, got.Supervision)
+	}
+	if wake := taskCardWake(s, "conv2", todo.ID); wake != wakeActive {
+		t.Fatalf("the transferred task's card wake = %q", wake)
+	}
+	if to := s.digestTo(s.settings(ctx), superviseSignal{Todo: todo.ID, Kind: sigReview}); to != "bg1" {
+		t.Fatalf("review routed to %q", to)
+	}
+	if to := s.digestTo(s.settings(ctx), superviseSignal{Todo: led.ID, Kind: sigReview}); to != "lead1" {
+		t.Fatalf("the leader's review routed to %q", to)
+	}
+	waitFor(t, "the transferred task's review sent to the background supervisor", func() bool {
+		return strings.Contains(strings.Join(f.noticesTo("bg1"), "\n"), todo.ID)
+	})
+	agent := proto.Session{SessionID: "s1", MachineID: "box"}
+	if _, elsewhere, err := s.supervisedElsewhere(ctx, "bg1", Device{ID: "box"}, agent); err != nil || elsewhere {
+		t.Fatalf("the background supervisor lost its agent: elsewhere %v, %v", elsewhere, err)
+	}
+	if res, err := runJSON(t, s, "bg1", "task_review", map[string]any{
+		"todo_id": todo.ID, "verdict": "accepted", "note": "Verified after the main conversation changed",
+	}); err != nil || !strings.Contains(res, "accepted and closed") {
+		t.Fatalf("background acceptance: %s %v", res, err)
+	}
+	got = todoNow(s, todo.ID)
+	if got.DoneAt == nil || got.Supervision.State != reviewAccepted || got.Origin != "conv2" || got.Supervision.Supervisor != "conv2" {
+		t.Fatalf("accepted task: %+v, supervision %+v", got, got.Supervision)
 	}
 }

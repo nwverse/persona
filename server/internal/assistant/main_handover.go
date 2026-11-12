@@ -12,7 +12,8 @@ import (
 // check that compares the supervisor with a conversation (agent_send's provenance, the done judge's, agent_supervise,
 // task_review) then counts the new main conversation as the one that handed the task out, and the task's receipts,
 // reviews and reports go to its feed instead of an archived one nobody opens. The ledger is kept as it is (criteria,
-// reviews, round, parking, waits on the owner); a task waiting for review is signalled again to the new conversation,
+// reviews, round, parking, waits on the owner); a task waiting for review is signalled again through the new main
+// conversation's supervision policy (the background supervisor by default),
 // and the card of a task it now supervises is put there (the old conversation keeps its history). A task a leader supervises keeps its leader;
 // closed tasks and the owner's own to-dos are not touched.
 
@@ -82,7 +83,7 @@ func (s *Service) handOverTask(ctx context.Context, t Todo, from, to string, hel
 		}
 	}
 	if supervised {
-		s.taskCard(ctx, to, t.ID) // its card follows it (the old conversation keeps its history)
+		s.taskCard(ctx, to, t.ID, wakeActive) // its card follows it (the old conversation keeps its history)
 	}
 	if moved {
 		s.logf("task %s: the main conversation %s was replaced; %s takes it over", t.ID, short(from), short(to))
