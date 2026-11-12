@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -221,7 +222,7 @@ func (n *Node) claudeAssistantMCPAndTools(id, cwd string, legacyMCP bool) (mcpJS
 // A managed launcher's shell is not wrapped: it runs `personad launch`, which fetches the launcher's settings outside
 // the sandbox and wraps only the agent it execs (launchExec).
 func (n *Node) assistantCLICommand(shell, launcher, cwd string, args, env []string) *exec.Cmd {
-	argv := append([]string{shell, "-ic", n.launcherCommandIn(launcher, envValue(env, "CLAUDE_CONFIG_DIR"), shellQuote) + ` "$@"`, "persona"}, args...)
+	argv := append([]string{shell, "-ic", n.launcherCommandIn(launcher, envValue(env, "CLAUDE_CONFIG_DIR"), assistantCLIPathQuote(assistantCLIGOOS)) + ` "$@"`, "persona"}, args...)
 	if _, managed := n.managedLauncher(launcher); !managed {
 		base := env
 		argv, env, _ = wrapAgent("assistant", n.home, n.dir, cwd, settingsArgs(args),
@@ -230,6 +231,20 @@ func (n *Node) assistantCLICommand(shell, launcher, cwd string, args, env []stri
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir, cmd.Env = cwd, env
 	return cmd
+}
+
+// assistantCLIGOOS is the platform assistantCLICommand builds its shell command for (tests set it).
+var assistantCLIGOOS = runtime.GOOS
+
+// assistantCLIPathQuote quotes the paths in assistantCLICommand's script (the profile directory, a managed launcher's
+// personad) for goos. On Windows the script reaches Git Bash as an argument of a native process, and that boundary
+// eats the backslashes shellQuote escapes, leaving an unmatched quote (#5487); the paths go with forward slashes, which
+// Git Bash and Windows programs both read as the same path. Elsewhere it is shellQuote.
+func assistantCLIPathQuote(goos string) func(string) string {
+	if goos != "windows" {
+		return shellQuote
+	}
+	return func(path string) string { return shellQuote(strings.ReplaceAll(path, `\`, "/")) }
 }
 
 func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options ...modelExecution) (*assistantProc, error) {
