@@ -63,8 +63,6 @@
   "speed_standard": "标准",
   "speed_fast": "Fast 加速",
   "header_mode": "权限模式：{mode}",
-  "mode_unknown": "未知",
   "leave_bypass_confirm": "切到 {mode}",
-  "leave_bypass_detail": "这个 Agent 不是以完全访问启动的，切走后在这里切不回来。",
-  "modes_locked": "没在运行：运行中才能改模式"
+  "leave_bypass_detail": "这个 Agent 不是以完全访问启动的，切走后在这里切不回来。"
 }

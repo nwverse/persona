@@ -46,10 +46,6 @@ class ChatSyncScenariosTest(private val name: String, private val case: JsonObje
          * the list, and a new failure is not hidden behind an old entry.
          */
         private val KNOWN: Map<String, Known> = mapOf(
-            "send_failed_stays_above_later" to Known(
-                "#2769: ChatScreen draws the outbox's bubbles below every transcript line, so a failed message drops " +
-                    "below the ones sent after it",
-                Regex("""got {2}\[.*If it rains: the aquarium\., user\[failed] Find a dinner place\.]""")),
             "start_answer_cut_then_receipt" to Known(
                 "can't be played yet: a new chat starts from the new-conversation page, not this harness's chat",
                 Regex("can't be played yet: a new chat")),

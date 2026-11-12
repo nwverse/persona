@@ -6,7 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { segments, type Segment } from "../../lib/turns";
 import type { Item } from "../../lib/types";
-import { MODEL_DIVIDER_HEIGHT, SegmentView, segmentHeight } from "./SegmentView";
+import { ENGINE_DIVIDER_HEIGHT, MODEL_DIVIDER_HEIGHT, SegmentView, segmentHeight } from "./SegmentView";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -45,6 +45,20 @@ describe("an exchange's guessed height", () => {
     const msg = segments([user])[0].user;
     expect(segmentHeight(msg, nodes, true) - segmentHeight(msg, nodes)).toBeGreaterThanOrEqual(56);
     expect(segmentHeight(msg, nodes, true) - segmentHeight(msg, nodes)).toBeLessThanOrEqual(57);
+  });
+
+  it("adds the engine switch divider folded (#5054) like the model one", () => {
+    expect(ENGINE_DIVIDER_HEIGHT).toBe(42.5); // the same row: 8 + 1 + 4 + 16.5 + 4 + 1 + 8
+    const nodes = [{ kind: "group", id: "g", children: [] }] as never[];
+    const msg = segments([user])[0].user;
+    expect(segmentHeight(msg, nodes, false, true) - segmentHeight(msg, nodes)).toBe(segmentHeight(msg, nodes, true) - segmentHeight(msg, nodes));
+    const switched: Segment = { ...plain, engineSwitch: { from: "claude", to: "codex", resumed: false, text: "summary" } };
+    draw(plain);
+    const without = estimate();
+    draw(switched);
+    expect(host.querySelector("[data-engine-switch]")).not.toBeNull();
+    expect(estimate() - without).toBeGreaterThanOrEqual(56);
+    expect(estimate() - without).toBeLessThanOrEqual(57);
   });
 
   it("follows the mark when it comes in or goes", () => {

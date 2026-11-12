@@ -1130,8 +1130,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		if p.ResumeSessionID != "" {
 			// A message carrying out a launcher switch quits the agent and starts it again in its terminal
 			// (launcher_switch.go): the Resume waits for it, then finds the agent running, or resumes it as it is.
-			n.awaitSwitch(ctx, p.ResumeSessionID)
-			r = n.fillResume(p.ResumeSessionID, r) // what it ran with, for what the start leaves out (retire.go)
+			defer n.resumeTurn(ctx, p.ResumeSessionID)() // and a switch to the other engine does not resume it beside this
+			r = n.fillResume(p.ResumeSessionID, r)       // what it ran with, for what the start leaves out (retire.go)
 			// The user's Resume (the only way a stopped agent runs again, #4754): in the shell it left when that is
 			// still there (stopped.go).
 			ctx = n.inKeptTerminal(ctx, p.ResumeSessionID, r.cwd)

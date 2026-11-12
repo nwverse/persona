@@ -21,7 +21,7 @@ import (
 // fields differ from them (a field added, renamed, retyped or retagged by a change that did not update this file),
 // appendSession leaves every session to the reflect encoder: the session is sent whole, only slower, until its line
 // here and this hash are brought up to date. TestSessionWireMatchesReflect fails meanwhile and prints the new hash.
-const sessionWireLayout = 0x3564cfad5cfc0506
+const sessionWireLayout = 0xe40c472e69558a21
 
 var sessionWireCurrent = sessionLayout() == sessionWireLayout && hierarchyLayout() == hierarchyWireLayout
 
@@ -41,7 +41,7 @@ const (
 
 // hierarchyWireLayout is the layout hash of SessionHierarchy and SessionChildren, whose members appendSession writes
 // on the row: while either differs, appendSession leaves every session to the reflect encoder, as for sessionWireLayout.
-const hierarchyWireLayout = 0x9e89ea2b84eac0ce
+const hierarchyWireLayout = 0x963e02625bba54a9
 
 // hierarchyLayout hashes SessionHierarchy's fields, then SessionChildren's.
 func hierarchyLayout() uint64 {
@@ -216,6 +216,7 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 	if s.TitleSource != TitleSourceUnknown {
 		w.str(`"title_source":`, s.TitleSource.String(), false)
 	}
+	w.boolean(`"suggestion_risky":`, s.SuggestionRisky, true)
 	w.str(`"turn_error":`, s.TurnError, true)
 	w.str(`"turn_error_kind":`, s.TurnErrorKind, true)
 	if s.TurnErrorResetsAt != nil {
@@ -272,6 +273,9 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 			w.integer(`"needs_you":`, int64(c.NeedsYou), true)
 			w.integer(`"workers":`, int64(c.Workers), true)
 			w.close()
+		}
+		if len(h.EngineHistory) > 0 {
+			w.value(`"engine_history":`, &h.EngineHistory)
 		}
 	}
 	w.boolean(legacyStartedMember, s.StartedByPersona, false) // sessionWire's legacy key (compatibility.go)

@@ -83,6 +83,7 @@
     <string name="agents_grouping_project">By project</string>
     <string name="agents_menu_compact">Compact list</string>
     <string name="agents_menu_detailed">Detailed list</string>
+    <string name="agents_menu_display">Display</string>
     <string name="agents_menu_collapse_all">Collapse all</string>
     <string name="agents_menu_expand_all">Expand all</string>
     <string name="agents_menu_machines">Machine monitor</string>
@@ -155,6 +156,8 @@
     <string name="agents_repo_main_checkout">Main worktree</string>
     <string name="agents_repo_worktree">Worktree</string>
     <string name="agents_repo_actions">Repository actions</string>
+    <!-- A computer's repositories with nothing going on, one row each (iOS "Idle Repositories", #4338 A8) -->
+    <string name="agents_idle_repositories">Idle repositories</string>
     <string name="agents_card_question">Claude has a question</string>
     <string name="agents_card_question_by">%1$s has a question</string>
     <string name="agents_card_permission">Waiting for your approval</string>

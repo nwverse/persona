@@ -767,7 +767,7 @@ Part of the built-in voice extension, and it speaks only to a GPT-Live-compatibl
 
 ### The meeting card
 
-The meeting page is pushed from the drawer's **Meeting Recording** row, the Live Activity, a push or Recordings (the Persona and Agents tabs stay the only primary destinations). It is built from the design system only (tokens, `Chip`, `.surface`, `.themedButton`, and the shell composer: no second composer), with one-line button labels, strings in en, zh-Hans and ja, and dark and light screenshots through DEBUG launch arguments. It replaces the recording section of Recordings for a meeting; an ordinary recording keeps today's controls.
+The meeting page is pushed from the drawer's **Record** row (**Meeting Recording** until #5243), the Live Activity, a push or Recordings (the Persona and Agents tabs stay the only primary destinations). It is built from the design system only (tokens, `Chip`, `.surface`, `.themedButton`, and the shell composer: no second composer), with one-line button labels, strings in en, zh-Hans and ja, and dark and light screenshots through DEBUG launch arguments. It replaces the recording section of Recordings for a meeting; an ordinary recording keeps today's controls.
 
 While the meeting records:
 
