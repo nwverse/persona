@@ -497,6 +497,9 @@ struct MailAccountsView: View {
                         }
                         .disabled(inboxBusy)
                         .accessibilityIdentifier("mail.inbox")
+                    } footer: {
+                        // The other connectors' footer when theirs is off (ConnectorFeedsSection).
+                        if !on { Text("Not showing in Inbox: nothing new arrives; existing items stay.") }
                     }
                 }
                 #endif
