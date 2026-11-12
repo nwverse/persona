@@ -251,7 +251,8 @@ func (s *Service) draftReply(ctx context.Context, id, instruction string) (strin
 		return "", errNoInboxItem
 	}
 	hello := s.hello(ctx)
-	system := prompts.RenderInboxDraft(prompts.InboxDraft{Owner: hello.Owner, Notes: strings.TrimSpace(hello.OwnerNotes),
+	// About me as the user last edited it in the app, else the config file's (notes), as the main chat has it.
+	system := prompts.RenderInboxDraft(prompts.InboxDraft{Owner: hello.Owner, Notes: s.notes(ctx),
 		Language: answerLanguage(hello.Locale)})
 	input := prompts.RenderInboxDraftInput(prompts.InboxDraftInput{Item: item, Instruction: strings.TrimSpace(instruction)})
 	cctx, cancel := context.WithTimeout(ctx, draftModelWait)
