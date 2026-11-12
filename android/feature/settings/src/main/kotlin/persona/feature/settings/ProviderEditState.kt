@@ -74,7 +74,7 @@ internal fun envProblem(raw: String): ResText? {
 
 private fun numberOk(s: String) = s.isBlank() || s.trim().all { it.isDigit() } && s.trim().length <= 9
 private fun number(s: String): Int = s.trim().takeIf { it.isNotEmpty() }?.toIntOrNull() ?: 0
-private fun numberText(n: Int) = if (n > 0) n.toString() else ""
+internal fun numberText(n: Int) = if (n > 0) n.toString() else ""
 
 /** Arguments as the form shows them, with whitespace preserved by quoting. */
 internal fun argumentText(arguments: List<String>): String = arguments.joinToString(" ") { arg ->

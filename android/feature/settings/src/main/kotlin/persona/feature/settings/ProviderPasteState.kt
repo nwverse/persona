@@ -76,8 +76,6 @@ internal fun ProviderPasteDraft.existingDraft(existing: HubLauncher, action: Pro
     }
 }
 
-private fun numberText(number: Int) = number.takeIf { it > 0 }?.toString().orEmpty()
-
 /** Every note is said in words, including codes from a newer hub. */
 internal fun providerPasteNoteText(note: ProviderPasteNote, resources: Resources): String {
     val base = when (note.code) {
