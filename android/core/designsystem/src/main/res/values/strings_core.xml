@@ -110,6 +110,7 @@
     <string name="designsystem_core_agents_no_todo">No to-do</string>
     <string name="designsystem_core_agents_manual">Opened by hand</string>
     <string name="designsystem_core_agents_quiet_spaces">Idle spaces</string>
+    <string name="designsystem_core_agents_started_tab">Started it</string>
     <plurals name="designsystem_core_count_needs_you">
         <item quantity="one">%1$d needs you</item>
         <item quantity="other">%1$d need you</item>

@@ -131,7 +131,7 @@ struct ClaudeSettingsView: View {
 
     private func load() async {
         let available = onlineMachines
-        if !available.contains(where: { $0.ref == ref }) {
+        if !available.contains(where: { $0.ref == self.ref }) {
             machineID = available.first(where: { $0.id == model.hubMachineID })?.ref.path ?? available.first?.ref.path ?? ""
             settings = []
             strings = [:]

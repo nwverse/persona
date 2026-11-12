@@ -46,10 +46,6 @@ class ChatSyncScenariosTest(private val name: String, private val case: JsonObje
          * the list, and a new failure is not hidden behind an old entry.
          */
         private val KNOWN: Map<String, Known> = mapOf(
-            "card_answered_then_resumed_snapshot" to Known(
-                "#2767: the pending-card snapshot after a resumed hello brings back a card this device answered " +
-                    "(HubInteractionCenter un-ends a card on any `interaction` frame, snapshot or replay)",
-                Regex("""card ix1 is answerable again|open cards \[ix1], want \[]""")),
             "send_failed_stays_above_later" to Known(
                 "#2769: ChatScreen draws the outbox's bubbles below every transcript line, so a failed message drops " +
                     "below the ones sent after it",

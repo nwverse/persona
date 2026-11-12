@@ -8,7 +8,8 @@ import { Header, spaceAgentsItem } from "./ChatView";
 import { HEADER_SLOT, HEADER_SLOT_END, HEADER_SLOT_START } from "./header";
 import { Composer } from "./Composer";
 import { PendingCards, permissionFrom } from "./Interactions";
-import { QueueStrip, restoreQueued } from "./QueueStrip";
+import { restoreQueued } from "./QueueStrip";
+import { QueuePanel } from "./QueuePanel";
 import { onDraftEvent, type DraftEvent } from "../../lib/drafts";
 import { getContexts, removeContext, withContexts } from "../../lib/links";
 import { parseQueued } from "../../lib/queue";
@@ -320,49 +321,80 @@ describe("tap areas", () => {
   });
 });
 
-describe("QueueStrip", () => {
+describe("QueuePanel (#5327, cindy's pending queue)", () => {
   const queued = { ...session, queued: ["顺便把截图换掉", "跑一遍 UI 测试"] } as Session;
-  it("is one line that opens the messages on a phone on its side", () => {
-    const html = renderToStaticMarkup(<QueueStrip session={queued} draftKey="t" canEdit compact />);
-    expect(html).toContain('aria-expanded="false"');
+  const panel = (props: Partial<Parameters<typeof QueuePanel>[0]> & { session: Session }) => renderToStaticMarkup(<QueuePanel draftKey="t" canEdit {...props} />);
+  const rows = (html: string) => html.match(/data-queue-row="/g) ?? [];
+
+  it("lists the messages in send order without numbers, one line each, a hairline under them", () => {
+    const html = panel({ session: queued });
+    expect(html).toMatch(/^<div role="region" aria-label="排队的消息" data-queue-panel="true" class="w-full border-b border-line"/);
+    expect(rows(html)).toHaveLength(2);
+    expect(html.indexOf("顺便把截图换掉")).toBeLessThan(html.indexOf("跑一遍 UI 测试"));
+    // the place is in the labels only
+    expect(html).toContain('aria-label="排队的第 1 条：顺便把截图换掉"');
+    expect(html).not.toMatch(/>1</);
+    expect(html).toMatch(/data-queue-row-body="true" class="[^"]*truncate text-\[13px\]/);
+    expect(html).toMatch(/max-h-\[196px\][^"]*overflow-y-auto/);
+  });
+
+  it("is one line that opens the same rows on a phone on its side, beside the run's status", () => {
+    const html = panel({ session: queued, compact: true });
+    expect(html).toContain("data-queue-strip");
     expect(html).toContain("排队中 2 条");
-    expect(html).toMatch(/<div class="grid [^"]*"[^>]*inert/);
-  });
-
-  it("starts folded everywhere, the opened list capped and scrolling", () => {
-    const html = renderToStaticMarkup(<QueueStrip session={queued} draftKey="t" canEdit />);
     expect(html).toContain('aria-expanded="false"');
     expect(html).toMatch(/<div class="grid [^"]*"[^>]*inert/);
-    expect(html).toMatch(/max-h-\[120px\][^"]*overflow-y-auto/);
-    expect(html).toContain("跑一遍 UI 测试");
+    expect(rows(html)).toHaveLength(2);
   });
 
-  it("gives a Claude's queue Send now and its next-step wording; other agents neither (#6088)", () => {
-    const claude = renderToStaticMarkup(<QueueStrip session={{ ...queued, agent: "claude" }} draftKey="t" canEdit />);
-    expect(claude).toContain("data-send-now");
-    expect(claude).toContain("下一步就会依次接收");
-    const codex = renderToStaticMarkup(<QueueStrip session={{ ...queued, agent: "codex" }} draftKey="t" canEdit />);
+  it("shows four in full, and from five the first three with N more", () => {
+    const four = panel({ session: { ...queued, queued: ["一", "二", "三", "四"] } });
+    expect(rows(four)).toHaveLength(4);
+    expect(four).not.toContain("data-queue-fold");
+    const six = panel({ session: { ...queued, queued: ["一", "二", "三", "四", "五", "六"] } });
+    expect(rows(six)).toHaveLength(3);
+    expect(six).toMatch(/data-queue-fold="true"[^>]*>还有 3 条/);
+    expect(six).toContain('aria-expanded="false"');
+  });
+
+  it("gives every own row a drag handle, Edit and Delete; a Claude's Send now too, other agents none (#6088)", () => {
+    const claude = panel({ session: { ...queued, agent: "claude" } });
+    expect(claude.match(/data-queue-handle/g)).toHaveLength(2);
+    expect(claude.match(/data-send-now/g)).toHaveLength(2);
+    expect(claude.match(/data-queue-edit/g)).toHaveLength(2);
+    expect(claude.match(/data-queue-delete/g)).toHaveLength(2);
+    expect(claude).toContain('aria-label="拖动第 2 条排队消息调整顺序"');
+    expect(claude).toContain('aria-label="编辑第 1 条排队消息"');
+    expect(claude).toContain('aria-label="删除第 2 条排队消息"');
+    // it hands over the whole queue, and says so
+    expect(claude).toContain('title="现在就把排队的消息全部发给 Claude，不用等到下一步"');
+    const codex = panel({ session: { ...queued, agent: "codex" } });
     expect(codex).not.toContain("data-send-now");
-    expect(codex).toContain("忙完会依次处理");
-    expect(renderToStaticMarkup(<QueueStrip session={{ ...queued, agent: "claude" }} draftKey="t" canEdit={false} />)).not.toContain("data-send-now");
+    expect(codex.match(/data-queue-edit/g)).toHaveLength(2);
+    // a lone message has nothing to move past
+    expect(panel({ session: { ...queued, queued: ["只有一条"] } })).not.toContain("data-queue-handle");
+    // a session this page can't send to shows them only
+    const viewOnly = panel({ session: { ...queued, agent: "claude" }, canEdit: false });
+    expect(rows(viewOnly)).toHaveLength(2);
+    expect(viewOnly).not.toMatch(/data-queue-(handle|edit|delete)|data-send-now/);
   });
 
-  it("in a Persona chat offers Send now for the user's own messages, in the persona's name; relayed ones alone get none (#4342)", () => {
+  it("in a Persona chat offers the user's own rows the same; one from another conversation says so and has none (#4342)", () => {
     const persona = { ...queued, agent: undefined, assistant: true, queued: ["顺便把截图换掉", "来自「日报」：今天的汇总"], queued_relayed: 1 } as Session;
-    const html = renderToStaticMarkup(<QueueStrip session={persona} draftKey="t" canEdit persona="Nova" />);
-    expect(html).toContain("data-send-now");
-    expect(html).toContain("Nova 下一步就会依次接收");
-    const relayedOnly = renderToStaticMarkup(<QueueStrip session={{ ...persona, queued_relayed: 2 }} draftKey="t" canEdit persona="Nova" />);
-    expect(relayedOnly).not.toContain("data-send-now");
-    expect(relayedOnly).toContain("Nova 忙完会依次处理");
-    // the relayed one says it arrives when the turn ends; the user's own don't
-    expect(html.match(/data-queue-note/g)).toHaveLength(1);
-    expect(html).toContain('aria-label="排队的第 2 条：来自「日报」：今天的汇总 · 对话空闲后送达"');
+    const html = panel({ session: persona, persona: "Nova" });
+    expect(html.match(/data-send-now/g)).toHaveLength(1);
+    expect(html).toContain("现在就把排队的消息全部发给 Nova");
+    expect(html.match(/data-queue-relayed/g)).toHaveLength(1);
+    expect(html.match(/data-queue-handle/g) ?? []).toHaveLength(0);
+    expect(html).toContain('title="对话空闲后送达"');
+    expect(html).toContain('aria-label="排队的第 2 条：其他对话 · 来自「日报」：今天的汇总 · 对话空闲后送达"');
+    // relayed ones alone: nothing to send now
+    expect(panel({ session: { ...persona, queued_relayed: 2 }, persona: "Nova" })).not.toContain("data-send-now");
   });
 
   it("marks the photos a Persona chat's queued message went with when this browser sent it (#4342)", () => {
     const persona = { ...queued, assistant: true, queued: ["请看图片", "顺便把截图换掉"] } as Session;
-    const html = renderToStaticMarkup(<QueueStrip session={persona} draftKey="t" canEdit persona="Nova" photosOf={(q) => (q === "请看图片" ? 2 : 0)} />);
+    const html = panel({ session: persona, persona: "Nova", photosOf: (q) => (q === "请看图片" ? 2 : 0) });
     expect(html.match(/data-queue-mark="photo"/g)).toHaveLength(1);
     expect(html).toContain('aria-label="排队的第 1 条：2 张图片"');
     expect(html).not.toContain(">请看图片<");
@@ -374,7 +406,7 @@ describe("QueueStrip", () => {
 
   it("shows a queued message's words and a mark per kind of attachment, never Claude's queue text (#3032)", () => {
     const photoOnly = `[Image #3] 请看图片\n\n<attached_images>\npath: ${photo("c3")}\n</attached_images>`;
-    const html = renderToStaticMarkup(<QueueStrip session={{ ...session, queued: [withPhotos, photoOnly] } as Session} draftKey="t" canEdit />);
+    const html = panel({ session: { ...session, queued: [withPhotos, photoOnly] } as Session });
     expect(html).toContain("把这两张截图对一下");
     expect(html).not.toContain("[Image #");
     expect(html).not.toContain("attached_images");

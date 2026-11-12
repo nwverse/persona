@@ -502,6 +502,11 @@ The changed-files card (`web/src/views/chat/TurnChanges.tsx`, #5157) and the err
 are ported from cindy's `TurnChangesCard.tsx` and `components/ui/error-notice.tsx` with changes: their layout, sizes and
 states; the counting, review targets and fold data are Persona's own.
 
+The web chat's bar under a turn's last reply (`web/src/views/chat/ReplyBar.tsx`, #5314) is ported from cindy's
+`MessageActionBar.tsx` with changes: which reply has it, the order of its actions, its sizes, the linger before it fades
+and when its copy check resets. `web/src/lib/relative-time.ts` is ported from cindy's `hooks/useRelativeTime.ts` with
+changes (the wording of the time and its exact form); the actions behind the buttons are Persona's own.
+
 The web chat's run status bar (`web/src/views/chat/RunningStatusBar.tsx` and its speed card
 `web/src/views/chat/RunningSpeedCard.tsx`, #5312) is ported from cindy's `RunningStatusBar` (in `CCAgentSessionView.tsx`)
 and `RunningTokenRatePopover.tsx` with changes: their layout, state words, the Done pop and the card's sparkline. The
