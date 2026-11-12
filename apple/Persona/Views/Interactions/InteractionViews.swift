@@ -278,6 +278,7 @@ struct InteractionPanel: View {
     /// scroll area the container is that area, and every card cut itself off at half of it (#926).
     @Environment(\.cardRoom) private var room
     @Environment(\.cardFits) private var fits
+    @Environment(\.cardArea) private var area
     /// The header row's height: with the card's margins, what of `fits` the form may not have.
     @State private var headerHeight: CGFloat = 0
     /// The plan full screen. Its button sits in this header: floating over the plan it covered the last line.
@@ -288,11 +289,18 @@ struct InteractionPanel: View {
 
     /// The form's cap while the keyboard is up (`cardFits`): the area less the card's header and margins; at least a tap
     /// target, so a sliver of a form never shows (a small iPhone with the shell's composer leaves the cards little more).
-    private var fitsCap: CGFloat {
-        guard fits > 0, headerHeight > 0 else { return .infinity }
+    private func cap(for available: CGFloat) -> CGFloat {
+        guard available > 0, headerHeight > 0 else { return .infinity }
         let row = headerAway ? 0 : headerHeight + Theme.Space.m // the row and the gap under it
-        return max(fits - row - Theme.Space.m - Theme.Space.l, Theme.Size.tapTarget) // and the margins
+        return max(available - row - Theme.Space.m - Theme.Space.l, Theme.Size.tapTarget) // and the margins
     }
+
+    private var fitsCap: CGFloat { cap(for: fits) }
+
+    /// The same fit without the keyboard: a long question's actions stay inside the cards' actual area, not below it.
+    private var areaCap: CGFloat { cap(for: area) }
+
+    private var formCap: CGFloat { min(room > 0 ? room * 0.55 : .infinity, fitsCap, areaCap) }
 
     /// The keyboard leaves the card so little that under its header row the form would show the question and hardly
     /// a choice (a small iPhone, the shell's composer): the row (its title, ⋯ and fold) steps aside while the keyboard
@@ -306,28 +314,34 @@ struct InteractionPanel: View {
         VStack(alignment: .leading, spacing: Theme.Space.m) {
             if !headerAway { header }
             if !collapsed {
-                ScrollView {
-                    form.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { formHeight = $0 }
+                if interaction.kind == .question {
+                    // Question forms own their options' scroll and keep their actions outside it (#4839).
+                    form.environment(\.cardFormCap, formCap)
+                        .transition(.opacity)
+                } else {
+                    ScrollView {
+                        form.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { formHeight = $0 }
+                    }
+                    .scrollBounceBehavior(.basedOnSize)
+                    // A field taking the keyboard brings the form's end into view, and while the keyboard takes the room the
+                    // area gives it up at the top, so the field and its Run stay above the keyboard (#1581). An area shorter
+                    // than the field and its Run shows Run whole and the field cut at the top.
+                    .scrollPosition($formPosition)
+                    .defaultScrollAnchor(keepsEnd ? .bottom : nil, for: .sizeChanges)
+                    .onPreferenceChange(CardFormKeepsEnd.self) { keep in
+                        keepsEnd = keep
+                        if keep { withAnimation(Theme.Motion.standard) { formPosition.scrollTo(edge: .bottom) } }
+                    }
+                    // Folded, the form is gone with its field: unfolded again it starts at its top, its commands first.
+                    .onDisappear {
+                        keepsEnd = false
+                        formPosition = ScrollPosition(edge: .top)
+                    }
+                    // At most a little over half of what the page has (not the screen: iPhone Duo's displays differ), and
+                    // with the keyboard up no more than lets the whole card fit the cards' area.
+                    .frame(height: room > 0 ? min(formHeight == 0 ? room : formHeight, room * 0.55, fitsCap) : nil)
+                    .transition(.opacity)
                 }
-                .scrollBounceBehavior(.basedOnSize)
-                // A field taking the keyboard brings the form's end into view, and while the keyboard takes the room the
-                // area gives it up at the top, so the field and its Run stay above the keyboard (#1581). An area shorter
-                // than the field and its Run shows Run whole and the field cut at the top.
-                .scrollPosition($formPosition)
-                .defaultScrollAnchor(keepsEnd ? .bottom : nil, for: .sizeChanges)
-                .onPreferenceChange(CardFormKeepsEnd.self) { keep in
-                    keepsEnd = keep
-                    if keep { withAnimation(Theme.Motion.standard) { formPosition.scrollTo(edge: .bottom) } }
-                }
-                // Folded, the form is gone with its field: unfolded again it starts at its top, its commands first.
-                .onDisappear {
-                    keepsEnd = false
-                    formPosition = ScrollPosition(edge: .top)
-                }
-                // At most a little over half of what the page has (not the screen: iPhone Duo's displays differ), and
-                // with the keyboard up no more than lets the whole card fit the cards' area.
-                .frame(height: room > 0 ? min(formHeight == 0 ? room : formHeight, room * 0.55, fitsCap) : nil)
-                .transition(.opacity)
             }
         }
         .padding(.horizontal, Theme.Space.l)
@@ -426,7 +440,11 @@ struct InteractionPanel: View {
 /// Several questions: "header · 1/2" on top, small Previous / Next / Submit below.
 struct QuestionForm: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.cardFormCap) private var formCap
     var interaction: Interaction
+    @State private var contentHeight: CGFloat = 0
+    @State private var footerHeight: CGFloat = 0
+    @State private var dragged = false
     @State private var picks: [String: Set<String>] = [:]
     @State private var other: [String: String] = [:]
     @State private var page = 0
@@ -440,7 +458,36 @@ struct QuestionForm: View {
     private var stepped: Bool { QuestionSteps.enabled(questions) }
 
     var body: some View {
-        if AppStyle.current.usesBeautifulUI { BUIQuestionForm(interaction: interaction) } else { plain }
+        if AppStyle.current.usesBeautifulUI { BUIQuestionForm(interaction: interaction) } else { plainLayout }
+    }
+
+    /// The options (or the review) scroll; Previous / Next / Submit are outside that scroll and stay in the panel.
+    private var plainLayout: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.m) {
+            ScrollView {
+                plain.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .frame(height: contentCap)
+            if showsReviewFooter {
+                ScreenReviewFooter(rows: QuestionSteps.rows(questions, answers: shownAnswers), sending: sending ? "submit" : nil,
+                                   back: { withAnimation(Theme.Motion.standard) { reviewing = false } }, submit: { send() }, answer: nil)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0 }
+            } else if showsFooter {
+                footer.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0 }
+            }
+        }
+        .deliberateTap($dragged)
+    }
+
+    private var showsFooter: Bool { needsFooter && !(stepped && reviewing) }
+    private var showsReviewFooter: Bool { stepped && reviewing }
+
+    private var contentCap: CGFloat? {
+        guard formCap > 0, formCap.isFinite else { return nil }
+        let fixed = showsFooter || showsReviewFooter ? footerHeight + Theme.Space.m : 0
+        let available = max(formCap - fixed, Theme.Size.tapTarget)
+        return min(contentHeight == 0 ? available : contentHeight, available)
     }
 
     @ViewBuilder private var plain: some View {
@@ -452,7 +499,7 @@ struct QuestionForm: View {
             if stepped, reviewing {
                 ScreenReview(rows: QuestionSteps.rows(questions, answers: shownAnswers), sending: sending ? "submit" : nil,
                              back: { withAnimation(Theme.Motion.standard) { reviewing = false } },
-                             submit: { send() })
+                             submit: { send() }, showsFooter: false)
             } else if questions.indices.contains(page) {
                 let q = questions[page]
                 if stepped {
@@ -475,7 +522,6 @@ struct QuestionForm: View {
                     .id(page)
                     .transition(.asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity), removal: .opacity))
             }
-            if needsFooter, !(stepped && reviewing) { footer }
         }
         .onChange(of: page) { _, p in writing = questions.indices.contains(p) && !(other[questions[p].question] ?? "").isEmpty }
     }
@@ -498,7 +544,7 @@ struct QuestionForm: View {
         let selected = picks[q.question, default: []].contains(opt.label)
         let (label, recommended) = Self.display(opt.label)
         let assistantPick = assistantPicks(q).contains(opt.label)
-        return Button { pick(q, opt) } label: {
+        return Button { if !dragged { pick(q, opt) } } label: {
             HStack(alignment: .top, spacing: Theme.Space.m) {
                 ZStack {
                     Circle().fill(selected ? Theme.accent : Theme.Fill.chip)
@@ -751,6 +797,7 @@ struct PermissionForm: View {
         // One view per card: another card in this place starts with an empty password field (a field still being
         // typed in keeps its UIKit text when only the binding is cleared).
         if interaction.isSecretRun { SecretRunForm(interaction: interaction).id(interaction.id) }
+        else if interaction.isSecretHandoff { SecretHandoffForm(interaction: interaction).id(interaction.id) }
         else if interaction.requiresInput { PermissionInputForm(interaction: interaction) }
         else if AppStyle.current.usesBeautifulUI { BUIPermissionForm(interaction: interaction) } else { plain }
     }
@@ -986,10 +1033,13 @@ struct ScreenForm: View {
         if let chat = d.options.first(where: { $0.kind == .chat }) {
             Button { send(chat.key, answer(chat)) } label: {
                 Label("Reply in Chat Instead", systemImage: "bubble.left").lineLimit(1).minimumScaleFactor(0.8)
+                    .tapTargetOutset() // hit like a finger-sized row, laid out as a line (#5392)
             }
         }
         if stepping, d.review, holding == nil, let cancel = d.options.dropFirst().first {
-            Button { send(cancel.key, answer(cancel)) } label: { Text("Cancel").lineLimit(1).minimumScaleFactor(0.8) }
+            Button { send(cancel.key, answer(cancel)) } label: {
+                Text("Cancel").lineLimit(1).minimumScaleFactor(0.8).tapTargetOutset()
+            }
                 .accessibilityIdentifier("screen-review-cancel")
         }
     }
@@ -998,6 +1048,7 @@ struct ScreenForm: View {
     private var viewTerminal: some View {
         Button { Haptics.tap(); showTerminal = true } label: {
             Label("View Terminal", systemImage: Theme.Icon.terminal).lineLimit(1).minimumScaleFactor(0.8)
+                .tapTargetOutset()
         }
         .accessibilityIdentifier("screen-card-terminal")
     }
@@ -1505,10 +1556,13 @@ extension Interaction {
 /// How the interaction forms fit BeautifulUI's approval card into the panel: no card of its own (the panel is the
 /// surface), the panel's width, no × (the panel has its menu) and no Start over (the panel goes once answered).
 extension ApprovalCardOptions {
-    static func panel(sending: Bool = false, autoAdvance: Bool = true) -> ApprovalCardOptions {
+    static func panel(sending: Bool = false, autoAdvance: Bool = true, maxHeight: CGFloat? = nil,
+                      rejectsDraggedPicks: Bool = false) -> ApprovalCardOptions {
         var o = ApprovalCardOptions()
         o.drawsSurface = false
         o.maxWidth = nil
+        o.maxHeight = maxHeight
+        o.rejectsDraggedPicks = rejectsDraggedPicks
         o.showsDismiss = false
         o.allowsStartOver = false
         o.autoAdvance = autoAdvance
@@ -1522,6 +1576,7 @@ extension ApprovalCardOptions {
 /// sends), several wait for Next / Submit; "Other answer…" is the card's own field.
 struct BUIQuestionForm: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.cardFormCap) private var formCap
     var interaction: Interaction
     /// Several questions (#2970): the card's answers held for the review, the question the card opens at when it comes
     /// back, and a new card each time (its answers and page are read once).
@@ -1530,33 +1585,59 @@ struct BUIQuestionForm: View {
     @State private var startAt = 0
     @State private var round = 0
     @State private var sending = false
+    @State private var notesHeight: CGFloat = 0
+    @State private var reviewHeight: CGFloat = 0
+    @State private var reviewFooterHeight: CGFloat = 0
 
     private var questions: [Question] { interaction.questions ?? [] }
 
     var body: some View {
-        if interaction.isDelegating || interaction.delegate != nil {
-            VStack(alignment: .leading, spacing: Theme.Space.m) {
+        VStack(alignment: .leading, spacing: Theme.Space.m) {
+            if interaction.isDelegating || interaction.delegate != nil {
                 DelegateNotes(interaction: interaction)
-                card
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { notesHeight = $0 }
             }
-        } else {
             card
         }
+    }
+
+    private var cardCap: CGFloat? {
+        guard formCap > 0, formCap.isFinite else { return nil }
+        let notes = interaction.isDelegating || interaction.delegate != nil ? notesHeight + Theme.Space.m : 0
+        return max(formCap - notes, Theme.Size.tapTarget)
+    }
+
+    private var reviewCap: CGFloat? {
+        guard let cardCap else { return nil }
+        let available = max(cardCap - reviewFooterHeight - Theme.Space.m, Theme.Size.tapTarget)
+        return min(reviewHeight == 0 ? available : reviewHeight, available)
     }
 
     @ViewBuilder private var card: some View {
         if QuestionSteps.enabled(questions), let held {
             // The card's own ↑ n / N ↓ shows where it is; a question skipped with ↓ shows here as not answered, with a
             // way back to it.
-            ScreenReview(rows: QuestionSteps.rows(questions, answers: Self.shown(held, questions)), sending: sending ? "submit" : nil,
-                         back: { reopen(at: questions.count - 1) },
-                         submit: { send(held) },
-                         answer: { (row: ScreenReviewRow) in reopen(at: row.index) })
+            VStack(alignment: .leading, spacing: Theme.Space.m) {
+                ScrollView {
+                    ScreenReview(rows: QuestionSteps.rows(questions, answers: Self.shown(held, questions)), sending: sending ? "submit" : nil,
+                                 back: { reopen(at: questions.count - 1) },
+                                 submit: { send(held) },
+                                 answer: { (row: ScreenReviewRow) in reopen(at: row.index) }, showsFooter: false)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { reviewHeight = $0 }
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                .frame(height: reviewCap)
+                ScreenReviewFooter(rows: QuestionSteps.rows(questions, answers: Self.shown(held, questions)), sending: sending ? "submit" : nil,
+                                   back: { reopen(at: questions.count - 1) }, submit: { send(held) },
+                                   answer: { (row: ScreenReviewRow) in reopen(at: row.index) })
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { reviewFooterHeight = $0 }
+            }
         } else {
             let picks = Delegated.recommendedLabels(questions, interaction.delegate?.recommend)
             ApprovalCard(questions: zip(questions, picks).map { Self.card($0, picks: $1) }, startAt: startAt, answers: kept, skipLabel: nil,
                          continueLabel: String(localized: "Next [Interaction Views f82c68]"), sendLabel: String(localized: "Submit"),
-                         customPlaceholder: String(localized: "Other answer…"), sentMessage: String(localized: "Sent"), options: .panel()) { answers in
+                         customPlaceholder: String(localized: "Other answer…"), sentMessage: String(localized: "Sent"),
+                         options: .panel(maxHeight: cardCap, rejectsDraggedPicks: true)) { answers in
                 Haptics.tap()
                 if QuestionSteps.enabled(questions) { // the review first
                     withAnimation(Theme.Motion.standard) { held = answers; kept = answers }
@@ -1949,10 +2030,13 @@ struct BUIScreenForm: View {
         if let chat = d.options.first(where: { $0.kind == .chat }) {
             Button { send(chat.key, answer(chat)) } label: {
                 Label("Reply in Chat Instead", systemImage: "bubble.left").lineLimit(1).minimumScaleFactor(0.8)
+                    .tapTargetOutset() // hit like a finger-sized row, laid out as a line (#5392)
             }
         }
         if stepping, d.review, holding == nil, let cancel = d.options.dropFirst().first {
-            Button { send(cancel.key, answer(cancel)) } label: { Text("Cancel").lineLimit(1).minimumScaleFactor(0.8) }
+            Button { send(cancel.key, answer(cancel)) } label: {
+                Text("Cancel").lineLimit(1).minimumScaleFactor(0.8).tapTargetOutset()
+            }
                 .accessibilityIdentifier("screen-review-cancel")
         }
     }
@@ -1961,6 +2045,7 @@ struct BUIScreenForm: View {
     private var viewTerminal: some View {
         Button { Haptics.tap(); showTerminal = true } label: {
             Label("View Terminal", systemImage: Theme.Icon.terminal).lineLimit(1).minimumScaleFactor(0.8)
+                .tapTargetOutset()
         }
         .accessibilityIdentifier("screen-card-terminal")
     }

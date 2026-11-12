@@ -8,11 +8,14 @@
 // (the session's own first, at most three at a time).
 import { useSyncExternalStore } from "react";
 import { t } from "../i18n";
-import { errorText } from "./api";
+import { ApiError, errorText } from "./api";
 import { agentId, sessionAgent } from "./agent-kind";
 import { modelShort } from "./context-usage";
 import { stateOf } from "./format";
-import { defaultModel, forgetCustomModel, launcherModels, machineLaunchers, modelName, withoutCustom, type AgentModel, type LauncherModels } from "./launcher-models";
+import { runsAssistant, type AssistantLauncher } from "./assistant-chat";
+import {
+  defaultModel, forgetCustomModel, launcherModels, machineLaunchers, modelName, withoutCustom, type AgentModel, type LauncherDefault, type LauncherModels, type UnavailableLauncher,
+} from "./launcher-models";
 import { canSwitchModel, isCurrentModel, sessionLauncher } from "./model-switch";
 import { hasEffortOnly, hasModes } from "./session-actions";
 import type { Launcher, Session } from "./types";
@@ -55,6 +58,40 @@ export const modelList = (mid: string, launcher: string): ModelList => lists.get
 
 /** The launchers of `mid` as last read; undefined before the first answer. */
 export const machineLauncherList = (mid: string): Launcher[] | undefined => machines.get(mid)?.launchers;
+
+/** What a Persona chat's pill and panel read of its computer (`?purpose=assistant`, #5033): the launchers that can run
+ *  assistant chats, the main chat's default (Model configuration › Main chat), and what can't run them, with why. */
+export interface AssistantLaunchers {
+  launchers: AssistantLauncher[];
+  def?: LauncherDefault | null;
+  unavailable: UnavailableLauncher[];
+}
+
+const assistantMachines = new Map<string, { info?: AssistantLaunchers; loading?: boolean; error?: string }>();
+const assistantReads = new Map<string, Promise<void>>();
+
+/** The Persona chats' launchers of `mid` as last read (`info` undefined before the first answer). */
+export const assistantLaunchers = (mid: string): { info?: AssistantLaunchers; loading?: boolean; error?: string } => assistantMachines.get(mid) ?? {};
+
+/** Reads them: once (a pill that needs the default), or `again` behind the ones shown (an opening of the panel). */
+export function readAssistantLaunchers(mid: string, o: { again?: boolean } = {}): Promise<void> {
+  const reading = assistantReads.get(mid);
+  if (reading) return reading;
+  const had = assistantMachines.get(mid);
+  if (had?.info && !o.again) return Promise.resolve();
+  assistantMachines.set(mid, { info: had?.info, loading: true });
+  changed();
+  const read = machineLaunchers(mid, { purpose: "assistant" }).then(
+    (r) => void assistantMachines.set(mid, { info: { launchers: (r.launchers ?? []).filter(runsAssistant), def: r.default, unavailable: r.unavailable ?? [] } }),
+    // the ones shown stay; with none, say why
+    (e) => void assistantMachines.set(mid, had?.info ? { info: had.info } : { error: errorText(e) }),
+  ).finally(() => {
+    assistantReads.delete(mid);
+    changed();
+  });
+  assistantReads.set(mid, read);
+  return read;
+}
 
 // at most three lists are read at a time (each may start the agent's CLI on the computer); `first` jumps the queue
 const MAX_READS = 3;
@@ -199,6 +236,25 @@ export interface PillView extends PillSetup {
   failed: boolean;
 }
 
+/** A message refused because the switch to another launcher it was to carry out first could not be (#5035,
+ *  docs/protocol/protocol.md "Switching a running Agent to another provider": `switch_launcher_missing`,
+ *  `switch_failed`…): nothing was typed and the switch was dropped. */
+export const switchRefused = (e: unknown): boolean => e instanceof ApiError && e.status === 409 && Boolean(e.code?.startsWith("switch_"));
+
+/** The switch to another launcher waiting for the next message (#5035), as the pill draws it: that launcher, the model
+ *  picked (its list's name for it once read; none picked: the launcher's default), the effort picked or the one it runs
+ *  with now. null: none waits. */
+export function pendingView(s: Session, listOf: (launcher: string) => ModelList): PillSetup | null {
+  const ps = s.pending_switch;
+  if (!ps?.launcher || ps.launcher === sessionLauncher(s)) return null;
+  const models = listOf(ps.launcher).list?.models ?? [];
+  const row = ps.model ? models.find((m) => m.id === ps.model) : defaultModel(models);
+  const out: PillSetup = { engine: sessionEngine(s), provider: ps.launcher, model: row ? modelName(row) : ps.model ? modelLabel(ps.model) : t("chat-modelpill.default_model") };
+  const effort = ps.effort || s.effort;
+  if (effort) out.effort = effort;
+  return out;
+}
+
 export function pillView(s: Session, e: ModelList): PillView {
   const row = currentModelRow(e.list?.models ?? [], s.model);
   const model = row ? modelName(row) : s.model ? modelLabel(s.model) : undefined;
@@ -208,3 +264,18 @@ export function pillView(s: Session, e: ModelList): PillView {
   if (s.service_tier === "priority") out.fast = true;
   return out;
 }
+
+/** Forgets every list and read kept (tests: each starts with nothing read). */
+export function resetModelListsForTests(): void {
+  lists.clear();
+  machines.clear();
+  reads.clear();
+  machineReads.clear();
+  forgetting.clear();
+  queue.length = 0;
+  running = 0;
+  changed();
+}
+
+/** Subscribes to every change of what was read (views/NewAgentModel.tsx useModelList follows one list with it). */
+export const subscribeModelLists = subscribe;

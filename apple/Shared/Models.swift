@@ -470,13 +470,19 @@ nonisolated struct Launcher: Codable, Identifiable, Hashable, Sendable {
     /// How its last check or start went on the computer the list is for (`GET …/machines/{id}/launchers`,
     /// docs/server/launcher-health.md); nil: never checked, a failure too old to count, or an older hub.
     var health: LauncherHealth? = nil
+    /// A Codex launcher the computer also starts with no first message (docs/integrations/codex.md「Starting without a
+    /// first message」); nil from an older computer, whose Codex starts need one.
+    var promptOptional: Bool? = nil
     var id: String { name }
     /// A Codex start sends its first message with it and waits for the thread Codex makes.
     var isCodex: Bool { agent == "codex" }
+    /// Starting it needs a first message: a Codex on a computer that cannot open it without one.
+    var needsFirstMessage: Bool { isCodex && promptOptional != true }
 
     enum CodingKeys: String, CodingKey {
         case name, model, agent, assistant, health
         case baseURL = "base_url"
+        case promptOptional = "prompt_optional"
     }
 }
 
@@ -490,6 +496,7 @@ nonisolated extension Launcher {
         agent = try c.decodeIfPresent(String.self, forKey: .agent)
         assistant = try c.decodeIfPresent(Bool.self, forKey: .assistant)
         health = (try? c.decodeIfPresent(LauncherHealth.self, forKey: .health)) ?? nil
+        promptOptional = try c.decodeIfPresent(Bool.self, forKey: .promptOptional)
     }
 }
 
@@ -807,6 +814,10 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     var suggestion: String?
     /// Persona is still opening its tab and starting claude: messages sent now go in once it is ready.
     var starting: Bool? = nil
+    /// A Codex opened with no first message: it runs in its terminal with no thread yet, so this row's id is the
+    /// computer's. Its first message (text only) goes in here or in the terminal; then the row goes and the thread's comes
+    /// in the same pane (docs/integrations/codex.md「Starting without a first message」).
+    var awaitingFirstMessage: Bool? = nil
     /// Starting it failed (shown in the chat; sends get the same error).
     var startError: String? = nil
     /// The node refused the start with a code (launcher_missing / claude_missing in the new tab's shell, #1642): then
@@ -852,6 +863,10 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// on the CLI instead (「找不到 Node.js 22+」). Both nil otherwise.
     var runtime: String? = nil
     var runtimeFallback: String? = nil
+    /// After an upstream refusal Claude Code moved the session to a fallback model, still in use (#4489): the card above
+    /// the composer. And going back to the configured model, while that is pending. Nil from older hubs.
+    var modelFallback: ModelRefusal? = nil
+    var modelRestore: ModelRestore? = nil
     /// The manager it belongs to (docs/protocol/protocol.md "Per-manager routing"); nil from hubs with one manager and
     /// older ones. Requests the hub routes by the manager they name (its answered questions) name it.
     var manager: String? = nil
@@ -1014,10 +1029,10 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
              spaceKind = "space_kind", spaceID = "space_id", spaceName = "space_name", spaceIndex = "space_index", parentSpaceID = "parent_space_id",
              slotID = "slot_id", slotName = "slot_name", slotIndex = "slot_index", paneIndex = "pane_index", seenAt = "seen_at", stateSince = "state_since", queued, background, loop, goal, subagents, workflows, ports,
              updatedAt = "updated_at", lastText = "last_text", asks, awaitsReply = "awaits_reply", backgroundWaiting = "background_waiting", backgroundWorking = "background_working", activity, activityAt = "activity_at", pendingInteractions = "pending_interactions", rev, suggestion,
-             starting, startError = "start_error", startErrorCode = "start_error_code", startErrorArgs = "start_error_args", todo, quiet, hubGroup = "app_hub_group",
+             starting, awaitingFirstMessage = "awaiting_first_message", startError = "start_error", startErrorCode = "start_error_code", startErrorArgs = "start_error_args", todo, quiet, hubGroup = "app_hub_group",
              attentionReason = "attention_reason", failureReason = "failure_reason",
              turnError = "turn_error", turnErrorKind = "turn_error_kind", turnErrorCode = "turn_error_code", externalURL = "external_url", channels, origin, openedBy = "opened_by", compaction, work,
-             runtime, runtimeFallback = "runtime_fallback", manager
+             runtime, runtimeFallback = "runtime_fallback", manager, modelFallback = "model_fallback", modelRestore = "model_restore"
     }
 
     init(from decoder: Decoder) throws {
@@ -1026,6 +1041,8 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         sessionID = try c.decode(String.self, forKey: .sessionID)
         runtime = try c.decodeIfPresent(String.self, forKey: .runtime)
         runtimeFallback = try c.decodeIfPresent(String.self, forKey: .runtimeFallback)
+        modelFallback = try c.decodeIfPresent(ModelRefusal.self, forKey: .modelFallback)
+        modelRestore = try c.decodeIfPresent(ModelRestore.self, forKey: .modelRestore)
         manager = try c.decodeIfPresent(String.self, forKey: .manager)
         title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
         cwd = try c.decodeIfPresent(String.self, forKey: .cwd) ?? ""
@@ -1111,6 +1128,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         rev = try c.decodeIfPresent(Int64.self, forKey: .rev)
         suggestion = try c.decodeIfPresent(String.self, forKey: .suggestion)
         starting = try c.decodeIfPresent(Bool.self, forKey: .starting)
+        awaitingFirstMessage = try c.decodeIfPresent(Bool.self, forKey: .awaitingFirstMessage)
         startError = try c.decodeIfPresent(String.self, forKey: .startError)
         startErrorCode = try? c.decodeIfPresent(String.self, forKey: .startErrorCode)
         startErrorArgs = try? c.decodeIfPresent([String: String].self, forKey: .startErrorArgs)
@@ -1482,6 +1500,7 @@ extension Session {
     /// waits for once the hub triaged its turn (`workLine`), else the last words; Awaiting Reply's question first unless
     /// it is muted (`replyLine`).
     func listPreview(muted: Bool) -> String? {
+        if awaitingFirstMessage == true, state != .needsYou { return String(localized: "Waiting for its first message") } // a Codex opened with no first message
         if state == .needsYou, let r = attentionReason, !r.isEmpty { return r } // a stale reason (offline, seen) stays out
         if state != .working, let r = failureReason, !r.isEmpty { return Session.failureText(r) }
         if let r = replyLine(muted: muted) { return r }
@@ -1886,9 +1905,12 @@ nonisolated struct Item: Codable, Identifiable, Hashable, Sendable {
     var source: JSONValue? = nil
     /// kind == .toolResult: what the call came to. Nil from older nodes.
     var outcome: ToolOutcome? = nil
+    /// kind == .notice: an upstream refusal, drawn as a line of its own after the exchange (#4489, `RefusalNotice`).
+    var modelRefusal: ModelRefusal? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, seq, ts, role, kind, text, image, queued, from, wake, fold, task, compact, injected, supervisionUser, source, outcome
+        case modelRefusal = "model_refusal"
         case toolUseID = "tool_use_id", toolName = "tool_name", toolInput = "tool_input", isError = "is_error", fullSize = "full_size",
              clientMsgID = "client_msg_id"
     }
@@ -1971,8 +1993,8 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     var fields: [InteractionField]?
     /// Something to fill in before it can be allowed: every quick Allow (lists, menus, Siri, the watch) is off. The
     /// password card counts even without its field, so no path allows it without a password, and so does an MCP form or
-    /// link, answered only on its card.
-    var requiresInput: Bool { !(fields ?? []).isEmpty || isSecretRun || kind == .elicitation }
+    /// link, answered only on its card, and a hand-off card, approved on its card alone.
+    var requiresInput: Bool { !(fields ?? []).isEmpty || isSecretRun || isSecretHandoff || kind == .elicitation }
     /// Who asks when it is not Claude Code: "codex" / "traex" (a card read off a Codex TUI, docs/integrations/codex.md「Questions and approvals」).
     var agent: String?
     /// Why the agent asks for this permission, in its words.

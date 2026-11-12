@@ -196,11 +196,15 @@ func (s *Service) machineLaunchers(ctx context.Context, machine string) ([]proto
 		}
 		out = append(out, l)
 	}
+	// A node that starts its own Codex launchers with no first message starts a managed one so too (they share
+	// codex-start, node/codex_waiting.go); an older node's Codex starts all need it.
+	codexOptional := slices.ContainsFunc(res.Launchers, func(l proto.LauncherEnvelope) bool { return l.Agent == "codex" && l.PromptOptional })
 	for _, m := range managed {
 		if m.Kind == "api" {
 			continue
 		}
-		out = append(out, proto.Launcher{Name: m.Name, BaseURL: m.BaseURL, Model: m.Model, Source: "persona", Agent: m.Agent, Assistant: m.Agent == "agy"})
+		out = append(out, proto.Launcher{Name: m.Name, BaseURL: m.BaseURL, Model: m.Model, Source: "persona", Agent: m.Agent, Assistant: m.Agent == "agy",
+			PromptOptional: m.Agent == "codex" && codexOptional})
 	}
 	return out, nil
 }
@@ -341,5 +345,16 @@ func (s *Service) askLauncherModels(ctx context.Context, machine, name string, r
 	if res.Models == nil {
 		res.Models = []proto.AgentModel{}
 	}
-	return s.presetModels(ctx, machine, name, res), nil
+	res = s.presetModels(ctx, machine, name, res)
+	for i, m := range res.Models {
+		id := m.ID
+		if m.Resolved != "" {
+			id = m.Resolved
+		}
+		res.Models[i].Price = nil
+		if c, ok := catalogModel(id); ok && c.InheritedFrom == "" {
+			res.Models[i].Price = c.Price
+		}
+	}
+	return res, nil
 }

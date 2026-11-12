@@ -88,6 +88,37 @@ class AssistantTest {
         assertTrue(conversationGroups(AssistantSnapshot(main.key, listOf(main, mine)), "", words).directions.isEmpty())
     }
 
+    // #5084: the background supervisor is built in. It waits under "All chats" with the chats Persona opened itself,
+    // never among 常驻 or Recent, and is found by the name the app gives it.
+    @Test fun theBackgroundSupervisorIsListedUnderAllChatsOnly() {
+        val main = Session(machineId = "demo", sessionId = "main", title = "主对话")
+        val mine = Session(machineId = "demo", sessionId = "mine", title = "周报", origin = "user", updatedAt = "2026-11-12T08:00:00Z")
+        val scheduled = Session(machineId = "demo", sessionId = "scheduled", title = "早报", origin = "task", originRef = "t1",
+            updatedAt = "2026-11-12T09:00:00Z")
+        val background = Session(machineId = "demo", sessionId = "bg", title = "Background supervisor", origin = "task",
+            updatedAt = "2026-11-12T10:00:00Z")
+        val named = words.copy(background = resources.getString(R.string.assistant_background_supervisor))
+        val snapshot = AssistantSnapshot(main.key, listOf(main, mine, scheduled, background), backgroundSupervisor = "bg")
+        val result = conversationGroups(snapshot, "", named)
+        assertEquals("bg", result.background)
+        assertEquals(listOf(background, scheduled, mine), result.others)
+        assertEquals(listOf(mine), result.recent)
+        assertTrue(result.directions.isEmpty())
+        // whatever the leaders or its origin say, it is no direction and no recent chat of the user's
+        val odd = snapshot.copy(leaders = listOf("bg"), conversations = listOf(main, mine, background.copy(origin = null)))
+        assertTrue(conversationGroups(odd, "", named).directions.isEmpty())
+        assertEquals(listOf(mine), conversationGroups(odd, "", named).recent)
+        assertEquals(listOf(background.copy(origin = null), mine), conversationGroups(odd, "", named).others)
+        // found by the app's name for it, in the app's language, whatever language the hub titled it in
+        assertEquals("后台督办", named.background)
+        assertEquals(listOf(background), conversationGroups(snapshot, "后台督办", named).others)
+        // an older hub names none: the conversation list is as before
+        val old = conversationGroups(snapshot.copy(backgroundSupervisor = null), "", named)
+        assertNull(old.background)
+        assertEquals(listOf(background, scheduled, mine), old.others)
+        assertTrue(conversationGroups(snapshot.copy(backgroundSupervisor = null), "后台督办", named).others.isEmpty())
+    }
+
     @Test fun archivedConversationsLeaveTheHistory() {
         val kept = Session(machineId = "demo", sessionId = "kept", title = "留着")
         val archived = Session(machineId = "demo", sessionId = "gone", title = "归档了", archived = true)
@@ -108,13 +139,31 @@ class AssistantTest {
     @Test fun theHistoryRowMenu() {
         fun labels(leader: Boolean, live: Boolean, act: Boolean, end: Boolean) =
             conversationActions(resources, leader, live, if (act) ({}) else null, {}, if (end) ({}) else null).map { it.label }
-        assertEquals(listOf("设为常驻", "拷贝会话 ID", "结束对话"), labels(leader = false, live = true, act = true, end = true))
+        assertEquals(listOf("设为常驻", "拷贝会话 ID", "结束…"), labels(leader = false, live = true, act = true, end = true))
         assertEquals(listOf("取消常驻", "拷贝会话 ID"), labels(leader = true, live = false, act = true, end = true))
-        assertEquals("the main conversation is no leader", listOf("拷贝会话 ID", "结束对话"), labels(leader = false, live = true, act = false, end = true))
+        assertEquals("the main conversation is no leader", listOf("拷贝会话 ID", "结束…"), labels(leader = false, live = true, act = false, end = true))
         assertEquals(listOf("拷贝会话 ID"), labels(leader = false, live = true, act = false, end = false))
         assertTrue(conversationActions(resources, false, true, null, {}, {}).last().destructive)
-        assertEquals(listOf("设为常驻", "拷贝会话 ID", "归档", "结束对话"),
-            conversationActions(resources, false, true, {}, {}, {}, onArchive = {}).map { it.label })
+        // C12 (#4339): iOS's items in iOS's order (`AssistantSidebar.row`), End… last, apart and red.
+        val all = conversationActions(resources, false, true, {}, {}, {}, onArchive = {}, onRename = {}, onDiagnostics = {})
+        assertEquals(listOf("设为常驻", "重命名…", "归档", "拷贝会话 ID", "拷贝诊断", "结束…"), all.map { it.label })
+        assertEquals(listOf(false, false, false, false, false, true), all.map { it.destructive })
+        assertTrue(all.last().separatorBefore)
+        // Each action is the one passed for it.
+        val ran = mutableListOf<String>()
+        conversationActions(resources, true, true, { ran += "pin" }, { ran += "copy" }, { ran += "end" }, onArchive = { ran += "archive" },
+            onRename = { ran += "rename" }, onDiagnostics = { ran += "diagnostics" }).forEach { it.onClick() }
+        assertEquals(listOf("pin", "rename", "archive", "copy", "diagnostics", "end"), ran)
+    }
+
+    /** Copy diagnostics (C12): the conversation's structure, never its words. */
+    @Test fun diagnosticsCarryTheStructureAndNoWords() {
+        val session = Session(machineId = "hub", sessionId = "s1", title = "周末去哪儿", status = "idle", state = "working",
+            lastText = "去海边吧", updatedAt = "2026-11-12T09:00:00Z", origin = "user", pendingInteractions = 2,
+            queued = listOf("先订酒店"), turnErrorCode = "auth_failed")
+        val text = conversationDiagnostics(session)
+        assertTrue(text, "session=hub/s1" in text && "state=working" in text && "pending=2 queued=1" in text && "turn_error_code=auth_failed" in text)
+        listOf("周末去哪儿", "去海边吧", "先订酒店").forEach { assertFalse(it, it in text) }
     }
 
     @Test fun firstConversationBecomesMainAndSendUsesOutbox() = runTest {

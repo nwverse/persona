@@ -150,6 +150,7 @@ func TestGuestRefusesOtherRuntimes(t *testing.T) {
 // MCP server. No built-in tools or user settings are loaded.
 func TestGuestAgentSDKStart(t *testing.T) {
 	f := sdkTest(t)
+	f.n.hubPersonaContracts.Store(true)
 	id, err := f.n.assistantSend(withGuest(context.Background(), []string{"larkbridge_docs"}), "", t.TempDir(), "claude", "search", nil, "", "",
 		sdkExec(proto.AssistantRuntimeAgentSDK))
 	if err != nil {
@@ -168,7 +169,7 @@ func TestGuestAgentSDKStart(t *testing.T) {
 	if _, plain := o["mcpServers"].(map[string]any)["persona"]; plain {
 		t.Fatalf("guest config must go through the SDK proxy: %v", o)
 	}
-	if got, _ := o["allowedTools"].([]any); len(got) != 2 || got[0] != "mcp__persona__larkbridge_docs" || got[1] != "mcp__jarvis__larkbridge_docs" {
+	if got, _ := o["allowedTools"].([]any); len(got) != 1 || got[0] != "mcp__persona__larkbridge_docs" {
 		t.Fatalf("allowed tools: %#v", o["allowedTools"])
 	}
 }
@@ -597,6 +598,41 @@ func TestMeetingRoomByItsDirectory(t *testing.T) {
 	}
 	if _, err := n.spawnClaude(room, dir, "claude", true, false); !errors.Is(err, errRoomRecord) {
 		t.Fatalf("a room without its tools started: %v", err)
+	}
+}
+
+// A new conversation's first message with its client_msg_id and no given id (one a person's own app opened, the
+// manager's humanStart): once it started, the node expects that message under the conversation's id, as sent before it
+// was typed and after nothing, ties it to the conversation's first user line and tags that line's items with it.
+func TestANewConversationsFirstMessageIDIsTiedOnceItStarted(t *testing.T) {
+	fakeClaudeHome(t, "read line\necho '{\"type\":\"system\",\"subtype\":\"init\"}'\nsleep 30\n")
+	n := codexTestNode(t)
+	withFakeHub(t, n)
+	const text = "Fix the release CI with my token."
+	before := time.Now()
+	params := json.RawMessage(`{"cwd":"` + t.TempDir() + `","launcher":"claude","text":"` + text + `","client_msg_id":"start-x"}`)
+	out, err := n.handle(context.Background(), "assistant.send", params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := out.(map[string]any)["session_id"].(string)
+	if id == "" {
+		t.Fatalf("answer %v", out)
+	}
+	t.Cleanup(func() { n.stopAssistant(id) })
+	r, ok := n.echoes.record(id, "start-x")
+	if !ok || r.Text != text || r.AfterSeq != 0 || r.SentAt.Before(before) || r.SentAt.After(time.Now()) {
+		t.Fatalf("its first message is not expected under its id: %+v %v", r, ok)
+	}
+	line := []proto.Item{{ID: "u1", Seq: 1, Role: "user", Kind: proto.KindText, Text: text, TS: time.Now()},
+		{ID: "u1#1", Seq: 1, Role: "user", Kind: proto.KindImage, TS: time.Now()}}
+	if found := n.echoes.match(id, line); len(found) != 1 || found[0].Line != "u1" {
+		t.Fatalf("its first line was not found: %+v", found)
+	}
+	for _, it := range n.echoes.tag(id, line) {
+		if it.ClientMsgID != "start-x" {
+			t.Fatalf("an item of its first line carries %q", it.ClientMsgID)
+		}
 	}
 }
 
