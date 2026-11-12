@@ -11,6 +11,9 @@ export interface PanelPrice {
   input: number;
   output: number;
   cache_read?: number;
+  /** A 5-minute cache write; `cache_write_1h` a 1-hour one (absent: `cache_write`'s price). */
+  cache_write?: number;
+  cache_write_1h?: number;
 }
 
 /** One model of a provider, as the panel shows and picks it. */

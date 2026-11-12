@@ -28,7 +28,10 @@ import { useIsLatestMessage } from "./latest-message-time";
 
 // Hidden until the pointer comes, so it is not part of the first screen (startup-preload.ts): its row is kept while it
 // loads, so nothing moves when it comes.
-const ReplyBar = lazy(() => import("./ReplyBar").then((m) => ({ default: m.ReplyBar })));
+const replyBar = () => import("./ReplyBar");
+const ReplyBar = lazy(() => replyBar().then((m) => ({ default: m.ReplyBar })));
+// what the exchange cost, at the end of a touch screen's row (the reply bar has it on hover)
+const TurnUsage = lazy(() => replyBar().then((m) => ({ default: m.TurnUsage })));
 
 
 function pointAnchor(x: number, y: number): HTMLElement {
@@ -140,6 +143,8 @@ export function MessageActions({
   images,
   photos,
   onDelete,
+  usage,
+  usageMs,
   children,
   className,
 }: {
@@ -159,6 +164,9 @@ export function MessageActions({
   photos?: string[];
   /** A message only on this device (a failed send): "Delete" ends its menus (#4626). */
   onDelete?: () => void;
+  /** With `bar`: what the exchange used (lib/turn-usage.ts usageKey) and its work time, after the time (#5426). */
+  usage?: string;
+  usageMs?: number;
   children: React.ReactNode;
   className?: string;
 }) {
@@ -259,7 +267,7 @@ export function MessageActions({
       </div>
       {picking ? null : bar ? (
         <Suspense fallback={<div data-reply-bar="loading" className="mt-1.5 hidden h-6 [@media(hover:hover)]:block" />}>
-          <ReplyBar text={text} ts={ts} pinned={latest} fork={extras.find((a) => a.key === "fork")} more={actions.filter((a) => a.key !== "copy" && a.key !== "select")} />
+          <ReplyBar text={text} ts={ts} pinned={latest} fork={extras.find((a) => a.key === "fork")} more={actions.filter((a) => a.key !== "copy" && a.key !== "select")} usage={usage} usageMs={usageMs} persona={chat?.assistant} />
         </Suspense>
       ) : (side || corner) && (
       <div
@@ -316,6 +324,11 @@ export function MessageActions({
             <Icon name="more" size={14} />
           </button>
           {latest && ts && <span data-latest-time className="-ml-3 text-[12px] whitespace-nowrap text-ink-3 tabular-nums">{clock(ts)}</span>}
+          {usage && (
+            <Suspense fallback={null}>
+              <TurnUsage usage={usage} ms={usageMs} persona={chat?.assistant} touch />
+            </Suspense>
+          )}
         </div>
       )}
       {anchor && !picking && <Menu anchor={anchor} onClose={close} items={items} width={items.some((i) => i.hint) ? 200 : 168} />}

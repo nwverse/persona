@@ -68,5 +68,22 @@
   "uninstalled": "已卸载「{name}」",
   "uninstall_detail": "停掉它的程序，删掉它的包、配置和密钥；它提供的连接器从收件箱、知识库和助手里拿掉。要再用得重新安装。",
   "keep_data": "保留它的数据",
-  "keep_data_detail": "{path} 留着，以后重装能接着用。"
+  "keep_data_detail": "{path} 留着，以后重装能接着用。",
+  "network_title": "网络与隔离",
+  "sandbox_label": "在沙箱里运行",
+  "sandbox_default_on": "默认开：不是从官方市场装的",
+  "sandbox_default_off": "默认关：从官方市场装的",
+  "sandbox_you_off": "你关掉了 · 默认开",
+  "sandbox_you_on": "你打开了 · 默认关",
+  "sandbox_proxy_still": "用出网代理的程序照样只能连允许的地址。",
+  "sandbox_off_note": "沙箱已关：{name} 能连任何地址，也能读写 hub 用户能读写的文件。",
+  "network_egress": "出网",
+  "network_allowed_other": "放行 {count}",
+  "network_blocked_other": "拦下 {count}",
+  "sandbox_switch_label": "{name} 在沙箱里运行",
+  "sandbox_off_title": "关掉 {name} 的沙箱？",
+  "sandbox_off_body": "关掉后它能读写 hub 用户能读写的所有文件，也能连任何地址。",
+  "sandbox_off_confirm": "关掉沙箱",
+  "sandbox_turned_on": "{name} 的沙箱已打开",
+  "sandbox_turned_off": "{name} 的沙箱已关掉"
 }
