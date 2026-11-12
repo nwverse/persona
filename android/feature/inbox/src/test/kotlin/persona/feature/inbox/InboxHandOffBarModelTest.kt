@@ -10,7 +10,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.advanceTimeBy
-import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -111,7 +110,8 @@ class InboxHandOffBarModelTest {
         assertEquals(1, repository.handOffRequests.size)
         assertTrue(repository.handOffRequests.single().text.endsWith("Second"))
         model.queue("Third", typed = false)
-        advanceUntilIdle()
+        advanceTimeBy(INBOX_HAND_OFF_UNDO_MILLIS)
+        runCurrent()
         assertEquals(2, repository.handOffRequests.size)
         assertTrue(repository.handOffRequests.last().text.endsWith("Third"))
     }
@@ -121,7 +121,8 @@ class InboxHandOffBarModelTest {
         repository.failure = IOException("assistant_in_doubt")
         val model = model(repository, backgroundScope)
         model.queue("Original ask", typed = false)
-        advanceUntilIdle()
+        advanceTimeBy(INBOX_HAND_OFF_UNDO_MILLIS)
+        runCurrent()
         assertTrue(model.state.value.phase is HandOffBarPhase.Failed)
         val first = repository.handOffRequests.single()
         repository.snapshot.value = repository.snapshot.value.copy(records = listOf(
@@ -166,7 +167,8 @@ class InboxHandOffBarModelTest {
         val success = model(successRepository, backgroundScope)
         success.selectTarget(success.liveTargets().single())
         success.queue("Ask", typed = false)
-        advanceUntilIdle()
+        advanceTimeBy(INBOX_HAND_OFF_UNDO_MILLIS)
+        runCurrent()
         assertEquals(1, successRepository.doneCalls)
         assertNull((success.state.value.phase as HandOffBarPhase.Sent).doneError)
 
@@ -175,7 +177,8 @@ class InboxHandOffBarModelTest {
         val failed = model(failedRepository, backgroundScope)
         failed.selectTarget(failed.liveTargets().single())
         failed.queue("Ask", typed = false)
-        advanceUntilIdle()
+        advanceTimeBy(INBOX_HAND_OFF_UNDO_MILLIS)
+        runCurrent()
         assertTrue(failed.state.value.phase is HandOffBarPhase.Sent)
         assertEquals(failedRepository.doneFailure, (failed.state.value.phase as HandOffBarPhase.Sent).doneError)
         failed.retry()

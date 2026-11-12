@@ -108,7 +108,7 @@ class InboxHandOffBarShotsTest {
                 run++
                 Snapshot.sendApplyNotifications()
             }
-            rule.mainClock.advanceTimeByFrame()
+            rule.mainClock.advanceTimeBy(100)
             rule.waitForIdle()
             if (scene == "queued") {
                 rule.onNodeWithText("Undo").assertHasClickAction()
@@ -130,7 +130,7 @@ class InboxHandOffBarShotsTest {
         rule.onNodeWithTag("inbox-handoff-target").performClick()
         save("inbox-handoff-target-menu-glass-light", rule.onAllNodes(isPopup()).onLast().captureToImage().asAndroidBitmap())
         rule.onNodeWithText("More…").performClick()
-        rule.onNodeWithText("Main chat").assertExists()
+        rule.onNode(hasText("Main chat") and hasAnyAncestor(isPopup())).assertExists()
         rule.onNodeWithText("Also mark as done").assertExists()
         for (index in 1..12) rule.onNodeWithText("Agent $index").assertExists()
         rule.onNodeWithText("Agent 4").performClick()
