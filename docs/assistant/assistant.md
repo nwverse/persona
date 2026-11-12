@@ -604,7 +604,14 @@ and `web/src/views/chat/MentionSkill.test.tsx`. Opt-in real runtime checks:
 `node scripts/test/skill-runtime-smoke.mjs codex` (actual inventory, no model),
 `node scripts/test/skill-runtime-smoke.mjs codex --model`, and
 `node scripts/test/skill-runtime-smoke.mjs claude --model`. Model runs use disposable read-only-request fixtures and
-the installed launcher's default model/authentication; they print only allowlisted results. A successful native
+existing authentication; optional `--model-id <existing-model-id>` selects a model for this invocation only.
+Claude also accepts `--settings <current-profile-settings-file>` without copying its contents or changing the default.
+Its Go test bridge uses production catalog, opaque-reference validation and instruction rendering against the
+current profile (`CLAUDE_CONFIG_DIR`, or Claude's unset/default profile), explicitly keeping the catalog partial.
+It confirms an explicit model override against the runtime's initialization event, then requires an actual
+exact-file `Read`/successful tool-result pair and the random marker stored only in
+the disposable instruction body, not merely a successful chat reply. Go must be installed for that bridge.
+Output is allowlisted; arbitrary replies, catalogs and credentials are not printed. A successful runtime
 smoke is not a production Web-to-hub end-to-end test. Synthetic browser fixture:
 `PORT=25357 python3 scripts/mock/skill_mentions.py`.
 

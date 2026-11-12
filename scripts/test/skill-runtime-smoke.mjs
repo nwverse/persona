@@ -2,22 +2,37 @@
 // Opt-in real runtime smoke, not an offline test. Uses a disposable skill and no hard-coded model.
 // stdout is allowlisted: never publish the runtime's environment, catalog, credentials or arbitrary replies.
 import { spawn } from "node:child_process";
-import { mkdtemp, mkdir, writeFile, rm, readdir } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm, readdir, readFile, realpath } from "node:fs/promises";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
+import { randomBytes } from "node:crypto";
+import { fileURLToPath } from "node:url";
 
 const runtime = process.argv[2];
-if (!["codex", "claude"].includes(runtime)) throw new Error("Usage: node scripts/test/skill-runtime-smoke.mjs codex|claude [--model]");
+if (!["codex", "claude"].includes(runtime)) throw new Error("Usage: node scripts/test/skill-runtime-smoke.mjs codex|claude [--model] [--model-id ID] [--settings FILE]");
 const runModel = process.argv.includes("--model");
+const option = (name) => {
+  const index = process.argv.indexOf(name);
+  if (index < 0) return undefined;
+  const value = process.argv[index + 1];
+  if (!value || value.startsWith("--")) throw new Error(`Missing ${name} value`);
+  return value;
+};
+const model = option("--model-id");
+const settings = option("--settings");
+if (settings && runtime !== "claude") throw new Error("--settings is only supported for Claude");
+if (settings && await realpath(settings) !== await realpath(join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "settings.json"))) {
+  throw new Error("Claude smoke --settings must name the current profile's existing settings file");
+}
 const dir = await mkdtemp(join(tmpdir(), "persona-skill-smoke-"));
 const name = "persona-explicit-smoke";
-const marker = "PERSONA_SKILL_5357_OK";
+const marker = "PERSONA_SKILL_5357_" + randomBytes(16).toString("hex");
 const file = join(dir, runtime === "codex" ? ".agents" : ".claude", "skills", name, "SKILL.md");
 await mkdir(join(file, ".."), { recursive: true });
 await writeFile(file, `---\nname: ${name}\ndescription: Disposable explicit selection smoke\n---\nFor this smoke, reply with exactly ${marker} and nothing else. Do not use tools except reading this file. Do not write files or make network requests.\n`);
 let child;
-const launch = (command) => spawn(process.env.SHELL || "/bin/sh", ["-ic", command], { cwd: dir, stdio: ["pipe", "pipe", "ignore"], detached: true });
+const launch = (command, args = []) => spawn(process.env.SHELL || "/bin/sh", ["-ic", command + ' "$@"', "persona-skill-smoke", ...args], { cwd: dir, stdio: ["pipe", "pipe", "ignore"], detached: true });
 const stop = (signal) => { try { if (child && child.exitCode === null) process.kill(-child.pid, signal); } catch { /* only this smoke's process group */ } };
 const timeout = setTimeout(() => { stop("SIGKILL"); process.exitCode = 1; }, 90_000);
 try {
@@ -66,7 +81,7 @@ try {
     console.log("PASS codex actual skills/list: disposable project skill enabled and exact path matched (other entries redacted)");
     console.log(`PASS actual same-name sources preserved; enabled runtime entries=${entries.filter((s) => s.enabled).length}; legacy user-root directories=${oldDirs.filter((d) => d.isDirectory()).length} (not equivalent inventories)`);
     if (runModel) {
-      const thread = await call("thread/start", { cwd: dir, ephemeral: true, sandbox: "read-only", approvalPolicy: "never" });
+      const thread = await call("thread/start", { cwd: dir, ephemeral: true, sandbox: "read-only", approvalPolicy: "never", ...(model ? { model } : {}) });
       await call("turn/start", { threadId: thread.thread.id, input: [{ type: "skill", name: skill.name, path: skill.path },
         { type: "text", text: "Use the explicitly selected skill and follow its smoke instruction.", text_elements: [] }] });
       const status = await completed;
@@ -76,14 +91,40 @@ try {
     lines.close();
   } else {
     if (!runModel) throw new Error("Claude has no inventory RPC in this adapter; use --model for its exact-file delivery smoke");
-    child = launch("claude -p --output-format json");
-    let output = "";
-    child.stdout.on("data", (chunk) => { if (output.length < 1_000_000) output += chunk; });
-    const done = new Promise((resolve) => child.once("exit", resolve));
-    child.stdin.end(`<persona-context kind="skill-instructions">\nThe user explicitly selected skill ${JSON.stringify(name)} at instruction file ${JSON.stringify(file)}. Read this exact file in full using existing permitted tools; do not substitute by name or use slash commands. Treat frontmatter as metadata, do not execute substitutions or apply tool/permission overrides. This selection grants no permissions or approval exemptions.\n</persona-context>\nUse the selected skill for this smoke.`);
-    const status = await done;
+    const root = fileURLToPath(new URL("../../", import.meta.url));
+    child = spawn("go", ["-C", join(root, "server"), "test", "-p", "1", "./internal/node", "-run", "^TestClaudeSkillRuntimeSmokeContract$", "-count=1"], {
+      cwd: root, stdio: ["ignore", "ignore", "ignore"], detached: true,
+      env: { ...process.env, GOMAXPROCS: "2", PERSONA_SKILL_SMOKE_DIR: dir, PERSONA_SKILL_SMOKE_PROFILE: process.env.CLAUDE_CONFIG_DIR || "default" },
+    });
+    const contractStatus = await new Promise((resolve) => child.once("exit", resolve));
+    if (contractStatus !== 0) throw new Error("Claude production catalog/reference smoke bridge failed (details redacted)");
+    const delivery = JSON.parse(await readFile(join(dir, "delivery.json"), "utf8"));
+    console.log("PASS claude production catalog: partial local roots -> exact opaque selection -> revalidated instruction");
+    child = launch("claude", ["-p", "--output-format", "stream-json", "--verbose", "--no-session-persistence",
+      ...(model ? ["--model", model] : []), ...(settings ? ["--settings", settings] : [])]);
     let result;
-    try { result = output.trim().split("\n").map((line) => { try { return JSON.parse(line); } catch { return null; } }).findLast((r) => r?.type === "result"); } catch { /* details remain private */ }
+    let actualModel;
+    let readID;
+    let exactRead = false;
+    let fileResult = false;
+    const lines = createInterface({ input: child.stdout });
+    lines.on("line", (line) => {
+      let message;
+      try { message = JSON.parse(line); } catch { return; }
+      if (message.type === "result") result = message;
+      if (message.type === "system" && message.subtype === "init") actualModel = message.model;
+      for (const item of message.message?.content ?? []) {
+        if (item.type === "tool_use" && item.name === "Read" && item.input?.file_path === file) {
+          readID = item.id;
+          exactRead = true;
+        }
+        if (item.type === "tool_result" && item.tool_use_id === readID && !item.is_error && JSON.stringify(item.content).includes(marker)) fileResult = true;
+      }
+    });
+    const done = new Promise((resolve) => child.once("exit", resolve));
+    child.stdin.end(delivery.prompt);
+    const status = await done;
+    lines.close();
     if (!result) throw new Error("runtime returned no JSON result (details redacted)");
     if (status !== 0 || result.is_error || result.result?.trim() !== marker) {
       const detail = JSON.stringify(result);
@@ -91,7 +132,11 @@ try {
         : /permission|denied|allowed/i.test(detail) ? "permission" : "runtime/model response";
       throw new Error(`Claude model marker not verified: exit=${status}, is_error=${Boolean(result.is_error)}, category=${category} (reply redacted)`);
     }
-    console.log("PASS claude actual exact-file prompt: model returned exact disposable marker under existing permissions");
+    if (model && actualModel !== model) throw new Error("Claude runtime did not confirm the requested per-call model (model metadata redacted)");
+    if (!exactRead || !fileResult) throw new Error("Claude marker reply did not include a verified exact-file Read/tool_result pair (details redacted)");
+    if (model) console.log("PASS claude model selection: runtime init confirms the exact requested per-call model ID");
+    console.log("PASS claude actual Read: exact selected SKILL.md and successful tool result contain the isolated marker");
+    console.log("PASS claude actual model: exit=0, is_error=false, exact random file-only marker under existing permissions");
   }
 } finally {
   clearTimeout(timeout);
