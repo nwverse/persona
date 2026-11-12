@@ -45,6 +45,7 @@ import persona.core.contracts.api.DraftRepository
 import persona.core.contracts.api.DraftKey
 import persona.core.contracts.api.ChatComposerService
 import persona.core.designsystem.row
+import persona.core.domain.ConversationTitle
 import persona.feature.chat.ChatComposer
 import persona.feature.chat.ChatComposerState
 import persona.feature.chat.ChatDraftEditor
@@ -976,7 +977,7 @@ fun AssistantScreen(
             } else {
                 NewChatPage(enabled = !sending && draftReady && composer.ready, machines = machines,
                     phoneToolsAvailable = phoneToolsAvailable, contentPadding = padding, demo = demo,
-                    setup = blocking != null, mainNote = newChat == null, hubSuggestions = readiness?.suggestions?.takeIf { it.isNotEmpty() },
+                    setup = blocking != null, startsMain = newChat == null, hubSuggestions = readiness?.suggestions?.takeIf { it.isNotEmpty() },
                     onLocalSuggestion = { readinessHelp = ReadinessHelp.ofSuggestion(it) },
                     onSuggestion = {
                         composer.value = androidx.compose.ui.text.input.TextFieldValue(it, androidx.compose.ui.text.TextRange(it.length))
@@ -1160,6 +1161,17 @@ private val suggestions = listOf(
 )
 
 /**
+ * The words under the greeting on the blank page (iOS `ShellHome` header): "This is your main chat…" on the page that starts the
+ * main conversation, "Start a new side chat…" on New chat's; with a step to finish first, the step's own line.
+ */
+@androidx.annotation.StringRes
+internal fun homeLead(setup: Boolean, startsMain: Boolean): Int = when {
+    setup -> R.string.assistant_home_setup_lead
+    startsMain -> R.string.assistant_home_lead_main
+    else -> R.string.assistant_home_lead_side
+}
+
+/**
  * The assistant's one blank page (iOS `ShellHome`; #4339 C11: Android has no home page): New chat's, whose first message
  * starts a new conversation, or with no main conversation yet the page whose first message starts that one. A greeting,
  * what needs the user, things to ask and the devices Persona can reach, over the composer.
@@ -1172,8 +1184,8 @@ private fun NewChatPage(
     needsYou: NeedsYou = NeedsYou(), onNeed: ((NeedsYouLine) -> Unit)? = null, onMore: () -> Unit = {},
     /** The main conversation still misses a step (docs/assistant/onboarding.md 4.4): the lead says so. */
     setup: Boolean = false,
-    /** What is sent here goes to the main conversation (the page that starts it, not New chat's): the lead's note says so. */
-    mainNote: Boolean = true,
+    /** The first message here starts the main conversation (the page that starts it, not New chat's): the lead says "This is your main chat" (iOS `assistantMain == nil`), else "Start a new side chat". */
+    startsMain: Boolean = true,
     /** The hub's example questions (readiness `suggestions`), in place of the app's own; null: the app's. */
     hubSuggestions: List<ReadinessSuggestion>? = null,
     onLocalSuggestion: (String) -> Unit = {},
@@ -1202,9 +1214,7 @@ private fun NewChatPage(
         item(span = { GridItemSpan(2) }) {
             Column(Modifier.padding(vertical = 20.dp.dense), verticalArrangement = Arrangement.spacedBy(12.dp.dense)) {
                 Text(stringResource(greeting(LocalTime.now().hour)), style = PersonaTheme.type.largeTitle, color = PersonaTheme.palette.ink)
-                Text(stringResource(if (setup) R.string.assistant_home_setup_lead else R.string.assistant_home_lead),
-                    style = PersonaTheme.type.voice, color = PersonaTheme.palette.ink2)
-                if (!setup && mainNote) Text(stringResource(R.string.assistant_home_note), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3)
+                Text(stringResource(homeLead(setup, startsMain)), style = PersonaTheme.type.voice, color = PersonaTheme.palette.ink2)
             }
         }
         // What waits on the user comes before what Persona could do: the suggestions stay under it.
@@ -1478,16 +1488,19 @@ private fun ConversationRow(
         ?: channel?.let { c -> { JChannelMark(c, size = MarkSize.Inline) } }
     // [named]: a direction's name, shown instead of its leader conversation's title
     val title = named ?: session.conversationTitle(conversationWords())
+    // A hub title's day and kind ("1101 | Fix | ") in the quiet ink, so the topic is what the eye finds (iOS `titleText`); Glass.
+    val dated = if (PersonaTheme.style == AppStyle.Glass) ConversationTitle.parse(title) else null
+    val resources = androidx.compose.ui.platform.LocalResources.current
     val swipe = onArchive?.let { SwipeAction(stringResource(R.string.assistant_archive), PersonaIcons.archive, Status.Working, it) }
     if (LocalHomeDrawer.current) JSwipeActions(modifier, end = swipe) {
-        JSidebarHistoryRow(title, session.conversationStatus(), selected, onOpen, { menu = true },
+        JSidebarHistoryRow(dated?.topic ?: title, session.conversationStatus(), selected, onOpen, { menu = true },
             stringResource(R.string.assistant_conversation_actions), hint = counts,
-            titleAccessory = accessory)
+            titleAccessory = accessory, titleLead = dated?.head)
     } else JSwipeActions(modifier, end = swipe) { JGroupItem(position) {
         // The time goes on the line under the title, with the state: beside the title it left the title two or three
         // characters in the wide window's 300dp list (2026-11-02), and a narrow drawer cut it short too.
-        JRow(title, onClick = onOpen, onLongClick = { menu = true },
-            titleAccessory = accessory,
+        JRow(dated?.topic ?: title, onClick = onOpen, onLongClick = { menu = true },
+            titleAccessory = accessory, titleLead = dated?.head,
             subtitle = session.lastText?.takeIf { it.isNotBlank() },
             leading = { JIcon(if (selected) PhIcons.CheckCircle else PhIcons.ChatCircle, null,
                 selected = selected, tint = if (selected) PersonaTheme.palette.accent else PersonaTheme.palette.ink2) },
@@ -1497,7 +1510,7 @@ private fun ConversationRow(
             horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
             StatusLabel(session.conversationStatus())
             counts?.let { Text(it, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3, maxLines = 1) }
-            conversationTime(session.updated, currentLocale)?.let { time ->
+            historyTime(session.updated, resources)?.let { time ->
                 Text(time, Modifier.weight(1f), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3,
                     maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.End)
             }
@@ -1509,7 +1522,7 @@ private fun ConversationRow(
             onArchive, onRename = onRename, onDiagnostics = onDiagnostics, glass = PersonaTheme.style == AppStyle.Glass),
         // The long press's preview (iOS's context menu): what it last said (the row shows only the title) and when.
         preview = session.lastText?.let { persona.core.domain.plainMarkdown(it) }?.takeIf { it.isNotBlank() },
-        previewCaption = conversationTime(session.updated, currentLocale),
+        previewCaption = historyTime(session.updated, resources),
     )
 }
 

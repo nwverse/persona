@@ -361,14 +361,21 @@ displays to offer; on a narrow screen the button keeps only its icon). The rules
   server sends no ExtendedDesktopSize (see "Frames" above), so on a Mac this is the app's result too.
 - **Crop**: noVNC keeps scaling its whole framebuffer to its container. The page sizes that container to the framebuffer at the scale
   that makes the chosen display fit the page, and puts it inside a box the display's size that clips the rest. noVNC maps the pointer
-  through its canvas, so input lands in whole-framebuffer pixels without touching noVNC; a drag that leaves the box is sent again at the
-  nearest point inside it, as the app keeps touches on the display.
-- **Kept**: per Mac in this browser (`localStorage` `persona.screen.display.<machine id>`). When the framebuffer changes size (a display
-  plugged in or out, another resolution) the page asks for the status again, so a chosen display that comes back is shown again without
-  a reload.
-- **Loading**: the menu is a chunk of its own (`screen/DisplayMenu.tsx`), so its words (`screen-displays`) stay out of the first
-  screen's catalog; the cropping and its pointer handling live in `displays.ts` with the page.
-- Pages an app embeds (`embed=1`) have no top bar and show every display.
+  through its canvas, so input lands in whole-framebuffer pixels without touching noVNC. A mouse drag that leaves the box is sent again
+  at the nearest whole pixel inside it, and a touch gesture's position (noVNC's gesture events carry it in their detail) is moved there,
+  as the app keeps touches on the display.
+- **Kept**: per Mac in this browser (`localStorage` `persona.screen.display.<machine id>`). The page asks for the status again when the
+  framebuffer changes size (a display plugged in or out, another resolution), so a chosen display that comes back is shown again
+  without a reload, and as the menu opens, so its list is the Mac's as the choice is made. Two displays of one size swapped while the
+  menu stays closed keep the old crop until it opens.
+- **Loading**: the menu (`screen/DisplayMenu.tsx`) is a chunk of its own, so its words (`screen-displays`) stay out of the first
+  screen's catalog. It is fetched while a Mac whose status lists several displays connects, and the page crops to a kept display only
+  once it is in, so a cropped picture always has the menu to go back. One that would not load (offline, the hub redeployed) leaves
+  every display shown and is asked for again as the connection moves on.
+- Pages an app embeds (`embed=1`) have no top bar: they show every display and ignore a choice this browser kept.
+- **Tests**: `web/src/screen/displays.test.ts`, `ScreenView.displays.test.tsx`, and in a real browser against the mock hub
+  (`MOCK_COMPUTER=ready MOCK_SCREEN=fake MOCK_SCREEN_DISPLAYS=2:node`) `node web/e2e/screen-displays.mjs <web URL> <mock hub URL>`: the
+  chosen display fills its box, a click lands on it, drags out over a fractional edge and the top edge stay on it, a new page reopens it.
 
 ### App
 
