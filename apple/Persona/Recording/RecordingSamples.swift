@@ -294,6 +294,8 @@ extension RecordingSamples {
             // Read while deleted: the store lets go of the day it holds in memory before the new one is written.
             _ = await store.record(id)
         }
+        // An earlier run's erases (Erase Last 10 Minutes) would otherwise reach the same hours of the day built again.
+        await store.forgetSampleRequests([pastDay, todayDay])
     }
 
     /// A made-up day: its chunks and control events as the watch would send them, and the text the phone would have

@@ -973,6 +973,21 @@ nonisolated final class RecordingDayStore: @unchecked Sendable {
         try queue.sync { try commitEvent(envelope) }
     }
 
+    #if DEBUG
+    /// Screenshots and UI tests (`-showDaySample`): forgets what an earlier run asked the watch about the made-up days
+    /// `ids` and every erase over a stretch of time, which there is no watch to confirm. Otherwise an erase made by an
+    /// earlier run (kept `RecordingDayWatchRequests.lifetime`) would erase the same day built again at those hours.
+    func forgetSampleRequests(_ ids: Set<UUID>) async {
+        await onQueue {
+            self.updateRequests { requests in
+                requests.erases.removeAll { ids.contains($0.recording) }
+                requests.deletes.removeAll { ids.contains($0.recording) }
+                requests.ranges = nil
+            }
+        }
+    }
+    #endif
+
     // MARK: Everyone else
 
     /// The day as the phone holds it; nil for a day it doesn't have, or one deleted.
