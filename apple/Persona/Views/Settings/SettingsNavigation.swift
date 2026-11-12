@@ -95,7 +95,7 @@ enum SettingsCatalog {
                   aliases: String(localized: "settings.search.layout")),
             .init(id: "health", title: String(localized: "Health"), symbol: Theme.Icon.health, group: .device, page: .health,
                   aliases: String(localized: "settings.search.health")),
-            .init(id: "phoneData", title: String(localized: "This iPhone"), symbol: Theme.Icon.phone, group: .device, page: .phoneData,
+            .init(id: "phoneData", title: ConnectorText.device, symbol: Theme.Icon.thisDevice, group: .device, page: .phoneData,
                   aliases: String(localized: "settings.search.phoneData"))
         ]
         #endif

@@ -181,7 +181,11 @@ struct SettingsView: View {
                 settingsLink(.storage, "Storage", Theme.Icon.storage, id: "settings-storage", value: storage?.storageText ?? "")
                 #if os(iOS)
                 settingsLink(.health, "Health", Theme.Icon.health, id: "settings-health")
-                settingsLink(.phoneData, "This iPhone", Theme.Icon.phone, id: "settings-phone-data")
+                NavigationLink(value: SettingsPage.phoneData) {
+                    SettingsRow(title: ConnectorText.device, symbol: Theme.Icon.thisDevice, tint: Theme.accent)
+                }
+                .settingsListRow(SettingsPage.phoneData)
+                .accessibilityIdentifier("settings-phone-data")
                 #endif
                 settingsLink(.about, "About", Theme.Icon.info, id: "settings-about")
             }

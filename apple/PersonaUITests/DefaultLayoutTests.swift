@@ -9,9 +9,15 @@ final class DefaultLayoutTests: XCTestCase {
 
     @MainActor private func launch(tab: String, retiredArgument: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["-demo.on", "YES", "-openWelcome", "YES", "-dev.openChat", "", "-tab", tab,
-                               "-app.tab", tab == "dev" ? "chats" : tab, "-AppleLanguages", "(zh-Hans)",
-                               "-AppleLocale", "zh_CN", "-probes", "YES"]
+        if tab == "settings", let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] {
+            let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
+            app.launchArguments = ["-pairURL", pair, "-dev.openChat", "", "-tab", tab, "-app.tab", tab,
+                                   "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN", "-probes", "YES"]
+        } else {
+            app.launchArguments = ["-demo.on", "YES", "-openWelcome", "YES", "-dev.openChat", "", "-tab", tab,
+                                   "-app.tab", tab == "dev" ? "chats" : tab, "-AppleLanguages", "(zh-Hans)",
+                                   "-AppleLocale", "zh_CN", "-probes", "YES"]
+        }
         if retiredArgument {
             app.launchArguments += ["-" + ["ui.", "old", "Layout"].joined(), "YES"]
         }

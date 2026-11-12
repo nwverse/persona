@@ -74,15 +74,27 @@ final class ModelConfigurationTests: XCTestCase {
 
     @MainActor func testPurposeSaveUsesTheUnifiedConfigurationEndpoint() throws {
         let app = launch(["-openModelConfiguration", "YES", "-openModelPurpose", "agent.new"])
-        let field = app.textFields["model-config-model"]
-        XCTAssertTrue(field.waitForExistence(timeout: 10))
-        addShot(app, "editor")
-        field.tap()
-        if let current = field.value as? String, !current.contains("留空"), !current.isEmpty {
-            field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: current.count))
-        }
         let requested = "model-ui-" + UUID().uuidString.prefix(8).lowercased()
-        field.typeText(requested)
+        let list = app.descendants(matching: .any)["model-config-model-list"].firstMatch
+        if list.waitForExistence(timeout: 10) {
+            list.tap()
+            let search = app.searchFields.firstMatch
+            XCTAssertTrue(search.waitForExistence(timeout: 10))
+            search.tap()
+            search.typeText(requested)
+            let choice = app.buttons["newChat.model." + requested]
+            XCTAssertTrue(choice.waitForExistence(timeout: 10))
+            choice.tap()
+        } else {
+            let field = app.textFields["model-config-model"]
+            XCTAssertTrue(field.waitForExistence(timeout: 10))
+            field.tap()
+            if let current = field.value as? String, !current.contains("留空"), !current.isEmpty {
+                field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: current.count))
+            }
+            field.typeText(requested)
+        }
+        addShot(app, "editor")
         let save = app.buttons["model-config-save"]
         XCTAssertTrue(save.isEnabled)
         save.tap()
