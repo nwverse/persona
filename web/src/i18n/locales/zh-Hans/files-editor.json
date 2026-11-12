@@ -32,7 +32,7 @@
   "match_case": "区分大小写",
   "regexp": "正则",
   "by_word": "全词",
-  "replace_one": "替换",
+  "replace_single": "替换",
   "replace_all": "全部替换",
   "close": "关闭"
 }

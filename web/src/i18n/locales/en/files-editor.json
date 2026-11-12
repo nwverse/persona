@@ -32,7 +32,7 @@
   "match_case": "match case",
   "regexp": "regexp",
   "by_word": "by word",
-  "replace_one": "replace",
+  "replace_single": "replace",
   "replace_all": "replace all",
   "close": "close"
 }

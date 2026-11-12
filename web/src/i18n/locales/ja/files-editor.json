@@ -32,7 +32,7 @@
   "match_case": "大文字小文字を区別",
   "regexp": "正規表現",
   "by_word": "単語単位",
-  "replace_one": "置換",
+  "replace_single": "置換",
   "replace_all": "すべて置換",
   "close": "閉じる"
 }
