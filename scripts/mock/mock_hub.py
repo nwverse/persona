@@ -8625,7 +8625,8 @@ if os.environ.get("MOCK_IMESSAGE_INBOX"):
 
 # MOCK_SUBSCRIPTION_INBOX=1 (#5537): an item a source subscription delivered (a mail subscription's notice): its source is
 # the subscription's id, not a connector's, and its content is the whole of it. Its thread request answers as the hub
-# does now, a page that is no conversation (`chat.kind: none`); =old as hubs before #5537 did, 404 "no connector".
+# does now, a page that is no conversation (`chat.kind: none`); =old as hubs before #5537 did, 404 "no connector"
+# (=group and =group_before below answer as =1).
 # GET /mock/subscription_inbox?mode=old|1 switches it for the next requests. Only with ?sources=all, like connectors' items.
 SUBSCRIPTION_INBOX = os.environ.get("MOCK_SUBSCRIPTION_INBOX", "")
 if SUBSCRIPTION_INBOX:
@@ -8640,6 +8641,50 @@ if SUBSCRIPTION_INBOX:
          "connector": {"thread": "sub:sub_example01:t1", "label": "示例邮件", "url": "https://mail.example.com/notice/1116"}},
     ]
 
+# MOCK_SUBSCRIPTION_INBOX=group (#5671): beside it, a group chat's subscription grouped by source, as one row like a Lark
+# chat: titled by the subscription, the newest message its sender line, nine came in, one of them asks the owner (so the
+# row is Needs you), the earlier ones listed in its context. =group_before: the same messages as hubs before #5671 delivered them, a row each.
+SUB_GROUP_MESSAGES = [  # (minutes ago, sender, text, tier, summary): made up
+    (58, "小林", "周六的读书会改到下午了", "fyi", "读书会改到周六下午"),
+    (51, "Mia", "下午几点？我两点以后才有空", "fyi", ""),
+    (47, "小林", "@我 周六你能带投影仪吗？", "action", "小林问你周六能不能带投影仪"),
+    (40, "阿杰", "这次读第三章，大家记得带书", "fyi", ""),
+    (33, "Mia", "我可以带零食", "fyi", ""),
+    (24, "小林", "地点还是图书馆二楼？", "fyi", ""),
+    (18, "阿杰", "对，二楼靠窗那间", "fyi", ""),
+    (11, "Mia", "好的", "fyi", ""),
+    (6, "阿杰", "那就定周六下午两点，老地方见", "fyi", "读书会定在周六下午两点"),
+]
+
+
+def sub_group_line(m):
+    return f"{fmt_hm(ago(minutes=m[0]))} · {m[1]} · {m[2]}"
+
+
+def fmt_hm(iso):
+    t = datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone()
+    return t.strftime("%m-%d %H:%M")
+
+
+def sub_group_row(ms, key, count, tier, summary):
+    last = ms[-1]
+    earlier = "\n".join(sub_group_line(m) for m in ms[:-1][-10:])
+    block = f"{last[2]}\n{last[1]} · {fmt_hm(ago(minutes=last[0]))}"  # the body is the title: said once
+    return {"id": f"sub_example02:{key}", "source": "sub_example02", "kind": "sub_message", "account": "sub_example02",
+            "account_name": "示例读书群", "title": last[2], "sender": last[1], "preview": last[2], "count": count,
+            "started_at": ago(minutes=ms[0][0]), "updated_at": ago(minutes=last[0]), "tier": tier, "summary": summary,
+            "reason": "订阅的群消息", "read": False, "context": (earlier + "\n\n" if earlier else "") + block,
+            "connector": {"thread": f"sub:sub_example02:{key}", "label": "示例读书群"}}
+
+
+if SUBSCRIPTION_INBOX == "group":
+    _row = sub_group_row(SUB_GROUP_MESSAGES, "all", len(SUB_GROUP_MESSAGES), "action", "读书会定在周六下午两点，小林问你能不能带投影仪")
+    _row["title"] = "示例读书群"  # the one row is titled by the subscription, with no tag saying it again
+    del _row["connector"]["label"]
+    INBOX[1:1] = [_row]
+elif SUBSCRIPTION_INBOX == "group_before":
+    INBOX[1:1] = [sub_group_row([m], f"m{i}", 1, m[3], m[4] or m[2]) for i, m in reversed(list(enumerate(SUB_GROUP_MESSAGES)))]
+
 
 def subscription_thread_area(h, method, p):
     """A subscription's thread request (MOCK_SUBSCRIPTION_INBOX) and /mock/subscription_inbox; True when it answered."""
@@ -8649,7 +8694,7 @@ def subscription_thread_area(h, method, p):
     if p == "/mock/subscription_inbox":
         SUBSCRIPTION_INBOX = parse_qs(urlparse(h.path).query).get("mode", [SUBSCRIPTION_INBOX])[0] or "1"
         return h.send_json({"mode": SUBSCRIPTION_INBOX}) or True
-    if p != "/api/v1/connectors/sub_example01/thread":
+    if p not in ("/api/v1/connectors/sub_example01/thread", "/api/v1/connectors/sub_example02/thread"):
         return False
     if SUBSCRIPTION_INBOX == "old":
         return h.send_json({"error": 'no connector "sub_example01"'}, 404) or True

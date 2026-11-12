@@ -165,8 +165,16 @@ func TestInboxSourcesRoute(t *testing.T) {
 	}
 	var in uiRequest
 	_ = json.Unmarshal([]byte(`{"context":{"assistant":"Claude"}}`), &in)
-	if in.Context.Assistant != "Claude" {
+	if in.Context.Assistant == nil || *in.Context.Assistant != "Claude" {
 		t.Fatal("the request's assistant name isn't read")
+	}
+	// the key at all, even "", says the app opens Set Up with … (#5661); an older app sends none
+	for body, sent := range map[string]bool{`{"context":{"assistant":""}}`: true, `{"context":{}}`: false} {
+		var r uiRequest
+		_ = json.Unmarshal([]byte(body), &r)
+		if (r.Context.Assistant != nil) != sent {
+			t.Errorf("%s: sent %v", body, r.Context.Assistant != nil)
+		}
 	}
 	slot, _ := extension.Slot("extension_page")
 	params, _ := json.Marshal(h.uiParams(extension.UIItem{ID: "page"}, slot, in))
