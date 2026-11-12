@@ -70,8 +70,13 @@
     <string name="assistant_greeting_noon">中午好</string>
     <string name="assistant_greeting_afternoon">下午好</string>
     <string name="assistant_greeting_evening">晚上好</string>
-    <string name="assistant_home_lead">消息、日程和手头的事，都可以交给我。</string>
-    <string name="assistant_home_note">发出的内容会进入主对话，离线时先保存在本机。</string>
+    <string name="assistant_home_lead_main">这是你的主对话：我会记住这里聊过的事。我能看你的电脑、手机、邮箱、飞书和整理好的项目，也能替你盯着事、到点提醒。</string>
+    <string name="assistant_home_lead_side">开一段新的旁支对话。我能看你的电脑、手机、邮箱、飞书和整理好的项目，也能替你盯着事、到点提醒。</string>
+    <string name="assistant_time_just_now">刚刚</string>
+    <plurals name="assistant_time_minutes_ago">
+        <item quantity="other">%1$d 分钟前</item>
+    </plurals>
+    <string name="assistant_time_yesterday">昨天</string>
     <string name="assistant_online_devices">在线设备</string>
     <string name="assistant_this_phone">这台手机</string>
     <string name="assistant_phone_tools_unavailable">手机工具暂不可用</string>
