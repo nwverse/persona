@@ -60,7 +60,8 @@ describe("Header", () => {
 
   it("is cindy's one line: the Agent's mark, the title, then ⋯ (#5421)", () => {
     const html = bare(header());
-    const mark = html.indexOf('aria-label="Agent 在 MacBook 上运行"');
+    // spoken: which Agent and where it runs; on hover cindy's sentence
+    const mark = html.indexOf('aria-label="Claude Code。Agent 在 MacBook 上运行" title="Agent 在 MacBook 上运行"');
     const title = html.indexOf("data-chat-title=");
     const more = html.indexOf('aria-label="更多操作"');
     expect(mark).toBeGreaterThan(-1);
@@ -83,7 +84,7 @@ describe("Header", () => {
     state().machines = [{ id: "m", name: "MacBook", online: false } as (typeof machines)[number]];
     try {
       const html = bare(header());
-      expect(html).toMatch(/aria-label="Agent 在 MacBook 上运行，那台电脑现在离线，连上后才能继续"[^>]*data-agent-device="offline"[^>]*opacity-75/);
+      expect(html).toMatch(/title="Agent 在 MacBook 上运行，那台电脑现在离线，连上后才能继续"[^>]*data-agent-device="offline"[^>]*opacity-75/);
     } finally {
       state().machines = machines;
     }

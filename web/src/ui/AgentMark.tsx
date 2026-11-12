@@ -48,7 +48,7 @@ const MARKS: Record<MarkedAgent, { src: string; template?: boolean; fit: number 
 export function AgentMark({ agent, label, surface, size = 14, decorative, className, remote }: { agent?: string; label?: string; surface?: AgentSurface; size?: number; decorative?: boolean; className?: string; /** It runs on another computer: a signal arc at the mark's upper right (RemoteSignal). */ remote?: boolean }) {
   const id = agentId(agent);
   const agentNamed = agentName(agent, label);
-  const name = surface ? t("agent-mark.with_surface", { agent: agentNamed, surface: t(`agent-mark.surface_${surface}`) }) : agentNamed;
+  const name = markName(agent, label, surface);
   const a11y = decorative ? { "aria-hidden": true as const } : { role: "img" as const, "aria-label": name };
   const box = cx("relative inline-flex shrink-0 items-center justify-center", className ?? "text-ink-2");
   const badge = (
@@ -134,6 +134,18 @@ function RemoteSignal({ size }: { size: number }) {
       <circle cx="12.6" cy="3.4" r="0.95" fill="currentColor" stroke="none" />
     </svg>
   );
+}
+
+/** What a mark says it is: the agent's name, with the client it runs in ("Codex, command line"). */
+function markName(agent?: string, label?: string, surface?: AgentSurface): string {
+  const named = agentName(agent, label);
+  return surface ? t("agent-mark.with_surface", { agent: named, surface: t(`agent-mark.surface_${surface}`) }) : named;
+}
+
+/** What a session's mark says it is (SessionMark's accessible name), for a place that names it along with more. */
+export function sessionMarkName(s: Pick<Session, "agent" | "agent_label" | "source_kind" | "agent_surface">): string {
+  const { agent, label, surface } = sessionAgent(s);
+  return markName(agent, label, surface);
 }
 
 /** The mark of a session's agent. */

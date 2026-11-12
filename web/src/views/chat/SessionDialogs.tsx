@@ -120,18 +120,22 @@ export function SessionInfoDialog({ session, machineName, open, onClose }: { ses
 }
 
 // "Rename": the herdr tab and the session's name (Claude's /rename), each only when changed (iOS RenameSessionAlert).
-/** Saves a new title from the header's in-place rename (#5421, cindy's double-click on the title): only the title, the tab
- *  keeps its name. False when nothing changed or it failed (the error toasted). */
+/** Saves a new title from the header's in-place rename (#5421, cindy's double-click on the title, which updates at once and
+ *  puts the old title back if the save fails): only the title, the tab keeps its name. False when nothing changed or it
+ *  failed (the error toasted). */
 export async function renameTitle(session: Session, title: string): Promise<boolean> {
   const body = renameBody(session, "", title);
   if (!body?.title) return false;
+  // the header and the list show the new name at once; the hub's push confirms it
+  upsertSession({ ...session, title: body.title });
   try {
     await api(`${sessionPath(session.machine_id, session.session_id)}/rename`, { method: "POST", json: { title: body.title } });
-    // the header and the list show the new name at once; the hub's push confirms it
-    upsertSession({ ...session, title: body.title });
     if (session.assistant) void refreshAssistant().catch(() => {});
     return true;
   } catch (e) {
+    // back to the old title, unless something renamed it meanwhile
+    const now = getSession(session.machine_id, session.session_id);
+    if (!now || now.title === body.title) upsertSession({ ...(now ?? session), title: session.title });
     toast(t("chat-sessiondialogs.change_failed", { error: errorText(e) }), "error");
     return false;
   }

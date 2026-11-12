@@ -217,6 +217,31 @@ it("double-clicking the title renames it in place: Enter saves the title alone, 
   expect(title()?.textContent).toBe("Network tests");
 });
 
+it("an in-place rename shows the new title at once and puts the old one back when the save fails (#5421)", async () => {
+  await open(<ChatView mid="mac" sid="s1" inPage />);
+  let fail!: () => void;
+  fetcher.mockImplementation((url: string, init?: RequestInit) =>
+    String(url).endsWith("/rename") && init?.method === "POST"
+      ? new Promise((_, reject) => (fail = () => reject(new TypeError("offline"))))
+      : Promise.resolve(new Response(JSON.stringify(String(url).includes("/items") ? { items: [item(0)], to_seq: 0 } : {}), { status: 200, headers: { "Content-Type": "application/json" } })),
+  );
+  const title = () => host.querySelector<HTMLElement>("[data-chat-title]");
+  act(() => title()!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
+  const input = host.querySelector<HTMLInputElement>("[data-chat-title-input]")!;
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "Network tests");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  act(() => void input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
+  await settle();
+  expect(title()?.textContent).toBe("Network tests");
+  await act(async () => {
+    fail();
+    for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(title()?.textContent).toBe("Checks");
+});
+
 it("/workflows opens the Background tasks panel at the latest run instead of going to the Agent (#5421)", async () => {
   const { getPanel, openPanel } = await import("../../lib/panel");
   const runs = [

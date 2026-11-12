@@ -120,5 +120,6 @@
   "branch_title": "分支：{branch}",
   "background_tasks": "后台任务",
   "background_running": "后台任务，{count} 个在运行",
-  "rename_title": "重命名"
+  "rename_title": "重命名",
+  "agent_device_label": "{agent}。{where}"
 }

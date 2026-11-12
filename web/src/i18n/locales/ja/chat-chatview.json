@@ -120,5 +120,6 @@
   "branch_title": "ブランチ：{branch}",
   "background_tasks": "バックグラウンドタスク",
   "background_running": "バックグラウンドタスク、{count} 件実行中",
-  "rename_title": "名前を変更"
+  "rename_title": "名前を変更",
+  "agent_device_label": "{agent}。{where}"
 }

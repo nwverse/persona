@@ -190,6 +190,18 @@ describe("the loop", () => {
     take();
   });
 
+  it("offers no Stop while no chat page shows the session, and offers it once one does (#5421 review)", () => {
+    put({ loop });
+    draw();
+    expect(q('[data-bg-loop] button[aria-label="停止循环"]')).toBeNull();
+    const stopLoop = vi.fn();
+    let take = () => {};
+    act(() => void (take = provideBackgroundChat("m", "s", { stopLoop })));
+    expect(q('[data-bg-loop] button[aria-label="停止循环"]')).not.toBeNull();
+    act(() => take());
+    expect(q('[data-bg-loop] button[aria-label="停止循环"]')).toBeNull();
+  });
+
   it("says Loop when it has no task in words", () => {
     put({ loop: { kind: "dynamic", prompt: "/loop" } });
     draw();
@@ -235,17 +247,27 @@ describe("a run's detail", () => {
     expect(q('[data-bg-run="w1"]')).not.toBeNull();
   });
 
+  it("drops an ask for a run it does not have: the run coming later does not take the list away (#5421 review)", () => {
+    put({ workflows: [run("w1")] });
+    draw({ kind: "background", mid: "m", sid: "s", run: "w9" });
+    put({ workflows: [run("w1"), run("w9")] });
+    expect(q("[data-background-detail]")).toBeNull();
+    expect(q('[data-bg-run="w9"]')).not.toBeNull();
+  });
+
   it("shows the call in the chat only while the chat page can, and says so to it", () => {
     put({ workflows: [run("w1")] });
     draw({ kind: "background", mid: "m", sid: "s", run: "w1" });
     expect(q("[data-workflow-jump]")).toBeNull();
     const jumpToCall = vi.fn();
-    const take = provideBackgroundChat("m", "s", { stopLoop: () => {}, jumpToCall });
-    draw({ kind: "background", mid: "m", sid: "s", run: "w1" });
+    // a page that comes while the detail shows: the detail offers it without being drawn again for it
+    let take = () => {};
+    act(() => void (take = provideBackgroundChat("m", "s", { stopLoop: () => {}, jumpToCall })));
     act(() => q("[data-workflow-jump]")!.click());
     expect(jumpToCall).toHaveBeenCalledWith("call-w1");
     expect(closed).not.toHaveBeenCalled(); // wide: the chat is beside the panel
-    take();
+    act(() => take());
+    expect(q("[data-workflow-jump]")).toBeNull();
   });
 });
 

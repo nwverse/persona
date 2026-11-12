@@ -120,5 +120,6 @@
   "branch_title": "Branch: {branch}",
   "background_tasks": "Background tasks",
   "background_running": "Background tasks, {count} running",
-  "rename_title": "Rename"
+  "rename_title": "Rename",
+  "agent_device_label": "{agent}. {where}"
 }

@@ -8,7 +8,7 @@
 // something runs.
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { t } from "../../i18n";
-import { backgroundChat, type BackgroundPanel as BackgroundPanelObject } from "../../lib/background-panel";
+import { useBackgroundChat, type BackgroundPanel as BackgroundPanelObject } from "../../lib/background-panel";
 import { openPanel } from "../../lib/panel";
 import { getSession, useStore } from "../../lib/store";
 import { backgroundTitle, loopCadence, loopNext, loopTask } from "../../lib/tasks";
@@ -70,8 +70,12 @@ export function BackgroundPanel({ mid, sid, opened, onClose }: { mid: string; si
     row?.querySelector<HTMLElement>("[data-bg-row-button]")?.focus();
     back.current = null;
   }, [shown]);
-  // a run gone from the session (the node no longer lists it): the list
+  // a run gone from the session (the node no longer lists it), or not there when asked for: the list, and the ask is
+  // dropped, so the panel never jumps to it later
   const run = shown ? session?.workflows?.find((w) => w.task_id === shown.run) : undefined;
+  useEffect(() => {
+    if (shown && !run) setShown(null);
+  }, [shown, run]);
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-background-panel>
       <PanelHeader icon="list" title={t("sidepanel.background")} onClose={onClose} />
@@ -286,6 +290,8 @@ function RunRow({ run, onOpen }: { run: Workflow; onOpen: (task: string) => void
 function LoopRow({ loop, mid, sid }: { loop: LoopInfo; mid: string; sid: string }) {
   const now = useNow(30_000);
   const [confirming, setConfirming] = useState(false);
+  // Stop goes through the chat page showing the session: none (the panel outlived it), no Stop rather than one that does nothing
+  const chat = useBackgroundChat(mid, sid);
   const task = loopTask(loop);
   const meta = [loopCadence(loop), loopNext(loop, now)].filter(Boolean).map((m, i) => <span key={i}>{m}</span>);
   const hint = [task, loop.reason].filter(Boolean).join("\n") || undefined;
@@ -297,12 +303,12 @@ function LoopRow({ loop, mid, sid }: { loop: LoopInfo; mid: string; sid: string 
         hint={hint}
         meta={meta}
         trailing={
-          <span className="pt-1.5">
+          chat && <span className="pt-1.5">
             <IconButton icon="square" label={t("chat-activity.stop_loop")} size={24} iconSize={12} active={confirming} onClick={() => setConfirming((c) => !c)} />
           </span>
         }
       />
-      {confirming && (
+      {confirming && chat && (
         <div role="group" aria-label={t("chat-activity.stop_loop")} className="mr-2 mb-1.5 ml-9 flex flex-col gap-2 rounded-[8px] bg-surface px-3 py-2.5 shadow-hairline" data-bg-loop-confirm>
           <p className="text-[12.5px] leading-relaxed text-ink-2">{t("chat-activity.stop_loop_explain")}</p>
           <div className="flex justify-end gap-2">
@@ -314,7 +320,7 @@ function LoopRow({ loop, mid, sid }: { loop: LoopInfo; mid: string; sid: string 
               size="sm"
               onClick={() => {
                 setConfirming(false);
-                backgroundChat(mid, sid)?.stopLoop();
+                chat.stopLoop();
               }}
             >
               {t("chat-activity.stop_loop")}
@@ -335,9 +341,10 @@ function WorkflowDetail({ run, mid, sid, onBack, onClose, focus }: { run: Workfl
     // only as it opens
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const jump = backgroundChat(mid, sid)?.jumpToCall
+  const jumpToCall = useBackgroundChat(mid, sid)?.jumpToCall;
+  const jump = jumpToCall
     ? (call: string) => {
-        backgroundChat(mid, sid)?.jumpToCall?.(call);
+        jumpToCall(call);
         // narrow, the panel covers the chat: the call shows only once it is gone
         if (mediaMatches(NARROW)) onClose();
       }

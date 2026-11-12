@@ -10,7 +10,7 @@ import { navigate, type SessionView } from "../../lib/router";
 import { canShowTerminal, composerSlot, otherView, useSessionView, viewOnlyRow } from "../../lib/session-view";
 import { openLink } from "../../lib/links";
 import { getPanel, openPanel, togglePanel, usePanel } from "../../lib/panel";
-import { backgroundPanelOf, hasBackgroundWork, isWorkflowsCommand, latestWorkflowRun, openBackgroundPanel, provideBackgroundChat, toggleBackgroundPanel } from "../../lib/background-panel";
+import { backgroundPanelOf, hasBackgroundWork, isWorkflowsCommand, latestWorkflowRun, openBackgroundPanel, provideBackgroundChat, toggleBackgroundPanel, WORKFLOWS_COMMAND } from "../../lib/background-panel";
 import { machineWithHub } from "../../lib/mesh";
 import { useLayout } from "../../lib/layout";
 import { hasModes, isMuted, toggleMute } from "../../lib/session-actions";
@@ -124,7 +124,7 @@ import { ModelFallbackCard } from "./ModelFallbackCard";
 import { usageLimitLabel } from "../../lib/usage-limit";
 import { displayLines, getFeedState, loadedFrom, loadFeed, loadToday, sendRouted, startOfDay, useFeed, type FeedItem } from "../../lib/feed";
 import { CardConversation } from "../../ui/AssistantCard";
-import { SessionMark } from "../../ui/AgentMark";
+import { SessionMark, sessionMarkName } from "../../ui/AgentMark";
 import { AssistantActionBar, DayLine, FeedLineView, QuickResultCard, RouteChip, TaskQuestions } from "../assistant/Tasks";
 import { t } from "../../i18n";
 import { lazyOverlay } from "../LazyOverlay";
@@ -992,8 +992,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     // /clear in the main conversation clears its context in place, it is not words for Persona (#5095); an edit of the
     // last message stays an edit (its rewind already ran)
     if (clears && !out.edit && isClearCommand(out.text, out.images.length)) return clearMainContext(sid);
-    // /workflows opens the Agent's Background tasks panel at its latest workflow, as cindy's does (#5421): not words for it
-    if (!assistant && !out.edit && isWorkflowsCommand(out.text, out.images.length)) {
+    // /workflows opens the Agent's Background tasks panel at its latest workflow, as cindy's does (#5421): not words for it.
+    // Not in a chat drawn inside a panel, whose page shows another session
+    if (!assistant && !embedded && !out.edit && isWorkflowsCommand(out.text, out.images.length)) {
       openBackgroundPanel(mid, sid, latestWorkflowRun(session));
       return true;
     }
@@ -1609,7 +1610,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // until it changes. The assistant's face reads only the last item's role and kind (lib/persona.ts personaState).
   const stopLoop = useCallback(() => void deliver({ text: STOP_LOOP_MESSAGE, images: [] }, uuid()), [deliver]);
   // the Background tasks panel stops the /loop and shows a workflow's call through the page showing the chat (#5421)
-  useEffect(() => (assistant ? undefined : provideBackgroundChat(mid, sid, { stopLoop, jumpToCall: jump })), [assistant, mid, sid, stopLoop, jump]);
+  useEffect(() => (assistant || embedded ? undefined : provideBackgroundChat(mid, sid, { stopLoop, jumpToCall: jump })), [assistant, embedded, mid, sid, stopLoop, jump]);
   // cached content stays up when a read fails: the pill says so, the error page is for an empty chat
   const refreshFailed = tr.items.length > 0 ? tr.error || refreshError : undefined;
   const lastItem = assistant ? tr.items[tr.items.length - 1] : undefined;
@@ -1617,7 +1618,11 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const lastKind = lastItem?.kind;
   const faceLast = useMemo(() => (lastRole && lastKind ? { role: lastRole, kind: lastKind } : undefined), [lastRole, lastKind]);
   // the main conversation's /clear (#5095, lib/main-clear.ts): Persona's other conversations take no commands
-  const commands = useMemo(() => (assistant ? (clears ? mainCommands() : []) : agentCommands(AGENT_COMMANDS, session)), [assistant, clears, session]);
+  // /workflows opens this page's side panel: a chat drawn inside a panel (the Team panel's worker) does not offer it (#5421)
+  const commands = useMemo(
+    () => (assistant ? (clears ? mainCommands() : []) : agentCommands(AGENT_COMMANDS, session).filter((c) => !(embedded && c.text === WORKFLOWS_COMMAND))),
+    [assistant, clears, session, embedded],
+  );
   // the permission picker after the + (#5324), where the mode can be switched: a Persona conversation whatever its state
   // (the hub applies it, #2416), an agent with modes while it runs; Plan mode is the + panel's check row
   const modesOn = Boolean(session) && (Boolean(assistant) || (hasModes(session) && stateOf(session!) !== "offline"));
@@ -2296,7 +2301,7 @@ export const Header = memo(function Header({
       </div>
       <div data-chat-title-row className={cx("flex min-w-0 flex-1 items-center gap-0.5", Boolean(topCenter) && "max-lg:hidden")}>
         {pinned && !assistant && <span role="img" aria-label={t("chat-chatview.pinned")} title={t("chat-chatview.pinned")} className="mr-1 flex shrink-0 text-ink-3"><Icon name="pin" size={13} /></span>}
-        {session?.loop && !assistant && <LoopMark session={session} now={now} onOpen={openBackground} />}
+        {session?.loop && !assistant && <LoopMark session={session} now={now} onOpen={() => openBackgroundPanel(session.machine_id, session.session_id)} />}
         {session && !assistant && <AgentDeviceMark session={session} machineName={machineName} />}
         {assistant && <span className="mr-1.5 flex shrink-0"><AssistantFace session={session} last={last} /></span>}
         {editing && session ? (
@@ -2384,9 +2389,10 @@ export const Header = memo(function Header({
  *  computer is offline the mark dims and the hover says it goes on once the computer is back. */
 export function AgentDeviceMark({ session, machineName }: { session: Session; machineName: string }) {
   const offline = useStore((s) => s.machines.find((m) => m.id === session.machine_id)?.online === false);
-  const label = t(offline ? "chat-chatview.agent_device_offline" : "chat-chatview.agent_device", { device: machineName });
+  const where = t(offline ? "chat-chatview.agent_device_offline" : "chat-chatview.agent_device", { device: machineName });
+  // the hover is cindy's sentence; the spoken name says which Agent too, as the mark alone did
   return (
-    <span role="img" aria-label={label} title={label} data-agent-device={offline ? "offline" : "online"} className={cx("mr-2 inline-flex shrink-0", offline && "opacity-75")}>
+    <span role="img" aria-label={t("chat-chatview.agent_device_label", { agent: sessionMarkName(session), where })} title={where} data-agent-device={offline ? "offline" : "online"} className={cx("mr-2 inline-flex shrink-0", offline && "opacity-75")}>
       <SessionMark s={session} size={14} decorative remote className="text-ink-3" />
     </span>
   );
