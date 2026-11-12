@@ -54,12 +54,18 @@ func TestLiveControlGivesTheSizeBack(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatal("the control did not end")
 		}
-		time.Sleep(300 * time.Millisecond)
-		w, h, err := c.TermSize(ctx, pane)
-		if err != nil {
-			t.Fatal(err)
+		var w, h int
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			w, h, err = c.TermSize(ctx, pane)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if w == cols && h == rows || time.Now().After(deadline) {
+				return w, h
+			}
+			<-time.After(20 * time.Millisecond)
 		}
-		return w, h
 	}
 
 	s := control()

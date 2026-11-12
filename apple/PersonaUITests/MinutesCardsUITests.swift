@@ -3,8 +3,8 @@ import XCTest
 
 /// A recording's Summary on iPhone (#5026, docs/apple/recording.md「Minutes」): the made-up finished meeting
 /// (`-showMeetingSample minutes`) against a mock hub (PERSONA_MOCK_HUB) that writes made-up minutes from its sentences
-/// (`POST /mock/recording_minutes {"mode":"ready"}`): two key points, a decision at 0:44, an action item for 张三 by 周五前
-/// and an open question. PERSONA_SHOTS=<dir> saves cards-<appearance>-summary / -context / -transcript
+/// (`POST /mock/recording_minutes {"mode":"ready"}`): two key points, a decision at 0:44, an action item with an owner
+/// and a due date, and an open question. PERSONA_SHOTS=<dir> saves cards-<appearance>-summary / -context / -transcript
 /// and, at the largest text size, -summary-largest / -context-largest, and a cited photo's card -photo
 /// (PERSONA_SHOTS_APPEARANCE names the appearance; run once in light and once in dark).
 final class MinutesCardsUITests: XCTestCase {

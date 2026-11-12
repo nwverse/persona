@@ -91,13 +91,24 @@ func TestTerminalControlGivesThePaneItsSizeBack(t *testing.T) {
 	_ = hub.Notify("terminal.resize", map[string]any{"session_id": "s1", "cols": 40, "rows": 20}) // the phone rotates
 	waitFor(t, "the phone's resize", func() bool { return strings.Contains(readLog(log), `"cols":40`) })
 	waitFor(t, "its frame", func() bool { return countFrames(events()) == 2 })
+	stream := n.termStreamOf("s1")
+	if stream == nil {
+		t.Fatal("the control is not streaming")
+	}
 	n.terminalUnwatch("s1")
 	waitFor(t, "the release", func() bool { return strings.Contains(readLog(log), "released") })
 	got := logAfter(readLog(log), "start ")
 	if len(got) < 3 || got[len(got)-2] != homeResize || got[len(got)-1] != "released" {
 		t.Fatalf("herdr got %q, want the resize to 189×52 right before the release", got)
 	}
-	time.Sleep(100 * time.Millisecond) // a frame sent late would be here by now
+	if !stream.isLeaving() {
+		t.Fatal("the control did not begin leaving")
+	}
+	waitFor(t, "the last frame's timer", func() bool {
+		stream.mu.Lock()
+		defer stream.mu.Unlock()
+		return time.Since(stream.lease) >= 30*time.Millisecond
+	})
 	if k := countFrames(events()); k != 2 {
 		t.Fatalf("%d frames went to the hub, want 2 (none after letting go)", k)
 	}

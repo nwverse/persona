@@ -232,7 +232,7 @@ Outside the scale: composer 32 (`Shell.composerRadius`, `apple/Shared/Design/The
 
 `Theme.Size` (`apple/Shared/Design/Theme.swift:457-570`) always goes through `scaledFrame`.
 
-- Hit target: `tapTarget` 44 (`:507`), drawn through `tapTargetFrame()` (a square for a small control) or `tapTargetHeight()` (a row or a heading that is a button and draws less, as wide as it is; #3753). Same number under other names: `searchField`, `switchHeight`, `Watch.minRowHeight`, `Sidebar.row` (iOS), `voiceThreadRoom`. Android uses 48 as its platform floor (`Tokens.MinTouch`).
+- Hit target: `tapTarget` 44 (`:507`), drawn through `tapTargetFrame()` (a square for a small control) or `tapTargetHeight()` (a row or a heading that is a button and draws less, as wide as it is; #3753). A line of text that is a link in a row under a card, where a taller row would push the card's buttons under the composer, uses `tapTargetOutset()`: its touch area grows `Space.l` above and below, its layout does not (#5392). Same number under other names: `searchField`, `switchHeight`, `Watch.minRowHeight`, `Sidebar.row` (iOS), `voiceThreadRoom`. Android uses 48 as its platform floor (`Tokens.MinTouch`).
 - Dots 6-10, marks 12-18, icons 20-26, wells 28-38, avatars 40-48. Neighbors differ by 1 to 2 pt (DS-10).
 - Named by value: `box50` to `box380` (DS-10). Android's generated tokens carry only the sizes it draws with, under the same names (`spec/tokens/dimension.json`, checked against `Theme.Size`); the space page's cards added `hairline`, `line`, `dotL` and `box150`.
 - The Mac's pointer over its picture in the app's VNC: at least `pointer` 22 tall, about macOS's own size (`VNCPointerArt`, #3075).
@@ -536,10 +536,10 @@ The Agents list, the Inbox's Agent section, the Assistant home and history show 
 - Leading: one source mark, the Agent's brand or a contact's avatar. The row's one state sits on its corner, chosen by the order in section 5.6. iOS (`AgentAvatar`) and Android's Glass row put the mark in a round well with the state's dot on its corner, rimmed apart from the well.
 - Line 1: the session's title, with the time on the right, localized ("6 min ago").
 - Line 2: when the session needs the user, what it waits for (the plan's title, the command, or the question itself); otherwise its latest line, in the secondary color. For a failed run, what failed, in red.
-- Line 3, optional: computer · project, leaving out what the grouping already shows, then the model's short name. iOS's Avatar row and Android's Glass row (#4338 A9) draw it as the source tag, the tab (space › tab outside the tree), the computer only while the list mixes computers, the model, the to-do as an outlined chip and the muted mark; Android's words come from `rowContent` in core/domain.
+- Line 3, optional: computer · project, leaving out what the grouping already shows, then the model's short name. iOS's Avatar row and Android's Glass row (#4338 A9) draw it as the source tag, the tab (space › tab outside the tree), the computer only while the list mixes computers, the model, the to-do as an outlined chip and the muted mark; Android's words come from `rowContent` in core/domain, its model's short name from `modelShortName` (the web's `modelChipLabel`; iOS's row still shows the raw string).
 - Never in a row: raw model IDs, session IDs or engine badges. At most one count badge.
 - Answers in the row: a question's choices, and a tool approval whose full command is shown and whose action is low-risk (Deny, Allow Once). Plans, high-risk actions and Always Allow for This Session open the session, where the context is.
-- Views grouped by location draw these rows too (#3753): By Repository's computer, repository and worktree are lines of their own, each worktree's sessions in these rows under its line. The Mac's By Repository cards (frozen) keep their rows (`WorkspaceAgentRow`). On iOS and on Android's Glass style each repository is a card: its header has the folder, the bold name and the chevron, no counts, with its actions in its long press (`RepoCardHeader`, Android `AgentRepoHeader`); a worktree's line has its mark, its name, a Primary chip on the main checkout, the branch when the name is not it or Detached HEAD as a caution, "N agents" or Idle at the end, dimmed while its computer is offline (`RepoWorktreeLine`, Android `AgentWorktreeLine`, #4338 A7).
+- Views grouped by location draw these rows too (#3753): By Repository's computer, repository and worktree are lines of their own, each worktree's sessions in these rows under its line. The Mac's By Repository cards (frozen) keep their rows (`WorkspaceAgentRow`). On iOS and on Android's Glass style each repository is a card: its header has the folder, the bold name and the chevron, no counts, with its actions in its long press (`RepoCardHeader`, Android `AgentRepoHeader`); a worktree's line has its mark, its name, a Primary chip on the main checkout, the branch when the name is not it or Detached HEAD as a caution, "N agents" or Idle at the end, dimmed while its computer is offline (`RepoWorktreeLine`, Android `AgentWorktreeLine`, #4338 A7). A computer's repositories with nothing going on follow its busy ones under Idle Repositories with their count, one card with a row each: the folder, the name, "N agents · tab names", when it last moved and a chevron, a tap opening its agents under it (`QuietSpaceRow`, Android `AgentIdleRepoRow`). A busy worktree's idle agents fold behind one line, "2 idle · review · research", and once opened "Hide N Idle" after them folds them again (`RepoIdleLine`, Android `AgentRepoIdleLine`, #4338 A8).
 
 #### List controls
 
@@ -972,6 +972,31 @@ for VoiceOver, as section 4.8.1 keeps red for what is still wrong; one that time
 page cut, the result shows the output's end (End of output), where a build or test run says why it failed, before View
 full text. Without an outcome (an older node) a row draws as before.
 
+### 4.7.1 Opening and closing in a chat keeps the tapped row in place
+
+Anything that opens or closes inside a chat, in Persona's conversations and Agent chats alike (work lines, tool steps,
+thoughts, notes, task cards, long quotes, a report's Expand, and so on), keeps what was tapped where it was on screen,
+so the conversation reads on without a jump (#3757). The reference point is the tapped row's top edge, or the tapped
+control when it sits lower in the row.
+
+- **In the middle of a conversation**: the tapped row stays at the same screen position, within a point or two, from
+  the tap until everything it opens has arrived, including steps fetched from the hub a moment later. What opens grows
+  downward under it; what closes takes its space with it at once.
+- **At the newest end, following**: the list stays at the newest end and what opens grows upward, the tapped row rising
+  with it, until the row's top reaches just under the top bar. There the list stops following and ↓ shows, so the opened
+  row is never pushed off the screen. Closing there brings the newest end back: the row comes down by what closed,
+  gliding, not in one frame.
+- **At the oldest end**: what opens grows downward and nothing moves above it.
+- **Afterwards**: the list holds still while the conversation goes on (new steps, the answer, the next turn, a strip
+  appearing under the list), until the user scrolls, taps ↓ or sends (section 4.7). A row opened at the newest end
+  takes what comes in next the same way it took what opened: it rises until it is under the top bar, then stays.
+- **One mechanism**: rows report their top (`chatPinned`, `WorkHeadReport`) and change through `toggleInPlace` or
+  `toggleWork`; `ChatPin` keeps the tapped row in place, waiting for what comes from the hub (`ChatPin.awaiting`), and
+  `ChatFollow.toggledRow` decides how it is held. A new expander uses these; it never animates its own height or
+  scrolls the list itself.
+- **Tested** by `KeepTappedRowTests`: in the middle, at the newest end and at the oldest end, one open and one close
+  each, in both chats, asserting the tapped row's screen position frame by frame.
+
 ### 4.8 Pending requests
 
 Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and waiting for a reply.
@@ -1157,7 +1182,7 @@ your permission" (section 5, "Notifications"); moving them to the card's words i
 
 ### 6.3 Accessibility baseline (the contract every component meets)
 
-1. Hit area at least 44 x 44 pt (Android 48 dp), including icon buttons whose visual is smaller. Use `tapTargetFrame`, or `tapTargetHeight` for a row or a heading that is a button. This is Persona's rule and is stricter than Apple's: the HIG gives 44 x 44 pt as the iOS default and 28 x 28 pt as the absolute minimum. Persona uses the default as its floor.
+1. Hit area at least 44 x 44 pt (Android 48 dp), including icon buttons whose visual is smaller. Use `tapTargetFrame`, or `tapTargetHeight` for a row or a heading that is a button, or `tapTargetOutset` for a text link that must keep a line's height. This is Persona's rule and is stricter than Apple's: the HIG gives 44 x 44 pt as the iOS default and 28 x 28 pt as the absolute minimum. Persona uses the default as its floor.
 2. Every control has a spoken label; icon-only buttons never rely on the symbol name. Decorative marks are hidden when adjacent text says the same.
 3. Selected, expanded and busy state is exposed with traits or values, not only color or shape.
 4. State never rides on color alone: pair with text or a symbol.
@@ -1264,6 +1289,7 @@ done, not applicable, or deviated (with the reason). It is short on purpose. The
 - [ ] Hit areas at least 44 x 44 pt (Android 48 dp); every control has a spoken label; gesture-only actions also have a visible control or an accessibility action (section 6.3).
 - [ ] Destructive actions: confirmed if irreversible, offer Undo if reversible (section 4.4).
 - [ ] Motion respects Reduce Motion; new loops are listed in `apple/PersonaTests/ContinuousMotionTests.swift` (sections 2.7, 6.3).
+- [ ] Anything that opens or closes in a chat keeps the tapped row where it was, at the newest end and the oldest too (section 4.7.1).
 - [ ] New copy follows section 5 and ships in `en`, `zh-Hans` and `ja`.
 - [ ] Screenshots of each changed screen in light and dark, at the default and at the largest accessibility text size, are attached or linked (iOS, plus watch, Android and web when touched).
 - [ ] No new problem of a kind listed in `docs/design/HIG_AUDIT.md`. A PR that fixes a listed finding names its ID.

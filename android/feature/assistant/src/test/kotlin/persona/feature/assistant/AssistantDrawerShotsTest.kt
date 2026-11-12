@@ -88,7 +88,7 @@ class AssistantDrawerShotsTest {
                 Box(Modifier.testTag("shot").width(400.dp).height(1100.dp).background(PersonaTheme.palette.background)) {
                     AssistantDrawer("", {}, groups, active = null, hasMain = groups.main != null,
                         onEnd = null, onMain = { mainTapped = true }, onOpen = { opened = it }, onInfo = { info = it },
-                        onNew = {}, onHome = {}, onSettings = { settingsTapped = true }, onTodos = {}, todoCount = 2,
+                        onNew = {}, onSettings = { settingsTapped = true }, onTodos = {}, todoCount = 2,
                         onInbox = { inboxTapped = true }, inboxCount = 5, settingsDot = true,
                         pages = listOf(
                             NavItem("machines", "电脑", PhIcons.Desktop, badge = 2),
@@ -151,7 +151,7 @@ class AssistantDrawerShotsTest {
                 CompositionLocalProvider(LocalHomeDrawer provides true) {
                     Box(Modifier.width(320.dp).height(800.dp).background(PersonaTheme.palette.background)) {
                         AssistantDrawer("", {}, ConversationGroups(null, emptyList(), emptyList()), active = null,
-                            hasMain = false, onEnd = null, onMain = {}, onOpen = {}, onInfo = {}, onNew = {}, onHome = {},
+                            hasMain = false, onEnd = null, onMain = {}, onOpen = {}, onInfo = {}, onNew = {},
                             onSettings = {}, onInbox = {}, inboxCount = 2, showTodos = false, pages = listOf(
                                 NavItem("machines", "电脑", PhIcons.Desktop, badge = 2),
                                 NavItem("extension", "扩展", PhIcons.PuzzlePiece, badge = 2),
@@ -185,7 +185,7 @@ class AssistantDrawerShotsTest {
         rule.setContent {
             PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
                 AssistantDrawer("", {}, ConversationGroups(main, emptyList(), recent.take(1)), active = null,
-                    hasMain = true, onEnd = null, onMain = {}, onOpen = {}, onInfo = {}, onNew = {}, onHome = {}, onSettings = {},
+                    hasMain = true, onEnd = null, onMain = {}, onOpen = {}, onInfo = {}, onNew = {}, onSettings = {},
                     onArchive = { archived = it })
             }
         }
@@ -206,7 +206,7 @@ class AssistantDrawerShotsTest {
             PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
                 Box(Modifier.testTag("shot").width(400.dp).height(700.dp).background(PersonaTheme.palette.background)) {
                     AssistantDrawer("", {}, groups, active = null, hasMain = true, onEnd = null, onMain = {}, onOpen = {},
-                        onInfo = {}, onNew = {}, onHome = {}, onSettings = {})
+                        onInfo = {}, onNew = {}, onSettings = {})
                 }
             }
         }
@@ -234,7 +234,7 @@ class AssistantDrawerShotsTest {
             PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
                 Box(Modifier.testTag("shot").width(400.dp).height(900.dp).background(PersonaTheme.palette.background)) {
                     AssistantDrawer("", {}, groups, active = null, hasMain = true, onEnd = null, onMain = {}, onOpen = {},
-                        onInfo = {}, onNew = {}, onHome = {}, onSettings = {})
+                        onInfo = {}, onNew = {}, onSettings = {})
                 }
             }
         }
@@ -267,7 +267,7 @@ class AssistantDrawerShotsTest {
             PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
                 Box(Modifier.testTag("shot").width(400.dp).height(1300.dp).background(PersonaTheme.palette.background)) {
                     AssistantDrawer("", {}, groups, active = null, hasMain = true, onEnd = null, onMain = {}, onOpen = {},
-                        onInfo = {}, onNew = {}, onHome = {}, onSettings = {})
+                        onInfo = {}, onNew = {}, onSettings = {})
                 }
             }
         }
@@ -301,7 +301,7 @@ class AssistantDrawerShotsTest {
             PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
                 Box(Modifier.testTag("shot").width(400.dp).height(1700.dp).background(PersonaTheme.palette.background)) {
                     AssistantDrawer("", {}, groups, active = null, hasMain = true, onEnd = {}, onMain = {}, onOpen = {},
-                        onInfo = {}, onNew = {}, onHome = {}, onSettings = {}, onArchive = {}, onLeader = {})
+                        onInfo = {}, onNew = {}, onSettings = {}, onArchive = {}, onLeader = {})
                 }
             }
         }

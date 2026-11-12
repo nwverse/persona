@@ -10,7 +10,7 @@ import { realpathSync, statSync } from 'node:fs'
 import { basename, resolve } from 'node:path'
 import { createRuntime, light, page, RpcError, snippet } from '../../runtime-sdk/index.js'
 import {
-  EFFORTS, RUNTIME, SESSION_LABEL, agentRoot, agentRow, appAgent, archivedUnderOwnId, claudeId, defaultProvider, interactionOf,
+  EFFORTS, RUNTIME, SESSION_LABEL, agentRoot, agentRow, appAgent, archivedUnderOwnId, claudeId, codexThreadOf, defaultProvider, interactionOf,
   launchersOf, linkedWorktree, parentAgentId, paseoMode, projectSpaces, providerRoots, responseOf, sessionIdOf, slotNameOf,
   spaceIdOf, strayRecord, timelineItems, transcriptOf,
 } from './map.js'
@@ -78,7 +78,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
   const handedBack = new Set() // permission ids the phone handed back to the computer: Paseo's own app answers them
   const echoes = new Map() // Paseo message id → the client_msg_id the phone sent it with
   const lastTexts = new Map() // agent id → its last words (agents whose content is not a transcript)
-  // agent id → { agent, project, transcript, at }: the user's own agents of Claude Code archived in Paseo (noteArchived),
+  // agent id → { agent, project, transcript?, at }: archived Claude agents and Persona-owned Codex agents (noteArchived),
   // the latest last
   const archived = new Map()
   let archiveRead = false // Paseo's archive was read since the bridge started: before that it cannot say which they are
@@ -214,7 +214,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
   function noteArchived(agent, project) {
     if (!agent?.id || parentAgentId(agent)) return
     const transcript = transcriptOf(agent, roots)
-    if (!transcript) return
+    if (!transcript && !archivedUnderOwnId(agent, roots)) return
     const known = archived.get(agent.id)?.project
     archived.delete(agent.id) // the latest last: the oldest go first when there are too many
     archived.set(agent.id, { agent, project: project ?? known, transcript, at: Date.parse(agent.archivedAt) || Date.now() })
@@ -347,6 +347,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
     const own = new Set()
     for (const [id, u] of archived) {
       if (u.at < since) archived.delete(id)
+      else if (!u.transcript) continue // Codex rows name their thread, never a Claude transcript.
       else if (archivedUnderOwnId(u.agent, roots)) own.add(u.transcript)
       else if (!listed.has(u.transcript)) out.add(u.transcript)
     }
@@ -364,18 +365,23 @@ export function createPaseoBridge(deps = {}, options = {}) {
    */
   function archivedRows(s) {
     const transcripts = new Set()
+    const threads = new Set()
     for (const { agent } of agents.values()) {
       const t = transcriptOf(agent, roots)
       if (t) transcripts.add(t)
+      const thread = codexThreadOf(agent, roots)
+      if (thread) threads.add(thread)
     }
     const ids = new Set()
     const rows = []
     for (const u of [...archived.values()].reverse()) {
       if (!archivedUnderOwnId(u.agent, roots)) continue
       const sid = sessionIdOf(u.agent, roots)
-      if (bySession.has(sid) || ids.has(sid) || transcripts.has(u.transcript)) continue
+      const thread = codexThreadOf(u.agent, roots)
+      if (bySession.has(sid) || ids.has(sid) || transcripts.has(u.transcript) || (thread && threads.has(thread))) continue
       ids.add(sid)
-      transcripts.add(u.transcript)
+      if (u.transcript) transcripts.add(u.transcript)
+      if (thread) threads.add(thread)
       const spaceId = s.idOf(u.project)
       const row = agentRow(u.agent, { project: u.project, roots, labels, spaceId, spaceName: s.names.get(spaceId), canon, archived: true })
       if (row) rows.push(row)
@@ -1149,6 +1155,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
     // when it runs Claude Code, else the one this machine's Claude agents use most lately.
     const own = kept?.persistence?.provider ?? kept?.provider
     let provider = own && entries.some((e) => e.provider === own && e.enabled) ? own : undefined
+    if (kept && agentRoot(kept, roots) === 'codex' && !provider) throw new RpcError('Provider unavailable', 'unavailable')
     provider ??= launchers.some((l) => l.name === params.launcher && roots[l.name] === 'claude') ? params.launcher : undefined
     if (!provider) {
       let latest
@@ -1159,7 +1166,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
       provider = latest?.provider ?? defaultProvider(entries.filter((e) => roots[e.provider] === 'claude'), roots)
     }
     if (!provider) throw new RpcError('Paseo 里没有跑 Claude Code 的 provider，接不了这个会话', 'unavailable')
-    const imp = { provider, sessionId: kept ? transcriptOf(kept, roots) : id, cwd, labels: { [SESSION_LABEL]: id } }
+    const imp = { provider, sessionId: kept ? (transcriptOf(kept, roots) ?? codexThreadOf(kept, roots)) : id, cwd, labels: { [SESSION_LABEL]: id } }
     const workspaceId = workspaceFor(kept?.workspaceId, cwd)
     if (workspaceId) imp.workspaceId = workspaceId
     const res = await paseo.request('import_agent_request', imp,
