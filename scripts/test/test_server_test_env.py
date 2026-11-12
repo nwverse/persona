@@ -15,6 +15,11 @@ ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("server_test_env", ROOT / "scripts/test/server_test_env.py")
 ISOLATION = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(ISOLATION)
+# test-server.sh runs go test through this runner on the hub; the launcher test derives its split from it (#5666).
+RUNNER_SPEC = importlib.util.spec_from_file_location("go_test_partitioned", ROOT / "scripts/test/go_test_partitioned.py")
+RUNNER = importlib.util.module_from_spec(RUNNER_SPEC)
+RUNNER_SPEC.loader.exec_module(RUNNER)
+PARTITIONS = RUNNER.go_partitions
 
 
 class ServerTestEnvironmentTests(unittest.TestCase):
@@ -245,19 +250,24 @@ class ServerTestEnvironmentTests(unittest.TestCase):
                  f" pathlib.Path({str(sdk_capture)!r}).write_text(json.dumps(sys.argv[1:]))\n"
                  "if str(source)=='schema/extension':\n"
                  f" pathlib.Path({str(schema_capture)!r}).write_text(json.dumps(sys.argv[1:]))\n")
+            packages = ["github.com/example/fixture/server/internal/example",
+                        "github.com/example/fixture/server" + PARTITIONS.IMPORT_SUFFIX]
+            node_tests = ["TestNodeA", "TestNodeB", "TestNodeC", "ExampleNode"]
+            node_listing = [*node_tests[:2], "BenchmarkNode", *node_tests[2:], "ok  fixture 0.1s"]
             tool("go", "import json,os,pathlib,sys\n"
                  "if sys.argv[1:2]==['env']:\n"
                  f" pathlib.Path({str(cache_capture)!r}).write_text(json.dumps(dict(os.environ)))\n"
                  f" print(json.dumps({caches!r})); sys.exit(0)\n"
-                 "record=lambda **extra: (pathlib.Path(os.environ['FAKE_GO_RUNS'])/(str(os.getpid())+'.json')).write_text("
-                 "json.dumps({'args':sys.argv[1:],'env':dict(os.environ),**extra}))\n"
+                 "import tempfile\n"
+                 "def record(**extra):\n"
+                 " handle,path=tempfile.mkstemp(suffix='.json',dir=os.environ['FAKE_GO_RUNS'])\n"
+                 " with os.fdopen(handle,'w') as out: json.dump({'args':sys.argv[1:],'env':dict(os.environ),**extra},out)\n"
                  "assert pathlib.Path.cwd().name=='server'\n"
-                 # what go_test_partitioned.py lists to split ./... and internal/node
-                 "if sys.argv[1:]==['list','./...']:\n"
-                 " record(); print('github.com/example/fixture/server/internal/example'); "
-                 "print('github.com/example/fixture/server/internal/node'); sys.exit(0)\n"
-                 "if sys.argv[1:]==['test','-list','.*','./internal/node']:\n"
-                 " record(); print('TestNodeA\\nTestNodeB\\nBenchmarkNode\\nTestNodeC\\nok  fixture 0.1s'); sys.exit(0)\n"
+                 # what go_test_partitioned.py lists to split the module and internal/node, whatever -list pattern it uses
+                 f"if sys.argv[1:]==['list',{RUNNER.WHOLE_MODULE!r}]:\n"
+                 f" record(); print('\\n'.join({packages!r})); sys.exit(0)\n"
+                 f"if sys.argv[1:3]==['test','-list'] and sys.argv[-1]=={PARTITIONS.PACKAGE!r}:\n"
+                 f" record(); print('\\n'.join({node_listing!r})); sys.exit(0)\n"
                  "base=pathlib.Path.cwd().parent\n"
                  "sdk=base/'sdk/go'\n"
                  "assert (sdk/'go.mod').read_text()=='module example.invalid/fixture-sdk\\n'\n"
@@ -289,15 +299,18 @@ class ServerTestEnvironmentTests(unittest.TestCase):
             }
             # The whole module runs through the staged go_test_partitioned.py: the other packages in one go test and
             # internal/node in go_partitions.py's two -run partitions. A -run passes through unchanged.
-            listing = [["list", "./..."], ["test", "-list", ".*", "./internal/node"]]
-            whole = [["test", "-count=1", "-p", "1", "github.com/example/fixture/server/internal/example"],
-                     ["test", "-count=1", "-p", "1", "-run", "^(TestNodeA|TestNodeC)$", "./internal/node"],
-                     ["test", "-count=1", "-p", "1", "-run", "^(TestNodeB)$", "./internal/node"]]
-            for index, (args, expected, extra) in enumerate((
-                ([], whole, {}),
+            flags = ["test", "-count=1", "-p", "1"]
+            # A listing call's -list pattern is the runner's choice; compare it by its shape.
+            is_listing = lambda call: call[:1] == ["list"] or call[:2] == ["test", "-list"]
+            shape = lambda call: ["test", "-list", PARTITIONS.PACKAGE] if call[:2] == ["test", "-list"] else call
+            listing = [["list", RUNNER.WHOLE_MODULE], ["test", "-list", PARTITIONS.PACKAGE]]
+            whole = [[*flags, packages[0]]] + [[*flags, "-run", pattern, PARTITIONS.PACKAGE]
+                                               for pattern in PARTITIONS.patterns(node_tests)]
+            for index, (args, expected, expected_listing, extra) in enumerate((
+                ([], whole, listing, {}),
                 (["-run", "TestFixture", "./internal/example"],
-                 [["test", "-count=1", "-p", "1", "-run", "TestFixture", "./internal/example"]], {}),
-                ([], whole, {"FAKE_GO_EXIT": "19"}),
+                 [[*flags, "-run", "TestFixture", "./internal/example"]], [], {}),
+                ([], whole, listing, {"FAKE_GO_EXIT": "19"}),
             )):
                 runs = root / f"go-runs-{index}"
                 runs.mkdir()
@@ -319,10 +332,10 @@ class ServerTestEnvironmentTests(unittest.TestCase):
                         self.assertEqual((remote_checkout / name).read_bytes(),
                                          (ROOT / "scripts/test" / name).read_bytes())
                     records = [json.loads(path.read_text()) for path in runs.iterdir()]
-                    tests = [record for record in records if record["args"] not in listing]
+                    tests = [record for record in records if not is_listing(record["args"])]
                     self.assertCountEqual([record["args"] for record in tests], expected)
-                    self.assertCountEqual([record["args"] for record in records if record["args"] in listing],
-                                          listing if expected is whole else [])
+                    self.assertCountEqual([shape(record["args"]) for record in records if is_listing(record["args"])],
+                                          expected_listing)
                     for record in tests:
                         self.assertEqual(record["sdk_source"], source)
                         self.assertEqual(record["inbox_source"], inbox_source)
