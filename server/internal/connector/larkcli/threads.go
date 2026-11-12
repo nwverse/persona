@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -64,6 +65,14 @@ func (c *Connector) Thread(ctx context.Context, thread, before string, limit int
 			format = "markdown"
 		}
 		out := connector.ThreadMessage{ID: m.MessageID, At: conversationTime(m.CreateTime), Sender: connector.ThreadPerson{ID: m.Sender.ID, Name: m.Sender.Name}, Mine: mine, Text: text, Format: format, Edited: m.Updated}
+		// Existing Inbox items may predate stored AppLinks. Their loaded original
+		// message can still supply its source link without recollecting history.
+		link, linkErr := url.Parse(m.MessageAppLink)
+		if linkErr == nil && link.Scheme == "https" && link.User == nil &&
+			(link.Host == "applink.feishu.cn" || link.Host == "applink.larksuite.com") &&
+			(link.Path == "/client/chat/open" || link.Path == "/client/thread/open") {
+			out.URL = m.MessageAppLink
+		}
 		if m.Deleted {
 			out.Text = ""
 			out.Format = ""

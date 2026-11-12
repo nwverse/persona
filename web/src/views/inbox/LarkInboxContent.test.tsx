@@ -11,10 +11,28 @@ import { ConnectorReplyTarget, ConnectorReadNotice, conversationFailure } from "
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let root: Root, host: HTMLDivElement;
 beforeEach(() => { host=document.createElement("div");document.body.append(host);root=createRoot(host); });
-afterEach(async () => { await act(async()=>root.unmount());host.remove(); });
+afterEach(async () => { await act(async()=>root.unmount());host.remove();vi.restoreAllMocks(); });
 const card = `<card title="Merge Request Merged">\n**Merge Request**\n[Example release](https://example.com/merge/1)\n**Author**\nExample author\n**Repository**\n[example/project](https://example.com/project)\n**Description**\n${"A detailed explanation of the example change. ".repeat(15)}\n</card>`;
 
 describe("Lark Inbox message presentation", () => {
+ it("opens an older item's loaded original message without duplicating a stored source action", async () => {
+  const url="https://applink.feishu.cn/client/thread/open?open_chat_id=oc_example&open_thread_id=omt_example&thread_position=8";
+  const open=vi.spyOn(window,"open").mockReturnValue(null);
+  const item={source:"larkcli",title:"Example conversation",connector:{reply_to:"om_example",can_reply:true}} as InboxItem;
+  const page={chat:{id:"example",name:"Example",kind:"group"},messages:[{id:"om_example",at:"",sender:{name:"Example author"},text:"Example message",url}]};
+  await act(async()=>root.render(<ConnectorReplyTarget item={item} page={page} />));
+  const button=host.querySelector("button")!;
+  expect(button.textContent).toBe(t("inbox-inboxdetail.open_in_feishu"));
+  await act(async()=>button.click());
+  expect(open).toHaveBeenCalledExactlyOnceWith(url,"_blank","noopener,noreferrer");
+  await act(async()=>root.render(<ConnectorReplyTarget item={{...item,connector:{...item.connector!,open_url:url}}} page={page} />));
+  expect(host.querySelector("button")).toBeNull();
+  await act(async()=>root.render(<ConnectorReplyTarget item={item} page={{...page,messages:[{...page.messages[0],id:"om_another"}]}} />));
+  expect(host.querySelector("button")).toBeNull();
+  await act(async()=>root.render(<ConnectorReplyTarget item={{...item,connector:{...item.connector!,can_reply:false}}} page={page} />));
+  expect(host.querySelector("button")).not.toBeNull();
+  expect(host.querySelector("details")).toBeNull();
+ });
  it("keeps long content accessible while providing a preview and a collapse action", async () => {
   await act(async()=>root.render(<LarkInboxContent text={card} markdown />));
   expect(host.querySelector("article")).not.toBeNull();

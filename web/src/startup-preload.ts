@@ -198,9 +198,11 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * Agent?" dialog and the panel's engine code load lazily). And 453 B because #5303 and #5457 landed together (#5488):
  * #5303 counted the room main had at d7536a601c as its own, and #5457 (#5420, the provider import link) used that room
  * too, merged in between; ja 591,939 B on main at 48f1e053b5, plus 41 B of room. Raise it on purpose, in the change that
- * needs it.
+ * needs it. And 23 B for the connected Inbox cards (PR #4743: shared CSS for responsive nowrap/truncation and
+ * hidden disclosure markers; ja 591,928 B on main 09e0d7731fee to 591,951 B). The source-opening button and its words
+ * stay in the lazy Inbox page.
  */
-export const FIRST_SCREEN_BUDGET = 591_980;
+export const FIRST_SCREEN_BUDGET = 592_003;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").

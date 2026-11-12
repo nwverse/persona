@@ -523,9 +523,11 @@ Deviations from cindy: no Undo / Reapply (Persona cannot apply or revert a turn'
 #### Connected Inbox message cards (#856)
 
 Lark CLI Inbox items with a source AppLink offer **Open in Feishu** (or **Open in Lark**)
-beside **AI draft reply**. This secondary Button opens the source client at the original
+while **AI draft reply** remains available. This secondary Button opens the source client at the original
 message or topic using the CLI's unmodified link. Missing links have no opening action;
 the existing in-app Original action remains available.
+For older items without a stored link, the loaded original message supplies the
+same action next to the reply-target details; a stored header action is never duplicated.
 
 The web Inbox uses the existing connector conversation for source-provided messages;
 legacy collected text is never split into inferred messages. A supported card uses

@@ -31,6 +31,9 @@ func TestConversationPageUsesSourceIdentityAndCursor(t *testing.T) {
 	if p.Messages[0].At != time.Date(2030, 1, 1, 12, 0, 0, 0, time.UTC) {
 		t.Fatal(p.Messages[0].At)
 	}
+	if p.Messages[1].URL != "https://applink.feishu.cn/client/thread/open?open_chat_id=oc_example_group&open_thread_id=omt_example_thread&thread_position=4" {
+		t.Fatalf("source AppLink lost from the read page: %q", p.Messages[1].URL)
+	}
 	data, err := os.ReadFile(log)
 	if err != nil {
 		t.Fatal(err)

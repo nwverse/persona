@@ -1,5 +1,10 @@
 # Lark Inbox text and card presentation
 
+The `open-source-*` captures show the real Inbox detail component with synthetic
+transport and messages after adding the independent source-opening action. The
+button remains beside AI draft reply. They are component fixture evidence;
+native-client positioning is a separate manual check after local deployment.
+
 Synthetic examples for #856 L6. No screenshot contains a real account, message,
 repository, routing ID, host or private URL. The page is the actual web Inbox;
 its API and WebSocket transport were mocked with `Example Assistant`,

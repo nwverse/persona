@@ -112,6 +112,13 @@ Unknown or incomplete envelopes remain literal text. A reply destination shows a
 friendly name and a preview only when its message is present; its routing ID stays
 in details and is unchanged.
 
+**Open in Feishu** (or **Open in Lark**) is available beside AI draft reply when
+the CLI supplies the original message's AppLink. Its chat or topic positioning
+parameters are preserved. Missing or unrelated links do not produce an action;
+opening the source does not send a message or replace the existing draft action.
+For previously collected items, the loaded original message can supply the link
+without a history backfill. A different message is never used as its substitute.
+
 Conversation reads distinguish unsupported capability, missing access, rate limits
 and transient failures, retaining collected content and previously loaded pages.
 This is the text/card portion of #856 L6. Collection remains L4; attachments,

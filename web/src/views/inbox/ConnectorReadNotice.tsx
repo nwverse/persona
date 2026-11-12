@@ -31,14 +31,22 @@ export function ConnectorReadNotice({ failure, onRetry }: { failure: Conversatio
 
 export function ConnectorReplyTarget({ item, page }: { item: InboxItem; page?: ThreadPage | null }) {
   const target = item.connector?.reply_to;
-  if (item.source !== "larkcli" || !target || !item.connector?.can_reply) return null;
+  if (item.source !== "larkcli") return null;
   const message = page?.messages.find((m) => m.id === target);
   const preview = message?.text ? larkMessagePreview(message.text) : "";
-  return <details className="shrink-0 border-b border-line px-4 py-2 text-xs text-ink-3">
+  const source = item.connector?.open_url ? undefined : message?.url;
+  const reply = target && item.connector?.can_reply;
+  if (!reply && !source) return null;
+  return <div className="flex shrink-0 items-center gap-2 border-b border-line px-4 py-2 text-xs text-ink-3">
+    {reply && <details className="min-w-0 flex-1">
     <summary className="touch-hit flex cursor-pointer list-none flex-wrap items-center gap-x-2 gap-y-1 [&::-webkit-details-marker]:hidden focus-visible:outline-2 focus-visible:outline-accent">
       <span className="text-ink-2">{t("inbox-connectorthread.reply_to_name", { name: item.title })}</span>
       <span className="min-w-0 truncate">{preview || t("inbox-connectorthread.reply_unknown")}</span><Icon name="chevron" size={12} />
     </summary>
     <p className="mt-2 break-words font-mono select-text">{target}</p>
-  </details>;
+    </details>}
+    {source && <Button tone="secondary" icon="external" onClick={() => window.open(source, "_blank", "noopener,noreferrer")}>
+      {source.startsWith("https://applink.larksuite.com/") ? t("inbox-inboxdetail.open_in_lark") : t("inbox-inboxdetail.open_in_feishu")}
+    </Button>}
+  </div>;
 }
