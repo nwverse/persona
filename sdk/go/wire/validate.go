@@ -622,8 +622,32 @@ func isShortJSONNumber(s string) bool {
 }
 
 func equal(a, b any) bool {
+	// json.Marshal is injective on these, so the encodings match exactly when the values do.
+	switch x := a.(type) {
+	case string:
+		if y, ok := b.(string); ok && utf8.ValidString(x) && utf8.ValidString(y) {
+			return x == y
+		}
+	case bool:
+		if y, ok := b.(bool); ok {
+			return x == y
+		}
+	case nil:
+		if b == nil {
+			return true
+		}
+	}
 	_, aNumber := a.(json.Number)
 	_, bNumber := b.(json.Number)
+	if aNumber != bNumber {
+		n, bound := a, b
+		if bNumber {
+			n, bound = b, a
+		}
+		if cmp, ok := compareNumber(n.(json.Number), bound); ok {
+			return cmp == 0
+		}
+	}
 	if aNumber || bNumber {
 		if left, ok := preciseNumber(a); ok {
 			if right, ok := preciseNumber(b); ok {
