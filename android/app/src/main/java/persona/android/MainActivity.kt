@@ -1,16 +1,13 @@
 package persona.android
 
 import androidx.compose.ui.res.stringResource
-import android.Manifest
 import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.CircularProgressIndicator
@@ -76,7 +73,6 @@ class MainActivity : ComponentActivity() {
     /** Only a debug launch adapter overrides the system appearance. */
     private val darkTheme = mutableStateOf<Boolean?>(null)
 
-    private val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
     /** Installed only by the debug manifest; release builds have no launch adapter or developer pages. */
     private val launchAdapter: LaunchAdapter? by lazy {
         // A legacy launcher alias does not inherit target metadata; always query the canonical Activity.
@@ -96,9 +92,6 @@ class MainActivity : ComponentActivity() {
             shell.automation = input.automation
             shell.posture.value = input.posture
             input.style?.let { (application as PersonaApp).appearance.setStyle(it) }
-        }
-        if (Build.VERSION.SDK_INT >= 33 && !shell.automation && !shell.demoSaved()) {
-            askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
         val app = application as PersonaApp
         lifecycleScope.launch { shell.restoreDemo() }
