@@ -340,6 +340,12 @@ For every component: use the design-system one, not a lookalike. Counts are appr
 - User bubble: trailing, radius 20, padding 16 x 12, `ChatBox.user` fill in the unified layout, otherwise the theme's bubble gradient (`apple/Persona/DesignSystem/QuoteViews.swift:295-345`, `apple/Persona/Views/Chat/MessageViews.swift:151`).
 - Assistant text: unboxed in Agents chats; boxed in `ChatBox.persona` in Assistant chats. Streaming text re-parses only the tail.
 - Quotes sit above the words and jump to the original on tap.
+- Everything in the user's bubble takes its colors from the bubble as drawn (`Theme.UserBubbleInk`, #5204): the
+  unified layout's box (primary words) or the theme's bubble, never the style alone. Blocks at its top (quotes, forwards,
+  text to change, comment blocks) draw their rule, heading and words in the bubble's words color, on the accent's tint
+  in a pale bubble or the box, and on a 12% black shade in a colored bubble: a veil of white words would lighten what
+  they sit on. Floors (`StyleSpecTests.whatSitsInTheUsersBubble`): the block's words 4.5:1 on its fill over the
+  bubble's top and deepened bottom, linked paths 3:1.
 - Forwards (#3807) use the quote card with the forward arrow before the heading ("Forwarded from Claude · chat"), a line
   for the computer and time, and four lines of the original; a tap opens the original chat at that message. Over the
   composer the same row adds a line saying where it comes from and goes. Forward takes Share's place in the message bar
