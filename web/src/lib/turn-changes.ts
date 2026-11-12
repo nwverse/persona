@@ -4,6 +4,7 @@
 // fold_changes.go), and both read spec/fixtures/fold-changes, so the card is the same before and after a reload.
 import { relativeTo } from "./comments";
 import { joinPath, normalizePath, toolFile } from "./files";
+import { patchDiffs } from "./tool-detail";
 import type { Step } from "./turns";
 import type { Item } from "./types";
 
@@ -75,26 +76,12 @@ export function lineCounts(oldText: string, newText: string): Counts {
   return d === null ? { add: b.length, del: a.length } : { add: (b.length - a.length + d) / 2, del: (a.length - b.length + d) / 2 };
 }
 
-/** The lines a Codex file change's unified diff adds and removes (lib/files.ts parseDiff); a patch without hunks is the
- *  whole file, added, or removed when the change deletes it (lib/tool-detail.ts patchDiffs). */
+/** The lines a Codex file change's unified diff adds and removes, read as its row reads them (lib/tool-detail.ts
+ *  patchDiffs: the lines in its hunks, or the whole file without hunks). A patch is no Myers diff: nothing to save. */
 export function patchCounts(patch: string, change?: string): Counts {
-  const lines = patch.split("\n");
-  if (!lines.some((l) => l.startsWith("@@"))) {
-    if (!patch) return { add: 0, del: 0 };
-    const n = patch.replace(/\n$/, "").split("\n").length;
-    return change === "delete" ? { add: 0, del: n } : { add: n, del: 0 };
-  }
-  let add = 0;
-  let del = 0;
-  let inHunk = false;
-  for (const l of lines) {
-    if (l.startsWith("diff --git")) inHunk = false;
-    else if (!inHunk && (l.startsWith("index ") || l.startsWith("--- ") || l.startsWith("+++ "))) continue;
-    else if (l.startsWith("@@")) inHunk = true;
-    else if (inHunk && l.startsWith("+")) add++;
-    else if (inHunk && l.startsWith("-")) del++;
-  }
-  return { add, del };
+  const n = { add: 0, del: 0 };
+  for (const d of patchDiffs(patch, change)) for (const o of d) if (o.kind !== "same") n[o.kind]++;
+  return n;
 }
 
 const text = (v: unknown) => String(v ?? "");
