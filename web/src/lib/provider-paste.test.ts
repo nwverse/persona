@@ -150,6 +150,14 @@ describe("noteText", () => {
     expect(noteText({ code: "url_shell", line: 4 })).toBe(t("lib-provider-paste.url_shell_line", { line: 4 }));
     expect(noteText({ code: "url_user", name: "cc" })).toBe(t("lib-provider-paste.url_user_alias", { name: "cc" }));
     expect(noteText({ code: "url_user" })).toBe(t("lib-provider-paste.url_user"));
+    expect(noteText({ code: "url_query", name: "cc" })).toBe(t("lib-provider-paste.url_query_alias", { name: "cc" }));
+    expect(noteText({ code: "url_query", line: 5 })).toBe(t("lib-provider-paste.url_query_line", { line: 5 }));
+    expect(noteText({ code: "url_query" })).toBe(t("lib-provider-paste.url_query"));
+    expect(noteText({ code: "args_left_out" })).toBe(t("lib-provider-paste.args_left_out"));
+    expect(noteText({ code: "header_unreadable" })).toBe(t("lib-provider-paste.header_unreadable"));
+    // a value the hub doesn't know is never named
+    expect(noteText({ code: "cindy_auth" })).toBe(t("lib-provider-paste.cindy_auth_unknown"));
+    expect(noteText({ code: "cindy_endpoint" })).toBe(t("lib-provider-paste.cindy_endpoint_unknown"));
     expect(noteText({ code: "key_shell" })).toBe(t("lib-provider-paste.key_shell"));
     expect(noteText({ code: "no_key" })).toBe(t("lib-provider-paste.no_key"));
     expect(noteText({ code: "key_helper" })).toBe(t("lib-provider-paste.key_helper"));

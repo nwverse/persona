@@ -198,6 +198,12 @@ export function noteText(n: PasteNote): string {
       return name ? t("lib-provider-paste.url_shell_alias", { name }) : line ? t("lib-provider-paste.url_shell_line", { line }) : t("lib-provider-paste.url_shell");
     case "url_user":
       return name ? t("lib-provider-paste.url_user_alias", { name }) : line ? t("lib-provider-paste.url_user_line", { line }) : t("lib-provider-paste.url_user");
+    case "url_query":
+      return name ? t("lib-provider-paste.url_query_alias", { name }) : line ? t("lib-provider-paste.url_query_line", { line }) : t("lib-provider-paste.url_query");
+    case "args_left_out":
+      return t("lib-provider-paste.args_left_out");
+    case "header_unreadable":
+      return t("lib-provider-paste.header_unreadable");
     case "key_shell":
       return t("lib-provider-paste.key_shell");
     case "no_key":
@@ -213,10 +219,9 @@ export function noteText(n: PasteNote): string {
     case "cindy_kind":
       return t("lib-provider-paste.cindy_kind");
     case "cindy_auth":
-      return name === "oauth" ? t("lib-provider-paste.cindy_auth_oauth") : name === "none" ? t("lib-provider-paste.cindy_auth_none") : t("lib-provider-paste.cindy_auth", { name: name ?? "" });
+      return name === "oauth" ? t("lib-provider-paste.cindy_auth_oauth") : name === "none" ? t("lib-provider-paste.cindy_auth_none") : name ? t("lib-provider-paste.cindy_auth", { name }) : t("lib-provider-paste.cindy_auth_unknown");
     case "cindy_endpoint":
-      if (name) return t("lib-provider-paste.cindy_endpoint", { name });
-      break;
+      return name ? t("lib-provider-paste.cindy_endpoint", { name }) : t("lib-provider-paste.cindy_endpoint_unknown");
     case "too_many":
       return t("lib-provider-paste.drafts_limit", { max: MAX_DRAFTS });
   }
