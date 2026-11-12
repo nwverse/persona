@@ -163,8 +163,8 @@ func codexSwitchNode(t *testing.T) (n *Node, f *fakeHerdr, home, cwd string, unt
 		EngineHistory: []proto.EngineLeg{{SessionID: sidA, Agent: "claude", Until: until}}})
 	// the Codex stretch's own words: what a switch back hands over (engineHandoff reads them)
 	writeRollout(t, home, sidB, cwd, until, until.Add(time.Minute),
-		`{"timestamp":"`+until.Add(10*time.Second).Format(time.RFC3339)+`","type":"event_msg","payload":{"type":"user_message","message":"make it faster"}}`,
-		`{"timestamp":"`+until.Add(20*time.Second).Format(time.RFC3339)+`","type":"event_msg","payload":{"type":"agent_message","message":"Cached the lookup."}}`)
+		`{"timestamp":"`+until.Add(10*time.Second).Format(time.RFC3339)+`","type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","id":"u1","content":[{"type":"text","text":"make it faster"}]}}}`,
+		`{"timestamp":"`+until.Add(20*time.Second).Format(time.RFC3339)+`","type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","id":"m1","content":[{"type":"text","text":"Cached the lookup."}]}}}`)
 	f.reply("session.snapshot", snapshot(nil, nil, []any{agentOf("codex", sidB, proto.StatusIdle, "w1:p1", "w1:t1", "w1", cwd, "")}, nil))
 	f.setScreens("w1:p1", "", "")
 	listSessions(t, n)
