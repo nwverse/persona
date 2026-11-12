@@ -1,8 +1,8 @@
 // End-to-end check of the Agent header's permission mode (#3956, iOS #3719, docs/web/web.md "Header permission mode"): every
-// Claude agent's header ends with an icon-only mode button in its tone (Ask First gray, Plan Only teal, Auto-Edit and Auto
-// purple, Allow all red; a mode not reported yet the plain shield), named for screen readers; Codex has none; the wide state
-// pill has no second dot; its menu offers Allow all only where the agent can take it (disabled with its reason elsewhere),
-// asks again going into it, and asks leaving it where there is no way back.
+// Claude agent's header ends with an icon-only mode button in its tone (Default permissions gray, Plan mode teal, Auto
+// accept edits and Auto-review purple, Full access red; a mode not reported yet the plain shield), named for screen readers;
+// Codex has none; the wide state pill has no second dot; its menu offers Full access only where the agent can take it
+// (disabled with its reason elsewhere), asks again going into it, and asks leaving it where there is no way back.
 //
 // Needs the web page against the fake hub with one agent per mode, and Chrome or Edge (playwright-core drives it):
 //
@@ -34,15 +34,15 @@ if (shots) mkdirSync(shots, { recursive: true });
 
 // the fake hub's agents (scripts/mock/mock_hub.py, MOCK_HEADER_MODES=1)
 const AGENTS = {
-  asks: ["macbook", "a1f3c2d4-0000-4000-8000-000000000002"], // tests: Ask First
-  plans: ["studio", "a1f3c2d4-0000-4000-8000-000000000005"], // photos: Plan Only
-  edits: ["macbook", "a1f3c2d4-0000-4000-8000-000000000001"], // widget: Auto-Edit, can take Allow all
-  auto: ["macbook", "a1f3c2d4-0000-4000-8000-000000000008"], // release: Auto
-  allows: ["studio", "a1f3c2d4-0000-4000-8000-000000000003"], // blog: Allow all, no way back, background that waits
+  asks: ["macbook", "a1f3c2d4-0000-4000-8000-000000000002"], // tests: Default permissions
+  plans: ["studio", "a1f3c2d4-0000-4000-8000-000000000005"], // photos: Plan mode
+  edits: ["macbook", "a1f3c2d4-0000-4000-8000-000000000001"], // widget: Auto accept edits, can take Full access
+  auto: ["macbook", "a1f3c2d4-0000-4000-8000-000000000008"], // release: Auto-review
+  allows: ["studio", "a1f3c2d4-0000-4000-8000-000000000003"], // blog: Full access, no way back, background that waits
   unknown: ["macbook", "a1f3c2d4-0000-4000-8000-000000000006"], // review: nothing reported yet
   codex: ["server", "a1f3c2d4-0000-4000-8000-000000000004"], // orders: Codex, none
 };
-const WORDS = { asks: "权限模式：手动确认", plans: "权限模式：只做计划", edits: "权限模式：自动改文件", auto: "权限模式：自动", allows: "权限模式：全部放行", unknown: "权限模式：未知" };
+const WORDS = { asks: "权限模式：默认权限", plans: "权限模式：计划模式", edits: "权限模式：允许编辑", auto: "权限模式：自动审批", allows: "权限模式：完全访问", unknown: "权限模式：未知" };
 const TONE = { asks: "asks", plans: "plans", edits: "acts", auto: "acts", allows: "allows", unknown: "unknown" };
 
 const ok = (msg) => console.log(`ok  ${msg}`);
@@ -131,39 +131,39 @@ try {
         if ((await pill.locator("*").count()) !== 0) fail(`${tag}: the pill still has a dot`);
         ok(`${tag}: the state pill has no second dot`);
       }
-      // the menu without Allow all on offer: there, disabled, saying why
+      // the menu without Full access on offer: there, disabled, saying why
       await agent(page, "asks");
       await page.getByTestId("header-mode").click();
-      const bypassRow = page.getByRole("menuitem", { name: /全部放行/ });
+      const bypassRow = page.getByRole("menuitem", { name: /完全访问/ });
       await bypassRow.waitFor({ state: "visible", timeout: 5000 });
-      if (!(await bypassRow.isDisabled())) fail(`${tag}: Allow all is offered to an agent that can't take it`);
+      if (!(await bypassRow.isDisabled())) fail(`${tag}: Full access is offered to an agent that can't take it`);
       await save(page, `menu-${tag}`, top(page, width > 600 ? 420 : 520));
       await closeMenu(page);
-      ok(`${tag}: Allow all disabled where it can't be taken`);
+      ok(`${tag}: Full access disabled where it can't be taken`);
       // the menu with it on offer, and going into it asks again
       await agent(page, "edits");
       await page.getByTestId("header-mode").click();
-      const into = page.getByRole("menuitemradio", { name: /全部放行/ });
+      const into = page.getByRole("menuitemradio", { name: /完全访问/ });
       await into.waitFor({ state: "visible", timeout: 5000 });
       await save(page, `menu-bypass-${tag}`, top(page, width > 600 ? 420 : 520));
       const sent = (await modesLog()).length;
       await into.click();
-      await page.getByText("确认切到全部放行").waitFor({ state: "visible", timeout: 5000 });
-      if ((await modesLog()).length !== sent) fail(`${tag}: Allow all was sent before the second choice`);
+      await page.getByText("确认切到完全访问").waitFor({ state: "visible", timeout: 5000 });
+      if ((await modesLog()).length !== sent) fail(`${tag}: Full access was sent before the second choice`);
       await save(page, `confirm-bypass-${tag}`, top(page, width > 600 ? 420 : 520));
       await closeMenu(page);
-      ok(`${tag}: going into Allow all asks again`);
+      ok(`${tag}: going into Full access asks again`);
       // leaving it where there is no way back asks too
       await agent(page, "allows");
       await page.getByTestId("header-mode").click();
-      const out = page.getByRole("menuitemradio", { name: /只做计划/ });
+      const out = page.getByRole("menuitemradio", { name: /计划模式/ });
       await out.waitFor({ state: "visible", timeout: 5000 });
       await out.click();
-      await page.getByText("切到 只做计划").waitFor({ state: "visible", timeout: 5000 });
+      await page.getByText("切到 计划模式").waitFor({ state: "visible", timeout: 5000 });
       if ((await modesLog()).length !== sent) fail(`${tag}: leaving was sent before the second choice`);
       await save(page, `confirm-leave-${tag}`, top(page, width > 600 ? 420 : 520));
       await closeMenu(page);
-      ok(`${tag}: leaving Allow all asks where it can't come back`);
+      ok(`${tag}: leaving Full access asks where it can't come back`);
       await ctx.close();
     }
   }

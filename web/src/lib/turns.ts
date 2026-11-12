@@ -84,6 +84,9 @@ export interface Segment {
   supervision?: boolean;
   /** Its reply came from another model than the previous visible reply (lib/model-change.ts): a divider before it. */
   modelChange?: ModelChange;
+  /** The exchange ended in a model API error or an interruption after everything in it (turnLines, lineError): its last
+   *  words are not a finished reply, and say so (cindy's "This reply did not complete", #5314). */
+  cut?: boolean;
 }
 
 function blockOrder(a: Item, b: Item) {
@@ -833,7 +836,7 @@ export function buildBlocks(items: Item[], background = false): Block[] {
         // e.g. a background command finishing after a recap: part of the (next) work, never its own line
         cur = newTurn(it.id);
         add(cur, it);
-      } else if (!it.task && (it.text ?? "").includes("中断")) { // i18n-ignore: the transcript's interrupt notice
+      } else if (isInterruptNotice(it)) {
         cur.trailing.push(it);
       } else {
         add(cur, it);
@@ -845,6 +848,11 @@ export function buildBlocks(items: Item[], background = false): Block[] {
   }
   close();
   return blocks;
+}
+
+/** The transcript's "Interrupted" notice: a line of its own after the exchange it stopped. */
+function isInterruptNotice(it: Item): boolean {
+  return it.kind === "notice" && !it.task && (it.text ?? "").includes("中断"); // i18n-ignore: the transcript's interrupt notice
 }
 
 export type ChatLine =
@@ -882,6 +890,9 @@ function turnLines(t: Turn, live: boolean, results?: ReadonlyMap<string, Item>):
     ordered = ordered.slice(1);
   }
   const segs = segments(ordered, results);
+  // stopped after everything it did (not an exchange that went on after it): its last words are not a finished reply
+  const end = segs.at(-1), at = t.ordered.at(-1)?.seq ?? 0;
+  if (end && !live && t.trailing.some((n) => isInterruptNotice(n) && n.seq > at)) end.cut = true;
   segs.forEach((seg, k) => {
     if (k === 0 && !seg.user && wokeAt) seg.start = wokeAt;
     const last = k === segs.length - 1;
@@ -974,7 +985,9 @@ function lineError(l: ChatLine): { item: Item; info: APIErrorInfo; rest: ChatLin
   if (l.kind !== "segment" || !l.seg.answer) return null;
   const info = parseAPIError(l.seg.answer.text);
   if (!info) return null;
-  const seg = { ...l.seg, answer: undefined };
+  const seg: Segment = { ...l.seg, answer: undefined };
+  // the error came after everything else the exchange did: the words before it are cut short (Segment.cut)
+  if (!l.live && exchangeSteps(l.seg).at(-1)?.id === l.seg.answer.id) seg.cut = true;
   const empty = !seg.user && !seg.steps.length && !l.live;
   return { item: l.seg.answer, info, rest: empty ? null : { ...l, seg } };
 }

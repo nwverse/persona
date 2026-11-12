@@ -211,10 +211,23 @@ function ChannelSource({ clientMsgId, openedBy }: { clientMsgId?: string; opened
 const ANSWER = "[&_.prose-j]:text-[length:var(--chat-body)]! [&_.prose-j]:leading-[1.6]!";
 
 /** What the agent said, without a bubble, the chat's body size (15, 16 on a phone) / 1.6. `fade`: it just came in, its
- *  words fade in once. Still streaming, it has the same menu (copy what is there so far, quote it).
+ *  words fade in once. Still streaming, it has the same right-click / long-press menu (copy what is there so far, quote
+ *  it); only a finished turn's last reply has the bar under it (`bar`, #5314).
  *  Memo'd: the chat context changes with every streamed item, so each SegmentView re-renders; a finished answer's
  *  props stay the same and it is skipped (#3024). */
-export const Answer = memo(function Answer({ item, streaming, mid, sid, fade, noCloseout }: { item?: Item; streaming?: string; mid?: string; sid?: string; fade?: boolean; /** The card above the transcript shows its closeout (#3612): drawn without the raw block. */ noCloseout?: boolean }) {
+export const Answer = memo(function Answer({ item, streaming, mid, sid, fade, noCloseout, bar, cut }: {
+  item?: Item;
+  streaming?: string;
+  mid?: string;
+  sid?: string;
+  fade?: boolean;
+  /** The card above the transcript shows its closeout (#3612): drawn without the raw block. */
+  noCloseout?: boolean;
+  /** The bar under it (ReplyBar): a finished turn's last reply, never narration in a work summary. */
+  bar?: boolean;
+  /** Its turn ended in a model error or an interruption right after these words (Segment.cut): cindy's line above them. */
+  cut?: boolean;
+}) {
   // a long answer the hub cut for the page: its start, and "View full text" under it
   const full = useFullText(streaming === undefined ? item : undefined, mid, sid);
   const text = streaming ?? (noCloseout ? stripCloseout(full.text) : full.text);
@@ -230,7 +243,8 @@ export const Answer = memo(function Answer({ item, streaming, mid, sid, fade, no
     );
   }
   return (
-    <MessageActions text={text} ts={item?.ts} itemId={item?.id}>
+    <MessageActions text={text} ts={item?.ts} itemId={item?.id} bar={bar}>
+      {cut && <p className="mb-1 text-[13px] leading-[1.384615] text-ink-2" data-cut-short>{t("chat-messageactions.cut_short")}</p>}
       <div className={ANSWER} data-answer data-items={item?.id}>
         {/* the cards in it are this item's blocks (ui/AssistantCard.tsx): `<item id>/<n>` */}
         <CardItem.Provider value={item?.id ? { id: item.id, text } : null}>
@@ -245,11 +259,12 @@ export const Answer = memo(function Answer({ item, streaming, mid, sid, fade, no
 });
 
 /** Freshness reaches only the single visible persisted text, not every paragraph hidden in its execution summary: it
- *  reads its own id (fresh-words.ts), so a new reply renders these words, not every exchange. */
-const LatestAnswer = memo(function LatestAnswer({ item, streaming, mid, sid, noCloseout }: { item?: Item; streaming?: string; mid: string; sid: string; noCloseout?: boolean }) {
+ *  reads its own id (fresh-words.ts), so a new reply renders these words, not every exchange. `done`: its turn is over,
+ *  so the words have the bar under them (cindy: never while the turn runs). */
+const LatestAnswer = memo(function LatestAnswer({ item, streaming, mid, sid, noCloseout, done, cut }: { item?: Item; streaming?: string; mid: string; sid: string; noCloseout?: boolean; done?: boolean; cut?: boolean }) {
   const persisted = streaming === undefined ? item?.id : undefined;
   const fresh = useFreshWords(mid, sid, persisted);
-  return <Answer item={item} streaming={streaming} mid={mid} sid={sid} fade={persisted ? fresh : undefined} noCloseout={noCloseout} />;
+  return <Answer item={item} streaming={streaming} mid={mid} sid={sid} fade={persisted ? fresh : undefined} noCloseout={noCloseout} bar={Boolean(done && persisted) || undefined} cut={cut} />;
 });
 
 export const SegmentView = memo(function SegmentView({
@@ -263,6 +278,7 @@ export const SegmentView = memo(function SegmentView({
   beforeWords,
   trace,
   offscreen,
+  busy,
 }: {
   seg: Segment;
   live: boolean;
@@ -281,6 +297,10 @@ export const SegmentView = memo(function SegmentView({
   /** A finished exchange before the last two: off screen it is not drawn (the `seg-cv` class), and the chat watches its
    *  height through this (ChatView `watchSegment`, returning the unwatch) to keep the view still when it changes. */
   offscreen?: (section: HTMLElement) => () => void;
+  /** The chat's last exchange while the chat is still at work (working, a message of yours on its way or being
+   *  answered): drawn finished for a moment when a send drops the live line, its words get no reply bar yet, so the
+   *  bar does not come and go (#5314). */
+  busy?: boolean;
 }) {
   const { subagents, tasks, scope, workflowCalls = NO_WORKFLOW_CALLS, lineStyle, closeoutSegment, children } = useChatContext();
   const own = useMemo(() => exchangeSteps(seg), [seg]);
@@ -351,7 +371,7 @@ export const SegmentView = memo(function SegmentView({
       {imageStrip}
       {!live && <Fragment key="before-words">{beforeWords}</Fragment>}
       {streaming !== undefined && liveRow}
-      {(latestItem || streaming !== undefined) && !onlyCloseout && <div key="latest-text" data-latest-text><LatestAnswer item={latestItem} streaming={streaming} mid={mid} sid={sid} noCloseout={noCloseout || undefined} /></div>}
+      {(latestItem || streaming !== undefined) && !onlyCloseout && <div key="latest-text" data-latest-text><LatestAnswer item={latestItem} streaming={streaming} mid={mid} sid={sid} noCloseout={noCloseout || undefined} done={(!live && !busy) || undefined} cut={(!live && seg.cut) || undefined} /></div>}
       {changes && <TurnChanges key="turn-changes" changes={changes} mid={mid} sid={sid} cwd={cwd} />}
     </section>
   );

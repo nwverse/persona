@@ -15,6 +15,12 @@ Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in
 - Check existing icon identifiers, not just symbol literals, before adding a vocabulary token. Pairing was already a
   registered meaning; QR scanning is a different one. Run the icon vocabulary and token ratchets after moving code.
 
+## Colors inside the user's bubble come from the bubble as drawn (#5204)
+
+- Persona's main conversation draws the user's message in the new layout's pale box (`Theme.ChatBox.user`, primary words) whatever the style, while `StyleSpec.userBubbleText` and `deepensBubble` describe the style's own bubble. Quote and comment blocks picked their colors from `deepensBubble` alone, so every colored-bubble color (Coral, Lavender, Teal, Clay, Island) drew white blocks on the pale box (about 1.35:1), and Island in dark drew near-black ones on the dark box. Anything placed in the bubble reads `Theme.UserBubbleInk.of(spec, boxed: layout.on)`, the same value the bubble's fill comes from.
+- A veil of the words' color as a block's fill lowers contrast on a colored bubble: white words on white 12% over Coral were 4.3:1, and the 82% summary 3.4:1. A colored bubble's block takes a black shade (as `Theme.deepening`), and its words stay at full strength (82% fell to 4.45:1 on an avatar's honey bubble).
+- Text on a tinted fill needs a composite test (DESIGN_SYSTEM.md 6.3, item 7): lay the fill over the bubble's top and its deepened bottom before measuring (`StyleSpecTests.whatSitsInTheUsersBubble`).
+
 ## What a VNC client can count on from macOS Screen Sharing (#3075)
 
 - ClientCutText reaches the Mac's pasteboard only as the legacy `com.apple.traditional-mac-plain-text` type, without `public.utf8-plain-text`: AppleScript's `the clipboard` reads it, `pbpaste` and Terminal do not, so a ⌘V after it pasted nothing. Write the clipboard through the node, which answers once the text is there.
@@ -1540,6 +1546,14 @@ no initial Working row so the message shifted by one row, and pending local remo
   - Taller inner ScrollViews take all drags: fit inner to outer or disable inner scrolling.
   - Inspect keyboard UI at SE size; iOS 27.1 simulator has no SE, use 27.0.
   - Do not `swipeUp` for options in small regions: fast flings overshoot and header-start swipes do not scroll. Hold, slow-drag, pause at end (`press(forDuration:thenDragTo:withVelocity:thenHoldForDuration:)`), starting inside the scrolling area.
+
+## Question actions live outside option scrolling (2026-11-12, #4839)
+
+- Putting the whole question form in the panel's ScrollView also puts Previous / Next / Submit below the visible options. A footer brought closer to the visible area can still be clipped by the spacing between the scrolling body and footer; subtract both the footer and that spacing from the body's cap.
+- Size a single question from the actual pending-card area after its header and margins, not only from the page's 55% or the keyboard-only cap. The choices (or a multi-question review) scroll inside; the outer pending-cards view scrolls only between several cards.
+- `ApprovalCard.maxHeight` is opt-in and includes its fixed footer, so the BeautifulUI panel gets the same behavior without changing the library's other approval and plan callers. `rejectsDraggedPicks` is separately opt-in, so terminal, plan and permission cards keep their original gesture handling. `ScreenReviewFooter` separates the multi-question review's actions from its scrolling rows in the same way. The regression drives the real main-chat `ask_user` card in both styles, color schemes and the largest accessibility text on a standard phone, plus default-text small-phone coverage, after a deliberate pick has enabled Submit, then checks the actual resolution.
+- A multi-select drag guard cannot cover the single-select auto-send path: a 12 pt flick can still activate a Button. `DeliberateTap` marks a drag from 10 pt until 250 ms after it ends, and the option action checks that state; a short-drag regression must assert both no selection and no resolution while deliberate taps keep working.
+- Negative footer padding is visual overflow even when the accessibility frame still fits. A capped `ApprovalCard` keeps the host's horizontal and top alignment but has no bottom bleed, so its measured cap contains the whole button. Its footer pills also opt into `growsWithText`: a fixed 27 pt background does not grow when the label does at accessibility XXXL. The UI regression keeps actions above the outer area's 8 pt bottom fade, and screenshot pixel checks must confirm the visible capsule, not only `isHittable` and a successful resolution.
 
 ## A view that places itself over the whole screen gets no keyboard avoidance (2026-11-10, #3004)
 

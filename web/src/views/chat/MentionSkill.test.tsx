@@ -1,14 +1,15 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { loadPages } from "../../lib/lazy-page";
 import { getContexts, removeContext } from "../../lib/links";
 import { sendDraft } from "../../lib/drafts";
 import { parseQueued } from "../../lib/queue";
 import { restoreQueued } from "./QueueStrip";
 import { skillContext, skillDraft } from "../../lib/skill-mentions";
 import { Composer, type Outgoing } from "./Composer";
-import type { MentionSource } from "./MentionMenu";
+import type { MentionSource } from "./ComposerPanel";
 
 vi.hoisted(() => {
   window.matchMedia = ((query: string) => ({ matches: query === "(any-pointer: fine)", media: query, onchange: null,
@@ -37,6 +38,7 @@ async function type(text: string) {
   });
 }
 const key = (k: string) => act(() => { box().dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true })); });
+beforeAll(() => loadPages());
 beforeEach(() => {
   Element.prototype.scrollIntoView ??= () => {};
   localStorage.clear();
@@ -118,4 +120,18 @@ it("retains the exact reference through queue pullback and refused sends", async
   await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="发送"]')!.click());
   expect(box().value).toBe("Queued words");
   expect(getContexts("skill-test")[0].attrs?.ref).toBe("b");
+});
+
+it("keeps existing file rows reachable beside a large skill catalog and searches beyond the empty preview", async () => {
+  api.mockImplementationOnce(async () => ({ catalog_version: 1, complete: true,
+    skills: Array.from({ length: 50 }, (_, i) => ({ ...skills[0], id: `skill-${i}`, name: `review-${i}` })),
+  }));
+  render({ ...source, files: () => ["/example/report.ts"] });
+  await type("@");
+  expect(options().some((o) => o.textContent?.includes("report.ts"))).toBe(true);
+  expect(options().filter((o) => o.textContent?.includes("review-"))).toHaveLength(3);
+  await type("@review-49");
+  expect(options()).toHaveLength(1);
+  expect(options()[0].textContent).toContain("review-49");
+  expect(api).toHaveBeenCalledTimes(1);
 });
