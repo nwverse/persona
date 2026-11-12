@@ -13359,6 +13359,10 @@ for attempt in 0..<3 {{
         _seq[0] += 1
         _x.update(seq=_seq[0], id=f"{uuid.UUID(int=_seq[0])}#0")
 
+# MOCK_FOLD_DELAY=<seconds>: opening a fold (its steps fetched by from_seq / through_seq) answers that late, as the hub
+# does over a phone's network: what the steps push in comes a moment after the tap, not in the same frame (#3757).
+FOLD_DELAY = float(os.environ.get("MOCK_FOLD_DELAY", "0"))
+
 # MOCK_RICH=1: a reply with a link in Chinese prose (full-width brackets right after it), a three-column table whose
 # last column is long Chinese text, and a seven-column table that cannot fit (RichReplyTests).
 RICH = "a1f3c2d4-0000-4000-8000-00000000000a"
@@ -17194,7 +17198,8 @@ def agent_live(step, n):
 
 
 # MOCK_TOOL_TURN=1 (#3005): an agent in the middle of a turn of shell calls with long outputs, a message of the user's
-# queued behind it, history above it. GET /mock/tool_turn?step=… moves it on one push at a time, as the hub pushes them:
+# queued behind it, twelve finished exchanges above it (each with a work line). GET /mock/tool_turn?step=… moves it on one
+# push at a time, as the hub pushes them:
 #   call     a new call starts (its tool_use alone: running)
 #   result   the running call's result lands
 #   answer   the agent's answer lands and the turn is over (the agent idle)
@@ -17240,11 +17245,16 @@ if TOOL_TURN:
                          "subs", 1, 0, "Find the PR that closed it", state_since=ago(minutes=7),
                          queued=["顺便看一下静音开关那条还缺什么"]))
     _earlier = []
-    for _q, _a in (("把收件箱的折叠改一下", "收件箱的折叠改好了：已处理的分组默认收起，网页和 iOS 都在里面。"),
-                   ("网页那边部署了吗", "部署了，网页已经是新版本，iOS 跟下次 TestFlight 走。")):
-        _earlier += [it("user", "text", 30, text=_q)] + tool("Bash", {"command": "git log --oneline -3", "description": "Recent commits"},
-                                                              "abc1234 fix(web): fold handled groups\nbcd2345 docs: inbox folds", 30) \
-            + [it("assistant", "text", 29, text=_a + "\n\n" + "\n".join("- 第 %d 项：已经核对过，没有遗留问题。" % _k for _k in range(1, 9)))]
+    # Ten older exchanges first, each with a work line of its own: work lines all the way back, to open one in the middle
+    # of the chat and at its oldest end (KeepTappedRowTests).
+    _asks = [("第 %d 处改动：顺便看一下这一块的写法有没有问题？" % _k, "看过了，第 %d 处没有问题，两处重复的判断已经合并。" % _k, 240 - _k * 20)
+             for _k in range(1, 11)]
+    _asks += [("把收件箱的折叠改一下", "收件箱的折叠改好了：已处理的分组默认收起，网页和 iOS 都在里面。", 30),
+              ("网页那边部署了吗", "部署了，网页已经是新版本，iOS 跟下次 TestFlight 走。", 30)]
+    for _q, _a, _m in _asks:
+        _earlier += [it("user", "text", _m, text=_q)] + tool("Bash", {"command": "git log --oneline -3", "description": "Recent commits"},
+                                                              "abc1234 fix(web): fold handled groups\nbcd2345 docs: inbox folds", _m) \
+            + [it("assistant", "text", _m - 1, text=_a + "\n\n" + "\n".join("- 第 %d 项：已经核对过，没有遗留问题。" % _k for _k in range(1, 9)))]
     ITEMS[TOOL_TURN_SID] = _earlier + [it("user", "text", 7, text="来源订阅的需求推进情况如何")]
     for _n in range(3):
         ITEMS[TOOL_TURN_SID] += list(tool_turn_call(_n))
@@ -20598,6 +20608,7 @@ class H(BaseHTTPRequestHandler):
                 LOG.write("  items after_seq=%d\n" % a); LOG.flush()
                 return self.send_json({"items": lazy_images([x for x in items if x["seq"] > a]), "more_after": False, **span(items, a, max(a, last))})
             if "through_seq" in q:  # opening a fold
+                if FOLD_DELAY: time.sleep(FOLD_DELAY)
                 frm, thru = int(q.get("from_seq", ["0"])[0]), int(q["through_seq"][0])
                 inside = [x for x in items if frm <= x["seq"] <= thru]
                 out = {"items": lazy_images(inside[:1000]), "more": len(inside) > 1000}
