@@ -493,6 +493,38 @@ extension Theme {
         static let pluginCalendar = calendarView
         static let pluginMoney = "creditcard"
         static let pluginStar = "star"
+        /// UI version 6's icons for homes and markets (docs/extensions/extensions.md "UI version 6", #827), one meaning
+        /// each. Meanings the app already has (home, lock, camera, play…) draw the app's own (`ExtensionUIStyle.icon`).
+        /// Unlock and bolt are not `lock.open` and `bolt`: the app draws those for other things (a session's permissions,
+        /// the terminal's quick commands).
+        static let pluginSofa = "sofa"
+        static let pluginLight = "lightbulb"
+        static let pluginPower = "power"
+        static let pluginFan = "fan"
+        static let pluginThermometer = "thermometer.medium"
+        static let pluginDroplet = "drop"
+        static let pluginUnlock = "lock.open.fill"
+        static let pluginDoor = "door.left.hand.closed"
+        static let pluginWindow = "window.vertical.closed"
+        static let pluginTV = "tv"
+        static let pluginPlug = "poweroutlet.type.b"
+        static let pluginBattery = "battery.75percent"
+        static let pluginBolt = "bolt.circle"
+        static let pluginCloud = "cloud.fill"
+        static let pluginRain = "cloud.rain"
+        static let pluginSnow = "snowflake"
+        static let pluginWind = "wind"
+        static let pluginLeaf = "leaf"
+        static let pluginCar = "car"
+        static let pluginRobot = "robotic.vacuum"
+        static let pluginWifi = "wifi"
+        static let pluginTrendUp = "chart.line.uptrend.xyaxis.circle"
+        static let pluginTrendDown = "chart.line.downtrend.xyaxis.circle"
+        static let pluginWallet = "wallet.bifold"
+        static let pluginBank = "building.columns"
+        static let pluginMinus = notChecked
+        /// A commit (UI version 4's code hosting).
+        static let pluginCommit = "circle.and.line.horizontal"
         /// Asking for a GitHub star for Persona (#5761): the empty Agents pill, the milestone card, the onboarding toast.
         static let gitHubStar = pluginStar
         static let phone = "iphone"
