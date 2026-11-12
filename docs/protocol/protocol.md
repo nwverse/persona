@@ -1797,6 +1797,13 @@ When an Agent is blocked without a hook interaction, the hub reads the screen on
   A node that returns no `dialog_rev` (older than #5538) gets the old formula (`LegacyRev`, which kept the wrapped rows), and a node also accepts that one from an older hub.
   A `prompt_changed` refusal's data carries `rev` (the card's) and, when a dialog is on screen, `seen_rev`, `seen_question` and `seen_options`. The node logs the same with the pane the answer read and the agent's pane (the one `session.screen` reads for the card), and the hub logs the refusal's data.
   The card the hub makes after a `prompt_changed` is named by the node's `dialog_rev` too, so a dialog the node reads differently gets a new card rather than the old id again.
+- **A permission prompt for a shell command** (Claude Code's "Bash command", its description, the command between dashed rules `╌╌╌`, a boxed warning, a countdown): `dialog` also carries
+  `command` (the command, its wrapped rows joined back where the screen shows they were wrapped), `description` (the agent's words for it), `warning` (the boxed note as Claude Code words it),
+  `risk` (what the warning is about, for the apps to say in plain words: `delete` for "Dangerous rm operation …"; empty for any other warning, shown as it is),
+  `deadline` (the countdown sentence as on screen), `deadline_action` (`deny` when it blocks the request, `allow` when it lets it through) and `deadline_at` (RFC 3339, when it runs out by the hub's clock at the read).
+  `detail` still holds "Bash command", the description and the command, for older apps. The command is in `rev`; the warning and the countdown are not, so the card stays answerable while the clock runs.
+  The countdown is read as one sentence across the two or three rows a narrow pane wraps it onto (#5265: read as question rows, its seconds changed `rev` every second once the phone's terminal view had narrowed the pane, and every answer was refused).
+  Claude Code 2.1.322 draws a `│` before each row of the command, as before the warning; the rows between the dashed rules are the command whatever they start with (#5265: read as the warning, the command was neither shown nor in `rev`).
 - The watch also answers with `option` when there's a `dialog` (Siri's **Approve First Pending** doesn't handle screen cards).
 - **Multi-select** (AskUserQuestion `multiSelect` in Claude Code 2.1.316, `docs/integrations/claude-integration.md` ("Screen cards for multiselect questions")): `dialog` also carries
   `multi: true`, `submit` (`Submit`, or `Next` when more questions follow), and options also carry `checked` (already checked on the computer) and `text` (what's already typed in the free-answer box);

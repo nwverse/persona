@@ -64,6 +64,8 @@ object PersonaIcons {
     val darkMode: PhIcon get() = PhIcons.Moon
     /** SF Symbol `trash`. */
     val delete: PhIcon get() = PhIcons.Trash
+    /** SF Symbol `stethoscope`. */
+    val diagnostics: PhIcon get() = PhIcons.Gauge
     /** SF Symbol `mic`. */
     val dictate: PhIcon get() = PhIcons.Microphone
     /** SF Symbol `mic.fill`. */
@@ -310,6 +312,8 @@ object PersonaIcons {
     val todo: PhIcon get() = PhIcons.ListChecks
     /** SF Symbol `translate`. */
     val translate: PhIcon get() = PhIcons.Translate
+    /** SF Symbol `tray.and.arrow.up`. */
+    val unarchive: PhIcon get() = PhIcons.ArrowUUpLeft
     /** SF Symbol `arrow.uturn.backward`. */
     val undo: PhIcon get() = PhIcons.ArrowUUpLeft
     /** SF Symbol `bell`. */
