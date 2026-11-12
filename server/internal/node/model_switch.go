@@ -161,7 +161,7 @@ func (n *Node) setModel(ctx context.Context, id, model string) error {
 			_ = n.sendKeys(ctx, pane, "esc")
 			return fmt.Errorf("Claude Code 打开了模型选择器而没有直接切换，已取消")
 		}
-		if strings.Contains(strings.Join(strings.Fields(s), " "), "Set model to") || modelOutcome(s, model) == nil {
+		if modelOutcome(s, model) == nil {
 			break
 		}
 	}

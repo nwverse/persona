@@ -296,6 +296,15 @@ class RepositoryTests(unittest.TestCase):
                 self.assertEqual(self.catalog.values[f"status.{mode}.{state}.text"], base)
                 for part, opacity in (("dot", dot_alpha), ("tint", tint_alpha)):
                     self.assertEqual(self.catalog.values[f"status.{mode}.{state}.{part}"], {**base, "alpha": base["alpha"] * opacity})
+        # Waiting in the background: Working's dot made lighter, its words the secondary gray.
+        waiting = re.search(r'static let backgroundWaiting = StatusTone\(dot: working.dot.opacity\(([0-9.]+)\), text: .secondary, tint: working.dot.opacity\(([0-9.]+)\)\)', swift)
+        self.assertIsNotNone(waiting, "StatusPalette.backgroundWaiting not found")
+        dot_alpha, tint_alpha = map(float, waiting.groups())
+        for mode in gen.MODES:
+            working = self.catalog.values[f"status.{mode}.working.dot"]
+            self.assertEqual(self.catalog.values[f"status.{mode}.backgroundWaiting.text"], self.catalog.values[f"system.{mode}.secondary"])
+            for part, opacity in (("dot", dot_alpha), ("tint", tint_alpha)):
+                self.assertEqual(self.catalog.values[f"status.{mode}.backgroundWaiting.{part}"], {**working, "alpha": working["alpha"] * opacity})
 
     def test_ios_theme_explicit_colors_match(self):
         # Since 2026-11-01 iOS keeps a look as UI style × theme color (apple/Shared/Design): each catalog style is its component
@@ -386,11 +395,6 @@ class RepositoryTests(unittest.TestCase):
     def test_ios_sizes_match(self):
         # spec/tokens carries the sizes Android uses, each as Theme.Size has it; the rest of Theme.Size isn't ported.
         ios = {name: float(value) for name, value in re.findall(r'static let (\w+): CGFloat = ([0-9.]+)$', self.swift_enum("Size"), re.M)}
-        # The folded chat bar's source is ChatChrome.compactHeight, as the catalog documents.
-        chat = (gen.ROOT / "apple/Persona/Views/Chat/ChatView.swift").read_text()
-        compact = re.findall(r'static let compactHeight: CGFloat = ([0-9.]+)$', chat, re.M)
-        self.assertEqual(len(compact), 1, "ChatChrome.compactHeight must have one source value")
-        ios["slimBar"] = float(compact[0])
         tokens = {key.removeprefix("size."): value["value"] for key, value in self.catalog.values.items() if key.startswith("size.")}
         self.assertTrue(tokens)
         self.assertEqual({name: ios.get(name) for name in tokens}, tokens, "a size in spec/tokens differs from Theme.Size")

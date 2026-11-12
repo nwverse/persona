@@ -50,16 +50,19 @@ fun HomeAgentFilters(bays: List<Bay>, selected: Int, onSelect: (Int) -> Unit, mo
         horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
         bays.forEachIndexed { index, bay ->
             val chosen = index == selected
-            // The chosen chip takes its own state's color, the accent for "All" (iOS `QuickFilterBar`, #4338 A11).
-            val tint = bay.status?.let { palette.status(it).text } ?: palette.accent
+            // The chosen chip takes its own state's color, the accent for "All" (iOS `QuickFilterBar`, #4338 A11); Waiting in
+            // the background its lighter tone, whose words are the secondary gray. Like iOS's opacity, the fill and edge scale
+            // the tint's own alpha.
+            val tone = bay.status?.let { palette.status(it, bay.waiting) }
+            val tint = tone?.text ?: palette.accent
             Row(Modifier.clip(CircleShape)
-                .background(if (chosen) tint.copy(alpha = HomeTokens.filterSelectedAlpha) else palette.sunken)
-                .border(Tokens.Space.xxs / 2, if (chosen) tint.copy(alpha = HomeTokens.filterStrokeAlpha) else Color.Transparent, CircleShape)
+                .background(if (chosen) tint.copy(alpha = tint.alpha * HomeTokens.filterSelectedAlpha) else palette.sunken)
+                .border(Tokens.Space.xxs / 2, if (chosen) tint.copy(alpha = tint.alpha * HomeTokens.filterStrokeAlpha) else Color.Transparent, CircleShape)
                 .clickable(role = Role.Tab) { onSelect(index) }.semantics { this.selected = chosen }
                 .padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                bay.icon?.let { icon -> bay.status?.let { JIcon(icon, null, size = Tokens.Size.iconXS, tint = palette.status(it).dot, selected = true, decorative = true) } }
-                    ?: bay.status?.let { JStatusDot(it) }
+                bay.icon?.let { icon -> tone?.let { JIcon(icon, null, size = Tokens.Size.iconXS, tint = it.dot, selected = true, decorative = true) } }
+                    ?: bay.status?.let { JStatusDot(it, waiting = bay.waiting) }
                 Text(bay.label, style = PersonaTheme.type.callout.copy(fontWeight = if (chosen) FontWeight.SemiBold else FontWeight.Medium),
                     color = if (chosen) tint else palette.ink, maxLines = 1, softWrap = false)
                 if (index != 0) bay.count?.let { Text("$it", style = PersonaTheme.type.callout, color = if (chosen) tint else palette.ink2, maxLines = 1) }
