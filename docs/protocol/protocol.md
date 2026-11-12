@@ -3577,7 +3577,7 @@ in plan order (a task without `todo_id` did not start and has no link); no extra
  "count":3}                              // how many identical answers were counted
 
 // FeedItem: entries the hub inserts into an assistant chat, not in the transcript; clients draw them merged with the transcript by at
-{"id":"feed_…","conversation":"…","at":"...","kind":"plan|task|answered|receipt|routed|today|message|review|report|notice|brief","ref":"plan_…, todo_…, a date or an Inbox entry id",
+{"id":"feed_…","conversation":"…","at":"...","kind":"plan|task|answered|receipt|routed|today|message|inbox_suggestion|review|report|notice|brief","ref":"plan_…, todo_…, a date or an Inbox entry id",
  "body":{…}}
 // plan: ref is the plan id, no body; task: ref is the to-do id; body {"wake":"active|resumed"} when the task was made of an Agent
 //   it did not start (#5096, the web's hand-off badge): resumed when agent_send with a task resumed a closed Agent, active for an
@@ -3619,6 +3619,11 @@ in plan order (a task without `todo_id` did not start and has no link); no extra
 //         such a review took no turn of this conversation, so a client may draw the entry here as its only record); clients that don't know it skip this entry
 // message: ref is the Inbox entry id; the AI twin drafted a reply to a message related to the task:
 //         {"todo_id","source":"lark|mail|…","account","chat","sender","text":"original words (truncated)","draft":"the draft"}; sending goes through the Inbox send endpoint
+// inbox_suggestion (#5932): ref is the Inbox entry id; the conversation the entry was handed to (Hand to AI) handed in a reply or a
+//         conclusion with inbox_suggest: {"version","kind":"reply|conclusion","outcome"?:"fyi|done","text","note"?,"recap"?,"title","source",
+//         "account"?,"sender"?}, a snapshot never updated. Clients read the entry for its state: the entry's suggestion still this version from
+//         this conversation offers Send / Got it (POST /api/v1/inbox/{id}/suggestion with that version); otherwise it was sent, filed or
+//         replaced. Not counted in Needs you (the entry is); clients that don't know it skip it
 // today: ref is the user's date for that day; {"date":"2026-11-03","done":[{"id","title"}],"waiting":[{"id","title"}],"pending_review":[{"id","title"}],"working":2,
 //         "meetings":[{"start","end","title"}],"at_me":[{"name","unread","preview"}],"unread":5} (fields Lark didn't answer for are omitted)
 //         pending_review: this chat's open supervised tasks whose supervision state is pending_review, oldest created first (#4889).
