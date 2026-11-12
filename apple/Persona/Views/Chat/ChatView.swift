@@ -18,6 +18,7 @@ enum ChatStyle {
 struct ChatView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dynamicTypeSize) private var typeSize
     /// The session on screen; the sibling strip can switch it to another agent in the same space.
     @State private var key: SessionKey
     var style: ChatStyle = .dev
@@ -38,6 +39,9 @@ struct ChatView: View {
     /// The pin is bringing a header up to show what opened under it (`ChatPin.onRising`): no ↓ for that moment.
     @State private var pinRising = false
     @State private var showTerminal = false
+    /// The terminal comes up to resume a stopped Agent at once (Resume in Terminal, #5521): it shows the resume's progress
+    /// and connects as soon as the Agent is up.
+    @State private var resumeOnOpen = false
     #if os(macOS)
     /// The Mac's terminal takes the chat's place (Terminal | Chat, #3183): mounted the first time it is shown, then kept under
     /// the chat, still subscribed and at the same size, so coming back to it does not connect again.
@@ -744,8 +748,9 @@ struct ChatView: View {
         .onChange(of: status) { _, st in if !st.isActive { Task { await loadGit() } } }
         // One stack: the chat takes the whole screen. Beside the list (split) the tab bar stays, or there is no way out.
         .hidesTabBarWhenShown(style == .dev && split == nil)
-        .fullScreenCover(isPresented: Binding(get: { showTerminal && session?.canTerminal == true }, set: { showTerminal = $0 })) {
-            TerminalCover(key: key, switchTo: switchTo).presentationBackground(.clear)
+        .fullScreenCover(isPresented: Binding(get: { showTerminal && session?.canTerminal == true },
+                                              set: { showTerminal = $0; if !$0 { resumeOnOpen = false } })) {
+            TerminalCover(key: key, switchTo: switchTo, resumeOnOpen: resumeOnOpen).presentationBackground(.clear)
         }
         .renameSessionAlert($renaming)
         .confirmClose($closing) { closedAgent($0, order: []) }
@@ -805,6 +810,7 @@ struct ChatView: View {
         .environment(\.viewImages, actions.viewImages)
         .environment(\.imageZoom, imageZoom)
         .environment(\.openTools, openTools)
+        .environment(\.plainRefusals, session?.assistant == true) // a Persona conversation: plain words (#5202)
         .fullScreenCover(item: $viewingImages) { v in
             Group {
                 if let viewed = v.viewed {
@@ -1239,6 +1245,21 @@ struct ChatView: View {
         position.scrollTo(point: CGPoint(x: scratch.offsetX, y: y))
     }
 
+    #if DEBUG
+    /// `-showAutoScroll`'s jumps to `y` pt from the newest end: on the list as the chat jumps (`ChatJumpRun`), or with
+    /// `-showSwiftUIJumps YES` as SwiftUI's animated scroll (eased over `seconds`, else the chat's standard motion).
+    private func debugJump(to y: CGFloat, seconds: Double?) {
+        #if os(iOS) || os(visionOS)
+        if !Self.swiftUIJumps, let list = pin.list {
+            position = ScrollPosition(idType: String.self)
+            jumpRun.start(list, to: .offset(ChatJumpRun.newest(list) + y)) { _ in }
+            return
+        }
+        #endif
+        withAnimation(seconds.map { .easeOut(duration: $0) } ?? Theme.Motion.standard) { scrollList(to: y) }
+    }
+    #endif
+
     /// Folds or opens a work line. From its header, the header stays under the finger (`ChatPin`), through the steps
     /// arriving from the hub after the tap; from Collapse under the last step, the flipped list keeps the reply below where
     /// it was on its own. No animation: hundreds of rows animating out left blank frames behind. Folding is at once too:
@@ -1440,7 +1461,7 @@ struct ChatView: View {
                     }
                     .font(Theme.Font.caption)
                     .foregroundStyle(.secondary)
-                    .padding(.leading, WorkCardSlice.contentLeading)
+                    .padding(.leading, WorkCardSlice.contentLeading(typeSize))
                     .padding(.trailing, WorkCardSlice.inset)
                     .padding(.vertical, Theme.Space.m)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1700,6 +1721,14 @@ struct ChatView: View {
         if !animated, scratch.atNewest, position.edge == .top { return }
         if animated {
             #if os(iOS) || os(visionOS)
+            // On the list itself, as ↓ (`ChatJumpRun`): SwiftUI's animated scroll drew every text it passed again on
+            // every frame (#5076). Its stored position is forgotten first, as ↓ does (#4788).
+            if let list = pin.list, !Self.swiftUIJumps {
+                if pin.holding { pin.release() }
+                position = ScrollPosition(idType: String.self)
+                jumpRun.start(list) { arrived in landedAtNewest(list, arrived: arrived, again: true) }
+                return
+            }
             withAnimation(Theme.Motion.standard, completionCriteria: .removed) {
                 position.scrollTo(edge: .top)
             } completion: {
@@ -1783,7 +1812,7 @@ struct ChatView: View {
             try? await Task.sleep(for: .milliseconds(300))
             guard pin.list === list, follow.follows, !jumpRun.running, !list.isTracking, !list.isDecelerating,
                   let gap = pin.measuredNewestGap, gap > ChatJump.there else { return }
-            Self.jumpLog.notice("↓ landed, then the list moved \(Int(gap), privacy: .public) pt from the newest end: again")
+            Self.jumpLog.notice("A jump to the newest landed, then the list moved \(Int(gap), privacy: .public) pt from it: again")
             #if DEBUG
             scratch.jumpSlips += 1
             #endif
@@ -2481,6 +2510,8 @@ struct ChatView: View {
             // Needs You / In Progress in the dock's capsules, each opening its tray (#3393), on every device.
             AssistantActionBar(conversation: conversation, key: key, computer: computerActivity)
             RouteChip(conversation: conversation)
+            // Items handed to the main conversation that are still open: "Wrap up" asks it for the final write-back (#5932).
+            if model.assistantMain == key { WrapUpChips(key: key) }
         }
     }
 
@@ -2563,7 +2594,8 @@ struct ChatView: View {
                         .padding(.leading, Theme.Space.xs)
                 }
                 if let s = session, s.isStopped {
-                    StoppedAgentBar(openTerminal: openTerminal) // read-only: its terminal page has the shell and Resume (#4754)
+                    // read-only: its terminal page has the shell it left and Resume (#4754), which Resume here opens (#5521)
+                    StoppedAgentBar(openTerminal: openTerminal, resume: resumeHere)
                 } else if let s = session, !s.canSend, let reason = s.sourceSubtitle {
                     Text(reason).font(Theme.Font.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -3247,6 +3279,10 @@ struct ChatView: View {
                 if session?.canTerminal == true {
                     Button { openTerminal() } label: { Label("Terminal", systemImage: Theme.Icon.terminal).lineLimit(1) }
                 }
+                #if os(iOS)
+                // Its computer is read only for a session that isn't running: a live chat never watches the machines (P5).
+                if let s = session, s.status == .offline || s.status == .unknown { resumeMenuItem(s) }
+                #endif
                 if pane != .chat {
                     Button { withAnimation(Theme.Motion.standard) { pane = .chat } } label: { Label("Back to Chat", systemImage: SessionPane.chat.symbol) }
                 }
@@ -3854,6 +3890,47 @@ struct ChatView: View {
         #endif
     }
 
+    /// Resume in Terminal (#5521): the terminal comes up over the page and resumes the stopped Agent there (TerminalPanel's
+    /// Resume Session, `session.start` with its id), so its progress, an error and then the Agent itself show in one place.
+    private func resumeInTerminal() {
+        resumeOnOpen = true
+        openTerminal()
+    }
+
+    /// The stopped line's Resume: as Resume in Terminal on the phone; the frozen Mac app keeps its line as it was.
+    private var resumeHere: (() -> Void)? {
+        #if os(macOS)
+        nil
+        #else
+        resumeInTerminal
+        #endif
+    }
+
+    #if os(iOS)
+    /// ⋯'s Resume in Terminal, as `Session.terminalResume(on:)` says: there for a stopped Agent, disabled with why where
+    /// its computer has no terminal engine, gone otherwise (running, starting, an assistant's, a desktop app's).
+    @ViewBuilder private func resumeMenuItem(_ s: Session) -> some View {
+        let machine = model.machine(s.machineRef)
+        switch s.terminalResume(on: machine) {
+        case .available:
+            Button { resumeInTerminal() } label: { Label("Resume in Terminal", systemImage: Theme.Icon.resume).lineLimit(1) }
+                .accessibilityIdentifier("chat-resume-terminal")
+        case .noEngine:
+            // The reason under the name, written as the mode menu's disabled Allow Everything: two `Text`s and the image
+            // (a menu drops a `Label`'s second `Text`, and keeps a `Label`'s icon tinted while the row dims).
+            Button {} label: {
+                Text("Resume in Terminal")
+                Text("No terminal engine on \(machine?.name ?? s.machineID)", comment: "Why Resume in Terminal is off: the computer enables no terminal engine")
+                Theme.Icon.image(Theme.Icon.resume)
+            }
+            .disabled(true)
+            .accessibilityIdentifier("chat-resume-terminal")
+        case .hidden:
+            EmptyView()
+        }
+    }
+    #endif
+
     /// Terminal: on the Mac it takes the chat's place (Terminal | Chat, #3183); elsewhere it comes up from the bottom over the page.
     private func openTerminal() {
         #if os(macOS)
@@ -3973,6 +4050,9 @@ struct ChatView: View {
                     }
                 }
             }
+            #if os(iOS)
+            if UserDefaults.standard.bool(forKey: "showJumpPerf") { Task { await jumpPerf() } } // the four jumps, measured (#5076)
+            #endif
             if UserDefaults.standard.bool(forKey: "showAutoScroll") { // profiling: flicks through the history, frames counted
                 Task {
                     try? await Task.sleep(for: .seconds(12)) // the history loads (-loadAll) and the page settles
@@ -3994,14 +4074,24 @@ struct ChatView: View {
                     FrameStats.shared.stop(label: "stream")
                     try? await Task.sleep(for: .seconds(2))
                     FrameStats.shared.start()
-                    // Like a reader flicking: four fast flicks back into the history, then four back to the newest.
+                    // Programmatic jumps: four of 3000 pt back into the history, then four back to the newest, as the chat
+                    // jumps (`ChatJumpRun`), or with `-showSwiftUIJumps YES` as SwiftUI's animated scroll (before #5076).
                     var y: CGFloat = 0
                     for step in 0..<8 {
                         y = max(0, y + (step < 4 ? 3000 : -3000))
-                        withAnimation(.easeOut(duration: 2.5)) { scrollList(to: y) }
+                        debugJump(to: y, seconds: 2.5)
                         try? await Task.sleep(for: .seconds(2.8))
                     }
                     FrameStats.shared.stop(label: "sweep")
+                    // Short jumps, less than a screen: the whole way animates either way (frames-hop.json).
+                    try? await Task.sleep(for: .seconds(1))
+                    FrameStats.shared.start()
+                    for step in 0..<8 {
+                        y = max(0, y + (step < 4 ? 600 : -600))
+                        debugJump(to: y, seconds: nil)
+                        try? await Task.sleep(for: .seconds(1))
+                    }
+                    FrameStats.shared.stop(label: "hop")
                     // The same distance as a finger's glide: the list's own scroll view moved every display frame at
                     // 2000 pt/s (no SwiftUI state written), four seconds back into the history and four to the newest.
                     #if os(iOS) || os(visionOS)
@@ -4154,14 +4244,73 @@ struct ChatView: View {
     static let blankLanding = UserDefaults.standard.bool(forKey: "showBlankLanding")
     /// `-showAsUnread YES`: open the chat as if its answer had not been seen (where it lands).
     static let debugAsUnread = UserDefaults.standard.bool(forKey: "showAsUnread")
+    /// `-showSwiftUIJumps YES`: the chat's jumps animate SwiftUI's scroll position, as before #5076, to measure the two
+    /// ways in one build (`-showAutoScroll`'s sweep and hops).
+    static let swiftUIJumps = UserDefaults.standard.bool(forKey: "showSwiftUIJumps")
     /// `-showEdgeScrub N`: Persona's conversation opens the right-edge navigator on the Nth newest message the user typed
     /// and keeps it open (screenshots of the new conversation layout, #1666).
     static let debugEdgeScrub = UserDefaults.standard.integer(forKey: "showEdgeScrub")
     #else
     static let debugAsUnread = false
+    static let swiftUIJumps = false
     #endif
 
     #if DEBUG && os(iOS)
+    /// `-showJumpPerf YES` (#5076): the chat's animated jumps through a long answer, three of each, every one measured
+    /// (Documents/frames-jump-<kind>-<n>.json): ↓ from 8000 pt into the history (`end`), a message sent from there
+    /// (`send`), from the newest end to a quote of the longest answer (its start, `quote`), to the oldest tool call
+    /// (`call`) and to the oldest line on screen, as the navigator goes (`near`). With `-showSwiftUIJumps YES` as before.
+    /// Documents/jump-perf.txt says where each one left the list.
+    private func jumpPerf() async {
+        try? await Task.sleep(for: .seconds(12)) // the history loads and the page settles
+        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        var log: [String] = []
+        defer { try? log.joined(separator: "\n").write(to: dir.appending(path: "jump-perf.txt"), atomically: true, encoding: .utf8) }
+        let items = model.chat(shownKey).items
+        guard let list = pin.list,
+              let answer = items.filter({ $0.role == "assistant" && $0.kind == .text }).max(by: { ($0.text?.count ?? 0) < ($1.text?.count ?? 0) }),
+              let call = items.first(where: { $0.kind == .toolUse && $0.toolUseID != nil })?.toolUseID else {
+            return log.append("jump-perf: no list, answer or call")
+        }
+        func reading(at y: CGFloat) async { // as a finger leaves the list there
+            PagePerf.touchers[ObjectIdentifier(pin)]?(list, true)
+            list.setContentOffset(CGPoint(x: list.contentOffset.x, y: ChatJumpRun.newest(list) + y), animated: false)
+            try? await Task.sleep(for: .milliseconds(300))
+            PagePerf.touchers[ObjectIdentifier(pin)]?(list, false)
+            try? await Task.sleep(for: .seconds(2))
+        }
+        func atNewest() async {
+            setFollow { $0.follow() }
+            scrollToEnd()
+            try? await Task.sleep(for: .seconds(2))
+        }
+        func measure(_ kind: String, _ n: Int, _ act: () -> Void) async {
+            let y0 = list.contentOffset.y
+            FrameStats.shared.start()
+            act()
+            try? await Task.sleep(for: .seconds(1.5))
+            FrameStats.shared.stop(label: "jump-\(kind)-\(n)")
+            log.append("\(kind) \(n): from \(Int(y0 - ChatJumpRun.newest(list))) to \(Int(list.contentOffset.y - ChatJumpRun.newest(list))) pt from the newest end, at newest \(scratch.atNewest)")
+        }
+        for n in 1...3 {
+            await reading(at: 8000)
+            await measure("end", n) { jumpToEnd() }
+            await reading(at: 8000)
+            await measure("send", n) { log.append("sent \(model.sendNow(shownKey, text: "第 \(n) 次：再核对一遍"))") } // i18n-ignore
+            await atNewest()
+            await measure("quote", n) { _ = jumpToQuoted(ContextRef(kind: "quote", title: "", url: "", text: "", msg: answer.id)) }
+            await atNewest()
+            await measure("call", n) { jumpToCall(call) }
+            await atNewest()
+            let shown = Set(scratch.drawnLines)
+            if let near = currentLines().first(where: { shown.contains($0.id) })?.id {
+                await measure("near", n) { jumpToLine(near) }
+            }
+            await atNewest()
+        }
+        try? Data().write(to: dir.appending(path: "jump-perf-done"))
+    }
+
     private func showEdgeScrub(_ n: Int) async {
         try? await Task.sleep(for: .seconds(4)) // the chat loaded and settled
         let marks = navigationMarks()
@@ -4480,14 +4629,33 @@ struct StartingNote: View {
 }
 
 /// Why a session waits for the user, in its host's words (a botmux attention), with its Feishu topic one tap away.
+/// Under it, the AskUserQuestion it waits on, read-only (#5889), when no card can answer it: a dialog only its computer
+/// can answer still says here what it asks.
 struct AttentionNote: View {
     var reason: String
     var link: URL?
+    /// The chat whose open question it lists; read here, so only the note follows the chat's items (P5).
+    var key: SessionKey? = nil
+    @Environment(AppModel.self) private var model
 
     var body: some View {
+        // A question a card can answer is listed there, not here too (#5937).
+        let questions = key.flatMap {
+            model.interactions(for: $0).isEmpty ? AskUserAnswers.pending(model.chat($0).items) : nil
+        } ?? []
         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
             ThemedIcon(Theme.Icon.needsYou).font(Theme.Font.labelStrong).foregroundStyle(StatusPalette.needsYou.text)
-            Text(reason).font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(3)
+            VStack(alignment: .leading, spacing: Theme.Space.s) {
+                Text(reason).font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(3)
+                ForEach(Array(questions.enumerated()), id: \.offset) { _, q in
+                    VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                        Text(q.question).font(Theme.Font.captionMedium)
+                        ForEach(Array(q.options.enumerated()), id: \.offset) { _, label in AskUserDetail.choice(label, picked: false) }
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("chat.attention.question")
+                }
+            }
             Spacer(minLength: 0)
             if let link { FeishuLink(url: link).font(Theme.Font.secondaryStrong) }
         }
@@ -4968,7 +5136,7 @@ struct Composer: View, Equatable {
                 StartingNote(error: s.startError, agent: s.agentLabel, coded: s.startErrorCode?.isEmpty == false)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             } else if let s = model.session(key), let reason = s.attentionReason, !reason.isEmpty, s.state == .needsYou {
-                AttentionNote(reason: reason, link: s.externalLink)
+                AttentionNote(reason: reason, link: s.externalLink, key: key)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             } else if let s = model.session(key), let reason = s.failureReason, !reason.isEmpty, !status.isActive,
                       retried != reason {
@@ -5665,10 +5833,12 @@ struct TerminalCover: View {
     @Environment(\.dismiss) private var dismiss
     let key: SessionKey
     var switchTo: ((SessionKey) -> Void)?
+    /// Resume in Terminal (#5521): resume the stopped Agent as the terminal comes up.
+    var resumeOnOpen = false
     @State private var offset: CGFloat = 0
 
     var body: some View {
-        TerminalPanel(key: key, switchTo: switchTo, grab: TerminalGrab(
+        TerminalPanel(key: key, switchTo: switchTo, resumeOnOpen: resumeOnOpen, grab: TerminalGrab(
             dragged: { offset = max(0, $0) },
             released: { distance, predicted in
                 if distance > 140 || predicted > 420 { close() } else { withAnimation(.spring(duration: 0.3)) { offset = 0 } }
@@ -5688,22 +5858,50 @@ struct TerminalCover: View {
 }
 
 /// Above a stopped Agent's composer (#4754, docs/integrations/engines.md「Agents run in a terminal」): it takes no messages;
-/// its terminal page shows the shell it left and offers Resume, the one way it runs again.
+/// its terminal page shows the shell it left and offers Resume, the one way it runs again. Resume Session here opens that
+/// page and resumes it there (#5521), as the web's line does; the words go above the two buttons, which stay on one line.
 private struct StoppedAgentBar: View {
+    @Environment(\.dynamicTypeSize) private var typeSize
     var openTerminal: () -> Void
+    /// Nil keeps the line as it was (the frozen Mac app).
+    var resume: (() -> Void)?
 
     var body: some View {
-        HStack(spacing: Theme.Space.s) {
-            Text("This Agent has stopped. Its conversation and terminal stay; it doesn't take messages.")
-                .font(Theme.Font.caption).foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Button(action: openTerminal) {
-                Label("Terminal", systemImage: Theme.Icon.terminal).font(Theme.Font.labelStrong).lineLimit(1)
+        Group {
+            if let resume {
+                VStack(alignment: .leading, spacing: Theme.Space.s) {
+                    note
+                    // At the accessibility sizes the two go one above the other: side by side they would be cut short.
+                    let buttons = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: Theme.Space.s))
+                        : AnyLayout(HStackLayout(spacing: Theme.Space.s))
+                    buttons {
+                        terminal
+                        Button(action: resume) {
+                            Label("Resume Session", systemImage: Theme.Icon.resume).font(Theme.Font.labelStrong).lineLimit(1)
+                        }
+                        .themedButton(prominent: true)
+                        .accessibilityIdentifier("chat.stopped.resume")
+                    }
+                }
+            } else {
+                HStack(spacing: Theme.Space.s) { note; terminal }
             }
-            .themedButton()
-            .accessibilityIdentifier("chat.stopped.terminal")
         }
         .accessibilityElement(children: .contain)
+    }
+
+    private var note: some View {
+        Text("This Agent has stopped. Its conversation and terminal stay; it doesn't take messages.")
+            .font(Theme.Font.caption).foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var terminal: some View {
+        Button(action: openTerminal) {
+            Label("Terminal", systemImage: Theme.Icon.terminal).font(Theme.Font.labelStrong).lineLimit(1)
+        }
+        .themedButton()
+        .accessibilityIdentifier("chat.stopped.terminal")
     }
 }
 
@@ -5743,6 +5941,7 @@ struct QueueStrip: View {
     @State private var confirmSend = false
     /// One row's height with its spacing, as drawn (it follows the text size and the rows' line counts).
     @State private var rowHeight: CGFloat = 0
+    @Environment(\.dynamicTypeSize) private var typeSize
     private static let visibleRows: CGFloat = 3
 
     var body: some View {
@@ -5756,19 +5955,25 @@ struct QueueStrip: View {
             .frame(height: rowHeight > 0 ? rowHeight * min(CGFloat(queued.count), Self.visibleRows) : nil)
             .padding(.top, Theme.Space.sm)
         } label: {
-            HStack(spacing: Theme.Space.sm) {
-                ThemedIcon("tray.and.arrow.down").accessibilityHidden(true)
-                Text("\(queued.count) queued · \(agent) will handle them in order [Queue Strip]").lineLimit(1)
-                Spacer(minLength: 0)
-                if busy {
-                    ProgressView().controlSize(.mini)
-                } else if steers, own > 0 {
-                    Button { confirmSend = true } label: {
-                        Label("Send Now [Queue Strip]", systemImage: Theme.Icon.sendNow).lineLimit(1).fixedSize()
+            Group {
+                if typeSize.isAccessibilitySize {
+                    // Side by side, Send Now (which keeps its width) left the title a few points and took the tap that
+                    // opens the strip (#4846): at these sizes the title wraps and Send Now has the line under it.
+                    VStack(alignment: .leading, spacing: Theme.Space.sm) {
+                        HStack(alignment: .firstTextBaseline, spacing: Theme.Space.sm) {
+                            tray
+                            title.multilineTextAlignment(.leading) // the label centers wrapped lines
+                        }
+                        sendNowButton
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Theme.accent)
-                    .accessibilityIdentifier("queue-send-now")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    HStack(spacing: Theme.Space.sm) {
+                        tray
+                        title.lineLimit(1)
+                        Spacer(minLength: 0)
+                        sendNowButton
+                    }
                 }
             }
             .font(Theme.Font.labelStrong)
@@ -5789,6 +5994,24 @@ struct QueueStrip: View {
         .surface(in: .rect(cornerRadius: Theme.Radius.panel, style: .continuous))
         .transition(.move(edge: .bottom).combined(with: .opacity))
         .accessibilityIdentifier("queue-strip")
+    }
+
+    private var tray: some View { ThemedIcon("tray.and.arrow.down").accessibilityHidden(true) }
+    private var title: Text { Text("\(queued.count) queued · \(agent) will handle them in order [Queue Strip]") }
+
+    /// Send Now when a Claude in a terminal has the user's own messages queued, or the spinner while the queue is being
+    /// handed over.
+    @ViewBuilder private var sendNowButton: some View {
+        if busy {
+            ProgressView().controlSize(.mini)
+        } else if steers, own > 0 {
+            Button { confirmSend = true } label: {
+                Label("Send Now [Queue Strip]", systemImage: Theme.Icon.sendNow).lineLimit(1).fixedSize()
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Theme.accent)
+            .accessibilityIdentifier("queue-send-now")
+        }
     }
 
     private var rows: some View {
@@ -6316,6 +6539,7 @@ nonisolated indirect enum WorkItem: Identifiable, Equatable, Sendable {
 struct WorkStepView: View, Equatable {
     nonisolated let item: WorkItem
     nonisolated let first: Bool
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.item == rhs.item && lhs.first == rhs.first
@@ -6341,19 +6565,19 @@ struct WorkStepView: View, Equatable {
                 ThinkingRow(item: t, compact: true) // a row like the tools', with their insets
             case .step(.thought(let t)):
                 Group { if t.kind == .notice { NoticeRow(item: t) } else { ThinkingRow(item: t, compact: !WorkCardSlice.timeline) } }
-                    .padding(.leading, WorkCardSlice.contentLeading)
+                    .padding(.leading, WorkCardSlice.contentLeading(typeSize))
                     .padding(.trailing, WorkCardSlice.inset)
                     .padding(.vertical, WorkCardSlice.timeline ? Theme.Space.s : Theme.Space.m)
             case .step(.folded(let f)):
                 FoldedWorkRow(fold: f)
-                    .padding(.leading, WorkCardSlice.contentLeading)
+                    .padding(.leading, WorkCardSlice.contentLeading(typeSize))
                     .padding(.trailing, WorkCardSlice.inset)
                     .padding(.vertical, WorkCardSlice.timeline ? Theme.Space.s : Theme.Space.m)
             case .text(let i):
                 // The agent's words between its steps: on the timeline in the quieter type, so they read as part of
                 // the process and not as its answer.
                 AssistantText(item: i, quiet: WorkCardSlice.timeline)
-                    .padding(.leading, WorkCardSlice.contentLeading)
+                    .padding(.leading, WorkCardSlice.contentLeading(typeSize))
                     .padding(.trailing, WorkCardSlice.inset)
                     .padding(.vertical, WorkCardSlice.timeline ? Theme.Space.s : Theme.Space.m)
             }
@@ -6446,20 +6670,32 @@ struct WorkStepView: View, Equatable {
 struct WorkCardSlice: View {
     var top: Bool
     var bottom: Bool
+    @Environment(\.dynamicTypeSize) private var typeSize
     /// Half the list's spacing (`LazyVStack(spacing: Theme.Space.l)`): the slices meet in the middle of each gap. It was
     /// 7 from when the spacing was 14; at 16 every seam showed a 2 pt gap (white lines across the card, the rail broken).
     static let bridge: CGFloat = Theme.Space.l / 2
     static let radius = Theme.Radius.card
-    /// The rows' side padding inside the card.
-    static let inset: CGFloat = 12
-    /// Where a tool row's words start (inset + 24 pt icon + 10): separators start there.
-    static let textColumn: CGFloat = 46
-    /// The timeline's rail runs through the middle of the tools' icons.
-    static let railX: CGFloat = inset + Theme.Size.icon / 2
+    /// Side padding inside a card. The timeline's icon column uses `iconLeading` instead.
+    static let inset: CGFloat = Theme.Space.m
+    /// Where the timeline's icons start. Flush with the assistant reply bubble, which begins at the list's content
+    /// margin. A card keeps `inset` inside its ring, so that style does not move.
+    static var iconLeading: CGFloat { timeline ? Theme.Space.flush : inset }
+    /// The card's text column, unchanged: inset + icon + 10. The hairline between card steps starts there.
+    /// The separator only draws for cards, so it reads this directly instead of a text size.
+    static let cardTextColumn: CGFloat = 46
+    /// The icon's width at this text size, the same scale `scaledFrame` gives the step icons.
+    static func iconWidth(_ typeSize: DynamicTypeSize) -> CGFloat { Theme.Size.icon * Theme.sizeScale(typeSize) }
+    /// Where a tool row's words start. On the timeline that is the scaled icon plus the header's gap, so the title,
+    /// the opened detail and Collapse share one edge. A card keeps `cardTextColumn`.
+    static func textColumn(_ typeSize: DynamicTypeSize) -> CGFloat {
+        timeline ? iconLeading + iconWidth(typeSize) + Theme.Space.m : cardTextColumn
+    }
+    /// The rail's x, through the middle of the tools' icons.
+    static func railX(_ typeSize: DynamicTypeSize) -> CGFloat { iconLeading + iconWidth(typeSize) / 2 }
 
     static var timeline: Bool { StyleSpec.current.workList == .timeline }
     /// Where a step's own content starts: the card's inset, or (timeline) right of the rail, where the tools' words are.
-    static var contentLeading: CGFloat { timeline ? textColumn : inset }
+    static func contentLeading(_ typeSize: DynamicTypeSize) -> CGFloat { timeline ? textColumn(typeSize) : inset }
 
     var body: some View {
         if Self.timeline { rail } else { card }
@@ -6472,7 +6708,7 @@ struct WorkCardSlice: View {
             Rectangle()
                 .fill(Color(uiColor: .separator))
                 .frame(width: Theme.Size.lineMedium, height: bottom ? g.size.height / 2 + (top ? 0 : Self.bridge) : g.size.height + (top ? 0 : Self.bridge) + Self.bridge)
-                .offset(x: Self.railX - Theme.Size.lineMedium / 2, y: top ? Theme.Space.m : -Self.bridge)
+                .offset(x: Self.railX(typeSize) - Theme.Size.lineMedium / 2, y: top ? Theme.Space.m : -Self.bridge)
         }
         .allowsHitTesting(false)
     }
@@ -6497,7 +6733,7 @@ struct WorkCardSlice: View {
     @ViewBuilder static var separator: some View {
         if !timeline {
             Rectangle().fill(beautiful ? Theme.cardStroke : Color(uiColor: .separator)).frame(height: beautiful ? Theme.Size.line : Theme.Size.hairline)
-                .padding(.leading, textColumn)
+                .padding(.leading, cardTextColumn)
                 .offset(y: -bridge)
                 .allowsHitTesting(false)
         }
@@ -6509,6 +6745,7 @@ struct WorkCardSlice: View {
 struct WorkEndView: View, Equatable {
     @Environment(\.openFile) private var openFile
     @Environment(\.chatPin) private var pin
+    @Environment(\.dynamicTypeSize) private var typeSize
     nonisolated let count: Int
     nonisolated let files: [ChangedFile]
     /// What the chat's pin knows the chips by: "+N files" opens the rest under them, the chips staying where they are (#3757).
@@ -6542,7 +6779,7 @@ struct WorkEndView: View, Equatable {
                 }
                 .font(Theme.Font.caption)
                 .foregroundStyle(.secondary)
-                .padding(.leading, WorkCardSlice.contentLeading)
+                .padding(.leading, WorkCardSlice.contentLeading(typeSize))
                 .padding(.trailing, WorkCardSlice.inset)
                 .padding(.vertical, Theme.Space.m)
                 .frame(maxWidth: .infinity, alignment: .leading)

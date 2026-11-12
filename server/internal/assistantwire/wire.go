@@ -98,6 +98,9 @@ const (
 	DeviceAssistantSend = "assistant.send" // {session_id, text, resume_only?, permission_mode?, …model} → {session_id}
 	DeviceSessionSend   = "session.send"   // {session_id, text} → {}
 	DeviceSessionStart  = "session.start"  // {cwd, prompt, launcher?, model?, permission_mode?, tab_name?, workspace_id?} → {session}
+	// DeviceSessionModes: {session_id, launcher?, from?, model?, effort?, permission_mode?} → {}; a launcher other than
+	// the session's own is a switch to it, carried out by a session.send with apply_switch (docs/protocol/protocol.md).
+	DeviceSessionModes = "session.modes"
 	// DeviceWorktreePrepare / DeviceWorktreeCreate: "New worktree…" (docs/integrations/terminal.md), the workspace named by a directory
 	// in it: {cwd} → WorktreePrepare; {cwd, branch, path} → WorktreeCreateResult.
 	DeviceWorktreePrepare = "worktree.prepare"
@@ -241,6 +244,9 @@ type Notification struct {
 	// may stand in for the phone's push ("Phone Muted", docs/operations/link.md "Presence"). Older managers leave it
 	// out: the phone is pushed.
 	LinkCovered bool `json:"link_covered,omitempty"`
+	// RecordingID is the recording a NotifyPush push is about (a meeting's minutes, #3862 phase 6): the push carries it
+	// as `recording_id`, and apps that know it open the meeting's thread instead of the session. Older hubs drop it.
+	RecordingID string `json:"recording_id,omitempty"`
 }
 
 // NotifyTodo is the to-do a NotifyDecide push asks about: its id, when the decision now waiting was asked (what

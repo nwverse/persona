@@ -1,5 +1,51 @@
 # Lessons: hub / node and networking
 
+## A name taken from a counter of attempts is not a free name (2026-11-13, #6024)
+
+The hub edge named each new slot by alternating on a counter of slots started (`'a' + slots%2`), assuming every
+start replaces the slot before it. A failed standby does not: after one, the next standby got the serving slot's own
+name and so its socket paths (`slot-<name>-<port>.sock`), and when that standby failed too, the edge's clean-up of
+"its" sockets deleted the serving slot's. The old hub kept running, the edge could no longer dial it, and every
+connection waited `HoldMax` and was closed, with nothing exiting for the service manager to restart. Self-update
+retries a version that failed in standby at the next hourly check, so two failed attempts were enough. Name a
+resource after what is in use now (the slot that served last), not after how many attempts were made, and let a
+process's clean-up remove only what it made: the edge notes any socket file already at a slot's path when it starts
+it and leaves that file alone. A test of one failed switch passed for this reason; test failures in a row.
+
+## A new file in the knowledge base is searched unless `searchable` says otherwise (2026-11-13, #5991)
+
+Search reads every `.md` and `.json` file of the data dir it is not told to skip, profile files before any message
+day, and every file under a `messages/` directory as a day. Live ingestion's receipts (`chats/<id>/.receipts.json`,
+the source and every message id and time on one line) were documented as "not searched" but never added to
+`searchable` (`server/internal/kb/find.go`), nor were the ingestion intent (`.ingest.json`) and a chat's zone marker
+(`messages/.zone`). A query of digits, a date or the source's name matched the receipts of every chat and filled the
+limit before any message was read; Chinese queries looked fine, so nobody noticed. Whoever writes a new bookkeeping
+file into the data dir adds it to `searchable` in the same change and checks it with a search over real ingested
+chats that asks for digits and ASCII words, not only with a fixture line that names the file.
+
+## An app connection's read loop must not wait for a node (2026-11-13, #5915)
+
+`subscribe` and `unsubscribe` called the node (`session.watch` / `session.unwatch`, up to 10 s each) from the app
+connection's only read loop, and the cleanup after a disconnect did the same for each session in turn. While such a
+call waited, nothing else the app sent was read: its `ping`, a phone tool's `tool_result`, terminal keys, and the pong
+of the hub's own protocol ping, so the hub closed a healthy app with `pong_timeout`. No faulty component is needed:
+for 30 s after a manager restart a call for a computer still shown online waits for its node to come back
+(`waitWarm`), and that is when every app subscribes again. One open with a ping behind it took 9.51 s; an open and a
+leave across the hub's ping closed the socket 37 s after it connected.
+
+In the read loop, change only what the hub keeps (the subscription and its count), in the order the messages came,
+and call the node from a goroutine. That is safe because the call is decided by state, not by the message:
+`syncWatch` takes the session's turn (`watchLock`) and looks at the subscriber count when its turn comes, so the
+goroutines may run in any order. The count cannot move to the goroutine too: a leave that ran ahead of its join would
+find nothing to take away, and the join would stay counted for good. What must keep its order with the app's other
+messages (terminal keys) is a one-way `notify` written in place, never a call.
+
+Test it by keeping the node's answer back, waiting until the call is at the node, and then checking that a message
+sent behind it is taken: the fix is told apart by whether the hub reads, not by how long something took. Run the
+scenario through the manager as well, where the wait is the manager's own
+(`server/internal/hub/subscribe_readloop_test.go`). As of this change `fs_watch` still calls the node from the read
+loop (`fsWatchSet`, up to 10 s).
+
 ## A Go file named after a platform builds only there (#5563)
 
 Go reads a file name's last `_<word>` (before `_test`) as a build constraint when the word is a GOOS or GOARCH:
@@ -1931,6 +1977,27 @@ On TestFlight 224 an extension's **Review** spun for two minutes and then failed
 hub, and a download runs at 88 MB/s: the hub, the bus, the manager and the stream mux are not where a live screen's
 latency goes. The hub → node leg (`ssh -T` over Tailscale on the LAN) is where it varies; plain `ssh host cat` shows the
 same spread, and the Mac's `sshd-session` already has TCP_NODELAY (lsof `-T f`: TF flag 0x4), so it is not Nagle.
+## A list of a few entries built the whole catalog to find them (2026-11-12, #3197)
+
+- `marketChannels` called `catalog("", "")` to list the channels the markets offer: every entry of every market with its
+  translations parsed, its permission lines written, every contribution decoded and its install problems checked, to
+  keep the one entry in 83 that contributes a channel. The assistant asks for the channel list every few seconds while
+  agents end turns: 3.6% of the manager's allocation and 4% of its CPU in a soak of 10 computers x 50 sessions, and
+  1.29 ms and 691 KB a call on a synthetic market of that size.
+- Test the cheap condition on the raw entry first (`len(e.Parsed.Contributes["channel"])`, then its items), and build
+  the ones that pass with the function the full list uses (`catalogItem`): 43 µs and 22 KB. Sharing the builder is what
+  keeps the two from drifting; a second, slimmer builder would have to track every later change to names, problems
+  and install state. It happened while this was in review: the catalog began to list the official market's entries
+  most downloaded first (#4909), and the channel list had to keep that order. The comparison with the old path caught
+  it once the test had an official market; the order is a named function both use (`officialCatalogOrder`), a total
+  order, so sorting only the entries kept gives the order the whole catalog has.
+- No cache, so nothing to invalidate when a market is refreshed, an extension installed or the language changed. A
+  cache would have saved the remaining 43 µs and cost a stale channel list on any missed invalidation.
+- Prove it against the old path kept in the test, over every kind of entry the filter tells apart (installed, no
+  package for the platform, a newer hub needed, a refused signature, an empty, null or malformed channel list, an id
+  another entry or the list already has), in every language (`TestMarketChannelsAreTheCatalogs`), and pin what the
+  table holds so that two empty lists do not pass.
+
 ## A child in its own process group outlives a node killed by `exec.CommandContext` (2026-11-11, #4259)
 
 - The manager ran the hub machine's node (`node --stdio`) with `exec.CommandContext` and the default `Cancel`, a SIGKILL. The node puts each assistant process in its own group (`Setpgid`, so `stop()` can end its background tasks), and nothing ties that group to the node: a SIGKILLed node leaves its conversations running. Before blue-green switching, the systemd restart's cgroup kill hid this; a switch keeps the unit, so the old Claude processes went on beside the ones the next node resumed for the same conversations, and the next node rightly refused them the assistant's tools.
@@ -1981,6 +2048,27 @@ computer every 2 s): the manager allocated 555 MB and used about 2.1 s of CPU a 
   out at 0.943 with every one of the 20 minutes below 1, the unchanged hub's at 0.983 (`pairedCPU`). Measure a noisy
   quantity against a reference that sees the same noise at the same moment.
 
+## The manager read its own session lists through their JSON (2026-11-13, #3197)
+
+- With the fleet in the manager, `sessions.list` is answered in the same process (`localFleetDeviceCall`), but the
+  manager's own readers (`Service.sessions`, `workView.sessions`) still called it like a remote method: decorate the
+  machine's whole list, `json.Marshal` it, `json.Unmarshal` it again, often to read one row. Encoding and decoding was
+  75-87% of a read. Readers in the same process take the decorated rows themselves (`localSessions`); the rows share
+  their slices and pointers with the devices' list, which is safe only because nothing writes into a row's slices or
+  pointees (`localizeSession` copies before it writes; `Session.Hierarchy` is replaced, never written). Check that
+  before handing out rows in place, and prove the rows equal the answer's encoded (`TestInProcessSessionsAreTheListsRows`).
+- The list carries a row for every archive record of the machine the node no longer lists, and the records are never
+  removed, so a whole-list read grows for months even on a quiet machine. A reader of one row (a turn end, a wake, a
+  done task's agent) reads it alone (`decoratedSession`, `listedSession`; an archived row from its record by key,
+  `archivedRow`), and a pass over what runs reads only the node's rows (`listedSessions`): the archive's rows are
+  offline, and those passes skip offline rows. Prove each against the whole list's row with `reflect.DeepEqual`, folds
+  and archive rows included, and keep the apps' list pinned to the bytes the old code wrote
+  (`TestAppsSessionListUnchanged`, golden written on the base commit with `-update-session-reads`).
+- A subset never stores a fold (`foldInventory`): the fold depends on the archive's rows, so a list without them would
+  fold differently and the rows decorated alone (`foldSubset`) would pick it up. Only a complete list refreshes it.
+- A per-minute pass that walks finished tasks pays for every task ever finished, since their agent links are kept: look
+  each agent's row up (a missing row is a map lookup) rather than listing its machine.
+
 ## `http.DefaultTransport` drops a push connection after 90 s idle (2026-11-11, #4800)
 
 - The hub's relay client and `apns.Client` were `&http.Client{Timeout: …}` with no transport, so they ran on
@@ -2007,3 +2095,25 @@ computer every 2 s): the manager allocated 555 MB and used about 2.1 s of CPU a 
 - The node sent an assistant chat's messages to its agent runtime under a `client_msg_id` of its own, new on every call. The runtime protocol lets a runtime put the id it was sent with on the message's item, and the node forwards an item a runtime tied as it is (`echo.go`). So the line carried an id no app had, the app's pending bubble stayed beside it, and the message showed twice: the same failure as #5200, in another place.
 - Hand a message on with the id it came with, or with none. A made-up id deduplicates nothing either: it is new on every retry. A message without an id leaves its line without one, and the apps match it by its words.
 - In-repo runtimes (DSH, Antigravity) did not tie their lines, so nothing showed it. The test that does is a fake runtime that ties its line as the protocol allows (`TestAssistantOnARuntimeSendsTheMessagesOwnID`).
+
+## A wait for a person takes its deadline from the card, not from the bus default (2026-11-13, #5907)
+
+- `callBus` gives up after two minutes when its context has no deadline. That suits a call a program answers. A call
+  that waits for a person is different, and nothing upstream of the hub gives a tool call a deadline: the MCP
+  process's own timeout is not carried over the socket, so `app.call` arrives without `timeout_ms`. A
+  `persona_settings` card good for 15 minutes was withdrawn after 2.
+- It was worse where the wait is relayed. For the manager's own settings the hub calls `extensions.hub_call`, which
+  was not in the hub peer's `Cancels`. The hub's deadline failed the tool call, the manager never heard of it, its
+  card stayed on the phone, and a later approval made the change after the assistant had been told it failed.
+- A call that waits for a card takes its deadline from the card: its `ExpiresAt` plus a margin when the card is the
+  caller's (`waitInteraction`), none of its own when the card is the other side's (`callBusAsIs`, as
+  `managerSettingsTool` does for a change). The margin lets the side that holds the card end it and say how.
+- Whoever may stop waiting on a call that holds a card says so (`Peer.Cancels`), and the side that holds the card
+  makes no change once its caller is gone: check `ctx.Err()` before a change that does not take the context (adding
+  a mail account). The answer and the caller's end can cross, and the queue still hands back an answer it had taken.
+- What the caller is told and what becomes of the card are one assertion: test both ends together. `protocol.md`
+  already said `extensions.hub_call` sent `rpc.cancel`; no test held the code to it.
+- The hub's real bus endpoint runs inside a `testing/synctest` bubble over a `net.Pipe` (`playManager` in
+  `server/internal/hub/settings_card_wait_test.go`), so fifteen minutes pass at once. Give the hub's end a loopback
+  address (the bus refuses plaintext from an address it cannot place), and let what the hub does after a hang-up
+  (`devicesGone` waits half a second) pass in a cleanup: the bubble's clock stops when the test's goroutine is done.

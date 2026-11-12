@@ -447,6 +447,10 @@ Single pane reads herdr's observe/control streams, which don't carry it ("Progra
 - **IME**: page key handling (Shift+Enter, copy) yields on `isComposing` or `keyCode === 229`, leaving composition to xterm.
 - **Fonts**: before opening xterm, wait for `document.fonts.load("<size>px <font stack>", "W中")` (中 is the CJK measurement glyph), up to 1.5 seconds, avoiding late fonts and wrong cell measurements. JetBrains Mono in `--font-mono` currently has no `@font-face`, using local fonts,
   so this returns nearly immediately today; useful once web fonts are bundled.
+  The shared stack includes DejaVu Sans Mono and Liberation Mono before UI/platform fallbacks for Linux (#5768).
+  A missing desktop family can resolve through Fontconfig to a proportional face, inflating xterm's W-based cell
+  width and its letter-spacing correction. The range-limited, size-adjusted CJK face goes first in the terminal stack
+  so a named fallback containing CJK glyphs cannot shadow it.
 - **Shift+Enter → `ESC CR`** already existed (`encodeKey` and key handling in `feed.ts`); moved to `keyDecision` with IME exception added.
 
 ### Program OSC 52 and color queries never reach pane streams
@@ -662,6 +666,13 @@ Same shape as Moshi `worktree/prepare` + `worktree/create`.
 ### Advanced Orca worktree actions
 
 The local Orca adapter also provides a capability-gated composer, GitHub issue/PR source lookup, sparse presets and preview-confirmed workspace removal. The exact HTTP fields, adapter/runtime capability distinction, receipt handling and deletion reconciliation are specified in [the protocol](../protocol/protocol.md#orca-worktree-composer-and-removal). Legacy branch/path creation remains available. Removal keeps branches by default, unregisters folder workspaces without deleting their directories, and requires a fresh instance-bound preview when identity or dirty content changes. A background acknowledgement is not completion; clients reconcile without automatically repeating the destructive request.
+
+The sidebar also offers **Close workspace** for herdr. Confirmation ends its terminals and keeps the directory, files
+and branches, including a main checkout or a workspace whose directory has disappeared. A linked Git checkout also
+offers **Delete worktree** after its directory is verified. Deletion previews the checkout's changed files and keeps
+its branch by default. The optional merged-branch cleanup uses Git's safe branch deletion. Each confirmation binds
+the workspace, pane membership, available native socket identity and, for deletion, the checkout and reviewed file contents.
+An uncertain response is reconciled through the live catalog and filesystem. Reconciliation preserves one-use dispatch. A herdr parent with linked workspaces requires closing those child workspaces first.
 
 ### A new agent in a worktree (#6115)
 

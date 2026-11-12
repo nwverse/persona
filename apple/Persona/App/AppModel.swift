@@ -195,10 +195,30 @@ final class AppModel {
     /// What a chat's model last did on each Mac (`ComputerActivity`), kept by the open chat: the live screen shows it
     /// over the picture.
     var computerActivities: [MachineRef: ComputerActivity] = [:]
-    var openChat: SessionKey?
+    var openChat: SessionKey? {
+        didSet { if openChat != nil { agentsNavigationRevision += 1 } }
+    }
+    /// Cancels deferred list resets even after a newer targeted open has already been consumed.
+    @ObservationIgnored private(set) var agentsNavigationRevision = 0
+    /// An explicit Agents-tab selection returns to its list; targeted opens do not change this request.
+    var agentsListReveal = 0
+
+    /// User navigation, unlike `open` (notifications / links): choosing Agents discards its retained detail.
+    func selectHomeTab(_ tab: AppTab) {
+        if tab == .chats {
+            openChat = nil
+            openPersonalAgent = nil
+            Self.rememberChat(nil)
+            agentsNavigationRevision += 1
+            agentsListReveal = agentsNavigationRevision
+        }
+        if selectedTab != tab { selectedTab = tab }
+    }
     /// A personal agent's conversation to open on the Agents page, over its list (a Spotlight result, #4519): ChatsView
     /// takes it as it takes `openChat`.
-    var openPersonalAgent: PersonalAgentSession?
+    var openPersonalAgent: PersonalAgentSession? {
+        didSet { if openPersonalAgent != nil { agentsNavigationRevision += 1 } }
+    }
     /// A chat to open at its latest answer, like a finished one from the list (ChatView takes it): a tap on a
     /// "Done" notification. From the background the session list is stale (the agent still reads as working until the
     /// hub's next list), so the chat cannot tell by itself that this turn finished unseen (2026-10-31).
@@ -1962,9 +1982,17 @@ final class AppModel {
             }
             #endif
             Task { await refreshInAppTunnel(group) }
-            Task { await refreshManagerRoster(group) }
+            let rosterRead = Task { await refreshManagerRoster(group) }
             // Back on the hub: an install that moved on while the connection was down shows where it is now (#3307).
-            if isHub, Set(hello.features).hasExtensionFeature("operations") { Task { await ExtensionOperations.shared.reload() } }
+            if isHub, Set(hello.features).hasExtensionFeature("operations") {
+                Task {
+                    await ExtensionOperations.shared.reload()
+                    await rosterRead.value
+                    if managerRoster != nil, let manager = assistantManagerID {
+                        await ExtensionOperations.shared.reload(manager: manager)
+                    }
+                }
+            }
             if isHub { flushErrorReports(group) } // the feature may have come or gone with this hello (#5621)
             if isHub, link(group)?.isDemo == false { learnedRecordingDay(hello) }
             #if DEBUG && (os(iOS) || os(visionOS))
