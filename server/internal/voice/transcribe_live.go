@@ -188,16 +188,22 @@ func (j *trJob) sessionUp(u trUp) {
 		j.memo().captions.Store(trGranted)
 	}
 	// It writes from the first window still to be sent at or after the one it was opened for, as far back as the
-	// audio is kept.
+	// audio is kept. A caption session opened again (a rollover, a reconnect) starts at the live edge instead, for the
+	// next window: captions break faster than real time, so it is never given a backlog to catch up on; the open
+	// window keeps the session it rolls over (or, after a reconnect, has no captions).
 	feed := j.edge
-	for _, w := range j.windows {
-		if w.n >= s.window {
-			s.window, feed = w.n, w.from
-			break
-		}
-	}
-	if len(j.windows) == 0 || j.windows[len(j.windows)-1].n < s.window {
+	if s.kind == trCaption && s.why != "first" {
 		s.window = j.nextWin
+	} else {
+		for _, w := range j.windows {
+			if w.n >= s.window {
+				s.window, feed = w.n, w.from
+				break
+			}
+		}
+		if len(j.windows) == 0 || j.windows[len(j.windows)-1].n < s.window {
+			s.window = j.nextWin
+		}
 	}
 	if oldest := j.buf.oldest(); feed < oldest {
 		feed = oldest
@@ -409,29 +415,57 @@ func (j *trJob) replyBegins(s *trSession, pos int64) {
 	s.cur = &trReply{window: n, at: pos}
 }
 
-// assign is the window of a reply that began when the session's audio was at pos: the window of the first speech it
-// had not covered yet that ended before then (a reply follows the sentence it writes), else the window of what it
-// covered last; -1 when that window was sent already (a reply too late for it, never used).
+// assign is the window of a reply that began when the session's audio was at pos. A reply writes one turn: the first
+// speech it had not covered yet that ended before then (a reply follows the sentence it writes; all of a forced
+// window's speech has ended once the session got its end and the silence after it), with the speech after it within a
+// turn's gap (trWindowGap: the service hears one turn there). Speech that ended more than trReplyWait before pos is
+// covered too: a reply that late is not coming, so what is left of it was in this one or never had one. The reply is
+// of the window of the first speech it covers; with none, of the window of what it covered last; -1 when that window
+// was sent already (a reply too late for it, never used). When none of its replies was of speech the adapter heard (a
+// quiet room its detection misses), a reply is of the window its audio was in.
 func (j *trJob) assign(s *trSession, pos int64) int {
 	cut := pos - trSamples(trAssignSlack)
+	stale := pos - trSamples(trReplyWait)
+	n, turnEnd := -1, int64(-1)
+claim:
 	for _, w := range j.windows {
 		if w.n < s.window {
 			continue
 		}
-		end := w.to
+		end, limit := w.to, cut
 		if end < 0 {
 			end = j.edge
+		} else if w.forced && pos >= w.to {
+			limit = max(cut, w.to)
 		}
-		last := int64(-1)
 		for _, sp := range j.vad.speech(w.from, end) {
-			if sp[1] > s.claimed && sp[1] <= cut {
-				last = sp[1]
+			switch {
+			case sp[1] <= s.claimed:
+				continue
+			case sp[1] > limit: // not over before the reply began
+				break claim
+			case sp[1] > stale: // its turn: the first speech it could be of, and what follows within a turn's gap
+				if turnEnd >= 0 && sp[0]-turnEnd >= trSamples(trWindowGap) {
+					break claim // the next turn, another reply's
+				}
+				turnEnd = sp[1]
+			}
+			s.claimed = sp[1]
+			if n < 0 {
+				n = w.n
 			}
 		}
-		if last >= 0 {
-			s.claimed = last
-			return w.n
+	}
+	if n >= 0 {
+		return n
+	}
+	if len(j.windows) > 0 && s.claimed == s.feed && len(j.vad.speech(j.windows[0].from, max(cut, j.windows[0].from))) == 0 {
+		// None of its replies was of speech the adapter heard: a quiet room its detection misses. The reply is of the
+		// window its audio was in.
+		if n := j.windowAt(max(cut, j.windows[0].from)); n >= s.window {
+			return n
 		}
+		return -1
 	}
 	for _, w := range j.windows {
 		if s.claimed >= w.from && (w.to < 0 || s.claimed <= w.to) {
@@ -567,7 +601,20 @@ func (j *trJob) settled(s *trSession, w *trWin, now time.Time) bool {
 	if !ok || s.clock.Load()-c < trSamples(after) || now.Sub(passed) < trSettleWall {
 		return false
 	}
-	return s.cur == nil || s.cur.window > w.n || s.cur.window < 0
+	if s.cur != nil && s.cur.window <= w.n && s.cur.window >= 0 {
+		return false // its reply for the window is still coming
+	}
+	return !j.replyOwed(s, w) || now.Sub(passed) >= trReplyWait
+}
+
+// replyOwed: verbatim session s has not begun a reply to window w's last speech yet (a reply comes 1.5 s, up to 3 s,
+// after its sentence ends: a window decided before it would lose that sentence).
+func (j *trJob) replyOwed(s *trSession, w *trWin) bool {
+	if s.kind != trVerbatim {
+		return false
+	}
+	sp := j.vad.speech(w.from, w.to)
+	return len(sp) > 0 && s.claimed < sp[len(sp)-1][1]
 }
 
 // finalize sends the windows that are done, in order.
@@ -624,9 +671,12 @@ func (j *trJob) finalizeOne(w *trWin) bool {
 		j.emit(j.fake.sentences(w.from, w.to, sp))
 		return true
 	}
-	if len(sp) == 0 {
-		return true
-	}
+	// A window the adapter's speech detection found no speech in is chosen too: a quiet room (a phone on the table, no
+	// voice processing) may be below its gate while the sessions hear it. Its sessions are checked against each other,
+	// not the captions (its cuts fall anywhere, so captions and replies split a sentence differently), the captions'
+	// text is sent only when no session wrote any, its sentences are spread over the whole window, and no session is
+	// counted dropped in it.
+	quietWin := len(sp) == 0
 	waited := now.Sub(w.closedAt) >= trWindowWait
 	var caption *trSession
 	type cand struct {
@@ -634,18 +684,24 @@ func (j *trJob) finalizeOne(w *trWin) bool {
 		sl *trSlot
 	}
 	var cands []cand
-	behind := 0
+	behind, late := 0, 0
 	for _, sl := range j.slots {
 		if sl.dead {
 			continue
 		}
 		s := sl.responsible(w.n)
+		if s == nil && sl.kind == trCaption {
+			continue // no caption session heard this window (one opened again starts at the live edge): no captions
+		}
 		if s == nil || !j.settled(s, w, now) {
 			if !waited {
 				return false
 			}
 			behind++
 			continue
+		}
+		if j.replyOwed(s, w) {
+			late++ // taken after trReplyWait without a reply to the window's last speech
 		}
 		if sl.kind == trCaption {
 			caption = s
@@ -670,7 +726,11 @@ func (j *trJob) finalizeOne(w *trWin) bool {
 		}
 		texts[i] = b.String()
 	}
-	pick, dropped := pickLive(capText, texts)
+	check := capText
+	if quietWin {
+		check = "" // windows cut without speech to cut at split sentences unlike the captions do: the sessions agree among themselves
+	}
+	pick, dropped := pickLive(check, texts)
 	var out []string
 	from := "sent nothing"
 	switch {
@@ -687,10 +747,13 @@ func (j *trJob) finalizeOne(w *trWin) bool {
 		if trHasText(capText) {
 			d += fmt.Sprintf(", distance %.2f", normDistance(texts[i], capText))
 		}
-		if dropped[i] {
+		switch {
+		case dropped[i]:
 			d += " (dropped)"
-			c.sl.drops++
-		} else {
+			if !quietWin {
+				c.sl.drops++
+			}
+		case !quietWin:
 			c.sl.drops = 0
 		}
 		dist = append(dist, d)
@@ -701,10 +764,10 @@ func (j *trJob) finalizeOne(w *trWin) bool {
 	}
 	j.logf("window %d [%.1f-%.1f s, %.1f s of speech]: %s; %s; %s, %d sentences%s", w.n, trSeconds(w.from), trSeconds(w.to),
 		j.vad.speechIn(w.from, w.to), captions, firstNonEmpty(strings.Join(dist, ", "), "no verbatim session"), from, len(sentences),
-		behindNote(behind))
-	if behind > 0 && now.Sub(j.behindAt) >= trBehindEvery {
+		behindNote(behind+late))
+	if behind+late > 0 && now.Sub(j.behindAt) >= trBehindEvery {
 		j.behindAt = now
-		j.warn(extwire.TWBehind, fmt.Sprintf("%d sessions had not answered for a window in time", behind))
+		j.warn(extwire.TWBehind, fmt.Sprintf("%d sessions had not answered for a window in time", behind+late))
 	}
 	for _, c := range cands {
 		if c.sl.drops >= 2 {

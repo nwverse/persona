@@ -53,6 +53,7 @@ var (
 	trSettleWall    = 1500 * time.Millisecond // and that long after it got the window's end
 	trCaptionSettle = 1500 * time.Millisecond // captions settle about 1.5 s after a sentence ends
 	trWindowWait    = 12 * time.Second        // the most a closed window waits for a session that is behind
+	trReplyWait     = 5 * time.Second         // and at most this long for a session's reply to its last speech
 	trStall         = time.Second             // no audio this long while a window waits: silence ends the sessions' turns
 	trFlushSilence  = 1500 * time.Millisecond
 	trSessionMost   = 25 * time.Minute // rolled over before the upstream's session limit

@@ -40,9 +40,11 @@ func trFast(t *testing.T) {
 	setVar(t, &trSettleWall, 80*time.Millisecond)
 	setVar(t, &trCaptionSettle, 500*time.Millisecond)
 	setVar(t, &trWindowWait, 4*time.Second)
+	setVar(t, &trReplyWait, time.Second)
 	setVar(t, &trStall, 300*time.Millisecond)
 	setVar(t, &trFlushSilence, time.Second)
 	setVar(t, &trCatchUp, 200.0)
+	setVar(t, &trCaptionCatchUp, 200.0)
 	setVar(t, &trReconnectWaits, []time.Duration{0, 20 * time.Millisecond, 20 * time.Millisecond})
 	setVar(t, &trUsageMost, 200*time.Millisecond)
 	setVar(t, &trReplayWindow, 4*time.Second)
@@ -54,6 +56,15 @@ func trFast(t *testing.T) {
 	setVar(t, &trReplayQuiet, 100*time.Millisecond)
 	setVar(t, &trReplayTailMost, 3*time.Second)
 	setVar(t, &trStopEarly, 2*time.Second)
+}
+
+// trProduction keeps the production settle times for a test that streams at real time against a stand-in whose
+// replies come seconds after a sentence: only the tick and the waits before reconnects are shorter.
+func trProduction(t *testing.T) {
+	t.Helper()
+	setVar(t, &trTick, 10*time.Millisecond)
+	setVar(t, &trReconnectWaits, []time.Duration{0, 20 * time.Millisecond, 20 * time.Millisecond})
+	setVar(t, &trUsageMost, 200*time.Millisecond)
 }
 
 // trLive is a plugin whose one upstream is the stand-in for script s.
@@ -739,12 +750,13 @@ func TestTranscriptionVerbatimStartTriedAgain(t *testing.T) {
 }
 
 // Sessions are rolled over before the end session.started's expires_at says, when that comes before trSessionMost:
-// the service never closes one under the job (no session_dropped, no reconnect), and nothing is lost.
+// the service never closes a session the job still writes with (no session_dropped, no reconnect), and nothing is
+// lost.
 func TestTranscriptionRolloverBeforeItExpires(t *testing.T) {
 	trFast(t)
-	setVar(t, &trExpiryMargin, time.Second)
+	setVar(t, &trExpiryMargin, 1500*time.Millisecond)
 	setVar(t, &trRollOverlap, 200*time.Millisecond)
-	_, srv, logs, _ := trLive(t, voicetest.Script{Sentences: trScript, ExpiresIn: 2 * time.Second})
+	_, srv, logs, _ := trLive(t, voicetest.Script{Sentences: trScript, ExpiresIn: 3 * time.Second})
 	tc := startTr(t, srv, liveStart())
 	tc.next(extwire.TFReady)
 	tc.stream(voicetest.PCM(voicetest.Script{Sentences: trScript}, trScriptLength), 5)
@@ -756,7 +768,136 @@ func TestTranscriptionRolloverBeforeItExpires(t *testing.T) {
 			t.Errorf("a session expired under the job, log:\n%s", logs)
 		}
 	}
-	if !strings.Contains(logs.String(), "(rollover)") || strings.Contains(logs.String(), "lost after") {
+	if !strings.Contains(logs.String(), "(rollover)") || strings.Contains(logs.String(), "(reconnect") {
 		t.Errorf("log:\n%s", logs)
+	}
+}
+
+// trScript4 are the script's first four sentences, 13.4 s with the silence after them.
+var trScript4 = trScript[:4]
+
+// A flush right after a sentence, against a service whose replies come 2 s after a sentence ends, with the
+// production settle times at real time: the window it closes waits for every session's reply to its last speech, so
+// flushed comes after every sentence said before it, none left to the captions.
+func TestTranscriptionFlushWaitsForSlowReplies(t *testing.T) {
+	trProduction(t)
+	_, srv, logs, _ := trLive(t, voicetest.Script{Sentences: trScript4, CaptionNoise: 0.08, ReplyDelay: 2 * time.Second})
+	tc := startTr(t, srv, liveStart())
+	tc.next(extwire.TFReady)
+	tc.stream(voicetest.PCM(voicetest.Script{Sentences: trScript4}, 12.6), 1) // flushed right after "Let's revisit pricing next week."
+	tc.send(extwire.TranscriptionFrame{Type: extwire.TFFlush})
+	tc.next(extwire.TFFlushed)
+	tc.mu.Lock()
+	before := trTexts(tc.got)
+	tc.mu.Unlock()
+	if strings.Join(before, "\n") != strings.Join(scriptTexts(trScript4), "\n") {
+		t.Fatalf("before flushed: %q\nlog:\n%s", before, logs)
+	}
+	tc.send(extwire.TranscriptionFrame{Type: extwire.TFEnd})
+	sameTexts(t, tc.done(), trScript4)
+	if strings.Contains(logs.String(), "(dropped)") || strings.Contains(logs.String(), "the captions' text") {
+		t.Errorf("a healthy session was dropped, log:\n%s", logs)
+	}
+}
+
+// Replies that come 3.2 s after their sentence, past the settle of a window that closes right after it: each window
+// waits for them, so no sentence is lost or moved to the wrong window.
+func TestTranscriptionLateRepliesAcrossWindows(t *testing.T) {
+	trProduction(t)
+	setVar(t, &trWindow, 4*time.Second) // a window closes after nearly every sentence
+	_, srv, logs, _ := trLive(t, voicetest.Script{Sentences: trScript4, CaptionNoise: 0.08, ReplyDelay: 3200 * time.Millisecond})
+	tc := startTr(t, srv, liveStart())
+	tc.next(extwire.TFReady)
+	tc.stream(voicetest.PCM(voicetest.Script{Sentences: trScript4}, 13.4), 1)
+	tc.send(extwire.TranscriptionFrame{Type: extwire.TFEnd})
+	frames := tc.done()
+	defer func() {
+		if t.Failed() {
+			t.Log(logs.String())
+		}
+	}()
+	sameTexts(t, frames, trScript4)
+	if strings.Contains(logs.String(), "(dropped)") {
+		t.Error("a healthy session was dropped")
+	}
+}
+
+// A caption session rolled over starts at the live edge and is never given audio faster than real time (captions
+// break faster than that): healthy verbatim sessions are never dropped against its captions.
+func TestTranscriptionCaptionRolloverAtTheLiveEdge(t *testing.T) {
+	trProduction(t)
+	setVar(t, &trWindow, 4*time.Second)
+	setVar(t, &trSessionMost, 3*time.Second)
+	setVar(t, &trRollOverlap, time.Second)
+	_, srv, logs, live := trLive(t, voicetest.Script{Sentences: trScript4, CaptionNoise: 0.05, CaptionNoiseFast: 1})
+	tc := startTr(t, srv, liveStart())
+	tc.next(extwire.TFReady)
+	tc.stream(voicetest.PCM(voicetest.Script{Sentences: trScript4}, 13.4), 1)
+	tc.send(extwire.TranscriptionFrame{Type: extwire.TFEnd})
+	frames := tc.done()
+	defer func() {
+		if t.Failed() {
+			t.Log(logs.String())
+		}
+	}()
+	sameTexts(t, frames, trScript4)
+	if caption, _ := live.Sessions(); caption < 2 {
+		t.Errorf("%d caption sessions: no rollover", caption)
+	}
+	if strings.Contains(logs.String(), "(dropped)") || strings.Contains(logs.String(), "the captions' text") {
+		t.Error("a healthy session was dropped against a rolled-over caption session's captions")
+	}
+}
+
+// A quiet room: the sessions hear the sentences while the adapter's speech detection finds none. The windows are
+// chosen all the same, each sentence once, in order.
+func TestTranscriptionQuietRoom(t *testing.T) {
+	trFast(t)
+	quiet := voicetest.Script{Sentences: trScript, Level: 0.1}
+	_, srv, logs, _ := trLive(t, quiet)
+	tc := startTr(t, srv, liveStart())
+	tc.next(extwire.TFReady)
+	tc.stream(voicetest.PCM(quiet, trScriptLength), 20)
+	tc.send(extwire.TranscriptionFrame{Type: extwire.TFEnd})
+	frames := tc.done()
+	if got := strings.Join(trTexts(frames), "\n"); got != strings.Join(scriptTexts(trScript), "\n") {
+		t.Fatalf("sentences:\n%s\nlog:\n%s", got, logs)
+	}
+	if !strings.Contains(logs.String(), "0.0 s of speech") {
+		t.Errorf("the detection heard speech: the test is not of a quiet room\n%s", logs)
+	}
+}
+
+// A reply that writes two sentences (a service that answers both in one turn) is sent as its two sentences.
+func TestTranscriptionMergedReply(t *testing.T) {
+	trFast(t)
+	setVar(t, &trWindow, 30*time.Second)
+	setVar(t, &trWindowMost, 30*time.Second)
+	_, srv, logs, _ := trLive(t, voicetest.Script{Sentences: trScript, Merge: map[int]bool{1: true, 3: true}})
+	tc := startTr(t, srv, liveStart())
+	tc.next(extwire.TFReady)
+	tc.stream(voicetest.PCM(voicetest.Script{Sentences: trScript}, trScriptLength), 20)
+	tc.send(extwire.TranscriptionFrame{Type: extwire.TFEnd})
+	if got := strings.Join(trTexts(tc.done()), "\n"); got != strings.Join(scriptTexts(trScript), "\n") {
+		t.Fatalf("sentences:\n%s\nlog:\n%s", got, logs)
+	}
+}
+
+// A service that refuses text-only output: its sessions start again without it (remembered for the provider), and
+// the sentences come as before.
+func TestTranscriptionTextOnlyRefused(t *testing.T) {
+	trFast(t)
+	_, srv, logs, live := trLive(t, voicetest.Script{Sentences: trScript, TextOnlyRefused: true})
+	tc := startTr(t, srv, liveStart())
+	tc.next(extwire.TFReady)
+	tc.stream(voicetest.PCM(voicetest.Script{Sentences: trScript}, trScriptLength), 20)
+	tc.send(extwire.TranscriptionFrame{Type: extwire.TFEnd})
+	sameTexts(t, tc.done(), trScript)
+	if !strings.Contains(logs.String(), "refused text-only output") {
+		t.Errorf("log:\n%s", logs)
+	}
+	starts := live.Starts()
+	if _, textOnly := starts[len(starts)-1]["output_modalities"]; textOnly {
+		t.Error("a session started with text-only output after the service refused it")
 	}
 }

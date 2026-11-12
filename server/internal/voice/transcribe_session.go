@@ -35,6 +35,9 @@ var (
 	// trCatchUp is how much faster than real time a live session that is behind gets its audio (the final pass runs at
 	// four times real time; faster, the service falls behind).
 	trCatchUp = 4.0
+	// trCaptionCatchUp is the same for a caption session: real time, since captions break faster than that (59%
+	// character error rate measured at four times).
+	trCaptionCatchUp = 1.0
 )
 
 // trBuffer is a job's audio by recording position (samples), for its sessions' writers.
@@ -470,6 +473,9 @@ func (s *trSession) write() {
 			speed = 0
 			if j.buf.edgeNow()-at > trRate {
 				speed = trCatchUp
+				if s.kind == trCaption {
+					speed = trCaptionCatchUp
+				}
 			}
 		}
 		if speed > 0 {

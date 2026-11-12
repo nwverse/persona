@@ -65,6 +65,18 @@ type Script struct {
 	Reject int
 	// TurnGap is the silence that ends a turn, in seconds (0: 0.5).
 	TurnGap float64
+	// ReplyDelay is how long after a turn's end a verbatim session's reply begins (the measured service: about 1.5 s,
+	// up to 3 s); ReplyJitter moves each reply by up to that much, earlier or later in turn. 0: at once.
+	ReplyDelay, ReplyJitter time.Duration
+	// Merge: sentence n's reply is held back and written with the next sentence's, as one reply (a service that
+	// answers two sentences in one turn).
+	Merge map[int]bool
+	// CaptionNoiseFast is the share of a caption's letters written wrong while the caption session gets its audio
+	// faster than one and a half times real time (captions break faster than real time); 0: no worse than CaptionNoise.
+	CaptionNoiseFast float64
+	// Level scales the audio's levels (0: 1): below about 0.15 a sentence is quieter than the adapter's speech
+	// detection hears, while the service still does (a phone on the table in a quiet room).
+	Level float64
 }
 
 // InventedReplies are what rogue sessions write instead of a sentence, each its own (by its number): two rogue sessions
@@ -84,13 +96,21 @@ const (
 	heard     = levelBase - levelStep/2
 )
 
+// scale is the script's Level.
+func (s Script) scale() float64 {
+	if s.Level > 0 {
+		return s.Level
+	}
+	return 1
+}
+
 // PCM is total seconds of the script's audio: 16 kHz PCM16 little-endian mono, silent except where a sentence is
 // said. A sentence is 240 ms of its level and 60 ms of silence, over and over: speech with gaps between its words.
 func PCM(s Script, total float64) []byte {
 	n := int(math.Round(total * rate))
 	out := make([]byte, 2*n)
 	for i, l := range s.Sentences {
-		level := int16(levelBase + levelStep*i)
+		level := int16(math.Round(float64(levelBase+levelStep*i) * s.scale()))
 		from, to := int(math.Round(l.Start*rate)), min(int(math.Round(l.End*rate)), n)
 		for k := from; k < to; k++ {
 			if (k-from)%(rate*3/10) >= rate*24/100 {
@@ -207,7 +227,7 @@ func (l *Live) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	ws.SetReadLimit(1 << 20)
 	l.mu.Lock()
-	c := &conn{l: l, ws: ws, n: len(l.conns) + 1, replied: map[int]bool{}}
+	c := &conn{l: l, ws: ws, n: len(l.conns) + 1, replied: map[int]bool{}, done: make(chan struct{})}
 	l.conns = append(l.conns, c)
 	l.mu.Unlock()
 	c.run()
@@ -243,6 +263,14 @@ type conn struct {
 	mu      sync.Mutex
 	samples int64
 	gone    bool
+	sendMu  sync.Mutex    // the reader and the delayed replies both write
+	done    chan struct{} // closed once the session is over
+	queue   chan pendingReply
+	recent  [][2]int64 // (wall time in ns, samples) of the last second's appends: how fast it gets its audio
+	held    string     // a reply held back to be written with the next (Merge)
+	// fastTurn: some of the turn's audio came faster than one and a half times real time (CaptionNoiseFast)
+	fastTurn bool
+	delayed  int // the replies delayed so far (ReplyJitter takes turns)
 
 	vn      int  // its number among the verbatim sessions, 0 for a caption session
 	caption bool // a caption session whose extension was granted
@@ -260,12 +288,23 @@ type conn struct {
 	replyNo int
 }
 
+// pendingReply is a reply written once its time comes (ReplyDelay).
+type pendingReply struct {
+	due  time.Time
+	text string
+}
+
 func (c *conn) run() {
 	defer func() {
 		c.mu.Lock()
 		c.gone = true
 		c.mu.Unlock()
+		close(c.done)
 	}()
+	if c.l.s.ReplyDelay > 0 {
+		c.queue = make(chan pendingReply, 256)
+		go c.writeReplies()
+	}
 	for {
 		_, b, err := c.ws.Read(context.Background())
 		if err != nil {
@@ -351,6 +390,7 @@ func (c *conn) start(raw json.RawMessage) {
 
 // audio takes an append; false: the script drops the session now.
 func (c *conn) audio(pcm []byte) bool {
+	c.note(len(pcm) / 2)
 	buf := append(c.part, pcm...)
 	n := len(buf) / (2 * block) * (2 * block)
 	gap := int64(c.l.s.TurnGap * rate)
@@ -364,12 +404,13 @@ func (c *conn) audio(pcm []byte) bool {
 			v := int(int16(binary.LittleEndian.Uint16(buf[k:])))
 			peak = max(peak, v, -v)
 		}
-		if peak >= heard {
-			i := int(math.Round(float64(peak-levelBase) / levelStep))
+		if float64(peak) >= heard*c.l.s.scale() {
+			i := int(math.Round((float64(peak)/c.l.s.scale() - levelBase) / levelStep))
 			if !c.turn {
-				c.turn, c.from, c.idx, c.got = true, at, nil, map[int]int64{}
+				c.turn, c.from, c.idx, c.got, c.fastTurn = true, at, nil, map[int]int64{}, false
 				c.item++
 			}
+			c.fastTurn = c.fastTurn || c.l.s.CaptionNoiseFast > 0 && c.fast() // a turn heard fast stays broken
 			c.voice = at + block
 			if _, ok := c.got[i]; !ok {
 				c.idx = append(c.idx, i)
@@ -395,6 +436,28 @@ func (c *conn) audio(pcm []byte) bool {
 	return true
 }
 
+// note keeps the append of n samples now, for fast.
+func (c *conn) note(n int) {
+	now := time.Now().UnixNano()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.recent = append(c.recent, [2]int64{now, int64(n)})
+	for len(c.recent) > 0 && now-c.recent[0][0] > int64(time.Second) {
+		c.recent = c.recent[1:]
+	}
+}
+
+// fast says whether the session got more than one and a half seconds of audio in the last second.
+func (c *conn) fast() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var n int64
+	for _, r := range c.recent {
+		n += r[1]
+	}
+	return n > rate*3/2
+}
+
 func (c *conn) seconds() float64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -414,8 +477,12 @@ func (c *conn) caption1(whole bool) {
 		}
 		b.WriteString(text)
 	}
+	noise := c.l.s.CaptionNoise
+	if c.l.s.CaptionNoiseFast > noise && c.fastTurn {
+		noise = c.l.s.CaptionNoiseFast
+	}
 	c.send(map[string]any{"type": "svc.input_transcript.partial", "item_id": fmt.Sprintf("item-%d-%d", c.n, c.item),
-		"start_ms": c.from * 1000 / rate, "text": noisy(b.String(), c.l.s.CaptionNoise), "is_final": false})
+		"start_ms": c.from * 1000 / rate, "text": noisy(b.String(), noise), "is_final": false})
 }
 
 func (c *conn) text(i int) string {
@@ -446,7 +513,44 @@ func (c *conn) endTurn() {
 		if from, ok := c.l.s.Rogue[c.vn]; ok && i >= from {
 			text = InventedReplies[(c.vn-1)%len(InventedReplies)]
 		}
+		if c.held != "" {
+			text, c.held = c.held+" "+text, ""
+		}
+		if c.l.s.Merge[i] {
+			c.held = text
+			continue
+		}
+		c.later(text)
+	}
+}
+
+// later writes reply text now, or ReplyDelay (moved by ReplyJitter) after now, in order.
+func (c *conn) later(text string) {
+	if c.queue == nil {
 		c.reply(text)
+		return
+	}
+	delay := c.l.s.ReplyDelay + c.l.s.ReplyJitter*time.Duration(c.delayed%3-1)
+	c.delayed++
+	c.queue <- pendingReply{due: time.Now().Add(delay), text: text}
+}
+
+// writeReplies writes the delayed replies as their times come.
+func (c *conn) writeReplies() {
+	for {
+		select {
+		case <-c.done:
+			return
+		case r := <-c.queue:
+			t := time.NewTimer(time.Until(r.due))
+			select {
+			case <-c.done:
+				t.Stop()
+				return
+			case <-t.C:
+			}
+			c.reply(r.text)
+		}
 	}
 }
 
@@ -470,6 +574,8 @@ func (c *conn) send(v any) {
 	b, _ := json.Marshal(v)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
 	_ = c.ws.Write(ctx, websocket.MessageText, b)
 }
 
