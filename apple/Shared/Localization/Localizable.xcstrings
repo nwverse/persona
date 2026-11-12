@@ -277,6 +277,30 @@
         }
       }
     },
+    "Couldn't check with the hub (%@)." : {
+      "comment" : "%@: the network's or the hub's error",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't check with the hub (%@)."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "hub に確認できませんでした（%@）。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没能向 hub 确认（%@）。"
+          }
+        }
+      }
+    },
     "Denied automatically in %@" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1242,6 +1266,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Persona checks again when you open this page." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona checks again when you open this page."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このページを開くたびに Persona がもう一度確認します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每次打开这一页，Persona 都会再确认一次。"
+          }
+        }
+      }
     },
     "Place %lld [Place Map]" : {
       "localizations" : {

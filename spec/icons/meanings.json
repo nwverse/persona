@@ -621,6 +621,10 @@
       "sf": "checkmark.circle.fill",
       "phosphor": "check-circle"
     },
+    "taskPlan": {
+      "sf": "list.clipboard",
+      "phosphor": "list-checks"
+    },
     "terminal": {
       "sf": "terminal",
       "phosphor": "terminal-window"
