@@ -19,6 +19,12 @@ final class MessageMenu {
     /// The lifted message's words selected where they are (#603, `LiftSelection.swift`): a second long press on it, or
     /// Select Text. nil: lifted with its bar.
     var inPlace: InPlaceSelect?
+    /// The lifted copy of a message drawn in parts lays out all of its parts (#5221): asked for when its words are to
+    /// be selected (the text view over them follows every line). Until then it lays out only the parts near the screen.
+    var liftWhole = false
+    /// Selecting asked for while that copy lays out all of its parts: `LiftedMessage` starts it once they are there,
+    /// with what showed kept where it was.
+    @ObservationIgnored var pendingSelect: InPlaceSelect?
     /// The message being shared as a card.
     var sharing: ShareMessage?
     /// Forward (#3807): the chat makes the pressed message a forward and opens its picker (`forwarding`). nil: the bar
@@ -91,19 +97,27 @@ final class MessageMenu {
     }
 
     func close() {
-        if selected != nil || lift != nil || inPlace != nil {
+        pendingSelect = nil
+        if selected != nil || lift != nil || inPlace != nil || liftWhole {
             withAnimation(Theme.Motion.conceal) {
                 selected = nil
                 lift = nil
                 inPlace = nil
+                liftWhole = false
             }
         }
     }
 
-    /// Selects the lifted message's words where they are: the word at `point` (in the window), or all of them.
+    /// Selects the lifted message's words where they are: the word at `point` (in the window), or all of them. A
+    /// message drawn in parts first lays out all of them (`liftWhole`); the selecting starts once they are there.
     func selectInPlace(at point: CGPoint?) {
-        guard lift != nil else { return }
+        guard let lift else { return }
         Haptics.tap()
+        if lift.part != nil, !liftWhole {
+            pendingSelect = InPlaceSelect(at: point)
+            liftWhole = true
+            return
+        }
         withAnimation(Theme.Motion.state) { inPlace = InPlaceSelect(at: point) }
     }
 
@@ -259,9 +273,9 @@ struct LongPressAt: UIGestureRecognizerRepresentable {
 extension View {
     /// The pressable part of a message (the bubble / the text). preview: the same part again, lifted over the dimmed chat
     /// when pressed; card: it is words on the page with nothing around them (an answer), lifted on a card of its own.
-    /// part: this is one of the rows a message is drawn in (a long answer, #4970), and preview draws all of the message,
-    /// this part marked with `liftPressedPart` (`MessageLift.part`).
-    func messageLongPress<P: View>(id: String, card: Bool = false, part: Bool = false, @ViewBuilder preview: @escaping () -> P) -> some View {
+    /// part: this is that row of the rows a message is drawn in (a long answer, #4970), and preview draws all of the
+    /// message, this part marked with `liftPressedPart` and identified by this number (`MessageLift.part`).
+    func messageLongPress<P: View>(id: String, card: Bool = false, part: Int? = nil, @ViewBuilder preview: @escaping () -> P) -> some View {
         modifier(MessageLongPress(id: id, card: card, part: part, preview: preview))
     }
     /// The whole row of a message: hosts the action bar above the press point and lifts the row above its neighbours.
@@ -297,7 +311,7 @@ private struct MessageLongPress<P: View>: ViewModifier {
     @Environment(\.messageBar) private var bar
     let id: String
     let card: Bool
-    let part: Bool
+    let part: Int?
     let preview: () -> P
     /// Where the part is, kept without drawing anything again (it changes on every scrolled frame).
     @State private var place = LiftPlace()
@@ -349,7 +363,7 @@ private struct MessageLongPress<P: View>: ViewModifier {
         LiftLines.shared.select = ""
         #endif
         // All of a message drawn in parts is as tall as it takes, at the part's width.
-        let offer = part ? place.offer.map { ProposedViewSize(width: $0.width, height: nil) } : place.offer
+        let offer = part != nil ? place.offer.map { ProposedViewSize(width: $0.width, height: nil) } : place.offer
         withAnimation(Theme.Motion.state) {
             menu.selected = id
             menu.lift = MessageLift(bar: bar, frame: f.global, press: press, preview: AnyView(shown), card: card,
