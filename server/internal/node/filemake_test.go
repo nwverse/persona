@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -82,6 +83,31 @@ func TestWriteCreatesAFileOnlyWhereNoneIs(t *testing.T) {
 	}
 	_, err = makeCall(t, n, "file.write", map[string]any{"path": "~/Library/x.txt", "create": true, "text": ""})
 	wantCode(t, err, proto.CodeReadOnly)
+}
+
+// A save of the same size stamped with the opened version's mtime (a coarse clock) still gets a new revision.
+func TestPastRevisionOnACoarseClock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "run.sh")
+	makeFile(t, path, "echo 1\n")
+	old, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	makeFile(t, path, "echo 2\n")
+	if err := os.Chtimes(path, time.Time{}, old.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if now, _ := os.Stat(path); fileRevision(now) != fileRevision(old) {
+		t.Fatal("setup: the two versions should share a revision")
+	}
+	pastRevision(path, old)
+	now, _ := os.Stat(path)
+	if fileRevision(now) == fileRevision(old) || !now.ModTime().After(old.ModTime()) {
+		t.Fatalf("revision %s, mtime %v: want past %s", fileRevision(now), now.ModTime(), fileRevision(old))
+	}
+	if b, _ := os.ReadFile(path); string(b) != "echo 2\n" {
+		t.Fatalf("content %q", b)
+	}
 }
 
 func TestWriteReplacesOnlyTheVersionOpened(t *testing.T) {
