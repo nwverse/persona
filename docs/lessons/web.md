@@ -1,5 +1,35 @@
 # Lessons: web UI and interactions
 
+## The live screen's later words go in a lazy component, not in a startup namespace (#5685)
+
+`main.tsx` imports `screen/ScreenView` without waiting for the rest of the catalog, so the build counts every namespace
+ScreenView names as first-screen code, and a namespace in `src/i18n/startup-namespaces.json` ships in every page's first
+screen: the live screen and the App share that catalog. Four Displays-menu strings in `screen-screenview` took the ja first
+screen 49 B over its budget. Words the live screen needs only once it is connected go in a component ScreenView imports
+dynamically (`screen/DisplayMenu.tsx`, namespace `screen-displays`): the build makes that import wait for the rest of the
+catalog, so the first screen does not grow and nothing has to wait for it at run time. Gating ScreenView's own rendering
+on `i18nRest()` does not pass the build: the check reads which namespaces a chunk names, not when it reads them.
+
+## A mouse event sent again comes out on whole pixels (#5729)
+
+Keeping a drag inside a clipping box meant stopping a move outside it and dispatching a new `MouseEvent` at the nearest
+point inside. A centered box rarely has whole-pixel edges, and Chrome hands a constructed event's `clientX` / `clientY`
+back as whole pixels: kept at 81.5, the event read 81, outside again, and was sent again without end. The release never
+reached noVNC, so the Mac's button stayed down. Keep such a point on a whole pixel inside the edges (`ceil` the near edge,
+`floor` the far one), and guard the handler against the event it sends itself. Unit tests with whole-pixel boxes passed;
+`web/e2e/screen-displays.mjs` sizes its window so the edge is fractional.
+
+## Check the keyboard-sized viewport before declaring that a composer grows (#5645)
+
+A 390 × 844 phone showed seven draft lines, but the same phone with 500px visible above the keyboard stopped at
+four: its growth cap used 22% of the visible height, not a six-line limit. Desktop instead stopped at 240px, cutting
+through a twelfth line. Measure the real textarea's line height and padding at both widths and with the keyboard's
+remaining height; cap at six whole lines while retaining the dock's short-viewport safety share. A manual scroll
+was stable at both widths before the fix (idle, hub update and viewport resize), so leave the native scrolling alone
+and pin that behavior with browser tests rather than adding a caret-follow timer for a bug that was not reproduced.
+The follow-up #5682 keeps the six-line limit in `COMPOSER_LINES` and leaves exceptionally short-viewport safety to
+CSS, removing the redundant viewport React state/subscription and keeping the original startup budget unchanged.
+
 ## A lazy page importing a first-screen module can split it into a chunk of its own (#3962)
 
 Step 4c's settings pages imported `referenceState` from `lib/extensions.ts`, which the first screen already loaded inside
