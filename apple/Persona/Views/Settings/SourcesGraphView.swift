@@ -138,6 +138,7 @@ extension APIClient {
     init(deps: Deps) { self.deps = deps }
 
     func load() async {
+        if graph == nil { failed = nil }  // Retry shows the spinner again
         do {
             graph = try await deps.load()
             failed = nil
@@ -225,31 +226,38 @@ private struct SourcesGraphContent: View {
     @Environment(AppModel.self) private var app
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: Theme.Space.m) {
-                Text("Where each source comes from, how it's read and where it goes. Tap one to see its whole path.")
-                    .font(Theme.Font.secondary)
-                    .foregroundStyle(.secondary)
-                if let failed = model.failed {
-                    Text("Couldn't read the relationships: \(failed)").font(Theme.Font.secondary).foregroundStyle(.secondary)
-                } else if model.graph == nil {
-                    ProgressView().frame(maxWidth: .infinity)
-                } else if model.count(.all) == 0 {
-                    Text("Nothing brings things into the Inbox or the knowledge base yet.").font(Theme.Font.secondary).foregroundStyle(.secondary)
-                } else {
-                    filters
-                    ForEach(model.groups) { group in
-                        SourcesGraphGroup(model: model, group: group)
+        LoadableContent(state: state, retry: { Task { await model.load() } }) { _ in
+            if model.count(.all) == 0 {
+                EmptyStateView(symbol: Theme.Icon.inbox, title: String(localized: "No Sources Yet [Source Relationships]"),
+                               message: String(localized: "Nothing brings things into the Inbox or the knowledge base yet."))
+                    .frame(maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: Theme.Space.m) {
+                        Text("Where each source comes from, how it's read and where it goes. Tap one to see its whole path.")
+                            .font(Theme.Font.secondary)
+                            .foregroundStyle(.secondary)
+                        filters
+                        ForEach(model.groups) { group in
+                            SourcesGraphGroup(model: model, group: group)
+                        }
                     }
+                    .padding(.horizontal, Theme.Space.page)
+                    .padding(.vertical, Theme.Space.m)
                 }
             }
-            .padding(.horizontal, Theme.Space.page)
-            .padding(.vertical, Theme.Space.m)
         }
         .sheet(item: Binding(get: { model.pickedSource }, set: { model.picked = $0?.id })) { s in
             SourcesGraphDetails(model: model, source: s, assistant: assistant, manager: manager)
                 .presentationDetents([.medium, .large])
         }
+    }
+
+    /// The design system's one way to show loading and a failure (with Retry).
+    private var state: Loadable<SourcesGraph> {
+        if let g = model.graph { return .loaded(g) }
+        if let f = model.failed { return .failed(String(localized: "Couldn't read the relationships: \(f)")) }
+        return .loading
     }
 
     private var filters: some View {

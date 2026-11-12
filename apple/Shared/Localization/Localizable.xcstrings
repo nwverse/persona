@@ -945,6 +945,29 @@
         }
       }
     },
+    "No Sources Yet [Source Relationships]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Sources Yet"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "まだソースがありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还没有来源"
+          }
+        }
+      }
+    },
     "Not yet: %@ [Meeting Topic]": {
       "extractionState": "manual",
       "localizations": {
