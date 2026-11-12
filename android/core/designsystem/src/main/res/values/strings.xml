@@ -50,8 +50,8 @@
     <string name="designsystem_processing">Working…</string>
     <string name="designsystem_with_state">%1$s, %2$s</string>
     <!-- Requests that need the user (Agents page) -->
-    <string name="designsystem_decision_command">Needs your permission</string>
-    <string name="designsystem_decision_tool">Needs your permission</string>
+    <string name="designsystem_decision_command">Waiting for your approval</string>
+    <string name="designsystem_decision_tool">Waiting for your approval</string>
     <string name="designsystem_decision_plan">Plan awaiting approval</string>
     <string name="designsystem_decision_question">Has a question</string>
     <string name="designsystem_decision_form">Needs a few answers</string>
@@ -142,15 +142,28 @@
     </plurals>
     <!-- A herdr tab of several agents (#2320) -->
     <string name="designsystem_tab_launcher">Lead</string>
+    <!-- An Agents row's third line on Glass (#4338 A9): the to-do chip and the muted bell, for TalkBack -->
+    <string name="designsystem_row_todo">To-do: %1$s</string>
+    <string name="designsystem_row_muted">Notifications muted</string>
     <plurals name="designsystem_tab_agents">
         <item quantity="one">%1$d agent</item>
         <item quantity="other">%1$d agents</item>
     </plurals>
     <string name="designsystem_group_expand">Expand group</string>
     <string name="designsystem_group_collapse">Collapse group</string>
+    <string name="designsystem_show_all">Show All %1$d</string>
+    <string name="designsystem_show_fewer">Collapse</string>
+    <string name="designsystem_count_waiting_background">%1$d waiting in the background</string>
     <string name="designsystem_machine_monitor">Machine monitor</string>
     <string name="designsystem_details">Details</string>
     <string name="designsystem_space">space</string>
+    <string name="designsystem_repository">Repository</string>
+    <string name="designsystem_main_worktree">Main worktree</string>
+    <string name="designsystem_worktree">Worktree</string>
+    <string name="designsystem_worktree_primary">Primary</string>
+    <string name="designsystem_worktree_detached">Detached HEAD</string>
+    <string name="designsystem_worktree_offline">This computer is offline</string>
+    <string name="designsystem_worktree_idle">Idle</string>
     <string name="designsystem_expand_named">Expand %1$s</string>
     <string name="designsystem_collapse_named">Collapse %1$s</string>
     <plurals name="designsystem_idle_more">
@@ -216,6 +229,23 @@
     <string name="designsystem_editor_picture">Image to edit</string>
     <string name="designsystem_editor_undo">Undo</string>
     <string name="designsystem_editor_clear">Clear</string>
+    <!-- The image editor's crop, turn, widths and redo (#4992, iOS ImageEditor) -->
+    <string name="designsystem_markup_crop">Crop</string>
+    <string name="designsystem_editor_rotate">Rotate</string>
+    <string name="designsystem_editor_reset">Reset</string>
+    <string name="designsystem_editor_redo">Redo</string>
+    <string name="designsystem_editor_shape">Aspect Ratio</string>
+    <string name="designsystem_editor_shape_free">Freeform</string>
+    <string name="designsystem_editor_shape_original">Original</string>
+    <string name="designsystem_editor_shape_square">Square</string>
+    <string name="designsystem_editor_width">Line Width</string>
+    <string name="designsystem_editor_width_thin">Thin</string>
+    <string name="designsystem_editor_width_medium">Medium</string>
+    <string name="designsystem_editor_width_thick">Thick</string>
+    <string name="designsystem_editor_shape_4x3" translatable="false">4:3</string>
+    <string name="designsystem_editor_shape_3x4" translatable="false">3:4</string>
+    <string name="designsystem_editor_shape_16x9" translatable="false">16:9</string>
+    <string name="designsystem_editor_shape_9x16" translatable="false">9:16</string>
     <string name="designsystem_viewer_load_failed">Couldn\'t load the image</string>
     <string name="designsystem_viewer_action_failed">That didn\'t finish. Try again.</string>
     <!-- Formulas and diagrams in Markdown -->
@@ -360,4 +390,5 @@
     <string name="designsystem_stepper_minus">Decrease</string>
     <string name="designsystem_stepper_plus">Increase</string>
     <string name="designsystem_copy_too_large">Text too large to copy; use Share instead</string>
+    <string name="designsystem_copied">Copied</string>
 </resources>

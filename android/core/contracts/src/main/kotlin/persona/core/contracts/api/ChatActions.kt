@@ -9,7 +9,9 @@ sealed interface ChatAction {
     data class Rename(val title: String) : ChatAction
     data class Mute(val muted: Boolean) : ChatAction
     /** [ultracode]: Claude Code's ultracode switch, sent on its own (docs/protocol/protocol.md "Claude Code ultracode"). */
-    data class Modes(val permissionMode: String? = null, val effort: String? = null, val ultracode: Boolean? = null) : ChatAction
+    data class Modes(val permissionMode: String? = null, val effort: String? = null, val ultracode: Boolean? = null,
+        /** Take the after-resume ultracode notice away (`ultracode_dismiss_lost`, #582). */
+        val dismissUltracodeLost: Boolean? = null) : ChatAction
     data object Close : ChatAction
     /** Join a Codex app-server thread live (POST …/attach); only for a session whose capabilities offer it. */
     data object Attach : ChatAction
@@ -36,6 +38,15 @@ interface ChatActions {
      */
     suspend fun editQueue(session: Session, keep: List<Int>): List<String> =
         throw UnsupportedOperationException("Queued message management unavailable")
+
+    /**
+     * "Send now" (`docs/protocol/protocol.md`, POST …/queue/send-now): the agent takes everything queued at once instead of at its next step,
+     * through Claude Code's own send-now, which the node presses (a command it runs goes on in the background, a reply it
+     * writes starts again with the messages). Only for `Session.steersQueue`. Refusals are 409 with a `code`
+     * (nothing_queued, send_now_unsupported, send_now_unrecognized, send_now_in_doubt, node_outdated) and the hub's words
+     * for it in the reader's language. Not idempotent: a failure is reported, never retried.
+     */
+    suspend fun sendQueuedNow(session: Session): Unit = throw UnsupportedOperationException("Send now unavailable")
 
     /**
      * "Branch to new chat" (#2137, POST …/fork): the node copies the conversation up to the end of [atItemId]'s turn (a reply's

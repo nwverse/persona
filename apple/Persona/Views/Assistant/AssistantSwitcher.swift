@@ -5,8 +5,8 @@ import SwiftUI
 // list: one row each with its state, the current one checked, the default marked, one still installing with its code's
 // time left, then New Assistant and Manage Assistants… (Settings › Assistants). Picking one makes it the current
 // assistant on this device (`AppModel.selectAssistantManager`, kept for each hub across launches); picking one still
-// installing shows how to install it. It shows from two installed assistants on (`AppModel.showsAssistantIdentity`):
-// with one, or on a hub without a roster, the sidebar has no assistant identity (#3975).
+// installing shows how to install it. It shows from two installed assistants on (`ManagerRoster.isMulti`):
+// with one, or on a hub without a roster, the sidebar keeps the persona's name and avatar.
 
 /// What the switcher says and how it marks an assistant, kept apart from the views to test.
 enum AssistantSwitcherText {
@@ -99,6 +99,7 @@ struct AssistantSwitcherHeader: View {
     var manager: HubManager
     var nameFont: Font
     var compact = false
+    var showsSwitchLabel = false
     /// Opens Settings on the page `AppModel.settingsPath` names.
     var openSettings: () -> Void
 
@@ -132,6 +133,10 @@ struct AssistantSwitcherHeader: View {
                         Text(AssistantSwitcherText.line(manager, now: .now)).font(Theme.Font.label).foregroundStyle(.secondary)
                             .lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
                     }
+                }
+                if showsSwitchLabel {
+                    Spacer(minLength: Theme.Space.s)
+                    Text("Switch").font(Theme.Font.labelStrong).lineLimit(1)
                 }
             }
             // A finger's target at least (the Mac's one line keeps its title row's height).

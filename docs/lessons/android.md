@@ -1,5 +1,20 @@
 # Lessons: Android
 
+## Keep a worktree fixed while Gradle verifies it (#5233)
+
+Do not merge main or edit source while a multi-task Gradle invocation is running in that worktree. Earlier tasks can
+compile the old contracts and later tasks read newly merged tests, producing misleading missing-field and constructor
+errors. Finish or stop that invocation first, update the branch, then verify the fixed revision. A failure is not an
+inherited main defect until a clean, independent main worktree reproduces it.
+
+## Reusing an onboarding checklist for ordinary settings (#5233)
+
+Reusing the full phone-check list is not enough: an ordinary Notifications and background page must also suppress
+assistant/computer setup, skipped-computer summaries and first-run completion/dismissal actions. Otherwise leaving
+settings can clear first-run pending state or dismiss assistant setup. Keep these behaviors behind an explicit
+`backgroundOnly` mode with an unchanged default for onboarding. Preserve old route names separately from new home
+labels, and test owner-switch closure and parent Back navigation after adding a group page.
+
 ## A design-system signature change compiles every caller (#4145)
 
 #4124 added a `Boolean` after `JSectionHeader`'s composable slot. A caller passing the slot as a trailing lambda then bound it to the `Boolean`, and `main` stopped compiling for every Android build. No hosted CI runs on PRs, so the module's own build passing was not enough. Before merging a change to a `core/designsystem` component's parameters, compile `:app:compileDebugKotlin` (every feature's main code) and the test code of the modules that call it. Keep a composable slot last; `scripts/app/android_slot_order.py` checks that (#4146).
@@ -132,6 +147,10 @@ stream fixtures. Fixture screenshots do not establish live transport routing; ve
 ## Task bindings are independent of the Agents window (#6524)
 
 A bounded, filtered session list cannot establish that a task has no agent. Keep navigation from the durable todo binding even when its session is outside the window; request exact metadata only for watched task agents and never add those rows to the paged list. Refresh that metadata on list invalidations and reconnect. Serialize todo reads so an older unbound or completed snapshot cannot overwrite a later linked or reopened snapshot in memory or on disk. A metadata failure falls back to the binding and never starts another agent.
+
+## Every list of sessions takes the subtask rule, not only the Agents list (#4769)
+
+#4686 made an agent another Paseo agent created a subtask, folded under its creator and left out of the Agents list's counts, but the floating capsule and the main chat's dock each filtered the session list by state on their own: an orchestrator with five working reviewers was six dock rows, and every finished Codex subagent an unread capsule entry with its own notice. A new place that lists or counts sessions by state takes the same rule from `CodexTaskForest.kt`: `isNestedSubtask` for a count, `foldedSubtasks` for a flat list that draws rows of its own (left out only while the list shows the session above it). Do not write a second parent lookup; the forest's (parent session, then the Codex thread, then the root, on the same computer) is the one the Agents list uses. Test with a runtime subtask, a Codex subagent and a subtask that needs the user, beside a list without subtasks that must stay as it was.
 
 ## Completion edges must retain evidence of the current run (#2124)
 
@@ -285,6 +304,7 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 - Decode images with `ImageDecoder` (corrects EXIF orientation), not `BitmapFactory` (ignores it, displaying camera originals sideways). Bitmaps to draw into / reencode need `ALLOCATOR_SOFTWARE`; hardware bitmaps cannot be drawn into software Canvas. Flatten transparent areas onto white before saving JPEG: JPEG has no alpha, and the encoder otherwise makes them black (`jpegBytes`).
 - `Offset` is a value class with bitwise equality. `coerceIn(-0f, 0f)` can produce `-0f`, unequal to `Offset.Zero`. Return `0f` directly when no range exists (`ImageMath.clampPan`); use tolerance for computed floating-point offsets in tests.
 - Robolectric's default window is 320×470 dp (2026-11-09, #1581). `performClick` taps the node's centre; a node laid out below the window (a tall card set straight into `setContent`, no scroll container) gets nothing, and the test fails as if the button ignored the tap. Give the test a window that fits (`@Config(qualifiers = "zh-w400dp-h1200dp")`) or bring the node into view with `performScrollTo()` first.
+- A Compose dialog that holds a text field never gets idle under Robolectric unless the window is Robolectric's default 320×470 dp (2026-11-12, #4339). A bare `Dialog { BasicTextField(…) }` hung every finder for 60 seconds (`AppNotIdleException`, once an `OutOfMemoryError`) with `w400dp-h1200dp`, `w400dp-h900dp`, `w360dp-h800dp` and `w400dp-h480dp` alike, focusable or not, and passed at the default size; a dialog without the field and the field without the dialog were fine. Test and shoot such a dialog (the history's Rename…, `ConversationRenameTest`) in a class whose qualifiers leave the size alone (`zh-xhdpi`), and reach rows below the window with `performScrollToNode`. On a device the same dialog works (the Agents rename dialog is the same pair).
 
 ## System capabilities
 
@@ -575,3 +595,7 @@ Measure pending and parsed frames with the real chat row and reverse list. A fix
 ## Bound divider settling frames (#4756)
 
 A non-bouncy spring can still overshoot with a fling velocity. Clamp every divider animation frame to the current drag range before writing PaneExpansionState; negative widths can collide with its unset sentinel. Exercise the production splitter in a measured two-pane scaffold at both edges, including collapse and expand. State-only tests miss the visible width reset.
+
+## Pairing fixtures must follow the default sign-in page (#4623)
+
+Skipping onboarding does not skip password sign-in. Tests of manual or scan pairing must select the localized pairing alternative from that default page before using the existing controls. Keep initial-link fixtures on their direct confirmation path, and retain back-stack, field-retention, invalid-input and screenshot assertions rather than changing the product default to fit older fixtures.

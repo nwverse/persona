@@ -37,9 +37,6 @@ const (
 	// leader's task id), as sourceReview marks a reviewer.
 	sourceLeader = "leader"
 	sourceWorker = "worker"
-	// permBypass is the only permission a task that changes files may be planned with: it starts at once, with nobody
-	// there to answer a permission prompt.
-	permBypass = "bypassPermissions"
 	// leaderWorkersMost bounds the workers of one leader that are open at a time.
 	leaderWorkersMost = 8
 )
@@ -640,9 +637,9 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 		}
 		if verdict == reviewCancelled {
 			s.stopTaskAgents(ctx, t)
-			return fmt.Sprintf("Worker task %s is cancelled and closed; its agent is being closed and archived.", t.ID), nil
+			return fmt.Sprintf("Worker task %s is cancelled and closed; its agent is being stopped (its terminal stays) and archived.", t.ID), nil
 		}
-		return fmt.Sprintf("Worker task %s is accepted and closed; its agent is closed once it stays still.", t.ID), nil
+		return fmt.Sprintf("Worker task %s is accepted and closed; its agent is stopped once it stays still (its terminal stays).", t.ID), nil
 	case reviewNeedsUser:
 		why := cmp.Or(clip(oneLine(a.Reason), 200), clip(oneLine(note), 200))
 		if over && a.Reason == "" {
@@ -752,7 +749,12 @@ func (s *Service) leaderOpen(t Todo) bool { return t.ID != "" && t.DoneAt == nil
 // worker (a decision the leader sent up). The worker's supervisor stays the leader's agent: this never takes it over.
 func (s *Service) mayReviewForLeader(ctx context.Context, self string, t Todo) bool {
 	up, _ := s.supervisorAboveTask(ctx, t)
-	return up != "" && up == self
+	if up == "" {
+		return false
+	}
+	// The background supervisor stands in for the main conversation above a task leader no leader conversation
+	// supervises: the leader's decisions come to it (digestTo).
+	return up == self || s.isBackground(ctx, self) && !s.isLeader(ctx, up)
 }
 
 // leaderTaskOf is the open task leader agent lead leads.

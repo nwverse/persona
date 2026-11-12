@@ -22,7 +22,9 @@ each mail account's latest page, reading at most 4 accounts concurrently and del
 `settle`, event grouping's `group.tool` / `group.fallback` / `group.append`, read hub triage rules, AI twin configuration, and plugin-provided connectors
 (`inbox.config`), and current translation model (`inbox.translate_fingerprint`). On item changes, the manager emits `inbox.changed`; outside the bus read loop, hub
 sends plugins the `inbox.changed` event and Apps `{"type":"inbox"}` (one slow plugin reader does not block others). Hub asks the manager for items needed by plugin detail slot `inbox_item`,
-items when deleting a source's data, and GitHub Settings' muted repositories (`inbox.item`, `inbox.forget`, `inbox.repo_mutes`).
+items when deleting a source's data, and GitHub Settings' muted repositories (`inbox.item`, `inbox.forget`, `inbox.repo_mutes`). The Inbox Sources
+pages (#5278, `docs/extensions/subscriptions.md` "Pages") list and remove a source's mutes (`inbox.mutes`, `inbox.unmute`) and have the triage model try a
+subscription's dry run on request (`inbox.triage_preview`: nothing kept).
 Hub still enforces its own boundary: reply-only devices (Watch) may send only text, not change document state or send `/agent …` (which starts an Agent when sent as the user).
 Hub rejects these before forwarding (403; the manager checks too). Connector settings, including credentials, remain hub APIs; only muted repositories belong to the manager.
 
@@ -76,8 +78,11 @@ or the manager restarts and retries). A previous interrupted send (hub stopped o
   Exception: Reopen (single `done:false`, bulk `reopen` / Undo) does not check whether a newer item exists for the thread; it reopens the old one anyway, yielding two unhandled items.
   Later messages always merge into the newest (`UpdatedAt`, ties by ID, `threadIndex.openFor`, #3796); the old item stays unchanged.
 - Included Lark messages: gateway `unread` scope (Lark Unread, excluding muted chats) + `mentions` scope (mentions of me in muted groups still count).
+  When `lark.cli` is enabled and is the primary source (or the gateway is absent / unavailable), the built-in `larkcli` connector polls `im +messages-search --start … --as user` every two minutes (minimum one minute, with a bounded page count). It keeps messages that mention me or @all, messages in direct chats, and replies in topics where I posted, replied or was mentioned; my own messages never create an item. Overlapping pages are deduplicated by `message_id`, consecutive messages in one chat/topic are one row, and context comes from `+chat-messages-list` / `+threads-messages-list`. A later message from me marks that row replied. The cursor and topic set are kept in Postgres settings, not files under `~/.persona`.
+  As a maintainer opt-in addition, `larkcli` has an `inbox_all_chats` connector option containing chat ids whose every new incoming message is collected. The default is an empty list; this option is intentionally separate from the L4 collection rules.
   Private chat → `dm`, bot / AI private chat → `bot`, group mentions of me / everyone → `mention`, unmuted group → `group`; unread older than 7 days is excluded.
   Only other people's messages count; your own messages never make a chat Needs you.
+- Messages sent by the app bound to `lark-cli` (the `appId` reported by `lark-cli auth status --json`) are marked seen and omitted to prevent Persona's own bot replies from looping back into the Inbox. If that app id is unavailable, the connector keeps the existing behavior; messages from other apps remain eligible.
 - Mail: unread messages in each account's latest 40 Inbox messages, within 7 days. The list API reads only the first 2 KB of body (HTML mail often contains nothing but `<style>`),
   so new mails fetch the full body again (IMAP `BODY.PEEK`, without marking read) for preview and AI context (`BodyOf` tracks which mail was read).
 
@@ -107,6 +112,33 @@ Handled by the Lark plugin (formerly hub `inbox_docs.go`). Mentions / comments t
   Open base (in-App document reader), one card per row (fields + a menu per status column), and reply destination.
 - Tests: row detection, status columns, fingerprints, reply targets, AI-change validation, plus a live change-and-restore test on your own demo document. Since #1571 these live with Lark Inbox in the Lark plugin (formerly hub `inbox_docs_test.go`, TestDocsLive).
   This repository retains `inbox_agent_test.go` / `inbox_golden_test.go` for block types (`assistant/inbox_blocks.go`) and UI `InboxDocTests` (`MOCK_DOCS=1`). Never test on someone else's sheet.
+
+### Lark via lark-cli: watched document comments (#2691)
+
+The `larkcli` connector has a separate, read-only document-comment poller. It is enabled only for links the user puts in
+Settings › Connectors › the lark-cli connector's page › Watched documents; an empty list watches nothing. Options accept `documents`
+(`docx`, sheet, Base, or wiki-node links) and `wiki_spaces`. A selected wiki space is expanded through bounded
+`wiki spaces list` / `wiki nodes list` reads, so a space never turns into an unbounded crawl.
+
+On each Inbox round the connector runs `drive +list-comments --solved-status false` as the lark-cli user, then reads each
+thread with `drive +list-replies`. It keeps an opaque cursor per watched document and deduplicates comment and reply ids.
+Rate limits pause the document poller. A permission or not-found result marks that document unreadable: it is probed again every 10 minutes, and at once after a new lark-cli login (another account or other granted scopes); a successful read clears the mark. A missing comment scope belongs to the login, not to a document: no document is marked, the round stops and the connector's status lists the scope until a read succeeds again.
+The title, quoted passage (or “Whole document”), latest matching comment text, and a link with the comment id are kept in
+one Inbox item per thread (`kind: "doc"`). A comment that mentions the user by open_id is included, as is a later reply
+when the user has written in that thread; resolved threads are skipped. The connector never replies or changes a comment.
+With `owned_all_comments` (off by default; "All comments on documents I own" in the Lark dialog's "Collect my Lark messages" section), the user's own documents need
+no watch list: every 30 minutes the connector lists the documents the user owns (`drive +search --mine --sort edit_time`, only types whose comments can be listed, so no folders),
+keeps those edited or opened in the last 30 days, at most 50, and reads each one's comments every 10 minutes (the first
+reads spread over that interval). On those, and on watched documents the user owns (owner read once with `drive metas
+batch_query`), every new comment and reply from someone else comes in, mention or not. A comment that mentions the user
+is Needs you; the rest are left to the Inbox's triage. A document untouched for longer than the window is not read, so a
+new comment on it is missed until someone edits or opens it.
+
+The existing document block is used for the detail page (`doc.url`, `doc.link`, `doc.type`, `doc.notice_id`), while the
+quoted passage and comment text are in the item's context. An unreadable watched document appears as a warning in the
+connector's Settings status and can be removed from the watch list there. The comment poller and state live in
+`server/internal/connector/larkcli/doc_comments.go`; the parallel L4 chat poller should be joined in that connector's
+manifest and lifecycle, with its own files and state kept separate to avoid making either poller own the other's cursor.
 
 ## AI triage
 
@@ -233,10 +265,11 @@ Triage, drafting, AI twin, done state, and retention use hub's generic logic.
   Any notification in the list keeps its thread unread, also one the inbox leaves out (a reason it does not take, a muted repository).
   The time compared is the notification's `updated_at`, kept apart from the thing's time: a CI item the follow-up moved to a later run (GitHub sent no notification of it) is not inferred read while the connector runs, and that run makes a read item unread again (#2149).
   These times are kept in memory only: after a restart the connector rebuilds the item at its notification and may infer that read, which the hub then ignores for an item already at the later run (above).
-  With under one tenth of request quota remaining, poll notifications only and show "Request quota nearly exhausted."
+  With under one tenth of core request quota remaining, poll notifications only and show a localized quota warning with the minutes until reset.
   A rate limit (429, or 403 for a secondary limit or a used-up hour) on any GitHub request pauses the background reads, the poll included: until `Retry-After`; without it, until `X-RateLimit-Reset` only when the hour is used up (`X-RateLimit-Remaining: 0`),
   otherwise for a minute, doubling up to an hour while the limit keeps coming back: within one step of the end of the last such pause, whatever was answered in between (a pause GitHub named is not a step).
   A pause also stops the notification pages still to read. The poll waits it out instead of failing, so the watch is not restarted early.
+  During a pause, the localized status says no content is being read and shows the minutes until the pause ends. This takes precedence over the low-quota notification-only warning, even if the quota resets later.
 - Included `reason`: PRs requesting my review (`review_requested`), mentions (`mention`), team mentions (`team_mention`), new comments / reviews by others on my PRs / issues (`author`),
   CI results (`ci_activity`), assignments (`assign`). Others (`subscribed`, `comment`, `state_change`…) are excluded. One item per PR / issue (`example-org/example-repo#12`).
 - **Noise reduction (2026-11-03, #577)**: the user found it too noisy. A read-only hub count showed all 52 open GitHub items as Needs you, including 42 CI failures on feature / automatic branches (many pushed by Agents using the user's account),
@@ -277,6 +310,7 @@ All sources work alike. Long-press an Inbox row for Done / Reopen plus available
 Muting handles this item and other covered open items in the same source, reason "Muted: <name>," with toast "Muted ‘…’; future items will not enter the Inbox."
 The handling chain says "Muted, done" for existing items, newly admitted items and grouped events; `done_by=read` stays unchanged for compatibility.
 Muted under More at the Inbox's top right lists all mutes (name, source · repository / chat / sender), with swipe-left or long-press Unmute. Unmuting admits only future items; already handled ones stay handled.
+Settings › Inbox Sources (#5278) shows the same mutes per source on each built-in source's page, with Unmute (`inbox.mutes`, `inbox.unmute`).
 
 - **APIs**: `GET /api/v1/inbox/mutes` (creation order, oldest first); `POST /api/v1/inbox/mutes {item_id, tag}` mutes the item's value for `tag` (read from the item,
   not supplied by the client; nonexistent item 404, missing tag 400), returning `{mute, settled}` with additionally handled items. `DELETE /api/v1/inbox/mutes/{id}` unmutes.
@@ -339,7 +373,8 @@ with a chronological **handling chain**. Additive only: IDs, sources, existing f
 | `recap` | Manager-written summary: background, progress, blockers; plain text, up to 600 characters |
 | `handling` | Bound handling chat: `{owner: "manager", state, machine_id?, session_id?, since, error?}`; `state` is `looking` (AI reviewing) / `agent` (its sub-chat working) / `waiting` (confirmed action sent, awaiting response) / `done` (turn finished with suggestion or conclusion) / `failed` (failure / timeout, returns to Needs you without suggestion) |
 | `suggestion` | At most one current suggestion (see "Handling chats and suggestions") |
-| `chain` | Chronological handling chain, oldest first, latest 50 entries at most |
+| `chain` | Chronological handling chain, oldest first, latest 50 entries at most. A list asked with `chain=last` (`docs/protocol/protocol.md`, "Inbox delta") gives a done item its newest entry alone |
+| `chain_count` | Only in a list asked with `chain=last`: how many entries a done item's chain has, when it has more than the one listed |
 | `related` | Cross-atomic relationships: `[{id, title, source}]`; tap to jump to that item, each retaining its own state |
 
 **Section calculation** (`status()`): collapsed stays collapsed (noise never upgrades); reply / Agent suggestion → Needs you; handling chat reviewing / sub-chat working → Working (urgent stays Needs you);
@@ -554,8 +589,11 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   each of the 2 to 6 days before by its date (the last week, not the calendar week), 7+ days ago (7 to 29 days) and 1+ month ago (30 days or more, or no time).
   A moment in the future counts as today. Open items use their last activity (`updated_at`), Done items `done_at`; newest group first.
 - **Source groups** follow the filter chips' order: Lark, each mail account, each connector (by its account), then sources the chips don't name in the order they first show up.
+- **Filter chips (web)**: sources (Lark, which also holds lark-cli's items; each mail account; each other connector), then kinds: @me (mentions, plus document and Moments mentions), Direct, Group, Bot (a bot's own chat, no longer under Group), Doc comments, Mail, Agent.
 - **Folding**: every group folds to its title and count; folds are kept on this device per manager, section and group (web `inbox.folds`, Apple `@StoredValue("inbox.folds")`).
   Open at first: every group of Needs you, FYI and Collapsed; in Done only Just now and Today. Group titles stick to the top while their rows scroll by.
+  On iOS, Done's title is a list row while Done lists its groups, not the header of an empty section: as that header (with its Jump To menu)
+  it came out washed like a stuck title's, and on an iPhone the scroll edge blurred every row above it once a title stuck (#4218).
   Done's title has Jump To (its groups with counts; picking one unfolds it, loads it if it isn't, and scrolls to its first row, since an iOS `List` can't scroll to a header)
   and Fold all / Unfold all.
 - **Done's history**: past the list's 3 days, Done reads each manager's `GET /api/v1/inbox/done` ("History" under "Lifecycle"; 100 a page; on iOS the default manager's).

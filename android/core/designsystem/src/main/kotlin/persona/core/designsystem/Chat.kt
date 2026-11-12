@@ -54,6 +54,8 @@ fun ChatTopBar(
     status: Status? = null,
     statusText: String? = null,
     source: String? = null,
+    /** Said instead of [source] when that doesn't fit on the line (iOS: the computer goes first, the place stays). */
+    sourceShort: String? = null,
     busy: Boolean = false,
     onTitleClick: (() -> Unit)? = null,
     /** Which agent runs here, and in which client (#6390): its mark before the status line's dot. */
@@ -72,19 +74,28 @@ fun ChatTopBar(
             }
             if (statusText != null || source != null) Row(verticalAlignment = Alignment.CenterVertically) {
                 agentMark?.let { JAgentMark(it, size = AgentMarkInBar); Spacer(Modifier.width(Tokens.Space.xs + Tokens.Space.xxs)) }
-                if (status != null && statusText != null) {
-                    when {
-                        style == AppStyle.Brief && status == Status.NeedsYou -> MarkerText(statusText, type.micro.copy(fontWeight = FontWeight.Bold))
-                        else -> {
-                            if (style == AppStyle.Brief && status == Status.Working) JSpinner(Modifier.size(11.dp), stroke = 1.6.dp) else JStatusDot(status, size = 7.dp)
-                            Spacer(Modifier.width(5.dp))
-                            Text(statusText, style = type.caption, color = if (style == AppStyle.Brief) palette.ink else tone!!.text, maxLines = 1)
-                        }
+                // The gap after the dot, and after the state's words.
+                val afterDot = 5.dp
+                if (status != null && statusText != null && style == AppStyle.Brief && status == Status.NeedsYou) {
+                    MarkerText(statusText, type.micro.copy(fontWeight = FontWeight.Bold))
+                } else if (status != null) {
+                    // A quiet state says nothing in words (iOS): its dot alone, which TalkBack reads by its name.
+                    val spoken = stringResource(status.labelRes)
+                    if (statusText != null && style == AppStyle.Brief && status == Status.Working) JSpinner(Modifier.size(11.dp), stroke = 1.6.dp)
+                    else Box(if (statusText == null) Modifier.semantics { contentDescription = spoken } else Modifier) { JStatusDot(status, size = 7.dp) }
+                    statusText?.let {
+                        Spacer(Modifier.width(afterDot))
+                        Text(it, style = type.caption, color = if (style == AppStyle.Brief) palette.ink else tone!!.text, maxLines = 1)
                     }
                 } else statusText?.let { Text(it, style = type.caption, color = palette.ink2, maxLines = 1) }
                 source?.let {
-                    Spacer(Modifier.width(8.dp))
-                    Text(it, style = type.caption.copy(fontWeight = FontWeight.Normal), color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Spacer(Modifier.width(if (statusText == null && status != null) afterDot else Tokens.Space.s))
+                    val sourceStyle = type.caption.copy(fontWeight = FontWeight.Normal)
+                    val measurer = androidx.compose.ui.text.rememberTextMeasurer()
+                    BoxWithConstraints {
+                        val fits = sourceShort == null || measurer.measure(it, sourceStyle, maxLines = 1, softWrap = false).size.width <= constraints.maxWidth
+                        Text(if (fits) it else sourceShort!!, style = sourceStyle, color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
                 }
             }
         }
@@ -149,7 +160,8 @@ fun UserBubble(text: String, modifier: Modifier = Modifier, time: String? = null
  * A folded run of work (tools and thinking between replies). [summary] is one plain sentence such as
  * "Did 6 steps in 7 minutes"; the steps go in [content] when [expanded]. [peek] is drawn under the header while folded:
  * a running group's latest steps (web #1990's "Working…"). [trailing] sits after the summary (a ticking clock: its own
- * leaf, so the clock redraws only itself).
+ * leaf, so the clock redraws only itself). [onTerminal], on Glass: the terminal mark at the line's far end (iOS
+ * `WorkLine`'s), said as [terminalLabel].
  */
 @Composable
 fun WorkGroup(
@@ -160,6 +172,8 @@ fun WorkGroup(
     running: Boolean = false,
     peek: (@Composable ColumnScope.() -> Unit)? = null,
     trailing: (@Composable () -> Unit)? = null,
+    onTerminal: (() -> Unit)? = null,
+    terminalLabel: String = "",
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val body: @Composable ColumnScope.() -> Unit = { if (expanded) content() else peek?.invoke(this) }
@@ -182,12 +196,32 @@ fun WorkGroup(
             JIcon(if (expanded) PhIcons.CaretUp else PhIcons.CaretDown, null, size = 14.dp, tint = palette.ink3)
         }
     }
+    // Glass as iOS's plain work line (#4339 C5): no card, the spinner while it runs, the words and the chevron after them.
+    val glassLine: @Composable (Modifier) -> Unit = { lineModifier ->
+        Row(
+            lineModifier.clickable(role = Role.Button, onClick = onToggle).semantics { contentDescription = spoken }
+                .padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.sm),
+        ) {
+            if (running) JSpinner(Modifier.size(Tokens.Space.m), stroke = Tokens.Space.xxs)
+            Text(summary, style = type.caption, color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            trailing?.let { CompositionLocalProvider(LocalContentColor provides palette.ink2, LocalTextStyle provides type.micro) { it() } }
+            JIcon(if (expanded) persona.core.designsystem.icons.PersonaIcons.expand else PhIcons.CaretRight, null, size = Tokens.Space.m, tint = palette.ink3)
+        }
+    }
+    // The terminal mark at the far end, as quiet as the words (#4339 C7); Compose widens its touch area to 48dp.
+    val glassHeader: @Composable () -> Unit = {
+        if (onTerminal == null) glassLine(Modifier)
+        else Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+            glassLine(Modifier.weight(1f, fill = false))
+            Box(Modifier.clickable(role = Role.Button, onClick = onTerminal).semantics { contentDescription = terminalLabel }
+                .padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s), contentAlignment = Alignment.Center) {
+                JIcon(persona.core.designsystem.icons.PersonaIcons.terminal, null, size = Tokens.Space.l, tint = palette.ink2)
+            }
+        }
+    }
     when (PersonaTheme.style) {
-        AppStyle.Glass -> Column(
-            modifier.fillMaxWidth().padding(vertical = 6.dp).clip(RoundedCornerShape(24.dp)).background(palette.surface)
-                .border(1.dp, Brush.verticalGradient(listOf(palette.strokeTop, palette.strokeBottom)), RoundedCornerShape(24.dp))
-                .animateContentSize(PersonaTheme.motion.size()).padding(vertical = 4.dp),
-        ) { header(); body() }
+        AppStyle.Glass -> Column(modifier.fillMaxWidth().animateContentSize(PersonaTheme.motion.size())) { glassHeader(); body() }
         AppStyle.Brief -> Column(modifier.fillMaxWidth().padding(vertical = 6.dp).animateContentSize(PersonaTheme.motion.size())) {
             header(); if (expanded || peek != null) { Spacer(Modifier.height(4.dp)); body() }
         }
@@ -282,6 +316,22 @@ fun PlanCard(
     }
 }
 
+/**
+ * The rail an open work line's steps hang on, in Glass (iOS's work timeline, #4339 C5): a thin line through the middle of
+ * the steps' icons ([WorkStep] puts the page behind each icon, so the line stops at it), down to the [last] step's middle.
+ * Nothing in the other styles, whose steps draw their own.
+ */
+@Composable
+fun Modifier.workRail(last: Boolean): Modifier {
+    if (PersonaTheme.style != AppStyle.Glass) return this
+    val color = PersonaTheme.palette.line
+    return drawBehind {
+        val x = (Tokens.Space.m + Tokens.Size.iconXS / 2).toPx()
+        val w = Tokens.Size.lineMedium.toPx()
+        drawRect(color, topLeft = Offset(x - w / 2, 0f), size = androidx.compose.ui.geometry.Size(w, if (last) size.height / 2 else size.height))
+    }
+}
+
 /** [Unknown]: an older step with no recorded result; neither a success nor a failure. */
 enum class WorkState { Done, Running, Failed, Waiting, Unknown }
 
@@ -323,11 +373,14 @@ fun WorkStep(
     }
     val titleStyle = if (mono) type.code else type.callout
     when (PersonaTheme.style) {
+        // Glass as iOS's work timeline (#4339 C5): no hairlines; the steps sit on the rail their list draws ([workRail]).
         AppStyle.Glass -> Column(modifier.fillMaxWidth().then(click)) {
-            Box(Modifier.padding(start = 50.dp).fillMaxWidth().height(1.dp).background(palette.line))
-            Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                JIcon(icon, null, size = 20.dp, tint = palette.ink2, decorative = true)
-                Spacer(Modifier.width(16.dp))
+            Row(Modifier.padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
+                // The page under the icon hides the rail behind it.
+                Box(Modifier.size(Tokens.Size.iconXS).clip(CircleShape).background(palette.background), contentAlignment = Alignment.Center) {
+                    JIcon(icon, null, size = Tokens.Space.l, tint = palette.ink2, decorative = true)
+                }
+                Spacer(Modifier.width(Tokens.Space.l))
                 Column(Modifier.weight(1f)) {
                     Text(title, style = titleStyle, color = palette.ink, maxLines = titleLines, overflow = TextOverflow.Ellipsis)
                     detail?.let { Text(it, style = type.caption.copy(fontWeight = FontWeight.Normal), color = palette.ink3, maxLines = 2, overflow = TextOverflow.Ellipsis) }
@@ -523,8 +576,10 @@ fun SendButton(onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Bool
     val fill = when { kind == SendKind.Stop -> palette.danger.dot; enabled -> palette.action; else -> palette.surfaceStrong }
     val ink = when { kind == SendKind.Stop -> palette.danger.onDot; enabled -> palette.onAction; else -> palette.ink3 }
     val spoken = stringResource(if (kind == SendKind.Stop) R.string.designsystem_send_stop else R.string.designsystem_send)
+    // Send and Stop are felt, as on iOS (DESIGN_SYSTEM.md 4.3).
+    val haptics = rememberHaptics()
     Box(
-        modifier.size(48.dp).clickable(enabled = enabled && !loading, role = Role.Button, onClick = onClick)
+        modifier.size(48.dp).clickable(enabled = enabled && !loading, role = Role.Button, onClick = haptics.tapped(onClick))
             .semantics { contentDescription = spoken },
         contentAlignment = Alignment.Center,
     ) {
@@ -566,15 +621,17 @@ fun JumpToLatest(count: Int, onClick: () -> Unit, modifier: Modifier = Modifier)
 /**
  * Above the composer while the latest plan card is out of view (web `PlanPill`): a ring with how far along it is and
  * "Step N/M" (a check once all are done); a tap scrolls back to the card. Shaped like [JumpToLatest] in each style.
+ * [spoken] and [onClickLabel] say what it does when the tap does something else (Glass opens the plan sheet).
  */
 @Composable
-fun PlanPill(step: Int, total: Int, done: Int, onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun PlanPill(step: Int, total: Int, done: Int, onClick: () -> Unit, modifier: Modifier = Modifier,
+             spoken: String? = null, onClickLabel: String? = null) {
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
     val shape = if (style == AppStyle.Board) RoundedCornerShape(8.dp) else RoundedCornerShape(50)
     val ink = if (style == AppStyle.Brief) palette.onAction else palette.ink
     val allDone = total in 1..done
-    val spoken = stringResource(R.string.designsystem_plan_pill_spoken, step, total)
+    val description = spoken ?: stringResource(R.string.designsystem_plan_pill_spoken, step, total)
     Row(
         modifier.heightIn(min = 44.dp)
             .then(when (style) {
@@ -582,8 +639,8 @@ fun PlanPill(step: Int, total: Int, done: Int, onClick: () -> Unit, modifier: Mo
                 AppStyle.Brief -> Modifier.clip(shape).background(palette.action)
                 AppStyle.Board -> Modifier.clip(shape).background(palette.surface).border(1.dp, palette.line, shape)
             })
-            .clickable(role = Role.Button, onClick = onClick)
-            .semantics { contentDescription = spoken; progressBarRangeInfo = ProgressBarRangeInfo(done.toFloat(), 0f..total.toFloat().coerceAtLeast(1f)) }
+            .clickable(onClickLabel = onClickLabel, role = Role.Button, onClick = onClick)
+            .semantics { contentDescription = description; progressBarRangeInfo = ProgressBarRangeInfo(done.toFloat(), 0f..total.toFloat().coerceAtLeast(1f)) }
             .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),

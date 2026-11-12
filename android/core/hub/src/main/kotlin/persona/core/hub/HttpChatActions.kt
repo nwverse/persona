@@ -54,6 +54,7 @@ class HttpChatActions internal constructor(
                     action.permissionMode?.let { put("permission_mode", it) }
                     action.effort?.let { put("effort", it) }
                     action.ultracode?.let { put("ultracode", it) }
+                    action.dismissUltracodeLost?.let { put("ultracode_dismiss_lost", it) }
                 }
                 else -> buildJsonObject { }
             }
@@ -90,6 +91,13 @@ class HttpChatActions internal constructor(
             if (!it.isSuccessful) throw HubFailure.from(it)
             (JsonCodec.parseToJsonElement(it.body!!.string()).jsonObject["queue"] as? JsonArray).orEmpty()
                 .mapNotNull { item -> (item as? JsonPrimitive)?.takeIf { value -> value.isString }?.content }
+        }
+    }
+
+    override suspend fun sendQueuedNow(session: Session) {
+        // The node presses the keys and waits for the queue to leave the screen (iOS gives it 30 s): the slow client's timeout covers it.
+        slow(api("sessions", session.machineId, session.sessionId, "queue", "send-now"), "POST", ByteArray(0).toRequestBody()).use {
+            if (!it.isSuccessful) throw HubFailure.from(it)
         }
     }
 
@@ -161,7 +169,8 @@ class HttpChatActions internal constructor(
                         (action.permissionMode == null || current.permissionMode == action.permissionMode) &&
                         (action.effort == null || current.effort == action.effort) &&
                         // a queued switch went through too: the node applies it after the turn
-                        (action.ultracode == null || current.ultracode == action.ultracode || current.ultracodePending)
+                        (action.ultracode == null || current.ultracode == action.ultracode || current.ultracodePending) &&
+                        (action.dismissUltracodeLost == null || current.ultracodeLostAt == null)
                     ChatAction.Close -> current == null || !current.isLive
                     ChatAction.Interrupt -> current != null && current.status in listOf("idle", "done", "offline")
                     ChatAction.Attach -> current?.attached == true

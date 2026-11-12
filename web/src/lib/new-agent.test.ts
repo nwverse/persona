@@ -161,6 +161,33 @@ describe("本地优先启动", () => {
     expect(JSON.parse(fetcher.mock.calls[1][1].body)).toMatchObject({ prompt: input.text });
   });
 
+  it("opens a Codex with no first message where the computer can, and sends nothing after it", async () => {
+    const waiting = { ...session, session_id: "c0de0000-1111-4222-8333-444455556666", agent: "codex", awaiting_first_message: true };
+    const fetcher = vi.fn().mockResolvedValueOnce(response({ error: "needs prompt", code: "codex_needs_prompt" }, 409)).mockResolvedValueOnce(response({ session: waiting }));
+    vi.stubGlobal("fetch", fetcher);
+    vi.stubGlobal("location", { pathname: "/other" });
+    const id = launchAgent({ ...input, launcher: "codex", text: "" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getState().launches[id]).toMatchObject({ phase: "ready", session: waiting });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    const body = JSON.parse(fetcher.mock.calls[1][1].body);
+    expect(body).toMatchObject({ launcher: "codex" });
+    expect(body).not.toHaveProperty("prompt");
+    expect(body).not.toHaveProperty("async");
+  });
+
+  it("asks for the first message when an older computer starts a Codex only with one", async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(response({ error: "needs prompt", code: "codex_needs_prompt" }, 409))
+      .mockResolvedValueOnce(response({ error: "needs prompt", code: "codex_needs_prompt" }, 409));
+    vi.stubGlobal("fetch", fetcher);
+    const id = launchAgent({ ...input, launcher: "codex", text: "" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getState().launches[id]).toMatchObject({ phase: "failed" });
+    expect(getState().launches[id].error).toContain("需要第一条消息");
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
   it("sends the picked model and effort with the start, and only the model to a Codex", async () => {
     const fetcher = vi.fn().mockResolvedValueOnce(response({ session })).mockResolvedValueOnce(response({}));
     vi.stubGlobal("fetch", fetcher);
@@ -304,5 +331,38 @@ describe("startKeys", () => {
     expect(startKeys(platformOf({ platform: "Linux x86_64" }), false)).toBe("Ctrl ↵");
     expect(startKeys("mac", true)).toBeNull();
     expect(startKeys("other", true)).toBeNull();
+  });
+});
+
+describe("work-session delivery", () => {
+  const work = { ...input, launcher: "codex-team", agentType: "codex", model: "model-from-catalog", workSession: true };
+  const target = { machine_id: work.machineId, cwd: work.cwd, launcher: work.launcher, agent_type: work.agentType, model: work.model, work_session: true };
+
+  it("sends the same target with Codex's first message and retries a lost reply under the same operation", async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(response({ code: "codex_needs_prompt" }, 409))
+      .mockRejectedValueOnce(new TypeError("lost response"))
+      .mockResolvedValueOnce(response({ session }));
+    vi.stubGlobal("fetch", fetcher);
+    const id = launchAgent(work);
+    vi.stubGlobal("location", { pathname: `/s/desktop/${id}` });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(fetcher.mock.calls.map((c) => [c[0], JSON.parse(c[1].body)])).toEqual([
+      ["/api/v1/sessions", { ...target, async: true, name_hint: work.text }],
+      ["/api/v1/sessions", { ...target, prompt: work.text }],
+      ["/api/v1/sessions", { ...target, prompt: work.text }],
+    ]);
+    expect(fetcher.mock.calls[1][1].headers.get("X-Persona-Op-Id")).toBe(fetcher.mock.calls[2][1].headers.get("X-Persona-Op-Id"));
+    expect(navigate).toHaveBeenLastCalledWith({ name: "session", mid: "desktop", sid: "remote-id" }, true);
+  });
+
+  it("stops after a Codex creation reports an unknown outcome", async () => {
+    const fetcher = vi.fn().mockResolvedValueOnce(response({ state: "unknown" }, 202));
+    vi.stubGlobal("fetch", fetcher);
+    const id = launchAgent({ ...work, inlinePrompt: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(fetcher.mock.calls[0][1].body)).toEqual({ ...target, prompt: work.text });
+    expect(getState().launches[id]).toMatchObject({ phase: "failed", uncertain: true, repeatOnly: true, model: work.model });
   });
 });
