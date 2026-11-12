@@ -443,7 +443,9 @@ struct FilesPane: View {
             }
             .font(current ? Theme.Font.captionStrong : Theme.Font.caption)
             .foregroundStyle(current ? Color.primary : Color.secondary)
-            .padding(.horizontal, Theme.Space.s)
+            // only the current folder sits on a chip: the others keep a hair of room, so the path from the home fits
+            // beside the buttons on a phone
+            .padding(.horizontal, current ? Theme.Space.s : Theme.Space.xxs)
             .padding(.vertical, Theme.Space.xs)
             .background(current ? Theme.Fill.chip : .clear, in: .capsule)
         }
