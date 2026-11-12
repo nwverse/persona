@@ -21,5 +21,6 @@
   "key": "Replace {name}'s key",
   "key_hint": "Opens {name} with the pasted key. Its models and other settings stay.",
   "new": "Add as a new provider",
-  "new_hint": "Starts a new provider with what was read."
+  "new_hint": "Starts a new provider with what was read.",
+  "provider_missing": "Couldn't open {name}: it's no longer among your providers."
 }

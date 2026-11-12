@@ -726,7 +726,7 @@ function Models() {
         return toast(t("settings.launchers_failed", { error: errorText(e) }), "error");
       }
     }
-    if (!l) return toast(t("settings.provider_missing", { name }), "error");
+    if (!l) return toast(t("settings-providerpaste.provider_missing", { name }), "error");
     setEditDraft(draft);
     setEditing(l);
   };

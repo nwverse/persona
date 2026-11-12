@@ -20,5 +20,6 @@
   "key": "替换 {name} 的 Key",
   "key_hint": "打开 {name}，填入粘贴的 Key。模型和其他设置不变。",
   "new": "添加为新供应商",
-  "new_hint": "用识别出的内容新建一个供应商。"
+  "new_hint": "用识别出的内容新建一个供应商。",
+  "provider_missing": "没能打开 {name}：它已不在你的供应商里。"
 }

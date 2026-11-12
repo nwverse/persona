@@ -173,9 +173,13 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * room main had, plus 40 B of room: the card at the end of a finished Agent exchange, its count of the exchange's own
  * edits without drawing their diffs (lib/turn-changes.ts) and of a fold's `changes`, its review and file targets, the
  * store read of the session's folder, the feed cache's check of `changes`, the shared ErrorNotice the model-error and
- * usage-limit lines become, their marks and words). Raise it on purpose, in the change that needs it.
+ * usage-limit lines become, their marks and words). And 98 B for the provider wizard's paste and found aliases (#5193:
+ * no first-screen code or words; the lazy wizard's pieces shared through views/settings/ProviderFields.tsx changed how
+ * Rollup names the shared chunks' exports, which renamed App's imports and moved App 138 B as counted, its length
+ * unchanged: ja 595,110 B on main at d7908558d to 595,248 B, 40 B of it in the room main had; take it back when App's
+ * imports are renamed back). Raise it on purpose, in the change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 595_150;
+export const FIRST_SCREEN_BUDGET = 595_248;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").

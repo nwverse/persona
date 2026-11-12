@@ -95,7 +95,7 @@ describe("model providers: paste and found aliases", () => {
     await act(async () => wizard().onEditWith!("gw_gone", DRAFT));
     await flush();
     expect(wizard().existing).toBeNull();
-    expect(toasts).toEqual([t("settings.provider_missing", { name: "gw_gone" })]);
+    expect(toasts).toEqual([t("settings-providerpaste.provider_missing", { name: "gw_gone" })]);
   });
 
   it("says the list couldn't be read, not that the provider is gone, when reading it again fails", async () => {
