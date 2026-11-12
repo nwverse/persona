@@ -329,9 +329,9 @@ For every component: use the design-system one, not a lookalike. Counts are appr
 - Source: `apple/Persona/DesignSystem/ShellComposerBar.swift:11`, `apple/Persona/DesignSystem/ComposerButtons.swift`.
 - Platforms: web composer (14 px radius, 28 px buttons, `web/src/views/chat/Composer.tsx:648`); Android `ComposerFrame` (radius 32 in Glass).
 - Web bottom row (#5032): `[+][@][/] [permission chip · source · folder] … [model pill][voice][stop/send]`. The model pill
-  sits in the composer's `trailing` slot, right before voice / Stop / Send, in an Agent chat (a Persona chat keeps its
-  effort and launcher chips until #5033). The card is the `composer` container whose width sets the pill's modes ("Model
-  pill and unified model panel" in 3.8).
+  sits in the composer's `trailing` slot, right before voice / Stop / Send, in an Agent chat and in a Persona chat
+  (#5033; the new-chat page too), where the permission chip is the only chip on the left. The card is the `composer`
+  container whose width sets the pill's modes ("Model pill and unified model panel" in 3.8).
 - Editing state (web, #4503): editing the last message puts its words and quotes back into the box under a one-line bar at the box's top, above the context chips and quote bars. The bar has an accent pencil, **Editing last message** (`ink-2`, medium), a truncating hint (`ink-3`, precise pointers only) and a × with the quote bar's 24 px look. It is the only sign of the state, and the text field stays the same field. The irreversible step (the rewind) waits for an explicit send, which the bar's hint names. Esc or × leaves with nothing changed (`docs/web/web.md` "Pages", **Edit last message**).
 - Duplicates: four composer implementations exist (DS-19).
 
@@ -417,6 +417,8 @@ No new token. The two icons are added to `ui/icons.tsx` in the existing stroke g
 #### Sessions that need the user
 
 In every grouping a list offers, a session that needs the user is visible without opening anything: in a section at the top, or by the state mark on its row, with a folded group counting it on its header. Grouping by location (computer, repository, worktree, tab) never hides it, and nobody has to pick a computer or a repository first to see their own work.
+
+A child session (an Agent another Agent started, folded under a listed parent; web, #5120, after cindy) is never a row or a count of its own: its parent's row carries it, in the parent's folded state (a waiting child makes it need you, a working one makes it work), its second line saying what the child waits for. The child's need is visible on that row, counted once under the parent.
 
 #### The work-item row
 
@@ -552,8 +554,8 @@ copy; none is presented as the current location.
 
 **Model pill and unified model panel** (web, #5032; `docs/web/web.md` "Model pill and model panel"). This part follows
 Cindy's model selector at the user's request (2026-11-12): where an earlier rule here differs, this entry wins for the
-pill and panel, built from Persona's tokens. Who it serves: people working with coding Agents; a Persona chat moves to it
-in #5033.
+pill and panel, built from Persona's tokens. Who it serves: people working with coding Agents, and everyone in a Persona
+chat (#5033), where the panel only offers models and says plainly which one the chat uses.
 
 - Pill (`web/src/views/chat/ModelPill.tsx`): 30 px tall capsule, 10 px side padding, 4 px gaps, 13 px text
   (`ink`), no frame at rest; hover and open draw a 1 px `--line-strong` border on `--hover`. Contents in order: the
@@ -563,18 +565,38 @@ in #5033.
   `UltraMark` (`ink-2`), a 14 px chevron (`ink-2`). Widths by the composer card (`@container/composer`): ≥ 600 px 72–320 px;
   < 600 px 148 px (name ≤ 108 px and truncating first, the effort only once the name has no room); < 520 px 12 px text, marks a step smaller; < 420 px 64 px, the
   tile and chevron only. States: loading (a 13 px `Spinner` and "Loading model…"), failed (the `warning` icon in `--red`),
-  pending (a 12 px clock first, the target engine's name in `ink-3`, a two-line tooltip), disabled (50% opacity, no
-  pointer), and a label (not a button) where nothing can be switched. The click keeps the caret in the message box.
+  pending (#5035, a switch to another launcher that the next message carries out: a 12 px clock in `ink-3` first, then
+  the target launcher's tile and its name in `ink-3` up to 96 px, hidden under 600 px, before the target's model and
+  effort; the engine's name in its place when the engine changes; the tooltip "Current: …" over "Next message: …"),
+  disabled (50% opacity, no pointer), and a label (not a button) where nothing can be switched. The click keeps the caret
+  in the message box.
+- Panel while a switch waits: one warning line at the top of the list (the panel's `note`: `warning` icon, 11 px,
+  `--orange`), "Switches on your next message: the Agent restarts on {launcher} and keeps this conversation"; a recorded
+  pick is confirmed by a toast ("Switch scheduled: …"). Cindy's "Switch Agent?" confirmation is for an engine change,
+  which Persona does not offer yet (#5054); a launcher switch keeps the conversation and its engine, so it asks nothing.
 - Panel (`web/src/ui/model-panel/`): opens above the pill, right edges aligned, 6 px gap, 8 px from the window's edges;
   300–460 px wide, a 428 px body (a 48 px rail of Recent, Favorites, All and one cell per provider beside the model list),
   search on top, "Configure models" at the bottom; two-line rows with hover-revealed Favorite and Customize; the model that
   runs has a static selected fill, no check. Customize opens a 264 px flyout to the panel's left: the effort slider, Fast,
-  the engine, and a footer that says whether the setup is the recommended one, customized or saved.
+  the engine, an exact catalog reference-price line where known, and a footer that says whether the setup is the
+  recommended one, customized or saved. A provider rail cell adds a 22 × 3 px weekly-remaining bar only when the existing
+  launcher quota answer supplies a weekly ratio; its tooltip names the window and reset time.
+- Usage placement (#5056): the Agent's context meter is a separate, right-aligned row below the composer card, not part of
+  the header or the model-pill container. Unknown context mounts no row. Quota bars use the established accent / orange /
+  red quota tones (≤ 30% left warning, ≤ 10% or exhausted critical); price marks use neutral `ink-2`, one to three `$` by
+  standard output price, and the flyout's values use tabular numerals. Unknown data never creates placeholder marks.
+- Header strip (Persona chats, #5033, `PickStrip` in `web/src/views/chat/AssistantModelPanel.tsx`): one line above the
+  search, 14 px side and 8 px vertical padding, a `line` rule below, 12 px `ink-2` text that truncates. It says where the
+  chat's setup comes from in plain words ("Following the default · …", "Picked for this chat · …", "For this new chat ·
+  …") and, when the chat has its own pick, ends with a text button in `accent-ink` (medium weight, one line):
+  **Follow default** in the main chat, **Undo pick** in another. Providers that can't run Persona chats on that computer
+  are the panel's last groups: the header and the hub's reason, no rows.
 - Tokens: the effort levels have one colour each in both themes (`--effort-low` / `--effort-minimal` #2AAE5B,
   `--effort-medium` #14B8A6, `--effort-high` #3B82F6, `--effort-xhigh` #4F46E5, `--effort-max` #8B5CF6, Codex's ultra on
   max) and `--fast` (#3B9EFF), used inside the flyout only: the pill never colours its effort or its bolt.
-- Deviations from Cindy: letter tiles instead of vendor logos; no price or quota data; ↑↓ also move between rows; providers
-  and engines that can't be switched to yet are listed with their rows off and the reason.
+- Deviations from Cindy: letter tiles instead of vendor logos; price and quota appear only where the catalog / launcher
+  answer supplies them; ↑↓ also move between rows; providers and engines that can't be switched to yet are listed with
+  their rows off and the reason; a pending switch names the launcher rather than the engine.
 
 ### 3.9 Empty states
 
@@ -730,6 +752,23 @@ A computer's dev server opened from a chat (a forwarded port, `docs/web/preview.
 
 Tool execution is one summary line, never opens by itself, shows the latest text segment while running and the result when done, and expands by hand. Opened by hand, a step (and the summary itself) changes in place: the tapped row stays under the finger, what opens fades in, what closes goes at once, and the list holds still while the turn goes on (new steps, the answer, the next turn, the footer under the list changing) until the user scrolls, taps ↓ or sends (`toggleInPlace`, `ChatFollow.toggledRow`, #3005). iOS complies: `isOpen` ignores `live` (`apple/Persona/Views/Chat/ChatLines.swift:293`) and tool rows use `autoExpand: false`. The "latest segment only" half was not confirmed from code reading and needs a screenshot test.
 
+**The opened summary** (web, #5155; the owner asked on 2026-11-12 that it follow cindy's `WorkGroupBlock` and
+`createCompletedWorkGroup`). A summary that holds intermediate narration opens to cindy's timeline: the narration in
+order, and each run of work between two pieces of it an inner summary of its own, "Worked for 12s" from the words
+before it to the words after it, the live one "Working…" with its clock. Without intermediate narration it holds its
+rows directly. Inner summaries open together with the outer one and then keep their own open / closed state, so
+opening a summary shows every tool call. A thought with words is one row in the tool rows' chrome (16 px status slot
+with the sparkle, italic `thinking-ink` words on one line, the 18 px chevron slot), opening in place only when it does
+not fit or has a line break, its opened words selectable; a thought without words is no step, so it neither makes a
+summary of its own nor splits a run of rows. The live "Thinking" line with dots and a clock ends
+the innermost live summary, once. Durations read `6s`, `1m 5s`, `2m` in every language and, from an hour, the
+language's form that always keeps the minutes (`1h 0m`, `1 小时 0 分`, `1時間0分`). Copy follows cindy's catalog
+("Work details" without times, "Searched once", "Listed files once"). A diff count reads `+12 -3`; the in-place
+detail's divider is the tool ink at 20 %. The chat's items stand 14 px apart under 28 px of top padding. Held back by
+super rule 2: cindy's running preview of the latest five activities, its narration in the open while running, and its
+inner summaries folded by default (exception requested in #5162). Kept from Persona: a failed call's red ✕ and red
+output (#4303 outcomes, below), which cindy's rows lack.
+
 Subagent launch receipts, interim reports and final results belong under their launching tool, not in independent
 parent-chat message bubbles (#3378). Empty completion pointers update status without creating another report. The
 shared wire contract is in `docs/protocol/protocol.md` ("Subagent deliveries as tool results").
@@ -745,6 +784,9 @@ per card; a workflow card's head opens the chat's Background dialog at its run. 
 its own (no panel, no page, no sidebar row). Like every tool call the cards sit inside the work summary, running or
 not (super rule 2; cindy's running cards outside it wait on #5047). Nested subagents are flat cards by start time. A card offers Stop only
 where the node can stop that task. iOS and Android still draw the earlier design (#5045).
+A child session (a Codex subagent, an Agent a Paseo Agent created; #5120) is the same card in its parent's chat, built
+from its own row and placed by when it started, since no call in the parent's transcript names it: what runs it, its
+model and effort, its status and time; opened, its prompt, latest words and last tool. iOS and Android follow in #5140.
 
 A tool row names its tool in words on iOS, the web and Android (#2986; Android `ToolNaming.kt`, #4339): Claude Code's tools have verbs of their own, another
 server's MCP tool reads "<Server> · <Tool>" ("GitHub · Create issue"), and any other name is humanized. Opened, a tool
@@ -767,6 +809,8 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   the Needs you / In progress entries, on every client (#4883: on the web and Android they sat only in the closed Needs
   you tray, and an owner waited minutes on an approval no screen in the chat showed). Needs you still counts them, and
   its row for one closes the tray onto the card instead of drawing it a second time.
+  A child session's request (web, #5120: `folded_under`) has its parent's page as its home: shown there with the
+  parent's own, "From subagent · <title>", counted once under the parent, and every link to it opens the parent.
 - **One count, per session**: the Agents list's Needs you section, its Needs you filter and the tab's badge count the sessions that wait for the user, each once, its requests in its row oldest first, the way `docs/assistant/managers.md` ("Counts") counts an assistant's waiting agents (principle 4). The Inbox's Agent section and the Assistant's composer entries open the same requests; the composer's entries count tasks (`docs/assistant/unified-entry.md`).
 - **Background rounds and supervisors** (#4314, `docs/assistant/assistant.md` "Background rounds"): in the main conversation a round another conversation, a scheduled task or a follow-up started reuses the quiet supervision record, one muted line `@<source> · Background round` that always opens, never a new component; a round that asked or told the user stays shown. While that switch is on, the composer's Needs you groups rows under the conversation supervising them, this one's first, with a plain caption header and no other change: the same rows, order within a group and count.
 - **Room** (web, #4656): an open tray of requests takes the room its cards need, up to most of the visible height (the assistant's Needs you / In progress tray lets the dock grow to 82% of it while open), never a fixed short box. Its header (title, All, Expand, Close) stays and only its list scrolls; a card's answer row stays at the list's bottom edge with a hairline over what scrolls under it. **Expand** in the header fills the chat column for going through many requests, the composer still on screen; the same button, **Restore size**, or closing the tray gives the room back.
@@ -1067,11 +1111,10 @@ style or motion.
 ## Codex speed controls (#3865)
 
 An Agent's Codex thread sets its speed with Fast in the model panel's flyout of the model it runs (#5032, the model pill
-and unified model panel in 3.8); a Persona chat running Codex keeps its effort chip and radio menu. A Speed submenu there
-reveals native model speed choices and their current value, including Unknown before native settings arrive. Its Fast choice explains increased usage or cost.
-Selection waits for native acknowledgment and the session push. Standard is the reversible choice. This requested
-control reuses Menu typography, spacing, focus behavior and light/dark tokens. Settings > Agents > Codex uses the
-existing agent-settings row for the native default. No account or session is automatically switched to Fast.
+and unified model panel in 3.8); a Persona chat running Codex does the same since #5033, its effort chip and Speed
+submenu retired. Fast is a toggle showing the current value, and its label explains the increased usage. A change
+waits for native acknowledgment and the session push; turning Fast off is the reversible choice. Settings > Agents >
+Codex uses the existing agent-settings row for the native default. No account or session is automatically switched to Fast.
 
 ## Hub connection password (#4474)
 
@@ -1125,9 +1168,9 @@ page the user watches during the meeting is the page they keep writing in after 
   microphone the recording holds, and its model and attachment rows don't apply. The page has no second composer.
 - **Control row** (live only): Pause / Continue, Bookmark and Stop, with the live bar's looks, identifiers, Stop
   confirmation and announcements; hidden while the field has focus. At accessibility sizes the bar is at most two rows,
-  the field and one row of icons: Pause or Continue, Stop, a More menu (Bookmark, the Just Me switch, **What Was Just
-  Said**) and send. Why the field takes no words then shows at the end of what scrolls (a neutral `NoticeBanner`) and as
-  the field's spoken hint, not in the bar.
+  the field and one row of icons: Pause or Continue, Stop, a More menu (Bookmark, the Just Me switch, the photo items
+  when the meeting takes photos, **What Was Just Said**) and send. Why the field takes no words then shows at the end of
+  what scrolls (a neutral `NoticeBanner`) and as the field's spoken hint, not in the bar.
 - **When Persona can't take part**: an older manager took the room meeting with Persona off (the last upload's `200` had
   no `room`): the subtitle and the thread's header say "Persona can't take part right now", the field asks nothing of the
   room and [+] goes, with a caption that says so; Just me stays. The same rule (`MeetingAsk.canAsk`) decides the asks
@@ -1150,6 +1193,54 @@ page the user watches during the meeting is the page they keep writing in after 
   `MeetingExchangeRow` look.
 - **The After the Meeting divider**: a centered caption between two hairlines, the look of the chat's `CompactDivider`,
   between the room's thread and the follow-up's.
+- **Photos (phase 3)**: in a meeting started while the hub listed `meeting_photos`, [+] also has **Take Photo** (where
+  the device has a camera) and **Choose Photos** (the system picker, images only, at most
+  `Theme.Recording.photoPickLimit` at once), live only and never with Just Me on: a photo is the meeting's material,
+  not a private question. Picked photos show in the thread at once as **Preparing…** rows, before Photos hands their
+  bytes over; those it can't (still in iCloud) leave again and are said in one `Theme.danger` line under the field until
+  the next pick (at accessibility sizes a danger `NoticeBanner` at the end of what scrolls instead, so the bar stays two
+  rows). Each photo is a row of its own: a thumbnail (`Theme.Recording.photoThumbSide` square, scaled with the text,
+  `Theme.Radius.control` corners on `Theme.Fill.well`, the photo icon until the picture is ready; a tap opens the
+  viewer), then "Photo" and the meeting clock it was taken at, the caption or the first
+  `Theme.Recording.photoTextLines` lines of the words read on it, and its state in words: **Preparing…** and
+  **Uploading…** with a small spinner, **Used as material** with the success check in `Theme.positive` once the hub
+  stored it, or **Couldn't upload** in `Theme.danger` with the reason. A failed photo has its buttons under it, plain
+  themed ones: **Retry** only when sending it again can help (no answer, a busy or read-only hub, a full meeting once a
+  photo is deleted), and **Delete Photo** always, so a refusal the hub would give again (a picture it can't take, a
+  meeting whose transcript expired, a hub without photos, a device without access) never leaves a Retry that can't
+  work. Under it the room's note shows as a **Persona** answer row; while the room has the photo and no note yet,
+  "Persona is looking at the photo…" with a spinner, for at most `Theme.Recording.photoNoteWait` after it was added (a
+  room that never writes one stops the spinner). After the meeting a photo the minutes cite says **Cited in the
+  minutes** with the minutes icon. A photo whose room message the thread holds sits there; the others (not sent to the
+  room, their message not among the room's pages loaded, still on their way) follow the room's rows, oldest first,
+  those still on their way last; never hidden. A photo the room holds but the hub no longer lists (deleted, trimmed) is
+  a quiet centered line, **Photo removed**, with no thumbnail. At accessibility sizes the thumbnail stands above the
+  words, and the failed photo's buttons stack. VoiceOver reads the thumbnail, heading, words and state as one element
+  (label "Photo, 12:34, its first lines"; value the state words, "Deleting…" while it is deleted, and Cited in the
+  minutes), with **View Photo**, **Retry** and **Delete Photo** as its accessibility actions, so nothing needs the long
+  press; the buttons and the note are elements of their own. Reason: the whiteboard is what the minutes and answers
+  read, so the row says in words where it is (stored, read by Persona) instead of a badge, and the note shows what
+  Persona took from it.
+- **Deleting a photo**: the row's long-press menu has **Delete Photo** (destructive) for a stored or a failed photo, as
+  does the failed one's button; then a confirmation dialog, **Delete This Photo?**, with **Delete Photo** and a message
+  that says what deleting does: sent to the room, "Persona already saw it. It is told not to use it again, and it leaves
+  the minutes."; stored but not sent, "It leaves the meeting's material and the minutes."; a failed one has no message,
+  since it may have been stored with its answer lost: the delete reads the hub's list first and deletes it there when
+  the list has it, else it only leaves this phone; with no list (offline) it stays and says why. While it is deleted the
+  row is dimmed (`Theme.Recording.dimmed`) and its state reads **Deleting…** with a spinner, so the dimming never says
+  it alone; a refusal shows its words under the photo in `Theme.danger` and is announced. Why a confirmation: it can't
+  be undone, and it changes the minutes.
+- **Photos and haptics**: adding a photo (camera or library) and deleting one play no haptic: the new row, its state
+  words and the confirmation are the feedback, and the microphone is open (the Haptics line below keeps them to send,
+  Pause and Bookmark).
+- **A cited photo in the minutes** (the recording page's minutes, `RecordingMinutesSections`; iPhone only, visionOS
+  shows the item alone): an item that cites a photo (`"photo": 3`) shows that photo's thumbnail under its words, the
+  same thumbnail as the thread's, a tap opens the viewer; **Photo removed** in caption secondary once the hub's list
+  was read and no longer has it (a trimmed recording's deleted photo); the thumbnail's place while the list isn't read
+  yet (offline), which is not a delete. Copy and Share end such an item with "(photo 3)", as the hub's Markdown does.
+- **Photo viewer**: the thumbnail opens the photo full screen (`.fullScreenCover`) in the app's image viewer
+  (`ImageViewer`), from this phone's copy or the hub's; a spinner with **Done** until the bytes are here, and when
+  neither has it an `EmptyStateView` ("Image didn't load") with **Retry**.
 - **Just me**: a switch row in the bar (live only) with its caption ("Only you see it, in the main chat"). With it on the
   section header reads **Just Me** ("Only on this screen, never said aloud"), the field's placeholder "Ask privately…",
   and the thread shows only the owner's private questions and the main chat's answers to them, in the same You / Persona
@@ -1168,12 +1259,19 @@ page the user watches during the meeting is the page they keep writing in after 
   nobody chosen the role shows Off; Listen or Take Part shows "Who Attends: Choose" with a caption under it in the same
   row ("Choose who attends. Until then Persona stays out of the meeting."), and the strip's Turn on Persona or role menu
   pushes the attendee picker first, turning on once someone is picked. The main chat stays an ordinary row of the picker.
-- Haptics: only `tap`, on send, Pause and Bookmark, while the microphone is open (section 4.3); new room answers are
-  announced to VoiceOver as the live view's are.
+- Haptics: only `tap`, on send, Pause and Bookmark, while the microphone is open (section 4.3); photos play none;
+  new room answers are announced to VoiceOver as the live view's are.
 - Identifiers for tests: `meeting-page-menu`, `meeting-role`, `meeting-private`, `meeting-page-subtitle`,
   `meeting-room-problem`, `meeting-live`, `meeting-transcript`, `meeting-thread-header`, `meeting-thread-earlier`,
   one `meeting-thread-<kind>` per row kind (`lines`, `heard`, `question`, `answer` and the others),
-  `meeting-just-me`, `meeting-just-me-retry`, `meeting-plus`, `meeting-heard`, `meeting-ask-field`, `meeting-ask-send`
+  `meeting-just-me`, `meeting-just-me-retry`, `meeting-plus`, `meeting-heard`, `meeting-photo-camera`,
+  `meeting-photo-library`, `meeting-photo-row` (the row), its photo element named by its state (`meeting-photo-preparing`,
+  `meeting-photo-uploading`, `meeting-photo-material`, `meeting-photo-failed`, `meeting-photo-deleting`,
+  `meeting-photo-unlisted`), `meeting-photo-retry`, `meeting-photo-remove`, `meeting-photo-note`,
+  `meeting-photo-reading`, `meeting-photo-removed`, `meeting-photo-delete`, `meeting-photo-delete-confirm`,
+  `meeting-photo-delete-problem`, `meeting-photo-viewer`, `meeting-photo-viewer-done`, `meeting-photo-problem`; in the
+  minutes `minutes-photo` and `minutes-photo-removed`,
+  `meeting-ask-field`, `meeting-ask-send`
   (the two shared with the live bar's typed question), `meeting-ask-caption`, `meeting-ask-notice`, `recording-more`,
   `meeting-page-stop-speaking`, `meeting-after-status`, `meeting-after-divider`, `meeting-followup-retry`; at the start
   `meeting-private-start`; on the recording's page `recording-private` and `recording-meeting-conversation`; the sheet's
