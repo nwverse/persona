@@ -76,6 +76,7 @@ export function parseFrame(text: string): VoiceFrame | null {
           message: str(o.message),
           draft: str(o.draft),
           clearable: nonEmpty(o.clearable),
+          resendable: o.resendable === true ? true : undefined,
         },
       };
     }

@@ -175,6 +175,9 @@ nonisolated struct VoiceRun: Equatable, Identifiable, Sendable {
     /// The hub's 409 `clearable` text: present only when the node can clear that line, and not always the same as `draft`
     /// (an IDE selection marker stays out of it). Clear and Send sends it back as `clear_draft` exactly (docs/assistant/voice.md 3.2).
     var clearable: String?
+    /// The extension keeps it for a resend (#5904): what the user-speech gate held back offers Send Anyway only then
+    /// (one longer than its quoted task, or from before it, is not kept).
+    var resendable = false
 }
 
 nonisolated enum VoiceAskState: Equatable, Sendable {
@@ -315,7 +318,8 @@ nonisolated enum VoiceFrame: Equatable, Sendable {
                                  msgIDs: (o["msg_ids"]?.array ?? []).compactMap { str($0) },
                                  baseSeq: whole(o["base_seq"]) ?? 0, startedAt: VoiceStamp(o["started_at"]),
                                  code: str(o["code"]), message: str(o["message"]), draft: str(o["draft"]),
-                                 clearable: str(o["clearable"]).flatMap { $0.isEmpty ? nil : $0 }))
+                                 clearable: str(o["clearable"]).flatMap { $0.isEmpty ? nil : $0 },
+                                 resendable: o["resendable"]?.bool ?? false))
         case "ask":
             guard let id = str(o["interaction_id"]), !id.isEmpty else { return .other(type: type) }
             return .ask(VoiceAsk(interactionID: id, state: VoiceAskState(wire: str(o["state"]) ?? ""), by: str(o["by"])))

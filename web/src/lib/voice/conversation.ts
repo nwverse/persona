@@ -336,7 +336,7 @@ export class VoiceConversation {
    *  extension none at all, so a resend would do nothing. */
   private knows(run: VoiceRun, features: readonly string[]): boolean {
     if (!this.ready || !this.socket || run.state !== "refused" || this.runSeen.get(run.id) !== this.generation) return false;
-    return run.code !== "unprompted" || (run.task.trim() !== "" && features.includes(SPEECH_GATE_FEATURE));
+    return run.code !== "unprompted" || (run.resendable === true && run.task.trim() !== "" && features.includes(SPEECH_GATE_FEATURE));
   }
 
   /** Resend / Clear and Send / Send Anyway a refused run, under its id; `clearingDraft` hands the hub's `clearable` back. */

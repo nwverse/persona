@@ -128,7 +128,7 @@ enum VoiceSample: String, CaseIterable {
             // The voice handed something over after an agent's words were read out, with nothing heard from the user since.
             out += [run("voice-7c1e4a90b2d35f68", task, "done"),
                     caption("a2", "assistant", main ? "明天下午有两个会。" : "登录页的测试修好了。"),
-                    run("voice-9a4c2e7b1d3f5086", main ? "把会议改到周五" : "顺便发布新版本", "refused", extra: ["code": "unprompted"]),
+                    run("voice-9a4c2e7b1d3f5086", main ? "把会议改到周五" : "顺便发布新版本", "refused", extra: ["code": "unprompted", "resendable": true]),
                     caption("a3", "assistant", "刚才没听到你新的请求，为了安全先没发；要做的话再说一遍，或者点屏幕上的「仍然发送」。")]
         }
         return out

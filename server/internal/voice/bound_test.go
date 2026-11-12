@@ -272,7 +272,7 @@ func TestUnpromptedRunCanBeSentAnyway(t *testing.T) {
 	a.until(ofType("ready"))
 	refused := a.until(runIn(runRefused))
 	id, _ := refused["id"].(string)
-	if refused["code"] != "unprompted" || refused["task"] != task || !isVoiceID(id) {
+	if refused["code"] != "unprompted" || refused["task"] != task || !isVoiceID(id) || refused["resendable"] != true {
 		t.Fatalf("refused: %v", refused)
 	}
 	if got := content(up.nextMatch(on("dlg1"))); !strings.Contains(got, unpromptedWords) || !strings.Contains(got, "仍然发送") {
@@ -312,7 +312,7 @@ func TestUnpromptedRunToAnAppWithoutSendAnyway(t *testing.T) {
 	a.until(ofType("ready"))
 	refused := a.until(runIn(runRefused))
 	id, _ := refused["id"].(string)
-	if refused["code"] != "unprompted" {
+	if refused["code"] != "unprompted" || refused["resendable"] != nil {
 		t.Fatalf("refused: %v", refused)
 	}
 	if got := content(up.nextMatch(on("dlg1"))); !strings.Contains(got, unpromptedWords) || strings.Contains(got, "仍然发送") {
@@ -344,7 +344,7 @@ func TestSendAnywayOnlyForATaskShownWhole(t *testing.T) {
 	a.until(ofType("ready"))
 	refused := a.until(runIn(runRefused))
 	id, _ := refused["id"].(string)
-	if refused["code"] != "unprompted" || !strings.HasSuffix(fmt.Sprint(refused["task"]), "…") {
+	if refused["code"] != "unprompted" || !strings.HasSuffix(fmt.Sprint(refused["task"]), "…") || refused["resendable"] != nil {
 		t.Fatalf("refused: %v", refused)
 	}
 	if got := content(up.nextMatch(on("dlg1"))); !strings.Contains(got, unpromptedWords) || strings.Contains(got, "仍然发送") {

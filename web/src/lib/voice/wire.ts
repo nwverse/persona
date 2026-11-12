@@ -104,6 +104,9 @@ export interface VoiceRun {
   /** The hub's 409 `clearable` text: only when the node can clear that line, not always the same as `draft` (an IDE
    *  selection marker stays out of it). Clear and Send sends it back as `clear_draft` exactly (docs/assistant/voice.md 3.2). */
   clearable?: string;
+  /** The extension keeps it for a resend (#5904): what the user-speech gate held back offers Send anyway only then (one
+   *  longer than its quoted task, or from before it, is not kept). */
+  resendable?: boolean;
 }
 
 export type VoiceAskState = "asking" | "answered" | "released" | (string & {});

@@ -388,8 +388,8 @@ struct VoiceDeps {
     /// without one, and an older extension none at all, so a resend would do nothing.
     func canResend(_ runID: String) -> Bool {
         guard ready, socket != nil, let run = runs.first(where: { $0.id == runID }) else { return false }
-        if run.code == "unprompted",
-           !features.contains(VoiceInfo.speechGateFeature) || run.task.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if run.code == "unprompted", !run.resendable || !features.contains(VoiceInfo.speechGateFeature)
+            || run.task.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return false
         }
         return run.state == .refused && runSeen[runID] == generation

@@ -201,6 +201,7 @@ func boundFailure(err error) sendFail {
 func (t *tracker) notSent(r *voiceRun, f sendFail) {
 	c := t.c
 	r.Code, r.Message, r.Draft, r.Clearable = f.code, f.reason, f.draft, f.clearable
+	r.resendable = f.resendable
 	t.set(r, f.state)
 	c.tell(r, plainWords(prompts.RenderVoiceRefused(prompts.VoiceRefused{Lang: string(c.language()), Code: f.prompt, Task: r.task,
 		Reason: f.reason, Plan: f.plan, To: c.target.to(), Resend: f.resendable})), true, false)
@@ -244,7 +245,7 @@ func (t *tracker) sendBound(r *voiceRun, opts sendOpts, approval bool) {
 			t.notSent(r, sendFail{state: runRefused, code: "on_screen", prompt: "on_screen"})
 			return
 		}
-		r.Code, r.Message, r.Draft, r.Clearable = "", "", "", ""
+		r.Code, r.Message, r.Draft, r.Clearable, r.resendable = "", "", "", "", false
 		r.State = "" // a resend is sending again
 		t.set(r, runSending)
 		err := t.sendTo(ctx, r, opts)

@@ -48,6 +48,9 @@ type voiceRun struct {
 	// State is the run frame's (protocol 2), with why it was refused or failed: Code, Message (the hub's words),
 	// Draft and Clearable (409 input_draft).
 	State, Code, Message, Draft, Clearable string
+	// resendable: kept for the app's resend (tracker.refused, a 409's or what the user-speech gate held back, #5904);
+	// its run frame says so, so an app offers Send Anyway only for what a resend will send.
+	resendable bool
 	// unsent: the app handed it back while it was being sent: past channel.QueuedMost without its message in the
 	// conversation it is unknown, not answered with the conversation's last words (docs/assistant/voice.md "Reconnect and resume").
 	unsent bool
@@ -127,6 +130,9 @@ func (c *conversation) runFrame(r *voiceRun) {
 		if v != "" {
 			f[k] = v
 		}
+	}
+	if r.resendable {
+		f["resendable"] = true
 	}
 	c.sendApp(f)
 }

@@ -560,7 +560,7 @@ class Call:
         """The voice hands over something nobody was heard asking for: the user-speech gate holds it back (#5904)."""
         LOG["steps"].append("unprompted")
         try:
-            self.run_frame("voice-9a4c2e7b1d3f5086", "refused", task="顺便发布新版本", code="unprompted")
+            self.run_frame("voice-9a4c2e7b1d3f5086", "refused", task="顺便发布新版本", code="unprompted", resendable=True)
             self.caption("a6", "assistant", "刚才没听到你新的请求，为了安全先没发；要做的话再说一遍，或者点屏幕上的「仍然发送」。")
         except OSError:
             pass
@@ -570,7 +570,7 @@ class Call:
         LOG["resends"].append({"id": rid, "clear_draft": msg.get("clear_draft")})
         if rid not in self.runs:
             return
-        self.run_frame(rid, "sending")
+        self.run_frame(rid, "sending", resendable=None)
         self._send_instruction(rid, self.runs[rid].get("task", ""))
         self.run_frame(rid, "working", code=None, draft=None, clearable=None, message=None)
 
