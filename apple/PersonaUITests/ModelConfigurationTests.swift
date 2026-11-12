@@ -1,6 +1,6 @@
 import XCTest
 
-/// Against the mock hub: separated providers/purposes and a real PATCH through the editor.
+/// Against the mock hub: common model choices, advanced providers, and a real PATCH through the editor.
 final class ModelConfigurationTests: XCTestCase {
     private var hub: String!
 
@@ -20,14 +20,19 @@ final class ModelConfigurationTests: XCTestCase {
         return app
     }
 
-    @MainActor func testSettingsSeparatesProvidersAndModelConfiguration() {
+    @MainActor func testSettingsOpensModelsBeforeAdvancedProviders() {
         let app = launch()
-        let providers = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "模型供应商")).firstMatch
-        let purposes = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "模型配置")).firstMatch
-        for _ in 0..<4 where !purposes.isHittable { app.swipeUp() }
-        XCTAssertTrue(providers.exists && purposes.exists)
-        purposes.tap()
+        let models = app.descendants(matching: .any)["settings-models"].firstMatch
+        XCTAssertTrue(models.waitForExistence(timeout: 10))
+        for _ in 0..<4 where !models.isHittable { app.swipeUp() }
+        XCTAssertFalse(app.descendants(matching: .any)["settings-model-providers"].exists)
+        models.tap()
         XCTAssertTrue(app.descendants(matching: .any)["model-purpose-assistant"].waitForExistence(timeout: 10))
+        let providers = app.descendants(matching: .any)["settings-model-providers"].firstMatch
+        for _ in 0..<4 where !providers.isHittable { app.swipeUp() }
+        XCTAssertTrue(providers.exists)
+        providers.tap()
+        XCTAssertTrue(app.searchFields.firstMatch.waitForExistence(timeout: 10))
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.lifetime = .keepAlways
         add(attachment)

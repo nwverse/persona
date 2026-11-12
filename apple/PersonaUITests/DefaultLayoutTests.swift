@@ -34,9 +34,14 @@ final class DefaultLayoutTests: XCTestCase {
 
     @MainActor func testAppearanceHasOnlySupportedChoices() {
         let app = launch(tab: "settings")
+        let appearance = element("settings-appearance", in: app)
+        XCTAssertTrue(element("settings-list", in: app).waitForExistence(timeout: 30))
+        for _ in 0..<8 where !appearance.isHittable { app.swipeUp() }
+        XCTAssertTrue(appearance.exists)
+        appearance.tap()
         let style = element("settings-style", in: app)
-        XCTAssertTrue(style.waitForExistence(timeout: 30))
-        for id in ["settings-persona", "settings-color", "settings-language", "settings-scheme"] {
+        XCTAssertTrue(style.waitForExistence(timeout: 15))
+        for id in ["settings-color", "settings-scheme"] {
             XCTAssertTrue(element(id, in: app).exists, "Missing appearance choice: \(id)")
         }
         XCTAssertFalse(element("settings-layout", in: app).exists)

@@ -31,6 +31,7 @@ enum ProviderWizardStep: String, Hashable, Identifiable {
 /// model" sit beside them, and the import / other connection types under Advanced.
 struct ProviderWizard: View {
     @Environment(AppModel.self) private var model
+    private let requestScope = AssistantSettingsRequestScope(AppModel.shared)
     @Environment(\.dismiss) private var dismiss
     var saved: () async -> Void
     @State private var wizard: ProviderWizardModel
@@ -103,7 +104,8 @@ struct ProviderWizard: View {
                 .task(id: wizard.presetsFlow) {
                     // The toggle's default reads the readiness: ask for a fresh one alongside the presets.
                     if wizard.presetsFlow, model.hubFeatures.contains(AssistantReadiness.feature) {
-                        Task { await model.readiness.refresh(api: model.api) }
+                        let api = requestScope.api(model)
+                        Task { await model.readiness.refresh(api: api) }
                     }
                     await wizard.loadPresets()
                     #if DEBUG
@@ -267,7 +269,7 @@ struct ProviderWizard: View {
     }
 
     /// No computer yet: nothing to read a ~/.zshrc on (the import would wait for one forever).
-    private var noComputer: Bool { model.hubMachines.isEmpty }
+    private var noComputer: Bool { requestScope.machines(model).isEmpty }
 
     /// A hub with built-in presets: its providers in its order, the gateway typed by hand last; the two side paths;
     /// the import and the other ways under Advanced.
@@ -810,7 +812,7 @@ struct ProviderWizard: View {
 
     /// The machines to import from: the hub group's, online first.
     private var importMachines: [Machine] {
-        model.hubMachines.sorted { ($0.online ? 0 : 1, $0.name) < ($1.online ? 0 : 1, $1.name) }
+        requestScope.machines(model).sorted { ($0.online ? 0 : 1, $0.name) < ($1.online ? 0 : 1, $1.name) }
     }
 
     #if DEBUG
