@@ -2,10 +2,10 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { setToken } from "../lib/api";
+import { getToken, setToken } from "../lib/api";
 import { acquireExtensionLogo, extensionLogoSource } from "../lib/extension-logo";
 import { ExtensionLogo } from "./ExtensionLogo";
-import { pinManager } from "../lib/manager-choice";
+import { chosenManager, defaultManager, pinManager, resetManagerChoice, setRosterDefault } from "../lib/manager-choice";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const path = "/api/v1/extensions/notes/-/icon?v=1.0.0";
@@ -15,6 +15,7 @@ let host: HTMLDivElement, root: Root;
 let created: ReturnType<typeof vi.fn>, revoked: ReturnType<typeof vi.fn>;
 const flush = async () => { for (let i = 0; i < 4; i++) await act(async () => { await new Promise(r => setTimeout(r, 0)); }); };
 beforeEach(() => {
+  resetManagerChoice();
   setToken(`synthetic-${Math.random()}`);
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
   created = vi.fn(() => "blob:synthetic-icon"); revoked = vi.fn();
@@ -93,11 +94,42 @@ it("keeps list and detail artwork scoped to their explicit manager, including th
     act(() => root.render(<ExtensionLogo url={path} manager="list-owner" className="size-8" iconSize={16} />)); await flush();
     expect(new Headers(vi.mocked(fetch).mock.calls[0][1]?.headers).get("X-Persona-Manager")).toBe("list-owner");
     act(() => root.render(<ExtensionLogo url={path} manager="" className="size-8" iconSize={16} />)); await flush();
-    expect(new Headers(vi.mocked(fetch).mock.calls[1][1]?.headers).get("X-Persona-Manager")).toBe("");
+    expect(new Headers(vi.mocked(fetch).mock.calls[1][1]?.headers).get("X-Persona-Manager")).toBe(defaultManager());
     expect(revoked).toHaveBeenCalledTimes(1);
     act(() => root.render(<ExtensionLogo url={path} manager="list-owner" className="size-8" iconSize={16} />)); await flush();
     expect(fetch).toHaveBeenCalledTimes(2);
   } finally { unpin(); }
+});
+
+it("retires default-owner artwork and isolates A/B caches without changing token or chosen manager, while stamped A stays mounted", async () => {
+  setRosterDefault("default-a");
+  const token = getToken();
+  created.mockImplementation(() => `blob:owner-${created.mock.calls.length}`);
+  let resolveB!: (response: Response) => void;
+  vi.mocked(fetch).mockImplementation(async (_url, init) => {
+    const owner = new Headers(init?.headers).get("X-Persona-Manager");
+    if (owner === "default-b") return new Promise(resolve => { resolveB = resolve; });
+    return new Response("owner-a", { headers: { "Content-Type": "image/png" } });
+  });
+  act(() => root.render(<><ExtensionLogo url={path} manager="" className="size-8" iconSize={16} />
+    <ExtensionLogo url={path} manager="default-a" className="size-8" iconSize={16} /></>));
+  await flush();
+  const tiles = host.querySelectorAll("[data-extension-logo]");
+  const oldDefault = tiles[0].querySelector("img")!.src;
+  const stampedA = tiles[1].querySelector("img")!.src;
+  expect(fetch).toHaveBeenCalledTimes(1);
+  act(() => setRosterDefault("default-b")); await flush();
+  expect(getToken()).toBe(token); expect(chosenManager()).toBeNull();
+  expect(tiles[0].querySelector("img")).toBeNull();
+  expect(tiles[1].querySelector("img")!.src).toBe(stampedA);
+  expect(revoked).toHaveBeenCalledExactlyOnceWith(oldDefault);
+  expect(new Headers(vi.mocked(fetch).mock.calls[1][1]?.headers).get("X-Persona-Manager")).toBe("default-b");
+  resolveB(new Response("owner-b", { headers: { "Content-Type": "image/png" } })); await flush();
+  expect(tiles[0].querySelector("img")!.src).not.toBe(oldDefault);
+  expect(tiles[1].querySelector("img")!.src).toBe(stampedA);
+  act(() => setRosterDefault("default-a")); await flush();
+  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(tiles[1].querySelector("img")!.src).toBe(stampedA);
 });
 
 it("leaves external HTTPS images anonymous without asking the hub", async () => {
@@ -138,7 +170,7 @@ it("cancels only after the final consumer leaves and fences stale results on URL
 
 it("bounds cached bytes and never caches invalid media or failures", async () => {
   vi.mocked(fetch).mockResolvedValueOnce(new Response("not a bundled PNG", { headers: { "Content-Type": "image/jpeg" } }));
-  const bad = acquireExtensionLogo(apiPath); await expect(bad.promise).rejects.toThrow("Invalid extension icon"); bad.release();
+  const bad = acquireExtensionLogo(apiPath); await expect(bad.promise).rejects.toThrow("Invalid bounded blob response"); bad.release();
   vi.mocked(fetch).mockImplementation(async () => new Response(new Uint8Array(2 * 1024 * 1024), { headers: { "Content-Type": "image/png" } }));
   for (let i = 0; i < 5; i++) { const entry = acquireExtensionLogo(`${apiPath}${i}`); await entry.promise; entry.release(); }
   const first = acquireExtensionLogo(`${apiPath}0`); await first.promise; first.release();

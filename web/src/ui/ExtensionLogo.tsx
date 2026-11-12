@@ -1,18 +1,22 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 import { credentialOwner, subscribeCredentialOwner } from "../lib/api";
 import { acquireExtensionLogo, extensionLogoSource } from "../lib/extension-logo";
-import { useChosenManager } from "../lib/manager-choice";
+import { defaultManager, managerHeaderFor, onDefaultManager, useChosenManager } from "../lib/manager-choice";
 import { Icon } from "./icons";
+
+const subscribeDefault = (listener: () => void) => onDefaultManager(listener);
 
 /** Keep the caller's existing tile geometry and status tint, including when artwork fails. */
 export function ExtensionLogo({ url, manager, className, iconSize }: { url?: string; manager?: string; className: string; iconSize: number }) {
   const source = extensionLogoSource(url);
   const owner = useSyncExternalStore(subscribeCredentialOwner, credentialOwner);
-  const chosen = useChosenManager();
+  useChosenManager();
+  const fallbackOwner = useSyncExternalStore(subscribeDefault, defaultManager);
+  const resolvedManager = (manager ?? (source?.path ? managerHeaderFor(source.path) : undefined)) || fallbackOwner;
   const tile = useRef<HTMLSpanElement>(null);
   // Remount on URL/owner changes: failed or retired artwork cannot replace a new request.
   return <span ref={tile} aria-hidden="true" data-extension-logo className={`relative ${className}`}>
-    {source?.path ? <HubLogo key={`${owner}:${chosen ?? ""}:${manager ?? ""}:${source.path}`} path={source.path} manager={manager} tile={tile} iconSize={iconSize} />
+    {source?.path ? <HubLogo key={`${owner}:${resolvedManager}:${source.path}`} path={source.path} manager={resolvedManager} tile={tile} iconSize={iconSize} />
       : <LogoImage key={source?.publicURL} src={source?.publicURL ?? null} iconSize={iconSize} />}
   </span>;
 }

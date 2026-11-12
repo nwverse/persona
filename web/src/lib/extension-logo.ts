@@ -1,6 +1,7 @@
 import { apiBlob, credentialOwner } from "./api";
 import { BASE } from "./base";
-import { MANAGER_HEADER, managerHeaderFor } from "./manager-choice";
+import { defaultManager, MANAGER_HEADER, managerHeaderFor } from "./manager-choice";
+import { boundedBlobReader } from "./bounded-blob";
 
 const installed = /^\/api\/v1\/extensions\/[A-Za-z0-9_-]{1,64}\/-\/icon\?v=[A-Za-z0-9_.~%+\-]+$/;
 const catalog = /^\/api\/v1\/extensions\/-\/catalog\/[A-Za-z0-9_-]{1,64}\/[A-Za-z0-9_-]{1,64}\/icon\?sha256=[a-fA-F0-9]{64}$/;
@@ -25,6 +26,7 @@ const maxBytes = 2 * 1024 * 1024;
 const cacheBytes = 8 * 1024 * 1024;
 const cacheEntries = 128;
 const types = new Set(["image/png"]);
+const readIconBlob = boundedBlobReader({ maxBytes, mimeTypes: [...types] });
 const cached = new Map<string, Blob>();
 const pending = new Map<string, { controller: AbortController; users: number; promise: Promise<Blob> }>();
 let bytes = 0;
@@ -33,7 +35,8 @@ let bytes = 0;
 export function acquireExtensionLogo(path: string, explicitManager?: string): { promise: Promise<Blob>; release: () => void } {
   if (!iconPath(`/api/v1${path}`)) throw new Error("Invalid extension icon path");
   const owner = credentialOwner();
-  const manager = (explicitManager ?? managerHeaderFor(path)) || "";
+  const resolveManager = () => (explicitManager ?? managerHeaderFor(path)) || defaultManager();
+  const manager = resolveManager();
   const key = JSON.stringify([owner, manager, path]);
   const hit = cached.get(key);
   if (hit) {
@@ -47,10 +50,10 @@ export function acquireExtensionLogo(path: string, explicitManager?: string): { 
       // The ordinary API's same-origin credentials also preserve a hub's front-door sign-in cookies.
       // These never go to public artwork or to a followed redirect.
       signal: controller.signal, credentials: "same-origin", redirect: "manual", referrerPolicy: "no-referrer",
-      headers: { [MANAGER_HEADER]: manager ?? "" },
-      isAuthContextCurrent: () => !controller.signal.aborted && credentialOwner() === owner,
+      headers: { [MANAGER_HEADER]: manager }, readBlob: readIconBlob,
+      isAuthContextCurrent: () => !controller.signal.aborted && credentialOwner() === owner && resolveManager() === manager,
     }).then(blob => {
-      if (controller.signal.aborted || credentialOwner() !== owner) throw new DOMException("Aborted", "AbortError");
+      if (controller.signal.aborted || credentialOwner() !== owner || resolveManager() !== manager) throw new DOMException("Aborted", "AbortError");
       if (!blob.size || blob.size > maxBytes || !types.has(blob.type.split(";")[0].toLowerCase())) throw new Error("Invalid extension icon");
       cached.set(key, blob); bytes += blob.size;
       while (cached.size > cacheEntries || bytes > cacheBytes) {
