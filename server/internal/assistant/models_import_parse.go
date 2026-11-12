@@ -201,19 +201,39 @@ func parsePasteJSON(data []byte) pasteResult {
 	return pasteResult{}
 }
 
-// matchPaste fills each draft's matches: every stored provider on its base URL, the ones with its key first. Keys are
-// compared here and never leave the manager; a key that is a reference never equals a pasted one, nor does a draft
-// without a key.
-func matchPaste(drafts []pasteDraft, known []knownProvider) {
+// pasteAPI is the API a stored provider is called with, as a draft names it: messages for any Messages base (a Claude
+// Code or omp launcher, a direct Messages API), a direct API's own; none for a Codex or Antigravity launcher, which no
+// paste makes (its models are what that agent is offered, not a direct API's).
+func pasteAPI(l storedLauncher) string {
+	switch {
+	case l.MessagesBase():
+		return "messages"
+	case l.Kind == "api":
+		return l.API
+	}
+	return ""
+}
+
+// matchPaste fills each draft's matches: every stored provider calling the draft's API at its base URL, the ones with
+// its key first. Only those providers' keys are opened (open), and only for a draft with a key; they are compared here
+// and never leave the manager. A key that is a reference never equals a pasted one.
+func matchPaste(drafts []pasteDraft, stored []storedLauncher, open func(sealed string) (string, error)) error {
 	for i := range drafts {
 		d := &drafts[i]
 		var same, other []pasteMatch
-		for _, k := range known {
-			if k.baseURL != d.Provider.BaseURL {
+		for _, l := range stored {
+			if l.LaunchBaseURL() != d.Provider.BaseURL || pasteAPI(l) != d.Provider.API {
 				continue
 			}
-			_, ref := extension.ReferenceOf(k.key)
-			m := pasteMatch{Name: k.name, DisplayName: k.displayName, SameKey: d.Provider.APIKey != "" && !ref && k.key == d.Provider.APIKey}
+			m := pasteMatch{Name: l.Name, DisplayName: l.DisplayName}
+			if d.Provider.APIKey != "" && l.KeySealed != "" {
+				key, err := open(l.KeySealed)
+				if err != nil {
+					return i18n.Err("assistant-models.err_key_decrypt")
+				}
+				_, ref := extension.ReferenceOf(key)
+				m.SameKey = !ref && key == d.Provider.APIKey
+			}
 			if m.SameKey {
 				same = append(same, m)
 			} else {
@@ -222,6 +242,7 @@ func matchPaste(drafts []pasteDraft, known []knownProvider) {
 		}
 		d.Matches = append(same, other...)
 	}
+	return nil
 }
 
 // parsePasteRoute answers POST /api/v1/launchers/import/parse {text}: the drafts of the pasted text, the shell aliases'
@@ -243,12 +264,16 @@ func (s *Service) parsePasteRoute(w http.ResponseWriter, r *http.Request) {
 	if len(res.Drafts) > 0 {
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
-		stored, known, err := s.storedKnown(ctx)
+		s.models.mu.Lock()
+		stored, err := s.readStoredLaunchers(ctx)
+		s.models.mu.Unlock()
+		if err == nil {
+			err = matchPaste(res.Drafts, stored, s.openKey)
+		}
 		if err != nil {
 			apierr.Write(w, http.StatusInternalServerError, err)
 			return
 		}
-		matchPaste(res.Drafts, known)
 		if slices.ContainsFunc(res.Drafts, func(d pasteDraft) bool { return d.Provider.Name != "" }) {
 			rc, _ := s.zshrcLaunchersLastSeen(ctx)
 			taken := s.importTaken(ctx, rc, stored)

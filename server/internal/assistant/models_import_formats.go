@@ -127,14 +127,14 @@ func parseShell(lines []shellcmd.Line) pasteResult {
 				}
 				for _, d := range defs {
 					recognized = true
+					// Defined again: the last definition counts, where it is (as the shell keeps it), claude or not.
+					aliases = slices.DeleteFunc(aliases, func(o shellLaunch) bool { return o.alias == d.Name })
 					a, ok := shellcmd.ClaudeCommand(d.Value)
 					if !ok {
 						tell(l.Start, noteNotClaude, 0, d.Name)
 						continue
 					}
-					// Defined again: the last definition counts, where it is (as the shell keeps it).
-					aliases = append(slices.DeleteFunc(aliases, func(o shellLaunch) bool { return o.alias == d.Name }),
-						shellLaunch{alias: d.Name, line: l.Start, env: a.Env, args: a.Args})
+					aliases = append(aliases, shellLaunch{alias: d.Name, line: l.Start, env: a.Env, args: a.Args})
 				}
 			case words[0] == "export" || !slices.ContainsFunc(words, func(w string) bool { return !shellcmd.AssignRe.MatchString(w) }):
 				for _, w := range words {
@@ -209,8 +209,8 @@ func parseShell(lines []shellcmd.Line) pasteResult {
 }
 
 // parseSettings reads a Claude Code settings.json: its env (string values; others are not variables Claude Code
-// sets), its model as ANTHROPIC_MODEL when env has none, and an apiKeyHelper (it runs a command for the key, so
-// there is no key to take) as the draft of that env alone.
+// sets) and its model as ANTHROPIC_MODEL when env has none, as the draft of that env alone. Without a key in env, an
+// apiKeyHelper says why there is none: it runs a command for the key.
 func parseSettings(obj map[string]any) pasteResult {
 	env := map[string]string{}
 	if m, ok := obj["env"].(map[string]any); ok {
@@ -230,8 +230,9 @@ func parseSettings(obj map[string]any) pasteResult {
 		return res
 	}
 	if helper, _ := obj["apiKeyHelper"].(string); strings.TrimSpace(helper) != "" {
-		d.Notes = slices.DeleteFunc(d.Notes, func(n pasteNote) bool { return n.Code == noteNoKey })
-		addNote(&d.Notes, pasteNote{Code: noteKeyHelper})
+		if i := slices.Index(d.Notes, pasteNote{Code: noteNoKey}); i >= 0 {
+			d.Notes[i] = pasteNote{Code: noteKeyHelper}
+		}
 	}
 	res.Drafts = append(res.Drafts, d)
 	return res
@@ -364,14 +365,14 @@ func readCurl(args []string) curlRequest {
 }
 
 // curlEndpoint is an endpoint path a curl URL may end in, and the API that says: the base URL is what is before the
-// path, and keep.
-type curlEndpoint struct{ path, keep, api string }
+// path (an OpenAI-compatible base keeps its /v1, /v1beta/openai or none at all).
+type curlEndpoint struct{ path, api string }
 
 var curlEndpoints = []curlEndpoint{
-	{"/messages", "", "messages"},
-	{"/v1/chat/completions", "/v1", "chat"},
-	{"/v1/responses", "/v1", "responses"},
-	{"/v1/models", "", "messages"},
+	{"/messages", "messages"},
+	{"/chat/completions", "chat"},
+	{"/responses", "responses"},
+	{"/v1/models", "messages"},
 }
 
 // endpointProvider is the provider calling api at base: Messages a Claude Code gateway (base as MessagesBaseURL makes
@@ -426,7 +427,7 @@ func curlDraft(c curlRequest) (pasteDraft, string) {
 	root, path := u.Scheme+"://"+u.Host, strings.TrimRight(u.EscapedPath(), "/")
 	if i := slices.IndexFunc(curlEndpoints, func(e curlEndpoint) bool { return strings.HasSuffix(path, e.path) }); i >= 0 {
 		e := curlEndpoints[i]
-		d.Provider = endpointProvider(e.api, root+strings.TrimSuffix(path, e.path)+e.keep)
+		d.Provider = endpointProvider(e.api, root+strings.TrimSuffix(path, e.path))
 	} else {
 		d.Provider = endpointProvider("messages", root+path)
 		addNote(&d.Notes, pasteNote{Code: noteCurlPath, Name: u.Path})
