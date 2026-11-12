@@ -516,6 +516,7 @@ To-dos do not store a separate tree. Code: `assistant/inbox_parent.go`.
   Moments, and other connectors (their events / setting changes also trigger this full round); mail every 3 minutes. Previously every Lark event read all of them (#674). Pull-to-refresh
   (`POST /api/v1/inbox/refresh`) collects everything immediately (a failed collect answers `502 inbox_refresh_failed` instead of the list, see "Ownership" above). Changes write `inbox_items` and push `{"type":"inbox"}`, prompting App refetch; new plugin-connector items store / push only after triage ("AI triage").
 - **Done** is recorded only in Persona (`done_at`, `done_by=user`; ignored items use `dismissed`, see "Clean up all"; one replaced by the new thread rule uses `superseded`). It does not change Lark or mail read state. Done items remain listed for 3 days, reopenable at the bottom,
+  at most the newest 200 of them by `done_at` (`inboxListDone`; after thousands are marked done at once the list stayed small, and the rest are on Done's history),
   and the manager holds them in memory for 8 days (meanwhile preventing old still-unread Lark messages from resurfacing); it loads only open items and those done within 8 days.
 - **History** (#2200): done rows stay in `inbox_items` for 90 days (`inboxKeepHistory`); the manager deletes older ones at load and from the collection rounds at most hourly.
   `GET /api/v1/inbox/done` pages them newest done first (`inbox_history.go`, `docs/protocol/protocol.md`), keyset on `(done_at, id)`: a bulk action files many items at one instant,
@@ -602,12 +603,13 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   it came out washed like a stuck title's, and on an iPhone the scroll edge blurred every row above it once a title stuck (#4218).
   Done's title has Jump To (its groups with counts; picking one unfolds it, loads it if it isn't, and scrolls to its first row, since an iOS `List` can't scroll to a header)
   and Fold all / Unfold all.
-- **Done's history**: past the list's 3 days, Done reads each manager's `GET /api/v1/inbox/done` ("History" under "Lifecycle"; 100 a page; on iOS the default manager's).
+- **Done's history**: past what the list holds (its 3 days, at most 200 done items), Done reads each manager's `GET /api/v1/inbox/done` ("History" under "Lifecycle"; 100 a page; on iOS the default manager's).
   Items the hub didn't stamp with a manager get the default one when there are several, so the per-manager filter keeps them. Done from history reopens through the item's own manager.
   - **With day counts** (#2969; "Days" under "Lifecycle", #2967): when the list is shown the apps ask for the counts in this device's zone, and Done lists every group they name
     with its exact count, loaded or not (Today less what Just now holds). Groups older than today start folded, so nothing more loads until one opens: opening a group, or
     picking it in Jump To, loads its first page from its end (`before=<the group's end>`, no `before_id`), and Show Older inside it loads the next, until a page reaches
-    the group's start. The groups the list holds (its 3 days) are complete without a page. Filtered or searched, the hub's counts don't apply: Done shows the groups with
+    the group's start. Installed iOS builds and web bundles from before the 200 cap take the groups of the list's 3 days as complete without a page, so past 200 done items in 3 days
+    they show the newest 200 there and the counts; the history still pages them all. Filtered or searched, the hub's counts don't apply: Done shows the groups with
     matching items, counted as loaded and "n+" until complete, and Show Older under Done loads the newest group the hub counts that hasn't all come.
   - **Without them** (a hub from before #2967: 404 / 405): the first page from the newest when the list is shown, the next from Show Older at the end of Done; the last
     group's count reads "n+" while older pages remain. Old hubs without the history (404 / 405) quietly have none.
