@@ -1249,7 +1249,7 @@ private struct HomeInboxWidget: View {
                     Spacer().frame(height: HomeWidgetTokens.row)
                     HStack(alignment: .firstTextBaseline, spacing: HomeWidgetTokens.gap) {
                         HomeHero(text: "\(inbox.needsYou)", font: HomeWidgetTokens.heroMedium, color: HomeWidgetTokens.inbox.dot)
-                        Text("\(inbox.needsYou) messages need you [Home Widgets]").font(HomeWidgetTokens.headline).lineLimit(1).homeInk(.primary)
+                        Text("Need You [Home Widgets]").font(HomeWidgetTokens.headline).lineLimit(1).homeInk(.primary)
                         Spacer()
                     }
                     Spacer().frame(height: HomeWidgetTokens.row)
