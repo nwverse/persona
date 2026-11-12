@@ -304,6 +304,14 @@
       },
       "$description": "Theme.Size.markS"
     },
+    "badge": {
+      "$type": "dimension",
+      "$value": {
+        "value": 18,
+        "unit": "px"
+      },
+      "$description": "Theme.Size.badge"
+    },
     "wellXS": {
       "$type": "dimension",
       "$value": {
@@ -375,6 +383,14 @@
         "unit": "px"
       },
       "$description": "Theme.Size.box150"
+    },
+    "box280": {
+      "$type": "dimension",
+      "$value": {
+        "value": 280,
+        "unit": "px"
+      },
+      "$description": "Theme.Size.box280: the widest a pill above the composer gets (the pill while a chat's model operates a Mac)"
     },
     "slimBar": {
       "$type": "dimension",

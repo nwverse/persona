@@ -611,16 +611,28 @@ func TestHandoffCardWordsAndTheProviderApproved(t *testing.T) {
 	}
 }
 
-// The card's summary names the Agent when it has a name, and says "an Agent" when it has none yet, in every language.
+// The card's summary, also the "Needs you" row's and the push's, leads with the Agent and how many secrets it asks for
+// (the items are on the card), and says "an Agent" when it has no name yet, in every language.
 func TestHandoffSummaryWithoutAnAgentName(t *testing.T) {
-	const items = "Example Vault › GitHub token as GITHUB_TOKEN"
-	if got := handoffSummary(i18n.En, items, " ", "Box"); got != "Give "+items+" to an Agent on Box, for this run only. Approve on iPhone or the web." {
-		t.Fatalf("en: %q", got)
+	for _, c := range []struct {
+		count       int
+		agent, want string
+	}{
+		{2, "Fix CI", "“Fix CI” needs 2 secrets on Box, for this run only. Approve on iPhone or the web."},
+		{1, "Fix CI", "“Fix CI” needs a secret on Box, for this run only. Approve on iPhone or the web."},
+		{2, " ", "An Agent needs 2 secrets on Box, for this run only. Approve on iPhone or the web."},
+	} {
+		if got := handoffSummary(i18n.En, c.count, c.agent, "Box"); got != c.want {
+			t.Errorf("en %d %q: %q", c.count, c.agent, got)
+		}
+	}
+	if got := handoffSummary(i18n.ZhHans, 2, "修发布的 CI", "MacBook"); !strings.HasPrefix(got, "「修发布的 CI」要 2 个密钥") {
+		t.Errorf("zh-Hans: %q", got)
 	}
 	for _, l := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
-		named, unnamed := handoffSummary(l, items, "Fix CI", "Box"), handoffSummary(l, items, "", "Box")
-		if !strings.Contains(named, "Fix CI") || !strings.Contains(named, items) || !strings.Contains(unnamed, items) ||
-			!strings.Contains(unnamed, "Box") || strings.Contains(unnamed, "“”") || strings.Contains(unnamed, "「」") || unnamed == named {
+		named, unnamed := handoffSummary(l, 2, "Fix CI", "Box"), handoffSummary(l, 2, "", "Box")
+		if !strings.Contains(named, "Fix CI") || !strings.Contains(named, "2") || !strings.Contains(unnamed, "Box") ||
+			!strings.Contains(unnamed, "Agent") || strings.Contains(unnamed, "“”") || strings.Contains(unnamed, "「」") || unnamed == named {
 			t.Fatalf("%s: %q / %q", l, named, unnamed)
 		}
 	}
@@ -947,4 +959,43 @@ func TestHandoffRulesCoverTheUsersOwnMessagesNotTheStartsFirst(t *testing.T) {
 	}
 	r.f.items = []proto.Item{{ID: "line3", Role: "user", Kind: proto.KindText, Text: mail, ClientMsgID: "c-mail"}}
 	r.declineCard(r.startIn(self, handoffArgs))
+}
+
+// What Siri, Shortcuts or the share sheet sends (via, any value) never counts as the user's own words, from their own
+// app or not, and the mark is not passed on to the node.
+func TestHandoffRulesNotForWhatSiriOrTheShareSheetSends(t *testing.T) {
+	ctx := context.Background()
+	const prompt = "fix CI with my token please"
+	r := newHandoffRig(t)
+	r.secrets.rules = []extmgr.HandoffRule{{Reference: "op://Dev/GitHub/credential1", Launcher: "claude", Machine: "box"},
+		{Reference: "op://Dev/npm/credential2", Launcher: "claude", Machine: "box"}}
+	self, id := r.open(map[string]any{"prompt": prompt, "machine_id": "server", "via": "intent"}, true)
+	if id != "" {
+		t.Fatalf("a start from Siri gave the node %q", id)
+	}
+	out, err := r.s.SendParams(ctx, SendParams{MachineID: "server", SessionID: self, Human: true,
+		Params: map[string]any{"client_msg_id": "c-shared", "text": prompt, "via": "share"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, passed := out["via"]; passed {
+		t.Fatal("the mark was passed on to the node")
+	}
+	r.f.items = []proto.Item{{ID: "line2", Role: "user", Kind: proto.KindText, Text: prompt, ClientMsgID: "c-shared"}}
+	r.declineCard(r.startIn(self, handoffArgs))
+	if _, err := r.s.SendParams(ctx, SendParams{MachineID: "server", SessionID: self, Human: true,
+		Params: map[string]any{"client_msg_id": "c-marked", "text": prompt, "via": true}}); err != nil { // any mark marks it
+		t.Fatal(err)
+	}
+	r.f.items = []proto.Item{{ID: "line3", Role: "user", Kind: proto.KindText, Text: prompt, ClientMsgID: "c-marked"}}
+	r.declineCard(r.startIn(self, handoffArgs))
+	// The same message unmarked: covered (the rule, the rig and the send all work).
+	if _, err := r.s.SendParams(ctx, SendParams{MachineID: "server", SessionID: self, Human: true,
+		Params: map[string]any{"client_msg_id": "c-typed", "text": prompt}}); err != nil {
+		t.Fatal(err)
+	}
+	r.f.items = []proto.Item{{ID: "line4", Role: "user", Kind: proto.KindText, Text: prompt, ClientMsgID: "c-typed"}}
+	if answer, errText := r.answer(r.startIn(self, handoffArgs)); errText != "" || !strings.Contains(answer, "Always rule") {
+		t.Fatalf("the typed message: answer %q, error %q", answer, errText)
+	}
 }

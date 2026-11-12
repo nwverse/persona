@@ -65,6 +65,46 @@ import Testing
         #expect(old.secretUsers.isEmpty && old.handoffRules.isEmpty)
     }
 
+    /// What Siri, Shortcuts or the share sheet sends is marked `via`, so it never counts as the user's own words for an
+    /// Always rule; what the app's own composer sends is not marked.
+    @Test func siriAndTheShareSheetMarkWhatTheySend() async throws {
+        let hub = FakeHub()
+        let session = #"{"session":{"machine_id":"server","session_id":"s9","status":"working","cwd":"/a"}}"#
+        hub.on("POST", "/api/v1/assistant/conversations", json: session)
+        hub.on("POST", "/api/v1/sessions/server/main/messages", json: #"{"ok":true}"#)
+        let id = UUID().uuidString
+        _ = try await ShareTargets.send(hub.client, to: ShareTarget(kind: .newChat, key: nil, title: "New Chat"), text: "a page", images: [], clientMsgID: id)
+        _ = try await ShareTargets.send(hub.client, to: ShareTarget(kind: .main, key: SessionKey(machineID: "server", sessionID: "main"), title: "Persona"),
+                                        text: "a page", images: [], clientMsgID: id)
+        _ = try await hub.client.startConversation(prompt: "what is on today", main: true, via: .intent)
+        try await hub.client.send(SessionKey(machineID: "server", sessionID: "main"), text: "typed", clientMsgID: "c1")
+        func via(_ body: Data?) throws -> String? {
+            try (JSONSerialization.jsonObject(with: try #require(body)) as? [String: Any])?["via"] as? String
+        }
+        let starts = hub.sent("POST", "/api/v1/assistant/conversations"), sends = hub.sent("POST", "/api/v1/sessions/server/main/messages")
+        #expect(starts.count == 2 && sends.count == 2)
+        #expect(try via(starts[0].body) == "share")
+        #expect(try via(starts[1].body) == "intent")
+        #expect(try via(sends[0].body) == "share")
+        #expect(try via(sends[1].body) == nil)
+    }
+
+    /// A message a card's button wrote (the Today card's Prep) keeps its mark in the outbox, across a relaunch, and is
+    /// sent with it.
+    @Test func aCardsMessageKeepsItsMarkInTheOutbox() async throws {
+        var msg = PendingMessage(text: "Help me prepare for “Design review”", images: [])
+        msg.via = .card
+        let kept = try JSONDecoder().decode(PendingMessage.self, from: try JSONEncoder().encode(msg))
+        #expect(kept.via == .card)
+        let typed = try JSONDecoder().decode(PendingMessage.self, from: try JSONEncoder().encode(PendingMessage(text: "typed", images: [])))
+        #expect(typed.via == nil)
+        let hub = FakeHub()
+        hub.on("POST", "/api/v1/sessions/server/main/messages", json: #"{"ok":true}"#)
+        try await hub.client.send(SessionKey(machineID: "server", sessionID: "main"), text: kept.text, clientMsgID: kept.id.uuidString, via: kept.via)
+        let body = try #require(hub.sent("POST", "/api/v1/sessions/server/main/messages").first?.body)
+        #expect((try JSONSerialization.jsonObject(with: body) as? [String: Any])?["via"] as? String == "card")
+    }
+
     @Test func aReferenceIsSavedInPlaceOfAValueAndARuleRemoved() async throws {
         let hub = FakeHub()
         let detail = #"{"id":"example-notes","name":"Example Notes","kind":"connectors","status":"running","permissions":[]}"#

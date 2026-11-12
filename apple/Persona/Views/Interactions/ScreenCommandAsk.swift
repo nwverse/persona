@@ -3,42 +3,65 @@ import SwiftUI
 /// What a screen card shows of a command's permission prompt read off the terminal, in plain words (#5266), under its
 /// heading ("Claude Wants to Run a Command") and over its answers: the agent's own words for it, the command in code type
 /// (a long one folded, Show All), the warning in plain words with Claude Code's own under Show Original, and the
-/// countdown running. The default style's `ScreenForm` and Beautiful UI's `BUIScreenForm` both lay it out.
+/// countdown running. The default style's `ScreenForm` and Beautiful UI's `BUIScreenForm` (`compact`) both lay it out.
 struct ScreenCommandAskBody: View {
     var ask: CommandAsk
+    /// Beautiful UI's card, whose choice rows and Send under this take more room than the default style's two buttons:
+    /// the agent's words in the secondary type close over the command (as its permission card shows a reason), the
+    /// command folded to two rows, the countdown beside the warning where the row has room. So Send stays in the
+    /// half-page panel's view.
+    var compact = false
     @State private var showsAll = false
     @State private var showsOriginal = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.m) {
-            if let description = ask.description {
-                Text(description)
-                    .font(Theme.Font.body).lineHeight(.body)
-                    .fixedSize(horizontal: false, vertical: true)
+            if compact {
+                VStack(alignment: .leading, spacing: Theme.Space.s) {
+                    if let description = ask.description {
+                        Text(description)
+                            .font(Theme.Font.secondary).lineHeight(.secondary)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    command
+                }
+            } else {
+                if let description = ask.description {
+                    Text(description)
+                        .font(Theme.Font.body).lineHeight(.body)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                command
             }
-            command
             // Close together, so Deny / Allow stay in the panel's view under them.
             if ask.riskLine != nil || ask.deadlineAt != nil {
                 VStack(alignment: .leading, spacing: Theme.Space.s) {
-                    if let risk = ask.riskLine { warning(risk) }
-                    if ask.deadlineAt != nil { ScreenCountdown(ask: ask) }
+                    if compact {
+                        compactNotes
+                    } else {
+                        if let risk = ask.riskLine { warning(risk) }
+                        if ask.deadlineAt != nil { ScreenCountdown(ask: ask) }
+                    }
                 }
             }
         }
     }
+
+    private var foldedLines: Int { compact ? CommandAsk.compactFoldedLines : CommandAsk.foldedLines }
 
     /// The command as the permission card shows one (`PermissionForm`): code type in its box, selectable.
     private var command: some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
             Text(ask.command)
                 .font(Theme.Font.code)
-                .lineLimit(ask.isLong && !showsAll ? CommandAsk.foldedLines : nil)
+                .lineLimit(ask.folds(at: foldedLines) && !showsAll ? foldedLines : nil)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(Theme.Space.m)
                 .background(Theme.codeBackground, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
                 .accessibilityIdentifier("screen-command")
-            if ask.isLong {
+            if ask.folds(at: foldedLines) {
                 Button {
                     withAnimation(Theme.Motion.standard) { showsAll.toggle() }
                 } label: {
@@ -56,12 +79,7 @@ struct ScreenCommandAskBody: View {
     /// Code's own warning and countdown sentence under that.
     private func warning(_ risk: String) -> some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
-            let line = HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
-                ThemedIcon(Theme.Icon.errorFilled).font(Theme.Font.captionMedium)
-                Text(risk).font(Theme.Font.captionMedium).fixedSize(horizontal: false, vertical: true)
-            }
-            .foregroundStyle(Theme.cautionText)
-            .accessibilityElement(children: .combine)
+            let line = warningLine(risk)
             if let original = ask.original {
                 ViewThatFits(in: .horizontal) {
                     HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
@@ -85,6 +103,74 @@ struct ScreenCommandAskBody: View {
             } else {
                 line
             }
+        }
+    }
+
+    private func warningLine(_ risk: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+            ThemedIcon(Theme.Icon.errorFilled).font(Theme.Font.captionMedium)
+            Text(risk).font(Theme.Font.captionMedium).fixedSize(horizontal: false, vertical: true)
+        }
+        .foregroundStyle(Theme.cautionText)
+        .accessibilityElement(children: .combine)
+    }
+
+    /// Beautiful UI's warning and countdown: the countdown beside the warning, Show Original under them; where the row
+    /// has no room for both, the countdown under the warning with Show Original beside it (or under it). Claude Code's
+    /// own words under all that.
+    @ViewBuilder private var compactNotes: some View {
+        if let risk = ask.riskLine {
+            let line = warningLine(risk)
+            let countdown = ask.deadlineAt != nil ? ScreenCountdown(ask: ask) : nil
+            let original = ask.original != nil ? originalButton : nil
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+                        line
+                        Spacer(minLength: Theme.Space.s)
+                        countdown
+                        original
+                    }
+                    if let countdown {
+                        VStack(alignment: .leading, spacing: Theme.Space.s) {
+                            HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+                                line
+                                Spacer(minLength: Theme.Space.s)
+                                countdown
+                            }
+                            original
+                        }
+                    }
+                    VStack(alignment: .leading, spacing: Theme.Space.s) {
+                        line
+                        if let countdown {
+                            ViewThatFits(in: .horizontal) {
+                                HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+                                    countdown
+                                    Spacer(minLength: Theme.Space.s)
+                                    original
+                                }
+                                VStack(alignment: .leading, spacing: Theme.Space.s) {
+                                    countdown
+                                    original
+                                }
+                            }
+                        } else {
+                            original
+                        }
+                    }
+                }
+                if showsOriginal, let original = ask.original {
+                    Text(original)
+                        .font(Theme.Font.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .transition(.opacity)
+                }
+            }
+        } else if ask.deadlineAt != nil {
+            ScreenCountdown(ask: ask)
         }
     }
 
