@@ -43,6 +43,7 @@ func (s *Service) hubUploaded(e *kb.Engine, id string, segs []kb.RecordingSegmen
 	r.role = rec.AttendanceRole()
 	if t := m.Transcription; t != nil && t.Timeline != nil {
 		r.timeline.Merge(*t.Timeline)
+		r.reconcileOpenLocked() // the upload's timeline repairs a speaking off a socket lost
 	}
 	r.device = slices.Clone(segs)
 	for _, sg := range segs {

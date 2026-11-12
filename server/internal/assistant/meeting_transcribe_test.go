@@ -143,6 +143,62 @@ func TestHubEchoSpanTimesOut(t *testing.T) {
 	if got := p.texts(); len(got) != 1 {
 		t.Fatalf("lines %q", got) // [2, 3] is inside [1.9, 2.1] widened by half a second: dropped
 	}
+	// The span assumed for the hold is not the phone's: meeting.json's timeline (the final pass's) never has it.
+	m, _, _ := h.engine().MeetingRead(meetingRec)
+	if tl := m.Transcription.Timeline; tl != nil && len(tl.Speaking) > 0 {
+		t.Fatalf("an assumed span in the timeline: %+v", tl.Speaking)
+	}
+}
+
+// A speaking off lost with a dropped socket: the next socket's start.timeline (or an upload's timeline) closes the
+// open span, and the sentences after it go out at once instead of waiting echoHoldMost; the timeline keeps the
+// phone's span.
+func TestHubEchoSpanRepairedByTheTimeline(t *testing.T) {
+	h := newHubFixture(t)
+	h.tr.set(func(f *fakeTranscriber) { f.live = jobScript{lines: mixedLines} })
+	h.hubUpload(meetingRec, 1, nil)
+	p, _ := h.open(meetingRec, 0, nil)
+	p.audio(1.6)
+	p.wait("line", 1)
+	p.send(map[string]any{"type": "speaking", "on": true, "at": 1.65})
+	waitFor(t, "the span open", func() bool {
+		r := h.s.hubRunOf(meetingRec)
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		return r.openFrom != nil
+	})
+	_ = p.c.CloseNow() // the speaking off at 1.7 is lost with it
+	waitFor(t, "the socket gone", func() bool { return !h.s.hubRunOf(meetingRec).socketOpen() })
+	back, ready := h.open(meetingRec, 0, map[string]any{"speaking": [][]float64{{1.65, 1.7}}})
+	if ready["from"] != 1.6 {
+		t.Fatalf("ready %v", ready)
+	}
+	back.audio(3)
+	back.wait("line", 2)
+	if got := back.texts(); !slices.Equal(got, []string{mixedLines[1].text, mixedLines[2].text}) {
+		t.Fatalf("lines %q", got)
+	}
+	m, _, _ := h.engine().MeetingRead(meetingRec)
+	if tl := m.Transcription.Timeline; tl == nil || len(tl.Speaking) != 1 || tl.Speaking[0] != [2]float64{1.65, 1.7} {
+		t.Fatalf("the timeline: %+v", m.Transcription.Timeline)
+	}
+
+	// An upload's timeline repairs it too.
+	back.send(map[string]any{"type": "speaking", "on": true, "at": 4.7})
+	waitFor(t, "the span open", func() bool {
+		r := h.s.hubRunOf(meetingRec)
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		return r.openFrom != nil
+	})
+	h.hubUpload(meetingRec, 2, map[string]any{"timeline": map[string]any{"speaking": [][]float64{{1.65, 1.7}, {4.7, 4.8}}}})
+	r := h.s.hubRunOf(meetingRec)
+	r.mu.Lock()
+	open := r.openFrom
+	r.mu.Unlock()
+	if open != nil {
+		t.Fatalf("still open from %v after the upload closed it", *open)
+	}
 }
 
 // GET …/live has the caption while it is fresh and the role is not off; ?parts=interim and ?parts=transcription

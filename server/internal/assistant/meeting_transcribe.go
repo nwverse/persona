@@ -257,7 +257,7 @@ func (r *hubRun) tick(now time.Time) {
 	}
 	if r.openFrom != nil && now.Sub(r.openAt) >= echoHoldMost { // counts as closed then
 		from := *r.openFrom
-		r.closeSpanLocked(from, from+echoHoldMost.Seconds())
+		r.expireSpanLocked(from, from+echoHoldMost.Seconds())
 	}
 	if r.hubDirty && now.Sub(r.hubPutAt) >= hubSegmentsEvery {
 		r.putHubLocked()
@@ -318,6 +318,7 @@ func (r *hubRun) begin(p *phoneSocket, t *kb.Timeline) {
 	if t != nil {
 		r.mergeTimelineLocked(*t)
 	}
+	r.reconcileOpenLocked() // a speaking off the socket before lost
 	if r.shown != "" {
 		p.send(map[string]any{"type": "problem", "code": r.shown})
 	}
@@ -406,6 +407,41 @@ func (r *hubRun) closeSpanLocked(from, to float64) {
 		r.judgeLocked(s)
 	}
 	r.notifyLocked()
+}
+
+// expireSpanLocked: the open span counts as closed at to without the phone saying so (held echoHoldMost, or the run
+// ends): the sentences held for it are judged with [from, to] as a speaking span, which is never written to the
+// timeline. The timeline has only what the phone said, so a span whose speaking off a dropped socket lost (and that
+// the next start or upload repairs) never becomes an assumed span that drops real speech in the final pass.
+func (r *hubRun) expireSpanLocked(from, to float64) {
+	r.openFrom = nil
+	spans := append(kb.EchoSpans(r.timeline), kb.EchoSpan{From: from, To: max(from, to)})
+	held := r.held
+	r.held = nil
+	for _, s := range held {
+		if kb.EchoOf(s, spans) == kb.EchoKeep {
+			r.acceptLocked(s)
+		}
+	}
+	r.notifyLocked()
+}
+
+// reconcileOpenLocked closes the open speaking span once the timeline has it closed: the speaking off a dropped
+// socket lost comes back in the next socket's start.timeline or an upload's timeline (a span still open when a socket
+// starts is not in its start, the phone sends speaking on after it). The timeline's span that closes it begins at or
+// before the open one and ends after it.
+func (r *hubRun) reconcileOpenLocked() {
+	if r.openFrom == nil {
+		return
+	}
+	from := *r.openFrom
+	const slack = 1.0 / kb.AudioRate // times are rounded to a sample
+	for _, sp := range r.timeline.Speaking {
+		if sp[0] <= from+slack && sp[1] > from+slack {
+			r.closeSpanLocked(from, sp[1])
+			return
+		}
+	}
 }
 
 // mergeTimelineLocked adds t to the run's timeline and meeting.json's.
@@ -585,7 +621,7 @@ func (r *hubRun) stop(code string) {
 	gone := code == codeRecordingDeleted || code == codeTranscriptExpired
 	if r.openFrom != nil && !gone {
 		from := *r.openFrom
-		r.closeSpanLocked(from, max(from, float64(r.edge)/kb.AudioRate))
+		r.expireSpanLocked(from, float64(r.edge)/kb.AudioRate)
 	}
 	if !gone {
 		r.putHubLocked()
