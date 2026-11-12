@@ -36,7 +36,8 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 // the Mac has a launcher the Studio lacks; a gateway (relay) lists a model a Codex launcher lists too
 const LAUNCHERS: Record<string, Launcher[]> = {
-  mac: [{ name: "claude", agent: "claude" }, { name: "relay", agent: "claude" }, { name: "codex", agent: "codex" }, { name: "only-mac", agent: "claude" }],
+  // codex: this computer opens Codex with no first message too (#4961), so a start may leave it empty
+  mac: [{ name: "claude", agent: "claude" }, { name: "relay", agent: "claude" }, { name: "codex", agent: "codex", prompt_optional: true }, { name: "only-mac", agent: "claude" }],
   studio: [{ name: "claude", agent: "claude" }, { name: "relay", agent: "claude" }],
   mini: [{ name: "claude", agent: "claude" }, { name: "relay", agent: "claude" }],
 };
@@ -324,10 +325,10 @@ describe("New agent's model panel (#5104)", () => {
 
   it("leaves the permission mode and the folder alone when a model is picked", async () => {
     await open();
-    act(() => radio("只做计划").click());
+    act(() => radio("计划模式").click());
     type(folder(), "/code/other");
     await pick("model:claude\nsonnet");
-    expect(radio("只做计划").getAttribute("aria-checked")).toBe("true");
+    expect(radio("计划模式").getAttribute("aria-checked")).toBe("true");
     expect(folder().value).toBe("/code/other");
     start();
     expect(launched[0]).toMatchObject({ cwd: "/code/other", permissionMode: "plan", launcher: "claude", model: "sonnet" });

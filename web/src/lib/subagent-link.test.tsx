@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 import { describe, expect, it } from "vitest";
 import { directionAgentNodes } from "./direction-agent-tree";
 import { childOfCall } from "./child-cards";
+import { closePanel, getPanel, openPanel } from "./panel";
 import { doneSubagentLink, followChildSession, followSubagentLink, splitSubagentLink, useSubagentLink } from "./subagent-link";
 import type { Session } from "./types";
 
@@ -34,6 +35,13 @@ describe("subagent links", () => {
     act(() => doneSubagentLink("m", "p1"));
     expect(seen).toBeUndefined();
     act(() => root.unmount());
+  });
+
+  it("an agent panel for a subagent opens its parent's chat", () => {
+    openPanel({ kind: "agent", mid: "m", sid: "p9@a9" });
+    expect(getPanel()).toEqual({ kind: "agent", mid: "m", sid: "p9" });
+    closePanel();
+    doneSubagentLink("m", "p9");
   });
 
   it("a child session's link opens its parent and asks for the child's card (#5120)", () => {

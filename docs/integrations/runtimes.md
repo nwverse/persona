@@ -76,6 +76,10 @@ Call the SDK when things happen:
 | `rt.tools()` / `rt.callTool({name, args, session_id})` | The hub's tools (the phone's `phone_*`, `mail_*`) for your own Agent: list them and register as your own tools; calls go through node to the hub (`createRuntime`'s `onHub` is called after hello and whenever the hub comes and goes, which is the right time to fetch tools) |
 | Throw `RpcError(…, 'handover', {delivered: 'none'})` on send | A disk-only companion process: the session doesn't run here, and the program that can run it has been started; node hands the message to the runtime taking over (`requires: ['handover']`, DSH's `dsh-files`) |
 
+`rt.streamEnd(id)` retires a published live text even after the final viewer leaves. It cancels pending text and
+sends the empty boundary to the node while a stream entry exists, so the Hub clears its cached reply before a later
+viewer subscribes. Call it whenever the generated segment ends, including while the session is unwatched.
+
 What the SDK handles (no runtime needs to write it again): connect / reconnect / `runtime.hello` (with this process's `instance`: if another process uses the same runtime id, node refuses the connection; the SDK logs one line and retries every 30 seconds, without taking over), list pushes, watch backfill and continuity (marking honestly when `from_seq` / `to_seq` don't line up,
 so the phone fills the gap), byte-by-byte streaming, the session turning "Needs you" while asking the phone, asking again with the same id for the same interaction when node restarts (`interactionId(...)`, waits up to 2 minutes),
 withdrawing retracted interactions from the phone, handing the same `client_msg_id` to the driver only once (retries get the first result; failed ones can be resent), the "who answers first" policy (when node says there's no hub, always the local UI first, `rt.hubConnected`), and reconnecting quickly after a drop (one attempt per second while the socket file exists).
@@ -287,7 +291,7 @@ Lark tokens and gates. node drives it with calls the protocol already has:
 | node sends | With (all optional fields; runtimes that don't declare `caps.assistant` never receive them) |
 | --- | --- |
 | `session.start {cwd, assistant: true}` | `cwd` is the assistant directory (`~/.persona/assistant`, containing `AGENTS.md` / `CLAUDE.md` and `.agents/skills/`); no `prompt`. The runtime reports this `cwd` for the chat's whole life (`runtime.sessions`, its cards), not where a tool's `cd` left the shell: the hub places assistant and health chats by that directory exactly (#2368) |
-| `session.send {session_id, text, images, client_msg_id, assistant: true, context, mode, memory_dir}` | `context`: a `<persona-context>` block given to the model before the user's text (the live snapshot; the first message of a new chat also has memory and Lark notes), not shown in the chat; `mode`: Persona's permission mode (`default` / `acceptEdits` / `auto` / `plan` / `bypassPermissions`); `memory_dir`: the memory directory |
+| `session.send {session_id, text, images, client_msg_id, assistant: true, context, mode, memory_dir}` | `context`: a `<persona-context>` block given to the model before the user's text (the live snapshot; the first message of a new chat also has memory and Lark notes), not shown in the chat; `mode`: Persona's permission mode (`default` / `acceptEdits` / `auto` / `plan` / `bypassPermissions`); `memory_dir`: the memory directory; `client_msg_id`: the id the message came with (the App's, a channel's), absent when it came without one: put it on the message's item, or leave the item without one, never another (`docs/protocol/protocol.md` "Matching pending messages") |
 | `session.interrupt` | Stop on the phone; closing the assistant chat = stopping the running turn, the chat stays in the runtime |
 
 For sessions it starts, the node restores persisted ownership and launcher metadata before publishing runtime rows.
@@ -353,6 +357,14 @@ Implementation: `integrations/antigravity/lib/runtime.js` and `integrations/anti
 Live text belongs to the ACP prompt currently executing. Queued prompts acquire the stream when they start, with an
 empty boundary. A tool call ends the current text message, so the next message replaces its words in the live slot.
 Each prompt clears its live text on completion, including when another prompt is queued.
+
+Session inventory, watch cursors, item pages and live item pushes read `transcript_full.jsonl` when available.
+The compact `transcript.jsonl` export can contain native `<truncated N bytes>` placeholders and can be ahead of
+the complete export. Use one source for sequences and content so a watch cannot advance past unread complete items.
+Older histories fall back to the compact export when the complete file is unavailable. Persona applies the SDK's
+normal page limits to complete native records and serves larger items through the full-item endpoint. The history
+scope includes `:full` to invalidate previously cached compact pages. Parsed files are cached by file identity, size
+and nanosecond modification/change times, bounded to 16 files and 64 MiB of source data.
 
 ### Shared runtime behavior
 

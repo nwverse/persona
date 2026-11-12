@@ -1,5 +1,46 @@
 # Lessons: hub / node and networking
 
+## A Go file named after a platform builds only there (#5563)
+
+Go reads a file name's last `_<word>` (before `_test`) as a build constraint when the word is a GOOS or GOARCH:
+`selfupdate_android_test.go` compiled only for `GOOS=android`, so `go test ./internal/hub/` passed without running its
+tests. Name feature files so they do not end in `_android`, `_ios`, `_linux`, `_darwin`, `_windows`, `_js`, `_wasm`
+and the like (`selfupdate_androidsync_test.go`; `android.go` alone is fine), and check a new test file with
+`go test -list <name>` or `-v`: "no tests to run" for a test you just wrote means it was never compiled.
+
+## Resident exec must drain replies before closing transport (#5277)
+
+Stopping idle assistant processes after Attach closes spends the node's reconnect grace on SIGTERM/SIGKILL waits.
+Drain and reap them while the old transport still serves, then retain the Unix listener and run-lock descriptors across exec.
+The listener keeps the socket inode and accept backlog, not the active RPC connection or process-local assistant keeper.
+A same-PID descriptor ticket must be consumed before children start; protect the close-on-exec change with the fork lock.
+
+A handler returning is not proof its reply reached the manager. Hold admission through the reply write, announce reload,
+suspend new outgoing manager calls, and acknowledge an ordered state.load barrier only after preceding pending replies drain.
+Retry only explicit before-execution refusals and known-unsent calls; never replay an ambiguous dropped write.
+A failed barrier must resume calls and clear its reload window, and an old peer must not change a new peer's state.
+Context cancellation cannot interrupt an arbitrary writer already in progress: close an unconfirmed announcement's physical peer so a late event cannot
+suspend a surviving manager. Publish a received reply before removing its pending entry, and prefer it over a simultaneous close.
+Legacy images cannot consume a retained run lock: require their explicit handover support before install/ordinary reload; startup rollback releases both fds.
+Measure actual RPC waiting separately from signal-to-readiness: preflight and idle-process drain can take time while requests
+still succeed. Online flags and successful retries alone do not prove uninterrupted blue-green transport.
+
+## A preference clients report is not "the last one wins" (#5238)
+
+The user language was whatever full-role client sent `client_hello.locale` last. An English test simulator paired with
+a real hub, or simply an English Mac next to a Chinese iPhone, flipped it at every reconnect, and with it the Inbox
+summaries, folder names, the assistant's answers and pushes. Connecting is not choosing: remember what each device
+last reported and take only a device's own change (`server/internal/hub/locale.go`, `docs/protocol/i18n.md` "Protocol:
+telling hub the language"). Apply the same rule to any hub-wide value inferred from what several devices report.
+
+## Extension feature strings are not transport authority (#5258)
+
+Old hubs merge extension reports into `hello.features`. A new client cannot trust a newly reserved receipt type merely
+because that array contains its name: an older manager can declare both the feature and an unreserved event. Reserve the
+hub's event against manager broadcasts, and advertise its transport version in a dedicated hub-owned hello field that
+old report merging cannot manufacture. Bind trust to the current authenticated connection and clear it on reconnect or
+credential changes; cached UI capabilities are not live socket proof. Test both old feature injection and old-socket frames.
+
 ## Authority handover must include the trusted keeper roster (#5228)
 
 A machine its manager keeps has moved out of hub.json, but its hub-owned keeper
@@ -1960,3 +2001,9 @@ computer every 2 s): the manager allocated 555 MB and used about 2.1 s of CPU a 
 - `cmd.Cancel` runs only when the context ends before the process exits. A shell that exits at once and leaves a background child holding its stdout or stderr (`sleep 4 & echo $!`) keeps `Wait` reading the pipe until that child exits or `WaitDelay`, counted from the shell's exit, closes it: the deadline passes unnoticed. `secret.run` held a 1-second run for 4 seconds, and the next command, which could no longer start, came back as timed out.
 - Watch the context for as long as `Wait` runs and stop the group at the deadline, sharing one "stopped" flag with `Cancel` so the group gets one SIGTERM (`runSecretCommand`). Classify the result by that flag, not the exit status: the shell exited 0.
 - A command that never started because the time was used up gets no result. A timed-out result for it reads as a command that ran and was stopped, and makes the Agent check the computer for one that never ran.
+
+## An id the node makes up for a message ends up on its line (2026-11-12, #5225)
+
+- The node sent an assistant chat's messages to its agent runtime under a `client_msg_id` of its own, new on every call. The runtime protocol lets a runtime put the id it was sent with on the message's item, and the node forwards an item a runtime tied as it is (`echo.go`). So the line carried an id no app had, the app's pending bubble stayed beside it, and the message showed twice: the same failure as #5200, in another place.
+- Hand a message on with the id it came with, or with none. A made-up id deduplicates nothing either: it is new on every retry. A message without an id leaves its line without one, and the apps match it by its words.
+- In-repo runtimes (DSH, Antigravity) did not tie their lines, so nothing showed it. The test that does is a fake runtime that ties its line as the protocol allows (`TestAssistantOnARuntimeSendsTheMessagesOwnID`).

@@ -13,8 +13,11 @@ type Launcher struct {
 	// from an older node: zshrc.
 	Source string `json:"source,omitempty"`
 	// Agent is what it starts when not Claude Code: "codex" (plain codex, or an alias running it; docs/integrations/codex.md
-	// "Starting from the phone"). A Codex start needs its first message with it.
+	// "Starting from the phone").
 	Agent string `json:"agent,omitempty"`
+	// PromptOptional: a Codex launcher this node starts with no first message too (docs/integrations/codex.md
+	// "Starting without a first message"). Older nodes leave it out: their Codex starts need the first message.
+	PromptOptional bool `json:"prompt_optional,omitempty"`
 	// Assistant: a runtime's launcher that may run the Persona assistant (docs/integrations/runtimes.md "Assistant"), whatever its agent.
 	Assistant bool `json:"assistant,omitempty"`
 }
@@ -96,6 +99,9 @@ type ModelPrice struct {
 	Input     float64  `json:"input"`
 	Output    float64  `json:"output"`
 	CacheRead *float64 `json:"cache_read,omitempty"`
+	// CacheWrite: a 5-minute cache write; CacheWrite1h a 1-hour one (absent: CacheWrite's price, as cindy prices it).
+	CacheWrite   *float64 `json:"cache_write,omitempty"`
+	CacheWrite1h *float64 `json:"cache_write_1h,omitempty"`
 }
 
 // AgentModel is one model of the list: Claude Code's initialize, Codex's model/list.

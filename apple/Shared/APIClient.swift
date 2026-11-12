@@ -238,6 +238,17 @@ nonisolated struct APIClient: Sendable {
         return c
     }
 
+    /// Freeze the current assistant for a settings page, including routes outside `/assistant`.
+    /// An explicit item manager takes precedence; the default still sends no manager header.
+    func currentAssistantSettings() -> APIClient { manager(managerID ?? shownManager) }
+
+    /// Whether two captured settings requests still belong to the same hub and assistant.
+    func sameSettingsScope(as other: APIClient?) -> Bool {
+        guard let other else { return false }
+        return config == other.config && group == other.group
+            && (managerID ?? shownManager) == (other.managerID ?? other.shownManager)
+    }
+
     /// This client for the Persona page while it shows manager `id` (nil or empty: the default's).
     func showing(_ id: String?) -> APIClient {
         var c = self
@@ -256,8 +267,19 @@ nonisolated struct APIClient: Sendable {
         return !(parts.count > 1 && parts[0] == "conversations")
     }
 
-    /// What a request to `path` carries besides the caller's own headers: the manager it names.
+    /// The recordings' part of the knowledge base (`/api/v1/kb/recordings…`: a recording's minutes, a day's recap, the
+    /// hub's list of them). This device syncs its recordings to the default manager whichever assistant is current
+    /// (`/api/v1/recordings` names none), so what was made of them is read there too.
+    nonisolated static func recordingsRoute(_ path: String) -> Bool {
+        let base = "/api/v1/kb/recordings"
+        return path == base || path.hasPrefix(base + "/") || path.hasPrefix(base + "?")
+    }
+
+    /// What a request to `path` carries besides the caller's own headers: the manager it names. None for the
+    /// recordings' part of the knowledge base, whichever manager this client is for (`recordingsRoute`): the knowledge
+    /// page's client names the current assistant on everything else.
     func routing(_ path: String, _ query: [String: String]) -> [String: String] {
+        if Self.recordingsRoute(path) { return [:] }
         let named = managerID ?? (Self.assistantRoute(path, query: query) ? shownManager : nil)
         return named.map { [Self.managerHeader: $0] } ?? [:]
     }
@@ -889,6 +911,18 @@ nonisolated struct APIClient: Sendable {
         return try await Task.detached(priority: .utility) { try JSON.decoder.decode(NewerResponse.self, from: data) }.value
     }
 
+    /// How the app sent a message when it was not typed in the app itself (docs/protocol/protocol.md, `via`): such a
+    /// message never counts as the user's own words for a secret hand-off's Always rule.
+    enum MessageVia: String, Codable, Sendable {
+        /// Siri, Shortcuts or another App Intent ("Ask Persona", which runs on a locked phone too).
+        case intent
+        /// The share sheet.
+        case share
+        /// A card's button that writes the message for the user from what the app read (the Today card's Prep, with a
+        /// calendar event's title in it).
+        case card
+    }
+
     struct SendBody: Encodable {
         var text: String
         var images: [ImagePayload]?
@@ -897,18 +931,20 @@ nonisolated struct APIClient: Sendable {
         var clientMsgID: String?
         var clearDraft: String?
         var todoID: String?
+        var via: MessageVia?
         enum CodingKeys: String, CodingKey {
-            case text, images, launcher, model, clientMsgID = "client_msg_id", clearDraft = "clear_draft", todoID = "todo_id"
+            case text, images, launcher, model, via, clientMsgID = "client_msg_id", clearDraft = "clear_draft", todoID = "todo_id"
         }
     }
     /// launcher / model switch what a headless (assistant) conversation runs on from this message on. clientMsgID
     /// stays the same on a retry (the node types it once); clearDraft is the computer's draft the user agreed to
     /// clear first.
     /// opID: the message's op id (the outbox passes its id, the same as clientMsgID: docs/protocol/protocol.md「Operation receipts」).
+    /// via: how the app sent it when not typed in the app itself (Siri, the share sheet).
     func send(_ k: SessionKey, text: String, images: [ImagePayload] = [], launcher: String? = nil, model: String? = nil,
-              clientMsgID: String? = nil, clearDraft: String? = nil, todoID: String? = nil, opID: UUID? = nil) async throws {
+              clientMsgID: String? = nil, clearDraft: String? = nil, todoID: String? = nil, via: MessageVia? = nil, opID: UUID? = nil) async throws {
         try await post(sp(k) + "/messages", body: SendBody(text: HubNaming.outbound(text, canonical: personaNaming), images: images.isEmpty ? nil : images, launcher: launcher,
-                                                           model: model, clientMsgID: clientMsgID, clearDraft: clearDraft, todoID: todoID),
+                                                           model: model, clientMsgID: clientMsgID, clearDraft: clearDraft, todoID: todoID, via: via),
                        timeout: 100, opID: opID)
     }
     func interrupt(_ k: SessionKey) async throws { try await post(sp(k) + "/interrupt") }
@@ -1613,14 +1649,16 @@ nonisolated struct APIClient: Sendable {
         var main: Bool?
         /// "health": the conversation opens in the health space (docs/assistant/health.md); never with `main`.
         var space: String?
-        enum CodingKeys: String, CodingKey { case prompt, images, launcher, effort, main, space; case permissionMode = "permission_mode" }
+        var via: MessageVia?
+        enum CodingKeys: String, CodingKey { case prompt, images, launcher, effort, main, space, via; case permissionMode = "permission_mode" }
     }
     /// `main`: the new conversation becomes the main one. `space`: the space it opens in (nil: the assistant's own).
+    /// `via`: how the app sent the prompt when not typed in the app itself (Siri, the share sheet).
     /// `opID`: the first message's op id (`AssistantStart`, hub feature `assistant_start_ops`): the hub starts it once.
     func startConversation(prompt: String, images: [ImagePayload] = [], launcher: String? = nil, permissionMode: String? = nil,
-                           effort: String? = nil, main: Bool = false, space: String? = nil, opID: UUID? = nil) async throws -> Session {
+                           effort: String? = nil, main: Bool = false, space: String? = nil, via: MessageVia? = nil, opID: UUID? = nil) async throws -> Session {
         let body = NewConversation(prompt: HubNaming.outbound(prompt, canonical: personaNaming), images: images.isEmpty ? nil : images,
-                                   launcher: launcher, permissionMode: permissionMode, effort: effort, main: main ? true : nil, space: space)
+                                   launcher: launcher, permissionMode: permissionMode, effort: effort, main: main ? true : nil, space: space, via: via)
         // The health space is the default manager's (docs/assistant/health.md), whichever the Persona page shows.
         let api = space == nil ? self : showing(nil)
         var s = try JSON.decoder.decode(SessionResponse.self, from: try await api.post("/api/v1/assistant/conversations", body: body, timeout: 110, opID: opID)).session
