@@ -96,6 +96,7 @@ func fold(run []proto.Item) proto.Item {
 		fo.LatestThinking = thinkingPreview(run[latestThought])
 	}
 	fo.Changes = foldChanges(run)
+	fo.Usage = foldUsage(run)
 	return proto.Item{ID: "fold:" + first.ID, Seq: first.Seq, TS: first.TS, Role: "assistant", Kind: proto.KindFold, Fold: fo}
 }
 

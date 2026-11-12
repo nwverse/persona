@@ -974,7 +974,7 @@ Agents started manually in Agents have no to-do, or a to-do with empty `origin`,
     Drafts submitted after the reply was sent no longer insert cards.
   - **No placeholders**: drafts are sent verbatim with one tap. `inbox/agent.md` and `inbox/draft.md` require omitting unknown information (no more 【】 markers for the user to fill).
     `inbox_draft` rejects drafts containing 【…】 / {{…}} and asks the AI twin to resubmit. Web and Android cards refuse to send drafts still containing 【…】 and ask for edits.
-  - iOS still uses local records + the Inbox list item's `done`, not `sent_at` (the list retains processed items only for 3 days; reopening an item makes old cards show Send again). To be fixed.
+  - iOS still uses local records + the Inbox list item's `done`, not `sent_at` (the list retains processed items only for 3 days, at most the newest 200; reopening an item makes old cards show Send again). To be fixed.
 
 ## Steps
 

@@ -1349,6 +1349,9 @@ nonisolated enum ScreenParser {
         /// The tab that submits every answer ("Review your answers"); incomplete: a question has none yet.
         var review = false
         var incomplete = false
+        /// A permission prompt for a shell command, as the hub reads it (#5266): nil for any other dialog, and from a hub
+        /// before it.
+        var commandAsk: CommandAsk?
 
         init(header: String?, question: String, detail: String?, options: [Option]) {
             self.header = header

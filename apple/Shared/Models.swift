@@ -2568,6 +2568,22 @@ nonisolated struct ScreenDialog: Codable, Hashable, Sendable {
     var steps: [Step]?
     var review: Bool?
     var incomplete: Bool?
+    /// A permission prompt for a shell command (#5266): the command, the agent's words for it (`description`), the boxed
+    /// warning as Claude Code words it and what it is about (`risk`: "delete"), the countdown as on screen, what it does
+    /// when it runs out (`deadline_action`: "deny" / "allow") and when, by the hub's clock. A hub before it sends none.
+    var command: String?
+    var commandDescription: String?
+    var warning: String?
+    var risk: String?
+    var deadline: String?
+    var deadlineAction: String?
+    var deadlineAt: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case header, question, detail, options, rev, multi, submit, steps, review, incomplete
+        case command, commandDescription = "description", warning, risk, deadline
+        case deadlineAction = "deadline_action", deadlineAt = "deadline_at"
+    }
 
     var parsed: ScreenParser.Dialog {
         var d = ScreenParser.Dialog(
@@ -2582,6 +2598,8 @@ nonisolated struct ScreenDialog: Codable, Hashable, Sendable {
         d.submit = submit
         d.review = review ?? false
         d.incomplete = incomplete ?? false
+        d.commandAsk = CommandAsk(command: command, description: commandDescription, warning: warning, risk: risk,
+                                  deadline: deadline, deadlineAction: deadlineAction, deadlineAt: deadlineAt)
         return d
     }
 }
