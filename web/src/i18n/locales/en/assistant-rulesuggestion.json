@@ -1,0 +1,22 @@
+{
+  "label": "Suggested rule",
+  "always": "Always",
+  "not_now": "Not now",
+  "always_title": "Make this a rule",
+  "not_now_title": "Don't suggest this for 30 days",
+  "joined": "{first} {second}",
+  "list_separator": ", ",
+  "creates_plan_start": "Always remembers this kind of task: tasks that change files in {directory} on {machine} start without asking.",
+  "creates_standing": "Always adds a standing authorization for {directory} on {machine}: {action}.",
+  "creates_conditions": "Only when: {conditions}.",
+  "creates_quote": "Kept as your words: “{quote}”.",
+  "creates_delegate": "Always stores no rule here: Persona answers these for you once {setting} is on in the assistant's manager.json.",
+  "made_plan_start": "Remembered: tasks like this now start without asking.",
+  "made_standing": "Standing authorization added.",
+  "made_delegate": "No rule was stored.",
+  "where": "Listed and removed in Settings › {tab} › {list}.",
+  "where_delegate": "Persona answers these once {setting} is on in the assistant's manager.json; it is turned off there too.",
+  "open_settings": "Open settings",
+  "hidden": "Not suggested again for 30 days.",
+  "failed": "Couldn't save your answer. {error}"
+}

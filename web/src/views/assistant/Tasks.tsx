@@ -62,15 +62,20 @@ import { AcceptRow, BriefCard } from "./Brief";
 // A plan task's brief (#3822) comes with the first plan card that has one, as the decision row does.
 const PlanBrief = lazy(() => import("./TaskBrief").then((m) => ({ default: m.PlanBrief })));
 
-// A decision's row comes with the tray's first decision, not with the first screen (startup-preload's budget).
-const TaskDecision = lazy(() => import("./TaskDecision").then((m) => ({ default: m.TaskDecision })));
+// A decision's row comes with the tray's first decision, not with the first screen (startup-preload's budget); the
+// same chunk has a suggested rule's line (#5802), which comes with the first card that carries one.
+const NeedsYouPart = lazy(() => import("./TaskDecision"));
+/** The suggested rule's line of a card, drawn right after it; nothing for a card without the field. */
+const ruleLine = (of: RuleCard) => of.suggestion && <Suspense fallback={null}><NeedsYouPart rule={of} /></Suspense>;
+underCard.line = ruleLine;
 import { SentLine, TaskSentList } from "./Sent";
 import { feedWake, HandoffCard, HandoffCards, taskHandoffs, whyNotStarted } from "./Handoff";
 import { latestReview, parkedLine, progressLine } from "../../lib/supervision";
 import { planLabel, planLine, planShown } from "../../lib/plan";
 import { namedLauncher, providerIdNote, providerTitle, useProviderNames } from "../../lib/provider-names";
 import { useChosenManager, useLinkManager } from "../../lib/manager-choice";
-import { AnsweredCard, InteractionCard } from "../chat/Interactions";
+import { AnsweredCard, InteractionCard, underCard } from "../chat/Interactions";
+import type { RuleCard } from "../../lib/rule-suggestion";
 import { cardLine } from "../chat/dock";
 import { interactionKicker } from "../../lib/row-line";
 import { MessageActions } from "../chat/MessageActions";
@@ -362,6 +367,8 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
     return all.some((e) => Object.keys(e).length) ? all : undefined;
   };
   return (
+    // an open plan may carry a suggested rule: its line goes under the card (#5802)
+    <>
     <div className="flex flex-col gap-3 rounded-card bg-surface p-4 shadow-card">
       <div className="flex items-center gap-1.5 text-[12px] font-medium text-ink-2">
         <Icon name="list" size={13} />
@@ -402,6 +409,8 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
         />
       </Suspense>}
     </div>
+    {ruleLine(plan)}
+    </>
   );
 }
 
@@ -1390,7 +1399,7 @@ function NeedsYouRow({ item }: { item: NeedsYouItem }) {
   if (ask?.outcome === "decide" || todo.supervision?.state === "needs_user")
     return (
       <Suspense fallback={<div data-needs-row={item.key} className="truncate rounded-control bg-field px-3 py-2.5 text-[12px] text-ink-2">{todo.title}</div>}>
-        <TaskDecision key={todo.id + (todo.supervision?.reviews?.at(-1)?.at || todo.decision_review?.review_at || ask?.asked_at)} rowKey={item.key} todo={todo} />
+        <NeedsYouPart key={todo.id + (todo.supervision?.reviews?.at(-1)?.at || todo.decision_review?.review_at || ask?.asked_at)} rowKey={item.key} decision={todo} />
       </Suspense>
     );
   if (ask) return <div data-needs-row={item.key}><AcceptRow stacked key={todo.id + ask.asked_at} row={{ id: todo.id, title: todo.title, waited_s: Math.max(0, (Date.now() - Date.parse(ask.asked_at)) / 1000), outcome: ask.outcome, verdict: ask.verdict, recommend: ask.recommend, asked_at: ask.asked_at }} /></div>;

@@ -1462,6 +1462,8 @@ const TodoListItem = memo(function TodoListItem({
 
         {/* What it waits on from the user, with the one tap that answers it (#2056) */}
         <TodoAskLine todo={todo} className="mt-1" />
+        {/* held for the briefing (#5803): why it did not ring */}
+        <HeldForBriefing todo={todo} />
 
         {/* Due date, a reminder still to push, high priority (#1683) */}
         <TodoPlanLine todo={todo} />
@@ -1648,6 +1650,35 @@ function TodoPlanEditor({ todo }: { todo: Todo }) {
 }
 
 /** A to-do's due date, a reminder still to push and high priority under its status (#1683); nothing without them. */
+/** A to-do whose decision is held for the briefing (#4930, #5803, docs/assistant/todos.md "Decisions that can wait"):
+ *  nothing was pushed for it, and it comes with the next briefing. Under a row's ask it is a quiet mark whose hover
+ *  says what that means; on the to-do's page (`caption`) the meaning is written out. Nothing for any other to-do, and
+ *  for a hub that does not say. The decision card's own is views/assistant/BriefingMark; this page draws its own so
+ *  the two share no chunk of code (the first screen names every chunk: startup-preload's budget). */
+export function HeldForBriefing({ todo, caption = false }: { todo: Pick<Todo, "ask">; caption?: boolean }) {
+  const ask = todo.ask;
+  if (!ask?.verdict || !ask.asked_at || ask.for_briefing !== true) return null;
+  const label = t("assistant-decisionrow.for_briefing");
+  const hint = t("assistant-decisionrow.for_briefing_hint");
+  if (caption)
+    return (
+      <p data-for-briefing="caption" className="mt-2 flex min-w-0 items-start gap-1.5 px-1 text-xs text-ink-2 [overflow-wrap:anywhere]">
+        <Icon name="clock" size={13} className="mt-0.5 shrink-0" />
+        <span>
+          <span className="font-medium">{label}</span>
+          {t("assistant-decisionrow.separator")}
+          {hint}
+        </span>
+      </p>
+    );
+  return (
+    <div data-for-briefing="mark" title={hint} className="mt-0.5 flex min-w-0 items-center gap-1 text-[12px] text-ink-2">
+      <Icon name="clock" size={11} className="shrink-0" />
+      <span className="truncate">{label}</span>
+    </div>
+  );
+}
+
 function TodoPlanLine({ todo }: { todo: Todo }) {
   const due = todoDueText(todo);
   const remind = Boolean(todo.remind_at && !todo.reminded_at && !todo.done_at);
@@ -1937,6 +1968,7 @@ function TodoDetail({
 
       {/* What it waits on from the user and how to answer it (#2056) */}
       <TodoAskPanel todo={todo} />
+      <HeldForBriefing todo={todo} caption />
 
       {/* Due date, reminder, priority (#1683) */}
       <TodoPlanEditor todo={todo} />
