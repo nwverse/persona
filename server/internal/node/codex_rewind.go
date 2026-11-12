@@ -186,6 +186,10 @@ func (n *Node) rewindCodex(ctx context.Context, id string, o rewindOpts) (map[st
 	if err := n.refreshCodexAppHistory(id); err != nil {
 		return nil, rewindError(rewindFailed, "Codex rewound the conversation. Its display is still synchronizing: %v", err)
 	}
+	f, err = n.file(id)
+	if err != nil {
+		return nil, rewindError(rewindFailed, "Codex rewound the conversation. Its display is still synchronizing: %v", err)
+	}
 	if err := n.refresh(id, f); err != nil {
 		return nil, rewindError(rewindFailed, "Codex rewound the conversation. Its display is still synchronizing: %v", err)
 	}
