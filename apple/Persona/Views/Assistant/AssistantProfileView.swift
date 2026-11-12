@@ -119,7 +119,7 @@ struct AssistantProfileView: View {
             if let own = ownTasks {
                 Section {
                     Toggle(isOn: own) {
-                        Label(Self.ownTasksTitle, systemImage: Theme.Icon.supervised).lineLimit(1)
+                        Label(Self.ownTasksTitle, systemImage: Theme.Icon.supervised).lineLimit(1).minimumScaleFactor(0.8)
                     }
                     .accessibilityIdentifier("assistant-main-supervises-own-tasks")
                 } footer: {
@@ -290,7 +290,7 @@ struct AssistantProfileView: View {
         guard let on = model.assistantConfig?.mainSupervisesOwnTasks else { return nil }
         return Binding(get: { on }, set: { v in Task { await model.setMainSupervisesOwnTasks(v) } })
     }
-    private static let ownTasksTitle = String(localized: "Main Chat Follows Up Tasks")
+    private static let ownTasksTitle = String(localized: "Main Chat Supervises Its Own Tasks")
     private static let ownTasksFooter = String(localized: "While this is off, the background supervisor follows up the tasks Persona hands out, so the main chat answers you first.")
 
     // Where Persona asks before acting on your behalf: the Mac app asks in the app, iOS asks on the phone (#4068).

@@ -1461,10 +1461,12 @@ Mac and Vision Pro. Nothing here shows on a hub from before it.
   (`AssistantState.isBackgroundSupervisor`, never the main conversation). The hub opens it with `origin: "task"`, so it
   is in All Chats under Scheduled Tasks and never in the sidebar's Directions or Recent (`AutoConversations`,
   `AssistantSidebarGroups`). Its row has no Archive (swipe, menu, the Mac's Delete key), no Pin and no End, in the
-  sidebar's search results and in All Chats; Rename and the copy items stay. The hub refuses those actions too. Until
-  the app has read the assistant settings again after the hub made the conversation, the row still has the actions
-  and the hub's refusal is shown.
-- **The switch**: Settings › Assistant › **Main Chat Follows Up Tasks** is the hub's `main_supervises_own_tasks`
+  sidebar's search results and in All Chats; Rename and the copy items stay. The hub refuses Archive and Pin itself;
+  End it does not refuse, the row only does not offer it. The hub makes the conversation on first use, usually while
+  the app is open, and only the assistant settings say which one it is: a new assistant conversation with
+  `origin: "task"` that the settings held do not list has them read again, once for a conversation
+  (`AppModel.unreadTaskConversations`), so the row has the three actions no longer than that request takes.
+- **The switch**: Settings › Assistant › **Main Chat Supervises Its Own Tasks** is the hub's `main_supervises_own_tasks`
   (`GET` / `PUT /api/v1/assistant`), off by default: while it is off the background supervisor follows up the tasks
   Persona hands out. It is read and written through `AppModel.assistantConfig` (`setMainSupervisesOwnTasks`: shown at
   once, put back when the hub refuses), as the two switches above it. A hub that omits the field has no switch.

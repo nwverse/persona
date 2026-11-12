@@ -129,6 +129,44 @@ struct BackgroundSupervisorTests {
         #expect(AssistantSidebarGroups.directions(all, leaders: ["lead"], main: main).map(\.sessionID) == ["lead"])
     }
 
+    /// The hub makes it on first use, while the app is open: a task's conversation the settings held do not know has
+    /// them read again, and nothing else does.
+    @Test func aNewTaskConversationTheSettingsDoNotKnowHasThemReadAgain() throws {
+        var held = try decode(Self.state(own: false, supervisor: nil))
+        held.conversations = [try session("routine-1", origin: "task")]
+        let made = try session("bg-1", origin: "task")
+        let rows = [try session("main-1", origin: "user"), try session("routine-1", origin: "task"), try session("mine", origin: "user"),
+                    try session("twin", origin: "inbox")]
+        #expect(AppModel.unreadTaskConversations(old: [], new: rows, held: held).isEmpty, "listed, or not a task's")
+        #expect(AppModel.unreadTaskConversations(old: rows, new: rows + [made], held: held) == ["bg-1"])
+        #expect(AppModel.unreadTaskConversations(old: rows + [made], new: rows + [made], held: held).isEmpty, "not new")
+        held.backgroundSupervisor = "bg-1"
+        #expect(AppModel.unreadTaskConversations(old: rows, new: rows + [made], held: held).isEmpty, "already known as the built-in one")
+        var agent = try session("agent-1", origin: "task")
+        agent.assistant = false
+        #expect(AppModel.unreadTaskConversations(old: [], new: [agent], held: held).isEmpty, "not an assistant conversation")
+    }
+
+    @Test func theSettingsAreReadAgainWhenTheHubMakesTheConversation() async throws {
+        let chosen = UserDefaults.standard.object(forKey: "assistant.current") // reading the settings picks the main chat
+        defer { UserDefaults.standard.set(chosen, forKey: "assistant.current") }
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/assistant", json: Self.state(own: false, supervisor: nil))
+        let model = try model(hub)
+        await model.refreshAssistant()
+        #expect(!model.isBackgroundSupervisor("bg-1"))
+        hub.on("GET", "/api/v1/assistant", json: Self.state(own: false))
+        let made = try session("bg-1", origin: "task")
+        model.applySessions([made.machineRef: [made]])
+        for _ in 0..<200 where !model.isBackgroundSupervisor("bg-1") { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(model.isBackgroundSupervisor("bg-1"), "its row loses Archive, Pin and End without a relaunch")
+        let reads = hub.sent("GET", "/api/v1/assistant").count
+        model.applySessions([made.machineRef: []])
+        model.applySessions([made.machineRef: [made]])
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(hub.sent("GET", "/api/v1/assistant").count == reads, "asked once for a conversation")
+    }
+
     // MARK: Model Settings
 
     private static let providers = #"[{"id":"launcher.strong","name":"strong","kind":"launcher","model":"model-a"}]"#

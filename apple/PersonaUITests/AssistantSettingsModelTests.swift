@@ -73,7 +73,7 @@ final class AssistantSettingsModelTests: XCTestCase {
         try setQuiet(true)
     }
 
-    /// Settings › Assistant › Main Chat Follows Up Tasks (#5083): off on a hub with the background supervisor, and
+    /// Settings › Assistant › Main Chat Supervises Its Own Tasks (#5083): off on a hub with the background supervisor, and
     /// turning it on is sent to the hub.
     @MainActor func testMainSupervisesOwnTasksSwitch() throws {
         let key = "main_supervises_own_tasks"
@@ -84,7 +84,7 @@ final class AssistantSettingsModelTests: XCTestCase {
         for _ in 0..<6 where !toggle.isHittable { app.swipeUp() }
         XCTAssertTrue(toggle.waitForExistence(timeout: 5))
         XCTAssertEqual(toggle.value as? String, "0")
-        XCTAssertTrue(app.staticTexts["主对话自己跟进任务"].firstMatch.exists)
+        XCTAssertTrue(app.staticTexts["主对话自己督办它派出的任务"].firstMatch.exists)
         shot(app, "assistant-main-supervises-own-tasks-off")
         toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap() // the switch, not the label
         let on = expectation(for: NSPredicate { _, _ in (try? self.hubFlag(key)) == true }, evaluatedWith: nil)

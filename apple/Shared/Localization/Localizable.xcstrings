@@ -71725,25 +71725,25 @@
       },
       "extractionState" : "manual"
     },
-    "Main Chat Follows Up Tasks" : {
+    "Main Chat Supervises Its Own Tasks" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Main Chat Follows Up Tasks"
+            "value" : "Main Chat Supervises Its Own Tasks"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "主对话自己跟进任务"
+            "value" : "主对话自己督办它派出的任务"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "メインチャットがタスクをフォロー"
+            "value" : "メインチャットが自分のタスクを監督する"
           }
         }
       }
