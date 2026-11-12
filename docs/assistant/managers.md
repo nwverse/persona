@@ -283,7 +283,7 @@ before resuming application publication.
 ### Transport and the first update
 
 The manager publisher reuses the original publisher's `credentials_command`, `ssh_proxy`,
-`remote_root` and `release_namespace` configuration and authenticated connection to the Hub.
+`remote_python`, `remote_root` and `release_namespace` configuration and authenticated connection to the Hub.
 On the Hub it holds the existing `releases/hub/.publish.lock` for the whole manager operation.
 It then uses a configured SSH transport to the target Mac. The new transport is a product
 entry point, not a claim that an installation already has the required endpoint or identity.
