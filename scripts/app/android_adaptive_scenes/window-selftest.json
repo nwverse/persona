@@ -3,7 +3,7 @@
   "manifestId": "adaptive-window-continuity",
   "description": "Keep one Agent chat, its multiline draft, selection and focus alive through rotation, a real book posture, compact size and expanded restoration.",
   "requires": {
-    "page": "chat",
+    "page": "chat:macbook/a1f3c2d4-0000-4000-8000-000000000001",
     "fields": [
       "selectedKey",
       "draftHmac",
@@ -29,7 +29,10 @@
     },
     {
       "step": "key",
-      "keycombination": ["SHIFT_LEFT", "ENTER"]
+      "keycombination": [
+        "SHIFT_LEFT",
+        "ENTER"
+      ]
     },
     {
       "step": "text",
@@ -37,14 +40,24 @@
     },
     {
       "step": "key",
-      "keycombination": ["CTRL_LEFT", "A"]
+      "keycombination": [
+        "CTRL_LEFT",
+        "A"
+      ]
     },
     {
       "step": "assert",
       "checks": {
-        "selection": {"equals": {"start": 0, "end": 22}},
+        "selection": {
+          "equals": {
+            "start": 0,
+            "end": 22
+          }
+        },
         "focused": true,
-        "route": {"matches": "/chat$"}
+        "route": {
+          "matches": "/chat$"
+        }
       }
     },
     {

@@ -3,7 +3,7 @@
   "manifestId": "tabletop-page-safety",
   "description": "Keep chat state alive through posture changes, then prove Settings, Machines, Files, a file preview and Terminal keep their content clear of a fake tabletop hinge in one process.",
   "requires": {
-    "page": "chat",
+    "page": "chat:server/b2e4d6f8-0000-4000-8000-000000000001",
     "fields": [
       "selectedKey",
       "draftHmac",
