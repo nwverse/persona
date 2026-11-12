@@ -240,8 +240,10 @@ public struct ApprovalCard<Context: View>: View {
                 questionArea
             }
             footer
-                .padding(options.drawsSurface ? 0 : -10)
-                .padding(.top, options.drawsSurface ? 0 : 12)
+                .padding(.horizontal, options.drawsSurface ? 0 : -10)
+                .padding(.top, options.drawsSurface ? 0 : 2)
+                // A capped card includes the whole footer in its measured height; uncapped hosts keep the original bleed.
+                .padding(.bottom, options.drawsSurface || options.maxHeight != nil ? 0 : -10)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0 }
         }
         .disabled(options.isSending)
@@ -378,7 +380,7 @@ public struct ApprovalCard<Context: View>: View {
                         go(to: index + 1)
                     }
                 }
-                .buttonStyle(.bui(.ghost))
+                .buttonStyle(.bui(.ghost, growsWithText: options.maxHeight != nil))
                 }
                 Button { advance() } label: {
                     HStack(spacing: 6) {
@@ -386,7 +388,7 @@ public struct ApprovalCard<Context: View>: View {
                         Text(isLast ? sendLabel : continueLabel).lineLimit(1)
                     }
                 }
-                    .buttonStyle(.bui(.accent))
+                    .buttonStyle(.bui(.accent, growsWithText: options.maxHeight != nil))
                     .disabled(!answers.hasAnswer(index))
             }
             .padding(.trailing, -2)

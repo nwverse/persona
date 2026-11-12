@@ -169,8 +169,10 @@ final class PendingCardsTests: XCTestCase {
             let action = app.buttons.matching(NSPredicate(format: "label IN %@", ["提交", "Submit"])).firstMatch
             XCTAssertTrue(action.waitForExistence(timeout: 5), "no Submit:\n\(app.debugDescription)")
             XCTAssertTrue(action.isEnabled, "Submit is not enabled after a deliberate pick")
-            XCTAssertTrue(action.isHittable && cards.frame.insetBy(dx: -1, dy: -1).contains(action.frame),
-                          "Submit needs scrolling first (\(action.frame) in \(cards.frame))")
+            // The outer card area's last 8 pt are its bottom fade, not room for a complete action.
+            let aboveFade = action.frame.maxY <= cards.frame.maxY - 8
+            XCTAssertTrue(action.isHittable && cards.frame.insetBy(dx: -1, dy: -1).contains(action.frame) && aboveFade,
+                          "Submit is clipped or needs scrolling first (\(action.frame) in \(cards.frame))")
             shot("long-question-actions-\(scheme)")
             action.tap()
             let deadline = Date().addingTimeInterval(10)
@@ -218,7 +220,7 @@ final class PendingCardsTests: XCTestCase {
             var reachable = false
             let hitDeadline = Date().addingTimeInterval(5)
             while Date() < hitDeadline {
-                if cards.frame.insetBy(dx: -1, dy: -1).contains(submit.frame) {
+                if cards.frame.insetBy(dx: -1, dy: -1).contains(submit.frame) && submit.frame.maxY <= cards.frame.maxY - 8 {
                     reachable = true
                     break
                 }
