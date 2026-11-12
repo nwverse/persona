@@ -36,21 +36,22 @@ private fun HardwareShortcutController.handle(event: KeyEvent): Boolean {
 
 /**
  * Large windows own their keyboard help and transient stack. The key listener runs after focused children, so a
- * terminal, an IME, the expanded composer and pointer menus keep the keys they consume. Compact windows add no node.
+ * terminal, an IME, the expanded composer and pointer menus keep the keys they consume. The content and its parent
+ * stay in place when the window changes; compact windows only remove the key modifier and controller.
  */
 @Composable
 fun HardwareShortcutHost(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
-    if (!LocalLargeWindowInput.current) {
-        content()
-        return
-    }
+    val large = LocalLargeWindowInput.current
     val controller = remember { HardwareShortcutController() }
     val focus = remember { FocusRequester() }
-    CompositionLocalProvider(LocalHardwareShortcutController provides controller) {
-        LaunchedEffect(controller) { runCatching { focus.requestFocus() } }
-        Box(modifier.onKeyEvent(controller::handle).focusRequester(focus).focusable()) {
+    // Only the first large composition may take focus; a resize must not steal it from a child.
+    LaunchedEffect(Unit) { if (large) runCatching { focus.requestFocus() } }
+    LaunchedEffect(large) { if (!large) controller.closeHelp() }
+    val keys = if (large) Modifier.onKeyEvent(controller::handle).focusable() else Modifier
+    CompositionLocalProvider(LocalHardwareShortcutController provides (if (large) controller else null)) {
+        Box(modifier.focusRequester(focus).then(keys)) {
             content()
-            if (controller.helpVisible) KeyboardShortcutsSheet(onDismiss = controller::closeHelp)
+            if (large && controller.helpVisible) KeyboardShortcutsSheet(onDismiss = controller::closeHelp)
         }
     }
 }

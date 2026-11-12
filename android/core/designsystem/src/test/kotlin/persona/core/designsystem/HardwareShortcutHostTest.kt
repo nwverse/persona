@@ -1,13 +1,25 @@
 package persona.core.designsystem
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -22,11 +34,13 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import kotlinx.coroutines.awaitCancellation
 
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35], qualifiers = "en-w840dp-h900dp-xhdpi")
@@ -141,5 +155,60 @@ class HardwareShortcutHostTest {
         rule.waitForIdle()
         rule.onNodeWithTag("draft-field").assertTextEquals("draft")
         rule.onNodeWithTag("draft-field").assertIsFocused()
+    }
+
+    @Test fun mainShellContentSurvivesLargeWindowChanges() {
+        var large by mutableStateOf(true)
+        var effectStarts = 0
+        var disposals = 0
+        lateinit var marker: Any
+        lateinit var list: LazyListState
+        rule.setContent {
+            CompositionLocalProvider(LocalLargeWindowInput provides large) {
+                PersonaTheme(darkTheme = false, reduceMotion = true) {
+                    HardwareShortcutHost(Modifier.fillMaxSize()) {
+                        val remembered = remember { Any() }
+                        val scroll = rememberLazyListState()
+                        var draft by remember { mutableStateOf("draft") }
+                        val field = remember { FocusRequester() }
+                        SideEffect { marker = remembered; list = scroll }
+                        DisposableEffect(Unit) { onDispose { disposals++ } }
+                        LaunchedEffect(Unit) { effectStarts++; awaitCancellation() }
+                        LaunchedEffect(Unit) { runCatching { field.requestFocus() } }
+                        Column {
+                            BasicTextField(draft, { draft = it }, Modifier.testTag("continuous-draft").focusRequester(field))
+                            LazyColumn(Modifier.height(Tokens.Size.box280), state = scroll) {
+                                items(20) { index -> Text("Row $index") }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        rule.onNodeWithTag("continuous-draft").assertIsFocused()
+        rule.runOnIdle { list.requestScrollToItem(4, 13) }
+        rule.waitForIdle()
+        val originalMarker = marker
+        val originalList = list
+        val first = list.firstVisibleItemIndex
+        val offset = list.firstVisibleItemScrollOffset
+        large = false
+        rule.waitForIdle()
+        assertSame(originalMarker, marker)
+        assertSame(originalList, list)
+        assertEquals(first, list.firstVisibleItemIndex)
+        assertEquals(offset, list.firstVisibleItemScrollOffset)
+        rule.onNodeWithTag("continuous-draft").assertTextEquals("draft")
+        rule.onNodeWithTag("continuous-draft").assertIsFocused()
+        large = true
+        rule.waitForIdle()
+        assertSame(originalMarker, marker)
+        assertSame(originalList, list)
+        assertEquals(first, list.firstVisibleItemIndex)
+        assertEquals(offset, list.firstVisibleItemScrollOffset)
+        assertEquals(1, effectStarts)
+        assertEquals(0, disposals)
+        rule.onNodeWithTag("continuous-draft").assertTextEquals("draft")
+        rule.onNodeWithTag("continuous-draft").assertIsFocused()
     }
 }

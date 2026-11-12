@@ -4,6 +4,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.movableContentOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
@@ -21,11 +25,16 @@ fun JSettingsSheet(onDismiss: () -> Unit, content: @Composable () -> Unit) {
         surfaceOpaque = if (base.dark) base.surfaceOpaque else base.background,
     )
     val settingsState = rememberSaveableStateHolder()
-    val settingsContent: @Composable () -> Unit = {
-        settingsState.SaveableStateProvider("settings-sheet-content") {
-            CompositionLocalProvider(LocalPalette provides grouped, LocalFlatPageSurface provides true,
-                LocalHomeChrome provides null, LocalRootBack provides null, LocalRootLeading provides null) {
-                Box(Modifier.fillMaxSize()) { content() }
+    val currentContent by rememberUpdatedState(content)
+    val currentGrouped by rememberUpdatedState(grouped)
+    // The same content instance moves between presentations, including non-saveable state and running effects.
+    val settingsContent = remember {
+        movableContentOf {
+            settingsState.SaveableStateProvider("settings-sheet-content") {
+                CompositionLocalProvider(LocalPalette provides currentGrouped, LocalFlatPageSurface provides true,
+                    LocalHomeChrome provides null, LocalRootBack provides null, LocalRootLeading provides null) {
+                    Box(Modifier.fillMaxSize()) { currentContent() }
+                }
             }
         }
     }
