@@ -125,6 +125,8 @@ var goTypes = map[string]any{
 	"AssistantConversationsResult": assistantwire.AssistantConversationsResult{},
 	"AssistantMessagesParams":      assistantwire.AssistantMessagesParams{},
 	"AssistantMessagesResult":      assistantwire.AssistantMessagesResult{},
+	"AssistantDataStatusParams":    assistantwire.AssistantDataStatusParams{},
+	"AssistantDataStatusResult":    assistantwire.AssistantDataStatusResult{},
 
 	"ModelCompleteParams": assistantwire.ModelCompleteParams{},
 	"ModelCompleteResult": assistantwire.ModelCompleteResult{},
@@ -194,7 +196,8 @@ var kbCalls = []string{assistantwire.MethodKBList, assistantwire.MethodKBGet, as
 var modelCalls = []string{assistantwire.MethodModelComplete}
 
 // The assistant's conversations the hub forwards for extensions granted assistant.read (assistant.schema.json).
-var assistantCalls = []string{assistantwire.MethodAssistantConversations, assistantwire.MethodAssistantMessages}
+var assistantCalls = []string{assistantwire.MethodAssistantConversations, assistantwire.MethodAssistantMessages,
+	assistantwire.MethodAssistantDataStatus} // and what it reads back of its data contributions (assistant_data.schema.json)
 
 // The to-do events the hub tells the extensions granted todos.read (todos.schema.json).
 var todoCalls = []string{"event." + assistantwire.EventTodoChanged, "event." + assistantwire.EventTodoDecision}

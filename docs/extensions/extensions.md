@@ -120,8 +120,8 @@ What an extension contributes where is written in the manifest's `contributes`: 
 | `channel` (version 1) | `channel.` | `id` (`^[a-z][a-z0-9_]{0,31}$`, cannot be 8 hex digits), `name`, `kind` (`im`), `connector?` (binding and status come from this connector of the same extension), `bind?` (`qr` / `code` / `fields`), `description?`, `capabilities` (receive images / files / voice, `format`, `max_text`, `asks`, `push`, `typing`, `progress`, `threads`) | Process speaks the protocol; `on_startup` when there is no `connector` | A channel for talking to Persona: the hub runs the shared pipeline (into the chat, tracking the turn, sending the answer back, questions), and the extension only talks to the IM; see [channels.md](channels.md) |
 | `events` (version 1) | `event.` | `id`, `subscribe` (a list of event names, see "Events") | Process speaks the protocol, `on_startup` | Only tells the extension what happened on the hub, see "Events" below |
 | `shortcuts` (version 1) | `shortcut.` | `id`, `title` (1–40 characters), `description?` (≤ 200 characters), `params?` (≤ 8 `{name, title, kind: text / number / toggle / choice, choices?, required?}`), `ui?` (a full page from the same extension) | Process speaks the protocol | Actions in Shortcuts and Siri (iPhone, Mac, Apple Watch), see "System-level placements" below |
-| `skills` (version 1) | — | `id`, `dir` (a directory in the package with `SKILL.md`) | Declarative is enough | The assistant's skills, delivered the same way as `assistant.skills`, see "Declarative contributions" below |
-| `prompts` (version 1) | — | `id`, `kind`: `instructions` (`file`: an `.md` in the package) / `quick` (`title`, `text`) | Declarative is enough | Instructions appended to the assistant's CLAUDE.md; quick prompts in the App's input box; see "Declarative contributions" |
+| `skills` (version 1) | — | `id`, `dir` (a directory in the package with `SKILL.md`), `source?` (`package` / `data`: with `data`, `dir` is in the extension's data directory and holds one skill per subdirectory) | Declarative is enough | The assistant's skills, delivered the same way as `assistant.skills`, see "Declarative contributions" and "Assistant content from the data directory" below |
+| `prompts` (version 1) | — | `id`, `kind`: `instructions` (`file`: an `.md` in the package, or in the data directory with `source: "data"`) / `quick` (`title`, `text`); `source?` (`package` / `data`, not for `quick`) | Declarative is enough | Instructions appended to the assistant's CLAUDE.md; quick prompts in the App's input box; see "Declarative contributions" and "Assistant content from the data directory" |
 | `themes` (version 1) | — | `id`, `name`, `light` / `dark`: `#RRGGBB` for the role colors `accent` (required), `positive`, `caution`, `danger`, `ai` | Declarative is enough | One more option in **Settings › Appearance › Theme Color**, see "Declarative contributions" |
 | `looks` (version 1) | — | `id` (`^[a-z0-9][a-z0-9-]{0,31}$`), `name`, `names?`, `subtitle?`, `subtitles?`, `avatar` (`sizes`: PNG, `svg?`, `safe?`, `dark?`), `colors?`, `dot?`, `app_icon_fallback` (id of a built-in avatar) | Declarative is enough; the package has the images it names | One more **Avatar** in settings: Persona's name, picture, colors and status dot, plus the App icon where it can be changed; see "Avatars" below |
 | `triage_templates` (version 1) | — | `id`, `title` (≤ 40 characters), `text` (≤ 4000 characters) | Declarative is enough | Templates to pick from when filling in Inbox triage rules (`triage_rules`), see "Declarative contributions" |
@@ -1634,6 +1634,66 @@ An extension contributes `assistant`:
   - **Space** (#6003): every assistant process has `PERSONA_SPACE` in its environment: `health` in the health space (`docs/assistant/health.md`), `main` everywhere else, decided by the conversation's directory when the node starts the process (`assistantSpace` in `node/larkgate_env.go`). An extension's skills and commands reach every space; a command meant for one space checks this rather than its working directory, which a `cd` in front of the command changes without a confirmation. Overriding it takes `PERSONA_SPACE=… <command>`, which the gate does not let through unless the gate lists the variable in `allowed_env`, so it goes to the normal permission prompt.
   - The gate file is read in strict mode and checked at install time (the script must be inside a skill); credentials cannot start with `PERSONA_` / `PERSONA_` or be `PATH`.
 
+### Assistant content from the data directory (#5770)
+
+Package files are fixed at install, but an extension that learns from the user's work produces its content at run time. It writes
+that content into its own **data directory** (`<hub data>/extensions/data/<key>/`, writable in the sandbox and kept across upgrades)
+and declares it with `source: "data"`; the hub reads it when it renders the assistant's instructions and skills. Nothing to call:
+writing the file is the whole interface.
+
+```json
+"contributes": {
+  "prompts": [{"id": "about-me", "kind": "instructions", "source": "data", "file": "assistant/instructions.md"}],
+  "skills": [{"id": "manuals", "source": "data", "dir": "assistant/skills"}]
+}
+```
+
+| | Instructions (`prompts`, `kind: instructions`) | Skills (`skills`) |
+| --- | --- | --- |
+| Where | `file`, an `.md` relative to the data directory | `dir` relative to the data directory; each subdirectory named `^[a-z0-9][a-z0-9_-]{0,63}$` with a `SKILL.md` is one skill, its name the subdirectory's |
+| Goes to | The assistant's CLAUDE.md / AGENTS.md after the package instructions, under `<!-- plugin <id> (data) -->`; never the health space's | The computer running the assistant, like package skills (`assistant.prepare`); in the skill list their source is `plugin` |
+| Limit | 6 KB per file; a larger file is **not adopted** (the text adopted before stays) and the status says `too_large` | 256 KB and 32 skills per extension, Markdown files only (anything else in the directory is left out); past a limit that contribution sends none |
+| Checked | Valid UTF-8 (else `invalid`); control characters except tab and newline, byte order marks, bidirectional embedding / isolate marks and line / paragraph separators removed; every `<!--` removed, so no part can pose as another extension's header | Valid UTF-8; a name another extension's skill has already is left out |
+| When it changes | Adopted **at most once every 24 hours** per contribution (below) | Read on every render (every minute): a skill change restarts nothing |
+
+- **Paths stay inside the data directory**: files are opened through an `os.Root`, so neither `..` nor a symbolic link leads out of it;
+  a link out is `not_regular`. A missing file or directory is simply nothing.
+- **Why the instructions are rate-limited**: the node resumes the main conversation in a fresh process on its next idle message once
+  its CLAUDE.md changes (Claude; `instructionsStale`), and the long conversation loses its prompt cache. So the hub keeps the
+  **adopted** text (with its time) in its database and serves it until one of: 24 hours have passed since the last adoption; the hub's
+  own part of the CLAUDE.md changes anyway (a hub upgrade, the user editing About me: the new text **rides along** at no extra
+  restart); the user applies it (`POST /api/v1/extensions/{id}/-/assistant-data/apply`, full credentials). A first version is adopted at
+  once. A restart of the hub does not open the window again. Keep the always-read block small and put the bulk into skills.
+  Extensions should write a file only when its content changed (same bytes, same digest: nothing happens).
+- **Runtimes**: Claude reads the new CLAUDE.md on the main conversation's next idle message, in a fresh process. Codex reads AGENTS.md (the
+  same text) only when a conversation or its process starts, so an adopted change reaches it with the next new conversation or restart.
+  Data skills reach any runtime that reads the assistant directory's skills. Other launchers get what they read of CLAUDE.md, AGENTS.md
+  and the skills directory (`docs/integrations/runtimes.md`).
+- **Switched off, removed**: an extension switched off, or the single contribution switched off, adds nothing from the next render on;
+  removing the extension also forgets what was adopted.
+- **Install screen**: an extension with any `source: "data"` contribution shows the line "Add what it writes to what your assistant reads"
+  (`assistant_data`). It is shown, not part of the permissions digest: package instructions and skills are not either.
+- **Read-back** (`schema/extension/assistant_data.schema.json`), so an extension can tell the user truthfully whether its content
+  reached the assistant and warn when it did not: it asks `assistant.data_status` (no parameters, no permission: only its own
+  contributions, every one its manifest declares) → `{items: [{contribution, kind, path, limit, bytes, state, reason?, detail?, hash?, adopted_hash?, adopted_at?, next_adopt_at?, skills?}]}`.
+
+  | `state` | Meaning |
+  | --- | --- |
+  | `adopted` | The assistant reads the content as it is now (skills: sent) |
+  | `pending` | Instructions: an older version is read, the new one waits (`reason: rate_limited`) until `next_adopt_at` at the latest |
+  | `kept` | Instructions: an older version is read, the new one cannot be used (`reason` says why) |
+  | `none` | Nothing is read: none written yet, none usable, or `reason` `disabled` (the extension is switched off or cannot run) / `switched_off` (this contribution is) |
+
+  `reason` is one of `too_large`, `invalid`, `not_regular`, `unreadable`, `rate_limited`, `disabled`, `switched_off`; `detail` adds the
+  file's problem for logs. `hash` is the digest of the content now (instructions: the cleaned text, first 16 hex digits of its sha256;
+  skills: of every skill's name and digest), `adopted_hash` and `adopted_at` of the instructions the assistant reads (or read last, when
+  switched off). Adopted means the hub puts it into the CLAUDE.md it writes on the assistant's computer within a minute while that
+  computer is online; the conversation reads it as "Runtimes" says. An extension switched off has no process to ask, so `disabled` is
+  for full-credential devices, which read the same at `GET /api/v1/extensions/{id}/-/assistant-data`; `POST …/assistant-data/apply`
+  answers it after adopting. Reading the status adopts what is due, as a render would. The hub logs each adoption ("adopted (first
+  version | after the wait | with the hub's own instructions | applied by the user, <digest>, <bytes>)") and, once per problem, why a
+  file is not used. A data skill whose name another extension's skill already has is left out and logged (not in the status).
+
 ## MCP servers
 
 An extension contributes `mcp_servers`: when the computer running the assistant has a certain command-line tool (usually the MCP server bundled with the upstream tool the extension corresponds to), the node attaches it as
@@ -2582,7 +2642,7 @@ What extensions with only a manifest and a few files, no program, can do (model 
 | Extension point | Form | Destination |
 | --- | --- | --- |
 | `skills` | `{"id": "weekly-review", "dir": "skills/weekly-review"}`: directory in the package containing `SKILL.md` | Same path as `assistant`'s `skills`: sent with `assistant.prepare` to the computer running the assistant and placed in the assistant directory (see "Assistant") |
-| `prompts` | `{"id": "tone", "kind": "instructions", "file": "assistant/tone.md"}` | Appended to the assistant's CLAUDE.md (like `assistant.instructions`) |
+| `prompts` | `{"id": "tone", "kind": "instructions", "file": "assistant/tone.md"}` | Appended to the assistant's CLAUDE.md (like `assistant.instructions`); with `"source": "data"` the file is in the data directory, see "Assistant content from the data directory" |
 | | `{"id": "today", "kind": "quick", "title": "What did I do today?", "text": "…"}` | Quick prompts in the app input: `GET /api/v1/extensions/-/prompts` → `{prompts: [{extension, extension_name, id, title, text}]}` |
 | `themes` | `{"id": "forest", "name": "Forest", "light": {"accent": "#2E7D32", …}, "dark": {"accent": "#81C784"}}`: only design-system role colors (`accent` required, `positive`, `caution`, `danger`, `ai` optional), not fonts, icons or other colors | `GET /api/v1/extensions/-/themes` → `{themes: [{extension, extension_name, id, name, light, dark, problems?}]}` |
 | `triage_templates` | `{"id": "quiet-groups", "title": "Only mentions in large groups", "text": "…"}` | Selectable when filling a source's triage rules (`triage_rules`): `GET /api/v1/extensions/-/triage-templates` → `{templates: [{extension, extension_name, id, title, text}]}` |
