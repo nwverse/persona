@@ -2,11 +2,16 @@
   "used_files": "Used in this session",
   "folder": "Folder",
   "session_dir": "Session folder",
-  "label": "Mention a file, workspace or session",
+  "label": "Mention a reference",
   "as_context": "As context",
   "reading_folder": "Reading folder…",
   "no_match_in_folder": "Nothing matches in this folder",
-  "no_match": "No matching files, workspaces or sessions",
+  "no_match": "No matching references",
   "keys_hint": "↑↓ select · Enter insert · type / to open a folder · Esc close",
-  "workspace": "Workspace"
+  "workspace": "Workspace",
+  "skills_loading": "Loading skills for this assistant and execution environment…",
+  "skills_error": "Skills unavailable here. Ordinary chat and other references still work.",
+  "skills_partial": "Verified local skills only. This runtime may have additional skills.",
+  "skills_route": "Selected skills belong to this assistant. Cancel task routing before sending.",
+  "skills_changed": "Execution environment changed. Your draft is kept; remove selected skills and select them again."
 }

@@ -1,6 +1,6 @@
 // One conversation: an agent in herdr on one of your computers, or a Persona assistant conversation.
 import { useAssistantTitle, useManagerOffline } from "../ManagerParts";
-import { LinkManager } from "../../lib/manager-choice";
+import { LinkManager, useShownManager } from "../../lib/manager-choice";
 import { alsoOpenText } from "../../lib/engines";
 import { lazy, memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, errorText, pastHub, sessionPath } from "../../lib/api";
@@ -30,7 +30,8 @@ import { planProgress, workLineStyle } from "../../lib/work-groups";
 import { echoed, taggedSeen } from "../../lib/echo";
 import { acceptOutgoing, forgetOutgoing, inSendOrder, keepFailed, keepOutgoing, noteWritten, outboxKey, placeFailed, restoreOutbox, retryOutbox, SENT_GRACE_MS, settleOutbox } from "../../lib/outbox";
 import { apiOp } from "../../lib/ops";
-import { conversationKey, pickedLauncher, pickedModel } from "../../lib/assistant-chat";
+import { conversationKey, pickedLauncher, pickedModel, usePickedLauncher } from "../../lib/assistant-chat";
+import { splitSkillDraft } from "../../lib/skill-mentions";
 import { unlinkAgentFromTodo } from "../../lib/todos";
 import { LinkTodoDialog } from "../LinkTodoDialog";
 import { t as tr } from "../../i18n";
@@ -517,7 +518,13 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     [draftKey, title, canCompose, canFork, canRewind, rewindLive, mid, sid, assistant, persona.name],
   );
   // the assistant works on any computer, so its @ menu offers workspaces too
-  const mention = useMemo(() => ({ cwd: session?.cwd, self: draftKey, files: () => chatFiles(items.current), workspaces: Boolean(assistant) }), [session?.cwd, draftKey, assistant]);
+  const shownManager = useShownManager();
+  const skillLauncher = usePickedLauncher(conversationKey(mid, sid));
+  const assistantLauncher = useStore((s) => s.assistant?.launcher);
+  const skillEnvironment = JSON.stringify([session?.launcher, session?.model_pick, assistantLauncher]);
+  const mention = useMemo(() => ({ cwd: session?.cwd, self: draftKey, files: () => chatFiles(items.current), workspaces: Boolean(assistant),
+    skills: assistant ? { manager: session?.manager ?? shownManager, session: sid, launcher: skillLauncher, environment: skillEnvironment } : undefined,
+  }), [session?.cwd, session?.manager, draftKey, assistant, shownManager, sid, skillLauncher, skillEnvironment]);
 
   // a sent message stays as a "sending" bubble until the transcript has it (lib/echo.ts): an item the hub tied to it
   // (any kind, a notice too), or else a latest user message with its words; one that answered one answers no other
@@ -995,6 +1002,10 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       return false;
     }
     if (assistant && !out.images.length && out.text.trim() && getFeedState().routes[sid]) {
+      if (splitSkillDraft(out.text).skills.length) {
+        toast(t("chat-mentionmenu.skills_route"), "error");
+        return false;
+      }
       try {
         // in turn: the route is used up by the first message that takes it, and the next one must see that
         if (await inSendOrder(outboxKey(mid, sid), () => sendRouted(sid, out.text))) return true;
@@ -2314,4 +2325,3 @@ function headerSlot(centered: boolean, side: "start" | "end"): string {
   if (!centered) return "contents";
   return cx(HEADER_SLOT, side === "start" ? HEADER_SLOT_START : HEADER_SLOT_END, "lg:contents");
 }
-

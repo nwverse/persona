@@ -35,7 +35,7 @@ export interface Action extends Pick<MenuItem, "hint" | "disabled" | "danger" | 
   onSelect: () => void | Promise<unknown>;
 }
 
-function useActions(text: string, isUser: boolean, ts: string | undefined, task: QuotedTask | undefined, select: () => void, forward?: ForwardPick): Action[] {
+function useActions(text: string, isUser: boolean, ts: string | undefined, task: QuotedTask | undefined, select: () => void, forward?: ForwardPick, editText?: string): Action[] {
   const chat = useChatActions();
   if (!text.trim()) return [];
   const out: Action[] = [{ key: "copy", label: t("chat-messageactions.copy"), icon: "copy", onSelect: () => void copyText(text) }];
@@ -44,7 +44,7 @@ function useActions(text: string, isUser: boolean, ts: string | undefined, task:
     out.push({ key: "quote", label: t("chat-messageactions.quote"), icon: "quote", onSelect: () => void sendDraft(chat.draftKey, { type: "quote", text, from: isUser ? t("chat-messageactions.me") : chat.speaker, ts, task }) });
   }
   out.push(...messageContextActions(text, chat, forward));
-  if (chat?.canCompose && isUser) out.push({ key: "edit", label: t("chat-messageactions.edit"), icon: "pencil", onSelect: () => void sendDraft(chat.draftKey, { type: "replace", text }) });
+  if (chat?.canCompose && isUser) out.push({ key: "edit", label: t("chat-messageactions.edit"), icon: "pencil", onSelect: () => void sendDraft(chat.draftKey, { type: "replace", text: editText ?? text }) });
   return out;
 }
 
@@ -115,6 +115,7 @@ function useWhileOpen(live: Rewind["block"] | undefined, open: boolean, closed: 
  *  over its top right corner (`corner`, a task's card: no row under it either). `task`: "Quote" quotes it as that task. */
 export function MessageActions({
   text,
+  editText,
   isUser,
   ts,
   side,
@@ -129,6 +130,8 @@ export function MessageActions({
   className,
 }: {
   text: string;
+  /** Explicit selections kept when editing; Copy, Quote and Forward still use visible words only. */
+  editText?: string;
   isUser?: boolean;
   ts?: string;
   side?: boolean;
@@ -150,7 +153,7 @@ export function MessageActions({
   const touch = useMedia(NO_HOVER);
   const forwarded = itemId ?? messageId;
   const pick: ForwardPick | undefined = forwarded ? { itemId: forwarded, text, isUser: Boolean(isUser), ts, images, photos } : undefined;
-  const actions = useActions(text, Boolean(isUser), ts, task, () => setSelecting(true), pick);
+  const actions = useActions(text, Boolean(isUser), ts, task, () => setSelecting(true), pick, editText);
   const chat = useChatActions();
   const [moreAnchor, setMoreAnchor] = useState<HTMLElement | null>(null);
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);

@@ -2,11 +2,16 @@
   "used_files": "本会话用过的文件",
   "folder": "文件夹",
   "session_dir": "会话目录",
-  "label": "引用文件、工作区或会话",
+  "label": "选择引用",
   "as_context": "作为上下文",
   "reading_folder": "正在读取文件夹…",
   "no_match_in_folder": "这个文件夹里没有对得上的",
-  "no_match": "没有对得上的文件、工作区或会话",
+  "no_match": "没有对得上的引用",
   "keys_hint": "↑↓ 选择 · Enter 填入 · 输入 / 进入文件夹 · Esc 关闭",
-  "workspace": "工作区"
+  "workspace": "工作区",
+  "skills_loading": "正在读取当前助手执行环境的技能…",
+  "skills_error": "此环境的技能暂不可用，仍可正常聊天和引用其他内容。",
+  "skills_partial": "仅显示已核实的本地技能，此运行时可能还有其他技能。",
+  "skills_route": "所选技能属于当前助手，请先取消任务转发再发送。",
+  "skills_changed": "执行环境已变化，草稿已保留。请移除所选技能并重新选择。"
 }

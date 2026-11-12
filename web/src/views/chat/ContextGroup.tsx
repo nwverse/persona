@@ -9,9 +9,10 @@ import { t } from "../../i18n";
 // What a message carries besides what the user wrote (picked page excerpts, everything a Feishu /agent request hands
 // its agent): one folded row under the bubble; open, a list of titles; each title opens to its text.
 
-const ICONS: Record<string, IconName> = { instructions: "info", doc: "book", edit: "pencil" };
+const ICONS: Record<string, IconName> = { instructions: "info", doc: "book", edit: "pencil", skill: "spark" };
 
 export function contextLabel(c: Context): string {
+  if (c.kind === "skill") return `${t("link-contextchips.skill")} · ${c.title ?? ""} · ${c.text.split("\n")[0]}`;
   return c.title || c.url || t("chat-contextgroup.quote");
 }
 
