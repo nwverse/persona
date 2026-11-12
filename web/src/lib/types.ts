@@ -243,7 +243,7 @@ export interface Session {
   read_only_reason?: string;
   capabilities?: SessionCapabilities;
   attached?: boolean;
-  /** "Branch to new chat" works for it (a Claude Code conversation, node/fork.go); older nodes never say so. */
+  /** "Start a new session" (a branch of it, #2137) works for it (a Claude Code conversation, node/fork.go); older nodes never say so. */
   can_fork?: boolean;
   /** What to call an agent the app does not know (a runtime's own name, "DSH"; docs/integrations/runtimes.md). */
   agent_label?: string;

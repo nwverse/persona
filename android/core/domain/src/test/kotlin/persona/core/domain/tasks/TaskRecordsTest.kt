@@ -12,8 +12,8 @@ import persona.core.contracts.Todo
 import persona.core.domain.lines.ChatLine
 
 /**
- * #4339 C13: on Glass the conversation draws the hub's task records as iOS's `FeedLine` does; only plans, task cards and
- * message cards keep their other places. Brief and Board keep every record behind the trays, as before.
+ * #4339 C13: on Glass the conversation draws the hub's task records as iOS's `FeedLine` does, message cards included; only
+ * plans and task cards keep their other places. Brief and Board keep every record behind the trays, as before.
  */
 class TaskRecordsTest {
     private fun at(n: Int) = "2026-11-12T10:00:${n.toString().padStart(2, '0')}Z"
@@ -38,13 +38,13 @@ class TaskRecordsTest {
 
     @Test fun glassDrawsTheRecordsAmongTheLines() {
         val lines = AssistantTaskCards.lines(emptyList(), feed, mapOf(plan.id to plan), todos, inline = true)
-        assertEquals(listOf("handoff", "asked", "report", "review", "receipt", "notice"), feedIds(lines))
+        assertEquals(listOf("handoff", "asked", "report", "review", "receipt", "notice", "message"), feedIds(lines))
         // the plan and the task card are the dispatched line, once
         assertEquals(listOf(listOf("Fix the login")), hints(lines).map { hint -> hint.tasks.map { it.title } })
     }
 
-    @Test fun glassKeepsOnlyPlansTaskCardsAndMessagesBehind() {
-        assertEquals(listOf("plan-feed", "task-feed", "message"), AssistantTaskCards.backgroundFeed(feed, inline = true).map { it.id })
+    @Test fun glassKeepsOnlyPlansAndTaskCardsBehind() {
+        assertEquals(listOf("plan-feed", "task-feed"), AssistantTaskCards.backgroundFeed(feed, inline = true).map { it.id })
     }
 
     @Test fun briefAndBoardKeepTheRecordsBehindTheTrays() {

@@ -502,6 +502,18 @@ The changed-files card (`web/src/views/chat/TurnChanges.tsx`, #5157) and the err
 are ported from cindy's `TurnChangesCard.tsx` and `components/ui/error-notice.tsx` with changes: their layout, sizes and
 states; the counting, review targets and fold data are Persona's own.
 
+The web chat's bar under a turn's last reply (`web/src/views/chat/ReplyBar.tsx`, #5314) is ported from cindy's
+`MessageActionBar.tsx` with changes: which reply has it, the order of its actions, its sizes, the linger before it fades
+and when its copy check resets. `web/src/lib/relative-time.ts` is ported from cindy's `hooks/useRelativeTime.ts` with
+changes (the wording of the time and its exact form); the actions behind the buttons are Persona's own.
+
+The web composer follows cindy's design at the owner's request (2026-11-12): the toolbar, the + / @ panel and the
+permission picker (`web/src/views/chat/Composer.tsx`, `ComposerPanel.tsx`, `PermissionPicker.tsx`, after cindy's
+`ChatInput`, `ExtraDirsButton`, `AtMentionPanel`, `PermissionSelector` and `SendButton`), the `/` palette
+(`SlashPalette.tsx`, after `SlashCommandPalette`) and the queued messages (`QueuePanel.tsx`, after `PendingQueuePanel`):
+layout, states and wording, with the permission mode names and the placeholders' tone taken from cindy's English
+strings. No code is copied for those.
+
 The handoff note an Agent session's conversation carries when it switches between Claude Code and Codex
 (`server/internal/node/engine_handoff_build.go`, read by `server/internal/node/engine_handoff.go`, with its words in
 `server/internal/prompts/agents/engine_handoff.md`, `engine_handoff_command.md` and `engine_handoff_speaker.md`) is

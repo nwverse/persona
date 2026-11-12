@@ -38,6 +38,7 @@ import (
 type Node struct {
 	Version string
 	updater *nodeupdate.Manager // resident-owned, shared across attach connections
+	reload  *ResidentReload     // admission/draining while the attach transport stays available
 
 	// dataDirOnce finds the data folder the path guard refuses the credentials of (pathguard.go dataDirs).
 	dataDirOnce sync.Once
@@ -362,9 +363,17 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 		w = &updateResponseWriter{Writer: w, responseWritten: n.updater.ResponseWritten}
 	}
 	n.peer = rpc.New("n", w)
+	n.peer.TrackReplies = n.reload != nil
+	n.reload.peer(n.peer, func() {
+		cancel()
+		if closer, ok := r.(io.Closer); ok {
+			_ = closer.Close()
+		}
+	})
+	defer n.reload.peer(n.peer, nil)
 	// A tool call whose caller went away (the assistant's turn stopped, a hook killed) ends on the hub too: an
 	// approval it was waiting on is withdrawn, not left to run the call when allowed later (#2597).
-	n.peer.Cancels = map[string]bool{"mcp.call": true}
+	n.peer.Cancels = map[string]bool{"mcp.call": true, "state.load": true}
 	n.peer.OnRequest = n.handle
 	n.streams = streams.New(n.peer.Notify)
 	defer n.streams.CloseAll()
@@ -563,6 +572,15 @@ func (n *Node) writeClaudeConfig() error { return writeGeneratedConfig(n.dir, n.
 func (n *Node) hubSupportsPersonaContracts() bool { return n.hubPersonaContracts.Load() }
 
 func (n *Node) handle(ctx context.Context, method string, params json.RawMessage) (any, error) {
+	if n.reload != nil {
+		done, err := n.reload.enter()
+		if err != nil {
+			return nil, err // explicitly not started: the manager can retry on the replacement
+		}
+		if !rpc.AfterReply(ctx, done) {
+			defer done()
+		}
+	}
 	if strings.HasPrefix(method, "node.update.") {
 		return n.handleUpdate(ctx, method, params)
 	}

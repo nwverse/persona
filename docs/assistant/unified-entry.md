@@ -165,12 +165,12 @@ The approved simplified Assistant presentation places a task's **only card in th
 Planning, running, blocked progress, PR references and acceptance update that same task row in place. Tapping the row opens
 the existing task details. On iOS and Android the dispatch answer has only a small line naming what it dispatched ("Dispatched: <title> · Open", or each
 title when there are several); each opens that task's details, as its tray row does, not the tray (#3700). The web draws a hand-off card
-for each Agent instead, which opens that Agent's page ("Hand-off cards (web)" below). Historical plan/task/receipt/review/report cards use the same lightweight entry or are omitted from the chat; Android's Glass style draws receipts, reviews, reports, Persona's hand-offs and the hub's notice lines in the chat as iOS does (`docs/plans/android-ios-alignment/chats.md` C13).
+for each Agent instead, which opens that Agent's page ("Hand-off cards (web)" below). Historical plan/task/receipt/review/report cards use the same lightweight entry or are omitted from the chat; Android's Glass style draws receipts, reviews, reports, Persona's hand-offs, message cards and the hub's notice lines in the chat as iOS does (`docs/plans/android-ios-alignment/chats.md` C13).
 
 **Pending** holds plans that still require Start and acceptance decisions, alongside ordinary questions/approvals. Drafts sent
 on the user's behalf are a separate group and require their own explicit Send; Approve all never sends drafts or chooses an
 answer to a question. **Progress** also has a separate quiet supervision/scheduled-task group, with inspectable background
-records. System housekeeping notices are not conversation messages. Tools and intermediate narration stay manually
+records (Android's Glass style keeps a supervision round in the chat as one folded "Supervision record" line instead, as iOS does). System housekeeping notices are not conversation messages. Tools and intermediate narration stay manually
 inspectable under a single collapsed summary; source metadata, not title/emoji guesses, identifies background turns.
 
 A report's row shows a paraphrase, not the Agent's own words (#3181): those are often in another language than the user's,

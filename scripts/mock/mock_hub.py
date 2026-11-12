@@ -5567,6 +5567,14 @@ if os.environ.get("MOCK_REWIND"):
     if os.environ.get("MOCK_REWIND") == "safeguards":
         ITEMS[REVIEW][-2]["text"] = "> Example quote\n\nRevise this paragraph"
         ITEMS[REVIEW][-1]["text"] = "API Error: Opus 5.5's safeguards flagged this message. Details: [frontier_llm]"
+# MOCK_REPLY_CUT=1|error (#5314): the review chat's last turn stopped right after its first words (a read, the words, then
+# the interrupt notice; =error: a model API error instead), so the web's reply bar says the reply did not complete.
+if os.environ.get("MOCK_REPLY_CUT"):
+    ITEMS[REVIEW] = ITEMS[REVIEW] + [it("user", "text", 12, text="再看一下新加的重试测试")] + tool(
+        "Read", {"file_path": "/Users/me/code/weather/Tests/RetryTests.swift"}, "func testRetriesThreeTimes() {}", 11) + [
+        it("assistant", "text", 10, text="重试测试一共三个用例：前两个覆盖了超时和 503，第三个"),
+        it("assistant", "text", 9, text="API Error: 529 Overloaded") if os.environ.get("MOCK_REPLY_CUT") == "error"
+        else it("system", "notice", 9, text="已中断")]
 # MOCK_WORKFLOW=1 (#3436): the Workflow calls that launched the review agent's runs, each drawn as its run's card (the
 # parity-audit one in a turn the hub folds: the app fetches that fold for the card), and each agent's own conversation.
 if os.environ.get("MOCK_WORKFLOW") == "1":
@@ -5687,6 +5695,18 @@ if os.environ.get("MOCK_COMMENTS") == "1":
             "> 改成整行宽的主按钮", "",
             "整体可以，改完这三处再提交。"])),
         it("assistant", "text", 0.4, text="好，三处都改：城市名改成可选，解析失败回退到上次的缓存，保存按钮改成整行宽的主按钮。"),
+    ]
+    # And Persona's main conversation has a quote of words picked in its answer and a comment on others (#5204): the
+    # blocks sit in the new layout's box, whatever the style's bubble.
+    _answer = next(i["id"] for i in ITEMS[ASK1] if i["role"] == "assistant" and i["kind"] == "text")
+    ITEMS[ASK1] = ITEMS[ASK1] + [
+        it("user", "text", 2.1, text=f'<persona-context kind="quote" title="Persona" url="" msg="{_answer}" part="selection">\n'
+           "照片同步脚本（Mac Studio）的计划写好了，等你批准。\n</persona-context>\n这个下周再看。"),
+        it("assistant", "text", 2.0, text="好，下周一提醒你看照片同步脚本的计划。"),
+        it("user", "text", 1.9, text="\n".join([
+            "> Comment 1", "> Selected text:", "> > 韩梅梅在飞书问你周五的发布能不能赶上", "> ", "> 她说的是哪个版本？", "",
+            "先帮我问清楚再答复她。"])),
+        it("assistant", "text", 1.7, text="好，我先在飞书问她是哪个版本，问清楚了再告诉你。"),
     ]
 # MOCK_LIVE_STEP=bash|command|reads|parallel|thinking|thinking-folded (#2987): the widget chat is a minute into a new turn whose newest
 # step is still going, for the running work line that names it: `bash` a command Claude described (its description alone),
@@ -6761,6 +6781,30 @@ if os.environ.get("MOCK_ASK_LONG") == "1":
                 for n in range(1, 9)]},
             {"question": "整理完发给谁？", "header": "发送", "multi_select": True, "options": [
                 {"label": "组里"}, {"label": "老板"}, {"label": "只给我"}]}]})
+# MOCK_ASK_LONG=actions: one long multi-select question, so Submit is enabled by a deliberate pick without advancing
+# to another, shorter question (#4839). =swipe is a short single-select card for the auto-send gesture path; =review
+# has six single-select questions whose review is taller than a small phone's pending-card area. Reset restores them.
+ASK_LONG_INTERACTIONS = []
+if os.environ.get("MOCK_ASK_LONG") in ("actions", "swipe", "review"):
+    mode = os.environ["MOCK_ASK_LONG"]
+    if mode == "review":
+        questions = [{"question": "第 %d 题的回答要保留完整，复核时这一行会占用足够的高度" % n,
+                      "header": "第 %d 题" % n, "multi_select": False,
+                      "options": [{"label": "第 %d 个答案" % n,
+                                   "description": "这是第 %d 个答案的完整说明，用来让复核内容超过首屏" % n}]}
+                     for n in range(1, 7)]
+    elif mode == "swipe":
+        questions = [{"question": "短拖动也不要替我选", "header": "手势", "multi_select": False,
+                      "options": [{"label": "选项 1"}, {"label": "选项 2"}]}]
+    else:
+        questions = [{"question": "这周先处理哪件事？", "header": "下一步", "multi_select": True, "options": [
+            {"label": "选项 %d" % n, "description": "第 %d 件事的说明：要多长时间、会碰到谁、做完之后接着做什么" % n}
+            for n in range(1, 9)]}]
+    ASK_LONG_INTERACTIONS.append({
+        "id": "ix_ask_long", "machine_id": "server", "session_id": ASK1, "session_title": "Persona",
+        "kind": "question", "created_at": ago(minutes=1), "expires_at": later(minutes=29), "tool_name": "ask_user",
+        "questions": questions})
+    INTERACTIONS.extend(copy.deepcopy(ASK_LONG_INTERACTIONS))
 # A very long `python3 -c …` script for a Feishu permission card (MOCK_ASK_LONG=perm|agent): taller than the dock on
 # every width, so its buttons have to stay reachable.
 def _long_lark_cmd(verb):
@@ -19293,6 +19337,7 @@ MOCK_HELP = [
     "MOCK_NEEDS=none|two  Persona 首页「现在要你处理的事」：什么都没有 / 一个请求加一件收件箱（默认超过三件）",
     "MOCK_HISTORY=1  很长的 Persona 对话历史（最近 30 个 + 查看全部）、一段交接对话、一个置顶，置顶写入会保存",
     "MOCK_MODELS_SECONDS=<秒>  新建 Agent 里列一个启动器的模型要多久（默认 0.8，CLI 起来回答的时间）",
+    "MOCK_REPLY_CUT=1|error  The review chat's last turn stopped right after its first words (interrupted; =error: a model API error): its reply says it did not complete (#5314)",
 ]
 
 _features_without_voice = features
@@ -20026,7 +20071,7 @@ class H(BaseHTTPRequestHandler):
             BUMPED.pop("blocked", None)
             TODOS[:] = copy.deepcopy(TODOS_INIT)
             TODO_DECISIONS[:] = copy.deepcopy(TODO_DECISIONS_INIT)
-            again = CODEX_INTERACTIONS + SCREEN_MULTI_INTERACTIONS  # the cards back, unanswered
+            again = CODEX_INTERACTIONS + SCREEN_MULTI_INTERACTIONS + ASK_LONG_INTERACTIONS  # the cards back, unanswered
             ids = {x["id"] for x in again}
             INTERACTIONS[:] = [x for x in INTERACTIONS if x["id"] not in ids] + copy.deepcopy(again)
             RESOLVED[:] = [r for r in RESOLVED if r["id"] not in ids]
@@ -22816,7 +22861,7 @@ MOCK_HELP.append("MOCK_EXTENSION_OPS=1|fail  （配合 MOCK_EXTENSIONS）扩展�
 MOCK_HELP.append("MOCK_MANAGER_NAS=1  （默认的三个管理者）NAS 归离线的「家里」：像 hub 一样显示成离线，error 是 hub 的「助手暂时连不上，稍后再试」；它的一个 agent（备份脚本）状态 unknown")
 MOCK_HELP.append("MOCK_ASSISTANT_BASH=1  主对话自己的第一条 Bash 在等批准（#4883），是它唯一的卡片：对话里输入区上方显示「在等你批准」，不只在收起的「需要你」里")
 MOCK_HELP.append("MOCK_LONG_REPORT=1|<items.json>  An Agent chat (macbook/a1f3c2d4-0000-4000-8000-000000000090) ending in one ~33,000-character report with nine tables and a dozen code blocks after 120 folded tool calls (#4970); a path serves that file's transcript items instead")
-MOCK_HELP.append("MOCK_ASK_LONG=1|perm|agent  卡片比输入区上方的盒子还高（#3112）：1 主对话的 ask_user 提问卡（八个带说明的选项）；perm 主对话的飞书授权卡（超长命令）；agent MacBook 上补测试的 Agent 对话里两张这样的授权卡、没有别的卡（手机和侧边面板把第二张折在「还有 1 件」后面）")
+MOCK_HELP.append("MOCK_ASK_LONG=1|actions|swipe|review|perm|agent  卡片比输入区上方的盒子还高（#3112）：1 主对话的 ask_user 提问卡（八个带说明的选项）；actions 单道八个带说明选项的多选题，swipe 短单选拖动不误发，review 六道单选题的长复核页，Submit 首屏可达（#4839）；perm 主对话的飞书授权卡（超长命令）；agent MacBook 上补测试的 Agent 对话里两张这样的授权卡、没有别的卡（手机和侧边面板把第二张折在「还有 1 件」后面）")
 MOCK_HELP.append("MOCK_MANAGER_NEEDS_YOU=0  名册不带 inbox_needs_you（旧 hub，或还不上报这个数的旧管理者）；默认每个在线的管理者带它收件箱里「需要你处理」的未完成条目数，数变了推 managers")
 MOCK_HELP.append("MOCK_MANAGER_OUTDATED=1  设置 › 管理者：「工作」带 needs_update（它还不读自己的 manager.json，hub 在它在线时这样标）")
 MOCK_HELP.append("MOCK_MANAGERS=1  只有 hub 自己的管理者（没有切换、不分组，电脑、会话、卡片和合并的列表照样带 manager）；默认三个装好的（一个离线）：电脑、收件箱、扩展带 manager，会话和卡片跟它的电脑走；默认管理者换成别的时，模拟助手发的实时消息带它的 manager；助手页按 X-Persona-Manager 切换（工作：还没有主对话、有自己的说明，PUT 改它的；家里：503 assistant_offline；不认识的 404 no_manager）；POST /api/v1/managers/{id}/machines、…/sources 移电脑 / 邮箱，删掉的管理者的电脑回到 hub 自己的")
