@@ -16255,6 +16255,7 @@ def mock_files(p, q):
     if what == "fs/find":  # #2438: every file under cwd, shallow first (the node's walk / git ls-files)
         home, path = mock_abs(mid, "", arg("cwd"))
         rel = mock_rel(home, path)
+        rel = rel if rel is None else link_real(rel)
         if rel is None or not (rel == "" or rel.endswith("/")): return {"error": "not a directory: %s" % path}, 502
         files = sorted((k[len(rel):] for k, v in MOCK_TREE.items() if k.startswith(rel) and not k.endswith("/")),
                        key=lambda f: (f.count("/"), f))
@@ -16263,11 +16264,17 @@ def mock_files(p, q):
         home, path = mock_abs(mid, arg("path"), arg("cwd"))
         rel = mock_rel(home, path)
         if rel is None: return {"error": "open %s: no such file or directory" % path}, 502
+        if MOCK_LINKS.get(rel, ("", ""))[1] is None: return {"error": "open %s: no such file or directory" % path}, 502
+        rel = link_real(rel)
         is_dir = rel == "" or rel.endswith("/")
         if what == "fs":
             if not is_dir: return {"error": "readdir %s: not a directory" % path}, 502
             ents = [{"name": k[len(rel):].rstrip("/"), "dir": k.endswith("/"), "size": mock_size(MOCK_TREE[k]),
                      "mtime": ago(hours=i + 1)} for i, k in enumerate(mock_children(rel))]
+            for e, k in zip(ents, mock_children(rel)):
+                if k in MOCK_LINKS:
+                    e.update(symlink=True, link_target=MOCK_LINKS[k][0])
+                    if MOCK_LINKS[k][1] is None: e.update(link_broken=True, dir=False, size=0)
             if FS_LIVE:
                 for e in ents:
                     if rel.startswith(MOCK_REPO) and e["name"] in FS_IGNORED: e["ignored"] = True
@@ -16369,6 +16376,53 @@ def mock_pdf():
 
 
 MOCK_TREE[MOCK_REPO + "/docs/guide.pdf"] = ("application/pdf", mock_pdf())
+# MOCK_FILE_LINKS=1 (#5827): symlinks in the weather checkout for the file page: `shared` → ../shared (a folder beside the
+# checkout), `old-settings.json` → ../legacy/settings.json (broken), and a script; GET …/stat?detail=1 answers the Info
+# sheet's fields (mode, owner, group, times, items, a link's target).
+MOCK_LINKS = {}
+if os.environ.get("MOCK_FILE_LINKS"):
+    MOCK_TREE["code/shared/"] = None
+    MOCK_TREE["code/shared/colors.json"] = '{"sky": "#4a90d9", "rain": "#5b6b7d"}\n'
+    MOCK_TREE["code/shared/README.md"] = "# Shared\n\nCode the apps share.\n"
+    MOCK_TREE[MOCK_REPO + "/shared/"] = None
+    MOCK_TREE[MOCK_REPO + "/old-settings.json"] = ""
+    MOCK_TREE[MOCK_REPO + "/deploy.sh"] = "#!/bin/sh\nswift build -c release\n"
+    MOCK_LINKS[MOCK_REPO + "/shared/"] = ("../shared", "code/shared/")
+    MOCK_LINKS[MOCK_REPO + "/old-settings.json"] = ("../legacy/settings.json", None)
+
+
+def link_real(rel):
+    """The tree key a path through a mock symlink folder stands for (MOCK_FILE_LINKS)."""
+    for k, (_, real) in MOCK_LINKS.items():
+        if real and k.endswith("/") and (rel == k or rel.startswith(k)):
+            return real + rel[len(k):]
+    return rel
+
+
+def mock_stat_detail(mid, asked, cwd):
+    """GET …/stat?detail=1 for one path (docs/protocol/protocol.md "File details and links")."""
+    home, path = mock_abs(mid, asked, cwd)
+    rel = mock_rel(home, path)
+    if rel is None: return {"path": asked, "kind": "missing"}
+    link = MOCK_LINKS.get(rel)
+    real = link_real(rel)
+    is_dir = real == "" or real.endswith("/")
+    d = {"path": asked, "kind": "dir" if is_dir else "file", "mode": 0o755 if is_dir or rel.endswith(".sh") else 0o644,
+         "owner": "me", "group": "staff", "mtime": ago(hours=5), "ctime": ago(hours=5), "birthtime": ago(days=9)}
+    if is_dir:
+        d["items"] = len(mock_children(real))
+    else:
+        d["size"] = mock_size(MOCK_TREE.get(real))
+    if link:
+        d.update(symlink=True, link_target=link[0])
+        if link[1] is None:
+            d.update(kind="link", link_broken=True, mode=0o755)
+            d.pop("size", None)
+        else:
+            d["link_real"] = home + "/" + link[1].rstrip("/")
+    return d
+
+
 if os.environ.get("MOCK_SHEETS"):  # the table viewer's files (#1310), in the browser's tree too
     MOCK_TREE.setdefault(MOCK_REPO + "/data/", None)
     MOCK_TREE[MOCK_REPO + "/data/stations.csv"] = stations_csv()
@@ -19608,7 +19662,8 @@ _features_without_file_ops = features
 
 
 def features():
-    return _features_without_file_ops() + (["upload_dir", "file_edit"] if FILE_OPS else [])
+    return (_features_without_file_ops() + (["upload_dir", "file_edit"] if FILE_OPS else [])
+            + (["file_info"] if os.environ.get("MOCK_FILE_LINKS") else []))
 
 
 def file_ops_key(mid, path, cwd):
@@ -20744,6 +20799,8 @@ class H(BaseHTTPRequestHandler):
         if p.startswith("/api/v1/machines/") and p.endswith("/stat"):
             cwd = q.get("cwd", [""])[0]
             paths = q.get("path", []) + [x for x in q.get("paths", [""])[0].split("\n") if x]
+            if q.get("detail", [""])[0] == "1":  # the file page's Info (#5827)
+                return self.send_json({"stats": [mock_stat_detail(p.split("/")[4], x, cwd) for x in paths]})
             return self.send_json({"stats": [{"path": x, "kind": file_kind(file_path(x, cwd)) if file_path(x, cwd) else "missing"} for x in paths]})
         if p.startswith("/api/v1/machines/") and p.endswith("/file/convert"):  # node file.convert (LibreOffice → PDF)
             src = q.get("path", [""])[0]

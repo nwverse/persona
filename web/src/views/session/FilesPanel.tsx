@@ -434,7 +434,7 @@ function FindResults({ mid, dir, query, onOpen }: { mid: string; dir: string; qu
           <FileGlyph name={hitName(h)} dir={h.dir} />
           <span className="min-w-0 flex-1">
             <span className="block truncate text-[13px] text-ink">{hitName(h)}</span>
-            <span className="block truncate font-mono text-[11px] text-ink-3" dir="rtl">{(hitFolder(h) || ".") + "/"}</span>
+            <span className="block truncate font-mono text-[11px] text-ink-3">{(hitFolder(h) || ".") + "/"}</span>
           </span>
           {h.dir && <Icon name="chevronRight" size={13} stroke={2.2} className="shrink-0 text-ink-3" />}
         </button>
@@ -472,12 +472,12 @@ function EntryRow({ mid, e, full, mark, marked, onOpen, ops }: { mid: string; e:
             <span className={cx("truncate text-[13px]", e.ignored ? "text-ink-3" : hidden ? "text-ink-2" : "text-ink")}>{e.name}</span>
             {e.symlink && (
               <span role="img" aria-label={e.link_broken ? t("files-nav.broken_link") : t("files-nav.link")} className="flex shrink-0">
-                <Icon name={e.link_broken ? "alertCircle" : "link"} size={11} className={e.link_broken ? "text-danger" : "text-ink-3"} />
+                <Icon name={e.link_broken ? "alertCircle" : "link"} size={11} className={e.link_broken ? "text-red" : "text-ink-3"} />
               </span>
             )}
           </span>
           {e.link_broken ? (
-            <span className="block truncate text-[11.5px] text-danger">{t("files-nav.link_broken", { target: e.link_target ?? "" })}</span>
+            <span className="block truncate text-[11.5px] text-red">{t("files-nav.link_broken", { target: e.link_target ?? "" })}</span>
           ) : e.symlink && e.link_target ? (
             <span className="block truncate text-[11.5px] text-ink-3">{t("files-nav.link_to", { target: e.link_target })}</span>
           ) : (

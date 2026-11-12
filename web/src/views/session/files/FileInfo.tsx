@@ -7,7 +7,7 @@ import { dirName, fileName, type FileInfo, type FsEntry } from "../../../lib/fil
 import { modeOctal, modeSymbolic, tildePath } from "../../../lib/files-nav";
 import { bytes } from "../../../lib/format";
 import { hubHas, useStore } from "../../../lib/store";
-import { t } from "../../../i18n";
+import { formatDate, formatNumber, t } from "../../../i18n";
 import { Button, copyText, Dialog, Loading } from "../../../ui/atoms";
 
 export const FILE_INFO_FEATURE = "file_info";
@@ -30,7 +30,7 @@ export function permissionWords(mode: number): string {
 function when(iso?: string): string | null {
   if (!iso) return null;
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? null : d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  return Number.isNaN(d.getTime()) ? null : formatDate(d, { dateStyle: "medium", timeStyle: "short" });
 }
 
 export function FileInfoDialog({
@@ -92,7 +92,7 @@ export function FileInfoDialog({
   if (isDir) {
     if (info?.items !== undefined) rows.push([t("files-info.contents"), info.items_more ? t("files-info.items_more", { count: info.items }) : t("files-info.items", { count: info.items })]);
   } else if (size !== undefined) {
-    rows.push([t("files-info.size"), size >= 1024 ? t("files-info.size_bytes", { size: bytes(size), bytes: size.toLocaleString() }) : t("files-info.bytes", { bytes: size.toLocaleString() })]);
+    rows.push([t("files-info.size"), size >= 1024 ? t("files-info.size_bytes", { size: bytes(size), bytes: formatNumber(size) }) : t("files-info.bytes", { bytes: formatNumber(size) })]);
   }
   const created = when(info?.birthtime),
     modified = when(info?.mtime ?? entry?.mtime),
@@ -114,7 +114,7 @@ export function FileInfoDialog({
           <Group title={t("files-info.link")}>
             <Row label={t("files-info.link_says")} value={says} mono />
             {broken ? (
-              <p className="px-3 py-2 text-danger">{t("files-info.link_missing")}</p>
+              <p className="px-3 py-2 text-red">{t("files-info.link_missing")}</p>
             ) : info?.link_real ? (
               <>
                 <Row label={t("files-info.real_location")} value={tildePath(info.link_real, home)} mono />
