@@ -25,8 +25,10 @@ final class TalkAboutMeetingUITests: XCTestCase {
         app.launchPinned()
         let talk = element(app, "recording-talk")
         XCTAssertTrue(talk.waitForExistence(timeout: 30), "no Talk about this meeting:\n\(app.debugDescription)")
-        // The minutes come in too: the picture has the page as it settles.
+        // The minutes come in too: the picture has the page once they have settled (the cards fade in over the
+        // pending line for a moment after Copy appears).
         _ = app.buttons["minutes-copy"].waitForExistence(timeout: 45)
+        sleep(2)
         try shot(app, "detail")
 
         talk.tap()
