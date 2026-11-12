@@ -102,23 +102,67 @@ func (s *Service) readMeetingTranscriptionSettings(v *Settings, mode, glossary, 
 	return ""
 }
 
-// transcriptionReadiness caches only availability, never the user's choice. A changed setting or registry report
-// invalidates it before another probe can publish an old result. Slow probes do not hold up readers of the cache.
+// transcriptionReadiness caches whether the chosen contribution can transcribe (meeting_transcription_ready), never
+// the user's choice. An answer is for one choice (choice, transcriptionChoice's): another choice, or other
+// transcribers, drops it before another probe can publish an old result; a registry change or the periodic tick only
+// has it probed again, and the answer stands meanwhile, so an unrelated settings change never makes a ready hub look
+// unavailable. Slow probes do not hold up readers of the cache.
 type transcriptionReadiness struct {
-	ready atomic.Bool
-	probe sync.Mutex
-	mu    sync.Mutex
-	at    time.Time
-	gen   uint64
-	wake  chan struct{}
+	ready     atomic.Bool
+	probe     sync.Mutex
+	mu        sync.Mutex
+	at        time.Time // when the answer was published (zero: none stands)
+	stale     bool      // probed again at the next look; the answer stands meanwhile
+	choice    string    // the choice the answer is for (or will be, once at is set)
+	gen       uint64
+	wake      chan struct{}
+	published chan struct{} // closed when an answer is published
 }
 
+// transcriptionChoice is what a readiness answer is for: the contribution v chooses.
+func (s *Service) transcriptionChoice(v Settings) string { return meetingTranscriptionExtensionOf(v) }
+
+// transcriptionReadinessChanged: the extensions' registry changed: the answer is probed again (and stands meanwhile).
 func (s *Service) transcriptionReadinessChanged() {
 	c := &s.transcriptionReady
 	c.mu.Lock()
+	c.stale = true
+	c.wakeLocked()
+	c.mu.Unlock()
+}
+
+// transcriptionReadinessReset: the transcribers changed (SetExtensions): no answer stands until one is probed.
+func (s *Service) transcriptionReadinessReset() {
+	c := &s.transcriptionReady
+	c.mu.Lock()
+	c.resetLocked(c.choice)
+	c.mu.Unlock()
+}
+
+// transcriptionSettingsChanged: the settings changed; only another choice of contribution drops the answer.
+func (s *Service) transcriptionSettingsChanged(ctx context.Context) {
+	v, ok := s.settingsLastGood(ctx)
+	if !ok {
+		return
+	}
+	choice := s.transcriptionChoice(v)
+	c := &s.transcriptionReady
+	c.mu.Lock()
+	if choice != c.choice {
+		c.resetLocked(choice)
+	}
+	c.mu.Unlock()
+}
+
+// resetLocked drops the answer: none stands for choice until a probe publishes one (an older probe never does).
+func (c *transcriptionReadiness) resetLocked(choice string) {
 	c.gen++
-	c.at = time.Time{}
+	c.at, c.stale, c.choice = time.Time{}, false, choice
 	c.ready.Store(false)
+	c.wakeLocked()
+}
+
+func (c *transcriptionReadiness) wakeLocked() {
 	if c.wake == nil {
 		c.wake = make(chan struct{}, 1)
 	}
@@ -126,12 +170,41 @@ func (s *Service) transcriptionReadinessChanged() {
 	case c.wake <- struct{}{}:
 	default:
 	}
-	c.mu.Unlock()
 }
 
+// transcriptionReadyNow is meeting_transcription_ready, probed first when the answer is stale and no probe runs.
 func (s *Service) transcriptionReadyNow() bool {
 	s.refreshTranscriptionReady(s.runCtx())
 	return s.transcriptionReady.ready.Load()
+}
+
+// transcriptionReadyCached is the answer as it stands, without a probe: the knowledge base asks it under its locks
+// (the first upload naming the hub), after the upload's handler waited for one (transcriptionReadyAwait).
+func (s *Service) transcriptionReadyCached() bool { return s.transcriptionReady.ready.Load() }
+
+// transcriptionReadyAwait is transcriptionReadyNow for a mode decided now (a meeting upload): while no answer stands
+// (none yet, or the choice just changed) it waits for the probe in flight, or its own, at most a probe's time.
+func (s *Service) transcriptionReadyAwait() bool {
+	c := &s.transcriptionReady
+	ctx, cancel := context.WithTimeout(s.runCtx(), transcriptionInfoTimeout+time.Second)
+	defer cancel()
+	for {
+		s.refreshTranscriptionReady(ctx)
+		c.mu.Lock()
+		stands := !c.at.IsZero()
+		if c.published == nil {
+			c.published = make(chan struct{})
+		}
+		published := c.published
+		c.mu.Unlock()
+		if stands || ctx.Err() != nil {
+			return c.ready.Load()
+		}
+		select {
+		case <-published:
+		case <-ctx.Done():
+		}
+	}
 }
 
 func (s *Service) refreshTranscriptionReady(ctx context.Context) {
@@ -142,16 +215,17 @@ func (s *Service) refreshTranscriptionReady(ctx context.Context) {
 	defer c.probe.Unlock()
 	for ctx.Err() == nil {
 		c.mu.Lock()
-		at, gen := c.at, c.gen
+		at, stale, gen := c.at, c.stale, c.gen
 		c.mu.Unlock()
-		if !at.IsZero() && time.Since(at) < transcriptionReadyInterval {
+		if !at.IsZero() && !stale && time.Since(at) < transcriptionReadyInterval {
 			return
 		}
-		ready := false
+		ready, choice := false, ""
 		if s.trans != nil {
 			probeCtx, cancel := context.WithTimeout(ctx, transcriptionInfoTimeout)
 			v, ok := s.settingsLastGood(probeCtx)
 			if ok {
+				choice = s.transcriptionChoice(v)
 				info, err := s.trans.TranscriptionInfo(probeCtx, meetingTranscriptionExtensionOf(v))
 				// meeting-minutes.md "Which one transcribes": protocol 1 with live and no setup.
 				ready = err == nil && info.Protocol == extwire.TranscriptionProtocol && info.Setup == "" &&
@@ -162,10 +236,14 @@ func (s *Service) refreshTranscriptionReady(ctx context.Context) {
 		c.mu.Lock()
 		if c.gen != gen {
 			c.mu.Unlock()
-			continue // settings changed during the probe: never publish its old answer
+			continue // the choice changed during the probe: never publish its old answer
 		}
 		c.ready.Store(ready)
-		c.at = time.Now()
+		c.at, c.stale, c.choice = time.Now(), false, choice
+		if c.published != nil {
+			close(c.published)
+		}
+		c.published = make(chan struct{})
 		c.mu.Unlock()
 		return
 	}
@@ -187,9 +265,9 @@ func (s *Service) transcriptionReadyLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			// Probe on each tick even if the previous probe finished just after its tick.
+			// Probe on each tick even if the previous probe finished just after its tick; the answer stands meanwhile.
 			c.mu.Lock()
-			c.at = time.Time{}
+			c.stale = true
 			c.mu.Unlock()
 		case <-wake:
 		}

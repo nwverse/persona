@@ -32,9 +32,10 @@ func (s *Service) recordingRoutes(engine func(http.ResponseWriter, *http.Request
 		}
 		meeting := strings.EqualFold(strings.TrimSpace(u.Kind), kb.RecordingMeeting)
 		if meeting {
-			// Whether hub transcription is ready is asked under the knowledge base's locks (the first upload naming the
-			// hub): read now, so a stale answer is probed here and not there.
-			s.transcriptionReadyNow()
+			// Whether hub transcription is ready is read under the knowledge base's locks (the first upload naming the
+			// hub), as it stands: probed here first, and waited for while no answer stands (the choice just changed),
+			// so a probe in flight never makes a ready hub look unavailable.
+			s.transcriptionReadyAwait()
 		}
 		put, err := e.PutRecording(r.PathValue("id"), u, time.Now())
 		status := put.Status

@@ -439,7 +439,7 @@ func keptSessions(v Settings, tasks []TaskView, links []TodoLink) []SessionRef {
 
 // settingsChanged: the hub learns them (the snapshot's profile) and the next message reads the time in the new zone.
 func (s *Service) settingsChanged(ctx context.Context) {
-	s.transcriptionReadinessChanged()
+	s.transcriptionSettingsChanged(ctx) // only another contribution chosen drops the readiness answer
 	s.ProfileChanged(ctx)
 	s.publish(ctx)
 }

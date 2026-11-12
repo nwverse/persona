@@ -244,6 +244,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.settingsChanged(ctx)
+	if in.MeetingTranscriptionExtension != nil {
+		s.transcriptionReadinessChanged() // named again: probed again (the answer stands meanwhile)
+	}
 	if in.Main != "" && in.Main != "-" && in.Main != before.Main {
 		s.handOverMainTasks(context.WithoutCancel(ctx), before.Main, in.Main) // its open tasks follow the main conversation (main_handover.go)
 	}

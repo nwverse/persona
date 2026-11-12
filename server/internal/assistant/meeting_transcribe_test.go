@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"context"
 	"net/http"
 	"slices"
 	"strings"
@@ -417,5 +418,49 @@ func TestHubSocketNeverStartedCountsAsDown(t *testing.T) {
 	defer r.mu.Unlock()
 	if !r.downSince.Equal(since) {
 		t.Fatalf("down since %v, was %v", r.downSince, since)
+	}
+}
+
+// A ready hub stays ready while its readiness is probed again: neither an unrelated settings change nor a registry
+// change during the probe makes the first upload naming the hub fall back to the device; and with no answer standing
+// (the choice just changed) the upload waits for the probe.
+func TestHubModeChosenWhileReadinessIsProbed(t *testing.T) {
+	h := newHubFixture(t)
+	if !h.s.transcriptionReadyNow() {
+		t.Fatal("not ready")
+	}
+	setSettings(t, h.s, func(v *Settings) { days := 30; v.RecordingDays = &days })
+	started, release := make(chan struct{}, 1), make(chan struct{})
+	h.tr.set(func(f *fakeTranscriber) {
+		f.infoHook = func() {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			<-release
+		}
+	})
+	h.s.transcriptionReadinessChanged() // a registry change: probed again, in flight below
+	probed := make(chan struct{})
+	go func() { defer close(probed); h.s.refreshTranscriptionReady(context.Background()) }()
+	<-started
+	if out := h.hubUpload(meetingRec, 1, nil); out["transcription"] != "hub" {
+		t.Fatalf("during the probe: %v", out)
+	}
+	close(release)
+	<-probed
+
+	// Another contribution chosen: no answer stands; the upload waits for the probe and takes its answer.
+	gate := make(chan struct{})
+	h.tr.set(func(f *fakeTranscriber) { f.infoHook = func() { <-gate } })
+	h.s.transcriptionReady.mu.Lock()
+	h.s.transcriptionReady.resetLocked("another")
+	h.s.transcriptionReady.mu.Unlock()
+	go func() { h.s.refreshTranscriptionReady(context.Background()) }()
+	uploaded := make(chan map[string]any, 1)
+	go func() { uploaded <- h.hubUpload(meetingOther, 1, nil) }()
+	close(gate)
+	if out := <-uploaded; out["transcription"] != "hub" {
+		t.Fatalf("with no answer standing: %v", out)
 	}
 }

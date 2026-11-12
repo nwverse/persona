@@ -105,16 +105,17 @@ func (j *fakeJob) snapshot() ([]extwire.TranscriptionFrame, int64, []float64, bo
 
 // fakeTranscriber is a transcription contribution: /info, and jobs scripted by live and replay.
 type fakeTranscriber struct {
-	t       *testing.T
-	srv     *httptest.Server
-	mu      sync.Mutex
-	info    extwire.TranscriptionInfo
-	infoErr error
-	dialErr error
-	live    jobScript
-	replay  jobScript
-	jobs    []*fakeJob
-	refs    []string
+	t        *testing.T
+	srv      *httptest.Server
+	mu       sync.Mutex
+	info     extwire.TranscriptionInfo
+	infoErr  error
+	infoHook func() // runs in each /info, outside the lock (a slow probe)
+	dialErr  error
+	live     jobScript
+	replay   jobScript
+	jobs     []*fakeJob
+	refs     []string
 }
 
 func newFakeTranscriber(t *testing.T) *fakeTranscriber {
@@ -127,9 +128,13 @@ func newFakeTranscriber(t *testing.T) *fakeTranscriber {
 
 func (f *fakeTranscriber) TranscriptionInfo(ctx context.Context, ref string) (extwire.TranscriptionInfo, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.refs = append(f.refs, ref)
-	return f.info, f.infoErr
+	info, err, hook := f.info, f.infoErr, f.infoHook
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	return info, err
 }
 
 func (f *fakeTranscriber) TranscriptionDial(ctx context.Context, ref string) (*websocket.Conn, func(), error) {
