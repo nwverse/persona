@@ -91,11 +91,32 @@ describe("an exchange's usage", () => {
     expect(models(seg)?.map((m) => [m.model, m.out])).toEqual([[OPUS, 1], [SONNET, 100], ["claude-haiku-5-5", 60]]);
   });
 
+  it("counts a background subagent that failed, was resumed and finished once, its nested one apart, as the node reports them", () => {
+    // the node's shape: each report on a result of the launching call with its task, a nested subagent under its own
+    // id on its parent's report and on its own result (whose call, inside the parent, is not on the page)
+    const task = (id: string, call: string, status: string) => ({ kind: "agent", task_id: id, tool_use_id: call, status });
+    const report = (seq: number, call: string, id: string, status: string, usage: TokenUsage[]): Item => ({ ...result(seq, call, usage), id: `r${seq}#0`, task: task(id, call, status) });
+    const parent = (n: number): TokenUsage => ({ id: "agent:P", model: OPUS, in: 10, out: 100 + n });
+    const child: TokenUsage = { id: "agent:C", model: OPUS, in: 1000, out: 5000 };
+    const items = [
+      u(1, "review it"), call(2, "toolu_P", "Agent"), { ...result(3, "toolu_P"), task: task("P", "toolu_P", "running") },
+      report(4, "toolu_inside_P", "C", "failed", [child]),
+      report(5, "toolu_P", "P", "failed", [parent(0), child]),
+      a(6, "it failed"),
+      u(7, "resume it"),
+      report(8, "toolu_P", "P", "completed", [parent(20), child]),
+      a(9, "done"),
+    ];
+    const segs = segOf(chatLines(items));
+    expect(segs.map((s) => summarize(s.usage)?.models.map((m) => [m.in, m.out]))).toEqual([[[1010, 5120]], undefined]);
+  });
+
   it("counts what a stopped turn's notice carries in its last exchange", () => {
     // a Codex turn you stopped: its total rides on the interruption notice, a line of its own after the exchange
     const stopped: Item = { id: "n4#0", seq: 4, role: "system", kind: "notice", text: "已中断", usage: [{ model: "gpt-5.5", in: 70, out: 8 }] };
-    const lines = chatLines([u(1, "rename it"), call(2, "c2"), result(3, "c2"), stopped]);
+    const lines = chatLines([u(1, "rename it"), call(2, "c2"), result(3, "c2"), a(3.5, "renaming"), stopped]);
     expect(lines.map((l) => l.kind)).toEqual(["segment", "notice"]);
+    expect(segOf(lines)[0].cut).toBe(true);
     expect(models(segOf(lines)[0])).toEqual([{ model: "gpt-5.5", in: 70, out: 8, cache_read: 0, cache_write: 0, cache_write_1h: 0 }]);
   });
 
