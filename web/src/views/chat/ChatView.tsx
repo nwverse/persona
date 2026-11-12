@@ -66,6 +66,7 @@ import { AgentModelPill, AssistantModelPill } from "./ModelPill";
 import { switchRefused } from "../../lib/session-models";
 import { mediaMatches, NARROW, NO_HOVER, SHORT, useFinePointer, useMedia } from "../../lib/viewport";
 import { UserBubble } from "./SegmentView";
+import { LatestMessageTime } from "./latest-message-time";
 import { scrollsAFold } from "./fold-scroll";
 import { GoalBar } from "./GoalBar";
 import { CommentMarks } from "./CommentMarks";
@@ -371,6 +372,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // the message is in, the hub has not said working yet (#3654): the live row covers that wait too
   const segs = useMemo(() => segments(tr.items), [tr.items]);
   const lastSeg = segs[segs.length - 1];
+  // the last message's send time: it stays on screen without a hover (#5285)
+  const latestTime = lastSeg?.answer?.ts ?? lastSeg?.user?.ts;
   const [awaitNow, setAwaitNow] = useState(() => Date.now());
   const turnFailure = session?.failure_reason ? { since: session.state_since } : undefined;
   // a message whose wait the hub took a stop for (#2450): it is no longer worked on, so Working… and Interrupt go at
@@ -1766,6 +1769,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
               </div>
             )}
             <LiveClockContext.Provider value={countClock}>
+            <LatestMessageTime.Provider value={latestTime}>
             <ChatContext.Provider value={ctx}>
               <CardConversation.Provider value={assistant ? sid : ""}>
               {earlier.host && <Suspense fallback={null}><EarlierStretches {...earlier.host} offscreen={offscreen} /></Suspense>}
@@ -1813,6 +1817,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
               )])}
               </CardConversation.Provider>
             </ChatContext.Provider>
+            </LatestMessageTime.Provider>
             </LiveClockContext.Provider>
             {/* what is on its way, and failed messages with nothing sent after them, in the order they were written */}
             {[...shownPending.map((p) => ({ at: p.at, el: (
