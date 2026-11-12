@@ -764,6 +764,7 @@ targets:
       - path: PersonaTests/AddComputerModelTests.swift
       - path: PersonaTests/NotificationActionsTests.swift
       - path: PersonaTests/NotifyPrefsTests.swift
+      - path: PersonaTests/AppIconBadgeTests.swift
       - path: PersonaTests/SentSettingsNavigationTests.swift
       - path: PersonaTests/SentModelTests.swift
       - path: PersonaTests/ConnectorRowTests.swift

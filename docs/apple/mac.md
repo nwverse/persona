@@ -65,7 +65,7 @@ and multiple windows. Do not copy the iPhone tab bar, bottom sheets or horizonta
 
 | iOS | Mac |
 | --- | --- |
-| Bottom tab bar, badges | Sidebar groups + count badges; Dock icon badge = waiting-card count (a second card in the same session also counts, #4081) |
+| Bottom tab bar, badges | Sidebar groups + count badges; Dock icon badge = the Persona, Agents and Inbox badges added up, as the iPhone's icon (#5824) |
 | Long-press menus, horizontal swipes | Context menus (`contextMenu`); row `swipeActions` remain for trackpads; inline buttons on hover |
 | Bottom sheets / floating panels | Forms use window sheets; viewers use Inspector or popovers; fullscreen panels (terminal, images) use separate windows or the detail column |
 | In-app links (bottom card) | Web panel slides out to the right of detail (draggable width, ⌘W closes, **Open in Browser**); can also detach into a window |
@@ -444,10 +444,12 @@ Dock context menu (`apple/Mac/App/MacDockMenu.swift`, tested): **Needs You / Don
   Inside this device's quiet hours (`NotifyPrefs.quiet`, `QuietHours.active`) nothing says an Agent finished, and Needs You comes without a sound and passive, as the hub's pushes do then (#1863).
   The state-change notification includes the turn's earliest card; the same card never notifies twice. If state arrives one beat before the card event, the 3-second grace period still deduplicates it.
   Request notification permission after pairing / at launch (`PushRegistrar`, same as iPhone: remote pushes while closed display only if previously authorized; allowed later in System Settings, it registers when the App becomes active again, `applicationDidBecomeActive`, #1861); watcher asks again if it needs to notify before authorization, then sends after approval (items added during the prompt are lost).
-  Closed or disconnected Apps receive hub pushes, see "Remote push (Mac)" below. Muting / unmuting immediately updates the Dock badge.
+  Closed or disconnected Apps receive hub pushes, see "Remote push (Mac)" below.
 - Notifications use the same userInfo (`machine_id` / `session_id` / `interaction_id`) and categories as hub pushes: **Allow / Deny** for authorization, **Approve / Send Back** for plans;
   `MacAppDelegate` submits button actions directly to the hub, and clicking opens chat; a second Done notification for the same Agent replaces the first, while card notifications are separate by interaction uid.
-- Dock badge counts waiting cards (interactions, excluding muted and quiet tasks), not sessions; same as iPhone Agents `badges.agents` and the number beside the menu bar icon (#4081).
+- Dock badge (#5824, a bug fix: unread Inbox items never showed): the sidebar's Persona, Agents and Inbox badges added up, the same
+  number as the iPhone's icon (`AppIconBadge`, `docs/apple/ios.md` "App icon badge (#5824)"); muting updates it with the sidebar. Until
+  #5824 it counted waiting cards only, like the menu bar's number, which still does (#4081).
 - Menu bar (`MenuBarExtra`, menu style, remains after closing the main window): waiting-card count beside the icon; groups **Needs You** (longest waiting first), **Working**,
   **Done, Unread** (latest 5). Each Needs You item is a submenu: what it said + immediately answerable card choices (single-question options, Allow / Deny, Approve Plan,
   terminal short options read by the hub) + Open Chat; other items open chat with one click. Ends with **Open Persona / Quit Persona**.

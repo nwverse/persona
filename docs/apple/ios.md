@@ -730,6 +730,26 @@ Long-press the Persona icon: the last conversation opened on this device, then "
 - If the App is open or backgrounded, use the scene delegate's `windowScene(_:performActionFor:)`; on cold launch the item comes through scene connectionOptions. `QuickActionSceneDelegate` handles only these two entry points; SwiftUI still manages the window.
 - `QuickActionsTests` opens a demo chat, long-presses the home-screen icon, finds that chat on the menu (with Record, and no Agents) and taps it, then Inbox and New chat; a second test opens two chats in turn and checks the menu's order (the newer chat only, then Record, New chat, Inbox). Record is not tapped (it would record). `RecentChatsTests` runs the shared fixture. Cold launch is untested: SpringBoard launch cannot pass demo-mode arguments. Each simulator return to the home screen waits about 60 seconds for SpringBoard idle; the whole test takes about 7 minutes.
 
+## App icon badge (#5824)
+
+The number on the Persona icon (the iPhone's home screen, the Mac's Dock; Apple Vision Pro runs the same code) is the
+tab badges added up: Persona's waiting questions (`TabBadges.assistant`) + Agents' Needs You (`TabBadges.agents`) +
+the Inbox's unread items (`InboxStore.unreadCount`). One function, `AppIconBadge.count` (`Persona/App/AppIconBadge.swift`),
+on every Apple app.
+
+- **Same as the tabs**: nothing the tabs leave out (muted agents, an agent's finished turn not yet opened, open
+  to-dos, an extension's badge, Messages) and nothing more; a quiet task's question counts with Persona's, as on its
+  tab. Signed out, or every item handled, clears it.
+- **Set by the app**: `AppIconBadgeWatcher` observes the numbers while the app runs and sets the icon only when the sum
+  moves, 0.25 s after the first change of a burst (P7). iOS calls `UNUserNotificationCenter.setBadgeCount` on a serial
+  utility queue (P1) and sends the number again each time the app becomes active: one set before the user allowed
+  badges is dropped. The Mac sets `NSApp.dockTile.badgeLabel`. The hub's pushes carry no `badge`, so while the app is
+  not running the icon keeps the last number set, and a build without push (no `aps-environment`) works the same.
+- **The user's switch**: iOS shows the number only with badge permission (asked with notifications, `PushRegistrar`)
+  and the system's Badges switch on; the Dock badge always shows.
+- **Tests**: `AppIconBadgeTests` (also in `PersonaMacTests`): the sum, the model's tabs feeding it, nothing while
+  signed out, one call per burst, none when a burst ends where it started.
+
 ## Share to Persona (#4586, #1460)
 
 In another App, Share › Persona sends text, a web link, up to 4 images and up to 10 files (PDFs, documents, videos, archives…), with an optional note, to the conversation or agent picked in the sheet, or starts a new chat with them (`PersonaShare/`, target `PersonaShare`). Android's ShareActivity has the same recent-first rules (#2515).
@@ -1360,7 +1380,7 @@ When on, tasks dispatched by the main chat are quiet (to-do `quiet`, attached se
 - Foreground notifications: `willPresent` shows no banner for quiet sessions.
 - Badges: quiet-session questions count toward the assistant, not Agents (handled in the main chat); the drawer / Mac sidebar's To-dos count excludes quiet tasks (`TodoStore.badgeCount`), though the to-do list still includes them.
 - Watch: both the phone-synced summary and the watch's directly fetched lists exclude quiet sessions and their questions (watch credentials cannot read to-dos and use only session `quiet`).
-- Mac: notifications and Dock badges treat them as muted; the menu bar excludes them.
+- Mac: notifications treat them as muted; the menu bar excludes them. The app icon counts their questions with Persona's, as the tabs do ("App icon badge (#5824)").
 
 `AppModel.isQuiet` decides: first the hub's session `quiet`, then the current hub's to-dos (`QuietTasks`: quiet to-dos and their Agents, including ones detached from the to-do). Task cards in the main chat and the Agents-page list still display normally.
 
@@ -1907,8 +1927,9 @@ is listed), and a hub that answers it has no roster filters nothing (`AppModel.m
   or Don't Start, a briefing question's Handled) name the conversation's own manager (`AppModel.feedManager`), whichever
   assistant is current: some of those routes name no conversation, so the hub would take them to the default. The
   default's conversations name none, and with one installed manager or no roster nothing is named.
-- **Counts**: the tab badges, the sidebar's Inbox and To-dos counts, the home page's Needs You and the main conversation's
-  dock count the current assistant's (`AppModel.countBadges`, `InboxStore.actionCount`, `TodoStore.badgeCount`). The
+- **Counts**: the tab badges, the app icon's number (their sum), the sidebar's Inbox and To-dos counts, the home page's
+  Needs You and the main conversation's dock count the current assistant's (`AppModel.countBadges`,
+  `InboxStore.actionCount`, `TodoStore.badgeCount`). The
   switcher shows beside every other assistant what waits there (`AssistantBadges`, `AppModel.assistantBadges`): its agents
   waiting (a session with a pending card or in Needs You once, quiet and muted ones left out, a card on no session by
   itself; Persona's own conversations by their cards only) plus `inbox_needs_you`. The header's face carries a mark while
