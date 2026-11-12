@@ -484,6 +484,29 @@
       },
       "extractionState" : "manual"
     },
+    "Done: %@ [Meeting Topic]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Done: %1$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已讨论：%1$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "済み：%1$@"
+          }
+        }
+      }
+    },
     "Driving [Place Map]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -714,6 +737,29 @@
         }
       }
     },
+    "Not yet: %@ [Meeting Topic]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not yet: %1$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "待讨论：%1$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "これから：%1$@"
+          }
+        }
+      }
+    },
     "Note [Recording Kind]": {
       "extractionState": "manual",
       "localizations": {
@@ -737,6 +783,29 @@
         }
       }
     },
+    "Now: %@ [Meeting Topic]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Now: %1$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "当前：%1$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "いま：%1$@"
+          }
+        }
+      }
+    },
     "Only the current assistant's settings are shown. Switch assistants to change another's settings.": {
       "extractionState": "manual",
       "localizations": {
@@ -756,6 +825,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "現在のアシスタントの設定だけを表示しています。別のアシスタントを変更するには切り替えてください。"
+          }
+        }
+      }
+    },
+    "Persona: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona: %1$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona：%1$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona：%1$@"
           }
         }
       }
@@ -1356,6 +1448,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "时间到了，Claude Code 会自动拒绝"
+          }
+        }
+      }
+    },
+    "Topics [Meeting]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Topics"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "议题"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "議題"
           }
         }
       }

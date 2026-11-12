@@ -257,6 +257,52 @@ private fun resourceOf(key: CoreText.Key): Int = when (key) {
     CoreText.Key.ToolComputerRun -> R.string.designsystem_core_tool_computer_run
     CoreText.Key.ToolBrowserRun -> R.string.designsystem_core_tool_browser_run
     CoreText.Key.ToolBrowserLook -> R.string.designsystem_core_tool_browser_look
+    CoreText.Key.ToolTaskCreate -> R.string.designsystem_core_tool_task_create
+    CoreText.Key.ToolTaskUpdate -> R.string.designsystem_core_tool_task_update
+    CoreText.Key.ToolTaskList -> R.string.designsystem_core_tool_task_list
+    CoreText.Key.ToolTaskGet -> R.string.designsystem_core_tool_task_get
+    CoreText.Key.ToolTaskStop -> R.string.designsystem_core_tool_task_stop
+    CoreText.Key.ToolTaskOutput -> R.string.designsystem_core_tool_task_output
+    CoreText.Key.ToolSubagentHandback -> R.string.designsystem_core_tool_subagent_handback
+    CoreText.Key.ToolScheduleWakeup -> R.string.designsystem_core_tool_schedule_wakeup
+    CoreText.Key.ToolCronList -> R.string.designsystem_core_tool_cron_list
+    CoreText.Key.ToolRemoteTrigger -> R.string.designsystem_core_tool_remote_trigger
+    CoreText.Key.ToolLsp -> R.string.designsystem_core_tool_lsp
+    CoreText.Key.ToolEnterWorktree -> R.string.designsystem_core_tool_enter_worktree
+    CoreText.Key.ToolExitWorktree -> R.string.designsystem_core_tool_exit_worktree
+    CoreText.Key.ToolSendUserFile -> R.string.designsystem_core_tool_send_user_file
+    CoreText.Key.ToolArtifact -> R.string.designsystem_core_tool_artifact
+    CoreText.Key.ToolReportFindings -> R.string.designsystem_core_tool_report_findings
+    CoreText.Key.ToolSendFeedback -> R.string.designsystem_core_tool_send_feedback
+    CoreText.Key.ToolEndConversation -> R.string.designsystem_core_tool_end_conversation
+    CoreText.Key.ToolWaitForMcp -> R.string.designsystem_core_tool_wait_for_mcp
+    CoreText.Key.ToolListMcpResources -> R.string.designsystem_core_tool_list_mcp_resources
+    CoreText.Key.ToolReadMcpResource -> R.string.designsystem_core_tool_read_mcp_resource
+    CoreText.Key.ToolWorkflow -> R.string.designsystem_core_tool_workflow
+    CoreText.Key.ToolIphoneStatus -> R.string.designsystem_core_tool_iphone_status
+    CoreText.Key.ToolIphoneLook -> R.string.designsystem_core_tool_iphone_look
+    CoreText.Key.ToolIphoneDo -> R.string.designsystem_core_tool_iphone_do
+    CoreText.Key.ToolTaskStart -> R.string.designsystem_core_tool_task_start
+    CoreText.Key.ToolTaskComplete -> R.string.designsystem_core_tool_task_complete
+    CoreText.Key.ToolTaskDelete -> R.string.designsystem_core_tool_task_delete
+    CoreText.Key.ToolCellAdd -> R.string.designsystem_core_tool_cell_add
+    CoreText.Key.ToolCellDelete -> R.string.designsystem_core_tool_cell_delete
+    CoreText.Key.ToolCellEdit -> R.string.designsystem_core_tool_cell_edit
+    CoreText.Key.ToolLspDefinition -> R.string.designsystem_core_tool_lsp_definition
+    CoreText.Key.ToolLspImplementations -> R.string.designsystem_core_tool_lsp_implementations
+    CoreText.Key.ToolLspReferences -> R.string.designsystem_core_tool_lsp_references
+    CoreText.Key.ToolLspHover -> R.string.designsystem_core_tool_lsp_hover
+    CoreText.Key.ToolLspSymbols -> R.string.designsystem_core_tool_lsp_symbols
+    CoreText.Key.ToolLspWorkspaceSymbol -> R.string.designsystem_core_tool_lsp_workspace_symbol
+    CoreText.Key.ToolLspCalls -> R.string.designsystem_core_tool_lsp_calls
+    CoreText.Key.ToolStopLoop -> R.string.designsystem_core_tool_stop_loop
+    CoreText.Key.ToolWorktreeRemove -> R.string.designsystem_core_tool_worktree_remove
+    CoreText.Key.ToolArtifactsList -> R.string.designsystem_core_tool_artifacts_list
+    CoreText.Key.ToolFindings -> -R.plurals.designsystem_core_tool_findings
+    CoreText.Key.WorkTimeSeconds -> R.string.designsystem_core_work_time_seconds
+    CoreText.Key.WorkTimeMinutes -> R.string.designsystem_core_work_time_minutes
+    CoreText.Key.WorkTimeMinutesSeconds -> R.string.designsystem_core_work_time_minutes_seconds
+    CoreText.Key.WorkTimeHoursMinutes -> R.string.designsystem_core_work_time_hours_minutes
     CoreText.Key.ComputerLookAt -> R.string.designsystem_core_computer_look_at
     CoreText.Key.ComputerLookAtScreen -> R.string.designsystem_core_computer_look_at_screen
     CoreText.Key.ComputerScript -> R.string.designsystem_core_computer_script

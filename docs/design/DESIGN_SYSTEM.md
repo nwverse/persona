@@ -525,7 +525,7 @@ For every component: use the design-system one, not a lookalike. Counts are appr
 | `ReadinessCard` | what the main conversation still needs | `apple/Persona/DesignSystem/ReadinessCard.swift:8` |
 | `PlaceMapCard` | where the phone is, or the places a location tool found, as a map under the turn's work line | `apple/Persona/Views/Assistant/Tasks/PlaceMap.swift` |
 
-`.card()` uses the system grouped background, not the style's card color, so it does not follow Clay, Island or Lark (DS-07). The space page's cards (`SlotCard` and the dashed new-tab card in `apple/Persona/Views/Chats/SpaceView.swift`) are `.card(padding: 12)` with a minimum height of `box150`; Android Glass draws the same page with `AgentSlotCard`, `AgentNewTabCard` and `AgentCardRow` (`android/core/designsystem/src/main/kotlin/persona/core/designsystem/AgentSpaceCards.kt`), on its opaque card color with the hairline stroke, since its translucent card color is nearly invisible on the dark page (#4338). Inset wells (`Fill.well`) are rebuilt by hand in 24+ places. Web has no shared card outside the admin app.
+`.card()` uses the system grouped background, not the style's card color, so it does not follow Clay, Island or Lark (DS-07). The space page's cards (`SlotCard` and the dashed new-tab card in `apple/Persona/Views/Chats/SpaceView.swift`) are `.card(padding: 12)` with a minimum height of `box150`; Android Glass draws the same page with `AgentSlotCard`, `AgentNewTabCard` and `AgentCardRow` (`android/core/designsystem/src/main/kotlin/persona/core/designsystem/AgentSpaceCards.kt`), on its opaque card color with the hairline stroke, since its translucent card color is nearly invisible on the dark page (#4338). The page of a computer's projects that the space page's computer opens (`apple/Persona/Views/Chats/MachineSpacesView.swift`) is an inset grouped list: a summary row, a Working section and an Idle section, each with its count in the state's tone, each project a row that opens its space page; Android sets the same rows in `JGroupItem` cards and `JRow`s (`AgentMachineSummary`, `AgentProjectLine`, `AgentIdleProjectLine`, #4338 A11). Inset wells (`Fill.well`) are rebuilt by hand in 24+ places. Web has no shared card outside the admin app.
 
 **Place map card** (iOS, #5543, `PlaceMapCard`): a quick result like the added-reminder card (`QuickResultCard`): the same `Fill.well` and `Radius.card`, under the turn's work line, with the tool calls still folded (super rule 2). On top, a still map `Size.chatMap` tall (160, scaled), made by `MKMapSnapshotter` off the main thread for the card's size and appearance and cached (bound 24); while it is made the well's fill holds the same height, so nothing below moves. Places carry `CountBadge` numbers on the accent in the order the tool returned them, which is the order the answer counts in; the phone's own fix is an accent dot. Under the map, the first three places as rows (number, name in `secondaryStrong`, distance and address in `caption`) with an icon-only Directions button (`Icon.directions`, 44 pt target, spoken "Directions to <place>"), then "N more on the map". Tapping the map opens a sheet with a live `Map`, the same numbers as `Marker` monograms, every place's row and Done. Why a new card: no existing component shows places, and a live map in the chat would redraw while scrolling (`docs/apple/performance.md`, P8). No setting; nothing is drawn for a failed, empty or running call. **Hand-off** (#5545): directions `phone_maps_navigate` opened in Apple Maps are the same card with one place, the destination: on the map a white `Icon.place` in an accent circle (the accent dot stays the phone's own fix), and one row with Maps' app icon (`BrandMark`, `Brand.iosMaps`, as Settings › Connectors draws it), the destination's name, the mode and "Opened in Maps" in `caption`, and the icon-only button (`Icon.directions`, spoken "Open directions to <place> in Maps") that opens the same directions in the same mode again. Nothing opens Maps without a tap, and the words say Maps navigates, not Persona. **Route** (#5544): a route `phone_maps_route` worked out is the same card with the destination: on the map the route's line in the accent (`Size.barWide`, round caps and joins) from the phone's accent dot to the destination's mark, the same line as a `MapPolyline` in the sheet; one row with `Icon.place`, the destination, "Walking · 6 min · 420 m" in `caption`, and the icon-only button (`Icon.directions`, spoken "Start directions to <place> in Maps") that hands the route to Maps in its mode. Transit has no line (Apple Maps gives apps none), only the destination with its time and distance.
 
@@ -1140,11 +1140,14 @@ user's starts another turn.
 A tool row names its tool in words on iOS, the web and Android (#2986; Android `ToolNaming.kt`, #4339): Claude Code's tools have verbs of their own, another
 server's MCP tool reads "<Server> · <Tool>" ("GitHub · Create issue"), and any other name is humanized. What the call is
 about follows, picked from its input by the field that says the most (`ToolNaming.subject`; Android, whose rows show no
-verb, puts it under the name). Opened, a tool
-no table knows shows its arguments as `key: value` lines, with the JSON one tap away under Raw Input (`RawInputToggle`,
-shared with computer tools; Android draws the list on Glass, `ToolArguments`, with the JSON in Raw input's reader, and
-Brief and Board keep the input as code). The cases both platforms follow are in `spec/fixtures/tool-names`. Details in
-`docs/lessons/ios.md`.
+verb, puts it under the name where the tool's own icon doesn't say it). Two subjects are words of their own: several
+findings by their count ("2 findings") and a wake-up with no reason by its delay ("5 min"). A computer tool names the Mac
+as the user knows it ("MacBook", not the `macbook` the tool wrote). Opened, a tool
+no table knows shows its arguments as `key: value` lines, and a tool that operates a Mac its steps in words ("Click AC →
+6 → ×") with what the driver answered and the picture it brought back, each with the JSON one tap away under Raw Input
+(`RawInputToggle`; Android draws both on Glass, `ToolArguments` and `ComputerToolDetail`, with the same inline toggle,
+and Brief and Board keep the input as code with the reader's Raw input button). The cases both platforms follow are in
+`spec/fixtures/tool-names`. Details in `docs/lessons/ios.md`.
 
 A tool row says what its call came to when the node sends `outcome` (#4303, `docs/protocol/protocol.md` "Tool
 outcomes"). Only a call that ran and failed turns the row and its chip red, and its result says "Exit code N". A call
@@ -1582,9 +1585,9 @@ page the user watches during the meeting is the page they keep writing in after 
 
 - **Structure, live**: a header (title in `Theme.Font.title`, the page menu, **Hide**), a state line (the recording dot,
   the system-ticked clock, the state word), a subtitle (the role, "On this iPhone", "Private" when marked), a problem as a
-  caution `NoticeBanner` when the room can't take part, the **Live** box, the thread's section header, the thread, and the
-  bar pinned through `safeAreaInset`. While the field has the keyboard the top of the page steps aside as the bar's
-  controls do: the subtitle hides and the Live box keeps only its newest line, so the thread keeps its height (the
+  caution `NoticeBanner` when the room can't take part, **Topics** (phase 2, below), the **Live** box, the thread's
+  section header, the thread, and the bar pinned through `safeAreaInset`. While the field has the keyboard the top of the
+  page steps aside as the bar's controls do: the subtitle and Topics hide and the Live box keeps only its newest line, so the thread keeps its height (the
   structure stays the same, so the thread's scroll position holds). At accessibility sizes a one-line header (dot, time,
   menu, Hide) stays fixed, the rest scrolls as one, and the bar stays pinned.
 - **Structure, after**: **Done** when it is in the sheet, a status card (title, start–end, the minutes' state with
@@ -1615,6 +1618,15 @@ page the user watches during the meeting is the page they keep writing in after 
   no `room`): the subtitle and the thread's header say "Persona can't take part right now", the field asks nothing of the
   room and [+] goes, with a caption that says so; Just me stays. The same rule (`MeetingAsk.canAsk`) decides the asks
   themselves and the Live Activity.
+- **Topics (phase 2)**: in a meeting started while the hub listed `meeting_live_view`, once the room set any, a section
+  under the header and above the Live box: "Topics" (caption strong, secondary, a header for VoiceOver) and one
+  horizontal row of `Chip`s in the room's order, scrolled so the current one is in view (without motion under Reduce
+  Motion), each at most `Theme.Size.meetingTopicChip` wide (scaled with the text; a longer title is cut). The state is in
+  words, never the color alone: **Done: <title>** on the neutral fill, **Now: <title>** in the accent tint, an open topic
+  its title alone in the outline look (the sketch's `[ ]`); VoiceOver reads each as one element with its state, an open
+  one "Not yet: <title>". It steps aside while the field has the keyboard, as the subtitle does; at accessibility sizes
+  it scrolls with the rest. Nothing shows before the first topics. Reason: the topics say where the meeting is at a
+  glance, and words keep them readable in either appearance and to VoiceOver.
 - **Live box**: a `.surface` card with the radius `Theme.Radius.card`: "Live" and, on the right, how far the transcript
   is behind ("About N s behind", or "Listening…" before any line), then the last `Theme.Recording.liveLines` sentences
   (time in monospaced digits, secondary; two lines of text at most) and **Full Transcript**, which pushes the whole
@@ -1724,8 +1736,9 @@ page the user watches during the meeting is the page they keep writing in after 
   `meeting-photo-uploading`, `meeting-photo-material`, `meeting-photo-failed`, `meeting-photo-deleting`,
   `meeting-photo-unlisted`), `meeting-photo-retry`, `meeting-photo-remove`, `meeting-photo-note`,
   `meeting-photo-reading`, `meeting-photo-removed`, `meeting-photo-delete`, `meeting-photo-delete-confirm`,
-  `meeting-photo-delete-problem`, `meeting-photo-viewer`, `meeting-photo-viewer-done`, `meeting-photo-problem`; in the
-  minutes `minutes-photo` and `minutes-photo-removed`,
+  `meeting-photo-delete-problem`, `meeting-photo-viewer`, `meeting-photo-viewer-done`, `meeting-photo-problem`; the
+  topics `meeting-topics` and each chip `meeting-topic-done|current|open`; in the minutes `minutes-photo` and
+  `minutes-photo-removed`,
   `meeting-ask-field`, `meeting-ask-send`
   (the two shared with the live bar's typed question), `meeting-ask-caption`, `meeting-ask-notice`, `recording-more`,
   `meeting-page-stop-speaking`, `meeting-after-status`, `meeting-after-divider`, `meeting-followup-retry`,
@@ -1733,7 +1746,7 @@ page the user watches during the meeting is the page they keep writing in after 
   `meeting-private-start`; on the recording's page `recording-private` and `recording-talk`; the sheet's
   shared ones (`recording-now-title`, `recording-live-timer`, `recording-live-hide`, `recording-pause`,
   `recording-bookmark`, `recording-stop`, `recording-wrapup-title`, `recording-wrapup-open`, `recording-wrapup-done`)
-  keep their names. UI tests: `MeetingConversationUITests`, `TalkAboutMeetingUITests`.
+  keep their names. UI tests: `MeetingConversationUITests`, `MeetingLiveViewUITests` (the topics), `TalkAboutMeetingUITests`.
 - Platforms: the web shows the same thread on the recording detail (**Conversation**, with **Talk about this meeting**
   from phase 6); Android has no meeting page yet.
 

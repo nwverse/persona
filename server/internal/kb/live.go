@@ -138,6 +138,33 @@ type Live struct {
 	Asks []LiveAsk `json:"asks,omitempty"`
 	// AsksRev is the asks' revision (the meeting_live event's asks): it goes up whenever they change (LiveUpdate).
 	AsksRev int64 `json:"asks_rev,omitempty"`
+	// Topics are the meeting's topics as its room set them (meeting_topics_set, TopicsSet), TopicsAt their last change
+	// and TopicsRev their revision (the meeting_live event's topics), which goes up whenever they change (LiveUpdate).
+	// Kept here, they go with the transcript: the trim takes live.json.
+	Topics    []LiveTopic `json:"topics,omitempty"`
+	TopicsAt  time.Time   `json:"topics_at,omitzero"`
+	TopicsRev int64       `json:"topics_rev,omitempty"`
+}
+
+// The topics of a room meeting (docs/assistant/meeting-minutes.md "Phase 2: live view"): each done, current (at most
+// one) or open, set whole by the room.
+const (
+	TopicDone    = "done"
+	TopicCurrent = "current"
+	TopicOpen    = "open"
+	// The limits of meeting_topics_set: a call over one is refused, saying which.
+	MaxTopics     = 20
+	MaxTopicTitle = 80  // characters
+	MaxTopicNote  = 200 // characters
+)
+
+// LiveTopic is one topic of the meeting: its title, its state, the seconds from the start when it began (nil: not
+// said) and the room's short note on it.
+type LiveTopic struct {
+	Title string   `json:"title"`
+	State string   `json:"state"`
+	At    *float64 `json:"at,omitempty"`
+	Note  string   `json:"note,omitempty"`
 }
 
 var (
@@ -149,6 +176,8 @@ var (
 	ErrLiveFull = errors.New("the live log of this recording is full")
 	// ErrBadLive wraps what is wrong with a live request (a negative from, too many sentences).
 	ErrBadLive = errors.New("invalid live sentences")
+	// ErrBadTopics wraps the limit a meeting_topics_set call broke (CleanTopics).
+	ErrBadTopics = errors.New("invalid topics")
 )
 
 // LiveGapError is ErrLiveGap with how many positions the hub holds: the phone sends again from Next. errors.As finds
@@ -376,8 +405,11 @@ func (e *Engine) LiveAppend(rawID string, from int, segs []LiveSegment) (Live, R
 		return Live{}, Recording{}, ErrNotFound
 	}
 	l, r, stored, err := e.liveAppend(id, from, segs)
-	if stored && e.LiveChanged != nil {
-		e.LiveChanged(id)
+	if stored {
+		if e.LiveChanged != nil {
+			e.LiveChanged(id)
+		}
+		e.meetingChanged(id, []string{PartLines}) // its revision is the live log's length
 	}
 	return l, r, err
 }
@@ -452,59 +484,133 @@ func (e *Engine) LiveRead(rawID string) (Live, Recording, error) {
 }
 
 // LiveUpdate changes recording id's live log with fn (given it and the stored upload) and writes the result unless fn
-// fails or changed nothing; the live log after it. ErrNotFound when the recording's meta.json is gone (also deleted
-// meanwhile) or the recording was trimmed meanwhile, ErrReadOnly on a read-only knowledge base. fn runs with the live log locked: it must be quick and call
-// no Engine method of the live log or the recordings.
+// fails or changed nothing; the live log after it. The asks' and the topics' revisions go up when fn changed them, and
+// MeetingChanged hears of them. ErrNotFound when the recording's meta.json is gone (also deleted meanwhile) or the
+// recording was trimmed meanwhile, ErrReadOnly on a read-only knowledge base. fn runs with the live log locked: it must
+// be quick and call no Engine method of the live log or the recordings.
 func (e *Engine) LiveUpdate(rawID string, fn func(l *Live, r Recording) error) (Live, error) {
 	id, ok := RecordingID(rawID)
 	if !ok {
 		return Live{}, ErrNotFound
 	}
-	l, asks, err := e.liveUpdate(id, fn)
-	if asks {
-		e.meetingChanged(id, []string{PartAsks})
-	}
+	l, parts, err := e.liveUpdate(id, fn)
+	e.meetingChanged(id, parts)
 	return l, err
 }
 
-func (e *Engine) liveUpdate(id string, fn func(l *Live, r Recording) error) (Live, bool, error) {
+func (e *Engine) liveUpdate(id string, fn func(l *Live, r Recording) error) (Live, []string, error) {
 	st := e.Store
 	st.liveMu.Lock()
 	defer st.liveMu.Unlock()
 	r, ok := st.Recording(id)
 	if !ok {
-		return Live{}, false, ErrNotFound
+		return Live{}, nil, ErrNotFound
 	}
 	if st.ReadOnly() {
-		return Live{}, false, ErrReadOnly
+		return Live{}, nil, ErrReadOnly
 	}
 	l, err := st.readLive(id)
 	if err != nil {
-		return Live{}, false, err
+		return Live{}, nil, err
 	}
 	before, err := json.Marshal(l)
 	if err != nil {
-		return Live{}, false, err
+		return Live{}, nil, err
 	}
 	asksBefore, _ := json.Marshal(l.Asks)
+	topicsBefore, _ := json.Marshal(l.Topics)
 	if err := fn(&l, *r); err != nil {
-		return Live{}, false, err
+		return Live{}, nil, err
 	}
 	after, err := json.Marshal(l)
 	if err != nil || bytes.Equal(before, after) {
-		return l, false, err
+		return l, nil, err
 	}
-	asksAfter, _ := json.Marshal(l.Asks)
-	asks := !bytes.Equal(asksBefore, asksAfter)
-	if asks {
+	var parts []string
+	if asksAfter, _ := json.Marshal(l.Asks); !bytes.Equal(asksBefore, asksAfter) {
 		l.AsksRev++
+		parts = append(parts, PartAsks)
+	}
+	if topicsAfter, _ := json.Marshal(l.Topics); !bytes.Equal(topicsBefore, topicsAfter) {
+		l.TopicsRev++
+		parts = append(parts, PartTopics)
 	}
 	if ok, err := st.putLive(id, &l); err != nil {
-		return Live{}, false, err
+		return Live{}, nil, err
 	} else if !ok {
-		return Live{}, false, ErrNotFound
+		return Live{}, nil, ErrNotFound
 	}
-	return l, asks, nil
+	return l, parts, nil
+}
+
+// CleanTopics is topics as the live log keeps them, or ErrBadTopics saying which limit they break: at most MaxTopics,
+// each with a title of at most MaxTopicTitle characters and a state done, current or open (at most one current), at
+// (when given) 0 or more seconds, a note of at most MaxTopicNote characters. Titles and notes are put on one line
+// first; none at all is nil.
+func CleanTopics(topics []LiveTopic) ([]LiveTopic, error) {
+	if len(topics) > MaxTopics {
+		return nil, fmt.Errorf("%w: %d topics, over the %d the meeting may have", ErrBadTopics, len(topics), MaxTopics)
+	}
+	var out []LiveTopic
+	current := 0
+	for i, t := range topics {
+		n := i + 1
+		t.Title, t.Note = topicLine(t.Title), topicLine(t.Note)
+		t.State = strings.ToLower(strings.TrimSpace(t.State))
+		switch c := utf8.RuneCountInString(t.Title); {
+		case c == 0:
+			return nil, fmt.Errorf("%w: topic %d has no title", ErrBadTopics, n)
+		case c > MaxTopicTitle:
+			return nil, fmt.Errorf("%w: topic %d's title is %d characters, over the %d a title may have", ErrBadTopics, n, c, MaxTopicTitle)
+		}
+		switch t.State {
+		case TopicDone, TopicOpen:
+		case TopicCurrent:
+			current++
+		default:
+			return nil, fmt.Errorf("%w: topic %d's state is %q, not done, current or open", ErrBadTopics, n, t.State)
+		}
+		if t.At != nil && (math.IsNaN(*t.At) || math.IsInf(*t.At, 0) || *t.At < 0) {
+			return nil, fmt.Errorf("%w: topic %d's at is not 0 or more seconds from the meeting's start", ErrBadTopics, n)
+		}
+		if c := utf8.RuneCountInString(t.Note); c > MaxTopicNote {
+			return nil, fmt.Errorf("%w: topic %d's note is %d characters, over the %d a note may have", ErrBadTopics, n, c, MaxTopicNote)
+		}
+		if t.At != nil {
+			at := *t.At
+			t.At = &at
+		}
+		out = append(out, t)
+	}
+	if current > 1 {
+		return nil, fmt.Errorf("%w: %d topics are current, and at most one may be", ErrBadTopics, current)
+	}
+	return out, nil
+}
+
+// topicLine is a topic's title or note on one line, valid UTF-8.
+func topicLine(s string) string {
+	return strings.Join(strings.Fields(strings.ToValidUTF8(s, "\uFFFD")), " ")
+}
+
+// TopicsSet replaces recording rawID's topics with topics (CleanTopics: ErrBadTopics names the limit broken), at now;
+// false when they were those already, which changes nothing. LiveUpdate's errors otherwise; MeetingChanged hears of
+// PartTopics.
+func (e *Engine) TopicsSet(rawID string, topics []LiveTopic, now time.Time) (bool, error) {
+	clean, err := CleanTopics(topics)
+	if err != nil {
+		return false, err
+	}
+	want, _ := json.Marshal(clean)
+	changed := false
+	_, err = e.LiveUpdate(rawID, func(l *Live, _ Recording) error {
+		if have, _ := json.Marshal(l.Topics); bytes.Equal(have, want) {
+			return nil
+		}
+		l.Topics, l.TopicsAt, changed = clean, now.UTC(), true
+		return nil
+	})
+	return changed && err == nil, err
 }
 
 // AttendingRecordings is every recording whose stored attendance is not off and whose end batch has not gone out,

@@ -21,6 +21,10 @@ const featureMeetingConversation = assistantwire.CapabilityMeetingConversation
 // docs/assistant/meeting-minutes.md "Phase 3: photos"); only with meeting_conversation.
 const featureMeetingPhotos = assistantwire.CapabilityMeetingPhotos
 
+// featureMeetingLiveView: the default manager takes the meeting conversation's live view (phase 2,
+// docs/assistant/meeting-minutes.md "Phase 2: live view"); only with meeting_conversation.
+const featureMeetingLiveView = assistantwire.CapabilityMeetingLiveView
+
 // meetingAttendanceFeatures is the feature while the default manager is connected and named the capability in its
 // hello; nothing otherwise, so a phone offers no role to an older manager, which would ignore it.
 func (h *Hub) meetingAttendanceFeatures() []string {
@@ -46,6 +50,16 @@ func (h *Hub) meetingPhotosFeatures() []string {
 		return nil
 	}
 	return []string{featureMeetingPhotos}
+}
+
+// meetingLiveViewFeatures is meeting_live_view while the default manager names it beside meeting_conversation (and so
+// meeting_attendance); nothing otherwise, so a phone writes no shorter segments for, and no app asks lines or topics
+// of, a manager that has none.
+func (h *Hub) meetingLiveViewFeatures() []string {
+	if len(h.meetingConversationFeatures()) == 0 || !h.defaultManagerNames(assistantwire.CapabilityMeetingLiveView) {
+		return nil
+	}
+	return []string{featureMeetingLiveView}
 }
 
 // defaultManagerNames: the default manager (the one the recordings' routes go to) is connected and named capability

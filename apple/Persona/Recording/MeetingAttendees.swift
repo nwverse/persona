@@ -49,7 +49,8 @@ import Foundation
         guard !features.isEmpty else { return UserDefaults.standard.bool(forKey: MeetingAttendanceDefaults.conversationKey) }
         let conversation = features.contains(MeetingAttendanceDefaults.conversationFeature)
         MeetingAttendanceDefaults.remember(conversation: conversation,
-                                           photos: conversation && features.contains(MeetingAttendanceDefaults.photosFeature))
+                                           photos: conversation && features.contains(MeetingAttendanceDefaults.photosFeature),
+                                           liveView: conversation && features.contains(MeetingAttendanceDefaults.liveViewFeature))
         return conversation
     }
 
@@ -59,6 +60,14 @@ import Foundation
         let features = model.hubFeatures
         guard !features.isEmpty else { return UserDefaults.standard.bool(forKey: MeetingAttendanceDefaults.photosKey) }
         return features.contains(MeetingAttendanceDefaults.photosFeature)
+    }
+
+    /// …and the live view (phase 2: topics, the latest line, 15-second segments), which comes only with the conversation.
+    static func liveView(_ model: AppModel) -> Bool {
+        guard conversation(model) else { return false }
+        let features = model.hubFeatures
+        guard !features.isEmpty else { return UserDefaults.standard.bool(forKey: MeetingAttendanceDefaults.liveViewKey) }
+        return features.contains(MeetingAttendanceDefaults.liveViewFeature)
     }
 
     // MARK: Sessions
@@ -163,7 +172,7 @@ import Foundation
     /// conversation a room meeting in the default role, not private (the one-tap rule, #3862); else `defaultAttendance`.
     static func startAttendance(_ model: AppModel) -> RecordingAttendance {
         guard conversation(model) else { return defaultAttendance(model) }
-        return .room(defaultRole(model), private: false, photos: photos(model))
+        return .room(defaultRole(model), private: false, photos: photos(model), liveView: liveView(model))
     }
 
     /// A recording's attendance once it becomes a meeting again mid-recording, at `at` on its clock (a note turned into a

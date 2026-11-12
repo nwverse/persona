@@ -39,7 +39,7 @@ Phone recordings can use the microphone on glasses or a Bluetooth headset (Bluet
 
 Reuse Hourhand's `Shared/SegmentRecorder.swift` (segmented AAC), `HourhandWatch/TransferQueue.swift` (persistence and transfer backoff), and `Hourhand/Transcription/SpeechEngines.swift` (on-device engines and timestamps). After migration, standardize on the `Recording` prefix and remove product accounts, payments, cloud services, location, and separate recording-library navigation.
 
-- Audio: 16 kHz mono AAC, 32 kbps, roughly 14 MB / hour; segments are 30 seconds in the foreground and 60 seconds in the background. watchOS 11 and later finalize with `AVAudioFile.close()`; watchOS 10 releases the last file reference before the callback and must not retain a local reference inside the write loop.
+- Audio: 16 kHz mono AAC, 32 kbps, roughly 14 MB / hour; segments are 30 seconds in the foreground and 60 seconds in the background, and 15 seconds in both while Persona attends a meeting started with the live view ("Live view (phase 2)" below). watchOS 11 and later finalize with `AVAudioFile.close()`; watchOS 10 releases the last file reference before the callback and must not retain a local reference inside the write loop.
 - Storage: Application Support/Recordings on each device, one UUID directory per recording, with atomic updates to `recording.json`. This is not a cache and must not be deleted by cache cleanup.
 - Abnormal exit: retain finalized segments and delete the unfinished tail; do not automatically restart the microphone. At most the current 30–60 seconds are lost.
 - Privacy: no location collection and no audio uploads; transcript text syncs into the hub's knowledge base ("Synchronization" above) and is not automatically sent to any chat, except to the session attending a meeting the user chose to attend (#2981). Transcription uses only Apple's on-device models, with no implicit fallback to Apple servers or cloud APIs.
@@ -170,14 +170,15 @@ hub that lists `meeting_conversation` beside `meeting_attendance`. The page's de
   app doesn't know reads as `starting`), the private mark, the follow-up and the asks, from the upload's `200`, the `200`
   of `POST …/live` and `GET …/live`. A page on screen watches its recording (one watch per page) and reads it whole once;
   a `meeting_live` event reads only the parts it names that are newer than those read (`?parts=`), and only the parts
-  phase 1 shows (`room`, `asks`, `private`, `followup`); a reconnect reads every watched meeting again. An upload's or a
+  the page shows (phase 1's `room`, `asks`, `private`, `followup`; `topics` with the live view, `photos` with photos); a reconnect reads every watched meeting again. An upload's or a
   live POST's late answer never takes the room back to an earlier state. `404` / `410` mean the hub has no such recording.
 - **The meeting page in the sheet**: `RecordingLiveSheet` shows `MeetingPage` for a room meeting in place of the live
   view, and after Stop in its after mode in place of the wrap-up; every way in (the drawer row, the Live Activity, a
   notification, Recordings) still opens the sheet. The page has the state line, a subtitle with the role, "On this
   iPhone" and "Private", the room's problem (`runtime_unsupported`, `node_too_old`, `machine_offline`, `start_failed`: then
-  questions are answered from the meeting so far), the **Live** box (the last three lines, how far behind the transcript
-  is, **Full Transcript**), the thread, and the bar: Just me, the composer and its `[+]` menu (**What Was Just Said**, the
+  questions are answered from the meeting so far), **Topics** for a meeting started with the live view ("Live view (phase
+  2)" below), the **Live** box (the last three lines, how far behind the transcript is, **Full Transcript**), the thread,
+  and the bar: Just me, the composer and its `[+]` menu (**What Was Just Said**, the
   heard ask), Pause, Bookmark, Stop.
 - **The thread** (`MeetingThreadView`, read apart by `MeetingThread`, a port of the web's `meeting-thread.ts`): once the
   room has ids the page subscribes to it like any chat (WS `subscribe`, **Show Earlier** pages back) and shows its items:
@@ -231,6 +232,47 @@ hub that lists `meeting_conversation` beside `meeting_attendance`. The page's de
   private mark and when the hub's word replaces the start's, Just me and the follow-up with their retries and the 8000
   limit, when the follow-up waits, asks while the room is missing, `room_unavailable`, the words) and `MeetingThreadTests`
   (the web's cases, the mock's items, where a Just me answer ends, asks answered from material in place).
+
+#### Live view (phase 2)
+
+The contract's "Phase 2: live view" ([meeting-minutes.md](../assistant/meeting-minutes.md)), for a room meeting started
+while the hub listed `meeting_live_view` beside `meeting_conversation` (`RecordingAttendance.liveView`, kept for life like
+`photos`: a hub that lists it later adds nothing to a meeting already running; `MeetingAttendanceDefaults.liveViewKey`
+keeps the last hello's flag for a start without the app in front, `MeetingAttendees.liveView`, `startAttendance`, the
+Recordings page's start through `RecordingStart.make`). The Topics row is in [DESIGN_SYSTEM.md](../design/DESIGN_SYSTEM.md)
+"Meeting page (#3862)"; the Live Activity's topic and line in [live-activity.md](live-activity.md) "Recording".
+
+- **15-second segments**: while Persona attends such a meeting and its lines reach the room
+  (`RecordingAttendance.shortSegments(roomMissing:)`: a room meeting with the live view whose role isn't off, not stopped
+  by the hub (`live_full`, `unsupported`) and not taken by an older manager without the room, `RecordingSync.roomMissing`),
+  its segments are `RecordingAudioSpec.meetingLiveSegmentSeconds` (15 s, above the
+  writer's 10 s minimum) in the foreground and the background alike, so a line reaches the page and the room within about
+  15–30 seconds. `MeetingRecorder` hands it to the capture at the start (`RecordingCapture.start(…, shortSegments:)`)
+  and again when the role changes (the page's role, the activity's Turn Off) or the recording turns into a note or back
+  (`RecordingCapture.setShortSegments`; the open segment closes as soon as it is longer), and whenever a save or an
+  upload's answer changes whether the lines go (`RecordingSync.onSegments` → `MeetingRecorder.followSegments`). Every other recording keeps
+  30 s in front and 60 s behind (`RecordingCapture.segmentLength(short:watched:)`), all-day recording its own chunks.
+- **Topics**: `MeetingConversation` reads `topics` and `topics_at` with the rest of `GET …/live` (`LiveRead`, leniently:
+  an unknown state reads as `open`, a topic without a title leaves the list, at most 20 are kept) and follows `topics` in
+  `meeting_live` (`partsRead(for:)` adds it for such a meeting only), reading `?parts=topics` when its revision is newer.
+  A read of other parts keeps the topics; a meeting started without the live view keeps none (`applyTopics`). The page
+  shows them as chips under the header, above the Live box, once the room set any. In the background the WebSocket is
+  closed, so no `meeting_live` comes: while this phone records such a meeting, an accepted `POST …/live` reads
+  `?parts=topics` at most every 20 s (`MeetingConversation.liveAccepted`, only with the socket closed), so the Live
+  Activity's topic follows.
+- **The Live box keeps the phone's own lines** (its transcript): the phone never reads `lines` of `GET …/live`, which is
+  for other devices.
+- **The Live Activity**: the current topic (`topic`, at most 60 characters) and the live log's latest line (`line`, at
+  most 120), both only while Persona attends; the third line is the latest answer for 60 seconds after this phone had it,
+  then the latest line (`RecordingActivity.content`); updates go at once for an answer or a phase and at most every 5
+  seconds for a new line or topic (`RecordingActivity.hold`). Just me never reaches it.
+- **Screenshots and tests**: the room samples (`-showMeetingSample room-listening|room-taking-part|room-whiteboard`) start
+  with the live view. The mock hub serves the phase (`POST /mock/meeting_live_view {"on"}`, `MOCK_NO_MEETING_LIVE_VIEW=1`;
+  its room sets made-up topics after each batch). UI tests `MeetingLiveViewUITests` (the topics on the page and the
+  current one on the Lock Screen, shots `live-<appearance>-topics|island-expanded|lock`; none from a hub without the
+  phase). Unit tests `MeetingLiveViewTests` (the flag and its snapshot, which meetings write 15-second segments, the
+  topics' decoding, merging and event, the chips' words, the activity's topic and line, the third-line rule, the
+  throttle, the state's size).
 
 #### Talk about this meeting (phase 6)
 
