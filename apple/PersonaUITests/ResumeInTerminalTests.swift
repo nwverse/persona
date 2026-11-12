@@ -40,13 +40,13 @@ final class ResumeInTerminalTests: XCTestCase {
         ((try mock("/mock/started"))["started"] as? [[String: Any]] ?? []).compactMap { $0["resume_session_id"] as? String }
     }
 
-    /// The chat of `key`, its header held open (⋯ is in it).
-    @MainActor private func open(_ key: String) throws {
+    /// The chat of `key`, its header held open (⋯ is in it); `extra` launch arguments after.
+    @MainActor private func open(_ key: String, _ extra: [String] = []) throws {
         try resetMock()
         app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", pair, "-tab", "dev", "-openSession", key, "-openChatsFresh", "YES", "-holdChromeOpen", "YES",
-                               "-terminalTipsSeen", "YES"]
+                               "-terminalTipsSeen", "YES"] + extra
         app.launchPinned()
         let more = app.buttons.matching(NSPredicate(format: "label == %@", "更多")).firstMatch
         XCTAssertTrue(more.waitForExistence(timeout: 25), "no ⋯ on \(key):\n\(app.debugDescription.prefix(4000))")
@@ -117,6 +117,32 @@ final class ResumeInTerminalTests: XCTestCase {
             closeMenu()
             app.terminate()
         }
+    }
+
+    /// The largest accessibility text size, light: the stopped line (its two buttons one above the other, neither cut
+    /// short) and the disabled item with its reason.
+    @MainActor func testShotsLargestText() throws {
+        let was = XCUIDevice.shared.appearance
+        defer { XCUIDevice.shared.appearance = was }
+        XCUIDevice.shared.appearance = .light
+        look = "ax"
+        let ax = ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        try open(stopped, ax)
+        shot("stopped")
+        if !before {
+            for id in ["chat.stopped.terminal", "chat.stopped.resume"] {
+                let b = app.buttons[id]
+                XCTAssertTrue(b.exists && b.frame.maxX <= app.windows.firstMatch.frame.maxX + 1, "\(id) is off the screen at the largest size")
+            }
+        }
+        openMenu()
+        shot("stopped-menu")
+        closeMenu()
+        try open(noEngine, ax)
+        openMenu()
+        shot("no-engine-menu")
+        closeMenu()
+        app.terminate()
     }
 
     /// ⋯ › Resume in Terminal: the terminal comes up over the page, the hub gets the resume, and the Agent's screen shows.

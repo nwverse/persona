@@ -5740,6 +5740,7 @@ struct TerminalCover: View {
 /// its terminal page shows the shell it left and offers Resume, the one way it runs again. Resume Session here opens that
 /// page and resumes it there (#5521), as the web's line does; the words go above the two buttons, which stay on one line.
 private struct StoppedAgentBar: View {
+    @Environment(\.dynamicTypeSize) private var typeSize
     var openTerminal: () -> Void
     /// Nil keeps the line as it was (the frozen Mac app).
     var resume: (() -> Void)?
@@ -5749,7 +5750,10 @@ private struct StoppedAgentBar: View {
             if let resume {
                 VStack(alignment: .leading, spacing: Theme.Space.s) {
                     note
-                    HStack(spacing: Theme.Space.s) {
+                    // At the accessibility sizes the two go one above the other: side by side they would be cut short.
+                    let buttons = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: Theme.Space.s))
+                        : AnyLayout(HStackLayout(spacing: Theme.Space.s))
+                    buttons {
                         terminal
                         Button(action: resume) {
                             Label("Resume Session", systemImage: Theme.Icon.resume).font(Theme.Font.labelStrong).lineLimit(1)
