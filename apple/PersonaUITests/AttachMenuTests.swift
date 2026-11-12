@@ -106,8 +106,13 @@ final class AttachMenuTests: XCTestCase {
                     XCTAssertTrue(app.buttons[id].waitForExistence(timeout: 5), "no \(id) in More (\(name)):\n\(app.debugDescription)")
                 }
                 XCTAssertEqual(app.buttons["composer-menu-voice"].exists, name != "new", "Voice Chat in More (\(name))")
-                // The list draws what is on screen: the first command, not /clear at the bottom.
+                // The list draws what is on screen: the first command, not /clear at the bottom. An Agent's list is
+                // longer than the resting sheet: tapping the tab shown opens it all the way.
                 let command = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'attach-command-'")).firstMatch
+                if name == "agent", !command.waitForExistence(timeout: 2) {
+                    more.tap()
+                    _ = command.waitForExistence(timeout: 5)
+                }
                 XCTAssertEqual(command.exists, name == "agent", "the commands in More (\(name))")
                 shot("attach-panel-more-\(name)", scheme, style)
                 app.terminate()
