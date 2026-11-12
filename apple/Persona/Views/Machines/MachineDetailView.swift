@@ -11,6 +11,11 @@ struct MachineDetailView: View {
     @Environment(\.scenePhase) private var phase
     var ref: MachineRef
     private var machineID: String { ref.id }
+
+    init(ref: MachineRef) {
+        self.ref = ref
+        _browserLogins = State(initialValue: BrowserLoginsModel(machine: ref.id, deps: .live(group: ref.group)))
+    }
     @State private var range: MetricRange = Self.initialRange
     @State private var data: MachineMetrics?
     @State private var preparedCharts: [MetricSeriesKey: PreparedMetricSeries] = [:]
@@ -26,6 +31,10 @@ struct MachineDetailView: View {
     @State private var plugins = ExtensionMachineModel()
     @State private var pluginLink: LinkTarget?
     @State private var filesOpen = Self.initialFilesOpen
+    /// Browser Sign-ins (#5821) and their whole list: owned here, beside Files, not by the section, which exists only
+    /// while this page has its machine; a destination inside it went away with it and broke the open list (#6050).
+    @State private var browserLogins: BrowserLoginsModel
+    @State private var browserLoginsOpen = false
     /// The rename alert is open, and what it holds.
     @State private var renaming = false
     @State private var newName = ""
@@ -108,7 +117,7 @@ struct MachineDetailView: View {
                         NodeHealthSection(ref: ref, machine: machine)
                         if let computer = machine.computer { ComputerSection(ref: ref, computer: computer, online: online) }
                         if let browser = machine.browser { BrowserSection(ref: ref, browser: browser, online: online) }
-                        if machine.browser?.setUp == true { BrowserLoginsSection(ref: ref, online: online).id(Self.browserLoginsAnchor) }
+                        if machine.browser?.setUp == true { BrowserLoginsSection(ref: ref, online: online, logins: browserLogins, listOpen: $browserLoginsOpen).id(Self.browserLoginsAnchor) }
                         #if os(iOS)
                         // The iPhones paired with this computer, for the assistant (docs/extensions/iphone.md); the frozen Mac app skips it.
                         if let iphone = machine.iphone { IPhoneControlSection(ref: ref, iphone: iphone, online: online) }
@@ -159,6 +168,9 @@ struct MachineDetailView: View {
             FilesPane(machineID: machineID, group: ref.group, cwd: "~")
                 .detailTitle(String(localized: "Files"))
                 .navigationBarTitleDisplayMode(.inline)
+        }
+        .navigationDestination(isPresented: $browserLoginsOpen) { // a leaf: nothing is pushed from the list
+            BrowserLoginsListView(logins: browserLogins, online: online)
         }
         .extensionPushes(Array(plugins.models.values))
         .detailTitle(machine?.name ?? machineID)

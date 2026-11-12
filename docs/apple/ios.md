@@ -52,7 +52,7 @@ Chat page:
   (`WorkCardSlice`: top corners on first step, bottom corners on Collapse N steps, backgrounds extending halfway into spacing to join neighbors), thin separators starting at the text column; tool rows 44pt high.
   **Liquid Glass (default) has no card** (requested 2026-10-31: cards did not match chat home, `StyleSpec.workList = .timeline`): steps sit directly on the page, with a thin left vertical line from first step
   through Collapse N steps, circular tool icons on it (page background behind icons masks the line), medium-weight tool verbs; intermediate Agent remarks use smaller gray text (`AssistantText(quiet:)`),
-  reading as process rather than reply; thinking, folded steps, to-dos, tool details and Collapse start at the text column right of the line. Other styles keep cards (`.card`).
+  reading as process rather than reply; thinking, folded steps, to-dos, tool details and Collapse start at the text column right of the line. The icon column's leading edge is flush with the assistant reply bubble (`WorkCardSlice.iconLeading` = `Theme.Space.flush` inside the list margin; a card keeps `Theme.Space.m`), and the rail runs through the icon centres, including at larger text sizes (`Theme.sizeScale`). Other styles keep cards (`.card`).
   Background slices extend halfway into spacing (`WorkCardSlice.bridge = Theme.Space.l / 2`): the old hard-coded 7 for 14pt spacing left 2pt white seams after spacing changed to 16.
 - One `DiffView` (Claude Edit / MultiEdit / Write supplies old/new text; Codex unified diff), sharing Git row models (`DiffText.Line` / `parse`):
   header filename, directory, +N −N (opens file); only ± and row backgrounds are colored, code uses body color; long lines scroll horizontally with right fade; beyond 40 lines show beginning + Expand all.
@@ -1367,6 +1367,7 @@ Windows shows the PowerShell line → countdown (the `ConnectDeviceText` algorit
 "A computer wants to join: <name> (macOS). Is it yours?", "It's my computer" / "No". Errors use Chinese text by `code` (`AddComputerText.failure`); `tls_required` uses the hub's message, and unknown codes show the hub's `error`.
 
 - Entry points: the Machines page's empty state and toolbar "+", the Agents empty state with no computers, Mac's File › Add Computer…; only shown when the hub has `machines_add` (otherwise the Machines page keeps its original text).
+- The current assistant (`docs/assistant/managers.md` "The current assistant"): a new computer's `add.manager` is the roster's real id of the hub-level group's current assistant (the default's too, one assistant too). Before a roster is known (none kept from the last launch, and the hub has not answered in this run) with no kept pick, Next waits up to 5 seconds for the hub's answer (`AddAssistant.unknown`, settled by `AppModel.managerRosterUnsupported`, the hub's 404); a hub that says it has no roster (404) is settled at once and gets the request as before `add.manager`, as does one that never answers. A read that failed leaves the roster last read, or the kept pick; a new code for a computer names none. When the assistant the computer is under (the reply's `manager`; if missing, the hub's own assistant for a new computer and the listed one for a reused one) is not the one asked for, the waiting screen says "This computer was added under <name>." (several assistants only). With the current assistant offline (several assistants, roster known) the form is replaced by an explanation and Next is off. `no_manager`, `installing`, `assistant_offline` and `owners_unknown` show the hub's own words (`AddComputerText.failure`). The 3-computer limit is shown as the hub's `too_many_pending` words, with no list of the computers in the way (the hub counts every assistant's).
 - Other pages can open it with `AppModel.openAddComputer()` (readiness `add_computer`), `AppModel.openConfirmComputer(ref)` (`confirm_computer`; without a machine, use `pendingToConfirm()`: online pending computers first),
   both setting `AppModel.addComputer`, presented by `.addComputerPresentation()` at the root; pages that are themselves sheets use `.addComputerSheet($request)` on themselves.
 - Lists and the Machines page: `trust == "pending"` comes first, labeled "Waiting for your confirmation"; online offers "It's my computer" / "No", offline offers "Delete" (buttons only with hub feature `machine_trust`); `error_code` gets Chinese text
@@ -1512,6 +1513,15 @@ to-do's `origin`) when they come from more than one: the conversation's own grou
 other one under its name (the direction's name, else the conversation's title, else "Another conversation") in the
 tray's header style. Rows that are not tasks belong to the conversation's own group. Rows, their order within a group
 and the count are unchanged (`ActionTrayContent.grouped`); with one group the tray is a single list as before.
+
+**Task cards, fused with the web (#5569, `docs/design/task-cards.md`).** What changed on iOS:
+- **Needs You rows are folded.** A plan, a reply draft and a task with an open owner ask (a decision or a to-do to verify) are one line each (mark, title, kind word, a second line, ›); a tap, or the chevron, opens that row in place into its card (`AssistantActionBar.opening`): `PlanCard`, `MessageCard` or `BriefAcceptRow`. Several rows may be open; a card drawn once stays in the tree (folded to height 0) so a plan's "Start these directly" and a draft's edit survive folding. The tray grows to `box380` while a row is open and scrolls the row to the top; the open plan's Start / Edit / Don't Start are pinned under the list (`PlanActions`, choices in `PlanChoices`). The conversation's own ask rows keep their old behaviour (the card is in the chat footer; the row closes the tray), and task and Agent rows without a card open their detail. DEBUG: `-openNeedsRow plan:|task:|message:` opens the tray with the first row of that kind opened (the name is in the Release check's list in `scripts/release/release.sh`).
+- **Progress rows (§3.2).** The status word is the right-hand column in its tone (red for interrupted and failed, `cautionText` for a usage limit, the Needs You tone), a second line carries the reason (usage limit: "You've hit your usage limit. · Resets 15:20", from `Session.usageLimitWhen`; interrupted: the error's reason; starting: "Starting the agent"; needing you: what it asks; working: its step; finished: its last words), and a › ends every row that opens something. Marks: a `caution` clock for a usage limit, ⓘ for interrupted, a hollow circle with a `caution` dot for starting. The usage limit's reading is `Shared/UsageLimit.swift` (the web's `lib/usage-limit.ts`: `turn_error_resets_at`, `turn_error_resumes`, `work.resets_at`, a 10-minute grace after the reset); `AssistantEntries.todoStatus` is unchanged (the shared fixture does not know the grace).
+- **Decision rows (P1, P4).** `BriefAcceptRow` has no "Actions" menu: when its buttons do not fit one line the secondary ones (Open, Complete Directly, Later, Don't handle) wrap in their own row and the main one has the line below to itself. Later and Don't handle show only on the tray's decision rows (`decision:` arg of `BriefAcceptRow`, an owner decision or a `needs_user` review): Later hides the round for this app session (`TasksStore.laterDecisions`, keyed `decision:<manager>:<id>:<round>` like the web's `decisionLaterKey`); Don't handle is `POST /todos/{id}/decision-dismiss` with the hub's own `decision_review.review_at` string (never a `Date`: sub-second digits matter) and the manager header, a six-second Undo toast (`decision-undo-dismiss` with the receipt), and a 409 reloads the to-dos. `AssistantEntries.split` leaves a hidden decision out (`decisionHidden`) unless a live Agent question gives the task its status. The words are one pair on every surface: "Later" / "Don't handle".
+- **Plan card (§3.1).** Start is full width, Edit and Don't Start under it when the three do not fit one line; a task's brief (`PlanTask.brief`, decode-only, never sent back) shows folded under its "why" (`PlanBriefView`: who asked, a summary line, Show All).
+- **Receipts (§3.3).** `ReceiptCard` shows Show All / Show Less when the summary is longer than four lines (`ClampMeasure`), Retry on a failed start while its to-do still is one (`POST /todos/{id}/retry`, `TasksStore.retry`), Continue on a turn the model service cut off (not for a usage limit that continues by itself, which says when it resumes, in `caution` on a quiet well), and a ⋯ menu with Copy and Quote (the quote carries the heading and the summary; the quote bar names the Agent, not the task). Once the to-do is no longer failed or interrupted the card is one quiet line.
+- **Hand-off cards (D6).** See `docs/assistant/unified-entry.md` ("What a dispatch opens").
+- Removed (P7): the unused `TaskCard`, `TaskNowLine`, `TaskLine`, `TaskSentList`, `TaskProgressLine`, `TaskOpenButton`.
 
 The hub's `main_background_folded` (`GET` / `PUT /api/v1/assistant`, on unless changed; an older hub that omits it
 counts as on and hides the switch) is Settings › Assistant › **Fold background rounds**. Off, the main conversation
@@ -1732,6 +1742,16 @@ When a device cannot reach the hub address, connect through an SSH server. For t
 - **Background**: `suspendLinks` closes every tunnel (`SSHTunnels.closeAll`); foregrounding reroutes and rebuilds each group (about 1 second measured in the simulator).
 - **Debugging**: `-seedSSHTunnel <base64 SSHRoute JSON>` seeds SSH settings for the first hub; `-seedSSHKey <base64 32-byte seed>` uses a supplied test key (DEBUG only),
   `-tab settings -openSSHTunnel YES` opens the first hub's SSH tunnel page. End-to-end test setup is in `docs/operations/testing.md` ("SSH tunnels").
+
+## File page (#5827)
+
+The Files page (`Views/Session/FilesPane.swift`: an Agent's Files tab, and the computer page's Files row at the home) walks the computer's folders. The pure parts are `FilesNavigation` and `FileFind` (`FilesNavigation.swift`, `FilesNavigationTests`).
+
+- **Where it goes**: it starts at the session's folder (the computer page: `~`) and goes anywhere the node lets it read, above the session's folder included. Back and Forward walk the folders shown, like a browser (50 kept); Up opens the parent; the path bar names every folder from the home (a house) or from `/`, each a button, with the session's folder tagged **Session** and **Read Only** after a folder outside the home (or in `~/.persona`, `~/Library`). Uploads, renames, moves and trash are not offered there; the node refuses them anyway (protocol.md "Changing files"). A folder listed in the last minutes shows at once on Back / Forward while it is read again.
+- **Find**: the field under the path bar finds names under the folder shown, folders included (`fs/find`: Git's files in a repository, else a bounded walk), every typed word in the name, best first (whole name, start, word start, anywhere; folders first, shorter paths first). The web's Files panel ranks by the same rule.
+- **Info** (long press › Info, ⋯ › Info for the folder shown; `FileInfoSheet.swift`): kind, location, size or item count, created / modified / attributes changed, permissions in words and as `rw-r--r-- · 644`, owner and group, Copy Path. A symlink adds what it says, its real location and **Go to Real Location**. No permissions on a Windows computer; an older hub or node shows what the listing had and says what to update (protocol.md "File details and links").
+- **Symlinks** in the list carry an arrow on the icon and "Link → target"; a broken one the error mark and "Link broken · target isn’t there" in red, and a tap opens Info instead. A tap on a working link opens what it leads to with the path bar on the link's path.
+- **Show in Files Page** (the preview's ⋯, where the preview was opened from the Files page or an Agent's chat): the Files page at the file's folder with the file marked for a moment.
 
 ## File viewer (2026-10-31)
 
@@ -2083,9 +2103,10 @@ installing opens its install code: the one this header made while it lasts, else
 keeps no code to show again). What the list presents (the name alert, the code sheet, Settings) waits until the popover is
 gone (its `onDisappear`), not for a fixed delay: UIKit refuses a presentation while the popover is still leaving. At the
 accessibility text sizes the header leaves out the face so the name fits, and the list gives way to the screen's width. The
-header and its list show from two installed assistants on (an offline one counts, one still installing doesn't); with one, or on
-a hub without a roster, the sidebar keeps the look without assistant identity (#3975, `AppModel.showsAssistantIdentity`), as the
-web app and Android do.
+header and its list appear once a roster is known (read in this run, or kept from the last launch) and the current assistant
+can be shown, including with one installed assistant (an offline one counts, one still installing doesn't). A one-assistant
+roster has no Default chip, and **New Assistant** and **Manage Assistants…** stay below it. On a hub without a roster,
+`AppModel.showsAssistantSwitcher` is false and the sidebar keeps the persona's name as its title.
 
 The pick is the manager's id per group (`AppModel.assistantPicks`), kept on this device across launches (`AssistantPickStore`,
 the app's defaults); no pick follows the hub's default. A pick whose manager leaves the roster goes back to the default, and one
@@ -2140,7 +2161,7 @@ default assistant.
 `-showNewChat YES`, `-tab dev|mail|settings`, `-openAssistant <machine>/<session>`, `-newAssistant YES`, `-openAssistantSidebar YES|0.5` (Persona tab sidebar open / halfway open), `-openAssistantManager <id>` (that manager as the current assistant once the roster is in), `-showAssistantSwitcher YES` (the sidebar's assistant list open, several assistants), `-openFirstImage YES` (open the viewer for the first image in the chat), `-showScrollState YES|visible` (chat-list position and following state, readable by UI tests; `visible` draws it), `-openTerminalPane YES`, `-showPad YES`, `-showKeyMods locked,once,held` (set the terminal key bar's ctrl / alt / shift to these states), `-terminalWrap NO`, `-terminalTheme ink|midnight|persona|solarized`, `-terminalInputMode direct|field` (terminal direct typing / input field), `-terminalTipsSeen YES` (skip "Terminal tips"), `-openTerminalTips YES` (show them again), `-focusTerminalInput YES` (shows the keyboard in direct-typing mode), `-openShortcutsPanel YES`, `-openTerminalSettings YES`, `-showLark YES` (go directly to Inbox), `-larkFocus <messageId>` (scroll to that message), `-larkProfile <userId>` (show this person's profile card in the chat), `-larkPicker YES` (show the reaction picker for the last message), `-larkMoments <postId>` (open a Moments post), `-openInboxFirst YES` (open the first unhandled Inbox item), `-larkTop YES` (show the Lark chat from its earliest message, for screenshots of long cards), `-addMail YES` (open Manage email accounts › Add email account), `-tab settings -openHubUpdate YES` (Settings › hub, `docs/operations/hub-update.md`), `-tab settings -openSkills YES` (Settings › Assistant › Skills), `-tab settings -openAssistantPage assistant|routines|routine|intervalTask|cronTask|followup|bypassTask|newRoutine|memory|memoryFile|memoryEdit|places|place|newPlace|deletePlace|about` (pages under Settings › Assistant; `routine` opens the first scheduled task, `intervalTask` / `cronTask` / `followup` the first interval / cron / one-time task, `bypassTask` shows the "Allow everything?" confirmation in the editor, `newRoutine` shows the creation sheet with the "End-of-day review" template, `memoryFile` / `memoryEdit` opens the first memory / its editor; `places` is Saved Places, `place` opens the first place's editor, `newPlace` the new-place sheet, `deletePlace` the list's Delete confirmation for the first place). `scripts/app/sim.sh` wraps building, installation, pairing and launch (`SIM=<udid>` changes the simulator; concurrent agents must use separate simulators or overwrite each other's installs).
 Check history rendering: `-loadAll YES` (load all history and scroll to the top), `-showFromSeq <seq>` (display from the turn containing this user message; scroll positioning can drift in long histories),
 `-dropUsers YES` (hide that turn's user bubbles to fit its process rows and answer on one screen). `-openPane terminal|git|files` opens the chat page's terminal (from the bottom) / Git / Files;
-`-simulateTap <machine>/<session>` runs the notification-tap handler 4 seconds after launch; `-tab settings -openNotificationSettings YES` (Settings › Notifications; add `-openIslandSettings YES` for Dynamic Island); `-tab settings -openSentAsYou YES` (Settings › Sent as You, #5278); `-showFleetSample needsYou|working|done` (`-fleetDetails YES`, `-fleetIsland b|c|custom:<left>,<right>`) starts a Live Activity with fake data; `-showTestNotification permission|plan` shows a local notification matching an interaction push 3 seconds after backgrounding (UI tests use it to test buttons); `-openFilePath <path>` (open this file after opening the chat; `-openFileLine <line>` jumps to that line), `-showFilePerf YES` (write file-open timings and per-second frame rates to Caches/file-perf.log; `-showFileAutoScroll YES` scrolls the file at constant speed, `-showFileAutoScrollSpeed 1500` changes the speed); `-showMenu YES` opens the long-press action bar on the last reply (with `-showFromSeq`, that turn's reply); `-openWelcome YES` forgets pairing and exits demo mode at launch, stopping on the pairing page (`DemoModeTests`); `-openChangeAnswer YES` opens Change Answer on the first **Answered by the assistant** card (#544).
+`-openNeedsRow plan:|task:|message:` (the Needs You tray with the first row of that kind opened in place; use with `-openAssistant`), `-simulateTap <machine>/<session>` runs the notification-tap handler 4 seconds after launch; `-tab settings -openNotificationSettings YES` (Settings › Notifications; add `-openIslandSettings YES` for Dynamic Island); `-tab settings -openSentAsYou YES` (Settings › Sent as You, #5278); `-showFleetSample needsYou|working|done` (`-fleetDetails YES`, `-fleetIsland b|c|custom:<left>,<right>`) starts a Live Activity with fake data; `-showTestNotification permission|plan` shows a local notification matching an interaction push 3 seconds after backgrounding (UI tests use it to test buttons); `-openFilePath <path>` (open this file after opening the chat; `-openFileLine <line>` jumps to that line), `-showFilePerf YES` (write file-open timings and per-second frame rates to Caches/file-perf.log; `-showFileAutoScroll YES` scrolls the file at constant speed, `-showFileAutoScrollSpeed 1500` changes the speed); `-showMenu YES` opens the long-press action bar on the last reply (with `-showFromSeq`, that turn's reply); `-openWelcome YES` forgets pairing and exits demo mode at launch, stopping on the pairing page (`DemoModeTests`); `-openChangeAnswer YES` opens Change Answer on the first **Answered by the assistant** card (#544).
 
 `-showVoiceOrbs YES`: without connecting to the hub or opening the microphone, show a sheet listing every phase of the voice orb (fake fluctuating volume) and two large orbs; combine with `-ui.style`, `-ui.scheme` for screenshots (#3506).
 
@@ -2185,10 +2206,14 @@ The shared iPhone, iPad and Mac settings page has three groups:
 | This Device | Appearance & Display, Language & Dictation, Notifications, Translation, Storage, Health, This iPhone, About |
 | Hub | Hub Connection, Hub Version, Assistants, Avatar, Devices & Pairing |
 
-With several installed assistants, the first heading shows the current assistant's avatar, name and existing switcher,
-with scope guidance. With one, it keeps the chosen Persona face and name without a switcher. The health space remains
-bound to the default assistant. The avatar is shared across devices; theme color, interface style, text size, list layout
-and light/dark appearance remain device preferences. The layout page is titled **Agents List Layout**.
+Whenever the hub answers a roster, with one or many installed assistants, the first heading is **<name>'s Settings**,
+with the current assistant's first-letter avatar and state dot plus **Switch**. Switch opens the same assistant
+popover/list as the sidebar. The first group's footer is **Only <name>'s own settings are shown. To change another
+assistant's, switch to it first.** A legacy hub without a roster keeps the neutral **Current Assistant's Settings**
+heading, without Switch or that first-group footer. The second group has no footer; the third group's footer is
+**These two groups are the same whichever assistant is current.** It covers both This Device and Hub. The health space
+remains bound to the default assistant. The avatar is shared across devices; theme color, interface style, text size,
+list layout and light/dark appearance remain device preferences. The layout page is titled **Agents List Layout**.
 
 Models replaces the two separate model-provider and model-configuration entries. Common purpose/model choices come first;
 providers and keys sit under Advanced, and a purpose's runtime/provider choices are folded in its editor. Agent collects
@@ -2196,6 +2221,21 @@ Claude Code, Codex and Session Triage. Applying runtime settings to all online c
 computers in the current Hub. Connectors, extensions, markets, channels and knowledge selection use a captured assistant
 request context; switching assistants returns Settings to the list, and a late response cannot replace the new scope.
 An explicitly manager-bound detail link still opens that assistant's copy without changing the app's pick.
+
+The rest of the first group follows the same rule. Skills, Auto-Start Tasks (`TaskTrustModel`), Outlook sign-in on Add Mail
+Account, an extension form's launcher picker, each page's Subscriptions entry (`SettingsPage.subscriptions(state:manager:)`)
+and the extension operations a page reads (`ExtensionOperations.reload(manager:)`, which replaces that assistant's alone) go to
+the assistant the page opened for. An assistant without the chat connector (its manager answers 404) shows it Not set up, with
+no Message Tweaks. Links from a page of the default assistant's things name it by its id while another one is current
+(`AppModel.settingsRoute`): an extension page's settings link opens its own page's copy (`ExtensionViewModel.Outcome.settingsOwner`),
+Messages' Settings the default's chat connector page (`SettingsPage.feishu(manager:)`, which says whose it is), and the voice
+entry the default's voice extension. What runs on the default assistant whichever is current keeps the default's model
+settings (`ModelSettingsOwner`): Translation's model (with a line saying so while another assistant is current), a voice
+call's model, the inbox triage banner's Set Up, and the /agent model on the default's chat connector page. The badges on the
+ways to Settings count the default's extension entries only while it is current, since Settings shows the current
+assistant's under Extensions. While another assistant is current, that route may keep the default assistant's explicit id
+on the page's requests. Extension operation and auth storage canonicalize the id to the default/nil key, so a push with
+no manager still updates the explicitly routed page; another assistant's id remains a separate key.
 
 About shows the app version and a folded Diagnostics section containing the build commit and last new-chat check.
 Devices & Pairing retains the device list, pairing again, Watch sync and confirmed disconnect. Mobile permissions,
@@ -2207,7 +2247,9 @@ ModelLaunchersRoute and existing DEBUG page-opening arguments continue to work. 
 `-openAppearance` argument accepts `search:<query>`; no new DEBUG switch is introduced.
 
 Regression coverage: `SettingsNavigationTests`, `AssistantSettingsScopeTests`, `SettingsResourceScopeTests`,
-`ManagerSwitchTests`, and `SettingsNavigationUITests` / `ModelsSettingsHierarchyTests`. A remembered assistant pick
+`ManagerSwitchTests`, `SettingsFollowAssistantTests`, `SettingsHomeTests`, `SettingsOwnerLinksTests`, `ModelSettingsOwnerTests`,
+`SettingsSubscriptionsOwnerTests`, `SettingsBadgeTests`, `ExtensionOperationsTests`, and `SettingsNavigationUITests` /
+`ModelsSettingsHierarchyTests`. A remembered assistant pick
 routes settings before the roster arrives; only a confirmed legacy-roster 404 suppresses it, without erasing the pick.
 These tests do not claim that an installed TestFlight app was updated.
 

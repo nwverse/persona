@@ -2125,6 +2125,16 @@ The watch only prunes by age. Segments the phone has not confirmed stay up to `u
 - The crash needs the menu's morph (iOS 26 and later) and a layout that changes when the keyboard goes. Upright, the VNC top row's
   `ViewThatFits` picks by width, which the keyboard doesn't change, so it never met this.
 
+## A destructive swipe takes its row's dialog with it (2026-11-13, #3962)
+
+- An Always rule's confirm (`SecretProviderSections` in `apple/Persona/Views/Settings/ExtensionsViews.swift`) moved from the page
+  onto its row, so iOS 26's popover points at the row. Its swipe's Remove kept `role: .destructive`, and tapping it closed the whole
+  Settings cover back to the Assistant page, with no dialog. A destructive swipe button folds its row away at once, expecting the row
+  to go; the `confirmationDialog` anchored to it went too, and its dismissal reached the cover that presented the page.
+- A swipe that only asks first is a plain button tinted `Theme.danger` (`ModelLaunchersView`'s Delete does the same); the context
+  menu's item keeps the role, since the menu is gone before the dialog shows. A UI test that swipes, taps and waits for the dialog
+  catches it; a test that only checks the dialog's text after setting the state directly does not.
+
 ## Simulator arguments and screenshot settling (#1872)
 
 - On Xcode 27.2, a direct `simctl launch` can drop leading DEBUG arguments before they reach `UserDefaults`; put `--` before them. Verify the App actually adopted the mock pairings—an old real-hub cache on screen is a launch-environment failure, not the target RED. UI launch helpers can carry the same separator without changing the assertions.

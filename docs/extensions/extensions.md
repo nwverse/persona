@@ -2510,8 +2510,8 @@ A hub picture that fails to load may have outlived its token, so the page is dra
 A row's extra actions open from a right click, a half-second press on a touch screen and the … button at its end (no swipe on the web).
 The component showcase's version 6 pages are `web/src/showcase/v6` (with their pictures in `web/src/showcase/images`) until the showcase extension's own snapshots have them.
 
-**iOS** (#827) draws it in parts and sends 6 only when all of it is drawn, after the rest of UI version 5; meanwhile the hub downgrades it as for any older app. Drawn so far: row controls
-(see "App: Settings › Extensions" below). One difference from the web and Android: a switch that asks first has already moved when the alert shows (a system switch cannot be held where it was), and Cancel puts it back.
+**iOS** (#827) draws it in parts and sends 6 only when all of it is drawn, after the rest of UI version 5; meanwhile the hub downgrades it as for any older app. Drawn so far: row controls, and the styles
+(the 45 icons, named colors, `title` / `headline`; see "App: Settings › Extensions" below). One difference from the web and Android: a switch that asks first has already moved when the alert shows (a system switch cannot be held where it was), and Cancel puts it back.
 
 ## System-level placements (#1858)
 
@@ -2952,6 +2952,26 @@ Views, components, actions, responses, placements and context all use schema-gen
   `GET /mock/invalidate` syncs one note and sends `ui.invalidate`; UI test `ExtensionV3Tests` (list, filters, more, search to empty state, push note page, edit/save/pop, invalidate),
   unit tests `ExtensionUIv3Tests`, `PersonaCardTests`. `MOCK_EXTENSION_CARDS=1` with `ExtensionAssistantCardTests` checks in a real assistant chat that
   `persona-view` and old `persona-card` share the renderer, actions are not tappable, links remain, and saves light/dark screenshots. Four-client showcase comparison depends on #1852, not replaceable by notes screenshots.
+- UI version 6's styles (#827): every name of the icon set (UI version 4's code hosting and version 6's 45 for homes and markets) is drawn as the app's own symbol
+  (`ExtensionUIStyle.icon`; meanings the app already has, such as home, lock, camera, play, use its own); the 11 named colors are `Theme.Hue`'s (`ExtensionUIStyle.color`), on marks only:
+  a row's icon in its color on the design system's `IconTile`, a metric's icon before its label, an empty state's mark, and a badge as a soft tint of the color behind words in the text's
+  own color (a tone, when it has one, wins). `text` takes `title` and `headline` (heading levels for VoiceOver). Unit tests `ExtensionStylesTests` read the schema's names; screenshots of
+  `showcase › styles` with `ExtensionShowcaseShotsUITests`.
+- UI version 5's code review (#827, "UI version 5: code review"), drawn in parts (pages send 4 until all of version 6 is drawn too, so the hub strips these fields for iOS meanwhile).
+  Reading (`ExtensionCodeReview.swift`, the code page): the words that changed in a removed and added pair on a stronger fill (PersonaKit's `LineDiff` word comparison, worked out once per hunk);
+  generated files and lockfiles (by the extension's `generated` or the web's path list), changes over 400 lines and viewed files start folded with a line saying why and **Show**; a generated
+  file without hunks is not loaded by itself. Each diff's header has a **Viewed** tick box (`.toggleStyle(.tickBox)`): checked, the file folds; unchecked, it stays as it is. With `mark_viewed`
+  the mark changes at once and is sent quietly (`ExtensionViewModel.quiet`: nothing waits, an empty answer draws nothing, a failure puts the mark back); without it the mark is kept on the
+  device by `path` + `revision` (or a digest of the lines), at most 5,000 (`CodeViewedMarks`). The tree ticks viewed files. Over the diffs: "Viewed x / y", "N unresolved" (each tap unfolds
+  and scrolls to the next open thread; drafts don't count) and a ⋯ menu with **Ignore Whitespace** (kept for every page). A rename shows its similarity. An action's `items` replace their
+  components without drawing the page again, and a page drawn again keeps diffs loaded since. Hidden lines (`context`): between hunks a bar says how many lines are hidden, with the next hunk's
+  header, and shows 20 more down or up, or all (a few: all at once; the first gap only up, the last only down, to the end of the file once its length is known); the lines are asked quietly for the
+  new side (`to` "end" when the length is not known yet), kept per file so showing more of a gap that came needs no request, and `expand` is not used then. `code.line_url` adds **Copy Link to
+  Line** to the code viewer's line menu (https only). Commenting: a second line number on the same side picks the lines between (`start_line`, the picked lines tinted, the box under the
+  last one, what is typed kept); the box sends alone (**Comment**) or as a draft of the pending review (`draft`, **Add to Review**, first once a review is under way), its ✕ closes it, and
+  **Suggest Change** (`suggestions`, new side) starts a ```suggestion block from the lines as they are. A comment's suggestion is drawn as a small diff of the lines it is on; **Resolve** /
+  **Reopen** send `resolve`; a resolved thread is folded to its first comment. Unit tests `ExtensionCodeReviewTests`, UI test `ExtensionCodeReviewUITests` (`showcase › snapshots › code-review-v5`; the mock answers
+  `context` with made-up lines of a 90-line file).
 - UI version 6 (#827, "UI version 6"), drawn in parts; pages keep sending 4 and cards 3 until all of it is drawn, so the hub still downgrades it for iOS meanwhile.
   Row controls (`ExtensionControls.swift`, `ExtensionControlRow`): a switch or a stepper at the row's end, a slider on a line under it, all system controls labeled by the row's title and read out with
   their value as written (`display` for the value the extension drew, else the number in the user's locale and the unit); a row with its own action does it from its words, the control beside them.

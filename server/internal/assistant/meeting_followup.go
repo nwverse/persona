@@ -166,9 +166,10 @@ func (s *Service) followupSend(ctx context.Context, e *kb.Engine, id string, msg
 	return kb.ConvView{MachineID: sess.MachineID, SessionID: sess.SessionID}, true, nil
 }
 
-// meetingProfile is the Claude profile (config_dir) a meeting's conversations, its room and its follow-up, start in: the
-// one the assistant's conversations had before each new one got a private profile, a config directory with no login
-// in it (docs/assistant/meeting-minutes.md "The room conversation").
+// meetingProfile is the Claude profile (config_dir) a meeting's conversations, its room and its follow-up, start in, and
+// the conversations the hub starts by itself (startConversation): the one the assistant's conversations had before each
+// new one got a private profile, a config directory with no login in it (docs/assistant/meeting-minutes.md "The room
+// conversation", #6015).
 const meetingProfile = "legacy"
 
 // startSignedIn starts p in meetingProfile, or as it is on a node too old to be told a profile, whose conversations
@@ -248,6 +249,9 @@ func (s *Service) followupSeed(ctx context.Context, e *kb.Engine, rec kb.Recordi
 	}
 	if l, _, err := e.LiveRead(rec.ID); err == nil {
 		d.Topics = meetingTopics(l.Topics)
+		for _, h := range l.Highlights { // at their place in the transcript below
+			d.Highlights = append(d.Highlights, prompts.MeetingHighlight{At: meetingClock(h.At), Text: oneLine(h.Text)})
+		}
 		for _, a := range l.Asks {
 			if a.State == askAnswered {
 				q := a.Question
