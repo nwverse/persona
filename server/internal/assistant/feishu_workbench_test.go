@@ -180,6 +180,56 @@ func TestWorkbenchButtonOnEveryCard(t *testing.T) {
 	}
 }
 
+// buttonPayload finds a button by its localized label anywhere in a card, including a form.
+func buttonPayload(t *testing.T, card *feishubot.Card, label string) map[string]any {
+	t.Helper()
+	var root any
+	if err := json.Unmarshal([]byte(card.JSON()), &root); err != nil {
+		t.Fatal(err)
+	}
+	var walk func(any) map[string]any
+	walk = func(node any) map[string]any {
+		switch v := node.(type) {
+		case map[string]any:
+			if v["tag"] == "button" {
+				if text, _ := v["text"].(map[string]any); text["content"] == label {
+					return v
+				}
+			}
+			for _, child := range v {
+				if found := walk(child); found != nil {
+					return found
+				}
+			}
+		case []any:
+			for _, child := range v {
+				if found := walk(child); found != nil {
+					return found
+				}
+			}
+		}
+		return nil
+	}
+	if found := walk(root); found != nil {
+		return found
+	}
+	t.Fatalf("no button %q in %s", label, card.JSON())
+	return nil
+}
+
+func behaviorPayload(t *testing.T, button map[string]any, kind string) map[string]any {
+	t.Helper()
+	behaviors, _ := button["behaviors"].([]any)
+	for _, raw := range behaviors {
+		behavior, _ := raw.(map[string]any)
+		if behavior["type"] == kind {
+			return behavior
+		}
+	}
+	t.Fatalf("no %s behavior in %v", kind, button)
+	return nil
+}
+
 // Navigation added at different times still forms one footer. Approval and form callbacks keep their own row, and the
 // card-size guard still leaves Workbench off an oversized card (#5317).
 func TestWorkbenchFooterKeepsNavigationTogether(t *testing.T) {
@@ -194,8 +244,18 @@ func TestWorkbenchFooterKeepsNavigationTogether(t *testing.T) {
 		if got := len(row["columns"].([]any)); got != 2 {
 			t.Fatalf("the shared navigation row has %d buttons: %s", got, card.JSON())
 		}
-		if js := card.JSON(); !strings.Contains(js, `"type":"open_url"`) || !strings.Contains(js, `"to":"home"`) {
-			t.Fatalf("a navigation behavior changed: %s", js)
+		open := behaviorPayload(t, buttonPayload(t, card, "Open on web"), "open_url")
+		if got := open["default_url"]; got != "https://example.com" {
+			t.Fatalf("the original navigation URL changed: %v", got)
+		}
+		homeLabel := wbT(e.s.botLang(context.Background()), "btn_home")
+		if strings.Contains(homeLabel, "\n") {
+			t.Fatalf("the localized Workbench label wraps: %q", homeLabel)
+		}
+		home := behaviorPayload(t, buttonPayload(t, card, homeLabel), "callback")
+		value, _ := home["value"].(map[string]any)
+		if value["a"] != "nav" || value["to"] != "home" {
+			t.Fatalf("the Workbench callback changed: %v", value)
 		}
 	})
 	t.Run("callbacks stay independent", func(t *testing.T) {
@@ -203,6 +263,10 @@ func TestWorkbenchFooterKeepsNavigationTogether(t *testing.T) {
 		e.s.workbenchStamp(context.Background(), card)
 		if got := strings.Count(card.JSON(), `"tag":"column_set"`); got != 2 {
 			t.Fatalf("an approval action was merged with navigation: %s", card.JSON())
+		}
+		allow := behaviorPayload(t, buttonPayload(t, card, "Allow"), "callback")
+		if value, _ := allow["value"].(map[string]any); value["allow"] != true {
+			t.Fatalf("the approval callback changed: %v", value)
 		}
 	})
 	t.Run("mixed actions stay independent", func(t *testing.T) {
@@ -212,6 +276,26 @@ func TestWorkbenchFooterKeepsNavigationTogether(t *testing.T) {
 		e.s.workbenchStamp(context.Background(), card)
 		if got := strings.Count(card.JSON(), `"tag":"column_set"`); got != 2 {
 			t.Fatalf("a mixed action row was merged with navigation: %s", card.JSON())
+		}
+		if got := behaviorPayload(t, buttonPayload(t, card, "Open on web"), "open_url")["default_url"]; got != "https://example.com" {
+			t.Fatalf("the mixed row's URL changed: %v", got)
+		}
+		allow := behaviorPayload(t, buttonPayload(t, card, "Allow"), "callback")
+		if value, _ := allow["value"].(map[string]any); value["allow"] != true {
+			t.Fatalf("the mixed row's callback changed: %v", value)
+		}
+	})
+	t.Run("form callbacks stay independent", func(t *testing.T) {
+		card := feishubot.NewCard("", "", "form").Form("approval", nil,
+			feishubot.Submit("Send", feishubot.Primary, "send", map[string]any{"sent": true}))
+		e.s.workbenchStamp(context.Background(), card)
+		send := buttonPayload(t, card, "Send")
+		if send["form_action_type"] != "submit" {
+			t.Fatalf("the form action changed: %v", send)
+		}
+		callback := behaviorPayload(t, send, "callback")
+		if value, _ := callback["value"].(map[string]any); value["sent"] != true {
+			t.Fatalf("the form callback value changed: %v", value)
 		}
 	})
 	t.Run("size guard", func(t *testing.T) {
