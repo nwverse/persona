@@ -80,7 +80,7 @@ func testNode(t testing.TB) (*Node, string) {
 		agents: map[string]host.Agent{}, watches: map[string]*watch{}, state: &stateFile{Sessions: map[string]sessionState{}},
 		// The scripted shell is ready as soon as the fake creates it. Tests of shell readiness opt back into
 		// observation with watchShell (shellsettle_test.go).
-		shellSettled: true, claudePoll: 20 * time.Millisecond}
+		shellSettled: true, readyPoll: 20 * time.Millisecond}
 	t.Cleanup(n.starts.close)
 	return n, home
 }
