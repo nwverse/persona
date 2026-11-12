@@ -23,7 +23,7 @@ const item = (label: string) => [...document.querySelectorAll('[role="menuitem"]
 
 beforeEach(async () => {
   localStorage.clear(); setToken("synthetic-A"); sent = []; clicked = [];
-  Object.assign(getState(), { features: ["file_edit", "upload_dir", "file_mkdir", "file_write", "file_zip", "file_copy"], machines: [{ id: "m1", name: "Work computer", online: true, home: "/home/me", os: "linux" }] });
+  Object.assign(getState(), { features: ["file_edit", "upload_dir", "file_mkdir", "file_write", "file_zip", "file_copy", "pane_cwd"], machines: [{ id: "m1", name: "Work computer", online: true, home: "/home/me", os: "linux" }] });
   vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) { clicked.push(this.getAttribute("href") ?? ""); });
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const u = new URL(String(input), "http://local.invalid");
@@ -35,6 +35,7 @@ beforeEach(async () => {
     if (u.pathname.endsWith("/files/mkdir")) return Response.json({ path: "/home/me/app/" + body.name });
     if (u.pathname.endsWith("/files/write")) return Response.json({ path: body.path, size: 0, revision: "r1" });
     if (u.pathname.endsWith("/files/zip")) return Response.json({ path: (body.dir ?? "/tmp/persona-zips/z-1") + "/" + body.name, name: body.name, size: 10, files: 2 });
+    if (u.pathname.endsWith("/panes")) return Response.json({ pane: "w1:p9", terminal: "pane:w1:p9", tab_id: "w1:t9" });
     if (u.pathname.endsWith("/files/copy")) return Response.json({ copied: body.paths.map((p: string) => ({ from: p, to: p + " 2" })) });
     return Response.json({});
   }));
@@ -89,5 +90,12 @@ describe("FilesPanel New and zip (#5828)", () => {
     expect(document.body.textContent).toContain(t("files-ops.copy_one_title", { name: "a.txt" }));
     await click(t("files-ops.copy_here"));
     expect(sent.at(-1)).toEqual({ path: "/api/v1/machines/m1/files/copy", body: { paths: ["/home/me/app/a.txt"], cwd: "/home/me/app", dir: "/home/me/app" } });
+  });
+
+  it("opens a terminal in the folder shown (#5832)", async () => {
+    await click(t("session-filespanel.more"));
+    await act(async () => item(t("files-nav.open_terminal"))!.click()); await flush();
+    expect(sent.at(-1)).toEqual({ path: "/api/v1/machines/m1/panes", body: { cwd: "/home/me/app" } });
+    expect(location.pathname).toContain("pane");
   });
 });

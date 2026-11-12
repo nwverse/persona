@@ -19665,7 +19665,7 @@ _features_without_file_ops = features
 def features():
     return (_features_without_file_ops() + (["upload_dir", "file_edit"] if FILE_OPS else [])
             + (["file_info"] if os.environ.get("MOCK_FILE_LINKS") else [])
-            + (["file_mkdir", "file_write", "file_zip", "file_copy", "file_chmod"] if FILE_OPS else []))
+            + (["file_mkdir", "file_write", "file_zip", "file_copy", "file_chmod", "pane_cwd"] if FILE_OPS else []))
 
 
 def file_ops_key(mid, path, cwd):
