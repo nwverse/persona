@@ -61,6 +61,14 @@ func TestLarkInertHeredoc(t *testing.T) {
 	}{
 		{"cat source file", "cat > /tmp/a.go <<'EOF'\n// lark-cli im +messages-send\nEOF\ngo test ./...", 0},
 		{"append source file", "cat >> /tmp/a.go <<'EOF'\n// lark-cli im +messages-send\nEOF\ngo test ./...", 0},
+		{"tee append", "tee -a /tmp/a.go <<'EOF'\n// lark-cli im +messages-send\nEOF\ngo test ./...", 0},
+		{"assignment heredoc substitution", "cat > /tmp/a.go <<'EOF'\n// lark-cli\nEOF\nA=1 <<EOF\n$(lark-cli im +messages-send)\nEOF", 1},
+		{"redirect heredoc substitution", "cat > /tmp/a.go <<'EOF'\n// lark-cli\nEOF\n<<EOF\n$(lark-cli im +messages-send)\nEOF", 1},
+		{"execute makefile", "cat > /tmp/Makefile <<'EOF'\nsend:\n\tlark-cli im +messages-send\nEOF\nmake -f /tmp/Makefile send", 1},
+		{"execute go program", "cat > /tmp/a.go <<'EOF'\n// lark-cli im +messages-send\nEOF\ngo run /tmp/a.go", 1},
+		{"custom cat executable", "/tmp/cat > /tmp/a.go <<'EOF'\n// lark-cli im +messages-send\nEOF", 1},
+		{"test executable override", "cat > /tmp/a.go <<'EOF'\n// lark-cli im +messages-send\nEOF\ngo test -exec sh ./...", 1},
+
 		{"tee source file", "tee /tmp/a.go <<'EOF'\n// lark-cli im +messages-send\nEOF\ngo test ./...", 0},
 		{"execute written file", "cat > /tmp/a.sh <<'EOF'\nlark-cli im +messages-send\nEOF\nsh /tmp/a.sh", 1},
 		{"execute chmod file", "cat > /tmp/a.sh <<'EOF'\nlark-cli im +messages-send\nEOF\nchmod +x /tmp/a.sh; /tmp/a.sh", 1},

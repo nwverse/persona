@@ -80,15 +80,34 @@ func normalizeLarkCommand(cmd string) string {
 	for _, stmt := range tree.Stmts {
 		call := stmt.Cmd.(*syntax.CallExpr)
 		if len(call.Args) == 0 {
+			if len(stmt.Redirs) != 0 {
+				safe = false
+			}
 			continue
 		}
 		name, dynamic := executionWord(call.Args[0])
 		base := filepath.Base(name)
-		if dynamic || dynamicCommandName(name) || indirectLarkCommand(name) {
+		// Do not infer safety from an interpreter denylist: build tools and
+		// arbitrary programs can execute the file as well. Only these ordinary
+		// file/inspection commands and the specified test invocation are inert.
+		allowed := map[string]bool{"cat": true, "tee": true, "echo": true, "pwd": true, "ls": true, "head": true, "wc": true}[base]
+		if base == "go" && len(call.Args) > 1 && call.Args[1].Lit() == "test" {
+			allowed = true
+		}
+		if !allowed || name != base || dynamic || dynamicCommandName(name) || len(call.Assigns) != 0 {
 			safe = false
+		}
+		for _, arg := range call.Args[1:] {
+			value, expanded := executionWord(arg)
+			if expanded || strings.HasPrefix(value, "-exec") || strings.HasPrefix(value, "-toolexec") {
+				safe = false
+			}
 		}
 		for _, redir := range stmt.Redirs {
 			if redir.Hdoc == nil {
+				if redir.Word == nil || redir.Word.Lit() == "" {
+					safe = false
+				}
 				continue
 			}
 			hasHeredoc = true
@@ -107,13 +126,19 @@ func normalizeLarkCommand(cmd string) string {
 					safe = false
 				}
 			} else {
-				if len(call.Args) < 2 {
-					safe = false
-				}
+				files := 0
 				for _, arg := range call.Args[1:] {
-					if arg.Lit() == "" || strings.HasPrefix(arg.Lit(), "-") {
+					value := arg.Lit()
+					if value == "-a" || value == "--append" {
+						continue
+					}
+					if value == "" || strings.HasPrefix(value, "-") {
 						safe = false
 					}
+					files++
+				}
+				if files == 0 {
+					safe = false
 				}
 			}
 			syntax.Walk(redir.Hdoc, func(n syntax.Node) bool {
