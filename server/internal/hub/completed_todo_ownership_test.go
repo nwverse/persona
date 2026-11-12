@@ -9,10 +9,9 @@ import (
 )
 
 func TestCompactSessionKeepsCompletedTodoOwnershipSeparate(t *testing.T) {
-	raw, err := json.Marshal(runtimeSummary(proto.Session{
-		MachineID: "box", SessionID: "history",
-		CompletedTodo: &proto.TodoRef{ID: "done", Title: strings.Repeat("x", 400)},
-	}))
+	session := proto.Session{MachineID: "box", SessionID: "history"}
+	session.SetCompletedTodo(&proto.TodoRef{ID: "done", Title: strings.Repeat("x", 400)})
+	raw, err := json.Marshal(runtimeSummary(session))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -20,7 +19,7 @@ func TestCompactSessionKeepsCompletedTodoOwnershipSeparate(t *testing.T) {
 	if err := json.Unmarshal(raw, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Todo != nil || got.CompletedTodo == nil || got.CompletedTodo.ID != "done" || len(got.CompletedTodo.Title) > 256 {
+	if got.Todo != nil || got.CompletedTodo() == nil || got.CompletedTodo().ID != "done" || len(got.CompletedTodo().Title) > 256 {
 		t.Fatalf("compact ownership: %+v", got)
 	}
 }

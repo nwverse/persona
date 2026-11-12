@@ -348,8 +348,6 @@ type Session struct {
 	StartErrorArgs map[string]string `json:"start_error_args,omitempty"`
 	// Todo is the active (uncompleted, unreleased) todo this session is linked to (assistant/todos.go).
 	Todo *TodoRef `json:"todo,omitempty"`
-	// CompletedTodo preserves the last completed association for navigation only, never active work.
-	CompletedTodo *TodoRef `json:"completed_todo,omitempty"`
 	// SpawnFrom is persona_from reported by node for todo derivation (#762), stripped by hub before client push.
 	SpawnFrom string `json:"spawn_from,omitempty"`
 	// AttentionReason is why the session waits for the user, in the host's words (a botmux attention's reason).
@@ -486,7 +484,7 @@ const (
 	CodeSwitchFailedStopped = "switch_failed_stopped"
 )
 
-// TodoRef names a session's associated todo; Session.Todo is active, Session.CompletedTodo is display-only history.
+// TodoRef names a session's associated todo; Session.Todo is active, CompletedTodo() is display-only history.
 type TodoRef struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`

@@ -51,18 +51,18 @@ func TestCompletedTodoOwnershipDecoratesAndClearsWithoutTaskSignals(t *testing.T
 	before := len(ft.toldOf(assistantwire.EventFleetSessions))
 	ft.s.fleetTakeSnapshot(Snapshot{Todos: report})
 	closed, active := listed(t, ft.s, "mac", "history"), listed(t, ft.s, "mac", "active")
-	if closed.Todo != nil || closed.CompletedTodo == nil || closed.CompletedTodo.ID != "done" || closed.Quiet {
+	if closed.Todo != nil || closed.CompletedTodo() == nil || closed.CompletedTodo().ID != "done" || closed.Quiet {
 		t.Fatalf("completed ownership changed active/quiet state: %+v", closed)
 	}
-	if active.Todo == nil || active.Todo.ID != "current" || active.CompletedTodo != nil {
+	if active.Todo == nil || active.Todo.ID != "current" || active.CompletedTodo() != nil {
 		t.Fatalf("history displaced current work: %+v", active)
 	}
 	if got := ft.s.withTask(proto.Interaction{MachineID: "mac", SessionID: "history"}).TaskTitle; got != "" {
 		t.Fatalf("completed ownership named a supervised task: %q", got)
 	}
 	ft.s.fleetTakeSnapshot(Snapshot{Todos: &TodoReport{}})
-	if got := listed(t, ft.s, "mac", "history"); got.CompletedTodo != nil {
-		t.Fatalf("a withdrawn association remained on the session: %+v", got.CompletedTodo)
+	if got := listed(t, ft.s, "mac", "history"); got.CompletedTodo() != nil {
+		t.Fatalf("a withdrawn association remained on the session: %+v", got.CompletedTodo())
 	}
 	if len(ft.toldOf(assistantwire.EventFleetSessions)) < before+2 {
 		t.Fatal("changing completed ownership did not refresh the session list")

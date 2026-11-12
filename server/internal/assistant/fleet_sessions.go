@@ -386,11 +386,12 @@ func (s *Service) decorateTodos(mid string, list []proto.Session) {
 	defer r.mu.RUnlock()
 	for i := range list {
 		key := [2]string{mid, list[i].SessionID}
-		list[i].Todo, list[i].CompletedTodo = nil, nil
+		list[i].Todo = nil
+		list[i].SetCompletedTodo(nil)
 		if l, ok := r.links[key]; ok {
 			list[i].Todo = &proto.TodoRef{ID: l.TodoID, Title: l.Title}
 		} else if l, ok := r.completed[key]; ok {
-			list[i].CompletedTodo = &proto.TodoRef{ID: l.TodoID, Title: l.Title}
+			list[i].SetCompletedTodo(&proto.TodoRef{ID: l.TodoID, Title: l.Title})
 		}
 		list[i].Quiet = r.quiet[key]
 	}
