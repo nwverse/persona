@@ -117,6 +117,23 @@ class HttpTasksApiTest {
         }
     }
 
+    @Test fun seenAndUndoUseTheExactTodoRouteAndAnswer() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("""{"todo":{"id":"todo/one","title":"Release notes","seen_at":"2026-11-05T09:31:00Z"}}"""))
+            val seen = api(server).setTodoSeen("todo/one", true)
+            val put = server.takeRequest()
+            assertEquals("PUT", put.method)
+            assertEquals("/api/v1/todos/todo%2Fone/seen", put.path)
+            assertEquals("2026-11-05T09:31:00Z", seen.seenAt)
+            server.enqueue(MockResponse().setBody("""{"todo":{"id":"todo/one","title":"Release notes"}}"""))
+            val unseen = api(server).setTodoSeen("todo/one", false)
+            val delete = server.takeRequest()
+            assertEquals("DELETE", delete.method)
+            assertEquals("/api/v1/todos/todo%2Fone/seen", delete.path)
+            assertNull(unseen.seenAt)
+        }
+    }
+
     @Test fun retryPostsAndAnswersTheReopenedTodo() = runBlocking {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setBody("""{"todo":{"id":"todo_1","title":"设置页按钮对齐","origin":"c","plan_id":"p","agents":[]}}"""))
