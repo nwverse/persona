@@ -121,6 +121,12 @@ Widgets/faces/<id>_<rev>/    the chosen package's pictures, one per state, at th
 - **Waking the app** (#5721): from the foreground the app tells the hub whether any of the widgets is on a screen
   (`widgets` in its device prefs, `HomeWidgetWriter.tellHub`); the hub's silent `persona_wake: "widgets"` push then
   connects it for 25 seconds, and it writes before it lets go.
+- **What the app reads itself** (`HomeWidgetData`): today's calendar events (EventKit, off the main actor, only with
+  the access Persona already has), Health's numbers (`HealthTool.daily`: steps for 8 days, sleep, resting heart rate,
+  active energy), the subscription windows (`UsageWindowsStore`) and today's tokens by the hour (`GET /api/v1/usage`'s
+  `hourly`). Each is read only while a widget that shows it is on a screen (`WidgetCenter`'s configurations, from the
+  foreground), at most every 10, 15 and 5 minutes, and again when the hub wakes the app; a read that fails (Health is
+  locked with the phone) keeps the last.
 - **Off the main thread** (P1): the file is written on a background task, protected until first unlock as
   `FleetLookStore`'s; only encoding the few kilobytes runs on the main actor, at most every 5 seconds.
 - **Stale**: the timeline adds an entry at `HomeSnapshot.staleAfter` (an hour after the write). From then on the
@@ -153,6 +159,8 @@ without a hub; those shots, on each PR, are the proof (both DEBUG launch argumen
    Screen), the gallery, `HomeWidgetTests` (Needs You replayed from `spec/fixtures/needs-you/cases.json` against the
    Agents badge, rows past the cap, the file read back only in its shape, which kinds reload, writes only on change,
    moods).
-2. **The rest of the Home Screen**: Today, To-dos (with ticking off), Usage, Computers, Health.
+2. **The rest of the Home Screen**: Today, To-dos (with ticking off, `CompleteTodoIntent`, `HomeWidgetActions`), Usage,
+   Computers, Health; their data (`HomeWidgetData`, `HomeToday`, `HomeTodos`, `HomeUsage`); taps to the To-dos,
+   Machines and Health pages.
 3. **Lock Screen, settings and the Smart Stack**: the accessory families, Edit Widget (entities for computers and
    accounts read from the snapshot), relevance, background refresh, and the hub's push (#5721, its own PR).
