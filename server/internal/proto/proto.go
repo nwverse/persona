@@ -37,6 +37,7 @@ var Features = []string{
 	"launcher_switch",          // POST …/modes {launcher, model?, effort?} switches a running Claude Code Agent to another launcher with its next message; Session.pending_switch (#5035)
 	"engine_switch",            // POST …/modes with a launcher of the other engine: the next message moves the conversation between Claude Code and Codex with a handoff; pending_switch.agent, engine_history (#5054)
 	"client_msg_id",            // session.send dedupes retries
+	FeatureMessageSendState,    // informational receipt support; trust only authenticated hello.message_send_state == 1
 	"client_ops",               // durable operation receipts and read-only status queries
 	"send_refusals",            // 409 dialog_open / input_draft, clear_draft
 	"screen_dialog",            // interaction.dialog, Resolution.option, 409 prompt_changed
@@ -63,6 +64,7 @@ var Features = []string{
 	"machine_trust",            // machines' trust and error_code, POST /api/v1/machines/{id}/confirm|reject (docs/assistant/onboarding.md 5.3)
 	"machines_add",             // POST /api/v1/auth/pair-codes with add / machine from a signed-in device: it adds a computer and pairs it (docs/assistant/onboarding.md 5.3)
 	"todo_threads",             // a to-do's chat thread: PUT/DELETE /api/v1/todos/{id}/thread, and `thread` on the to-dos GET returns (docs/assistant/todos.md "Chat thread")
+	"todo_seen",                // Got it on a Just finished to-do: PUT/DELETE /api/v1/todos/{id}/seen, and `seen_at` on the to-dos GET returns (docs/assistant/todo-status-sop.md "Seen")
 	"tls",                      // optional TLS listener and SPKI pin (hub-changes.md 1.1)
 	"endpoints",                // authenticated address discovery and capability-gated updates
 	"plugins",                  // GET /api/v1/plugins and the relay under /api/v1/plugins/{id}/ (docs/extensions/extensions.md)
@@ -114,6 +116,10 @@ var Features = []string{
 // CodeWorktreeUnsupported: worktree.prepare / worktree.create on an engine that has no checkouts (a runtime such as
 // Paseo or Cindy, or a host without checkout support); the message starts with "unsupported".
 const CodeWorktreeUnsupported = "worktree_unsupported"
+
+// CodeWorktreeNoCommits: worktree.prepare / worktree.create on a repository nobody has committed to (HEAD names an
+// unborn branch): there is nothing to check out, so the folder itself is the only workspace (#5548).
+const CodeWorktreeNoCommits = "worktree_no_commits"
 
 // Codes of a failed credential.gh_token (hub → node, node/credential.go).
 const (

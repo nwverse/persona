@@ -34,11 +34,12 @@ import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
 import persona.core.domain.tasks.TasksStore
 import java.io.File
+import java.time.Instant
 
 /** Native JVM evidence of the real ChatPage, not a hand-built tray mock or a device screenshot. */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-@Config(sdk = [35], qualifiers = "en-w400dp-h900dp-xhdpi")
+@Config(sdk = [35], qualifiers = "en-w400dp-h900dp-xhdpi", application = QuestionTestApplication::class)
 class AssistantTraysShotsTest {
     @get:Rule val rule = createComposeRule()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -174,7 +175,8 @@ class AssistantTraysShotsTest {
     @Test
     @Config(sdk = [35], qualifiers = "zh-w400dp-h1000dp-xhdpi")
     fun backgroundWorkUsesOneSpinnerAndRealWaitUsesClockInEveryStyle() {
-        val at = "2026-11-10T08:00:00Z"
+        // Recent, by the real clock the trays read: a task idle for 48 h is shelved and leaves In progress (TodoTriage, #5530).
+        val at = Instant.now().minusSeconds(2 * 3_600).toString()
         val flow = Workflow(taskId = "workflow-fixture", status = "running", running = true, phase = "Adversarial review",
             agentsDone = 5, agentsStarted = 6, agentsRunning = 1, startedAt = at)
         val workers = listOf(
@@ -288,8 +290,10 @@ class AssistantTraysShotsTest {
                 rule.onNodeWithTag("assistant-tray-needs").assertIsDisplayed()
                 // one row for the release task, carrying its agent's oldest card; the running task is not here
                 rule.onNodeWithTag("assistant-needs-task-task-b").assertIsDisplayed()
-                rule.onAllNodesWithText(blocked.title).assertCountEquals(1)
-                rule.onNodeWithText(running.title).assertDoesNotExist()
+                // in the tray (the stack under the entries draws its tasks' oldest question too, #4339 C10)
+                val inNeeds = hasAnyAncestor(hasTestTag("assistant-tray-needs"))
+                rule.onAllNodes(hasText(blocked.title) and inNeeds).assertCountEquals(1)
+                rule.onNode(hasText(running.title) and inNeeds).assertDoesNotExist()
                 rule.onNodeWithText("Sent on your behalf · Only after you tap").assertIsDisplayed()
                 shot("needs-$suffix")
                 rule.onNodeWithTag("assistant-entry-running").performClick(); settle()
@@ -299,7 +303,7 @@ class AssistantTraysShotsTest {
                 rule.onNodeWithTag("assistant-agent-manual").assertIsDisplayed()
                 // the tasks' agents are in their tasks' rows, never rows of their own; the asking task is not here
                 rule.onNodeWithTag("assistant-agent-working").assertDoesNotExist()
-                rule.onNodeWithText(blocked.title).assertDoesNotExist()
+                rule.onNode(hasText(blocked.title) and hasAnyAncestor(hasTestTag("assistant-tray-running"))).assertDoesNotExist()
                 rule.onNodeWithTag("assistant-task-board").assertExists()
                 shot("running-$suffix")
                 rule.onNodeWithTag("assistant-entry-running").performClick(); settle()

@@ -2,6 +2,7 @@
 // The composer's permission picker (#5324, cindy's, after #5584's menu): a bare chip with the mode's symbol, cindy's name
 // and a chevron; Full access in red. Its menu offers the modes the agent can switch to without Plan mode (the + panel's
 // check row), each with its symbol, its description on hover, the current one checked; Full access asks again (#1379).
+// A mode not known yet is named by no value (#5756).
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -21,6 +22,7 @@ import { PermissionPicker, usePlanMode, type PlanMode } from "./PermissionPicker
 import { PERMISSION_MODES, switchableModes } from "../../lib/session-actions";
 import type { Session } from "../../lib/types";
 import { t } from "../../i18n";
+import { Icon } from "../../ui/icons";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -68,8 +70,10 @@ describe("the chip (#5324)", () => {
       expect(html).toContain(`title="${m.id === "bypassPermissions" ? t("lib-session-actions.bypass_warning") : m.detail}"`);
       expect(html.match(/<svg/g)).toHaveLength(2); // the mode's symbol and the chevron
     }
-    // a mode not reported yet reads as the default one
-    expect(renderToStaticMarkup(<PermissionPicker session={{ ...session, permission_mode: undefined }} />)).toContain(`>${label("default")}<`);
+    // a mode this page has no name for is named by its ID
+    const odd = renderToStaticMarkup(<PermissionPicker session={{ ...session, permission_mode: "dontAsk" }} assistant />);
+    expect(odd).toContain(">dontAsk<");
+    expect(odd).toContain(`aria-label="${t("chat-sessiondialogs.header_mode", { mode: "dontAsk" })}"`);
   });
 
   it("is bare until hovered, tints Full access red, and keeps its symbol in a very narrow box", () => {
@@ -139,8 +143,42 @@ describe("its menu (#5584, #5324)", () => {
     const key = (k: string) => act(() => void window.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true })));
     key("ArrowDown");
     await act(async () => void window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
-    expect(api).toHaveBeenCalledWith(expect.stringContaining("/modes"), { method: "POST", json: { permission_mode: "default" } });
+    expect(api).toHaveBeenCalledWith(expect.stringContaining("/modes"), { method: "POST", timeout: 95_000, json: { permission_mode: "default" } });
     expect(document.querySelector('[role="menu"]')).toBeNull();
+  });
+});
+
+describe("a mode not known yet (#5756, as iOS #5596)", () => {
+  // Claude Code before its first prompt: no mode reported, and it can already be changed
+  const fresh = { machine_id: "mac", session_id: "a2", agent: "claude", effort: "high" } as unknown as Session;
+  const show = () => {
+    act(() => root.unmount());
+    root = createRoot(host);
+    act(() => root.render(<PermissionPicker session={fresh} />));
+  };
+
+  it("is named by no value: just Permission mode, with no tooltip, and keeps the raised hand", () => {
+    // absent, empty, or null as a hub may send it
+    for (const permission_mode of [undefined, "", null as unknown as string]) {
+      const html = renderToStaticMarkup(<PermissionPicker session={{ ...fresh, permission_mode }} />);
+      expect(html).toContain(renderToStaticMarkup(<Icon name="palm" size={14} stroke={2} className="shrink-0" />));
+      expect(html).toContain(`>${t("chat-sessiondialogs.permission_mode")}<`);
+      expect(html).toContain(`aria-label="${t("chat-sessiondialogs.permission_mode")}"`);
+      expect(html).not.toContain(label("default"));
+      expect(html).not.toContain(" title=");
+      expect(html).not.toContain("data-mode=");
+      expect(html.match(/<svg/g)).toHaveLength(2);
+    }
+  });
+
+  it("checks no row, and any mode can still be picked", async () => {
+    show();
+    open();
+    expect(rows().map((r) => r.textContent)).toEqual(expect.arrayContaining([expect.stringContaining(label("default")), expect.stringContaining(label("acceptEdits"))]));
+    expect(rows().filter((r) => r.getAttribute("aria-checked") === "true")).toHaveLength(0);
+    const edits = rows().find((r) => r.textContent?.includes(label("acceptEdits")))!;
+    await act(async () => edits.click());
+    expect(api).toHaveBeenCalledWith(expect.stringContaining("/modes"), { method: "POST", timeout: 95_000, json: { permission_mode: "acceptEdits" } });
   });
 });
 
@@ -172,7 +210,7 @@ describe("Full access on a running agent (#1379)", () => {
     expect(panel().textContent).toContain(t("chat-sessiondialogs.bypass_confirm"));
     expect(panel().textContent).toContain(t("lib-session-actions.bypass_warning"));
     await act(async () => bypassRow()!.click());
-    expect(api).toHaveBeenCalledWith(expect.stringContaining("/modes"), { method: "POST", json: { permission_mode: "bypassPermissions" } });
+    expect(api).toHaveBeenCalledWith(expect.stringContaining("/modes"), { method: "POST", timeout: 95_000, json: { permission_mode: "bypassPermissions" } });
   });
 
   it("is the checked row, in red, while the agent runs in it, so it can be switched away and back", () => {
@@ -204,20 +242,20 @@ describe("Plan mode, the + panel's check row (#5324)", () => {
   it("goes into Plan mode, and back to the mode this page saw before it", async () => {
     probe(agent({ permission_mode: "auto" }));
     await act(async () => plan!.toggle());
-    expect(api).toHaveBeenLastCalledWith(expect.stringContaining("/modes"), { method: "POST", json: { permission_mode: "plan" } });
+    expect(api).toHaveBeenLastCalledWith(expect.stringContaining("/modes"), { method: "POST", timeout: 95_000, json: { permission_mode: "plan" } });
     probe(agent({ permission_mode: "plan" }));
     await act(async () => plan!.toggle());
-    expect(api).toHaveBeenLastCalledWith(expect.stringContaining("/modes"), { method: "POST", json: { permission_mode: "auto" } });
+    expect(api).toHaveBeenLastCalledWith(expect.stringContaining("/modes"), { method: "POST", timeout: 95_000, json: { permission_mode: "auto" } });
   });
 
   it("goes back to Default permissions when it never saw another mode, and never into Full access", async () => {
     probe(agent({ session_id: "p2", permission_mode: "plan" }));
     await act(async () => plan!.toggle());
-    expect(api).toHaveBeenLastCalledWith(expect.stringContaining("/modes"), { method: "POST", json: { permission_mode: "default" } });
+    expect(api).toHaveBeenLastCalledWith(expect.stringContaining("/modes"), { method: "POST", timeout: 95_000, json: { permission_mode: "default" } });
     probe(agent({ session_id: "p3", permission_mode: "bypassPermissions", bypass_available: true }));
     probe(agent({ session_id: "p3", permission_mode: "plan", bypass_available: true }));
     await act(async () => plan!.toggle());
-    expect(api).toHaveBeenLastCalledWith(expect.stringContaining("/modes"), { method: "POST", json: { permission_mode: "default" } });
+    expect(api).toHaveBeenLastCalledWith(expect.stringContaining("/modes"), { method: "POST", timeout: 95_000, json: { permission_mode: "default" } });
   });
 
   it("asks first when it leaves a Full access the agent can't come back to", async () => {

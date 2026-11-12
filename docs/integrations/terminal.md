@@ -447,6 +447,10 @@ Single pane reads herdr's observe/control streams, which don't carry it ("Progra
 - **IME**: page key handling (Shift+Enter, copy) yields on `isComposing` or `keyCode === 229`, leaving composition to xterm.
 - **Fonts**: before opening xterm, wait for `document.fonts.load("<size>px <font stack>", "W中")` (中 is the CJK measurement glyph), up to 1.5 seconds, avoiding late fonts and wrong cell measurements. JetBrains Mono in `--font-mono` currently has no `@font-face`, using local fonts,
   so this returns nearly immediately today; useful once web fonts are bundled.
+  The shared stack includes DejaVu Sans Mono and Liberation Mono before UI/platform fallbacks for Linux (#5768).
+  A missing desktop family can resolve through Fontconfig to a proportional face, inflating xterm's W-based cell
+  width and its letter-spacing correction. The range-limited, size-adjusted CJK face goes first in the terminal stack
+  so a named fallback containing CJK glyphs cannot shadow it.
 - **Shift+Enter → `ESC CR`** already existed (`encodeKey` and key handling in `feed.ts`); moved to `keyDecision` with IME exception added.
 
 ### Program OSC 52 and color queries never reach pane streams
@@ -603,7 +607,7 @@ with node methods `panes.close` / `panes.split` / `panes.agent` / `panes.git` / 
 - **Run Agent Here…**: only panes at shell prompts (no Agent, no bound session, all foreground programs shells; unreadable foreground also rejected). `panes.agent {pane, launcher}` reuses the full `start` pipeline—
   same launcher command, trust-dialog handling, readiness wait, pane binding, continuation command—without creating a tab, replacing `newTab` with selected pane in `context` (`withAdoptedPane`). Failure **doesn't** close this pane (new-tab failures do close the new tab).
   It answers `{session_id}`, and the clients open that agent's chat as New Agent opens the one it starts (#3287).
-  Web lists only Claude Code launchers (Codex/compatible Codex forks startup needs a first message, menu has no composer).
+  Web and iOS list only Claude Code launchers: a Codex start that fails closes its pane (`closeCodexStart`, `node/codex_start.go`), which here would be the user's own shell, so Codex starts from New Agent in a tab of its own (#5275). iOS's footer says so only on a computer that has a Codex launcher (`NodeMenu.runHereFooter`).
 - **Git**: run in pane directory (workspace uses its own), reject non-repositories (`not_a_repository`).
   Results and refusals are codes (#1888): success carries an `outcome` (`fetched`, `up_to_date`, `pulled`, `nothing_to_push`, `pushed`) that web and iOS say in their own strings, with an English `message` for older clients; each refusal is a coded 409 the hub words in the client's language (`rpc-errors`: `no_directory`, `detached_head`, `no_upstream`, `uncommitted_changes`, `not_fast_forward`, `push_rejected`; `pull_failed` / `push_failed` / `fetch_failed` carry git's words), the node's words as `detail`. **Pull** uses existing `gitPull`: fast-forward only, reject uncommitted changes; **Fetch** `git fetch --no-recurse-submodules`.
   **Push** asks first in every client (#1883, like the Git panel's Push; Pull and Fetch don't change the remote and run at once). It requires branch/upstream and pending commits (otherwise the `nothing_to_push` outcome), explicit `refs/heads/<branch>:<upstream branch>` without `+`, preventing force push even if `remote.<name>.push = +…` is configured. A remote that rejects a branch behind it is `push_rejected` (pull first; git's words in `detail`).
