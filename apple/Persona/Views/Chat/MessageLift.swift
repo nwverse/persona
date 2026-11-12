@@ -59,15 +59,18 @@ struct MessageLift {
     var part: Int? = nil
 }
 
-/// Where the pressed part starts in the lifted copy of a message drawn in parts (`MessageLift.part`), and whether
-/// the copy has all of its parts laid out (`MessageMenu.liftWhole`) or only those near the screen.
+/// Where the pressed part starts in the lifted copy of a message drawn in parts (`MessageLift.part`): in the copy
+/// (`top`) and in the card's scroll view as it shows (`window`, which changes as it scrolls), and whether the copy
+/// has all of its parts laid out (`MessageMenu.liftWhole`) or only those near the screen.
 struct LiftPressedPart: PreferenceKey {
     struct Mark: Equatable {
         var top: CGFloat
+        var window: CGFloat
         var whole: Bool
     }
 
     static let space = "lift-copy"
+    static let window = "lift-window"
     static var defaultValue: Mark? { nil }
     static func reduce(value: inout Mark?, nextValue: () -> Mark?) { value = value ?? nextValue() }
 }
@@ -79,7 +82,9 @@ extension View {
             if on {
                 GeometryReader { g in
                     Color.clear.preference(key: LiftPressedPart.self,
-                                           value: LiftPressedPart.Mark(top: g.frame(in: .named(LiftPressedPart.space)).minY, whole: whole))
+                                           value: LiftPressedPart.Mark(top: g.frame(in: .named(LiftPressedPart.space)).minY,
+                                                                       window: g.frame(in: .named(LiftPressedPart.window)).minY,
+                                                                       whole: whole))
                 }
             }
         }
@@ -107,14 +112,12 @@ nonisolated final class LiftPlace {
     var environment: EnvironmentValues?
 }
 
-/// Where a lifted copy of a message drawn in parts is scrolled to (`LiftedMessage`), written on every scrolled frame
-/// without drawing anything again (not observed): the offset, the pressed part's top, how far past it the copy shows,
-/// and whether all of its parts are laid out.
+/// The pressed part of a lifted copy of a message drawn in parts (`LiftedMessage`), written on every scrolled frame
+/// without drawing anything again (not observed): its top in the copy, and where it shows in the card while the copy
+/// above it stays as it is.
 nonisolated final class LiftScrolled {
-    var y: CGFloat = 0
     var top: CGFloat = 0
-    var past: CGFloat = 0
-    var whole = false
+    var window: CGFloat?
 }
 
 /// Lays out its one view as its parent asks, and keeps what that parent offered it (`LiftPlace.offer`), for the same
@@ -547,19 +550,12 @@ private struct LiftedMessage: View {
     /// Where the pressed part starts in the copy of a message drawn in parts (`MessageLift.part`), once it is laid out.
     @State private var partTop: CGFloat?
     /// The copy of a message drawn in parts opens at its pressed part (its scroll target), the only one of its parts
-    /// laid out then with those around it; `align` then moves it once to where it goes. Other messages open at their
-    /// `defaultScrollAnchor`.
+    /// laid out then with those around it; once that part is measured it moves to where `LiftLayout.place` puts it
+    /// (`placing`). Other messages open at their `defaultScrollAnchor`.
     @State private var scroll: ScrollPosition
-    @State private var align: Align?
-    /// Where the copy is scrolled to, kept on every scrolled frame without drawing anything again (not observed).
+    @State private var placing = false
+    /// The pressed part, kept on every scrolled frame without drawing anything again (not observed).
     @State private var scrolled = LiftScrolled()
-
-    /// A scroll to make once the pressed part is measured: `place`, where `LiftLayout.place` puts the copy (its first
-    /// measure); `keep`, this far past the pressed part's top, as it was before all of its parts were laid out.
-    private enum Align: Equatable {
-        case place
-        case keep(CGFloat)
-    }
 
     init(lift: MessageLift, menu: MessageMenu, space: CGRect) {
         self.lift = lift
@@ -673,11 +669,11 @@ private struct LiftedMessage: View {
         .scrollDisabled(!cut)
         .scrollIndicators(.hidden)
         // Opens at the part that was pressed (the same place on screen). A message drawn in parts opens at its pressed
-        // part (`scroll`) and moves once that part is measured (`align`).
+        // part (`scroll`) and moves once that part is measured (`placing`).
         .defaultScrollAnchor(lift.part != nil ? nil : UnitPoint(x: 0, y: cut ? p.offset / max(whole - p.preview.height, 1) : 0))
         .scrollPosition($scroll)
-        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in scrolledTo(y) }
-        .onChange(of: alignTarget(p)) { _, target in aligned(target) }
+        .coordinateSpace(.named(LiftPressedPart.window))
+        .onChange(of: placing && height > 0 ? p.offset : nil) { _, offset in placed(offset) }
         .onScrollGeometryChange(for: Fade.self) { g in
             Fade(top: g.contentOffset.y > 1, bottom: g.contentOffset.y + g.containerSize.height < g.contentSize.height - 1)
         } action: { _, f in fade = f }
@@ -697,53 +693,42 @@ private struct LiftedMessage: View {
         .accessibilityIdentifier("message-lift")
     }
 
-    /// Where `align` scrolls the copy to, once what it needs is measured.
-    private func alignTarget(_ p: LiftLayout.Placement) -> CGFloat? {
-        switch align {
-        case .place?: height > 0 ? p.offset : nil
-        case .keep(let past)?: partTop.map { $0 + past }
-        case nil: nil
-        }
-    }
-
-    /// The pressed part of a message drawn in parts, measured in the copy. Its first measure places the copy; the first
-    /// after all of its parts were laid out (to select its words) keeps what showed. Until then the lazy copy keeps
-    /// what shows itself as the parts around it are laid out. All of it laid out, the parts above the pressed one are
-    /// laid out again a pass later (MarkdownUI spaces its blocks once it has measured them): the pressed part stays
-    /// where it is, the copy scrolled by as much as it moved (else the words under a second long press were lines
-    /// further down by the time they were selected).
+    /// The pressed part of a message drawn in parts, measured in the copy. Its first measure places the copy
+    /// (`placing`). The lazy copy keeps what shows itself as it lays out the parts it had guessed (and as the card
+    /// scrolls, where the part shows is kept). Once all of the parts are laid out to select the words, and again when
+    /// MarkdownUI spaces their blocks a pass later, the copy above the pressed part changes: the copy is scrolled for
+    /// that part to show where it did, what showed stays where it was. Selecting asked for meanwhile starts then.
     private func measured(_ v: LiftPressedPart.Mark?) {
         guard let v else { return }
+        defer { partTop = v.top }
         if partTop == nil {
-            align = .place
-        } else if v.whole, !scrolled.whole {
-            align = .keep(scrolled.past)
-        } else if v.whole, align == nil, abs(v.top - scrolled.top) > 0.25 {
-            scrolled.y += v.top - scrolled.top
-            scroll.scrollTo(y: scrolled.y)
+            placing = true
+            scrolled.top = v.top
+            return
         }
-        scrolled.whole = v.whole
+        if placing {
+            scrolled.top = v.top
+            return
+        }
+        if v.whole, abs(v.top - scrolled.top) > 0.25, let shown = scrolled.window {
+            // The content offset that puts the part `shown` below the card's top: its place in the content (inside
+            // the copy's padding) less that.
+            scroll.scrollTo(y: pad.top + v.top - shown)
+        } else {
+            scrolled.window = v.window
+        }
         scrolled.top = v.top
-        if !v.whole { scrolled.past = scrolled.y - v.top }
-        partTop = v.top
-    }
-
-    private func scrolledTo(_ y: CGFloat) {
-        scrolled.y = y
-        // Not once all of the parts are asked for: laying them out moves the offset before the part is measured again.
-        if !menu.liftWhole, !scrolled.whole { scrolled.past = y - scrolled.top }
-    }
-
-    /// Scrolled where `align` said; selecting asked for meanwhile starts now, over the words where they are.
-    private func aligned(_ target: CGFloat?) {
-        guard let target else { return }
-        scroll.scrollTo(y: target)
-        scrolled.y = target // where it is from now on, before the scroll view says so
-        align = nil
-        if scrolled.whole, let pending = menu.pendingSelect {
+        if v.whole, let pending = menu.pendingSelect {
             menu.pendingSelect = nil
             withAnimation(Theme.Motion.state) { menu.inPlace = pending }
         }
+    }
+
+    /// Moved where `LiftLayout.place` puts the copy, once.
+    private func placed(_ offset: CGFloat?) {
+        guard let offset else { return }
+        scroll.scrollTo(y: offset)
+        placing = false
     }
 
     /// Opaque, fading over the fade's width at an end with more of the message beyond it.

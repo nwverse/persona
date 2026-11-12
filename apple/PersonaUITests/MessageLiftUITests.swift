@@ -577,10 +577,10 @@ final class MessageLiftUITests: XCTestCase {
         XCTAssertTrue(copy.waitForExistence(timeout: 3), "no edit menu:\n\(app.debugDescription)")
         XCTAssertTrue(isTheWholeSplitAnswer(words.value as? String ?? "", markdown: false), "the text view holds the whole answer")
         sleep(1)
+        shot("split-second-press")
         let laid = words.textViews.matching(NSPredicate(format: "label BEGINSWITH %@", Self.splitMiddle)).firstMatch
         XCTAssertTrue(laid.exists, "no paragraph with the pressed line:\n\(words.debugDescription)")
         XCTAssertLessThanOrEqual(abs(laid.frame.minY - before.minY), 6, "the words stayed where they were (\(before.minY) → \(laid.frame.minY))")
-        shot("split-second-press")
         copy.tap()
         XCTAssertTrue(words.waitForNonExistence(timeout: 3), "拷贝 did not put the answer back")
         let copied = pasted().trimmingCharacters(in: .whitespacesAndNewlines)
