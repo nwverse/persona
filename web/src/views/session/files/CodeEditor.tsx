@@ -84,7 +84,7 @@ function phrases() {
     "match case": t("files-editor.match_case"),
     regexp: t("files-editor.regexp"),
     "by word": t("files-editor.by_word"),
-    replace: t("files-editor.replace_one"),
+    replace: t("files-editor.replace_single"),
     "replace all": t("files-editor.replace_all"),
     close: t("files-editor.close"),
   });
