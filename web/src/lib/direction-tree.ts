@@ -1,4 +1,4 @@
-// The direction tree (#4352, docs/assistant/unified-entry.md "Direction tree"): each current leader conversation (a
+// The direction tree (#4352, docs/assistant/unified-entry.md "The direction tree"): each current leader conversation (a
 // "direction", shown as 常驻 / Pinned) with the open tasks it supervises, each task with its state and its agents, and
 // last the secretary's group (tasks with no leader). The hub builds it once (GET /api/v1/assistant/directions/tree); the
 // sidebar, the To-dos page and the Agents page all draw this one tree and never group or rank the tasks themselves.

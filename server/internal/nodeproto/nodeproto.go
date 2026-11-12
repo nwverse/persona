@@ -69,6 +69,10 @@ const (
 	SecretEnv = "secret_env"
 	// Clipboard: clipboard.get / clipboard.set and node.info's clipboard (docs/operations/clipboard.md).
 	Clipboard = "clipboard"
+	// LauncherSwitch: session.modes takes launcher, a switch of a running Claude Code Agent to another launcher that
+	// its next session.send carries out (docs/integrations/claude-integration.md "Switching a running Agent to another
+	// provider"). A node without it would drop launcher and apply the model on the launcher the Agent runs on.
+	LauncherSwitch = "launcher_switch"
 	// ModelHTTP: model.http, a direct-API model request an API connection sends through this computer
 	// (docs/assistant/model-config.md "Sending through a computer").
 	ModelHTTP = "model_http"
@@ -96,7 +100,7 @@ const (
 )
 
 // Announced is what a node built from this code announces.
-var Announced = []string{ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, Sessions, ModelConfiguration, AssistantConfigDir, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, ModelHTTP}
+var Announced = []string{ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, Sessions, ModelConfiguration, AssistantConfigDir, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP}
 
 // ShareProjection is the bounded complete-source sharing projection, not light Items.
 const ShareProjection = "share_projection.v1"
