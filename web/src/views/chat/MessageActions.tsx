@@ -1,14 +1,15 @@
-// What you can do with a message (iOS MessageMenu.swift: "Copy" / "Select" / "Quote" / "Forward" / "Edit"): with a mouse, a small
-// bar under it on hover and the same items on right-click; on a touch screen, a long press opens them, or a reply's ⋯ beside its
-// copy button (and "Select" shows the text to select, since the press no longer selects). "Quote" puts it as a quote in front of
-// the draft, "Edit" (your own messages) puts it back in the composer to change and send again. "Forward" (#3899) opens Forward to:
-// Persona or any Agent, the message over that chat's box with a note to type (lib/forward.ts); it took the place of "Hand to
-// Persona". "Use as context" attaches it to this chat's next message. Sharing as a card is the phone's. A reply's bar ends in a ⋯
-// whose menu has "Branch to new chat" (#2137: a new conversation with what was said up to this reply) when the session can.
-// Beside your own bubbles, Forward and Use as context live in ⋯ to keep the hover bar compact.
+// What you can do with a message (iOS MessageMenu.swift: "Copy" / "Select" / "Quote" / "Forward" / "Edit"): every item on
+// right-click; on a touch screen, a long press opens them (and "Select" shows the text to select, since the press no longer
+// selects). With a mouse, a small bar on hover too: beside your own bubbles, and under a turn's last reply cindy's bar
+// (ReplyBar, #5314: Copy message, Start a new session, ⋯, the time); the other replies (narration in a work summary, words
+// still streaming) have the menus only, and on a touch screen the last reply has a copy button and a ⋯ under it. "Quote" puts
+// it as a quote in front of the draft, "Edit" (your own messages) puts it back in the composer to change and send again.
+// "Forward" (#3899) opens Forward to: Persona or any Agent, the message over that chat's box with a note to type
+// (lib/forward.ts); it took the place of "Hand to Persona". "Use as context" attaches it to this chat's next message. Sharing
+// as a card is the phone's. "Start a new session" (#2137: a new conversation with what was said up to this reply) is there
+// when the session can branch. Beside your own bubbles, Forward and Use as context live in ⋯ to keep the hover bar compact.
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { t } from "../../i18n";
-import { clock } from "../../lib/format";
 import { sendDraft, type QuotedTask } from "../../lib/drafts";
 import type { ForwardPick } from "../../lib/forward";
 import { addContext, newContext } from "../../lib/links";
@@ -18,6 +19,7 @@ import { Icon, type IconName } from "../../ui/icons";
 import type { RewindRestore } from "../../lib/rewind";
 import { isNoHover, NO_HOVER, useMedia } from "../../ui/media-query";
 import { useChatActions, type ChatActions } from "./chat-actions";
+import { ReplyBar } from "./ReplyBar";
 
 
 function pointAnchor(x: number, y: number): HTMLElement {
@@ -63,11 +65,12 @@ export function messageContextActions(text: string, chat: ChatActions | null, fo
   return out;
 }
 
-/** What the reply's ⋯ holds (also at the end of its right-click menu): "Branch to new chat" when the session can fork and the
- *  reply is a transcript line of its own (`<uuid>#<n>`; lines without a uuid are `line<seq>`, which the node cannot find). */
-export function moreActions(itemId: string | undefined, fork: ((itemId: string) => void) | undefined): Action[] {
+/** "Start a new session" (cindy's words; "Start a new chat" in a Persona conversation, `chat`), on the reply bar and at the
+ *  end of a reply's right-click menu, when the session can fork and the reply is a transcript line of its own
+ *  (`<uuid>#<n>`; lines without a uuid are `line<seq>`, which the node cannot find). */
+export function moreActions(itemId: string | undefined, fork: ((itemId: string) => void) | undefined, chat?: boolean): Action[] {
   if (!itemId || !fork || itemId.startsWith("line") || !itemId.includes("#")) return [];
-  return [{ key: "fork", label: t("chat-messageactions.fork"), icon: "fork", onSelect: () => fork(itemId) }];
+  return [{ key: "fork", label: t(chat ? "chat-messageactions.fork_chat" : "chat-messageactions.fork"), icon: "fork", onSelect: () => fork(itemId) }];
 }
 
 /** "Delete", last and in red, on a message only on this device (#4626, the apps' long press): in the right-click / long-press
@@ -110,15 +113,17 @@ function useWhileOpen(live: Rewind["block"] | undefined, open: boolean, closed: 
   return useSyncExternalStore(on ? on.subscribe : NO_STORE, get, get);
 }
 
-/** Wraps a message: right-click / long press opens its menu. The hover bar goes under it (with the time), or beside it
- *  (`side`, your own bubbles: they had no row under them, so the layout does not move; the time stays the tooltip), or
- *  over its top right corner (`corner`, a task's card: no row under it either). `task`: "Quote" quotes it as that task. */
+/** Wraps a message: right-click / long press opens its menu. A hover bar goes beside it (`side`, your own bubbles: they had
+ *  no row under them, so the layout does not move; the time stays the tooltip), over its top right corner (`corner`, a
+ *  task's card: no row under it either), or under it (`bar`, a finished turn's last reply: ReplyBar). Without any of those
+ *  it has the menus only. `task`: "Quote" quotes it as that task. */
 export function MessageActions({
   text,
   isUser,
   ts,
   side,
   corner,
+  bar,
   task,
   itemId,
   messageId,
@@ -133,8 +138,9 @@ export function MessageActions({
   ts?: string;
   side?: boolean;
   corner?: boolean;
+  bar?: boolean;
   task?: QuotedTask;
-  /** The reply's transcript item: where "Branch to new chat" branches off, and what Forward forwards. */
+  /** The reply's transcript item: where "Start a new session" branches off, and what Forward forwards. */
   itemId?: string;
   /** Your message (UserMessage.id): where "Rewind to here" goes back to, and what Forward forwards. */
   messageId?: string;
@@ -154,10 +160,13 @@ export function MessageActions({
   const chat = useChatActions();
   const [moreAnchor, setMoreAnchor] = useState<HTMLElement | null>(null);
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  // the pointer over a reply with the bar: it shows and fades by this (ReplyBar). Only its own state: the reply's words are
+  // `children`, the same elements, and do not draw again.
+  const [hovered, setHovered] = useState(false);
   const rewind = isUser ? chat?.rewind : undefined;
   const rewindBlock = useWhileOpen(rewind?.block, Boolean(anchor || moreAnchor), "");
   const extras = [
-    ...moreActions(itemId, chat?.fork),
+    ...moreActions(itemId, chat?.fork, chat?.assistant),
     ...rewindActions(messageId, text, rewind && { block: rewindBlock, run: rewind.run }),
     ...deleteActions(onDelete),
   ];
@@ -190,7 +199,11 @@ export function MessageActions({
   const items: MenuItem[] = [...actions, ...extras].map((a, i) => ({ ...a, divider: i === actions.length && i > 0 }));
 
   return (
-    <div className={cx("group/msg", (side || corner) && "relative", className)}>
+    <div
+      className={cx("group/msg", (side || corner) && "relative", className)}
+      onMouseEnter={bar ? () => setHovered(true) : undefined}
+      onMouseLeave={bar ? () => setHovered(false) : undefined}
+    >
       <div
         className="[@media(hover:none)]:select-none [@media(hover:none)]:[-webkit-touch-callout:none]"
         onContextMenu={(e) => {
@@ -234,11 +247,14 @@ export function MessageActions({
       >
         {children}
       </div>
+      {bar ? (
+        <ReplyBar text={text} ts={ts} hovered={hovered} fork={extras.find((a) => a.key === "fork")} more={actions.filter((a) => a.key !== "copy" && a.key !== "select")} />
+      ) : (side || corner) && (
       <div
         className={cx(
           "hidden h-6 items-center gap-0.5 opacity-0 transition-opacity duration-200 group-hover/msg:opacity-100 focus-within:opacity-100 [@media(hover:hover)]:flex",
           moreAnchor && "opacity-100", // the ⋯ menu is open: its bar stays while the pointer is in the menu
-          side ? "absolute right-full bottom-0.5 mr-1.5" : corner ? "absolute top-2 right-2 rounded-[8px] bg-surface px-0.5 shadow-hairline" : "mt-1.5",
+          side ? "absolute right-full bottom-0.5 mr-1.5" : "absolute top-2 right-2 rounded-[8px] bg-surface px-0.5 shadow-hairline",
         )}
       >
         {actions
@@ -268,9 +284,9 @@ export function MessageActions({
             <Icon name="more" size={14} />
           </button>
         )}
-        {!side && !corner && ts && <span className="ml-1 text-[11px] text-ink-3">{clock(ts)}</span>}
       </div>
-      {touch && !isUser && !side && !corner && (
+      )}
+      {touch && bar && (
         <div className="mt-1 flex h-6 items-center gap-5">
           <button type="button" aria-label={t("chat-messageactions.copy_reply")} title={t("chat-messageactions.copy")} onClick={() => void copyText(text)} className="touch-hit flex size-6 items-center justify-center rounded-[6px] text-ink-3">
             <Icon name="copy" size={14} />

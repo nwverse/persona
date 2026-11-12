@@ -1184,7 +1184,8 @@ export function Toasts() {
 }
 
 /** Puts text on the clipboard and says so (`done` / `failed` replace the usual words); whether it got there. */
-export async function copyText(text: string, words: { done?: string; failed?: string } = {}): Promise<boolean> {
+/** `quiet`: no toast when it worked, for a button that shows it itself (the reply bar's ✓); a failure still says so. */
+export async function copyText(text: string, words: { done?: string; failed?: string; quiet?: boolean } = {}): Promise<boolean> {
   let ok = true;
   try {
     await navigator.clipboard.writeText(text);
@@ -1204,7 +1205,8 @@ export async function copyText(text: string, words: { done?: string; failed?: st
       ta.remove();
     }
   }
-  if (ok) toast(words.done ?? t("ui-atoms.copied"), "ok");
-  else toast(words.failed ?? t("ui-atoms.copy_failed"), "error");
+  if (ok) {
+    if (!words.quiet) toast(words.done ?? t("ui-atoms.copied"), "ok");
+  } else toast(words.failed ?? t("ui-atoms.copy_failed"), "error");
   return ok;
 }

@@ -64,6 +64,10 @@ vi.mock("../../lib/router", async (importOriginal) => ({
   useRoute: () => ({ name: "session", mid: "hub", id: "c1" }),
 }));
 vi.mock("../assistant/Persona", () => ({ usePersona: () => ({ name: "Persona" }) }));
+// the last reply's ⋯ menu (#5314) drawn open: what the chat offers on it
+vi.mock("./ReplyBar", () => ({
+  ReplyBar: ({ more }: { more: { key: string; label: string }[] }) => <div data-reply-bar>{more.map((a) => <button key={a.key} type="button" aria-label={a.label} />)}</div>,
+}));
 vi.mock("../assistant/AssistantChat", () => ({
   AssistantFace: () => null,
   CompactionStrip: () => null,
