@@ -1,7 +1,7 @@
 // The source subscription pages (#2041, docs/extensions/subscriptions.md "Pages") at /subscriptions: the manager draws
 // them as declarative UI, so this is only the page around them, as an extension's full page has (ExtensionNavPage).
-// ?state= opens them on one extension's or one connector's subscriptions. Unnarrowed, a manager with inbox_sources draws
-// Inbox Sources (#5278), every source of the Inbox, and the page says so.
+// ?state= opens them on one extension's or one connector's subscriptions, or one of their pages. A manager with
+// inbox_sources draws Inbox Sources (#5278), every source of the Inbox, and the page says so.
 import { Suspense, useMemo, useState } from "react";
 import { t } from "../../i18n";
 import { useInboxSourcesShown } from "../../lib/subscriptions";
@@ -13,7 +13,8 @@ export function SubscriptionsPage({ onToggleSidebar }: { onToggleSidebar: () => 
   const [n, setN] = useState(0);
   const state = useMemo(() => new URLSearchParams(location.search).get("state") ?? undefined, []);
   const sources = useInboxSourcesShown();
-  const title = sources && !state ? t("subscriptions.title_sources") : t("subscriptions.title");
+  // every page of them is Inbox Sources' with a manager that draws them (#5278), whichever one opens first
+  const title = sources ? t("subscriptions.title_sources") : t("subscriptions.title");
   return (
     <div className="flex h-full flex-col">
       <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3 sm:px-4">
