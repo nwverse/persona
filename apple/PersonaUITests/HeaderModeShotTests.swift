@@ -130,14 +130,36 @@ final class HeaderModeShotTests: XCTestCase {
             XCTAssertTrue(title.waitForExistence(timeout: 3), "the menu's title line; the screen's elements:\n\(app.debugDescription)")
 
             open(Self.review, scheme: scheme)
+            let field = app.descendants(matching: .any)["shell-composer-field"].firstMatch
+            XCTAssertTrue(field.waitForExistence(timeout: 10), "the composer")
+            field.tap() // the model button is on the open composer's second row
             let modes = app.buttons["shell-composer-modes"]
             XCTAssertTrue(modes.waitForExistence(timeout: 10), "the composer's model button")
             modes.tap()
             sleep(1)
+            // The long model list opens at the current model. The mode item is at the far end, and the menu draws (and
+            // lists) a row only once it is scrolled into view.
+            let item = app.descendants(matching: .any).matching(NSPredicate(
+                format: "(label BEGINSWITH %@ OR label BEGINSWITH %@) AND identifier != %@", plain[0], plain[1], "chat.permissionMode")).firstMatch
+            for _ in 0..<4 where !(item.exists && item.isHittable) {
+                app.collectionViews.firstMatch.swipeDown()
+                sleep(1)
+            }
             shot("composer-menu-unknown", scheme)
+            XCTAssertTrue(item.exists && item.isHittable, "the model menu's Permission Mode item on screen; the screen's elements:\n\(app.debugDescription)")
+            if item.exists { XCTAssertTrue(plain.contains(item.label), "the model menu's Permission Mode item: \(item.label)") }
             assertNoUnknownMode()
-            let item = app.descendants(matching: .any).matching(NSPredicate(format: "label IN %@", plain)).firstMatch
-            XCTAssertTrue(item.waitForExistence(timeout: 3), "the model menu's Permission Mode item; the screen's elements:\n\(app.debugDescription)")
+        }
+        // The largest accessibility text size (the UI change self-check): the header's menu.
+        let largest = ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        for scheme in ["light", "dark"] {
+            open(Self.review, scheme: scheme, extra: largest)
+            let mode = app.buttons["chat.permissionMode"]
+            XCTAssertTrue(mode.waitForExistence(timeout: 10), "the header's mode")
+            mode.tap()
+            sleep(1)
+            shot("menu-unknown-ax", scheme)
+            assertNoUnknownMode()
         }
     }
 

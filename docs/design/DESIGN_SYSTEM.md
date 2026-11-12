@@ -771,7 +771,7 @@ Agent header permission mode (#3719, `HeaderModeButton` in `apple/Persona/Views/
 capsule at the trailing end of the open Agents header's second row, under `⋯`, as tall as the tabs, with a 44 pt target that
 overhangs the row. It draws the mode menu's own symbol (one per mode) in its `ModeTone`, tinted as `ModeChip` tints a
 mode that is not the quiet one; Ask First is the quiet gray, never hidden, so the control stays in one place. A mode not
-reported yet is the plain permissions symbol, never a guessed Ask First. The words are in its menu (headed "Permission Mode: …" as on the web and Android,
+reported yet is the plain permissions symbol, never a guessed Ask First. The words are in its menu (headed "Permission Mode: …" as on the web and Android; just "Permission Mode" while no mode is reported, as the capsule says it, `SessionModes.modeHeading`, #5596;
 then the mode list, current one checked, Allow Everything disabled with its reason where the agent cannot take it), its VoiceOver label
 and the pointer tooltip. Going into Allow Everything asks first; so does leaving it when the agent cannot come back
 (`SessionModes.confirmation`), on the header and the composer's model menu alike. An agent whose mode can be neither
