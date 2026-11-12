@@ -483,7 +483,8 @@ list. The provider settings (the add-a-provider steps, the connection test and t
 chat's subagent and workflow cards (`web/src/views/chat/TaskCard.tsx`, after cindy's `AgentTaskCard`: layout, states and
 wording) and the main chat's hand-off cards with the way-back strip on an Agent's page (`web/src/views/assistant/Handoff.tsx`,
 `web/src/views/chat/HandoffBack.tsx`, after cindy's `SessionHandoffCard` and its return pill: layout, states and wording)
-follow cindy's design. No code is copied for those.
+and a lead's Team side panel (`web/src/views/chat/TeamPanel.tsx`, after cindy's Team tab, `OrcaWorkerPanel` and its worker
+strip: layout, states, wording and when it opens) follow cindy's design. No code is copied for those.
 
 The web chat's work summary follows cindy's chat at the owner's request (2026-11-12): the timeline inside an opened
 summary (`web/src/lib/work-groups.ts`, after `createCompletedWorkGroup` in `messageWorkGroups.ts`), the thought rows
@@ -496,6 +497,10 @@ after `formatDuration`). Two files are ported from cindy's code with changes: `w
 The web chat's plan (`web/src/views/chat/PlanCard.tsx`, #5156) is ported from cindy's `TodoListCard.tsx` with changes:
 the inline card that opens in place (`InlinePlanCard`), the pill above the composer with its hover / pinned flyout and
 Close Plan (`TodoListCard`), the progress ring's arithmetic and the in-progress arc's path and sizes.
+
+The changed-files card (`web/src/views/chat/TurnChanges.tsx`, #5157) and the error notice (`web/src/ui/ErrorNotice.tsx`)
+are ported from cindy's `TurnChangesCard.tsx` and `components/ui/error-notice.tsx` with changes: their layout, sizes and
+states; the counting, review targets and fold data are Persona's own.
 
 https://github.com/makecindy/cindy
 
