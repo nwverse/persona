@@ -1,0 +1,49 @@
+// An Agent's Background tasks side panel (#5421, after cindy's right-sidebar Background tasks tab, `openBackgroundTasksTab`;
+// docs/web/web.md "Background tasks"): what keeps the Agent going besides its turn, its /loop, background commands and
+// subagents, and its workflow runs. Every way in goes through here: the header's button, the loop mark before the title, a
+// workflow card's "Open in the background tasks panel" and `/workflows` in the composer.
+import { getPanel, openPanel, type Panel } from "./panel";
+import type { Session } from "./types";
+import { otherBackground, recentWorkflows } from "./workflows";
+
+export type BackgroundPanel = Extract<Panel, { kind: "background" }>;
+
+/** The open panel when it is this session's Background tasks panel. */
+export function backgroundPanelOf(p: Panel | null, mid: string, sid: string): BackgroundPanel | undefined {
+  return p?.kind === "background" && p.mid === mid && p.sid === sid ? p : undefined;
+}
+
+/** Opens the session's panel, at a workflow run's detail when `run` names one (cindy's focusTaskId). Asked again for the
+ *  same run, it is a new object, so the panel goes to that run again. */
+export function openBackgroundPanel(mid: string, sid: string, run?: string) {
+  openPanel({ kind: "background", mid, sid, ...(run ? { run } : {}) });
+}
+
+/** The header's button: closes the session's panel when it is open, else opens it at its list. */
+export function toggleBackgroundPanel(mid: string, sid: string) {
+  if (backgroundPanelOf(getPanel(), mid, sid)) openPanel(null);
+  else openBackgroundPanel(mid, sid);
+}
+
+/** Whether the session has anything the panel lists now: a /loop, a background task, or a workflow run that runs or ended
+ *  within the day the node keeps it (lib/workflows.ts recentWorkflows). The header's button shows only then. */
+export function hasBackgroundWork(s: Session | undefined, now: number): boolean {
+  if (!s) return false;
+  return Boolean(s.loop) || otherBackground(s).length > 0 || recentWorkflows(s, now).length > 0;
+}
+
+/** The composer's `/workflows` (cindy's): opens the panel instead of going to the Agent. */
+export const WORKFLOWS_COMMAND = "/workflows";
+
+/** A message that is `/workflows`: the word alone, no pictures. */
+export function isWorkflowsCommand(text: string, images: number): boolean {
+  return images === 0 && text.trim().toLowerCase() === WORKFLOWS_COMMAND;
+}
+
+/** The run `/workflows` opens at (cindy's findLatestWorkflowTask): the latest running one, else the latest that started. */
+export function latestWorkflowRun(s: Session | undefined): string | undefined {
+  const runs = s?.workflows ?? [];
+  const at = (w: (typeof runs)[number]) => Date.parse(w.started_at ?? "") || 0;
+  const pick = (list: typeof runs) => list.slice().sort((a, b) => at(b) - at(a))[0];
+  return (pick(runs.filter((w) => w.running)) ?? pick(runs))?.task_id;
+}
