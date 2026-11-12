@@ -87,7 +87,9 @@ fun JSheet(
     })
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     ModalBottomSheet(
-        onDismissRequest = { if (canDismiss) onDismiss() }, modifier = modifier,
+        onDismissRequest = { if (canDismiss) onDismiss() }, modifier = modifier.hardwareShortcutDismiss {
+            if (canDismiss) onDismiss() else blocked?.invoke()
+        },
         sheetState = sheetState,
         shape = PersonaTheme.shapes.sheetShape, containerColor = container, contentColor = palette.ink,
         scrimColor = palette.scrim, tonalElevation = 0.dp,
@@ -231,7 +233,8 @@ fun JDialog(
     val palette = PersonaTheme.palette
     androidx.compose.runtime.CompositionLocalProvider(LocalReadingInset provides 0.dp) {
     AlertDialog(
-        onDismissRequest = onDismiss, containerColor = palette.surfaceOpaque, shape = PersonaTheme.shapes.panelShape, tonalElevation = 0.dp,
+        onDismissRequest = onDismiss, modifier = Modifier.hardwareShortcutDismiss(onDismiss),
+        containerColor = palette.surfaceOpaque, shape = PersonaTheme.shapes.panelShape, tonalElevation = 0.dp,
         title = { Text(title, style = PersonaTheme.type.title, color = palette.ink) },
         text = if (text == null && content == null) null else ({
             Column {

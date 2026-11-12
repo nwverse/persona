@@ -34,12 +34,14 @@ internal fun FullTextReader(text: String, onDismiss: () -> Unit, title: String =
     }
     val copyText = rememberCopy()
     JFullScreen(onDismiss) {
-        val ready = snapshot
-        val copy: () -> Unit = { copyText(frozen, null) }
-        if (ready == null) JPage(title, onBack = onDismiss) { padding ->
-            LazyColumn(contentPadding = PaddingValues(start = pagePadding, end = pagePadding,
-                top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding())) { item { JLoading() } }
-        } else ReaderPages(ready, Modifier.fillMaxSize().imePadding(), title, onDismiss, copy, plain)
+        Box(Modifier.fillMaxSize().hardwareShortcutDismiss(onDismiss)) {
+            val ready = snapshot
+            val copy: () -> Unit = { copyText(frozen, null) }
+            if (ready == null) JPage(title, onBack = onDismiss) { padding ->
+                LazyColumn(contentPadding = PaddingValues(start = pagePadding, end = pagePadding,
+                    top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding())) { item { JLoading() } }
+            } else ReaderPages(ready, Modifier.fillMaxSize().imePadding(), title, onDismiss, copy, plain)
+        }
     }
 }
 

@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -19,10 +20,19 @@ fun JSettingsSheet(onDismiss: () -> Unit, content: @Composable () -> Unit) {
         surface = if (base.dark) base.surfaceOpaque else base.background,
         surfaceOpaque = if (base.dark) base.surfaceOpaque else base.background,
     )
-    JSheet(onDismiss, Modifier.fillMaxSize(), contentPadding = 0.dp, bottomPadding = 0.dp, showDragHandle = false) {
-        CompositionLocalProvider(LocalPalette provides grouped, LocalFlatPageSurface provides true,
-            LocalHomeChrome provides null, LocalRootBack provides null, LocalRootLeading provides null) {
-            Box(Modifier.fillMaxSize()) { content() }
+    val settingsState = rememberSaveableStateHolder()
+    val settingsContent: @Composable () -> Unit = {
+        settingsState.SaveableStateProvider("settings-sheet-content") {
+            CompositionLocalProvider(LocalPalette provides grouped, LocalFlatPageSurface provides true,
+                LocalHomeChrome provides null, LocalRootBack provides null, LocalRootLeading provides null) {
+                Box(Modifier.fillMaxSize()) { content() }
+            }
         }
+    }
+    when (settingsPresentation(LocalLargeWindowInput.current)) {
+        SettingsPresentation.FullWindow -> JSheet(onDismiss, Modifier.fillMaxSize(), contentPadding = 0.dp, bottomPadding = 0.dp, showDragHandle = false) {
+            settingsContent()
+        }
+        SettingsPresentation.PageSized -> JPageSizedSettingsSheet(onDismiss, settingsContent)
     }
 }
