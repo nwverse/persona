@@ -1084,16 +1084,20 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
 - **A command asked about on the terminal** (#5266): a permission prompt the hub reads off an Agent's screen (Claude
   Code's own safety check in bypass mode, "Bash command … Do you want to proceed?") is a tool approval, titled as one
   ("Claude is waiting for your approval"), with "Claude wants to run a command" in place of the terminal's question. Its
-  body: the agent's own words for the command, the command in code type (four rows until Show all; the web shows the
-  toggle only when the rows cut something), the warning in plain words ("Can't confirm this command won't delete files",
-  a generic line for a warning there are no words for) with Claude Code's own warning and countdown under Show original,
-  and the countdown as a line that runs ("Denied automatically in 1:44", then what happens when it ran out). iOS draws
-  the time with `Text(timerInterval:)` and redraws once at the end (`TimelineView(.explicit)`), with no timer of its own;
-  the web redraws the line once a second while it is shown. The prompt's Yes / No are Deny / Allow (primary); a prompt
-  with more choices keeps their labels as numbered rows. Components: `ScreenCommandAskBody`, `ScreenCountdown` (iOS,
-  default style and Beautiful UI), `CommandScreenCard` (web `web/src/views/chat/CommandScreenCard.tsx`, its own chunk
-  loaded at idle; until it is in the card is the terminal's question as before); the rules in
-  `apple/Shared/CommandAsk.swift`, `web/src/lib/command-ask.ts` and `web/src/lib/command-ask-lines.ts`.
+  body: the agent's own words for the command, the command in code type (three rows on iOS until Show All; the web shows
+  four, and the toggle only when the rows cut something), the warning in plain words ("Can't confirm this command won't
+  delete files", a generic line for a warning there are no words for) with Claude Code's own warning and countdown under
+  Show original, and the countdown as a line that runs ("Denied automatically in 1:44", then what happens when it ran
+  out). iOS draws the time with `Text(timerInterval:)` and switches to the words for the end after one sleep until then,
+  with no timer of its own; the web redraws the line once a second while it is shown. The prompt's Yes / No are Deny /
+  Allow (primary); a prompt with more choices keeps their labels as numbered rows. Beautiful UI's card keeps its choice
+  rows and Send (as its permission card) and is tighter (`compact`, #5556), so Send stays in the half-page pending
+  area's view: the agent's words in the secondary type close over the command (as that card's reason), two rows of the
+  command, the countdown beside the warning where the row has room. Components: `ScreenCommandAskBody`,
+  `ScreenCountdown` (iOS, default style and Beautiful UI), `CommandScreenCard` (web
+  `web/src/views/chat/CommandScreenCard.tsx`, its own chunk loaded when the first such card shows; until it is in the
+  card is the terminal's question as before); the rules in `apple/Shared/CommandAsk.swift`, `web/src/lib/command-ask.ts`
+  and `web/src/lib/command-ask-lines.ts`.
 - **Buttons**: for a tool approval, in this order: Deny, Always Allow for This Session, Allow Once (primary). High-risk actions offer no "always" and ask twice.
 - **Secret hand-off (#3962)**: the card that hands a provider's secret values to one Agent run is a permission card with the tool
   approval's title ("Waiting for your approval") and buttons (Deny, Always allow, Allow); its body names each variable with the

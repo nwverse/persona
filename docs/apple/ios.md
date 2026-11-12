@@ -478,7 +478,7 @@ Chat page:
   Other answer… first number for Type something then text+Enter (`Resolution.preKeys`), Chat instead sends Chat about this number; raw terminal,
   keys/input under View terminal; unparseable dialog shows terminal directly. DEBUG `-showSampleScreen YES`.
   A command's permission prompt (the hub's `dialog.command`, #5266) reads as a tool approval instead: "Claude Wants to Run a Command", the agent's words,
-  the command (`ScreenCommandAskBody`, four rows until Show All), the warning in plain words (Show Original: Claude Code's own), the countdown running
+  the command (`ScreenCommandAskBody`, three rows until Show All, two in Beautiful UI), the warning in plain words (Show Original: Claude Code's own), the countdown running
   (`ScreenCountdown`), Deny / Allow for its No / Yes (`ScreenParser.Dialog.allowDeny`). Mock: `MOCK_SCREEN_DANGER=before|after`.
 - Interaction panel above input: questions (`QuestionForm`, iOS grouped list, question + rounded choice group, terminal-style numbered circles become checks, "(Recommended)" shown as Recommended badge but original sent; Other answer… last row becomes input on tap; single-question single-choice submits immediately, multiple title "Heading · 1/2", small Previous / Next / Submit below, auto-next after single choice; `-showSampleQuestion YES`), plans (Markdown + full screen, Approve and run automatically /
   Approve and auto-accept edits / Request changes with feedback), permissions (Allow / Deny / Always allow this session), terminal (screen + parsed choices + keys + text).
