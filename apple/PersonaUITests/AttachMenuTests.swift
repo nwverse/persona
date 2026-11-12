@@ -21,8 +21,9 @@ final class AttachMenuTests: XCTestCase {
     private var shots: Bool { ProcessInfo.processInfo.environment["PERSONA_SHOTS"] != nil }
     /// Both looks when screenshots are kept; light alone otherwise.
     private var schemes: [String] { shots ? ["light", "dark"] : ["light"] }
-    /// The default style, and BeautifulUI's when screenshots are kept (its components, the same composer in the shell).
-    private var styles: [String] { shots ? ["glass", "beautiful"] : ["glass"] }
+    /// The default style and BeautifulUI's when screenshots are kept (its components, the same composer in the shell);
+    /// otherwise the run's (`UITestStyle`).
+    private var styles: [String] { shots ? ["glass", "beautiful"] : [UITestStyle.name] }
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -240,17 +241,19 @@ final class AttachMenuTests: XCTestCase {
         app.descendants(matching: .any).matching(NSPredicate(format: "identifier == %@ OR label == %@", "attach-menu-commands", "快捷指令")).firstMatch
     }
 
-    /// Always with a style: the app writes the style it launched with back to its settings on a fresh install.
-    @MainActor private func launch(_ extra: [String], scheme: String, style: String = "glass") -> XCUIApplication {
+    /// Always with a style: the app writes the style it launched with back to its settings on a fresh install. This test
+    /// names its styles itself, so not `launchPinned()`: its `-ui.style` comes later and wins, and the BeautifulUI
+    /// screenshots came out in Liquid Glass.
+    @MainActor private func launch(_ extra: [String], scheme: String, style: String = UITestStyle.name) -> XCUIApplication {
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", pair, "-showCameraRows", "YES", "-ui.scheme", scheme, "-ui.style", style] + extra
-        app.launchPinned()
+        app.launchPersona()
         return app
     }
 
     /// The whole screen: a menu is drawn in a window of its own.
-    @MainActor private func shot(_ name: String, _ scheme: String, _ style: String = "glass") {
+    @MainActor private func shot(_ name: String, _ scheme: String, _ style: String = UITestStyle.name) {
         sleep(1)
         let s = XCUIScreen.main.screenshot()
         let file = name + (isPad ? "-ipad" : "") + (style == "glass" ? "" : "-" + style) + "-" + scheme
