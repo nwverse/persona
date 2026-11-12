@@ -9,6 +9,9 @@ import android.net.Uri
 import android.view.DragEvent
 import android.view.View
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
@@ -19,6 +22,8 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNode
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.core.content.FileProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -63,11 +68,12 @@ class ComposerDropInstrumentedTest {
     private fun show(
         state: ChatComposerState,
         service: ChatComposerService?,
+        large: () -> Boolean = { true },
         enabled: Boolean = true,
         onSend: () -> Unit = {},
     ) {
         rule.setContent {
-            CompositionLocalProvider(LocalLargeWindowInput provides true) {
+            CompositionLocalProvider(LocalLargeWindowInput provides large()) {
                 PersonaTheme(darkTheme = false, reduceMotion = true) {
                     LargeWindowComposer(SessionKey("box", "s1"), state, working = false, sending = false,
                         canClear = false, service = service, onSend = onSend, onCommand = {}, onNotice = {},
@@ -195,6 +201,48 @@ class ComposerDropInstrumentedTest {
 
         service.gate!!.complete(Unit)
         rule.waitUntil(timeoutMillis = 10_000) { state.attachments.single().path != null }
+        assertEquals(1, service.snapshot().size)
+    }
+
+    @Test fun largeWindowFlagChangesDoNotRestartUploadOrLoseDropCleanup() {
+        val state = ChatComposerState().apply { value = TextFieldValue("draft", TextRange(3)) }
+        val service = RecordingComposerService().apply { gate = CompletableDeferred() }
+        var large by mutableStateOf(true)
+        show(state, service, large = { large })
+        val description = ClipDescription("files", arrayOf("application/octet-stream"))
+        val data = ClipData(description, ClipData.Item(source("resize.txt", "resize")))
+        assertTrue(drop(description, data))
+        rule.waitUntil(timeoutMillis = 10_000) { service.snapshot().size == 1 }
+        val id = state.attachments.single().id
+        val owned = state.attachments.single().uri
+        val selection = state.value.selection
+        repeat(2) {
+            large = false
+            rule.waitForIdle()
+            rule.onNodeWithTag("composer-drop-target").assertDoesNotExist()
+            large = true
+            rule.waitForIdle()
+            assertEquals(1, service.snapshot().size)
+            assertEquals(id, state.attachments.single().id)
+            assertEquals(selection, state.value.selection)
+        }
+        service.gate!!.complete(Unit)
+        rule.waitUntil(timeoutMillis = 10_000) { state.attachments.single().path != null }
+        assertEquals(1, service.snapshot().size)
+
+        val otherUri = source("other.txt", "other").toString()
+        state.attachments = state.attachments + ComposerAttachment("other", "other.txt", otherUri, false,
+            path = "/remote/other.txt", uploadState = DraftUploadState.Uploaded)
+        rule.waitForIdle()
+        large = false
+        rule.waitForIdle()
+        state.attachments = emptyList()
+        rule.waitUntil(timeoutMillis = 5_000) { !readable(rule.activity, owned) }
+        assertTrue(readable(rule.activity, otherUri))
+        large = true
+        rule.waitForIdle()
+        assertFalse(readable(rule.activity, owned))
+        assertTrue(readable(rule.activity, otherUri))
         assertEquals(1, service.snapshot().size)
     }
 

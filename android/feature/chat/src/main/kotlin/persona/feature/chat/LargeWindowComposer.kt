@@ -7,13 +7,13 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draganddrop.toAndroidDragEvent
 import androidx.compose.ui.input.key.Key
@@ -42,8 +42,8 @@ import persona.core.designsystem.LocalLargeWindowInput
 import persona.core.designsystem.ModelPillWidth
 
 /**
- * The production chat composer with large-window input integrations. Compact and wide-phone windows call the original
- * composable directly, with no wrapper layout, key handling or drop target. Sending remains the caller's [onSend].
+ * The production chat composer with large-window input integrations. Compact windows disable every integration but keep
+ * the same neutral composition identity, so resizing cannot cancel an upload or move the composer to another parent.
  */
 @Composable
 fun LargeWindowComposer(
@@ -76,6 +76,7 @@ fun LargeWindowComposer(
     onBlocked: () -> Unit = {},
     modelPill: (@Composable (ModelPillWidth) -> Unit)? = null,
 ) {
+    val largeWindow = LocalLargeWindowInput.current
     val composer: @Composable () -> Unit = {
         ChatComposer(
             session = session, state = state, working = working, sending = sending, canClear = canClear,
@@ -87,23 +88,28 @@ fun LargeWindowComposer(
             blockedLabel = blockedLabel, onBlocked = onBlocked, modelPill = modelPill,
         )
     }
-    if (!LocalLargeWindowInput.current) {
-        composer()
-        return
-    }
 
     val currentOnSend by rememberUpdatedState(onSend)
     val sendAction = remember { { currentOnSend() } }
     val hasContent = state.hasContent || extraContent
     val canSend = enabled && state.ready && !sending
     val sendEnabled = canSend && hasContent && blockedLabel == null
-    val hardware = remember(sendEnabled) { ComposerHardwareActions(send = if (sendEnabled) sendAction else null) }
+    val collapseForSend = remember(state) {
+        { collapse: () -> Unit ->
+            val focusRequest = state.focusRequest
+            collapse()
+            state.focusRequest = focusRequest
+        }
+    }
+    val hardware = remember(sendEnabled, collapseForSend) {
+        ComposerHardwareActions(send = if (sendEnabled) sendAction else null, collapseForSend = collapseForSend)
+    }
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var dropHover by remember { mutableStateOf(false) }
     var dropImporting by remember { mutableStateOf(false) }
-    val canDrop = visible && enabled && service != null && !sending && blockedLabel == null && !dropImporting
+    val canDrop = largeWindow && visible && enabled && service != null && !sending && blockedLabel == null && !dropImporting
     val currentCanDrop by rememberUpdatedState(canDrop)
     val dropFailure = stringResource(R.string.chat_composer_drop_failed)
     val currentDrop by rememberUpdatedState<(DragEvent) -> Boolean> { event ->
@@ -121,6 +127,7 @@ fun LargeWindowComposer(
                             importDroppedAttachment(context, uri, mediaCount)
                         }
                         result.attachment?.let { attachment ->
+                            ComposerDropCleanup.track(state, context)
                             state.beginEdit()
                             state.attachments += attachment
                         }
@@ -149,56 +156,49 @@ fun LargeWindowComposer(
         )
     }
     LaunchedEffect(canDrop) { if (!canDrop) dropHover = false }
-
-    // Only copies owned by this draft are deleted, after removal or a send that clears it. Other sessions' drops and
-    // edited-photo sources stay; no directory sweep can remove an attachment still in use elsewhere.
-    LaunchedEffect(state) {
-        var before = state.attachments to state.photoEdits.values.map { it.sourceUri }
-        snapshotFlow {
-            state.attachments to state.photoEdits.filterKeys { id -> state.attachments.any { it.id == id } }.values.map { it.sourceUri }
-        }.collect { now ->
-            val gone = leftDrops(before.first, now.first, context.packageName, before.second, now.second)
-            before = now
-            if (gone.isNotEmpty()) withContext(Dispatchers.IO) { gone.forEach { deleteDrop(context, it) } }
-        }
+    SideEffect {
+        if (state.attachments.any { isDropUri(it.uri, context.packageName) }) ComposerDropCleanup.track(state, context)
     }
 
+    val integrationModifier = if (largeWindow) Modifier.onPreviewKeyEvent { event ->
+        val action = composerKeyAction(ComposerKeyInput(
+            key = when (event.key) {
+                Key.Enter, Key.NumPadEnter -> ComposerKey.Enter
+                Key.Escape -> ComposerKey.Escape
+                else -> ComposerKey.Other
+            },
+            press = if (event.type == KeyEventType.KeyDown) ComposerKeyPress.Down else ComposerKeyPress.Up,
+            repeatCount = event.nativeKeyEvent.repeatCount,
+            ctrlPressed = event.isCtrlPressed,
+            metaPressed = event.isMetaPressed,
+            shiftPressed = event.isShiftPressed,
+            composing = state.value.composition != null,
+            canSend = canSend,
+            hasContent = hasContent,
+            blocked = blockedLabel != null,
+        ))
+        when (action) {
+            ComposerKeyAction.Send -> { sendAction(); true }
+            ComposerKeyAction.Consume -> true
+            ComposerKeyAction.Collapse,
+            ComposerKeyAction.PassThrough -> false
+        }
+    }.dragAndDropTarget(
+        shouldStartDragAndDrop = { event ->
+            currentCanDrop && composerDropAccepts(event.toAndroidDragEvent().clipDescription)
+        },
+        target = dropTarget,
+    ) else Modifier
+
     ComposerDropTargetFrame(
-        active = dropHover || dropImporting,
+        active = largeWindow && (dropHover || dropImporting),
         importing = dropImporting,
         label = stringResource(R.string.chat_composer_drop_target),
         importingLabel = stringResource(R.string.chat_composer_drop_importing),
-        modifier = Modifier.onPreviewKeyEvent { event ->
-            val action = composerKeyAction(ComposerKeyInput(
-                key = when (event.key) {
-                    Key.Enter, Key.NumPadEnter -> ComposerKey.Enter
-                    Key.Escape -> ComposerKey.Escape
-                    else -> ComposerKey.Other
-                },
-                press = if (event.type == KeyEventType.KeyDown) ComposerKeyPress.Down else ComposerKeyPress.Up,
-                repeatCount = event.nativeKeyEvent.repeatCount,
-                ctrlPressed = event.isCtrlPressed,
-                metaPressed = event.isMetaPressed,
-                shiftPressed = event.isShiftPressed,
-                composing = state.value.composition != null,
-                canSend = canSend,
-                hasContent = hasContent,
-                blocked = blockedLabel != null,
-            ))
-            when (action) {
-                ComposerKeyAction.Send -> { sendAction(); true }
-                ComposerKeyAction.Consume -> true
-                ComposerKeyAction.Collapse,
-                ComposerKeyAction.PassThrough -> false
-            }
-        }.dragAndDropTarget(
-            shouldStartDragAndDrop = { event ->
-                currentCanDrop && composerDropAccepts(event.toAndroidDragEvent().clipDescription)
-            },
-            target = dropTarget,
-        ),
+        modifier = integrationModifier,
+        enabled = largeWindow,
     ) {
-        CompositionLocalProvider(LocalComposerHardware provides hardware) {
+        CompositionLocalProvider(LocalComposerHardware provides (if (largeWindow) hardware else null)) {
             composer()
         }
     }

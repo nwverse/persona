@@ -89,7 +89,8 @@ fun ExpandedComposer(
             }
             (event.key == Key.Enter || event.key == Key.NumPadEnter) && (event.isCtrlPressed || event.isMetaPressed) -> {
                 if (event.type == KeyEventType.KeyDown && event.nativeKeyEvent.repeatCount == 0 && hardware.send != null) {
-                    onCollapse()
+                    val collapse = hardware.collapseForSend
+                    if (collapse != null) collapse(onCollapse) else onCollapse()
                     hardware.send.invoke()
                 }
                 true

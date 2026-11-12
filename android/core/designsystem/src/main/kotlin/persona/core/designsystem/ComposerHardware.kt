@@ -21,6 +21,8 @@ import androidx.compose.ui.semantics.stateDescription
  */
 data class ComposerHardwareActions(
     val send: (() -> Unit)? = null,
+    /** Collapse for sending without the Esc path's focus restoration. */
+    val collapseForSend: ((onCollapse: () -> Unit) -> Unit)? = null,
 )
 
 val LocalComposerHardware = staticCompositionLocalOf<ComposerHardwareActions?> { null }
@@ -36,6 +38,7 @@ fun ComposerDropTargetFrame(
     label: String,
     importingLabel: String,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
     content: @Composable () -> Unit,
 ) {
     val shape = when (PersonaTheme.style) {
@@ -44,8 +47,9 @@ fun ComposerDropTargetFrame(
         AppStyle.Board -> RoundedCornerShape(Tokens.Radius.control)
     }
     val spec = if (PersonaTheme.reduceMotion) snap<Color>() else tween(PersonaTheme.motion.standard)
-    val edge by animateColorAsState(if (active) PersonaTheme.palette.accent else Color.Transparent, spec, label = "composer drop")
-    Box(modifier.border(Tokens.Size.lineMedium, edge, shape).testTag("composer-drop-target").semantics {
-        if (active) stateDescription = if (importing) importingLabel else label
-    }, content = { content() })
+    val edge by animateColorAsState(if (enabled && active) PersonaTheme.palette.accent else Color.Transparent, spec, label = "composer drop")
+    Box(modifier.border(Tokens.Size.lineMedium, edge, shape)
+        .then(if (enabled) Modifier.testTag("composer-drop-target") else Modifier).semantics {
+            if (enabled && active) stateDescription = if (importing) importingLabel else label
+        }, content = { content() })
 }

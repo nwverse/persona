@@ -14,6 +14,8 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -140,6 +142,7 @@ class LargeWindowComposerTest {
         val state = ChatComposerState().apply { value = TextFieldValue(long, TextRange(12)) }
         var sent = 0
         show(state) { sent++ }
+        val focusBeforeSend = state.focusRequest
         rule.onNodeWithTag("composer-expand").performClick()
         rule.onNodeWithTag("composer-expanded").assertIsDisplayed()
         rule.onNode(hasSetTextAction() and isFocused()).performKeyInput {
@@ -149,13 +152,18 @@ class LargeWindowComposerTest {
         assertEquals(1, sent)
         assertEquals(long, state.value.text)
         assertEquals(TextRange(12), state.value.selection)
+        assertEquals("hardware send must not request small-field focus", focusBeforeSend, state.focusRequest)
+        assertFalse(state.focused)
 
+        val focusBeforeEscape = state.focusRequest
         rule.onNodeWithTag("composer-expand").performClick()
         rule.onNode(hasSetTextAction() and isFocused()).performKeyInput { pressKey(Key.Escape) }
         rule.onNodeWithTag("composer-expanded").assertDoesNotExist()
         assertEquals(1, sent)
         assertEquals(long, state.value.text)
         assertEquals(TextRange(12), state.value.selection)
+        assertEquals("Escape restores small-field focus", focusBeforeEscape + 1, state.focusRequest)
+        assertTrue(state.focused)
     }
 
     @Test fun compactDoesNotInstallTheNewSendShortcut() {
