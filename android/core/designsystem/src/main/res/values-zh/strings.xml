@@ -148,6 +148,15 @@
     <plurals name="designsystem_idle_more">
         <item quantity="other">还有 %1$d 个空闲</item>
     </plurals>
+    <plurals name="designsystem_idle_count">
+        <item quantity="other">%1$d 个空闲</item>
+    </plurals>
+    <plurals name="designsystem_idle_hide">
+        <item quantity="other">收起空闲的 %1$d 个</item>
+    </plurals>
+    <plurals name="designsystem_idle_show">
+        <item quantity="other">展开 %1$d 个空闲的 Agent</item>
+    </plurals>
     <string name="designsystem_folded">已折叠</string>
     <string name="designsystem_attachment_uploading">正在上传</string>
     <string name="designsystem_attachment_waiting">等待上传</string>

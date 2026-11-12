@@ -144,6 +144,7 @@
     <string name="agents_repo_main_checkout">主工作树</string>
     <string name="agents_repo_worktree">工作树</string>
     <string name="agents_repo_actions">仓库操作</string>
+    <string name="agents_idle_repositories">空闲的仓库</string>
     <string name="agents_card_question">Claude 在问你</string>
     <string name="agents_card_question_by">%1$s 在问你</string>
     <string name="agents_card_permission">在等你批准</string>

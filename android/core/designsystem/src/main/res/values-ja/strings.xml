@@ -148,6 +148,15 @@
     <plurals name="designsystem_idle_more">
         <item quantity="other">ほかに待機中%1$d件</item>
     </plurals>
+    <plurals name="designsystem_idle_count">
+        <item quantity="other">アイドル%1$d件</item>
+    </plurals>
+    <plurals name="designsystem_idle_hide">
+        <item quantity="other">アイドルの%1$d個を折りたたむ</item>
+    </plurals>
+    <plurals name="designsystem_idle_show">
+        <item quantity="other">アイドル中の%1$d個のエージェントを展開</item>
+    </plurals>
     <string name="designsystem_folded">折りたたみ済み</string>
     <string name="designsystem_attachment_uploading">アップロード中</string>
     <string name="designsystem_attachment_waiting">アップロード待ち</string>

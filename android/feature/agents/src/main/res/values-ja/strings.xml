@@ -144,6 +144,7 @@
     <string name="agents_repo_main_checkout">メインのワークツリー</string>
     <string name="agents_repo_worktree">ワークツリー</string>
     <string name="agents_repo_actions">リポジトリの操作</string>
+    <string name="agents_idle_repositories">アイドル中のリポジトリ</string>
     <string name="agents_card_question">Claudeから質問があります</string>
     <string name="agents_card_question_by">%1$sから質問があります</string>
     <string name="agents_card_permission">承認を待っています</string>
