@@ -7,6 +7,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -17,10 +18,16 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.setMain
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestDispatcher
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.ContinuationInterceptor
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import org.junit.Assert.*
+import org.junit.After
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
@@ -80,6 +87,8 @@ class PhoneToolsRuntimeConcurrencyTest {
         connection: FakeConnection,
         execute: (suspend (String, JsonObject) -> PhoneToolResult)? = null,
     ): PhoneToolsRuntime {
+        val scheduler = (scope.coroutineContext[ContinuationInterceptor] as TestDispatcher).scheduler
+        Dispatchers.setMain(StandardTestDispatcher(scheduler))
         val context = ApplicationProvider.getApplicationContext<Context>()
         // Grant every runtime permission the tools check, so calls reach the backend instead of being refused.
         org.robolectric.Shadows.shadowOf(context as android.app.Application).grantPermissions(
@@ -96,6 +105,8 @@ class PhoneToolsRuntimeConcurrencyTest {
         for (source in PhoneSource.entries) rt.settings.setEnabled(source, true)
     }
 
+    @After fun resetMainDispatcher() = Dispatchers.resetMain()
+
     /**
      * #4456: transport delivers write-wait, two reads and a second write; the reads complete while the first
      * write still waits for the user. The semaphore caps in-flight calls without losing any.
@@ -103,7 +114,7 @@ class PhoneToolsRuntimeConcurrencyTest {
     @Test fun aWaitingWriteDoesNotStopLaterReadsAndTheSecondWriteQueues() = runTest {
         val transport = FakeTransport()
         val connection = FakeConnection()
-        val scope = CoroutineScope(coroutineContext)
+        val scope = CoroutineScope(coroutineContext + SupervisorJob())
         val readResults = mutableListOf<String>()
         val rt = runtime(scope, transport, connection) { name, _ ->
             if (name == "phone_device_info" || name == "phone_calendar_events") readResults += name
@@ -155,7 +166,7 @@ class PhoneToolsRuntimeConcurrencyTest {
     @Test fun aWriteResultThatCouldNotBeSentIsHeldAndFlushedOnReconnect() = runTest {
         val transport = FakeTransport()
         val connection = FakeConnection()
-        val scope = CoroutineScope(coroutineContext)
+        val scope = CoroutineScope(coroutineContext + SupervisorJob())
         var executions = 0
         val rt = runtime(scope, transport, connection) { _, _ ->
             executions++
@@ -200,7 +211,7 @@ class PhoneToolsRuntimeConcurrencyTest {
     @Test fun theWatcherDoesNotKillAConfirmedWriteWhoseExecuteHasStarted() = runTest {
         val transport = FakeTransport()
         val connection = FakeConnection()
-        val scope = CoroutineScope(coroutineContext)
+        val scope = CoroutineScope(coroutineContext + SupervisorJob())
         val executeStarted = CompletableDeferred<Unit>()
         val executeGate = CompletableDeferred<Unit>()
         val rt = runtime(scope, transport, connection) { _, _ ->
@@ -251,7 +262,7 @@ class PhoneToolsRuntimeConcurrencyTest {
     @Test fun backpressureBoundsHowManyCallsStartExecuting() = runTest {
         val transport = FakeTransport()
         val connection = FakeConnection()
-        val scope = CoroutineScope(coroutineContext)
+        val scope = CoroutineScope(coroutineContext + SupervisorJob())
         val gate = CompletableDeferred<Unit>()
         var started = 0
         val rt = runtime(scope, transport, connection) { _, _ ->
@@ -282,7 +293,7 @@ class PhoneToolsRuntimeConcurrencyTest {
     @Test fun aCallWaitingForAPermitDoesNotSurviveAReconnect() = runTest {
         val transport = FakeTransport()
         val connection = FakeConnection()
-        val scope = CoroutineScope(coroutineContext)
+        val scope = CoroutineScope(coroutineContext + SupervisorJob())
         val gate = CompletableDeferred<Unit>()
         var executions = 0
         val rt = runtime(scope, transport, connection) { _, _ ->

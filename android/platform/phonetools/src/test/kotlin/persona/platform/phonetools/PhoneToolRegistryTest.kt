@@ -9,6 +9,8 @@ import persona.core.contracts.api.*
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -294,11 +296,41 @@ class PhoneToolRegistryTest {
         val writeArgs = buildJsonObject {
             put("title", "测试日程"); put("start", "2026-11-01T10:00:00+08:00"); put("end", "2026-11-01T11:00:00+08:00")
         }
+        val failures = listOf(
+            PhoneToolFailure(PhoneToolFailure.Kind.Denied, "write failed"),
+            IllegalArgumentException("invalid after approval"),
+            SecurityException("permission revoked after approval"),
+            IllegalStateException("socket closed mid-write"),
+            RuntimeException("unexpected mid-write"),
+        )
+        var failure: Exception = failures.first()
         val registry = PhoneToolRegistry({ setOf(PhoneSource.Calendar) }, { true }, { true }, { _, _ -> true },
-            { PhoneConfirmation.Allowed }, { _, _ -> throw IllegalStateException("socket closed mid-write") })
-        val result = registry.call(PhoneToolCall("uncertain-exception", "phone_calendar_create_event", writeArgs))
-        assertTrue(result.isError)
-        assertTrue(text(result).contains("不确定") || text(result).contains("did not confirm"))
+            { PhoneConfirmation.Allowed }, { _, _ -> throw failure })
+        failures.forEachIndexed { index, expected ->
+            failure = expected
+            val result = registry.call(PhoneToolCall("uncertain-exception-$index", "phone_calendar_create_event", writeArgs))
+            assertTrue("unexpected result for ${expected::class.simpleName}", result.isError)
+            assertTrue("ordinary failure leaked for ${expected::class.simpleName}: ${text(result)}",
+                text(result).contains("不确定") || text(result).contains("did not confirm"))
+        }
+    }
+
+    @Test fun aFatalErrorIsRethrownToLeaderAndFollowerInsteadOfBecomingAToolFailure() = runTest {
+        val writeArgs = buildJsonObject {
+            put("title", "测试日程"); put("start", "2026-11-01T10:00:00+08:00"); put("end", "2026-11-01T11:00:00+08:00")
+        }
+        val registry = PhoneToolRegistry({ setOf(PhoneSource.Calendar) }, { true }, { true }, { _, _ -> true },
+            { PhoneConfirmation.Allowed }, { _, _ -> throw LinkageError("native library missing") })
+        val call = PhoneToolCall("fatal-write", "phone_calendar_create_event", writeArgs)
+        supervisorScope {
+            val leader = async { registry.call(call) }
+            runCurrent()
+            val follower = async { registry.call(call) }
+            runCurrent()
+            assertEquals("native library missing", assertThrows(LinkageError::class.java) { runBlocking { leader.await() } }.message)
+            assertThrows(LinkageError::class.java) { runBlocking { follower.await() } }
+        }
+        assertTrue(registry.writesInFlight.value.isEmpty())
     }
 
     /** A plain read timeout keeps its existing wording (not the uncertain one). */

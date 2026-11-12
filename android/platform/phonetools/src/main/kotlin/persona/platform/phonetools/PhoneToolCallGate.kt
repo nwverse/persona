@@ -50,12 +50,12 @@ internal class PhoneToolCallGate(
     }
 
     /**
-     * The leader's coroutine was cancelled (pairing close, watcher kill). Followers waiting for the result would
-     * otherwise wait forever; cancel their deferred so they propagate `CancellationException` to their own scope
-     * and are not silently stuck. The completed cache is left alone.
+     * The leader was cancelled or failed fatally. Followers must not wait forever: cancellation is propagated as
+     * cancellation, while any other [Throwable] completes the deferred exceptionally without caching a tool result.
      */
-    suspend fun fail(callId: String, cause: CancellationException) = lock.withLock {
-        inFlight.remove(callId)?.cancel(cause)
+    suspend fun fail(callId: String, cause: Throwable) = lock.withLock {
+        val deferred = inFlight.remove(callId) ?: return@withLock
+        if (cause is CancellationException) deferred.cancel(cause) else deferred.completeExceptionally(cause)
     }
 
     /** Test seam: how many call-ids have a cached terminal result. */

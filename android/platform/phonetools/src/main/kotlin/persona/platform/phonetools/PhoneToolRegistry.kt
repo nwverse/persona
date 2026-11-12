@@ -53,17 +53,17 @@ class PhoneToolRegistry(
                 } catch (cancelled: CancellationException) {
                     gate.fail(call.callId, cancelled)
                     throw cancelled
-                } catch (t: Throwable) {
-                    // runCall converts every expected failure into a result. If something still escapes (a
-                    // future tool, a confirmation summary that throws an unexpected type, a refusal check
-                    // that blows up), the leader must not leave the in-flight slot forever: followers would
-                    // wait indefinitely and the exception would escape the runtime's launch. Convert it into
-                    // a failure result and complete the leader so the gate is released and followers answer.
-                    // A confirmed write that already entered execute is handled inside executeCall and still
-                    // caches uncertain; this branch never re-executes anything.
-                    val result = PhoneToolText.failed(t as? Exception ?: RuntimeException(t))
+                } catch (error: Exception) {
+                    // Expected tool failures are results already. An unexpected ordinary Exception still releases
+                    // the leader and answers followers instead of leaving them waiting forever.
+                    val result = PhoneToolText.failed(error)
                     gate.complete(call.callId, result)
                     result
+                } catch (fatal: Throwable) {
+                    // Fatal Errors are never converted into an ordinary tool failure. Wake followers with the same
+                    // error and clear the leader before preserving the process/runtime failure semantics.
+                    gate.fail(call.callId, fatal)
+                    throw fatal
                 }
             }
         }
@@ -119,9 +119,15 @@ class PhoneToolRegistry(
                 }
                 throw cancelled
             }
-            catch (failure: PhoneToolFailure) { PhoneToolText.failure(failure, tool.source) }
-            catch (invalid: IllegalArgumentException) { PhoneToolText.invalid(invalid.message ?: "invalid arguments") }
-            catch (_: SecurityException) { PhoneToolText.denied(tool.source) }
+            catch (failure: PhoneToolFailure) {
+                if (isConfirmedWrite) PhoneToolText.uncertain() else PhoneToolText.failure(failure, tool.source)
+            }
+            catch (invalid: IllegalArgumentException) {
+                if (isConfirmedWrite) PhoneToolText.uncertain() else PhoneToolText.invalid(invalid.message ?: "invalid arguments")
+            }
+            catch (_: SecurityException) {
+                if (isConfirmedWrite) PhoneToolText.uncertain() else PhoneToolText.denied(tool.source)
+            }
             catch (unavailable: IllegalStateException) {
                 if (isConfirmedWrite) PhoneToolText.uncertain() else PhoneToolText.unavailable(unavailable.message)
             }
