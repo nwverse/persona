@@ -367,3 +367,13 @@ the same cause. Recheck scrolling, folding and layout separately with synthetic 
   request arrives while it is still writing a big update; asked for early only after a single rectangle of at most
   64 KB, typed text still came back later (p50 374 ms against 215 for stop-and-wait over a 25 ms, 30 Mbit/s link,
   slower in all 5 interleaved pairs, median +81 ms). The app asks for the next update once one is in (`RFBFrameTests.nextUpdateIsAskedOnceAnUpdateIsIn`).
+
+## The Dock draws a badge only for an app that asked for notifications (2026-11-12, #5824)
+
+- `NSApp.dockTile.badgeLabel` was set ("6", read back with `lsappinfo info -only StatusLabel -app <bundle id>`), yet
+  the Dock drew nothing: the build ran in Demo Mode, which never asks for notification permission. Once the same build
+  was paired (so `PushRegistrar` asked, with `.badge`), the Dock drew the number. Its switch is System Settings ›
+  Notifications › Badge application icon (not tried here).
+- To photograph the Dock, pair the build (the mock hub is enough) so it asks; check the label with `lsappinfo` before
+  blaming the code. Run such builds under a bundle id of their own (`PERSONA_BUNDLE_ID=…` on the `xcodebuild` line):
+  the installed app's container and preferences stay untouched.

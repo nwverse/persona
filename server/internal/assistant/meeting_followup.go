@@ -247,6 +247,7 @@ func (s *Service) followupSeed(ctx context.Context, e *kb.Engine, rec kb.Recordi
 		}
 	}
 	if l, _, err := e.LiveRead(rec.ID); err == nil {
+		d.Topics = meetingTopics(l.Topics)
 		for _, a := range l.Asks {
 			if a.State == askAnswered {
 				q := a.Question

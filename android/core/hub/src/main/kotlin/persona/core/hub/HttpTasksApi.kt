@@ -208,6 +208,13 @@ class HttpTasksApi internal constructor(
         call(path("later", questionId, "handled"), "POST", JsonObject(emptyMap()))
     }
 
+    override suspend fun ruleAlways(suggestionId: String): persona.core.contracts.RuleSuggestionMade =
+        JsonCodec.decodeFromJsonElement(call(path("assistant", "rule-suggestions", suggestionId, "always"), "POST", JsonObject(emptyMap())))
+
+    override suspend fun ruleNotNow(suggestionId: String) {
+        call(path("assistant", "rule-suggestions", suggestionId, "not-now"), "POST", JsonObject(emptyMap()))
+    }
+
     override suspend fun removeTask(todoId: String) {
         call(path("todos", todoId), "DELETE")
     }

@@ -363,19 +363,31 @@ export interface SkillItem {
 export type ContentSource = "package" | "data" | (string & {});
 export const CONTENT_SOURCES = ["package", "data"] as const;
 
-export type PromptKind = "instructions" | "quick" | (string & {});
-export const PROMPT_KINDS = ["instructions", "quick"] as const;
+export type PromptKind = "instructions" | "quick" | "project_context" | "inbox_context" | (string & {});
+export const PROMPT_KINDS = ["instructions", "quick", "project_context", "inbox_context"] as const;
 
 /**
  * A prompt: instructions (a .md of the package, or with source data of the data directory, added to the assistant's
- * CLAUDE.md) or quick (a template the apps offer in the message box).
+ * CLAUDE.md), quick (a template the apps offer in the message box), project_context (a directory of the data
+ * directory whose <project slug>.md files go into a new Agent's project background) or inbox_context (a .md of the
+ * data directory added to the Inbox's triage and draft prompts).
  */
 export interface PromptItem {
   id: string;
   kind: PromptKind;
   source?: ContentSource;
-  /** instructions: the .md file (with source data: at most 6 KB, adopted at most once a day). */
+  /**
+   * instructions: the .md file (with source data: at most 6 KB, adopted at most once a day); inbox_context: the .md
+   * file (1 KB used).
+   */
   file?: string;
+  /** project_context: the directory of <project slug>.md files (1.5 KB of each used). */
+  dir?: string;
+  /**
+   * inbox_context: a text file of sentences, one a line, a draft must not repeat word for word (64 KB used); only
+   * checked, never in a prompt.
+   */
+  never_quote?: string;
   /** quick: what the apps show. */
   title?: string;
   /** quick: what goes into the message box. */
@@ -5147,9 +5159,10 @@ export interface ModelRefusal {
 }
 
 /**
- * error.code of the assistant calls besides permission_denied (data {scope: "assistant.read"}): invalid_params;
- * not_found (assistant.messages: no such conversation in the assistant's own space); assistant_offline (the manager
- * is away: try again); machine_offline (the assistant's computer is not connected or not set up: try again).
+ * error.code of the assistant calls besides permission_denied (data {scope: "assistant.read"}, or
+ * "assistant.memory.read" for assistant.memory): invalid_params; not_found (assistant.messages: no such conversation
+ * in the assistant's own space); assistant_offline (the manager is away: try again); machine_offline (the assistant's
+ * computer is not connected or not set up: try again).
  */
 export type AssistantErrorCode = "invalid_params" | "not_found" | "assistant_offline" | "machine_offline" | (string & {});
 export const ASSISTANT_ERROR_CODES = ["invalid_params", "not_found", "assistant_offline", "machine_offline"] as const;
@@ -5218,6 +5231,43 @@ export type AssistantRole = "user" | "assistant" | (string & {});
 export const ASSISTANT_ROLES = ["user", "assistant"] as const;
 
 /**
+ * assistant.memory (assistant.memory.read): the assistant's memory entries of its own space (never the health
+ * space's), by name. Read-only.
+ */
+export interface AssistantMemoryParams {
+  /**
+   * Return each entry's text too: cut at 16 KB each, and left out once a page holds 512 KB of text (truncated says
+   * so).
+   */
+  include_content?: boolean;
+}
+
+export interface AssistantMemoryEntry {
+  /** The entry's file name. */
+  name: string;
+  /** The frontmatter's description; empty without one. */
+  description?: string;
+  /** The frontmatter's type (or metadata.type); empty without one. */
+  type?: string;
+  /** The file's size in bytes. */
+  size: number;
+  /** When the file was made, where the computer's file system keeps it. */
+  created?: string;
+  modified: string;
+  /** With include_content: the text, perhaps cut. */
+  content?: string;
+  /** content was cut or left out for its size. */
+  truncated?: boolean;
+}
+
+/**
+ * An assistant without memory (none written yet, or the feature off) has no entries.
+ */
+export interface AssistantMemoryResult {
+  entries: AssistantMemoryEntry[];
+}
+
+/**
  * next_seq is set while there is more to read (pass it as after_seq), even when this page has no messages.
  */
 export interface AssistantMessagesResult {
@@ -5232,10 +5282,10 @@ export interface AssistantDataStatusParams {
 }
 
 /**
- * What the assistant reads of the contribution: adopted (the content as it is now; skills: sent), pending
- * (instructions: an older version, the new one waits for next_adopt_at), kept (instructions: an older version, the
- * new one cannot be used, see reason), none (nothing: none written yet, none usable, or the extension or contribution
- * is switched off).
+ * What the assistant reads of the contribution: adopted (the content as it is now; skills: sent; project and Inbox
+ * context: used whenever their prompt is built), pending (instructions: an older version, the new one waits for
+ * next_adopt_at), kept (instructions: an older version, the new one cannot be used, see reason), none (nothing: none
+ * written yet, none usable, or the extension or contribution is switched off).
  */
 export type AssistantDataState = "adopted" | "pending" | "kept" | "none" | (string & {});
 export const ASSISTANT_DATA_STATES = ["adopted", "pending", "kept", "none"] as const;
@@ -5255,7 +5305,7 @@ export const ASSISTANT_DATA_REASONS = ["too_large", "invalid", "not_regular", "u
 export interface AssistantDataItem {
   /** Its id, as the manifest has it. */
   contribution: string;
-  /** instructions or skills. */
+  /** instructions, skills, project_context or inbox_context. */
   kind: string;
   /** Its file or directory, relative to the data directory. */
   path: string;
@@ -5286,6 +5336,12 @@ export interface AssistantDataItem {
   next_adopt_at?: string;
   /** skills: the skills sent. */
   skills?: string[];
+  /** project_context: the projects (slugs) with a file in use. */
+  files?: string[];
+  /** project_context, inbox_context: some content is used cut at its limit (detail says which). */
+  truncated?: boolean;
+  /** inbox_context: how many sentences drafts are checked against. */
+  never_quote?: number;
 }
 
 export interface AssistantDataStatusResult {
@@ -5880,6 +5936,7 @@ export const CALLS: Record<string, Call> = {
   "model.complete": { from: "program", params: "ModelCompleteParams", result: "ModelCompleteResult" },
   "assistant.conversations": { from: "program", params: "AssistantConversationsParams", result: "AssistantConversationsResult" },
   "assistant.messages": { from: "program", params: "AssistantMessagesParams", result: "AssistantMessagesResult" },
+  "assistant.memory": { from: "program", params: "AssistantMemoryParams", result: "AssistantMemoryResult" },
   "assistant.data_status": { from: "program", params: "AssistantDataStatusParams", result: "AssistantDataStatusResult" },
   "storage.request": { from: "program", params: "StorageEmptyParams", result: "StorageRequestResult" },
   "storage.get": { from: "program", params: "StorageKeyParams", result: "StorageEntry" },

@@ -137,6 +137,7 @@ struct NotificationSettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .overlay { if page?.spinning != false { ProgressView() } }
         .task { await load() }
+        .task { await refreshPush() } // the hub's way to this device now, not the one kept since launch (#1859)
         .onChange(of: model.isLive) { _, live in
             if live { Task { await page?.reloadIfNeeded() } } // the hub is back: read what failed
         }
@@ -154,6 +155,7 @@ struct NotificationSettingsView: View {
             Task {
                 system = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
                 await page?.reloadIfNeeded()
+                await refreshPush()
             }
             #if os(iOS)
             activitiesAllowed = ActivityAuthorizationInfo().areActivitiesEnabled
@@ -180,7 +182,7 @@ struct NotificationSettingsView: View {
     private var pushStatus: PushStatus {
         var health = PushHealthStore.shared.health
         #if DEBUG
-        // `-showPushHealth refused | moved | unreachable | relay | direct | failed | unknown`: a sample, for screenshots.
+        // `-showPushHealth refused | moved | unreachable | relay | direct | failed | unknown | unchecked`: a sample, for screenshots.
         if let sample = UserDefaults.standard.string(forKey: "showPushHealth") { health = .sample(sample, group: model.hub?.group ?? "") }
         #endif
         return health.status(group: model.hub?.group ?? "", allowed: system.map { _ in !systemOff })
@@ -291,6 +293,12 @@ struct NotificationSettingsView: View {
     private var prefs: NotifyPrefs? {
         get { page?.prefs }
         nonmutating set { page?.prefs = newValue }
+    }
+
+    /// Background Push's route at this page's hub, read again (#1859).
+    private func refreshPush() async {
+        guard let api = model.api, let group = model.hub?.group, !model.isDemo else { return }
+        await PushRegistrar.shared.refreshRoute(group: group) { try await api.deviceTokens(timeout: 15) }
     }
 
     private func load() async {
