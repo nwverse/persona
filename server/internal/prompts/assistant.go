@@ -80,7 +80,7 @@ type SnapshotMachine struct {
 
 // SnapshotApp is the Persona app on one kind of device as it last said its version (assistant/snapshot_app). No
 // time: the node sends only the snapshot's changed lines, and a reconnect must not make this one change.
-// Platform: ios | ipados | watchos | macos | visionos | android.
+// Platform: ios | ipados | watchos | macos | visionos | android | harmony.
 type SnapshotApp struct {
 	Platform, Version, Build, OS string // Build, OS: "" when not said
 	Simulator                    bool
