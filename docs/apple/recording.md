@@ -60,6 +60,7 @@ In-person meetings and hallway discussions went unrecorded: the recorder sat fou
 | Where | How | Code |
 | --- | --- | --- |
 | The drawer | **Record**, first among the places: starts recording and opens Recordings; while a recording runs the row reads "Recording… Open" and opens it | `AssistantSidebar.meetingRow`, `ShellView.startMeeting` |
+| Persona's main conversation | **Record** in the composer's + list (the iPhone's touch and hold on +, the attach panel's More tab, the iPad's + menu; #3723), as the drawer's: starts recording and opens Recordings; while a recording runs it reads "Recording… Open" and opens it. Not in other conversations | `AttachMoreSection.common(meeting:)`, `Composer.attachMoreSections` |
 | Recordings page | **Record** (prominent, the page's one start button) at the top; below it the options, one row each: **Type** (Meeting / Note), then for a meeting Persona, Private Meeting or Who Attends, then language and microphone. While the start runs (calendar, microphone) the button keeps its label and shows a spinner | `RecordingCaptureControls`, `RecordingStart`, `RecordingsSection` |
 | Home screen icon's menu | **Record** | `QuickAction.meetingRecording` |
 | Control Center, Lock Screen, Action button | the **Record** control, without opening the app | `MeetingRecordingControl` → `StartMeetingRecordingIntent` |
