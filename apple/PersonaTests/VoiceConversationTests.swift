@@ -51,8 +51,9 @@ struct VoiceConversationTests {
     }
 
     /// #5904: Only Send What I Just Said turned off on this device (its preference, per group and extension) goes in
-    /// `start` as speech_gate false; on, the default, `start` leaves it out (an older extension sees nothing new).
-    @Test func startSaysWhenTheSpeechGateIsOff() async throws {
+    /// `start` as speech_gate false; on, the default, as true: always said, it tells the extension this app has Send
+    /// Anyway (an app from before it says nothing, and the hub then offers none; an older extension ignores it).
+    @Test func startSaysWhetherTheSpeechGateIsOn() async throws {
         let rig = VoiceRig()
         let key = "voice.speechGate." + rig.key.group + ".voice"
         UserDefaults.standard.set(false, forKey: key)
@@ -61,7 +62,7 @@ struct VoiceConversationTests {
         #expect(try #require(socket.start)["speech_gate"] as? Bool == false)
         let plain = VoiceRig()
         let (_, other) = await started(plain)
-        #expect(try #require(other.start)["speech_gate"] == nil)
+        #expect(try #require(other.start)["speech_gate"] as? Bool == true)
     }
 
     @Test func theModelComesFromTheUseAndUnverifiedIsUsable() async throws {

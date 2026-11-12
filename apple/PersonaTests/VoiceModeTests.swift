@@ -98,6 +98,21 @@ struct VoiceModeTests {
         #expect(resend?["id"] as? String == "voice-3" && resend?["clear_draft"] == nil)
     }
 
+    /// #5904 review: a refusal with no task (the model said nothing of what to do, and nothing the user said was there
+    /// to take) is kept by no extension: no Send Anyway, and no resend, even from one that lists `speech_gate`.
+    @Test func noSendAnywayWithoutATask() async {
+        let rig = VoiceRig()
+        let call = rig.call()
+        await call.begin()
+        let socket = rig.socket!
+        ready(socket, rig.key, features: ["target", "runs", "asks", "resume", "suspend", "speak", "speech_gate"])
+        socket.deliver(#"{"type":"run","id":"voice-4","task":"","state":"refused","code":"unprompted","msg_ids":["voice-4"],"base_seq":1}"#)
+        #expect(call.runs.map(\.id) == ["voice-4"])
+        #expect(!call.canResend("voice-4"))
+        #expect(!call.resend("voice-4"))
+        #expect(socket.frames.allSatisfy { $0["type"] as? String != "resend" })
+    }
+
     /// An extension from before #5904 keeps no unprompted run: its resend would do nothing, so there is no Send Anyway.
     @Test func anOlderExtensionOffersNoSendAnyway() async {
         let rig = VoiceRig()

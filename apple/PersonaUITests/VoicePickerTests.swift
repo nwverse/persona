@@ -266,7 +266,7 @@ final class VoicePickerTests: XCTestCase {
 
     /// Settings › Extensions › the voice extension (#5904): Only Send What I Just Said under the Voice row, on by
     /// default; turned off it is kept on the device and the next call's start says `speech_gate: false`; on again, the
-    /// start leaves it out. Shots of both (`picker-<style>-<appearance>-settings-speech-gate-on|off.png`).
+    /// next start says `speech_gate: true`. Shots of both (`picker-<style>-<appearance>-settings-speech-gate-on|off.png`).
     @MainActor func testTheSpeechGateSwitch() throws {
         let hub = try hub
         try mock(hub, voices: "ok")
@@ -295,6 +295,6 @@ final class VoicePickerTests: XCTestCase {
         app.terminate()
 
         let on = try XCTUnwrap(try nextStart(hub), "no call started")
-        XCTAssertNil(on["speech_gate"] as? Bool, "on is left out of start: \(on)")
+        XCTAssertEqual(on["speech_gate"] as? Bool, true, "on is said in start (it also says the app has Send Anyway): \(on)")
     }
 }

@@ -367,8 +367,9 @@ nonisolated struct VoiceStart: Equatable, Sendable {
     var resume: [VoiceRun] = []
     /// False: the microphone records without echo cancellation, so a caption of the user's may be the voice's own.
     var echoCancellation: Bool?
-    /// False: the user turned the user-speech gate off on this device (Only Send What I Just Said, #5904); nil leaves
-    /// it on, as it is for an extension that does not know it.
+    /// False: the user turned the user-speech gate off on this device (Only Send What I Just Said, #5904); true: on.
+    /// A call always says it (`VoiceConversation.startFrame`): it also tells the extension this app has Send Anyway,
+    /// which an app from before it does not (nil, left out). An extension that does not know it ignores it.
     var speechGate: Bool?
 }
 

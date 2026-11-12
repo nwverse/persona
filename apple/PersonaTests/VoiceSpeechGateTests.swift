@@ -12,10 +12,11 @@ struct VoiceSpeechGateTests {
         (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any]
     }
 
-    @Test func startSaysSpeechGateOnlyWhenItIsOff() throws {
+    @Test func startSaysSpeechGateAsTheCallHasIt() throws {
         #expect(object(VoiceMessage.start(VoiceStart(speechGate: false)))?["speech_gate"] as? Bool == false)
+        #expect(object(VoiceMessage.start(VoiceStart(speechGate: true)))?["speech_gate"] as? Bool == true)
         let plain = try #require(object(VoiceMessage.start(VoiceStart())))
-        #expect(plain["speech_gate"] == nil, "left out: the gate stays on, and an older extension sees nothing new")
+        #expect(plain["speech_gate"] == nil, "nil is left out, as an app from before #5904 sends it")
     }
 
     @Test func thePreferenceIsOnUnlessTurnedOff() {
@@ -38,7 +39,7 @@ struct VoiceSpeechGateTests {
         let call = rig.call()
         await call.begin()
         rig.socket?.ready(rig.key)
-        #expect(rig.sockets.count == 1 && rig.socket?.start?["speech_gate"] == nil)
+        #expect(rig.sockets.count == 1 && rig.socket?.start?["speech_gate"] as? Bool == true)
         call.change(speechGate: false)
         #expect(rig.sockets.count == 2)
         #expect(try #require(rig.socket?.start)["speech_gate"] as? Bool == false)

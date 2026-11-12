@@ -51060,6 +51060,29 @@
       },
       "extractionState" : "manual"
     },
+    "Didn’t hear you ask for this just now, so it wasn’t sent: “%@”" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Didn’t hear you ask for this just now, so it wasn’t sent: “%1$@”"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "直前にこの依頼を聞き取れなかったため、送信していません：「%1$@」"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "刚才没听到你要做这件事，所以没发出去：『%1$@』"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Diff View" : {
       "localizations" : {
         "zh-Hans" : {

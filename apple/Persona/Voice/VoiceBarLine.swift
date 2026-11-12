@@ -179,9 +179,13 @@ nonisolated struct VoiceBarLine: Equatable, Sendable {
             }
             return line(String(localized: "\(label) is waiting for you to handle the card above"))
         case "unprompted":
-            // The gate heard no fresh request (docs/assistant/voice.md 4.4): never worded as if someone else said it.
-            return line(String(localized: "Didn’t hear you ask for this just now, so it wasn’t sent"),
-                        resendable ? [.sendAnyway(run: run.id)] : [])
+            // The gate heard no fresh request (docs/assistant/voice.md 4.4): never worded as if someone else said it. What
+            // was held back is quoted, as a draft is: Send Anyway confirms words the user can see (last, so a long one
+            // only loses its end to the bar's line limit).
+            let task = run.task.trimmingCharacters(in: .whitespacesAndNewlines)
+            let text = task.isEmpty ? String(localized: "Didn’t hear you ask for this just now, so it wasn’t sent")
+                : String(localized: "Didn’t hear you ask for this just now, so it wasn’t sent: “\(task)”")
+            return line(text, resendable && !task.isEmpty ? [.sendAnyway(run: run.id)] : [])
         case "on_screen":
             return line(String(localized: "Approve it by tapping on screen"))
         case "empty":
