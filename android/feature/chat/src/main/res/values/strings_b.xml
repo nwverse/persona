@@ -147,7 +147,6 @@
     <string name="chat_full_text_failed">Couldn\'t load. Tap to retry</string>
     <string name="chat_full_text_open">View full text (%1$s)</string>
     <string name="chat_request_collapse_full">Collapse</string>
-    <string name="chat_request_list_title">Requests waiting for you</string>
     <string name="chat_request_allow">Allow</string>
     <string name="chat_request_deny">Deny</string>
     <string name="chat_request_always_allows">Always allowing lets through: %1$s</string>

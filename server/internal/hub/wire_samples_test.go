@@ -219,6 +219,27 @@ func wireSamples(t *testing.T) map[string][]wireSample {
 		map[string]any{"/sessions/0/assistant": true, "/sessions/0/queued/0": "请补充示例。", "/sessions/0/queued/2": "来自「示例对话」：示例结果已整理好。", "/sessions/0/queued_relayed": 1},
 		"server/internal/proto/session.go: Session.QueuedRelayed", "server/internal/assistant/fleet_sessions.go: Service.decorateInventory", "apple/Shared/Models.swift: Session.ownQueuedCount")
 
+	// A launcher switch waiting for the next message (#5035) and a Persona chat's own pick (#5033): the complete rows
+	// carry both; a summary row keeps the pick and leaves the switch and the launcher out (the apps keep theirs).
+	switching := proto.Session{MachineID: "m1", SessionID: "s3", Title: "示例切换", Cwd: "/home/user/project", Status: proto.StatusIdle,
+		PaneID: "w1:p2", Agent: "claude", Launcher: "example", Model: "example-model", Effort: "high", UpdatedAt: now,
+		PendingSwitch: &proto.PendingSwitch{Launcher: "work", Model: "work-model", Effort: "max", At: now}}
+	picked := proto.Session{MachineID: "m1", SessionID: "a1", Title: "示例对话", Status: proto.StatusIdle, Agent: "claude",
+		Launcher: "claude", Model: "example-model", Assistant: true, UpdatedAt: now,
+		ModelPick: &proto.ModelPick{Launcher: "work", Model: "work-model", Effort: "high"}}
+	switching.State, picked.State = proto.StateIdle, proto.StateIdle
+	add("sessions", "sessions_model_switch", "完整会话行携带等待下一条消息的服务商切换和 Persona 对话自己选的模型。", "sessions",
+		httpJSON(map[string]any{"sessions": []proto.Session{switching, picked}}),
+		map[string]any{"/sessions/0/launcher": "example", "/sessions/0/pending_switch/launcher": "work", "/sessions/0/pending_switch/model": "work-model",
+			"/sessions/0/pending_switch/effort": "max", "/sessions/1/model_pick/launcher": "work", "/sessions/1/model_pick/model": "work-model",
+			"/sessions/1/model_pick/effort": "high", "/sessions/1/pending_switch": nil},
+		"server/internal/proto/session.go: PendingSwitch, ModelPick", "docs/protocol/protocol.md: Switching a running Agent to another provider")
+	add("sessions", "sessions_summary_model_pick", "摘要行保留 model_pick，省略启动器和等待中的切换。", "sessions",
+		httpJSON(map[string]any{"sessions": []runtimeRowSummary{runtimeSummary(switching), runtimeSummary(picked)}}),
+		map[string]any{"/sessions/0/waiting": false, "/sessions/0/launcher": nil, "/sessions/0/pending_switch": nil, "/sessions/0/model": "example-model",
+			"/sessions/1/model_pick/launcher": "work", "/sessions/1/model_pick/effort": "high", "/sessions/1/launcher": nil},
+		"server/internal/hub/sessions_list.go: runtimeSummary", "docs/protocol/protocol.md: Summary rows")
+
 	m := newMachine(h, MachineConfig{ID: "m1", Name: "示例电脑", Kind: "ssh", SSHHost: "example.com"})
 	m.online = true
 	m.lastSeen = now
@@ -292,6 +313,17 @@ func wireSamples(t *testing.T) map[string][]wireSample {
 	add("items", "items_task_notifications", "监控事件和子任务结果都作为带 task 的 notice 传输。", "items", httpJSON(map[string]any{"items": []proto.Item{monitor, agent}, "has_more": false}),
 		map[string]any{"/items/0/kind": "notice", "/items/0/task/kind": "monitor", "/items/0/task/detail": "示例值 > 0 & < 10", "/items/1/task/kind": "agent"},
 		"server/internal/proto/item.go: TaskNote", "apple/Shared/Models.swift: TaskNote")
+
+	// The model each reply was written by (#5034): the apps mark where it changes.
+	first := item("entry_reply_a#0", 1, "assistant", proto.KindText, "示例回答。")
+	first.Model = "example-model"
+	ask := item("entry_ask#0", 2, "user", proto.KindText, "换个模型再看。")
+	call := item("entry_reply_b#0", 3, "assistant", proto.KindToolUse, "")
+	call.ToolUseID, call.ToolName, call.ToolInput = "call_model", "Read", json.RawMessage(`{"file_path":"/home/user/project/example.txt"}`)
+	call.Model = "work-model"
+	add("items", "items_reply_models", "助手条目携带写出它的模型，用户条目没有。", "items", httpJSON(map[string]any{"items": []proto.Item{first, ask, call}, "has_more": false}),
+		map[string]any{"/items/0/model": "example-model", "/items/1/model": nil, "/items/2/model": "work-model"},
+		"server/internal/proto/item.go: Item.Model", "docs/web/web.md: Model pill and model panel")
 
 	wireItemEvents(t, add, now, []proto.Item{text, img})
 	durations := transcript.ParseLine(9, []byte(`{"type":"system","subtype":"turn_duration","uuid":"duration_example","parentUuid":"entry_text","durationMs":12345,"timestamp":"2026-01-02T03:04:05Z"}`), &transcript.Meta{})
