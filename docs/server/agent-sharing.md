@@ -144,6 +144,12 @@ existing `devicewire.NodeCall` or `assistantwire.HTTPRequest` envelope; client
 headers and arbitrary node parameters cannot install them. Background/delegated
 manager calls are system calls and borrow no human owner.
 
+Sharing-authority handover follows the hub's trusted roster: its staged entries
+and machines recorded as kept by their manager. Removing a kept machine from
+hub.json does not remove its authority. The keeper/owner filter and live routing
+generation validation still apply; reported-only machines receive no authority.
+This does not change the separate handover of actual machine configuration.
+
 The manager persists a creation intent and sends opaque creation/incarnation IDs
 only to nodes advertising `creation_receipt.v1`. Terminal, asynchronous, runtime
 launcher and engine-runtime start returns record those IDs in node state. The
