@@ -541,6 +541,12 @@ nonisolated extension RecordingDayEraseRequest: RecordingDayMessage {
         RecordingDayWire.finite(erase.from) && RecordingDayWire.finite(erase.to) && erase.from <= erase.to
     }
 
+    /// The same request as `other`: the same recording and erase id. Its times may differ by the wire's rounding to
+    /// milliseconds (a copy read back from a queued transfer), so they don't count.
+    func isSame(as other: RecordingDayEraseRequest) -> Bool {
+        recording == other.recording && erase.id == other.erase.id
+    }
+
     private nonisolated enum CodingKeys: String, CodingKey { case recording, erase }
     private nonisolated enum EraseKeys: String, CodingKey { case id, from, to }
 

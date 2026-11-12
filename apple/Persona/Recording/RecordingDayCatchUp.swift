@@ -1,18 +1,21 @@
 #if os(iOS)
 import BackgroundTasks
 import Foundation
+import os
 
 /// All-day recording's catch-up (docs/assistant/day-recap.md): a `BGProcessingTask` that transcribes, uploads and applies
-/// retention to what the watch sent while the app sat in the background, run by the system while the phone charges and
-/// has a network (the upload needs one). Submitted when the app goes to the background and from the receiver as
-/// chunks arrive (a day the app is only ever woken by WatchConnectivity never goes through that transition), and again
-/// after a run that left work. Submitting replaces the pending request, so asking often costs nothing.
+/// retention to what the watch sent while the app sat in the background, run by the system while the phone charges.
+/// It doesn't wait for a network: transcription is on the device and retention needs none, and without one the upload
+/// only finds the hub unreachable and goes with the next run. Submitted when the app goes to the background and from
+/// the receiver as chunks arrive (a day the app is only ever woken by WatchConnectivity never goes through that
+/// transition), and again after a run that left work. Submitting replaces the pending request, so asking often costs
+/// nothing.
 enum RecordingDayCatchUp {
     /// In `BGTaskSchedulerPermittedIdentifiers` (apple/project.yml).
     nonisolated static let identifier = "persona.recording.day-catchup"
     /// The earliest a submitted request may start: chunks keep arriving while the user is about, and the receiver asks at
     /// most this often anyway.
-    static let delay: TimeInterval = 15 * 60
+    nonisolated static let delay: TimeInterval = 15 * 60
 
     private static var registered = false
 
@@ -29,10 +32,11 @@ enum RecordingDayCatchUp {
     }
 
     /// Submits (or replaces) the request. Fails quietly where the system has no background tasks (the simulator).
-    static func schedule() {
+    /// Callable from any thread (the task's expiration handler).
+    nonisolated static func schedule() {
         let request = BGProcessingTaskRequest(identifier: identifier)
         request.requiresExternalPower = true
-        request.requiresNetworkConnectivity = true
+        request.requiresNetworkConnectivity = false
         request.earliestBeginDate = Date(timeIntervalSinceNow: delay)
         try? BGTaskScheduler.shared.submit(request)
     }
@@ -58,14 +62,38 @@ enum RecordingDayCatchUp {
 
     private static func run(_ task: BGTask) {
         let work = Task { await catchUp() }
+        let completion = Completion(task)
         // Time is up (the user picked up the phone, or the system needs it back): stop; nothing done so far is lost, and
-        // an interrupted run counts no try against any chunk.
-        task.expirationHandler = { @Sendable in work.cancel() }
+        // an interrupted run counts no try against any chunk. The task is completed here and now, not when the work has
+        // wound down: an await that is slow to notice the cancellation must not keep it open past its deadline (the
+        // system would end the app, and give the catch-up fewer chances). The work's own completion is a no-op then.
+        task.expirationHandler = { @Sendable in
+            work.cancel()
+            schedule()
+            completion.complete(success: false)
+        }
         Task {
             let remains = await work.value
             let finished = !work.isCancelled
             if remains || !finished { schedule() }
-            task.setTaskCompleted(success: finished)
+            completion.complete(success: finished)
+        }
+    }
+
+    /// Completes a background task once: from its work, or from its expiration handler, whichever comes first.
+    private nonisolated final class Completion: Sendable {
+        nonisolated(unsafe) private let task: BGTask
+        private let done = OSAllocatedUnfairLock(initialState: false)
+
+        init(_ task: BGTask) { self.task = task }
+
+        func complete(success: Bool) {
+            let first = done.withLock { (done: inout Bool) -> Bool in
+                defer { done = true }
+                return !done
+            }
+            guard first else { return }
+            task.setTaskCompleted(success: success)
         }
     }
 }

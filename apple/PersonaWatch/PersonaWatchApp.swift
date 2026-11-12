@@ -611,6 +611,9 @@ struct WatchRootView: View {
         // All-day recording's page, asked for by the complication or a notification (`WatchAllDay.open`).
         .sheet(isPresented: Binding(get: { allDay.pageRequested }, set: { allDay.pageRequested = $0 })) {
             NavigationStack { WatchAllDayView() }
+                #if DEBUG
+                .largeTextIfAsked() // a sheet doesn't take the root's text size
+                #endif
         }
         .onChange(of: model.meetingAsked, initial: true) { _, asked in
             guard asked else { return }

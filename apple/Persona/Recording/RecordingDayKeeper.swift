@@ -31,8 +31,10 @@ nonisolated enum RecordingDayRetention {
     }
 }
 
-/// Applies `RecordingDayRetention` to every day the phone holds: soon after launch, when the app comes to the front, in
-/// the catch-up task, when a final recap's time becomes known, and at the next deadline while the app runs.
+/// Applies `RecordingDayRetention` to every day the phone holds: soon after every launch (also one in the background to
+/// take a chunk, and hourly while chunks keep arriving: `RecordingDayReceiver`), when the app comes to the front, in
+/// the catch-up task, at once when a final recap's time becomes known (it can bring a deadline that passed already),
+/// and at the next deadline while the app runs.
 @MainActor final class RecordingDayKeeper {
     static let shared = RecordingDayKeeper()
 
@@ -41,8 +43,11 @@ nonisolated enum RecordingDayRetention {
     private let days: () -> Int?
     private let now: () -> Date
     private let forget: (UUID) -> Void
+    private let debounce: Duration
     private var running = false
     private var again = false
+    /// A run asked for while one was under way, or while one waits for its debounce, goes whatever the last run's time.
+    private var forceNext = false
     private var pending: Task<Void, Never>?
     private var timer: Task<Void, Never>?
     private var lastRun: Date?
@@ -51,28 +56,42 @@ nonisolated enum RecordingDayRetention {
     private static let minimumGap: TimeInterval = 3600
     /// Looked at again at least this often while the app runs.
     private static let maximumGap: TimeInterval = 6 * 3600
-    private static let debounce: Duration = .seconds(2)
 
     /// - Parameters:
     ///   - days: the hub's `recording_days` once it said it (`RecordingSync`), nil before: until then no day is purged
     ///     for its age (the hub may keep them longer than the default), and the audio's deadline is the other two.
     ///   - forget: a purged day's transcription and upload let go of it, and the watch is asked to delete its copy.
+    ///   - debounce: how long triggers in a row gather into one run.
     init(store: RecordingDayStore = .shared, library: RecordingLibrary = .shared,
          days: @escaping () -> Int? = { RecordingSync.shared.store.daysKnown ? RecordingSync.shared.store.days : nil },
          now: @escaping () -> Date = { .now },
-         forget: @escaping (UUID) -> Void = { RecordingDaySync.shared.removedHere($0) }) {
+         forget: @escaping (UUID) -> Void = { RecordingDaySync.shared.removedHere($0) },
+         debounce: Duration = .seconds(2)) {
         self.store = store; self.library = library; self.days = days; self.now = now; self.forget = forget
+        self.debounce = debounce
     }
 
-    /// A run soon (several triggers in a row share it), unless one ran within the hour.
-    func schedule() {
+    /// A run soon (several triggers in a row share it), unless one ran within the hour; `force`: whatever the last run's
+    /// time.
+    func schedule(force: Bool = false) {
+        if force { forceNext = true }
         guard pending == nil else { return }
+        let debounce = debounce
         pending = Task { [weak self] in
-            try? await Task.sleep(for: RecordingDayKeeper.debounce)
+            try? await Task.sleep(for: debounce)
             guard let self, !Task.isCancelled else { return }
             self.pending = nil
-            await self.run()
+            let force = self.forceNext
+            self.forceNext = false
+            await self.run(force: force)
         }
+    }
+
+    /// A day's final recap time became known (`RecordingDaySync`): its audio's 3-day clock may have run out already (a
+    /// phone that was offline learns it late), so a run goes soon whatever the last one's time, and sets the wake for
+    /// the new deadline.
+    func deadlineChanged() {
+        schedule(force: true)
     }
 
     /// Deletes the audio that is due and purges the days past `recording_days`. `force`: whatever the last run's time
@@ -81,6 +100,7 @@ nonisolated enum RecordingDayRetention {
         if !force, let last = lastRun, now().timeIntervalSince(last) < Self.minimumGap, last <= now() { return }
         guard !running else {
             again = true
+            if force { forceNext = true }
             return
         }
         running = true
@@ -88,7 +108,7 @@ nonisolated enum RecordingDayRetention {
             running = false
             if again {
                 again = false
-                schedule()
+                schedule(force: forceNext)
             }
         }
         lastRun = now()

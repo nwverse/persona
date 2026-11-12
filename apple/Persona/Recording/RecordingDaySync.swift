@@ -458,7 +458,9 @@ nonisolated enum RecordingDayUpload {
             }
         }
         refs.sort { ($0.part, $0.pos, $0.seq, $0.index) < ($1.part, $1.pos, $1.seq, $1.index) }
-        let firstCap = refused - max(1, refused / 10)
+        // Fewer than it was refused with, and never more than the hub takes in one part: a part an offline phone filled
+        // past the limit (`assign` doesn't stop at it) fits at the first `PUT` instead of after several refused ones.
+        let firstCap = min(maxPartSegments, refused - max(1, refused / 10))
         guard firstCap > 0 else { return false }
         var groups: [[Ref]] = []
         var rest = refs[...]
@@ -625,8 +627,8 @@ nonisolated enum RecordingDayUpload {
          appState: RecordingDayAppState = RecordingDaySystemState.shared,
          noteParts: @escaping (UUID, [UUID]) -> Void = { RecordingSync.shared.noteDayParts($0, $1) },
          removed: @escaping (UUID) -> Void = { RecordingDayTranscriber.shared.cancel($0) },
-         removeEverywhere: @escaping (UUID) -> Void = { try? RecordingSync.shared.delete($0) },
-         recapFinal: @escaping () -> Void = { RecordingDayKeeper.shared.schedule() },
+         removeEverywhere: @escaping (UUID) -> Void = { try? RecordingSync.shared.delete($0, day: true) },
+         recapFinal: @escaping () -> Void = { RecordingDayKeeper.shared.deadlineChanged() },
          debounce: Duration = .seconds(1)) {
         self.store = store; self.library = library; self.api = api; self.features = features; self.now = now
         self.days = days; self.appState = appState; self.noteParts = noteParts; self.removed = removed

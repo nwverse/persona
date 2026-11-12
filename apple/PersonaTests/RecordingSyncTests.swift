@@ -297,4 +297,27 @@ private final class FakeRecordingHub: @unchecked Sendable {
         }
         #expect(pending.deletes == [RecordingDayDelete(recording: day)], "and the watch's copy")
     }
+
+    /// The day upload's `410` deletes a day the library has no row for yet (written only after its first chunk was
+    /// stored): it is still a day, so its transcription stops and the watch is asked to delete its copy.
+    @Test func aDayWithoutItsRowYetIsStillDeletedEverywhere() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lib = RecordingLibrary(root: root)
+        let store = RecordingDayStore(root: root, isDeleted: { lib.isDeletedSnapshot($0) }, writeDelay: 3600)
+        var stopped: [UUID] = []
+        let daySync = RecordingDaySync(store: store, library: lib, api: { nil }, features: { [RecordingDayContract.feature] },
+                                       days: { 14 }, appState: RecordingDayForeground(), noteParts: { _, _ in },
+                                       removed: { stopped.append($0) }, removeEverywhere: { _ in }, recapFinal: {})
+        let sync = RecordingSync(library: lib, api: { nil }, daySync: { daySync }, recordingDaysChanged: { _ in })
+        let day = UUID()
+        try sync.delete(day, day: true)
+        #expect(lib.isDeleted(day) && stopped == [day])
+        var pending = await store.watchRequests()
+        for _ in 0..<200 where pending.deletes.isEmpty {
+            try? await Task.sleep(for: .milliseconds(2))
+            pending = await store.watchRequests()
+        }
+        #expect(pending.deletes == [RecordingDayDelete(recording: day)])
+    }
 }

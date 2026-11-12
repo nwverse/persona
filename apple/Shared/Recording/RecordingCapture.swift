@@ -308,6 +308,7 @@ final class RecordingCapture {
             : nil
         let writer = RecordingSegmentWriter(directory: library.folder(entry.id), allocateSeq: allocate)
         writer.compactsFiles = entry.isDay
+        writer.cutsAtGaps = entry.isDay
         writer.segmentLength = entry.isDay ? Self.dayChunkLength(reachable: linkReachable) : Self.segmentLength
         return writer
     }
@@ -417,14 +418,15 @@ final class RecordingCapture {
 
     /// Erases the last few minutes. A rolling recording erases them everywhere and drops the segment being written when it
     /// finalizes; all-day recording (on, or off with today's day still open) cuts first (`eraseDayRecent`).
-    func eraseRecent() {
+    /// Returns false only when an all-day erase couldn't be saved (and so deletes nothing); its `error` says so too.
+    @discardableResult func eraseRecent() -> Bool {
         if rolling, let id = recordingID {
             let now = Date.now
             RecordingLibrary.shared.erase(id, from: now.addingTimeInterval(-RecordingRolling.eraseMinutes * 60), to: now)
-            return
+            return true
         }
-        guard allDay || state == .idle else { return }
-        eraseDayRecent()
+        guard allDay || state == .idle else { return true }
+        return eraseDayRecent()
     }
 
     /// `reason`: the user's Stop, or the system's (the audio service reset, a failed write, low storage or battery). An
@@ -499,11 +501,10 @@ final class RecordingCapture {
             let clock = ContinuousClock()
             var checked = clock.now
             while !Task.isCancelled {
-                // Hours in the background (all-day recording): a slower tick there, with the failure checks only.
-                let foreground = self?.isAppActive ?? true
-                do { try await Task.sleep(for: foreground ? .milliseconds(250) : .seconds(1)) } catch { return }
+                let interval = self.map { Self.tick(allDay: $0.allDay, screen: $0.screen).interval } ?? Self.foregroundTick
+                do { try await Task.sleep(for: interval) } catch { return }
                 guard let self, let writer = self.writer else { return }
-                if self.isAppActive { self.elapsed = writer.elapsed }
+                if Self.tick(allDay: self.allDay, screen: self.screen).showsClock { self.elapsed = writer.elapsed }
                 writer.segmentLength = self.chunkLength
                 // A save that failed gets one more try; still failing, it halts as any failed write does (the stop tries again).
                 if self.hasUnsaved { self.applyWriterEvents() }
@@ -530,13 +531,36 @@ final class RecordingCapture {
         String(localized: "The recording info wasn't saved. Keep the app installed and try again.")
     }
 
-    /// Whether the app is in front. In the background nothing shows `elapsed`, so the watch skips redrawing it there; the
-    /// phone keeps its timing as it was.
-    private var isAppActive: Bool {
+    /// Where the app is, for the recording's clock: in front; on screen but not in front (dimmed in Always On with the
+    /// wrist down, a banner or Control Center over it), where the clock still shows; or off screen.
+    nonisolated enum Screen: Equatable, Sendable { case front, dimmed, hidden }
+
+    /// What the ticker does next: how long it waits, and whether it writes `elapsed`.
+    nonisolated struct Tick: Equatable, Sendable {
+        var interval: Duration
+        var showsClock: Bool
+    }
+
+    private nonisolated static let foregroundTick = Duration.milliseconds(250)
+
+    /// Every recording ticks four times a second and writes its clock wherever it can be seen, dimmed included. Off
+    /// screen nothing shows `elapsed`, so it isn't written (each write redraws whatever reads it), and all-day recording,
+    /// hours there, ticks once a second with the failure checks only.
+    nonisolated static func tick(allDay: Bool, screen: Screen) -> Tick {
+        Tick(interval: allDay && screen == .hidden ? .seconds(1) : foregroundTick, showsClock: screen != .hidden)
+    }
+
+    /// Where the app is now; the phone keeps its timing as it was (always in front for the ticker).
+    private var screen: Screen {
         #if os(watchOS)
-        WKApplication.shared().applicationState == .active
+        switch WKApplication.shared().applicationState {
+        case .active: .front
+        case .inactive: .dimmed
+        case .background: .hidden
+        @unknown default: .front
+        }
         #else
-        true
+        .front
         #endif
     }
 
@@ -1052,7 +1076,8 @@ final class RecordingCapture {
     ///
     /// The range ends exactly at the writer's cut (`cutForErase`), never at a later clock reading: the chunk after the cut
     /// starts there, so the phone keeps all of its audio however long the saves take.
-    private func eraseDayRecent() {
+    @discardableResult private func eraseDayRecent() -> Bool {
+        var saved = true
         let now = Date.now
         let cut = writer?.cutForErase()
         var changes = applyWriterEvents(notify: false)
@@ -1062,12 +1087,14 @@ final class RecordingCapture {
             for entry in Self.daysTouched(by: window, in: library.entries, source: Self.source) {
                 guard Self.erase(window, ofDay: entry.id, in: library) else {
                     error = Self.notSavedMessage
+                    saved = false
                     continue
                 }
                 changes.insert(entry.id)
             }
         }
         announce(changes)
+        return saved
     }
 
     /// The range "Erase the last 10 minutes" erases at `now`: up to where the audio before the cut ends (`audioEnd`),

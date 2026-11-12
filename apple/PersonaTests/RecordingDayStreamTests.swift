@@ -183,6 +183,7 @@ private struct SplitMix64 {
         })
         writer.segmentLength = liveSeconds
         writer.compactsFiles = true
+        writer.cutsAtGaps = true
         self.library = library
         self.id = id
         self.writer = writer
@@ -1402,6 +1403,14 @@ private final class Collected<Element: Sendable>: Sendable {
         record = try await loop.phone.record(id)
         #expect(record.appliedEvents == 6 && record.pauses.count == 2 && record.erasures.count == 1)
         #expect(loop.link.arrivals[.event(id, n: 4)] == 2 && (loop.link.arrivals[.event(id, n: 5)] ?? 0) >= 2)
+        // Kept a while after its midnight, all of it on the phone: an erase of the last minutes on the watch can still
+        // reach it (docs/assistant/day-recap.md「Erasing」). Then it goes.
+        let removable = midnight + RecordingDayOutbox.keepClosedSeconds
+        if loop.clock.now < removable {
+            #expect(loop.watch.library.entry(id) != nil, "kept until \(removable)")
+        }
+        loop.clock.set(removable)
+        loop.pump()
         #expect(loop.watch.library.entry(id) == nil, "the closed day the phone has all of is removed from the watch")
 
         // The hub: the day's one sentence, and the day complete with its gaps.

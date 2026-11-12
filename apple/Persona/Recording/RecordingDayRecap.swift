@@ -303,6 +303,11 @@ nonisolated struct RecordingDayRecapListing: Decodable, Sendable, Equatable {
         rows = RecapLossy<Row>.list(c, .recordings) ?? []
     }
 
+    /// How many sentence positions the hub holds of each listed recording (`next`), where the row says.
+    var positions: [UUID: Int] {
+        Dictionary(rows.compactMap { row in row.next.map { (row.id, $0) } }, uniquingKeysWith: { first, _ in first })
+    }
+
     /// Each listed recording's state; a recording not listed is not on the hub.
     func seen(_ ids: [UUID]) -> [UUID: RecordingDayRecapSeen] {
         let byID = Dictionary(rows.map { ($0.id, $0.seen) }, uniquingKeysWith: { first, _ in first })
@@ -521,15 +526,41 @@ nonisolated enum RecordingDayRecapState: Equatable, Sendable {
         var recapState: String?
         var recap: RecordingDayRecap?
         var startedAt: Date?
+        /// The hub holds sentence positions of it (`next` above 0 in the list); nil when the list didn't say.
+        var hasText: Bool?
+    }
+
+    /// What the page knows of the day itself, for a recap that will never come: a day that ended without a word gets
+    /// none (docs/assistant/day-recap.md), and a complete day's last recap the hub writes by itself is due by a known time.
+    nonisolated struct Day: Equatable, Sendable {
+        /// The day's recording ended, and all of it is settled and on the hub (`RecordingDaySummary.complete`).
+        var complete = false
+        /// Some of its audio may hold words: a chunk that was neither quieter than speech nor failed to transcribe (one
+        /// still waiting counts).
+        var mayHaveText = true
+        /// When the last recap the hub writes by itself is due at the latest: the cutoff's 6 hours after the day ended,
+        /// and its 30 minutes after the last upload, which for a complete day came by then. nil before the day has an
+        /// end.
+        var lastRecapDue: Date?
+        /// Nothing more of it goes to the hub (`problem`, `expired`): the hub writes from what it holds, by the same time.
+        var stopped = false
+
+        /// From the end of the day to the last recap the hub writes by itself.
+        static let lastRecapAfter: TimeInterval = 6.5 * 3600
     }
 
     /// The state from what the hub said of each part (`parts` nil: no answer, offline or demo), where the phone's
-    /// upload is (`sync`), and whether any of the day is transcribed. `fallbackStart` is the day recording's start
-    /// (`recording_started_at`), every part's clock, when the hub's meta leaves it out.
-    static func of(parts: [Part?]?, sync: RecordingDaySyncState, transcribed: Bool, fallbackStart: Date?,
+    /// upload is (`sync`), whether any of the day is transcribed, and the day's own facts (`day`). `fallbackStart` is the
+    /// day recording's start (`recording_started_at`), every part's clock, when the hub's meta leaves it out.
+    static func of(parts: [Part?]?, sync: RecordingDaySyncState, transcribed: Bool, day: Day = Day(), fallbackStart: Date?,
                    zone: TimeZone) -> RecordingDayRecapState {
         if sync == .notOffered || sync == .unsupported { return .unsupported }
-        let later: RecordingDayRecapState = sync == .expired ? .none : transcribed ? .waitingForSync : .waitingForText
+        // Nothing more of the day goes to the hub: its upload stopped for good (the page says why, under the day's
+        // word) or the hub keeps no text of it.
+        let stopped = sync == .problem || sync == .expired
+        // The day ended without a word to read: the hub writes it no recap, ever.
+        let silent = day.complete && !day.mayHaveText
+        let later: RecordingDayRecapState = stopped || silent ? .none : transcribed ? .waitingForSync : .waitingForText
         guard let parts else { return later }
         let held = parts.compactMap { $0 }
         let recaps = parts.compactMap { part -> RecordingDayRecapContent.Part? in
@@ -544,8 +575,12 @@ nonisolated enum RecordingDayRecapState: Equatable, Sendable {
         }
         if states.contains("failed") { return .failed }
         if states.contains("pending") { return .writing }
+        if held.isEmpty { return later }
+        // Complete, or stopped for good, and the hub holds no position of any part: nothing of it there is a word, and
+        // nothing more comes (a create the hub took, then a first append it refused).
+        if silent || ((day.complete || stopped) && held.allSatisfy { $0.hasText == false }) { return .none }
         // On the hub with no recap due yet: it comes in the evening, or when the day ends.
-        return held.isEmpty ? later : .waitingForText
+        return .waitingForText
     }
 
     /// Worth asking the hub again soon: the recap is on its way.
@@ -555,6 +590,73 @@ nonisolated enum RecordingDayRecapState: Equatable, Sendable {
         case .ready(_, let note): note == .updating
         case .none, .failed, .unsupported: false
         }
+    }
+
+    /// Worth asking again soon for this day at `now`: on its way (`waiting`), except a recap still waited for once a
+    /// complete day is past the last one the hub writes by itself. None comes then unless asked; the page looks again
+    /// when it opens or the day's summary moves.
+    func follows(_ day: Day, now: Date) -> Bool {
+        guard waiting else { return false }
+        if self == .waitingForText, day.complete || day.stopped, let due = day.lastRecapDue, now >= due { return false }
+        return true
+    }
+}
+
+nonisolated extension RecordingDayRecapState.Day {
+    init(_ summary: RecordingDaySummary) {
+        complete = summary.complete
+        mayHaveText = Self.mayHaveText(summary)
+        lastRecapDue = (summary.closedAt ?? summary.span?.end).map { $0.addingTimeInterval(Self.lastRecapAfter) }
+        stopped = summary.sync == .problem || summary.sync == .expired
+    }
+
+    /// A chunk with audio that was neither quieter than speech nor failed to transcribe (or is still waiting).
+    static func mayHaveText(_ summary: RecordingDaySummary) -> Bool {
+        summary.chunks > summary.skipped + summary.failed
+    }
+}
+
+/// What a day's page keys its recap task on: what changes where the day is with the hub, and Retry. Coarse on purpose:
+/// the upload's `pending` / `synced`, which flips with each transcribed chunk and its append while the watch records, is
+/// one value here, or every flip would start the task again and read the whole recordings list (`load`) at once.
+nonisolated struct RecordingDayRecapKey: Hashable, Sendable {
+    /// Where the upload is, as the recap's state reads it.
+    nonisolated enum Upload: Hashable, Sendable {
+        /// The hub doesn't take day recordings (`notOffered`, `unsupported`).
+        case refused
+        /// Nothing more goes: the upload stopped for good (`problem`), or the hub keeps no text (`expired`).
+        case stopped
+        /// On its way or there (`pending`, `synced`).
+        case going
+    }
+
+    var upload: Upload?
+    var transcribed: Bool
+    /// The day's own facts the recap's state reads (`RecordingDayRecapState.Day`), each of which changes once.
+    var complete: Bool
+    var mayHaveText: Bool
+    var recapState: String?
+    var recapFinal: Bool
+    var hubIDs: [UUID]
+    var round: Int
+
+    init(_ summary: RecordingDaySummary?, round: Int) {
+        upload = summary.map {
+            switch $0.sync {
+            case .notOffered, .unsupported: .refused
+            case .problem, .expired: .stopped
+            case .pending, .synced: .going
+            }
+        }
+        transcribed = summary?.transcribedTo != nil
+        complete = summary?.complete ?? false
+        // Only a complete day's matters (a silent one waits for no recap): while the day records, chunks that come in
+        // waiting and are then skipped as quiet would flip it, and start the task again, each time.
+        mayHaveText = complete ? summary.map(RecordingDayRecapState.Day.mayHaveText) ?? true : true
+        recapState = summary?.recapState
+        recapFinal = summary?.recapFinal ?? false
+        hubIDs = summary?.hubIDs ?? []
+        self.round = round
     }
 }
 
@@ -629,8 +731,11 @@ nonisolated enum RecordingDayTranscript {
     private(set) var heard: Heard?
     @ObservationIgnored private let api: () -> APIClient?
     @ObservationIgnored private let reconciled: (UUID, [RecordingDayHubRow]) -> Void
+    @ObservationIgnored private let now: () -> Date
     /// What the last read found; nil before the first.
     @ObservationIgnored private var last: Read?
+    /// The day's own facts at the last look (`RecordingDayRecapState.follows`); nil before the first.
+    @ObservationIgnored private var day: RecordingDayRecapState.Day?
 
     /// While the recap is on its way, the list is asked this often.
     static let pollSeconds = 30.0
@@ -650,9 +755,11 @@ nonisolated enum RecordingDayTranscript {
 
     /// - Parameter reconciled: hands the day's upload the list's rows of a day's parts (`RecordingDaySync.reconciled`).
     init(api: @escaping () -> APIClient? = { AppModel.shared.api },
-         reconciled: @escaping (UUID, [RecordingDayHubRow]) -> Void = { RecordingDaySync.shared.reconciled([$0: $1]) }) {
+         reconciled: @escaping (UUID, [RecordingDayHubRow]) -> Void = { RecordingDaySync.shared.reconciled([$0: $1]) },
+         now: @escaping () -> Date = { .now }) {
         self.api = api
         self.reconciled = reconciled
+        self.now = now
     }
 
     /// The hub recordings of a day, in part order: the first has the watch's id, before the upload has named any.
@@ -662,6 +769,7 @@ nonisolated enum RecordingDayTranscript {
 
     /// Looks at the day's recap on the hub: where every part is, and each recap that moved since the last read.
     func load(_ day: RecordingDaySummary) async {
+        self.day = RecordingDayRecapState.Day(day)
         if day.sync == .notOffered || day.sync == .unsupported {
             show(.unsupported, heard: nil)
             return
@@ -674,10 +782,13 @@ nonisolated enum RecordingDayTranscript {
         do {
             let listing = try await api.getDecodedOffMain("/api/v1/recordings", as: RecordingDayRecapListing.self)
             report(listing, for: day)
-            let read = try await Self.read(ids, listed: listing.seen(ids), after: last, api)
+            let read = try await Self.read(ids, listed: listing.seen(ids), positions: listing.positions, after: last, api)
             last = read
             show(mapped(day, parts: read.parts), heard: Self.heard(read))
         } catch {
+            // Cancelled (the page's task started again, or the page went): nothing was learned, and the hub isn't out of
+            // reach. The next look says what there is.
+            if error.isCancellation { return }
             // Out of reach for now: a recap it shows stays; otherwise what the last read said, else it waits for the
             // text to get there.
             if case .ready = state { return }
@@ -718,13 +829,15 @@ nonisolated enum RecordingDayTranscript {
         }
     }
 
-    var waiting: Bool { state.waiting }
+    /// Worth looking again in `pollSeconds`: the recap is on its way, for the day as the last look saw it.
+    var waiting: Bool { state.follows(day ?? RecordingDayRecapState.Day(), now: now()) }
 
     // MARK: Reading
 
     /// Each part as the hub has it: not listed (nil), listed with no recap due (its detail isn't read), or its detail's
-    /// recap and state. A part whose place in the list hasn't moved since `last` is taken from it, unread.
-    private static func read(_ ids: [UUID], listed: [UUID: RecordingDayRecapSeen], after last: Read?,
+    /// recap and state, each with whether the hub holds text of it (`positions`, the list's `next`). A part whose place
+    /// in the list hasn't moved since `last` is taken from it, unread.
+    private static func read(_ ids: [UUID], listed: [UUID: RecordingDayRecapSeen], positions: [UUID: Int], after last: Read?,
                              _ api: APIClient) async throws -> Read {
         var seen: [UUID: RecordingDayRecapSeen] = [:]
         var parts: [RecordingDayRecapState.Part?] = []
@@ -754,6 +867,10 @@ nonisolated enum RecordingDayTranscript {
                 parts.append(.init(recapState: listedState))
             }
         }
+        // Whether the hub holds text moves with every append, not with the recap: said by this look's list.
+        for (i, id) in ids.enumerated() where parts[i] != nil {
+            parts[i]?.hasText = positions[id].map { $0 > 0 }
+        }
         return Read(ids: ids, seen: seen, parts: parts)
     }
 
@@ -782,8 +899,8 @@ nonisolated enum RecordingDayTranscript {
     }
 
     private func mapped(_ day: RecordingDaySummary, parts: [RecordingDayRecapState.Part?]?) -> RecordingDayRecapState {
-        RecordingDayRecapState.of(parts: parts, sync: day.sync, transcribed: day.transcribedTo != nil, fallbackStart: day.firstAt,
-                                  zone: RecordingDayStatus.zone(day.timeZone))
+        RecordingDayRecapState.of(parts: parts, sync: day.sync, transcribed: day.transcribedTo != nil, day: .init(day),
+                                  fallbackStart: day.firstAt, zone: RecordingDayStatus.zone(day.timeZone))
     }
 
     /// `GET /api/v1/kb/recordings/{id}`, decoded off the main actor.

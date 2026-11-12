@@ -217,7 +217,7 @@ API smoke tests: `curl -H "Authorization: Bearer $TOKEN" …/api/v1/machines`, `
 | Plan approval | ExitPlanMode → deny + feedback → revise plan → allow + setMode | Both branches correct (`docs/integrations/claude-integration.md`) |
 | Phone tools | claude on hub machine calls `mcp__persona__phone_device_info` | node → hub → simulator App returns iPhone 17 Pro / iOS 26.5 |
 | Live stream | App opens a working session on another Mac | Tool steps append live; status bar shows spinner line |
-| Watch | Watch simulator `-pairURL` | "Needs you" (waiting Agents + Inbox items), running sessions; `-openInboxFirst YES` opens first item, `-showWatchPet YES` shows the Milk Frog as if chosen on the phone (mock with `MOCK_PERSONAS=builtin`), `-showPetState <state>` forces its state, `-openWatchItem pet` opens its page, `-openWatchItem complication` shows the watch face's frog in every family (a simulator cannot add a complication from the command line), `-openWatchItem question\|plan\|permission\|screen\|session` opens first request of that type / first running session (`running`: hides "Needs you" to screenshot running rows; `inbox`: only Inbox rows under "Needs you"); `-showWatchMissing Work,Home` shows groups missing watch credentials (`""` is default group; no `-pairURL` opens "No watch credentials yet", #1185) |
+| Watch | Watch simulator `-pairURL` | "Needs you" (waiting Agents + Inbox items), running sessions; `-openInboxFirst YES` opens first item, `-showWatchPet YES` shows the Milk Frog as if chosen on the phone (mock with `MOCK_PERSONAS=builtin`), `-showPetState <state>` forces its state, `-openWatchItem pet` opens its page, `-openWatchItem complication` shows the watch face's frog in every family (a simulator cannot add a complication from the command line), `-openWatchItem question\|plan\|permission\|screen\|session` opens first request of that type / first running session (`running`: hides "Needs you" to screenshot running rows; `inbox`: only Inbox rows under "Needs you"); `-showWatchMissing Work,Home` shows groups missing watch credentials (`""` is default group; no `-pairURL` opens "No watch credentials yet", #1185); all-day recording (`docs/apple/recording.md` "All-day recording (Apple)"): `-showAllDaySample recording\|paused\|interrupted\|stopped\|off\|consent\|deleted` shows it in that state with no microphone (`consent`: before the user agreed on the iPhone; `deleted`: just deleted on the iPhone), `-openWatchItem allday` opens its page, `-openWatchItem allday-complication` shows its complication in every family and state, `-recording.phoneDayHub NO` a phone whose hub can't write the recap, `-showLargeText YES` an accessibility text size from the root (not left to the simulator applying `-UIPreferredContentSizeCategoryName` to a watch app) |
 
 ## UI checklist (inspect screenshots after every UI change)
 
@@ -894,6 +894,21 @@ TEST_RUNNER_PERSONA_HUB_A=http://127.0.0.1:18760 TEST_RUNNER_PERSONA_HUB_B=http:
 - One-group zero change: build DEBUG before in detached worktree, same mock/group args/status bar/clock, 14 pages × light/dark;
   repeat after, pixel compare. Repeated shots from same build identify noise (system spinner/Liquid Glass highlights vary per launch); exclude noise, inspect remaining differences.
   Only allowed change: hub row added to Settings Server section.
+
+### All-day recording (`RecordingDayUITests`)
+
+The phone's side of all-day recording (`docs/apple/recording.md` "All-day recording (Apple)") against the mock hub, with made-up days standing in for the watch: a simulator pair can't record a day or deliver its files.
+
+```sh
+PORT=<dedicated port> python3 scripts/mock/mock_hub.py &
+TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<port> TEST_RUNNER_PERSONA_SHOTS=<directory> TEST_RUNNER_PERSONA_SHOTS_APPEARANCE=light \
+  xcodebuild test … -only-testing:PersonaUITests/RecordingDayUITests
+```
+
+- The mock lists `recording_day` and writes recaps by default (`MOCK_NO_RECORDING_DAY=1` turns the flag off, `MOCK_DAY_RECAP=ready|pending|failed|none` sets the recap). `POST /mock/recording_day {"on", "recap"}` switches either before a launch (`GET` reads it back); each test starts with it and with `POST /mock/recording_minutes`, which forgets the stored recordings. The test reads what the phone uploaded from `/mock/recordings` (`next`, `coverage`, `complete`, the segments) and the recap's version from `GET /api/v1/kb/recordings/{id}`. `python3 scripts/mock/test_recording_day_mock.py` checks the mock against the contract.
+- Launch: `-pairURL <the mock's pair link> -tab assistant -openShellPage recordings` with `-showDaySample today|paused|recap|pending|failed|consent` (yesterday's day in Recent Recordings and today's in Today, transcribed and stored as the watch would send them, so the phone uploads them as real days; `consent`: a user who hasn't agreed), `-openDayRecap YES` to open the past day's page. `-openDayCatchUp YES` runs the background catch-up at launch, which the simulator never schedules.
+- Covered: the Today section's switch mirroring the watch and today's day listed once, paused by a call, the consent sheet before the first start (Not Now, the switch asking first, Agree), Erase Last 10 Minutes reaching the hub as an erased gap, the recap ready (a time chip opening the transcript at its line), being written and failed with Retry, the largest text size, a page without all-day recording unchanged, and a hub without the flag. Screenshots go to `TEST_RUNNER_PERSONA_SHOTS` as `allday-<appearance>-<name>.png`; run once per appearance (switch it with `simctl ui`).
+- The watch's side has no UI test: screenshot it with the watch arguments in the End-to-end table's Watch row. `RecordingDayStreamTests` (unit tests) runs the watch-to-phone stream in process.
 
 ## SSH tunnels (`apple/Packages/PersonaSSH`, [network.md](network.md#经-ssh-隧道连-hub直连不通时的后备))
 

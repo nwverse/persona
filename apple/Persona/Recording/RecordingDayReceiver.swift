@@ -28,6 +28,9 @@ import UIKit
     /// The erases and deletes still waiting go again at most this often while the watch keeps sending: its app is
     /// running then, so a request whose answer went missing gets one soon.
     static let resendInterval: TimeInterval = 60
+    /// Arriving chunks ask for an audio retention pass at most this often (`RecordingDayKeeper` runs one at most hourly
+    /// anyway): a phone only ever woken by WatchConnectivity never comes to the front, where it otherwise runs.
+    static let retentionInterval: TimeInterval = 60 * 60
 
     private let store: RecordingDayStore
     private let library: RecordingLibrary
@@ -35,6 +38,7 @@ import UIKit
     private let capabilities: RecordingDayPhoneCapabilities
     private let sendErase: (RecordingDayEraseRequest) -> Void
     private let sendDelete: (RecordingDayDelete) -> Void
+    private let retain: () -> Void
     private let now: () -> Date
     private var started = false
     /// The intake WatchConnectivity calls; made by `start()`.
@@ -43,6 +47,7 @@ import UIKit
     private var rows: Set<UUID> = []
     private var adopting: Task<Void, Never>?
     private var lastCatchUp: Date?
+    private var lastRetention: Date?
     private var lastResend: Date?
     private var resending: Task<Void, Never>?
     private var resendAgain = false
@@ -55,10 +60,13 @@ import UIKit
     /// - Parameters:
     ///   - sendErase, sendDelete: one request to the watch (WatchSync's: a message while its app runs, else queued user
     ///     info, never queued twice).
+    ///   - retain: asks for an audio retention pass (`RecordingDayKeeper.schedule`): once per launch, whatever the app's
+    ///     state, and from arriving chunks (`retentionInterval`).
     init(store: RecordingDayStore = .shared, library: RecordingLibrary = .shared, summaries: RecordingDaySummaries = .shared,
          capabilities: RecordingDayPhoneCapabilities = .shared,
          sendErase: @escaping (RecordingDayEraseRequest) -> Void = { WatchSync.shared.sendDayErase($0) },
          sendDelete: @escaping (RecordingDayDelete) -> Void = { WatchSync.shared.sendDayDelete($0) },
+         retain: @escaping () -> Void = { RecordingDayKeeper.shared.schedule() },
          now: @escaping () -> Date = { .now }) {
         self.store = store
         self.library = library
@@ -66,6 +74,7 @@ import UIKit
         self.capabilities = capabilities
         self.sendErase = sendErase
         self.sendDelete = sendDelete
+        self.retain = retain
         self.now = now
     }
 
@@ -79,7 +88,8 @@ import UIKit
         let sync = WatchSync.shared
         let intake = RecordingDayIntake(store: store,
                                         sendAck: { @Sendable ack in sync.sendDayAck(ack) },
-                                        arrived: { @Sendable id in Task { @MainActor in self.arrived(id) } })
+                                        arrived: { @Sendable id in Task { @MainActor in self.arrived(id) } },
+                                        refused: { @Sendable id in Task { @MainActor in self.refused(id) } })
         self.intake = intake
         sync.onDayChunk = { @Sendable frame, reply in reply(intake.receive(frame: frame)) }
         sync.onDayFile = { @Sendable header, file in intake.receive(file: file, header: header) }
@@ -87,6 +97,7 @@ import UIKit
         sync.onDayErased = { [weak self] answer in Task { await self?.watchErased(answer) } }
         sync.onDayDeleted = { [weak self] answer in Task { await self?.watchDeleted(answer) } }
         sync.onDayWatchState = { [summaries] state in summaries.receive(watch: state) }
+        sync.onDayReachable = { [weak self] in self?.resendRequests() }
         // What the watch gets at the session's activation (WatchSync keeps it until then).
         capabilities.start()
         // Following changes only: the full read waits for the app to be in front (`readSummaries`).
@@ -101,7 +112,8 @@ import UIKit
     /// The watch session activated: what waits for the watch goes now (a send before activation goes nowhere).
     func sessionActivated() {
         // `AppModel`'s `WatchSync.shared.onActivated` calls this. Requests also go once recovery is done, whenever the
-        // app comes to the front, and when the watch sends.
+        // app comes to the front, when the watch becomes reachable (`onDayReachable`), and when the watch sends (also a
+        // chunk of a deleted day, `refused`).
         resendRequests()
     }
 
@@ -109,6 +121,7 @@ import UIKit
     func arrived(_ id: UUID) {
         // The transcriber and the upload follow `RecordingDayStore.shared.changes` on their own.
         requestCatchUpIfDue()
+        retainIfDue()
         resendIfDue()
         rows.insert(id)
         guard adopting == nil else { return }
@@ -116,6 +129,13 @@ import UIKit
             while let id = rows.popFirst() { await adoptRow(id) }
             adopting = nil
         }
+    }
+
+    /// A chunk or an event of a day deleted here came: the watch is still at it, so the delete (which the store made
+    /// sure is waiting) goes again, at most once a minute (`resendIfDue`). Without this nothing would: refused chunks
+    /// change no day, so they never pass through `arrived`.
+    func refused(_ id: UUID) {
+        resendIfDue()
     }
 
     /// Returns once every day that arrived so far has its library row (tests).
@@ -174,6 +194,9 @@ import UIKit
         }
         readSummaries()
         resendRequests()
+        // Audio past its deadline goes on every launch, also one in the background to take a chunk (the catch-up needs
+        // the phone on power, and the app may not come to the front for days).
+        retainIfDue()
     }
 
     /// Every day's summary, read once per launch. A launch in the background to take a chunk shows nothing, so it
@@ -203,6 +226,13 @@ import UIKit
         if let last = lastCatchUp, at >= last, at.timeIntervalSince(last) < Self.catchUpInterval { return }
         lastCatchUp = at
         Self.requestCatchUp()
+    }
+
+    private func retainIfDue() {
+        let at = now()
+        if let last = lastRetention, at >= last, at.timeIntervalSince(last) < Self.retentionInterval { return }
+        lastRetention = at
+        retain()
     }
 
     private func resendIfDue() {
@@ -264,6 +294,7 @@ nonisolated final class RecordingDayIntake: Sendable {
     private let store: RecordingDayStore
     private let sendAck: @Sendable (RecordingDayAck) -> Void
     private let arrived: @Sendable (UUID) -> Void
+    private let refused: @Sendable (UUID) -> Void
     private let ackDelay: TimeInterval
     private let queue = DispatchQueue(label: "persona.recording-day-acks", qos: .utility)
     private let waiting = OSAllocatedUnfairLock(initialState: Waiting())
@@ -277,13 +308,22 @@ nonisolated final class RecordingDayIntake: Sendable {
     /// - Parameters:
     ///   - sendAck: sends one recording's acknowledgements (a message while reachable, else user info).
     ///   - arrived: a day changed (a chunk or an event stored); called on WatchConnectivity's queue.
+    ///   - refused: a chunk or an event of a day deleted here came (the store asked the watch again to delete it);
+    ///     called on WatchConnectivity's queue.
     ///   - ackDelay: how long file acknowledgements gather (a backlog arrives as a burst of files).
     init(store: RecordingDayStore, sendAck: @escaping @Sendable (RecordingDayAck) -> Void,
-         arrived: @escaping @Sendable (UUID) -> Void, ackDelay: TimeInterval = 1) {
+         arrived: @escaping @Sendable (UUID) -> Void, refused: @escaping @Sendable (UUID) -> Void = { _ in },
+         ackDelay: TimeInterval = 1) {
         self.store = store
         self.sendAck = sendAck
         self.arrived = arrived
+        self.refused = refused
         self.ackDelay = ackDelay
+    }
+
+    private func follow(_ result: RecordingDayStore.StoreResult, _ id: UUID) {
+        if result.changed { arrived(id) }
+        if result == .refused { refused(id) }
     }
 
     /// A chunk by `sendMessageData`: the reply is its acknowledgement (JSON `RecordingDayAck`), with the recording's
@@ -292,7 +332,7 @@ nonisolated final class RecordingDayIntake: Sendable {
         guard let unframed = RecordingDayHeader.unframe(frame),
               let result = try? store.store(header: unframed.header, audio: unframed.audio) else { return Data() }
         let header = unframed.header
-        if result.changed { arrived(header.recording) }
+        follow(result, header.recording)
         return acknowledgement(header.recording, seqs: [header.seq], events: []).data
     }
 
@@ -300,7 +340,7 @@ nonisolated final class RecordingDayIntake: Sendable {
     /// already held, or for a deleted day), false to leave it to the watch's resend.
     func receive(file: URL, header: RecordingDayHeader) -> Bool {
         guard let result = try? store.store(header: header, movingFile: file) else { return false }
-        if result.changed { arrived(header.recording) }
+        follow(result, header.recording)
         batch(header.recording, seq: header.seq)
         return true
     }
@@ -311,6 +351,7 @@ nonisolated final class RecordingDayIntake: Sendable {
     func receive(event envelope: RecordingDayEventEnvelope) -> RecordingDayAck? {
         guard let result = try? store.store(event: envelope) else { return nil }
         if result.changed { arrived(envelope.recording) }
+        if result == .refused { refused(envelope.recording) }
         return acknowledgement(envelope.recording, seqs: [], events: [envelope.event.n])
     }
 

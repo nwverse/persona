@@ -240,8 +240,10 @@ final class RecordingSync {
     /// Deleted by the user: gone here at once (audio and text), and from the knowledge base when the hub is reachable.
     /// A day recording goes whole (docs/assistant/day-recap.md「Deleting」), also when the hub deleted one of its parts:
     /// every part of it from the hub, its transcription and upload here, and the watch's copy (`RecordingDaySync.removedHere`).
-    func delete(_ id: UUID) throws {
-        let day = library.entry(id)?.isDay == true
+    /// `day`: the caller knows it is a day recording (the day upload's `410`), also when the library has no row for it
+    /// yet (one is written only after its first chunk was stored): without the row, nothing would ask the watch.
+    func delete(_ id: UUID, day isDay: Bool = false) throws {
+        let day = isDay || library.entry(id)?.isDay == true
         try library.remove(id)
         store.deletes.insert(id)
         if day {

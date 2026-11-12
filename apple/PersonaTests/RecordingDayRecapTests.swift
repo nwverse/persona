@@ -57,11 +57,20 @@ private func recap(entries: [(Double, String)], summary: String = "", isFinal: B
 }
 
 private func summary(id: UUID = UUID(), hubIDs: [UUID] = [], sync: RecordingDaySyncState = .synced,
-                     transcribedTo: Date? = dayStart.addingTimeInterval(600), recapState: String? = nil) -> RecordingDaySummary {
+                     transcribedTo: Date? = dayStart.addingTimeInterval(600), recapState: String? = nil,
+                     closedAt: Date? = nil, chunks: Int = 360, skipped: Int = 0, complete: Bool = false) -> RecordingDaySummary {
     RecordingDaySummary(id: id, day: "2026-11-11", timeZone: "Asia/Shanghai", firstAt: dayStart, lastAt: dayStart.addingTimeInterval(3600),
-                        closedAt: nil, recordedSeconds: 3600, transcribedTo: transcribedTo, chunks: 360, waiting: 0, skipped: 0,
-                        failed: 0, gaps: [], marks: [], sync: sync, recapState: recapState, recapFinal: false, hubIDs: hubIDs,
-                        complete: false)
+                        closedAt: closedAt, recordedSeconds: 3600, transcribedTo: transcribedTo, chunks: chunks, waiting: 0,
+                        skipped: skipped, failed: 0, gaps: [], marks: [], sync: sync, recapState: recapState, recapFinal: false,
+                        hubIDs: hubIDs, complete: complete)
+}
+
+/// The contract's example day, closed at 19:07 there and complete on the hub: every chunk settled and appended.
+private let dayEnd = JSON.parseDate("2026-11-11T19:07:00+08:00")!
+
+/// That day, complete: its chunks all quieter than speech (`silent`), or some of them with words.
+private func completeDay(id: UUID = UUID(), silent: Bool) -> RecordingDaySummary {
+    summary(id: id, hubIDs: [id], transcribedTo: dayEnd, closedAt: dayEnd, chunks: 66, skipped: silent ? 66 : 3, complete: true)
 }
 
 /// The detail the hub answers for a day: its meta (`recap_final` when `final`) and, when given, its recap (raw JSON).
@@ -79,11 +88,11 @@ private let listPath = "/api/v1/recordings"
 
 /// `GET /api/v1/recordings` with a day's parts in order, each with its `recap_state` (nil: none due) and the day fields
 /// reconciliation reads; `final` parts list `recap_final` and `recap_final_at`.
-private func listing(_ parts: [(UUID, String?)], final finalParts: Set<UUID> = []) -> String {
+private func listing(_ parts: [(UUID, String?)], final finalParts: Set<UUID> = [], next: Int = 120) -> String {
     let rows = parts.enumerated().map { i, part in
         let stateField = part.1.map { #", "recap_state": "\#($0)""# } ?? ""
         let finalField = finalParts.contains(part.0) ? #", "recap_final": true, "recap_final_at": "2026-11-12T06:00:00Z""# : ""
-        let dayFields = #""kind": "day", "day": "2026-11-11", "part": \#(i + 1), "next": 120, "base": 1762826467250"#
+        let dayFields = #""kind": "day", "day": "2026-11-11", "part": \#(i + 1), "next": \#(next), "base": 1762826467250"#
         return #"{"id": "\#(part.0.uuidString.lowercased())", "revision": 1762830067891, \#(dayFields)\#(stateField)\#(finalField)}"#
     }
     return #"{"days": 14, "recordings": [\#(rows.joined(separator: ", "))]}"#
@@ -590,5 +599,162 @@ private func listing(_ parts: [(UUID, String?)], final finalParts: Set<UUID> = [
         await model.load(day)
         #expect(hub.sent("GET", kbPath(second)).count == 2)
         #expect(hub.sent("GET", kbPath(first)).count == 1)
+    }
+
+    // MARK: A recap that never comes
+
+    /// A day that ended without a word (every chunk quieter than speech): the hub lists it with no recap state, which it
+    /// keeps for good. The page shows no "comes later" and stops asking.
+    @Test func aSilentCompleteDayWaitsForNoRecap() async {
+        let id = UUID()
+        let hub = FakeHub()
+        hub.on("GET", listPath, json: listing([(id, nil)], next: 0))
+        let model = RecordingDayRecapModel(api: { hub.client }, reconciled: { _, _ in }, now: { dayEnd.addingTimeInterval(60) })
+        let day = completeDay(id: id, silent: true)
+        #expect(RecordingDayStatus.word(day) == .noSpeech)
+        await model.load(day)
+        #expect(model.state == .none)
+        #expect(!model.waiting, "polled the hub for a recap that never comes")
+        // Not complete yet (a chunk may still come from the watch): it may still have words, so it waits.
+        var open = day
+        open.complete = false
+        await model.load(open)
+        #expect(model.state == .waitingForText)
+        #expect(model.waiting)
+        // Offline: the phone's own facts say the same.
+        #expect(RecordingDayRecapState.of(parts: nil, sync: .synced, transcribed: true, day: .init(day), fallbackStart: dayStart,
+                                          zone: shanghai) == .none)
+    }
+
+    /// Transcribed chunks whose speech held no sentence: the phone can't tell, the hub's list does (no position held).
+    @Test func aCompleteDayTheHubHoldsNoTextOfWaitsForNoRecap() async {
+        let id = UUID()
+        let hub = FakeHub()
+        hub.on("GET", listPath, json: listing([(id, nil)], next: 0))
+        let model = RecordingDayRecapModel(api: { hub.client }, reconciled: { _, _ in }, now: { dayEnd.addingTimeInterval(60) })
+        await model.load(completeDay(id: id, silent: false))
+        #expect(model.state == .none)
+        #expect(!model.waiting)
+        // With text there, the recap comes: the hub writes the final one when the day becomes complete.
+        hub.on("GET", listPath, json: listing([(id, nil)], next: 40))
+        await model.load(completeDay(id: id, silent: false))
+        #expect(model.state == .waitingForText)
+        #expect(model.waiting)
+    }
+
+    /// A complete day's last recap the hub writes by itself is due 6 hours and a half after the day ended: still none
+    /// listed by then, none comes unless asked, and the page stops asking every 30 seconds.
+    @Test func aCompleteDayPastItsLastRecapIsNotPolled() async {
+        let id = UUID()
+        let hub = FakeHub()
+        hub.on("GET", listPath, json: listing([(id, nil)]))
+        var now = dayEnd.addingTimeInterval(3600)
+        let model = RecordingDayRecapModel(api: { hub.client }, reconciled: { _, _ in }, now: { now })
+        let day = completeDay(id: id, silent: false)
+        await model.load(day)
+        #expect(model.state == .waitingForText)
+        #expect(model.waiting)
+        now = dayEnd.addingTimeInterval(RecordingDayRecapState.Day.lastRecapAfter)
+        #expect(model.state == .waitingForText)
+        #expect(!model.waiting)
+        // An open day keeps following: its recap comes in the evening, and again once it ends.
+        var open = day
+        open.complete = false
+        open.closedAt = nil
+        await model.load(open)
+        #expect(model.waiting)
+        // A recap being written is always followed.
+        #expect(RecordingDayRecapState.writing.follows(.init(day), now: now))
+    }
+
+    /// The hub refused the day (a 400, or another kind of recording under its id): nothing more is sent, so nothing is
+    /// waited for, offline or not.
+    @Test func aDayKnowledgeDidntAcceptWaitsForNothing() async {
+        let id = UUID()
+        let hub = FakeHub()
+        hub.on("GET", listPath, json: listing([]))
+        let model = RecordingDayRecapModel(api: { hub.client }, reconciled: { _, _ in })
+        let refused = summary(id: id, hubIDs: [id], sync: .problem)
+        await model.load(refused)
+        #expect(model.state == .none, "not \"It's written once the day's text reaches the hub\"")
+        #expect(!model.waiting)
+        #expect(RecordingDayStatus.word(refused) == .notAccepted)
+        #expect(RecordingDayRecapState.of(parts: nil, sync: .problem, transcribed: true, fallbackStart: dayStart, zone: shanghai) == .none)
+        // A part the hub holds keeps its recap (another part was the one refused).
+        hub.on("GET", listPath, json: listing([(id, "ready")]))
+        hub.on("GET", kbPath(id), json: detail(state: "ready", recap: contractRecap))
+        await model.load(refused)
+        guard case .ready = model.state else {
+            Issue.record("the held part's recap went: \(model.state)")
+            return
+        }
+    }
+
+    /// The hub took the empty create, then refused the first append: it lists the part with no position and no recap,
+    /// and nothing more goes, so nothing is waited for; a stopped day whose part holds text waits only as long as a
+    /// complete one would.
+    @Test func aStoppedUploadWaitsOnlyForWhatTheHubHolds() async {
+        let id = UUID()
+        let hub = FakeHub()
+        hub.on("GET", listPath, json: listing([(id, nil)], next: 0))
+        var now = dayEnd.addingTimeInterval(60)
+        let model = RecordingDayRecapModel(api: { hub.client }, reconciled: { _, _ in }, now: { now })
+        let refused = summary(id: id, hubIDs: [id], sync: .problem, closedAt: dayEnd)
+        await model.load(refused)
+        #expect(model.state == .none)
+        #expect(!model.waiting)
+        hub.on("GET", listPath, json: listing([(id, nil)], next: 40))
+        await model.load(refused)
+        #expect(model.state == .waitingForText, "the hub writes from what it holds")
+        #expect(model.waiting)
+        now = dayEnd.addingTimeInterval(RecordingDayRecapState.Day.lastRecapAfter)
+        #expect(!model.waiting)
+    }
+
+    /// The page's recap task restarts only on what changes the recap's state: the upload's pending / synced flips with
+    /// each chunk while the watch records, and isn't one of them.
+    @Test func theRecapTaskIsKeyedOnWhatMovesTheRecap() {
+        let id = UUID()
+        let synced = summary(id: id, hubIDs: [id], sync: .synced)
+        var pending = synced
+        pending.sync = .pending
+        pending.recordedSeconds += 10
+        pending.chunks += 1
+        #expect(RecordingDayRecapKey(synced, round: 0) == RecordingDayRecapKey(pending, round: 0))
+        #expect(RecordingDayRecapKey(synced, round: 0) != RecordingDayRecapKey(synced, round: 1), "Retry")
+        for sync in [RecordingDaySyncState.notOffered, .unsupported, .problem, .expired] {
+            var moved = synced
+            moved.sync = sync
+            #expect(RecordingDayRecapKey(synced, round: 0) != RecordingDayRecapKey(moved, round: 0), "\(sync)")
+        }
+        var ready = synced
+        ready.recapState = "ready"
+        #expect(RecordingDayRecapKey(synced, round: 0) != RecordingDayRecapKey(ready, round: 0))
+        #expect(RecordingDayRecapKey(synced, round: 0) != RecordingDayRecapKey(completeDay(id: id, silent: false), round: 0))
+        // A silent day recording: a chunk that comes in waiting, then is skipped as quiet, moves nothing while it is open;
+        // once the day is complete, whether any of it may hold words does.
+        let quiet = summary(id: id, hubIDs: [id], chunks: 10, skipped: 10)
+        var arriving = quiet
+        arriving.chunks += 1
+        #expect(RecordingDayRecapKey(quiet, round: 0) == RecordingDayRecapKey(arriving, round: 0))
+        #expect(RecordingDayRecapKey(completeDay(id: id, silent: true), round: 0)
+                != RecordingDayRecapKey(completeDay(id: id, silent: false), round: 0))
+    }
+
+    /// A look cut short by the task starting again isn't the hub out of reach: what the page shows stays as it was.
+    @Test func aCancelledLookChangesNothing() async {
+        let id = UUID()
+        let hub = FakeHub()
+        hub.on("GET", listPath) { _ in throw CancellationError() }
+        let model = RecordingDayRecapModel(api: { hub.client }, reconciled: { _, _ in })
+        await model.load(summary(id: id))
+        #expect(model.state == .none, "not \"waiting for sync\" after a first look that was cancelled")
+        hub.on("GET", listPath, json: listing([(id, "pending")]))
+        hub.on("GET", kbPath(id), json: detail(state: "pending"))
+        await model.load(summary(id: id))
+        #expect(model.state == .writing)
+        hub.on("GET", listPath) { _ in throw URLError(.cancelled) }
+        await model.load(summary(id: id, transcribedTo: nil))
+        #expect(model.state == .writing)
     }
 }

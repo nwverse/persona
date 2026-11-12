@@ -1064,6 +1064,25 @@ struct RecordingDayUploadTests {
         #expect(day.chunks[2]?.positions == [RecordingDayPosition(part: 2, pos: 0)] && day.parts[1].count == 1)
     }
 
+    /// A part an offline phone filled past the hub's 20000 segments, whose repair `PUT` the hub refused: packed again
+    /// to the hub's limit at once, not to 90% of what was refused (22500, refused again, and again).
+    @Test func aRefusedPartOverTheHubsLimitIsPackedToTheLimitAtOnce() {
+        let total = RecordingDayUpload.maxPartSegments + 5_000
+        var day = record([(0..<total).map { RecordingSentence(start: Double($0) * 0.0004, end: Double($0) * 0.0004, text: "s") }])
+        RecordingDayUpload.place(&day)
+        #expect(day.parts.map(\.count) == [total])
+        day.parts[0].created = true
+        #expect(RecordingDayUpload.repartition(&day, from: 1, refused: total, now: anchor, newID: { UUID() }))
+        let counts = Dictionary(grouping: day.chunks[0]?.positions ?? [], by: \.part).mapValues(\.count)
+        #expect(counts == [1: RecordingDayUpload.maxPartSegments, 2: 5_000], "the first PUT fits")
+        #expect(day.parts.sorted { $0.part < $1.part }.map(\.count) == [RecordingDayUpload.maxPartSegments, 5_000])
+        // Below the limit it is still fewer than were refused (the hub may count bytes the phone doesn't).
+        var small = record([(0..<100).map { RecordingSentence(start: Double($0) * 0.05, end: Double($0) * 0.05, text: "s") }])
+        RecordingDayUpload.place(&small)
+        #expect(RecordingDayUpload.repartition(&small, from: 1, refused: 100, now: anchor, newID: { UUID() }))
+        #expect(small.chunks[0]?.positions?.filter { $0.part == 1 }.count == 90)
+    }
+
     @Test func aSentenceOver64KBIsSplitBeforeItGetsAPosition() throws {
         let word = String(repeating: "x", count: 1000)
         let long = Array(repeating: word, count: 100).joined(separator: " ")   // 100 099 bytes

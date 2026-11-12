@@ -32,6 +32,8 @@ final class WatchAllDay {
     /// A line confirming the tap just made (and read out by VoiceOver).
     enum Feedback: Equatable {
         case meetingMarked, bookmarked, erased
+        /// The erase couldn't be saved: nothing was erased.
+        case notErased
         /// Another recording holds the microphone.
         case busy
 
@@ -40,6 +42,7 @@ final class WatchAllDay {
             case .meetingMarked: String(localized: "Meeting marked")
             case .bookmarked: String(localized: "Bookmark added")
             case .erased: String(localized: "Erased the last 10 minutes")
+            case .notErased: String(localized: "The last 10 minutes weren't erased. Try again.")
             case .busy: String(localized: "Stop the other recording first.")
             }
         }
@@ -49,9 +52,12 @@ final class WatchAllDay {
             case .meetingMarked: Theme.Icon.meetingMark
             case .bookmarked: Theme.Icon.pin
             case .erased: Theme.Icon.delete
-            case .busy: Theme.Icon.error
+            case .notErased, .busy: Theme.Icon.error
             }
         }
+
+        /// Something didn't happen: the failure haptic and the caution color.
+        var failed: Bool { self == .notErased || self == .busy }
     }
 
     /// When the state shown began: a recording's time counts from here.
@@ -61,6 +67,9 @@ final class WatchAllDay {
     var pageRequested = false
     /// The phone deleted the recording this watch was making, and nothing started since: the page says so.
     private(set) var deletedOnPhone = false
+    /// Notifications are off for the app (the user said no): a pause, a stop or the phone's start won't reach the
+    /// wrist while the screen is off, so the page says so. Learned when the page or the card asks (`askForNotifications`).
+    private(set) var notificationsOff = false
     /// The user wants all-day recording on (`RecordingCapture.allDayIntentKey`, kept by the capture so it outlives the
     /// app): on from a start until Stop for Today. Mirrored here because UserDefaults isn't observed, so the card and
     /// the page redraw when it goes (`refreshWish`).
@@ -77,6 +86,9 @@ final class WatchAllDay {
     @ObservationIgnored private var feedbackTask: Task<Void, Never>?
     @ObservationIgnored private var deadManArmedAt: Date?
     @ObservationIgnored private var heartbeatAt: Date?
+    /// What the face last said a tap may do while nothing records: a change of the phone's `recordingDay` rewrites it.
+    @ObservationIgnored private var offered: AllDaySnapshot.Access?
+    @ObservationIgnored private var defaultsObserver: NSObjectProtocol?
     /// The user's stop is under way (`stopCapture`).
     @ObservationIgnored private var stopping = false
     #if DEBUG
@@ -130,6 +142,20 @@ final class WatchAllDay {
     /// The phone's `recordingDay` as last stored, read when a start is asked for.
     private static var storedPhoneDay: Int? { UserDefaults.standard.object(forKey: WatchSync.phoneDayKey) as? Int }
 
+    /// UserDefaults Data: the last gap said (`AllDayAlertPolicy.Gap`), so a later launch that finds the same day still
+    /// open doesn't say it again. Written once per halt.
+    private static let reportedGapKey = "recording.allDay.reportedGap"
+
+    private static var reportedGap: AllDayAlertPolicy.Gap? {
+        get {
+            UserDefaults.standard.data(forKey: reportedGapKey).flatMap { try? JSONDecoder().decode(AllDayAlertPolicy.Gap.self, from: $0) }
+        }
+        set {
+            guard newValue != reportedGap else { return }
+            UserDefaults.standard.set(newValue.flatMap { try? JSONEncoder().encode($0) }, forKey: reportedGapKey)
+        }
+    }
+
     /// Chunks the iPhone hasn't acknowledged yet.
     var waiting: Int {
         #if DEBUG
@@ -153,7 +179,7 @@ final class WatchAllDay {
         let deleted = capture.onDayDeletedRemotely
         capture.onDayHalted = { [weak self] reason in
             halted?(reason)
-            self?.handle(.halted(reason))
+            self?.halted(reason)
         }
         capture.onDayResumed = { [weak self] in
             resumed?()
@@ -172,22 +198,70 @@ final class WatchAllDay {
         refreshWish()
         published = state
         observeCapture()
+        observePhoneDay()
         #if DEBUG
         guard !sampleShown else { return }
         #endif
+        // The face says what a tap may do now, whatever an earlier build or the phone's last word left there.
+        refreshOffer(force: true)
         if let halt = capture.takeHaltedOnLaunch() { reportLaunchHalt(halt) }
         // Next turn: this runs while the app is still being set up (`WatchModel.init`).
         Task { scheduleMidnightClose() }
     }
 
-    /// The app ended while the user wanted all-day recording on. It says so only when the day was recording then and
-    /// nothing said it yet (the dead-man's switch may have, minutes ago); the face and the phone follow either way.
+    /// The app ended while the user wanted all-day recording on. It says so only for an exit this launch found while
+    /// the day was recording, which nothing said yet (the dead-man's switch may have, minutes ago): every later launch
+    /// finds the same day open until Continue, Stop for Today or midnight, and a stop the system made while the app ran
+    /// had its own notice (`AllDayAlertPolicy.alertsOnLaunch`). The face and the phone follow either way.
     private func reportLaunchHalt(_ halt: (id: UUID, reason: RecordingDayHalt)) {
-        let gap = RecordingLibrary.shared.entry(halt.id)?.gapReason
+        let entry = RecordingLibrary.shared.entry(halt.id)
+        let gap = entry.map(AllDayAlertPolicy.gap(of:)) ?? AllDayAlertPolicy.Gap(recording: halt.id, event: nil)
+        let reported = Self.reportedGap
         Task {
-            let alerted = await notices.isDelivered(AllDayNotice.stoppedRequest)
-            handle(.halted(halt.reason), alerts: AllDayAlertPolicy.alertsOnLaunch(gapReason: gap, alreadyAlerted: alerted))
+            // The dead-man's switch spoke when its notice is out, or it no longer waits (it fired and was dismissed).
+            var fired = await notices.isDelivered(AllDayNotice.stoppedRequest)
+            if !fired { fired = await !notices.isPending(AllDayNotice.stoppedRequest) }
+            let alerts = AllDayAlertPolicy.alertsOnLaunch(gapReason: entry?.gapReason, gap: gap, reported: reported,
+                                                          alreadyAlerted: fired)
+            Self.reportedGap = gap
+            refreshWish()
+            handle(.halted(halt.reason, now: state), alerts: alerts)
         }
+    }
+
+    /// The capture paused or stopped by itself: the wrist, the notice and the face follow the state it is really in.
+    /// Its gap is said now, so a launch that finds the day still open later doesn't say it again; only once its event
+    /// is saved, though (`AllDayAlertPolicy.haltMark`).
+    private func halted(_ reason: RecordingDayHalt) {
+        refreshWish()
+        handle(.halted(reason, now: state))
+        let library = RecordingLibrary.shared
+        // A stop has let the recording go: the newest day still open is the one it left.
+        let day = capture.dayRecordingID.flatMap { library.entry($0) }
+            ?? library.openDays(source: .watch).max { $0.createdAt < $1.createdAt }
+        if let mark = day.flatMap(AllDayAlertPolicy.haltMark(of:)) { Self.reportedGap = mark }
+    }
+
+    /// The phone's `recordingDay` arrives in the defaults (`WatchPhoneCapabilities.store`), which nothing observes: the
+    /// face follows it here, so it never offers a start the page would refuse, nor hides one it would take.
+    private func observePhoneDay() {
+        defaultsObserver = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil,
+                                                                  queue: .main) { @Sendable [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshOffer(force: false) }
+        }
+    }
+
+    /// Rewrites the face when what a tap may do changed (`force`: at launch, compared with what is on file instead).
+    /// A move not published yet is left to `captureChanged`, which writes the offer with the new state; a running
+    /// recording's offer doesn't change with the phone's word.
+    private func refreshOffer(force: Bool) {
+        #if DEBUG
+        // A sample's made-up state never reaches the real face.
+        guard !sampleShown else { return }
+        #endif
+        let access = access(phoneDay: Self.storedPhoneDay)
+        guard force || access != offered, published == state else { return }
+        publishFace(published, group: DispatchGroup(), onlyIfRedrawn: true)
     }
 
     // MARK: - What the user does
@@ -208,15 +282,24 @@ final class WatchAllDay {
     }
 
     /// Stop for Today: the microphone goes off and stays off until the user starts again. The day stays open (a start
-    /// later today continues it) and closes at midnight.
+    /// later today continues it) and closes at midnight. From the phone's switch it also takes back what its start
+    /// asked for: a start of ours still under way, or its notice.
     func stopForToday() {
         let was = state
-        // A start of ours still waiting for the microphone goes too (the phone's switch turned off meanwhile).
-        let cancelled = startTask != nil && capture.state == .starting
-        if cancelled { capture.cancelStarting() }
+        // A start of ours not recording yet goes too: asking for notifications (it checks once the answer comes), or
+        // waiting for the microphone.
+        let underWay = startTask != nil
+        if underWay {
+            startTask?.cancel()
+            if capture.state == .starting { capture.cancelStarting() }
+        }
+        let event = AllDayAlertPolicy.stopEvent(state: was, startUnderWay: underWay)
         switch was {
         case .off:
-            guard cancelled else { return }
+            guard event == .stoppedByUser else {
+                handle(event)
+                return
+            }
         case .recording, .paused, .interrupted:
             stopCapture()
         case .stopped:
@@ -253,11 +336,11 @@ final class WatchAllDay {
     }
 
     /// Erases the last 10 minutes, also once the microphone is off while a day is still open (`dayOpen`): what was
-    /// just said can be taken back after a stop too.
+    /// just said can be taken back after a stop too. The page asks first; this confirms only an erase that was saved,
+    /// since one that wasn't deletes nothing and the audio still goes to the phone.
     func eraseRecent() {
         guard capture.allDay || capture.state == .idle else { return }
-        capture.eraseRecent()
-        show(.erased)
+        if capture.eraseRecent() { show(.erased) } else { show(.notErased) }
     }
 
     private func bringToRecording() {
@@ -276,7 +359,13 @@ final class WatchAllDay {
         guard startTask == nil else { return }
         guard capture.state == .idle else { return show(.busy) }
         startTask = Task {
-            await notices.askOnce()
+            let off = await notices.askOnce()
+            if notificationsOff != off { notificationsOff = off }
+            // The phone's switch turned off (or Stop for Today) while the permission prompt was up: no microphone.
+            guard !Task.isCancelled else {
+                startTask = nil
+                return
+            }
             await capture.start(locale: WatchRecordingView.defaultLocale, day: true)
             startTask = nil
             refreshWish()
@@ -303,7 +392,7 @@ final class WatchAllDay {
 
     private func show(_ next: Feedback) {
         feedback = next
-        if Self.inFront { WKInterfaceDevice.current().play(next == .busy ? .failure : .success) }
+        if Self.inFront { WKInterfaceDevice.current().play(next.failed ? .failure : .success) }
         AccessibilityNotification.Announcement(next.text).post()
         feedbackTask?.cancel()
         feedbackTask = Task {
@@ -330,6 +419,26 @@ final class WatchAllDay {
             capture.resumeAfterInterruption()
         }
         runPending()
+        // Back from Settings: the page's line about notifications being off goes once they are on.
+        if notificationsOff {
+            Task {
+                let off = await notices.askOnce()
+                if notificationsOff != off { notificationsOff = off }
+            }
+        }
+    }
+
+    /// The page or the home card is showing All-Day Recording in front: ask for notifications once when it is offered
+    /// (`AllDayAlertPolicy.asksForNotifications`), so the phone's start and a pause can reach the wrist before the first
+    /// start on the watch, and learn whether the user turned them off.
+    func askForNotifications(phoneDay: Int?, onPage: Bool) async {
+        guard Self.inFront, AllDayAlertPolicy.asksForNotifications(access(phoneDay: phoneDay), onPage: onPage) else { return }
+        #if DEBUG
+        // Screenshots (`-showAllDaySample`): the system's prompt would cover the page.
+        if UserDefaults.standard.string(forKey: "showAllDaySample") != nil { return }
+        #endif
+        let off = await notices.askOnce()
+        if notificationsOff != off { notificationsOff = off }
     }
 
     private func runPending() {
@@ -346,7 +455,9 @@ final class WatchAllDay {
         switch command {
         case RecordingDayContract.Command.start:
             guard state != .recording else { return }
-            if handle(.phoneAskedToStart).startsNow { open(.start, byPhone: true) }
+            // `WatchSync` acted on it just now, so the newest stamp is this command's: its notice keeps it.
+            let sentAt = UserDefaults.standard.double(forKey: WatchDayCommandOrder.lastKey)
+            if handle(.phoneAskedToStart(sentAt: sentAt)).startsNow { open(.start, byPhone: true) }
         case RecordingDayContract.Command.stop:
             stopForToday()
         default:
@@ -375,26 +486,32 @@ final class WatchAllDay {
     /// A background refresh (`WatchBackgroundRefresh`; the one after midnight, or the frog's): a day recording left
     /// open while nothing recorded gets its `closed` event, so the phone can finish it and the hub write its final
     /// recap without the user opening the app. The close hands its event off to the system at once, which needs an
-    /// activated session: a cold launch has only just asked for one.
+    /// activated session: a cold launch has only just asked for one. A session that doesn't activate in time leaves the
+    /// day open, and the wake is asked for again (`AllDayAlertPolicy.closeRefreshDate`), rather than closing it into
+    /// a `closed` event nothing could hand to the system.
     func closeStaleDays() async {
         install()
+        var retrying = false
         // A pause can span several midnights: the next close is asked for whatever happens here.
-        defer { scheduleMidnightClose() }
+        defer { scheduleMidnightClose(retrying: retrying) }
         guard !RecordingLibrary.shared.openDays(source: .watch).isEmpty else { return }
-        _ = await sessionActivated(by: .now.addingTimeInterval(Self.activationWait))
+        guard await sessionActivated(by: .now.addingTimeInterval(Self.activationWait)) else {
+            retrying = true
+            return
+        }
         WatchDayTransfer.shared.closeStaleDays()
         WatchDayTransfer.shared.publishState()
     }
 
     /// While a day recording is open and nothing records, wake just after its midnight (in the recording's own zone)
     /// to close it; otherwise no wake of ours. watchOS decides when exactly, and the request is shared with the frog's.
-    private func scheduleMidnightClose() {
+    private func scheduleMidnightClose(retrying: Bool = false) {
         let open = state == .recording ? [] : RecordingLibrary.shared.openDays(source: .watch)
         // Every day entry keeps its zone; the watch's own is only the fallback for one whose zone is unreadable.
         let days = open.compactMap { entry in
             entry.day.map { AllDayAlertPolicy.OpenDay(day: $0, zone: entry.dayTimeZone ?? .autoupdatingCurrent) }
         }
-        WatchBackgroundRefresh.want(.allDay, at: AllDayAlertPolicy.closeRefreshDate(openDays: days, now: .now))
+        WatchBackgroundRefresh.want(.allDay, at: AllDayAlertPolicy.closeRefreshDate(openDays: days, now: .now, retrying: retrying))
     }
 
     /// Waits until WatchConnectivity has activated (`WatchModel` asks for it at launch), at most until `deadline`.
@@ -492,6 +609,7 @@ final class WatchAllDay {
         let group = DispatchGroup()
         if let haptic = out.haptic { WKInterfaceDevice.current().play(haptic.watch) }
         if out.withdraw { notices.withdraw() }
+        if out.withdrawStart { notices.withdrawStart() }
         switch out.deadMan {
         case .arm:
             notices.armDeadMan(group: group)
@@ -516,14 +634,17 @@ final class WatchAllDay {
         if let done { group.notify(queue: .main, execute: done) }
     }
 
-    /// The complication's snapshot, written now: a change of state, or the recording's heartbeat (`since` stays).
-    private func publishFace(_ state: AllDaySnapshot.State, group: DispatchGroup) {
+    /// The complication's snapshot, written now: a change of state, or the recording's heartbeat (`since` stays), with
+    /// what a tap may do (`onlyIfRedrawn`: only when that or the state differs from what is on file).
+    private func publishFace(_ state: AllDaySnapshot.State, group: DispatchGroup, onlyIfRedrawn: Bool = false) {
         let now = Date.now
         heartbeatAt = now
+        let access = AllDayAlertPolicy.access(phoneDay: shown(phoneDay: Self.storedPhoneDay), state: state)
+        offered = access
         let day = capture.dayRecordingID.flatMap { RecordingLibrary.shared.entry($0)?.day }
-        let snapshot = AllDaySnapshot(state: state, since: since, updatedAt: now, day: day, pending: waiting)
+        let snapshot = AllDaySnapshot(state: state, since: since, updatedAt: now, day: day, pending: waiting, access: access)
         group.enter()
-        face.publish(snapshot) { group.leave() }
+        face.publish(snapshot, onlyIfRedrawn: onlyIfRedrawn) { group.leave() }
     }
 
     /// Runs `work` under a short task assertion (not a keep-alive): after a pause, a stop or an interruption watchOS
@@ -573,8 +694,14 @@ private extension AllDayAlertPolicy.Haptic {
 private final class AllDayFacePublisher {
     private let queue = DispatchQueue(label: "persona.allday.face", qos: .utility)
 
-    func publish(_ snapshot: AllDaySnapshot, done: @escaping @Sendable () -> Void) {
+    /// `onlyIfRedrawn`: skips the write and the reload when the face on file already draws the same
+    /// (`AllDaySnapshot.redraws`), read on this queue, never on the main thread.
+    func publish(_ snapshot: AllDaySnapshot, onlyIfRedrawn: Bool = false, done: @escaping @Sendable () -> Void) {
         queue.async { @Sendable in
+            if onlyIfRedrawn, !snapshot.redraws(over: AllDaySnapshot.read()) {
+                done()
+                return
+            }
             if snapshot.write() {
                 DispatchQueue.main.async { MainActor.assumeIsolated { WidgetCenter.shared.reloadTimelines(ofKind: AllDaySnapshot.widgetKind) } }
             }

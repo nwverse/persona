@@ -89,12 +89,21 @@ nonisolated enum WatchPhoneCapabilities {
 
     /// Applies one context; returns how many values it wrote or removed (0 when nothing changed).
     @discardableResult static func store(_ ctx: [String: Any], full: Bool, in defaults: UserDefaults = .standard) -> Int {
-        var writes = 0
-        if let rolling = ctx["recordingRolling"] as? Bool, defaults.object(forKey: rollingKey) as? Bool != rolling {
-            defaults.set(rolling, forKey: rollingKey)
-            writes += 1
-        }
-        writes += keep(ctx[RecordingDayContract.phoneKey] as? Int, as: dayKey, full: full, in: defaults)
+        storeRolling(ctx, in: defaults) + storeDay(ctx, full: full, in: defaults)
+    }
+
+    /// The rolling key alone; returns 1 when it wrote it.
+    @discardableResult static func storeRolling(_ ctx: [String: Any], in defaults: UserDefaults = .standard) -> Int {
+        guard let rolling = ctx["recordingRolling"] as? Bool, defaults.object(forKey: rollingKey) as? Bool != rolling else { return 0 }
+        defaults.set(rolling, forKey: rollingKey)
+        return 1
+    }
+
+    /// The all-day keys alone; returns how many it wrote or removed. Any change is the watch's day transfer's to act on
+    /// at once (`WatchSync.onDayCapabilities`): sending waits for `recordingDay` ≥ 1, and the age limit follows the keep
+    /// days.
+    @discardableResult static func storeDay(_ ctx: [String: Any], full: Bool, in defaults: UserDefaults = .standard) -> Int {
+        var writes = keep(ctx[RecordingDayContract.phoneKey] as? Int, as: dayKey, full: full, in: defaults)
         writes += keep(ctx[RecordingDayContract.phoneHubKey] as? Bool, as: dayHubKey, full: full, in: defaults)
         let keepDays = (ctx[RecordingDayContract.phoneKeepDaysKey] as? Int).map { RecordingDayContract.keepDays(recordingDays: $0) }
         writes += keep(keepDays, as: keepDaysKey, full: full, in: defaults)
@@ -203,6 +212,8 @@ final class WatchSync: NSObject, WCSessionDelegate {
     var onDayDeleted: ((RecordingDayDeleted) -> Void)?
     /// iPhone side: the watch's all-day state (`RecordingDayContract.watchStateKey` in its application context).
     var onDayWatchState: ((RecordingDayWatchState) -> Void)?
+    /// iPhone side: the watch became reachable: the erase and delete requests still waiting for it go again.
+    var onDayReachable: (() -> Void)?
     /// Watch side: the phone's switch (`RecordingDayContract.Command`). Only commands newer than the last one it got
     /// reach it (`WatchDayCommandOrder`): never a late, repeated or stale one.
     var onDayCommand: ((String) -> Void)?
@@ -215,12 +226,17 @@ final class WatchSync: NSObject, WCSessionDelegate {
     /// Watch side: the phone deleted a day recording. Returns the confirmation once the watch's copy is gone, nil to
     /// leave it to the phone's resend; WatchSync sends it like `onDayEraseRequest`'s answer.
     var onDayDelete: ((RecordingDayDelete) -> RecordingDayDeleted?)?
+    /// Watch side: what the phone says of all-day recording changed (`recordingDay`, `recordingDayHub`,
+    /// `recordingDayKeepDays`): its consent came or went, or how long the watch keeps chunks.
+    var onDayCapabilities: (() -> Void)?
 
     private var lastSummaryPush = Date.distantPast
     private var pendingSummary: WatchSummary?
     #if os(iOS) || os(visionOS)
     /// What the app last gave `pushRecordingDay`, sent again at every activation.
     private var dayCapabilities: RecordingDayCapabilities?
+    /// Whether the watch app was installed at the last look (activation, a change of the watch's state).
+    private var watchAppWasInstalled = false
     #endif
 
     func activate() {
@@ -361,7 +377,8 @@ final class WatchSync: NSObject, WCSessionDelegate {
     func sendDayErase(_ request: RecordingDayEraseRequest) {
         guard Self.phoneCanSend else { return }
         Self.ask([RecordingDayContract.eraseKey: request.data], unlessQueued: { @Sendable info in
-            RecordingDayEraseRequest(data: info[RecordingDayContract.eraseKey] as? Data) == request
+            // By identity: the queued copy's times went through the wire's milliseconds.
+            RecordingDayEraseRequest(data: info[RecordingDayContract.eraseKey] as? Data)?.isSame(as: request) ?? false
         }, answer: { @Sendable [weak self] reply in
             guard let erased = RecordingDayErased(data: reply[RecordingDayContract.erasedKey] as? Data) else { return }
             Task { @MainActor in self?.onDayErased?(erased) }
@@ -490,7 +507,8 @@ final class WatchSync: NSObject, WCSessionDelegate {
     /// `full`: the whole application context (at activation, or a new one arrived), which also says what the phone no
     /// longer offers; user info and config replies are partial.
     private func apply(_ ctx: [String: Any], full: Bool) {
-        WatchPhoneCapabilities.store(ctx, full: full)
+        WatchPhoneCapabilities.storeRolling(ctx)
+        let dayChanged = WatchPhoneCapabilities.storeDay(ctx, full: full) > 0
         #if os(watchOS)
         if let language = ctx["language"] as? String {
             LanguageStore.shared.follow(language)
@@ -510,6 +528,11 @@ final class WatchSync: NSObject, WCSessionDelegate {
         }
         if let minutes = WatchMinutes(data: ctx[WatchMinutes.key] as? Data) { onMinutes?(minutes) }
         if let state = RecordingDayWatchState(data: ctx[RecordingDayContract.watchStateKey] as? Data) { onDayWatchState?(state) }
+        #if os(watchOS)
+        if dayChanged { onDayCapabilities?() }
+        #else
+        _ = dayChanged
+        #endif
     }
 
     /// Routes a message's or user info's all-day keys; true when it carried one (it is then nothing else). `reply` is
@@ -609,19 +632,44 @@ final class WatchSync: NSObject, WCSessionDelegate {
 
     nonisolated func session(_ session: WCSession, activationDidCompleteWith state: WCSessionActivationState, error: Error?) {
         nonisolated(unsafe) let ctx = session.receivedApplicationContext
+        #if os(iOS) || os(visionOS)
+        let installed = session.isWatchAppInstalled
+        #endif
         Task { @MainActor in
             self.apply(ctx, full: true)
             #if os(iOS) || os(visionOS)
-            // All-day keys only once the app said what they are (`pushRecordingDay`): until then the context keeps the
-            // last ones sent, never a consent nobody gave.
-            var capabilities: [String: Any] = ["recordingRolling": true]
-            if let day = self.dayCapabilities { capabilities.merge(day.context) { $1 } }
-            self.update(capabilities)
+            self.watchAppWasInstalled = installed
+            self.update(Self.capabilityContext(day: self.dayCapabilities))
             #endif
             self.onActivated?()
             self.onRecordingEvent?()
         }
     }
+
+    #if os(iOS) || os(visionOS)
+    /// iPhone side: what the phone takes, for the watch's application context: rolling recordings, and all-day
+    /// recording's keys only once the app said what they are (`pushRecordingDay`), so the context never carries a
+    /// consent nobody gave.
+    static func capabilityContext(day: RecordingDayCapabilities?) -> [String: Any] {
+        var capabilities: [String: Any] = ["recordingRolling": true]
+        if let day { capabilities.merge(day.context) { $1 } }
+        return capabilities
+    }
+
+    /// iPhone side: the watch app was installed after the session activated. A context sent while the watch had no app
+    /// never got there (`updateApplicationContext` fails then, and nothing sends it again while the values stay the
+    /// same), so it goes now: without it the watch would not offer All-Day Recording, nor point to the phone for the
+    /// consent. Other changes of the watch's state (a complication added) send nothing.
+    nonisolated func sessionWatchStateDidChange(_ session: WCSession) {
+        let installed = session.isWatchAppInstalled
+        Task { @MainActor in
+            let arrived = installed && !self.watchAppWasInstalled
+            self.watchAppWasInstalled = installed
+            guard arrived else { return }
+            self.update(Self.capabilityContext(day: self.dayCapabilities))
+        }
+    }
+    #endif
 
     nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
         // All-day events, acknowledgements, requests, answers and commands first: none of them is a context.
@@ -669,7 +717,11 @@ final class WatchSync: NSObject, WCSessionDelegate {
     }
 
     nonisolated func sessionReachabilityDidChange(_ session: WCSession) {
-        Task { @MainActor in self.onRecordingEvent?() }
+        let reachable = session.isReachable
+        Task { @MainActor in
+            self.onRecordingEvent?()
+            if reachable { self.onDayReachable?() }
+        }
     }
 
     nonisolated func session(_ session: WCSession, didReceive file: WCSessionFile) {

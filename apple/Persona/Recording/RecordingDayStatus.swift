@@ -148,9 +148,31 @@ nonisolated enum RecordingDayStatus {
 
     /// Whether the day's page offers "Erase Last 10 Minutes": only for today's recording while it is open
     /// (docs/assistant/day-recap.md「Erasing」). A closed day ended at its midnight or was deleted, so its last ten
-    /// minutes are not the ten minutes just said.
+    /// minutes are not the ten minutes just said. `now`: the board's (`RecordingDayBoard.now`), which moves on at
+    /// midnight, so the button goes then even when nothing else about the day changes.
     static func offersErase(_ day: RecordingDaySummary, now: Date) -> Bool {
         day.closedAt == nil && isToday(day: day.day, timeZone: day.timeZone, now: now)
+    }
+
+    /// Whether the Today section says the hub doesn't write day recaps yet: only once that is about something (a day
+    /// exists, or the user agreed to all-day recording or turned it on). A watch user who never used the mode keeps the
+    /// page as it was, without a lasting caution about a feature they haven't used.
+    static func showsHubUpdate(offered: Bool, sync: RecordingDaySyncState?, hasDay: Bool, agreed: Bool, on: Bool) -> Bool {
+        guard hasDay || agreed || on else { return false }
+        return !offered || sync == .unsupported
+    }
+
+    /// What the day's page says when its upload stopped for good (`RecordingDaySummary.problem`, the code the phone or
+    /// the hub gave): why, in a sentence, since the code itself means nothing to the user. A code without words of its
+    /// own (a `400`'s) gets the plain refusal.
+    static func problemText(_ code: String?) -> String {
+        switch code {
+        case "too_large": String(localized: "This day's text was too large for Knowledge to take, so it stays on this iPhone.")
+        case "day_full": String(localized: "Knowledge holds as much of this day as it can, so the rest stays on this iPhone.")
+        case "not_day", "kind_changed":
+            String(localized: "Knowledge keeps another kind of recording in this day's place, so its text stays on this iPhone.")
+        default: String(localized: "Knowledge didn't accept this day's text, so it stays on this iPhone.")
+        }
     }
 
     /// Why there is no text, grouped as the day's page lists them.
@@ -211,6 +233,13 @@ nonisolated enum RecordingDayStatus {
         return today.max { ($0.createdAt, $0.id.uuidString) < ($1.createdAt, $1.id.uuidString) }?.id
     }
 
+    /// The first midnight after `date` in any of `zones` (each day rolls over at its own), else in the phone's: when
+    /// "today" next changes for one of them.
+    static func nextMidnight(after date: Date, zones: some Sequence<TimeZone>) -> Date {
+        zones.map { RecordingDayCalendar.nextMidnight(after: date, in: $0) }.min()
+            ?? RecordingDayCalendar.nextMidnight(after: date, in: .autoupdatingCurrent)
+    }
+
     /// A day's name, as `RecordingEntry.displayTitle` writes an untitled day: its date in its own time zone.
     static func title(day: String, timeZone: String) -> String {
         let dayZone = Self.zone(timeZone)
@@ -226,14 +255,33 @@ nonisolated enum RecordingDayStatus {
 
     // MARK: Formatting
 
-    /// A clock time in the day's zone (09:41).
-    static func time(_ date: Date, in zone: TimeZone) -> String {
-        date.formatted(Date.FormatStyle(date: .omitted, time: .shortened, timeZone: zone))
+    /// The locale every clock time of a day is written in: the interface language's (docs/protocol/i18n.md), which is
+    /// fixed for the launch.
+    private static let clockLocale = Locale.interface
+
+    /// Every clock time of all-day recording, wherever it shows: the switch's "since", the Today row's "transcribed to",
+    /// a day's span on its row and page, the recap's ranges and time chips, the transcript's hours and lines. One style,
+    /// in the interface locale and in the zone of the recording the time belongs to, so the same moment reads the same
+    /// everywhere (a span's "09:12" beside a line's "9:12" read as two different styles). `seconds`: the transcript's
+    /// lines only.
+    static func clock(_ date: Date, in zone: TimeZone, seconds: Bool = false) -> String {
+        date.formatted(Date.FormatStyle(date: .omitted, time: seconds ? .standard : .shortened, locale: clockLocale, timeZone: zone))
     }
 
-    /// 09:12 – 21:40, in the day's zone.
+    /// From one clock time to another, each end written by `clock` (9:12–19:07), as the kept segments of a recording
+    /// write theirs.
     static func spanText(_ span: Range<Date>, in zone: TimeZone) -> String {
-        span.formatted(Date.IntervalFormatStyle(date: .omitted, time: .shortened, timeZone: zone))
+        let from = clock(span.lowerBound, in: zone), to = clock(span.upperBound, in: zone)
+        // A span within one minute reads as that minute, not "9:41–9:41".
+        return from == to ? from : "\(from)–\(to)"
+    }
+
+    /// When something was written: its clock time today, else its date and time ("Written 21:00" / "Written Nov 11,
+    /// 21:00"), in the interface locale; a relative "now" reads oddly beside a recap of a whole day.
+    static func writtenText(_ date: Date, now: Date = .now, in zone: TimeZone = .autoupdatingCurrent) -> String {
+        var calendar = Calendar(identifier: .gregorian); calendar.timeZone = zone
+        if calendar.isDate(date, inSameDayAs: now) { return clock(date, in: zone) }
+        return date.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened, locale: clockLocale, timeZone: zone))
     }
 
     /// A length of time as the system writes it ("2 hr, 14 min"); seconds only below a minute.
@@ -247,14 +295,15 @@ nonisolated enum RecordingDayStatus {
 // MARK: - Text
 
 nonisolated extension RecordingDayStatus.Line {
-    /// The switch row's detail. `zone`: the phone's (the watch's state carries no zone).
+    /// The switch row's detail. `zone`: the zone of the day recording the watch records, the phone's when it isn't known
+    /// (the watch's state carries no zone).
     func text(in zone: TimeZone) -> String {
         switch self {
         case .off: String(localized: "Records the whole day on your Apple Watch")
         case .starting: String(localized: "Tap Start on your Apple Watch to begin")
         case .stopping: String(localized: "Stopping on your Apple Watch…")
         case .noAnswer: String(localized: "Your Apple Watch hasn't answered. Open Persona on it.")
-        case .recording(let since?): String(localized: "Recording all day since \(RecordingDayStatus.time(since, in: zone))")
+        case .recording(let since?): String(localized: "Recording all day since \(RecordingDayStatus.clock(since, in: zone))")
         case .recording(nil): String(localized: "Recording all day")
         case .paused: String(localized: "Paused on your Apple Watch")
         case .interrupted: String(localized: "Paused — tap Continue on your Apple Watch")
@@ -298,7 +347,7 @@ nonisolated extension RecordingDayStatus.Progress {
         case .recorded(let seconds):
             String(localized: "\(RecordingDayStatus.duration(seconds)) recorded")
         case .transcribed(let seconds, let to):
-            String(localized: "\(RecordingDayStatus.duration(seconds)) recorded · transcribed to \(RecordingDayStatus.time(to, in: zone))")
+            String(localized: "\(RecordingDayStatus.duration(seconds)) recorded · transcribed to \(RecordingDayStatus.clock(to, in: zone))")
         }
     }
 }

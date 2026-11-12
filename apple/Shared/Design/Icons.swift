@@ -651,8 +651,8 @@ extension Theme {
         /// A meeting marked inside an all-day recording (the watch's Mark Meeting, the day's timeline): a meeting, so the
         /// same symbol.
         static let meetingMark = meeting
-        /// The hub's recap of a recorded day (docs/assistant/day-recap.md). Its own symbol rather than `minutes`: a day's
-        /// recap and a meeting's minutes sit side by side in Recent Recordings, and one covers a whole day.
+        /// The hub's recap of a recorded day (docs/assistant/day-recap.md): the Day Recap section and the Today row. Its own
+        /// symbol rather than `minutes`: a recap covers a whole day, a meeting's minutes one meeting.
         static let dayRecap = "text.book.closed"
         /// People in the knowledge base.
         static let people = "person.3"

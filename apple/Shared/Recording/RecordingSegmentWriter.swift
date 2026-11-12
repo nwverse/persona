@@ -137,6 +137,12 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
     /// Rewrites each finished file without the container's padding (`RecordingM4A`), so a 10-second all-day chunk fits
     /// the watch's live envelope. Set before `start()`; off for every other recording.
     var compactsFiles = false
+    /// All-day recordings: a gap in the audio ends the file being written (`write`), since a chunk's `started_at` and
+    /// `duration` place every sample on the wall clock and no pause may fall inside one (docs/assistant/day-recap.md
+    /// 「Chunks」). A gap is the input restarting after a route change, or a buffer the tap handed over after a pause's
+    /// cut, followed by the audio of the continue. Other recordings keep their files across such gaps, on a timeline
+    /// without them. Set before `start()`.
+    var cutsAtGaps = false
 
     init(directory: URL, firstIndex: Int = 0, startOffset: Double = 0, allocateSeq: (@Sendable (_ directory: URL) -> Int?)? = nil) {
         self.directory = directory
@@ -391,9 +397,14 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
                 }
                 end = before
             }
+            let sampleAt = startedAt.addingTimeInterval(Double(offset) / RecordingAudioSpec.sampleRate)
+            if cutsAtGaps, file != nil, Self.isGap(from: fileEnd, to: sampleAt) {
+                if let segment = closeAndLog() { onSegment?(segment) }
+                continue
+            }
             if file == nil {
                 openFile()
-                fileStartedAt = firstSampleTime(startedAt.addingTimeInterval(Double(offset) / RecordingAudioSpec.sampleRate))
+                fileStartedAt = firstSampleTime(sampleAt)
             }
             guard file != nil else { return }
             let segmentFrames = shared.withLock { $0.segmentFrames }
@@ -410,7 +421,7 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
             }
             fileFrames += AVAudioFramePosition(n)
             offset += n
-            audioThrough = fileStartedAt.addingTimeInterval(Double(fileFrames) / RecordingAudioSpec.sampleRate)
+            audioThrough = fileEnd
             if fileFrames >= segmentFrames, let segment = closeAndLog() {
                 onSegment?(segment)
             }
@@ -440,6 +451,15 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
 
     /// How far apart two consecutive buffers' host-clock times can be from their sample count, at most.
     private static let bufferClockJitter: TimeInterval = 0.25
+
+    /// Wall-clock end of the open file's last sample, counted in samples from its first.
+    private var fileEnd: Date { fileStartedAt.addingTimeInterval(Double(fileFrames) / RecordingAudioSpec.sampleRate) }
+
+    /// Whether audio starting at `next` doesn't follow on from audio ending at `end`: more than the host clock's jitter
+    /// apart, either way (a gap, or the wall clock set back).
+    static func isGap(from end: Date, to next: Date) -> Bool {
+        abs(next.timeIntervalSince(end)) > bufferClockJitter
+    }
 
     /// Crossing the boundary at frame `offset` of a buffer that started at `bufferStart`: the old folder's file ends
     /// there, the next folder's segments are numbered from its start, and the timeline (`elapsed`, segment offsets)
@@ -560,11 +580,16 @@ nonisolated private struct BufferBox: @unchecked Sendable { let buffer: AVAudioP
 /// 65 KB instead of 42 KB, over the all-day live envelope's 48 000 bytes (docs/assistant/day-recap.md「Chunks」).
 nonisolated enum RecordingM4A {
     /// Rewrites a finished file without its padding (`compacted`). A file that can't be read or rewritten, or whose
-    /// layout this doesn't know, stays as it was: still a valid file, only larger.
+    /// layout this doesn't know, stays as it was: still a valid file, only larger. The rewrite is a new file, so it is
+    /// given the original's creation date back: when the chunk's first sample was written, which is where
+    /// `RecordingLibrary.recover` has a chunk an exit left unregistered begin.
     static func compact(_ url: URL) {
         guard let data = try? Data(contentsOf: url), // perf-ok: the writer's queue, once per finished file
               let compact = compacted(data) else { return }
-        try? compact.write(to: url, options: .atomic)
+        let files = FileManager.default
+        let created = (try? files.attributesOfItem(atPath: url.path))?[.creationDate] as? Date
+        guard (try? compact.write(to: url, options: .atomic)) != nil, let created else { return }
+        try? files.setAttributes([.creationDate: created], ofItemAtPath: url.path)
     }
 
     /// `data` without its top-level `free` and `skip` boxes, each chunk offset (`stco`, `co64`) moved back by what was

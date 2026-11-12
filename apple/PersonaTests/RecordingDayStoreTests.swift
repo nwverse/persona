@@ -45,9 +45,18 @@ private struct Fixture {
 
     var folder: URL { root.appendingPathComponent(id.uuidString, isDirectory: true) }
 
-    func store(now: Date = anchor.addingTimeInterval(30), writeDelay: TimeInterval = 3600) -> RecordingDayStore {
+    func store(now: Date = anchor.addingTimeInterval(30), writeDelay: TimeInterval = 3600,
+               arrivalWriteDelay: TimeInterval = 3600) -> RecordingDayStore {
         let tombstones = tombstones
-        return RecordingDayStore(root: root, isDeleted: { tombstones.contains($0) }, now: { now }, writeDelay: writeDelay)
+        return RecordingDayStore(root: root, isDeleted: { tombstones.contains($0) }, now: { now }, writeDelay: writeDelay,
+                                 arrivalWriteDelay: arrivalWriteDelay)
+    }
+
+    /// A store whose clock the test moves.
+    func store(clock: OSAllocatedUnfairLock<Date>) -> RecordingDayStore {
+        let tombstones = tombstones
+        return RecordingDayStore(root: root, isDeleted: { tombstones.contains($0) }, now: { clock.withLock { $0 } },
+                                 writeDelay: 3600, arrivalWriteDelay: 3600)
     }
 
     func at(_ offset: Double) -> Date { anchor.addingTimeInterval(offset) }
@@ -675,6 +684,154 @@ struct RecordingDayStoreTests {
         #expect(await store.requestWatchDelete(deleted))
     }
 
+    /// The delete's request to the watch is written after the library's tombstone, on the store's queue: an app that
+    /// ends in between, or a write that fails, would leave the watch recording into a day the phone drops. The tombstone
+    /// is what lasts, so every chunk or event refused for it asks the watch again (at most once a minute).
+    @Test func aChunkOfADeletedDayAsksTheWatchToDeleteIt() async throws {
+        let f = Fixture()
+        defer { f.cleanUp() }
+        let clock = OSAllocatedUnfairLock(initialState: anchor)
+        let store = f.store(clock: clock)
+        var requested = store.watchRequestChanges.makeAsyncIterator()
+        _ = try store.store(header: f.header(0), audio: f.audio(0))
+        // Deleted here, and the app ended before the request to the watch was written.
+        f.tombstones.delete(f.id)
+        try FileManager.default.removeItem(at: f.folder)
+        #expect(await store.watchRequests().deletes.isEmpty)
+
+        #expect(try store.store(header: f.header(1, at: 10), audio: f.audio(1)) == .refused)
+        #expect(await store.watchRequests().deletes == [RecordingDayDelete(recording: f.id)])
+        #expect(await requested.next() != nil, "the receiver sends it at once")
+        #expect(await f.store().watchRequests().deletes == [RecordingDayDelete(recording: f.id)],
+                "on disk before the chunk is acknowledged")
+        #expect(!FileManager.default.fileExists(atPath: f.folder.path), "and nothing of the day is kept")
+
+        // Confirmed; a chunk still on its way a moment later doesn't ask again at once.
+        await store.watchDeleted(RecordingDayDeleted(recording: f.id))
+        clock.withLock { $0 = anchor.addingTimeInterval(RecordingDayStore.refusalInterval - 1) }
+        #expect(try store.store(event: f.envelope(.started(0, at: f.at(0)))) == .refused)
+        #expect(await store.watchRequests().deletes.isEmpty)
+        // The watch is still at it a minute on: asked again.
+        clock.withLock { $0 = anchor.addingTimeInterval(RecordingDayStore.refusalInterval) }
+        #expect(try store.store(event: f.envelope(.paused(1, at: f.at(20), reason: Reason.paused))) == .refused)
+        #expect(await store.watchRequests().deletes == [RecordingDayDelete(recording: f.id)])
+    }
+
+    /// "Erase the last 10 minutes" just after midnight, while the new day the watch began at midnight has nothing on the
+    /// phone yet (its chunks batched in Low Power, or the phone out of reach): that day gets the erase when its first
+    /// chunk or event arrives, here and on the watch, also after a relaunch.
+    @Test func anEraseOverMidnightReachesADayThatTurnsUpLater() async throws {
+        let f = Fixture()
+        defer { f.cleanUp() }
+        let store = f.store(now: shanghaiMidnight.addingTimeInterval(240))
+        _ = try store.store(header: f.header(0, at: 8 * 3600 - 600, duration: 600), audio: f.audio(0))
+        let from = shanghaiMidnight.addingTimeInterval(-360), to = shanghaiMidnight.addingTimeInterval(240)
+        let eraseID = UUID()
+        #expect(await store.requestErase(from: from, to: to, requestID: eraseID) == [f.id], "the only day held now")
+
+        // Today's first chunks arrive: the one inside the erase is dropped, the one after it kept.
+        let today = UUID()
+        func todays(_ seq: Int, at offset: Double) -> RecordingDayHeader {
+            f.header(seq, at: offset, duration: 60, id: today, day: "2027-01-16", start: shanghaiMidnight)
+        }
+        #expect(try store.store(header: todays(3, at: 180), audio: f.audio(3)) == .settled)
+        #expect(try store.store(header: todays(4, at: 240), audio: f.audio(4)) == .stored)
+        #expect(try store.store(header: todays(0, at: 0), audio: f.audio(0)) == .settled, "erase comes before anything is kept")
+        let record = try #require(await store.record(today))
+        #expect(record.erasures == [RecordingDayErasure(id: eraseID, from: from, to: to)], "the same erase, its id included")
+        #expect(record.chunks[0]?.erased == true && record.chunks[3]?.erased == true && record.chunks[4]?.erased == false)
+        #expect(!FileManager.default.fileExists(atPath: store.audioURL(today, seq: 0).path))
+        let asked = await store.watchRequests().erases
+        #expect(Set(asked.map(\.recording)) == [f.id, today] && asked.allSatisfy { $0.erase.id == eraseID },
+                "the watch erases its copy of the new day too")
+
+        // After a relaunch, a day whose first word is an event; one that began after the range is left alone.
+        let relaunched = f.store(now: shanghaiMidnight.addingTimeInterval(300))
+        let another = UUID(), later = UUID()
+        #expect(try relaunched.store(event: f.envelope(.started(0, at: shanghaiMidnight.addingTimeInterval(60)), id: another,
+                                                       day: "2027-01-16", start: shanghaiMidnight.addingTimeInterval(60))) == .applied)
+        #expect(await relaunched.record(another)?.erasures.map(\.id) == [eraseID])
+        #expect(try relaunched.store(event: f.envelope(.started(0, at: to), id: later, day: "2027-01-16", start: to)) == .applied)
+        #expect(await relaunched.record(later)?.erasures.isEmpty == true)
+        #expect(await relaunched.watchRequests().erases.map(\.recording).contains(another))
+    }
+
+    /// A crash after the range was kept but before every day held had it: the launch erases them.
+    @Test func aRangeEraseACrashCutShortIsFinishedAtLaunch() async throws {
+        let f = Fixture()
+        defer { f.cleanUp() }
+        let before = f.store()
+        _ = try before.store(header: f.header(0), audio: f.audio(0))
+        await before.flushAll()
+        let eraseID = UUID()
+        let range = RecordingDayWatchRequests.RangeErase(id: eraseID, from: f.at(0), to: f.at(5),
+                                                    until: anchor.addingTimeInterval(RecordingDayWatchRequests.lifetime))
+        let requests = RecordingDayWatchRequests(ranges: [range])
+        try JSONEncoder().encode(requests).write(to: f.root.appendingPathComponent("day-requests.json"))
+        let relaunched = f.store()
+        _ = await relaunched.recoverOnLaunch()
+        #expect(await relaunched.record(f.id)?.erasures.map(\.id) == [eraseID])
+        #expect(!f.exists("seg-000.m4a"))
+        #expect(await relaunched.watchRequests().erases.map(\.erase.id) == [eraseID])
+        // Done: the next launch has nothing more to do for it.
+        let saved = try JSONDecoder().decode(RecordingDayWatchRequests.self,
+                                             from: Data(contentsOf: f.root.appendingPathComponent("day-requests.json")))
+        #expect(saved.ranges?.first?.done == true)
+    }
+
+    /// The request to the watch is taken as soon as erases.json holds the erase: a day.json that can't be written (or
+    /// an app that ends before the request is) never leaves the watch's copy unerased.
+    @Test func anEraseIsAskedOfTheWatchWhateverHappensToTheDaysWrite() async throws {
+        let f = Fixture()
+        defer { f.cleanUp() }
+        let store = f.store()
+        _ = try store.store(header: f.header(0), audio: f.audio(0))
+        // day.json can't be written: a folder with a file in it stands in its place.
+        let blocker = f.file("day.json")
+        try FileManager.default.createDirectory(at: blocker, withIntermediateDirectories: true)
+        try Data([1]).write(to: blocker.appendingPathComponent("x"))
+        let eraseID = UUID()
+        #expect(!(await store.requestErase(f.id, from: f.at(0), to: f.at(5), requestID: eraseID)), "the day isn't on disk")
+        let request = RecordingDayEraseRequest(recording: f.id, id: eraseID, from: f.at(0), to: f.at(5))
+        #expect(await store.watchRequests().erases == [request], "still asked of the watch")
+        #expect(await f.store().watchRequests().erases == [request], "and on disk for the next launch")
+
+        // An app that ended between erases.json and the request: the launch asks it again from erases.json.
+        try FileManager.default.removeItem(at: blocker)
+        try FileManager.default.removeItem(at: f.root.appendingPathComponent("day-requests.json"))
+        let relaunched = f.store()
+        _ = await relaunched.recoverOnLaunch()
+        #expect(await relaunched.record(f.id)?.erasures.map(\.id) == [eraseID])
+        #expect(await relaunched.watchRequests().erases == [request])
+    }
+
+    @Test func anEraseWhoseRequestWasntWrittenIsAskedAgainAtTheNextLaunch() async throws {
+        let f = Fixture()
+        defer { f.cleanUp() }
+        let store = f.store()
+        _ = try store.store(header: f.header(0), audio: f.audio(0))
+        // day-requests.json can't be written: a folder with a file in it stands in its place.
+        let blocker = f.root.appendingPathComponent("day-requests.json")
+        try FileManager.default.createDirectory(at: blocker, withIntermediateDirectories: true)
+        try Data([1]).write(to: blocker.appendingPathComponent("x"))
+        let eraseID = UUID()
+        #expect(!(await store.requestErase(f.id, from: f.at(0), to: f.at(5), requestID: eraseID)), "the request isn't on disk")
+        let request = RecordingDayEraseRequest(recording: f.id, id: eraseID, from: f.at(0), to: f.at(5))
+        #expect(await store.watchRequests().erases == [request], "still asked of the watch while the app runs")
+        #expect(try f.dayJSON().erasures.map(\.id) == [eraseID], "the erase itself is on disk")
+
+        // The app ended before the request was written: the launch asks the watch again, once.
+        try FileManager.default.removeItem(at: blocker)
+        let relaunched = f.store()
+        _ = await relaunched.recoverOnLaunch()
+        #expect(await relaunched.watchRequests().erases == [request])
+        #expect(await f.store().watchRequests().erases == [request], "and on disk now")
+        await relaunched.watchErased(RecordingDayErased(recording: f.id, erased: eraseID, seqs: [] as [Int]))
+        let later = f.store()
+        _ = await later.recoverOnLaunch()
+        #expect(await later.watchRequests().erases.isEmpty, "a confirmed erase isn't asked again")
+    }
+
     @Test func dayJSONIsWrittenCoalescedAndOnFlush() async throws {
         let f = Fixture()
         defer { f.cleanUp() }
@@ -711,12 +868,40 @@ struct RecordingDayStoreTests {
     @Test func theCoalescedWriteComesByItself() async throws {
         let f = Fixture()
         defer { f.cleanUp() }
-        let store = f.store(writeDelay: 0.3)
+        let store = f.store(writeDelay: 0.3, arrivalWriteDelay: 0.3)
         for seq in 0..<3 { _ = try store.store(header: f.header(seq, at: Double(seq) * 10), audio: f.audio(seq)) }
         // No flush: the burst reaches day.json by the store's own write a moment later.
         let deadline = Date.now.addingTimeInterval(10)
         while (try? f.dayJSON().chunks.count) != 3, Date.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
         #expect(try f.dayJSON().chunks.count == 3)
+    }
+
+    /// A chunk every ten seconds all day: what its sidecar already holds doesn't rewrite the whole day.json each time
+    /// (a recovery merges sidecars through the journal anyway); it rides along with the day's next write of any kind.
+    @Test func anArrivalWaitsForTheDaysNextWrite() async throws {
+        let f = Fixture()
+        defer { f.cleanUp() }
+        let store = f.store(writeDelay: 0.05)
+        for seq in 0..<3 { _ = try store.store(header: f.header(seq, at: Double(seq) * 10), audio: f.audio(seq)) }
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(!f.exists("day.json"), "arrivals alone don't start the coalesced write")
+        #expect(f.exists("journal.log") && f.exists("seg-002.json"), "the sidecars and the journal hold them")
+        // Also after a relaunch before any write: rebuilt from the sidecars.
+        #expect(await f.store().record(f.id)?.chunks.count == 3)
+
+        // An edit (the transcriber's text) is written soon, and the arrivals with it.
+        await f.transcribe(store, 0, [Sentence(start: 1, end: 2, text: "hello")])
+        let deadline = Date.now.addingTimeInterval(10)
+        while (try? f.dayJSON().chunks.count) != 3, Date.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(try f.dayJSON().chunks.count == 3)
+        #expect(try f.dayJSON().chunks[0]?.state == .transcribed)
+
+        // An erase from the watch takes text and audio: written soon too, not left for later.
+        _ = try store.store(header: f.header(3, at: 30), audio: f.audio(3))
+        _ = try store.store(event: f.envelope(.erase(0, id: UUID(), from: f.at(30), to: f.at(35), seqs: [])))
+        let erased = Date.now.addingTimeInterval(10)
+        while (try? f.dayJSON().chunks[3]?.erased) != true, Date.now < erased { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(try f.dayJSON().chunks[3]?.erased == true)
     }
 
     @Test func aSummaryCountsTheDayAndNamesItsGaps() throws {
@@ -797,7 +982,12 @@ struct RecordingDayStoreTests {
 
         record.parts[0].problem = "invalid segments"
         #expect(RecordingDaySummary(record: record, hubOffered: true, now: at(4000)).sync == .problem)
+        #expect(RecordingDaySummary(record: record, hubOffered: true, now: at(4000)).problem == "invalid segments")
+        record.problem = "too_large"
+        #expect(RecordingDaySummary(record: record, hubOffered: true, now: at(4000)).problem == "too_large", "the day's own first")
+        record.problem = nil
         record.parts[0].problem = nil
+        #expect(RecordingDaySummary(record: record, hubOffered: true, now: at(4000)).problem == nil)
         record.unsupportedUntilHello = true
         #expect(RecordingDaySummary(record: record, hubOffered: true, now: at(4000)).sync == .unsupported)
     }
@@ -1012,8 +1202,9 @@ struct RecordingDayIntakeTests {
         let f = Fixture()
         defer { f.cleanUp() }
         let sent = Collected<RecordingDayAck>()
-        let arrivals = Collected<UUID>()
-        let intake = RecordingDayIntake(store: f.store(), sendAck: { sent.append($0) }, arrived: { arrivals.append($0) }, ackDelay: 3600)
+        let arrivals = Collected<UUID>(), refusals = Collected<UUID>()
+        let intake = RecordingDayIntake(store: f.store(), sendAck: { sent.append($0) }, arrived: { arrivals.append($0) },
+                                        refused: { refusals.append($0) }, ackDelay: 3600)
         func file(_ seq: Int) throws -> URL {
             let url = f.root.appendingPathComponent("incoming-\(seq).m4a")
             try FileManager.default.createDirectory(at: f.root, withIntermediateDirectories: true)
@@ -1050,6 +1241,7 @@ struct RecordingDayIntakeTests {
         #expect(RecordingDayAck(data: intake.receive(frame: f.header(7, at: 70).frame(audio: f.audio(7))))?.seqs == [7])
         #expect(intake.receive(event: f.envelope(.paused(1, at: f.at(80), reason: Reason.paused)))?.eventNumbers == [1])
         #expect(arrivals.all.count == 7)
+        #expect(refusals.all == [f.id, f.id], "the receiver sends the watch the delete again")
     }
 }
 
@@ -1058,11 +1250,61 @@ struct RecordingDayIntakeTests {
 @MainActor @Suite(.serialized) struct RecordingDayReceiverTests {
     private func makeReceiver(_ f: Fixture, _ store: RecordingDayStore, library: RecordingLibrary, now: @escaping () -> Date,
                           erases: @escaping (RecordingDayEraseRequest) -> Void = { _ in },
-                          deletes: @escaping (RecordingDayDelete) -> Void = { _ in }) -> RecordingDayReceiver {
+                          deletes: @escaping (RecordingDayDelete) -> Void = { _ in },
+                          retain: @escaping () -> Void = {}) -> RecordingDayReceiver {
         let consent = RecordingDayConsent(defaults: UserDefaults(suiteName: "recording-day-receiver-\(f.id.uuidString)") ?? .standard)
         let capabilities = RecordingDayPhoneCapabilities(consent: consent, store: store, hub: false, recordingDays: nil, send: { _ in })
         return RecordingDayReceiver(store: store, library: library, summaries: RecordingDaySummaries(store: store, hubOffered: { false }),
-                                    capabilities: capabilities, sendErase: erases, sendDelete: deletes, now: now)
+                                    capabilities: capabilities, sendErase: erases, sendDelete: deletes, retain: retain, now: now)
+    }
+
+    /// A phone only ever woken by WatchConnectivity never comes to the front: arriving chunks ask for the audio's
+    /// retention pass (the keeper's own gate keeps it hourly).
+    @Test func arrivingChunksAskForRetentionAtMostHourly() async throws {
+        let f = Fixture()
+        defer { f.cleanUp() }
+        let store = f.store()
+        var clock = anchor
+        var passes = 0
+        let receiver = makeReceiver(f, store, library: RecordingLibrary(root: f.root), now: { clock }, retain: { passes += 1 })
+        let original = RecordingDayReceiver.requestCatchUp
+        RecordingDayReceiver.requestCatchUp = {}
+        defer { RecordingDayReceiver.requestCatchUp = original }
+        _ = try store.store(header: f.header(0), audio: f.audio(0))
+        receiver.arrived(f.id)
+        #expect(passes == 1)
+        clock = anchor.addingTimeInterval(RecordingDayReceiver.retentionInterval - 1)
+        receiver.arrived(f.id)
+        #expect(passes == 1)
+        clock = anchor.addingTimeInterval(RecordingDayReceiver.retentionInterval)
+        receiver.arrived(f.id)
+        #expect(passes == 2)
+        await receiver.rowsAdopted()
+    }
+
+    /// Chunks of a day deleted here change nothing, so they never pass through `arrived`: the delete still waiting goes
+    /// to the watch again from them.
+    @Test func aRefusedChunkSendsTheWaitingDeleteAgain() async throws {
+        let f = Fixture()
+        defer { f.cleanUp() }
+        let store = f.store()
+        var clock = anchor
+        var deletes: [RecordingDayDelete] = []
+        let receiver = makeReceiver(f, store, library: RecordingLibrary(root: f.root), now: { clock },
+                                    deletes: { deletes.append($0) })
+        await store.requestWatchDelete(f.id)
+        receiver.refused(f.id)
+        await receiver.requestsSent()
+        #expect(deletes == [RecordingDayDelete(recording: f.id)])
+        // A chunk every ten seconds asks at most once a minute.
+        clock = anchor.addingTimeInterval(10)
+        receiver.refused(f.id)
+        await receiver.requestsSent()
+        #expect(deletes.count == 1)
+        clock = anchor.addingTimeInterval(RecordingDayReceiver.resendInterval)
+        receiver.refused(f.id)
+        await receiver.requestsSent()
+        #expect(deletes.count == 2)
     }
 
     @Test func aDayGetsItsRowAndAsksForTheCatchUpAtMostEveryQuarterHour() async throws {

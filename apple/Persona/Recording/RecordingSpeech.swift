@@ -33,6 +33,15 @@ nonisolated enum RecordingSpeechError: LocalizedError {
         case .empty: false
         }
     }
+
+    /// About one language only (no model for it, or its model not installed): audio in another language still
+    /// transcribes, so all-day recording's lane stops only the days in this one.
+    var isPerLanguage: Bool {
+        switch self {
+        case .unsupportedLanguage, .modelUnavailable: true
+        case .noSpeechPermission, .empty: false
+        }
+    }
 }
 
 /// All-day recording's runs (docs/assistant/day-recap.md): a few contiguous chunk files read as one stretch of audio, so
@@ -247,8 +256,8 @@ nonisolated struct RecordingAnalyzerEngine: RecordingSpeechEngine {
     /// Each sentence goes to the file its start is in (`file` indexes `urls`), its times on that file's clock as its
     /// header's `durations` measure it (`RecordingRun.assign`: past the duration only when it ran into the next file).
     /// `downloadsAssets` false (in the background) never downloads the model: a model that isn't on the device
-    /// throws `.modelUnavailable`, which stops the lane rather than failing the run. `@concurrent`: the files are decoded
-    /// off the main actor whoever calls.
+    /// throws `.modelUnavailable`, which stops the lane for the days in that language rather than failing the run.
+    /// `@concurrent`: the files are decoded off the main actor whoever calls.
     @concurrent func transcribeRun(_ urls: [URL], durations: [Double], locale: Locale, priority: TaskPriority,
                                    downloadsAssets: Bool) async throws -> [(file: Int, sentence: RecordingSentence)] {
         guard !urls.isEmpty else { return [] }

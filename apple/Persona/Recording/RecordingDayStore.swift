@@ -13,12 +13,14 @@ import os
 // - `events.log`: the watch's control events, one JSON envelope per line, each written before it is acknowledged;
 // - `erases.json`: the ranges erased on this phone, written before the erase is carried out;
 // - `day.json`: the whole `RecordingDayRecord` (the events applied, transcription, upload state), written by the
-//   store's queue at most every couple of seconds and on `flush`, never on the main actor;
+//   store's queue at most every couple of seconds after an edit, and on `flush`, never on the main actor; a chunk or
+//   event that only arrived (its sidecar or `events.log` holds it) waits for the day's next write, at most ten minutes;
 // - `journal.log`: what was written since `day.json` was (a seq whose sidecar, `events`, `erases`), so a recovery knows
 //   what to merge in without trusting file dates; emptied by each write of `day.json`.
 // The sidecars, the event log and the erases are the durable record: `day.json` is rebuilt from them (without its
-// transcript) when it is missing or unreadable. The erases and deletes the phone asks the watch for wait in the
-// recordings folder's `day-requests.json`, which outlives a deleted day's folder.
+// transcript) when it is missing or unreadable. The erases and deletes the phone asks the watch for, and its erases over a
+// stretch of time for days still to come, wait in the recordings folder's `day-requests.json`, which outlives a deleted
+// day's folder.
 // Foundation and Observation only, so the Mac build compiles it too (the receiver that feeds it is iOS and visionOS
 // only).
 
@@ -738,6 +740,20 @@ nonisolated struct RecordingDayWatchRequests: Codable, Sendable, Equatable {
         var until: Date
     }
 
+    /// An erase over a stretch of time (`RecordingDayStore.requestErase(from:to:)`), kept for the day recordings the phone
+    /// has nothing of yet: one the watch began at midnight whose first chunk is still on its way gets it when that chunk
+    /// or an event of it arrives, here and as an `Erase` to the watch (docs/assistant/day-recap.md「Erasing」: an erase
+    /// that spans midnight applies to both day recordings).
+    nonisolated struct RangeErase: Codable, Sendable, Equatable {
+        var id: UUID
+        var from: Date
+        var to: Date
+        var until: Date
+        /// Every day the phone held when it was asked has it; nil until then, so a launch after a crash in between
+        /// erases them.
+        var done: Bool? = nil
+    }
+
     /// What to send now.
     nonisolated struct Pending: Sendable, Equatable {
         var erases: [RecordingDayEraseRequest] = []
@@ -746,6 +762,8 @@ nonisolated struct RecordingDayWatchRequests: Codable, Sendable, Equatable {
 
     var erases: [Erase] = []
     var deletes: [Delete] = []
+    /// nil in a file from before.
+    var ranges: [RangeErase]? = nil
 }
 
 nonisolated extension RecordingDayWatchRequests {
@@ -755,10 +773,12 @@ nonisolated extension RecordingDayWatchRequests {
 
     /// Drops the requests that expired; whether any did.
     mutating func prune(now: Date) -> Bool {
-        let before = (erases.count, deletes.count)
+        let before = (erases.count, deletes.count, ranges?.count ?? 0)
         erases.removeAll { $0.until <= now }
         deletes.removeAll { $0.until <= now }
-        return before != (erases.count, deletes.count)
+        ranges?.removeAll { $0.until <= now }
+        if ranges?.isEmpty == true { ranges = nil }
+        return before != (erases.count, deletes.count, ranges?.count ?? 0)
     }
 
     var pending: Pending {
@@ -850,6 +870,7 @@ nonisolated final class RecordingDayStore: @unchecked Sendable {
     private let isDeleted: @Sendable (UUID) -> Bool
     private let now: @Sendable () -> Date
     private let writeDelay: TimeInterval
+    private let arrivalWriteDelay: TimeInterval
     private let queue = DispatchQueue(label: "persona.recording-day-store", qos: .utility)
     private let dayChanges = RecordingDayBroadcast<UUID>()
     private let requestChanges = RecordingDayBroadcast<Void>()
@@ -862,6 +883,9 @@ nonisolated final class RecordingDayStore: @unchecked Sendable {
     private var uses = 0
     private var dirty: Set<UUID> = []
     private var writeScheduled = false
+    private var arrivalWriteScheduled = false
+    /// When a refused chunk or event last asked the watch to delete its day (`refuse`), per day.
+    private var refusals: [UUID: Date] = [:]
     /// Days this process has brought up to their folder (`reconcile`): every file it writes for them afterwards stays in
     /// `cache` until a later `day.json` holds it, so from then on `day.json` alone is current.
     private var reconciled: Set<UUID> = []
@@ -874,6 +898,9 @@ nonisolated final class RecordingDayStore: @unchecked Sendable {
     private var requests: RecordingDayWatchRequests?
     /// `requests` is what `day-requests.json` holds; false after a write of it failed, until one succeeds.
     private var requestsSaved = true
+    /// Days erased here while their request to the watch couldn't be written: their journal keeps `asksEntry` through
+    /// the day's writes until `day-requests.json` is written, so a launch after the app ended asks the watch again.
+    private var unasked: Set<UUID> = []
 
     /// Days kept decoded at once (today's, the one transcribing, the one uploading, the one on screen); a day is a few
     /// MB of text, and fourteen are kept.
@@ -887,9 +914,13 @@ nonisolated final class RecordingDayStore: @unchecked Sendable {
     /// The journal's lines for an append to `events.log` and a write of `erases.json` (the others are seqs).
     private static let eventsEntry = "events"
     private static let erasesEntry = "erases"
+    /// The journal's line for an erase whose request to the watch is not on disk (`unasked`).
+    private static let asksEntry = "asks"
     /// How much earlier than `day.json` a file may be dated and still be merged in as possibly newer. The journal is
     /// what recovery relies on; file dates only add to it, for a journal line a crash of the whole system lost.
     private static let clockSlack: TimeInterval = 5
+    /// A chunk or an event of a day deleted here asks the watch again to delete that day at most this often.
+    static let refusalInterval: TimeInterval = 60
     /// Chunks arrive while the phone is locked in a pocket, and are transcribed then: every file of a day stays readable
     /// and writable once the phone was unlocked after a restart, whatever the app's default protection becomes.
     private static let writing: Data.WritingOptions = [.atomic, .completeFileProtectionUntilFirstUserAuthentication]
@@ -898,12 +929,17 @@ nonisolated final class RecordingDayStore: @unchecked Sendable {
     ///   - root: the recordings folder (the library's).
     ///   - isDeleted: the library's tombstones, readable from any thread (`RecordingLibrary.isDeletedSnapshot`).
     ///   - writeDelay: how long changes gather before `day.json` is written.
+    ///   - arrivalWriteDelay: the longest a chunk or an event that a sidecar or `events.log` already holds waits for
+    ///     `day.json` (a chunk arrives every ten seconds all day, and rewriting a day of text for each adds nothing a
+    ///     recovery doesn't already get from the journal); any other write of the day, `flush` and `flushAll` take it
+    ///     sooner.
     init(root: URL, isDeleted: @escaping @Sendable (UUID) -> Bool, now: @escaping @Sendable () -> Date = { .now },
-         writeDelay: TimeInterval = 2) {
+         writeDelay: TimeInterval = 2, arrivalWriteDelay: TimeInterval = 600) {
         self.root = root
         self.isDeleted = isDeleted
         self.now = now
         self.writeDelay = writeDelay
+        self.arrivalWriteDelay = max(writeDelay, arrivalWriteDelay)
     }
 
     func folder(_ id: UUID) -> URL { root.appendingPathComponent(id.uuidString, isDirectory: true) }
@@ -1023,17 +1059,20 @@ nonisolated final class RecordingDayStore: @unchecked Sendable {
     /// kept, the audio and sentences overlapping it go now (`RecordingDayRecord.erase`; the upload's repair `PUT`
     /// follows `needsRepair`), and the watch is asked to erase its copies until it confirms (`watchRequests`). True once
     /// the erase and the request to the watch are both on disk; false for a day the phone doesn't hold, an empty range,
-    /// or a failed write. What was done before a write failed stays done, and a request that could not be written is
-    /// still sent while the app runs and written again with every later look at the requests. An erase over midnight
-    /// goes to every day it touches (`requestErase(from:to:)`), with the same `requestID`.
+    /// or a failed write. The request is taken as soon as `erases.json` holds the erase, before the erase is carried out
+    /// and `day.json` written, so what fails after it never loses it: it is still sent while the app runs and written
+    /// again with every later look at the requests, and a launch after a crash in between asks it again from
+    /// `erases.json` (`merge`). An erase over midnight goes to every day it touches (`requestErase(from:to:)`), with the
+    /// same `requestID`.
     func requestErase(_ id: UUID, from: Date, to: Date, requestID: UUID = UUID()) async -> Bool {
         await onQueue { self.commitErase(id, from: from, to: to, requestID: requestID) }
     }
 
     /// Erases a wall-clock range from every day it touches, as one erase with one id (docs/assistant/day-recap.md
     /// 「Erasing」: an erase that spans midnight applies to both day recordings). The days are the ones the store holds
-    /// now, so a day whose first chunk only just came is among them. Returns the days `requestErase` erased, in the
-    /// order they began.
+    /// now, so a day whose first chunk only just came is among them; the range is also kept (`day-requests.json`) for a
+    /// day the phone has nothing of yet, which gets it when its first chunk or event arrives (`eraseRanges`). Returns
+    /// the days `requestErase` erased now, in the order they began.
     func requestErase(from: Date, to: Date, requestID: UUID = UUID()) async -> [UUID] {
         await onQueue { self.commitErase(from: from, to: to, requestID: requestID) }
     }
@@ -1088,8 +1127,13 @@ nonisolated final class RecordingDayStore: @unchecked Sendable {
         guard header.valid else { throw Failure.invalidHeader }
         let id = header.recording
         // A deleted recording's chunk is acknowledged and dropped (delete comes before deduplication).
-        guard !forgetIfDeleted(id) else { return .refused }
+        guard !forgetIfDeleted(id) else {
+            refuse(id)
+            return .refused
+        }
         var record = load(id) ?? RecordingDayRecord(header: header)
+        // An erase over a stretch of time this day's first chunk came after (erase comes before deduplication too).
+        try eraseRanges(&record)
         // Held already: any erase since was applied to the held copy, and audio is never taken twice (retention may have
         // deleted it on purpose).
         guard record.chunks[header.seq] == nil else { return .duplicate }
@@ -1109,16 +1153,24 @@ nonisolated final class RecordingDayStore: @unchecked Sendable {
         record.put(chunk, recordingStartedAt: header.recordingStartedAt)
         // A delete that landed while this wrote: the library removed the folder (or is about to), and what was just
         // written must not bring the day back.
-        guard !removeIfDeleted(id) else { return .refused }
-        keep(record)
+        guard !removeIfDeleted(id) else {
+            refuse(id)
+            return .refused
+        }
+        // The sidecar holds it: `day.json` takes it with the day's next write.
+        keep(record, durable: true)
         return settled == nil ? .stored : .settled
     }
 
     private func commitEvent(_ envelope: RecordingDayEventEnvelope) throws -> EventResult {
         guard envelope.valid else { throw Failure.invalidEvent }
         let id = envelope.recording
-        guard !forgetIfDeleted(id) else { return .refused }
+        guard !forgetIfDeleted(id) else {
+            refuse(id)
+            return .refused
+        }
         var record = load(id) ?? RecordingDayRecord(envelope: envelope)
+        try eraseRanges(&record)
         guard record.hold(envelope.event) else {
             // Sent again because its acknowledgement never came: an erase whose audio deletion failed tries once more.
             if envelope.event.type == .erase { try purgeAudio(id) }
@@ -1129,8 +1181,12 @@ nonisolated final class RecordingDayStore: @unchecked Sendable {
         try appendLine(envelope.data, to: eventsURL(id))
         let applied = record.appliedEvents
         let gone = record.applyHeldEvents()
-        guard !removeIfDeleted(id) else { return .refused }
-        keep(record)
+        guard !removeIfDeleted(id) else {
+            refuse(id)
+            return .refused
+        }
+        // `events.log` holds it; an erase (its text gone, its audio about to be) is written soon all the same.
+        keep(record, durable: envelope.event.type != .erase && gone.isEmpty)
         // Last, once the record holds the erase, so its text is gone whatever happens to the files. An event is
         // acknowledged only with its audio deleted: when that fails this throws, and the copy the watch sends again tries
         // once more (`purgeAudio`).
@@ -1141,46 +1197,119 @@ nonisolated final class RecordingDayStore: @unchecked Sendable {
     private func commitErase(_ id: UUID, from: Date, to: Date, requestID: UUID) -> Bool {
         guard from <= to, from.timeIntervalSince1970.isFinite, to.timeIntervalSince1970.isFinite,
               !forgetIfDeleted(id), var record = load(id) else { return false }
-        let erasure = RecordingDayErasure(id: requestID, from: from, to: to)
-        if !record.erasures.contains(erasure) {
-            // Written down before anything is erased, so a recovery always erases it again.
-            var erases = readLocalErases(id)
-            erases.append(erasure)
-            do {
-                try makeFolder(id)
-                try note(Self.erasesEntry, in: id)
-                try JSONEncoder().encode(erases).write(to: erasesURL(id), options: Self.writing)
-            } catch {
-                return false
-            }
-            let gone = record.erase(id: requestID, from: from, to: to, seqs: [])
-            guard !removeIfDeleted(id) else { return false }
-            keep(record)
-            // On disk at once: the user asked for it.
-            guard write(id) else { return false }
-            // A file that can't go now goes with the next write of the day (`purgeLeftoverAudio`).
-            try? deleteAudio(id, seqs: gone)
-        }
+        return (try? eraseHere(&record, RecordingDayErasure(id: requestID, from: from, to: to))) ?? false
+    }
+
+    /// Erases a range from a day here and asks the watch to erase it there (`requestErase`), in the order that keeps
+    /// each step whatever fails after it: `erases.json` first, so a recovery always erases it again; then the request
+    /// to the watch, before anything else can fail, so it waits for the watch even when the day's own write fails or
+    /// the app ends; then the erase itself, written to `day.json` at once (the user asked for it). Throws when
+    /// `erases.json` could not be written (nothing was done then); returns whether the request and the day are on disk.
+    /// `record` is the day as the store now holds it.
+    private func eraseHere(_ record: inout RecordingDayRecord, _ erasure: RecordingDayErasure) throws -> Bool {
+        let id = record.id
         let until = now().addingTimeInterval(RecordingDayWatchRequests.lifetime)
+        guard !record.erasures.contains(erasure) else { return askWatchToErase(id, erasure, until: until) }
+        var erases = readLocalErases(id)
+        if !erases.contains(erasure) { erases.append(erasure) }
+        try makeFolder(id)
+        try note(Self.erasesEntry, in: id)
+        try JSONEncoder().encode(erases).write(to: erasesURL(id), options: Self.writing)
+        let asked = askWatchToErase(id, erasure, until: until)
+        if !asked {
+            // Only in memory: the journal says so through the day's writes, until the request is written.
+            unasked.insert(id)
+            try? note(Self.asksEntry, in: id)
+        }
+        let gone = record.erase(id: erasure.id, from: erasure.from, to: erasure.to, seqs: [])
+        guard !removeIfDeleted(id) else { return false }
+        keep(record)
+        guard write(id) else { return false }
+        // A file that can't go now goes with the next write of the day (`purgeLeftoverAudio`).
+        try? deleteAudio(id, seqs: gone)
+        if let held = cache[id] { record = held }
+        return asked
+    }
+
+    /// Asks the watch to erase a range of a day until it confirms (`watchRequests`); whether the request is on disk.
+    @discardableResult private func askWatchToErase(_ id: UUID, _ erasure: RecordingDayErasure, until: Date) -> Bool {
+        guard let requestID = erasure.id else { return false }
         return updateRequests { requests in
             guard !requests.erases.contains(where: { $0.recording == id && $0.id == requestID }) else { return }
-            requests.erases.append(.init(recording: id, id: requestID, from: from, to: to, until: until))
+            requests.erases.append(.init(recording: id, id: requestID, from: erasure.from, to: erasure.to, until: until))
         }
     }
 
     /// `requestErase(from:to:)`: the days are found and erased in one turn of the queue, so no chunk lands in between.
+    /// The range is kept first (`RecordingDayWatchRequests.RangeErase`), for a day that turns up later and for a launch
+    /// after a crash before every day held had it.
     private func commitErase(from: Date, to: Date, requestID: UUID) -> [UUID] {
-        guard from <= to else { return [] }
+        guard from <= to, from.timeIntervalSince1970.isFinite, to.timeIntervalSince1970.isFinite else { return [] }
         // A day a crash left without day.json is one too.
         if !swept { sweep() }
+        let until = now().addingTimeInterval(RecordingDayWatchRequests.lifetime)
+        updateRequests { requests in
+            guard !(requests.ranges ?? []).contains(where: { $0.id == requestID }) else { return }
+            let range = RecordingDayWatchRequests.RangeErase(id: requestID, from: from, to: to, until: until)
+            requests.ranges = (requests.ranges ?? []) + [range]
+        }
+        let touched = heldDays(overlapping: from, to)
+        let erased = touched.filter { commitErase($0, from: from, to: to, requestID: requestID) }
+        if erased.count == touched.count { rangeDone(requestID) }
+        return erased
+    }
+
+    /// The days the store holds whose span overlaps `from…to`, in the order they began.
+    private func heldDays(overlapping from: Date, _ to: Date) -> [UUID] {
         var touched: [(id: UUID, start: Date)] = []
         for id in dayIDs() {
             guard let span = span(of: id), span.start < to, from < span.end else { continue }
             touched.append((id, span.start))
         }
-        return touched.sorted { ($0.start, $0.id.uuidString) < ($1.start, $1.id.uuidString) }
-            .filter { commitErase($0.id, from: from, to: to, requestID: requestID) }
-            .map(\.id)
+        return touched.sorted { ($0.start, $0.id.uuidString) < ($1.start, $1.id.uuidString) }.map(\.id)
+    }
+
+    private func rangeDone(_ requestID: UUID) {
+        updateRequests { requests in
+            guard let i = requests.ranges?.firstIndex(where: { $0.id == requestID }) else { return }
+            requests.ranges?[i].done = true
+        }
+    }
+
+    /// The phone's erases over a stretch of time that are still kept, for days the phone had nothing of when they were
+    /// asked (`commitErase(from:to:)`).
+    private func pendingRanges() -> [RecordingDayWatchRequests.RangeErase] {
+        if requests == nil { requests = readRequests() }
+        let at = now()
+        return (requests?.ranges ?? []).filter { $0.until > at }
+    }
+
+    /// A day whose first chunk or event comes after an erase over a stretch of time that reaches into it gets that
+    /// erase, here and on the watch, before anything of it is kept: a day the watch began at midnight whose chunks were
+    /// still on their way when the user erased the last ten minutes. Throws when the erase could not be written down
+    /// (the chunk or event is then not acknowledged, and comes again).
+    private func eraseRanges(_ record: inout RecordingDayRecord) throws {
+        let ranges = pendingRanges()
+        guard !ranges.isEmpty, let span = record.span else { return }
+        for range in ranges where span.start < range.to && range.from < span.end {
+            let erasure = RecordingDayErasure(id: range.id, from: range.from, to: range.to)
+            guard !record.erasures.contains(erasure) else { continue }
+            _ = try eraseHere(&record, erasure)
+        }
+    }
+
+    /// A launch after a crash (or a failed write) cut an erase over a stretch of time short: the days the phone held
+    /// that don't have it yet get it now.
+    private func eraseUnfinishedRanges() {
+        for range in pendingRanges() where range.done != true {
+            let erasure = RecordingDayErasure(id: range.id, from: range.from, to: range.to)
+            var finished = true
+            for id in heldDays(overlapping: range.from, range.to) {
+                guard !forgetIfDeleted(id), var record = load(id), !record.erasures.contains(erasure) else { continue }
+                if (try? eraseHere(&record, erasure)) != true { finished = false }
+            }
+            if finished { rangeDone(range.id) }
+        }
     }
 
     /// A day's span, without decoding its text when it isn't in memory: an erase looks at every day the phone holds.
@@ -1208,13 +1337,26 @@ nonisolated final class RecordingDayStore: @unchecked Sendable {
         updateRequests { $0.erases.removeAll { $0.recording == answer.recording && $0.id == answer.erased } }
     }
 
-    private func commitWatchDelete(_ id: UUID) -> Bool {
+    @discardableResult private func commitWatchDelete(_ id: UUID) -> Bool {
         let until = now().addingTimeInterval(RecordingDayWatchRequests.lifetime)
         return updateRequests { requests in
             requests.erases.removeAll { $0.recording == id }
             guard !requests.deletes.contains(where: { $0.recording == id }) else { return }
             requests.deletes.append(.init(recording: id, until: until))
         }
+    }
+
+    /// A chunk or an event of a day deleted here came: the watch still holds that day, so it is asked (again) to delete
+    /// it, on the strength of the library's tombstone and before the acknowledgement goes. The request the delete made
+    /// may never have reached `day-requests.json` (the app ended before it, or its write failed), or the delete came a
+    /// way that asked nothing of the watch; without this the watch would go on recording into the deleted day, every
+    /// chunk acknowledged and dropped. At most once per `refusalInterval` per day; a request still waiting is left as it
+    /// is (the receiver sends it again, `RecordingDayIntake`'s `refused`).
+    private func refuse(_ id: UUID) {
+        let at = now()
+        if let last = refusals[id], at >= last, at.timeIntervalSince(last) < Self.refusalInterval { return }
+        refusals[id] = at
+        commitWatchDelete(id)
     }
 
     /// The pending requests, read once; expired ones dropped, and written when that or an earlier write left the file
@@ -1255,11 +1397,13 @@ nonisolated final class RecordingDayStore: @unchecked Sendable {
         return (try? JSONDecoder().decode(RecordingDayWatchRequests.self, from: data)) ?? RecordingDayWatchRequests()
     }
 
-    /// The day as it now is, kept and announced; written with the next coalesced write.
-    private func keep(_ record: RecordingDayRecord) {
+    /// The day as it now is, kept and announced; written with the next coalesced write. `durable`: all that changed is
+    /// a chunk or an event its sidecar or `events.log` already holds (and the journal names), which a recovery merges in
+    /// anyway, so `day.json` takes it with the day's next write of any kind, or at the latest `arrivalWriteDelay` on.
+    private func keep(_ record: RecordingDayRecord, durable: Bool = false) {
         cache[record.id] = record
         touch(record.id)
-        markDirty(record.id)
+        markDirty(record.id, soon: !durable)
         dayChanges.yield(record.id)
     }
 
@@ -1335,6 +1479,8 @@ nonisolated final class RecordingDayStore: @unchecked Sendable {
                 unsaved.events = true
             } else if line == Self.erasesEntry {
                 unsaved.erases = true
+            } else if line == Self.asksEntry {
+                unsaved.asks = true
             } else if let seq = Int(line), seq >= 0 {
                 unsaved.seqs.insert(seq)
             }
@@ -1408,8 +1554,10 @@ nonisolated final class RecordingDayStore: @unchecked Sendable {
         var seqs: Set<Int> = []
         var events = false
         var erases = false
+        /// An erase's request to the watch may not be on disk, though `day.json` holds the erase (`unasked`).
+        var asks = false
 
-        var isEmpty: Bool { seqs.isEmpty && !events && !erases }
+        var isEmpty: Bool { seqs.isEmpty && !events && !erases && !asks }
     }
 
     /// The day from memory, else from its folder. The first read of a day in this process brings it up to its folder
@@ -1551,9 +1699,16 @@ nonisolated final class RecordingDayStore: @unchecked Sendable {
         }
         guard var current = record else { return }
         _ = current.applyHeldEvents()
-        if unsaved.erases {
-            for erasure in readLocalErases(id) where !current.erasures.contains(erasure) {
-                current.erase(id: erasure.id, from: erasure.from, to: erasure.to, seqs: [])
+        if unsaved.erases || unsaved.asks {
+            for erasure in readLocalErases(id) {
+                let held = current.erasures.contains(erasure)
+                if !held { current.erase(id: erasure.id, from: erasure.from, to: erasure.to, seqs: []) }
+                // An erase the app ended in the middle of, or one whose request couldn't be written: its request to the
+                // watch may not be on disk. Asked again for as long as the watch can hold anything of that time (a
+                // repeat is answered the same way).
+                guard !held || unsaved.asks else { continue }
+                let until = erasure.to.addingTimeInterval(RecordingDayWatchRequests.lifetime)
+                if until > now(), !askWatchToErase(id, erasure, until: until) { unasked.insert(id) }
             }
         }
         for (seq, chunk) in current.chunks {
@@ -1572,6 +1727,7 @@ nonisolated final class RecordingDayStore: @unchecked Sendable {
     /// `recoverOnLaunch`: every folder brought up to date, then the days that changed since the last call.
     private func recoverAll() -> [UUID] {
         sweep()
+        eraseUnfinishedRanges()
         let changed = unreported.filter { !forgetIfDeleted($0) }
         unreported = []
         return changed.sorted { $0.uuidString < $1.uuidString }
@@ -1621,6 +1777,9 @@ nonisolated final class RecordingDayStore: @unchecked Sendable {
         var merged = current
         let all = current == nil
         merge(listing, all ? Unsaved(events: true, erases: true) : unsaved, allSidecars: all, into: &merged, id)
+        // Asked again and on disk, with nothing else new: the journal has nothing left to say (no write of the day
+        // follows to remove it), so later launches don't ask again.
+        if unsaved.asks, merged == current, !unasked.contains(id) { try? FileManager.default.removeItem(at: journalURL(id)) }
         return (merged, merged != current)
     }
 
@@ -1651,14 +1810,27 @@ nonisolated final class RecordingDayStore: @unchecked Sendable {
 
     // MARK: Writing, deletion, the cache
 
-    private func markDirty(_ id: UUID) {
+    /// The day differs from its `day.json` (kept in `cache` until written): written with the coalesced write
+    /// `writeDelay` on, or, for an arrival only (`soon` false), with whichever write comes first, at the latest
+    /// `arrivalWriteDelay` on.
+    private func markDirty(_ id: UUID, soon: Bool = true) {
         dirty.insert(id)
-        guard !writeScheduled else { return }
-        writeScheduled = true
-        queue.asyncAfter(deadline: .now() + writeDelay) { [weak self] in
-            guard let self else { return }
-            self.writeScheduled = false
-            self.writeDirty()
+        if soon {
+            guard !writeScheduled else { return }
+            writeScheduled = true
+            queue.asyncAfter(deadline: .now() + writeDelay) { [weak self] in
+                guard let self else { return }
+                self.writeScheduled = false
+                self.writeDirty()
+            }
+        } else {
+            guard !writeScheduled, !arrivalWriteScheduled else { return }
+            arrivalWriteScheduled = true
+            queue.asyncAfter(deadline: .now() + arrivalWriteDelay) { [weak self] in
+                guard let self else { return }
+                self.arrivalWriteScheduled = false
+                self.writeDirty()
+            }
         }
     }
 
@@ -1689,6 +1861,9 @@ nonisolated final class RecordingDayStore: @unchecked Sendable {
         // and what an earlier run left was merged in when the day was first read (`reconcile`). One left behind only
         // costs a few file reads at the next launch.
         try? FileManager.default.removeItem(at: journalURL(id))
+        if unasked.contains(id) {
+            if requestsSaved { unasked.remove(id) } else { try? note(Self.asksEntry, in: id) }
+        }
         return !removeIfDeleted(id)
     }
 
@@ -1743,11 +1918,19 @@ nonisolated final class RecordingDayStore: @unchecked Sendable {
         lastUse[id] = uses
     }
 
-    /// Drops the least recently used days that are on disk as they are.
+    /// Drops the least recently used days that are on disk as they are. Days whose arrivals wait for their write
+    /// (`markDirty`) are written first when there are more of them than the limit (a backlog of several days), so no
+    /// more than `cacheLimit` stay decoded for long.
     private func trimCache() {
         guard cache.count > Self.cacheLimit else { return }
         let clean = cache.keys.filter { !dirty.contains($0) }.sorted { (lastUse[$0] ?? 0) < (lastUse[$1] ?? 0) }
         for id in clean.prefix(cache.count - Self.cacheLimit) {
+            cache[id] = nil
+            lastUse[id] = nil
+        }
+        guard cache.count > Self.cacheLimit else { return }
+        let waiting = cache.keys.sorted { (lastUse[$0] ?? 0) < (lastUse[$1] ?? 0) }
+        for id in waiting.prefix(cache.count - Self.cacheLimit) where write(id) {
             cache[id] = nil
             lastUse[id] = nil
         }
@@ -1955,6 +2138,8 @@ nonisolated struct RecordingDaySummary: Sendable, Equatable {
     var recapFinal: Bool
     var hubIDs: [UUID]
     var complete: Bool
+    /// Why the upload stopped for good (`sync == .problem`): the day's code, else the first refused part's.
+    var problem: String? = nil
 }
 
 nonisolated extension RecordingDaySummary {
@@ -1981,7 +2166,9 @@ nonisolated extension RecordingDaySummary {
                   recapState: record.recapState,
                   recapFinal: record.recapFinal,
                   hubIDs: record.hubIDs,
-                  complete: record.isComplete)
+                  complete: record.isComplete,
+                  problem: record.problem
+                      ?? record.parts.first { !$0.expired && !$0.deleted && $0.problem != nil }?.problem)
     }
 
     /// The span the recording covers: from its start to its end, or to its day's midnight while open.

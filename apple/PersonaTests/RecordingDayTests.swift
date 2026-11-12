@@ -319,6 +319,22 @@ struct RecordingDayWireTests {
         #expect(RecordingDayErased(recording: recording, erased: erase, seqs: [5, 4, 3]) == answer)
     }
 
+    /// The phone's resend of an erase request is not queued again while a copy waits with the system. That copy's
+    /// times came through the wire's milliseconds, and the phone's own request keeps the instant it was made, so the
+    /// two are the same request by recording and id, never by their times.
+    @Test func aQueuedEraseRequestIsTheSameRequestWhateverItsTimesRoundTo() throws {
+        let recording = UUID(), id = UUID()
+        let request = RecordingDayEraseRequest(recording: recording, id: id, from: anchor.addingTimeInterval(-600.000_4),
+                                               to: anchor.addingTimeInterval(0.000_7))
+        let queued = try #require(RecordingDayEraseRequest(data: request.data))
+        #expect(queued != request, "rounded to milliseconds on the wire")
+        #expect(queued.isSame(as: request) && request.isSame(as: queued))
+        #expect(!queued.isSame(as: RecordingDayEraseRequest(recording: recording, id: UUID(), from: request.erase.from,
+                                                             to: request.erase.to)), "another erase")
+        #expect(!queued.isSame(as: RecordingDayEraseRequest(recording: UUID(), id: id, from: request.erase.from,
+                                                             to: request.erase.to)), "another recording's")
+    }
+
     @Test func deletesAndTheirConfirmationsHaveTheContractShape() throws {
         let id = UUID()
         let delete = RecordingDayDelete(recording: id)
@@ -401,6 +417,41 @@ struct RecordingDayWireTests {
         #expect(WatchSync.phoneDayKey == WatchPhoneCapabilities.dayKey && WatchSync.phoneDayHubKey == WatchPhoneCapabilities.dayHubKey)
         #expect(WatchSync.phoneDayKeepDaysKey == WatchPhoneCapabilities.keepDaysKey)
     }
+
+    /// What tells the watch's day transfer to look again (`WatchSync.onDayCapabilities`): any change of the day keys,
+    /// the consent arriving above all, and only that. The rolling key and the resends of the same context don't.
+    @Test func onlyAChangeOfTheDayKeysCountsAsOne() throws {
+        let name = "watch-day-keys-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        var ctx: [String: Any] = ["recordingRolling": true, RecordingDayContract.phoneKey: 0, RecordingDayContract.phoneHubKey: true,
+                                  RecordingDayContract.phoneKeepDaysKey: 7]
+        #expect(WatchPhoneCapabilities.storeRolling(ctx, in: defaults) == 1)
+        #expect(WatchPhoneCapabilities.storeDay(ctx, full: true, in: defaults) == 3)
+        #expect(WatchPhoneCapabilities.storeDay(ctx, full: true, in: defaults) == 0, "the same context again")
+        // The user agrees on the phone (after a reinstall cleared the consent): sending can start.
+        ctx[RecordingDayContract.phoneKey] = 1
+        #expect(WatchPhoneCapabilities.storeDay(ctx, full: true, in: defaults) == 1)
+        // The hub's transcript retention drops to two days: the age limit follows.
+        ctx[RecordingDayContract.phoneKeepDaysKey] = 2
+        #expect(WatchPhoneCapabilities.storeDay(ctx, full: true, in: defaults) == 1 && WatchPhoneCapabilities.keepDays(defaults) == 2)
+        ctx["recordingRolling"] = false
+        #expect(WatchPhoneCapabilities.storeDay(ctx, full: true, in: defaults) == 0, "rolling is no day key")
+        #expect(WatchPhoneCapabilities.store(ctx, full: true, in: defaults) == 1, "store is both")
+    }
+
+    #if os(iOS) || os(visionOS)
+    /// The phone's capabilities for the watch's application context, sent at activation and again when the watch app
+    /// is installed later (`WatchSync.sessionWatchStateDidChange`): rolling recording, and the day keys once the app said
+    /// them, so a watch installed after the phone's launch still learns it may offer All-Day Recording.
+    @MainActor @Test func theCapabilitiesForAWatchAppInstalledLaterHoldTheDayKeys() {
+        let day = RecordingDayCapabilities(consent: false, hub: true, keepDays: 30)
+        let ctx = WatchSync.capabilityContext(day: day)
+        #expect(ctx["recordingRolling"] as? Bool == true && day.isIn(ctx))
+        #expect(ctx[RecordingDayContract.phoneKey] as? Int == 0, "the watch points to the phone for the consent")
+        #expect(Set(WatchSync.capabilityContext(day: nil).keys) == ["recordingRolling"], "never a consent nobody gave")
+    }
+    #endif
 
     // MARK: The watch's state
 
@@ -914,6 +965,36 @@ private final class CountingDefaults: UserDefaults, @unchecked Sendable {
         #expect(restored.appendDayEvent(id) { .started($0, at: anchor) } == nil)
         _ = restored.allocateSeq(id)
         #expect(!FileManager.default.fileExists(atPath: lib.folder(id).path), "a seq taken for it writes nothing")
+    }
+
+    /// A crash between the writer's midnight and the main thread making the next day's entry leaves a folder with the
+    /// new day's seq counter and audio but no recording.json: no entry names it, `recover` never sees it, nobody was
+    /// told of its audio. The next launch removes it. A folder without a seq counter's mark (the phone's chunks before
+    /// the day's index row, a rolling segment before its entry) stays, and so does every recording.
+    @Test func aDayFolderAnExitLeftWithoutItsEntryGoesAtTheNextLaunch() async throws {
+        let lib = library()
+        defer { try? FileManager.default.removeItem(at: lib.root) }
+        let kept = try day(lib)
+        try chunk(lib, kept, lib.allocateSeq(kept), at: 0)
+        // The next day's recording, named before midnight: its first seqs taken and audio written, never registered.
+        let orphan = UUID()
+        try chunk(lib, orphan, lib.allocateSeq(orphan), at: 3_600, register: false)
+        try chunk(lib, orphan, lib.allocateSeq(orphan), at: 3_610, register: false)
+        // Chunks the phone stored before the day's index row.
+        let unnamed = UUID()
+        try chunk(lib, unnamed, 0, at: 0, register: false)
+        #expect(FileManager.default.fileExists(atPath: lib.folder(orphan).path))
+
+        let relaunched = RecordingLibrary(root: lib.root)
+        await relaunched.orphanCleanup?.value
+        #expect(!FileManager.default.fileExists(atPath: lib.folder(orphan).path), "its audio doesn't outlive every limit")
+        #expect(FileManager.default.fileExists(atPath: lib.audio(unnamed, 0).path))
+        #expect(relaunched.entry(kept)?.segments.map(\.index) == [0] && hasAudio(relaunched, kept, 0))
+        #expect(relaunched.entry(orphan) == nil && !relaunched.isDeleted(orphan))
+        // Nothing to do at a launch without such folders.
+        let removedFolder = RecordingLibrary(root: lib.root)
+        await removedFolder.orphanCleanup?.value
+        #expect(FileManager.default.fileExists(atPath: lib.audio(unnamed, 0).path))
     }
 
     /// Asks from a thread that isn't the main one, as the phone's chunk store does.

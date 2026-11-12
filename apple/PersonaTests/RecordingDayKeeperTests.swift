@@ -135,4 +135,35 @@ private func record(day: String = "2027-01-15", zone: String = "Asia/Shanghai", 
         #expect(forgotten == [old, recent])
         #expect(library.entry(fresh) != nil && audio(fresh, 0) && audio(fresh, 1))
     }
+
+    /// A final recap time learned minutes after a run (a phone that was offline for days learns it late) can bring a
+    /// deadline that passed already: the audio goes now, not at the next run hours later.
+    @Test func aFinalRecapLearnedLateDeletesTheAudioAtOnce() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("day-keeper-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = RecordingLibrary(root: root)
+        let lib = library
+        let store = RecordingDayStore(root: root, isDeleted: { lib.isDeletedSnapshot($0) }, now: { anchor }, writeDelay: 3600)
+        let id = UUID()
+        let start = anchor.addingTimeInterval(-4 * day)
+        let header = RecordingDayHeader(recording: id, recordingStartedAt: start, tz: "Asia/Shanghai", day: "2027-01-11", seq: 0,
+                                        startedAt: start, duration: 10, level: -30)
+        _ = try store.store(header: header, audio: Data([1, 2, 3]))
+        let keeper = RecordingDayKeeper(store: store, library: library, days: { nil }, now: { anchor }, forget: { _ in },
+                                        debounce: .zero)
+        func audio() -> Bool { FileManager.default.fileExists(atPath: store.audioURL(id, seq: 0).path) }
+        await keeper.run()
+        #expect(audio(), "four days old, no final recap yet: kept")
+
+        // Reconciliation brings its final recap, written four days ago, a moment after that run.
+        await store.update(id) { record in
+            record.parts = [RecordingDayPart(hubID: id, part: 1, startedAt: start, recapFinalAt: anchor.addingTimeInterval(-3.5 * day))]
+        }
+        keeper.schedule()
+        for _ in 0..<50 { await Task.yield() }
+        #expect(audio(), "an ordinary trigger within the hour runs nothing")
+        keeper.deadlineChanged()
+        for _ in 0..<500 where audio() { try await Task.sleep(for: .milliseconds(2)) }
+        #expect(!audio(), "past three days after its final recap: gone at once")
+    }
 }

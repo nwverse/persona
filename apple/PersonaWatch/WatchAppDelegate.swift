@@ -12,11 +12,22 @@ final class WatchAppDelegate: NSObject, WKApplicationDelegate, UNUserNotificatio
 
     // Completion-handler forms on purpose: the async ones return on a background executor (docs/lessons/ios.md).
 
-    /// In front, the page and the wrist tap already said it: the notice goes to Notification Center without a banner.
+    /// Looked at, the page and the wrist tap already said it: the notice goes to Notification Center without a banner.
+    /// Frontmost but inactive (wrist down while it records) no haptic played, so the banner and its sound say it
+    /// (`AllDayNotice.presentsBanner`), judged on the main thread as `WatchAllDay` judges the haptic.
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                             withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
-        let ours = AllDayNotice.categories.contains(notification.request.content.categoryIdentifier)
-        completionHandler(ours ? [.list] : [])
+        guard AllDayNotice.categories.contains(notification.request.content.categoryIdentifier) else {
+            completionHandler([])
+            return
+        }
+        nonisolated(unsafe) let done = completionHandler
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                let active = WKApplication.shared().applicationState == .active
+                done(AllDayNotice.presentsBanner(appActive: active) ? [.banner, .sound, .list] : [.list])
+            }
+        }
     }
 
     /// Continue or Start brings the app to the front, where the microphone can open; a tap on the notice opens the page.
@@ -29,7 +40,11 @@ final class WatchAppDelegate: NSObject, WKApplicationDelegate, UNUserNotificatio
             return
         }
         let link = AllDayNotice.link(answering: response.actionIdentifier)
-        let byPhone = AllDayNotice.askedByPhone(answering: response.actionIdentifier)
+        // The phone's request counts only while no newer command (its Stop) came and it is recent.
+        let sentAt = response.notification.request.content.userInfo[AllDayNotice.sentAtKey] as? Double
+        let byPhone = AllDayNotice.askedByPhone(answering: response.actionIdentifier, sentAt: sentAt,
+                                                newest: UserDefaults.standard.double(forKey: WatchDayCommandOrder.lastKey),
+                                                now: .now)
         nonisolated(unsafe) let done = completionHandler
         DispatchQueue.main.async {
             MainActor.assumeIsolated {

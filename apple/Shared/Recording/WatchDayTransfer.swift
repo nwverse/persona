@@ -2,14 +2,16 @@
 import Foundation
 import Observation
 import WatchConnectivity
+import WatchKit
 
 /// Sends the watch's all-day chunks and control events to the phone and keeps each until the phone acknowledges it
 /// (docs/assistant/day-recap.md「Watch to phone」). `RecordingDayOutbox` decides what goes and which way, and
 /// `RecordingDayWatchLedger` what the watch keeps; this carries both out over WatchConnectivity and hands the phone's
 /// erase and delete requests to the capture. Event driven (a library change, a reply, an acknowledgement, a file
-/// transfer finishing, a reachability or Low Power change) plus one timer for the outbox's next deadline: a backoff or
-/// hold ending, a reply or an acknowledgement overdue, and, while an event waits with the system as user info, the next
-/// look whether it still does (the end of a user info transfer doesn't reach this yet). Nothing polls otherwise.
+/// transfer finishing, a reachability, Low Power or capability change, the app leaving the front) plus one timer for
+/// the outbox's next deadline: a backoff or hold ending, a reply or an acknowledgement overdue, the live path due
+/// another try, and, while an event waits with the system as user info, the next look whether it still does (the end of
+/// a user info transfer doesn't reach this yet). Nothing polls otherwise.
 @Observable
 final class WatchDayTransfer {
     static let shared = WatchDayTransfer()
@@ -50,8 +52,14 @@ final class WatchDayTransfer {
     /// send of the same chunk (handed off as a file since) must not count against the newer one.
     @ObservationIgnored private var inFlight: [Key: Int] = [:]
     @ObservationIgnored private var generation = 0
-    /// Envelope sizes, measured once per chunk from its file (a lookup, not a read), exact once framed.
+    /// Envelope sizes, measured once per chunk from its file off the main actor (a lookup, not a read), exact once
+    /// framed. A chunk is offered to the planner once its size is known.
     @ObservationIgnored private var frameBytes: [Key: Int] = [:]
+    /// Chunks whose file is being looked up off the main actor (`measureOffMain`).
+    @ObservationIgnored private var measuring: Set<Key> = []
+    /// The chunk each outstanding file transfer is of, by its metadata's header: a long backlog with the system is
+    /// decoded once, not on every pass.
+    @ObservationIgnored private var transferKeys: [Data: Key] = [:]
     @ObservationIgnored private var readFailures: [Key: Int] = [:]
     @ObservationIgnored private var handOffUntil = Date.distantPast
     @ObservationIgnored private var pumpScheduled = false
@@ -73,11 +81,20 @@ final class WatchDayTransfer {
         sync.onDayAck = { [weak self] ack in self?.received(ack) }
         sync.onDayEraseRequest = { [weak self] request in self?.eraseRequested(request) }
         sync.onDayDelete = { [weak self] delete in self?.deleteRequested(delete) }
+        // The phone's consent or keep days changed: sending may start (or stop), the age limit moves.
+        sync.onDayCapabilities = { [weak self] in self?.pump() }
+        let center = NotificationCenter.default
         // Posted on a global queue; delivered on main here.
-        observers.append(NotificationCenter.default.addObserver(forName: .NSProcessInfoPowerStateDidChange, object: nil,
-                                                                queue: .main) { @Sendable _ in
+        observers.append(center.addObserver(forName: .NSProcessInfoPowerStateDidChange, object: nil, queue: .main) { @Sendable _ in
             MainActor.assumeIsolated { WatchDayTransfer.shared.pump() }
         })
+        // Out of the front (the wrist lowered, the Crown pressed): an app that doesn't record may be suspended any moment,
+        // and nothing else hands its backlog to the system first.
+        for name in [WKApplication.willResignActiveNotification, WKApplication.didEnterBackgroundNotification] {
+            observers.append(center.addObserver(forName: name, object: nil, queue: .main) { @Sendable _ in
+                MainActor.assumeIsolated { WatchDayTransfer.shared.leftTheFront() }
+            })
+        }
         observeLibrary()
         pump()
     }
@@ -94,10 +111,11 @@ final class WatchDayTransfer {
         }
     }
 
-    /// The app is about to stop running (a pause, a stop, a halt, a background refresh ending): everything
-    /// unacknowledged goes to the system now, chunks as files and events as user info, messages still awaiting their
-    /// reply included: a message dies with the app, a queued transfer reaches the phone anyway. The phone drops what
-    /// it already holds.
+    /// The app is about to stop running (a pause, a stop, a halt, a background refresh ending, leaving the front while
+    /// nothing records): everything unacknowledged goes to the system now, chunks as files and events as user info,
+    /// messages still awaiting their reply included: a message dies with the app, a queued transfer reaches the phone
+    /// anyway. The phone drops what it already holds. Every later pass of an app that neither is in front nor records
+    /// does the same (`RecordingDayOutbox.suspends`).
     func handOff() {
         handOffUntil = Date.now.addingTimeInterval(Self.handOffWindow)
         run(handingOff: true)
@@ -105,10 +123,22 @@ final class WatchDayTransfer {
 
     /// Ends the open day recordings whose own midnight has passed and that the microphone doesn't record into, a day
     /// all-day recording is paused in included (`RecordingDayWatchLedger.closeStaleDays`), so the phone and the hub learn
-    /// the day is over without waiting for the next start. Run from the background refresh after midnight, and in every
-    /// pass. The `closed` events are handed off at once, since the app may not run again soon.
+    /// the day is over without waiting for the next start. Run from the background refresh after midnight, once the
+    /// session is activated, and in every pass of an activated session. The app may not run again soon, so whatever the
+    /// phone hasn't acknowledged is handed off now: the `closed` events of this call, or of a pass that ran first after
+    /// the wake. Only a recording app, which keeps running, goes on as it was.
     func closeStaleDays() {
-        guard !currentLedger().closeStaleDays(now: .now).isEmpty else { return }
+        currentLedger().closeStaleDays(now: .now)
+        if Self.keepsRunning || !RecordingDayOutbox.holdsUnacknowledged(Self.dayEntries()) {
+            pump()
+        } else {
+            handOff()
+        }
+    }
+
+    /// The app left the front. One that records keeps running, and its live path with it; any other hands off.
+    private func leftTheFront() {
+        guard !Self.recording else { return }
         handOff()
     }
 
@@ -134,9 +164,9 @@ final class WatchDayTransfer {
         // Acknowledged, erased or lost since: nothing waits for it.
         guard isHeld(key) else { return }
         outbox.transferFinished(key, failed: failed, at: .now)
-        // Measured again on the next pass: audio that is gone makes the chunk lost.
-        if failed { frameBytes[key] = nil }
-        // A failure goes again after its backoff; a delivery frees a place for the backlog's next file.
+        // Looked up again: audio that is gone makes the chunk lost.
+        if failed { measureAgain(key) }
+        // A failure goes again after its backoff; a delivery waits for the phone's acknowledgement.
         pump()
     }
 
@@ -164,39 +194,49 @@ final class WatchDayTransfer {
         let session = WCSession.default
         refreshReachability(session)
         let ledger = currentLedger()
-        // Before the gate: days end, age out and go even while the phone doesn't take days yet.
-        ledger.closeStaleDays(now: now)
+        let activated = WCSession.isSupported() && session.activationState == .activated
+        // Before the gate: days end, age out and go even while the phone doesn't take days yet. A day ends only once
+        // the session is up, so a pass that can send its `closed` follows at once: a background refresh that woke the
+        // app for it waits for the activation, and hands off what it finds (`closeStaleDays`).
+        if activated { ledger.closeStaleDays(now: now) }
         ledger.ageOut(now: now, keepDays: WatchPhoneCapabilities.keepDays())
         ledger.removeSettled(now: now)
-        guard Self.phoneTakesDays, WCSession.isSupported(), session.activationState == .activated,
-              session.isCompanionAppInstalled else {
+        guard Self.phoneTakesDays, activated, session.isCompanionAppInstalled else {
             refreshPending()
             cancelWake()
             return
         }
-        let work = waitingWork()
-        let files = outstandingFiles(session, waiting: work)
+        let (work, unmeasured) = waitingWork()
+        // A chunk still being looked up waits outside the plan, but it is held: a transfer the system already has of it
+        // stays (a pass that ends before the lookup answers mustn't leave it with neither a transfer nor a message).
+        let held = Set(work.keys).union(unmeasured)
+        let files = outstandingFiles(session, held: held)
         let queued = queuedEvents(session, waiting: work)
-        keepOnly(Set(work.keys))
+        keepOnly(held)
+        let suspending = RecordingDayOutbox.suspends(handingOff: handingOff, handOffUntil: handOffUntil, now: now,
+                                                     appActive: Self.appActive, recording: Self.recording)
         let actions = outbox.plan(work.values.map(\.item), now: now, reachable: reachable,
                                   lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled,
-                                  suspending: handingOff || now < handOffUntil, inFlight: Set(inFlight.keys),
+                                  suspending: suspending, inFlight: Set(inFlight.keys),
                                   withSystem: Set(files.keys).union(queued))
         for action in actions {
             guard let item = work[action.key] else { continue }
             perform(action, item, transfer: files[action.key], session: session, now: now)
         }
-        refreshPending(work.keys.filter { !$0.isEvent }.count)
+        refreshPending()
         publishState()
         scheduleWake(after: now)
     }
 
     /// Everything of the watch's day recordings the phone has not acknowledged: each recording's events, then its
-    /// chunks. A chunk that can never go (its audio is gone, or no header describes it) becomes a `lost` event here,
-    /// so the phone stops waiting for its seq.
-    private func waitingWork() -> [Key: Work] {
+    /// chunks. A chunk that can never go (no header describes it, or its audio is gone: `measured`) becomes a `lost`
+    /// event, so the phone stops waiting for its seq. A chunk whose file hasn't been looked up yet waits for that lookup,
+    /// made off the main actor (`measureOffMain`), which asks for the next pass; those come back as `unmeasured`.
+    private func waitingWork() -> (work: [Key: Work], unmeasured: Set<Key>) {
         var work: [Key: Work] = [:]
         var lost: [UUID: [Int]] = [:]
+        var lookups: [Lookup] = []
+        let library = RecordingLibrary.shared
         for entry in Self.dayEntries() where RecordingDayOutbox.isSendable(entry) {
             for event in entry.dayEvents ?? [] {
                 guard let envelope = RecordingDayEventEnvelope(entry: entry, event: event) else { continue }
@@ -205,47 +245,88 @@ final class WatchDayTransfer {
             }
             for record in entry.segments {
                 let key = Key.chunk(entry.id, seq: record.index)
-                guard let bytes = measure(record, of: entry, key: key),
-                      let item = RecordingDayOutbox.item(record, of: entry.id, frameBytes: bytes) else {
+                guard let header = RecordingDayHeader(entry: entry, chunk: record),
+                      let probe = RecordingDayOutbox.item(record, of: entry.id, frameBytes: 0) else {
                     lost[entry.id, default: []].append(record.index)
                     continue
                 }
+                guard let bytes = frameBytes[key] else {
+                    lookups.append(Lookup(key: key, url: library.audio(entry.id, record.index), header: header))
+                    continue
+                }
+                var item = probe
+                item.frameBytes = bytes
                 work[key] = Work(entry: entry, payload: .chunk(record), item: item)
             }
         }
         for (id, seqs) in lost { loseChunks(id, seqs: seqs) }
-        return work
+        measureOffMain(lookups)
+        return (work, Set(lookups.map(\.key)))
     }
 
-    /// A chunk's envelope size: measured from its file the first time it is seen (a file-system lookup, not a read:
-    /// cheap on main), estimated when the lookup fails although the file is there. nil for a chunk that can't go.
-    private func measure(_ record: RecordingSegment, of entry: RecordingEntry, key: Key) -> Int? {
-        if let known = frameBytes[key] { return known }
-        guard let header = RecordingDayHeader(entry: entry, chunk: record) else { return nil }
-        let path = RecordingLibrary.shared.audio(entry.id, record.index).path
-        if let size = (try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? Int {
-            let bytes = RecordingDayOutbox.frameBytes(audio: size, header: header)
-            frameBytes[key] = bytes
-            return bytes
+    /// A chunk's audio file to look up, with what its envelope's size needs.
+    private nonisolated struct Lookup: Sendable {
+        var key: Key
+        var url: URL
+        var header: RecordingDayHeader
+    }
+
+    /// Looks these chunks' files up off the main actor (docs/apple/performance.md P1), all in one task; the next pass
+    /// follows the answer. A chunk already being looked up is not looked up twice.
+    private func measureOffMain(_ lookups: [Lookup]) {
+        let fresh = lookups.filter { !measuring.contains($0.key) }
+        guard !fresh.isEmpty else { return }
+        measuring.formUnion(fresh.map(\.key))
+        Task.detached(priority: .utility) { [weak self] in
+            let results = fresh.map { ($0.key, RecordingDayOutbox.measure(audio: $0.url, header: $0.header)) }
+            await self?.measured(results)
         }
-        guard FileManager.default.fileExists(atPath: path) else { return nil }
-        return RecordingDayOutbox.estimatedFrameBytes(seconds: record.duration)
     }
 
-    /// The waiting chunks the system still holds as a file transfer, one each. A transfer of audio nothing waits for
+    /// The lookups' answers: each chunk the watch still holds gets its envelope's size, or, its audio gone, becomes lost.
+    private func measured(_ results: [(Key, RecordingDayOutbox.Measured)]) {
+        var gone: [UUID: [Int]] = [:]
+        for (key, result) in results {
+            measuring.remove(key)
+            guard isHeld(key) else { continue }
+            switch result {
+            case .bytes(let bytes): frameBytes[key] = bytes
+            case .missing: gone[key.recording, default: []].append(key.number)
+            }
+        }
+        for (id, seqs) in gone { loseChunks(id, seqs: seqs) }
+        pump()
+    }
+
+    /// Looks a chunk's file up again (a transfer of it failed, its audio could not be read), keeping the size known
+    /// meanwhile, so the chunk keeps its place and its backoff.
+    private func measureAgain(_ key: Key) {
+        let library = RecordingLibrary.shared
+        guard let entry = library.entry(key.recording), let record = entry.segments.first(where: { $0.index == key.number }),
+              let header = RecordingDayHeader(entry: entry, chunk: record) else { return }
+        measureOffMain([Lookup(key: key, url: library.audio(entry.id, record.index), header: header)])
+    }
+
+    /// The held chunks the system still holds as a file transfer, one each. A transfer of audio nothing waits for
     /// any more (acknowledged, erased, lost, of a deleted recording) is cancelled, so erased audio doesn't reach the
-    /// phone, and so is a second transfer of the same chunk.
-    private func outstandingFiles(_ session: WCSession, waiting: [Key: Work]) -> [Key: WCSessionFileTransfer] {
+    /// phone, and so is a second transfer of the same chunk. A chunk whose file is still being looked up keeps its
+    /// transfer. Each transfer's header is decoded once (`transferKeys`).
+    private func outstandingFiles(_ session: WCSession, held: Set<Key>) -> [Key: WCSessionFileTransfer] {
         var files: [Key: WCSessionFileTransfer] = [:]
+        var seen: [Data: Key] = [:]
         for transfer in session.outstandingFileTransfers {
-            guard let header = RecordingDayHeader(userInfo: transfer.file.metadata) else { continue }
-            let key = Key.chunk(header.recording, seq: header.seq)
-            guard waiting[key] != nil, files[key] == nil else {
+            let metadata = transfer.file.metadata
+            guard let json = metadata?[RecordingDayContract.chunkKey] as? Data,
+                  let key = transferKeys[json] ?? RecordingDayHeader(userInfo: metadata).map({ Key.chunk($0.recording, seq: $0.seq) })
+            else { continue }
+            seen[json] = key
+            guard held.contains(key), files[key] == nil else {
                 transfer.cancel()
                 continue
             }
             files[key] = transfer
         }
+        transferKeys = seen
         return files
     }
 
@@ -372,10 +453,10 @@ final class WatchDayTransfer {
         pump()
     }
 
-    /// A chunk's audio could not be read. Gone: the next pass finds that and reports it lost. Still there: tried again
-    /// after a backoff, and reported lost after `maxReadFailures` tries.
+    /// A chunk's audio could not be read. Gone: the lookup it gets again finds that and reports it lost. Still there:
+    /// tried again after a backoff, and reported lost after `maxReadFailures` tries.
     private func unreadable(_ key: Key) {
-        frameBytes[key] = nil
+        measureAgain(key)
         let count = (readFailures[key] ?? 0) + 1
         readFailures[key] = count
         if count >= Self.maxReadFailures {
@@ -465,7 +546,7 @@ final class WatchDayTransfer {
     }
 
     private func refreshLinkReachable() {
-        let live = outbox.liveUp(reachable: reachable)
+        let live = outbox.liveUp(reachable: reachable, now: .now)
         let capture = RecordingCapture.shared
         if capture.linkReachable != live { capture.linkReachable = live }
     }
@@ -523,6 +604,18 @@ final class WatchDayTransfer {
     /// Sending waits for a phone that takes all-day recordings and whose user agreed (`recordingDay` ≥ 1); everything
     /// stays until then.
     private static var phoneTakesDays: Bool { UserDefaults.standard.integer(forKey: WatchSync.phoneDayKey) >= 1 }
+
+    /// The app is in front, where it keeps running.
+    private static var appActive: Bool { WKApplication.shared().applicationState == .active }
+
+    /// The microphone is on (or opening): the recording keeps the app running in the background too.
+    private static var recording: Bool {
+        let state = RecordingCapture.shared.state
+        return state == .recording || state == .starting
+    }
+
+    /// The app keeps running for now, so the live path goes on: it is in front, or records.
+    private static var keepsRunning: Bool { appActive || recording }
 
     private static func dayEntries() -> [RecordingEntry] {
         RecordingLibrary.shared.entries.filter { $0.isDay && $0.source == .watch }

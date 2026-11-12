@@ -7,10 +7,10 @@ import Foundation
 /// or an event out (the watch's age limit is `RecordingDayWatchLedger.ageOut`, which reports the loss).
 ///
 /// The rules, in the order they apply:
-/// - Suspending (the app is about to stop running: a pause, a stop, a halt, a background refresh): everything not
-///   already with the system is queued with it now, chunks as files and events as user info, messages still awaiting
-///   their reply included, since a message dies with the app and a queued transfer doesn't. The phone drops what it
-///   already holds.
+/// - Suspending (the app is about to stop running: a pause, a stop, a halt, leaving the front, a background wake while
+///   nothing records; `suspends`): everything not already with the system is queued with it now, chunks as files and
+///   events as user info, messages still awaiting their reply included, since a message dies with the app and a queued
+///   transfer doesn't. Nothing is taken back from the system then. The phone drops what it already holds.
 /// - Becoming reachable: outstanding files of chunks that fit a message are cancelled and the chunks go live, oldest
 ///   first; bigger ones (the minute-long chunks recorded out of reach) stay with the system.
 /// - Reachable: events and every chunk that fits a message (an envelope under `maxMessageBytes`) go by message, oldest
@@ -18,8 +18,8 @@ import Foundation
 ///   messages wait until the oldest of them ended `lowPowerHoldSeconds` ago, then all go together. A chunk whose
 ///   message failed and that is `liveDelaySeconds` behind goes as a file, its retry still awaiting a reply included:
 ///   the live path doesn't hold audio longer than that.
-/// - Not reachable: chunks go as files as soon as they are finished (at most `maxOutstandingFiles` with the system at
-///   once) and events as user info.
+/// - Not reachable: chunks go as files as soon as they are finished, every one of them (a backlog left in the app would
+///   wait for its next run if it ended without a hand-off), and events as user info.
 /// - Retries: a message without its acknowledgement after `ackTimeout`, or with an error, goes again after a backoff
 ///   (`backoffFirst` doubling to `backoffMax`). A queued transfer goes again only after the system reports it failed,
 ///   or when no acknowledgement came `fileAckTimeout` after it was delivered or was found gone from the system's
@@ -69,9 +69,6 @@ nonisolated struct RecordingDayOutbox {
         }
     }
 
-    /// Files and user info handed to the system at once, each: a long backlog doesn't fill its queue, and more follow as
-    /// these finish. A hand-off before suspending ignores it, since nothing would follow until the app runs again.
-    static let maxOutstandingFiles = 50
     /// Low Power Mode on the live path: chunk messages wait until the oldest one's end is this old, so its first sample
     /// is at most `lowPowerTransferBatchSeconds` (the contract's five minutes) behind when it leaves.
     static let lowPowerHoldSeconds = RecordingAudioSpec.lowPowerTransferBatchSeconds - RecordingDayContract.liveChunkSeconds
@@ -81,6 +78,10 @@ nonisolated struct RecordingDayOutbox {
     /// Chunk messages failing in a row (an error, or no reply in time) after which the live path counts as down
     /// (`liveUp`), although the session still says the phone is reachable: in the background that flag is optimistic.
     static let maxMessageFailures = 3
+    /// How long the live path stays down before the capture tries it again with a short chunk, while the session keeps
+    /// saying the phone is reachable: only a chunk message's reply shows the path works again, and the minute-long
+    /// chunks cut meanwhile never go by message.
+    static let liveProbeSeconds = RecordingDayContract.backoffMax
     /// While the system holds an event's user info, a pass looks this often whether it still does. Nothing else
     /// would notice the transfer ending: `WatchSync` passes on the end of a file transfer but not of user info. So an
     /// event delivered without an acknowledgement goes again at most this much later than a file would.
@@ -111,6 +112,9 @@ nonisolated struct RecordingDayOutbox {
     private var cancelled: Set<Key> = []
     /// Chunk messages that failed in a row, for `liveUp`.
     private var messageFailuresInARow = 0
+    /// When the latest of those failures came, once they count as the live path down: it is tried again
+    /// `liveProbeSeconds` later.
+    private var liveDownAt: Date?
     /// What the system held at the last plan: one gone from its queue by the next is done with, as far as this can
     /// tell.
     private var held: Set<Key> = []
@@ -156,15 +160,16 @@ nonisolated struct RecordingDayOutbox {
         let overtaken = overdueRetries(ordered, flying: flying, now: now)
         let waiting = ordered.filter { !queued.contains($0.key) && (!flying.contains($0.key) || overtaken.contains($0.key)) }
         // Overtaken messages keep their place for this plan: they are still out until the transport drops them.
-        var budget = Budget(flying: flying, queued: queued)
+        var budget = Budget(flying: flying)
         let released = reachable && lowPower ? lowPowerRelease(waiting, now: now) : .distantFuture
         for item in waiting {
             let route = way(for: item, reachable: reachable, now: now)
             guard isDue(item.key, by: route, now: now) else { continue }
             switch (item.key.kind, route) {
             case (.event, .message): if budget.take(\.eventMessages) { actions.append(.message(item.key)) }
-            case (.event, .queued): if budget.take(\.userInfos) { actions.append(.userInfo(item.key)) }
-            case (.chunk, .queued): if budget.take(\.files) { actions.append(.file(item.key)) }
+            // The system's queues take everything: each chunk is queued as soon as it is finished.
+            case (.event, .queued): actions.append(.userInfo(item.key))
+            case (.chunk, .queued): actions.append(.file(item.key))
             case (.chunk, .message):
                 if item.finishedAt <= released, budget.take(\.chunkMessages) { actions.append(.message(item.key)) }
             }
@@ -172,20 +177,15 @@ nonisolated struct RecordingDayOutbox {
         return actions
     }
 
-    /// The places left for each way of sending.
+    /// The places left for messages awaiting their reply, chunks' and events' (`maxInFlightMessages` each).
     private nonisolated struct Budget {
         var chunkMessages: Int
         var eventMessages: Int
-        var files: Int
-        var userInfos: Int
 
-        init(flying: Set<Key>, queued: Set<Key>) {
+        init(flying: Set<Key>) {
             let flyingEvents = flying.filter(\.isEvent).count
-            let queuedEvents = queued.filter(\.isEvent).count
             chunkMessages = RecordingDayContract.maxInFlightMessages - (flying.count - flyingEvents)
             eventMessages = RecordingDayContract.maxInFlightMessages - flyingEvents
-            files = RecordingDayOutbox.maxOutstandingFiles - (queued.count - queuedEvents)
-            userInfos = RecordingDayOutbox.maxOutstandingFiles - queuedEvents
         }
 
         /// Takes one place of that kind; false when none is left.
@@ -313,18 +313,29 @@ nonisolated struct RecordingDayOutbox {
     mutating func messageFailed(_ key: Key, at time: Date, answered: Bool = false) {
         guard let send = sends[key], send.route == .message, send.progress == .awaiting else { return }
         fail(key, at: time)
-        if !answered, !key.isEvent { messageFailuresInARow += 1 }
+        if !answered, !key.isEvent { chunkMessageFailed(at: time) }
     }
 
     /// The phone answered a chunk message: the live path works.
     mutating func linkAnswered() {
         messageFailuresInARow = 0
+        liveDownAt = nil
     }
 
     /// Whether the capture should cut short chunks for the live path: the session says the phone is reachable, and
-    /// chunk messages haven't kept failing.
-    func liveUp(reachable: Bool) -> Bool {
-        reachable && messageFailuresInARow < Self.maxMessageFailures
+    /// chunk messages haven't kept failing, or failed long enough ago (`liveProbeSeconds`) that the next short chunk
+    /// tries the live path again. Its reply brings the path back (`linkAnswered`); its failure puts it down again for
+    /// as long.
+    func liveUp(reachable: Bool, now: Date) -> Bool {
+        guard reachable else { return false }
+        guard messageFailuresInARow >= Self.maxMessageFailures, let down = liveDownAt else { return true }
+        return now >= down.addingTimeInterval(Self.liveProbeSeconds)
+    }
+
+    /// One more chunk message failed in a row (an error, or no reply in time).
+    private mutating func chunkMessageFailed(at time: Date) {
+        messageFailuresInARow += 1
+        if messageFailuresInARow >= Self.maxMessageFailures { liveDownAt = max(liveDownAt ?? time, time) }
     }
 
     /// The phone holds these: nothing about them is kept.
@@ -346,6 +357,7 @@ nonisolated struct RecordingDayOutbox {
     /// chunks back from the system to send them live.
     mutating func reachabilityChanged(_ reachable: Bool) {
         messageFailuresInARow = 0
+        liveDownAt = nil
         reclaiming = reachable
         guard reachable else { return }
         retryAt.removeAll()
@@ -356,13 +368,18 @@ nonisolated struct RecordingDayOutbox {
     }
 
     /// When a plan could next do something without a new event (a backoff ends, a reply or an acknowledgement is
-    /// overdue, a hold ends, a queued event is due a look); nil when only an event can change anything (a chunk or an
-    /// event to send, an acknowledgement, a reachability change, a file transfer finishing). A file the system holds
-    /// wakes nothing: it may wait hours for the phone, and its end comes as `transferFinished`. An event's user info
-    /// wakes a pass every `userInfoCheckSeconds`, since nothing reports its end yet.
+    /// overdue, a hold ends, a queued event is due a look, the live path is due another try); nil when only an event
+    /// can change anything (a chunk or an event to send, an acknowledgement, a reachability change, a file transfer
+    /// finishing). A file the system holds wakes nothing: it may wait hours for the phone, and its end comes as
+    /// `transferFinished`. An event's user info wakes a pass every `userInfoCheckSeconds`, since nothing reports its end
+    /// yet.
     func nextWake(after now: Date) -> Date? {
         var times = Array(retryAt.values)
         if let heldUntil { times.append(heldUntil) }
+        // The pass then tells the capture the live path is worth a try (`liveUp`).
+        if messageFailuresInARow >= Self.maxMessageFailures, let liveDownAt {
+            times.append(liveDownAt.addingTimeInterval(Self.liveProbeSeconds))
+        }
         for (key, send) in sends {
             switch (send.route, send.progress) {
             case (.message, .awaiting): times.append(send.at.addingTimeInterval(RecordingDayContract.ackTimeout))
@@ -417,7 +434,7 @@ nonisolated struct RecordingDayOutbox {
             }
             guard let deadline, now >= deadline else { continue }
             fail(key, at: deadline)
-            if send.route == .message, !key.isEvent { messageFailuresInARow += 1 }
+            if send.route == .message, !key.isEvent { chunkMessageFailed(at: deadline) }
         }
     }
 
@@ -482,6 +499,23 @@ nonisolated extension RecordingDayOutbox {
         return Int(audio.rounded(.up)) + containerOverheadBytes + prefixBytes + headerAllowanceBytes
     }
 
+    /// What a look at a chunk's audio file found: its envelope's size (exact, or estimated when the file is there but its
+    /// size can't be read), or no file (the chunk can never go).
+    nonisolated enum Measured: Sendable, Equatable {
+        case bytes(Int)
+        case missing
+    }
+
+    /// Looks a chunk's audio file up (docs/apple/performance.md P1: never on the main actor). The transport does it off
+    /// main once per chunk, and again after a transfer of it failed or its audio could not be read.
+    static func measure(audio url: URL, header: RecordingDayHeader) -> Measured {
+        let path = url.path
+        if let size = (try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? Int {
+            return .bytes(frameBytes(audio: size, header: header))
+        }
+        return FileManager.default.fileExists(atPath: path) ? .bytes(estimatedFrameBytes(seconds: header.duration)) : .missing
+    }
+
     /// Whether a day recording can go to the phone at all: one this build wrote always can (a valid `day` and `tz`).
     static func isSendable(_ entry: RecordingEntry) -> Bool {
         guard entry.isDay, let day = entry.day, let tz = entry.timeZone else { return false }
@@ -511,13 +545,35 @@ nonisolated extension RecordingDayOutbox {
         return limit
     }
 
+    /// How long a closed day recording stays on the watch at least, after it ended: "Erase the last 10 minutes" just
+    /// after midnight reaches back into it, and only a day recording the watch still holds gets its own `erase` event
+    /// (docs/assistant/day-recap.md「Erasing」: an erase that spans midnight applies to both day recordings). The erase
+    /// window and a minute more, for the clock.
+    static let keepClosedSeconds = RecordingRolling.eraseMinutes * 60 + 60
+
     /// A closed day recording the phone has all of (every seq acknowledged, erased or lost, every event acknowledged)
-    /// can go from the watch, unless the phone may still ask again about an erase it asked for: the watch answers a
-    /// repeated request with the seqs it saved with the day (`RecordingDayContract.eraseMemoryDays`).
+    /// can go from the watch once an erase on the watch can no longer reach it (`keepClosedSeconds` after it ended), and
+    /// unless the phone may still ask again about an erase it asked for: the watch answers a repeated request with the
+    /// seqs it saved with the day (`RecordingDayContract.eraseMemoryDays`).
     static func isRemovable(_ entry: RecordingEntry, now: Date) -> Bool {
-        guard entry.isDaySettled else { return false }
+        guard entry.isDaySettled, let closedAt = entry.closedAt,
+              now >= closedAt.addingTimeInterval(keepClosedSeconds) else { return false }
         let forgotten = now.addingTimeInterval(-RecordingDayContract.eraseMemoryDays * 86_400)
         return (entry.dayErases ?? []).allSatisfy { $0.at <= forgotten }
+    }
+
+    /// Whether a pass hands everything to the system rather than sending live (`plan`'s `suspending`): a hand-off was
+    /// asked for or made a moment ago (`handOffUntil`: a pause's last chunk reaches the library a moment after the
+    /// pause), or the app may be suspended any moment, being neither in front (`appActive`) nor recording (the
+    /// microphone keeps a recording app running). A message's reply dies with a suspended app, and chunks taken back
+    /// from the system to go live would wait for its next run.
+    static func suspends(handingOff: Bool, handOffUntil: Date, now: Date, appActive: Bool, recording: Bool) -> Bool {
+        handingOff || now < handOffUntil || !(appActive || recording)
+    }
+
+    /// Whether any of these day recordings still holds something the phone hasn't acknowledged: a chunk or an event.
+    static func holdsUnacknowledged(_ days: [RecordingEntry]) -> Bool {
+        days.contains { $0.isDay && (!$0.segments.isEmpty || !($0.dayEvents ?? []).isEmpty) }
     }
 
     /// The state the phone's Today row shows. `allDay`: day mode runs (recording or paused); `recording`: the microphone

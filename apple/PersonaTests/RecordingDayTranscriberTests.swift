@@ -278,10 +278,10 @@ private func files(_ seqs: [Int]) -> [String] { seqs.map(RecordingSegment.fileNa
         try f.chunk(1, at: 30)
         try f.chunk(2, at: 60)
         try f.close(3, at: 70)
-        f.engine.fail(with: RecordingSpeechError.modelUnavailable)
+        f.engine.fail(with: RecordingSpeechError.noSpeechPermission)
         await f.lane.drain()
-        #expect(f.engine.calls.count == 1, "one try shows the model is missing; the day's other runs aren't spent on it")
-        #expect(f.lane.blocked == .modelUnavailable)
+        #expect(f.engine.calls.count == 1, "one try shows speech recognition is off; the day's other runs aren't spent on it")
+        #expect(f.lane.blocked == .noSpeechPermission)
         #expect(f.lane.hasWork)
         for seq in 0..<3 {
             let chunk = try await f.chunk(seq)
@@ -293,6 +293,85 @@ private func files(_ seqs: [Int]) -> [String] { seqs.map(RecordingSegment.fileNa
         await f.lane.drain()
         #expect(f.lane.blocked == nil)
         for seq in 0..<3 { #expect(try await f.chunk(seq).state == .transcribed) }
+    }
+
+    /// No model for one day's language (or not installed while downloads are off) stops only the days in that language:
+    /// today's chunks in another keep being transcribed and uploaded.
+    @Test func aLanguageWithoutItsModelHoldsOnlyItsOwnDays() async throws {
+        let f = Fixture()
+        defer { f.cleanUp() }
+        let engine = f.engine
+        let lane = RecordingDayTranscriber(store: f.store, library: f.library, engine: { urls, _, locale, _, _ in
+            if locale.identifier == "ja-JP" { throw RecordingSpeechError.modelUnavailable }
+            return try engine.run(urls)
+        }, clipsIdle: {}, now: { f.clock.now }, appState: f.app,
+           defaults: UserDefaults(suiteName: "day-lane-\(UUID().uuidString)")!, languageChanged: { _ in })
+        // An older day in Japanese, today's in English.
+        f.library.adoptDay(id: f.id, day: "2027-01-15", timeZone: "Asia/Shanghai", createdAt: anchor)
+        f.library.change(f.id) { $0.locale = "ja-JP" }
+        try f.chunk(0, at: 0)
+        try f.close(1, at: 10)
+        let today = UUID()
+        let start = anchor.addingTimeInterval(86_400)
+        f.library.adoptDay(id: today, day: "2027-01-16", timeZone: "Asia/Shanghai", createdAt: start)
+        f.library.change(today) { $0.locale = "en-US" }
+        for seq in 0..<2 {
+            let header = RecordingDayHeader(recording: today, recordingStartedAt: start, tz: "Asia/Shanghai", day: "2027-01-16",
+                                            seq: seq, startedAt: start.addingTimeInterval(Double(seq) * 10), duration: 10, level: -30)
+            #expect(try f.store.store(header: header, audio: Data([1, 2, 3])) == .stored)
+        }
+        let closed = RecordingDayEventEnvelope(recording: today, recordingStartedAt: start, tz: "Asia/Shanghai", day: "2027-01-16",
+                                               event: .closed(0, at: start.addingTimeInterval(20), seqCount: 2))
+        #expect(try f.store.store(event: closed) == .applied)
+
+        await lane.drain()
+        #expect(lane.blocked == nil, "the lane goes on")
+        #expect(lane.blockedLanguages == ["ja-JP": .modelUnavailable])
+        #expect(lane.hasWork, "the next catch-up is asked for")
+        let english = try #require(await f.store.record(today))
+        #expect(english.chunks.values.allSatisfy { $0.state == .transcribed }, "today's language has its model")
+        let japanese = try await f.chunk(0)
+        #expect(japanese.state == .waiting && japanese.attempts == 0, "no try counted against the waiting day")
+
+        // In front again (the model may download now): the day in Japanese is tried again.
+        lane.foreground()
+        #expect(lane.blockedLanguages.isEmpty)
+        await lane.drain()
+        #expect(lane.blockedLanguages == ["ja-JP": .modelUnavailable], "still no model: still held, still not counted")
+        #expect(try await f.chunk(0).attempts == 0)
+    }
+
+    /// A seq the watch still has (its live send failed and goes again): transcription stops at the gap, and goes past it
+    /// only once it has been open `gapWaitSeconds`, so the late chunk is read in one run with its neighbours.
+    @Test func transcriptionWaitsForAMissingSeqBeforeGoingPastIt() async throws {
+        let f = Fixture()
+        defer { f.cleanUp() }
+        try f.chunk(0, at: 0)
+        try f.chunk(1, at: 10)
+        for seq in 3...8 { try f.chunk(seq, at: Double(seq) * 10) }
+        f.clock.advance(RecordingDayRuns.settleSeconds)
+        await f.lane.drain()
+        #expect(f.engine.calls == [files([0, 1])], "up to the gap; 3…8 wait for 2 though they fill a run")
+        let record = try await f.record()
+        let opened = try #require(record.chunks[3]?.receivedAt)
+        #expect(RecordingDayRuns.next(record, now: f.clock.now) == .wait(opened.addingTimeInterval(RecordingDayContract.gapWaitSeconds)))
+
+        // Seq 2 comes: read with the chunks after it.
+        try f.chunk(2, at: 20)
+        try f.close(9, at: 90)
+        await f.lane.drain()
+        #expect(f.engine.calls == [files([0, 1]), files([2, 3, 4, 5, 6, 7]), files([8])])
+
+        // Never coming: past the gap once it has been open two minutes.
+        let g = Fixture()
+        defer { g.cleanUp() }
+        try g.chunk(0, at: 0)
+        for seq in 2...7 { try g.chunk(seq, at: Double(seq) * 10) }
+        await g.lane.drain()
+        #expect(g.engine.calls == [files([0])], "up to the gap at once")
+        g.clock.advance(RecordingDayContract.gapWaitSeconds)
+        await g.lane.drain()
+        #expect(g.engine.calls.last == files([2, 3, 4, 5, 6, 7]))
     }
 
     @Test func aChunkWhoseAudioWentIsUntranscribedNotSilent() async throws {
@@ -494,6 +573,46 @@ private func files(_ seqs: [Int]) -> [String] { seqs.map(RecordingSegment.fileNa
         #expect(try await f.chunk(0).attempts == 0)
         #expect(f.lane.hasWork, "the next catch-up is asked for")
         #expect(f.app.grants.isEmpty, "and no background time was taken in its place")
+    }
+
+    /// The catch-up's time runs out while the lane waits for a clip still being transcribed (launched in the
+    /// background, the app resumes pending clips first): the catch-up ends at once, so its task is completed in time.
+    @Test func theCatchUpEndsInTimeWhileAClipIsStillTranscribing() async throws {
+        let f = Fixture()
+        defer { f.cleanUp() }
+        f.app.inForeground = false
+        f.app.givesGrants = false
+        var clip = try f.library.create(source: .phone)
+        clip.active = false; clip.expectedSegments = 1
+        clip.segments = [RecordingSegment(index: 0, start: 0, duration: 30)]
+        try f.library.save(clip)
+        try Data([0]).write(to: f.library.audio(clip.id, 0))
+        let held = OSAllocatedUnfairLock(initialState: true)
+        let clips = RecordingTranscription(library: f.library) { _, _ in
+            while held.withLock({ $0 }) { try? await Task.sleep(for: .milliseconds(2)) }
+            return []
+        }
+        clips.enqueue(clip.id)
+        await until { clips.current == clip.id }
+        let safety = Task { try? await Task.sleep(for: .seconds(10)); held.withLock { $0 = false } }
+        defer { safety.cancel() }
+        let engine = f.engine
+        let lane = RecordingDayTranscriber(store: f.store, library: f.library, engine: { urls, _, _, _, _ in try engine.run(urls) },
+                                           clipsIdle: { await clips.whenIdle() }, now: { f.clock.now }, appState: f.app,
+                                           defaults: UserDefaults(suiteName: "day-lane-\(UUID().uuidString)")!,
+                                           languageChanged: { _ in })
+        try f.chunk(0, at: 0)
+        try f.close(1, at: 10)
+
+        let catchUp = Task { await lane.drain() }
+        for _ in 0..<50 { await Task.yield() }
+        catchUp.cancel()
+        await catchUp.value
+        #expect(clips.current == clip.id, "ended while the clip was still being transcribed")
+        await lane.whenIdle()
+        #expect(f.engine.calls.isEmpty && lane.hasWork, "nothing of the day ran; the next catch-up is asked for")
+        held.withLock { $0 = false }
+        await clips.whenIdle()
     }
 
     @Test func aGrantRunningOutStopsTheRunAndNoOtherStartsInItsPlace() async throws {

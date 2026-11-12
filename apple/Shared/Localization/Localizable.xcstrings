@@ -164838,6 +164838,283 @@
           }
         }
       }
+    },
+    "Agree on iPhone": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agree on iPhone"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在 iPhone 上同意"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "iPhoneで同意"
+          }
+        }
+      }
+    },
+    "Agree to Start": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agree to Start"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "同意并开始"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "同意して開始"
+          }
+        }
+      }
+    },
+    "Knowledge didn't accept this day's text, so it stays on this iPhone.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Knowledge didn't accept this day's text, so it stays on this iPhone."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "知识库没有收下这一天的文字，文字仍保存在这台 iPhone 上。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ナレッジがこの日のテキストを受け付けなかったため、テキストはこのiPhoneに保存されたままです。"
+          }
+        }
+      }
+    },
+    "Knowledge holds as much of this day as it can, so the rest stays on this iPhone.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Knowledge holds as much of this day as it can, so the rest stays on this iPhone."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "知识库已收下这一天能容纳的全部文字，其余文字仍保存在这台 iPhone 上。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ナレッジはこの日のテキストを受け取れる限り保存しました。残りはこのiPhoneに保存されたままです。"
+          }
+        }
+      }
+    },
+    "Knowledge keeps another kind of recording in this day's place, so its text stays on this iPhone.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Knowledge keeps another kind of recording in this day's place, so its text stays on this iPhone."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "知识库在这一天的位置保存着另一种录音，因此这一天的文字仍保存在这台 iPhone 上。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ナレッジにはこの日の場所に別の種類の録音が保存されているため、この日のテキストはこのiPhoneに保存されたままです。"
+          }
+        }
+      }
+    },
+    "Notifications are off for Persona, so you won't be told when recording pauses or stops.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notifications are off for Persona, so you won't be told when recording pauses or stops."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona 的通知已关闭，录音暂停或停止时不会提醒你。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Personaの通知がオフのため、録音が一時停止または停止しても通知されません。"
+          }
+        }
+      }
+    },
+    "This day's text was too large for Knowledge to take, so it stays on this iPhone.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This day's text was too large for Knowledge to take, so it stays on this iPhone."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这一天的文字太大，知识库无法收下，文字仍保存在这台 iPhone 上。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この日のテキストが大きすぎてナレッジが受け取れなかったため、テキストはこのiPhoneに保存されたままです。"
+          }
+        }
+      }
+    },
+    "To use All-Day Recording, update Persona on your iPhone.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "To use All-Day Recording, update Persona on your iPhone."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "要使用全天录音，请更新 iPhone 上的 Persona。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "終日録音を使うには、iPhoneのPersonaをアップデートしてください。"
+          }
+        }
+      }
+    },
+    "Update iPhone app": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Update iPhone app"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "需更新 iPhone App"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "iPhoneアプリを更新"
+          }
+        }
+      }
+    },
+    "What was said in the last 10 minutes is deleted from this watch now, and from your iPhone and Knowledge after sync.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "What was said in the last 10 minutes is deleted from this watch now, and from your iPhone and Knowledge after sync."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最近 10 分钟说的话会马上从这块手表上删除，同步后也会从 iPhone 和知识库删除。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "直近10分間の内容はこのApple Watchからすぐに削除され、同期後にiPhoneとナレッジからも削除されます。"
+          }
+        }
+      }
+    },
+    "All-day recording stops on your Apple Watch, and today's audio and text on this iPhone are deleted now. Its text in Knowledge is removed after sync succeeds.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "All-day recording stops on your Apple Watch, and today's audio and text on this iPhone are deleted now. Its text in Knowledge is removed after sync succeeds."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Watch 上的全天录音会停止，这台 iPhone 上今天的音频和文字会马上删除。知识库里的文字会在同步成功后移除。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Watchの終日録音が停止し、このiPhone上の今日の音声とテキストはすぐに削除されます。ナレッジのテキストは同期が完了すると削除されます。"
+          }
+        }
+      }
+    },
+    "All Day [All-Day Recording Page]": {
+      "comment": "Apple Watch: the All-Day Recording page's navigation title, short so it fits a 41 mm watch.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "All Day"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "全天录音"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "終日録音"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

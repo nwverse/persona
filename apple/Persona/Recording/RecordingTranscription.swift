@@ -13,6 +13,8 @@ final class RecordingTranscription {
     @ObservationIgnored private let transcribe: @Sendable (URL, Locale) async throws -> [RecordingSentence]
     @ObservationIgnored private var worker: Task<Void, Never>?
     @ObservationIgnored private var queued: [UUID] = []
+    /// `whenIdle` callers waiting for the worker to end, each resumed once: then, or when its own task is cancelled.
+    @ObservationIgnored private var idleWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
 
     init(library: RecordingLibrary = .shared,
          transcribe: @escaping @Sendable (URL, Locale) async throws -> [RecordingSentence] = RecordingTranscription.onDevice) {
@@ -82,17 +84,41 @@ final class RecordingTranscription {
             }
             self.worker = nil
             self.kickIfNeeded()
+            if self.worker == nil { self.resumeIdleWaiters() }
         }
     }
 
     private func kickIfNeeded() { if !queued.isEmpty { kick() } }
 
     /// Returns once nothing is being transcribed or queued: all-day recording's lane runs only then, so a recording the
-    /// user is waiting for never waits behind a day's backlog.
+    /// user is waiting for never waits behind a day's backlog. Also returns as soon as the caller's task is cancelled,
+    /// clips still being transcribed (awaiting the worker itself would not): the catch-up task whose time ran out stops
+    /// at once, whatever a clip's transcription or model download still takes.
     func whenIdle() async {
-        while let worker {
-            await worker.value
+        while worker != nil, !Task.isCancelled {
+            let key = UUID()
+            await withTaskCancellationHandler {
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    if worker == nil || Task.isCancelled {
+                        continuation.resume()
+                    } else {
+                        idleWaiters[key] = continuation
+                    }
+                }
+            } onCancel: { @Sendable in
+                Task { @MainActor in self.resumeIdleWaiter(key) }
+            }
         }
+    }
+
+    private func resumeIdleWaiter(_ key: UUID) {
+        idleWaiters.removeValue(forKey: key)?.resume()
+    }
+
+    private func resumeIdleWaiters() {
+        let waiting = idleWaiters
+        idleWaiters = [:]
+        for continuation in waiting.values { continuation.resume() }
     }
 
     /// A rolling recording only transcribes the segments of its pulled range; an all-day recording none (its own lane).

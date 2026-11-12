@@ -93,12 +93,16 @@ extension AllDaySnapshot.Face {
         if case .off = self { String(localized: "All-Day") } else { title }
     }
 
-    /// What a tap does, where the face has room to say it.
+    /// What a tap does, or what a start still waits for, where the face has room to say it: it offers a start only
+    /// once the phone takes day recordings and its user agreed (docs/assistant/day-recap.md「End to end」). Nothing
+    /// before the watch app has written the face: it doesn't know yet.
     var hint: String? {
         switch self {
-        case .off: String(localized: "Tap to start")
-        case .paused, .stopped: String(localized: "Tap to continue")
-        case .recording, .stale: nil
+        case .off(.ready?): String(localized: "Tap to start")
+        case .off(.needsConsent?), .stopped(startable: false): String(localized: "Agree on iPhone")
+        case .off(.hidden?): String(localized: "Update iPhone app")
+        case .paused, .stopped(startable: true): String(localized: "Tap to continue")
+        case .off(.none), .recording, .stale: nil
         }
     }
 
@@ -126,25 +130,38 @@ extension AllDaySnapshot.Face {
 }
 
 #if DEBUG
-/// `-openWatchItem allday-complication` in the watch app: every family in every state (off, recording, paused,
-/// stopped, a recording gone stale) at a 46 mm face's sizes, on a mock face's grey, since a simulator cannot put a
-/// complication on a face from the command line (screenshots).
+/// `-openWatchItem allday-complication` in the watch app: every family in every state (off as ready, waiting for the
+/// iPhone's consent, with a phone from before and before the app wrote anything; recording, paused, stopped with and
+/// without consent, a recording gone stale) at a 46 mm face's sizes, on a mock face's grey, since a simulator cannot
+/// put a complication on a face from the command line (screenshots).
 struct AllDayComplicationPreview: View {
     var body: some View {
         let now = Date.now
         let since = now.addingTimeInterval(-(3 * 3600 + 25 * 60))
         let entries: [AllDayEntry] = [
+            AllDayEntry(date: now, snapshot: AllDaySnapshot(state: .off, updatedAt: now, access: .ready)),
+            AllDayEntry(date: now, snapshot: AllDaySnapshot(state: .off, updatedAt: now, access: .needsConsent)),
+            AllDayEntry(date: now, snapshot: AllDaySnapshot(state: .off, updatedAt: now, access: .hidden)),
             AllDayEntry(date: now, snapshot: nil),
             AllDayEntry(date: now, snapshot: AllDaySnapshot(state: .recording, since: since, updatedAt: now)),
             AllDayEntry(date: now, snapshot: AllDaySnapshot(state: .interrupted, since: now, updatedAt: now)),
             AllDayEntry(date: now, snapshot: AllDaySnapshot(state: .stopped, since: now, updatedAt: now)),
+            AllDayEntry(date: now, snapshot: AllDaySnapshot(state: .stopped, since: now, updatedAt: now, access: .needsConsent)),
             AllDayEntry(date: now, snapshot: AllDaySnapshot(state: .recording, since: since,
                                                             updatedAt: now.addingTimeInterval(-AllDaySnapshot.staleAfter - 60))),
         ]
+        // `-showComplicationState recording|interrupted|stopped|stale|off`: only that state's faces (screenshots).
+        let only = UserDefaults.standard.string(forKey: "showComplicationState")
+        let shown = entries.filter { entry in
+            guard let only else { return true }
+            let stale = entry.snapshot.map { now.timeIntervalSince($0.updatedAt) > AllDaySnapshot.staleAfter } ?? false
+            if only == "stale" { return stale }
+            return !stale && (entry.snapshot?.state.rawValue ?? "off") == only
+        }
         let size = WatchFaceTokens.previewRectangular
         ScrollView {
             VStack(alignment: .leading, spacing: WatchFaceTokens.previewSpacing) {
-                ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
+                ForEach(Array(shown.enumerated()), id: \.offset) { _, entry in
                     HStack(spacing: WatchFaceTokens.previewSpacing) {
                         AllDayComplicationView(entry: entry, family: .accessoryCircular)
                             .frame(width: WatchFaceTokens.previewCircular, height: WatchFaceTokens.previewCircular)

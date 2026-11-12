@@ -80,6 +80,17 @@ struct AllDayAlertPolicyTests {
         }
     }
 
+    @Test func notificationsAreAskedForWhereAllDayRecordingIsOffered() {
+        // The page asks whenever it is offered (the phone's start and a pause reach the wrist only as notices)…
+        #expect(Policy.asksForNotifications(.ready, onPage: true))
+        #expect(Policy.asksForNotifications(.needsConsent, onPage: true))
+        // …the home card once the user agreed on the iPhone; a phone that offers nothing never brings up a prompt.
+        #expect(Policy.asksForNotifications(.ready, onPage: false))
+        #expect(!Policy.asksForNotifications(.needsConsent, onPage: false))
+        #expect(!Policy.asksForNotifications(.hidden, onPage: true))
+        #expect(!Policy.asksForNotifications(.hidden, onPage: false))
+    }
+
     @Test func onlyAnAgreementOrThePhonesOwnRequestStartsTheMicrophone() {
         #expect(Policy.mayStart(.ready, askedByPhone: false))
         #expect(!Policy.mayStart(.needsConsent, askedByPhone: false))
@@ -110,16 +121,66 @@ struct AllDayAlertPolicyTests {
 
     @Test func everyHaltNotifiesAtOnceAsPausedOrStopped() {
         for why in Self.pausing {
-            let out = Policy.decide(.halted(why), appActive: false)
+            let out = Policy.decide(.halted(why, now: .interrupted), appActive: false)
             #expect(Policy.state(after: why) == .interrupted)
             #expect(out == Policy.Output(notify: .paused(why), withdraw: true, snapshot: .interrupted, deadMan: .disarm,
                                          handOff: true))
         }
         for why in Self.stopping {
-            let out = Policy.decide(.halted(why), appActive: true)
+            let out = Policy.decide(.halted(why, now: .stopped), appActive: true)
             #expect(Policy.state(after: why) == .stopped)
             #expect(out == Policy.Output(haptic: .failure, notify: .stopped(why), withdraw: true, snapshot: .stopped,
                                          deadMan: .disarm, handOff: true))
+        }
+    }
+
+    @Test func aHaltShowsTheStateTheCaptureIsReallyIn() {
+        // A resume that couldn't open today's day (past midnight) says `writeFailed` but leaves the capture paused, as
+        // the page shows it: the face and the notice say paused too, never stopped.
+        #expect(Policy.decide(.halted(.writeFailed, now: .paused), appActive: false)
+                == Policy.Output(notify: .paused(.writeFailed), withdraw: true, snapshot: .paused, deadMan: .disarm,
+                                 handOff: true))
+        #expect(Policy.decide(.halted(.writeFailed, now: .interrupted), appActive: false).snapshot == .interrupted)
+        // A resume the user asked for after their own pause stays their pause.
+        #expect(Policy.decide(.halted(.resumeFailed, now: .paused), appActive: false).snapshot == .paused)
+        // Every halt leaving the state it usually does shows just that.
+        for why in Self.pausing + Self.stopping {
+            #expect(Policy.shown(after: why, now: Policy.state(after: why)) == Policy.state(after: why))
+            #expect(Policy.shown(after: why, now: .paused) == .paused)
+        }
+        // A state no halt leaves can't be what the reason meant: its usual state stands.
+        #expect(Policy.shown(after: .lowBattery, now: .recording) == .stopped)
+        #expect(Policy.shown(after: .interrupted, now: .off) == .interrupted)
+    }
+
+    @Test func aStopWithNothingOnTakesBackOnlyThePhonesStartRequest() {
+        // The phone's switch turned off while the watch app was in the background: nothing records, nothing is
+        // starting, but its start notice is out. Taking it back is all the stop does.
+        #expect(Policy.stopEvent(state: .off, startUnderWay: false) == .startTakenBack)
+        for active in [true, false] {
+            #expect(Policy.decide(.startTakenBack, appActive: active) == Policy.Output(withdrawStart: true))
+        }
+        // A start of ours still asking for notifications (capture idle) or waiting for the microphone is stopped as
+        // a recording is: it is withdrawn with everything it said.
+        #expect(Policy.stopEvent(state: .off, startUnderWay: true) == .stoppedByUser)
+        for state in Self.running + [.stopped] {
+            for underWay in [true, false] {
+                #expect(Policy.stopEvent(state: state, startUnderWay: underWay) == .stoppedByUser)
+            }
+        }
+        #expect(Policy.decide(.stoppedByUser, appActive: false).withdraw)
+    }
+
+    @Test func ourNoticesShowABannerOnlyWhileTheAppIsNotLookedAt() {
+        #expect(!AllDayNotice.presentsBanner(appActive: true))
+        #expect(AllDayNotice.presentsBanner(appActive: false))
+        // Frontmost but inactive (wrist down) is not looked at: no haptic plays for a notice then, so its banner and
+        // sound are what reach the wrist.
+        let events: [Policy.Event] = Self.pausing.map { .halted($0, now: .interrupted) }
+            + Self.stopping.map { .halted($0, now: .stopped) } + [.phoneAskedToStart(sentAt: 0), .deletedOnPhone]
+        for event in events {
+            let out = Policy.decide(event, appActive: false)
+            #expect(out.notify != nil && out.haptic == nil && AllDayNotice.presentsBanner(appActive: false))
         }
     }
 
@@ -139,8 +200,8 @@ struct AllDayAlertPolicyTests {
         #expect(Policy.Notice.stopped(.crashed).request == AllDayNotice.stoppedRequest)
         // …and continues with the paused notice's Continue action.
         #expect(Policy.Notice.stopped(.lowBattery).category == AllDayNotice.pausedCategory)
-        #expect(Policy.Notice.start.request == AllDayNotice.startRequest)
-        #expect(Policy.Notice.start.category == AllDayNotice.startCategory)
+        #expect(Policy.Notice.start(sentAt: 0).request == AllDayNotice.startRequest)
+        #expect(Policy.Notice.start(sentAt: 0).category == AllDayNotice.startCategory)
         // A deletion is its own: nothing to continue, and the dead-man's request stays the dead-man's.
         #expect(Policy.Notice.deleted.request == AllDayNotice.deletedRequest)
         #expect(Policy.Notice.deleted.category == AllDayNotice.deletedCategory)
@@ -155,15 +216,32 @@ struct AllDayAlertPolicyTests {
         #expect(AllDayNotice.link(answering: UNNotificationDefaultActionIdentifier) == .open)
     }
 
-    @Test func onlyThePhonesStartNoticeSpeaksForThePhone() {
-        #expect(AllDayNotice.askedByPhone(answering: AllDayNotice.startAction))
-        #expect(!AllDayNotice.askedByPhone(answering: AllDayNotice.continueAction))
-        #expect(!AllDayNotice.askedByPhone(answering: UNNotificationDefaultActionIdentifier))
+    @Test func onlyAFreshPhoneStartThatNoStopFollowedSpeaksForThePhone() {
+        let sent = anchor.timeIntervalSince1970
+        func asked(_ identifier: String = AllDayNotice.startAction, sentAt: Double? = sent, newest: Double = sent,
+                   after seconds: TimeInterval = 60) -> Bool {
+            AllDayNotice.askedByPhone(answering: identifier, sentAt: sentAt, newest: newest,
+                                      now: anchor.addingTimeInterval(seconds))
+        }
+        #expect(asked())
+        #expect(asked(after: WatchDayCommandOrder.freshness))
+        // The phone's switch turned off after it: its Stop is the newest command, and the old Start is the user's own.
+        #expect(!asked(newest: sent + 5))
+        // Answered long after the phone stopped waiting.
+        #expect(!asked(after: WatchDayCommandOrder.freshness + 1))
+        // A notice without the phone's stamp, or not its Start button.
+        #expect(!asked(sentAt: nil))
+        #expect(!asked(sentAt: .nan))
+        #expect(!asked(AllDayNotice.continueAction))
+        #expect(!asked(UNNotificationDefaultActionIdentifier))
     }
 
     @Test func phoneStartWaitsForTheAppInFront() {
-        #expect(Policy.decide(.phoneAskedToStart, appActive: false) == Policy.Output(notify: .start))
-        #expect(Policy.decide(.phoneAskedToStart, appActive: true) == Policy.Output(haptic: .notification, startsNow: true))
+        let sent = anchor.timeIntervalSince1970
+        // The notice keeps the command's stamp for `askedByPhone`.
+        #expect(Policy.decide(.phoneAskedToStart(sentAt: sent), appActive: false) == Policy.Output(notify: .start(sentAt: sent)))
+        #expect(Policy.decide(.phoneAskedToStart(sentAt: sent), appActive: true)
+                == Policy.Output(haptic: .notification, startsNow: true))
     }
 
     // MARK: - Chunks: the dead-man's switch and the heartbeat
@@ -269,23 +347,67 @@ struct AllDayAlertPolicyTests {
     }
 
     @Test func eachFaceOpensWhatItsTapShouldDo() {
-        #expect(AllDaySnapshot.face(nil, at: anchor) == .off)
+        // Nothing written yet (the app hasn't run since it was installed): the face promises nothing and opens the app.
+        #expect(AllDaySnapshot.face(nil, at: anchor) == .off(nil))
+        #expect(AllDaySnapshot.Face.off(nil).link == .open)
         let cases: [(AllDaySnapshot.State, AllDaySnapshot.Face, AllDayLink.Action)] = [
-            (.off, .off, .start), (.paused, .paused, .resume), (.interrupted, .paused, .resume), (.stopped, .stopped, .resume),
+            (.off, .off(.ready), .start), (.paused, .paused, .resume), (.interrupted, .paused, .resume),
+            (.stopped, .stopped(startable: true), .resume),
         ]
         for (state, face, link) in cases {
-            let snapshot = AllDaySnapshot(state: state, since: anchor, updatedAt: anchor)
+            let snapshot = AllDaySnapshot(state: state, since: anchor, updatedAt: anchor, access: .ready)
             #expect(snapshot.face(at: anchor.addingTimeInterval(86_400)) == face)
             #expect(face.link == link)
+            // A snapshot from before the offer was kept reads as ready, which is what its face said.
+            #expect(AllDaySnapshot(state: state, since: anchor, updatedAt: anchor).face(at: anchor) == face)
         }
         #expect(AllDaySnapshot.Face.recording(since: anchor).link == .open)
     }
 
+    @Test func theFaceOffersAStartOnlyOnceThePhoneTakesItAndTheUserAgreed() {
+        // What the watch writes, from the phone's `recordingDay`: absent (a phone from before), 0 (not agreed), agreed.
+        let offers: [(Int?, AllDaySnapshot.Access, AllDayLink.Action)] = [
+            (nil, .hidden, .open), (0, .needsConsent, .open), (RecordingDayContract.version, .ready, .start),
+        ]
+        for (phoneDay, access, link) in offers {
+            #expect(Policy.access(phoneDay: phoneDay, state: .off) == access)
+            let face = AllDaySnapshot(state: .off, updatedAt: anchor, access: access).face(at: anchor)
+            #expect(face == .off(access))
+            // Not ready: the tap opens the page, which says what is missing, instead of a start it would refuse.
+            #expect(face.link == link)
+        }
+        // Stopped by itself while the iPhone's consent is missing (a new version of it): no "tap to continue".
+        let waiting = AllDaySnapshot(state: .stopped, updatedAt: anchor, access: Policy.access(phoneDay: 0, state: .stopped))
+        #expect(waiting.face(at: anchor) == .stopped(startable: false))
+        #expect(waiting.face(at: anchor).link == .open)
+        // A running recording keeps its controls whatever the phone says now.
+        for state in Self.running {
+            #expect(Policy.access(phoneDay: nil, state: state) == .ready)
+        }
+    }
+
+    @Test func aChangeOfThePhonesWordRedrawsTheFaceAndALaunchThatChangesNothingDoesnt() {
+        let ready = AllDaySnapshot(state: .off, updatedAt: anchor, access: .ready)
+        #expect(ready.redraws(over: nil))
+        // Every launch writes the face; the same state and offer reload nothing (WidgetKit budgets reloads).
+        #expect(!AllDaySnapshot(state: .off, updatedAt: anchor.addingTimeInterval(60), access: .ready).redraws(over: ready))
+        #expect(!ready.redraws(over: AllDaySnapshot(state: .off, updatedAt: anchor)), "a snapshot from before reads as ready")
+        // The phone's user agreed, or a new consent version took it back: the face changes.
+        #expect(AllDaySnapshot(state: .off, updatedAt: anchor, access: .needsConsent).redraws(over: ready))
+        #expect(ready.redraws(over: AllDaySnapshot(state: .off, updatedAt: anchor, access: .hidden)))
+        #expect(AllDaySnapshot(state: .stopped, updatedAt: anchor, access: .ready).redraws(over: ready))
+        // A recording always writes: its heartbeat moves the stale moment on.
+        let recording = AllDaySnapshot(state: .recording, since: anchor, updatedAt: anchor, access: .ready)
+        #expect(recording.redraws(over: recording))
+    }
+
     @Test func snapshotRoundTripsAndReadsWithoutItsOptionalKeys() throws {
-        let full = AllDaySnapshot(state: .interrupted, since: anchor, updatedAt: anchor.addingTimeInterval(5), day: "2027-01-15", pending: 3)
+        let full = AllDaySnapshot(state: .interrupted, since: anchor, updatedAt: anchor.addingTimeInterval(5), day: "2027-01-15",
+                                  pending: 3, access: .needsConsent)
         #expect(try JSONDecoder().decode(AllDaySnapshot.self, from: JSONEncoder().encode(full)) == full)
         let minimal = try JSONDecoder().decode(AllDaySnapshot.self, from: Data(#"{"state":"stopped","updatedAt":0}"#.utf8))
         #expect(minimal.state == .stopped && minimal.since == nil && minimal.day == nil && minimal.pending == nil)
+        #expect(minimal.access == nil)
     }
 
     @Test func linksRoundTripAndLeaveOtherLinksAlone() throws {
@@ -306,14 +428,31 @@ struct AllDayAlertPolicyTests {
 
     // MARK: - Launch and midnight
 
-    @Test func launchAlertsOnlyForADayThatWasRecording() {
-        #expect(Policy.alertsOnLaunch(gapReason: nil, alreadyAlerted: false))
-        #expect(Policy.alertsOnLaunch(gapReason: RecordingDayContract.Reason.stopped, alreadyAlerted: false))
-        // The dead-man's switch (or a stop notice) already said it.
-        #expect(!Policy.alertsOnLaunch(gapReason: RecordingDayContract.Reason.stopped, alreadyAlerted: true))
+    @Test func launchAlertsOnlyForAnExitItFoundWhileRecording() {
+        let id = UUID()
+        let fresh = Policy.Gap(recording: id, event: 4)
+        let stopped = RecordingDayContract.Reason.stopped
+        // The exit's `paused` (`stopped`) this launch's recovery wrote, which nothing said yet.
+        #expect(Policy.alertsOnLaunch(gapReason: stopped, gap: fresh, reported: nil, alreadyAlerted: false))
+        #expect(Policy.alertsOnLaunch(gapReason: stopped, gap: fresh, reported: Policy.Gap(recording: id, event: 2),
+                                      alreadyAlerted: false))
+        // Recording, its exit's event not saved: still an exit while recording.
+        #expect(Policy.alertsOnLaunch(gapReason: nil, gap: Policy.Gap(recording: id, event: nil), reported: nil,
+                                      alreadyAlerted: false))
+        // The dead-man's switch already said it.
+        #expect(!Policy.alertsOnLaunch(gapReason: stopped, gap: fresh, reported: nil, alreadyAlerted: true))
+        // Said before: by an earlier launch, or by the halt's own notice (battery, storage) while the app ran.
+        #expect(!Policy.alertsOnLaunch(gapReason: stopped, gap: fresh, reported: fresh, alreadyAlerted: false))
+        #expect(!Policy.alertsOnLaunch(gapReason: nil, gap: Policy.Gap(recording: id, event: nil),
+                                       reported: Policy.Gap(recording: id, event: nil), alreadyAlerted: false))
+        // The phone acknowledged the stop's event: it is old news.
+        #expect(!Policy.alertsOnLaunch(gapReason: stopped, gap: Policy.Gap(recording: id, event: nil), reported: nil,
+                                       alreadyAlerted: false))
         // The user paused, or a call did and its notice is out: nothing new to say.
-        #expect(!Policy.alertsOnLaunch(gapReason: RecordingDayContract.Reason.paused, alreadyAlerted: false))
-        #expect(!Policy.alertsOnLaunch(gapReason: RecordingDayContract.Reason.interrupted, alreadyAlerted: false))
+        #expect(!Policy.alertsOnLaunch(gapReason: RecordingDayContract.Reason.paused, gap: fresh, reported: nil,
+                                       alreadyAlerted: false))
+        #expect(!Policy.alertsOnLaunch(gapReason: RecordingDayContract.Reason.interrupted, gap: fresh, reported: nil,
+                                       alreadyAlerted: false))
     }
 
     @Test func aDayIsClosedJustAfterItsMidnightOnDSTDays() throws {
@@ -370,9 +509,135 @@ struct AllDayAlertPolicyTests {
         #expect(Policy.closeRefreshDate(openDays: [], now: now) == nil)
     }
 
+    @Test func aCloseTheSessionWasntUpForIsAskedForAgain() throws {
+        let newYork = try #require(TimeZone(identifier: "America/New_York"))
+        let stale = Policy.OpenDay(day: "2026-11-09", zone: newYork)
+        let today = Policy.OpenDay(day: "2026-11-11", zone: newYork)
+        let todayEnd = try #require(RecordingDayCalendar.end(of: "2026-11-11", in: newYork))
+        let now = todayEnd.addingTimeInterval(-6 * 3600)
+        // The refresh left the stale day open: it wakes again soon, not only at today's midnight.
+        #expect(Policy.closeRefreshDate(openDays: [stale, today], now: now, retrying: true)
+                == now.addingTimeInterval(Policy.closeRetryAfter))
+        #expect(Policy.closeRefreshDate(openDays: [stale], now: now, retrying: true) == now.addingTimeInterval(Policy.closeRetryAfter))
+        // A midnight ahead that comes sooner still wins; with nothing stale there is nothing to retry.
+        let soon = todayEnd.addingTimeInterval(-60)
+        #expect(Policy.closeRefreshDate(openDays: [stale, today], now: soon, retrying: true)
+                == todayEnd.addingTimeInterval(Policy.closeAfterMidnight))
+        #expect(Policy.closeRefreshDate(openDays: [today], now: now, retrying: true)
+                == todayEnd.addingTimeInterval(Policy.closeAfterMidnight))
+        #expect(Policy.closeRefreshDate(openDays: [], now: now, retrying: true) == nil)
+    }
+
     private static func calendar(_ zone: TimeZone) -> Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = zone
         return calendar
+    }
+}
+
+/// The launches of one watch: each recovers the library at `root` as the capture does at launch
+/// (`RecordingCapture.launchHalt`) and decides as `WatchAllDay.reportLaunchHalt` does, keeping the gap it marks said
+/// from one launch to the next.
+@MainActor private final class Launches {
+    let root: URL
+    private(set) var reported: Policy.Gap?
+
+    init(root: URL, reported: Policy.Gap? = nil) {
+        self.root = root
+        self.reported = reported
+    }
+
+    /// One launch while the user still wants all-day recording on; `deadManFired`: its notice said it already.
+    func next(deadManFired: Bool = false) throws -> Bool {
+        let lib = RecordingLibrary(root: root)
+        let open = lib.recover(source: .watch)
+        let halt = try #require(RecordingCapture.launchHalt(recovered: open, entries: lib.entries, intent: true))
+        let entry = try #require(lib.entry(halt.id))
+        let gap = Policy.gap(of: entry)
+        let alerts = Policy.alertsOnLaunch(gapReason: entry.gapReason, gap: gap, reported: reported,
+                                           alreadyAlerted: deadManFired)
+        reported = gap
+        return alerts
+    }
+}
+
+/// What each launch says about a day recording the last run left open, on a real library.
+@MainActor struct AllDayLaunchAlertTests {
+    private func library() -> RecordingLibrary {
+        RecordingLibrary(root: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+    }
+
+    private func openDay(_ lib: RecordingLibrary) throws -> UUID {
+        let id = try lib.create(source: .watch, kind: .day, createdAt: anchor, day: "2027-01-15", timeZone: "Asia/Shanghai").id
+        lib.appendDayEvent(id) { .started($0, at: anchor) }
+        return id
+    }
+
+    @Test func aCrashWhileRecordingIsSaidOnceNotAtEveryLaterLaunch() throws {
+        let lib = library()
+        defer { try? FileManager.default.removeItem(at: lib.root) }
+        let id = try openDay(lib)
+        let launches = Launches(root: lib.root)
+        // The app died while recording: the first launch finds it and says so.
+        #expect(try launches.next())
+        // A WatchConnectivity wake, the midnight close's refresh, the user opening the app: the same day, still open.
+        for _ in 0..<3 { #expect(try !launches.next()) }
+        // Once the phone acknowledged the exit's event too.
+        let n = try #require(launches.reported?.event)
+        RecordingLibrary(root: lib.root).ackDayEvents(id, ns: [n])
+        #expect(try !launches.next())
+        // Continued, and the app died again: a new stop, said again, once.
+        RecordingLibrary(root: lib.root).appendDayEvent(id) { .started($0, at: anchor.addingTimeInterval(3600)) }
+        #expect(try launches.next())
+        #expect(try !launches.next())
+    }
+
+    @Test func aStopTheSystemMadeWhileTheAppRanIsNeverSaidAgainAsACrash() throws {
+        let lib = library()
+        defer { try? FileManager.default.removeItem(at: lib.root) }
+        let id = try openDay(lib)
+        // Low battery: the capture's stop writes `paused` (`stopped`), and the halt's own notice marks the gap said.
+        lib.appendDayEvent(id) { .paused($0, at: anchor.addingTimeInterval(600), reason: RecordingDayContract.Reason.stopped) }
+        let launches = Launches(root: lib.root, reported: Policy.gap(of: try #require(lib.entry(id))))
+        for _ in 0..<3 { #expect(try !launches.next()) }
+    }
+
+    @Test func aStopWhoseEventWasntSavedIsStillSaidAtLaunch() throws {
+        let lib = library()
+        defer { try? FileManager.default.removeItem(at: lib.root) }
+        let id = try openDay(lib)
+        // Storage full: the halt's `paused` couldn't be saved, so its notice leaves no mark, and the app died owing it.
+        let mark = Policy.haltMark(of: try #require(lib.entry(id)))
+        #expect(mark == nil)
+        let launches = Launches(root: lib.root, reported: mark)
+        // The launch finds the day as if it still recorded: said once, by it.
+        #expect(try launches.next())
+        #expect(try !launches.next())
+        // Saved: the mark names it, and no launch says it again.
+        let later = RecordingLibrary(root: lib.root)
+        later.appendDayEvent(id) { .started($0, at: anchor.addingTimeInterval(3600)) }
+        later.appendDayEvent(id) { .paused($0, at: anchor.addingTimeInterval(4000), reason: RecordingDayContract.Reason.stopped) }
+        let entry = try #require(later.entry(id))
+        let saved = try #require(Policy.haltMark(of: entry))
+        #expect(try !Launches(root: lib.root, reported: saved).next())
+    }
+
+    @Test func theDeadMansNoticeSpeaksForTheLaunchThatFindsTheExit() throws {
+        let lib = library()
+        defer { try? FileManager.default.removeItem(at: lib.root) }
+        _ = try openDay(lib)
+        let launches = Launches(root: lib.root)
+        #expect(try !launches.next(deadManFired: true))
+        // Dismissed since: it was still said.
+        #expect(try !launches.next())
+    }
+
+    @Test(arguments: [RecordingDayContract.Reason.paused, RecordingDayContract.Reason.interrupted])
+    func aPauseOrACallBeforeTheExitIsNotSaidAtLaunch(reason: String) throws {
+        let lib = library()
+        defer { try? FileManager.default.removeItem(at: lib.root) }
+        let id = try openDay(lib)
+        lib.appendDayEvent(id) { .paused($0, at: anchor.addingTimeInterval(60), reason: reason) }
+        #expect(try !Launches(root: lib.root).next())
     }
 }

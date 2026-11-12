@@ -1,15 +1,16 @@
 import Foundation
+import Observation
 import Testing
 @testable import Persona
 
 private let anchor = Date(timeIntervalSince1970: 1_800_000_000) // 2027-01-15T08:00:00Z, 16:00 in Shanghai
 
 /// A day's summary as `RecordingDaySummaries` computes it, with what each test changes.
-private func summary(day: String = "2027-01-15", sync: RecordingDaySyncState = .synced, recapState: String? = nil,
+private func summary(id: UUID = UUID(), day: String = "2027-01-15", sync: RecordingDaySyncState = .synced, recapState: String? = nil,
                      recorded: Double = 3600, lastAt: Date? = anchor.addingTimeInterval(3600),
                      transcribedTo: Date? = anchor.addingTimeInterval(3600), closedAt: Date? = nil, chunks: Int = 360,
                      waiting: Int = 0, skipped: Int = 0, gaps: [RecordingDayGap] = []) -> RecordingDaySummary {
-    RecordingDaySummary(id: UUID(), day: day, timeZone: "Asia/Shanghai", firstAt: anchor, lastAt: lastAt, closedAt: closedAt,
+    RecordingDaySummary(id: id, day: day, timeZone: "Asia/Shanghai", firstAt: anchor, lastAt: lastAt, closedAt: closedAt,
                         recordedSeconds: recorded, transcribedTo: transcribedTo, chunks: chunks, waiting: waiting, skipped: skipped,
                         failed: 0, gaps: gaps, marks: [], sync: sync, recapState: recapState, recapFinal: false, hubIDs: [],
                         complete: false)
@@ -41,6 +42,27 @@ private func dayEntry(_ day: String, zone: String, createdAt: Date, id: UUID = U
     entry.day = day
     entry.timeZone = zone
     return entry
+}
+
+/// What the day board follows, as the app's observable models give it: the summaries, the library's rows and the day the
+/// watch records.
+@MainActor @Observable private final class DaySource {
+    var byID: [UUID: RecordingDaySummary] = [:]
+    var entries: [RecordingEntry] = []
+    var watching: UUID?
+}
+
+/// Set when an observed value changed (`withObservationTracking`'s `onChange`, on the main thread here).
+private nonisolated final class Touched: @unchecked Sendable {
+    var value = false
+}
+
+/// Lets the board's observation hops run: each change reaches it through one main-actor task.
+@MainActor private func settle(until done: () -> Bool = { false }) async {
+    for _ in 0..<50 {
+        if done() { return }
+        await Task.yield()
+    }
 }
 
 /// The All-Day Recording switch, the words of a day's rows and page, and which day is today's (docs/assistant/day-recap.md).
@@ -344,6 +366,194 @@ private func dayEntry(_ day: String, zone: String, createdAt: Date, id: UUID = U
         #expect(RecordingDayStatus.todayID([springForward], watching: nil, now: Date(timeIntervalSince1970: 1_773_028_740)) == springForward.id)
         #expect(RecordingDayStatus.isToday(day: "2026-03-08", timeZone: newYork, now: Date(timeIntervalSince1970: 1_773_028_740)))
         #expect(!RecordingDayStatus.isToday(day: "2026-03-08", timeZone: newYork, now: Date(timeIntervalSince1970: 1_773_028_800)))
+    }
+
+    /// Each day rolls over at its own midnight: the board waits for the first of them.
+    @Test func theNextMidnightIsTheFirstOfTheDaysZones() {
+        let shanghai = TimeZone(identifier: "Asia/Shanghai")!, newYork = TimeZone(identifier: "America/New_York")!
+        // anchor: 2027-01-15 16:00 in Shanghai, 03:00 in New York.
+        let shanghaiMidnight = JSON.parseDate("2027-01-16T00:00:00+08:00")!
+        #expect(RecordingDayStatus.nextMidnight(after: anchor, zones: [newYork, shanghai]) == shanghaiMidnight)
+        #expect(RecordingDayStatus.nextMidnight(after: anchor, zones: [newYork]) == JSON.parseDate("2027-01-16T00:00:00-05:00"))
+        // A DST day: 2026-11-01 in New York has 25 hours.
+        let fallBack = Date(timeIntervalSince1970: 1_793_538_000) // 2026-11-01 08:00 EST
+        #expect(RecordingDayStatus.nextMidnight(after: fallBack, zones: [newYork]) == Date(timeIntervalSince1970: 1_793_595_600))
+    }
+
+    // MARK: The Today section's caution
+
+    /// "This hub doesn't write day recaps yet" only once it is about something: a day, the agreement, or the switch on.
+    @Test func aStoppedUploadSaysWhy() {
+        let generic = RecordingDayStatus.problemText(nil)
+        #expect(RecordingDayStatus.problemText("rejected") == generic, "a 400's code has no words of its own")
+        let own = ["too_large", "day_full", "not_day"].map(RecordingDayStatus.problemText)
+        #expect(Set(own + [generic]).count == 4)
+        #expect(RecordingDayStatus.problemText("kind_changed") == RecordingDayStatus.problemText("not_day"))
+        for text in own + [generic] { #expect(!text.isEmpty) }
+    }
+
+    @Test func theHubCautionWaitsUntilAllDayRecordingIsUsed() {
+        #expect(!RecordingDayStatus.showsHubUpdate(offered: false, sync: nil, hasDay: false, agreed: false, on: false),
+                "a watch user who never used the mode keeps the page as it was")
+        #expect(RecordingDayStatus.showsHubUpdate(offered: false, sync: nil, hasDay: false, agreed: true, on: false))
+        #expect(RecordingDayStatus.showsHubUpdate(offered: false, sync: nil, hasDay: false, agreed: false, on: true))
+        #expect(RecordingDayStatus.showsHubUpdate(offered: false, sync: .notOffered, hasDay: true, agreed: false, on: false))
+        #expect(RecordingDayStatus.showsHubUpdate(offered: true, sync: .unsupported, hasDay: true, agreed: true, on: true),
+                "listed, but its manager refused the day routes")
+        #expect(!RecordingDayStatus.showsHubUpdate(offered: true, sync: .synced, hasDay: true, agreed: true, on: true))
+    }
+
+    // MARK: Clock times
+
+    /// Every clock time of a day is written by one formatter in the zone of the recording it belongs to: a span's ends,
+    /// the switch's "since" and the Today row's "transcribed to" read the same for the same moment.
+    @Test func everyClockTimeOfADayReadsTheSame() {
+        let shanghai = TimeZone(identifier: "Asia/Shanghai")!
+        let morning = JSON.parseDate("2027-01-15T09:12:00+08:00")!
+        let evening = JSON.parseDate("2027-01-15T19:07:00+08:00")!
+        let nine = RecordingDayStatus.clock(morning, in: shanghai)
+        #expect(nine.contains("9") && nine.contains("12"))
+        #expect(RecordingDayStatus.spanText(morning..<evening, in: shanghai)
+                == "\(nine)–\(RecordingDayStatus.clock(evening, in: shanghai))", "the span's start as every other time")
+        #expect(RecordingDayStatus.Line.recording(since: morning).text(in: shanghai).contains(nine))
+        #expect(RecordingDayStatus.Progress.transcribed(seconds: 600, to: morning).text(in: shanghai).contains(nine))
+        // In the recording's zone, not the phone's: 09:12 in Shanghai is 20:12 the day before in New York.
+        let newYork = TimeZone(identifier: "America/New_York")!
+        #expect(RecordingDayStatus.clock(morning, in: newYork) == RecordingDayStatus.clock(JSON.parseDate("2027-01-15T20:12:00+08:00")!, in: shanghai))
+        // A span within one minute is that minute, not "9:12–9:12".
+        #expect(RecordingDayStatus.spanText(morning..<morning.addingTimeInterval(30), in: shanghai) == nine)
+        // Written today: the clock time; another day: the date too.
+        #expect(RecordingDayStatus.writtenText(evening, now: evening.addingTimeInterval(60), in: shanghai)
+                == RecordingDayStatus.clock(evening, in: shanghai))
+        #expect(RecordingDayStatus.writtenText(evening, now: evening.addingTimeInterval(86_400), in: shanghai)
+                != RecordingDayStatus.clock(evening, in: shanghai))
+        // The transcript's lines add the seconds.
+        let withSeconds = RecordingDayStatus.clock(morning.addingTimeInterval(5), in: shanghai, seconds: true)
+        #expect(withSeconds != nine && withSeconds.contains("05"))
+    }
+
+    // MARK: The board the views read
+
+    /// A day's cell changes only with that day (P5): today's chunks don't redraw another day's row or page.
+    @Test func aDaysCellChangesOnlyWithThatDay() async {
+        let past = UUID(), today = UUID()
+        let source = DaySource()
+        let gaps = [RecordingDayGap(from: 0, to: 60, reason: "paused"), RecordingDayGap(from: 100, to: 400, reason: "interrupted")]
+        source.byID = [past: summary(id: past, day: "2027-01-14", gaps: gaps), today: summary(id: today)]
+        let board = RecordingDayBoard(summaries: { source.byID }, entries: { source.entries }, watching: { source.watching },
+                                      installed: { false }, clock: { anchor }, sleep: { _ in throw CancellationError() })
+        let pastCell = board.cell(past), todayCell = board.cell(today)
+        #expect(pastCell.summary?.id == past)
+        #expect(pastCell.gapTotals == RecordingDayStatus.gapTotals(gaps), "worked out with the summary, not in a body")
+        let touched = Touched()
+        withObservationTracking { _ = pastCell.summary; _ = pastCell.gapTotals } onChange: { touched.value = true }
+        // A chunk of today's recording.
+        var next = source.byID[today]!
+        next.recordedSeconds += 10
+        next.chunks += 1
+        source.byID[today] = next
+        await settle { todayCell.summary == next }
+        #expect(todayCell.summary == next)
+        await settle()
+        #expect(!touched.value, "today's chunk redrew a past day")
+        #expect(board.cell(today) === todayCell, "one cell per day")
+        // The past day's own change does reach it.
+        source.byID[past] = nil
+        await settle { pastCell.summary == nil }
+        #expect(touched.value)
+        #expect(pastCell.summary == nil && pastCell.gapTotals.isEmpty)
+    }
+
+    /// Which day is today's is worked out when the library's rows or the watch's day change, and again at midnight, when
+    /// it moves `now` on: yesterday leaves the Today section and its page's Erase goes, with nothing else changing.
+    @Test func todayFollowsTheLibraryTheWatchAndMidnight() async {
+        let shanghai = "Asia/Shanghai" // anchor is 2027-01-15 16:00 there
+        let morning = dayEntry("2027-01-15", zone: shanghai, createdAt: anchor.addingTimeInterval(-6 * 3600))
+        let afternoon = dayEntry("2027-01-15", zone: shanghai, createdAt: anchor.addingTimeInterval(-3600))
+        let source = DaySource()
+        source.entries = [morning]
+        var clock = anchor
+        var waits: [Date] = []
+        let board = RecordingDayBoard(summaries: { source.byID }, entries: { source.entries }, watching: { source.watching },
+                                      installed: { false }, clock: { clock }, sleep: { until in
+            waits.append(until)
+            if waits.count > 1 { throw CancellationError() }
+            clock = until
+        })
+        #expect(board.todayID == morning.id)
+        source.entries = [morning, afternoon]
+        await settle { board.todayID == afternoon.id }
+        #expect(board.todayID == afternoon.id, "a newer day row")
+        source.watching = morning.id
+        await settle { board.todayID == morning.id }
+        #expect(board.todayID == morning.id, "the one the watch records")
+        let open = summary(id: morning.id)
+        #expect(RecordingDayStatus.offersErase(open, now: board.now))
+
+        await board.followMidnight()
+        let midnight = JSON.parseDate("2027-01-16T00:00:00+08:00")!
+        #expect(waits == [midnight, JSON.parseDate("2027-01-17T00:00:00+08:00")!])
+        #expect(board.now == midnight)
+        #expect(board.todayID == nil, "yesterday's day isn't today's after midnight")
+        #expect(!RecordingDayStatus.offersErase(open, now: board.now))
+        // A page that comes back later finds the midnight already moved: nothing moves twice.
+        await board.followMidnight()
+        #expect(board.now == midnight)
+    }
+
+    /// A day of another zone comes while the page waits for a later midnight: the wait moves to the new day's own
+    /// midnight, so that day leaves Today then, not at the old zone's.
+    @Test func aDayOfAnotherZoneMovesTheMidnightWaitedFor() async {
+        // anchor is 2027-01-15 03:00 in New York, 16:00 in Shanghai: Shanghai's midnight comes 13 hours sooner.
+        let newYork = dayEntry("2027-01-15", zone: "America/New_York", createdAt: anchor.addingTimeInterval(-3600))
+        let shanghai = dayEntry("2027-01-15", zone: "Asia/Shanghai", createdAt: anchor)
+        let newYorkMidnight = JSON.parseDate("2027-01-16T00:00:00-05:00")!
+        let shanghaiMidnight = JSON.parseDate("2027-01-16T00:00:00+08:00")!
+        let source = DaySource()
+        source.entries = [newYork]
+        var clock = anchor
+        var waits: [Date] = []
+        let board = RecordingDayBoard(summaries: { source.byID }, entries: { source.entries }, watching: { source.watching },
+                                      installed: { false }, clock: { clock }, sleep: { until in
+            waits.append(until)
+            switch waits.count {
+            case 1: try await Task.sleep(for: .seconds(600)) // woken by the sooner midnight
+            case 2: clock = until
+            default: throw CancellationError()
+            }
+        })
+        let follow = Task { await board.followMidnight() }
+        await settle { waits.count == 1 }
+        source.entries = [newYork, shanghai]
+        await settle { board.todayID == shanghai.id }
+        #expect(board.todayID == shanghai.id)
+        for _ in 0..<10 { await settle { waits.count >= 3 } }
+        await follow.value
+        #expect(waits == [newYorkMidnight, shanghaiMidnight, newYorkMidnight])
+        #expect(board.now == shanghaiMidnight)
+        #expect(board.todayID == newYork.id, "Shanghai's day left Today at Shanghai's midnight")
+    }
+
+    /// Whether a paired watch has Persona isn't observable: the Recordings page looks again, ever less often, until one is.
+    @Test func theWatchIsLookedForUntilItHasPersona() async {
+        var installed = false
+        var waits: [TimeInterval] = []
+        let board = RecordingDayBoard(summaries: { [:] }, entries: { [] }, watching: { nil }, installed: { installed },
+                                      clock: { anchor }, sleep: { until in
+            waits.append(until.timeIntervalSince(anchor))
+            if waits.count == 4 { installed = true }
+        })
+        #expect(!board.watchAppInstalled)
+        await board.followWatch()
+        #expect(waits == [1, 2, 4, 8])
+        #expect(board.watchAppInstalled)
+        // A watch that records a day has Persona, whatever the session said.
+        let source = DaySource()
+        let other = RecordingDayBoard(summaries: { [:] }, entries: { [] }, watching: { source.watching }, installed: { false },
+                                      clock: { anchor }, sleep: { _ in })
+        source.watching = UUID()
+        await settle { other.watchAppInstalled }
+        #expect(other.watchAppInstalled)
     }
 
     /// The day's name is the library's for an untitled day (one test of the localized key, `Day · %@`).

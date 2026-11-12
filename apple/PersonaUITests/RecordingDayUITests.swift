@@ -68,7 +68,7 @@ final class RecordingDayUITests: XCTestCase {
         XCTAssertTrue(agreeRow.exists, "Not Now agreed")
 
         // The switch asks first, and stays off until the user agrees.
-        toggle.tap()
+        flip(toggle)
         XCTAssertTrue(title.waitForExistence(timeout: 10), "turning the switch on didn't ask for consent:\n\(app.debugDescription)")
         XCTAssertEqual("\(toggle.value ?? "")", "0", "the switch went on before the user agreed")
         app.buttons["allday-consent-agree"].tap()
@@ -82,9 +82,9 @@ final class RecordingDayUITests: XCTestCase {
     @MainActor func testConsentAtTheLargestTextSize() throws {
         let hub = try mockHub(recap: "none")
         let app = launch(hub, sample: "consent", extra: Self.largestText)
+        // Below the capture controls at this size: a List builds the row only once it is scrolled to.
         let agreeRow = app.buttons["allday-consent"].firstMatch
-        XCTAssertTrue(agreeRow.waitForExistence(timeout: 20), app.debugDescription)
-        reveal(app, agreeRow)
+        XCTAssertTrue(reveal(app, agreeRow, after: recordingsTop(app)), app.debugDescription)
         agreeRow.tap()
         XCTAssertTrue(app.descendants(matching: .any)["allday-consent-title"].firstMatch.waitForExistence(timeout: 10), app.debugDescription)
         try shot(app, "consent-sheet-largest")
@@ -167,6 +167,10 @@ final class RecordingDayUITests: XCTestCase {
         try shot(app, "recap-failed")
         // Settled first, so no later upload rewrites the recap and moves its version.
         XCTAssertTrue(wait(60) { try self.day(hub, self.pastDay)?["complete"] as? Bool == true }, "the day never became complete on the hub")
+        // The page looks again by itself once more while the day's summary catches up with the hub (its recap's state, the
+        // day complete): only after that is a recap it shows the one Retry asked for.
+        XCTAssertTrue(pageSettled(hub), "the page kept reading the hub's list by itself")
+        XCTAssertTrue(retry.waitForExistence(timeout: 5), app.debugDescription)
         // The mock writes recaps from now on (its switch writes one at once, version 1); a failed page doesn't look again by
         // itself, so the recap it then shows, one version on, is the one Retry asked for.
         try switchMock(hub, ["recap": "ready"])
@@ -182,20 +186,20 @@ final class RecordingDayUITests: XCTestCase {
     @MainActor func testLargestTextSize() throws {
         let hub = try mockHub(recap: "ready")
         var app = launch(hub, sample: "today", extra: Self.largestText)
+        // Below the fold at this size: rows a List hasn't scrolled to don't exist yet, so it scrolls before it waits.
         let toggle = app.switches["allday-switch"].firstMatch
-        XCTAssertTrue(toggle.waitForExistence(timeout: 20), app.debugDescription)
-        reveal(app, toggle)
-        XCTAssertTrue(toggle.isHittable, app.debugDescription)
+        XCTAssertTrue(reveal(app, toggle, after: recordingsTop(app)), app.debugDescription)
         try shot(app, "today-largest")
         app.terminate()
 
         app = launch(hub, sample: "recap", open: true, extra: Self.largestText)
+        // The recap comes in under the day's header, which fills more than a screen at this size.
         let summary = app.descendants(matching: .any)["dayrecap-summary"].firstMatch
-        XCTAssertTrue(summary.waitForExistence(timeout: Self.recapTimeout), app.debugDescription)
+        XCTAssertTrue(reveal(app, summary, after: app.descendants(matching: .any)["day-title"].firstMatch, timeout: Self.recapTimeout),
+                      app.debugDescription)
         try shot(app, "recap-largest")
         let time = app.buttons.matching(identifier: "dayrecap-time").firstMatch
-        reveal(app, time)
-        XCTAssertTrue(time.isHittable, app.debugDescription)
+        XCTAssertTrue(reveal(app, time), app.debugDescription)
     }
 
     /// Without a day and without a paired watch the Recordings page is as it was: no Today section, no day rows (an
@@ -234,11 +238,39 @@ final class RecordingDayUITests: XCTestCase {
         return app
     }
 
-    /// Swipes until `element` is on screen (rows off screen are not in the tree): up first, then back down.
-    @MainActor private func reveal(_ app: XCUIApplication, _ element: XCUIElement) {
+    /// Scrolls until `element` exists and is on screen, then says whether it is: a List builds a row only once it is
+    /// scrolled to, so an element below the fold never appears by waiting (the largest text size puts most of these
+    /// below it). First waits for `anchor` (the page's top, so nothing is swiped before the page is there), then swipes
+    /// up six times and back down six, again and again until `timeout`: an element that comes later (the recap, once the
+    /// hub wrote it) is found wherever it lands.
+    @MainActor @discardableResult
+    private func reveal(_ app: XCUIApplication, _ element: XCUIElement, after anchor: XCUIElement? = nil,
+                        timeout: TimeInterval = 30) -> Bool {
+        if let anchor { _ = anchor.waitForExistence(timeout: 20) }
+        let deadline = Date.now.addingTimeInterval(timeout)
         var swipes = 0
-        while !(element.exists && element.isHittable), swipes < 6 { app.swipeUp(); swipes += 1 }
-        while !(element.exists && element.isHittable), swipes < 12 { app.swipeDown(); swipes += 1 }
+        while Date.now < deadline {
+            if element.exists, element.isHittable { return true }
+            if (swipes / 6).isMultiple(of: 2) { app.swipeUp() } else { app.swipeDown() }
+            swipes += 1
+        }
+        return element.exists && element.isHittable
+    }
+
+    /// The Recordings page's first control: there once the page is.
+    @MainActor private func recordingsTop(_ app: XCUIApplication) -> XCUIElement {
+        app.buttons["recording-meeting-start"].firstMatch
+    }
+
+    /// Flips a `SettingsSwitchRow`'s switch: the switch itself when it is its own element, else the row's trailing end,
+    /// where it is. A tap on the row's middle lands on its label, which doesn't flip it.
+    @MainActor private func flip(_ toggle: XCUIElement) {
+        let control = toggle.switches.firstMatch
+        if control.exists {
+            control.tap()
+        } else {
+            toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+        }
     }
 
     /// The mock hub, starting this test fresh: no recordings stored (an earlier test's recaps and versions go;
@@ -286,6 +318,27 @@ final class RecordingDayUITests: XCTestCase {
     private func spoken(_ hub: String, _ id: String) throws -> Int {
         let segments = try day(hub, id)?["segments"] as? [[String: Any]] ?? []
         return segments.filter { !($0["text"] as? String ?? "").isEmpty }.count
+    }
+
+    /// How often the app read the hub's recordings list (`/mock/hits`), the page's recap look among them.
+    private func listReads(_ hub: String) throws -> Int {
+        let data = try Data(contentsOf: URL(string: hub + "/mock/hits")!)
+        let hits = (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["hits"] as? [String: Any]
+        return hits?["GET /api/v1/recordings"] as? Int ?? 0
+    }
+
+    /// The app stopped reading the hub's recordings list by itself: no new read for 3 seconds.
+    private func pageSettled(_ hub: String) -> Bool {
+        var reads = -1
+        var since = Date.now
+        return wait(30) {
+            let now = try self.listReads(hub)
+            if now != reads {
+                reads = now
+                since = .now
+            }
+            return Date.now.timeIntervalSince(since) >= 3
+        }
     }
 
     /// The version of the day's recap on the hub (`detail.recap.version`); nil before one was written.

@@ -24,8 +24,10 @@ struct AllDayProvider: TimelineProvider {
     func placeholder(in context: Context) -> AllDayEntry { AllDayEntry(date: .now, snapshot: nil) }
 
     func getSnapshot(in context: Context, completion: @escaping (AllDayEntry) -> Void) {
-        // The gallery shows the face as it starts: off.
-        completion(AllDayEntry(date: .now, snapshot: context.isPreview ? nil : AllDaySnapshot.read()))
+        // The gallery shows the face as it starts once set up: off, one tap to start.
+        let now = Date.now
+        let gallery = AllDaySnapshot(state: .off, updatedAt: now, access: .ready)
+        completion(AllDayEntry(date: now, snapshot: context.isPreview ? gallery : AllDaySnapshot.read()))
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<AllDayEntry>) -> Void) {

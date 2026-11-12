@@ -121,11 +121,14 @@ struct RecordingDayOutboxTests {
         #expect(firstPlan(chunks.reversed(), at: time(300), reachable: false) == chunks.map { .file($0.key) }, "oldest first")
         // A chunk that fits a message still goes as a file while the phone is away.
         #expect(firstPlan([chunk(9, endsAt: 0)], reachable: false) == [.file(chunkKey(9))])
-        // At most fifty with the system at once.
+        // Every finished chunk, however many the system holds already: one left to a later pass would wait for the
+        // app's next run if it ended without a hand-off.
         let hour = (0..<60).map { minute($0, endsAt: Double($0) * 60) }
-        let queued = (100..<145).map { minute($0, endsAt: Double($0) * 60) }
-        let five = firstPlan(hour + queued, at: time(10_000), reachable: false, system: Set(queued.map(\.key)))
-        #expect(five == (0..<5).map { .file(chunkKey($0)) })
+        let queued = (100..<160).map { minute($0, endsAt: Double($0) * 60) }
+        let all = firstPlan(hour + queued, at: time(10_000), reachable: false, system: Set(queued.map(\.key)))
+        #expect(all == hour.map { .file($0.key) })
+        let events = (0..<60).map { event($0, at: Double($0)) }
+        #expect(firstPlan(events, reachable: false) == events.map { .userInfo($0.key) }, "events too")
     }
 
     @Test func becomingReachableTakesSmallChunksBackFromTheSystem() {
@@ -310,9 +313,9 @@ struct RecordingDayOutboxTests {
         #expect(handed == [.userInfo(eventKey(0)), .file(chunkKey(0)), .file(chunkKey(1)), .file(chunkKey(3))])
         let again = outbox.planned(all, at: time(1), suspending: true, system: [chunkKey(2)])
         #expect(again == [], "nothing is queued twice")
-        // The cap on transfers with the system doesn't hold a hand-off back: nothing would send the rest until the app
-        // runs again.
-        let crowded = (100..<(100 + Outbox.maxOutstandingFiles)).map { chunk($0, endsAt: -50) }
+        // However many transfers the system holds, a hand-off queues the rest: nothing would send them until the app runs
+        // again.
+        let crowded = (100..<150).map { chunk($0, endsAt: -50) }
         let handedAnyway = firstPlan(crowded + [cut, paused], suspending: true, system: Set(crowded.map(\.key)))
         #expect(handedAnyway == [.userInfo(eventKey(0)), .file(chunkKey(3))])
     }
@@ -489,31 +492,63 @@ struct RecordingDayOutboxTests {
 
     @Test func theLiveLinkCountsAsDownAfterThreeChunkMessagesFailInARow() {
         var outbox = Outbox()
-        #expect(outbox.liveUp(reachable: true) && !outbox.liveUp(reachable: false))
+        #expect(outbox.liveUp(reachable: true, now: anchor) && !outbox.liveUp(reachable: false, now: anchor))
         let chunks = (0..<3).map { chunk($0, endsAt: Double($0)) }
         _ = outbox.send(chunks)
         outbox.messageFailed(chunkKey(0), at: time(1))
         outbox.messageFailed(chunkKey(1), at: time(1))
-        #expect(outbox.liveUp(reachable: true))
+        #expect(outbox.liveUp(reachable: true, now: time(1)))
         outbox.messageFailed(chunkKey(2), at: time(1))
-        #expect(!outbox.liveUp(reachable: true), "three in a row")
+        #expect(!outbox.liveUp(reachable: true, now: time(1)), "three in a row")
         outbox.linkAnswered()
-        #expect(outbox.liveUp(reachable: true), "an answer from the phone")
+        #expect(outbox.liveUp(reachable: true, now: time(1)), "an answer from the phone")
 
         // Replies that never come count too.
         var silent = Outbox()
         _ = silent.send(chunks)
-        _ = silent.planned(chunks, at: time(RecordingDayContract.ackTimeout))
-        #expect(!silent.liveUp(reachable: true))
+        let overdue = time(RecordingDayContract.ackTimeout)
+        _ = silent.planned(chunks, at: overdue)
+        #expect(!silent.liveUp(reachable: true, now: overdue))
         silent.reachabilityChanged(true)
-        #expect(silent.liveUp(reachable: true), "a change of reachability starts over")
+        #expect(silent.liveUp(reachable: true, now: overdue), "a change of reachability starts over")
 
         // The phone answering without the chunk (it couldn't store it) is no sign of a broken link, nor is an event.
         var refused = Outbox()
         _ = refused.send(chunks + [event(0, at: 0)])
         for seq in 0..<3 { refused.messageFailed(chunkKey(seq), at: time(1), answered: true) }
-        _ = refused.planned(chunks + [event(0, at: 0)], at: time(RecordingDayContract.ackTimeout))
-        #expect(refused.liveUp(reachable: true))
+        _ = refused.planned(chunks + [event(0, at: 0)], at: overdue)
+        #expect(refused.liveUp(reachable: true, now: overdue))
+    }
+
+    /// The live path down while the session keeps saying the phone is reachable (its app took too long to wake): the
+    /// minute-long chunks cut meanwhile never go by message, so nothing would show it works again. After
+    /// `liveProbeSeconds` the capture cuts a short chunk again, whose message tries it; the transport wakes for that.
+    @Test func aLiveLinkDownIsTriedAgainAfterACoolDown() throws {
+        var outbox = Outbox()
+        let chunks = (0..<3).map { chunk($0, endsAt: Double($0)) }
+        _ = outbox.send(chunks)
+        let overdue = time(RecordingDayContract.ackTimeout)
+        _ = outbox.planned(chunks, at: overdue)
+        #expect(!outbox.liveUp(reachable: true, now: overdue))
+        let probe = overdue.addingTimeInterval(Outbox.liveProbeSeconds)
+        #expect(!outbox.liveUp(reachable: true, now: probe.addingTimeInterval(-1)))
+        #expect(outbox.liveUp(reachable: true, now: probe), "a short chunk tries the live path again")
+        #expect(!outbox.liveUp(reachable: false, now: probe), "never while the session says the phone is away")
+        // With nothing else to wait for, the transport wakes then to tell the capture.
+        outbox.acked(chunks.map(\.key))
+        _ = outbox.planned([], at: overdue)
+        #expect(outbox.nextWake(after: overdue) == probe)
+
+        // The probe's message fails too: down again, for as long.
+        let tried = chunk(3, endsAt: probe.timeIntervalSince(anchor) + 10)
+        _ = outbox.send([tried], at: probe.addingTimeInterval(10))
+        outbox.messageFailed(tried.key, at: probe.addingTimeInterval(12))
+        #expect(!outbox.liveUp(reachable: true, now: probe.addingTimeInterval(12)))
+        let next = probe.addingTimeInterval(12 + Outbox.liveProbeSeconds)
+        #expect(outbox.liveUp(reachable: true, now: next))
+        // Its reply instead brings the path back for good.
+        outbox.linkAnswered()
+        #expect(outbox.liveUp(reachable: true, now: probe.addingTimeInterval(13)))
     }
 
     // MARK: Order and keeping
@@ -656,6 +691,12 @@ struct RecordingDayOutboxTests {
         settled.nextSeq = 3
         settled.prunedBelow = 3
         #expect(Outbox.isRemovable(settled, now: anchor))
+        // Just closed: "Erase the last 10 minutes" right after midnight still reaches it, and it needs its own event.
+        var justClosed = settled
+        justClosed.closedAt = time(-60)
+        #expect(!Outbox.isRemovable(justClosed, now: anchor))
+        #expect(!Outbox.isRemovable(justClosed, now: time(RecordingRolling.eraseMinutes * 60 - 60)))
+        #expect(Outbox.isRemovable(justClosed, now: time(-60 + Outbox.keepClosedSeconds)))
         var asked = settled
         asked.dayErases = [RecordingDayEraseDone(id: UUID(), seqs: [[1, 1]], at: time(-86_400))]
         #expect(!Outbox.isRemovable(asked, now: anchor), "a repeated erase request still gets its seqs")
@@ -678,6 +719,56 @@ struct RecordingDayOutboxTests {
         undated.timeZone = nil
         #expect(!Outbox.isSendable(undated))
         #expect(!Outbox.isSendable(RecordingEntry(id: UUID(), createdAt: anchor, source: .watch, kind: .rolling)))
+    }
+
+    /// A pass of an app that may be suspended any moment (neither in front nor recording) hands everything to the
+    /// system, like a hand-off: a message's reply would die with it, and chunks taken back from the system to go live
+    /// would wait for its next run. Taking them back waits for a pass of an app that keeps running.
+    @Test func anAppThatMaySoonBeSuspendedHandsOffAndTakesNothingBack() {
+        let later = time(60)
+        #expect(Outbox.suspends(handingOff: true, handOffUntil: .distantPast, now: anchor, appActive: true, recording: true))
+        #expect(Outbox.suspends(handingOff: false, handOffUntil: later, now: anchor, appActive: true, recording: false),
+                "just after a hand-off")
+        #expect(!Outbox.suspends(handingOff: false, handOffUntil: anchor, now: anchor, appActive: true, recording: false))
+        #expect(!Outbox.suspends(handingOff: false, handOffUntil: .distantPast, now: anchor, appActive: false, recording: true),
+                "the microphone keeps it running")
+        #expect(Outbox.suspends(handingOff: false, handOffUntil: .distantPast, now: anchor, appActive: false, recording: false),
+                "out of the front, not recording")
+
+        // Back in reach while the app is about to be suspended: the small chunks stay with the system.
+        let small = (0..<5).map { chunk($0, endsAt: -50 + Double($0) * 10) }
+        let held = Set(small.prefix(4).map(\.key))
+        var outbox = Outbox()
+        outbox.reachabilityChanged(true)
+        let suspending = outbox.send(small, suspending: true, system: held)
+        #expect(suspending == [.file(chunkKey(4))], "nothing cancelled, the rest queued")
+        // Once the app keeps running, they come back to go live.
+        let running = outbox.planned(small, at: time(1), system: Set(small.map(\.key)))
+        #expect(running == small.map { .cancel($0.key) } + (0..<3).map { .message(chunkKey($0)) })
+    }
+
+    @Test func aDayHoldsSomethingUnacknowledgedWhileAChunkOrAnEventIsLeft() {
+        var empty = dayEntry(day: "2027-01-15", tz: "UTC")
+        empty.closedAt = anchor
+        var chunked = empty
+        chunked.segments = [RecordingSegment(index: 0, start: 0, duration: 10, startedAt: anchor)]
+        var evented = empty
+        evented.dayEvents = [.closed(0, at: anchor, seqCount: 1)]
+        #expect(!Outbox.holdsUnacknowledged([empty]) && !Outbox.holdsUnacknowledged([]))
+        #expect(Outbox.holdsUnacknowledged([empty, chunked]) && Outbox.holdsUnacknowledged([evented]))
+    }
+
+    /// The transport looks a chunk's file up off the main actor: its exact envelope, or no file (the chunk is lost).
+    @Test func aChunksFileIsMeasuredOrFoundGone() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("day-measure-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let header = RecordingDayHeader(recording: today, recordingStartedAt: anchor, tz: "UTC", day: "2027-01-15", seq: 0,
+                                        startedAt: anchor, duration: 10, level: -30)
+        let file = folder.appendingPathComponent(RecordingSegment.fileName(0))
+        try Data(repeating: 7, count: 41_000).write(to: file)
+        #expect(Outbox.measure(audio: file, header: header) == .bytes(Outbox.frameBytes(audio: 41_000, header: header)))
+        #expect(Outbox.measure(audio: folder.appendingPathComponent(RecordingSegment.fileName(1)), header: header) == .missing)
     }
 
     @Test func theWatchStateSaysWhoStoppedTheMicrophone() {
@@ -750,9 +841,12 @@ struct RecordingDayOutboxTests {
         let closed = try #require(lib.closeDay(id, at: midnight))
         #expect(ledger.removeSettled(now: midnight).isEmpty, "its chunk and its closed event are still to go")
         ledger.apply(RecordingDayAck(recording: id, seqs: [0], events: [closed.n]))
-        #expect(RecordingDayWatchLedger(library: lib, holding: id).removeSettled(now: midnight).isEmpty,
+        #expect(ledger.removeSettled(now: midnight.addingTimeInterval(60)).isEmpty,
+                "an erase of the last minutes on the watch can still reach it")
+        let gone = midnight.addingTimeInterval(Outbox.keepClosedSeconds)
+        #expect(RecordingDayWatchLedger(library: lib, holding: id).removeSettled(now: gone).isEmpty,
                 "never from under the capture")
-        #expect(ledger.removeSettled(now: midnight) == [id])
+        #expect(ledger.removeSettled(now: gone) == [id])
         #expect(lib.entry(id) == nil && lib.isDeleted(id))
 
         // A day the phone erased part of stays a week, to answer the same request again.

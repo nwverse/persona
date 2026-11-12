@@ -46,8 +46,9 @@ nonisolated enum RecordingDayRuns {
     }
 
     /// The next step for `record`, nil when nothing waits for transcription. Chunks without audio and silent ones are
-    /// settled first, all at once; then the first run in seq order. A chunk that already failed a run is tried alone
-    /// next time, so one unreadable file doesn't use up its neighbours' tries.
+    /// settled first, all at once; then the first run in seq order, once no seq below it is still on its way
+    /// (`gapWait`). A chunk that already failed a run is tried alone next time, so one unreadable file doesn't use up
+    /// its neighbours' tries.
     static func next(_ record: RecordingDayRecord, now: Date) -> Step? {
         let waiting = record.chunks.values.filter(isWaiting).sorted { $0.seq < $1.seq }
         guard !waiting.isEmpty else { return nil }
@@ -56,6 +57,7 @@ nonisolated enum RecordingDayRuns {
         let silent = waiting.filter(isSilent).map(\.seq)
         if !silent.isEmpty { return .skip(silent) }
         let first = waiting[0]
+        if let until = gapWait(record, below: first.seq, now: now) { return .wait(until) }
         var run = [first]
         var total = first.duration
         var open = first.attempts == 0
@@ -79,6 +81,26 @@ nonisolated enum RecordingDayRuns {
         let settled = now.timeIntervalSince(last.receivedAt) >= settleSeconds
         if !open || later || ended || full || settled { return .run(run.map(\.seq)) }
         return .wait(last.receivedAt.addingTimeInterval(settleSeconds))
+    }
+
+    /// When transcription may go on past the seqs missing below `seq`, while that is still ahead; nil when it may now.
+    /// A missing seq is one the watch still holds (docs/assistant/day-recap.md「Acknowledgements and retries」: the phone
+    /// transcribes up to the gap and goes on past it once it has been open `gapWaitSeconds` while later chunks keep
+    /// coming): a chunk whose live send failed comes a little later and is read in one run with its neighbours, its
+    /// sentences whole and its positions in order. Each gap is open from when the first held chunk after it arrived (its
+    /// persisted `receivedAt`, so a relaunch doesn't restart the wait), as coverage counts it (`RecordingDayCoverage`).
+    static func gapWait(_ record: RecordingDayRecord, below seq: Int, now: Date) -> Date? {
+        guard seq > 0, (0..<seq).contains(where: { !record.isAccounted($0) }) else { return nil }
+        let held = record.chunks.keys.sorted()
+        var index = 0
+        var until: Date?
+        for missing in 0..<seq where !record.isAccounted(missing) {
+            while index < held.count, held[index] <= missing { index += 1 }
+            guard index < held.count, let later = record.chunks[held[index]] else { break }
+            let expiry = later.receivedAt.addingTimeInterval(RecordingDayContract.gapWaitSeconds)
+            if expiry > now { until = max(until ?? expiry, expiry) }
+        }
+        return until
     }
 
     /// Whether `next` continues a run that ends with `previous` (`total` seconds long so far): its audio follows on, with
@@ -259,7 +281,8 @@ nonisolated enum RecordingDayRuns {
 /// Transcribes each day's chunks as they arrive (docs/assistant/day-recap.md, "Transcribe as it arrives"): silent ones
 /// skipped, the rest in runs of contiguous chunks (`RecordingDayRuns`), each sentence saved on the chunk it starts in.
 /// A run that fails counts a try against its chunks (persisted; `failed` after `maxAttempts`, an `untranscribed` gap);
-/// a failure of the device itself (no permission, no model, an unsupported language) stops the lane without counting.
+/// a failure of the device itself stops without counting: the whole lane for one every language shares (no speech
+/// permission), only the days in that language for one of a language (no model for it, or none installed).
 /// A run's sentences get their hub positions in the same write that saves them (`RecordingDayUpload.place`). In the
 /// background it works only inside a grant or the catch-up task, never downloads a model, and stops at the step it is
 /// on the moment that time ends; what it was cut short of goes again only when it may work again: the app in front, a
@@ -273,9 +296,13 @@ nonisolated enum RecordingDayRuns {
     /// The day whose run is in the engine now (this lane's own; `RecordingTranscription.current` is never set for a
     /// day). Set per run, not per look at a day: a chunk arrives every ten seconds.
     private(set) var current: UUID?
-    /// Why the lane stopped for the whole device (`RecordingSpeechError.isEntryLevel`); cleared when the app comes to the
-    /// front (a model may download then) or a day's language changes.
+    /// Why the lane stopped for the whole device (`RecordingSpeechError.isEntryLevel`, and not `isPerLanguage`); cleared
+    /// when the app comes to the front or a day's language changes.
     private(set) var blocked: RecordingSpeechError?
+    /// Languages (`RecordingEntry.locale`) whose days wait because the device can't transcribe them now (no model, or
+    /// not installed while downloads are off): the lane goes on with the days in other languages. Cleared like
+    /// `blocked` (a model may download in front).
+    private(set) var blockedLanguages: [String: RecordingSpeechError] = [:]
 
     @ObservationIgnored private let store: RecordingDayStore
     @ObservationIgnored private let library: RecordingLibrary
@@ -362,6 +389,7 @@ nonisolated enum RecordingDayRuns {
     /// audio's 7 days) is looked at.
     func foreground() {
         blocked = nil
+        blockedLanguages = [:]
         for id in recentDayIDs() where !settled.contains(id) { enqueue(id) }
         kick()
     }
@@ -390,6 +418,7 @@ nonisolated enum RecordingDayRuns {
         library.change(id) { $0.locale = locale }
         generations[id, default: 0] += 1
         blocked = nil
+        blockedLanguages = [:]
         Task {
             await store.update(id) { record in
                 Self.reset(&record) { $0.hasAudio && !$0.isErasedOrLost }
@@ -403,6 +432,7 @@ nonisolated enum RecordingDayRuns {
     /// get their tries back.
     func retryFailed(_ id: UUID) {
         blocked = nil
+        blockedLanguages = [:]
         Task {
             await store.update(id) { Self.resetFailed(&$0) }
             changed(id)
@@ -443,7 +473,7 @@ nonisolated enum RecordingDayRuns {
     }
 
     /// Chunks still to transcribe that this lane knows of, or a block: the catch-up asks for another run.
-    var hasWork: Bool { blocked != nil || !queue.isEmpty || !waits.isEmpty }
+    var hasWork: Bool { blocked != nil || !blockedLanguages.isEmpty || !queue.isEmpty || !waits.isEmpty }
 
     // MARK: The worker
 
@@ -499,6 +529,9 @@ nonisolated enum RecordingDayRuns {
             case .more:
                 // A long backlog: the other days go first.
                 enqueue(id)
+            case .languageBlocked:
+                // Not settled: the next foreground sweep, or a change of language, brings it back.
+                break
             case .interrupted:
                 // Cut short (time ran out, a block): the day comes back with the next run, unless it was the one cancelled.
                 if cancelledVisit != id { enqueue(id) }
@@ -548,6 +581,8 @@ nonisolated enum RecordingDayRuns {
         case later(Date)
         /// More than one visit's steps: the rest after the other days.
         case more
+        /// Its language can't be transcribed now (`blockedLanguages`): the other days go on.
+        case languageBlocked
         /// Cancelled, out of time, or blocked.
         case interrupted
     }
@@ -559,6 +594,8 @@ nonisolated enum RecordingDayRuns {
         case again
         /// Cancelled, out of time, or blocked: nothing counted.
         case stopped
+        /// The day's language can't be transcribed now: nothing counted, and the lane goes on with other days.
+        case languageBlocked
     }
 
     /// Transcribes `id` until nothing is left now.
@@ -594,7 +631,13 @@ nonisolated enum RecordingDayRuns {
                 guard step != previous else { return .idle }
                 await settle(id, seqs, as: .failed)
             case .run(let seqs):
-                if await transcribe(id, seqs, record) == .stopped { return .interrupted }
+                // Silence and missing audio settle without the engine; speech waits for its language.
+                guard blockedLanguages[language(of: id)] == nil else { return .languageBlocked }
+                switch await transcribe(id, seqs, record) {
+                case .stopped: return .interrupted
+                case .languageBlocked: return .languageBlocked
+                case .done, .again: break
+                }
             }
         }
         return .more
@@ -605,7 +648,8 @@ nonisolated enum RecordingDayRuns {
     private func transcribe(_ id: UUID, _ seqs: [Int], _ record: RecordingDayRecord) async -> Run {
         let urls = seqs.map { store.audioURL(id, seq: $0) }
         let durations = seqs.map { record.chunks[$0]?.duration ?? 0 }
-        let locale = Locale(identifier: library.entry(id)?.locale ?? RecordingDefaults.locale)
+        let languageID = language(of: id)
+        let locale = Locale(identifier: languageID)
         let generation = generations[id, default: 0]
         // A model downloads only with the app in front, never inside a grant or the catch-up.
         let downloads = appState.inForeground && !draining
@@ -630,6 +674,11 @@ nonisolated enum RecordingDayRuns {
             if Task.isCancelled { return .stopped }
             if cutDownload { return .again }
             if let speech = error as? RecordingSpeechError, speech.isEntryLevel {
+                // A model of this language only: the days in other languages go on.
+                guard !speech.isPerLanguage else {
+                    blockedLanguages[languageID] = speech
+                    return .languageBlocked
+                }
                 blocked = speech
                 return .stopped
             }
@@ -735,6 +784,11 @@ nonisolated enum RecordingDayRuns {
         // The first launch has nothing failed yet; any later change of system gets every failed chunk retried once.
         if defaults.string(forKey: Self.engineKey) != nil { engineChanged = true }
         defaults.set(signature, forKey: Self.engineKey)
+    }
+
+    /// The language a day is transcribed in (its row's, the default without one).
+    private func language(of id: UUID) -> String {
+        library.entry(id)?.locale ?? RecordingDefaults.locale
     }
 
     /// The days whose audio may still be here (`audioMaxDays`), from the library's index rows (in memory).

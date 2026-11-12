@@ -15,14 +15,15 @@ struct RecordingsSection: View {
     @State private var transcription = RecordingTranscription.shared
     @State private var sync = RecordingSync.shared
     @State private var capture = RecordingCapture.shared
-    @State private var days = RecordingDaySummaries.shared
+    /// Which day is today's and whether a paired watch has Persona, worked out outside `body` (P4).
+    @State private var days = RecordingDayBoard.shared
 
     var body: some View {
         // The recording being made is the now-recording card, not a row of the list below it.
         let capturing = capture.state == .recording || capture.state == .paused
         // Today's all-day recording is the Today section's row, not one of the list below it (C30).
         #if os(iOS)
-        let today = RecordingDayStatus.todayID(library.entries, watching: days.watch?.recording, now: .now)
+        let today = days.todayID
         #else
         let today: UUID? = nil
         #endif
@@ -40,7 +41,7 @@ struct RecordingsSection: View {
         // phone keeps the text until the hub takes it, docs/assistant/day-recap.md「Compatibility」), and once a day
         // exists. Without either, the page is as it always was.
         let dayOffered = RecordingDayDefaults.offered(model.hubFeatures)
-        if today != nil || RecordingDayTodaySection.watchOffersIt {
+        if today != nil || days.watchAppInstalled {
             RecordingDayTodaySection(dayID: today, offered: dayOffered)
         }
         #endif
@@ -84,6 +85,11 @@ struct RecordingsSection: View {
             await RecordingSamples.installDaySampleIfAsked()
             #endif
         }
+        #if os(iOS)
+        // Yesterday leaves the Today section at midnight, and the section comes once a paired watch has Persona.
+        .tabActiveTask { await days.followMidnight() }
+        .tabActiveTask { await days.followWatch() }
+        #endif
     }
 }
 

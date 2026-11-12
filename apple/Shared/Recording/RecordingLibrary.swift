@@ -22,6 +22,9 @@ final class RecordingLibrary {
     @ObservationIgnored private nonisolated let daySeqs = OSAllocatedUnfairLock(initialState: [UUID: DaySeqCounter]())
     /// Called after a recording is saved (the phone syncs its text to the knowledge base from here).
     @ObservationIgnored var didChange: ((UUID) -> Void)?
+    /// The launch's removal of day folders an exit left without their entry (`removeOrphanedDays`), off the main actor;
+    /// nil when there were none.
+    @ObservationIgnored private(set) var orphanCleanup: Task<Void, Never>?
 
     init(root: URL = RecordingLibrary.directory) {
         self.root = root
@@ -32,6 +35,7 @@ final class RecordingLibrary {
             let tombstoned = deleted
             tombstones.withLock { $0 = tombstoned }
             let dirs = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+            var unnamed: [URL] = []
             entries = dirs.compactMap { dir in
                 guard let id = UUID(uuidString: dir.lastPathComponent) else { return nil }
                 // A deleted recording whose folder came back (a write already under way when it was deleted).
@@ -39,15 +43,26 @@ final class RecordingLibrary {
                     try? FileManager.default.removeItem(at: dir)
                     return nil
                 }
-                guard let data = try? Data(contentsOf: dir.appendingPathComponent("recording.json")),
-                      let entry = try? JSONDecoder().decode(RecordingEntry.self, from: data),
+                let data: Data
+                do { data = try Data(contentsOf: dir.appendingPathComponent(Self.entryFileName)) } catch {
+                    if (error as? CocoaError)?.code == .fileReadNoSuchFile { unnamed.append(dir) }
+                    return nil
+                }
+                guard let entry = try? JSONDecoder().decode(RecordingEntry.self, from: data),
                       entry.id.uuidString == dir.lastPathComponent else { return nil }
                 return entry
             }.sorted { $0.createdAt > $1.createdAt }
             let counters = entries.filter(\.isDay).map { ($0.id, $0.nextIndex) }
             daySeqs.withLock { $0 = Dictionary(counters, uniquingKeysWith: max).mapValues { DaySeqCounter(next: $0) } }
+            if !unnamed.isEmpty {
+                let folders = unnamed
+                orphanCleanup = Task.detached(priority: .utility) { RecordingLibrary.removeOrphanedDays(folders) }
+            }
         } catch { self.error = String(localized: "Can't read the recordings folder") }
     }
+
+    /// Each recording's info in its folder.
+    nonisolated static let entryFileName = "recording.json"
 
     nonisolated func folder(_ id: UUID) -> URL { root.appendingPathComponent(id.uuidString, isDirectory: true) }
     nonisolated func audio(_ id: UUID, _ index: Int) -> URL { folder(id).appendingPathComponent(RecordingSegment.fileName(index)) }
@@ -83,7 +98,7 @@ final class RecordingLibrary {
         entry.updatedAt = max(Date.now, floor)
         if entry.isDay, entry.nextSeq != nil { entry.nextSeq = syncSeqCounter(entry) }
         try FileManager.default.createDirectory(at: folder(entry.id), withIntermediateDirectories: true)
-        try JSONEncoder().encode(entry).write(to: folder(entry.id).appendingPathComponent("recording.json"), options: .atomic)
+        try JSONEncoder().encode(entry).write(to: folder(entry.id).appendingPathComponent(Self.entryFileName), options: .atomic)
         entries.removeAll { $0.id == entry.id }
         entries.append(entry)
         entries.sort { $0.createdAt > $1.createdAt }
@@ -363,6 +378,24 @@ extension RecordingLibrary {
 
     /// The name of a seq counter's mark (`markSeqCounter`), followed by the counter.
     private nonisolated static let seqMarkPrefix = "next-seq-"
+
+    /// Removes the day folders an exit left without their recording.json, given the folders a launch found without one.
+    /// Only the watch's day writer makes such a folder: at midnight it moves to the next day's folder, takes its first
+    /// seq there (the counter's mark) and fills it before the main thread makes its entry, so an app that ends in
+    /// between leaves audio that no entry names, that `recover` never sees and that nobody was told of. Its id is never
+    /// named again, so it would stay past every retention limit; it goes instead. A folder without a seq counter's mark
+    /// stays: the phone keeps a day's chunks in their folder before the day's index row is written, and a watch's
+    /// rolling segment arrives before its entry. Run off the main actor (it lists folders), at launch, before any writer
+    /// could name a folder. The day the writer left keeps its own `recover`: its end and what it lost.
+    nonisolated static func removeOrphanedDays(_ folders: [URL]) {
+        let files = FileManager.default
+        for folder in folders {
+            guard !files.fileExists(atPath: folder.appendingPathComponent(entryFileName).path),
+                  let names = try? files.contentsOfDirectory(atPath: folder.path), // perf-ok: nonisolated, from init's Task.detached
+                  names.contains(where: { seqMark(fileName: $0) != nil }) else { continue }
+            try? files.removeItem(at: folder)
+        }
+    }
 
     /// The counter a file name holds, nil for a file that isn't a seq counter's mark.
     private nonisolated static func seqMark(fileName: String) -> Int? {

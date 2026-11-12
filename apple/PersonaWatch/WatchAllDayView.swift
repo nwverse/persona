@@ -11,10 +11,13 @@ struct WatchAllDayView: View {
     @AppStorage(WatchSync.phoneDayKey) private var phoneDay: Int?
     /// Absent until the phone says; only a phone that says its hub can't write the recap shows the line.
     @AppStorage(WatchSync.phoneDayHubKey) private var phoneDayHub = true
+    /// Erasing waits for its confirmation: it can't be undone, and it reaches the iPhone and Knowledge too.
+    @State private var erasing = false
 
     var body: some View {
         // Opened from the face or a link while the phone offers nothing yet, the page points to the phone too.
-        let startable = allDay.access(phoneDay: phoneDay) == .ready
+        let access = allDay.access(phoneDay: phoneDay)
+        let startable = access == .ready
         ScrollView {
             VStack(spacing: Theme.Space.m) {
                 WatchAllDayStatus(state: allDay.state, since: allDay.since, startable: startable)
@@ -23,8 +26,14 @@ struct WatchAllDayView: View {
                         .font(Theme.Font.caption).foregroundStyle(.secondary)
                         .accessibilityIdentifier("watch-allday-deleted")
                 }
-                if startable { controls } else { waitingForConsent }
+                if startable { controls } else { waiting(access) }
                 WatchAllDayFeedbackLine(feedback: allDay.feedback)
+                if allDay.notificationsOff, access != .hidden {
+                    Label("Notifications are off for Persona, so you won't be told when recording pauses or stops.",
+                          systemImage: Theme.Icon.muted)
+                        .font(Theme.Font.caption).foregroundStyle(Theme.cautionText)
+                        .accessibilityIdentifier("watch-allday-notifications-off")
+                }
                 if allDay.waiting > 0 {
                     Label(String(localized: "\(allDay.waiting) waiting for iPhone"), systemImage: Theme.Icon.phone)
                         .font(Theme.Font.caption).foregroundStyle(.secondary)
@@ -40,14 +49,23 @@ struct WatchAllDayView: View {
             }
             .padding(Theme.Space.m)
         }
-        .navigationTitle("All-Day Recording")
+        .navigationTitle("All Day [All-Day Recording Page]")
         .accessibilityIdentifier("watch-allday-page")
+        // Offered: ask for notifications now, so the phone's start and a pause reach the wrist before a first start here.
+        .task(id: access) { await allDay.askForNotifications(phoneDay: phoneDay, onPage: true) }
+        .confirmationDialog("Erase the last 10 minutes?", isPresented: $erasing, titleVisibility: .visible) {
+            Button("Erase", role: .destructive) { allDay.eraseRecent() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("What was said in the last 10 minutes is deleted from this watch now, and from your iPhone and Knowledge after sync.")
+        }
     }
 
-    /// No start until the user agrees on the iPhone; what needs no start stays: erasing what an open day still holds,
-    /// and ending a wish to record left from before (it stopped by itself).
-    @ViewBuilder private var waitingForConsent: some View {
-        WatchAllDayConsentLine()
+    /// No start until the user agrees on the iPhone (or, with a phone that doesn't take day recordings, until it is
+    /// updated); what needs no start stays: erasing what an open day still holds, and ending a wish to record left from
+    /// before (it stopped by itself).
+    @ViewBuilder private func waiting(_ access: AllDayAlertPolicy.Access) -> some View {
+        WatchAllDayConsentLine(access: access)
         if allDay.dayOpen { erase }
         if allDay.state == .stopped { stop }
     }
@@ -97,9 +115,10 @@ struct WatchAllDayView: View {
                     Label("Mark Meeting", systemImage: Theme.Icon.meetingMark).labelStyle(.iconOnly)
                 }
                 .accessibilityIdentifier("watch-allday-meeting")
-                Button { allDay.eraseRecent() } label: {
+                Button { erasing = true } label: {
                     Label("Erase last 10 minutes", systemImage: Theme.Icon.delete).labelStyle(.iconOnly)
                 }
+                .accessibilityIdentifier("watch-allday-erase-recent")
             }
         }
     }
@@ -113,7 +132,7 @@ struct WatchAllDayView: View {
 
     /// With the microphone off, on its own and so with its words.
     private var erase: some View {
-        Button { allDay.eraseRecent() } label: { Label("Erase 10m", systemImage: Theme.Icon.delete).lineLimit(1) }
+        Button { erasing = true } label: { Label("Erase 10m", systemImage: Theme.Icon.delete).lineLimit(1) }
             .accessibilityIdentifier("watch-allday-erase")
     }
 
@@ -128,13 +147,22 @@ struct WatchAllDayView: View {
     }
 }
 
-/// Where a start waits: the consent sheet on the iPhone.
+/// Where a start waits: the consent sheet on the iPhone, or (a phone that doesn't take day recordings, reached from
+/// the face) an update of the iPhone app.
 struct WatchAllDayConsentLine: View {
+    var access: AllDayAlertPolicy.Access = .needsConsent
+
     var body: some View {
-        Label("Agree on your iPhone to start", systemImage: Theme.Icon.phone)
-            .font(Theme.Font.secondaryMedium)
-            .multilineTextAlignment(.center)
-            .accessibilityIdentifier("watch-allday-consent")
+        Group {
+            if access == .hidden {
+                Label("To use All-Day Recording, update Persona on your iPhone.", systemImage: Theme.Icon.phone)
+            } else {
+                Label("Agree on your iPhone to start", systemImage: Theme.Icon.phone)
+            }
+        }
+        .font(Theme.Font.secondaryMedium)
+        .multilineTextAlignment(.center)
+        .accessibilityIdentifier(access == .hidden ? "watch-allday-update-phone" : "watch-allday-consent")
     }
 }
 
@@ -167,6 +195,8 @@ struct WatchAllDayCard: View {
             }
             .watchCard()
             .accessibilityIdentifier("watch-allday")
+            // Once the user agreed on the iPhone, the first look at the card asks for notifications.
+            .task(id: access) { await allDay.askForNotifications(phoneDay: phoneDay, onPage: false) }
         }
     }
 
@@ -245,7 +275,7 @@ struct WatchAllDayFeedbackLine: View {
         if let feedback {
             Label(feedback.text, systemImage: feedback.symbol)
                 .font(Theme.Font.caption)
-                .foregroundStyle(feedback == .busy ? Theme.cautionText : .secondary)
+                .foregroundStyle(feedback.failed ? Theme.cautionText : .secondary)
         }
     }
 }
