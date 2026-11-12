@@ -333,6 +333,20 @@ environment/credential changes, strict server-derived targeting and the confirma
 and a temporary directory; unrelated routes use `scripts/mock/mock_hub.py`. It is UI integration evidence, not a
 production or live-model test. Its header documents loopback ports and shutdown; run with `SKILL_IMPORT_QA=1`.
 
+Curated synthetic captures, actually inspected in a browser (not production assets):
+
+| Preview | Light | Dark |
+| --- | --- | --- |
+| Desktop, standard text | [Light](../web/screenshots/skill-zip/preview-light.png) | [Dark, keyboard focus](../web/screenshots/skill-zip/preview-dark.png) |
+| 390 px, largest supported text setting | [Light](../web/screenshots/skill-zip/narrow-light-large.png) | [Dark, keyboard focus](../web/screenshots/skill-zip/narrow-dark-large.png) |
+| Localized narrow layout | [Simplified Chinese](../web/screenshots/skill-zip/zh-preview.png) | [Japanese](../web/screenshots/skill-zip/ja-preview.png) |
+
+Browser observations: Cancel initially owns preview focus; Tab reaches Install with a visible ring; Escape closes
+and restores Upload ZIP focus. No horizontal overflow at 390 px, including Large. A missing-string description
+shows an actionable validation error; a duplicate name shows conflict with no overwrite action. Installation adds
+`example-review` to the real fixture store/list, and Undo removes only the new `example-cancel` while retaining its
+resources in the reported recovery sibling. These are local fixture results, not live Claude/Codex discovery.
+
 ## 2. Build channels
 
 The binary gets three more `-X` variables (`cmd/personad`):

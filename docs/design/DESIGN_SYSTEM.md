@@ -768,7 +768,7 @@ chat (#5033), where the panel only offers models and says plainly which one the 
 
 **Web skill ZIP import** (#5478): the advanced Settings › Assistant › Skills group reuses `Group`, `Row`,
 `SettingsHint`, `RowFailed`, `Pill`, `Button`, `Dialog` and `Loading`. **Upload ZIP** opens the existing dialog with a
-labelled native file control. Checking is announced; the preview shows plain-text metadata and a wrapping real path.
+labelled shared Button opening the native file picker. Checking is announced; the preview shows plain-text metadata and a wrapping real path.
 Cancel receives focus at preview; closing restores focus to Upload ZIP. The existing dialog owns focus trapping and
 Escape. Install/Undo are single-flight and cannot be dismissed halfway through a write; failures are actionable
 localized text, never raw archive HTML or filesystem errors. Buttons have a 44 px target; actions wrap on narrow
