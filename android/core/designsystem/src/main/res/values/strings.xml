@@ -83,6 +83,8 @@
         <item quantity="other">Computer offline; status may be out of date (%1$d minutes ago)</item>
     </plurals>
     <string name="designsystem_line_answering">Sending your choice…</string>
+    <string name="designsystem_message_sending">Sending</string>
+    <string name="designsystem_message_processing">Processing</string>
     <string name="designsystem_line_sending">Sending…</string>
     <string name="designsystem_line_unconfirmed">Last action\'s result is unconfirmed</string>
     <plurals name="designsystem_line_needs_you_count">

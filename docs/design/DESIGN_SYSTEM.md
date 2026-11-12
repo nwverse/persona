@@ -31,7 +31,7 @@ This table only points the way. Values and rules live in the sections it names, 
 
 ## Product design principles
 
-The six product design principles, with their rules, how to check each one and recent cases, live in `docs/design/PRINCIPLES.md`: 1 defaults first, 2 progressive disclosure, 3 user control, 4 consistency first, 5 model and product are separate, 6 rules are checkable. They decide product questions before any rule in this document applies. "Principle N" below refers to that numbering. Apple's Human Interface Guidelines are a source for this document, not its authority: what Persona takes from them is rewritten here as Persona rules (sections 2 to 6), and `docs/design/HIG_AUDIT.md` records where the code still falls short.
+The seven product design principles, with their rules, how to check each one and recent cases, live in `docs/design/PRINCIPLES.md`: 1 defaults first, 2 progressive disclosure, 3 user control, 4 consistency first, 5 model and product are separate, 6 rules are checkable, 7 fast, local-first and stateful. They decide product questions before any rule in this document applies. "Principle N" below refers to that numbering. Apple's Human Interface Guidelines are a source for this document, not its authority: what Persona takes from them is rewritten here as Persona rules (sections 2 to 6), and `docs/design/HIG_AUDIT.md` records where the code still falls short.
 
 ## 1. Purpose, scope and sources of truth
 
@@ -940,6 +940,23 @@ navigator on current main and is outside this fix's scope; it must not use its t
 
 ### 4.3 Feedback and haptics
 
+Message feedback (#5258, principle 7, super rule 5) reuses the chat's status line and pending bubble, not a new card or
+style. Show Sending immediately from local state, then Processing on the hub's `message_send_state` receipt; do not wait
+for a model token or overwrite `Session.status`. The pending-send overlay is scoped to the conversation and message,
+survives stale snapshots, and hands off to actual execution or queued state on delivery. Failure removes only its own
+overlay and keeps the existing draft, failed-bubble and uncertain-delivery recovery. The full wire and reconnect rules
+are in `docs/protocol/protocol.md` ("Message feedback (#5258)"). Apply the same definition in Assistant and Agent chats.
+
+| Message state | en | zh-Hans | ja |
+| --- | --- | --- | --- |
+| Local input pending | Sending | 发送中 | 送信中 |
+| Hub received; execution may still be preparing | Processing | 处理中 | 処理中 |
+
+These are message states, not answers to an approval or a claim that the model is already working. Receipt alone does
+not enable Stop or promise cancellation of the pending HTTP request. Keep existing answer
+labels and the authoritative Working/Needs you/queued state words. Verify dark/light in the existing styles and measure
+send-to-feedback separately from send-to-input delivery; a transport receipt's queue timestamp is not a client paint.
+
 `Haptics` (`apple/Persona/App/AppModel.swift`): `tap` (light impact), `success`, `error`, `attention` (warning). 443 call sites on 11-11 (tap 243, success 129, error 57, attention 14); no-op on visionOS; generators are created per call. One direct UIKit use remains (`apple/Persona/Views/Chat/ChatEdgeScrub.swift`). Android has the same four kinds (`android/core/designsystem/src/main/kotlin/persona/core/designsystem/Haptics.kt`: tap is a context click, success confirm, attention a gesture threshold, error reject; the system's touch-feedback setting decides whether they play).
 
 Which action gives which haptic, on both (#4209; the rule iOS follows):
@@ -1419,6 +1436,7 @@ done, not applicable, or deviated (with the reason). It is short on purpose. The
 - [ ] Consistency: lists the existing components, patterns and count definitions reused; a number shown under an existing name uses the same rule. Anything new has its reason written down and an update to this document (principle 4).
 - [ ] Model and product separate: names which of speed, model, presentation or features it touches, and changes none of the others (principle 5).
 - [ ] Checkable: each item above marked done carries its evidence (screenshot, test name, command output) in the PR (principle 6).
+- [ ] Fast, local-first and stateful: local Sending is immediate, hub receipt shows Processing, failure recovers; before/after feedback and execution timings are separate (principle 7).
 
 **Rules**
 

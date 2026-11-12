@@ -173,6 +173,12 @@ fun AssistantScreen(
     }
     val managers = assistantManagers(managerRoster, managerChoice, androidx.compose.ui.platform.LocalResources.current)
     val outbox by (mainConversationSender?.outbox ?: messageSender.outbox).collectAsStateWithLifecycle()
+    val receivedSendReceipts by key(mainConversationSender, messageSender, managerChoice.hubId, managerChoice.shown) {
+        (mainConversationSender?.sendReceipts ?: messageSender.sendReceipts).collectAsStateWithLifecycle()
+    }
+    val mainReceipts = receivedSendReceipts.filter { receipt -> receipt.session == snapshot.mainSession ||
+        (managerChoice.manager == null && receipt.mainTarget && outbox.any { it.mainTarget &&
+            (it.session == receipt.session || (receipt.session == PendingMainConversation && it.clientMessageId == receipt.clientMessageId)) }) }
     val mainMessages = if (managerChoice.manager == null) outbox.filter { (it.mainTarget || it.session == PendingMainConversation) && (it.session == PendingMainConversation || it.session == snapshot.mainSession) } else emptyList()
     val scope = rememberCoroutineScope()
     val sharedSidebar = LocalAssistantSidebarHost.current
@@ -816,6 +822,10 @@ fun AssistantScreen(
                 // On Glass with lines over the composer, the dock is on the page's own backdrop (NeedsBackdrop).
                 if (shellLines.isNotEmpty()) NeedsBackdrop(NeedsFade, Modifier.matchParentSize())
                 Column {
+                    if (hasComposer && active == null && !viewingMainQueue && (sending || mainReceipts.isNotEmpty())) {
+                        StatusLine(assistantStatus(null, emptyList(),
+                            submittingId = pendingClientId.takeIf { sending }, receipts = mainReceipts))
+                    }
                     if (hasComposer && active == null && !viewingMainQueue) {
                         val cardModifier = (if (shellLines.isEmpty()) Modifier else Modifier.onSizeChanged { needsRoom.above = it.height })
                             .padding(horizontal = pagePadding).padding(bottom = Tokens.Space.s)
@@ -914,7 +924,9 @@ fun AssistantScreen(
             } else if (viewingMainQueue || (active != null && !hasChat)) {
                 val visible = if (active != null) outbox.filter { it.session == active } else mainMessages
                 AssistantPendingConversation(visible, snapshot.conversations.firstOrNull { it.key == active },
-                    Modifier.fillMaxSize(), contentPadding = padding, demo = demo, emptyDetail = managers.offlineEmpty,
+                    Modifier.fillMaxSize(), contentPadding = padding, demo = demo,
+                    receipts = if (active != null) receivedSendReceipts.filter { it.session == active } else mainReceipts,
+                    emptyDetail = managers.offlineEmpty,
                     onRefusal = { action -> runReadinessAction(action) },
                     onRetry = { message -> scope.launch {
                         // Asked again first: a step still missing opens instead of sending into the same refusal.

@@ -1223,6 +1223,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "session.send":
 		var opts sendOpts
 		_ = json.Unmarshal(params, &opts)
+		ctx = context.WithValue(ctx, sendTraceKey{}, opts.ClientMsgID)
 		return ok(n.sends.once(opts.ClientMsgID, func() error {
 			var after int
 			if opts.ClientMsgID != "" {
