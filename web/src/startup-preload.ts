@@ -226,8 +226,11 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * header still draws only when it changes). And 31 B because #5579 and #5860 landed together (#5879): #5579 was measured
  * on main at 9223f7f92 (+228 B) and #5860 merged before it, on whose main at bae989cf42 (ja 474,213 B) it costs +262 B;
  * ja 474,475 B on main at 624f81dde, with 0 B of room.
+ * And 243 B for the explicit task-decision chat address (#5929): ja 474,611 B against 474,368 B on clean 549191b9e.
+ * This is the round-aware route and its visible, localized explanation, retaining the baseline's 107 B of room;
+ * no unrelated first-screen imports are added.
  */
-export const FIRST_SCREEN_BUDGET = 474_475;
+export const FIRST_SCREEN_BUDGET = 474_718;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").

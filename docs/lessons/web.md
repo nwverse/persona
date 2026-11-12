@@ -1,5 +1,13 @@
 # Lessons: web UI and interactions
 
+## A conversation link is not an answer to a task decision (#5929)
+
+Carry the task and its original decision round when offering Answer in chat. An ordinary chat message, an Agent
+question's answer in the task's ledger, and a pending needs-user closeout are distinct: a decision record alone
+does not settle that closeout. Reuse explicit task routing, show what the next message will answer, reject stale
+rounds, and refresh the pending card only after delivery and recording. A parked review likewise takes precedence
+over stopped/seen turn signals: seeing a turn cannot complete the task.
+
 ## Live acceptance must distinguish a lookup POST from a mutation (#5753)
 
 The live composer driver rejected the app's normal `POST /api/v1/launchers/catalog`, although the handler is a
