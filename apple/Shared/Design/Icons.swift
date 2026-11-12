@@ -19,6 +19,8 @@ extension Theme {
         static let success = "checkmark.circle"
         static let successFilled = "checkmark.circle.fill"
         static let done = "checkmark"
+        /// Got It on a Just finished to-do: seen, filed under Done (#5707). Not `done`, which beside it closes one.
+        static let seen = success
         /// Every open item in view set aside at once (Inbox › Clear All).
         static let cleanUpAll = "rectangle.stack.badge.minus"
         static let info = "info.circle"
@@ -192,6 +194,8 @@ extension Theme {
         static let interrupt = "stop.fill"
         static let stopLoop = "stop.circle"
         static let run = "play.fill"
+        /// Resume a stopped Agent in a terminal on its computer (#5521): the web's Resume shows the same play mark.
+        static let resume = run
         static let add = "plus"
         static let send = "arrow.up"
         /// Move up, the up-arrow key: the same arrow as `send`.
@@ -331,6 +335,8 @@ extension Theme {
         static let place = "mappin.and.ellipse"
         /// The phone's current location (Use Current Location).
         static let currentLocation = "location"
+        /// Directions to a place, handed to Apple Maps (the chat's place map, #5543).
+        static let directions = "arrow.triangle.turn.up.right.diamond"
         /// The phone's own health trends (steps, sleep, weight drawn from Apple Health, #3272).
         static let healthTrends = "chart.line.uptrend.xyaxis"
         /// Persona itself (the brand's four-point star).
@@ -483,6 +489,8 @@ extension Theme {
         static let pluginCalendar = calendarView
         static let pluginMoney = "creditcard"
         static let pluginStar = "star"
+        /// Asking for a GitHub star for Persona (#5761): the empty Agents pill, the milestone card, the onboarding toast.
+        static let gitHubStar = pluginStar
         static let phone = "iphone"
         /// The assistant operating an iPhone through a Mac (the extension iphone): its section, its tools.
         static let phoneControl = "iphone.radiowaves.left.and.right"

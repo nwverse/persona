@@ -5,18 +5,20 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { createRuntime, interactionId, page, snippet, summaryOf } from '../../runtime-sdk/index.js'
+import { createRuntime, interactionId, page, RpcError, snippet, summaryOf } from '../../runtime-sdk/index.js'
 import { isAssistantDir } from '../../runtime-sdk/lib/identity.js'
 import { AgyAcpClient } from './acp.js'
 import { discoverModels, mapModels } from './models.js'
 import {
   agyModeToPersona,
+  cleanUserText,
   LABEL,
   mapToolInput,
   mapToolName,
   nativeWorking,
   personaModeToAgy,
-  readTranscriptSteps,
+  PREFIX,
+  readTranscript,
   RUNTIME,
   stepsToItems,
   transcriptStatus,
@@ -44,6 +46,10 @@ export function createAgyRuntime(options = {}) {
   const sessionModes = new Map() // agyId -> { mode, effort }
   const archived = new Set() // agyId
   const lastPushedSeq = new Map() // personaId -> number
+  const lastPushedHistory = new Map()
+  const rewinding = new Set()
+  const nativeCuts = new Map()
+  const cutChecks = new Map()
   const assistants = new Set() // personaId
   const checkTurns = new Map() // availability probes collect text without appearing in user conversations
   const permissionAsks = new Map() // agyId -> Set of AbortControllers, one per permission card still on the phone
@@ -124,6 +130,7 @@ export function createAgyRuntime(options = {}) {
       modes,
       models,
       check,
+      rewind,
     },
     {
       runtime: RUNTIME,
@@ -313,7 +320,57 @@ export function createAgyRuntime(options = {}) {
   }
 
   function historyOf(rawId) {
-    return `agy:${rawId}`
+    return `agy:${rawId}:full`
+  }
+
+  function cutMatches(cut, transcript) {
+    return cut?.branch === transcript.branch && cut.next === JSON.stringify(transcript.steps.find((step) => step.step_index >= cut.limit))
+  }
+
+  function rememberCut(rawId, transcript, limit) {
+    nativeCuts.set(rawId, { branch: transcript.branch, limit,
+      next: JSON.stringify(transcript.steps.find((step) => step.step_index >= limit)) })
+  }
+
+  function transcriptOf(rawId, native = readConversationStates().get(rawId)) {
+    const transcript = readTranscript(brainDirOf(rawId), true)
+    const latestStep = transcript.steps.reduce((latest, step) => Math.max(latest, Date.parse(step.created_at || '') || 0), 0)
+    const summaryCurrent = (Date.parse(native?.last_modified_time || '') || 0) > latestStep
+    const verified = nativeCuts.get(rawId)
+    const limit = cutMatches(verified, transcript) ? verified.limit : summaryCurrent ? native?.step_count : undefined
+    const steps = Number.isInteger(limit) && limit >= 0
+      ? transcript.steps.filter((step, index) => (step.step_index ?? index) < limit)
+      : transcript.steps
+    const branch = transcript.branch ? `:branch:${transcript.branch}` : ''
+    const cut = steps.length < transcript.steps.length ? `:cut:${limit}` : ''
+    return { steps, history: historyOf(rawId) + branch + cut }
+  }
+
+  // Native rewind restores older summary timestamps. Verify a shorter summary against the native trajectory so
+  // restarts keep the cut, while a stale idle summary cannot hide a newer external input.
+  async function reconcileNativeCut(rawId, native = readConversationStates().get(rawId)) {
+    const transcript = readTranscript(brainDirOf(rawId), true)
+    const count = native?.step_count
+    if (!Number.isInteger(count) || count < 0 || !transcript.steps.some((step) => step.step_index >= count) ||
+        cutMatches(nativeCuts.get(rawId), transcript)) return
+    if (cutChecks.has(rawId)) return cutChecks.get(rawId)
+    const check = (async () => {
+      try {
+        await acp.ensureSessionLoaded(rawId, sessionCwds.get(rawId) || home, [])
+        const snapshot = await acp.nativeRequest('GetCascadeTrajectory', { cascadeId: rawId, disableRehydration: true })
+        if (snapshot.trajectory?.cascadeId === rawId && (snapshot.trajectory.steps || []).length === count) {
+          rememberCut(rawId, transcript, count)
+          syncTranscriptAppend(rawId)
+          rt.sessionsChanged()
+        }
+      } catch (error) {
+        log(`agy rewind history: ${error.message}`)
+      } finally {
+        cutChecks.delete(rawId)
+      }
+    })()
+    cutChecks.set(rawId, check)
+    return check
   }
 
   function readConversationStates() {
@@ -347,18 +404,19 @@ export function createAgyRuntime(options = {}) {
   function syncTranscriptAppend(rawId) {
     const pid = toPersonaId(rawId)
     const bDir = brainDirOf(rawId)
-    const steps = readTranscriptSteps(bDir, false)
-    if (steps.length === 0) return
+    const { steps, history } = transcriptOf(rawId)
     const { items: allItems, toSeq } = stepsToItems(steps, { brainDir: bDir, full: false })
     const prevSeq = lastPushedSeq.get(pid) ?? 0
-    if (toSeq > prevSeq) {
-      const deltaItems = allItems.filter((it) => it.seq > prevSeq)
+    const rewritten = lastPushedHistory.has(pid) && lastPushedHistory.get(pid) !== history
+    if (rewritten || toSeq > prevSeq) {
+      const deltaItems = rewritten ? allItems : allItems.filter((it) => it.seq > prevSeq)
       lastPushedSeq.set(pid, toSeq)
+      lastPushedHistory.set(pid, history)
       rt.append(pid, {
         items: deltaItems,
-        fromSeq: prevSeq + 1,
+        fromSeq: rewritten ? 0 : prevSeq + 1,
         toSeq,
-        history: historyOf(rawId),
+        history,
       })
     }
   }
@@ -385,7 +443,8 @@ export function createAgyRuntime(options = {}) {
       const pid = toPersonaId(rawId)
       const running = activeTurns.has(pid) || nativeWorking(native)
       const bDir = brainDirOf(rawId)
-      const transcriptFile = join(bDir, '.system_generated', 'logs', 'transcript.jsonl')
+      const fullTranscript = join(bDir, '.system_generated', 'logs', 'transcript_full.jsonl')
+      const transcriptFile = existsSync(fullTranscript) ? fullTranscript : join(bDir, '.system_generated', 'logs', 'transcript.jsonl')
       const hasTranscript = existsSync(transcriptFile)
       if (!hasTranscript && !running && !rt.touched(pid)) continue
       if (meta?.is_internal && !summary && !rt.touched(pid) && !running) continue
@@ -420,9 +479,10 @@ export function createAgyRuntime(options = {}) {
     })
 
     return chosen.map(({ rawId, pid, summary, native, cwd, mtimeMs, running, hasTranscript }) => {
-      const steps = readTranscriptSteps(brainDirOf(rawId), false)
+      const { steps, history } = transcriptOf(rawId, native || null)
       const parsed = stepsToItems(steps, { brainDir: brainDirOf(rawId), full: false })
       if (!lastPushedSeq.has(pid)) lastPushedSeq.set(pid, parsed.toSeq)
+      if (!lastPushedHistory.has(pid)) lastPushedHistory.set(pid, history)
       let status = running ? 'working' : transcriptStatus(steps, native)
       if (!hasTranscript && !running) {
         if (completedTurns.has(pid)) status = 'done'
@@ -441,7 +501,7 @@ export function createAgyRuntime(options = {}) {
         status,
         updated_at: new Date(mtimeMs).toISOString(),
         rev: Math.max(1, parsed.toSeq),
-        last_text: parsed.lastText || snippet(summary?.Preview || ''),
+        last_text: hasTranscript ? parsed.lastText : snippet(summary?.Preview || ''),
         model: sessionModels.get(rawId),
         launcher: 'agy',
         agent_label: LABEL,
@@ -457,25 +517,37 @@ export function createAgyRuntime(options = {}) {
     })
   }
 
+  // The agy id of one of this runtime's sessions. Every id it hands out carries PREFIX; anything else is another
+  // runtime's. The node asks every runtime about a session nobody listed and gives it to the first that answers, so an
+  // empty page here would take a new Claude Code session (no transcript yet) for an Antigravity one.
+  function ownedId(sessionId) {
+    const id = String(sessionId ?? '').trim()
+    if (!id.startsWith(PREFIX)) throw new RpcError(`Antigravity has no session ${id}`, 'not_found')
+    return toAgyId(id)
+  }
+
   async function items(params) {
-    const rawId = toAgyId(params.session_id)
+    const rawId = ownedId(params.session_id)
+    await reconcileNativeCut(rawId)
     const bDir = brainDirOf(rawId)
-    const steps = readTranscriptSteps(bDir, false)
+    const { steps, history } = transcriptOf(rawId)
     const { items: allItems, toSeq } = stepsToItems(steps, { brainDir: bDir, full: false })
-    return page(allItems, params, { history: historyOf(rawId), toSeq })
+    return page(allItems, params, { history, toSeq })
   }
 
   async function cursor(sessionId) {
-    const rawId = toAgyId(sessionId)
-    const steps = readTranscriptSteps(brainDirOf(rawId), false)
+    const rawId = ownedId(sessionId)
+    await reconcileNativeCut(rawId)
+    const { steps, history } = transcriptOf(rawId)
     const { toSeq } = stepsToItems(steps, { brainDir: brainDirOf(rawId), full: false })
-    return toSeq
+    return { to_seq: toSeq, history }
   }
 
   async function item(params) {
-    const rawId = toAgyId(params.session_id)
+    const rawId = ownedId(params.session_id)
+    await reconcileNativeCut(rawId)
     const bDir = brainDirOf(rawId)
-    const steps = readTranscriptSteps(bDir, true)
+    const { steps } = transcriptOf(rawId)
     const { items: fullItems } = stepsToItems(steps, { brainDir: bDir, full: true })
     const found = fullItems.find((it) => it.id === params.item_id)
     if (!found) throw new Error(`item ${params.item_id} not found`)
@@ -611,9 +683,10 @@ export function createAgyRuntime(options = {}) {
   }
 
   async function send(params) {
-    const pid = toPersonaId(params.session_id)
+    const rawId = ownedId(params.session_id)
+    const pid = toPersonaId(rawId)
+    if (rewinding.has(pid)) throw new RpcError('The conversation is being rewound', 'rewind_busy')
     completedTurns.delete(pid)
-    const rawId = toAgyId(pid)
     if (archived.has(rawId)) throw new Error('Antigravity session is closed')
     const cwd = sessionCwds.get(rawId) || home
     const isAsst = Boolean(params.assistant) || assistants.has(pid) || isAssistantDir(cwd)
@@ -625,6 +698,8 @@ export function createAgyRuntime(options = {}) {
       permission_mode: params.mode,
       effort: params.effort,
     })
+
+    if (rewinding.has(pid)) throw new RpcError('The conversation is being rewound', 'rewind_busy')
 
     const blocks = []
     let fullText = params.text || ''
@@ -688,14 +763,14 @@ export function createAgyRuntime(options = {}) {
   }
 
   async function interrupt(params) {
-    const rawId = toAgyId(params.session_id)
+    const rawId = ownedId(params.session_id)
     if (activeTurns.has(toPersonaId(rawId))) cancelling.add(rawId)
     withdrawPermissionAsks(rawId, 'interrupted')
     await acp.cancel(rawId)
   }
 
   async function rename(params) {
-    const rawId = toAgyId(params.session_id)
+    const rawId = ownedId(params.session_id)
     if (typeof params.title === 'string' && params.title.trim()) {
       sessionTitles.set(rawId, params.title.trim())
       rt.sessionsChanged()
@@ -703,15 +778,77 @@ export function createAgyRuntime(options = {}) {
   }
 
   async function close(params) {
-    const rawId = toAgyId(params.session_id)
+    const rawId = ownedId(params.session_id)
     archived.add(rawId)
     await interrupt(params)
     await acp.closeSession(rawId)
     rt.sessionsChanged()
   }
 
+  async function rewind(params) {
+    const rawId = ownedId(params.session_id)
+    const pid = toPersonaId(rawId)
+    if (params.restore !== 'conversation' || assistants.has(pid) || isAssistantDir(sessionCwds.get(rawId) || '')) {
+      throw new RpcError('This session supports conversation rewind', 'rewind_unsupported')
+    }
+    if (typeof params.prompt !== 'string' || !params.prompt.trim() || !Number.isInteger(params.occurrence) || params.occurrence < 1 ||
+        (params.prompts_after !== undefined && (!Number.isInteger(params.prompts_after) || params.prompts_after < 0))) {
+      throw new RpcError('A rewind needs the message and its current position', 'bad_params')
+    }
+    if (rewinding.has(pid) || activeTurns.has(pid) || permissionAsks.get(rawId)?.size || nativeWorking(readConversationStates().get(rawId))) {
+      throw new RpcError('Wait for the current turn to finish before rewinding', 'rewind_busy')
+    }
+    if (archived.has(rawId)) throw new RpcError('The session is closed', 'rewind_unsupported')
+    rewinding.add(pid)
+    try {
+      const cwd = sessionCwds.get(rawId) || home
+      await loadSession(rawId, cwd, mcpServersFor(pid, false))
+      const snapshot = await acp.nativeRequest('GetCascadeTrajectory', { cascadeId: rawId,
+        verbosity: 'CLIENT_TRAJECTORY_VERBOSITY_PROD_UI', trajectoryVerbosity: 'CLIENT_TRAJECTORY_VERBOSITY_PROD_UI', disableRehydration: true })
+      if (snapshot.trajectory?.cascadeId !== rawId) throw new RpcError('The native conversation changed', 'rewind_mismatch')
+      if (snapshot.status !== 'CASCADE_RUN_STATUS_IDLE') throw new RpcError('The native conversation is busy', 'rewind_busy')
+      const squash = (text) => text.replace(/\s+/g, '')
+      const exported = readTranscript(brainDirOf(rawId), true).steps
+      const inputs = (snapshot.trajectory.steps || []).flatMap((step, index) =>
+        step.type === 'CORTEX_STEP_TYPE_USER_INPUT' && step.metadata?.source === 'CORTEX_STEP_SOURCE_USER_EXPLICIT'
+          ? [{ index, text: cleanUserText((step.userInput?.items || []).map((item) => item.text || '').join('\n')),
+              shown: cleanUserText(exported.find((entry) => entry.step_index === index)?.content) }] : [])
+      const matches = inputs.filter((input) => {
+        const shown = input.shown || input.text
+        // Plan mode exports its /plan command, while the trajectory keeps the original words.
+        return squash(shown) === squash(params.prompt) && squash(shown.replace(/^\/plan\s+/, '')) === squash(input.text)
+      })
+      const target = matches.at(-params.occurrence)
+      if (!target || (params.prompts_after !== undefined && inputs.length - 1 - inputs.indexOf(target) !== params.prompts_after)) {
+        throw new RpcError('The selected message moved. Reload the conversation before rewinding', 'rewind_mismatch')
+      }
+      const before = transcriptOf(rawId)
+      lastPushedHistory.set(pid, before.history)
+      lastPushedSeq.set(pid, stepsToItems(before.steps).toSeq)
+      await acp.nativeRequest('RevertToCascadeStep', { cascadeId: rawId, stepIndex: target.index - 1,
+        conversationOnly: true, suppressErrorStep: true })
+      const after = await acp.nativeRequest('GetCascadeTrajectory', { cascadeId: rawId, disableRehydration: true })
+      if (after.trajectory?.cascadeId !== rawId || (after.trajectory.steps || []).length !== target.index) {
+        throw new RpcError('The native conversation changed during rewind. Reload its history', 'rewind_failed')
+      }
+      rememberCut(rawId, readTranscript(brainDirOf(rawId), true), target.index)
+      // Native exports retain the old branch until replacement steps arrive. Its durable summary supplies the cut.
+      const deadline = Date.now() + 5000
+      while (readConversationStates().get(rawId)?.step_count !== target.index) {
+        if (Date.now() >= deadline) throw new RpcError('The native rewind completed and its history is still synchronizing', 'rewind_failed')
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+      rt.streamEnd(pid)
+      syncTranscriptAppend(rawId)
+      rt.sessionsChanged()
+      return { prompt: target.text, restore: 'conversation', code_restored: false, input_cleared: true }
+    } finally {
+      rewinding.delete(pid)
+    }
+  }
+
   async function modes(params) {
-    const rawId = toAgyId(params.session_id)
+    const rawId = ownedId(params.session_id)
     if (archived.has(rawId)) throw new Error('Antigravity session is closed')
     if (params.model && (activeTurns.has(toPersonaId(rawId)) || nativeWorking(readConversationStates().get(rawId)))) {
       throw new Error('Antigravity session is busy')

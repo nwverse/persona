@@ -39,6 +39,7 @@ internal class GroupNames(val namespace: String?) {
         item.copy(id = path(item.id), interaction = item.interaction?.let(::interactionId))
     })
     fun outbox(value: OutboxMessage) = if (plain) value else value.copy(session = key(value.session))
+    fun receipt(value: MessageSendReceipt) = if (plain) value else value.copy(session = key(value.session))
     fun draftKey(value: DraftKey) = if (plain || value !is DraftKey.Chat) value else DraftKey.Chat(key(value.session))
     fun draft(value: DraftSnapshot) = if (plain) value else value.copy(key = draftKey(value.key))
     fun metrics(value: MachineMetrics) = if (plain) value else value.copy(machineId = machineId(value.machineId))
@@ -51,12 +52,14 @@ internal class GroupNames(val namespace: String?) {
         AgentOperationPreferences(value.spaces.map(::path), value.sessions.map(::path), value.allowed.mapTo(LinkedHashSet(), ::path))
 
     fun event(value: ServerEvent): ServerEvent = if (plain) value else when (value) {
+        is MessageSendStateEvent -> value.copy(machineId = machineId(value.machineId))
         is ItemsEvent -> value.copy(machineId = machineId(value.machineId))
         is SessionsEvent -> value.copy(machineId = machineId(value.machineId), sessions = value.sessions.map(::session))
         is MachinesEvent -> value.copy(machines = value.machines.map(::machine))
         is RevsEvent -> value.copy(machineId = machineId(value.machineId))
         is InteractionEvent -> value.copy(interaction = interaction(value.interaction))
         is InteractionResolvedEvent -> value.copy(id = interactionId(value.id))
+        is InteractionReansweredEvent -> value.copy(id = interactionId(value.id))
         is NotifyEvent -> value.copy(machineId = machineId(value.machineId), interactionId = value.interactionId?.let(::interactionId),
             id = value.id?.let(::interactionId))
         is FleetEvent -> value.copy(fleet = fleet(value.fleet))
@@ -130,6 +133,7 @@ internal fun HubConnection.inGroup(names: GroupNames, scope: CoroutineScope): Hu
     val source = this
     return object : HubConnection {
         override val state = source.state
+        override val currentHello = source.currentHello
         override val resumed get() = source.resumed
         override val events: SharedFlow<ServerEvent> = source.events.map(names::event)
             .shareIn(scope, SharingStarted.WhileSubscribed())
@@ -169,6 +173,7 @@ internal fun ChatActions.inGroup(names: GroupNames): ChatActions {
         override suspend fun editQueue(session: Session, keep: List<Int>) = source.editQueue(names.rawSession(session), keep)
         override suspend fun sendQueuedNow(session: Session) = source.sendQueuedNow(names.rawSession(session))
         override suspend fun info(session: Session) = source.info(names.rawSession(session))
+        override suspend fun completeRow(session: Session) = source.completeRow(names.rawSession(session))?.let(names::session)
         override suspend fun interactionHistory(session: Session) = source.interactionHistory(names.rawSession(session))
             .map { it.copy(interaction = names.interaction(it.interaction)) }
         override suspend fun restoreModel(session: Session) = source.restoreModel(names.rawSession(session))
@@ -256,6 +261,11 @@ internal fun AssistantManagement.inGroup(names: GroupNames): AssistantManagement
             source.updateConfig(update.copy(machineId = update.machineId?.let(names::rawMachine)))
                 .let { it.copy(machineId = names.machineId(it.machineId)) }
         override suspend fun launchers(machineId: String) = source.launchers(names.rawMachine(machineId))
+        override suspend fun assistantLaunchers(machineId: String) = source.assistantLaunchers(names.rawMachine(machineId))
+        override suspend fun assistantLauncherList(machineId: String) = source.assistantLauncherList(names.rawMachine(machineId))
+        override suspend fun launcherModels(machineId: String, launcher: String) = source.launcherModels(names.rawMachine(machineId), launcher)
+        override suspend fun setModelPick(session: SessionKey, pick: persona.core.contracts.ModelPick) = source.setModelPick(names.raw(session), pick)
+        override suspend fun clearModelPick(session: SessionKey) = source.clearModelPick(names.raw(session))
         override suspend fun endConversation(session: SessionKey) = source.endConversation(names.raw(session))
         override suspend fun compactConversation(session: SessionKey) = source.compactConversation(names.raw(session))
         override suspend fun archiveConversation(session: SessionKey) = source.archiveConversation(names.raw(session))
@@ -291,6 +301,7 @@ internal fun MainConversationSender.inGroup(names: GroupNames, scope: CoroutineS
     val source = this
     return object : MainConversationSender {
         override val outbox = source.outbox.mapIn(scope) { list -> list.map(names::outbox) }
+        override val sendReceipts = source.sendReceipts.mapIn(scope) { list -> list.map(names::receipt) }
         override suspend fun sendToMain(text: String, clientMessageId: String, draft: DraftSnapshot?) =
             source.sendToMain(text, clientMessageId, draft?.let(names::rawDraft))
         override suspend fun mainReplaced(previous: SessionKey) = source.mainReplaced(names.raw(previous))
@@ -311,6 +322,7 @@ internal fun AssistantConversations.inGroup(names: GroupNames, scope: CoroutineS
         override suspend fun refresh() = source.refresh()
         override suspend fun startConversation() = names.key(source.startConversation())
         override suspend fun startConversation(launcher: String) = names.key(source.startConversation(launcher))
+        override suspend fun startConversation(pick: persona.core.contracts.ModelPick) = names.key(source.startConversation(pick))
         // another manager's main conversation (docs/assistant/managers.md step 4), in this group's merged ids
         override suspend fun mainConversationOf(manager: String) = names.key(source.mainConversationOf(manager))
         override suspend fun spaceConversations(space: String) = source.spaceConversations(space).map(names::session)

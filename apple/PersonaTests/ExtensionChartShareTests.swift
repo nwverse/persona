@@ -4,6 +4,9 @@ import Testing
 /// A stacked bar chart of one category (every series holds one point, like a single day's parts) is a horizontal
 /// segmented bar, not a lone vertical column; several categories keep the columns. The same rule on every app
 /// (docs/extensions/extensions.md「New items」chart; issue #5386).
+// DataChart is a SwiftUI View, so its main-actor-isolated isSingleCategoryShare predicate can only be called from the
+// main actor; a nonisolated Swift Testing suite calls it off-actor and traps at runtime (the build only warns).
+@MainActor
 struct ExtensionChartShareTests {
     private func series(_ values: [Double]) -> [DataChart.Series] {
         values.enumerated().map { DataChart.Series(name: "Series \($0.offset + 1)", color: nil, values: [$0.element]) }

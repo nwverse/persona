@@ -359,6 +359,7 @@ func (s *Service) execute(ctx context.Context, sub Subscription, asked bool, sta
 	if from := inboxFrom(next); from != nil && (next.InboxCatchup == nil || next.InboxCatchup.Before(*from)) {
 		next.InboxCatchup, caughtUp = &start, true
 	}
+	next = markRows(next, caughtUp, start)
 	n := s.nextRun(next, start, false)
 	next.NextRunAt = &n
 	if !s.commit(ctx, sub, next, &commitData{seen: seen, items: items, baseline: baseline}, &run, start, true) {

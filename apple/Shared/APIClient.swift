@@ -57,6 +57,8 @@ nonisolated struct LocalRequest: Sendable {
     var method: String
     var path: String
     var query: [String: String]
+    /// Query items a name can repeat in (`site=a&site=b`), after `query`'s, in their order.
+    var repeated: [URLQueryItem] = []
     var body: Data?
     /// Operation semantics and anonymous caller diagnostics, matching the real request's headers.
     var headers: [String: String] = [:]
@@ -195,13 +197,13 @@ nonisolated struct APIClient: Sendable {
 
     /// Where a request goes: under the hub's address, through its SSH tunnel when the app routes it there
     /// (HubTransport). `direct`: the hub's own address all the same (the probe that asks whether it answers there).
-    func url(_ path: String, query: [String: String] = [:], direct: Bool = false) -> URL {
+    func url(_ path: String, query: [String: String] = [:], repeated: [URLQueryItem] = [], direct: Bool = false) -> URL {
         var comps = URLComponents(url: config.url, resolvingAgainstBaseURL: false)!
         var base = comps.percentEncodedPath
         if base.hasSuffix("/") { base.removeLast() }
         comps.percentEncodedPath = base + Self.encodedPath(path)
-        let items = query.filter { !$0.value.isEmpty }.map { URLQueryItem(name: $0.key, value: $0.value) }
-        if !items.isEmpty { comps.queryItems = items.sorted { $0.name < $1.name } }
+        let items = query.filter { !$0.value.isEmpty }.map { URLQueryItem(name: $0.key, value: $0.value) }.sorted { $0.name < $1.name } + repeated
+        if !items.isEmpty { comps.queryItems = items }
         return direct ? comps.url! : HubTransport.resolve(comps.url!, hub: config.url)
     }
 
@@ -267,8 +269,19 @@ nonisolated struct APIClient: Sendable {
         return !(parts.count > 1 && parts[0] == "conversations")
     }
 
-    /// What a request to `path` carries besides the caller's own headers: the manager it names.
+    /// The recordings' part of the knowledge base (`/api/v1/kb/recordings…`: a recording's minutes, a day's recap, the
+    /// hub's list of them). This device syncs its recordings to the default manager whichever assistant is current
+    /// (`/api/v1/recordings` names none), so what was made of them is read there too.
+    nonisolated static func recordingsRoute(_ path: String) -> Bool {
+        let base = "/api/v1/kb/recordings"
+        return path == base || path.hasPrefix(base + "/") || path.hasPrefix(base + "?")
+    }
+
+    /// What a request to `path` carries besides the caller's own headers: the manager it names. None for the
+    /// recordings' part of the knowledge base, whichever manager this client is for (`recordingsRoute`): the knowledge
+    /// page's client names the current assistant on everything else.
     func routing(_ path: String, _ query: [String: String]) -> [String: String] {
+        if Self.recordingsRoute(path) { return [:] }
         let named = managerID ?? (Self.assistantRoute(path, query: query) ? shownManager : nil)
         return named.map { [Self.managerHeader: $0] } ?? [:]
     }
@@ -286,7 +299,7 @@ nonisolated struct APIClient: Sendable {
     /// it arrives. A repeat it cannot answer yet comes back `202 {"state":"pending" | "unknown"}`: thrown as an
     /// APIError with `OpReceipt.pendingCode` / `unknownCode`, so no caller takes it for done.
     /// `extraHeaders`: what this one request says besides (a hand-off card's approval declares its feature).
-    func request(_ method: String, _ path: String, query: [String: String] = [:], body: (any Encodable)? = nil,
+    func request(_ method: String, _ path: String, query: [String: String] = [:], repeated: [URLQueryItem] = [], body: (any Encodable)? = nil,
                  timeout: TimeInterval = 30, opID: UUID? = nil, extraHeaders: [String: String] = [:]) async throws -> Data {
         let query = larkScoped(path, query)
         let headers = clientMetadata.headers.merging(opID.map(HubNaming.operationHeaders) ?? [:]) { _, operation in operation }
@@ -295,7 +308,7 @@ nonisolated struct APIClient: Sendable {
         if let answer = transport ?? (config.isDemo ? Self.local : nil) {
             let data: Data
             do {
-                data = try await answer(LocalRequest(method: method, path: path, query: query.filter { !$0.value.isEmpty },
+                data = try await answer(LocalRequest(method: method, path: path, query: query.filter { !$0.value.isEmpty }, repeated: repeated,
                                                      body: try body.map { try JSON.encoder.encode(AnyEncodable($0)) }, headers: headers, timeout: timeout))
             } catch var error as APIError {
                 error.requestPath = path
@@ -305,7 +318,7 @@ nonisolated struct APIClient: Sendable {
             return data
         }
         if config.isDemo { throw APIError(status: 503, message: String(localized: "Demo mode isn't available")) }
-        var req = URLRequest(url: url(path, query: query), timeoutInterval: timeout)
+        var req = URLRequest(url: url(path, query: query, repeated: repeated), timeoutInterval: timeout)
         req.httpMethod = method
         config.authorize(&req)
         req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
@@ -674,10 +687,12 @@ nonisolated struct APIClient: Sendable {
         struct Body: Encodable { var cookies: [BrowserCookie] }
         return try JSON.decoder.decode(BrowserCookies.self, from: await request("POST", "/api/v1/machines/\(machine)/browser/cookies", body: Body(cookies: cookies), timeout: 150))
     }
-    /// Clears a site's sign-ins, or (nil) all of them.
-    func clearBrowserCookies(machine: String, site: String?) async throws -> BrowserCookies {
-        let query = site.map { ["site": $0] } ?? ["all": "1"]
-        return try JSON.decoder.decode(BrowserCookies.self, from: await request("DELETE", "/api/v1/machines/\(machine)/browser/cookies", query: query, timeout: 150))
+    /// Clears these sites' sign-ins in one call (`?site=a&site=b`), or (nil) all of them.
+    func clearBrowserCookies(machine: String, sites: [String]?) async throws -> BrowserCookies {
+        let path = "/api/v1/machines/\(machine)/browser/cookies"
+        guard let sites else { return try JSON.decoder.decode(BrowserCookies.self, from: await request("DELETE", path, query: ["all": "1"], timeout: 150)) }
+        let named = sites.map { URLQueryItem(name: "site", value: $0) }
+        return try JSON.decoder.decode(BrowserCookies.self, from: await request("DELETE", path, repeated: named, timeout: 150))
     }
 
     /// The group on what the hub returned (docs/protocol/multi-hub.md).
@@ -900,6 +915,18 @@ nonisolated struct APIClient: Sendable {
         return try await Task.detached(priority: .utility) { try JSON.decoder.decode(NewerResponse.self, from: data) }.value
     }
 
+    /// How the app sent a message when it was not typed in the app itself (docs/protocol/protocol.md, `via`): such a
+    /// message never counts as the user's own words for a secret hand-off's Always rule.
+    enum MessageVia: String, Codable, Sendable {
+        /// Siri, Shortcuts or another App Intent ("Ask Persona", which runs on a locked phone too).
+        case intent
+        /// The share sheet.
+        case share
+        /// A card's button that writes the message for the user from what the app read (the Today card's Prep, with a
+        /// calendar event's title in it).
+        case card
+    }
+
     struct SendBody: Encodable {
         var text: String
         var images: [ImagePayload]?
@@ -908,19 +935,30 @@ nonisolated struct APIClient: Sendable {
         var clientMsgID: String?
         var clearDraft: String?
         var todoID: String?
+        var via: MessageVia?
         enum CodingKeys: String, CodingKey {
-            case text, images, launcher, model, clientMsgID = "client_msg_id", clearDraft = "clear_draft", todoID = "todo_id"
+            case text, images, launcher, model, via, clientMsgID = "client_msg_id", clearDraft = "clear_draft", todoID = "todo_id"
         }
     }
     /// launcher / model switch what a headless (assistant) conversation runs on from this message on. clientMsgID
     /// stays the same on a retry (the node types it once); clearDraft is the computer's draft the user agreed to
     /// clear first.
     /// opID: the message's op id (the outbox passes its id, the same as clientMsgID: docs/protocol/protocol.md「Operation receipts」).
+    /// via: how the app sent it when not typed in the app itself (Siri, the share sheet).
+    /// Returns whether the message waits behind a question on the computer (`waits_on_computer`, #5890): a Claude
+    /// outside Persona's terminals took it while a dialog only the computer can answer holds it. Only `sendPending`
+    /// (the composer and the outbox flush) tells the user; the other callers drop it.
+    @discardableResult
     func send(_ k: SessionKey, text: String, images: [ImagePayload] = [], launcher: String? = nil, model: String? = nil,
-              clientMsgID: String? = nil, clearDraft: String? = nil, todoID: String? = nil, opID: UUID? = nil) async throws {
-        try await post(sp(k) + "/messages", body: SendBody(text: HubNaming.outbound(text, canonical: personaNaming), images: images.isEmpty ? nil : images, launcher: launcher,
-                                                           model: model, clientMsgID: clientMsgID, clearDraft: clearDraft, todoID: todoID),
-                       timeout: 100, opID: opID)
+              clientMsgID: String? = nil, clearDraft: String? = nil, todoID: String? = nil, via: MessageVia? = nil, opID: UUID? = nil) async throws -> Bool {
+        let data = try await post(sp(k) + "/messages", body: SendBody(text: HubNaming.outbound(text, canonical: personaNaming), images: images.isEmpty ? nil : images, launcher: launcher,
+                                                                      model: model, clientMsgID: clientMsgID, clearDraft: clearDraft, todoID: todoID, via: via),
+                                  timeout: 100, opID: opID)
+        struct Answer: Decodable {
+            var waitsOnComputer: Bool?
+            enum CodingKeys: String, CodingKey { case waitsOnComputer = "waits_on_computer" }
+        }
+        return (try? JSON.decoder.decode(Answer.self, from: data))?.waitsOnComputer == true
     }
     func interrupt(_ k: SessionKey) async throws { try await post(sp(k) + "/interrupt") }
     func attach(_ k: SessionKey) async throws { try await post(sp(k) + "/attach") }
@@ -1133,7 +1171,18 @@ nonisolated struct APIClient: Sendable {
     struct QueueResponse: Decodable {
         var queue: [String]
         /// Photos for each returned queue item; a Persona chat includes them so take-back can restore the composer.
+        /// An item without photos is `[]` (the node writes `null` for it, #5858).
         var images: [[ImagePayload]]?
+
+        private enum CodingKeys: String, CodingKey { case queue, images }
+
+        /// A Persona chat's queue with photos on some messages only: the node answers `null` for a message without any,
+        /// and a strict `[[ImagePayload]]` turned the whole take-back into an error although the hub had done it.
+        init(from decoder: any Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            queue = try c.decode([String].self, forKey: .queue)
+            images = try c.decodeIfPresent([[ImagePayload]?].self, forKey: .images)?.map { $0 ?? [] }
+        }
     }
     /// Pulls the queued input back out of claude and re-queues the indexes in `keep`; returns what was queued.
     func editQueue(_ k: SessionKey, keep: [Int]) async throws -> QueueResponse {
@@ -1624,14 +1673,16 @@ nonisolated struct APIClient: Sendable {
         var main: Bool?
         /// "health": the conversation opens in the health space (docs/assistant/health.md); never with `main`.
         var space: String?
-        enum CodingKeys: String, CodingKey { case prompt, images, launcher, effort, main, space; case permissionMode = "permission_mode" }
+        var via: MessageVia?
+        enum CodingKeys: String, CodingKey { case prompt, images, launcher, effort, main, space, via; case permissionMode = "permission_mode" }
     }
     /// `main`: the new conversation becomes the main one. `space`: the space it opens in (nil: the assistant's own).
+    /// `via`: how the app sent the prompt when not typed in the app itself (Siri, the share sheet).
     /// `opID`: the first message's op id (`AssistantStart`, hub feature `assistant_start_ops`): the hub starts it once.
     func startConversation(prompt: String, images: [ImagePayload] = [], launcher: String? = nil, permissionMode: String? = nil,
-                           effort: String? = nil, main: Bool = false, space: String? = nil, opID: UUID? = nil) async throws -> Session {
+                           effort: String? = nil, main: Bool = false, space: String? = nil, via: MessageVia? = nil, opID: UUID? = nil) async throws -> Session {
         let body = NewConversation(prompt: HubNaming.outbound(prompt, canonical: personaNaming), images: images.isEmpty ? nil : images,
-                                   launcher: launcher, permissionMode: permissionMode, effort: effort, main: main ? true : nil, space: space)
+                                   launcher: launcher, permissionMode: permissionMode, effort: effort, main: main ? true : nil, space: space, via: via)
         // The health space is the default manager's (docs/assistant/health.md), whichever the Persona page shows.
         let api = space == nil ? self : showing(nil)
         var s = try JSON.decoder.decode(SessionResponse.self, from: try await api.post("/api/v1/assistant/conversations", body: body, timeout: 110, opID: opID)).session

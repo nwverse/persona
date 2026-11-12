@@ -237,13 +237,18 @@ func TestSetupSuggestsOnlyWhatIsOffAndCounted(t *testing.T) {
 	off := setupState{samplePercent: 100, triage: TriageSwitches{Enabled: true}, triageKnown: true, helloKnown: true}
 	for _, id := range setupOrder {
 		enough := setupNumber{n: setupMin}
-		if id == setupLeaders {
+		under := setupNumber{}
+		switch id {
+		case setupLeaders:
 			enough.n = setupLeaderMin
+		case setupSupervisorTier: // its own number: settled acceptances, with a lower tier known (setup_suggest_tier_test.go)
+			enough = setupNumber{n: setupTierMin, lower: "mid-model"}
+			under.lower = enough.lower
 		}
 		if !off.suggests(id, enough) {
 			t.Errorf("%s: not suggested at its threshold", id)
 		}
-		if off.suggests(id, setupNumber{n: enough.n - 1}) {
+		if under.n = enough.n - 1; off.suggests(id, under) {
 			t.Errorf("%s: suggested under its threshold", id)
 		}
 	}
@@ -734,6 +739,7 @@ func TestGoldenBriefFactsSetup(t *testing.T) {
 	lines := []string{
 		setupWord(i18n.ZhHans, "", setupDelegate, setupNumber{n: 4}).Text,
 		setupWord(i18n.ZhHans, "", setupLeaders, setupNumber{n: 12, seconds: 31 * 60}).Text,
+		setupWord(i18n.ZhHans, "", setupSupervisorTier, setupNumber{n: 24, reopened: 1, model: "big-model", lower: "mid-model"}).Text,
 	}
 	golden(t, "routine_facts.setup", prompts.RenderBriefFacts(prompts.BriefFacts{Hours: 12, Setup: lines}))
 	golden(t, "routine_facts.setup_card", prompts.RenderBriefFacts(prompts.BriefFacts{Card: true, Hours: 12, Setup: lines}))

@@ -40,6 +40,7 @@ import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
 import persona.core.domain.tasks.moveTo
 import persona.core.domain.tasks.TodoListFilter
@@ -145,6 +146,8 @@ fun TodosScreen(
 
     val sessionMap = remember(sessions) { sessions.associateBy { it.key } }
     val sessionLookup: (SessionKey) -> Session? = remember(sessionMap) { { key: SessionKey -> sessionMap[key] } }
+    val hubFeatures = tasks?.features?.collectAsState()
+    val seenOn = hubFeatures?.value?.contains("todo_seen") == true
 
     val searched = remember(todos, query) {
         if (query.isBlank()) todos
@@ -182,15 +185,9 @@ fun TodosScreen(
     val hidden = remember(searched, filtered, sessionMap, restored, nowMs, listFilter, superseded) {
         if (listFilter == TodoListFilter.All) 0 else hiddenWaiting(searched, filtered, sessionLookup, nowMs, restored, superseded = superseded)
     }
-    // Which sections the user folded or unfolded: Other open, Shelved and Done start folded.
+    // Which sections the user folded or unfolded: Shelved and Done start folded, the rest open (#5707).
     var toggled by rememberSaveable { mutableStateOf(emptyList<String>()) }
-    // Other open starts unfolded when the open sections above it are empty, so the list never opens on nothing.
-    val quietAbove = listOf(TriageSection.Waiting, TriageSection.Working, TriageSection.JustDone, TriageSection.Pr).all { triaged.rows(it).isEmpty() }
-    fun isFolded(section: TriageSection): Boolean {
-        // a filter narrows, so what it leaves in Other open shows (as iOS); Shelved and Done stay folded
-        val byDefault = section.folded && !(section == TriageSection.Other && (quietAbove || listFilter != TodoListFilter.All))
-        return byDefault != (section.name in toggled)
-    }
+    fun isFolded(section: TriageSection): Boolean = section.folded != (section.name in toggled)
     var expanded by rememberSaveable { mutableStateOf(emptyList<String>()) }
     val setDone: (Todo, Boolean) -> Unit = { todo, done ->
         scope.launch {
@@ -207,6 +204,26 @@ fun TodosScreen(
     val feedback = LocalAppFeedback.current
     val haptics = rememberHaptics()
     val locale = LocalConfiguration.current.locales[0]
+    fun seenFailed(e: Exception) {
+        if (feedback?.failure(e) != true) onError(res.getString(R.string.agents_todo_seen_failed, e.message.orEmpty()))
+    }
+    val gotIt: (Todo, Long) -> Unit = gotIt@{ todo, after ->
+        val store = tasks ?: return@gotIt
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            // The local move finishes before the click returns; the hub write does not hold Undo (#5707, principle 7).
+            val undo = FeedbackAction(res.getString(R.string.agents_todo_seen_undo)) {
+                scope.launch {
+                    try { store.setTodoSeen(todo.id, false) }
+                    catch (e: CancellationException) { throw e }
+                    catch (e: Exception) { seenFailed(e) }
+                }
+            }
+            feedback?.notice(res.getString(R.string.agents_todo_seen_moved), undo)
+            try { store.setTodoSeen(todo.id, true, after) }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) { seenFailed(e) }
+        }
+    }
     fun moveFailed(e: Exception) {
         if (feedback?.failure(e) != true) onError(res.getString(R.string.agents_todo_calendar_move_failed, e.message.orEmpty()))
     }
@@ -412,6 +429,9 @@ fun TodosScreen(
                                 onDone = setDone,
                                 onDelete = delete,
                                 onRestore = { restored = restores.restore(group.lead.id, System.currentTimeMillis()) },
+                                onSeen = if (seenOn && section == TriageSection.JustDone) ({
+                                    gotIt(group.lead, group.triage.getValue(group.lead.id).last)
+                                }) else null,
                             )
                             if (open) {
                                 for (m in group.members.drop(1)) {
@@ -485,6 +505,7 @@ private fun TodoTriageRow(
     onDone: (Todo, Boolean) -> Unit,
     onDelete: (Todo) -> Unit,
     onRestore: () -> Unit,
+    onSeen: (() -> Unit)?,
 ) {
     val res = agentResources()
     // a failed start waiting on the owner reads open, says why in red, and its checkbox closes it (#3713)
@@ -506,7 +527,7 @@ private fun TodoTriageRow(
                     val tickName = stringResource(R.string.agents_todo_done_action)
                     val tickLabel = stringResource(if (finished) R.string.agents_todo_reopen else R.string.agents_todo_done_action)
                     Box(
-                        Modifier.size(Tokens.Space.xl).clip(CircleShape)
+                        Modifier.size(Tokens.Space.Standard.xl).clip(CircleShape)
                             .clickable(onClickLabel = tickLabel, role = Role.Checkbox) { onDone(todo, !finished) }
                             .semantics {
                                 contentDescription = tickName
@@ -553,6 +574,10 @@ private fun TodoTriageRow(
                         TodoHoldLine(it, Modifier.padding(start = Tokens.Space.xxl))
                     }
                     TodoPlanLine(todo, Modifier.padding(start = Tokens.Space.xxl))
+                    // A decision held for the next briefing (#4930): nothing was pushed for it, and the row says so.
+                    if (todo.ask?.forBriefing == true) Text(stringResource(R.string.agents_todo_for_briefing),
+                        Modifier.padding(start = Tokens.Space.xxl).testTag("todo-for-briefing-${todo.id}"),
+                        style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 if (triage.section == TriageSection.Pr) {
                     // PR to merge: the PR, and how long since anything of it moved, however old (#3206)
@@ -588,7 +613,9 @@ private fun TodoTriageRow(
                         )
                     }
                     Spacer(Modifier.weight(1f))
-                    if (triage.section == TriageSection.Shelved) {
+                    if (onSeen != null) {
+                        JTextButton(stringResource(R.string.agents_todo_seen), onSeen)
+                    } else if (triage.section == TriageSection.Shelved) {
                         JTextButton(stringResource(R.string.agents_todo_restore), onRestore, icon = PhIcons.ArrowUUpLeft)
                     } else if (!finished && todo.currentAgents.isNotEmpty()) {
                         Text(pluralStringResource(R.plurals.agents_todo_agents, todo.currentAgents.size, todo.currentAgents.size),

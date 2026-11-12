@@ -16,7 +16,7 @@ import { DecisionRow } from "./DecisionRow";
 
 type Review = NonNullable<Todo["decision_review"]>;
 
-export function TaskDecision({ todo, rowKey }: { todo: Todo; rowKey: string }) {
+export function TaskDecision({ todo, rowKey, hideTitle = false }: { todo: Todo; rowKey?: string; hideTitle?: boolean }) {
   const ask = openAsk(todo);
   const review = latestReview(todo.supervision);
   const round = decisionRound(todo);
@@ -78,13 +78,14 @@ export function TaskDecision({ todo, rowKey }: { todo: Todo; rowKey: string }) {
     if (admission.current || !current()) return;
     later(decisionLaterKey(todo));
   };
-  const controls = <div data-decision-actions className={`${ask && askOptions(ask).length ? "" : "sticky -bottom-2.5 "}-mx-3 -mb-2.5 mt-1 flex items-center gap-2 border-t border-line bg-field px-3 py-2.5`}>
+  const buttons = <>
     <Button className="min-h-11" disabled={busy} onClick={defer}>{t("assistant-tasks.later")}</Button>
     <Button className="min-h-11" disabled={busy || !round} busy={dismissing} onClick={dismiss}>{t("assistant-tasks.dismiss_draft")}</Button>
-  </div>;
-  if (ask && askOptions(ask).length) return <DecisionRow todo={todo} ask={ask} rowKey={rowKey} admission={admission} onBusyChange={setBusy} blocked={busy} footer={controls} />;
+  </>;
+  const controls = <div data-decision-actions className={`${ask && askOptions(ask).length ? "" : "sticky -bottom-2.5 "}-mx-3 -mb-2.5 mt-1 flex items-center gap-2 border-t border-line bg-field px-3 py-2.5`}>{buttons}</div>;
+  if (ask && askOptions(ask).length) return <DecisionRow todo={todo} ask={ask} rowKey={rowKey} hideTitle={hideTitle} admission={admission} onBusyChange={setBusy} blocked={busy} footer={controls} />;
   return <div data-needs-row={rowKey} className="flex min-w-0 flex-col gap-1.5 rounded-control bg-field px-3 py-2.5">
-    {ask ? <AcceptRow stacked admission={admission} onBusyChange={setBusy} blocked={busy} row={{ id: todo.id, title: todo.title, waited_s: Math.max(0, (Date.now() - Date.parse(ask.asked_at)) / 1000), outcome: ask.outcome, verdict: ask.verdict, recommend: ask.recommend, asked_at: ask.asked_at }} /> : <>
+    {ask ? <AcceptRow stacked hideTitle={hideTitle} admission={admission} onBusyChange={setBusy} blocked={busy} secondary={<span data-decision-actions className="contents">{buttons}</span>} row={{ id: todo.id, title: todo.title, waited_s: Math.max(0, (Date.now() - Date.parse(ask.asked_at)) / 1000), outcome: ask.outcome, verdict: ask.verdict, recommend: ask.recommend, asked_at: ask.asked_at }} /> : <>
       <div className="flex min-w-0 items-center gap-2 text-sm"><button type="button" onClick={open} className="min-w-0 flex-1 truncate text-left font-medium hover:underline">{todo.title}</button><span className="shrink-0 text-xs text-ink-2">{t("assistant-tasks.review_needs_user")}</span></div>
       {(review?.reason || review?.note) && <p data-decision-legacy className="whitespace-pre-wrap text-sm select-text [overflow-wrap:anywhere]">{review.reason || review.note}</p>}
       {review?.recommend && <p className="text-xs text-ink-2">{t("assistant-brief.recommend", { option: review.recommend })}</p>}
@@ -92,6 +93,6 @@ export function TaskDecision({ todo, rowKey }: { todo: Todo; rowKey: string }) {
       <p className="text-xs text-ink-2">{t("assistant-decisionrow.missing_options")}</p>
       <div><Button disabled={busy} onClick={open}>{t("assistant-decisionrow.another")}</Button></div>
     </>}
-    {controls}
+    {!ask && controls}
   </div>;
 }

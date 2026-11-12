@@ -15,12 +15,16 @@ import persona.core.designsystem.*
 @Composable
 internal fun OutboxStatus(
     message: OutboxMessage, busy: Boolean, onAction: ((DeliveryAction) -> Unit)?,
+    receipt: persona.core.contracts.api.MessageSendReceipt? = null,
     onDetails: (() -> Unit)? = null,
 ) {
     var retryConfirmation by remember(message.clientMessageId) { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
         val pending = message.state.pendingStatus
-        if (pending != null) PendingBadge(pending, reason = message.refusalReason())
+        if (receipt?.processing == true) Text(stringResource(persona.core.designsystem.R.string.designsystem_message_processing),
+            style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
+        else if (receipt?.state == "sending") PendingBadge(PendingStatus.Sending)
+        else if (pending != null) PendingBadge(pending, reason = message.refusalReason())
         else Text(stringResource(R.string.chat_delivery_delivered_waiting), style = PersonaTheme.type.caption,
             color = PersonaTheme.palette.ink2)
         if (onAction != null) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),

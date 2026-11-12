@@ -146,7 +146,17 @@ struct PlanCard: View {
         }
     }
 
+    /// The open card, and under it the standing rule the hub suggests for this kind of plan (#5802); without one the
+    /// card alone, as before.
     private var open: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            openCard
+            RuleSuggestionLine(suggestion: plan.suggestion, card: .plan(id: plan.id, conversation: plan.conversation),
+                               group: AppModel.shared.hub?.group ?? "", inset: true)
+        }
+    }
+
+    private var openCard: some View {
         VStack(alignment: .leading, spacing: Theme.Space.m) {
             Label(plan.tasks.count > 1 ? String(localized: "Split into \(plan.tasks.count) tasks, started like this") : String(localized: "Start like this"), systemImage: Theme.Icon.taskPlan)
                 .font(Theme.Font.captionStrong)
@@ -565,7 +575,7 @@ struct FeedLine: View {
             if let body = item.today { TodayCard(item: item, body: body) }
         case .brief:
             // A routine's facts (#2320); a body this build can't read leaves the card out, never the feed around it.
-            if let brief = item.brief { BriefCard(brief: brief, group: group) }
+            if let brief = item.brief { BriefCard(brief: brief, group: group, conversation: item.conversation) }
         case .message:
             if let id = item.ref, !store.laterMessages.contains(id) { MessageCard(item: item, itemID: id) }
         case .answered: AnsweredLine(item: item, taskTitle: taskTitle)
