@@ -45,13 +45,17 @@ sealed interface NeedsYouEntry {
 sealed interface RunningEntry {
     val key: String
 
-    /** A dispatched task not finished and not waiting on the user. */
+    /**
+     * A dispatched task not finished and not waiting on the user. [waiting]: nothing of it runs and one of its agents waits to
+     * be brought back (iOS `TaskState.waiting`), by what it waits on or by background work that only waits.
+     */
     data class Task(val todo: Todo, val status: TriageStatus, val activity: BackgroundWork? = null, val waiting: Boolean = false) : RunningEntry {
         override val key get() = "task:${todo.id}"
     }
 
-    /** A working Agent that belongs to no task. */
-    data class Agent(val session: Session, val activity: BackgroundWork? = session.backgroundWork()) : RunningEntry {
+    /** A working Agent that belongs to no task. [waiting]: it works only because its background work waits (iOS `DockAgent.backgroundWaiting`). */
+    data class Agent(val session: Session, val activity: BackgroundWork? = session.backgroundWork(),
+                     val waiting: Boolean = activity == null && session.waitsInBackground) : RunningEntry {
         override val key get() = "agent:${session.machineId}/${session.sessionId}"
     }
 }
@@ -98,12 +102,14 @@ fun assistantEntries(
     val open = mutableListOf<Pair<RunningEntry.Task, Int>>()
     val shelved = mutableListOf<RunningEntry.Task>()
     val folded = mutableSetOf<SessionKey>()
+    // failed starts whose work finished in a related to-do: closed, as the To-dos page has them (#3713)
+    val superseded = supersededFailedStarts(todos)
     // the main conversation watches every task (docs/assistant/unified-entry.md); another one the tasks it dispatched
     for (todo in todos.filter { isMain || it.origin == conversation }) {
         val status = todo.triageStatus(lookup)
         val active = if (todo.isDone) emptyList() else todo.activeAgents
         val asks = active.flatMap { asksOf[GroupKeys.rawKey(it.key)].orEmpty() }
-        val bucket = todo.bucket(lookup, now, restored[todo.id] ?: 0L)
+        val bucket = todo.bucket(lookup, now, restored[todo.id] ?: 0L, superseded = todo.id in superseded)
         // a failed start carries done_at (the hub ends it), yet it is the user's to retry while its bucket says open
         val waits = if (status == TriageStatus.Failed) bucket == TodoBucket.Open
             else !todo.isDone && (status == TriageStatus.NeedsYou || status == TriageStatus.Interrupted)
@@ -112,7 +118,7 @@ fun assistantEntries(
             waits || todo.awaitsDecision() -> deciding += NeedsYouEntry.Task(todo, status, asks) to todo.entryRank(status)
             bucket == TodoBucket.Open -> {
                 val activity = todo.backgroundWork(lookup)
-                val waiting = activity == null && todo.activeAgents.mapNotNull { lookup(it.key) }.any { it.waitsWithoutBackground() }
+                val waiting = activity == null && todo.activeAgents.mapNotNull { lookup(it.key) }.any { it.waitsWithoutBackground() || it.waitsInBackground }
                 open += RunningEntry.Task(todo, status, activity, waiting) to todo.entryRank(status)
             }
             bucket == TodoBucket.Shelved -> shelved += RunningEntry.Task(todo, status)

@@ -64,6 +64,7 @@ object ExtensionThemeColors {
         return p.copy(accent = accent, accentSoft = accent.copy(alpha = SoftAlpha),
             positive = values["positive"] ?: p.positive,
             caution = values["caution"] ?: p.caution, cautionText = values["caution"] ?: p.cautionText,
+            codeNumberOverride = values["caution"] ?: p.codeNumberOverride,
             danger = status("danger") ?: p.danger, ai = values["ai"] ?: p.ai,
             positiveRole = status("positive"), cautionRole = status("caution"), customRoles = true)
     }

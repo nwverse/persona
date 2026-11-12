@@ -1,4 +1,4 @@
-// One tool call in a work group (cindy's AgentActionRow): [status][verb][what it worked on][+N −N][›]. A command and
+// One tool call in a work group (cindy's AgentActionRow): [status][verb][what it worked on][+N -N][›]. A command and
 // the like open in place (what went in, what came out, in full); an edit opens its diff over the page; a read opens
 // the file in the side panel.
 import { memo, useEffect, useMemo, useRef, useState } from "react";
@@ -10,13 +10,14 @@ import { fileName, toolFile } from "../../lib/files";
 import { openPanel } from "../../lib/panel";
 import { getSession } from "../../lib/store";
 import { taskBadge } from "../../lib/tasks";
-import { personaToolVerb, toolChip, toolDisplayName, toolLabel } from "../../lib/turns";
+import { ownEntry, personaToolVerb, SUBJECT_KEYS, toolChip, toolDisplayName, toolLabel } from "../../lib/turns";
 import type { Item } from "../../lib/types";
 import type { ToolStep } from "../../lib/work-groups";
 import { cx, Dialog, EASE, IconButton, Spinner } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { NARROW, useMedia } from "../../ui/media-query";
 import { patchDiffs } from "../../lib/tool-detail";
+import { editLines } from "../../lib/turn-changes";
 import { useChatContext } from "./chat-context";
 import { useFullText } from "./FullText";
 import { hasStepDetail, showsResult, StepDetail } from "./StepDetail";
@@ -25,13 +26,15 @@ import { edgeMask, useEdgeFade } from "./edge-fade";
 import { Thumb } from "./Steps";
 import { t } from "../../i18n";
 
-/** The row's chrome, shared with the thinking rows so a mixed list reads as one (cindy's activityRowChrome). */
-/** On a touch screen a row is a finger tall (40). */
-const ROW = "group flex w-full min-w-0 items-center gap-1.5 rounded-[8px] px-2 py-[3px] [@media(pointer:coarse)]:min-h-10 text-left select-none transition-colors duration-150 hover:bg-tool-hover motion-reduce:transition-none";
+/** The row's chrome, shared with the thought rows (ThinkingRow.tsx) so a mixed list reads as one (cindy's
+ *  activityRowChrome): radius, padding, the hover lift. On a touch screen a row is a finger tall (40). */
+export const ROW_CHROME = "flex w-full min-w-0 gap-1.5 rounded-[8px] px-2 py-[3px] [@media(pointer:coarse)]:min-h-10 text-left";
+export const ROW_HOVER = "group select-none transition-colors duration-150 hover:bg-tool-hover motion-reduce:transition-none";
+const ROW = `${ROW_CHROME} items-center ${ROW_HOVER}`;
 export const CHEVRON_SLOT = "ml-auto flex size-[18px] shrink-0 items-center justify-center rounded-[8px] text-tool-ink transition-colors duration-150 group-hover:bg-hover-2 motion-reduce:transition-none";
 export const STATUS_SLOT = "inline-flex h-[18px] w-4 shrink-0 items-center justify-center text-tool-ink";
 
-const COMMAND_TOOLS = new Set(["Bash", "exec_command", "shell"]);
+const COMMAND_TOOLS = new Set(["Bash", "exec_command", "shell", "PowerShell"]);
 const FILE_TOOLS = new Set(["Read", "Edit", "Write", "MultiEdit", "NotebookEdit"]);
 export const DIFF_TOOLS = new Set(["Edit", "Write", "MultiEdit"]);
 
@@ -51,6 +54,39 @@ const VERB: Record<string, string> = {
   LS: t("chat-actionrow.verb_list"),
   WebFetch: t("chat-actionrow.verb_visit"),
   WebSearch: t("chat-actionrow.verb_visit"),
+};
+
+/** Claude Code's newer tools (iOS ToolPresentation.knownVerb, #2986): what each did, then what it was about. */
+const DONE: Record<string, string> = {
+  TaskCreate: t("chat-actionrow.verb_task_create"),
+  TaskUpdate: t("chat-actionrow.verb_task_update"),
+  TaskList: t("chat-actionrow.verb_task_list"),
+  TaskGet: t("chat-actionrow.verb_task_get"),
+  TaskStop: t("chat-actionrow.verb_task_stop"),
+  KillShell: t("chat-actionrow.verb_task_stop"),
+  KillBash: t("chat-actionrow.verb_task_stop"),
+  TaskOutput: t("chat-actionrow.verb_task_output"),
+  BashOutput: t("chat-actionrow.verb_task_output"),
+  SendMessage: t("chat-actionrow.verb_send_message"),
+  ListAgents: t("chat-actionrow.verb_list_agents"),
+  ScheduleWakeup: t("chat-actionrow.verb_schedule_wakeup"),
+  CronCreate: t("chat-actionrow.verb_cron_create"),
+  CronList: t("chat-actionrow.verb_cron_list"),
+  CronDelete: t("chat-actionrow.verb_cron_delete"),
+  RemoteTrigger: t("chat-actionrow.verb_remote_trigger"),
+  Monitor: t("chat-actionrow.verb_monitor"),
+  LSP: t("chat-actionrow.verb_lsp"),
+  EnterWorktree: t("chat-actionrow.verb_enter_worktree"),
+  ExitWorktree: t("chat-actionrow.verb_exit_worktree"),
+  SendUserFile: t("chat-actionrow.verb_send_file"),
+  Artifact: t("chat-actionrow.verb_artifact"),
+  PushNotification: t("chat-actionrow.verb_push_notification"),
+  ReportFindings: t("chat-actionrow.verb_report_findings"),
+  ToolSearch: t("chat-actionrow.verb_load_tools"),
+  WaitForMcpServers: t("chat-actionrow.verb_wait_mcp"),
+  ListMcpResourcesTool: t("chat-actionrow.verb_list_mcp_resources"),
+  ReadMcpResourceTool: t("chat-actionrow.verb_read_mcp_resource"),
+  Skill: t("chat-actionrow.verb_skill"),
 };
 
 const PARAM_MAX = 60;
@@ -99,18 +135,23 @@ export function presentAction(use: Item): ActionPresentation {
       const what = [own.what, toolChip(use)].filter(Boolean).join(" · ");
       return { verb: own.verb, ...(what ? { param: { text: truncateParam(what), title: name } } : {}) };
     }
-    return { verb: t("chat-actionrow.verb_call"), param: { text: truncateParam(toolDisplayName(name)), title: name } };
+    // another server's tool in words ("GitHub · Create issue"), then what it was given
+    const what = [toolDisplayName(name), toolChip(use)].filter(Boolean).join(" · ");
+    return { verb: t("chat-actionrow.verb_call"), param: { text: truncateParam(what), title: name } };
   }
   const chip = toolChip(use);
-  return { verb: VERB[name] ?? t("chat-actionrow.verb_call"), param: { text: truncateParam(chip ? `${toolLabel(name)} · ${chip}` : toolLabel(name)), title: chip || undefined } };
+  const done = ownEntry(DONE, name);
+  if (done) return { verb: done, ...(chip ? { param: { text: truncateParam(chip), title: chip } } : {}) };
+  return { verb: ownEntry(VERB, name) ?? t("chat-actionrow.verb_call"), param: { text: truncateParam(chip ? `${toolLabel(name)} · ${chip}` : toolLabel(name)), title: chip || undefined } };
 }
 
 // ── diffs ──
 
-/** A line diff of an edit's old and new text (lib/compare.ts's Myers diff); too big to diff: all out, all in. */
+/** A line diff of an edit's old and new text (lib/compare.ts's Myers diff); too big to diff: all out, all in. Its
+ *  lines are lib/turn-changes.ts editLines' (a final newline ends the last line where both sides allow it), which the
+ *  changed-files card and the hub's folds count the same way. */
 export function lineDiff(oldText: string, newText: string): Op[] {
-  const a = oldText ? oldText.split("\n") : [];
-  const b = newText ? newText.split("\n") : [];
+  const [a, b] = editLines(oldText, newText);
   return diffLines(a, b) ?? [...a.map((text) => ({ kind: "del" as const, text })), ...b.map((text) => ({ kind: "add" as const, text }))];
 }
 
@@ -152,7 +193,22 @@ export function inlineInput(use: Item): string {
   if (name === "Glob") return str(inp.path) ? `${str(inp.pattern)}\nin: ${str(inp.path)}` : str(inp.pattern);
   if (name === "WebFetch") return [str(inp.url), str(inp.prompt)].filter(Boolean).join("\n");
   if (name === "WebSearch") return str(inp.query);
-  return Object.keys(inp).length ? JSON.stringify(inp, null, 2) : "";
+  if (name === "Monitor") return str(inp.command) || str((inp.ws as Record<string, unknown> | undefined)?.url);
+  return argumentLines(inp);
+}
+
+/** Any other call's input as `key: value` lines, not a JSON dump (iOS ToolArgumentsDetail, #2986): the telling fields
+ *  first, then the rest by name; text as written, lists of words joined, anything nested as one line of JSON. */
+export function argumentLines(inp: Record<string, unknown>): string {
+  const keys = [...SUBJECT_KEYS.filter((k) => Object.hasOwn(inp, k)), ...Object.keys(inp).filter((k) => !SUBJECT_KEYS.includes(k)).sort()];
+  const shown = (v: unknown): string => {
+    if (typeof v === "string") return v.trim();
+    if (v === null) return "null";
+    if (Array.isArray(v) && v.every((x) => x === null || typeof x !== "object")) return v.map(String).join(", ");
+    if (typeof v === "object") return Object.keys(v as object).length ? JSON.stringify(v) : "";
+    return String(v);
+  };
+  return keys.flatMap((k) => (shown(inp[k]) ? [`${k}: ${shown(inp[k])}`] : [])).join("\n");
 }
 
 export const ActionRow = memo(function ActionRow({ step, running, mid, sid, trace }: { step: ToolStep; running?: boolean; mid: string; sid: string; trace?: boolean }) {
@@ -194,7 +250,7 @@ export const ActionRow = memo(function ActionRow({ step, running, mid, sid, trac
     <div className="flex min-w-0 flex-col" data-action-row={name} data-tool-use={call} data-items={ids.join(" ")}>
       <button type="button" onClick={activate} aria-expanded={inPlace ? open : undefined} aria-label={label || name} title={p.param?.title} className={ROW}>
         <span role="img" aria-label={running ? t("chat-actionrow.status_running") : error ? t("chat-actionrow.status_error") : t("chat-actionrow.status_done")} className={cx(STATUS_SLOT, error && "text-red")}>
-          {running ? <Spinner size={12} /> : <Icon name={error ? "x" : "check"} size={13} />}
+          {running ? <Spinner size={13} /> : <Icon name={error ? "x" : "check"} size={13} />}
         </span>
         {p.verb && <span className="shrink-0 text-[length:var(--chat-secondary)] whitespace-nowrap text-tool-ink">{p.verb}</span>}
         {p.param &&
@@ -210,7 +266,7 @@ export const ActionRow = memo(function ActionRow({ step, running, mid, sid, trac
         {stats && (stats.add > 0 || stats.del > 0) && (
           <span className="flex shrink-0 gap-1 font-mono text-[13px] font-medium tabular-nums">
             <span className="text-diff-add-fg">+{stats.add}</span>
-            <span className="text-diff-del-fg">−{stats.del}</span>
+            <span className="text-diff-del-fg">-{stats.del}</span>
           </span>
         )}
         {bg && <span className={cx("shrink-0 rounded-[4px] px-1 text-[11px] font-medium whitespace-nowrap", bg.failed ? "bg-red-tint text-red" : "bg-field text-ink-2")}>{bg.text}</span>}
@@ -240,7 +296,7 @@ export const ActionRow = memo(function ActionRow({ step, running, mid, sid, trac
           {input && <pre className="m-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{input}</pre>}
           {output && (
             <>
-              {(input || detail) && <div className="my-2 h-px bg-line" />}
+              {(input || detail) && <div className="my-2 h-px bg-tool-ink/20" />}
               <pre className={cx("m-0 whitespace-pre-wrap [overflow-wrap:anywhere]", error ? "text-red" : "text-tool-ink")}>{output}</pre>
               {full.more}
             </>
@@ -274,7 +330,7 @@ function DiffStats({ diffs }: { diffs: Op[][] }) {
   const s = diffStats(diffs);
   return (
     <span className="shrink-0 font-mono text-[12px] font-medium tabular-nums">
-      <span className="text-diff-add-fg">+{s.add}</span> <span className="text-diff-del-fg">−{s.del}</span>
+      <span className="text-diff-add-fg">+{s.add}</span> <span className="text-diff-del-fg">-{s.del}</span>
     </span>
   );
 }

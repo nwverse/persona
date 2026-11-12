@@ -144,11 +144,16 @@ var actionBodies = map[string]string{
 	"tabs/close":       `{"tab_id":"w1:t2"}`,
 	"tabs/rename":      `{"tab_id":"w1:t2","label":"build"}`,
 	"worktree/prepare": `{"workspace_id":"w1"}`,
+	"worktree/source":  `{"workspace_id":"w1","kind":"orca"}`,
+	"worktree/preset":  `{"workspace_id":"w1","kind":"orca","name":"UI","directories":"src"}`,
+	"worktree/delete":  `{"workspace_id":"w1","kind":"orca","preview":true}`,
 	"worktree/rename":  `{"workspace_id":"w1","kind":"orca","name":"Renamed tree"}`,
 	"worktree/create":  `{"workspace_id":"w1","branch":"feat/x","path":"/tmp/wt/feat-x"}`,
 	"worktree/add":     `{"cwd":"/tmp/proj","name_hint":"fix the crash"}`,
 	"worktree/status":  `{"cwd":"/tmp/wt/persona-fix-the-crash"}`,
 	"worktree/remove":  `{"path":"/tmp/wt/persona-fix-the-crash","delete_branch":true}`,
+	// #4754 Close finished terminals: the panes the user confirmed
+	"panes/close_finished": `{"panes":"w1:p4,w2:p1"}`,
 }
 
 func postAction(h *Hub, role, path, body string) int {
@@ -175,6 +180,24 @@ func TestNodeActionsAreMountedOnTheHTTPRouter(t *testing.T) {
 	}
 }
 
+func TestHerdrWorkspaceCloseModeIsForwardedAsAStrictBoolean(t *testing.T) {
+	tn := newTermNode(t)
+	if code := postAction(tn.hub, roleFull, "worktree/delete", `{"workspace_id":"w1","kind":"herdr","preview":true,"close_only":true}`); code != http.StatusOK {
+		t.Fatal(code)
+	}
+	tn.await(t, 1)
+	var got map[string]any
+	if err := json.Unmarshal([]byte(tn.args["worktree.delete"]), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["close_only"] != true || got["kind"] != "herdr" {
+		t.Fatal(got)
+	}
+	if code := postAction(tn.hub, roleFull, "worktree/delete", `{"workspace_id":"w1","kind":"herdr","preview":true,"close_only":"true"}`); code != http.StatusBadRequest {
+		t.Fatal(code)
+	}
+}
+
 // Every one of them changes a computer: answer-only devices and extension tokens are refused before the node hears of
 // it, a full device gets through.
 func TestNodeActionsNeedAFullDevice(t *testing.T) {
@@ -198,7 +221,7 @@ func TestNodeActionsNeedAFullDevice(t *testing.T) {
 		}
 	}
 	want := map[string]bool{"panes.close": true, "panes.split": true, "panes.agent": true, "panes.git": true, "tabs.close": true, "tabs.rename": true,
-		"worktree.prepare": true, "worktree.create": true, "worktree.add": true, "worktree.status": true, "worktree.remove": true}
+		"worktree.source": true, "worktree.preset": true, "worktree.delete": true, "worktree.rename": true, "worktree.prepare": true, "worktree.create": true, "worktree.add": true, "worktree.status": true, "worktree.remove": true}
 	for _, m := range tn.await(t, len(want)) {
 		delete(want, m)
 	}

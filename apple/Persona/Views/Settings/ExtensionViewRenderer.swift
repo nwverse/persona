@@ -209,7 +209,8 @@ enum ExtensionUIStyle {
         case "play": Theme.Icon.run
         case "pause": Theme.Icon.pause
         case "stop": Theme.Icon.interrupt
-        case "speaker": Theme.Icon.pluginSpeaker
+        case "speaker": Theme.Icon.voiceSpeaking
+        case "music": Theme.Icon.music
         case "tv": Theme.Icon.pluginTV
         case "plug": Theme.Icon.pluginPlug
         case "battery": Theme.Icon.pluginBattery
@@ -609,7 +610,9 @@ struct ExtensionPageView: View {
                 let outcome = await initial.start(page)
                 if let error = outcome.error { app.toast = Toast(error, style: .error) }
                 else if let toast = outcome.toast { app.toast = Toast(toast) }
-                if let url = outcome.url, !app.openIfExtensionSettings(url) { link = LinkTarget(url: url) }
+                if let url = outcome.url, !app.openIfExtensionSettings(url, from: outcome.settingsOwner), !app.openIfAsk(url) {
+                    link = LinkTarget(url: url)
+                }
             } else { await page.load() }
         }
         .pluginRefresh(page)

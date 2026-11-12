@@ -4,6 +4,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.ui.draw.rotate
@@ -22,9 +23,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -39,7 +46,7 @@ internal fun Modifier.holder(color: androidx.compose.ui.graphics.Color, width: D
 
 /** Horizontal page padding of the active style; list items assume they sit inside it. */
 /** Side padding of page content, plus the room that keeps it to [ReadingWidth] in wide panes. */
-val pagePadding: Dp @Composable get() = when (PersonaTheme.style) { AppStyle.Glass -> 16.dp; AppStyle.Brief -> 20.dp; AppStyle.Board -> 12.dp } + LocalReadingInset.current
+val pagePadding: Dp @Composable get() = when (PersonaTheme.style) { AppStyle.Glass -> 16.dp; AppStyle.Brief -> 20.dp; AppStyle.Board -> 12.dp } * LayoutDensity.pageScale + LocalReadingInset.current
 
 /** Where an item sits in a group, so lazy lists can draw one continuous container out of separate items. */
 @Immutable
@@ -64,19 +71,27 @@ fun JSectionHeader(
     /** Before the title: a group's tick while selecting (#2576). */
     leading: (@Composable () -> Unit)? = null,
     /** A group inside a section (an inbox section's source or day, #2576): closer to its rows, the title a level below the
-     *  section's (caption, regular, in every style; as iOS and the web), and a caret for whether it is open (null: none). */
+     *  section's (caption, regular, in every style; as iOS and the web), and a caret for whether it is open (null: none).
+     *  With [onClick], [open] also tells TalkBack whether the section is open and what a tap does (#4100), in every style. */
     sub: Boolean = false,
     open: Boolean? = null,
+    /** The [count] in a capsule of this state's tone (the To-dos list's sections, #3712, as iOS `CountBadge`); none: quiet digits. */
+    countTone: Status? = null,
+    /** [trailing] is the fold's own action word ("Expand" / "Collapse"): while the header folds ([onClick] and [open]),
+     *  TalkBack hears it from the state and click label, so the visible word is not read a second time (#4120). */
+    trailingIsFoldAction: Boolean = false,
+    // Last, so a caller can pass it as a trailing lambda: `JSectionHeader(title) { … }`.
     action: (@Composable RowScope.() -> Unit)? = null,
 ) {
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
+    val fold = if (onClick != null && open != null) foldLabels(open) else null
     Row(
-        modifier.fillMaxWidth().then(if (onClick != null) Modifier.combinedClickable(role = Role.Button, onClick = onClick) else Modifier)
-            .padding(top = if (sub) Tokens.Space.s else if (style == AppStyle.Board) 18.dp else 26.dp, bottom = if (sub) Tokens.Space.xs else 10.dp,
-                start = if (style == AppStyle.Brief) 0.dp else 4.dp, end = if (style == AppStyle.Brief) 0.dp else 4.dp)
+        modifier.fillMaxWidth().then(if (onClick != null) Modifier.combinedClickable(role = Role.Button, onClickLabel = fold?.action, onClick = onClick) else Modifier)
+            .padding(top = if (sub) Tokens.Space.s else if (style == AppStyle.Board) 18.dp.dense else 26.dp.dense, bottom = if (sub) Tokens.Space.xs else 10.dp.dense,
+                start = if (style == AppStyle.Brief) 0.dp else 4.dp.dense, end = if (style == AppStyle.Brief) 0.dp else 4.dp.dense)
             .heightIn(min = if (leading != null) 48.dp else 0.dp)
-            .semantics { heading() },
+            .semantics { heading(); fold?.let { stateDescription = it.state } },
         verticalAlignment = Alignment.CenterVertically,
     ) {
         leading?.let { it(); Spacer(Modifier.width(Tokens.Space.xs)) }
@@ -86,7 +101,7 @@ fun JSectionHeader(
         }
         if (status != null && style == AppStyle.Board) {
             Box(Modifier.size(10.dp).clip(RoundedCornerShape(2.dp)).background(palette.status(status).dot))
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(8.dp.dense))
         }
         // The title and its count take the free width, so the trailing text and the action sit at the end of the row
         // (two weights in one row split the space, which left them near the middle and cut long titles at half width).
@@ -99,18 +114,60 @@ fun JSectionHeader(
                 color = if (muted) palette.ink3 else if (sub || style == AppStyle.Glass) palette.ink2 else palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f, fill = false),
             )
-            count?.let { Spacer(Modifier.width(6.dp)); Text("$it", style = PersonaTheme.type.micro, color = palette.ink3) }
+            count?.let {
+                Spacer(Modifier.width(6.dp.dense))
+                if (countTone == null) Text("$it", style = PersonaTheme.type.micro, color = palette.ink3)
+                else {
+                    val tone = palette.status(countTone)
+                    Text("$it", style = PersonaTheme.type.micro.copy(fontWeight = FontWeight.SemiBold), color = tone.text, maxLines = 1,
+                        modifier = Modifier.clip(CircleShape).background(tone.tint)
+                            .padding(horizontal = SectionHeaderTokens.countPadding, vertical = SectionHeaderTokens.countPaddingVertical))
+                }
+            }
         }
-        if (trailing != null || action != null) Spacer(Modifier.width(8.dp))
-        trailing?.let { Text(it, style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1) }
+        if (trailing != null || action != null) Spacer(Modifier.width(8.dp.dense))
+        trailing?.let {
+            Text(it, style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1,
+                modifier = if (trailingIsFoldAction && fold != null) Modifier.clearAndSetSemantics {} else Modifier)
+        }
         action?.invoke(this)
     }
+}
+
+/** What TalkBack says for a section that folds: whether it is open ([state]) and what a tap does ([action]). */
+@Immutable
+private data class FoldLabels(val state: String, val action: String)
+
+@Composable
+private fun foldLabels(open: Boolean) = FoldLabels(
+    state = stringResource(if (open) R.string.designsystem_expanded else R.string.designsystem_collapsed),
+    action = stringResource(if (open) R.string.designsystem_collapse else R.string.designsystem_expand),
+)
+
+/**
+ * A row of its own that folds a section open or shut on tap (a header drawn around a [JSectionHeader] with its own
+ * caret): a button that tells TalkBack whether the section is [open] and what a tap does (#4100), as [JSectionHeader]
+ * does with `onClick` and `open`. Draws nothing.
+ */
+@Composable
+fun Modifier.foldToggle(open: Boolean, onToggle: () -> Unit): Modifier {
+    val fold = foldLabels(open)
+    return clickable(role = Role.Button, onClickLabel = fold.action, onClick = onToggle).semantics { stateDescription = fold.state }
+}
+
+/** A [JSectionHeader]'s count capsule ([JSectionHeader] `countTone`). */
+object SectionHeaderTokens {
+    val countPadding = 6.dp
+    val countPaddingVertical = 1.dp
 }
 
 /**
  * One item of a group. List groups ([separate] false) read as one container (a glass panel, ruled rows, a
  * bordered table); separate items are cards of their own (glass cards, wash cards, board strips).
- * [holder] gives board strips their coloured holder; other styles ignore it.
+ * [holder] gives board strips their coloured holder; other styles ignore it. [grouped]: the group is a card of iOS's
+ * grouped list on the black page (the computer's projects, #4338 A11): on Glass in dark it is the system's lighter gray
+ * ([PersonaPalette.surfaceOpaque], as [JSettingsSheet]'s grouped surfaces), where the translucent glass fill would leave it
+ * near-invisible beside its edge highlight. Light and the other styles draw as without it.
  */
 @Composable
 fun JGroupItem(
@@ -118,6 +175,7 @@ fun JGroupItem(
     modifier: Modifier = Modifier,
     separate: Boolean = false,
     holder: Status? = null,
+    grouped: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val palette = PersonaTheme.palette
@@ -135,7 +193,7 @@ fun JGroupItem(
     Column(modifier.fillMaxWidth().padding(bottom = gap)) {
         when (style) {
             AppStyle.Glass -> Column(
-                Modifier.fillMaxWidth().clip(shape).background(palette.surface)
+                Modifier.fillMaxWidth().clip(shape).background(if (grouped && palette.dark) palette.surfaceOpaque else palette.surface)
                     .then(if (separate) Modifier.border(1.dp, Brush.verticalGradient(listOf(palette.strokeTop, palette.strokeBottom)), shape) else Modifier)
                     .drawBehind {
                         if (!separate && position.first) drawLine(palette.strokeTop.copy(alpha = 0.6f), Offset(radius.toPx(), 0f), Offset(size.width - radius.toPx(), 0f), 1.dp.toPx())
@@ -151,7 +209,7 @@ fun JGroupItem(
             )
             AppStyle.Board -> if (separate) Column(
                 Modifier.fillMaxWidth().clip(shape).background(palette.surface)
-                    .then(if (holder != null) Modifier.holder(palette.status(holder).dot, Tokens.Space.xxs).padding(start = 6.dp) else Modifier)
+                    .then(if (holder != null) Modifier.holder(palette.status(holder).dot, Tokens.Space.xxs).padding(start = 6.dp.dense) else Modifier)
                     .border(1.dp, palette.line, shape),
                 content = content,
             ) else Column(
@@ -185,6 +243,15 @@ fun JGroup(modifier: Modifier = Modifier, rows: List<@Composable () -> Unit>) {
  */
 val rowPadding: Dp @Composable get() = when (PersonaTheme.style) { AppStyle.Glass -> 16.dp; AppStyle.Brief -> 0.dp; AppStyle.Board -> 14.dp }
 
+/** The space between a [JRow]'s leading slot and its title. */
+private val RowLeadingGap = 14.dp
+
+/**
+ * Where a [JRow]'s title starts behind a leading icon of the default size. A line hung under such a row (a state and
+ * its time) starts here, so it sits under the title rather than under the icon in every style.
+ */
+val rowTitleStart: Dp @Composable get() = rowPadding + JIconDefaultSize + RowLeadingGap
+
 /** A settings-style row: optional icon, title and subtitle, a value or trailing control, and a chevron when it navigates. */
 @Composable
 fun JRow(
@@ -210,17 +277,22 @@ fun JRow(
     role: Role = Role.Button,
     /** [leadingIcon]'s colour in place of the quiet ink (an extension's named `icon_color`). */
     leadingIconTint: Color? = null,
+    /** The start of the title in the quiet ink, drawn before [title]: a hub conversation title's day and kind ("1101 | Fix | "), so its topic is what the eye finds (iOS `ConversationTitle`). */
+    titleLead: String? = null,
 ) {
     val palette = PersonaTheme.palette
     RowFrame(modifier, onClick, onLongClick, null, enabled, selected, value, trailing, chevron, changingValue, role) {
-        if (leading != null) { leading(); Spacer(Modifier.width(14.dp)) }
+        if (leading != null) { leading(); Spacer(Modifier.width(RowLeadingGap)) }
         else if (leadingIcon != null) {
             JIcon(leadingIcon, null, size = 22.dp, tint = if (destructive) palette.danger.dot else leadingIconTint ?: palette.ink2, decorative = true)
-            Spacer(Modifier.width(16.dp))
+            Spacer(Modifier.width(16.dp.dense))
         }
         Column(Modifier.weight(1f)) {
             val titleText: @Composable (Modifier) -> Unit = { m ->
-                Text(title, m, style = PersonaTheme.type.body, color = if (destructive) palette.danger.text else palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                val ink = if (destructive) palette.danger.text else palette.ink
+                if (titleLead == null) Text(title, m, style = PersonaTheme.type.body, color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                else Text(buildAnnotatedString { withStyle(SpanStyle(color = palette.ink3)) { append(titleLead) }; append(title) }, m,
+                    style = PersonaTheme.type.body, color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             if (titleAccessory == null) titleText(Modifier)
             else Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
@@ -281,18 +353,18 @@ private fun RowFrame(
             .then(if (drawer) Modifier.clip(RoundedCornerShape(Tokens.Radius.control)).background(if (selected) palette.sunken else Color.Transparent) else Modifier.selectedRow(selected))
             .onSecondaryClick(onLongClick)
             .then(if (onClick != null || onLongClick != null) Modifier.combinedClickable(enabled = enabled, role = role, onClickLabel = onClickLabel, onClick = onClick ?: {}, onLongClick = onLongClick) else Modifier)
-            .stableAlpha(if (enabled) 1f else 0.45f).padding(horizontal = if (drawer) Tokens.Space.m else rowPadding, vertical = if (drawer) Tokens.Space.xs else 10.dp),
+            .stableAlpha(if (enabled) 1f else 0.45f).padding(horizontal = if (drawer) Tokens.Space.m else rowPadding, vertical = if (drawer) Tokens.Space.xs else 10.dp.dense),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         content()
         value?.let {
-            Spacer(Modifier.width(10.dp))
+            Spacer(Modifier.width(10.dp.dense))
             val valueStyle = if (style == AppStyle.Board) PersonaTheme.type.micro.copy(fontSize = androidx.compose.ui.unit.TextUnit(14f, androidx.compose.ui.unit.TextUnitType.Sp)) else PersonaTheme.type.callout
             if (changingValue) JChangingText(it, style = valueStyle, color = palette.ink3, modifier = Modifier.widthIn(max = 180.dp))
             else Text(it, style = valueStyle, color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 180.dp))
         }
-        trailing?.let { Spacer(Modifier.width(10.dp)); it() }
-        if (chevron) { Spacer(Modifier.width(6.dp)); JIcon(PhIcons.CaretRight, null, size = 16.dp, tint = palette.ink3) }
+        trailing?.let { Spacer(Modifier.width(10.dp.dense)); it() }
+        if (chevron) { Spacer(Modifier.width(6.dp.dense)); JIcon(PhIcons.CaretRight, null, size = 16.dp, tint = palette.ink3) }
     }
 }
 
@@ -340,13 +412,17 @@ fun JCard(
             modifier.fillMaxWidth().clip(shape).background(palette.surface)
                 .then(if (status != null) Modifier.holder(palette.status(status).dot, Tokens.Space.xxs) else Modifier)
                 .border(1.dp, palette.line, shape).then(click)
-                .padding(start = if (status != null) 6.dp + padding else padding, end = padding, top = padding, bottom = padding),
+                .padding(start = if (status != null) 6.dp.dense + padding else padding, end = padding, top = padding, bottom = padding),
             content = content,
         )
     }
 }
 
-/** A notice inside a page (connection lost, permission needed). [status] picks the tone. */
+/**
+ * A notice inside a page (connection lost, permission needed). [status] picks the tone. [inlineAction] puts the action
+ * at the end of the text's line as a text button (a one-line notice over a list: "1 more waiting on you · Show all",
+ * #3740) instead of a button under the text.
+ */
 @Composable
 fun JNotice(
     text: String,
@@ -356,23 +432,32 @@ fun JNotice(
     icon: PhIcon = PhIcons.Info,
     actionLabel: String? = null,
     onAction: (() -> Unit)? = null,
+    inlineAction: Boolean = false,
 ) {
     val palette = PersonaTheme.palette
     val tone = palette.status(status)
-    JCard(modifier, status = status, padding = 16.dp) {
-        Row(verticalAlignment = Alignment.Top) {
-            JIcon(icon, null, size = 20.dp, tint = if (PersonaTheme.style == AppStyle.Brief) palette.ink else tone.dot, modifier = Modifier.padding(top = 2.dp))
-            Spacer(Modifier.width(12.dp))
+    val action = if (actionLabel != null && onAction != null) actionLabel to onAction else null
+    JCard(modifier, status = status, padding = if (inlineAction) NoticeTokens.inlinePadding else 16.dp) {
+        Row(verticalAlignment = if (inlineAction) Alignment.CenterVertically else Alignment.Top) {
+            JIcon(icon, null, size = 20.dp, tint = if (PersonaTheme.style == AppStyle.Brief) palette.ink else tone.dot,
+                modifier = if (inlineAction) Modifier else Modifier.padding(top = 2.dp.dense))
+            Spacer(Modifier.width(12.dp.dense))
             Column(Modifier.weight(1f)) {
                 title?.let { Text(it, style = PersonaTheme.type.headline, color = palette.ink) }
                 Text(text, style = PersonaTheme.type.callout, color = palette.ink2)
-                if (actionLabel != null && onAction != null) {
-                    Spacer(Modifier.height(10.dp))
-                    JButton(actionLabel, onAction, kind = JButtonKind.Secondary, size = JButtonSize.Medium)
+                if (action != null && !inlineAction) {
+                    Spacer(Modifier.height(10.dp.dense))
+                    JButton(action.first, action.second, kind = JButtonKind.Secondary, size = JButtonSize.Medium)
                 }
             }
+            if (action != null && inlineAction) JTextButton(action.first, action.second)
         }
     }
+}
+
+/** A [JNotice] whose action sits on its line ([JNotice] `inlineAction`): less padding above and below, the text button's own height filling it. */
+object NoticeTokens {
+    val inlinePadding = 12.dp
 }
 
 @Composable
@@ -384,29 +469,32 @@ fun JEmptyState(
     action: (@Composable () -> Unit)? = null,
     /** A named colour for the icon and its well (an extension's `icon_color`); none: the quiet ink. */
     iconHue: JHue? = null,
+    /** Drawn where the icon goes, in its place (an assistant's monogram, [JAssistantOffline]). */
+    leading: (@Composable () -> Unit)? = null,
 ) {
     val palette = PersonaTheme.palette
-    Column(modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 40.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        icon?.let {
+    Column(modifier.fillMaxWidth().padding(horizontal = 32.dp.dense, vertical = 40.dp.dense), horizontalAlignment = Alignment.CenterHorizontally) {
+        if (leading != null) { leading(); Spacer(Modifier.height(16.dp.dense)) }
+        else icon?.let {
             val hue = iconHue?.let { h -> palette.hue(h) }
             Box(
-                Modifier.size(64.dp).clip(if (PersonaTheme.style == AppStyle.Board) RoundedCornerShape(12.dp) else CircleShape).background(hue?.tint ?: palette.surfaceStrong),
+                Modifier.size(64.dp).clip(if (PersonaTheme.style == AppStyle.Board) RoundedCornerShape(12.dp.corner) else CircleShape).background(hue?.tint ?: palette.surfaceStrong),
                 contentAlignment = Alignment.Center,
             ) { JIcon(it, null, size = 28.dp, tint = hue?.dot ?: palette.ink2, decorative = true) }
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(16.dp.dense))
         }
         Text(title, style = PersonaTheme.type.title, color = palette.ink, textAlign = TextAlign.Center)
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(6.dp.dense))
         Text(description, style = PersonaTheme.type.callout, color = palette.ink2, textAlign = TextAlign.Center)
-        action?.let { Spacer(Modifier.height(18.dp)); it() }
+        action?.let { Spacer(Modifier.height(18.dp.dense)); it() }
     }
 }
 
 @Composable
 fun JLoading(modifier: Modifier = Modifier, text: String? = null) {
-    Column(modifier.fillMaxWidth().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(modifier.fillMaxWidth().padding(32.dp.dense), horizontalAlignment = Alignment.CenterHorizontally) {
         JSpinner(Modifier.size(28.dp))
-        text?.let { Spacer(Modifier.height(12.dp)); Text(it, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2) }
+        text?.let { Spacer(Modifier.height(12.dp.dense)); Text(it, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2) }
     }
 }
 
@@ -446,7 +534,7 @@ fun JAvatar(
             val color = badgeColor ?: if (style == AppStyle.Brief) palette.ink else palette.accent
             Box(
                 Modifier.align(Alignment.BottomEnd).offset(3.dp, 3.dp).size(size * 0.45f).clip(if (style == AppStyle.Board) RoundedCornerShape(4.dp) else CircleShape)
-                    .background(palette.background).padding(2.dp).clip(if (style == AppStyle.Board) RoundedCornerShape(3.dp) else CircleShape).background(color),
+                    .background(palette.background).padding(2.dp.dense).clip(if (style == AppStyle.Board) RoundedCornerShape(3.dp) else CircleShape).background(color),
                 contentAlignment = Alignment.Center,
             ) { JIcon(it, null, size = size * 0.26f, tint = if (style == AppStyle.Brief) palette.background else Color.White, selected = true) }
         }
@@ -487,10 +575,10 @@ fun JCodeBlock(
     header: (@Composable () -> Unit)? = null,
 ) {
     val palette = PersonaTheme.palette
-    val shape = RoundedCornerShape(if (PersonaTheme.style == AppStyle.Board) 6.dp else 14.dp)
+    val shape = RoundedCornerShape(if (PersonaTheme.style == AppStyle.Board) 6.dp.corner else 14.dp.corner)
     val box = Modifier.fillMaxWidth().clip(shape).background(if (PersonaTheme.style == AppStyle.Brief) palette.background else palette.sunken)
         .then(if (PersonaTheme.style == AppStyle.Brief) Modifier.border(1.dp, palette.line, shape) else Modifier)
-    val inset = 14.dp
+    val inset = 14.dp.dense
     val text: @Composable (Modifier) -> Unit = { m ->
         SelectionContainer {
             Text(

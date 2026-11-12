@@ -123,6 +123,12 @@ func (b *inboxBook) stored(it *InboxItem) {
 		it.Chain = synthesizedChain(b.userLang(), it)
 		it.ChainSeq = len(it.Chain)
 	}
+	// Loading a previously linked item is not a new message. Resume the process-local signal cursor at the
+	// stored snapshot; new batches collected after loading still change Last and reach the supervisor.
+	if a := it.Agent; a != nil && a.TodoID != "" {
+		_, a.signaled = receivedSince(it, 0, false)
+		a.signaledOf = it.Last
+	}
 }
 
 // purgeInboxHistory deletes the items done more than inboxKeepHistory ago: at load, then from the rounds at most every
@@ -254,7 +260,8 @@ func (s *Service) inboxChanged(ctx context.Context, items []assistantwire.InboxC
 }
 
 // inboxTeller is tellInboxNeedsYou's state, under inboxBook.needsYouMu: a teller runs (telling), and the inbox changed
-// since it last counted (again).
+// since it last counted (again). A teller reads s.hub only under needsYouMu too, so a test can swap the hub while one
+// runs (setHub); nothing else changes it after New.
 type inboxTeller struct{ telling, again bool }
 
 // tellInboxNeedsYou tells the hub how many open items are in "Needs you" (EventInboxNeedsYou), for the roster's
@@ -276,6 +283,7 @@ func (s *Service) tellInboxNeedsYou() {
 		return
 	}
 	b.needsYou.telling = true
+	hub := s.hub
 	b.needsYouMu.Unlock()
 	go func() {
 		for {
@@ -287,7 +295,7 @@ func (s *Service) tellInboxNeedsYou() {
 				}
 			}
 			b.mu.Unlock()
-			_ = s.hub.Tell(assistantwire.EventInboxNeedsYou, assistantwire.InboxNeedsYou{Count: n}) // an error: not connected, told at the handshake
+			_ = hub.Tell(assistantwire.EventInboxNeedsYou, assistantwire.InboxNeedsYou{Count: n}) // an error: not connected, told at the handshake
 			b.needsYouMu.Lock()
 			if !b.needsYou.again {
 				b.needsYou.telling = false
@@ -295,6 +303,7 @@ func (s *Service) tellInboxNeedsYou() {
 				return
 			}
 			b.needsYou.again = false
+			hub = s.hub
 			b.needsYouMu.Unlock()
 		}
 	}()

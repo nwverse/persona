@@ -1,3 +1,4 @@
+import PersonaKit
 import SwiftUI
 
 // The row above the assistant's composer on iPhone, iPad and Mac (#3393, docs/assistant/unified-entry.md "Needs you and In
@@ -143,12 +144,14 @@ nonisolated enum AssistantEntries {
 
     /// Splits a conversation's things into the two entries (the web's `assistantEntries`). `main`: the main
     /// conversation's id (it watches every task and the Agents opened by hand); `messageWaits`: whether a message card
-    /// still waits for Send (the app adds the inbox's word and Later); `restored`: tasks brought back from shelved;
+    /// still waits for Send (the app adds the inbox's word and Later); `decisionHidden`: a decision put off with Later or
+    /// taken out with Don't handle (the web's `deferred` and `dismissal_id`); `restored`: tasks brought back from shelved;
     /// `going`: the agents going on (`AppModel.goingAgents`), else read from `sessions`, which then must be every session.
     @MainActor static func split(conversation: String, main: String?, group: String = "", todos: [TodoItem], sessions: [Session],
                                  interactions: [Interaction], plans: [String: TaskPlan], feed: [FeedItem], now: Date = .now,
                                  restored: [String: Date] = [:], going: [DockAgent]? = nil,
-                                 messageWaits: (FeedItem) -> Bool = AssistantEntries.messageWaits) -> Result {
+                                 messageWaits: (FeedItem) -> Bool = AssistantEntries.messageWaits,
+                                 decisionHidden: (TodoItem) -> Bool = { _ in false }) -> Result {
         let lookup = TodosLogic.makeSessionLookup(sessions)
         let isMain = !(main ?? "").isEmpty && main == conversation
         // A function, not a closure value: Swift 6.2.4 (Xcode 26.3) rejects capturing a closure value in the `listed`
@@ -178,6 +181,8 @@ nonisolated enum AssistantEntries {
         var folded = Set<String>()
         var asking: [(row: Row, first: Date?)] = []
         var deciding: [Ranked] = [], open: [Ranked] = [], shelved: [Ranked] = []
+        // failed starts whose work finished in a related to-do: closed, as the To-dos page has them (#3713)
+        let superseded = TodoTriageLogic.supersededFailedStarts(todos)
         for todo in todos {
             guard let when = at[todo.id] else { continue }
             let status = status(todo, lookup: lookup, plans: plans)
@@ -185,11 +190,16 @@ nonisolated enum AssistantEntries {
             let asks = active.flatMap { asksOf[pair($0.machineID, $0.sessionID)] ?? [] }
             let row = Row.task(id: todo.id, status: status, agents: active.count)
             let listed = { folded.formUnion(active.map { pair($0.machineID, $0.sessionID) }) }
-            let bucket = TodoTriageLogic.bucket(todo, lookup: lookup, now: now, restoredAt: restored[todo.id])
+            let bucket = TodoTriageLogic.bucket(todo, lookup: lookup, now: now, restoredAt: restored[todo.id],
+                                                superseded: superseded.contains(todo.id))
             // a failed start carries done_at (the hub ends it), yet it is the user's to retry while its bucket says open
             let waits = status == .failed ? bucket == .open : todo.doneAt == nil && (status == .needsYou || status == .interrupted)
             if !asks.isEmpty { asking.append((row, asks.map { $0.createdAt ?? .distantPast }.min())); listed() }
-            else if waits || awaitsDecision(todo) { deciding.append((row, rank(todo, status), when)); listed() }
+            else if waits || awaitsDecision(todo) {
+                // Only the review decision is put off or dismissed (Later / Don't handle); a live Agent question keeps its home.
+                if !(status != .needsYou && awaitsDecision(todo) && decisionHidden(todo)) { deciding.append((row, rank(todo, status), when)) }
+                listed()
+            }
             else if bucket == .open { open.append((row, rank(todo, status), when)); listed() }
             else if bucket == .shelved { shelved.append((row, rank(todo, status), when)); listed() }
         }
@@ -253,10 +263,22 @@ nonisolated struct ActionTrayContent: Equatable, Sendable {
         }
     }
 
+    /// Needs You's rows from one supervising conversation (docs/apple/ios.md "Background rounds").
+    struct NeedsYouGroup: Equatable, Sendable, Identifiable {
+        /// The supervising conversation's id; "" for the conversation's own group.
+        var id: String
+        /// Its header; nil for the conversation's own group, which comes first.
+        var title: String?
+        var rows: [Row]
+    }
+
     var needsYou: [Row] = []
     var running: [Row] = []
     /// Folded under In Progress, not counted.
     var shelved: [AssistantEntries.Row] = []
+    /// Needs You's rows grouped by supervising conversation (`grouped`); empty when the tray is one list, as it always
+    /// was. Grouping never changes the rows or the count.
+    var needsYouGroups: [NeedsYouGroup] = []
 
     init() {}
 
@@ -275,6 +297,35 @@ nonisolated struct ActionTrayContent: Equatable, Sendable {
 
     /// The number its entry shows: its rows (shelved ones are not counted).
     func count(_ tray: ActionTray) -> Int { rows(tray).count }
+
+    /// Groups Needs You (`grouped`) when `enabled` (the main conversation folding background rounds); otherwise one list.
+    mutating func groupNeedsYou(_ enabled: Bool, conversation: String, origin: (String) -> String?, title: (String) -> String?) {
+        needsYouGroups = enabled ? Self.grouped(needsYou, conversation: conversation, origin: origin, title: title) : []
+    }
+
+    /// Needs You's rows by the conversation that supervises each task (its `origin`), the conversation's own group first
+    /// and the others in the order their first row comes. Rows that are not tasks (asks, agents, plans, messages) and
+    /// tasks without another origin are the conversation's own. Within a group rows keep their order. Empty with only
+    /// one group: the tray then looks as it always did. `title` names another conversation; "Another conversation"
+    /// when it has no name.
+    static func grouped(_ rows: [Row], conversation: String, origin: (String) -> String?,
+                        title: (String) -> String?) -> [NeedsYouGroup] {
+        var order: [String] = [""]
+        var byGroup: [String: [Row]] = [:]
+        for row in rows {
+            var group = ""
+            if case .entry(.task(let id, _, _)) = row, let o = origin(id), !o.isEmpty, o != conversation { group = o }
+            if byGroup[group] == nil, !group.isEmpty { order.append(group) }
+            byGroup[group, default: []].append(row)
+        }
+        let ids = order.filter { byGroup[$0]?.isEmpty == false }
+        guard ids.count > 1 else { return [] }
+        return ids.map { id -> NeedsYouGroup in
+            guard !id.isEmpty else { return NeedsYouGroup(id: id, title: nil, rows: byGroup[id] ?? []) }
+            let name = title(id)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return NeedsYouGroup(id: id, title: name.isEmpty ? String(localized: "Another conversation") : name, rows: byGroup[id] ?? [])
+        }
+    }
 }
 
 extension ActionTray {
@@ -304,19 +355,37 @@ struct AssistantActionBar: View {
     /// The open tray's rows, measured: the tray is as tall as they are, up to its cap.
     @State private var listHeight: CGFloat = 0
     @State private var removing: TodoItem?
+    /// Needs You's rows opened in place into their answerable card (`Row.id`), and the ones whose card was drawn once:
+    /// a card stays in the tree (folded to nothing) after it closes, so a PlanCard's remember choice and a MessageCard's
+    /// edit are still there when the row opens again.
+    @State private var expanded: Set<String> = []
+    @State private var drawn: Set<String> = []
+    /// What the user picked on each plan row's card; the tray draws Start, Edit and Don't Start of the open one under its
+    /// list (`PlanActions`), so a tall card never scrolls them away.
+    @State private var planChoices: [String: PlanChoices] = [:]
+    @Environment(\.dynamicTypeSize) private var typeSize
     private var store: TasksStore { .shared }
+
+    /// The entries side by side; at the accessibility text sizes they go on to the next line when they don't fit, each
+    /// whole (`docs/design/DESIGN_SYSTEM.md` 1.2 rule 3): side by side they made the row, and with it the whole chat
+    /// page, wider than the screen, cut off at both edges (#5702). The layout changes, not the views.
+    private var entryRow: AnyLayout {
+        typeSize.isAccessibilitySize ? AnyLayout(FlowLayoutRow(spacing: Theme.Space.s))
+            : AnyLayout(HStackLayout(spacing: Theme.Space.s))
+    }
 
     var body: some View {
         let content = Self.content(conversation, key: key)
+        let row = entryRow
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             if let open {
                 tray(open, content)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            HStack(spacing: Theme.Space.s) {
+            row {
                 ForEach(ActionTray.allCases) { entry($0, count: content.count($0)) }
                 if ComputerActivityPill.shows(computer) {
-                    ComputerActivityPill(activity: computer)
+                    ComputerActivityPill(activity: computer).background(Theme.pageBackground, in: .capsule) // as the entries
                 }
             }
             .padding(.horizontal, Theme.Space.xs)
@@ -325,18 +394,28 @@ struct AssistantActionBar: View {
             #endif
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        #if !os(macOS)
-        // On the whole bar, after its full-width frame (#3643): as wide as the chat, and over whatever is topmost, the
-        // capsules or the open tray. On the capsule row it was as wide as the capsules and under the tray.
-        .dockChatFade()
-        // Drawn under the question and the @ list over it in the footer, so the fade reaches only the chat.
-        .zIndex(-1)
-        #endif
-        .onChange(of: conversation) { open = nil }
+        // No fade of its own: the chat runs on behind the bar and fades out there (`FooterFog`, #3696).
+        .onChange(of: conversation) { open = nil; expanded = []; drawn = []; planChoices = [:] }
+        .onChange(of: open) { if open == nil { expanded = []; drawn = []; planChoices = [:] } }
         #if DEBUG
         .onAppear {
             if let value = UserDefaults.standard.string(forKey: "showActionTray"), let tray = ActionTray(rawValue: value) {
                 open = tray
+            }
+        }
+        // -openNeedsRow <Row.id prefix, e.g. plan: or task:>: opens the tray's first row of that kind in place, once the
+        // tasks and plans it lists have come in.
+        .task {
+            guard let prefix = UserDefaults.standard.string(forKey: "openNeedsRow") else { return }
+            for _ in 0..<60 {
+                if let first = Self.content(conversation, key: key).needsYou.map(\.id).first(where: { $0.hasPrefix(prefix) }) {
+                    open = .needsYou
+                    drawn.insert(first)
+                    expanded.insert(first)
+                    planChoices[first] = PlanChoices()
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(500))
             }
         }
         #endif
@@ -358,11 +437,21 @@ struct AssistantActionBar: View {
             feed: store.feed(conversation), restored: TodoRestores.load(), going: model.goingAgents,
             // the hub's fields, the inbox's word on the item, and Later
             messageWaits: { item in
-                guard item.kind == .message, let id = item.ref, !store.laterMessages.contains(id) else { return false }
+                guard item.kind == .message, let id = item.ref, !store.laterMessages.contains(item.id) else { return false }
                 return store.messageState(item, itemID: id) == .open
-            })
+            },
+            decisionHidden: { store.decisionHidden($0) })
         let asks = (key.map { model.interactions(for: $0) } ?? []).sorted { ($0.createdAt ?? .distantPast) < ($1.createdAt ?? .distantPast) }
-        return ActionTrayContent(entries, asks: asks.map { .init(id: $0.id, title: $0.askLine(includeToolName: false) ?? $0.title) })
+        var content = ActionTrayContent(entries, asks: asks.map { .init(id: $0.id, title: $0.askLine(includeToolName: false) ?? $0.title) })
+        // The main conversation, while it folds background rounds, groups Needs You by supervising conversation.
+        content.groupNeedsYou(conversation == model.assistantMain?.sessionID && model.mainBackgroundFolded,
+                              conversation: conversation, origin: { store.todos[$0]?.origin },
+                              title: { id in
+                                  if let name = model.directionNames[id] { return name }
+                                  let title = model.assistantConfig?.conversations.first(where: { $0.sessionID == id })?.title
+                                  return title == "Claude Code" ? nil : title
+                              })
+        return content
     }
 
     private func entry(_ tray: ActionTray, count: Int) -> some View {
@@ -375,9 +464,12 @@ struct AssistantActionBar: View {
         } label: {
             HStack(spacing: Theme.Space.xs) {
                 Text(tray.title)
-                if count > 0 { Text(count > 99 ? "99+" : "\(count)").monospacedDigit() }
+                if let text = CountBadge.text(count) { Text(text).monospacedDigit() }
             }
             .dockCapsule(look)
+            // On the page under its see-through fill: the chat fading out behind the row does not read through the
+            // words (#3696); with nothing behind, the same pixels as before.
+            .background(Theme.pageBackground, in: .capsule)
             .fixedSize()
         }
         .buttonStyle(.plain)
@@ -396,7 +488,10 @@ struct AssistantActionBar: View {
                     open = nil
                     store.showBoard = true
                 } label: {
+                    // A finger's height around the capsule (#5392).
                     Text("All").dockCapsule().fixedSize()
+                        .tapTargetHeight()
+                        .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("action-tray.board")
@@ -405,14 +500,15 @@ struct AssistantActionBar: View {
                 } label: {
                     ThemedIcon(Theme.Icon.close).font(Theme.Font.labelStrong).foregroundStyle(.secondary)
                         .scaledFrame(width: Theme.Size.badge, height: Theme.Size.badge)
-                        .contentShape(.circle)
+                        .tapTargetFrame()
+                        .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Close")
                 .accessibilityIdentifier("action-tray.close")
             }
-            .padding(.horizontal, Theme.Space.m)
-            .padding(.vertical, Theme.Space.s)
+            // No vertical padding: the 44 pt targets are the row's height, as the capsule and its padding were.
+            .padding(.leading, Theme.Space.m)
             if rows.isEmpty && (tray == .needsYou || content.shelved.isEmpty) {
                 Text(tray.empty).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(2)
                     .padding(.horizontal, Theme.Space.m)
@@ -420,16 +516,43 @@ struct AssistantActionBar: View {
                     .accessibilityIdentifier("action-tray.empty")
             } else {
                 // As tall as its rows; past the cap they scroll inside the tray, the bar stays where it is.
+                ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
-                        ForEach(rows) { row($0) }
+                        if tray == .needsYou, !content.needsYouGroups.isEmpty {
+                            ForEach(content.needsYouGroups) { group in
+                                if let title = group.title {
+                                    // The tray's own header style: a group reads as a section of the tray.
+                                    Text(title).font(Theme.Font.sectionHeader).foregroundStyle(.secondary).lineLimit(1)
+                                        .padding(.horizontal, Theme.Space.m)
+                                        .padding(.top, Theme.Space.s)
+                                        .accessibilityAddTraits(.isHeader)
+                                        .accessibilityIdentifier("action-tray.group")
+                                }
+                                ForEach(group.rows) { row($0) }
+                            }
+                        } else {
+                            ForEach(rows) { row($0) }
+                        }
                         if tray == .running, !content.shelved.isEmpty { shelvedLine(content.shelved.count) }
                     }
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listHeight = $0 }
                 }
                 .scrollBounceBehavior(.basedOnSize)
-                .frame(height: min(listHeight, Theme.Size.box280))
+                // A row that opened in place scrolls to the top of the tray: its card is taller than the tray.
+                .onChange(of: expanded) { old, new in
+                    guard let id = new.subtracting(old).first else { return }
+                    withAnimation(Theme.Motion.state) { proxy.scrollTo(id, anchor: .top) }
+                }
+                .frame(height: min(listHeight, expanded.isEmpty ? Theme.Size.box280 : Theme.Size.box380))
+                }
                 .padding(.bottom, Theme.Space.xs)
+                if tray == .needsYou, let (plan, choices) = pinnedPlan(rows) {
+                    PlanActions(plan: plan, choices: choices)
+                        .padding(.horizontal, Theme.Space.l)
+                        .padding(.vertical, Theme.Space.s)
+                        .accessibilityIdentifier("action-tray.plan-actions")
+                }
             }
         }
         .surface(in: .rect(cornerRadius: Theme.Radius.panel, style: .continuous))
@@ -444,7 +567,7 @@ struct AssistantActionBar: View {
             Button {
                 withAnimation(Theme.Motion.state) { open = nil }
             } label: {
-                line(title: ask.title, detail: StateName.needsYou.text, waiting: true) {
+                line(title: ask.title, detail: StateName.needsYou.text, tint: AgentState.needsYou.tone.text, trail: .open) {
                     ThemedIcon(Theme.Icon.askFirst).font(Theme.Font.labelStrong).foregroundStyle(AgentState.needsYou.tone.text)
                 }
             }
@@ -455,6 +578,60 @@ struct AssistantActionBar: View {
         }
     }
 
+    /// The open plan whose row is opened (only one is at a time): its buttons stay under the list.
+    private func pinnedPlan(_ rows: [ActionTrayContent.Row]) -> (TaskPlan, PlanChoices)? {
+        for row in rows {
+            guard case .entry(.plan(let id)) = row, expanded.contains("plan:" + id), let choices = planChoices["plan:" + id],
+                  let plan = store.plans[id], plan.state == .open else { continue }
+            return (plan, choices)
+        }
+        return nil
+    }
+
+    /// A Needs You row that opens in place: folded it is a line (mark, words, a chevron), opened it is the card that answers
+    /// it, right under the line. Another row opening does not close it (except a plan, there is one plan bar), and a message or
+    /// brief card drawn once stays in the tree, folded to nothing, so its edit is still there.
+    private func opening<Mark: View, Card: View>(_ id: String, title: String, detail: String, subtitle: String?,
+                                                 @ViewBuilder mark: () -> Mark, @ViewBuilder card: () -> Card) -> some View {
+        let isOpen = expanded.contains(id)
+        return VStack(alignment: .leading, spacing: 0) {
+            Button {
+                Haptics.tap()
+                if !isOpen {
+                    drawn.insert(id)
+                    if id.hasPrefix("plan:"), planChoices[id] == nil { planChoices[id] = PlanChoices() }
+                }
+                withAnimation(Theme.Motion.state) {
+                    if isOpen {
+                        expanded.remove(id)
+                        // a plan card is not kept: its choices are in `planChoices`, and a folded card would go on reading the stores
+                        if id.hasPrefix("plan:") { drawn.remove(id) }
+                    } else {
+                        // one plan at a time: its Start / Edit / Don't Start are the bar under the list, and there is one bar
+                        if id.hasPrefix("plan:") {
+                            for other in expanded where other.hasPrefix("plan:") { expanded.remove(other); drawn.remove(other) }
+                        }
+                        expanded.insert(id)
+                    }
+                }
+            } label: {
+                line(title: title, detail: detail, tint: AgentState.needsYou.tone.text, subtitle: subtitle, trail: isOpen ? .expanded : .folded, mark: mark)
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(isOpen ? String(localized: "Expanded") : String(localized: "Collapsed"))
+            .accessibilityIdentifier(isOpen ? "action-tray.row.open" : "action-tray.row")
+            if drawn.contains(id) {
+                card()
+                    .frame(height: isOpen ? nil : 0, alignment: .top)
+                    .clipped()
+                    .opacity(isOpen ? 1 : 0)
+                    .allowsHitTesting(isOpen)
+                    .accessibilityHidden(!isOpen)
+            }
+        }
+        .id(id)
+    }
+
     @ViewBuilder private func entry(_ row: AssistantEntries.Row) -> some View {
         switch row {
         case .task(let id, let status, let agents):
@@ -462,22 +639,38 @@ struct AssistantActionBar: View {
                 let state = status.taskState
                 let activity = AssistantTrayActivity(sessions: store.sessions(todo))
                 if let ask = todo.openAsk, todo.doneAt == nil {
-                    BriefAcceptRow(row: ask.row(for: todo), group: AppModel.shared.hub?.group ?? "")
-                        .padding(.horizontal, Theme.Space.m)
+                    // an owner decision or a to-do to verify: folded to a line, opened it is its Accept row
+                    let brief = ask.row(for: todo)
+                    opening(row.id, title: todo.title, detail: brief.isDecision ? String(localized: "Decision") : String(localized: "To Verify"),
+                            subtitle: ask.verdict, mark: { TaskMark(state: .needsYou) }) {
+                        BriefAcceptRow(row: brief, group: AppModel.shared.hub?.group ?? "", decision: todo, showsTitle: false)
+                            .padding(.horizontal, Theme.Space.m)
+                    }
                 } else {
+                    let lead = store.leadSession(todo)
                     Button {
                         open = nil
                         store.detailTask = id
                     } label: {
                         line(title: todo.title,
                              detail: activity.isActive && status == .waiting ? StateName.working.text : detail(todo, status: status, agents: agents),
-                             waiting: open == .needsYou, activity: activity) {
+                             tint: tint(status), subtitle: subtitle(todo, status: status, lead: lead, activity: activity),
+                             subtitleTint: status == .failed || status == .interrupted ? Theme.danger : nil,
+                             trail: .open, activity: activity) {
                             if open != .needsYou && (activity.isActive || status == .working) {
                                 WorkingIndicator().accessibilityIdentifier("action-tray.working-mark")
                             } else if status == .waiting {
                                 ThemedIcon(Theme.Icon.backgroundWaiting).font(Theme.Font.labelStrong)
                                     .foregroundStyle(StatusPalette.backgroundWaiting.dot)
                                     .accessibilityIdentifier("action-tray.waiting-mark")
+                            } else if status == .usageLimit {
+                                ThemedIcon(Theme.Icon.backgroundWaiting).font(Theme.Font.labelStrong).foregroundStyle(Theme.caution)
+                                    .accessibilityIdentifier("action-tray.limit-mark")
+                            } else if status == .interrupted {
+                                ThemedIcon(Theme.Icon.infoFilled).font(Theme.Font.labelStrong).foregroundStyle(Theme.danger)
+                                    .accessibilityIdentifier("action-tray.interrupted-mark")
+                            } else if status == .notStarted {
+                                StartingMark().accessibilityIdentifier("action-tray.starting-mark")
                             } else {
                                 TaskMark(state: state)
                             }
@@ -495,7 +688,7 @@ struct AssistantActionBar: View {
             } label: {
                 line(title: agent.title,
                      detail: agent.isWaiting ? StateName.needsYou.text : (agent.backgroundWaiting && !agent.activity.isActive ? StateName.taskWaiting.text : StateName.working.text),
-                     waiting: agent.isWaiting, activity: agent.activity) {
+                     tint: agent.isWaiting ? AgentState.needsYou.tone.text : nil, trail: .open, activity: agent.activity) {
                     if !agent.isWaiting && (agent.activity.isActive || !agent.backgroundWaiting) {
                         WorkingIndicator().accessibilityIdentifier("action-tray.working-mark")
                     } else {
@@ -507,20 +700,28 @@ struct AssistantActionBar: View {
             .buttonStyle(.plain)
             .accessibilityIdentifier("action-tray.agent")
         case .plan(let id):
-            // the plan card itself: Start, Edit and Don't Start are right here
-            if let plan = store.plans[id] {
-                PlanCard(plan: plan)
-                    .padding(.horizontal, Theme.Space.s)
-                    .padding(.bottom, Theme.Space.s)
-                    .accessibilityIdentifier("action-tray.plan")
+            // folded to a line; opened it is the plan card itself: Start, Edit and Don't Start are right there
+            if let plan = store.plans[id], let first = plan.tasks.first {
+                opening(row.id, title: first.title, detail: plan.tasks.count > 1 ? String(localized: "\(plan.tasks.count) tasks") : String(localized: "Plan"),
+                        subtitle: [TaskPlace.machineName(first.machine), first.project].filter { !$0.isEmpty }.joined(separator: " · "),
+                        mark: { ThemedIcon(Theme.Icon.taskPlan).font(Theme.Font.labelStrong).foregroundStyle(Theme.accent) }) {
+                    PlanCard(plan: plan, choices: planChoices[row.id], actionsPinned: planChoices[row.id] != nil)
+                        .padding(.horizontal, Theme.Space.s)
+                        .padding(.bottom, Theme.Space.s)
+                        .accessibilityIdentifier("action-tray.plan")
+                }
             }
         case .message(let feedID, let itemID):
-            // the message card itself: Send, Edit and Later are right here
+            // folded to a line; opened it is the message card itself: Send, Edit and Later are right there
             if let item = store.feed(conversation).first(where: { $0.id == feedID }) {
-                MessageCard(item: item, itemID: itemID)
-                    .padding(.horizontal, Theme.Space.s)
-                    .padding(.bottom, Theme.Space.s)
-                    .accessibilityIdentifier("action-tray.message")
+                opening(row.id, title: [item.sender, item.chat].compactMap { $0?.isEmpty == false ? $0 : nil }.joined(separator: " · "),
+                        detail: String(localized: "Draft Reply"), subtitle: (item.text ?? "").split(separator: "\n").first.map(String.init),
+                        mark: { ThemedIcon(item.source == "mail" ? Theme.Icon.mail : Theme.Icon.groupChat).font(Theme.Font.labelStrong).foregroundStyle(Theme.loop) }) {
+                    MessageCard(item: item, itemID: itemID)
+                        .padding(.horizontal, Theme.Space.s)
+                        .padding(.bottom, Theme.Space.s)
+                        .accessibilityIdentifier("action-tray.message")
+                }
             }
         }
     }
@@ -531,7 +732,7 @@ struct AssistantActionBar: View {
             open = nil
             store.showBoard = true
         } label: {
-            line(title: String(localized: "Shelved"), detail: "\(count)", waiting: false) {
+            line(title: String(localized: "Shelved"), detail: "\(count)", trail: .none) {
                 ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
             }
             .foregroundStyle(.secondary)
@@ -555,8 +756,50 @@ struct AssistantActionBar: View {
         return parts.joined(separator: " · ")
     }
 
-    private func line<Mark: View>(title: String, detail: String, waiting: Bool,
-                                  activity: AssistantTrayActivity = .init(), @ViewBuilder mark: () -> Mark) -> some View {
+    /// A task row's status word colour: red when it needs a retry or a continue, orange on a usage limit, the Needs You
+    /// colour while it waits for the user (and everything in that tray does); nil is secondary.
+    private func tint(_ status: AssistantEntries.Status) -> Color? {
+        switch status {
+        case .failed, .interrupted: Theme.danger
+        case .usageLimit: Theme.cautionText
+        case .needsYou: AgentState.needsYou.tone.text
+        default: open == .needsYou ? AgentState.needsYou.tone.text : nil
+        }
+    }
+
+    /// The row's second line (docs/design/task-cards.md §3.2): why a stopped task stopped and when it goes on, what a
+    /// starting one is doing, what a waiting one waits for, else its last words; nil when there is nothing to add.
+    private func subtitle(_ todo: TodoItem, status: AssistantEntries.Status, lead: Session?, activity: AssistantTrayActivity) -> String? {
+        func one(_ text: String?) -> String? {
+            let t = Fmt.plain(text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return t.isEmpty ? nil : t
+        }
+        switch status {
+        case .usageLimit:
+            let reason = one(lead?.turnError)
+            let when = lead?.usageLimitWhen()
+            return [reason, when].compactMap { $0 }.joined(separator: " · ").nilIfEmpty
+        case .interrupted:
+            return one(lead?.turnError.flatMap { TurnErrorReason.of($0) ?? $0 })
+        case .notStarted:
+            return String(localized: "Starting the agent")
+        case .failed:
+            return one(store.startFailure(todo))
+        case .needsYou:
+            return TaskAsk.waitingLine(store.interactions(todo))
+        case .working, .waiting:
+            return activity.isActive ? nil : one(TaskNow(lead: lead, working: status == .working)?.text)
+        case .unread, .done, .followUp:
+            return one(lead?.lastText)
+        }
+    }
+
+    /// What follows a row's words on the right.
+    private enum Trail { case none, open, folded, expanded }
+
+    private func line<Mark: View>(title: String, detail: String, tint: Color? = nil, subtitle: String? = nil, subtitleTint: Color? = nil,
+                                  trail: Trail = .open, activity: AssistantTrayActivity = .init(),
+                                  @ViewBuilder mark: () -> Mark) -> some View {
         HStack(spacing: Theme.Space.s) {
             mark().scaledFrame(width: Theme.Size.markM)
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
@@ -564,11 +807,21 @@ struct AssistantActionBar: View {
                     Text(title).font(Theme.Font.body).lineLimit(1)
                     Spacer(minLength: Theme.Space.s)
                     Text(detail).font(Theme.Font.caption).lineLimit(1).fixedSize()
-                        .foregroundStyle(waiting ? AnyShapeStyle(AgentState.needsYou.tone.text) : AnyShapeStyle(.secondary))
+                        .foregroundStyle(tint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.secondary))
+                }
+                if let subtitle {
+                    Text(subtitle).font(Theme.Font.caption).lineLimit(1)
+                        .foregroundStyle(subtitleTint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.secondary))
+                        .accessibilityIdentifier("action-tray.subtitle")
                 }
                 if activity.isActive {
                     AssistantTrayActivityLine(activity: activity)
                 }
+            }
+            if trail != .none {
+                ThemedIcon(trail == .expanded ? Theme.Icon.expand : Theme.Icon.disclosure)
+                    .font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
             }
         }
         .padding(.horizontal, Theme.Space.m)
@@ -576,6 +829,20 @@ struct AssistantActionBar: View {
         .contentShape(.rect)
         .accessibilityElement(children: .combine)
     }
+}
+
+/// A task whose Agent is on its way up: a hollow circle with the caution dot in it.
+private struct StartingMark: View {
+    var body: some View {
+        Circle().strokeBorder(.secondary, lineWidth: Theme.Size.lineMedium)
+            .scaledFrame(width: Theme.Size.dotL, height: Theme.Size.dotL)
+            .overlay { Circle().fill(Theme.caution).scaledFrame(width: Theme.Size.dotXS, height: Theme.Size.dotXS) }
+            .accessibilityLabel(String(localized: "Starting [Task Views d14c3a]"))
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }
 
 extension AssistantTrayActivity {

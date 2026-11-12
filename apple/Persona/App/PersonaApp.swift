@@ -74,10 +74,16 @@ struct PersonaApp: App {
         .onChange(of: phase, initial: true) { old, new in
             if new == .active {
                 model.retryRegistry() // launched in the background before the first unlock: the pairing reads now
+                PushRegistrar.shared.foreground() // notifications allowed in Settings since a denial: register now (#1861)
                 model.resumeLinks()
                 model.refreshExtensionSurfaces()
                 // Rolling recordings expire even when no segment arrives and the recording page stays closed.
                 RecordingRollingKeeper.shared.schedule()
+                // All-day recording: what waited while the app was away (a model can download now, a 403 pause ends), and
+                // the audio past its retention.
+                RecordingDayTranscriber.shared.foreground()
+                RecordingDaySync.shared.foreground()
+                RecordingDayKeeper.shared.schedule()
                 LiveActivityController.shared.look(model.fleetLook) { model.fleetFaces }
                 // The home screen icon in step with the Avatar and Light & Dark (a scheme from a launch argument, a switch the system
                 // cut short, the old App Icon setting); nothing happens when it already is, so no alert.
@@ -99,6 +105,14 @@ struct PersonaApp: App {
                 // Closed, the hub knows the phone is away and wakes it with a silent push instead; and nothing opens it
                 // again until the app is back (the network returning, a refresh ending: LiveConnection.suspended).
                 model.suspendLinks()
+                // All-day recording: a run or request in progress finishes only inside a grant of background time, and a
+                // model download a run started in front stops.
+                RecordingDayTranscriber.shared.background()
+                RecordingDaySync.shared.background()
+                #if os(iOS)
+                QuickAction.publish() // the home screen menu with the conversations' titles as they are now (#2191)
+                RecordingDayCatchUp.scheduleIfNeeded() // transcribe and upload the day's backlog while charging
+                #endif
             }
         }
         #if os(visionOS)
@@ -109,6 +123,13 @@ struct PersonaApp: App {
 }
 
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+    #if os(iOS)
+    /// Upright on an iPhone, but for the live screen's page (`AppOrientation`, #3075).
+    func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+        AppOrientation.mask
+    }
+    #endif
+
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         ErrorReports.installExceptionHandler(queue: .shared) // first: a crash while launching is reported too (#5621)
         _ = KeyboardState.shared // watches the keyboard from the start: a card may come while it is already up
@@ -178,6 +199,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         }
         #if os(iOS) || os(visionOS)
         PagePerf.runIfAsked()
+        PagePerf.offsetIfAsked()
         FrameProbe.listenIfAsked()
         #endif
         // Every tab a UI test can ask for. One it asks for and this does not know leaves the tab the last run saved
@@ -227,6 +249,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         if let kind = d.string(forKey: "showTestNotification").flatMap(InteractionKind.init(rawValue:)) {
             let place = d.string(forKey: "showTestNotificationIn")
             Task { await AppDelegate.postTestNotification(kind, in: place) }
+        } else if d.string(forKey: "showTestNotification") == "decide" {
+            Task { await AppDelegate.postDecideTestNotification() }
         } else if let sample = d.string(forKey: "showTestNotification"),
                   ["extension-background", "extension-foreground", "extension-tap"].contains(sample) {
             Task { await AppDelegate.postExtensionTestNotification(sample) }
@@ -251,11 +275,26 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let automation = false
         #endif
         PhoneRecordingReceiver.shared.start()
+        // All-day recording (docs/assistant/day-recap.md): its lanes follow the day store before WatchConnectivity can
+        // deliver a chunk, and the catch-up task is registered before launching finishes, as the system requires.
+        RecordingDayTranscriber.shared.start()
+        RecordingDaySync.shared.start()
+        #if os(iOS)
+        RecordingDayCatchUp.register()
+        #endif
         #if DEBUG
         RecordingSamples.showMeetingIfAsked() // `-showMeetingSample recording|paused|interrupted|minutes|pending`
+        #if os(iOS)
+        Task { await RecordingSamples.installDaySampleIfAsked() } // `-showDaySample today|paused|recap|pending|failed`
+        #endif
+        #if os(iOS)
+        // `-openDayCatchUp YES`: runs the all-day catch-up now (the simulator never runs background tasks).
+        if UserDefaults.standard.bool(forKey: "openDayCatchUp") { Task { _ = await RecordingDayCatchUp.catchUp() } }
+        #endif
         #endif
         WatchSync.shared.activate()
         AppModel.shared.start()
+        AppIconBadgeWatcher.shared.start(AppModel.shared)
         LiveActivityController.shared.start()
         if !automation { PushRegistrar.shared.registerIfPossible() }
         return true
@@ -373,6 +412,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let ixID = info["interaction_id"] as? String
         let extensionNotice = info["extension_notification"] != nil
         let pair = PairPush(info) // a pairing receipt (#4199); nil from an older hub: a plain notification
+        let decision = NotificationActions.decision(action: action, info: info) // Take Recommendation on a decision's push
+        #if os(iOS)
+        let pushedRecording = MeetingTalk.recordingID(info) // a meeting's minutes (#3862 phase 6)
+        #endif
         let noteID = response.notification.request.identifier
         let event = ExtensionNotificationEvent(id: response.notification.request.identifier, info: info,
                                               category: response.notification.request.content.categoryIdentifier,
@@ -405,11 +448,26 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                     AppDelegate.inBackground("reply-from-notification", done: done) { await NotificationActions.sendReply(key, text: reply) }
                     return
                 }
+                if let decision {
+                    // Take Recommendation on a decision's push (#2056): answered in the background, the app stays where it is.
+                    AppDelegate.inBackground("take-recommendation", done: done) { await NotificationActions.take(decision, group: key?.group ?? ref?.group) }
+                    return
+                }
                 if let ixID, let resolution = NotificationActions.resolution(action: action, text: text) {
                     // A button on the notification: settle it in the background, the app stays where it is.
                     AppDelegate.resolveFromNotification(ixID, group: key?.group ?? ref?.group, resolution, action: action, done: done)
                     return
                 }
+                #if os(iOS)
+                // A meeting's minutes (#3862 phase 6): the meeting's thread when its recording is on this phone; else, and
+                // from a hub that doesn't name it, the session the push names, as before.
+                if let recording = MeetingTalk.threadToOpen(pushedRecording, interaction: ixID, action: action,
+                                                            onPhone: { RecordingLibrary.shared.entry($0) != nil }) {
+                    MeetingRecorder.openMeeting(recording)
+                    done()
+                    return
+                }
+                #endif
                 // No interaction: a turn finished ("Done"), opened at its answer like from the list.
                 if action != UNNotificationDismissActionIdentifier { AppDelegate.openFromNotification(key, finished: ixID == nil) }
                 done()
@@ -467,6 +525,35 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let (machine, session) = place.flatMap { p in p.firstIndex(of: "/").map { (String(p[..<$0]), String(p[p.index(after: $0)...])) } } ?? ("test", "test")
         content.userInfo = ["interaction_id": "ix_test_\(kind.rawValue)", "machine_id": machine, "session_id": session]
         try? await center.add(UNNotificationRequest(identifier: "test-\(kind.rawValue)", content: content,
+                                                     trigger: UNTimeIntervalNotificationTrigger(timeInterval: 3, repeats: false)))
+    }
+    /// `-showTestNotification decide` (#2056): what a decision's push looks like (`decidePayloadIn` in
+    /// server/internal/hub/push_payload.go), for the first to-do the paired hub lists with a recommendation, its round as
+    /// the hub sent it; delivered 3 s after the app goes to the background.
+    static func postDecideTestNotification() async {
+        let center = UNUserNotificationCenter.current()
+        _ = try? await center.requestAuthorization(options: [.alert, .sound])
+        for _ in 0..<60 where await center.notificationSettings().authorizationStatus != .authorized {
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+        TasksStore.shared.reloadTodos()
+        var found: (TodoItem, TodoAsk)?
+        for _ in 0..<40 {
+            found = TasksStore.shared.todos.values.sorted { $0.id < $1.id }
+                .compactMap { t in t.openAsk.flatMap { $0.recommend?.isEmpty == false ? (t, $0) : nil } }.first
+            if found != nil { break }
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+        guard let (todo, ask) = found else { return }
+        for await _ in NotificationCenter.default.notifications(named: UIApplication.didEnterBackgroundNotification) { break }
+        let content = UNMutableNotificationContent()
+        content.title = "等你决定" // i18n-ignore: the hub's push.json decide_title
+        content.body = ask.verdict ?? todo.title
+        content.subtitle = todo.title
+        content.categoryIdentifier = NotificationActions.decideCategory
+        content.userInfo = ["machine_id": "test", "session_id": "test",
+                            "todo": ["id": todo.id, "asked_at": ask.askedAt, "recommend": ask.recommend ?? ""]]
+        try? await center.add(UNNotificationRequest(identifier: "test-decide", content: content,
                                                      trigger: UNTimeIntervalNotificationTrigger(timeInterval: 3, repeats: false)))
     }
     static func postExtensionTestNotification(_ sample: String) async {

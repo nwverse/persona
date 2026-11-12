@@ -2,8 +2,10 @@ package node
 
 import (
 	"context"
+	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -24,12 +26,17 @@ type larkRisk func(words []string) string
 
 var (
 	// lark-cli's own commands that only print: help, method schemas, the skills it carries, who is logged in.
-	larkCLIRead      = map[string]bool{"schema": true, "skills": true, "whoami": true, "doctor": true, "help": true, "completion": true}
-	larkCLIAuthRead  = map[string]bool{"status": true, "check": true, "scopes": true, "list": true}
-	larkCLIEventRead = map[string]bool{"list": true, "schema": true, "status": true}
-	larkRiskRe       = lazyre.New(`(?m)^\s*Risk:\s*([a-z-]+)`)
+	// Stable read commands also work when the manager has not configured CLI risk discovery.
+	larkCLIKnownReads = map[string]bool{"docs/+fetch": true}
+	larkCLIRead       = map[string]bool{"schema": true, "skills": true, "whoami": true, "doctor": true, "help": true, "completion": true}
+	larkCLIAuthRead   = map[string]bool{"status": true, "check": true, "scopes": true, "list": true}
+	larkCLIEventRead  = map[string]bool{"list": true, "schema": true, "status": true}
+	larkRiskRe        = lazyre.New(`(?m)^\s*Risk:\s*([a-z-]+)`)
 	// larkCLIRe: a lark-cli call anywhere in a command the gate cannot parse.
-	larkCLIRe = lazyre.New("(^|[\\s;&|(`])(\\S*/)?lark-cli(\\s|$)")
+	larkCLIRe = lazyre.New("(^|[\\s;&|(\"'`])(\\S*/)?lark-cli(\\s|[\"']|$)")
+	// larkCLINamed: lark-cli as a word of its own anywhere in a command, a variable's value (`L=lark-cli; $L …`)
+	// included; what lets a whole-command card say it acts on Lark (wholeCommandTitle).
+	larkCLINamed = lazyre.New(`(^|[^A-Za-z0-9_.-])lark-cli([^A-Za-z0-9_.-]|$)`)
 )
 
 func isLarkCLI(name string) bool { return name == "lark-cli" || filepath.Base(name) == "lark-cli" }
@@ -39,17 +46,34 @@ func isLarkCLI(name string) bool { return name == "lark-cli" || filepath.Base(na
 func parseLarkCLI(args []string, risk larkRisk) (c larkCall, deny string, ok bool) {
 	c = larkCall{Gate: -1, CLI: true, Method: "CLI", Args: args}
 	var words, flags []string
-	for i, a := range args {
-		if strings.HasPrefix(a, "-") {
-			flags = args[i:]
-			break
-		}
-		words = append(words, a)
-	}
-	for _, f := range flags {
+	for _, f := range args {
 		if f == "--profile" || strings.HasPrefix(f, "--profile=") {
 			return c, "lark-cli 的配置档由管理者定（manager.json 的 lark.cli.profile），不要自己传 --profile。", false
 		}
+	}
+	i := 0
+	for i < len(args) && strings.HasPrefix(args[i], "-") {
+		name, _, inline := strings.Cut(args[i], "=")
+		if !strings.Contains(" --as --format -q --jq -o --output ", " "+name+" ") {
+			break
+		}
+		flags = append(flags, args[i])
+		i++
+		if !inline {
+			if i == len(args) {
+				return c, "", false
+			}
+			flags = append(flags, args[i])
+			i++
+		}
+	}
+	for ; i < len(args); i++ {
+		a := args[i]
+		if strings.HasPrefix(a, "-") {
+			flags = append(flags, args[i:]...)
+			break
+		}
+		words = append(words, a)
 	}
 	if strings.Contains(strings.Join(words, " "), "$") {
 		return c, "", false // a variable names the command: its risk is unknown
@@ -82,11 +106,22 @@ func parseLarkCLI(args []string, risk larkRisk) (c larkCall, deny string, ok boo
 		if len(words) < 3 {
 			return c, "", false
 		}
-		c.Method, c.Path = strings.ToUpper(words[1]), words[2]
-		c.Query, c.Body = flagValue(flags, "--params"), flagValue(flags, "--data")
+		c.Method = strings.ToUpper(words[1])
+		endpoint, err := url.ParseRequestURI(words[2])
+		if err != nil || !httpMethod.MatchString(c.Method) || !strings.HasPrefix(words[2], "/") || endpoint.Host != "" {
+			return c, "", false
+		}
+		c.Path = path.Clean(endpoint.Path)
+		c.Query, c.Body = endpoint.RawQuery, flagValue(flags, "--data")
+		if params := flagValue(flags, "--params"); params != "" {
+			c.Query = params
+		}
 	default:
 		if risk != nil {
 			c.Risk = risk(words)
+		}
+		if c.Risk == "" && larkCLIKnownReads[strings.Join(words, "/")] {
+			c.Risk = "read"
 		}
 	}
 	return c, "", true
@@ -138,40 +173,88 @@ func shellJoin(args []string) string {
 // and a flag written without "=" may take the next word as its value ("--text --dry-run" sends the text
 // "--dry-run"), so a bare switch counts only when the word before it is not a flag that may be waiting for one.
 func flagOn(flags []string, names ...string) bool {
-	for i, f := range flags {
-		for _, n := range names {
-			if v, ok := strings.CutPrefix(f, n+"="); ok {
-				if on, err := strconv.ParseBool(v); err == nil && on {
-					return true
-				}
+	on := false
+	for i := 0; i < len(flags); i++ {
+		f := flags[i]
+		if f == "--" {
+			break
+		}
+		if !strings.HasPrefix(f, "-") {
+			continue
+		}
+		key, val, inline := strings.Cut(f, "=")
+		matched := false
+		for _, name := range names {
+			if key == name {
+				matched = true
+				break
+			}
+		}
+		if matched {
+			on = true
+			if inline {
+				value, err := strconv.ParseBool(val)
+				on = err == nil && value
+			}
+			continue
+		}
+		if !inline && !larkCLIBoolFlags[key] {
+			if i+1 < len(flags) && strings.HasPrefix(flags[i+1], "-") {
+				return false
+			}
+			i++ // a value flag consumes even a dash-prefixed argument
+		}
+	}
+	return on
+}
+
+var larkCLIBoolFlags = map[string]bool{
+	"--help": true, "-h": true, "--version": true, "-v": true, "--dry-run": true,
+	"--reply-in-thread": true,
+}
+
+// flagValue follows pflag's last-value semantics, including --name=value. A value flag consumes
+// its next argument even when that argument starts with a dash; -- ends flag parsing.
+func flagValue(flags []string, name string) string {
+	value := ""
+	for i := 0; i < len(flags); i++ {
+		f := flags[i]
+		if f == "--" {
+			break
+		}
+		if !strings.HasPrefix(f, "-") {
+			continue
+		}
+		key, val, inline := strings.Cut(f, "=")
+		if !inline {
+			if larkCLIBoolFlags[key] {
 				continue
 			}
-			if f == n && (i == 0 || !strings.HasPrefix(flags[i-1], "-") || strings.Contains(flags[i-1], "=")) {
-				return true
+			// An unknown flag may be boolean or consume the next flag as text. Neither
+			// interpretation may retain an earlier bot identity as a bypass exemption.
+			if key != name && (i+1 >= len(flags) || strings.HasPrefix(flags[i+1], "-")) {
+				return ""
 			}
+			if i+1 >= len(flags) {
+				if key == name {
+					value = ""
+				}
+				break
+			}
+			i++
+			val = flags[i]
+		}
+		if key == name {
+			value = val
 		}
 	}
-	return false
+	return value
 }
 
-// flagValue is `--name value` or `--name=value`.
-func flagValue(flags []string, name string) string {
-	for i, f := range flags {
-		if v, ok := strings.CutPrefix(f, name+"="); ok {
-			return v
-		}
-		if f == name && i+1 < len(flags) {
-			return flags[i+1]
-		}
-	}
-	return ""
-}
-
-// larkCLIRisk asks lark-cli for the risk level of each command it is given, once per command; nil without lark-cli
-// in the hub's config.
+// larkCLIRisk asks lark-cli for the risk level of each command it is given, once per command.
 func (n *Node) larkCLIRisk(cfg proto.AssistantLark) larkRisk {
 	if cfg.CLI == nil {
-		return nil
+		cfg.CLI = &proto.LarkCLI{}
 	}
 	return func(words []string) string {
 		key := cfg.CLI.Profile + "\x00" + strings.Join(words, " ")

@@ -305,6 +305,20 @@ final class CustomModelUITests: XCTestCase {
         clearDraft()
     }
 
+    /// A running session's model menu is its launcher's list (#3754): the rows New Agent offers for it (Fable, the
+    /// gateway's models), not only Default / Opus / Sonnet / Haiku; the alias it runs is ticked.
+    @MainActor func testARunningSessionsMenuIsTheLaunchersList() throws {
+        launch(["-ui.oldLayout", "NO", "-openSession", review])
+        modesButton().tap()
+        see(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Fable")).firstMatch, "Fable in the model menu")
+        see(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "glm-5.3")).firstMatch, "a gateway model in the model menu")
+        let opus = see(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Opus 5.5")).firstMatch, "the alias it runs")
+        XCTAssertTrue(opus.isSelected, "the alias it runs isn't ticked")
+        shot("session-list-menu")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15)).tap() // the menu closes
+        clearDraft()
+    }
+
     // MARK: The Persona chat
 
     /// The launcher menu: the IDs typed before under the launcher's models, and "Other Model…" for the next message.

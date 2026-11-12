@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/orcart/orcarttest"
 )
 
@@ -46,13 +47,16 @@ func orcaWorktreeNode(t *testing.T) *orcaWorktreeFixture {
 	o.SetWorktrees(src)
 	o.Handle("worktree.create", func(p map[string]any) any {
 		name, branch, base := str(p["name"]), str(p["branchNameOverride"]), str(p["baseBranch"])
-		if p["nameWasGenerated"] == true && branch == "" {
+		if branch == "" {
 			branch = "devuser/" + name
 		}
 		path := filepath.Join(w.dir, name)
 		at, _ := branchCheckedOutAt(t.Context(), repo, branch)
 		if _, err := os.Lstat(path); err == nil || at != "" {
-			path, branch = path+"-2", branch+"-2" // Orca's way out of a taken folder or branch
+			path = path + "-2"
+			if p["branchIntent"] != "open-existing-v2" && p["branchIntent"] != "open-existing" {
+				branch += "-2"
+			} // Legacy naming may suffix the branch too.
 		}
 		args := []string{"worktree", "add", "-b", branch, "--", path}
 		if base != "" {
@@ -153,6 +157,26 @@ func TestOrcaWorktreeCreate(t *testing.T) {
 	}
 	if bad := w.o.Invalid(); len(bad) != 0 {
 		t.Errorf("Orca's schema refused %v", bad)
+	}
+}
+
+// The terminal Orca opens in a new worktree is one the host knows by its handle: Orca re-keying it orphaned does not
+// lose it (#5547).
+func TestOrcaWorktreeTerminalSurvivesARekey(t *testing.T) {
+	w := orcaWorktreeNode(t)
+	if _, err := w.create(t, "feat/y"); err != nil {
+		t.Fatal(err)
+	}
+	launch, err := hostCap[host.Launcher](w.n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := launch.(*orcaHost)
+	if w.o.Orphan("term_new") == "" {
+		t.Fatal("no terminal to orphan")
+	}
+	if got, err := h.terminal(t.Context(), "tab-new:leaf-new", true); err != nil || got.Handle != "term_new" {
+		t.Errorf("terminal(tab-new:leaf-new) = %+v, %v", got, err)
 	}
 }
 

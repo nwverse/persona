@@ -300,6 +300,12 @@ internal class ProactiveStore(
     private val notices = MutableSharedFlow<String>(extraBufferCapacity = 4, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     /** Failures and confirmations worth telling the user about, in words for this page. */
     val messages: SharedFlow<String> = notices.asSharedFlow()
+    private val started = MutableSharedFlow<SessionKey>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    /**
+     * The conversation a "Run now" started, for the page to open. Without replay: a run that finishes after the page
+     * was left is not kept for later, so nothing pulls the user away from where they went (it is in the history).
+     */
+    val runsToOpen: SharedFlow<SessionKey> = started.asSharedFlow()
     private val writes = Mutex()
     private var tokens = 0L
 
@@ -410,6 +416,9 @@ internal class ProactiveStore(
         scope.launch { loadTasks(); loadRuns() }
         return result
     }
+
+    /** "Run now" from the page: the run goes on after the page is left, but only a page still collecting [runsToOpen] opens it. */
+    fun runNow(id: String): Job = scope.launch { run(id).onSuccess { key -> started.tryEmit(key) } }
 
     /** "New chat next time": the hub forgets the task's own conversation, so the next run starts one. */
     suspend fun fresh(id: String): Result<ScheduledTask> {

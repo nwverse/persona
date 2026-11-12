@@ -21,7 +21,8 @@ export function SourceMessage({ msg, mid, sid }: { msg: UserMessage; mid: string
   const [open, setOpen] = useExpanded(`${scope}source:${msg.id}`);
   const [measuredLong, setMeasuredLong] = useState(false);
   const full = useFullText(msg.injected ? undefined : msg.rawInput?.find((item) => item.kind === "text" && item.full_size), mid, sid);
-  const text = msg.injected ? msg.injected.detail || msg.injected.line : full.text ? parseUserText(full.text).text : msg.text;
+  // a scheduled task's prompt stays out of the main conversation while background rounds fold (promptHidden)
+  const text = msg.injected ? (msg.promptHidden ? "" : msg.injected.detail) || msg.injected.line : full.text ? parseUserText(full.text).text : msg.text;
   const long = measuredLong || text.length > 180 || text.split("\n").length > 3;
   useReveal(scope, [msg.id], () => {
     if (open) return;

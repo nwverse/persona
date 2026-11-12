@@ -88,6 +88,8 @@
   "older_account_changed": "飞书账号已切换，请重新打开会话",
   "older_signed_out": "飞书已退出登录，请重新连接",
   "jump_latest": "回到最新",
+  "jump_first_unread": "第一条未读",
+  "jump_mention": "有人@你",
   "recalled_mark": "已撤回",
   "edit_history": "编辑历史",
   "edit_history_hint": "查看已留存的旧版本",
@@ -98,5 +100,7 @@
   "discard": "移除本机记录",
   "check_found": "已发出",
   "check_missing": "最新消息里没有找到它，可能没有发出",
-  "thread_placeholder": "回复话题…"
+  "thread_placeholder": "回复话题…",
+  "unavailable_title": "这个会话已不可用",
+  "unavailable_detail": "群可能已解散，或飞书应用已无权再访问它。"
 }

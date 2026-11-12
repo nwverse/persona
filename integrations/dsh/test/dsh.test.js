@@ -191,6 +191,73 @@ test('starts a session from the phone and lists it before its first prompt', asy
   await until('listed', () => n.last('runtime.sessions')?.sessions.some((s) => s.session_id === 'session-new'))
 })
 
+// The real controller derives cwd from a workspaceId; retain that behavior while recording its public request.
+function recordCreations(ctl, workspacePath) {
+  const requests = [], create = ctl.create
+  ctl.create = async (request) => {
+    requests.push(request)
+    return create({ cwd: request.cwd ?? workspacePath })
+  }
+  return requests
+}
+
+for (const selected of ['/w/project', '/w/project-alias']) test(`a new DSH session joins the workspace resolved for ${selected} (#5485)`, async (t) => {
+  const matched = { id: 'workspace-project', path: '/w/project' }
+  const ws = { ...workspace(), async resolveByPath(path) {
+    return ['/w/project', '/w/project-alias'].includes(path) ? matched : undefined
+  } }
+  const { n, ctl, rt } = await setup(t, { workspace: ws })
+  const requests = recordCreations(ctl, matched.path)
+  rt.start()
+  await n.ready
+  const { session } = await n.peer.call('session.start', { cwd: selected, prompt: 'Check the synthetic project' })
+  assert.deepEqual(requests, [{ workspaceId: matched.id }], 'DSH receives workspaceId alone so it attaches the new session')
+  assert.equal(session.session_id, 'session-new')
+  assert.equal(ctl.prompts[0].sessionId, session.session_id)
+  assert.equal(ctl.sessions.get(session.session_id).summary.cwd, matched.path)
+})
+
+test('a directory without an exact DSH workspace keeps cwd-only creation (#5485)', async (t) => {
+  const ws = { ...workspace(), async resolveByPath() { return undefined } }
+  const { n, ctl, rt } = await setup(t, { workspace: ws })
+  const requests = recordCreations(ctl)
+  rt.start()
+  await n.ready
+  await n.peer.call('session.start', { cwd: '/w/unmatched' })
+  assert.deepEqual(requests, [{ cwd: '/w/unmatched' }])
+})
+
+for (const [name, ws] of [['absent', undefined], ['archive-only', workspace()]]) test(`an ${name} workspace service preserves cwd-only creation (#5485)`, async (t) => {
+  const { n, ctl, rt } = await setup(t, { workspace: ws })
+  const requests = recordCreations(ctl)
+  rt.start()
+  await n.ready
+  await n.peer.call('session.start', { cwd: '/w/new' })
+  assert.deepEqual(requests, [{ cwd: '/w/new' }])
+})
+
+test('a new directory keeps the DSH controller creation path (#5485)', async (t) => {
+  const ws = { ...workspace(), async resolveByPath() { throw Object.assign(new Error('directory does not exist'), { code: 'ENOENT' }) } }
+  const { n, ctl, rt } = await setup(t, { workspace: ws })
+  const requests = recordCreations(ctl)
+  rt.start()
+  await n.ready
+  await n.peer.call('session.start', { cwd: '/w/new-directory' })
+  assert.deepEqual(requests, [{ cwd: '/w/new-directory' }], 'the controller creates directories that do not exist yet')
+})
+
+test('a failed DSH workspace lookup creates no ungrouped session (#5485)', async (t) => {
+  const ws = { ...workspace(), async resolveByPath() { throw new Error('workspace lookup unavailable') } }
+  const { n, ctl, rt } = await setup(t, { workspace: ws })
+  const requests = recordCreations(ctl)
+  rt.start()
+  await n.ready
+  await assert.rejects(n.peer.call('session.start', { cwd: '/w/project', prompt: 'Do not create on failed lookup' }), /workspace lookup unavailable/)
+  assert.deepEqual(requests, [])
+  assert.equal(ctl.sessions.size, 0)
+  assert.deepEqual(ctl.prompts, [])
+})
+
 test('a watched session gets its new events as continuous items and the live text as deltas', async (t) => {
   const { n, ctl, ev, rt } = await setup(t)
   ctl.add('session-w', {}, [text(0, 'user', 'one'), text(1, 'assistant', 'a1')])
@@ -647,3 +714,68 @@ test('an approval card offers 本会话总是同意; always still answers DSH wi
   n.resolve = () => ({ allow: false, always: true })
   assert.equal(await ev.waterfall('approval/request', { agent, toolName: 'bash', callId: 'call_b' }, browser), 'rejected')
 })
+
+test('a session with no open turn and running background commands reports background and done status (#5981)', async (t) => {
+  const { n, ctl, rt } = await setup(t)
+  ctl.add('session-bg', {
+    cwd: '/w/app',
+    running: true, // DSH controller reports running: true because of the background task
+    projections: {
+      kind: 'cached',
+      asOfSeq: 10,
+      values: {
+        title: 'Background job session',
+        turnBoundary: { openTurnStartSeq: null, lastStepBoundary: { kind: 'end' }, lastTurn: 2 },
+        approvalState: { turnOpen: false },
+        contextTimeline: {
+          commands: [
+            { id: 'cmd-bg-1', background: true, status: 'running', command: 'sleep 300', startedAt: 1_700_000_000_000 },
+          ],
+        },
+      },
+    },
+  })
+  rt.start()
+  await n.ready
+  await until('session-bg is listed', () => rowOf(n, 'session-bg'))
+  const row = rowOf(n, 'session-bg')
+  assert.equal(row.status, 'done', 'foreground status should be done when no turn is open')
+  assert.deepEqual(row.background, [{
+    id: 'cmd-bg-1',
+    kind: 'shell',
+    description: 'sleep 300',
+    command: 'sleep 300',
+    started_at: new Date(1_700_000_000_000).toISOString(),
+  }])
+})
+
+test('a session waiting on a DSH Web dialog reports blocked with attention reason (#5980)', async (t) => {
+  const { n, ctl, ev, rt } = await setup(t) // default: liveClient = true, interactions = auto
+  ctl.add('session-dialog', { cwd: '/w/app', running: true })
+  rt.start()
+  await n.ready
+  await until('session-dialog is listed', () => rowOf(n, 'session-dialog'))
+  assert.equal(rowOf(n, 'session-dialog')?.status, 'working')
+
+  // When an approval is handed to Web GUI and still pending
+  let resolveBrowser
+  const browserPromise = new Promise((resolve) => { resolveBrowser = resolve })
+  const agent = { session: { id: 'session-dialog' } }
+
+  const waterfallPromise = ev.waterfall('approval/request', { agent, toolName: 'bash', callId: 'call_dialog' }, () => browserPromise)
+
+  await until('session-dialog is marked blocked', () => rowOf(n, 'session-dialog')?.status === 'blocked')
+  const blockedRow = rowOf(n, 'session-dialog')
+  assert.equal(blockedRow.status, 'blocked')
+  assert.equal(blockedRow.attention_reason, 'waiting for an answer in DSH Web')
+
+  // When Web GUI settles the request
+  resolveBrowser('allowed-once')
+  assert.equal(await waterfallPromise, 'allowed-once')
+
+  await until('session-dialog clears blocked state', () => rowOf(n, 'session-dialog')?.status !== 'blocked')
+  const settledRow = rowOf(n, 'session-dialog')
+  assert.equal(settledRow.attention_reason, undefined)
+})
+
+

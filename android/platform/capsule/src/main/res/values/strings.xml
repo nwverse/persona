@@ -38,7 +38,10 @@
     <string name="capsule_group_pending">Read · still pending</string>
     <string name="capsule_group_completed">Completed</string>
     <string name="capsule_read_all">Mark all read</string>
-    <string name="capsule_message_count">%1$d messages</string>
+    <plurals name="capsule_message_count">
+        <item quantity="one">%1$d message</item>
+        <item quantity="other">%1$d messages</item>
+    </plurals>
     <string name="capsule_ask_persona">Ask Persona…</string>
     <string name="capsule_reply_to">Reply to %1$s…</string>
     <string name="capsule_confirm_send">Confirm send</string>

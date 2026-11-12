@@ -52,6 +52,17 @@ func EnvNames(name string) (current, legacy string) {
 func ReservedEnv(name string) bool {
 	return strings.HasPrefix(name, "PERSONA_") || strings.HasPrefix(name, "JARVIS_")
 }
+
+// SecretEnvNameProblem is proto.SecretEnvNameProblem with the old names' prefix reserved too.
+func SecretEnvNameProblem(name string) string {
+	if why := proto.SecretEnvNameProblem(name); why != "" {
+		return why
+	}
+	if ReservedEnv(name) {
+		return "names with the old prefix are Persona's"
+	}
+	return ""
+}
 func StateSubpath(rel string) (string, bool) {
 	for _, root := range []string{".persona", StateDir} {
 		if sub, ok := strings.CutPrefix(rel, root+"/"); ok {

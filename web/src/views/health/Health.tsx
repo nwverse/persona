@@ -1,6 +1,6 @@
 // "Health" (docs/assistant/health.md, #2691): the health space, apart from Persona's other conversations like ChatGPT's Health. `/health`
-// is its home (what it is, where its data comes from, suggested questions, its past conversations, its memory);
-// `/health/<id>` one of its conversations. Its conversations run in a directory of their own on the assistant's machine,
+// opens its latest conversation (#4329), or its home when it has none; `/health/new` is its home, the new conversation page
+// (what it is, where its data comes from, suggested questions, its past conversations, its memory); `/health/<id>` one of its conversations. Its conversations run in a directory of their own on the assistant's machine,
 // so the assistant's other conversations don't see them and its memory is its own (`?space=health`).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, enc, errorText } from "../../lib/api";
@@ -12,13 +12,14 @@ import { href, navigate, onLinkClick } from "../../lib/router";
 import { onHubEvent, useStore } from "../../lib/store";
 import { noteConversation } from "../../lib/manager-choice";
 import type { Session } from "../../lib/types";
-import { Button, Dialog, EASE, IconButton, Loading, toast } from "../../ui/atoms";
+import { Button, Dialog, EASE, IconButton, Loading, Menu, toast, useMenu } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
 import { ChatView } from "../chat/ChatView";
 import { Composer, type Outgoing } from "../chat/Composer";
 import { conversationTitle, newestFirst } from "../assistant/conversations";
 import { HealthReports } from "./HealthReports";
 import { REPORT_FILES, startHealthConversation, uploadReports } from "./reports";
+import { healthEntry } from "./entry";
 import { Empty, SectionTitle } from "../assistant/parts";
 import { t } from "../../i18n";
 
@@ -66,15 +67,48 @@ function useHealthConversations() {
   return { list: merged, mid, error, reload: load };
 }
 
-export function Health({ sid, onToggleSidebar }: { sid?: string; onToggleSidebar: () => void }) {
+export function Health({ sid, fresh, onToggleSidebar }: { sid?: string; fresh?: boolean; onToggleSidebar: () => void }) {
   if (sid) return <HealthConversation sid={sid} onToggleSidebar={onToggleSidebar} />;
-  return <HealthHome onToggleSidebar={onToggleSidebar} />;
+  if (fresh) return <HealthHome onToggleSidebar={onToggleSidebar} />;
+  return <HealthResume />;
+}
+
+/** `/health`, the sidebar's Health (#4329): back to the latest conversation, as Codex does, else the new conversation
+ *  page. Either replaces this address, so Back skips it. */
+function HealthResume() {
+  const { list, error } = useHealthConversations();
+  const entry = healthEntry(list, error);
+  const to = entry.kind === "open" ? entry.sid : entry.kind;
+  useEffect(() => {
+    if (to === "wait") return;
+    navigate(to === "new" ? { name: "health", fresh: true } : { name: "health", sid: to }, true);
+  }, [to]);
+  return <div className="flex h-full items-center justify-center"><Loading /></div>;
+}
+
+/** A health conversation's header (#4329): New opens the new conversation page, the clock the space's past conversations. */
+function HealthChatActions({ sid, list }: { sid: string; list: Session[] | null }) {
+  const menu = useMenu();
+  const items = (list ?? []).map((s) => ({
+    key: s.session_id,
+    label: conversationTitle(s),
+    hint: s.updated_at ? ago(s.updated_at) : undefined,
+    checked: s.session_id === sid,
+    onSelect: () => navigate({ name: "health", sid: s.session_id }),
+  }));
+  return (
+    <>
+      {items.length > 0 && <IconButton icon="clock" label={t("health.history")} onClick={menu.open} active={Boolean(menu.anchor)} />}
+      <IconButton icon="compose" label={t("health.new_chat")} onClick={() => navigate({ name: "health", fresh: true })} />
+      {menu.anchor && <Menu anchor={menu.anchor} onClose={menu.close} align="right" width={320} header={t("health.recent")} items={items} />}
+    </>
+  );
 }
 
 /** One of the space's conversations, on the space's machine (its list says which); a list that could not be read
  *  says why, with Retry. */
 function HealthConversation({ sid, onToggleSidebar }: { sid: string; onToggleSidebar: () => void }) {
-  const { mid, error, reload } = useHealthConversations();
+  const { list, mid, error, reload } = useHealthConversations();
   const [retrying, setRetrying] = useState(false);
   if (!mid && error) {
     const retry = () => {
@@ -94,7 +128,7 @@ function HealthConversation({ sid, onToggleSidebar }: { sid: string; onToggleSid
     );
   }
   if (!mid) return <div className="flex h-full items-center justify-center"><Loading /></div>;
-  return <ChatView key={sid} mid={mid} sid={sid} assistant onToggleSidebar={onToggleSidebar} />;
+  return <ChatView key={sid} mid={mid} sid={sid} assistant onToggleSidebar={onToggleSidebar} headerActions={<HealthChatActions sid={sid} list={list} />} />;
 }
 
 function HealthHome({ onToggleSidebar }: { onToggleSidebar: () => void }) {

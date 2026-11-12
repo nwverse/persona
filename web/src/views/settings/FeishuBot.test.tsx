@@ -4,15 +4,34 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { connectorState, type HubConnector } from "../../lib/connectors";
 import type { FeishuBotStatus } from "../../lib/feishu-bot";
 
 type Call = { resolve: (s: FeishuBotStatus) => void };
 const calls = vi.hoisted(() => ({ status: [] as Call[], update: [] as (Call & { body: unknown })[] }));
+const connectorList = vi.hoisted(() => ({ value: [] as HubConnector[], calls: 0 }));
+const connectorLogin = vi.hoisted(() => vi.fn());
+const setConnector = vi.hoisted(() => vi.fn());
+const bindChannel = vi.hoisted(() => vi.fn());
+vi.mock("../../lib/channels", async (original) => ({
+  ...(await original<typeof import("../../lib/channels")>()),
+  bindChannel: (...args: unknown[]) => bindChannel(...args),
+  forgetChannels: () => {},
+}));
 vi.mock("../../lib/feishu-bot", async (original) => ({
   ...(await original<typeof import("../../lib/feishu-bot")>()),
   botStatus: () => new Promise<FeishuBotStatus>((resolve) => calls.status.push({ resolve })),
   updateBot: (body: unknown) => new Promise<FeishuBotStatus>((resolve) => calls.update.push({ resolve, body })),
   pairBot: () => new Promise<FeishuBotStatus>(() => {}),
+}));
+vi.mock("../../lib/connectors", async (original) => ({
+  ...(await original<typeof import("../../lib/connectors")>()),
+  listConnectors: () => {
+    connectorList.calls++;
+    return Promise.resolve(connectorList.value);
+  },
+  connectorLogin: (...args: unknown[]) => connectorLogin(...args),
+  setConnector: (...args: unknown[]) => setConnector(...args),
 }));
 vi.mock("../../ui/atoms", async (original) => ({ ...(await original<typeof import("../../ui/atoms")>()), toast: () => {} }));
 import { t } from "../../i18n";
@@ -49,6 +68,12 @@ const type = (label: string, value: string) =>
     el.dispatchEvent(new Event("input", { bubbles: true }));
   });
 const switches = () => [...document.body.querySelectorAll<HTMLButtonElement>('[role="switch"]')];
+// The credentials form is folded under Advanced (#5818): open it before reading or typing in it.
+const advancedToggle = () =>
+  [...document.body.querySelectorAll<HTMLButtonElement>("button[aria-expanded]")].find((b) =>
+    [t("settings-feishubot.advanced_other_app"), t("settings-feishubot.advanced_have_app")].includes(b.textContent ?? ""),
+  );
+const advanced = () => act(async () => advancedToggle()!.click());
 
 // Draws the row, answers its status read, and opens the dialog.
 async function open(status: FeishuBotStatus) {
@@ -60,6 +85,11 @@ async function open(status: FeishuBotStatus) {
 beforeEach(() => {
   calls.status.length = 0;
   calls.update.length = 0;
+  connectorList.value = [];
+  connectorList.calls = 0;
+  connectorLogin.mockReset();
+  setConnector.mockReset();
+  bindChannel.mockReset();
   visibility = "visible";
   Object.defineProperty(document, "visibilityState", { configurable: true, get: () => visibility });
   host = document.createElement("div");
@@ -75,8 +105,286 @@ afterEach(() => {
 });
 
 describe("Feishu bot dialog", () => {
+  it("combines the bot and lark-cli into one Lark row", async () => {
+    const onOpen = vi.fn();
+    const larkcli: HubConnector = { id: "larkcli", name: "Lark via lark-cli", status: "ok", account: "me" };
+    act(() => root.render(<FeishuBot larkcli={larkcli} onOpen={onOpen} />));
+    await act(async () => calls.status[0].resolve(saved()));
+
+    const row = [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes(t("settings-feishubot.lark_name")));
+    expect(row).toBeDefined();
+    expect(row?.textContent).toContain("cli_saved");
+    expect(row?.closest("section")?.textContent).toContain(t("settings-feishubot.combined_footer"));
+    expect(row?.querySelector("img")?.getAttribute("alt")).toBe("");
+  });
+
+  it("keeps the original group when lark-cli is absent", async () => {
+    act(() => root.render(<FeishuBot />));
+    await act(async () => calls.status[0].resolve(saved()));
+
+    expect(host.textContent).toContain(t("settings-feishubot.footer"));
+    expect(host.textContent).not.toContain(t("settings-feishubot.read_section"));
+    expect(host.textContent).not.toContain(t("settings-feishubot.combined_footer"));
+    expect(host.querySelectorAll("button")).toHaveLength(1);
+  });
+
+  it("shows lark-cli in the bot dialog and opens its connector page from More settings", async () => {
+    const onOpen = vi.fn();
+    const larkcli: HubConnector = { id: "larkcli", name: "Lark via lark-cli", status: "ok", account: "me" };
+    act(() => root.render(<FeishuBot larkcli={larkcli} onOpen={onOpen} />));
+    await act(async () => calls.status[0].resolve(saved()));
+    await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
+
+    expect(document.body.textContent).toContain(t("settings-feishubot.read_section"));
+    const more = [...document.body.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes(t("settings-feishubot.read_more")));
+    await act(async () => more!.click());
+
+    expect(onOpen).toHaveBeenCalledWith("larkcli");
+  });
+
+  it("loads lark-cli for a URL-opened dialog when the page has not passed it yet", async () => {
+    const larkcli: HubConnector = { id: "larkcli", name: "Lark via lark-cli", status: "ok", account: "me" };
+    connectorList.value = [larkcli];
+    act(() => root.render(<FeishuBot />));
+    await act(async () => calls.status[0].resolve(saved()));
+    await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
+    await act(async () => {});
+
+    const row = [...document.body.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes(t("settings-feishubot.lark_name")));
+    expect(row).toBeDefined();
+    expect(connectorList.calls).toBe(1);
+  });
+
+  it("uses the lark-cli warning as the combined row's status", async () => {
+    const larkcli: HubConnector = { id: "larkcli", name: "Lark via lark-cli", status: "no_permission", account: "me", missing_scopes: ["im:chat:read"] };
+    act(() => root.render(<FeishuBot larkcli={larkcli} />));
+    await act(async () => calls.status[0].resolve(saved({ owner: { name: "owner", paired_at: 1 } })));
+
+    const row = [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes(t("settings-feishubot.lark_name")))!;
+    expect(row.textContent).toContain(t("settings-feishubot.read_status_prefix", { status: connectorState(larkcli) }));
+    expect([...row.querySelectorAll<HTMLElement>("*")].some((element) => element.classList.contains("bg-orange-tint"))).toBe(true);
+  });
+
+  it("orders read-as-me, then the bot's controls, with the credentials folded under Advanced last", async () => {
+    const larkcli: HubConnector = { id: "larkcli", name: "Lark via lark-cli", status: "ok", account: "me", capabilities: ["login"] };
+    act(() => root.render(<FeishuBot larkcli={larkcli} />));
+    await act(async () => calls.status[0].resolve(saved({ owner: { name: "owner", paired_at: 1 } })));
+    await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
+
+    const headings = () => [...document.querySelectorAll<HTMLElement>("[role=dialog] section h2")].map((x) => x.textContent);
+    expect(headings()).not.toContain(t("settings-feishubot.credentials"));
+    expect(headings().indexOf(t("settings-feishubot.read_section"))).toBeGreaterThanOrEqual(0);
+    expect(headings().indexOf(t("settings-feishubot.read_section"))).toBeLessThan(headings().indexOf(t("settings-feishubot.bot_section")));
+    // An app is bound: no create step, and Advanced offers another app, folded.
+    expect(document.body.textContent).not.toContain(t("settings-feishubot.create_start"));
+    expect(advancedToggle()?.textContent).toBe(t("settings-feishubot.advanced_other_app"));
+    expect(advancedToggle()?.getAttribute("aria-expanded")).toBe("false");
+    await advanced();
+    expect(headings().indexOf(t("settings-feishubot.bot_section"))).toBeLessThan(headings().indexOf(t("settings-feishubot.credentials")));
+    // Signed in: the section is titled for the identity, and signing in again is the quiet secondary action.
+    const dialog = document.querySelector<HTMLElement>("[role=dialog]")!;
+    expect(dialog.textContent).toContain(t("settings-feishubot.read_as_you"));
+    const again = [...dialog.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes(t("settings-feishubot.read_reauthorize")));
+    expect(again).toBeDefined();
+    expect([...dialog.querySelectorAll("button")].some((button) => button.textContent === t("settings-feishubot.read_authorize"))).toBe(false);
+  });
+
+  it("switches reading as you off from the Lark page, the same switch as the connector page", async () => {
+    const larkcli: HubConnector = { id: "larkcli", name: "Lark · my messages", status: "ok", account: "me", enabled: true };
+    setConnector.mockResolvedValue({ ...larkcli, enabled: false });
+    connectorList.value = [{ ...larkcli, enabled: false }];
+    act(() => root.render(<FeishuBot larkcli={larkcli} />));
+    await act(async () => calls.status[0].resolve(saved({ owner: { name: "owner", paired_at: 1 } })));
+    await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
+
+    const sw = document.querySelector<HTMLButtonElement>(`[role=dialog] [role="switch"][aria-label="${t("settings-feishubot.read_section")}"]`)!;
+    expect(sw.getAttribute("aria-checked")).toBe("true");
+    await act(async () => sw.click());
+    expect(setConnector).toHaveBeenCalledWith("larkcli", { enabled: false });
+  });
+
+  it("turns on every comment for documents I own from the Lark page, keeping the other options", async () => {
+    const options = { inbox_all_chats: ["oc_example"], documents: [], wiki_spaces: [], owned_all_comments: false, triage_rules: "rule" };
+    const larkcli: HubConnector = { id: "larkcli", name: "Lark · my messages", status: "ok", account: "me", enabled: true, options };
+    setConnector.mockResolvedValue({ ...larkcli, options: { ...options, owned_all_comments: true } });
+    connectorList.value = [larkcli];
+    act(() => root.render(<FeishuBot larkcli={larkcli} />));
+    await act(async () => calls.status[0].resolve(saved({ owner: { name: "owner", paired_at: 1 } })));
+    await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
+
+    const sw = document.querySelector<HTMLButtonElement>(`[role=dialog] [role="switch"][aria-label="${t("settings-hubconnector.lark_docs_owned")}"]`)!;
+    expect(sw.getAttribute("aria-checked")).toBe("false");
+    await act(async () => sw.click());
+    expect(setConnector).toHaveBeenCalledWith("larkcli", { options: { ...options, owned_all_comments: true } });
+  });
+
+  it("starts lark-cli authorization inline and renders a device-code step", async () => {
+    const larkcli: HubConnector = { id: "larkcli", name: "Lark via lark-cli", status: "not_signed_in", capabilities: ["login"] };
+    connectorLogin.mockResolvedValue({ step: "device", kind: "device_code", user_code: "ABC123", url: "https://example.test/authorize" });
+    act(() => root.render(<FeishuBot larkcli={larkcli} />));
+    await act(async () => calls.status[0].resolve(saved({ owner: { name: "owner", paired_at: 1 } })));
+    await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
+
+    const authorize = [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes(t("settings-feishubot.read_authorize")))!;
+    await act(async () => authorize.click());
+    expect(connectorLogin).toHaveBeenCalledWith("larkcli", "", {});
+    expect(document.body.textContent).toContain("ABC123");
+  });
+
+  it("draws the device-code step's QR code when the hub sends one, the link kept as the secondary way (#5818)", async () => {
+    const larkcli: HubConnector = { id: "larkcli", name: "Lark via lark-cli", status: "not_signed_in", capabilities: ["login"] };
+    connectorLogin.mockResolvedValue({
+      step: "device", kind: "device_code", user_code: "ABC123", url: "https://example.test/authorize?user_code=ABC123", qr: { size: 2, rows: ["10", "01"] },
+    });
+    act(() => root.render(<FeishuBot larkcli={larkcli} />));
+    await act(async () => calls.status[0].resolve(saved({ owner: { name: "owner", paired_at: 1 } })));
+    await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
+    const authorize = [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes(t("settings-feishubot.read_authorize")))!;
+    await act(async () => authorize.click());
+
+    const dialog = document.querySelector<HTMLElement>("[role=dialog]")!;
+    expect(dialog.querySelector(`svg[role=img][aria-label="${t("settings-hubconnector.qr_label")}"]`)).not.toBeNull();
+    expect(dialog.textContent).toContain(t("settings-hubconnector.scan_to_authorize"));
+    expect(dialog.textContent).toContain("ABC123");
+  });
+
+  it("with no app anywhere, reading Lark waits for the app; once it is created, authorizing starts by itself (#5818)", async () => {
+    const larkcli: HubConnector = { id: "larkcli", name: "Lark via lark-cli", status: "not_signed_in", capabilities: ["login"] };
+    connectorList.value = [larkcli];
+    const larkcliStatus = (over: object) => ({ profile: "", same_app: false, mode: "default" as const, choice: "", profiles: [], ...over });
+    act(() => root.render(<FeishuBot larkcli={larkcli} />));
+    await act(async () => calls.status[0].resolve(saved({ app_id: "", has_secret: false, connected: false, larkcli: larkcliStatus({}) })));
+    await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
+    const dialog = document.querySelector<HTMLElement>("[role=dialog]")!;
+    expect(dialog.textContent).toContain(t("settings-feishubot.read_needs_app"));
+    expect([...dialog.querySelectorAll("button")].some((b) => b.textContent?.includes(t("settings-feishubot.read_authorize")))).toBe(false);
+
+    // The scan is confirmed: the bot has its app, lark-cli follows it, and the authorization starts without a press.
+    bindChannel.mockResolvedValueOnce({ done: true, account: "owner" });
+    connectorLogin.mockResolvedValue({ step: "device", kind: "device_code", user_code: "ABC123", url: "https://example.test/authorize?user_code=ABC123" });
+    const start = [...dialog.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === t("settings-feishubot.create_start"))!;
+    await act(async () => start.click());
+    await act(async () => calls.status[1].resolve(saved({ owner: { name: "owner", paired_at: 1 }, larkcli: larkcliStatus({ mode: "bot", app_id: "cli_saved", same_app: true }) })));
+    expect(dialog.textContent).not.toContain(t("settings-feishubot.read_needs_app"));
+    expect(connectorLogin).toHaveBeenCalledWith("larkcli", "", {});
+    expect(dialog.textContent).toContain("ABC123");
+  });
+
+  it("opens the permission URL when lark-cli scopes are missing", async () => {
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    const larkcli: HubConnector = {
+      id: "larkcli",
+      name: "Lark via lark-cli",
+      status: "no_permission",
+      missing_scopes: ["im:chat:read"],
+      guide_url: "https://open.feishu.cn/permissions",
+    };
+    act(() => root.render(<FeishuBot larkcli={larkcli} />));
+    await act(async () => calls.status[0].resolve(saved({ owner: { name: "owner", paired_at: 1 } })));
+    await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
+
+    const permission = [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes(t("settings-feishubot.read_open_platform")))!;
+    await act(async () => permission.click());
+    expect(open).toHaveBeenCalledWith("https://open.feishu.cn/permissions", "_blank", "noopener,noreferrer");
+    open.mockRestore();
+  });
+
+  it("lists lark-cli profiles and saves the selected choice", async () => {
+    const larkcli: HubConnector = { id: "larkcli", name: "Lark via lark-cli", status: "ok", account: "me" };
+    connectorList.value = [larkcli];
+    await open(saved({
+      larkcli: {
+        profile: "example",
+        app_id: "cli_example",
+        same_app: true,
+        mode: "chosen",
+        choice: "example",
+        profiles: [
+          { name: "example", app_id: "cli_example", user: "Example User", token_status: "valid" },
+          { name: "other", app_id: "cli_other", user: "", token_status: "signed_out" },
+        ],
+      },
+    }));
+
+    // The profile in use is shown under the account; the select opens behind "Change".
+    expect(document.body.textContent).toContain(t("settings-feishubot.larkcli_profile_using", { name: "example" }));
+    expect(document.querySelector(`select[aria-label="${t("settings-feishubot.larkcli_profile_title")}"]`)).toBeNull();
+    const change = [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === t("settings-feishubot.larkcli_profile_change"))!;
+    await act(async () => change.click());
+    const select = document.querySelector<HTMLSelectElement>(`select[aria-label="${t("settings-feishubot.larkcli_profile_title")}"]`)!;
+    expect([...select.options].map((option) => option.textContent)).toEqual([
+      t("settings-feishubot.larkcli_profile_auto"),
+      "example · Example User · cli_example",
+      "other · " + t("settings-feishubot.larkcli_profile_not_logged_in") + " · cli_other",
+    ]);
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(select, "other");
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(calls.update[0].body).toEqual({ larkcli_profile: "other" });
+    await act(async () => calls.update[0].resolve(saved({ larkcli: { ...saved().larkcli!, mode: "chosen", choice: "other", profiles: [] } })));
+    await act(async () => calls.status[1].resolve(saved({ larkcli: { ...saved().larkcli!, mode: "chosen", choice: "other", profiles: [] } })));
+  });
+
+  it("shows the profile manager.json fixes, with no way to change it", async () => {
+    const larkcli: HubConnector = { id: "larkcli", name: "Lark via lark-cli", status: "ok", account: "me" };
+    connectorList.value = [larkcli];
+    await open(saved({
+      larkcli: {
+        profile: "fixed",
+        app_id: "cli_fixed",
+        same_app: true,
+        mode: "config",
+        choice: "",
+        profiles: [{ name: "fixed", app_id: "cli_fixed", user: "Example User", token_status: "valid" }],
+      },
+    }));
+    expect(document.body.textContent).toContain(t("settings-feishubot.larkcli_profile_using", { name: t("settings-feishubot.larkcli_profile_fixed", { name: "fixed" }) }));
+    expect([...document.querySelectorAll("button")].some((b) => b.textContent === t("settings-feishubot.larkcli_profile_change"))).toBe(false);
+    expect(document.querySelector(`select[aria-label="${t("settings-feishubot.larkcli_profile_title")}"]`)).toBeNull();
+  });
+
+  it("hides the permission button without a link and re-reads the connector on recheck", async () => {
+    const larkcli: HubConnector = { id: "larkcli", name: "Lark via lark-cli", status: "no_permission", missing_scopes: ["im:chat:read"] };
+    connectorList.value = [{ ...larkcli, status: "ok" }];
+    act(() => root.render(<FeishuBot larkcli={larkcli} />));
+    await act(async () => calls.status[0].resolve(saved({ owner: { name: "owner", paired_at: 1 } })));
+    await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
+
+    const buttons = () => [...document.querySelectorAll<HTMLButtonElement>("button")];
+    expect(buttons().some((button) => button.textContent?.includes(t("settings-feishubot.read_open_platform")))).toBe(false);
+    const recheck = buttons().find((button) => button.textContent?.includes(t("settings-feishubot.recheck")) && !button.getAttribute("aria-label"))!;
+    await act(async () => recheck.click());
+    expect(connectorList.calls).toBe(1);
+  });
+
+  it("leaves the bot dialog unchanged when lark-cli is absent", async () => {
+    act(() => root.render(<FeishuBot larkcli={null} />));
+    await act(async () => calls.status[0].resolve(saved()));
+    await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
+
+    expect(host.textContent).toContain(t("settings-feishubot.footer"));
+    expect(host.textContent).not.toContain(t("settings-feishubot.read_section"));
+    expect(host.textContent).not.toContain(t("settings-feishubot.larkcli_dialog_footer"));
+  });
+
+  it("fills the saved App ID into a dialog opened by URL before the status arrived", async () => {
+    const before = location.href;
+    history.replaceState(null, "", "?tab=connectors&connector=feishu-bot");
+    try {
+      act(() => root.render(<FeishuBot larkcli={null} />));
+      await advanced();
+      expect(input("App ID").value).toBe("");
+      await act(async () => calls.status[0].resolve(saved()));
+      expect(input("App ID").value).toBe("cli_saved");
+    } finally {
+      history.replaceState(null, "", before);
+    }
+  });
+
   it("keeps a typed App ID when a feature switch is flipped", async () => {
     await open(saved());
+    await advanced();
     type("App ID", "cli_typed");
     // The enable switch comes first, then one switch per feature.
     await act(async () => switches()[2].click());
@@ -135,6 +443,19 @@ describe("Feishu bot dialog", () => {
     expect(onlyConclusions().disabled).toBe(false);
   });
 
+  it("hides answer as a new card for a hub from before it", async () => {
+    await open(saved());
+    expect(document.body.querySelector(`[role="switch"][aria-label="${t("settings-feishubot.feature_answer_new_card_title")}"]`)).toBeNull();
+  });
+
+  it("switches answer as a new card on its own, off by default", async () => {
+    const newCard = () => document.body.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${t("settings-feishubot.feature_answer_new_card_title")}"]`)!;
+    await open(saved({ features: { ...saved().features, answer_new_card: false } }));
+    expect(newCard().getAttribute("aria-checked")).toBe("false");
+    await act(async () => newCard().click());
+    expect(calls.update[0].body).toEqual({ features: { answer_new_card: true } });
+  });
+
   it("switches the workbench on its own, off by default", async () => {
     const workbench = () => document.body.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${t("settings-feishubot.feature_workbench_title")}"]`)!;
     await open(saved({ features: { ...saved().features, workbench: false } }));
@@ -152,6 +473,7 @@ describe("Feishu bot dialog", () => {
 
   it("keeps a typed App ID when the bot is switched off", async () => {
     await open(saved());
+    await advanced();
     type("App ID", "cli_typed");
     await act(async () => switches()[0].click());
     expect(calls.update[0].body).toEqual({ enabled: false });
@@ -162,6 +484,7 @@ describe("Feishu bot dialog", () => {
   it("keeps a typed App Secret while the pairing poll answers", async () => {
     vi.useFakeTimers();
     await open(saved({ pairing: { code: "123456", expires_at: Math.floor(Date.now() / 1000) + 600 } }));
+    await advanced();
     type("App Secret", "typed-secret");
     await act(async () => void vi.advanceTimersByTime(3000));
     expect(calls.status).toHaveLength(2);
@@ -185,6 +508,7 @@ describe("Feishu bot dialog", () => {
 
   it("takes the hub's answer after verify and save", async () => {
     await open(saved());
+    await advanced();
     type("App ID", " cli_new ");
     type("App Secret", "new-secret");
     const save = [...document.body.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === t("settings-feishubot.verify_save"));
@@ -208,8 +532,31 @@ describe("Feishu bot dialog", () => {
     expect(select().value).toBe("0");
   });
 
+  it("with no app, starts with scanning to create one, the credentials folded under Advanced (#5818)", async () => {
+    const noApp = saved({ app_id: "", has_secret: false, connected: false });
+    await open(noApp);
+    const dialog = document.querySelector<HTMLElement>("[role=dialog]")!;
+    const start = [...dialog.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === t("settings-feishubot.create_start"));
+    expect(start).toBeDefined();
+    expect(dialog.textContent).toContain(t("settings-feishubot.create_footer"));
+    expect(input("App ID")).toBeNull();
+    expect(advancedToggle()?.textContent).toBe(t("settings-feishubot.advanced_have_app"));
+
+    // The press is the channel's bind step: the hub begins the app registration and answers with a QR code.
+    bindChannel.mockResolvedValueOnce({ step: "register", kind: "qr", url: "https://accounts.example.com/verify", interval: 5, qr: { size: 2, rows: ["10", "01"] } });
+    await act(async () => start!.click());
+    expect(bindChannel).toHaveBeenCalledWith("feishu", "", {});
+    expect(dialog.querySelector(`svg[role=img][aria-label="${t("settings-channels.qr_label")}"]`)).not.toBeNull();
+  });
+
+  it("keeps manager.json's credentials: no create step when the app comes from the config", async () => {
+    await open(saved({ app_id: "", has_secret: false, from_config: true }));
+    expect(document.body.textContent).not.toContain(t("settings-feishubot.create_start"));
+  });
+
   it("fills the form from a switch's answer when nothing was typed", async () => {
     await open(saved());
+    await advanced();
     await act(async () => switches()[0].click());
     await act(async () => calls.update[0].resolve(saved({ enabled: false, app_id: "cli_elsewhere" })));
     expect(input("App ID").value).toBe("cli_elsewhere");

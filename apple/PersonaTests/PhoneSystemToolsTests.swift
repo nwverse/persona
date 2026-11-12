@@ -1,4 +1,5 @@
 import Foundation
+import MapKit
 import Testing
 @testable import Persona
 
@@ -81,7 +82,44 @@ struct PhoneSystemToolsTests {
         #expect(card?.contains("no-such-event") == true)
     }
 
+    @Test func theNewEventCardShowsEverythingItWillWrite() throws {
+        guard let start = try ToolDate.parse("2027-01-15T15:00:00+08:00"),
+              let end = try ToolDate.parse("2027-01-15T16:00:00+08:00") else {
+            Issue.record("valid test dates required")
+            return
+        }
+        let notes = "bring gift " + String(repeating: "n", count: 240)
+        let tool = PhoneToolRegistry.all.first { $0.spec.name == "phone_calendar_create_event" }
+        let card = try #require(tool?.confirmation?(.object([
+            "title": .string("Dinner"), "start": .string("2027-01-15T15:00:00+08:00"),
+            "end": .string("2027-01-15T16:00:00+08:00"), "calendar": .string("Family"), "notes": .string(notes),
+        ])))
+        #expect(card.contains("Family"))
+        #expect(card.contains(String(notes.prefix(200))))
+        #expect(!card.contains(String(notes.prefix(201))))
+        let timeZone = try #require(TimeZone(secondsFromGMT: 8 * 3600))
+        #expect(card.contains(CardTime.text(start, timeZone: timeZone)))
+        #expect(card.contains(CardTime.text(end, timeZone: timeZone)))
+        #expect(!card.contains("2027-01-15T15:00:00+08:00"))
+    }
+
     // MARK: - Reminders (#2277)
+
+    @Test func theNewReminderCardShowsEverythingItWillWrite() throws {
+        guard let due = try ToolDate.parse("2027-01-15T18:00:00+08:00") else {
+            Issue.record("valid test due date required")
+            return
+        }
+        let tool = PhoneToolRegistry.all.first { $0.spec.name == "phone_reminders_create" }
+        let card = try #require(tool?.confirmation?(.object([
+            "title": .string("Expenses"), "due": .string("2027-01-15T18:00:00+08:00"),
+            "notes": .string("call first"), "list": .string("Personal"), "priority": .number(1),
+        ])))
+        #expect(card.contains("Personal") && card.contains("call first"))
+        #expect(card.contains(RemindersTool.priorityName(1)))
+        #expect(card.contains(CardTime.text(due)))
+        #expect(!card.contains("2027-01-15T18:00:00+08:00"))
+    }
 
     @Test func theReminderCardNamesNotesPriorityAndList() throws {
         let target = RemindersTool.CompletionTarget(title: "Expenses", list: "Work", due: nil)
@@ -172,6 +210,42 @@ struct PhoneSystemToolsTests {
         #expect(throws: ToolFailure.self) { try MapsTool.Destination.parse(json(#"{"latitude":1,"longitude":2,"mode":"flying"}"#)) }
     }
 
+    /// A route starts at the phone unless both start coordinates are given (#5544); each mode asks Maps for its own kind
+    /// of route.
+    @Test func aRouteStartsAtThePhoneOrAtBothCoordinatesGiven() throws {
+        #expect(try MapsTool.routeStart(json(#"{"latitude":1,"longitude":2}"#)) == nil)
+        let given = try #require(try MapsTool.routeStart(json(#"{"from_latitude":31.2,"from_longitude":121.4}"#)))
+        #expect(given.latitude == 31.2 && given.longitude == 121.4)
+        #expect(throws: ToolFailure.self) { try MapsTool.routeStart(json(#"{"from_latitude":31.2}"#)) }
+        #expect(throws: ToolFailure.self) { try MapsTool.routeStart(json(#"{"from_latitude":31.2,"from_longitude":200}"#)) }
+        let modes = try ["driving", "walking", "transit"].map {
+            try MapsTool.Destination.parse(json(#"{"latitude":1,"longitude":2,"mode":"\#($0)"}"#)).transportType
+        }
+        #expect(modes == [.automobile, .walking, .transit])
+        let tool = PhoneToolRegistry.all.first { $0.spec.name == "phone_maps_route" }
+        #expect(tool != nil && tool?.confirmation == nil) // it opens nothing, so it asks nobody
+    }
+
+    /// A route's line is short enough for the model and the card: its ends stay, a straight stretch is two points, and a
+    /// winding one keeps at most `RouteLine.most`.
+    @Test func aRouteLineKeepsItsEndsAndStaysShort() {
+        func point(_ latitude: Double, _ longitude: Double) -> CLLocationCoordinate2D {
+            CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+        }
+        let straight = (0..<500).map { point(31.2 + Double($0) * 0.00001, 121.4 + Double($0) * 0.00002) }
+        let line = RouteLine.simplified(straight)
+        #expect(line.count == 2 && line.first?.latitude == straight.first?.latitude && line.last?.latitude == straight.last?.latitude)
+        let winding = (0..<3000).map { i -> CLLocationCoordinate2D in
+            let t = Double(i) / 3000
+            return point(31.2 + t * 0.05, 121.4 + 0.01 * sin(t * 40))
+        }
+        let kept = RouteLine.simplified(winding)
+        #expect(kept.count > 2 && kept.count <= RouteLine.most)
+        #expect(kept.first?.longitude == winding.first?.longitude && kept.last?.latitude == winding.last?.latitude)
+        #expect(RouteLine.simplified(Array(winding.prefix(10))).count == 10)
+        #expect(RouteLine.rounded(31.2304449) == 31.23044)
+    }
+
     // MARK: - Shortcuts (#2283)
 
     @Test func theRunLinkComesBackWithItsToken() throws {
@@ -250,5 +324,30 @@ struct PhoneSystemToolsTests {
         #expect(MediaTool.searchURL(service: "spotify", query: "lofi beats")?.absoluteString == "https://open.spotify.com/search/lofi%20beats")
         #expect(MediaTool.searchURL(service: "youtube", query: "a&b")?.absoluteString == "https://www.youtube.com/results?search_query=a%26b")
         #expect(MediaTool.searchURL(service: "other", query: "x") == nil)
+    }
+
+    @Test func aPlaylistDraftIsCheckedBeforeTheCard() throws {
+        let args = JSONValue.object([
+            "name": .string(" Road Trip "),
+            "songs": .array([.string("Midnight City M83"), .string("Outro M83")]),
+            "play": .bool(true),
+        ])
+        let draft = try MediaTool.PlaylistDraft.parse(args)
+        #expect(draft.name == "Road Trip" && draft.songs.count == 2 && draft.play && draft.note == nil)
+        let summary = MediaTool.playlistConfirmation(args)
+        #expect(summary.contains("Road Trip") && summary.contains("2"))
+        #expect(try MediaTool.PlaylistDraft.parse(.object([
+            "name": .string("Quiet"),
+            "songs": .array([.string("Song")]),
+            "play": .bool(false),
+        ])).play == false)
+        #expect((try? MediaTool.PlaylistDraft.parse(.object([
+            "name": .string(""),
+            "songs": .array([.string("Song")]),
+        ]))) == nil)
+        #expect((try? MediaTool.PlaylistDraft.parse(.object([
+            "name": .string("Empty"),
+            "songs": .array([]),
+        ]))) == nil)
     }
 }
