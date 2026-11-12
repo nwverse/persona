@@ -87,7 +87,7 @@ See `docs/android/android.md` ("App shell and direct page navigation," the Setti
 | `phone_home_run_scene {scene_id}` | Home | **Yes** | Runs a scene; the card says when it touches a security accessory |
 | `phone_notifications_list {limit?}` | None | No | **Android only**: Persona's own currently displayed notifications (id, title, body, time), newest first, default 50, maximum 100; excludes confirmation-card notifications and cannot see other apps' notifications |
 
-In the Persona chat on iPhone, the results of `phone_location_current`, `phone_location_search` and `phone_maps_search_nearby` are also drawn as a map card under the turn's work line, with numbered pins and Directions to Apple Maps (#5543; instant result cards in `docs/assistant/unified-entry.md`). The tool calls stay folded.
+In the Persona chat on iPhone, the results of `phone_location_current`, `phone_location_search` and `phone_maps_search_nearby` are also drawn as a map card under the turn's work line, with numbered pins and Directions to Apple Maps (#5543), and directions `phone_maps_navigate` opened in Maps as the destination's card with its mode and a button that opens them again (#5545; instant result cards in `docs/assistant/unified-entry.md`). The tool calls stay folded.
 
 ### Reminders by place (#6564)
 

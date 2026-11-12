@@ -232,7 +232,29 @@ struct TasksTests {
         #expect(PlaceMapResult(toolCall("phone_maps_search_nearby", result: #"{"count":0,"places":[]}"#)) == nil)
         #expect(PlaceMapResult(toolCall("phone_location_current", result: #"{"error":"denied"}"#, error: true)) == nil)
         #expect(PlaceMapResult(toolCall("phone_location_current", result: nil)) == nil) // still running
+        // Navigate is a hand-off only when Maps opened (`opened: maps`, below).
         #expect(PlaceMapResult(toolCall("phone_maps_navigate", result: #"{"latitude":31.2,"longitude":121.4}"#)) == nil)
+    }
+
+    /// Directions handed to Maps become a card too (#5545): the destination, its name and the mode it went with. A
+    /// failure, a result Maps didn't open or coordinates out of range draw nothing; a mode Persona doesn't know is left out.
+    @Test func mapsHandoffsComeFromTheNavigateTool() throws {
+        let walk = try #require(PlaceMapResult(toolCall("mcp__persona__phone_maps_navigate", result: """
+            {"opened":"maps","destination":"安静书房咖啡","latitude":31.2291,"longitude":121.4769,"mode":"walking",
+            "note":"Directions are open in the Maps app; navigation runs there, not in Persona."}
+            """)))
+        #expect(walk.kind == .handoff && walk.mode == .walking && walk.places.count == 1)
+        #expect(PlaceMapText.destination(walk.places[0]) == "安静书房咖啡")
+        #expect(PlaceMapText.handoff(.walking) == PlaceMapText.mode(.walking) + " · " + PlaceMapText.handoff(nil))
+        let unnamed = try #require(PlaceMapResult(toolCall("phone_maps_navigate",
+            result: #"{"opened":"maps","latitude":31.2,"longitude":121.4,"mode":"helicopter"}"#)))
+        #expect(unnamed.mode == nil && unnamed.places[0].name == nil)
+        #expect(PlaceMapText.destination(unnamed.places[0]) == String(localized: "Destination [Place Map]"))
+        #expect(PlaceMapResult(toolCall("phone_maps_navigate", result: #"{"error":"Maps did not open"}"#, error: true)) == nil)
+        #expect(PlaceMapResult(toolCall("phone_maps_navigate", result: #"{"opened":"maps","latitude":120,"longitude":121.4}"#)) == nil)
+        #expect(PlaceMapResult(toolCall("phone_maps_navigate", result: nil)) == nil) // still running
+        // Only a hand-off carries a mode.
+        #expect(PlaceMapResult(toolCall("phone_location_current", result: #"{"latitude":31.2,"longitude":121.4,"mode":"walking"}"#))?.mode == nil)
     }
 
     /// The map shows every place, and one place is not drawn at street level.
@@ -250,6 +272,10 @@ struct TasksTests {
         let call = toolCall("mcp__persona__phone_location_current", result: #"{"latitude":31.2,"longitude":121.4}"#)
         let work = ChatLine.work(id: "wt-1", items: [.step(.call(call))], live: false, start: .now, end: .now)
         #expect(ChatLines.quickResults([user(1, 5), work, answer(2, 4)]).map(\.id) == ["1#0", "wt-1", "map-10#0", "2#0"])
+        // A hand-off to Maps goes to the same place (#5545).
+        let handoff = toolCall("mcp__persona__phone_maps_navigate", result: #"{"opened":"maps","latitude":31.2,"longitude":121.4}"#, seq: 20)
+        let handoffWork = ChatLine.work(id: "wt-2", items: [.step(.call(handoff))], live: false, start: .now, end: .now)
+        #expect(ChatLines.quickResults([user(1, 5), handoffWork, answer(2, 4)]).map(\.id) == ["1#0", "wt-2", "map-20#0", "2#0"])
     }
 
     /// A turn's quick result goes right after its work line, after the line's open steps.
