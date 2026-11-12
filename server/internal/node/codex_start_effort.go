@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/shellcmd"
 )
 
 // A purpose's or tier's effort reaches a new Codex as `-c model_reasoning_effort=<effort>` (control.go), but any -c
@@ -32,7 +33,7 @@ var codexProfileKey = lazyre.New(`(?m)^[ \t]*"?profile"?[ \t]*=`)
 // after both and apply either way (codex-rs config_layer_source.rs).
 func (n *Node) codexEffortInherited(argv []string, cwd, effort string) bool {
 	words := argv
-	for len(words) > 0 && assignRe.MatchString(words[0]) {
+	for len(words) > 0 && shellcmd.AssignRe.MatchString(words[0]) {
 		if strings.HasPrefix(words[0], "CODEX_HOME=") {
 			return false
 		}

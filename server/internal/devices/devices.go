@@ -646,10 +646,11 @@ func (d *Devices) Call(ctx context.Context, p devicewire.NodeCall) (json.RawMess
 	if p.Method == "session.unwatch" && m.follows(params) {
 		return json.RawMessage(`{}`), nil // the manager still follows it: the node keeps sending its items
 	}
-	var receipt string
+	var receipt, preparation string
 	var prepareErr error
-	params, receipt, prepareErr = d.prepareShareCall(ctx, p, params)
+	params, receipt, preparation, prepareErr = d.prepareShareCall(ctx, p, params)
 	if prepareErr != nil {
+		d.observeCreationCall(p, nil, nil, preparation, prepareErr)
 		return nil, wireError(prepareErr)
 	}
 	if refusesHandoff(p.Method, params) { // and on what actually goes (prepareShareCall re-marshals it)
@@ -657,6 +658,7 @@ func (d *Devices) Call(ctx context.Context, p devicewire.NodeCall) (json.RawMess
 	}
 	var out json.RawMessage
 	err := m.call(ctx, p.Method, params, &out)
+	d.observeCreationCall(p, params, out, preparation, err)
 	d.finishShareCall(ctx, p, receipt, out, err)
 	m.noteOpened(p.Method, params, err)
 	if err != nil {
@@ -727,15 +729,51 @@ func (d *Devices) Reconnect(id string) error {
 func (d *Devices) List() []Summary {
 	out := []Summary{}
 	for _, m := range d.machinesNow() {
-		m.mu.Lock()
-		s := Summary{ID: m.cfg.ID, Name: m.name(), Kind: m.cfg.Kind, SSHHost: m.cfg.SSHHost, Home: m.info.Home,
-			DataDir: m.info.DataDir, Online: m.online}
-		m.mu.Unlock()
-		s.Trust = d.machineTrust(m)
-		s.Reachable = m.reachable()
-		out = append(out, s)
+		out = append(out, d.summaryOf(m))
 	}
 	return out
+}
+
+// summaryOf is one machine as List has it.
+func (d *Devices) summaryOf(m *Machine) Summary {
+	m.mu.Lock()
+	s := Summary{ID: m.cfg.ID, Name: m.name(), Kind: m.cfg.Kind, SSHHost: m.cfg.SSHHost, Home: m.info.Home,
+		DataDir: m.info.DataDir, Online: m.online || m.warmLocked(time.Now())}
+	m.mu.Unlock()
+	s.Trust = d.machineTrust(m)
+	s.Reachable = m.reachable()
+	return s
+}
+
+// Summary is List's entry for the machine id names (an entry another one absorbed: that one's), false when List has
+// none: the first listed machine with Canonical(id) as its id, found without the summaries of the others (their trust
+// reads every path's configuration). The fleet asks for one machine on every list a node sends.
+func (d *Devices) Summary(id string) (Summary, bool) {
+	m := d.listed(d.Canonical(id))
+	if m == nil {
+		return Summary{}, false
+	}
+	return d.summaryOf(m), true
+}
+
+// listed is the first of machinesNow with this id, read in place rather than from a copy of the list; nil when none
+// has it.
+func (d *Devices) listed(id string) *Machine {
+	f := &d.fleet
+	f.mu.Lock()
+	order := f.order // replaced whole by a regroup, never written into
+	f.mu.Unlock()
+	if order == nil {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		order = d.entries
+	}
+	for _, m := range order {
+		if m.cfg.ID == id {
+			return m
+		}
+	}
+	return nil
 }
 
 // View is one machine with what its node said of itself (node.info), and its sessions as the node listed them.
@@ -751,7 +789,7 @@ func (d *Devices) Views() []View {
 	for _, m := range d.machinesNow() {
 		m.mu.Lock()
 		v := View{Summary: Summary{ID: m.cfg.ID, Name: m.name(), Kind: m.cfg.Kind, SSHHost: m.cfg.SSHHost, Home: m.info.Home,
-			DataDir: m.info.DataDir, Online: m.online}, Info: m.info, Sessions: slices.Clone(m.sessions)}
+			DataDir: m.info.DataDir, Online: m.online || m.warmLocked(time.Now())}, Info: m.info, Sessions: slices.Clone(m.sessions)}
 		m.mu.Unlock()
 		v.Trust = d.machineTrust(m)
 		v.Reachable = m.reachable()
@@ -787,6 +825,19 @@ type Summary struct {
 // Has reports whether id is one of the machines (an entry another one absorbed included).
 func (d *Devices) Has(id string) bool { return d.machineByID(id) != nil }
 
+// NodeAnnounced reports whether machine id's node is connected and announced capability in its handshake, never
+// assumed for an older node: the assistant checks secret_env before it shows a hand-off card.
+func (d *Devices) NodeAnnounced(id, capability string) bool {
+	m := d.machineByID(id)
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	info, connected := m.info, m.peer != nil
+	m.mu.Unlock()
+	return connected && info.Protocol > 0 && slices.Contains(info.Capabilities, capability)
+}
+
 // CallNode is a call to a machine's node from the manager itself (the assistant's device.call): errors as the
 // hub's were (apierr.ErrOffline, rpc.ErrClosed, the node's *rpc.Error).
 func (d *Devices) CallNode(ctx context.Context, id, method string, params json.RawMessage) (json.RawMessage, error) {
@@ -814,6 +865,17 @@ func (d *Devices) Session(id, session string) (proto.Session, bool) {
 		return proto.Session{}, false
 	}
 	return m.session(session)
+}
+
+// Watched says whether the hub watches a machine's session for its apps (session.watch): an app has it open.
+func (d *Devices) Watched(id, session string) bool {
+	m := d.machineByID(id)
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.watched[session]
 }
 
 // Sessions are a machine's sessions as its node listed them; false when there is no such machine.

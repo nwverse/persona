@@ -24,6 +24,15 @@ import (
 // says.
 const subscriptionsFeature = "source_subscriptions"
 
+// subscriptionPushFeature says a device can hand in its own items (POST /api/v1/subscriptions/-/push, #3848): the iOS
+// Shortcuts action tells an older hub apart by it.
+const subscriptionPushFeature = "subscription_push"
+
+// inboxSourcesFeature says the pages are Inbox Sources (#5278): the built-in sources beside the subscriptions, the
+// recommended ones, Set Up with the assistant (persona://ask) and the preview. The apps show Settings' Inbox Sources
+// row only with it; an older manager's pages list subscriptions alone.
+const inboxSourcesFeature = "inbox_sources"
+
 // subscriptionsShown says whether the report carries subscriptionsFeature.
 func (h *Manager) subscriptionsShown() bool { return h.subs != nil && h.subs.Features().Deliver }
 
@@ -341,6 +350,24 @@ func (h *Manager) subscriptionRoutes(mux *http.ServeMux) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(s)
+	}))
+	// A device's own items (#3848): the iOS Shortcuts action hands them in, and its push source is made on the first
+	// push (no items: only the source, added by hand).
+	api.HandleFunc("POST /api/v1/subscriptions/-/push", h.subscriptionChange(func(w http.ResponseWriter, r *http.Request, by subscriptions.Actor) {
+		if principalOf(r.Context()).ID == "" {
+			writeErrCode(w, http.StatusBadRequest, subscriptions.CodeBadRequest, errors.New("a push comes from a paired device"))
+			return
+		}
+		var in subscriptions.PushRequest
+		if !readSubscriptionJSON(w, r, &in) {
+			return
+		}
+		out, err := h.subs.Push(r.Context(), by, in)
+		if err != nil {
+			writeSubscriptionErr(w, err)
+			return
+		}
+		writeJSON(w, out)
 	}))
 	api.HandleFunc("DELETE /api/v1/subscriptions/{id}", h.subscriptionChange(func(w http.ResponseWriter, r *http.Request, by subscriptions.Actor) {
 		data, _ := strconv.ParseBool(r.URL.Query().Get("data"))

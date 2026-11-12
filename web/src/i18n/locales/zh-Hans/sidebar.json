@@ -19,6 +19,7 @@
   "persona_chats": "Persona 对话",
   "new_chat": "新对话",
   "all_chats": "全部对话",
+  "recent_chats": "最近",
   "pages": "页面",
   "grouping_header": "Agent 分组",
   "new_agent": "新建 Agent",
@@ -148,5 +149,6 @@
   "switcher_label_waiting": "{name}，切换助手。别的助手有事等你处理",
   "switcher_count": "{count} 件等你处理",
   "leader_working": "在做 {count}",
-  "leader_needs_you": "等你 {count}"
+  "leader_needs_you": "等你 {count}",
+  "codex_waiting": "等第一条消息"
 }
