@@ -22456,7 +22456,7 @@ def work_timeline_live(send, mid, sid):
     threading.Thread(target=run, daemon=True).start()
 
 
-MOCK_HELP.append("MOCK_WORK_TIMELINE=1  工作摘要展开成 cindy 的时间线（#5155）：天气 Agent（WORKTL）一轮做完、一轮在做，中间有叙述、有字和没字的思考；Persona 主对话同样一轮做完一轮在做；声明了 session_live 的连接订阅这两个会话时每 5 秒推一次「在思考」")
+MOCK_HELP.append("MOCK_WORK_TIMELINE=1  work summaries that open to cindy's timeline (#5155): the weather Agent (WORKTL) and the Persona main conversation each have a finished and a live turn, with narration between runs of steps and thoughts with and without words; a connection that declared session_live and subscribes to either is told every 5 s that it is thinking")
 
 
 # ---------- MOCK_CHAT_CARDS: a crowded composer on a phone (#1996) ----------

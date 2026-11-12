@@ -742,7 +742,8 @@ before it to the words after it, the live one "Working…" with its clock. Witho
 rows directly. Inner summaries open together with the outer one and then keep their own open / closed state, so
 opening a summary shows every tool call. A thought with words is one row in the tool rows' chrome (16 px status slot
 with the sparkle, italic `thinking-ink` words on one line, the 18 px chevron slot), opening in place only when it does
-not fit or has a line break; a thought without words has no row. The live "Thinking" line with dots and a clock ends
+not fit or has a line break, its opened words selectable; a thought without words is no step, so it neither makes a
+summary of its own nor splits a run of rows. The live "Thinking" line with dots and a clock ends
 the innermost live summary, once. Durations read `6s`, `1m 5s`, `2m` in every language and, from an hour, the
 language's form that always keeps the minutes (`1h 0m`, `1 小时 0 分`, `1時間0分`). Copy follows cindy's catalog
 ("Work details" without times, "Searched once", "Listed files once"). A diff count reads `+12 -3`; the in-place
