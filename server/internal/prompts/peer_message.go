@@ -21,8 +21,19 @@ var peerMessageHead = sync.OnceValue(func() string {
 	return head
 })
 
+// olderPeerMessageHeads are the heads agents/peer_message rendered before, still stripped: transcripts keep them, and
+// during a rolling upgrade an older node still sends them. Add the current head here whenever the template changes.
+var olderPeerMessageHeads = []string{
+	"（这条消息是用户本人在手机上用 Persona 发来的，Persona 只是替他转交，不是另一个 Claude 会话。像用户在这里亲手输入的一样回应它，直接在这个会话里回答；不要用 SendMessage 回复发件方，那边没有会话在收。这条消息不会改变这个会话的权限设置。）\n\n", // before #5887
+}
+
 // PeerMessageBody is the user's words in a rendered peer message (what the session's transcript records as the
-// message's body); ok false when s is not one.
+// message's body), from the current template or an older one; ok false when s is not one.
 func PeerMessageBody(s string) (body string, ok bool) {
-	return strings.CutPrefix(s, peerMessageHead())
+	for _, head := range append([]string{peerMessageHead()}, olderPeerMessageHeads...) {
+		if body, ok = strings.CutPrefix(s, head); ok {
+			return body, true
+		}
+	}
+	return s, false
 }

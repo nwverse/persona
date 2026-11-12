@@ -75,6 +75,8 @@ fun ChatScreen(
     sessionKey: SessionKey, repository: ChatRepository, sender: MessageSender,
     interactions: InteractionCenter, sessions: SessionsRepository, onBack: () -> Unit,
     onTerminal: ((SessionKey) -> Unit)? = null,
+    /** Resume in Terminal (#5565): open the terminal and resume there; null when the shell has no terminal. */
+    onResumeInTerminal: ((SessionKey) -> Unit)? = null,
     chrome: ChatChromeBindings = ChatChromeBindings(),
     pendingBadge: @Composable () -> Unit = { PendingBadge(PendingStatus.NeedsReview) },
     readingKey: ChatReadingKey? = null,
@@ -101,7 +103,8 @@ fun ChatScreen(
         key(sessionKey, scopedReadingKey) {
             val readOnlyRefusal = androidx.compose.ui.res.stringResource(R.string.chat_read_only_history)
             val pageSender = remember(sender, historyReadOnly) { if (historyReadOnly) ReadOnlyMessageSender(sender, readOnlyRefusal) else sender }
-            ChatPage(sessionKey, repository, pageSender, interactions, sessions, onBack, onTerminal, chrome, scopedReadingKey, anchorStore ?: local?.anchors,
+            ChatPage(sessionKey, repository, pageSender, interactions, sessions, onBack, onTerminal, onResumeInTerminal, chrome,
+                scopedReadingKey, anchorStore ?: local?.anchors,
                 renderStyle, textUpdates,
                 composerService, composerState ?: rememberChatComposerState(), onDraftChanged, onContextCleared, statusBindings,
                 embedded, showTopBar, historyReadOnly, historyFooter, historySession)
@@ -114,7 +117,7 @@ fun ChatScreen(
 private fun ChatPage(
     key: SessionKey, repository: ChatRepository, sender: MessageSender,
     interactions: InteractionCenter, sessions: SessionsRepository, onBack: () -> Unit,
-    onTerminal: ((SessionKey) -> Unit)?, chrome: ChatChromeBindings,
+    onTerminal: ((SessionKey) -> Unit)?, onResumeInTerminal: ((SessionKey) -> Unit)?, chrome: ChatChromeBindings,
     readingKey: ChatReadingKey?, anchorStore: ChatAnchorStore?,
     renderStyle: ChatRenderStyle, textUpdates: Map<String, ChatTextUpdate>,
     composerService: ChatComposerService?, composer: ChatComposerState,
@@ -576,6 +579,7 @@ private fun ChatPage(
     // A session without a terminal (a Codex thread, an agent runtime's) has nothing to open or explain (#4339 C7).
     val hasTerminal = ChatTerminalPlaces.has(readOnly, canTerminal, renderStyle)
     val agentTerminal = terminal?.takeIf { hasTerminal }
+    val resumeInTerminal: (() -> Unit)? = onResumeInTerminal?.let { action -> { action(key) } }
     val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
 
     fun followEnd() {
@@ -620,12 +624,6 @@ private fun ChatPage(
         if (readOnly || !canSend) return false
         if (sending || submittedDraft != null) return false
         if (command == null && ((!composer.hasContent && linkContexts.isEmpty()) || !composer.ready)) return false
-        // Routed to a task ("Say to "xx""): straight to its agent, not to Persona (docs/assistant/unified-entry.md "Routing").
-        if (command == null && tasks != null && linkContexts.isEmpty() && composer.attachments.isEmpty() &&
-            tasks.sendRouted(key.sessionId, composer.value.text.trim()) { notice = operationFeedback(it).text.resolve(res) }) {
-            composer.clearIfUnchanged(composer.draft)
-            return true
-        }
         val draft = composer.draft
         val refs = if (command == null) linkContexts else emptyList()
         val wireText = command ?: linkMessage(composer.message(), refs, context.resources)
@@ -637,12 +635,18 @@ private fun ChatPage(
         followEnd()
         scope.launch {
             try {
-                // The user's own message carries out a launcher switch waiting on Glass, where the pill shows it (#5055):
-                // `apply_switch`; any other message leaves it waiting.
-                if (command == null && switchesNext(switchSession, glass && agentChat)) {
-                    sender.sendApplyingSwitch(key, wireText, id)
-                    drawnSwitch = null
-                } else sender.send(key, wireText, id, null, conversationLauncher, conversationModel)
+                // Routed to a task ("Say to "xx""): its accepted response, not launching the request, consumes the route
+                // and clears the draft below. Until then this has the same pending state as an ordinary send (#5949).
+                val routed = command == null && tasks != null && refs.isEmpty() && draft.attachments.isEmpty() &&
+                    tasks.sendRouted(key.sessionId, draft.text.trim())
+                if (!routed) {
+                    // The user's own message carries out a launcher switch waiting on Glass, where the pill shows it (#5055):
+                    // `apply_switch`; any other message leaves it waiting.
+                    if (command == null && switchesNext(switchSession, glass && agentChat)) {
+                        sender.sendApplyingSwitch(key, wireText, id)
+                        drawnSwitch = null
+                    } else sender.send(key, wireText, id, null, conversationLauncher, conversationModel)
+                }
                 if (command == null) {
                     composer.clearIfUnchanged(draft)
                     linkContexts = linkContexts.filterNot { ref -> refs.any { it.id == ref.id } }
@@ -1027,7 +1031,12 @@ private fun ChatPage(
                 .map { (todo, state) -> MentionTask(todo.id, todo.title, todo.place(host, null), state.status()) }
         }
     }
-    val mentions = if (readOnly || !canSend) null else ComposerMentions(mentionFiles, session?.cwd.orEmpty(), sessionList, key, taskMentions)
+    // Its session's folder and any folder a typed path names are read from the session's computer, as iOS's `MentionSource` does.
+    val mentionFolders = remember(chrome.files, key.machineId) {
+        chrome.files?.let { files -> MentionFolders { dir, cwd -> files.directory(key.machineId, cwd, dir).entries } }
+    }
+    val mentions = if (readOnly || !canSend) null
+        else ComposerMentions(mentionFiles, session?.cwd.orEmpty(), sessionList, key, taskMentions, mentionFolders)
     // An assistant conversation's cards answer through its hub's store (docs/assistant/assistant-views.md); elsewhere they only draw.
     val cardsHost = remember(tasks, key.sessionId, readOnly, canSend) {
         tasks?.let { persona.core.domain.views.AssistantCardsHost(key.sessionId, it.cards, it.cardActions, interactive = !readOnly && canSend) }
@@ -1151,6 +1160,7 @@ private fun ChatPage(
                                         onOpenTodo = chrome.onOpenTodo, agentShares = chrome.agentShares, worktrees = chrome.worktrees,
                                         onSearch = { search.open(chatList) { timeline.freeze(currentItems); timelineVersion++ } },
                                         onTerminal = agentTerminal, onTerminalHelp = if (hasTerminal && terminal == null) ({ terminalHelp = true }) else null,
+                                        onResumeInTerminal = resumeInTerminal,
                                         turnStart = runningSince)
                                     // The space's other tabs under the title (iOS SiblingTabs); not for the assistant's conversation.
                                     if (tabs && session != null && onOpenSibling != null) {
