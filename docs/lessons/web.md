@@ -19,6 +19,16 @@ change, measured 34 B more for ja (19 B over the budget) while the first screen'
 string in place of each built file's hash (`firstScreenBytes` in `web/src/startup-preload.ts`), so only a change to what
 the code does moves the number. Any other compressed-size check over Vite's output needs the same.
 
+## A lazy chunk's new import renames a first-screen chunk's exports (#5331)
+
+Rollup gives each export of a shared chunk a minified alias in the chunk's own order (`a`, `b`, …, `eu`, `ev`) and sorts
+the chunk's `export{…}` list by alias. When a lazy page imports a name from a first-screen chunk that the chunk did not
+export yet (#5310's lazy workflow board took `CATALOG_POLL_MS` and `isResumed` from `App`), the chunk gains one export,
+every later alias moves on by one, the list reorders and every first-screen import of those names is renamed: `App`
+grew 9 B, but the ja count grew 255 B and `main` failed the build, with no first-screen code changed. `firstScreenBytes`
+now counts imported names as one fixed string and export lists as empty ones. To check a surprising move, compare the
+number of entries in each first-screen chunk's `export{…}` between the two builds.
+
 ## A new list of sessions folds child sessions too (#5120)
 
 Child sessions (`folded_under`) are left out of lists and counts in one place, `foldRows` (`lib/folded-rows.ts`), which
@@ -35,6 +45,15 @@ hub: send `roots=1` on every page and count read while hello lists `sessions_hie
   look (the editor's `dark`).
 - A layer that closes on Esc from a capture-phase `keydown` on the window runs before an open menu's handler (also capture,
   registered later). It has to leave Esc alone while its menu is open, or Esc closes the editor instead of the menu.
+
+## Review dismissal must not be bypassed by an old runtime error (#5311)
+
+A task can have both a current `needs_user` review and an idle Agent with a transient `turn_error`. The latter makes its
+status `interrupted`; guarding dismissal and Later with `!waits` therefore leaves the decision visible even after a
+successful persisted dismissal. Protect actual Agent input (`asks` or `needs_you`), not every attention status. Hide the
+review round optimistically in the existing local deferral store, replace that mask with the confirmed receipt, and
+remove the mask on failure. Finish loading in `finally`; unmounting is not a completion signal. Regress both note-only
+and structured reviews with a runtime error, delayed writes, stale list reads, failure recovery, Undo and new rounds.
 
 ## Review state is not an answerable decision (#4808)
 
