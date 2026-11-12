@@ -558,8 +558,8 @@ nonisolated enum Theme {
         /// The height of the map in a saved place's editor: the reminder's circle with the streets around it, and room to
         /// pan the map and tap where the place is (#4248).
         static let placeMap: CGFloat = 220
-        /// An Agent chat's header folded into its slim bar (`ChatChrome.compactHeight`; Android's `Tokens.Size.slimBar`).
-        static let slimBar: CGFloat = 40
+        /// The map a place answer draws in the chat (`PlaceMapCard`, #5543): small enough to scroll past.
+        static let chatMap: CGFloat = 160
         static let box110: CGFloat = 110
         static let box120: CGFloat = 120
         /// The longest a tab's name gets in the chat header's strip of the space's tabs: one long name cannot push the

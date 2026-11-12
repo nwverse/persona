@@ -34,6 +34,7 @@ import persona.core.contracts.api.ReadinessSuggestion
 import persona.core.contracts.api.ReadinessStep
 import persona.core.contracts.api.ChannelSources
 import persona.core.designsystem.*
+import persona.core.designsystem.dense
 import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
@@ -43,6 +44,7 @@ import persona.core.contracts.api.MessageSender
 import persona.core.contracts.api.DraftRepository
 import persona.core.contracts.api.DraftKey
 import persona.core.contracts.api.ChatComposerService
+import persona.core.designsystem.row
 import persona.feature.chat.ChatComposer
 import persona.feature.chat.ChatComposerState
 import persona.feature.chat.ChatDraftEditor
@@ -173,6 +175,12 @@ fun AssistantScreen(
     }
     val managers = assistantManagers(managerRoster, managerChoice, androidx.compose.ui.platform.LocalResources.current)
     val outbox by (mainConversationSender?.outbox ?: messageSender.outbox).collectAsStateWithLifecycle()
+    val receivedSendReceipts by key(mainConversationSender, messageSender, managerChoice.hubId, managerChoice.shown) {
+        (mainConversationSender?.sendReceipts ?: messageSender.sendReceipts).collectAsStateWithLifecycle()
+    }
+    val mainReceipts = receivedSendReceipts.filter { receipt -> receipt.session == snapshot.mainSession ||
+        (managerChoice.manager == null && receipt.mainTarget && outbox.any { it.mainTarget &&
+            (it.session == receipt.session || (receipt.session == PendingMainConversation && it.clientMessageId == receipt.clientMessageId)) }) }
     val mainMessages = if (managerChoice.manager == null) outbox.filter { (it.mainTarget || it.session == PendingMainConversation) && (it.session == PendingMainConversation || it.session == snapshot.mainSession) } else emptyList()
     val scope = rememberCoroutineScope()
     val sharedSidebar = LocalAssistantSidebarHost.current
@@ -816,6 +824,10 @@ fun AssistantScreen(
                 // On Glass with lines over the composer, the dock is on the page's own backdrop (NeedsBackdrop).
                 if (shellLines.isNotEmpty()) NeedsBackdrop(NeedsFade, Modifier.matchParentSize())
                 Column {
+                    if (hasComposer && active == null && !viewingMainQueue && (sending || mainReceipts.isNotEmpty())) {
+                        StatusLine(assistantStatus(null, emptyList(),
+                            submittingId = pendingClientId.takeIf { sending }, receipts = mainReceipts))
+                    }
                     if (hasComposer && active == null && !viewingMainQueue) {
                         val cardModifier = (if (shellLines.isEmpty()) Modifier else Modifier.onSizeChanged { needsRoom.above = it.height })
                             .padding(horizontal = pagePadding).padding(bottom = Tokens.Space.s)
@@ -914,7 +926,9 @@ fun AssistantScreen(
             } else if (viewingMainQueue || (active != null && !hasChat)) {
                 val visible = if (active != null) outbox.filter { it.session == active } else mainMessages
                 AssistantPendingConversation(visible, snapshot.conversations.firstOrNull { it.key == active },
-                    Modifier.fillMaxSize(), contentPadding = padding, demo = demo, emptyDetail = managers.offlineEmpty,
+                    Modifier.fillMaxSize(), contentPadding = padding, demo = demo,
+                    receipts = if (active != null) receivedSendReceipts.filter { it.session == active } else mainReceipts,
+                    emptyDetail = managers.offlineEmpty,
                     onRefusal = { action -> runReadinessAction(action) },
                     onRetry = { message -> scope.launch {
                         // Asked again first: a step still missing opens instead of sending into the same refusal.
@@ -1151,12 +1165,12 @@ private fun NewChatPage(
         columns = GridCells.Fixed(2), state = grid,
         modifier = Modifier.fillMaxSize().then(if (room == null) Modifier else Modifier.onGloballyPositioned { gridTop = it.positionInRoot().y.roundToInt() }),
         contentPadding = PaddingValues(start = pagePadding, end = pagePadding,
-            top = contentPadding.calculateTopPadding() + 16.dp, bottom = contentPadding.calculateBottomPadding() + 24.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp),
+            top = contentPadding.calculateTopPadding() + 16.dp.dense, bottom = contentPadding.calculateBottomPadding() + 24.dp.dense),
+        horizontalArrangement = Arrangement.spacedBy(12.dp.dense), verticalArrangement = Arrangement.spacedBy(12.dp.dense),
     ) {
         if (demo) item(span = { GridItemSpan(2) }) { AssistantDemoNotice() }
         item(span = { GridItemSpan(2) }) {
-            Column(Modifier.padding(vertical = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(Modifier.padding(vertical = 20.dp.dense), verticalArrangement = Arrangement.spacedBy(12.dp.dense)) {
                 Text(stringResource(greeting(LocalTime.now().hour)), style = PersonaTheme.type.largeTitle, color = PersonaTheme.palette.ink)
                 Text(stringResource(if (setup) R.string.assistant_home_setup_lead else R.string.assistant_home_lead),
                     style = PersonaTheme.type.voice, color = PersonaTheme.palette.ink2)
@@ -1180,7 +1194,7 @@ private fun NewChatPage(
         item(span = { GridItemSpan(2) }) {
             Column {
                 JSectionHeader(stringResource(R.string.assistant_online_devices))
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp.dense), verticalArrangement = Arrangement.spacedBy(8.dp.dense)) {
                     machines.filter { it.online }.distinctBy { it.id }.forEach { machine ->
                         JChip(machine.displayName, icon = PhIcons.Desktop)
                     }
@@ -1237,12 +1251,12 @@ private fun HubSuggestionCard(suggestion: ReadinessSuggestion, enabled: Boolean,
 /** A suggestion card on the blank page: an icon, a one-line title and a line under it. */
 @Composable
 private fun SuggestionCard(icon: PhIcon, title: String, detail: String?, onClick: (() -> Unit)?) {
-    JCard(Modifier.fillMaxWidth().heightIn(min = 144.dp), padding = 16.dp, onClick = onClick) {
+    JCard(Modifier.fillMaxWidth().heightIn(min = 144.dp.row), padding = 16.dp.dense, onClick = onClick) {
         JIcon(icon, null, tint = PersonaTheme.palette.accent)
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(12.dp.dense))
         Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis,
             style = PersonaTheme.type.headline, color = PersonaTheme.palette.ink)
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(4.dp.dense))
         Text(detail.orEmpty(), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2,
             maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
@@ -1278,7 +1292,7 @@ internal fun AssistantDrawer(
     var searchVisible by rememberSaveable { mutableStateOf(false) }
     val drawer = LocalHomeDrawer.current
     val resources = androidx.compose.ui.platform.LocalResources.current
-    Column(Modifier.fillMaxHeight().padding(horizontal = if (drawer) Tokens.Space.s else 12.dp)) {
+    Column(Modifier.fillMaxHeight().padding(horizontal = if (drawer) Tokens.Space.s else 12.dp.dense)) {
         val headPadding = Modifier.padding(horizontal = if (drawer) Tokens.Space.l else Tokens.Space.xs).padding(top = Tokens.Space.s)
         val search: @Composable () -> Unit = {
             JIconButton(PhIcons.MagnifyingGlass, stringResource(R.string.assistant_search_chats), { searchVisible = !searchVisible }, raised = true)
@@ -1291,7 +1305,7 @@ internal fun AssistantDrawer(
             }
         }
         if (switcher != null) switcher(headPadding, search.takeIf { drawer }, plainHead) else plainHead()
-        LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 12.dp)) {
+        LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 12.dp.dense)) {
             // The first row is the main conversation, as "Persona" with the app's mark, then a line (#2004, the same on
             // every platform): it is listed nowhere else, has no pin of its own, and is on show whatever the search.
             // Its session keeps its id and title; only the row reads differently.
@@ -1449,7 +1463,7 @@ private fun ConversationRow(
                 selected = selected, tint = if (selected) PersonaTheme.palette.accent else PersonaTheme.palette.ink2) },
             trailing = { JIconButton(PhIcons.DotsThree, stringResource(R.string.assistant_conversation_actions), { menu = true }) }, chevron = false)
         // Under the title, not the icon: a fixed 16dp put it under the icon in glass and board and past it in brief.
-        Row(Modifier.padding(start = rowTitleStart, end = rowPadding, bottom = 10.dp),
+        Row(Modifier.padding(start = rowTitleStart, end = rowPadding, bottom = 10.dp.dense),
             horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
             StatusLabel(session.conversationStatus())
             counts?.let { Text(it, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3, maxLines = 1) }
@@ -1565,7 +1579,7 @@ internal fun AssistantDemo(navigator: Navigator) {
     val messages by repository.outbox.collectAsStateWithLifecycle()
     AssistantScreen(navigator, repository, repository, repository::start, demo = true,
         chatContent = { session ->
-            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp.dense), verticalArrangement = Arrangement.spacedBy(12.dp.dense)) {
                 items(messages.filter { it.session == session }, key = { it.clientMessageId }) { message ->
                     UserBubble(message.text)
                 }

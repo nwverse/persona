@@ -33,6 +33,14 @@ summaries, folder names, the assistant's answers and pushes. Connecting is not c
 last reported and take only a device's own change (`server/internal/hub/locale.go`, `docs/protocol/i18n.md` "Protocol:
 telling hub the language"). Apply the same rule to any hub-wide value inferred from what several devices report.
 
+## Extension feature strings are not transport authority (#5258)
+
+Old hubs merge extension reports into `hello.features`. A new client cannot trust a newly reserved receipt type merely
+because that array contains its name: an older manager can declare both the feature and an unreserved event. Reserve the
+hub's event against manager broadcasts, and advertise its transport version in a dedicated hub-owned hello field that
+old report merging cannot manufacture. Bind trust to the current authenticated connection and clear it on reconnect or
+credential changes; cached UI capabilities are not live socket proof. Test both old feature injection and old-socket frames.
+
 ## Authority handover must include the trusted keeper roster (#5228)
 
 A machine its manager keeps has moved out of hub.json, but its hub-owned keeper

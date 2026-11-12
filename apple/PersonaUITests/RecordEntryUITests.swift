@@ -68,7 +68,7 @@ final class RecordEntryUITests: XCTestCase {
         XCTAssertTrue(role.waitForExistence(timeout: 5), "Meeting shows Persona's options again")
     }
 
-    /// The drawer's row is Recordings (录音), a place like the rows under it (#5517): a tap opens the page with its Record
+    /// The drawer's row is Recordings, a place like the rows under it (#5517): a tap opens the page with its Record
     /// button and records nothing (no start under way, no microphone prompt, nothing new on the hub). Record is the page's.
     @MainActor func testTheDrawerOpensRecordings() throws {
         let hub = try mockHub()
