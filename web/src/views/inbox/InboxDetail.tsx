@@ -25,6 +25,7 @@ import { markFromRow } from "./InboxList";
 import { AgentWorking, ItemAvatar, Spark, Tag } from "./InboxParts";
 import { InboxExtensionBody } from "./InboxExtensionBody";
 import { InboxLine } from "./InboxLine";
+import { InboxTaskLinks } from "./InboxTaskLinks";
 import { EventBody, type SourceAt } from "./InboxEvent";
 import { chatOfItem, LarkThread } from "./LarkThread";
 
@@ -150,6 +151,7 @@ function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
                 </Button>
               )}
             </div>
+            <InboxTaskLinks item={item} />
             {item.summary && !showEvent && (
               <p className="mt-3 text-[13px] leading-relaxed text-ink">
                 <Spark />

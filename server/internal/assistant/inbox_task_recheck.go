@@ -31,7 +31,8 @@ func (s *Service) inboxTaskLinkRoutes() {
 }
 
 // recheckInboxTask runs only the task judge, including for old events with a saved draft or conversation. Unlike
-// handPass it cannot sweep, escalate, start conversations, file events or send replies. Existing links are preserved.
+// handPass it cannot sweep, escalate, start conversations, file events or send replies. Eligible links are preserved;
+// a bulk notification's stale association is cleared through the normal rollback-aware item write.
 func (s *Service) recheckInboxTask(ctx context.Context, id string) (inboxTaskLinkResult, int, error) {
 	b := &s.inbox
 	b.mu.Lock()
@@ -45,6 +46,24 @@ func (s *Service) recheckInboxTask(ctx context.Context, id string) (inboxTaskLin
 		b.mu.Unlock()
 		out.Status = "closed"
 		return out, http.StatusConflict, nil
+	}
+	if !inboxTaskLinkEligible(it) {
+		out.Status, out.Method = "excluded", "policy"
+		if it.Agent == nil || it.Agent.TodoID == "" {
+			b.mu.Unlock()
+			return out, http.StatusOK, nil
+		}
+		w := beginWrite(it)
+		it.Agent.TodoID = ""
+		b.settle(w)
+		b.mu.Unlock()
+		if failed := s.saveWrites(ctx, []*inboxWrite{w}, "its excluded task link"); failed[id] {
+			return out, http.StatusServiceUnavailable, errInboxNotPersisted
+		}
+		b.mu.Lock()
+		out.Status, out.Item = "cleared", it.listed()
+		b.mu.Unlock()
+		return out, http.StatusOK, nil
 	}
 	if it.Agent != nil && it.Agent.TodoID != "" {
 		b.mu.Unlock()
@@ -78,7 +97,7 @@ func (s *Service) recheckInboxTask(ctx context.Context, id string) (inboxTaskLin
 		return out, http.StatusConflict, nil
 	}
 	b.mu.Lock()
-	if b.items[id] != it || it.Last != snapshot.Last || !it.open() {
+	if b.items[id] != it || it.Last != snapshot.Last || !it.open() || !inboxTaskLinkEligible(it) {
 		b.mu.Unlock()
 		out.Status = "changed"
 		return out, http.StatusConflict, nil

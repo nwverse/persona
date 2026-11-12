@@ -692,7 +692,13 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   actual requested work, not names or messages merely quoted as examples in another task's notes.
   An existing event also supplies up to 1600 characters of its investigation recap, marked as possibly stale subject
   context rather than an instruction or confirmed reply; the current message takes precedence.
-  It requires the AI twin to be enabled and preserves existing links. It answers `{status, method?, item}`: `linked`
+  Eligible events require the AI twin to be enabled and preserve existing links. Bot/app broadcasts are excluded
+  before either exact-link routing or the model judge. Legacy Lark private chats with an explicit user sender
+  identity remain eligible, even if their old kind says `bot`; quoted notification text does not make a human a bot.
+  For an excluded event the maintenance action needs no model or enabled twin: it answers `excluded`, or `cleared`
+  after removing a stale task association through normal rollback-aware writes (`method: "policy"`). It preserves
+  the draft, suggestion, processing conversation and completion state, and publishes no task card or supervisor signal.
+  Other results are `{status, method?, item}`: `linked`
   or `unmatched` (with `method: "judge"` when the model ran), or `existing`; `409` distinguishes `disabled`, `closed`,
   `changed` and `task_closed`. Model failures answer `502`, storage failures `503`, and a missing event `404`.
   A changed message or a task closed during judgment invalidates the result. A new link is persisted through normal
@@ -700,6 +706,10 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   This action never starts processing, sends a reply, changes a suggestion or files an event/task. It does not
   periodically rejudge old events: an operator explicitly requests each bounded recheck. Normal initial escalation
   still judges only events without a processing session; refresh alone does not rejudge an existing draft.
+- **Linked work (Web)**: the detail header shows the linked task and its current task-lineage Agents, each as an
+  in-app link. These are the business task's workers, not the Inbox draft-processing conversation. Older hubs without
+  lineage use unreleased workers; a task still starting never substitutes a previous lineage worker. The shared
+  task list supplies live titles and manager ownership, with the task ID as a fallback before it is loaded.
   Do not invent unknown facts or leave 【】 placeholders for the user; omit unknown details. Include `assistant.notes` as About the user. Edit directly in the sheet or enter "Have AI revise: …" to rewrite.
   Send uses `POST /api/v1/inbox/{id}/reply {text}`: the manager asks hub to post in the original Lark chat through its plugin, or reply by mail (Re: subject, In-Reply-To / References,
   quote first 40 lines, using the receiving account), then mark done (`done_by=replied`). Phone and Watch use the same API.

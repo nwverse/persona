@@ -64,7 +64,7 @@ func (s *Service) linkInboxTaskURLs(ctx context.Context) {
 	var items []*InboxItem
 	b.mu.Lock()
 	for _, it := range b.items {
-		if !it.open() {
+		if !it.open() || !inboxTaskLinkEligible(it) {
 			continue
 		}
 		if it.Agent == nil || it.Agent.TodoID == "" {
