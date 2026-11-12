@@ -36,10 +36,10 @@ install_language() {
 	esac
 }
 
-# install_text <key>: print the text for key in INSTALL_LANG, as it is: each is a printf format whose values (%s) and
-# escapes (\n) install_format fills in, so print one through say / warn / prompt / install_format. Keys and all three
-# translations live in this block.
+# install_text <key>: print the text for key in INSTALL_LANG. Keys and all three translations live in this block.
+# Catalog entries are printed as data: install_format, not this lookup, substitutes their placeholders.
 INSTALL_TEXT_KEYS="admin_help admin_choose admin_invalid_choice admin_cidrs admin_any_confirm admin_any_fallback admin_reminder admin_reminder_if_hub lang_invalid unknown_option pair_hub_conflict pair_listen_conflict role_invalid admin_access_invalid state_conflict python_required state_symlink_unavailable legacy_command_directory artifact_missing unsupported_os unsupported_arch gzip_required fetch_required checksum_tool_required download_failed checksum_missing checksum_mismatch unpack_failed empty_binary create_dest_failed write_failed install_failed release_program_required release_program_kept node_link_required unknown_version program_installed not_on_path herdr_already herdr_installing herdr_installed herdr_failed node_connect_help node_connect_choose node_pair_prompt mac_connector node_switch_warning node_stays_warning hub_found hub_one_only install_node_confirm run_hub_confirm connect_node_confirm hub_setup_next hub_setup_incomplete hub_upgraded hub_run_next messaging_connectors other_computers"
+# shellcheck disable=SC2183 # Catalog entries are format strings; install_format supplies their arguments.
 install_text() {
 	case "$INSTALL_LANG:$1" in
 	en:admin_help) cat <<'TEXT'

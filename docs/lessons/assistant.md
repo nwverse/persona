@@ -14,6 +14,14 @@
   clear counters or call the model again just to repair display. Test every frame, a stopped label and a frame
   change during the request, alongside genuine title changes and manual/unknown sources.
 
+- Measure acknowledgement and execution separately (#5258). A resident `claude -p` process does not imply immediate
+  visible feedback: context preparation, control ACKs and cold-start confirmation all happen before a send returns.
+  Independent context and mode preparation may overlap, but both must finish before input is written; preserve the
+  original mode/effort for a retry when an unconfirmed control rolls back local state. A hub receipt is not durable
+  delivery or model execution, and must not change an already working turn. Test the HTTP/WS boundary, stale snapshots,
+  echo-before-response, failed sends and unknown delivery separately; label fake-CLI timings as such. Production request
+  totals without stage logs cannot establish which stage was slow, and absent logs are never a measured zero.
+
 - Automatic Agent names need title provenance, not a string heuristic alone (#4812). A user can deliberately choose
   a tool-looking name, and an old custom-title record can fall outside a quick tail window. Treat native custom titles
   as protected and unknown provenance as ineligible. Keep automatic names in the manager's own ledger, persist manual

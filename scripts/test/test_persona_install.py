@@ -159,6 +159,35 @@ class PersonaInstallTests(unittest.TestCase):
             for key in keys:
                 self.assertRegex(text, r'(?m)^\s*' + re.escape(lang + ':' + key) + r'\)', (lang, key))
 
+    def test_installer_text_preserves_placeholders_for_its_caller(self):
+        # The catalog is shared with deploy.sh: reading a format string must not consume its placeholders.
+        script = r'''
+set -eu
+install=$1
+eval "$(sed -n '/^# >>> install language/,/^# <<< install language/p' "$install")"
+set -- not-a-catalog-value
+for lang in en zh-Hans ja; do
+  INSTALL_LANG=$lang
+  for key in $INSTALL_TEXT_KEYS; do
+    text=$(install_text "$key")
+    count=$(printf '%s' "$text" | awk '{n += gsub(/%s/, "")} END {print n + 0}')
+    case $count in
+      0) ;;
+      1) [ "$(install_format "$key" one)" = "$(printf "$text" one)" ] ;;
+      2) [ "$(install_format "$key" one two)" = "$(printf "$text" one two)" ] ;;
+      3) [ "$(install_format "$key" one two three)" = "$(printf "$text" one two three)" ] ;;
+      4) [ "$(install_format "$key" one two three four)" = "$(printf "$text" one two three four)" ] ;;
+      5) [ "$(install_format "$key" one two three four five)" = "$(printf "$text" one two three four five)" ] ;;
+      *) printf 'unexpected format count: %s %s: %s\n' "$lang" "$key" "$count" >&2; exit 1 ;;
+    esac
+  done
+done
+printf 'catalog placeholders preserved in all languages\n'
+'''
+        result = subprocess.run(['sh', '-c', script, 'probe', str(INSTALL)], capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('catalog placeholders preserved', result.stdout)
+
     def test_installer_language_from_environment_and_override(self):
         cases = (
             ('English', {'LANG': 'en_US.UTF-8', 'LC_ALL': ''}, (), 'installed at'),
@@ -195,24 +224,18 @@ class PersonaInstallTests(unittest.TestCase):
                 self.assertIn(expected, result.stderr)
                 self.assertFalse((home / '.persona').exists())
 
-    def test_installer_messages_show_their_values(self):
-        # The catalog prints each entry as it is, so install_format fills its values in (#5623): the option an error
-        # names, the command a hint says to run.
-        for lang in ('en', 'zh-Hans', 'ja'):
-            with self.subTest(lang, message='unknown_option'), tempfile.TemporaryDirectory() as directory:
-                result = self.run_install(Path(directory), args=('--lang', lang, '--not-an-option'))
-                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-                self.assertIn('--not-an-option', result.stderr)
-            with self.subTest(lang, message='hub_run_next'), tempfile.TemporaryDirectory() as directory:
-                result = self.run_install(Path(directory), extra={'PERSONA_ROLE': ''}, args=('--lang', lang))
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertRegex(result.stdout, r'/bin/personad hub setup')
-        # A text printed without values still has its line breaks, not a literal \n.
-        with tempfile.TemporaryDirectory() as directory:
-            result = self.run_install(Path(directory), link=LINK_FIXTURE, node=True, extra={'PERSONA_ROLE': 'node'},
-                                      args=('--lang', 'en'), answers=[('Choose one [1-2', '2')])
-            self.assertIn('How should this computer connect to the hub?', result.stdout)
-            self.assertNotIn('\\n', result.stdout)
+    def test_node_connection_help_keeps_its_line_breaks(self):
+        # node_connect_help is a format string with \n in it: printed through install_format, not straight from the
+        # catalog, so the terminal shows separate lines, not a literal \n (#5623). The terminal is the test's own
+        # pseudo-terminal (run_with_terminal, killed after its timeout), never the one running the tests.
+        for lang, heading in (('en', 'How should this computer connect to the hub?'), ('zh-Hans', '这台电脑怎么和 hub 连？'),
+                              ('ja', 'このコンピュータを hub にどう接続しますか？')):
+            with self.subTest(lang), tempfile.TemporaryDirectory() as directory:
+                result = self.run_install(Path(directory), link=LINK_FIXTURE, node=True, extra={'PERSONA_ROLE': 'node'},
+                                          args=('--lang', lang), answers=[('[1-2', '2')])
+                self.assertEqual(result.returncode, 0, result.stdout)
+                self.assertIn(heading, result.stdout)
+                self.assertNotIn('\\n', result.stdout)
 
     def test_admin_access_prompt_uses_selected_language(self):
         cases = (
