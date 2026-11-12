@@ -60,7 +60,11 @@ final class ResumeInTerminalTests: XCTestCase {
             if compact.exists && compact.isHittable { compact.tap(); sleep(1) }
         }
         // At the largest text size a tap now and then lands while the header still settles, and only stops it: tap again.
-        let opened = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "拷贝目录")).firstMatch
+        // There the menu scrolls and only its first items exist, so any of them says it opened (Terminal: not the
+        // stopped line's own button; a session still running elsewhere has no Terminal, and its menu is short).
+        let opened = app.buttons.matching(NSPredicate(
+            format: "label BEGINSWITH %@ OR label BEGINSWITH %@ OR label BEGINSWITH %@ OR (label == %@ AND identifier != %@)",
+            "拷贝目录", "重命名", "文件", "终端", "chat.stopped.terminal")).firstMatch
         for _ in 0..<3 where !opened.exists {
             more.tap()
             _ = opened.waitForExistence(timeout: 5)
