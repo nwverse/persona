@@ -35,9 +35,9 @@ import persona.core.designsystem.*
 import java.io.File
 
 /**
- * The queue strip above the composer (#4339 C6, iOS QueueStrip): folded to its line with Send Now, opened (Glass shows
- * three rows and scrolls), and Send Now's confirmation, in every style, light and dark. PNGs in `build/queue-shots/`
- * (or `-Dpersona.shots=<dir>`).
+ * The queue strip above the composer (#4339 C6, iOS QueueStrip), light and dark: on Glass folded to its line with Send
+ * Now, opened (three rows, then it scrolls) and Send Now's confirmation; Brief and Board always open, as before. PNGs in
+ * `build/queue-shots/` (or `-Dpersona.shots=<dir>`).
  */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
