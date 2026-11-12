@@ -12,16 +12,19 @@ import { api, ApiError } from "./api";
 
 export const DIRECTION_TREE_PATH = "/assistant/directions/tree";
 
-/** A task's state in the tree, as the hub decides it (one rule, in this precedence). */
-export type DirectionTaskState = "needs_you" | "review" | "stuck" | "working";
+/** A task's state in the tree, as the hub decides it (one rule, in this precedence). planned: no agent has worked on
+ *  it yet, such as a piece of a direction a leader recorded and has not handed out (#5846). */
+export type DirectionTaskState = "needs_you" | "review" | "stuck" | "working" | "planned";
 
-export const DIRECTION_TASK_STATES: readonly DirectionTaskState[] = ["needs_you", "review", "stuck", "working"];
+export const DIRECTION_TASK_STATES: readonly DirectionTaskState[] = ["needs_you", "review", "stuck", "working", "planned"];
 
 export interface DirectionCounts {
   working: number;
   needs_you: number;
   stuck: number;
   review: number;
+  /** Not started (#5846): absent from an older hub; normalizeCounts makes it 0. */
+  planned?: number;
 }
 
 export interface DirectionAgent {
@@ -79,7 +82,7 @@ export function normalizeTree(raw: unknown): DirectionTree {
 function normalizeCounts(raw: unknown): DirectionCounts {
   const c = (raw ?? {}) as Partial<Record<keyof DirectionCounts, unknown>>;
   const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
-  return { working: n(c.working), needs_you: n(c.needs_you), stuck: n(c.stuck), review: n(c.review) };
+  return { working: n(c.working), needs_you: n(c.needs_you), stuck: n(c.stuck), review: n(c.review), planned: n(c.planned) };
 }
 
 function validAgent(a: unknown): a is DirectionAgent {
@@ -109,7 +112,7 @@ export function directionTitle(d: Direction, fallback?: string): string {
   return d.name || fallback || d.id;
 }
 
-/** A task state's word (在做 / 等你 / 卡住 / 待验收). */
+/** A task state's word (在做 / 等你 / 卡住 / 待验收 / 未开始). */
 export function directionStateName(s: DirectionTaskState): string {
   switch (s) {
     case "needs_you":
@@ -118,13 +121,16 @@ export function directionStateName(s: DirectionTaskState): string {
       return t("assistant-tasks.review_pending");
     case "stuck":
       return t("lib-state-labels.direction_stuck");
+    case "planned":
+      return t("lib-state-labels.direction_planned");
     default:
       return t("lib-state-labels.direction_working");
   }
 }
 
-/** A task state's text color: needs-you, working, and caution for stuck and review (Tailwind token classes). */
-export const DIRECTION_STATE_TONE: Record<DirectionTaskState, string> = { needs_you: "text-attention", working: "text-orange", stuck: "text-orange", review: "text-orange" };
+/** A task state's text color: needs-you, working, caution for stuck and review, and quiet for not started (Tailwind
+ *  token classes). */
+export const DIRECTION_STATE_TONE: Record<DirectionTaskState, string> = { needs_you: "text-attention", working: "text-orange", stuck: "text-orange", review: "text-orange", planned: "text-ink-3" };
 
 /** Every agent of a task, its children included, depth first. */
 export function taskAgents(td: DirectionTask): DirectionAgent[] {

@@ -572,8 +572,13 @@ data class Session(
      */
     val canDelete: Boolean get() = !assistant && !starting && status in setOf("offline", "done", "idle", "unknown", "interrupted")
     val updated: Instant? get() = parseTime(updatedAt)
-    /** Its workflows still running, newest first. */
-    val runningWorkflows: List<Workflow> get() = workflows.orEmpty().filter { it.isRunning }
+    /**
+     * Its workflows still running, newest first. On a summary row (`summary=1`, one with [waiting]) its [workflowProgress],
+     * the newest running run without its agents and phases, stands for them (#5888), even when the row kept an older
+     * complete row's [workflows] (`keepingDetails`): fresh summary counts win, as in `backgroundWork()`.
+     */
+    val runningWorkflows: List<Workflow> get() = if (waiting != null) listOfNotNull(workflowProgress?.takeIf { it.isRunning })
+        else workflows.orEmpty().filter { it.isRunning }
     /**
      * How much runs in the background without counting a workflow twice: its other background tasks and its running
      * workflows. An older hub sends no [workflows]: every background entry counts, as before.
@@ -691,6 +696,23 @@ data class ModelPick(
 object ModelPickSerializer : WireSerializer<ModelPick>(ModelPick.generatedSerializer())
 
 /**
+ * What POST …/queue answers (docs/protocol/protocol.md, `spec/fixtures/wire/queue.json`): the messages that were queued before
+ * the edit, in order ([queue]) and, in a Persona conversation, each one's photos for the composer ([images]: entry i is
+ * message i's, null for a message without photos; empty when no message had any).
+ */
+@KeepGeneratedSerializer
+@Serializable(with = QueueEditSerializer::class)
+data class QueueEdit(
+    val queue: List<String> = emptyList(),
+    val images: List<List<ImagePayload>?> = emptyList(),
+) {
+    /** The photos of the message at [index]; none when it had none. */
+    fun imagesOf(index: Int): List<ImagePayload> = images.getOrNull(index).orEmpty()
+}
+
+object QueueEditSerializer : WireSerializer<QueueEdit>(QueueEdit.generatedSerializer())
+
+/**
  * A launcher switch waiting for the user's next message (server proto.PendingSwitch): the launcher, the model and effort
  * picked (null: the launcher's default model, the effort it runs with now), the engine when the switch moves the
  * conversation to the other one ([agent], `claude` / `codex`), and when it was picked.
@@ -803,6 +825,14 @@ data class ScreenDialog(
     @SerialName("multi") val multi: Boolean = false,
     /** The submit row's own label ("Submit", or "Next" when another question follows). */
     @SerialName("submit") val submit: String? = null,
+    /** Claude Code's command prompt, read off the terminal (#5265); absent on older hubs and other dialogs. */
+    @SerialName("command") val command: String? = null,
+    @SerialName("description") val description: String? = null,
+    @SerialName("warning") val warning: String? = null,
+    @SerialName("risk") val risk: String? = null,
+    @SerialName("deadline") val deadline: String? = null,
+    @SerialName("deadline_action") val deadlineAction: String? = null,
+    @WireTime @SerialName("deadline_at") val deadlineAt: String? = null,
 )
 
 /** Something a permission card asks to fill in before approving (`proto.Field`, a password); see [Interaction.fields]. */
@@ -871,6 +901,8 @@ data class Interaction(
     @SerialName("tool_title") val toolTitle: String? = null,
     /** The tool alone, without what this call does, for the scope of "Always allow". */
     @SerialName("tool_name_title") val toolNameTitle: String? = null,
+    /** The rule a question a supervisor passed up suggests (#4929); the card comes again without it once it was answered. */
+    val suggestion: RuleSuggestion? = null,
 ) {
     val sessionKey: SessionKey get() = SessionKey(machineId, sessionId)
 

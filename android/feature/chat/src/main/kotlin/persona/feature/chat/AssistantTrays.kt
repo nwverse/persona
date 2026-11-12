@@ -6,10 +6,12 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
@@ -24,6 +26,7 @@ import persona.core.contracts.*
 import persona.core.contracts.api.AssistantInboxDraft
 import persona.core.contracts.api.ScheduledTask
 import persona.core.designsystem.*
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
 import persona.core.domain.answer.*
 import persona.core.domain.tasks.BackgroundWork
@@ -320,9 +323,11 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                                         val detail = trayBackgroundLine(entry.activity) ?: stringResource(R.string.chat_tray_agent_detail, host.machineName(agent.machineId),
                                             agent.activity?.takeIf(String::isNotBlank) ?: agent.lastText.orEmpty())
                                         JRow(onClick = { host.onOpen(agent.key) }, modifier = Modifier.testTag("assistant-agent-${agent.sessionId}"), trailing = {
-                                            Text(stringResource(R.string.chat_tray_working), style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3, maxLines = 1)
+                                            Text(stringResource(if (entry.waiting) R.string.chat_tray_waiting else R.string.chat_tray_working),
+                                                style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3, maxLines = 1)
                                         }) {
-                                            JSpinner(Modifier.testTag("assistant-work-spinner"))
+                                            // iOS: a clock for an agent whose background work only waits, the working mark otherwise
+                                            if (entry.waiting) TrayWaitClock() else JSpinner(Modifier.testTag("assistant-work-spinner"))
                                             Spacer(Modifier.width(Tokens.Space.s))
                                             Column(Modifier.weight(1f)) {
                                                 Text(agent.displayTitle, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink,
@@ -454,6 +459,20 @@ private fun TrayBackgroundSubtitle(work: BackgroundWork?, fallback: String?) {
     } else fallback?.let { Text(it, style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis) }
 }
 
+/**
+ * The clock of a row that waits to be brought back (iOS draws it in `StatusPalette.backgroundWaiting`): Glass in that
+ * state's lighter tone ([trayWaitTint]); Brief and Board keep the row's content color.
+ */
+@Composable
+private fun TrayWaitClock() {
+    JIcon(PersonaIcons.backgroundWaiting, null, decorative = true, modifier = Modifier.testTag("assistant-wait-clock"),
+        tint = trayWaitTint(PersonaTheme.style == AppStyle.Glass, PersonaTheme.palette, LocalContentColor.current))
+}
+
+/** The tone of [TrayWaitClock]: the palette's background-waiting dot on Glass, else the [content] color. */
+internal fun trayWaitTint(glass: Boolean, palette: PersonaPalette, content: Color): Color =
+    if (glass) palette.backgroundWaiting.dot else content
+
 /** "Shelved" and how many, quiet, under In progress's rows (iOS `shelvedLine`): a tap opens the board, which lists them. */
 @Composable
 private fun TrayShelvedLine(count: Int, onClick: () -> Unit) {
@@ -490,7 +509,7 @@ private fun TrayProgressRow(row: TrayProgress, activity: BackgroundWork? = null,
             JSpinner(Modifier.testTag("assistant-work-spinner"))
             Spacer(Modifier.width(Tokens.Space.s))
         } else if (live && waiting) {
-            JIcon(PhIcons.Clock, null, decorative = true, modifier = Modifier.testTag("assistant-wait-clock"))
+            TrayWaitClock()
             Spacer(Modifier.width(Tokens.Space.s))
         }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {

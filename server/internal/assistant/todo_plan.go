@@ -176,6 +176,27 @@ func (s *Service) createPlainTodo(ctx context.Context, title, notes string, plan
 	return s.insertTodo(ctx, row)
 }
 
+// createDirectionTodo makes a piece of leader's direction (#5846): a todo with plan's due date, reminder, priority and
+// project, opened by the leader and supervised by it, with no agent and no done_when, as a Lark topic opens one
+// (feishu_thread_open.go). So the direction tree lists it under that direction (as not started until an agent works on
+// it, direction_tree.go), and task_plan's todo_id can run an agent on it later instead of opening a second todo.
+func (s *Service) createDirectionTodo(ctx context.Context, leader, title, notes string, plan db.TodoEdit) (Todo, error) {
+	now := time.Now().UTC()
+	row := db.TodoRow{ID: "todo_" + randomHex(8), Title: title, Notes: notes, CreatedAt: now, UpdatedAt: now,
+		Origin: leader, Quiet: s.quietTask(ctx, leader)}
+	plan.Title, plan.Notes, plan.Done = nil, nil, nil
+	plan.Apply(&row, now)
+	t, err := s.insertTodo(ctx, row)
+	if err != nil {
+		return Todo{}, err
+	}
+	s.superviseTodo(ctx, t.ID, leader, nil, 0)
+	if cur, ok := s.todoNow(t.ID); ok {
+		t = cur
+	}
+	return t, nil
+}
+
 // editTodo makes edit e to todo id as the user's PATCH does: stored, put into memory, the apps and the hub told; a
 // todo it closes has its outcome recorded and a question's to-do answered as dropped. db.ErrTodoNotFound when it is not
 // there.

@@ -71,8 +71,14 @@
     <string name="assistant_greeting_noon">Good afternoon</string>
     <string name="assistant_greeting_afternoon">Good afternoon</string>
     <string name="assistant_greeting_evening">Good evening</string>
-    <string name="assistant_home_lead">Hand me your messages, plans and whatever\'s on your plate.</string>
-    <string name="assistant_home_note">What you send goes to the main chat. Offline, it\'s saved on this device first.</string>
+    <string name="assistant_home_lead_main">This is your main chat: I\'ll remember what we talk about here. I can see your computers, phone, email, Lark, and organized projects, and I can keep an eye on things and remind you when it\'s time.</string>
+    <string name="assistant_home_lead_side">Start a new side chat. I can see your computers, phone, email, Lark, and organized projects, and I can keep an eye on things and remind you when it\'s time.</string>
+    <string name="assistant_time_just_now">Just now</string>
+    <plurals name="assistant_time_minutes_ago">
+        <item quantity="one">%1$d min ago</item>
+        <item quantity="other">%1$d min ago</item>
+    </plurals>
+    <string name="assistant_time_yesterday">Yesterday</string>
     <string name="assistant_online_devices">Online devices</string>
     <string name="assistant_this_phone">This phone</string>
     <string name="assistant_phone_tools_unavailable">Phone tools unavailable</string>

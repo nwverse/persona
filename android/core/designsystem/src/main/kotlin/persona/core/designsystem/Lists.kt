@@ -28,7 +28,10 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -161,7 +164,10 @@ object SectionHeaderTokens {
 /**
  * One item of a group. List groups ([separate] false) read as one container (a glass panel, ruled rows, a
  * bordered table); separate items are cards of their own (glass cards, wash cards, board strips).
- * [holder] gives board strips their coloured holder; other styles ignore it.
+ * [holder] gives board strips their coloured holder; other styles ignore it. [grouped]: the group is a card of iOS's
+ * grouped list on the black page (the computer's projects, #4338 A11): on Glass in dark it is the system's lighter gray
+ * ([PersonaPalette.surfaceOpaque], as [JSettingsSheet]'s grouped surfaces), where the translucent glass fill would leave it
+ * near-invisible beside its edge highlight. Light and the other styles draw as without it.
  */
 @Composable
 fun JGroupItem(
@@ -169,6 +175,7 @@ fun JGroupItem(
     modifier: Modifier = Modifier,
     separate: Boolean = false,
     holder: Status? = null,
+    grouped: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val palette = PersonaTheme.palette
@@ -186,7 +193,7 @@ fun JGroupItem(
     Column(modifier.fillMaxWidth().padding(bottom = gap)) {
         when (style) {
             AppStyle.Glass -> Column(
-                Modifier.fillMaxWidth().clip(shape).background(palette.surface)
+                Modifier.fillMaxWidth().clip(shape).background(if (grouped && palette.dark) palette.surfaceOpaque else palette.surface)
                     .then(if (separate) Modifier.border(1.dp, Brush.verticalGradient(listOf(palette.strokeTop, palette.strokeBottom)), shape) else Modifier)
                     .drawBehind {
                         if (!separate && position.first) drawLine(palette.strokeTop.copy(alpha = 0.6f), Offset(radius.toPx(), 0f), Offset(size.width - radius.toPx(), 0f), 1.dp.toPx())
@@ -270,6 +277,8 @@ fun JRow(
     role: Role = Role.Button,
     /** [leadingIcon]'s colour in place of the quiet ink (an extension's named `icon_color`). */
     leadingIconTint: Color? = null,
+    /** The start of the title in the quiet ink, drawn before [title]: a hub conversation title's day and kind ("1101 | Fix | "), so its topic is what the eye finds (iOS `ConversationTitle`). */
+    titleLead: String? = null,
 ) {
     val palette = PersonaTheme.palette
     RowFrame(modifier, onClick, onLongClick, null, enabled, selected, value, trailing, chevron, changingValue, role) {
@@ -280,7 +289,10 @@ fun JRow(
         }
         Column(Modifier.weight(1f)) {
             val titleText: @Composable (Modifier) -> Unit = { m ->
-                Text(title, m, style = PersonaTheme.type.body, color = if (destructive) palette.danger.text else palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                val ink = if (destructive) palette.danger.text else palette.ink
+                if (titleLead == null) Text(title, m, style = PersonaTheme.type.body, color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                else Text(buildAnnotatedString { withStyle(SpanStyle(color = palette.ink3)) { append(titleLead) }; append(title) }, m,
+                    style = PersonaTheme.type.body, color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             if (titleAccessory == null) titleText(Modifier)
             else Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {

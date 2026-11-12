@@ -51,6 +51,11 @@ data class ChatChromeBindings(
     val agentShares: (() -> persona.core.contracts.api.AgentShares)? = null,
     /** Opens what fixes a turn's model error ([TurnErrorFix]): the model's set-up, or the [launcher]'s provider; null: no button. */
     val onFixModel: ((action: persona.core.designsystem.ReadinessActionId, launcher: String?, manager: String?) -> Unit)? = null,
+    /**
+     * Opens the settings page a briefing's recommended mechanism is turned on at (#5085), for the conversation's
+     * [manager]; null: the recommended-setup rows have no button.
+     */
+    val onOpenSetup: ((page: persona.core.contracts.BriefSetupPage, manager: String?) -> Unit)? = null,
 )
 
 /** Where a branch made by "Branch to new chat" opens: an assistant's branch is an assistant conversation, an agent's an agent chat. */
