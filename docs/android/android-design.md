@@ -274,6 +274,13 @@ and the Duo's inner screen; a phone, folded or not, is narrower than 600dp uprig
 - Keyboard, mouse, trackpad: session, message and settings-row long-press menus also respond to right-click; hover has feedback; lists support the wheel; the software keyboard does not open by itself on launch.
 - Glass blurs a larger area on large screens (each pane's top bar and scroll edges); performance has not been measured.
 
+### 3.2 Message pointer menus
+
+- In a regular or expanded window, a mouse or trackpad secondary press on a message opens `JPointerMenu` beside the pointer. The shell supplies `LocalLargeWindowInput`; the message menu does not measure the window or infer a device type. Compact and wide-phone secondary clicks retain the bottom `JActionSheet`.
+- Touch long press and TalkBack More actions always use `JActionSheet`, including on tablets. Swipe to quote, message dimming, link taps and the chat reading anchor are unchanged. There is no message lift, blurred preview or hover-only command.
+- Both presentations receive the same `messageMenuActions` list and callback, including order, icons, disabled reasons and destructive actions. Dismissing the pointer menu clears only its presentation anchor; Rewind's second confirmation, Select's reader and Share's page keep their existing state and can open and return.
+- `JPointerMenu` reuses `JMenu` rows and tokens. It grows right/down from the pointer, flips when the opposite direction fits, clamps the measured menu to the safe window, scrolls long actions and closes once on Escape. Verification uses real `BUTTON_SECONDARY` instrumentation or a hardware mouse, not adb hover / console success messages.
+
 ## 4. Screenshots and verification
 
 - Check screenshots of every page in all three styles, dark and light; debug launch arguments `debug.style` and `debug.theme` select them directly.
