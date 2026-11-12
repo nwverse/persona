@@ -5937,6 +5937,15 @@ if MOCK_TASKS:
             _feed("feed_r3", 3.5, "report", "todo_task_tests", {"kind": "question", "text": "统一用 snake_case 还是 camelCase 命名新接口？", "later": True}),
             _feed("feed_r2", 3, "routed", "todo_task_tests", {"text": "用协议注入，先改网络层那 6 个文件", "interrupted": True, "from": "assistant"}),
         ]
+    # MOCK_BACKGROUND_SUPERVISOR=1 (#5082): the reviews in the main chat's feed are the background supervisor's (`by`),
+    # so the chat shows each as its line; without MOCK_TASKS_REPORTS there is one, the release notes accepted.
+    if BACKGROUND_SUPERVISOR:
+        if not any(_i["kind"] == "review" for _i in TASK_FEED[ASK1]):
+            TASK_FEED[ASK1].append(_feed("feed_bg1", 18, "review", "todo_task_release", {
+                "title": "整理发布说明", "verdict": "accepted", "note": "写在 docs/release-notes.md，7 个 PR 都在里面"}))
+        for _i in TASK_FEED[ASK1]:
+            if _i["kind"] == "review":
+                _i["body"]["by"] = "background"
     # MOCK_BRIEFS=1 (#3822, docs/assistant/unified-entry.md "Briefs"): tasks carry the brief they are held to. The open
     # plan's task has a real one (the owner's own words, long enough to be cut, the goal, criteria, time and what is out
     # of bounds). The widget fix has a real one too, taken over twice (a lineage of three), with one scope change and an
