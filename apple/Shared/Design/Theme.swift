@@ -499,6 +499,8 @@ nonisolated enum Theme {
         static let barWide: CGFloat = 4
         /// A share bar's thickness (the assistant's stacked-bar card).
         static let meter: CGFloat = 12
+        /// An Agent chat's header folded into its slim bar (Android `Tokens.Size.slimBar`).
+        static let slimBar: CGFloat = 40
         /// How far a sideways strip fades out at an end with more to scroll to (`.edgeFade()`): a cut-off chip reads as
         /// "more", not as a broken row.
         static let fadeEdge: CGFloat = 24

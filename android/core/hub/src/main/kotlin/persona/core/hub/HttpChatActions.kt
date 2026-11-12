@@ -151,6 +151,20 @@ class HttpChatActions internal constructor(
             JsonCodec.decodeFromString<SessionInfo>(it.body!!.string())
         }
 
+    override suspend fun interactionHistory(session: Session): List<InteractionRecord> {
+        val url = HttpUrl.Builder().scheme("https").host("example.com").addPathSegments("api/v1/interactions/history")
+            .addQueryParameter("machine_id", session.machineId).addQueryParameter("session_id", session.sessionId)
+            .addQueryParameter("limit", HISTORY_LIMIT.toString())
+            .apply { session.manager?.takeIf(String::isNotEmpty)?.let { addQueryParameter("manager", it) } }.build()
+        return request(url.encodedPath + "?" + url.encodedQuery, "GET", null).use { response ->
+            if (response.code == 403 || response.code == 404) return emptyList()
+            if (!response.isSuccessful) throw HubFailure.from(response)
+            // One row the app can't read leaves the others (iOS decodes each lossily).
+            val rows = (JsonCodec.parseToJsonElement(response.body!!.string()) as? JsonObject)?.get("interactions") as? JsonArray
+            rows.orEmpty().mapNotNull { row -> runCatching { JsonCodec.decodeFromJsonElement<InteractionRecord>(row) }.getOrNull() }
+        }
+    }
+
     override suspend fun verify(session: Session, action: ChatAction): ChatActionResult = lock.withLock {
         verifyLocked(session, uncertain[session.key to kind(action)] ?: action)
     }
@@ -207,3 +221,5 @@ class HttpChatActions internal constructor(
 }
 
 private const val REWIND_READ_TIMEOUT_SECONDS = 110L
+/** As many of a session's cards as the hub gives (iOS `Delegated.historyLimit`): its limit counts permissions too. */
+private const val HISTORY_LIMIT = 500
