@@ -911,9 +911,13 @@ on hover) hides the pill until the plan changes. The pill also goes once every s
 user's starts another turn.
 
 A tool row names its tool in words on iOS, the web and Android (#2986; Android `ToolNaming.kt`, #4339): Claude Code's tools have verbs of their own, another
-server's MCP tool reads "<Server> · <Tool>" ("GitHub · Create issue"), and any other name is humanized. Opened, a tool
+server's MCP tool reads "<Server> · <Tool>" ("GitHub · Create issue"), and any other name is humanized. What the call is
+about follows, picked from its input by the field that says the most (`ToolNaming.subject`; Android, whose rows show no
+verb, puts it under the name). Opened, a tool
 no table knows shows its arguments as `key: value` lines, with the JSON one tap away under Raw Input (`RawInputToggle`,
-shared with computer tools). Details in `docs/lessons/ios.md`.
+shared with computer tools; Android draws the list on Glass, `ToolArguments`, with the JSON in Raw input's reader, and
+Brief and Board keep the input as code). The cases both platforms follow are in `spec/fixtures/tool-names`. Details in
+`docs/lessons/ios.md`.
 
 A tool row says what its call came to when the node sends `outcome` (#4303, `docs/protocol/protocol.md` "Tool
 outcomes"). Only a call that ran and failed turns the row and its chip red, and its result says "Exit code N". A call
