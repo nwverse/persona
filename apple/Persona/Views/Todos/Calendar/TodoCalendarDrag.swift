@@ -134,7 +134,7 @@ nonisolated struct MonthDropMap: Equatable {
     private(set) var text = ""
 
     func note(_ line: String) {
-        text = (text.split(separator: "|").suffix(7).map(String.init) + [line]).joined(separator: "|")
+        text = (text.split(separator: "|").suffix(11).map(String.init) + [line]).joined(separator: "|")
     }
 
     static func point(_ p: CGPoint) -> String { "(\(Int(p.x)),\(Int(p.y)))" } // i18n-ignore: DEBUG trace
@@ -167,14 +167,45 @@ struct CalendarTouchProbe: UIViewRepresentable {
             delaysTouchesEnded = false
         }
 
+        /// For each touch: the view it went to, its type, how many of the calendar's holds were given it, how many are
+        /// on a view it went through and how many under it; when none was given it, where the nearest such hold is.
         override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
             super.touchesBegan(touches, with: event)
             for touch in touches {
-                let view = touch.view.map { String(String(describing: type(of: $0)).prefix(32)) } ?? "none" // i18n-ignore: DEBUG trace
-                let holds = touch.gestureRecognizers?.filter { $0 is CalendarHoldRecognizer }.count ?? .zero
-                CalendarDragTrace.shared.note("touch \(view) holds \(holds) at \(CalendarDragTrace.point(touch.location(in: nil)))") // i18n-ignore: DEBUG trace
+                guard let window = touch.window else { continue }
+                let at = touch.location(in: nil)
+                let got = touch.gestureRecognizers?.filter { $0 is CalendarHoldRecognizer }.count ?? .zero
+                let chain = Self.up(touch.view)
+                let holds = Self.holds(in: window)
+                let inChain = holds.filter { h in chain.contains { $0 === h.view } }
+                let under = holds.filter { $0.view.map { $0.convert($0.bounds, to: nil).contains(at) } ?? false }
+                CalendarDragTrace.shared.note("touch \(Self.name(touch.view)) t\(touch.type.rawValue) got \(got) chain \(inChain.count)/\(holds.count) under \(under.count) at \(CalendarDragTrace.point(at))") // i18n-ignore: DEBUG trace
+                guard got == .zero, let view = (under.first ?? holds.first)?.view else { continue }
+                let path = Self.up(view)
+                let common = path.first { v in chain.contains { $0 === v } }
+                let depth = common.flatMap { c in path.firstIndex { $0 === c } } ?? -1
+                let touchDepth = common.flatMap { c in chain.firstIndex { $0 === c } } ?? -1
+                CalendarDragTrace.shared.note("hold on \(Self.name(view)) \(CalendarDragTrace.rect(view.convert(view.bounds, to: nil))) \(depth) below \(Self.name(common)), touch \(touchDepth) below; enabled \(view.isUserInteractionEnabled) hidden \(view.isHidden)") // i18n-ignore: DEBUG trace
             }
             state = .failed
+        }
+
+        private static func up(_ view: UIView?) -> [UIView] {
+            var out: [UIView] = []
+            var next = view
+            while let v = next {
+                out.append(v)
+                next = v.superview
+            }
+            return out
+        }
+
+        private static func holds(in view: UIView) -> [CalendarHoldRecognizer] {
+            (view.gestureRecognizers ?? []).compactMap { $0 as? CalendarHoldRecognizer } + view.subviews.flatMap { holds(in: $0) }
+        }
+
+        private static func name(_ view: UIView?) -> String {
+            view.map { String(String(describing: type(of: $0)).prefix(28)) } ?? "none" // i18n-ignore: DEBUG trace
         }
     }
 }

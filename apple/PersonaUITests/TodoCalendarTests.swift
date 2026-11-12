@@ -219,6 +219,67 @@ final class TodoCalendarTests: XCTestCase {
         XCTAssertTrue(wait { try self.due(hub, "todo_review") == Due(at: ten, day: nil) })
     }
 
+    /// TEMPORARY, removed before the PR (#2045): where a finger and a pointer on a block of the day's axis go, upright
+    /// and (an iPad) on its side. Prints DIAG lines with the drag trace; fails nothing.
+    @MainActor func testDiagnoseTouches() throws {
+        guard let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] else {
+            throw XCTSkip("needs scripts/mock/mock_hub.py (PERSONA_MOCK_HUB)")
+        }
+        continueAfterFailure = true
+        let pad = UIDevice.current.userInterfaceIdiom == .pad
+        let ten = Calendar.current.date(bySettingHour: 10, minute: 0, second: 0, of: .now)!
+        defer { XCUIDevice.shared.orientation = .portrait }
+        for side in pad ? [false, true] : [false] {
+            let tag = (pad ? "pad " : "phone ") + (side ? "landscape" : "portrait")
+            try resetReview(hub, to: ten)
+            XCUIDevice.shared.orientation = side ? .landscapeLeft : .portrait
+            start(hub)
+            let calendarSwitch = app.buttons["日历"]
+            guard calendarSwitch.waitForExistence(timeout: 60) else { print("DIAG \(tag) no calendar"); continue }
+            calendarSwitch.tap()
+            app.buttons["日"].tap()
+            let review = entry("检查 PR #42")
+            guard review.waitForExistence(timeout: 60) else { print("DIAG \(tag) no block"); continue }
+            bringIntoView(review)
+            /// Back on the calendar: the to-do's page closed, a "New to-do" sheet cancelled.
+            func back() {
+                let page = app.buttons.matching(identifier: "BackButton").matching(NSPredicate(format: "label == %@", "待办")).firstMatch
+                if page.exists { page.tap() }
+                let cancel = app.buttons["取消"].firstMatch
+                if cancel.exists { cancel.tap() }
+                _ = review.waitForExistence(timeout: 10)
+            }
+            print("DIAG \(tag) block \(review.frame) window \(app.windows.firstMatch.frame)")
+            review.tap()
+            let opened = app.switches["todo.plan.due"].waitForExistence(timeout: 5)
+            let sheet = app.buttons["取消"].firstMatch.exists
+            back()
+            print("DIAG \(tag) finger tap: opened \(opened) new-to-do sheet \(sheet); trace: \(trace())")
+            let center = review.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            center.press(forDuration: 0.6, thenDragTo: center.withOffset(CGVector(dx: 0, dy: Self.hour)), withVelocity: .slow,
+                         thenHoldForDuration: 0.5)
+            let moved = wait { try self.due(hub, "todo_review") != Due(at: ten, day: nil) }
+            back()
+            print("DIAG \(tag) finger drag: moved \(moved); trace: \(trace())")
+            try resetReview(hub, to: ten)
+            if pad {
+                bringIntoView(review)
+                review.click()
+                let clicked = app.switches["todo.plan.due"].waitForExistence(timeout: 5)
+                back()
+                print("DIAG \(tag) pointer click: opened \(clicked); trace: \(trace())")
+                let from = review.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                from.click(forDuration: 0.05, thenDragTo: from.withOffset(CGVector(dx: 0, dy: Self.hour)), withVelocity: .slow,
+                           thenHoldForDuration: 0.3)
+                let dragged = wait { try self.due(hub, "todo_review") != Due(at: ten, day: nil) }
+                back()
+                print("DIAG \(tag) pointer drag: moved \(dragged); trace: \(trace())")
+                try resetReview(hub, to: ten)
+            }
+            app.terminate()
+        }
+    }
+
     /// The way without dragging (VoiceOver's "Change Due Date…", opened here by `-openRescheduleTitled`): All Day on,
     /// Save, and 「检查 PR #42」 is due today, all day; Undo puts it back.
     @MainActor func testChangeDueDateWithoutDragging() throws {
