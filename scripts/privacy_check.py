@@ -30,9 +30,10 @@ mapping/fixture (only under app_store.provisioning_profiles), a config value mad
 private-words.txt takes back (an ordinary word, a machine id named after a room), the repo's own Go module path (it
 names the GitHub owner),
 CLAUDE.local.md spans that only name repo files, commands or config keys, a listed word of one case run where the text
-spells it only across a camel-case join ("fooBar", only_in_camel_joins), and in site/ the contact address and domain
-the App Store and the OAuth consent screen publish anyway. Generic email-pattern hits are also exempt only in the
-hash-pinned Harmony SSH third-party license bundle; config values, private words, banned names and private IPs still scan.
+spells it only across a camel-case join ("fooBar", only_in_camel_joins), and in site/ and the public installation docs
+the contact address and domain the App Store and the OAuth consent screen publish anyway. Generic email-pattern
+hits are also exempt only in the hash-pinned Harmony SSH third-party license bundle; config values, private words,
+banned names and private IPs still scan.
 """
 import ast, hashlib, io, ipaddress, json, os, plistlib, re, stat, subprocess, sys
 from functools import lru_cache
@@ -418,6 +419,9 @@ REAL_TLDS = {"com", "net", "org", "io", "cn", "dev", "app", "ai", "co", "me", "c
              "gov", "uk", "jp", "us", "de", "fr", "hk", "tw", "sg", "in", "ru", "kr", "tech", "cloud", "site", "work", "biz"}
 # The public site (site/) shows a contact address on purpose: the OAuth consent screen requires one.
 PUBLIC_DIRS = ("site/",)
+# The site's own address is also quoted by the public install and getting-started entry points. Keep its configured
+# value out of the private-word set in exactly these files; other config values and addresses remain private.
+PUBLIC_SITE_DOCS = {"README.md", "README.zh-CN.md", "docs/operations/getting-started.md"}
 
 # Names that are never in the repository, in any spelling (#4967): vendors and internal repositories Persona only
 # reaches through extensions, which bring their own names. Case-insensitive, with a hyphen, underscore, space or
@@ -982,7 +986,8 @@ def main():
 
     for f in files:
         public = f.startswith(PUBLIC_DIRS)
-        allowed = [w for w in words if w not in public_words] if public else words
+        allowed = ([w for w in words if w not in public_words]
+                   if public or f in PUBLIC_SITE_DOCS else words)
         for w in problems(f, words):
             report(f, "path", w)
         if f in SKIP_FILES:
