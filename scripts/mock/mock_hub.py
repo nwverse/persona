@@ -8544,6 +8544,39 @@ if os.environ.get("MOCK_IMESSAGE_INBOX"):
     ]
 
 
+# MOCK_SUBSCRIPTION_INBOX=1 (#5537): an item a source subscription delivered (a mail subscription's notice): its source is
+# the subscription's id, not a connector's, and its content is the whole of it. Its thread request answers as the hub
+# does now, a page that is no conversation (`chat.kind: none`); =old as hubs before #5537 did, 404 "no connector".
+# GET /mock/subscription_inbox?mode=old|1 switches it for the next requests. Only with ?sources=all, like connectors' items.
+SUBSCRIPTION_INBOX = os.environ.get("MOCK_SUBSCRIPTION_INBOX", "")
+if SUBSCRIPTION_INBOX:
+    INBOX[1:1] = [
+        {"id": "sub_example01:t1", "source": "sub_example01", "kind": "sub_update", "account": "sub_example01", "account_name": "示例邮件",
+         "title": "11 月 16 日园区东门临时交通管理通知", "sender": "示例物业", "preview": "11 月 16 日上午 8:00–9:00 东门只允许登记车辆通行",
+         "count": 1, "started_at": ago(minutes=40), "updated_at": ago(minutes=40), "tier": "fyi",
+         "summary": "园区东门 11 月 16 日早上临时交通管理", "reason": "订阅的通知", "read": False,
+         "context": "11 月 16 日园区东门临时交通管理通知\n示例物业 · 11-12 15:33\n\n各位同事：\n\n"
+                    "11 月 16 日（周一）园区有活动。为保障交通秩序，当天上午 8:00–9:00 东门只允许登记车辆通行，"
+                    "其他车辆请从北门进出。\n\n停车场 A、B 区当天上午临时关闭，下午恢复。\n\nhttps://mail.example.com/notice/1116",
+         "connector": {"thread": "sub:sub_example01:t1", "label": "示例邮件", "url": "https://mail.example.com/notice/1116"}},
+    ]
+
+
+def subscription_thread_area(h, method, p):
+    """A subscription's thread request (MOCK_SUBSCRIPTION_INBOX) and /mock/subscription_inbox; True when it answered."""
+    global SUBSCRIPTION_INBOX
+    if not SUBSCRIPTION_INBOX or method != "GET":
+        return False
+    if p == "/mock/subscription_inbox":
+        SUBSCRIPTION_INBOX = parse_qs(urlparse(h.path).query).get("mode", [SUBSCRIPTION_INBOX])[0] or "1"
+        return h.send_json({"mode": SUBSCRIPTION_INBOX}) or True
+    if p != "/api/v1/connectors/sub_example01/thread":
+        return False
+    if SUBSCRIPTION_INBOX == "old":
+        return h.send_json({"error": 'no connector "sub_example01"'}, 404) or True
+    thread = parse_qs(urlparse(h.path).query).get("thread", [""])[0]
+    return h.send_json({"chat": {"id": thread, "name": "", "kind": "none"}, "messages": []}) or True
+
 # What each item can be muted by (the row's menu: "Mute this repository" / "Conversation" / "Sender"), as the hub lists it (`mutes`).
 ITEM_MUTES = {
     "lark:f1:100": [{"tag": "chat", "value": "f1", "name": "韩梅梅"}],
@@ -20719,6 +20752,7 @@ class H(BaseHTTPRequestHandler):
         if kb_selection_route(self, "GET", p, b""): return
         if wechat_area(self, "GET", p, b""): return
         if github_thread_area(self, "GET", p, b""): return
+        if subscription_thread_area(self, "GET", p): return
         if github_area(self, "GET", p, b""): return
         if p == "/api/v1/connectors":  # Settings › Connectors › GitHub; MOCK_GITHUB=signed_out: its gh login has expired
             listed = [GITHUB_CONNECTOR, {k: v for k, v in _imessage_connector().items() if v is not None}] + ([telegram_connector()] if TELEGRAM_MODE else [])

@@ -422,3 +422,42 @@ it.each(["success", "failure"])("does not refresh or notify for a retired owner'
   expect(host.querySelector("textarea")!.value).toBe("New owner's draft");
   expect(toast).not.toHaveBeenCalled();
 });
+
+// An item with no conversation of its own (#5537): a subscription's (its source is the subscription, not a connector)
+// or a connector's without threads. Its content shows with no problem line, whether the hub answers a page that is none
+// or an older manager says no such connector (404) or none to open (409 without a code); signed out is still said.
+describe("an item with no conversation of its own", () => {
+  const subscription = {
+    id: "sub_example1:t1", source: "sub_example1", kind: "sub_update", account: "sub_example1", account_name: "Example mail",
+    title: "Example notice", preview: "", count: 1, connector: { thread: "sub:sub_example1:t1", label: "Example mail" },
+  } as InboxItem;
+  const problem = (error: string) => t("inbox-connectorthread.thread_failed", { error });
+
+  it("shows a subscription item's content when the hub answers a page that is none", async () => {
+    await render(subscription);
+    await resolve(0, { chat: { id: "sub:sub_example1:t1", name: "", kind: "none" }, messages: [] });
+    await flush();
+    expect(host.textContent).toContain("Synthetic fallback content");
+    expect(host.textContent).not.toContain(problem(""));
+    expect(host.querySelector("textarea")).toBeNull();
+  });
+
+  it.each([
+    [404, { error: 'no connector "sub_example1"' }],
+    [409, { error: "Example has no conversations to open" }],
+  ])("falls back quietly on an older manager's %s", async (status, body) => {
+    await render(subscription);
+    await reject(0, new ApiError(status, body.error, body));
+    await flush();
+    expect(host.textContent).toContain("Synthetic fallback content");
+    expect(host.textContent).not.toContain(body.error);
+  });
+
+  it("still says a connector is signed out", async () => {
+    await render(item);
+    await reject(0, new ApiError(409, "Example: not signed in", { error: "Example: not signed in", code: "unavailable" }));
+    await flush();
+    expect(host.textContent).toContain("Example: not signed in");
+    expect(host.textContent).toContain("Synthetic fallback content");
+  });
+});

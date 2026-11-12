@@ -78,8 +78,10 @@ function ConnectorThreadBody({ item, manager }: { item: InboxItem; manager?: str
     } catch (e) {
       if (!current()) return;
       // Said over the text only when it is worth saying (a rate limit, the connector unavailable); a thread that
-      // simply has no page of its own (a CI run) falls back quietly. "" is failed, null still loading.
-      setFailure(e instanceof ApiError && (e.status === 429 || e.status === 409) ? errorText(e) : "");
+      // simply has no page of its own (a CI run; a subscription's item or a connector without threads, as an older
+      // manager says it: 404, 409 without `unavailable`, #5537) falls back quietly. "" is failed, null still loading.
+      const said = e instanceof ApiError && (e.status === 429 || (e.status === 409 && e.code === "unavailable"));
+      setFailure(said ? errorText(e) : "");
     }
   }, [id, thread, manager]);
   // Again when the item moves (a new message came in).
