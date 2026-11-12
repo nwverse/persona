@@ -1,4 +1,5 @@
 """Scripted meeting PCM uplink, bilingual transcript, gap repair and final minutes; no upstream required."""
+import threading
 import unittest
 import uuid
 
@@ -205,10 +206,105 @@ class MeetingTranscriptionMockTests(Transcription, unittest.TestCase):
         self.assertIsNotNone(ws("line"))
         self.assertNotIn("interim", self.live(rid))
         self.mode(upstream="ok")
+        self.assertIsNone(ws("problem", wait=0.3))  # the switch alone recovers nothing: captions do
+        self.assertEqual(self.live(rid)["transcription"]["problem"], "no_interim")
+        self.pcm(ws, 1)
         self.assertIsNone(ws("problem")["code"])
         self.mode(fatal="upstream_failed")
         self.assertEqual(ws("error"), {"type": "error", "code": "upstream_failed", "fatal": True})
         self.assertEqual(ws("close")["code"], 1008)
+
+    def test_upstream_recovery_waits_for_a_hub_sentence(self):
+        rid = self.recording()
+        ws = self.socket(rid)
+        self.mode(upstream="failed")
+        self.assertEqual(ws("problem")["code"], "upstream_failed")
+        self.mode(upstream="ok")
+        self.assertIsNone(ws("problem", wait=0.3))
+        self.assertEqual(self.live(rid)["transcription"]["problem"], "upstream_failed")
+        self.pcm(ws, 4)
+        self.assertIsNone(ws("problem")["code"])
+        self.assertIsNotNone(ws("line"))
+        self.assertNotIn("problem", self.live(rid)["transcription"])
+
+    def test_a_repaired_timeline_closes_the_open_speaking_span(self):
+        rid = self.recording()
+        ws = self.socket(rid)
+        ws.send({"type": "speaking", "at": 0, "on": True})
+        self.pcm(ws, 1)
+        self.wait(lambda: self.observed(rid)["bytes"] == 32000, "the audio before the drop")
+        ws.close()  # the speaking off at 1 is lost with the socket
+        back = self.socket(rid, timeline={"speaking": [[0, 1]]})
+        self.pcm(back, 4)
+        self.assertIsNotNone(back("interim"))
+        self.assertEqual(back("line")["start"], 1)
+        self.assertEqual(self.observed(rid)["timeline"]["speaking"], [[0, 1]])
+        # An upload's timeline repairs it too.
+        back.send({"type": "speaking", "at": 5, "on": True})
+        self.pcm(back, 2)
+        self.upload(rid, room={"attendance": "participant"}, timeline={"speaking": [[0, 1], [5, 5.5]]})
+        self.pcm(back, 2)
+        self.assertEqual(back("line")["start"], 5)
+        self.assertEqual(self.observed(rid)["timeline"]["speaking"], [[0, 1], [5, 5.5]])
+
+    def test_a_heard_ask_flushes_the_hub_and_waits_for_fallback_material(self):
+        rid = self.recording()
+        self.wait(lambda: self.live(rid).get("room", {}).get("state") == "ready", "the room")
+        ws = self.socket(rid)
+        self.pcm(ws, 3)
+        self.wait(lambda: self.observed(rid)["bytes"] == 3 * 32000, "the audio")
+        ask = self.call("POST", f"/api/v1/recordings/{rid}/ask", {"id": str(uuid.uuid4()), "at": 3, "live_next": 0})[1]["ask"]
+        self.assertNotEqual(ask.get("error"), "nothing_heard")
+        line = ws("line")
+        self.assertEqual((line["start"], line["end"]), (0, 3))
+        self.assertEqual(self.live(rid)["next"], 1)
+        self.end(ws, 3)
+
+        other = self.recording()
+        self.wait(lambda: self.live(other).get("room", {}).get("state") == "ready", "the room")
+        sock = self.socket(other)
+        self.mode(fatal="upstream_failed")
+        self.assertEqual(sock("error")["code"], "upstream_failed")
+        self.assertTrue(self.live(other)["transcription"]["fallback"])
+        asked = []
+        thread = threading.Thread(target=lambda: asked.append(self.call(
+            "POST", f"/api/v1/recordings/{other}/ask", {"id": str(uuid.uuid4()), "at": 9})))
+        thread.start()
+        self.wait(lambda: thread.is_alive(), "the ask waiting")
+        self.upload(other, room={"attendance": "participant"}, segments=[{"start": 6.5, "end": 9.2, "text": "What about pricing?"}])
+        thread.join(15)
+        status, out = asked[0]
+        self.assertEqual(status, 200)
+        self.assertNotEqual(out["ask"].get("error"), "nothing_heard")
+
+    def test_final_pass_needs_the_contribution_ready(self):
+        rid = self.recording()
+        ws = self.socket(rid)
+        self.mode(ready=False)
+        self.assertEqual(ws("problem")["code"], "upstream_unavailable")
+        self.pcm(ws, 4)
+        self.assertIsNone(ws("line", wait=0.3))
+        self.end(ws, 4)
+        self.upload(rid, complete=True, duration=4, segments=[{"start": 0, "end": 4, "text": "Device only."}])
+        done = self.wait(lambda: (d := self.detail(rid))["meta"]["transcription"]["state"] in ("final", "failed") and d, "the end")
+        self.assertEqual(done["meta"]["transcription"]["state"], "failed")
+        self.assertEqual([(s["text"], s.get("source", "device")) for s in done["segments"]], [("Device only.", "device")])
+
+    def test_late_timeline_keeps_echo_out_when_the_replay_cannot_run(self):
+        for switch in ({"upstream": "failed"}, {"upstream": "unavailable"}, {"ready": False}, {"fatal": "upstream_failed"}):
+            with self.subTest(switch):
+                self.mode(upstream="ok", ready=True, fatal="")
+                rid = self.recording()
+                ws = self.socket(rid)
+                self.pcm(ws, 4)
+                self.assertIsNotNone(ws("line"))
+                self.end(ws, 4)
+                self.mode(**switch)
+                self.upload(rid, complete=True, duration=4, timeline={"speaking": [[0, 4]]})
+                done = self.wait(lambda: (d := self.detail(rid))["meta"]["transcription"]["state"] in ("final", "failed") and d, "the end")
+                self.assertEqual(done["meta"]["transcription"]["state"], "failed")
+                self.assertEqual(done["segments"], [])
+                self.assertNotIn("minutes", done)
 
     def test_transcription_and_interim_events_are_content_free(self):
         rid = self.recording()

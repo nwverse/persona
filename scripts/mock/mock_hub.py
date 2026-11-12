@@ -5462,6 +5462,8 @@ def transcription_put(rid, body):
     if not transcription_hub(rid): return
     t = TRANSCRIPTIONS[rid]
     transcription_timeline(t, body.get("timeline"))
+    sock = t.get("socket")
+    transcription_reconcile(rid, sock["send"] if sock and sock["started"] else None)
     if t["state"] in ("final", "failed"): return
     if body.get("complete"):
         t.setdefault("end", body.get("duration") if transcription_number(body.get("duration")) else (t["held"][-1][1] if t["held"] else 0))
@@ -5511,9 +5513,22 @@ def transcription_overlap(s, spans):
     return sum(max(0, min(s["end"], b) - max(s["start"], a)) for a, b in transcription_union(spans))
 
 
-def transcription_echo(t, s):
-    spans = [[max(0, a - 0.5), b + 0.5] for a, b in t["timeline"]["speaking"]]
+def transcription_echo(t, s, extra=None):
+    """The echo rule over the timeline's spans, and extra, a span assumed for the hold only (never in the timeline)."""
+    spans = [[max(0, a - 0.5), b + 0.5] for a, b in t["timeline"]["speaking"] + ([extra] if extra else [])]
     return transcription_overlap(s, spans) >= (s["end"] - s["start"]) / 2
+
+
+def transcription_reconcile(rid, send=None):
+    """A timeline that has the open speaking span closed (a socket's start, or an upload, repairing a speaking off a
+    dropped socket lost) closes it at once: the sentences held for it are judged now (meeting-minutes.md "No echo goes
+    out first")."""
+    t = TRANSCRIPTIONS[rid]
+    began = t.get("speaking")
+    if began is None: return
+    if any(a <= began + 1 / 16000 < b for a, b in t["timeline"]["speaking"]):
+        t.pop("speaking")
+        transcription_drain(rid, send)
 
 
 def transcription_record(rid):
@@ -5549,11 +5564,13 @@ def transcription_publish(rid):
         t["held"] = []  # Only observations and final gaps survive the mock's audio deletion.
 
 
-def transcription_accept(rid, s, send=None):
+def transcription_accept(rid, s, send=None, extra=None):
     t = TRANSCRIPTIONS[rid]
-    if transcription_echo(t, s): return
+    if transcription_echo(t, s, extra): return
     t["hub"].append(dict(s, source="hub"))
     if t.pop("fallback", None): transcription_changed(rid)
+    if t.get("problem") in ("upstream_unavailable", "upstream_failed"):
+        transcription_set_problem(rid, transcription_configured(), send)  # the hub's sentences came again
     device = [[x["start"], x["end"]] for x in meeting_live(rid)["segments"] if x.get("source") == "device"]
     if transcription_overlap(s, device) > (s["end"] - s["start"]) / 2: return
     if transcription_role(rid, s["end"]) == "off": return
@@ -5566,13 +5583,13 @@ def transcription_accept(rid, s, send=None):
     if send: send(dict(s, type="line", n=n))
 
 
-def transcription_drain(rid, send=None):
+def transcription_drain(rid, send=None, extra=None):
     t = TRANSCRIPTIONS[rid]
     while t["pending"]:
         s = t["pending"][0]
         if t.get("speaking") is not None and s["end"] > t["speaking"] - 0.5: break
         t["pending"].pop(0)
-        transcription_accept(rid, s, send)
+        transcription_accept(rid, s, send, extra)
     transcription_publish(rid)
 
 
@@ -5600,7 +5617,7 @@ def transcription_finish(rid, expected):
     with RECORDINGS_LOCK:
         t = TRANSCRIPTIONS.get(rid)
         if t is not expected or rid not in RECORDINGS or rid in RECORDINGS_TRIMMED: return
-        if TRANSCRIPTION_MODE["upstream"] in ("ok", "no_interim") and not TRANSCRIPTION_MODE["fatal"]:
+        if transcription_ready() and TRANSCRIPTION_MODE["upstream"] in ("ok", "no_interim") and not TRANSCRIPTION_MODE["fatal"]:
             final = []
             step = t["line_seconds"]
             for a, b in t["held"]:
@@ -5610,28 +5627,77 @@ def transcription_finish(rid, expected):
                     if not transcription_echo(t, s): final.append(s)
                     a = end
             t["hub"] = final
+        else:  # no replay: the live sentences stay, less what the complete upload's timeline says is Persona's echo
+            t["hub"] = [s for s in t["hub"] if not transcription_echo(t, s)]
         t["state"] = "final" if t["hub"] else "failed"
         t.pop("problem", None); t.pop("interim", None); t.pop("fallback", None)
         transcription_publish(rid)
         transcription_changed(rid)
 
 
-def transcription_problem(rid, send=None):
-    t = TRANSCRIPTIONS[rid]
+def transcription_configured():
+    """What the switches make of the upstream now: the problem a job would have."""
     upstream = TRANSCRIPTION_MODE["upstream"]
-    problem = ("upstream_unavailable" if not transcription_ready() or upstream == "unavailable" else
-               "upstream_failed" if upstream == "failed" else "no_interim" if upstream == "no_interim" else None)
-    if problem != t.get("problem"):
-        t["problem"] = problem
-        if problem in ("upstream_unavailable", "upstream_failed"):
-            if "degraded_at" not in t:
-                t["degraded_at"] = time.time()
-                transcription_fallback_later(rid)
-        else: t.pop("degraded_at", None)
-        t.pop("interim", None)
-        transcription_changed(rid)
-        if send: send({"type": "problem", "code": problem})
-    return problem
+    return ("upstream_unavailable" if not transcription_ready() or upstream == "unavailable" else
+            "upstream_failed" if upstream == "failed" else "no_interim" if upstream == "no_interim" else None)
+
+
+def transcription_problem(rid, send=None):
+    """The problem that stands: a degraded upstream at once; its end only once the hub's sentences (for no_interim,
+    its captions) come again (meeting-minutes.md "Problems"), never on the switch alone."""
+    t = TRANSCRIPTIONS[rid]
+    configured = transcription_configured()
+    if configured is not None or t.get("problem") not in ("upstream_unavailable", "upstream_failed", "no_interim"):
+        transcription_set_problem(rid, configured, send)
+    return t.get("problem")
+
+
+def transcription_set_problem(rid, problem, send=None):
+    t = TRANSCRIPTIONS[rid]
+    if problem == t.get("problem"): return
+    t["problem"] = problem
+    if problem in ("upstream_unavailable", "upstream_failed"):
+        if "degraded_at" not in t:
+            t["degraded_at"] = time.time()
+            transcription_fallback_later(rid)
+    else: t.pop("degraded_at", None)
+    t.pop("interim", None)
+    transcription_changed(rid)
+    if send: send({"type": "problem", "code": problem})
+
+
+def transcription_heard_wait(rid, raw):
+    """A heard ask in hub mode ignores live_next (meeting-minutes.md "In hub mode the live log is the hub's"): the
+    job's sentences up to `at` are flushed (the scripted sentence the audio is in, cut at `at`) once the audio reaches
+    it, and those held for a speaking span waited for; in the fallback an upload whose segments reach `at` is waited
+    for. At most 15 seconds, holding no lock while it waits. A stored ask id asked again waits for nothing."""
+    try: body = json.loads(raw or b"{}")
+    except ValueError: return
+    at = body.get("at") if isinstance(body, dict) else None
+    if not transcription_number(at) or not isinstance(body.get("id"), str): return
+    with MEETING_LOCK:
+        if any(a["id"] == body["id"].lower() for a in MEETING_LIVE.get(rid, {}).get("asks", [])): return
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        with RECORDINGS_LOCK:
+            t = TRANSCRIPTIONS.get(rid)
+            if not transcription_hub(rid) or rid not in RECORDINGS or t["state"] != "live": return
+            if t.get("fallback"):
+                if max((x["end"] for x in RECORDINGS[rid].get("segments", [])), default=0) >= at: return
+            else:
+                sock = t.get("socket")
+                if not sock or not sock["started"] or transcription_configured() in ("upstream_unavailable", "upstream_failed"):
+                    return  # no job transcribes it now: the ask reads what there is
+                if sock["at"] >= at:
+                    start = sock["sentence"]
+                    if at > start:  # the flush: the sentence being said, finished at `at`
+                        step = t["line_seconds"]
+                        t["pending"].append({"start": start, "end": at, "text": TRANSCRIPTION_SCRIPT[int(start / step) % len(TRANSCRIPTION_SCRIPT)]})
+                        t.pop("interim", None)
+                        sock["sentence"] = at
+                        transcription_drain(rid, sock["send"])
+                    if not any(x["end"] <= at for x in t["pending"]): return  # none held back for a speaking span
+        time.sleep(0.05)
 
 
 def transcription_refusal(rid):
@@ -5802,23 +5868,25 @@ def transcription_socket(h, rid):
                     if state["ack_bytes"] >= 5 * 32000:
                         ack_at = next((b for a, b in t["held"] if a <= end <= b), end)
                         send({"type": "ack", "at": ack_at}); state["ack_bytes"] %= 5 * 32000
-                    problem = transcription_problem(rid, send)
+                    transcription_problem(rid, send)
+                    configured = transcription_configured()  # what the upstream does now; the problem may stand longer
                     if end <= edge:
                         state["sentence"] = max(state["sentence"], edge)
                         continue
-                    if problem in ("upstream_unavailable", "upstream_failed"):
+                    if configured in ("upstream_unavailable", "upstream_failed"):
                         state["sentence"] = end
                         continue
                     if at < edge: state["sentence"] = max(state["sentence"], edge)
                     if t.get("speaking") is not None and end >= t["speaking"] + 60:
-                        began = t.pop("speaking")
-                        transcription_timeline(t, {"speaking": [[began, began + 60]]})
+                        began = t.pop("speaking")  # counts as closed: what it held is judged with it, never stored
+                        transcription_drain(rid, send, extra=[began, began + 60])
                     step = t["line_seconds"]
                     start = state["sentence"]
                     while start < end:
                         stop = start + step
                         text = TRANSCRIPTION_SCRIPT[int(start / step) % len(TRANSCRIPTION_SCRIPT)]
-                        if problem != "no_interim" and t.get("speaking") is None:
+                        if configured != "no_interim" and t.get("speaking") is None:
+                            if t.get("problem") == "no_interim": transcription_set_problem(rid, configured, send)  # captions came
                             caption = {"start": start, "text": text[:max(1, min(len(text), int(len(text) * (end - start) / step)))]}
                             send(dict(caption, type="interim"))
                             t["interim"] = dict(caption, time=time.time(), rev=int(time.time() * 1000))
@@ -5855,6 +5923,7 @@ def transcription_socket(h, rid):
                     if TRANSCRIPTION_MODE["fatal"]:
                         transcription_fallback(rid, fatal=True)
                         fail(TRANSCRIPTION_MODE["fatal"]); break
+                    transcription_reconcile(rid, send)  # a speaking off the socket before lost
                 elif kind == "seek":
                     state["at"] = at
                     state["sentence"] = max(at, t["held"][-1][1] if t["held"] else 0)
@@ -5873,13 +5942,12 @@ def transcription_socket(h, rid):
                     t["end"] = at
                     send({"type": "ack", "at": at})
                     tail = min(at, state["at"])
-                    if tail > state["sentence"] and t.get("problem") not in ("upstream_unavailable", "upstream_failed"):
+                    if tail > state["sentence"] and transcription_configured() not in ("upstream_unavailable", "upstream_failed"):
                         start = state["sentence"]
                         t["pending"].append({"start": start, "end": tail,
                                              "text": TRANSCRIPTION_SCRIPT[int(start / t["line_seconds"]) % len(TRANSCRIPTION_SCRIPT)]})
-                    if t.get("speaking") is not None:
-                        transcription_timeline(t, {"speaking": [[t.pop("speaking"), at]]})
-                    transcription_drain(rid, send)
+                    began = t.pop("speaking", None)  # still open at the end: judged with it, never stored
+                    transcription_drain(rid, send, extra=[began, at] if began is not None else None)
                     t.pop("interim", None)
                     transcription_changed(rid)
                     close(1000); break
@@ -5902,6 +5970,9 @@ def recordings_route(h, method, p):
     if audio and method == "GET" and meeting_transcription_on():
         transcription_socket(h, audio[1].lower())
         return True
+    ask = re.fullmatch(r"/api/v1/recordings/([^/]+)/ask", p)
+    if ask and method == "POST" and MEETING_ATTENDANCE and not is_read_only(h) and len(getattr(h, "last_body", b"") or b"") <= 64 << 10:
+        transcription_heard_wait(ask[1].lower(), h.last_body)  # before the locks: the uplink takes them meanwhile
     with RECORDINGS_LOCK:
         if p == "/mock/meeting_transcription": return transcription_control(h, method)
         if audio:
