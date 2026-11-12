@@ -90,6 +90,8 @@
     <string name="assistant_origin_spawned">Spawned from a chat</string>
     <string name="assistant_origin_extension">Extensions</string>
     <string name="assistant_origin_other">Other</string>
+    <string name="assistant_origin_from">From %1$s</string>
+    <string name="assistant_origin_from_extension">From an extension</string>
     <string name="assistant_empty_title">No chats yet</string>
     <string name="assistant_empty_detail">Send a message to start chatting with Persona.</string>
     <string name="assistant_no_match">No matching chats</string>

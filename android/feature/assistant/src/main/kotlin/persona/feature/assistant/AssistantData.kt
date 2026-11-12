@@ -63,6 +63,16 @@ internal fun automaticConversationOrigin(origin: String?): AssistantConversation
         ?: AssistantConversationOrigin.Other
 }
 
+/** The mark's TalkBack name: external conversations say where they came from, as on iOS and the web (#5195, #5196). */
+internal fun AssistantConversationOrigin.accessibilityLabel(resources: android.content.res.Resources): String {
+    val name = resources.getString(labelRes)
+    return when (this) {
+        AssistantConversationOrigin.LarkAgent -> resources.getString(R.string.assistant_origin_from, name)
+        AssistantConversationOrigin.Extension -> resources.getString(R.string.assistant_origin_from_extension)
+        else -> name
+    }
+}
+
 /**
  * The drawer's Recent (#4922, #5196; web `recentConversations`, iOS `AssistantSidebarGroups.recent`): every conversation
  * that is not the main one, not a leader, not archived and not the built-in background supervisor, newest first, equal

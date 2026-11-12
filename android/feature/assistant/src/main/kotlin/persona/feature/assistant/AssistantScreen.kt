@@ -1187,7 +1187,7 @@ internal fun AssistantDrawer(
                     counts = leaderCountsLabel(groups.counts[session.sessionId], resources),
                     named = groups.names[session.sessionId])
             }
-            // The user's own newest chats (#4922), the same rows and menu; All chats below still lists everything.
+            // The newest eligible chats (#4922, #5196), the same rows and menu; All chats below still lists everything.
             if (groups.recent.isNotEmpty()) item(key = "recent-header") { JSectionHeader(stringResource(R.string.assistant_recent)) }
             itemsIndexed(groups.recent, key = { _, session -> "recent-" + session.key.path }) { index, session ->
                 ConversationRow(session, selected = session.key == active,
@@ -1269,20 +1269,20 @@ private fun ConversationRow(
     val source = automaticConversationOrigin(origin)
     val channels = LocalChannels.current
     val channel = remember(session.channels, channels) { ChannelSources.latest(session.channels, channels) }
+    val accessory: (@Composable () -> Unit)? = source?.let { s -> { ConversationOriginMark(s) } }
+        ?: channel?.let { c -> { JChannelMark(c, size = MarkSize.Inline) } }
     // [named]: a direction's name, shown instead of its leader conversation's title
     val title = named ?: session.conversationTitle(conversationWords())
     val swipe = onArchive?.let { SwipeAction(stringResource(R.string.assistant_archive), PersonaIcons.archive, Status.Working, it) }
     if (LocalHomeDrawer.current) JSwipeActions(modifier, end = swipe) {
         JSidebarHistoryRow(title, session.conversationStatus(), selected, onOpen, { menu = true },
             stringResource(R.string.assistant_conversation_actions), hint = counts,
-            titleAccessory = source?.let { s -> { ConversationOriginMark(s) } }
-                ?: channel?.let { c -> { JChannelMark(c, size = MarkSize.Inline) } })
+            titleAccessory = accessory)
     } else JSwipeActions(modifier, end = swipe) { JGroupItem(position) {
         // The time goes on the line under the title, with the state: beside the title it left the title two or three
         // characters in the wide window's 300dp list (2026-11-02), and a narrow drawer cut it short too.
         JRow(title, onClick = onOpen, onLongClick = { menu = true },
-            titleAccessory = source?.let { s -> { ConversationOriginMark(s) } }
-                ?: channel?.let { c -> { JChannelMark(c, size = MarkSize.Inline) } },
+            titleAccessory = accessory,
             subtitle = session.lastText?.takeIf { it.isNotBlank() },
             leading = { JIcon(if (selected) PhIcons.CheckCircle else PhIcons.ChatCircle, null,
                 selected = selected, tint = if (selected) PersonaTheme.palette.accent else PersonaTheme.palette.ink2) },
@@ -1311,7 +1311,7 @@ private fun ConversationRow(
 /** What opened an automatic chat: Lark's official brand for /agent, otherwise the source's icon (#5196). */
 @Composable
 private fun ConversationOriginMark(source: AssistantConversationOrigin) {
-    val label = stringResource(source.labelRes)
+    val label = source.accessibilityLabel(androidx.compose.ui.platform.LocalResources.current)
     if (source == AssistantConversationOrigin.LarkAgent) {
         JSourceMark(label, brand = Brand.Lark, size = MarkSize.Inline)
     } else {

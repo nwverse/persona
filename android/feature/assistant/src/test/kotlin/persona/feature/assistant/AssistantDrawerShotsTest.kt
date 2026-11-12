@@ -310,22 +310,32 @@ class AssistantDrawerShotsTest {
                 }
             }
         }
-        val labels = listOf("收件箱", "定时任务", "飞书 /agent", "对话派生", "扩展", "其他")
-        fun assertMarks() {
-            labels.forEach { label ->
-                assertTrue("$label has no accessible source mark",
-                    rule.onAllNodesWithContentDescription(label, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty())
-            }
-            assertEquals("only the user's own chat uses the channel mark", 1,
-                rule.onAllNodesWithContentDescription("Feishu channel", useUnmergedTree = true).fetchSemanticsNodes().size)
+        val labels = listOf("收件箱", "定时任务", "来自 飞书 /agent", "对话派生", "来自扩展", "其他")
+        fun assertRowMark(title: String, label: String, below: Float? = null) {
+            val rows = rule.onAllNodesWithText(title).fetchSemanticsNodes()
+                .filter { below == null || it.boundsInRoot.top >= below }
+            assertTrue("no $title row below $below", rows.isNotEmpty())
+            val marks = rule.onAllNodesWithContentDescription(label, useUnmergedTree = true).fetchSemanticsNodes()
+            assertTrue("$title lacks $label in its own row", rows.any { row ->
+                marks.any { mark -> mark.boundsInRoot.top >= row.boundsInRoot.top && mark.boundsInRoot.bottom <= row.boundsInRoot.bottom }
+            })
         }
-        assertMarks() // Recent and 常驻.
-        rule.onNodeWithText("全部对话（7）").performScrollTo().performClick()
-        assertMarks() // All chats.
-        query = "chat"
-        groups = groups.copy(recent = emptyList())
+        fun assertMarks(below: Float? = null) {
+            titles.forEachIndexed { index, title -> assertRowMark(title, labels[index], below) }
+            assertRowMark("Own chat", "Feishu channel", below)
+        }
+        assertMarks() // Every Recent row, not merely one mark somewhere in the drawer.
+        assertRowMark("Leader chat", "定时任务")
+        groups = groups.copy(recent = emptyList(), directions = emptyList())
         rule.waitForIdle()
-        assertMarks() // Search results.
+        rule.onNodeWithText("全部对话（7）").performScrollTo().performClick()
+        val allChatsBottom = rule.onNodeWithText("全部对话（7）").fetchSemanticsNode().boundsInRoot.bottom
+        assertMarks(below = allChatsBottom) // Every expanded All chats row.
+        query = "chat"
+        groups = groups.copy(directions = listOf(lead))
+        rule.waitForIdle()
+        assertMarks() // Every search-result row.
+        assertRowMark("Leader chat", "定时任务")
     }
 
     // #5084: the built-in background supervisor waits under All chats with the chats Persona opened itself, under the

@@ -197,4 +197,14 @@ class AssistantTest {
         assertTrue("no Recent while searching", conversationGroups(snapshot, "x", words).recent.isEmpty())
         assertTrue("only the main chat: no Recent", recentConversations(AssistantSnapshot(main.key, listOf(main))).isEmpty())
     }
+
+    @Test fun automaticConversationOriginsHaveOneAccessibleMapping() {
+        listOf(null, "", "user", "channel", " user ").forEach { origin ->
+            assertNull("the user's own origin has no source mark: $origin", automaticConversationOrigin(origin))
+        }
+        val origins = listOf("inbox", "task", "lark_agent", "spawned", "extension", "something_new")
+        assertEquals(AssistantConversationOrigin.entries.toList(), origins.map { automaticConversationOrigin(it) })
+        assertEquals(listOf("收件箱", "定时任务", "来自 飞书 /agent", "对话派生", "来自扩展", "其他"),
+            AssistantConversationOrigin.entries.map { it.accessibilityLabel(resources) })
+    }
 }
