@@ -1157,8 +1157,8 @@ private fun ChatPage(
                                     if (composerShown(panel, requestCollapsed)) TaskRouteChip(host)
                                 }
                                 // Persona's queue: its own messages, then those relayed from elsewhere, under its entries and right
-                                // above the composer, as iOS's footer has it (Glass, #4339 C6).
-                                if (renderStyle == ChatRenderStyle.Assistant && glass && composerShown(panel, requestCollapsed) &&
+                                // above the composer, as iOS's footer has it (every style: it is behaviour; each draws its own strip, #4339 C6).
+                                if (renderStyle == ChatRenderStyle.Assistant && composerShown(panel, requestCollapsed) &&
                                     SlashCommand.suggestions(composer.value.text, clear = true).isEmpty())
                                     ChatQueueStrip(session, chrome.actions, composer, { notice = it }, sessions::refresh)
                                 val claudeCommands = session?.canTypeClaudeCommands == true
