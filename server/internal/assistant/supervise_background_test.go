@@ -670,6 +670,58 @@ func TestProviderOfBackgroundSupervisorIsNotDeleted(t *testing.T) {
 	}
 }
 
+// While it follows the main chat, the main chat's provider is the background supervisor's too: the refused deletion
+// names both, and so does what an import, or hiding the alias, reads before it takes the alias out (#5806). With a
+// provider of its own it is named alone.
+func TestProviderUsesNameTheBackgroundSupervisor(t *testing.T) {
+	s, _, _ := modelService(t)
+	putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "shared"}}, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "supervise-only"}})
+	l := s.requestCtxLang(context.Background())
+	main, own := purposeName(l, "assistant"), purposeName(l, purposeSupervise)
+	uses := func(name string) []string {
+		t.Helper()
+		r := request(s, "GET", "/api/v1/launchers/"+name+"/uses", "")
+		var body struct {
+			Uses []string `json:"uses"`
+		}
+		if err := json.Unmarshal(r.Body.Bytes(), &body); r.Code != 200 || err != nil {
+			t.Fatalf("uses of %s: %d %s %v", name, r.Code, r.Body.String(), err)
+		}
+		return body.Uses
+	}
+	rev := purposeOf(t, s, "assistant").Revision
+	if r := modelRequest(s, "PATCH", "assistant", fmt.Sprintf(`{"revision":%d,"provider":"launcher.shared","model":"big-model"}`, rev)); r.Code != 200 {
+		t.Fatalf("the main chat's provider: %d %s", r.Code, r.Body.String())
+	}
+	if p := purposeOf(t, s, purposeSupervise); p.Override.Provider != "" || p.Effective.Provider != "launcher.shared" {
+		t.Fatalf("it does not follow the main chat: %+v", p)
+	}
+	if got := uses("shared"); !reflect.DeepEqual(got, []string{main, own}) || main == own {
+		t.Fatalf("uses while it follows the main chat: %v; want %q and %q", got, main, own)
+	}
+	r := request(s, "DELETE", "/api/v1/launchers/shared", "")
+	want := i18n.T(l, "assistant-models_launchers.err_in_use", i18n.Args{"uses": main + i18n.T(l, "assistant-models_launchers.list_sep") + own})
+	var refused struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(r.Body.Bytes(), &refused)
+	if r.Code != 409 || refused.Error != want {
+		t.Fatalf("deleting the provider both run on: %d %s; want 409 %q", r.Code, r.Body.String(), want)
+	}
+	if got := uses("supervise-only"); len(got) != 0 {
+		t.Fatalf("uses before it is chosen: %v", got)
+	}
+	if r := modelRequest(s, "PATCH", purposeSupervise, `{"revision":0,"provider":"launcher.supervise-only","model":"small-model"}`); r.Code != 200 {
+		t.Fatalf("giving it its own provider: %d %s", r.Code, r.Body.String())
+	}
+	if got := uses("supervise-only"); !reflect.DeepEqual(got, []string{own}) {
+		t.Fatalf("uses of its own provider: %v; want %q", got, own)
+	}
+	if got := uses("shared"); !reflect.DeepEqual(got, []string{main}) {
+		t.Fatalf("uses of the main chat's provider once it has its own: %v; want %q", got, main)
+	}
+}
+
 // The prompts the background supervisor adds: its start, its context, its supervision message, the main
 // conversation's one-time line and the CLAUDE.md that no longer says the main conversation reviews everything.
 func TestGoldenBackgroundSupervisor(t *testing.T) {
