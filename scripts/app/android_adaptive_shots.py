@@ -625,6 +625,15 @@ class AdaptiveRunner:
         self.transformed = True
         return window
 
+    def update_fake_posture(self, step):
+        if not step.get("fake"):
+            return
+        raw = step.get("value", step.get("posture"))
+        fake_active = raw in ("book", "tabletop")
+        self.fake_posture_changed = fake_active
+        self.posture_evidence = "fake" if fake_active else "none"
+        self.transformed = True
+
     def posture(self, step):
         raw = step.get("value", step.get("posture"))
         fake_tabletop = step.get("fake") and raw == "tabletop"
@@ -634,11 +643,8 @@ class AdaptiveRunner:
         if value not in (1, 2, 3):
             raise AdaptiveFailure("posture must be 1, 2, 3, book, tabletop, open or closed")
         if step.get("fake"):
+            self.update_fake_posture(step)
             self.adb.shell(*self._launch_arguments(step), timeout=20)
-            fake_active = raw in ("book", "tabletop")
-            self.fake_posture_changed = fake_active
-            self.posture_evidence = "fake" if fake_active else "none"
-            self.transformed = True
             return self.device_state()
         self.adb.run(["emu", "posture", str(value)], timeout=10)
         self.posture_evidence = "folding-feature"
@@ -917,6 +923,7 @@ class AdaptiveRunner:
                 self._step_pid_before = self.pid()
                 if kind == "launch":
                     self.note_open(step)
+                    self.update_fake_posture(step)
                     self.adb.shell(*self._launch_arguments(step, pairing=self.reset), timeout=30)
                     self.wait_ready(step)
                     self.initial_pid = self.pid()
@@ -925,6 +932,7 @@ class AdaptiveRunner:
                     self.action_log.append({"type": "launch", "reusedProcess": self._step_pid_before == self.initial_pid})
                 elif kind == "open":
                     self.note_open(step)
+                    self.update_fake_posture(step)
                     self.adb.shell(*self._launch_arguments(step), timeout=30)
                     self.wait_ready(step)
                 elif kind == "tap":

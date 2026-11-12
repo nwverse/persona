@@ -338,6 +338,21 @@ class AdaptiveShotsTest(unittest.TestCase):
             self.assertFalse(runner.fake_posture_changed)
             self.assertNotIn(["emu", "posture", "3"], adb.commands)
 
+    def test_open_fake_posture_updates_sidecar_state_and_marks_cleanup(self):
+        document = scenario([
+            {"step": "launch"},
+            {"step": "open", "page": "settings", "probePage": "Settings", "posture": "tabletop", "fake": True},
+            {"step": "capture", "name": "one", "state": "tabletop"},
+        ])
+        with tempfile.TemporaryDirectory() as output:
+            runner = make_runner(FakeAdb(), output, document)
+            runner.wait_ready = mock.Mock()
+            runner.capture = mock.Mock(side_effect=lambda step, index: setattr(runner, "screenshots", 1))
+            runner.cleanup = mock.Mock()
+            runner.run()
+            self.assertEqual("fake", runner.posture_evidence)
+            self.assertTrue(runner.fake_posture_changed)
+
     def test_assertions_poll_for_delayed_evidence(self):
         with tempfile.TemporaryDirectory() as output:
             runner = make_runner(FakeAdb(), output)

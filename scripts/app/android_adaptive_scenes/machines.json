@@ -48,9 +48,6 @@
         "firstVisibleKey": {
           "equals": "machine-row|15:concern-pending"
         },
-        "firstVisibleOffset": {
-          "equals": 0
-        },
         "columns": {
           "equals": 1
         }
@@ -77,9 +74,6 @@
         },
         "firstVisibleKey": {
           "equals": "machine-row|15:concern-pending|15:concern-offline"
-        },
-        "firstVisibleOffset": {
-          "equals": 0
         },
         "columns": {
           "equals": 2
