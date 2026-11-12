@@ -107,7 +107,7 @@ func TestBoundToAnAgent(t *testing.T) {
 		{"role": "assistant", "text": "登录页的测试挂了两个"}, {"role": "tool", "text": "ignored"}}}))
 	ready := a.until(ofType("ready"))
 	target, _ := ready["target"].(map[string]any)
-	if ready["protocol"] != float64(2) || fmt.Sprint(ready["features"]) != "[target runs asks resume suspend speak]" || target["kind"] != "agent" ||
+	if ready["protocol"] != float64(2) || fmt.Sprint(ready["features"]) != "[target runs asks resume suspend speak speech_gate]" || target["kind"] != "agent" ||
 		target["agent_label"] != "Claude Code" || target["title"] != "修登录页的测试" || target["machine_name"] != "工作站" || target["session_id"] != "a1" {
 		t.Fatalf("ready: %v", ready)
 	}
@@ -250,6 +250,48 @@ func TestInputDraftAndResend(t *testing.T) {
 				t.Fatalf("said: %s", got)
 			}
 		})
+	}
+}
+
+// #5904: a handover the user-speech gate refused (nobody was heard asking for it) is kept with its message, and the
+// model is told the screen can send it anyway. The app's resend (its Send Anyway) is the user's own confirmation:
+// the task goes to the bound conversation under the same id, the run sending → sent, and the log says why it went.
+func TestUnpromptedRunCanBeSentAnyway(t *testing.T) {
+	setVar(t, &gateWait, 300*time.Millisecond)
+	const task = "跑一下测试"
+	hub := agentHub(t)
+	up := newFakeUpstream(t, func(u *fakeUpstream, c *websocket.Conn, f map[string]any) {
+		if f["type"] == "session.start" {
+			u.send(c, map[string]any{"type": "session.started", "session": map[string]any{}})
+			delegate(u, c, "dlg1", task) // nobody spoke
+		}
+	})
+	pl := testPlugin(t, liveProvider(up), hub.server(t))
+	logs := captureLog(t, pl)
+	a := dialApp(t, pl, boundStart("a1", nil))
+	a.until(ofType("ready"))
+	refused := a.until(runIn(runRefused))
+	id, _ := refused["id"].(string)
+	if refused["code"] != "unprompted" || refused["task"] != task || !isVoiceID(id) {
+		t.Fatalf("refused: %v", refused)
+	}
+	if got := content(up.nextMatch(on("dlg1"))); !strings.Contains(got, unpromptedWords) || !strings.Contains(got, "仍然发送") {
+		t.Errorf("told: %s", got)
+	}
+	if msgs := hub.messages(); len(msgs) != 0 {
+		t.Fatalf("sent before the resend: %+v", msgs)
+	}
+	a.send(map[string]any{"type": "resend", "id": id})
+	m := hub.waitSent(1)
+	if m.ID != id || m.Session != "a1" || !strings.HasPrefix(m.Text, task+"\n") || m.ClearDraft != "" {
+		t.Fatalf("sent %+v", m)
+	}
+	if states := a.runStates(id, runDone); len(states) < 2 || states[0] != runSending || states[1] != runSent {
+		t.Fatalf("states %v", states)
+	}
+	logs.wait("call 1: run " + id + ": the app sends it again (the user's own confirmation, past the user-speech gate)")
+	if all := logs.String(); strings.Contains(all, task) {
+		t.Errorf("the log has the task:\n%s", all)
 	}
 }
 
@@ -469,7 +511,7 @@ func TestStopInterrupts(t *testing.T) {
 	pl := testPlugin(t, liveProvider(up), hub.server(t))
 	a := dialApp(t, pl, boundStart("a1", nil))
 	a.until(ofType("ready"))
-	if got := content(up.nextMatch(on("dlg0"))); !strings.Contains(got, "这条不是你说的，我没发") {
+	if got := content(up.nextMatch(on("dlg0"))); !strings.Contains(got, unpromptedWords) {
 		t.Fatalf("unprompted: %s", got)
 	}
 	hub.mu.Lock()
@@ -772,6 +814,7 @@ func TestReconnectWithNewAgentWordsClosesTheGate(t *testing.T) {
 				}
 			})
 			pl := testPlugin(t, liveProvider(up), hub.server(t))
+			logs := captureLog(t, pl)
 			a := dialApp(t, pl, boundStart("a1", nil))
 			a.until(ofType("ready"))
 			if changed {
@@ -785,7 +828,7 @@ func TestReconnectWithNewAgentWordsClosesTheGate(t *testing.T) {
 				}
 				return
 			}
-			if got := content(up.nextMatch(on("dlg9"))); !strings.Contains(got, "这条不是你说的，我没发") {
+			if got := content(up.nextMatch(on("dlg9"))); !strings.Contains(got, unpromptedWords) {
 				t.Fatalf("told: %s", got)
 			}
 			if f := a.until(runIn(runRefused)); f["code"] != "unprompted" {
@@ -794,6 +837,9 @@ func TestReconnectWithNewAgentWordsClosesTheGate(t *testing.T) {
 			if msgs := hub.messages(); len(msgs) != 0 {
 				t.Fatalf("sent %+v", msgs)
 			}
+			// What the gate went by (#5904): the reconnect moved the agent time past the line the user typed.
+			logs.wait("delegation dlg9: the user-speech gate refused it (unprompted)", "agent words ", " (reconnect)",
+				", typed line ", " (not counted: not after the agent words)")
 		})
 	}
 }

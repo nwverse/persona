@@ -149,7 +149,8 @@ type tracker struct {
 	runs  []*voiceRun
 	last  time.Time             // the last check of everything
 	ended map[linkKey]time.Time // when the hub last said a turn ended there (one may end while its message is sent)
-	// refused are the runs the hub refused (409), by id, that the app may send again (resend).
+	// refused are the runs the hub refused (409) or the user-speech gate did (unprompted, with a task), by id, that
+	// the app may send again (resend).
 	refused map[string]*voiceRun
 	// stopAsked is when the voice side last asked the bound conversation to stop (stopTarget, unix ns): a run read as
 	// stopped after that ends quietly, as stopped() ends it: the model already said it was stopped.
