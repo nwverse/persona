@@ -10,6 +10,7 @@ import { applySnapshot } from "./assistant-views";
 import type { AssistantView, ViewAction } from "./extension-wire";
 import { isResumed } from "./reconnect";
 import type { TaskBrief } from "./brief";
+import type { RuleSuggestion } from "./rule-suggestion";
 import { deleteTodo, type Todo, type TodoAsk } from "./todos";
 import { getInbox, itemPath } from "./inbox";
 import { closePanel, getPanel } from "./panel";
@@ -53,9 +54,12 @@ export interface TaskPlan {
   tasks: PlanTask[];
   state: "open" | "started" | "dismissed";
   created_at?: string;
+  /** On an open plan: the rule the hub suggests once the owner started this kind of task three times (#4929,
+   *  lib/rule-suggestion.ts). Filled in where the plan is read, never stored with it; absent from an older hub. */
+  suggestion?: RuleSuggestion;
 }
 
-export type FeedKind = "plan" | "task" | "answered" | "receipt" | "routed" | "today" | "message" | "view" | "review" | "report" | "notice" | "brief";
+export type FeedKind = "plan" | "task" | "answered" | "receipt" | "routed" | "today" | "message" | "view" | "review" | "report" | "notice" | "brief" | "inbox_suggestion";
 
 export interface FeedItem {
   id: string;
@@ -170,8 +174,10 @@ export interface BriefSetup {
 }
 
 /** The settings page a recommended mechanism is turned on at, for those that have one in this app: Session triage, the
- *  standing authorizations and the remembered kinds of task are on the assistant's own page. */
+ *  standing authorizations and the remembered kinds of task are on the assistant's own page; a lower tier for the
+ *  background supervisor (#5805) is its purpose's page of Model settings. */
 export function briefSetupPage(id: string): string | undefined {
+  if (id === "supervisor_tier") return "/settings?tab=models&purpose=assistant.supervise";
   return ["triage_decide", "triage_auto_continue", "triage_wake", "standing_authorizations", "task_trust"].includes(id) ? "/settings?tab=persona" : undefined;
 }
 

@@ -47,11 +47,11 @@ export function modeMenuItems(s: Session, pick: (mode: string) => void, opts: { 
 }
 
 /** The composer picker's symbol per mode (#5324, cindy's: a raised hand, code, a list, sparkles, a warning triangle); a
- *  mode this app does not know the plain shield. Not reported yet reads as Default permissions, as the picker's label does. */
-export function pickerIcon(mode: string | undefined): IconName {
+ *  mode this app does not know the plain shield. Not reported yet keeps the raised hand, as iOS does, while the picker's
+ *  label names no mode (#5756). */
+export function pickerIcon(mode: string | null | undefined): IconName {
+  if (!mode) return "palm"; // not reported: absent, empty or null alike
   switch (mode) {
-    case undefined:
-    case "":
     case "default":
       return "palm";
     case "acceptEdits":
