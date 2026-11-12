@@ -128,7 +128,7 @@ func handoffBlock(text, from, to, model string, resumed bool) string {
 		b.WriteString(` resumed="1"`)
 	}
 	b.WriteString(">\n")
-	b.WriteString(strings.TrimSpace(text))
+	b.WriteString(prompts.ContextBody(strings.TrimSpace(text))) // whatever the text, nothing in it ends the block
 	b.WriteString("\n</persona-context>\n\n")
 	return b.String()
 }
