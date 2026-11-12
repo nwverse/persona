@@ -543,7 +543,7 @@ Routing stays unchanged: all navigation still writes `AppModel.selectedTab` (not
 `.mail` as "push Inbox on Assistant", `.settings` as "open Settings sheet", then returns to the original page. Foreground page has one source, `ShellState.page`;
 writing `selectedTab` forwards immediately to the shell (not through `onChange`), and switch segments and dragging use it too: see `docs/apple/shell.md`.
 
-UI tests always use `launchPinned()` to fix the style and `launchPersona()` for clean Demo Mode startup, without overriding the app's default navigation.
+UI tests always use `launchPinned()` to fix the style (the run's, unless the test passes `-ui.style` itself, #5683) and `launchPersona()` for clean Demo Mode startup, without overriding the app's default navigation.
 Shell tests: `ShellTests`, `ShellAvatarTests` (top-left avatar and Inbox badge), `ShellPagerTests` (paging), `ShellSwitchTests`, `ShellSearchTests`. DEBUG: `-openShellPage inbox|machines|routines|knowledge|profile`; `-showShellPagerAt 0.3` holds the strip 30% across for screenshots; `-showHomeState empty|error` (new-chat page: nothing needs you / a failed-start notice, for screenshots).
 
 ## Foreground-only work (polling and reporting read state)
