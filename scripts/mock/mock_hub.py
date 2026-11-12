@@ -15,6 +15,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, unquote
 
 PORT = int(os.environ.get("PORT", "18760"))
+# MOCK_CHILD_SESSIONS=1 (#5120) builds on the Paseo computer: its agent's created agents are its children.
+if os.environ.get("MOCK_CHILD_SESSIONS"):
+    os.environ.setdefault("MOCK_PASEO", "1")
 NOW = datetime.now(timezone.utc)
 LOG = sys.stderr
 # MOCK_HUB_ID keeps the identity across restarts, so a paired App stays paired when the switches change.
@@ -38,7 +41,7 @@ def features():
                 ["assistant_compact", "assistant_main_new", "assistant_main_clear"] if os.environ.get("MOCK_MAIN_ACTIONS") == "1" else []) + (
                 ["messaging"] if os.environ.get("MOCK_MESSAGING") == "1" else []) + (
                 ["conversation_origin"] if os.environ.get("MOCK_AUTO_CONVERSATIONS") == "1" else []) + (
-                ["sessions_list", "sessions_lookup"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
+                ["sessions_list", "sessions_lookup", "sessions_hierarchy"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
                 ["preview"] if os.environ.get("MOCK_PREVIEW") else []) + (
                 ["task_cron"] if os.environ.get("MOCK_CRON") == "1" else []) + (
                 [] if os.environ.get("MOCK_LOOK_UPLOADS") == "off" else ["look_uploads"])
@@ -1079,16 +1082,38 @@ if os.environ.get("MOCK_PASEO"):
                background=[{"id": PASEO_ASKS, "kind": "agent", "description": "Add a remember-me option", "started_at": ago(minutes=5)},
                            {"id": PASEO_CODEX, "kind": "agent", "description": "Review the session handling", "started_at": ago(minutes=3)}]),
         _paseo(PASEO_ASKS, "Add a remember-me option", "Fix the login flow", "brave-fox", "fix/login", "blocked", "needs_you", 1,
-               "May I run the migration on the test database?", pending_interactions=1),
+               "May I run the migration on the test database?", pending_interactions=1, asking_parent_session_id=PASEO_LEAD,
+               started_at=ago(minutes=5)),
         _paseo(PASEO_CODEX, "Review the session handling", "Fix the login flow", "brave-fox", "fix/login", "working", "working", 0,
-               "Reading how the token is refreshed.", agent="codex", is_subagent=True, parent_session_id=PASEO_LEAD, root_session_id=PASEO_LEAD),
+               "Reading how the token is refreshed.", agent="codex", is_subagent=True, parent_session_id=PASEO_LEAD, root_session_id=PASEO_LEAD,
+               started_at=ago(minutes=3), effort="high"),
         _paseo("019a5e00-0000-7000-8000-000000000005", "Trace the refresh failure", "Fix the login flow", "brave-fox", "fix/login",
                "working", "working", 0, "Following the 401 through the retry.", agent="codex", agent_name="Codex CLI",
                source_kind="codex_history", source_thread_id="019a5e00-0000-7000-8000-000000000005", source_instance_id=None, host=None,
                slot_name=None, is_subagent=True, parent_session_id=PASEO_CODEX, root_session_id=PASEO_LEAD,
-               read_only_reason="View only: its parent Agent drives this sub-Agent", capabilities={"read": True}),
+               read_only_reason="View only: its parent Agent drives this sub-Agent", capabilities={"read": True},
+               started_at=ago(minutes=2), model="gpt-5.4-mini"),
         _paseo("9a5e0000-0000-4000-8000-000000000006", "Profile the CSV parser", "Speed up the importer", "calm-owl", "perf/importer",
                "done", "unread", 12, "The parser is three times faster on the sample files."),
+    ]
+# MOCK_CHILD_SESSIONS=1 (#5120): the Paseo agent that created two agents created two more, both finished (one of them
+# failed), and an agent whose creator is not listed stays a row of its own. With the hub's folding (fold_hierarchy) the
+# web lists none of the children: the lead's row needs you (its waiting child) and its chat draws a card for each.
+PASEO_DONE = "paseo-9a5e0000-0000-4000-8000-000000000007"
+PASEO_FAILED = "paseo-9a5e0000-0000-4000-8000-000000000008"
+PASEO_ORPHAN = "paseo-9a5e0000-0000-4000-8000-000000000009"
+PASEO_GRANDCHILD = "019a5e00-0000-7000-8000-000000000005"
+if os.environ.get("MOCK_CHILD_SESSIONS"):
+    SESSIONS += [
+        _paseo(PASEO_DONE, "Write the regression tests", "Fix the login flow", "brave-fox", "fix/login", "done", "idle", 6,
+               "Added three regression tests for the refresh path; all pass.", is_subagent=True, parent_session_id=PASEO_LEAD,
+               started_at=ago(minutes=8.8), model="claude-sonnet-4-5", effort="medium", seen_at=ago(minutes=5)),
+        _paseo(PASEO_FAILED, "Check the CI config", "Fix the login flow", "brave-fox", "fix/login", "idle", "idle", 7,
+               "The model service timed out.", agent="codex", is_subagent=True, parent_session_id=PASEO_LEAD,
+               started_at=ago(minutes=8.5), effort="low", turn_error="The model service timed out.", seen_at=ago(minutes=6)),
+        _paseo(PASEO_ORPHAN, "Update the changelog", "Fix the login flow", "brave-fox", "fix/login", "working", "working", 0,
+               "Adding the login change to the changelog.", is_subagent=True,
+               parent_session_id="9a5e0000-0000-4000-8000-0000000000ff", started_at=ago(minutes=1)),
     ]
 # MOCK_ORCA_CHILDREN=1: an Orca worktree with three child worktrees (#2073, parent_space_id), one of them with a child of
 # its own: the web folds them under the parent and sums their states on its row.
@@ -1646,6 +1671,15 @@ if os.environ.get("MOCK_ORIGINS") == "1":
     for c in ASSISTANT[:4]:
         c.setdefault("origin", "user")
 
+# MOCK_BACKGROUND_SUPERVISOR=1 (#4927, docs/assistant/unified-entry.md "Background supervisor"): the hub's built-in
+# conversation that follows up the tasks no leader supervises. It has origin "task" with no origin_ref, so the apps list
+# it with the scheduled tasks' conversations; GET /api/v1/assistant names it as `background_supervisor`, and archiving
+# it is refused. Not with MOCK_LEGACY_HUB (a hub from before it).
+BACKGROUND_SUPERVISOR = ""
+if os.environ.get("MOCK_BACKGROUND_SUPERVISOR") == "1" and not os.environ.get("MOCK_LEGACY_HUB"):
+    BACKGROUND_SUPERVISOR = "bgsv0000-0000-4000-8000-000000000001"
+    ASSISTANT.append(dict(assistant_sess(BACKGROUND_SUPERVISOR, "后台督办", 12, "「补测试」已验收：测试补齐，PR 已合并。"), origin="task"))
+
 # MOCK_RECENT=1 (#4873): more of the user's own conversations, so the sidebar's Recent (the newest five that are not the main
 # conversation or a leader) has more than it lists and All chats holds the rest. Synthetic titles.
 if os.environ.get("MOCK_RECENT") == "1":
@@ -2043,6 +2077,9 @@ ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "A
                     # supervised task reach its supervisor (#4293), off by default; closed sessions archive themselves
                     # after this many idle days (#3618), 0 is never. Left out with MOCK_LEGACY_HUB.
                     "agent_tasks": False, "inbox_signals": False, "archive_closed_days": 3,
+                    # The main chat follows up its own tasks instead of the background supervisor (#4927), off by
+                    # default. Left out with MOCK_LEGACY_HUB.
+                    "main_supervises_own_tasks": False,
                     # idle Agents stop after this many hours, their terminal kept (#4754); 0 is never
                     "idle_close_hours": 12,
                     # The role a meeting recording pre-selects (#2981; MOCK_MEETING_ATTENDANCE_DEFAULT=listener starts there)
@@ -2071,7 +2108,10 @@ def assistant_state(space="", archived=False):
                              and (archived or not s.get("archived"))]}
     if not os.environ.get("MOCK_LEGACY_HUB"):
         out.update(agent_tasks=cfg["agent_tasks"], inbox_signals=cfg["inbox_signals"], archive_closed_days=cfg["archive_closed_days"],
-                   idle_close_hours=cfg["idle_close_hours"], kb_topics=cfg["kb_topics"])
+                   idle_close_hours=cfg["idle_close_hours"], kb_topics=cfg["kb_topics"],
+                   main_supervises_own_tasks=cfg["main_supervises_own_tasks"])
+        if BACKGROUND_SUPERVISOR and not space:  # once the hub has made it (#4927)
+            out.update(background_supervisor=BACKGROUND_SUPERVISOR, background_supervisor_machine_id=cfg["machine_id"])
     if cfg["notes"] is not None:
         out["notes"] = cfg["notes"]
     if isinstance(cfg.get("timezone_picked"), bool):  # once a client said so, as the hub (#1855)
@@ -5201,6 +5241,35 @@ EDIT_NEW = """    func makeEntry(for date: Date) -> WeatherEntry {
     }"""
 
 ITEMS = {}
+if os.environ.get("MOCK_CHILD_SESSIONS"):  # #5120: the lead's two exchanges, and what each child was asked and did
+    ITEMS[PASEO_LEAD] = (
+        [it("user", "text", 14, text="Rework the login flow: move the token refresh into the middleware.")]
+        + tool("Read", {"file_path": "src/auth/session.ts"}, "export function refresh(token) { … }", 13)
+        + tool("Edit", {"file_path": "src/auth/middleware.ts", "old_string": "next()", "new_string": "await refresh(req); next()"}, "ok", 12)
+        + [it("assistant", "text", 11, text="The refresh now runs in the middleware, before every handler.")]
+        + [it("user", "text", 9, text="Have agents add the tests and a remember-me option, check CI, and review the session handling.")]
+        + [it("assistant", "thinking", 8.9, text="Four parts that can run side by side: I'll start one agent for each.")]
+        + [it("assistant", "text", 4, text="Two agents are checking the change.")])
+    ITEMS[PASEO_DONE] = (
+        [it("user", "text", 8.8, text="Write regression tests for the token refresh now that it runs in the middleware: an expired token, a revoked one, and two requests at once.")]
+        + tool("Write", {"file_path": "src/auth/middleware.test.ts", "content": "describe(\"refresh\", () => { … })"}, "ok", 8)
+        + tool("Bash", {"command": "npm test -- src/auth"}, "3 passed", 7)
+        + [it("assistant", "text", 6, text="Added three regression tests for the refresh path (expired, revoked, concurrent); all pass.")])
+    ITEMS[PASEO_FAILED] = (
+        [it("user", "text", 8.5, text="Check that the CI config runs the auth tests on every pull request.")]
+        + tool("Read", {"file_path": ".github/workflows/ci.yml"}, "jobs: …", 8)
+        + [it("system", "notice", 7, text="The model service timed out.")])
+    ITEMS[PASEO_ASKS] = (
+        [it("user", "text", 5, text="Add a remember-me option to the login form and keep it in the sessions table.")]
+        + tool("Edit", {"file_path": "src/auth/LoginForm.tsx", "old_string": "</form>", "new_string": "<RememberMe />\n</form>"}, "ok", 3)
+        + [it("assistant", "tool_use", 1, tool_use_id="toolu_migrate_test", tool_name="Bash", tool_input={"command": "npm run migrate -- --env test"})])
+    ITEMS[PASEO_CODEX] = (
+        [it("user", "text", 3, text="Review the session handling after the refresh moved into the middleware. Report anything that can leak a token.")]
+        + tool("Bash", {"command": "rg -n refresh src/auth"}, "src/auth/middleware.ts:12: await refresh(req)", 2)
+        + [it("assistant", "text", 0.5, text="Reading how the token is refreshed.")])
+    ITEMS[PASEO_GRANDCHILD] = (
+        [it("user", "text", 2, text="Trace why a refresh after a retry returns 401.")]
+        + [it("assistant", "text", 0.2, text="Following the 401 through the retry.")])
 if os.environ.get("MOCK_ORCA_CHILDREN"):
     ITEMS["c2073000-0000-4000-8000-000000000006"] = [
         it("user", "text", 61, text="Review the prior work in this workspace."),
@@ -7182,6 +7251,7 @@ if os.environ.get("MOCK_OPENCODE"):
 if os.environ.get("MOCK_PASEO"):
     INTERACTIONS.append(
         {"id": "paseo_migrate_test", "machine_id": "server", "session_id": PASEO_ASKS, "session_title": "Add a remember-me option",
+         "folded_under": PASEO_LEAD, "tool_use_id": "toolu_migrate_test",
          "cwd": "/home/me/.paseo/worktrees/1a2b3c4d/brave-fox", "kind": "permission", "agent": "claude",
          "created_at": ago(minutes=1), "expires_at": later(minutes=29), "tool_name": "Bash",
          "summary": "npm run migrate -- --env test", "tool_input": {"command": "npm run migrate -- --env test"}})
@@ -7251,7 +7321,9 @@ def mock_interactions():
         if MOCK_TASKS:  # a task's agent asking: the hub names the task (task_title)
             titles = {a["session_id"]: t["title"] for t in TODOS if t.get("origin") and not t.get("done_at") for a in t.get("agents", [])}
             out = [dict(x, task_title=titles[x["session_id"]]) if x.get("session_id") in titles else x for x in out]
-        return out
+    # the session a card's session folds under (Interaction.folded_under, #5120): its home is that session's page
+    folds = {(r["machine_id"], r["session_id"]): r["folded_under"] for r in all_sessions() if r.get("folded_under")}
+    return [dict(x, folded_under=folds[(x.get("machine_id"), x.get("session_id"))]) if (x.get("machine_id"), x.get("session_id")) in folds else x for x in out]
 
 
 # MOCK_FLEET: the hub's fleet summary (server/internal/hub/liveactivity.go buildFleet) for Android's ongoing notification,
@@ -10494,6 +10566,31 @@ MODEL_CATEGORY_FOR = {pid: {"主对话": "assistant", "Agents": "agent.new", "�
                       for pid, _, group, _ in MODEL_DEFINITIONS}
 
 
+SUPERVISE_PURPOSE = "assistant.supervise"
+
+
+def supervise_model_purpose():
+    """The background supervisor's use (#4927): not in the catalog, read and set by its own id. A record of its own;
+    Main Chat's model while that is empty. None from a hub before it (MOCK_LEGACY_HUB)."""
+    if os.environ.get("MOCK_LEGACY_HUB"):
+        return None
+    catalog = model_configuration()
+    main = next(x for x in catalog["purposes"] if x["id"] == "assistant")
+    with MODEL_CONFIG_LOCK:
+        stored = MODEL_BINDINGS.get(SUPERVISE_PURPOSE, {"revision": 0, "override": {}})
+    binding = dict(stored["override"])
+    effective = {k: v for k, v in main["effective"].items() if k != "runtime"}
+    if binding.get("provider"):
+        provider = next((x for x in catalog["providers"] if x["id"] == binding["provider"]), {})
+        effective = {"provider": binding["provider"], "model": provider.get("model", "")}
+    effective.update(binding)
+    purpose = dict(id=SUPERVISE_PURPOSE, category_id="assistant", parent="assistant", name="后台督办", group="主对话",
+                   kind="launcher", override=binding, effective=effective, revision=stored["revision"],
+                   inherited_from=main["name"], fields=["provider", "model", "effort"],
+                   provider_ids=main["provider_ids"], status="未验证")
+    return {"purpose": purpose, "providers": catalog["providers"]}
+
+
 def model_configuration(include_uses=False):
     providers = [dict(id="launcher." + l["name"], name=l["name"], kind=l.get("kind", "launcher"),
                       model=l.get("model"), hidden=l.get("hidden", False)) for l in LAUNCHERS if l["source"] != "builtin"]
@@ -12862,7 +12959,75 @@ MODES_LOG = []  # POST …/modes requests, GET /mock/modes (the model picker's a
 
 
 def all_sessions():
-    return [decorated_session(s) for s in (SESSIONS + ASSISTANT)]
+    return fold_hierarchy([decorated_session(s) for s in (SESSIONS + ASSISTANT)])
+
+
+def is_child_row(r):
+    root = r.get("root_session_id")
+    return bool(r.get("is_subagent") or r.get("parent_session_id") or r.get("asking_parent_session_id") or (root and root != r["session_id"]))
+
+
+def fold_hierarchy(rows):
+    """The manager's folding (#5120, docs/protocol/protocol.md "Session hierarchy"), on copies: a child (is_subagent, a
+    parent, or the parent a waiting runtime child names in asking_parent_session_id) whose topmost listed ancestor on its
+    machine is another listed row gets folded_under that ancestor, which gets children (its descendants by their own
+    state). Orphans and cycles fold nowhere."""
+    by = {(r["machine_id"], r["session_id"]): r for r in rows}
+
+    def parent(r):
+        for k in ("parent_session_id", "asking_parent_session_id", "root_session_id"):
+            v = r.get(k)
+            if v and v != r["session_id"] and (r["machine_id"], v) in by:
+                return by[(r["machine_id"], v)]
+        return None
+    top = {}
+    for r in rows:
+        cur, seen, found = r, {r["session_id"]}, None
+        while is_child_row(cur):
+            p = parent(cur)
+            if p is None:
+                break
+            if p["session_id"] in seen:
+                found = None
+                break
+            seen.add(p["session_id"])
+            found = cur = p
+        if found is not None:
+            top[(r["machine_id"], r["session_id"])] = found["session_id"]
+    if not top and not any("folded_under" in r or "children" in r for r in rows):
+        return rows
+    rollup = {}
+    for (mid, sid), root in top.items():
+        c = rollup.setdefault((mid, root), {"total": 0, "working": 0, "needs_you": 0})
+        c["total"] += 1
+        state = by[(mid, sid)].get("state")
+        if state in ("working", "needs_you"):
+            c[state] += 1
+    out = []
+    for r in rows:
+        k = (r["machine_id"], r["session_id"])
+        r = {x: v for x, v in r.items() if x not in ("folded_under", "children")}
+        if k in top:
+            r["folded_under"] = top[k]
+        if k in rollup:
+            r["children"] = {x: v for x, v in rollup[k].items() if v or x == "total"}
+        out.append(r)
+    return out
+
+
+def with_fold(row):
+    """One decorated row with what the list's folding gives it."""
+    return next((x for x in all_sessions() if x["machine_id"] == row.get("machine_id") and x["session_id"] == row.get("session_id")), row)
+
+
+def folded_state(s):
+    """Session.FoldedState: what a parent shows and is counted as with its folded children."""
+    own, c = s.get("state") or "unknown", s.get("children") or {}
+    if own == "needs_you" or c.get("needs_you"):
+        return "needs_you"
+    if c.get("working") and own != "unread" and not (own == "idle" and s.get("awaits_reply")):
+        return "working"
+    return own
 
 
 LIST_JOURNAL = {}  # revision -> {identity: row} of the unfiltered list as it was (a bounded delta journal, #3759)
@@ -12934,12 +13099,20 @@ def paged_sessions(query):
     if os.environ.get("MOCK_SESSIONS_LIST") != "1" or not (set(query) - {"manager"}):
         return {"sessions": rows}, 200
     revision = list_revision(rows)
-    fields = {"machine_id": "machine_id", "session_id": "session_id", "state": "state",
+    fields = {"machine_id": "machine_id", "session_id": "session_id",
               "group": "space_id", "source": "source_kind", "provider": "agent"}
     search = query.get("q", [""])[0].lower()
+    # sessions_hierarchy (#5120): roots=1 leaves the folded children out and counts each parent by its folded state;
+    # parent_session_id=<id> (with machine_id) lists the sessions folded under it.
+    roots, under = query.get("roots", [""])[0] == "1", query.get("parent_session_id", [""])[0]
+    if under and not query.get("machine_id", [""])[0]:
+        return {"error": "parent_session_id needs machine_id", "code": "invalid_query"}, 400
+    state_of = folded_state if roots else (lambda s: s.get("state", "unknown"))
 
     def matching(rows):
-        rows = [s for s in rows if all(not query.get(k, [""])[0] or query[k][0] == s.get(v, "")
+        rows = [s for s in rows if (not roots or not s.get("folded_under")) and (not under or s.get("folded_under") == under)
+                and (not query.get("state", [""])[0] or query["state"][0] == state_of(s))
+                and all(not query.get(k, [""])[0] or query[k][0] == s.get(v, "")
                                       for k, v in fields.items())
                 and (not query.get("project", [""])[0] or query["project"][0] == (s.get("repo_root") or s.get("workspace_cwd") or s.get("cwd", "")))
                 and (not search or search in "\n".join(str(s.get(k, "")) for k in ("title", "cwd", "space_name", "slot_name", "last_text")).lower())]
@@ -12951,7 +13124,7 @@ def paged_sessions(query):
         counts = {"total": len(rows), "revision": revision, "machine": {}, "project": {}, "group": {}, "state": {}}
         for s in rows:
             values = {"machine": s["machine_id"], "project": s.get("repo_root") or s.get("workspace_cwd") or s.get("cwd", ""),
-                      "group": s.get("space_id") or s.get("workspace_id", ""), "state": s.get("state", "unknown")}
+                      "group": s.get("space_id") or s.get("workspace_id", ""), "state": state_of(s)}
             for key, value in values.items():
                 counts[key][value] = counts[key].get(value, 0) + 1
         return counts, 200
@@ -15844,7 +16017,7 @@ def set_session_state(query):
     session.update(state=state, status=STATUS_OF_STATE[state], updated_at=now, state_since=now,
                    rev=(session.get("rev") or 0) + 1)
     push_machine(mid)
-    return {"session": stamp_row(decorated_session(session))}, 200
+    return {"session": stamp_row(with_fold(decorated_session(session)))}, 200
 
 
 def incoming_message(query):
@@ -15869,7 +16042,7 @@ def incoming_message(query):
         if sid in subscribed:
             try: send({"type": "items", "machine_id": mid, "session_id": sid, "items": [item], **span([item], before)})
             except OSError: pass
-    return {"session": stamp_row(decorated_session(session)), "item": item}, 200
+    return {"session": stamp_row(with_fold(decorated_session(session))), "item": item}, 200
 
 
 def quiet_capsule():
@@ -18282,6 +18455,7 @@ MOCK_HELP = [
     "MOCK_SESSIONS_MANY=<n>  n more idle sessions to page through; GET /mock/sessions/touch expires the old cursors (#4410)",
     "MOCK_MANUAL_HERDR=1  没挂待办的 herdr Agent 算手动开的（started_by_persona 为假），Agents「按待办」里出「手动开的」一段（#2917）",
     "MOCK_ORCA_CHILDREN=1  MacBook 上一个 Orca 工作区带三个子工作区（其中一个还有子项，parent_space_id，#2073）",
+    "MOCK_CHILD_SESSIONS=1  The Paseo computer (MOCK_PASEO) with its agent's four created agents (one waiting for you, one working with a Codex subagent of its own, one done, one failed) and an agent whose creator is not listed: the hub folds them (folded_under / children) and the lead's chat draws a card for each (#5120)",
     "MOCK_PASEO=1  A computer whose engine is Paseo: a project with its main checkout and two titled worktree workspaces, an agent with the two agents it created (one waiting for you), and a Codex agent whose thread has a subagent",
     "MOCK_LIVE_STEP=bash|command|reads|parallel|thinking|thinking-folded  The widget chat a minute into a turn whose newest step is still going: the running work line names it (#2987)",
     "MOCK_TOOL_OUTCOMES=1  A turn whose tool results carry outcomes: a failed test run (exit code, the cut output's end), a denied edit, a refused write, an interrupted and a timed-out command; only the failure is red (#4303)",
@@ -19105,6 +19279,8 @@ class H(BaseHTTPRequestHandler):
             q = parse_qs(urlparse(self.path).query)
             return self.send_json(assistant_state(q.get("space", [""])[0], q.get("archived", [""])[0] == "1"))
         if p == "/api/v1/model-config": return self.send_json(model_configuration())
+        if p == "/api/v1/model-config/purposes/" + SUPERVISE_PURPOSE and (own := supervise_model_purpose()):
+            return self.send_json(own)
         if p.startswith("/api/v1/model-config/purposes/"):
             catalog = model_configuration(include_uses=True)
             purpose = next((x for x in catalog["purposes"] if x["id"] == unquote(p.rsplit("/", 1)[1])), None)
@@ -19884,6 +20060,8 @@ class H(BaseHTTPRequestHandler):
             if c is None: return self.send_json({"error": "not found"}, 404)
             if m.group(2) == "archive" and c["session_id"] == ASSISTANT_CONFIG["main"]:
                 return self.send_json({"error": "the main conversation can't be archived"}, 400)
+            if m.group(2) == "archive" and c["session_id"] == BACKGROUND_SUPERVISOR:  # built in, stays listed (#4927)
+                return self.send_json({"error": "the background supervisor can't be archived"}, 400)
             c["archived"] = m.group(2) == "archive"
             push_machine(c["machine_id"])
             return self.send_json({"ok": True, "archived": c["archived"]})
@@ -20079,6 +20257,21 @@ class H(BaseHTTPRequestHandler):
                 return self.send_json({"ok": True})
         if self.command == "POST" and p.startswith("/api/v1/inbox/") and p.endswith("/draft"):
             return self.send_json(*inbox_draft(unquote(p[len("/api/v1/inbox/"):-len("/draft")]), json.loads(self.last_body or b"{}")))
+        if p == "/api/v1/model-config/purposes/" + SUPERVISE_PURPOSE and self.command == "PATCH" and (own := supervise_model_purpose()):
+            body, purpose = json.loads(self.last_body or b"{}"), own["purpose"]
+            with MODEL_CONFIG_LOCK:
+                if body.get("revision") != purpose["revision"]:
+                    return self.send_json({"error": "配置已在别处修改"}, 409)
+                binding = dict(purpose["override"])
+                if "provider" in body and body["provider"] != binding.get("provider"):
+                    binding.pop("model", None)
+                    binding.pop("effort", None)
+                for field in purpose["fields"]:
+                    if field not in body: continue
+                    if body[field] is None: binding.pop(field, None)
+                    else: binding[field] = body[field]
+                MODEL_BINDINGS[SUPERVISE_PURPOSE] = {"revision": purpose["revision"] + 1, "override": binding}
+            return self.send_json(supervise_model_purpose())
         if p.startswith("/api/v1/model-config/purposes/") and self.command == "PATCH":
             pid, body = unquote(p.rsplit("/", 1)[1]), json.loads(self.last_body or b"{}")
             with MODEL_CONFIG_LOCK:
@@ -20861,6 +21054,8 @@ class H(BaseHTTPRequestHandler):
                 ASSISTANT_CONFIG["agent_tasks"] = body["agent_tasks"]
             if isinstance(body.get("inbox_signals"), bool):
                 ASSISTANT_CONFIG["inbox_signals"] = body["inbox_signals"]
+            if isinstance(body.get("main_supervises_own_tasks"), bool) and not os.environ.get("MOCK_LEGACY_HUB"):
+                ASSISTANT_CONFIG["main_supervises_own_tasks"] = body["main_supervises_own_tasks"]
             if isinstance(body.get("kb_topics"), bool):
                 ASSISTANT_CONFIG["kb_topics"] = body["kb_topics"]
             if body.get("machine_id"):
@@ -20950,7 +21145,7 @@ class H(BaseHTTPRequestHandler):
                 if os.environ.get("MOCK_RESUME_ERROR"): return self.send_json({"error": os.environ["MOCK_RESUME_ERROR"]}, 502)
                 resume.update(status="idle", state="idle")
                 push_machine(resume["machine_id"])
-                return self.send_json({"session": decorated_session(resume)})
+                return self.send_json({"session": with_fold(decorated_session(resume))})
             codex = body.get("launcher") == "codex"  # the node starts Codex with its first message and answers with its thread
             if codex and (body.get("async") or not (body.get("prompt") or "").strip()):
                 return self.send_json({"error": "新建 Codex 会话要连第一条消息一起发：Codex 收到第一条消息才建会话。", "code": "codex_needs_prompt"}, 400)
@@ -20990,7 +21185,7 @@ class H(BaseHTTPRequestHandler):
                     t["updated_at"] = now_str
                     push_machine(s["machine_id"])
                     push_todos()
-            return self.send_json({"session": decorated_session(s)})
+            return self.send_json({"session": with_fold(decorated_session(s))})
         if p.startswith("/api/v1/auth/tokens/") and self.command == "DELETE":
             for t in TOKENS:
                 if t["id"] == p.split("/")[-1]:
@@ -21792,6 +21987,9 @@ MOCK_HELP.append("MOCK_MARKDOWN=1  任务往来和回执里带 **粗体**、`代
 MOCK_HELP.append("MOCK_TASK_RENAMED=1  整理发布说明这个任务在回执写好后改了名：回执应显示新名字「写本周发布说明」（#3036）")
 MOCK_HELP.append("MOCK_AUTO_CONVERSATIONS=1  助手对话带来源 origin（feature conversation_origin）：另有 10 段自动对话（收件箱 6、定时任务 2、飞书 /agent、对话派生），侧边栏收进「自动对话」（#3264）")
 MOCK_HELP.append("MOCK_EXTERNAL=1  和 MOCK_AUTO_CONVERSATIONS=1 一起用：飞书 /agent 那段带上请求和上下文，另加一段别的扩展开的（origin extension），两段都是外部的（#3758）")
+MOCK_HELP.append("MOCK_BACKGROUND_SUPERVISOR=1  The hub's built-in background supervisor conversation exists (#4927): origin task with no origin_ref, "
+                 "named by GET /api/v1/assistant as background_supervisor, and archiving it is refused. Without it the setting "
+                 "main_supervises_own_tasks and the model use assistant.supervise (answered by its own id, not in the catalog) are still there; MOCK_LEGACY_HUB has none of them")
 
 
 
