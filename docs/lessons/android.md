@@ -601,3 +601,7 @@ A non-bouncy spring can still overshoot with a fling velocity. Clamp every divid
 ## Pairing fixtures must follow the default sign-in page (#4623)
 
 Skipping onboarding does not skip password sign-in. Tests of manual or scan pairing must select the localized pairing alternative from that default page before using the existing controls. Keep initial-link fixtures on their direct confirmation path, and retain back-stack, field-retention, invalid-input and screenshot assertions rather than changing the product default to fit older fixtures.
+
+## Resolve horizontal window insets with layout direction
+
+Compose `WindowInsets.getLeft` and `getRight` require both `Density` and `LayoutDirection`; only the vertical getters take density alone. Pass `LocalLayoutDirection.current` instead of copying the vertical call shape. Test pointer or popup clamping with asymmetric physical insets in both directions: LTR and RTL resolve different left/right values, while the resulting bounds and menu origin remain physical window coordinates.

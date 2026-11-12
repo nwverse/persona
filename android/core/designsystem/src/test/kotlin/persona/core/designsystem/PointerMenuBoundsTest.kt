@@ -1,6 +1,7 @@
 package persona.core.designsystem
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -19,9 +20,11 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -50,6 +53,18 @@ class PointerMenuBoundsTest {
     @Test fun anEdgeFlipsTheGrowthDirectionWhenTheOtherSideFits() {
         assertEquals(IntOffset(660, 100), pointerMenuOrigin(Offset(900f, 100f), menu, window))
         assertEquals(IntOffset(100, 380), pointerMenuOrigin(Offset(100f, 700f), menu, window))
+    }
+
+    @Test fun horizontalSafeInsetsAndClampingFollowLayoutDirection() {
+        val insets = WindowInsets(10, 20, 30, 40)
+        val size = IntSize(200, 300)
+        val ltr = pointerMenuSafeBounds(size, insets, Density(1f), LayoutDirection.Ltr)
+        val rtl = pointerMenuSafeBounds(size, insets, Density(1f), LayoutDirection.Rtl)
+        assertEquals(IntRect(10, 20, 170, 260), ltr)
+        assertEquals(IntRect(30, 20, 190, 260), rtl)
+        val smallMenu = IntSize(20, 20)
+        assertEquals(IntOffset(145, 20), pointerMenuOrigin(Offset(165f, 20f), smallMenu, ltr))
+        assertEquals(IntOffset(165, 20), pointerMenuOrigin(Offset(165f, 20f), smallMenu, rtl))
     }
 
     @Test fun anOversizedMenuStartsAtTheSafeEdgeAndCanScroll() {

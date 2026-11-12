@@ -22,11 +22,14 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import kotlin.math.roundToInt
 
 /**
@@ -42,15 +45,7 @@ fun JPointerMenu(
 ) {
     val density = LocalDensity.current
     val windowSize = LocalWindowInfo.current.containerSize
-    val safeDrawing = WindowInsets.safeDrawing
-    val safeLeft = safeDrawing.getLeft(density)
-    val safeTop = safeDrawing.getTop(density)
-    val safeBounds = IntRect(
-        safeLeft,
-        safeTop,
-        (windowSize.width - safeDrawing.getRight(density)).coerceAtLeast(safeLeft),
-        (windowSize.height - safeDrawing.getBottom(density)).coerceAtLeast(safeTop),
-    )
+    val safeBounds = pointerMenuSafeBounds(windowSize, WindowInsets.safeDrawing, density, LocalLayoutDirection.current)
     var hostOrigin by remember { mutableStateOf(Offset.Zero) }
     var menuSize by remember { mutableStateOf(IntSize.Zero) }
     val origin = pointerMenuOrigin(anchor, menuSize, safeBounds)
@@ -88,6 +83,20 @@ fun JPointerMenu(
             )
         }
     }
+}
+
+/** Safe physical window bounds; Compose resolves the horizontal insets in [layoutDirection]. */
+internal fun pointerMenuSafeBounds(
+    windowSize: IntSize,
+    insets: WindowInsets,
+    density: Density,
+    layoutDirection: LayoutDirection,
+): IntRect {
+    val left = insets.getLeft(density, layoutDirection)
+    val top = insets.getTop(density)
+    return IntRect(left, top,
+        (windowSize.width - insets.getRight(density, layoutDirection)).coerceAtLeast(left),
+        (windowSize.height - insets.getBottom(density)).coerceAtLeast(top))
 }
 
 /** The menu's top-left, growing right/down first and flipping where the other side has room. */
