@@ -315,7 +315,9 @@ struct FleetPersonaTests {
                 #expect(cg.width == size * 3 && cg.bitsPerComponent == 8)
             }
         }
-        #expect(FleetFaces.size(20) == 22 && FleetFaces.size(23) == 24 && FleetFaces.size(26) == 26 && FleetFaces.size(40) == 26)
+        // The island's sizes, then the widgets' (40 on the Lock Screen, 46 in the empty states); past the largest, the largest.
+        #expect(FleetFaces.size(20) == 22 && FleetFaces.size(23) == 24 && FleetFaces.size(26) == 26 && FleetFaces.size(30) == 40
+                    && FleetFaces.size(46) == 46 && FleetFaces.size(60) == 46)
     }
 
     /// A placeholder picture at every size: a disc of one color.
