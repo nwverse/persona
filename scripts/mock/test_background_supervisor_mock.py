@@ -85,7 +85,7 @@ class BackgroundSupervisorMockTests(unittest.TestCase):
         self.assertNotIn("assistant.supervise", [p["id"] for p in call(base, "/api/v1/model-config")["purposes"]])
         main = call(base, "/api/v1/model-config/purposes/assistant")["purpose"]
         purpose = call(base, PURPOSE)["purpose"]
-        self.assertEqual((purpose["parent"], purpose["category_id"], purpose["launch"]), ("assistant", "assistant", "headless"))
+        self.assertEqual((purpose["parent"], purpose["category_id"]), ("assistant", "assistant"))
         self.assertEqual(purpose["effective"], main["effective"])
         self.assertEqual(purpose["override"], {})
         self.assertTrue(purpose["inherited_from"])

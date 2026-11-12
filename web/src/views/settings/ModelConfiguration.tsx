@@ -35,8 +35,10 @@ function ModelConfigurationForManager({ manager, open, onOpen, onProviders }: { 
   const [query, setQuery] = useState("");
   const load = async () => {
     try {
-      // the background supervisor's purpose is read by its own id and listed after Main chat (#5082); a hub without it lists none
-      const [catalog, supervise] = await Promise.all([modelConfiguration(manager), modelPurpose(SUPERVISE_PURPOSE, manager).catch(() => undefined)]);
+      // the background supervisor's purpose is read by its own id and listed after Main chat (#5082). Only a hub that
+      // says it has none (404) lists none: any other failure is the page's error, with its retry, not a missing row
+      const absent = (e: unknown) => { if (e instanceof ApiError && e.status === 404) return undefined; throw e; };
+      const [catalog, supervise] = await Promise.all([modelConfiguration(manager), modelPurpose(SUPERVISE_PURPOSE, manager).catch(absent)]);
       setData(withPurposeAfter(catalog, supervise?.purpose, "assistant"));
       setError("");
     } catch (e) {

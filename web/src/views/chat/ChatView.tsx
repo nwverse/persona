@@ -18,7 +18,9 @@ import { acknowledgeLaunch } from "../../lib/new-agent";
 import { useRuntimeSession } from "../../lib/runtime-session";
 import { ArchivedNotice, SessionDetailNotice } from "../../ui/SessionDetailNotice";
 import { REVIEW_FEATURE } from "../../lib/session-review";
+import { isBackgroundSupervisor } from "../../lib/background-supervisor";
 import { getSession, getState, hubHas, listenSession, refresh, refreshTodos, saveMutes, useStore, viewSession } from "../../lib/store";
+import { foldRows } from "../../lib/folded-rows";
 import { PREVIEW_FEATURE } from "../../lib/preview";
 import { agentsWorking, buildTaskIndex, stableSubagents, STOP_LOOP_MESSAGE, subagentCall, subagentCardKey, terminalCalls, type TaskIndex } from "../../lib/tasks";
 import { stabilizeLines, stableValue } from "../../lib/stable-lines";
@@ -34,7 +36,7 @@ import { lastEditablePrompt, promptsOf, rewindBlock, rewindDone, rewindSession, 
 import { EDIT_SEND_SETTLE_MS } from "../../lib/edit-last-key";
 import { sendDraft } from "../../lib/drafts";
 import { chatLines, freshWords, openRecap, parseUserText, segments, type ChatLine, type UserMessage } from "../../lib/turns";
-import type { Item, Session, Subagent } from "../../lib/types";
+import type { Interaction, Item, Session, Subagent } from "../../lib/types";
 import { anchoredScroll, followsAgain, isScrollbarPress, jumpLabel, leavesOnKey, leavesOnScrollbarDrag, leavesOnTouch, leavesOnWheel, followsAfterUnfold, UNFOLD_PAUSE, type ScrollAnchor } from "../../lib/disclosure";
 import { Button, copyText, cx, Dialog, IconButton, Loading, Menu, StatePill, toast, useMenu, useNow, type MenuItem } from "../../ui/atoms";
 import { awaitsReply } from "../../lib/agent-groups";
@@ -72,6 +74,8 @@ import { addFreshWords, resetFreshWords } from "./fresh-words";
 import { backgroundLine, backgroundWaitLine, waitingOnWorkflow, workflowAgentFor, workflowCalls, workflowCallsKey } from "../../lib/workflows";
 import { waitingOnSubagents } from "../../lib/background-work";
 import { doneSubagentLink, useSubagentLink } from "../../lib/subagent-link";
+import { childCall, childCardKey, childOfCall, childPlaces, exchangeStarts, placeChildren, type ChildPlace } from "../../lib/child-cards";
+import { useChildSessions } from "../../lib/use-child-sessions";
 import { openExpanded } from "./expanded";
 import { seekCall } from "./jump";
 import { navRailTicks, type NavRailSource, type NavRailTick } from "../../lib/nav-rail";
@@ -133,6 +137,10 @@ const TerminalPanel = lazy(() => loadTerminal().then((m) => ({ default: m.Termin
 const HandoffBack = lazy(() => import("./HandoffBack").then((m) => ({ default: m.HandoffBack })));
 
 const NO_FEED: FeedItem[] = [];
+/** How many earlier pages a link to a child loads looking for the exchange its card is in. */
+const CHILD_LINK_PAGES = 10;
+// no child sessions: no cards, and the exchanges are not walked for where they would go
+const NO_PLACES = new Map<string, ChildPlace[]>();
 const NO_PANES: Session[] = [];
 // the assistant has no subagents: one array, so the chat context does not change with every render
 const NO_SUBAGENTS: Subagent[] = [];
@@ -239,10 +247,14 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const machineName = useStore((s) => machineWithHub(mid, s.machines));
   // only the tab's own rows (the same objects, the same array): a push for another agent on the machine leaves the chat be
   const panes = useStore((s) => (session && !assistant ? tabSessions(s.sessions[mid] ?? [], session) : NO_PANES));
-  const siblings = useStore((s) => (session?.space_id ? (s.sessions[mid] ?? []).filter((x) => x.space_id === session.space_id && stateOf(x) !== "offline") : []));
-  const interactions = useStore((s) => s.interactions.filter((i) => i.machine_id === mid && i.session_id === sid));
-  const answered = useStore((s) => Object.values(s.answered).filter((a) => a.ix.machine_id === mid && a.ix.session_id === sid));
-  const delegated = useStore((s) => Object.values(s.delegated).filter((d) => d.ix.machine_id === mid && d.ix.session_id === sid));
+  // the space's other agents, its child sessions folded into their parents (#5120: a child is never one of them)
+  const siblings = useStore((s) => (session?.space_id ? foldRows(s.sessions[mid] ?? []).filter((x) => x.space_id === session.space_id && stateOf(x) !== "offline") : []));
+  // its own requests and those of the child sessions folded under it (#5120): a child's are answered here, in the order
+  // they came, each saying which child asks
+  const ownCard = (ix: Interaction) => ix.machine_id === mid && (ix.session_id === sid || ix.folded_under === sid);
+  const interactions = useStore((s) => s.interactions.filter(ownCard));
+  const answered = useStore((s) => Object.values(s.answered).filter((a) => ownCard(a.ix)));
+  const delegated = useStore((s) => Object.values(s.delegated).filter((d) => ownCard(d.ix)));
   // the list as pushed: its updated_at and rev are what tell the page it fell behind (useTranscript)
   const tr = useTranscript(mid, sid, { starting: Boolean(launching), updatedAt: session?.updated_at, rev: session?.rev, cache: mainCache, assistant });
   const trNow = useRef(tr);
@@ -1173,7 +1185,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // workflow agent's, its run's card. Once the chat and its subagents are in; a subagent no longer listed: just the chat.
   const linkedAgent = useSubagentLink(mid, sid);
   useEffect(() => {
-    if (!linkedAgent || !session || tr.loading || detail.loading) return;
+    if (!linkedAgent || childOfCall(linkedAgent) || !session || tr.loading || detail.loading) return;
     doneSubagentLink(mid, sid);
     const agent = subagents?.find((a) => a.id === linkedAgent);
     const call = agent ? subagentCall(agent) : workflowAgentFor(session, `${sid}@${linkedAgent}`)?.run.tool_use_id;
@@ -1201,9 +1213,46 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     const last = lines.findLast((line) => line.kind === "segment");
     return last?.kind === "segment" ? last.seg.id : undefined;
   }, [closeoutShown, lines]);
+  // The child sessions folded under this one (#5120, a Codex subagent, an Agent a Paseo Agent created): each a card in
+  // the exchange during which it started (lib/child-cards.ts). The placement is kept while nothing moves it, so a push
+  // for a child redraws only its card, and a streamed item none of the exchanges.
+  // read while the row says it has some, or a link to one waits (its parent's rollup may not be in yet)
+  const linkedChild = linkedAgent ? childOfCall(linkedAgent) : undefined;
+  const kids = useChildSessions(mid, sid, Boolean(session?.children?.total) || Boolean(linkedChild));
+  const seenAt = useRef(new Map<string, string>());
+  const lastPlaces = useRef<Map<string, ChildPlace[]> | undefined>(undefined);
+  const places = useMemo(
+    () => stableValue(lastPlaces.current, kids.rows.length ? placeChildren(exchangeStarts(lines), childPlaces(kids.rows, seenAt.current), !tr.hasMore) : NO_PLACES),
+    [lines, kids.rows, tr.hasMore],
+  );
+  lastPlaces.current = places;
+  // A link to a child's own conversation (lib/subagent-link.ts): its card opened, in view, once its row is in. A child
+  // that started before the loaded history: earlier pages until its exchange is in (at most CHILD_LINK_PAGES); a child
+  // that is not this session's (any more): just the chat.
+  const childLinkPages = useRef({ child: "", pages: 0 });
+  useEffect(() => {
+    // a link followed to its end gives the next one, the same child's again too, its whole budget of earlier pages
+    if (!linkedChild) childLinkPages.current.child = "";
+    if (!linkedChild || !session || tr.loading || detail.loading || tr.loadingEarlier) return;
+    if (!kids.rows.some((c) => c.session_id === linkedChild)) {
+      if (kids.loaded) doneSubagentLink(mid, sid);
+      return;
+    }
+    if (![...places.values()].some((ps) => ps.some((p) => p.sid === linkedChild))) {
+      const pages = childLinkPages.current;
+      if (pages.child !== linkedChild) Object.assign(pages, { child: linkedChild, pages: 0 });
+      if (tr.hasMore && pages.pages++ < CHILD_LINK_PAGES) void tr.loadEarlier();
+      else doneSubagentLink(mid, sid);
+      return;
+    }
+    doneSubagentLink(mid, sid);
+    openExpanded([childCardKey(`${mid}/${sid}:`, linkedChild)]);
+    jump(childCall(linkedChild));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [linkedChild, session, tr.loading, tr.loadingEarlier, tr.hasMore, detail.loading, kids, places, mid, sid, jump]);
   const ctx = useMemo<ChatContextValue>(
-    () => ({ tasks, subagents: assistant ? NO_SUBAGENTS : (subagents ?? NO_SUBAGENTS), scope: `${mid}/${sid}:`, jumpToCall: jump, workflowCalls: wfCalls, lineStyle, opening: openingId && openingOrigin ? { id: openingId, origin: openingOrigin } : undefined, closeoutSegment }),
-    [tasks, subagents, assistant, mid, sid, jump, wfCalls, lineStyle, openingId, openingOrigin, closeoutSegment],
+    () => ({ tasks, subagents: assistant ? NO_SUBAGENTS : (subagents ?? NO_SUBAGENTS), scope: `${mid}/${sid}:`, jumpToCall: jump, workflowCalls: wfCalls, lineStyle, opening: openingId && openingOrigin ? { id: openingId, origin: openingOrigin } : undefined, closeoutSegment, children: places }),
+    [tasks, subagents, assistant, mid, sid, jump, wfCalls, lineStyle, openingId, openingOrigin, closeoutSegment, places],
   );
   // ── "Search in chat" (ChatSearch.tsx, Android ChatSearchState): where the reader was when it opened, going to a hit (the
   // rows that hold it open, search-reveal.ts), lit for HIT_MS, and "Back to where you were" ──
@@ -1919,6 +1968,8 @@ export const Header = memo(function Header({
   // archived (the Archived page listed it, or it was archived here): the menu offers Restore instead of archive / delete
   const archived = useArchived(session?.machine_id ?? "", session?.session_id ?? "");
   const [dialog, setDialog] = useState<"info" | "rename" | "space" | "delete" | null>(null);
+  // the background supervisor is built in (#5082): not renamed here either, as in its row's menu
+  const builtIn = useStore((s) => isBackgroundSupervisor(s.assistant, session?.session_id));
   const muted = Boolean(session && !assistant && isMuted(session, mutes));
   const pinned = useStore((s) => Boolean(session && isPinned(session, s.pins)));
   // "Mute": the hub stops pushing this agent's "Needs you" / "Finished" (an agent's switch sits on top of its space's)
@@ -2037,7 +2088,7 @@ export const Header = memo(function Header({
         ...(feishu ? [{ key: "feishu", label: t("chat-chatview.open_in_lark"), icon: "external" as const, onSelect: () => openLink(feishu) }] : []),
         ...(onSearch ? [{ key: "search", label: t("chat-chatsearch.menu"), icon: "search" as const, onSelect: onSearch }] : []),
         { key: "info", label: t("chat-chatview.session_info"), icon: "info", onSelect: () => setDialog("info") },
-        ...(!main && sessionCan(session, "send") && (session.assistant || !session.source_kind) ? [{ key: "rename", label: t("chat-chatview.rename"), icon: "pencil" as const, onSelect: () => setDialog("rename") }] : []),
+        ...(!main && !builtIn && sessionCan(session, "send") && (session.assistant || !session.source_kind) ? [{ key: "rename", label: t("chat-chatview.rename"), icon: "pencil" as const, onSelect: () => setDialog("rename") }] : []),
         ...(!assistant && session.space_id && !session.source_kind ? [{ key: "space", label: t("chat-chatview.rename_space"), icon: "folder" as const, onSelect: () => setDialog("space") }] : []),
         ...(!assistant ? [{ key: "mute", label: muted ? t("chat-chatview.unmute") : t("chat-chatview.mute"), icon: muted ? ("bell" as const) : ("bellOff" as const), onSelect: () => void flipMute() }] : []),
         ...(!assistant ? [{ key: "pin", label: pinned ? t("chat-chatview.unpin") : t("chat-chatview.pin"), icon: "pin" as const, onSelect: () => void flipPin(session) }] : []),

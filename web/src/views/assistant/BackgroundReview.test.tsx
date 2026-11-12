@@ -38,7 +38,7 @@ const line = () => host.querySelector('[data-testid="review-line"]');
 describe("the main chat's line for a background supervisor's review (#5082)", () => {
   it("says who reviewed, the task and the verdict, and opens the task", () => {
     act(() => root.render(<FeedLineView simplified item={review({ title: "整理发布说明", verdict: "accepted", note: "7 个 PR 都在", by: "background_supervisor" })} />));
-    expect(line()?.querySelector('[data-testid="review-by"]')?.textContent).toBe("后台督办 ·");
+    expect(line()?.querySelector('[data-testid="review-by"]')?.textContent).toBe("后台督办");
     expect(line()?.textContent).toContain("整理发布说明");
     expect(line()?.textContent).toContain("已验收");
     expect(line()?.textContent).toContain("7 个 PR 都在");

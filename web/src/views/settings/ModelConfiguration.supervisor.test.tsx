@@ -25,7 +25,7 @@ const agents: ModelPurpose = { ...base, id: "agent.new", category_id: "agent.new
 const supervise: ModelPurpose = { ...base, id: "assistant.supervise", category_id: "assistant", parent: "assistant", name: "Background supervisor", group: "Assistant", launch: "headless", inherited_from: "Main chat" };
 
 /** What the hub does with the purpose: answers it by id (as built, #4927), also lists it, or has none (an older hub). */
-let mode: "detail" | "listed" | "none";
+let mode: "detail" | "listed" | "none" | "failing";
 let patches: Record<string, unknown>[];
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
 const hub = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -35,7 +35,7 @@ const hub = async (input: RequestInfo | URL, init?: RequestInit): Promise<Respon
     return json({ purpose: { ...supervise, override: { model: "small-model" }, effective: { ...supervise.effective, model: "small-model" }, revision: 2 }, providers });
   }
   if (path.endsWith("/model-config")) return json({ purposes: mode === "listed" ? [main, supervise, agents] : [main, agents], providers });
-  if (path.endsWith("/purposes/assistant.supervise")) return mode === "none" ? json({ error: "not found" }, 404) : json({ purpose: supervise, providers });
+  if (path.endsWith("/purposes/assistant.supervise")) return mode === "none" ? json({ error: "not found" }, 404) : mode === "failing" ? json({ error: "hub busy" }, 503) : json({ purpose: supervise, providers });
   if (path.endsWith("/models")) return json({ error: "unavailable" }, 404);
   throw new Error(`Unexpected request: ${path}`);
 };
@@ -102,5 +102,12 @@ describe("the background supervisor's model purpose (#5082)", () => {
     await render();
     expect(rows().map((r) => r.dataset.modelPurpose)).toEqual(["assistant", "agent.new"]);
     expect(host.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("says the page failed when the purpose could not be read, not that the hub has none", async () => {
+    mode = "failing";
+    await render();
+    expect(rows()).toEqual([]);
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("hub busy");
   });
 });
