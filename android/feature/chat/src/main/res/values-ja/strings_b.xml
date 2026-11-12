@@ -140,7 +140,6 @@
     <string name="chat_full_text_failed">読み込めませんでした。タップして再試行</string>
     <string name="chat_full_text_open">全文を表示（%1$s）</string>
     <string name="chat_request_collapse_full">折りたたむ</string>
-    <string name="chat_request_list_title">対応待ちのリクエスト</string>
     <string name="chat_request_allow">許可</string>
     <string name="chat_request_deny">拒否</string>
     <string name="chat_request_always_allows">常に許可すると次を通します：%1$s</string>

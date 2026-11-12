@@ -558,7 +558,7 @@ fun ComposerTextField(
     placeholder: String,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
-    maxLines: Int = 6,
+    maxLines: Int = ComposerGrowLines,
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
 ) {
     val palette = PersonaTheme.palette

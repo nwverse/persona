@@ -54,12 +54,13 @@
     <string name="designsystem_decision_other">要対応</string>
     <string name="designsystem_decision_open_chat">チャットを開く</string>
     <string name="designsystem_decision_open_full">ページ全体を開く</string>
-    <string name="designsystem_decision_previous">前へ</string>
-    <string name="designsystem_decision_next">次へ</string>
     <string name="designsystem_decision_advice">Persona：%1$s</string>
     <string name="designsystem_decision_recommended">おすすめ</string>
-    <string name="designsystem_decision_position">%2$d 件中 %1$d 件目</string>
     <string name="designsystem_decision_option_position">%2$d 個中 %1$d 個目</string>
+    <!-- The pending requests above a chat's composer while they scroll (iOS PendingCards). -->
+    <plurals name="designsystem_decision_pending">
+        <item quantity="other">保留中%1$d件</item>
+    </plurals>
     <string name="designsystem_pending_sending">送信中</string>
     <string name="designsystem_pending_waiting">接続後に自動送信</string>
     <string name="designsystem_pending_unconfirmed">結果未確認</string>
@@ -136,7 +137,7 @@
     <string name="designsystem_row_style_two_lines">2 行</string>
     <string name="designsystem_row_style_cards">状態カード</string>
     <string name="designsystem_row_style_list">コンパクトリスト</string>
-    <string name="designsystem_row_style_avatar_summary">アバター、タイトルと時刻、最新の発言 1 行、実行場所。</string>
+    <string name="designsystem_row_style_avatar_summary">アバター、タイトルと時刻、最新の発言 2 行、実行場所。</string>
     <string name="designsystem_row_style_two_lines_summary">エージェントごとに 2 行：タイトルと時刻、最新の発言 1 行。</string>
     <string name="designsystem_row_style_cards_summary">エージェントごとに 1 枚のカード。左端に状態の色があり、あなたを待つカードは色付きです。</string>
     <string name="designsystem_row_style_list_summary">エージェントごとに 1 行：状態、タイトル、時刻。</string>

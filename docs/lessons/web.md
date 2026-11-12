@@ -1,5 +1,24 @@
 # Lessons: web UI and interactions
 
+## The live screen's later words go in a lazy component, not in a startup namespace (#5685)
+
+`main.tsx` imports `screen/ScreenView` without waiting for the rest of the catalog, so the build counts every namespace
+ScreenView names as first-screen code, and a namespace in `src/i18n/startup-namespaces.json` ships in every page's first
+screen: the live screen and the App share that catalog. Four Displays-menu strings in `screen-screenview` took the ja first
+screen 49 B over its budget. Words the live screen needs only once it is connected go in a component ScreenView imports
+dynamically (`screen/DisplayMenu.tsx`, namespace `screen-displays`): the build makes that import wait for the rest of the
+catalog, so the first screen does not grow and nothing has to wait for it at run time. Gating ScreenView's own rendering
+on `i18nRest()` does not pass the build: the check reads which namespaces a chunk names, not when it reads them.
+
+## A mouse event sent again comes out on whole pixels (#5729)
+
+Keeping a drag inside a clipping box meant stopping a move outside it and dispatching a new `MouseEvent` at the nearest
+point inside. A centered box rarely has whole-pixel edges, and Chrome hands a constructed event's `clientX` / `clientY`
+back as whole pixels: kept at 81.5, the event read 81, outside again, and was sent again without end. The release never
+reached noVNC, so the Mac's button stayed down. Keep such a point on a whole pixel inside the edges (`ceil` the near edge,
+`floor` the far one), and guard the handler against the event it sends itself. Unit tests with whole-pixel boxes passed;
+`web/e2e/screen-displays.mjs` sizes its window so the edge is fractional.
+
 ## Check the keyboard-sized viewport before declaring that a composer grows (#5645)
 
 A 390 × 844 phone showed seven draft lines, but the same phone with 500px visible above the keyboard stopped at
@@ -8,6 +27,8 @@ through a twelfth line. Measure the real textarea's line height and padding at b
 remaining height; cap at six whole lines while retaining the dock's short-viewport safety share. A manual scroll
 was stable at both widths before the fix (idle, hub update and viewport resize), so leave the native scrolling alone
 and pin that behavior with browser tests rather than adding a caret-follow timer for a bug that was not reproduced.
+The follow-up #5682 keeps the six-line limit in `COMPOSER_LINES` and leaves exceptionally short-viewport safety to
+CSS, removing the redundant viewport React state/subscription and keeping the original startup budget unchanged.
 
 ## A lazy page importing a first-screen module can split it into a chunk of its own (#3962)
 
@@ -669,6 +690,11 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 - Machine details has three monitoring cells per row; at 390 width a subtitle gets about 94 px, while "56.5 GB / 64.0 GB" takes 92 px (2026-11-06, #3637). Headless Chrome at 390 just fits and hides truncation in screenshots; 15 px narrower (desktop scrollbar), or a slightly wider font, cuts the total. Measure natural text width (`Range.getBoundingClientRect`) against cell `clientWidth`, not just 390-wide screenshots. Show a shared unit once (`usedOfTotal`, "56.5 / 64.0 GB", 74 px).
 
 ### Terminal (xterm.js)
+
+- A Linux Fontconfig preference can substitute a missing desktop family such as Menlo with a proportional face
+  (#5768). Check W and i widths through the entire computed stack. Add explicit Linux monospace faces before
+  platform fallbacks. Put the unicode-range-limited CJK face first so substituted named fonts cannot shadow its
+  size adjustment. Verify the actual xterm row spacing after asynchronous CJK loading in both terminal surfaces.
 
 - DOM-renderer Chinese gaps come from `DomRendererRowFactory`: `spacing = width * cellWidth - measured glyph width`, written as `letter-spacing`. Make Chinese glyphs measure exactly two cells to eliminate gaps. `FontFace` `size-adjust`
   scales only this fallback font; restrict `unicode-range` to CJK, leaving English cell width unchanged.

@@ -63,10 +63,10 @@ fun queueListCap(rowsHeight: Int, count: Int): Int? =
  * Glass is iOS's strip: folded to the title line by default, which opens and folds it as iOS's disclosure does
  * ([initiallyExpanded] opens it from the start: catalog, screenshots); opened, each message sits in a well and about
  * [QUEUE_VISIBLE_ROWS] show before it scrolls. Its line carries [sendNow], a text button folded or open, for
- * [onSendNow] (iOS Send Now), and a row with a note in [notes] (by index) says it in the caption size under its words
- * (iOS's "Arrives when this chat is free" under a message relayed from another conversation). Brief (a paper card) and
- * the board (a bordered ticket) stay always open, without Send now or notes (the alignment plan's ground rules: no new
- * alignment work outside Glass).
+ * [onSendNow] (iOS Send Now). Brief (a paper card) and the board (a bordered ticket) stay always open, without Send now
+ * (the alignment plan's ground rules: no new alignment work outside Glass). In every style a row with a note in [notes]
+ * (by index) says it in the caption size under its words (iOS's "Arrives when this chat is free" under a message
+ * relayed from another conversation); without notes Brief and Board draw as before.
  */
 @Composable
 fun QueueStrip(
@@ -83,7 +83,7 @@ fun QueueStrip(
 ) {
     if (items.isEmpty()) return
     if (PersonaTheme.style == AppStyle.Glass) GlassQueueStrip(title, items, onItem, modifier, busy, enabled, sendNow, onSendNow, notes, initiallyExpanded)
-    else PlainQueueStrip(title, items, onItem, modifier, busy, enabled)
+    else PlainQueueStrip(title, items, onItem, modifier, busy, enabled, notes)
 }
 
 /** iOS's strip: the title line in the label size, then the rows as wells, about three of them before it scrolls. */
@@ -153,9 +153,11 @@ private fun GlassQueueStrip(
     }
 }
 
-/** Brief and Board: their card and ticket as before, always open. */
+/** Brief and Board: their card and ticket as before, always open; a row's note under its words. */
 @Composable
-private fun PlainQueueStrip(title: String, items: List<String>, onItem: (Int) -> Unit, modifier: Modifier, busy: Boolean, enabled: Boolean) {
+private fun PlainQueueStrip(
+    title: String, items: List<String>, onItem: (Int) -> Unit, modifier: Modifier, busy: Boolean, enabled: Boolean, notes: List<String?>,
+) {
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
     val shape = RoundedCornerShape(if (style == AppStyle.Brief) 20.dp.corner else 8.dp.corner)
@@ -174,7 +176,9 @@ private fun PlainQueueStrip(title: String, items: List<String>, onItem: (Int) ->
         Column(Modifier.fillMaxWidth().heightIn(max = 184.dp).verticalScroll(rememberScrollState()).padding(top = 4.dp.dense)) {
             val itemActions = stringResource(R.string.designsystem_queue_actions)
             items.forEachIndexed { index, text ->
-                val spoken = stringResource(R.string.designsystem_queue_item, index + 1, text)
+                val note = notes.getOrNull(index)
+                val spoken = if (note == null) stringResource(R.string.designsystem_queue_item, index + 1, text)
+                    else stringResource(R.string.designsystem_queue_item_note, index + 1, text, note)
                 if (index > 0) JDivider(Modifier.padding(start = 50.dp.dense, end = 14.dp.dense))
                 Row(
                     Modifier.fillMaxWidth().heightIn(min = 44.dp.row)
@@ -185,8 +189,13 @@ private fun PlainQueueStrip(title: String, items: List<String>, onItem: (Int) ->
                 ) {
                     QueueNumber(index + 1)
                     Spacer(Modifier.width(12.dp.dense))
-                    Text(text, style = PersonaTheme.type.callout, color = palette.ink, maxLines = 2, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f).padding(top = 1.dp.dense))
+                    val words = Modifier.weight(1f).padding(top = 1.dp.dense)
+                    if (note == null) Text(text, style = PersonaTheme.type.callout, color = palette.ink, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                        modifier = words)
+                    else Column(words, verticalArrangement = Arrangement.spacedBy(Tokens.Space.xxs)) {
+                        Text(text, style = PersonaTheme.type.callout, color = palette.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text(note, style = PersonaTheme.type.caption, color = palette.ink2)
+                    }
                     if (enabled) {
                         Spacer(Modifier.width(8.dp.dense))
                         JIcon(PhIcons.DotsThree, null, size = 18.dp, tint = palette.ink3, modifier = Modifier.padding(top = 2.dp.dense))
