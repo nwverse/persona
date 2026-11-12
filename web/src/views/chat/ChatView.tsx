@@ -1438,7 +1438,6 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const footer = useMemo(() => (session ? <ComposerFooter session={session} assistant={assistant} /> : null), [session, assistant]);
   // an Agent's model pill (#5032); a Persona conversation keeps its launcher chip in the footer for now (#5033)
   const trailing = useMemo(() => (session && !assistant ? <AgentModelPill session={session} /> : null), [session, assistant]);
-  const usage = useMemo(() => (session && !assistant && contextUsage(session) !== null ? <ContextMeter session={session} /> : null), [session, assistant]);
 
   const pendingCards = (
     <PendingCards
@@ -1689,9 +1688,11 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           blocked={gate.blocked ?? noRowBlock}
           footer={footer}
           trailing={trailing}
-          usage={usage}
           voice={voiceEntry.offer}
         />
+        )}
+        {!stoppedLine && session && !assistant && contextUsage(session) !== null && (
+          <div data-composer-usage className="flex items-center justify-end px-2 pt-0.5"><ContextMeter session={session} /></div>
         )}
         </div>
       </div>

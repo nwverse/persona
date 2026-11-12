@@ -23,10 +23,10 @@ vi.mock("./Composer", async (importOriginal) => {
   const { useLinkManager } = await import("../../lib/manager-choice");
   return {
     ...await importOriginal<typeof import("./Composer")>(),
-    Composer: ({ onSend, usage }: { onSend: (out: Outgoing) => Promise<boolean>; usage?: React.ReactNode }) => {
+    Composer: ({ onSend }: { onSend: (out: Outgoing) => Promise<boolean> }) => {
       captured.onSend = onSend;
       captured.linkManager = useLinkManager();
-      return usage ? <div data-composer-usage>{usage}</div> : null;
+      return <div data-testid="composer" />;
     },
   };
 });
@@ -164,6 +164,7 @@ describe("Agent context usage", () => {
       expect(header).not.toContain("61%");
       expect(html).toContain('data-composer-usage');
       expect(html).toContain('aria-valuenow="61"');
+      expect(html.indexOf('data-testid="composer"')).toBeLessThan(html.indexOf("data-composer-usage"));
       captured.session = { ...was, agent: "claude", context_tokens: undefined, context_window: undefined };
       expect(renderToStaticMarkup(<ChatView mid="hub" sid="c1" />)).not.toContain('data-composer-usage');
     } finally {

@@ -225,7 +225,7 @@ describe("an Agent's pill", () => {
     await open();
     for (const name of ["claude", "gateway", "cx"]) {
       expect(calls.some((c) => c.url.includes(`/launchers/${name}/quota?machine=mac-${machine}`) && !c.url.includes("refresh="))).toBe(true);
-      expect(panel.props!.quotas?.[name]?.quota?.pools?.[0].windows[0]).toMatchObject({ label: "每周", used_ratio: 0.77 });
+      expect(panel.props!.quotas?.[name]?.quota?.pools?.[0]?.windows?.[0]).toMatchObject({ label: "每周", used_ratio: 0.77 });
     }
   });
 
