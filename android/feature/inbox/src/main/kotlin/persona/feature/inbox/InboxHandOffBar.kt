@@ -40,7 +40,7 @@ import persona.core.designsystem.JToastHost
 import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.SendButton
 import persona.core.designsystem.Tokens
-import persona.core.designsystem.icons.PhIcons
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.rememberHaptics
 import persona.core.designsystem.rememberToastState
 import persona.core.designsystem.tapped
@@ -132,7 +132,7 @@ internal fun InboxHandOffBar(
                 horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                JIcon(PhIcons.Info, null, size = Tokens.Space.m, tint = PersonaTheme.palette.cautionText, decorative = true)
+                JIcon(PersonaIcons.info, null, size = Tokens.Space.m, tint = PersonaTheme.palette.cautionText, decorative = true)
                 Text(
                     stringResource(R.string.inbox_handoff_last_gone),
                     style = PersonaTheme.type.caption,
@@ -188,9 +188,9 @@ private fun HandOffChips(
     val resources = LocalResources.current
     val asks = handoffPresets(resources)
     val chips = listOf(
-        HandOffChip(R.string.inbox_handoff_chip_summary, PhIcons.Sparkle, asks[0], "summary"),
-        HandOffChip(R.string.inbox_handoff_chip_background, PhIcons.MagnifyingGlass, asks[1], "background"),
-        HandOffChip(R.string.inbox_handoff_chip_handle, PhIcons.Robot, asks[2], "handle"),
+        HandOffChip(R.string.inbox_handoff_chip_summary, PersonaIcons.ai, asks[0], "summary"),
+        HandOffChip(R.string.inbox_handoff_chip_background, PersonaIcons.search, asks[1], "background"),
+        HandOffChip(R.string.inbox_handoff_chip_handle, PersonaIcons.agents, asks[2], "handle"),
     )
     Row(
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -208,7 +208,7 @@ private fun HandOffChips(
                 JChip(
                     stringResource(R.string.inbox_draft_reply),
                     modifier = Modifier.testTag("inbox-handoff-chip-draft"),
-                    icon = PhIcons.NotePencil,
+                    icon = PersonaIcons.draftReply,
                     role = Role.Button,
                     onClick = haptics.tapped(onDraftReply),
                 )
@@ -238,8 +238,8 @@ private fun HandOffTargetMenu(
         JChip(
             if (state.lastTime) "$name ($last)" else name,
             modifier = Modifier.testTag("inbox-handoff-target"),
-            icon = if (state.target == null) PhIcons.Sparkle else PhIcons.Robot,
-            trailingIcon = PhIcons.CaretDown,
+            icon = if (state.target == null) PersonaIcons.ai else PersonaIcons.agents,
+            trailingIcon = PersonaIcons.expand,
             muted = !enabled,
             role = Role.Button,
             boundedLabel = true,
@@ -251,15 +251,15 @@ private fun HandOffTargetMenu(
         )
         val agents = stringResource(R.string.inbox_handoff_agents)
         val actions = buildList {
-            add(JAction(main, PhIcons.Sparkle, checked = state.target == null,
+            add(JAction(main, PersonaIcons.ai, checked = state.target == null,
                 onClick = haptics.tapped { model.selectTarget(null) }))
             targets.take(INBOX_HAND_OFF_MENU_TARGETS).forEachIndexed { index, target ->
-                add(JAction(target.title, PhIcons.Robot, checked = target == state.target, subtitle = target.machine,
+                add(JAction(target.title, PersonaIcons.agents, checked = target == state.target, subtitle = target.machine,
                     section = agents.takeIf { index == 0 }, onClick = haptics.tapped { model.selectTarget(target) }))
             }
             if (more) {
                 targets.drop(INBOX_HAND_OFF_MENU_TARGETS).forEach { target ->
-                    add(JAction(target.title, PhIcons.Robot, checked = target == state.target, subtitle = target.machine,
+                    add(JAction(target.title, PersonaIcons.agents, checked = target == state.target, subtitle = target.machine,
                         onClick = haptics.tapped { model.selectTarget(target) }))
                 }
             } else if (targets.size > INBOX_HAND_OFF_MENU_TARGETS) {
