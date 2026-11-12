@@ -3,6 +3,7 @@ package hub
 import (
 	"errors"
 	"net/http"
+	"sync"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 )
@@ -24,4 +25,20 @@ func (h *Hub) assistantSocketRoutesRelayed(api *http.ServeMux) {
 			h.relayToManager(w, r, false)
 		})
 	}
+}
+
+// assistantSockets matches assistantwire.SocketRoutes, as the API mux does.
+var assistantSockets = sync.OnceValue(func() *http.ServeMux {
+	mux := http.NewServeMux()
+	for _, pattern := range assistantwire.SocketRoutes {
+		mux.HandleFunc(pattern, func(http.ResponseWriter, *http.Request) {})
+	}
+	return mux
+})
+
+// isAssistantSocket says whether r is one of assistantwire.SocketRoutes: open for as long as a meeting records
+// (longLived).
+func isAssistantSocket(r *http.Request) bool {
+	_, pattern := assistantSockets().Handler(r)
+	return pattern != ""
 }
