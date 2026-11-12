@@ -451,6 +451,6 @@
     <string name="designsystem_core_always_scope_commands">这段对话里的所有命令</string>
     <string name="designsystem_core_always_scope_read_directory">这段对话中，这个目录里的所有读取操作</string>
     <string name="designsystem_core_always_scope_edit_directory">这段对话中，这个目录里的所有文件编辑</string>
-    <string name="designsystem_core_always_scope_tool">这段对话里对这个工具的所有调用</string>
+    <string name="designsystem_core_always_scope_tool">这段对话里的所有「%1$s」调用</string>
     <string name="designsystem_core_always_scope_approved">批准的范围在这段对话中持续有效</string>
 </resources>

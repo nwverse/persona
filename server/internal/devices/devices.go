@@ -738,7 +738,7 @@ func (d *Devices) List() []Summary {
 func (d *Devices) summaryOf(m *Machine) Summary {
 	m.mu.Lock()
 	s := Summary{ID: m.cfg.ID, Name: m.name(), Kind: m.cfg.Kind, SSHHost: m.cfg.SSHHost, Home: m.info.Home,
-		DataDir: m.info.DataDir, Online: m.online}
+		DataDir: m.info.DataDir, Online: m.online || m.warmLocked(time.Now())}
 	m.mu.Unlock()
 	s.Trust = d.machineTrust(m)
 	s.Reachable = m.reachable()
@@ -789,7 +789,7 @@ func (d *Devices) Views() []View {
 	for _, m := range d.machinesNow() {
 		m.mu.Lock()
 		v := View{Summary: Summary{ID: m.cfg.ID, Name: m.name(), Kind: m.cfg.Kind, SSHHost: m.cfg.SSHHost, Home: m.info.Home,
-			DataDir: m.info.DataDir, Online: m.online}, Info: m.info, Sessions: slices.Clone(m.sessions)}
+			DataDir: m.info.DataDir, Online: m.online || m.warmLocked(time.Now())}, Info: m.info, Sessions: slices.Clone(m.sessions)}
 		m.mu.Unlock()
 		v.Trust = d.machineTrust(m)
 		v.Reachable = m.reachable()

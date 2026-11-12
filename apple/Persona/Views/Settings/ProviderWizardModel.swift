@@ -36,9 +36,11 @@ enum LauncherName {
         /// The hub's computers (the scope's checklist and its per-computer keys).
         var machines: () -> [Machine] = { [] }
         @MainActor static var live: Deps {
-            .init(api: { AppModel.shared.api }, features: { AppModel.shared.hubFeatures },
-                  readiness: { AppModel.shared.readiness.current }, landReadiness: { AppModel.shared.readiness.land($0) },
-                  machines: { AppModel.shared.hubMachines })
+            let app = AppModel.shared
+            let scope = AssistantSettingsRequestScope(app)
+            return .init(api: { scope.api(app) }, features: { app.hubFeatures },
+                         readiness: { app.readiness.current }, landReadiness: { app.readiness.land($0) },
+                         machines: { scope.machines(app) })
         }
     }
 

@@ -2,6 +2,25 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## Settings requests must capture their scope (#5236)
+
+- Renaming a section does not scope a merged list. Filter connector/extension rows by the captured assistant, and name
+  that assistant on reads, previews, consent and mutations. A default (`nil`) is a captured choice too: it must not
+  inherit a later picker value. Keep explicit manager-bound deep links bound to their owner.
+- A remembered pick must apply before the roster returns, or opening settings during launch can read another assistant's
+  data. Distinguish a confirmed legacy-roster 404 from a transient failure; compatibility may suppress the request header
+  without erasing the user's saved pick.
+- A reusable Settings row that already wraps itself in Section needs an unwrapped variant when moved into an existing
+  scope group. Nesting Sections produces a different grouping instead of retaining one group.
+- Check existing icon identifiers, not just symbol literals, before adding a vocabulary token. Pairing was already a
+  registered meaning; QR scanning is a different one. Run the icon vocabulary and token ratchets after moving code.
+
+## Colors inside the user's bubble come from the bubble as drawn (#5204)
+
+- Persona's main conversation draws the user's message in the new layout's pale box (`Theme.ChatBox.user`, primary words) whatever the style, while `StyleSpec.userBubbleText` and `deepensBubble` describe the style's own bubble. Quote and comment blocks picked their colors from `deepensBubble` alone, so every colored-bubble color (Coral, Lavender, Teal, Clay, Island) drew white blocks on the pale box (about 1.35:1), and Island in dark drew near-black ones on the dark box. Anything placed in the bubble reads `Theme.UserBubbleInk.of(spec, boxed: layout.on)`, the same value the bubble's fill comes from.
+- A veil of the words' color as a block's fill lowers contrast on a colored bubble: white words on white 12% over Coral were 4.3:1, and the 82% summary 3.4:1. A colored bubble's block takes a black shade (as `Theme.deepening`), and its words stay at full strength (82% fell to 4.45:1 on an avatar's honey bubble).
+- Text on a tinted fill needs a composite test (DESIGN_SYSTEM.md 6.3, item 7): lay the fill over the bubble's top and its deepened bottom before measuring (`StyleSpecTests.whatSitsInTheUsersBubble`).
+
 ## What a VNC client can count on from macOS Screen Sharing (#3075)
 
 - ClientCutText reaches the Mac's pasteboard only as the legacy `com.apple.traditional-mac-plain-text` type, without `public.utf8-plain-text`: AppleScript's `the clipboard` reads it, `pbpaste` and Terminal do not, so a ⌘V after it pasted nothing. Write the clipboard through the node, which answers once the text is there.
