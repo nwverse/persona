@@ -235,7 +235,7 @@ protocol in `docs/protocol/connector-protocol.md`, "Event grouping").
   The output budget is `256 + 48 × new messages + 160 × min(new messages, candidate events + 3)`, clamped to 1024–4096 tokens on every model call.
   The batch `context` may interleave the user's own messages by position: their sender is `我（自己说的，不归类）`, they have no message id of their own (a trailing `(回复 <id>)` or `(话题 <id>)` names another message), they are context only, they are not in `new`, and the model must not assign them.
   At most 4 tool calls per batch; at most 2 minutes total, 45 seconds per call.
-- **Tools**: `events` (hub-owned: open events in the same chat plus those handled within 3 days, at most 10, `{id, title, summary, tier, version, done, meta}`; `query` filters text in titles, summaries, meta);
+- **Tools**: `events` (hub-owned: up to 10 open events in the same chat plus up to 6 handled within 3 days, open first and each group newest-first, `{id, title, summary, tier, version, done, meta}`; `query` filters text in titles, summaries, meta before the independent caps);
   `messages_before`, `messages_around`, `search` (plugin-owned through `group.tool`, avatars / media stripped, at most 8 KB).
 - **Result**: `assign` (each new message's event: existing ID or `new:1`…) and `events` (title, summary, tier, reason for each touched event; new events may `continues` a handled one).
   For a handled event, the optional `reopen` in its `events` item defaults to true: a genuine follow-up appends to and reopens the same event. Only pure closeout (thanks, acknowledgement or emoji) sets `reopen: false`, which appends and records the messages but keeps the event done; `reopen` has no effect on open or new events.
