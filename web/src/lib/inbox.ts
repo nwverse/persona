@@ -93,6 +93,8 @@ export interface InboxItem {
   account: string;
   account_name: string;
   title: string;
+  /** Where the matter happens: a group's name, the other person of a direct chat, or a repository. */
+  where?: string;
   sender?: string;
   avatar?: string;
   preview: string;
@@ -133,6 +135,10 @@ export interface InboxItem {
   // ── events (docs/assistant/inbox.md "Events and handling chain"; lib/inbox-events.ts): absent from an older hub ──
   /** The section of an open item; absent: by `tier` as before. */
   status?: InboxStatus;
+  /** What or whom it waits on, the next step, and when to look again. */
+  follow?: { who?: string; next?: string; check_at?: string };
+  /** The manager's state key; apps translate it with the shared table in spec/fixtures/inbox/now.json. */
+  now?: string;
   /** Urgent: stays in "Needs you" while the AI prepares a suggestion. */
   urgent?: boolean;
   /** Summary by the manager: background, progress, where it is stuck. */
@@ -373,6 +379,14 @@ export function fromLine(it: InboxItem, preview?: string): string {
   return t("lib-inbox.sender_line", { sender: it.sender, text: it.preview });
 }
 
+/** The row's third line and the detail header's small line: where, then who said the newest line and what.
+ *  A direct chat names the person once. Without `where` (an older hub, mail), today's line stays unchanged. */
+export function rowMeta(it: InboxItem): string {
+  if (!it.where) return fromLine(it);
+  const latest = it.sender ? t("lib-inbox.sender_line", { sender: it.sender, text: it.preview }) : it.preview;
+  return it.sender === it.where ? latest : [it.where, latest].filter(Boolean).join(" · ");
+}
+
 /** The row's text under the summary says what the summary already says (the assistant's own rows: its text is the summary), so it is not drawn twice. */
 export function repeatsSummary(it: InboxItem): boolean {
   const summary = it.summary?.trim();
@@ -500,7 +514,7 @@ export function matches(it: InboxItem, f: InboxFilter): boolean {
     const ok = it.kind === f.kind || (f.kind === "mention" && (it.kind === "doc" || (it.kind === "moment" && kindLabel(it) === AT_ME)));
     if (!ok) return false;
   }
-  return hasText([it.title, it.sender, it.preview, it.summary], f.query);
+  return hasText([it.title, it.sender, it.preview, it.summary, it.where], f.query);
 }
 
 const byUpdated = (a: InboxItem, b: InboxItem) => byTime(b.updated_at, a.updated_at) || a.id.localeCompare(b.id);

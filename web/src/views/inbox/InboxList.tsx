@@ -2,7 +2,7 @@
 // FYI, Collapsed and Done, each a section that opens / closes from its title.
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import {
-  agentDraft, agentWorking, conversationRoute, fromLine, repeatsSummary, interactionAgentTitle, interactionAsk, interactionTitle, isDone, isLark,
+  agentDraft, agentWorking, conversationRoute, fromLine, repeatsSummary, rowMeta, interactionAgentTitle, interactionAsk, interactionTitle, isDone, isLark,
   itemKey, itemRoute, listInboxMutes, muteItem, muteLine, muteShortName, muteTitle, policyMenuTitle, sameItem, unmuteInbox,
   BULK_CONFIRM_AT, bulkScope, bulkScopeName, connectorSources, KIND_FILTERS, kindLabel, labelIsUrgent, mailAccounts, mailShort, matches, reloadInbox, sections, sendReply, setAllDone, setDone, shortTime, TIERS,
   useInbox, waitingAgents, type InboxItem, type InboxMute, type SectionKey, doneWithHistory, loadOlderDone, loadDoneDays, loadDoneGroup,
@@ -631,7 +631,8 @@ const ItemRow = memo(function ItemRow({ it, selected, showAccount, folder, onEdi
   const rows = !done ? it.doc?.rows ?? [] : [];
   const first = rows[0];
   const translated = hubTranslation(it, useTranslatePrefs());
-  const from = fromLine(it, translated?.preview);
+  // Translated mail keeps the old optional-preview path exactly; mail has no `where`.
+  const from = translated ? fromLine(it, translated.preview) : rowMeta(it);
   // a right click: "Done" / "Move back", then what it can be muted by (iOS: the row's long press)
   // (the menu key / Shift+F10 open it next to the row, see ui/context-menu.ts)
   const [menu, setMenu] = useState<MenuAt | null>(null);
