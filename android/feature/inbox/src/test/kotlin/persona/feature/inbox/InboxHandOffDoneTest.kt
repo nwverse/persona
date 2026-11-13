@@ -1,6 +1,7 @@
 package persona.feature.inbox
 
 import androidx.compose.ui.test.*
+import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.navigation3.runtime.NavKey
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -92,6 +93,25 @@ class InboxHandOffDoneTest {
         rule.waitForIdle()
         assertEquals(1, repository.doneCalls)
         assertEquals(1, repository.requests.size)
+    }
+
+    /** The user's choice is saved state, not plain state: a sheet rebuilt after a rotation keeps it. */
+    @Test fun theUsersChoiceSurvivesARecreationOfTheSheet() {
+        val repository = DoneTestRepository()
+        val restoration = StateRestorationTester(rule)
+        restoration.setContent {
+            PersonaTheme(reduceMotion = true) {
+                InboxHandOffSheet(repository, repository.record, navigator, onDismiss = {})
+            }
+        }
+        toggle().performClick().assertIsOn()
+        restoration.emulateSavedInstanceStateRestore()
+        toggle().assertIsOn()
+        rule.onNodeWithText("Example agent").performClick()
+        toggle().assertIsOn()
+        rule.onNodeWithText("Send", substring = false).performClick()
+        rule.waitForIdle()
+        assertEquals(1, repository.doneCalls)
     }
 
     /** An item already filed as done has no switch and keeps it that way. */
