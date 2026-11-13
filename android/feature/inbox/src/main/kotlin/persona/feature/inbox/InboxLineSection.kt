@@ -20,7 +20,7 @@ import persona.core.designsystem.JRow
 import persona.core.designsystem.JSectionHeader
 import persona.core.designsystem.JTextButton
 import persona.core.designsystem.LocalAppFeedback
-import persona.core.designsystem.icons.PhIcons
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.text
 import persona.core.domain.inbox.InboxTier
 import persona.core.domain.sort.stateLabel
@@ -71,9 +71,9 @@ internal fun InboxLineSection(repository: InboxRepository, record: InboxRecord, 
             val unlink = row.unlink
             JGroupItem(GroupPosition.of(index, rows.size)) {
                 JRow(title = title, titleLead = if (title.isEmpty()) kind else "$kind ", subtitle = status, leadingIcon = when (row.parent.kind) {
-                    "todo" -> PhIcons.ListChecks
-                    "session" -> PhIcons.Robot
-                    else -> PhIcons.Tray
+                    "todo" -> PersonaIcons.todo
+                    "session" -> PersonaIcons.agents
+                    else -> PersonaIcons.inbox
                 }, enabled = busy == null, onClick = open(row), trailing = {
                     if (unlink != null) JTextButton(stringResource(R.string.inbox_line_not_same), enabled = busy == null, onClick = {
                         busy = row.key
