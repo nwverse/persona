@@ -551,7 +551,7 @@ bound to that item (`handling` on the item; chat source `inbox`, `origin_ref` = 
 
 **Suggestion tool `inbox_suggest`** (`assistant/inbox_suggest.go`, description `prompts/mcp/inbox/inbox_suggest.md`; accepts the handling chat started for an item, and with `item` a
 conversation the item was handed to ("Item actions", Hand to AI), rejecting other chats):
-`{item?, kind, text, note?, handback?, outcome?, recap?, title?, summary?, machine?, cwd?, related?, changes?, follow?}`.
+`{item?, kind, text, note?, handback?, outcome?, recap?, title?, summary?, machine?, cwd?, related?, changes?, follow?, reported?}`.
 
 | kind | Meaning | After confirmation |
 | --- | --- | --- |
