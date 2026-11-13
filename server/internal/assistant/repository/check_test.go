@@ -209,7 +209,7 @@ func TestStalledAddressDoesNotHideReachableRepository(t *testing.T) {
 		_, _ = io.WriteString(w, `{"id":1,"full_name":"example/project","html_url":"http://code.example.com/example/project"}`)
 	}))
 	defer srv.Close()
-	var stopped atomic.Bool
+	stopped := make(chan struct{})
 	c := Checker{
 		resolve: func(context.Context, string) ([]net.IPAddr, error) {
 			return []net.IPAddr{{IP: net.ParseIP("93.184.216.34")}, {IP: net.ParseIP("93.184.216.35")}}, nil
@@ -217,7 +217,7 @@ func TestStalledAddressDoesNotHideReachableRepository(t *testing.T) {
 		dial: func(ctx context.Context, network, target string) (net.Conn, error) {
 			if strings.HasPrefix(target, "93.184.216.34:") {
 				<-ctx.Done()
-				stopped.Store(true)
+				close(stopped)
 				return nil, ctx.Err()
 			}
 			return (&net.Dialer{}).DialContext(ctx, network, strings.TrimPrefix(srv.URL, "http://"))
@@ -230,11 +230,9 @@ func TestStalledAddressDoesNotHideReachableRepository(t *testing.T) {
 	if err := c.Check(ctx, id); err != nil {
 		t.Fatalf("reachable second address hidden: %v (after %v)", err, time.Since(start))
 	}
-	deadline := time.Now().Add(time.Second)
-	for !stopped.Load() && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	if !stopped.Load() {
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
 		t.Fatal("losing attempt not canceled")
 	}
 	t.Logf("reachable fallback checked in %v", time.Since(start))
