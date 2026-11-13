@@ -1,8 +1,10 @@
 # Conversation deletion Web validation
 
-Refs #6172. Web source 2baf66b5e with no Web diff between integrated main 2e85b78e and 934a2c4e7.
+Refs #6172. Final Web source 06a3e4c51, after replacing four literal fonts with existing equal-size typography tokens. Previous captions/history behavior remains covered by the earlier integration evidence.
 
 Real local Web components with a separate synthetic mock API; no real accounts, conversations or services.
 Desktop 1440 x 1000, narrow 390 x 844; standard and the application's largest text size. All screenshots inspected.
 
 An actual synthetic send appeared in the open global history search; an external mock deletion removed it from both the panel and browser history. An archived former-main chat was deleted through the confirmation dialog; its old link shows a tombstone and has no composer. The independent PostgreSQL manager and HTTP race tests validate the backend separately. These screenshots do not claim a live Go backend browser end-to-end test or native client validation.
+
+Final browser computed styles match the previous font/line-height values, including the largest application text size. An injected 1.5-second mock failure showed disabled pending controls after 2 ms and the error after 1509 ms in one observed run; retry then deleted the synthetic former-main chat. This is fixture feedback evidence, not a production latency benchmark.
