@@ -362,10 +362,9 @@ const catalogPath = (value?: string) => {
 function repositoryWorkspace(s: Session, catalog: readonly HostWorkspace[], manager: string): HostWorkspace | undefined {
   const bound = sessionWorkspace(s, catalog, manager);
   if (bound || s.workspace_id || s.source_kind !== "runtime") return bound;
-  const git = gitPlaceOf(s);
-  if (!git) return undefined;
-  const checkout = catalogPath(git.worktree);
-  const candidate = sessionWorkspace({ ...s, space_id: undefined, cwd: checkout, workspace_cwd: undefined }, catalog, manager);
+  const checkout = catalogPath(s.worktree);
+  if (!checkout) return undefined;
+  const candidate = sessionWorkspace({ ...s, space_id: undefined, cwd: checkout }, catalog, manager);
   return candidate && catalogPath(candidate.cwd) === checkout ? candidate : undefined;
 }
 
@@ -469,10 +468,9 @@ function catalogRepos(sessions: Session[], machineId: string, options: RepoCatal
     repo.count += root.tree.length;
   }
   const unmatched = query ? loose.filter((s) => `${s.title} ${s.cwd}`.toLocaleLowerCase().includes(query)) : loose;
-  const navigation = options.navigationSessions?.filter((s) => {
-    const workspace = repositoryWorkspace(s, inventory, options.manager);
-    return (!workspace || !nodes.has(keyOf(workspace))) && (!query || `${s.title} ${s.cwd}`.toLocaleLowerCase().includes(query));
-  });
+  const groupedNavigation = new Set([...nodes.values()].flatMap((node) => node.directSessions!));
+  const navigation = options.navigationSessions?.filter((s) => !groupedNavigation.has(s)
+    && (!query || `${s.title} ${s.cwd}`.toLocaleLowerCase().includes(query)));
   return [...repos.values(), ...legacyNavigationRepos(unmatched, machineId, { ...options, navigationSessions: navigation })].sort((a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key));
 }
 
