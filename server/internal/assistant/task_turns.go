@@ -1,0 +1,671 @@
+package assistant
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"sync"
+	"time"
+
+	"github.com/nwverse/persona/server/internal/proto"
+)
+
+// ---- the turns a task's completion was handled for (#5718) ----
+//
+// Completion handling (the receipt, the judgment, the supervision message: tasks_follow.go, done.go,
+// supervise_events.go) used to start only where a session list said working and a later one done or idle. A node
+// whose inventory never says working for a runtime (idle, done or unknown through the whole turn), a manager that was
+// down or disconnected while the turn ended, and a list that arrives out of order all left a finished turn with
+// nothing, or handled it twice.
+//
+// Here completion is reconciled by session and turn instead. The runtime closes a turn in its transcript (turnEndOf),
+// and that end names the turn. The ledger below, kept in the database, says for each open task which turn of which
+// session was taken up, the judgment written for it and whether its supervision signal was told:
+//
+//   - the receipt of (task, machine, session, turn) has one feed id (receiptID): written once, whoever writes it;
+//   - a turn taken up again (the same end told twice, a stale working row before it, a manager started again) gets
+//     no second judgment: the one on the ledger is put back, or made now when there is none yet (turnAgain);
+//   - its signal is told once: the ledger keeps what was told, and a manager started again tells what was not;
+//   - the supervision sweep reads the transcript of a supervised task whose agents look stopped and whose rows moved
+//     since it last looked, and takes up a closed turn the ledger does not have (watchTurn, recoverTurn).
+//
+// A turn the runtime did not close in its transcript (an older runtime, a transcript that cannot be read) has no
+// name: it is handled as before, from the working → stopped edge alone, and the sweep does not take it up.
+
+// taskTurnsKey is the setting the ledger is kept in, with the stages and the supervision deduplication (no migration).
+const taskTurnsKey = "assistant.task_turns"
+
+var (
+	// turnRecoverMost is how many transcripts the supervision sweep reads at one time looking for a turn that ended
+	// unheard: the rest wait for the next tick.
+	turnRecoverMost = 4
+	// turnJudgeTries is how often the sweep has a turn judged whose judgment did not land, before it is told unjudged.
+	turnJudgeTries = 3
+	// receiptRetryAfter is how long after a look that could not ask the task's agents again the turn end is looked at
+	// once more (taskTurnSettled).
+	receiptRetryAfter = 30 * time.Second
+)
+
+// What a turn on the ledger got: a done receipt (and then a judgment), an interrupted one (nothing to judge), or
+// nothing because it ended before the ledger began or before its agent was the task's.
+const (
+	turnDone        = "done"
+	turnInterrupted = "interrupted"
+	turnBefore      = "before"
+)
+
+// turnClose is where the runtime closed a turn in its transcript: Key names the turn (the runtime's turn id, else the
+// id of the item that ends it), At is when.
+type turnClose struct {
+	Key string
+	At  time.Time
+}
+
+// turnEndOf finds the end of the latest turn in items (a session's last turn as its node pages it); false while that
+// turn is open, or when the transcript has no end to go by. A turn ends where the runtime says so: Codex's
+// task_complete and Claude Code's turn_duration (both a turn_duration item), or the user's stop (the interrupted
+// notice, Codex's turn_aborted). Anything after that end that the agent wrote or that starts a turn (a message, a
+// wake, a background task's notice, an injected line) belongs to a turn still going, or to one that left no end: it is
+// not the turn that ended. A notice of the transcript's own after the end (a compaction) changes nothing.
+func turnEndOf(items []proto.Item) (turnClose, bool) {
+	for i := len(items) - 1; i >= 0; i-- {
+		it := items[i]
+		switch {
+		case it.Kind == "turn_duration":
+			key := it.ID
+			if d := it.TurnDuration; d != nil && d.TurnID != "" {
+				key = d.TurnID
+			}
+			return turnClose{Key: key, At: it.TS}, key != ""
+		case it.Kind == proto.KindNotice && it.Text == userStoppedNotice:
+			return turnClose{Key: it.ID, At: it.TS}, it.ID != ""
+		case it.Kind == proto.KindText, it.Kind == proto.KindToolUse, it.Kind == proto.KindToolResult, it.Kind == proto.KindThinking,
+			it.Kind == proto.KindImage, it.Role == "user", it.Wake, it.Task != nil, it.Injected != nil:
+			return turnClose{}, false
+		}
+	}
+	return turnClose{}, false
+}
+
+// taskTurn is the latest turn of a task that completion handling took up: which session's, the turn's end (Key; ""
+// when its transcript named none), the transcript's size then (Rev), what it got (State), the stretch of work it
+// closed (Work, as the judgment and the signals name it), the judgment written for it and the signal it raised.
+type taskTurn struct {
+	Machine string      `json:"machine"`
+	Session string      `json:"session"`
+	Key     string      `json:"key,omitempty"`
+	Rev     int64       `json:"rev,omitempty"`
+	State   string      `json:"state"`
+	Work    time.Time   `json:"work"`
+	At      time.Time   `json:"at"`
+	Judged  *turnJudged `json:"judged,omitempty"`
+	Signal  *turnSignal `json:"signal,omitempty"`
+}
+
+// turnJudged is the judgment written for a turn: the judge's check, the error when it could not say (the supervisor
+// was told unjudged), or why the hub does not judge the task at all (Skip, autoDoneSkip).
+type turnJudged struct {
+	Check     taskDoneCheck `json:"check"`
+	ReasonKey string        `json:"reason_key,omitempty"`
+	Err       string        `json:"err,omitempty"`
+	Skip      string        `json:"skip,omitempty"`
+	At        time.Time     `json:"at"`
+}
+
+// turnSignal is the supervision signal a turn's outcome raised, and when a supervision message carried it (nil: not yet).
+type turnSignal struct {
+	Kind    string     `json:"kind"`
+	Key     string     `json:"key"`
+	Machine string     `json:"machine,omitempty"`
+	Detail  string     `json:"detail,omitempty"`
+	Told    *time.Time `json:"told,omitempty"`
+}
+
+// settled: nothing is left to do for the turn: it is judged (or has nothing to judge) and what it raised was told.
+func (e taskTurn) settled() bool {
+	if e.State == turnDone && e.Judged == nil {
+		return false
+	}
+	return e.Signal == nil || e.Signal.Told != nil
+}
+
+// of: e is the turn that ended at end in session c.
+func (e taskTurn) of(c proto.Session, end turnClose) bool {
+	return end.Key != "" && e.Key == end.Key && e.Machine == c.MachineID && e.Session == c.SessionID
+}
+
+// receiptID is the feed id of the done receipt of todo's turn e: one id for one turn of one session, so that the
+// receipt is written once whichever path writes it, before or after a restart. "" for a turn with no name.
+func receiptID(todo string, e taskTurn) string {
+	if e.Key == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(todo + "\x00" + e.Machine + "\x00" + e.Session + "\x00" + e.Key))
+	return "feed_turn_" + hex.EncodeToString(sum[:10])
+}
+
+// taskTurnsDoc is the ledger as it is kept: the turns by todo, and since when it is kept (a turn that ended before
+// was handled, or not, by a manager that kept none: it is not taken up again).
+type taskTurnsDoc struct {
+	Since time.Time           `json:"since"`
+	Turns map[string]taskTurn `json:"turns"`
+}
+
+// turnLook is the row of a task's last agent as the sweep last looked at it: it looks again when the row moved.
+type turnLook struct {
+	Machine, Session, Status string
+	Rev                      int64
+	UpdatedAt                time.Time
+}
+
+func lookOf(c proto.Session) turnLook {
+	return turnLook{Machine: c.MachineID, Session: c.SessionID, Status: c.Status, Rev: c.Rev, UpdatedAt: c.UpdatedAt}
+}
+
+// turnsState is the ledger and what this manager remembers about it; the maps are by todo unless said otherwise.
+type turnsState struct {
+	mu     sync.Mutex
+	loaded bool
+	doc    taskTurnsDoc
+	// again: the judgment on the ledger is being put back (turnAgain): the signal it raises is the one told already.
+	again map[string]bool
+	// looked: the row the sweep looked at last; recovering: a look is going on; tries: how often the sweep had the
+	// turn judged (by todo and turn key).
+	looked     map[string]turnLook
+	recovering map[string]bool
+	tries      map[string]int
+	// judging: the end of a turn of the task is being handled (taskJudging).
+	judging map[string]int
+	// closed: the sessions whose transcript showed their turn closed, at the row it was read at: an unknown status
+	// there is a stopped agent (rowsProven).
+	closed map[SessionRef]turnLook
+}
+
+// turnsLocked reads the ledger once; b.mu is held. False when the database could not be read: nothing is taken from
+// the ledger then, and completion goes on as it does without one.
+func (s *Service) turnsLocked(ctx context.Context) bool {
+	b := &s.tasks.turns
+	if b.loaded {
+		return true
+	}
+	doc, fresh := taskTurnsDoc{}, true
+	st := s.store()
+	if st != nil {
+		found, err := st.Setting(ctx, taskTurnsKey, &doc)
+		if err != nil {
+			s.logf("task turns: %v", err)
+			return false
+		}
+		fresh = !found
+	}
+	if doc.Turns == nil {
+		doc.Turns = map[string]taskTurn{}
+	}
+	if doc.Since.IsZero() {
+		doc.Since = time.Now().UTC()
+	}
+	b.doc, b.loaded = doc, true
+	if fresh && st != nil { // since when it is kept must outlive this manager
+		if err := st.PutSetting(ctx, taskTurnsKey, b.doc); err != nil {
+			s.logf("task turns: %v", err)
+		}
+	}
+	return true
+}
+
+// saveTurnsLocked writes the ledger; b.mu is held.
+func (s *Service) saveTurnsLocked(ctx context.Context) {
+	if st := s.store(); st != nil {
+		if err := st.PutSetting(ctx, taskTurnsKey, s.tasks.turns.doc); err != nil {
+			s.logf("task turns: %v", err)
+		}
+	}
+}
+
+// pruneTurns takes the turns of todos closed or gone off the ledger (the sweep, each tick; a write only when there is
+// one to take off): the ledger holds one turn for each open task that had one, no more. A closed task that is opened
+// again starts from what ends after that (recoverTurn), and a turn's receipt keeps its one id in the feed.
+func (s *Service) pruneTurns(ctx context.Context) {
+	b := &s.tasks.turns
+	b.mu.Lock()
+	if !s.turnsLocked(ctx) || len(b.doc.Turns) == 0 {
+		b.mu.Unlock()
+		return
+	}
+	ids := make([]string, 0, len(b.doc.Turns))
+	for id := range b.doc.Turns {
+		ids = append(ids, id)
+	}
+	b.mu.Unlock()
+	var gone []string
+	s.todos.mu.RLock()
+	if s.todos.loaded {
+		for _, id := range ids {
+			if t := s.todos.todos[id]; t == nil || t.DoneAt != nil {
+				gone = append(gone, id)
+			}
+		}
+	}
+	s.todos.mu.RUnlock()
+	if len(gone) == 0 {
+		return
+	}
+	b.mu.Lock()
+	for _, id := range gone {
+		if e, ok := b.doc.Turns[id]; ok {
+			delete(b.closed, SessionRef{MachineID: e.Machine, SessionID: e.Session})
+		}
+		delete(b.doc.Turns, id)
+		delete(b.looked, id)
+		delete(b.tries, id)
+	}
+	s.saveTurnsLocked(ctx)
+	b.mu.Unlock()
+}
+
+// turnOf is the turn the ledger has for todo.
+func (s *Service) turnOf(ctx context.Context, todo string) (taskTurn, bool) {
+	b := &s.tasks.turns
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !s.turnsLocked(ctx) {
+		return taskTurn{}, false
+	}
+	e, ok := b.doc.Turns[todo]
+	return e, ok
+}
+
+// takeTurn puts on the ledger that task t's stretch of work since since ended with the turn that closed at end in
+// its agent last (named: the transcript had an end), and got state. again: the ledger has that very turn already, so
+// it was taken up before, by this manager or one before it; the turn as the ledger has it is answered then.
+func (s *Service) takeTurn(ctx context.Context, t Todo, last proto.Session, end turnClose, named bool, since time.Time, state string) (e taskTurn, again bool) {
+	if !named {
+		end = turnClose{}
+	}
+	fresh := taskTurn{Machine: last.MachineID, Session: last.SessionID, Key: end.Key, Rev: last.Rev, State: state, Work: since.UTC(), At: time.Now().UTC()}
+	b := &s.tasks.turns
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !s.turnsLocked(ctx) {
+		return fresh, false
+	}
+	// A turn the sweep kept as ended before the ledger (turnBefore) is not one taken up: that only says the sweep
+	// makes nothing of it. An end that is told for it is handled as any first one.
+	if cur, ok := b.doc.Turns[t.ID]; ok && cur.of(last, end) && cur.State != turnBefore {
+		if !cur.Work.Equal(since) || cur.Rev != last.Rev {
+			cur.Work, cur.Rev = since.UTC(), last.Rev // the stretch it closes now, as the judgment and the signals name it
+			b.doc.Turns[t.ID] = cur
+			s.saveTurnsLocked(ctx)
+		}
+		return cur, true
+	}
+	b.doc.Turns[t.ID] = fresh
+	delete(b.tries, t.ID)
+	s.saveTurnsLocked(ctx)
+	return fresh, false
+}
+
+// turnJudged keeps on the ledger the judgment written for todo's turn: c, the error when the judge could not say,
+// or skip when the hub does not judge the task. A judgment being put back (turnAgain) is on it already.
+func (s *Service) turnJudged(ctx context.Context, todo string, c taskDoneCheck, err error, skip string) {
+	b := &s.tasks.turns
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !s.turnsLocked(ctx) || b.again[todo] {
+		return
+	}
+	e, ok := b.doc.Turns[todo]
+	if !ok || e.State != turnDone {
+		return
+	}
+	j := &turnJudged{Check: c, ReasonKey: c.reasonKey, Skip: skip, At: time.Now().UTC()}
+	if err != nil {
+		j.Err = err.Error()
+	}
+	e.Judged = j
+	b.doc.Turns[todo] = e
+	s.saveTurnsLocked(ctx)
+}
+
+// turnSignalKind: a signal that says how a turn ended, kept on its turn.
+func turnSignalKind(kind string) bool {
+	return kind == sigReview || kind == sigIdle || kind == sigUnjudged || kind == sigInterrupted
+}
+
+// turnSignalled keeps on the ledger that todo's turn raised g, before it is told. told: a supervision message
+// carried it already (this manager's, or one before a restart), so it is not told again; while the turn's judgment
+// is put back, the signal that judgment raised before is this one under a new key.
+func (s *Service) turnSignalled(g superviseSignal) (told bool) {
+	b := &s.tasks.turns
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.loaded {
+		return false
+	}
+	e, ok := b.doc.Turns[g.Todo]
+	if !ok {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if sig := e.Signal; sig != nil && sig.Kind == g.Kind && sig.Told != nil && (sig.Key == g.Key || b.again[g.Todo]) {
+		if sig.Key != g.Key {
+			next := *sig // a turn handed out keeps the signal it was read with
+			next.Key = g.Key
+			e.Signal = &next
+			b.doc.Turns[g.Todo] = e
+			s.saveTurnsLocked(ctx)
+		}
+		return true
+	}
+	if sig := e.Signal; sig == nil || sig.Kind != g.Kind || sig.Key != g.Key {
+		e.Signal = &turnSignal{Kind: g.Kind, Key: g.Key, Machine: g.Machine, Detail: g.Detail}
+		b.doc.Turns[g.Todo] = e
+		s.saveTurnsLocked(ctx)
+	}
+	return false
+}
+
+// turnsTold keeps on the ledger that the turn signals in list need no telling any more: a supervision message carried
+// them (sent, or queued where a restart keeps it), said the same within the deduplication window, or they no longer
+// hold. A manager started again does not tell them a second time; until then it tells them from the ledger.
+func (s *Service) turnsTold(ctx context.Context, list []superviseSignal) {
+	b := &s.tasks.turns
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.loaded {
+		return
+	}
+	changed := false
+	for _, g := range list {
+		if !turnSignalKind(g.Kind) {
+			continue
+		}
+		e, ok := b.doc.Turns[g.Todo]
+		if sig := e.Signal; ok && sig != nil && sig.Kind == g.Kind && sig.Key == g.Key && sig.Told == nil {
+			next, now := *sig, time.Now().UTC()
+			next.Told = &now
+			e.Signal = &next
+			b.doc.Turns[g.Todo] = e
+			changed = true
+		}
+	}
+	if changed {
+		s.saveTurnsLocked(ctx)
+	}
+}
+
+// turnAgain: task t's stretch of work since since ended with turn e, which was taken up before. It gets no second
+// receipt, notice or report. A judgment it never got (the manager stopped between the receipt and the judgment) is
+// made now. One it has is put back, without asking the model again, when a start was heard since (a stale working row
+// that came after the turn's end): that start took the check off the todo and the review wait off the ledger, and no
+// turn followed it. What the supervisor decided since the judgment stands.
+func (s *Service) turnAgain(ctx context.Context, t Todo, e taskTurn, last proto.Session, text string, since time.Time, worked bool) {
+	if e.State != turnDone {
+		return
+	}
+	j := e.Judged
+	if j == nil {
+		s.autoFinishTask(t, since, worked)
+		return
+	}
+	if !worked || !since.After(j.At) || j.Skip != "" {
+		return // no start since: the todo and the ledger are as the judgment left them
+	}
+	s.logf("task %s: its agent's turn %s was handled already: its judgment stands", t.ID, clip(e.Key, 40))
+	s.advanceTaskReply(ctx, t, last.MachineID, last.SessionID, text) // its stage, as its reply left it
+	current, ok := s.todoNow(t.ID)
+	if !ok {
+		return
+	}
+	c := j.Check
+	c.reasonKey = j.ReasonKey
+	var err error
+	if j.Err != "" {
+		err = errors.New(j.Err)
+	}
+	if v := current.Supervision; v != nil {
+		for _, r := range v.Reviews {
+			if r.At.After(j.At) { // reviewed since: only the check goes back, the ledger is the supervisor's
+				if err == nil {
+					s.keepTaskCheck(ctx, current, since, c)
+				}
+				return
+			}
+		}
+	}
+	b := &s.tasks.turns
+	b.mu.Lock()
+	b.again[t.ID] = true
+	b.mu.Unlock()
+	defer func() {
+		b.mu.Lock()
+		delete(b.again, t.ID)
+		b.mu.Unlock()
+	}()
+	s.applyTaskDone(ctx, current, since, worked, c, err)
+}
+
+// rowsProven is agents with an unknown status read as idle where the session's transcript showed its turn closed at
+// that very row (recoverTurn): a node that cannot tell a runtime's status says unknown from the start of a turn to
+// long after its end, and the transcript is what says it stopped. Any other unknown row stays unknown: not stopped.
+func (s *Service) rowsProven(agents []proto.Session) []proto.Session {
+	b := &s.tasks.turns
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.closed) == 0 {
+		return agents
+	}
+	var out []proto.Session
+	for i, c := range agents {
+		if c.Status != proto.StatusUnknown || b.closed[SessionRef{MachineID: c.MachineID, SessionID: c.SessionID}] != lookOf(c) {
+			continue
+		}
+		if out == nil {
+			out = append([]proto.Session(nil), agents...)
+		}
+		out[i].Status = proto.StatusIdle
+	}
+	if out == nil {
+		return agents
+	}
+	return out
+}
+
+// taskJudging marks the end of a turn of todo as being handled, from its receipt's reservation to its judgment
+// (taskTurnSettled, autoFinishTask; n: +1 when one starts, -1 when it ends): the sweep leaves the task alone meanwhile.
+func (s *Service) taskJudging(todo string, n int) {
+	b := &s.tasks.turns
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.judging[todo] += n; b.judging[todo] <= 0 {
+		delete(b.judging, todo)
+	}
+}
+
+// watchTurn is the sweep's look at supervised task t for a turn that ended unheard, from its agents as listed. It
+// costs no call to a node unless the task's agents all look stopped and the last one's row moved since the sweep last
+// looked (once after a start of the manager); then one transcript read, at most turnRecoverMost going at a time. What
+// a manager before this one left untold is told from the ledger alone.
+func (s *Service) watchTurn(ctx context.Context, t Todo, agents []proto.Session) {
+	agents = currentTaskAgents(agents, supersededAgents(t, agents))
+	probe := make([]proto.Session, len(agents))
+	var last proto.Session
+	for i, c := range agents {
+		if probe[i] = c; c.Status == proto.StatusUnknown {
+			probe[i].Status = proto.StatusIdle // the transcript says whether it stopped
+		}
+		if last.SessionID == "" || c.UpdatedAt.After(last.UpdatedAt) {
+			last = c
+		}
+	}
+	if !taskAgentsSettled(t, probe) {
+		return // one works, waits, or is not listed: its end comes later, by itself or by this look
+	}
+	look := lookOf(last)
+	b := &s.tasks.turns
+	b.mu.Lock()
+	if !s.turnsLocked(ctx) {
+		b.mu.Unlock()
+		return
+	}
+	e, known := b.doc.Turns[t.ID]
+	same := known && e.Machine == last.MachineID && e.Session == last.SessionID && e.Rev == last.Rev
+	var tell *turnSignal
+	if sig := e.Signal; same && sig != nil && sig.Told == nil {
+		tell = sig
+	}
+	skip := b.looked[t.ID] == look || b.recovering[t.ID]
+	if !skip && same && last.Rev != 0 && e.settled() {
+		b.looked[t.ID], skip = look, true // nothing was written since it was handled
+	}
+	if !skip && len(b.recovering) >= turnRecoverMost {
+		skip = true
+	}
+	if !skip {
+		b.recovering[t.ID] = true
+	}
+	b.mu.Unlock()
+	if tell != nil { // judged before a restart, never told: told now (a signal waiting or told already stays as it is)
+		s.signal(superviseSignal{Todo: t.ID, Kind: tell.Kind, Key: tell.Key, Machine: tell.Machine, Detail: tell.Detail})
+	}
+	if skip {
+		return
+	}
+	go func() {
+		defer func() {
+			b.mu.Lock()
+			delete(b.recovering, t.ID)
+			b.mu.Unlock()
+		}()
+		if s.recoverTurn(context.WithoutCancel(ctx), t, last) {
+			b.mu.Lock()
+			b.looked[t.ID] = look
+			b.mu.Unlock()
+		}
+	}()
+}
+
+// recoverTurn reads the transcript of supervised task t's last agent and takes up a closed turn the ledger does not
+// have: the start nobody heard first (as taskWorking would have), then the end (taskTurnSettled: receipt, judgment,
+// signal). A turn the ledger has but that is not judged yet is judged. looked: the row needs no second look while it
+// stays as it is; false has the next tick try again (the node did not answer, the task's agents did not all stop).
+func (s *Service) recoverTurn(ctx context.Context, t Todo, last proto.Session) (looked bool) {
+	items, read := s.lastTurnItems(ctx, last.MachineID, last.SessionID)
+	if !read {
+		return false
+	}
+	end, closed := turnEndOf(items)
+	ref := SessionRef{MachineID: last.MachineID, SessionID: last.SessionID}
+	b := &s.tasks.turns
+	b.mu.Lock()
+	if !closed {
+		delete(b.closed, ref)
+		b.mu.Unlock()
+		return true // open, or nothing to go by: looked at again when its row moves
+	}
+	b.closed[ref] = lookOf(last)
+	e, known := b.doc.Turns[t.ID]
+	since := b.doc.Since
+	settling := b.judging[t.ID] > 0
+	b.mu.Unlock()
+	current, ok := s.todoNow(t.ID)
+	if !ok || current.DoneAt != nil || current.Supervision == nil {
+		return true
+	}
+	if known && e.of(last, end) {
+		if e.settled() {
+			return true
+		}
+		return s.resumeTurn(ctx, current, e)
+	}
+	if settling {
+		return false // its end is being handled right now (taskTurnSettled): looked at again next tick
+	}
+	// A turn the ledger does not have. One that ended before the ledger was kept, before this agent was the task's or
+	// before the task was opened again is not this task's news: a manager that kept no ledger handled it or not, and
+	// a reopened task is judged by what its agent does after that (autoDoneSkip). It is kept as seen, and the sweep
+	// makes nothing of it.
+	for _, at := range []*time.Time{&current.CreatedAt, current.ReopenedAt} {
+		if at != nil && at.After(since) {
+			since = *at
+		}
+	}
+	for _, a := range current.Agents {
+		if a.MachineID == last.MachineID && a.SessionID == last.SessionID && a.LinkedAt.After(since) {
+			since = a.LinkedAt
+		}
+	}
+	if end.At.IsZero() || !end.At.After(since) {
+		b.mu.Lock()
+		b.doc.Turns[t.ID] = taskTurn{Machine: last.MachineID, Session: last.SessionID, Key: end.Key, Rev: last.Rev, State: turnBefore, At: time.Now().UTC()}
+		s.saveTurnsLocked(ctx)
+		b.mu.Unlock()
+		return true
+	}
+	s.tasks.mu.Lock()
+	work, started := s.tasks.working[t.ID]
+	receipt, receipted := s.tasks.receipted[t.ID]
+	s.tasks.mu.Unlock()
+	if !started || receipted && !receipt.Before(work) {
+		s.logf("task %s: its agent %s/%s ended turn %s with no start heard: taken up", t.ID, last.MachineID, short(last.SessionID), clip(end.Key, 40))
+		if !s.taskStartMissed(ctx, t.ID) {
+			return true
+		}
+	}
+	s.taskTurnSettled(ctx, last.MachineID, last.SessionID)
+	now, ok := s.turnOf(ctx, t.ID)
+	return ok && now.of(last, end)
+}
+
+// resumeTurn finishes what a manager before this one, or a look that failed, left of task t's turn e: its judgment.
+// (Its untold signal is told by watchTurn.) After turnJudgeTries judgments that did not land it is told unjudged, so
+// that the supervisor hears of the stop in any case. looked: nothing more to try now.
+func (s *Service) resumeTurn(ctx context.Context, t Todo, e taskTurn) (looked bool) {
+	if e.State != turnDone || e.Judged != nil {
+		return true // judged: only the telling is left
+	}
+	b := &s.tasks.turns
+	b.mu.Lock()
+	judging := b.judging[t.ID] > 0
+	if !judging {
+		b.tries[t.ID]++
+	}
+	tries := b.tries[t.ID]
+	b.mu.Unlock()
+	if judging {
+		return false // this manager is at it
+	}
+	s.tasks.mu.Lock()
+	work, started := s.tasks.working[t.ID]
+	if !started {
+		s.tasks.working[t.ID] = e.Work // the stretch the receipt closed, as the manager before knew it
+	}
+	s.tasks.mu.Unlock()
+	if started && work.After(e.Work) {
+		return true // a start was heard since: that stretch's own end judges it
+	}
+	if tries > turnJudgeTries {
+		s.logf("task %s: the judgment of its agent's turn did not land %d times: told unjudged", t.ID, turnJudgeTries)
+		s.applyTaskDone(ctx, t, e.Work, true, taskDoneCheck{}, errors.New("the judgment did not land"))
+		return true
+	}
+	s.autoFinishTask(t, e.Work, true)
+	now, ok := s.turnOf(ctx, t.ID)
+	return ok && now.Judged != nil
+}
+
+// taskStartMissed is taskWorking for a start nobody heard, found by its turn's end (recoverTurn): the open task is
+// taken to work from now. It never reopens a closed task: a turn found in a transcript is no word that someone asked
+// for more. False when the task is closed or gone.
+func (s *Service) taskStartMissed(ctx context.Context, id string) bool {
+	s.tasks.completionMu.Lock()
+	defer s.tasks.completionMu.Unlock()
+	t, ok := s.todoNow(id)
+	if !ok || t.DoneAt != nil {
+		return false
+	}
+	s.taskWorks(ctx, t)
+	return true
+}

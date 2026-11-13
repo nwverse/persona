@@ -146,6 +146,12 @@ func (s *Service) taskWorking(ctx context.Context, mid, sid string) {
 		}
 		s.logf("task %s: reopened: its agent works again", t.ID)
 	}
+	s.taskWorks(ctx, t)
+}
+
+// taskWorks is what follows a turn's start on open task t: the stretch of work begins now, and what was judged or
+// waited for before is moot. s.tasks.completionMu is held (taskWorking, or taskStartMissed for a start nobody heard).
+func (s *Service) taskWorks(ctx context.Context, t Todo) {
 	s.tasks.mu.Lock()
 	s.tasks.working[t.ID] = time.Now()
 	s.tasks.mu.Unlock()
@@ -242,6 +248,7 @@ func (s *Service) taskTurnSettled(ctx context.Context, machine, sid string) {
 		return
 	}
 	agents, reached := s.taskAgentsReached(ctx, t)
+	agents = s.rowsProven(agents) // an unknown status whose transcript showed the turn closed is a stopped agent (task_turns.go)
 	if !reached || !taskAgentsSettled(t, agents) {
 		return
 	}
@@ -285,8 +292,11 @@ func (s *Service) taskTurnSettled(ctx context.Context, machine, sid string) {
 		s.tasks.mu.Unlock()
 		return
 	}
-	s.tasks.receipted[t.ID] = time.Now()
+	reserved := time.Now()
+	s.tasks.receipted[t.ID] = reserved
 	s.tasks.mu.Unlock()
+	s.taskJudging(t.ID, 1) // the sweep leaves this turn alone while its end is handled here (task_turns.go)
+	defer s.taskJudging(t.ID, -1)
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
 	name := machine
@@ -294,9 +304,20 @@ func (s *Service) taskTurnSettled(ctx context.Context, machine, sid string) {
 		name = m.Name
 	}
 	if !s.taskWorkCurrent(t.ID, since) || !s.taskRuntimeSettled(cctx, t) {
+		s.releaseReceipt(ctx, t.ID, machine, sid, reserved)
 		return
 	}
+	// The turn as its transcript has it: read before any receipt, since its end names the turn (task_turns.go).
+	items, read := s.lastTurnItems(cctx, last.MachineID, last.SessionID)
+	if !s.taskWorkCurrent(t.ID, since) || !s.taskRuntimeSettled(cctx, t) {
+		s.releaseReceipt(ctx, t.ID, machine, sid, reserved)
+		return
+	}
+	end, named := turnEndOf(items)
 	if cut.SessionID != "" {
+		if _, again := s.takeTurn(cctx, t, last, end, named, since, turnInterrupted); again {
+			return // this very turn was taken up before: no second receipt
+		}
 		// A turn cut off by the model service is no end of the work: an interrupted receipt (with "Continue" on the card),
 		// and nothing to judge or close (#1516).
 		s.logf("task %s: interrupted: %s", t.ID, clip(oneLine(cut.TurnError), 200))
@@ -306,10 +327,6 @@ func (s *Service) taskTurnSettled(ctx context.Context, machine, sid string) {
 		s.appendInterrupted(cctx, t, body, false)
 		s.taskNotice(cctx, t, name, "interrupted", "", body.Error)
 		s.taskReport(t, reportInterrupted, name, where, body.Error, nil)
-		return
-	}
-	items, read := s.lastTurnItems(cctx, last.MachineID, last.SessionID)
-	if !s.taskWorkCurrent(t.ID, since) || !s.taskRuntimeSettled(cctx, t) {
 		return
 	}
 	if read && taskTurnAwaitingAnswer(items) && !silentTurn(items) {
@@ -333,6 +350,9 @@ func (s *Service) taskTurnSettled(ctx context.Context, machine, sid string) {
 		return
 	}
 	if read && silentTurn(items) {
+		if _, again := s.takeTurn(cctx, t, last, end, named, since, turnInterrupted); again {
+			return // this very turn was taken up before: no second receipt
+		}
 		// No reply and no tool call, yet no error either (the model service answered 200 with nothing in it): no end
 		// of the work. Interrupted, as a cut-off turn is, with nothing to judge or close (#2349).
 		s.logf("task %s: interrupted: the turn had no output", t.ID)
@@ -380,8 +400,25 @@ func (s *Service) taskTurnSettled(ctx context.Context, machine, sid string) {
 	if pr := prLink.FindAllString(text, -1); len(pr) > 0 {
 		body.PR = pr[len(pr)-1]
 	}
-	if _, err := s.appendFeed(cctx, t.Origin, feedReceipt, t.ID, body); err != nil {
+	// One receipt, one judgment and one supervision signal for each turn the runtime closed, whatever tells of its end
+	// and however often. The ledger says whether this turn was taken up before; its receipt has one id, so the feed
+	// says it too where a manager stopped between the two (task_turns.go).
+	turn, again := s.takeTurn(cctx, t, last, end, named, since, turnDone)
+	if again && turn.State != turnDone {
+		return // it had an interrupted receipt, or ended before the ledger was kept
+	}
+	if id := receiptID(t.ID, turn); id != "" && !s.isLeaderRef(t.Origin) {
+		fresh, err := s.appendFeedOnce(cctx, id, t.Origin, feedReceipt, t.ID, body)
+		if err != nil {
+			s.logf("task %s: receipt: %v", t.ID, err)
+		}
+		again = err == nil && !fresh
+	} else if _, err := s.appendFeed(cctx, t.Origin, feedReceipt, t.ID, body); err != nil {
 		s.logf("task %s: receipt: %v", t.ID, err)
+	}
+	if again {
+		s.turnAgain(cctx, t, turn, last, text, since, worked)
+		return
 	}
 	s.taskNotice(cctx, t, name, "done", "", clipMarkdown(text, 1500))
 	if s.advanceTaskReply(cctx, t, last.MachineID, last.SessionID, text) {
@@ -389,6 +426,23 @@ func (s *Service) taskTurnSettled(ctx context.Context, machine, sid string) {
 	}
 	s.taskReport(t, reportDone, name, [2]string{last.MachineID, last.SessionID}, text, nil)
 	s.autoFinishTask(t, since, worked) // the work may be finished: then the todo is done (done.go)
+}
+
+// releaseReceipt gives back the receipt taskTurnSettled reserved for task id at reserved, when its second look at
+// the task's agents did not find them stopped: the node did not answer that time, or one works or waits again. The
+// stretch keeps its claim to a receipt, and the turn end is looked at once more after receiptRetryAfter: without
+// that, a link that dropped for a moment left the stretch with no receipt and no judgment for good, since nothing
+// tells of the same turn end again. A look that finds an agent at work ends there; its own turn end follows.
+func (s *Service) releaseReceipt(ctx context.Context, id, machine, sid string, reserved time.Time) {
+	s.tasks.mu.Lock()
+	mine := s.tasks.receipted[id].Equal(reserved)
+	if mine {
+		delete(s.tasks.receipted, id)
+	}
+	s.tasks.mu.Unlock()
+	if mine {
+		s.taskTurnEndedAfter(context.WithoutCancel(ctx), machine, sid, time.Now().Add(receiptRetryAfter))
+	}
 }
 
 // taskTurnEndedAfter has taskTurnEnded look at sid's task again at at. What happened meanwhile decides as ever: a turn

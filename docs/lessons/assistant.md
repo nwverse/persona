@@ -427,3 +427,24 @@ deadline), the record was gone and no later connection told the conversation: an
 waited forever. A record that exists only so something is said later is cleared after the saying succeeded, and only if it
 still holds what was said (the woken conversation may already have re-armed new tasks). Being told twice after a send
 that timed out but was delivered is the cheaper failure.
+
+## Name the thing an event is about, and keep what was done for it (#5718)
+
+Completion handling started only on a session list going from `working` to `done` / `idle`, and remembered "this stretch
+had its receipt" in memory. A node whose inventory never said `working` for Codex left finished turns with no receipt, no
+judgment and no supervision message; a manager restart forgot the receipt and wrote a second one when the same end was told
+again; a stale `working` row arriving after the end judged the same reply twice. Three faults, one cause: the work was
+keyed to the event that told of the turn, not to the turn.
+
+- Key the side effect to what it is about (here to-do, machine, session and the runtime's own turn end), give its row an
+  id derived from that key, and let the database refuse the second write.
+- Keep each later step on that key too (judged, told), so a process that stops between two steps resumes at the next one
+  instead of starting over or stopping for good.
+- Do not make a status transition the only trigger for something that must happen. Statuses are another component's
+  guess; reconcile from the record of what happened (the transcript) in a sweep that already runs, and bound what the
+  sweep reads per tick.
+- A reservation taken before a check must be given back on every path that leaves without doing the work, or one failed
+  check consumes the work for good (the second look at the task's agents failing on a dropped link).
+- When such a ledger is new, decide what it does with everything that happened before it existed. Here a turn that ended
+  before the ledger was first kept is recorded as seen and nothing is made of it; otherwise the first sweep after an
+  upgrade would have judged every stopped task again.
