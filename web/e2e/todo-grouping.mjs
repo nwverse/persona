@@ -176,7 +176,14 @@ try {
         assert.match(await tip.innerText(), /终端/);
         assert.doesNotMatch(await tip.innerText(), /herdr/i, "no engine name (DESIGN_SYSTEM 5.6)");
         ok(`${theme}: ⓘ shows the explanation on hover`);
-        await shot(page.locator("aside").first(), `agents-todo-info-${theme}`);
+        // the sidebar and the tip beside it, which is drawn over the page
+        if (shots) {
+          const at = await info.boundingBox();
+          const side = await page.locator("aside").first().boundingBox();
+          const top = Math.max(0, at.y - 520);
+          await page.screenshot({ path: join(shots, `${prefix}agents-todo-info-${theme}.png`), clip: { x: 0, y: top, width: side.width + 260, height: Math.min(700, 1500 - top) }, animations: "disabled" });
+          console.log(`shot ${prefix}agents-todo-info-${theme}.png`);
+        }
         await page.mouse.move(900, 700);
         await tip.waitFor({ state: "detached" });
         await info.click();
@@ -201,7 +208,12 @@ try {
     {
       const { ctx, page } = await open(browser, theme, "full", "/todos");
       await page.getByText("等待中").first().waitFor();
-      await shot(page.locator("body"), `todos-page-${theme}`);
+      // the sidebar and the To-dos list beside it (the open to-do's details left out)
+      if (shots) {
+        const list = await page.getByText("等待中").first().boundingBox();
+        await page.screenshot({ path: join(shots, `${prefix}todos-page-${theme}.png`), clip: { x: 0, y: 0, width: Math.min(1280, list.x + 520), height: 1500 }, animations: "disabled" });
+        console.log(`shot ${prefix}todos-page-${theme}.png`);
+      }
       await ctx.close();
     }
     // an empty group, opened: its explanation is the empty state

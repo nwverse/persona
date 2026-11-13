@@ -90,7 +90,7 @@ describe("By to-do's rows (#6458)", () => {
     expect(localStorage.getItem("fold:todo:none")).toBe("1");
   });
 
-  it("keeps the explanation behind the ⓘ, and says it when an empty group is opened", () => {
+  it("keeps the explanation behind the ⓘ, and says it when an empty group is opened", async () => {
     const tree = buildTodoTree(sessions, machines, todos, { spaces: [], sessions: [] }, Date.now(), { keepEmpty: true });
     const hint = tree.loose[0]!.hint;
     show(<TodoTreeView tree={tree} machines={machines} activeKey="" {...stable} />);
@@ -99,7 +99,9 @@ describe("By to-do's rows (#6458)", () => {
     expect(list.closest("[inert]") ?? list.getAttribute("inert")).not.toBeNull();
     const info = row("todo:manual").querySelector<HTMLButtonElement>('button[aria-label="关于「在终端里开的」"]')!;
     expect(info.hasAttribute("aria-expanded")).toBe(false);
-    act(() => info.click());
+    // the tip's words load the first time an ⓘ is asked (InfoTipPanel)
+    await act(async () => info.click());
+    for (let i = 0; i < 50 && !document.querySelector('[role="tooltip"]'); i++) await act(() => new Promise((r) => setTimeout(r, 10)));
     const tip = document.querySelector('[role="tooltip"]')!;
     expect(tip.textContent).toBe(hint);
     expect(info.getAttribute("aria-describedby")).toBe(tip.id);

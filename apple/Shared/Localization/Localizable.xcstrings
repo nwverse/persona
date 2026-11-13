@@ -1,6 +1,72 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "About %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "About “%@”"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关于「%@」"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%@」について"
+          }
+        }
+      }
+    },
+    "Agents you opened yourself in the terminal, on no to-do. Touch and hold one › Link to To-do… to file it." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agents you opened yourself in the terminal, on no to-do. Touch and hold one › Link to To-do… to file it."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你自己在终端里开的、没挂在待办上的 Agent。长按一行 › 关联到待办… 可以归过去。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ターミナルで自分で開いた、どのToDoにも関連付けられていないエージェントです。行を長押し ›「ToDoに関連付け…」で関連付けられます。"
+          }
+        }
+      }
+    },
+    "On no to-do; often started from Lark, the phone or elsewhere. Touch and hold one › Link to To-do… to file it." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On no to-do; often started from Lark, the phone or elsewhere. Touch and hold one › Link to To-do… to file it."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没挂在任何待办上，常是从飞书、手机或别的入口开的。长按一行 › 关联到待办… 可以归过去。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "どのToDoにも関連付けられていないエージェントです。多くはLarkやスマートフォンなど、ほかの場所から開始されたものです。行を長押し ›「ToDoに関連付け…」で関連付けられます。"
+          }
+        }
+      }
+    },
     "Among the Codex App's chats in no project" : {
       "extractionState" : "manual",
       "localizations" : {
