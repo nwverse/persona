@@ -68,6 +68,7 @@ const openItem = async (id: string) => {
 };
 const rowLink = (id: string) => host.querySelector<HTMLAnchorElement>(`[data-item="${id}"] a`)!;
 const buttonNamed = (label: string) => [...host.querySelectorAll("button")].filter((b) => b.textContent?.trim() === label).at(-1)!;
+const detailText = () => host.querySelector<HTMLElement>(`section[aria-label="${t("inbox-inbox.detail")}"]`)!.textContent ?? "";
 const openDocument = async () => {
   act(() => rowLink("d1").click());
   await openItem("d1");
@@ -138,7 +139,7 @@ describe("Back from an Inbox item (#3329)", () => {
     expect(history.length).toBe(entries + 1);
     expect(onOverlayEntry()).toBe(true);
     expect(host.querySelector("[data-event-body]")).toBeNull();
-    expect(host.textContent).toContain("Original document row");
+    expect(detailText()).toContain("Original document row");
     expect(host.querySelector("[data-extension-inbox]")).toBeNull(); // an event goes straight to its own original
 
     await act(() => popped(() => history.back()));
@@ -146,7 +147,7 @@ describe("Back from an Inbox item (#3329)", () => {
     expect(location.pathname).toBe("/inbox/d1");
     expect(onOverlayEntry()).toBe(false);
     expect(host.querySelector("[data-event-body]")).not.toBeNull();
-    expect(host.textContent).not.toContain("Original document row");
+    expect(detailText()).not.toContain("Original document row");
   });
 
   it("a chain's source entry uses the same history step back to the event", async () => {
@@ -155,7 +156,7 @@ describe("Back from an Inbox item (#3329)", () => {
     act(() => buttonNamed("Open the document").click());
     expect(history.length).toBe(entries + 1);
     expect(onOverlayEntry()).toBe(true);
-    expect(host.textContent).toContain("Original document row");
+    expect(detailText()).toContain("Original document row");
 
     await act(() => popped(() => history.back()));
     await flush();
