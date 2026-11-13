@@ -246,6 +246,8 @@ export function TaskEditor({
             )}
           </section>
 
+          {hasExecution && <Suspense fallback={<Spinner />}><TaskExecutionFields draft={draft} disabled={working} onChange={set} /></Suspense>}
+
           <section>
             <SectionTitle>{t("assistant-taskeditor.section_prompt")}</SectionTitle>
             <textarea
@@ -315,7 +317,6 @@ export function TaskEditor({
                 {draft.session_id ? t("assistant-taskeditor.permission_hint_resume") : ""}
               </p>
             )}
-            {hasExecution && <div className="mt-3"><Suspense fallback={<Spinner />}><TaskExecutionFields draft={draft} disabled={working} onChange={set} /></Suspense></div>}
           </section>
 
           {hasPush && (

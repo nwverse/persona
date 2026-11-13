@@ -838,8 +838,10 @@ yet it silently reran the old prompt 3 minutes later): deleted tasks don't retry
 
 ### Task execution context
 
-The web task editor's **Execution options** is an advanced group for people who need a task to use a particular
-assistant backend, model, computer or directory. Leaving it untouched follows Main chat. It reuses the chat's
+The web task editor's **Execution options**, before the prompt, is an advanced group for people who need a task to use
+a particular assistant backend, model, computer or directory. Its collapsed summary shows the launcher name, actual
+agent backend, model and thinking effort. Every untouched control explicitly follows Assistant, with known inherited
+values shown; the saved fields stay unset so future Assistant changes still apply. It reuses the chat's
 launcher list (`purpose=assistant`), model picker and capability-derived thinking choices; it never changes Main chat.
 Plain-text prompts work independently of rich input and content references.
 

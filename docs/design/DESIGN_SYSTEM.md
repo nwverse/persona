@@ -2271,9 +2271,13 @@ as finished without verifying a star, and opens GitHub outside the app.
 ## Scheduled task execution options
 
 The web task editor serves people scheduling specialist work as an optional **Execution options** group, closed by
-default. It reuses `Field`, native selects, `ModelPicker`, semantic surface/text tokens and the existing dialog.
-Main chat inheritance and the selected computer are shown inside the group; every choice can be cleared to inherit
-again. Launcher and model discovery use the selected computer's chat-compatible capabilities. A working directory
+default and placed before the prompt. Its disclosure always shows the effective launcher name, agent backend,
+model and thinking effort; repeated launcher/backend names are shown once. It reuses `Field`, native selects,
+`ModelPicker`, semantic surface/text tokens and the existing dialog. Every untouched control explicitly follows
+Assistant, with known inherited values shown. Selecting another launcher uses that agent's defaults for model and
+effort. Empty choices retain dynamic inheritance rather than pinning a copied value. The selected computer is shown
+inside the group. Launcher and model discovery use that computer's chat-compatible capabilities; the model catalog
+is only requested when the group opens. A working directory
 is an existing path on that computer, explained under the field. Switching execution context may start a new chat;
 the hint says earlier chats are retained. Failed saves retain the draft, and saving/running disables the controls.
 Run history has a separate disclosure for its execution configuration, outside the button opening the conversation.
