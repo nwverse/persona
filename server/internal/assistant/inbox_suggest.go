@@ -35,7 +35,7 @@ type errSuggestion struct{ msg string }
 
 func (e errSuggestion) Error() string { return e.msg }
 
-var errSuggestFiled = errSuggestion{"this inbox item is already filed, so the suggestion was not submitted and the user cannot see it; end this turn: if the item receives new messages, they will be sent here"}
+var errSuggestFiled = errSuggestion{"this inbox item is already filed, so the suggestion was not submitted and the user cannot see it; end this turn"}
 
 // check holds a suggestion to the rules before anything is kept.
 func (in *suggestIn) check() error {
