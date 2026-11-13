@@ -250,8 +250,13 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * new helper or lazy boundary, and the Scheduled-task exclusion is a constant-time check inside the existing pure
  * `recentConversations`. The ceiling moves to the measured ja 477,968 B, 0 B of room; the idle tier is unaffected because
  * the fold stays on the first screen.
+ * And 59 B for a Codex session's own model list (#6501, measured 2026-11-13 on main at 793bd19eb: first screen en
+ * 474,241 B, ja 477,957 B, zh-Hans 475,244 B, 11 B of room; this branch adds 59 B to each, en 474,300 B, ja 478,016 B,
+ * zh-Hans 475,303 B — `sessionLauncher` in lib/model-switch.ts falling back by the session's engine, to the Codex App's
+ * launcher for one of its chats and to plain codex for another Codex session, instead of Claude Code's; the composer's
+ * model pill loads it at once). The ceiling moves to 478,027 B, keeping main's 11 B of room.
  */
-export const FIRST_SCREEN_BUDGET = 477_968;
+export const FIRST_SCREEN_BUDGET = 478_027;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
