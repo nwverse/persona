@@ -32,6 +32,10 @@ private final class CallbackBox: @unchecked Sendable {
 
 /// An owned C core handle. Value codecs are Sendable; this class serializes only handle lifetime and calls, never
 /// the worker's state. Call `close` on a thread other than a host callback when an orderly stop is required.
+private struct NativeHandle: @unchecked Sendable {
+    let raw: OpaquePointer
+}
+
 public final class PersonaCoreClient: @unchecked Sendable {
     private let lock = NSLock()
     private var handle: OpaquePointer?
@@ -101,10 +105,10 @@ public final class PersonaCoreClient: @unchecked Sendable {
 
     /// Tests only: never wait for the worker on the UI thread or inside a host callback.
     public func flush(timeoutMilliseconds: UInt32 = 5_000) throws {
-        let failures = callbackBox.failures.withLock { $0 }
-        guard failures.isEmpty else { throw PersonaCoreError.callbackFailed(failures.joined(separator: "; ")) }
         try withHandle { handle in
             guard persona_core_flush(handle, timeoutMilliseconds) else { throw PersonaCoreError.flushTimedOut }
+            let failures = callbackBox.failures.withLock { $0 }
+            guard failures.isEmpty else { throw PersonaCoreError.callbackFailed(failures.joined(separator: "; ")) }
         }
     }
 
@@ -113,7 +117,15 @@ public final class PersonaCoreClient: @unchecked Sendable {
         let handle = handle
         self.handle = nil
         lock.unlock()
-        if let handle { persona_core_free(handle) }
+        guard let handle else { return }
+        if Thread.isMainThread {
+            let handle = NativeHandle(raw: handle)
+            DispatchQueue.global(qos: .utility).async {
+                persona_core_free(handle.raw)
+            }
+        } else {
+            persona_core_free(handle)
+        }
     }
 
     private func withHandle<T>(_ work: (OpaquePointer) throws -> T) throws -> T {

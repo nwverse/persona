@@ -44,4 +44,31 @@ final class PersonaCoreContinuityTests: XCTestCase {
         XCTAssertTrue(json.contains("newest"))
         client.close()
     }
+
+    func testCallbackErrorAppearsInItsFlushAndMainThreadCloseReturns() async throws {
+        let client = try PersonaCoreClient(config: Config(), callbacks: PersonaCoreCallbacks(run: { _ in
+            struct CallbackFailure: Error {}
+            throw CallbackFailure()
+        }))
+        try client.dispatch(.openChat(chat: "failure", snapshot: ChatSnapshot(
+            itemsJson: #"[{"id":"1#0","seq":1,"role":"assistant","kind":"text","text":"old"}]"#,
+            history: "h", covered: 1, hasMore: false, loadedOnce: true
+        )))
+        try client.dispatch(.chat(chat: "failure", event: .pushed(batch: WireBatch(
+            itemsJson: #"[{"id":"3#0","seq":3,"role":"assistant","kind":"text","text":"new"}]"#,
+            history: "h", fromSeq: 2, toSeq: 3, backlog: false, hasMore: nil, moreAfter: false
+        ))))
+        do {
+            try client.flush()
+            XCTFail("the effect callback error must be reported by its flush")
+        } catch let PersonaCoreError.callbackFailed(reason) {
+            XCTAssertFalse(reason.isEmpty)
+        }
+        await MainActor.run { client.close() }
+        try await Task.sleep(for: .milliseconds(100))
+        var temporary: PersonaCoreClient? = try PersonaCoreClient(config: Config(), callbacks: PersonaCoreCallbacks(run: { _ in }))
+        XCTAssertNotNil(temporary)
+        await MainActor.run { temporary = nil }
+        try await Task.sleep(for: .milliseconds(100))
+    }
 }
