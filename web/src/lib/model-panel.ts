@@ -27,6 +27,9 @@ export interface PanelModel {
   resolved?: string;
   /** Thinking efforts it takes, weakest first (lib/session-actions.ts EFFORTS / CODEX_EFFORTS ids); empty: no effort control. */
   efforts: string[];
+  /** The running session cannot change effort here; keep its actual value visible and explain why. */
+  effortUnavailable?: string;
+  effortNote?: string;
   /** The effort the model runs with when none is set: the slider marks it "Recommended". */
   defaultEffort?: string;
   /** A Fast (priority) speed exists for this model on this engine. */
@@ -195,7 +198,7 @@ const takes = (model: Pick<PanelModel, "efforts">, effort: string | undefined) =
 export function rowSetup(provider: Pick<PanelProvider, "id" | "models">, model: PanelModel, state: Pick<PanelState, "current" | "starting">, override?: PanelOverride): PanelConfig {
   const current = state.current;
   const now = runsNow(provider, model, current);
-  const effort = now ? (takes(model, current?.effort) ?? (state.starting ? undefined : takes(model, override?.effort))) : (takes(model, override?.effort) ?? takes(model, current?.effort));
+  const effort = now ? ((state.starting ? takes(model, current?.effort) : current?.effort) || (state.starting ? undefined : takes(model, override?.effort))) : (takes(model, override?.effort) ?? takes(model, current?.effort));
   // what runs is what runs: an unset Fast on the running model is Standard, not "unknown, take the override"
   const fast = model.fast ? (now ? current?.fast : override?.fast) : undefined;
   return cleanSetup({ provider: provider.id, model: model.id, effort, fast });

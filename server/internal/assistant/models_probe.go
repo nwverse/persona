@@ -38,6 +38,7 @@ type probeInput struct {
 	APIKey  string  `json:"api_key"`
 	Headers *string `json:"headers"`
 	Model   string  `json:"model"`
+	Effort  string  `json:"effort"`
 	// Preset fills in the address and the model left empty (GET /api/v1/launchers/presets), so a key alone is tested.
 	Preset string `json:"preset"`
 	// ViaMachine: the computer the requests go through (models_via.go); nil keeps the stored one, "" this manager.
@@ -352,7 +353,7 @@ func (t probeTarget) failure(ctx context.Context, res *http.Response, err error)
 	l := i18n.From(ctx)
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
-			return pt(l, "timeout", i18n.Args{"seconds": int(probeTimeout / time.Second)}), ""
+			return pt(l, "timeout", i18n.Args{"seconds": int(probeTimeout / time.Second)}), "timeout"
 		}
 		var uerr *url.Error
 		if errors.As(err, &uerr) {
@@ -480,6 +481,11 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 		path = "chat/completions"
 		payload = map[string]any{"model": t.model, "messages": []any{map[string]any{"role": "user", "content": "ping"}}, "stream": true, "max_tokens": 256}
 	}
+	if !ai.ApplyReasoningEffort(payload, t.api, t.model, in.Effort) {
+		out["error"] = i18n.T(i18n.From(ctx), "assistant-models.err_effort_unsupported")
+		out["code"] = "unsupported_effort"
+		return out
+	}
 	body, _ := json.Marshal(payload)
 	started := time.Now()
 	auto := t.auth == probeAuthAuto
@@ -524,6 +530,9 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 	}
 	if out["ok"] == true && auto {
 		out["auth"] = t.auth // the header the gateway took
+	}
+	if out["ok"] == true {
+		out["effort"] = in.Effort
 	}
 	out["ms"] = int(time.Since(started).Milliseconds())
 	return out

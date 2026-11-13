@@ -164,7 +164,7 @@ export const AgentModelPill = memo(function AgentModelPill({ session }: { sessio
   const own = sessionLauncher(session);
   const switches = sessionSwitches(session);
   const engineSwitch = useStore((s) => hubHas(s.features, ENGINE_SWITCH_FEATURE)) && engineSwitchable(session);
-  const opens = switches.model || switches.effort || engineSwitch;
+  const opens = switches.model || switches.effort || engineSwitch || session.agent === "codex";
   useEffect(() => {
     if (opens) void readModels(mid, own, { first: true });
   }, [opens, mid, own]);

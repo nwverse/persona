@@ -350,6 +350,12 @@ For every component: use the design-system one, not a lookalike. Counts are appr
 
 ### 3.1 Composer
 
+The web model panel's current Codex row keeps the session's recorded thinking effort, independently of whether it can
+change the model. When only effort can change, tapping the row opens its existing setup flyout instead of presenting
+a grey, inert choice. Unsupported effort has a visible reason (offline, read-only, parent-controlled, terminal-only,
+or unsupported by the model); supported changes say they apply to the next turn. These details belong to the Agent's
+on-demand model panel, not the everyday Assistant home (#6887).
+
 - Use: the one message input for Assistant and Agents chats on iPhone, iPad and Mac.
 - Anatomy: collapsed line `[+] field [mic] [voice/stop]`; expanded card with the field on top and a row `[+] ... [model/effort] [mic] [send]`. Both shapes share one text field so focus and IME text survive the change.
 - Tokens: radius 32, min field height 44, iOS grows from one through six lines then scrolls (`Theme.Shell.composerPhoneMaximumLines`); Mac retains its eight-line cap. Fill and stroke come from `Shell`.

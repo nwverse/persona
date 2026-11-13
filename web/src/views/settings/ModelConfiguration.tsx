@@ -17,7 +17,10 @@ import { ModelPicker, type ModelList } from "../../ui/ModelPicker";
 import { Group, Pill, Row } from "./SettingsParts";
 import { MANAGER_HEADER } from "../../lib/manager-choice";
 import { ConfigurationManager } from "./ConfigurationManager";
+import { DirectAPIEditor } from "./DirectAPIEditor";
 import { ModelProfiles } from "./ModelProfiles";
+
+const UNVERIFIED_STATUS = "未验证"; // i18n-ignore: stable wire sentinel, not user-facing text.
 
 function agentsOverrideStatus(binding: ModelBinding): string {
   return binding.provider || binding.model || binding.effort
@@ -86,6 +89,8 @@ function ModelConfigurationForManager({ manager, open, onOpen, onProviders }: { 
 function PurposeRow({ purpose: p, providers, sourceName, onOpen }: { purpose: ModelPurpose; providers: ModelProvider[]; sourceName: (id?: string) => string | undefined; onOpen: () => void }) {
   const machines = useStore((s) => s.machines);
   const form = executionForm(p, providers, machines);
+  const directAPI = p.kind === "api" && providers.find((v) => v.id === p.effective.provider)?.kind === "api";
+  const status = directAPI && p.status === UNVERIFIED_STATUS ? "" : p.status;
   const [help, setHelp] = useState(false);
   const [pinned, setPinned] = useState(false);
   const row = useRef<HTMLDivElement>(null);
@@ -113,7 +118,7 @@ function PurposeRow({ purpose: p, providers, sourceName, onOpen }: { purpose: Mo
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
             <Pill wrap>{form.label} · {form.backend}</Pill>
             {inheritance && <span className="whitespace-normal">{inheritance}</span>}
-            {p.status && <span>{p.status}</span>}
+            {status && <span>{status}</span>}
           </div>
         </>} />
       </div>
@@ -182,7 +187,8 @@ function PurposeEditor({ manager, id, sourceName, onClose, onSaved }: { manager:
   const chosen = data?.providers.find((v) => v.id === (draft.provider || p?.effective?.provider));
   const followsAgents = !!p && agentsOverride(p);
   const writable = p && (["provider", "model", "effort"] as const).some((field) => supportsField(p, field));
-  const effortAllowed = p && supportsField(p, "effort") && (followsAgents || chosen?.kind !== "api" || chosen.api === "responses" || chosen.api === "messages" || !chosen.api);
+  const directAPI = p?.kind === "api" && chosen?.kind === "api" && writable;
+  const effortAllowed = p && !directAPI && supportsField(p, "effort") && (followsAgents || chosen?.kind !== "api" || chosen.api === "responses" || chosen.api === "messages" || !chosen.api);
   const listProvider = p?.kind !== "plugin" && chosen?.kind === "launcher" && supportsField(p!, "model") ? chosen.id : "";
   useEffect(() => {
     const refresh = refreshNext.current;
@@ -248,7 +254,7 @@ function PurposeEditor({ manager, id, sourceName, onClose, onSaved }: { manager:
           <Row label={t("settings-modelconfiguration.provider")} mono><span className="max-w-[220px] truncate">{providerName(p.effective?.provider, data?.providers) ?? t("settings-modelconfiguration.not_configured")}</span></Row>
           <Row label={t("settings-modelconfiguration.model")} mono><span className="max-w-[220px] truncate">{p.effective?.model || t("settings-modelconfiguration.provider_default")}</span></Row>
           {runtimes.length > 0 && <Row label={t("settings-modelconfiguration.runtime")}><span>{runtimeLabel(p.effective?.runtime, effectiveAgent)}</span></Row>}
-          {p.status && <Row label={t("settings-modelconfiguration.status")}><Pill>{p.status}</Pill></Row>}
+          {p.status && !(directAPI && p.status === UNVERIFIED_STATUS) && <Row label={t("settings-modelconfiguration.status")}><Pill>{p.status}</Pill></Row>}
         </Group>
         {supportsField(p, "provider") && <label className="block">
           <span className="mb-1 block text-[12px] font-medium text-ink-2">{t("settings-modelconfiguration.model_provider")}</span>
@@ -259,7 +265,9 @@ function PurposeEditor({ manager, id, sourceName, onClose, onSaved }: { manager:
           </select>
         </label>}
         {previewForm && <div data-execution-preview><Pill wrap>{previewForm.label} · {previewForm.backend}</Pill></div>}
-        {supportsField(p, "model") && <div className="block">
+        {directAPI && <DirectAPIEditor key={`${manager}:${chosen.id}:${draft.provider}`} manager={manager} purpose={p} provider={chosen} draft={draft}
+          disabled={busy} onChange={(patch) => setDraft((value) => ({ ...value, ...patch }))} />}
+        {!directAPI && supportsField(p, "model") && <div className="block">
           <span className="mb-1 block text-[12px] font-medium text-ink-2">{t("settings-modelconfiguration.specific_model")}</span>
           {p.kind === "plugin" ? <select aria-label={t("settings-modelconfiguration.specific_model")} className={inputClass} value={draft.model} disabled={busy || (!!modelsError && models.length === 0)} onChange={(e) => setDraft((d) => ({ ...d, model: e.target.value }))}>
             <option value="">{t("settings-modelconfiguration.follow_extension_default")}</option>
