@@ -9,8 +9,7 @@ def failures(needs):
     if needs.get("changes", {}).get("result") != "success":
         bad.append("repository guards/path selection did not succeed")
     selected = needs.get("changes", {}).get("outputs", {})
-    # apple is the required iOS/Watch/HTML lane. By maintainer decision the
-    # independently reported apple_macos lane temporarily does not block merges.
+    # apple is the required iOS/Watch/HTML lane; the former native Mac lane was removed with PersonaMac.
     for platform in ("server", "web", "android", "apple", "core", "runtimes", "scripts"):
         expected = selected.get(platform)
         result = needs.get(platform, {}).get("result")
