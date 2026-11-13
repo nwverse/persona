@@ -10,6 +10,9 @@ public struct HelperArguments: Equatable {
         case stream(socket: String, token: String)
         /// Call `CGRequestScreenCaptureAccess()` once and exit; macOS shows its alert on the Mac's screen.
         case requestPermission
+        /// Print whether Screen Recording is granted (`CGPreflightScreenCaptureAccess()`, which asks nothing) and exit:
+        /// what the node reports as `screen_video.permission`.
+        case preflight
     }
 
     public var mode: Mode
@@ -26,7 +29,7 @@ public struct HelperArguments: Equatable {
         case missingValue(String)
         /// A value did not parse (e.g. `--display x`).
         case badValue(String)
-        /// Neither `--request-permission` nor a `--socket`/`--token` pair was given.
+        /// Neither `--request-permission`, `--preflight` nor a `--socket`/`--token` pair was given.
         case noMode
     }
 
@@ -35,6 +38,7 @@ public struct HelperArguments: Equatable {
         var socket: String?
         var token: String?
         var requestPermission = false
+        var preflight = false
         var display: Int?
 
         var i = 0
@@ -50,6 +54,7 @@ public struct HelperArguments: Equatable {
             case "--socket": socket = try value(for: arg)
             case "--token": token = try value(for: arg)
             case "--request-permission": requestPermission = true
+            case "--preflight": preflight = true
             case "--display":
                 let raw = try value(for: arg)
                 guard let n = Int(raw) else { throw ParseError.badValue(arg) }
@@ -62,6 +67,9 @@ public struct HelperArguments: Equatable {
 
         if requestPermission {
             return HelperArguments(mode: .requestPermission, display: display)
+        }
+        if preflight {
+            return HelperArguments(mode: .preflight, display: display)
         }
         if let socket, let token {
             return HelperArguments(mode: .stream(socket: socket, token: token), display: display)
