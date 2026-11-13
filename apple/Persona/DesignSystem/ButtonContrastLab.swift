@@ -108,8 +108,8 @@ private struct ButtonContrastList: View {
     }
 }
 
-/// One place: a secondary button in the accent, one tinted `Theme.danger` and one with the destructive role (the system's
-/// red), with words of the length real ones have.
+/// One place: a secondary button in the accent, one tinted `Theme.danger` and one with the destructive role (which
+/// `.themedButton()` draws in `Theme.danger`, #7042), with words of the length real ones have.
 private struct ButtonContrastRow: View {
     var place: String
 
