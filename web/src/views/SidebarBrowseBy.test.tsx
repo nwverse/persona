@@ -10,6 +10,7 @@ vi.hoisted(() => {
 });
 import { t } from "../i18n";
 import { loadPages } from "../lib/lazy-page";
+import { SESSIONS_AGENTS_ONLY_FEATURE } from "../lib/runtime-list";
 import { connect, reset } from "../lib/store";
 import type { Session } from "../lib/types";
 import { Sidebar } from "./Sidebar";
@@ -69,7 +70,7 @@ async function render(features: string[]) {
     connect();
     const socket = FakeSocket.all.at(-1)!;
     socket.open();
-    socket.push({ type: "hello", features });
+    socket.push({ type: "hello", features: [...features, SESSIONS_AGENTS_ONLY_FEATURE] });
   });
   await flush();
   act(() => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />));
@@ -109,6 +110,9 @@ describe("the sidebar's Agents by project", () => {
     expect(notes.querySelector(`[aria-label="${t("paged-agents.places")}"]`)!.textContent).toBe("MacBook · ~/notes");
     const read = fetch.mock.calls.map(([input]) => new URL(input, "http://hub.example.com").searchParams).find((q) => q.getAll("place").length === 2)!;
     expect(read.getAll("place")).toEqual([pair("mac", "/Users/me/code/app"), pair("pc", "C:\\code\\App")]);
+    expect(read.get("agents_only")).toBe("1");
+    const catalog = fetch.mock.calls.map(([input]) => new URL(input, "http://hub.example.com").searchParams).find((q) => q.has("catalog"));
+    expect(catalog?.get("agents_only")).toBe("1");
   });
 
   it("on a hub without the catalog keeps each directory its own project, by its folder's name", async () => {

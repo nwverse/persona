@@ -82,11 +82,16 @@ try {
   await main.locator("[data-session-row]").first().waitFor();
   await page.waitForTimeout(700);
   const firstPaint = await page.evaluate(() => {
-    const resource = performance.getEntriesByType("resource").find((r) => new URL(r.name).pathname === "/api/v1/sessions" && new URL(r.name).searchParams.get("limit") === "50");
+    const resource = performance.getEntriesByType("resource").find((r) => {
+      const url = new URL(r.name);
+      return url.pathname === "/api/v1/sessions" && url.searchParams.get("limit") === "50" && url.searchParams.get("agents_only") === "1";
+    });
     return { navigationToRowsMs: window.__agentsFirstPaint, responseToRowsMs: window.__agentsFirstPaint - resource?.responseEnd, firstResponseMs: resource?.responseEnd, firstRequestMs: resource?.startTime };
   });
-  const first = requests.filter((r) => r.query.includes("limit=50") && !r.query.includes("since=") && !r.query.includes("cursor="));
-  assert.equal(first.length, 1, "exactly one initial runtime page");
+  const initialPages = requests.filter((r) => r.query.includes("limit=50") && !r.query.includes("since=") && !r.query.includes("cursor="));
+  const first = initialPages.filter((r) => r.query.includes("agents_only=1"));
+  assert.equal(initialPages.length - first.length, 1, "exactly one initial all-sessions page");
+  assert.equal(first.length, 1, "exactly one initial Agents page");
   assert.equal(first[0].rows, 50);
   assert.equal(first[0].total, 8000);
   assert.ok(!requests.some((r) => !r.query), "no legacy full-list GET");
@@ -101,7 +106,7 @@ try {
   const beforeChange = requests.length;
   await fetch(`${url}/__fixture/change?row=1999&title=Incremental%20demo%20rename`);
   await main.getByText("Incremental demo rename", { exact: true }).waitFor();
-  assert.ok(requests.slice(beforeChange).some((r) => r.query.includes("since=") && r.rows === 1));
+  assert.ok(requests.slice(beforeChange).some((r) => r.query.includes("agents_only=1") && r.query.includes("since=") && r.rows === 1));
   assert.ok(!requests.slice(beforeChange).some((r) => !r.query.includes("since=") && r.query.includes("limit=")));
 
   await cdp.send("Tracing.start", { categories: "devtools.timeline,blink.user_timing,disabled-by-default-devtools.timeline.frame", transferMode: "ReturnAsStream" });

@@ -1,6 +1,6 @@
 // The paged Agents list drawn by group (#6348, docs/web/web.md "Paging hubs"): Browse by Computer, Project or Space
 // arranges the list in folding sections, a repository on two computers is one project that lists both directories,
-// and the value pill's menu is as wide as its pill. Checked against the fake hub's own answers, with screenshots.
+// and the value pill's menu is as wide as its pill. The Agents scope excludes Persona and health conversations (#4676).
 //
 // Needs the web page against the fake hub with the paged list, its catalog and one assistant, and Chrome:
 //
@@ -42,13 +42,22 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const hello = await hubGet("/health").catch(() => ({}));
 const pins = await hubGet("/pins");
 await hubGet("/pins", { method: "PUT", body: JSON.stringify({ spaces: [], sessions: [] }) });
-const catalog = await hubGet("/sessions?catalog=1&roots=1");
+const [catalog, counts, allRows] = await Promise.all([
+  hubGet("/sessions?catalog=1&roots=1&agents_only=1"),
+  hubGet("/sessions?counts=1&roots=1&agents_only=1"),
+  hubGet("/sessions?summary=1&limit=200&roots=1"),
+]);
+const persona = allRows.sessions?.find((row) => row.assistant && row.space !== "health");
+const health = allRows.sessions?.find((row) => row.space === "health");
+const idleAgent = allRows.sessions?.find((row) => !row.assistant && row.space !== "health" && row.state === "idle" && !row.children);
 const machines = (await hubGet("/machines")).machines ?? [];
 const machineName = (id) => machines.find((m) => m.id === id)?.name ?? id;
 if (!Array.isArray(catalog.projects)) {
   console.log(`VERDICT FAIL the hub at ${base} has no session catalog (start the fake hub with MOCK_SESSIONS_LIST=1 MOCK_SESSIONS_CATALOG=1)`, JSON.stringify(hello).slice(0, 120));
   process.exit(1);
 }
+check(Boolean(persona && health) && counts.total === allRows.total - allRows.sessions.filter((row) => row.assistant || row.space === "health").length,
+  "the unscoped list includes Persona and health while Agents counts exclude them");
 const shared = catalog.projects.find((p) => p.origin && new Set(p.places.map((x) => x.machine_id)).size > 1);
 const byMachine = {};
 for (const p of catalog.projects) for (const place of p.places) byMachine[place.machine_id] = (byMachine[place.machine_id] ?? 0) + place.total;
@@ -83,6 +92,7 @@ try {
         count: Number(top.querySelector("span[aria-hidden]").textContent), rows: el.querySelectorAll("[data-session-row]").length };
     }));
     const total = async () => Number((await list.locator("[data-session-total]").textContent()).replace(/\D+/g, ""));
+    const waitTotal = (n) => list.locator("[data-session-total]").filter({ hasText: new RegExp(`^${n} sessions$`) }).waitFor({ timeout: 10_000 });
     const shot = async (step) => {
       await page.waitForTimeout(350);
       await list.evaluate((el) => el.scrollIntoView({ block: "start" }));
@@ -90,7 +100,54 @@ try {
       await page.screenshot({ path: `${out}/${name}-${step}.png`, ...(touch ? {} : { clip: { x: 0, y: 0, width: (sidebar ?? 340) + 40, height: viewport.height } }) });
     };
     const settled = async () => { await sections().first().waitFor({ timeout: 15_000 }); await page.waitForTimeout(600); };
+    await waitTotal(counts.total);
+    check((await total()) === counts.total, `${name}: the flat list counts only Agents`);
+    if (counts.state.working > 0) {
+      const working = list.getByRole("radio", { name: `Working ${counts.state.working}`, exact: true });
+      await working.click();
+      await waitTotal(counts.state.working);
+      await list.getByRole("radio", { name: "All", exact: true }).click();
+      await waitTotal(counts.total);
+    }
     await shot("0-recent");
+
+    if (name === "wide-light" && persona && health) {
+      const search = list.getByRole("textbox").first();
+      for (const hidden of [persona, health]) {
+        await search.fill(hidden.title);
+        await waitTotal(0);
+        check((await list.locator("[data-session-row]").count()) === 0, `the Agents search excludes ${hidden.space === "health" ? "health" : "Persona"} conversations`);
+        await search.clear();
+        await waitTotal(counts.total);
+      }
+      if (hub && idleAgent) {
+        const setState = async (row, state) => {
+          const params = new URLSearchParams({ mid: row.machine_id, sid: row.session_id, state });
+          const reply = await fetch(`${hub}/mock/session_state?${params}`, { signal: AbortSignal.timeout(10_000) });
+          if (!reply.ok) throw new Error(`mock state change failed with ${reply.status}`);
+        };
+        const waitWorking = (n) => list.getByRole("radio", { name: `Working ${n}`, exact: true }).waitFor({ timeout: 10_000 });
+        const waitForScopedRefresh = () => page.waitForResponse((response) => {
+          const { pathname, searchParams } = new URL(response.url());
+          return pathname === "/api/v1/sessions" && searchParams.get("agents_only") === "1" &&
+            (searchParams.has("since") || searchParams.get("counts") === "1");
+        }, { timeout: 10_000 });
+        const working = counts.state.working ?? 0;
+        try {
+          const refresh = waitForScopedRefresh();
+          await setState(health, "working");
+          await refresh;
+          await setState(idleAgent, "working");
+          await waitWorking(working + 1);
+          await waitTotal(counts.total);
+          check(true, "the live working count includes the changed Agent and excludes the changed health conversation");
+        } finally {
+          await setState(health, health.state);
+          await setState(idleAgent, idleAgent.state);
+        }
+        if (working > 0) await waitWorking(working);
+      }
+    }
 
     // Computer: one section per computer with sessions, the busiest first, the first three open
     await tab("Computer").click();
