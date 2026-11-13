@@ -32,7 +32,7 @@ private struct LarkConversationsPage: View {
     /// iPhone Duo's bars down the side: the shell's bar is the side rail there (`ShellSideRail`).
     @Environment(\.shellRailEdge) private var railEdge
     @Environment(\.pageTabSwitch) private var pageTabSwitch
-    @Environment(\.tabIsActive) private var active
+    @Environment(\.scenePhase) private var phase
     @State private var store: LarkConversationsModel
     @State private var path: [LarkConversation] = []
     @State private var query = ""
@@ -41,6 +41,9 @@ private struct LarkConversationsPage: View {
     @State private var scroll = LarkConversationScroll()
     /// The end of the list (the spinner) is on screen: pages keep coming while it stays there.
     @State private var endVisible = false
+    /// State stays live across a scan's awaits, including when the shell retains a hidden tab.
+    @State private var pageVisible = false
+    @State private var sceneActive = false
     /// Pages a search has asked for since the query last changed (`searchPageLimit`).
     @State private var searchPages = 0
     var choice: LarkAccountChoice
@@ -137,7 +140,7 @@ private struct LarkConversationsPage: View {
                                 Button("Retry [Lark Conversations View 8924c7]") { Task { await store.more() } }.lineLimit(1)
                             } else if scansPages, searchPages >= Self.searchPageLimit {
                                 Button(store.filter == .unread ? String(localized: "lark.filter.continue") : String(localized: "Search Older Chats")) {
-                                    searchPages = 0; endVisible = true; Task { await loadAtEnd() }
+                                    searchPages = 0; endVisible = true; resumePaging()
                                 }.lineLimit(1)
                                 .accessibilityIdentifier("feishu-filter-continue")
                             } else {
@@ -154,7 +157,7 @@ private struct LarkConversationsPage: View {
                                 // results leave it in view); a task keyed on the cursor ran off screen too (#1034).
                                 .onScrollVisibilityChange(threshold: 0.01) { visible in
                                     endVisible = visible
-                                    if visible { Task { await loadAtEnd() } }
+                                    if visible { resumePaging() }
                                 }
                                 .onDisappear { endVisible = false }
                             }
@@ -217,15 +220,23 @@ private struct LarkConversationsPage: View {
         .onChange(of: query) { _, _ in
             pins = LarkPinnedInteraction(); scroll.resetShelf()
             searchPages = 0
-            if endVisible { Task { await loadAtEnd() } }
+            resumePaging()
         }
         // A page held for a moving list lands when it rests: the end may still be on screen and want the next one.
-        .onChange(of: store.nextCursor) { _, cursor in if cursor != nil, endVisible { Task { await loadAtEnd() } } }
+        .onChange(of: store.nextCursor) { _, cursor in if cursor != nil { resumePaging() } }
+        .onTabVisibility(appear: { pageVisible = true; resumePaging() }, disappear: { pageVisible = false })
+        .onChange(of: phase, initial: true) { _, value in
+            sceneActive = VisibleScenePolicy.permits(value)
+            resumePaging()
+        }
         .onChange(of: store.pinned.isEmpty) { _, empty in
             if empty { pins = LarkPinnedInteraction(); scroll.resetShelf() }
         }
         .onDisappear { pins.cancelDrag(); store.holdScrolling(false); store.willChange = {} }
-        .onChange(of: path.isEmpty, initial: true) { _, root in shell?.feishuAtRoot = root }
+        .onChange(of: path.isEmpty, initial: true) { _, root in
+            shell?.feishuAtRoot = root
+            if root { resumePaging() }
+        }
         .tabActiveTask(id: model.connection.shown == .online) {
             let changes = LarkSync.shared.listChanges()
             async let accounts: Void = choice.load()
@@ -256,9 +267,14 @@ private struct LarkConversationsPage: View {
     }
 
     /// Pages while the end of the list is on screen; a search counts its pages and stops at `searchPageLimit`.
+    private func resumePaging() {
+        guard pageVisible, sceneActive, path.isEmpty, endVisible else { return }
+        Task { await loadAtEnd() }
+    }
+
     private func loadAtEnd() async {
         let selected = store.filter
-        while active, path.isEmpty, selected == store.filter, endVisible, let cursor = store.nextCursor, !store.pageFailed, !Task.isCancelled {
+        while pageVisible, sceneActive, path.isEmpty, selected == store.filter, endVisible, let cursor = store.nextCursor, !store.pageFailed, !Task.isCancelled {
             let searching = scansPages
             if searching, searchPages >= Self.searchPageLimit { return }
             await store.more()

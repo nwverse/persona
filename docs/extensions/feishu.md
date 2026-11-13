@@ -12,6 +12,8 @@
 
 Verification: `LarkUnreadTests` covers scope/cursor isolation, late replies, manual unread, retry, account changes and read events. `LarkUnreadUITests` uses `MOCK_LARK=1 MOCK_LARK_UNREAD=1`; add `MOCK_MESSAGING=1` for generic page filtering. For its bounded-scan assertion, also set mock `MOCK_LARK_UNREAD_PAGES=9` and runner `TEST_RUNNER_PERSONA_EXPECT_UNREAD_CONTINUE=1`. `MOCK_LARK_LIST=180` supplies a paginated list for the existing optimized `PerfInboxTests/testFeishuMessagesListScroll` measurement.
 
+For a visibility check, add `MOCK_LARK_UNREAD_PAGE_DELAY=0.5` to the long generic fixture. Switch to Assistant after cursor 60 starts: the in-flight page may finish, but cursor 120 must not start until Messages is visible again. Scans use live mounted/tab/scene state and pause while a chat is open.
+
 Three optional hub integrations: Lark gateway (third-party user-authenticated web client through private extension), official `lark-cli` (`docs/plans/plan-lark-cli.md`), and a private Lark Agent extension. This document covers gateway; its deployment / variables / commands in extension instructions.
 
 ## What stays
