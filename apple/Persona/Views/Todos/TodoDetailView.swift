@@ -206,6 +206,9 @@ struct TodoDetailView: View {
                         }
                     }
 
+                    // Nobody is working on it (#3618): under its state.
+                    OrphanedLine(todo: todo, state: status)
+
                     if todo.autoDone {
                         // The hub closed it (docs/assistant/todos.md「Automatic completion」): say why, and how to undo it.
                         Text(todo.autoDoneReason.map { String(localized: "The agent stopped and the work looked finished, so it was marked done: \($0). If it isn't, tap “Reopen”.") }

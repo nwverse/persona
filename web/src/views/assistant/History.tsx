@@ -25,6 +25,10 @@ import { t } from "../../i18n";
 import { ASSISTANT_SEARCH_FEATURE, markParts, mergeSearch, useAssistantSearch, type AssistantSearchHit } from "../../lib/assistant-search";
 
 const NONE: Session[] = [];
+// A row's line under its title: the matching words of a search, or else its last message.
+const ROW_LINE = "mt-0.5 block truncate text-[12px] text-ink-3";
+// The pill beside a row's title ("Main chat", "Built in"): one shape, each in its own colors.
+const pill = (bg: string, ink: string) => `inline-flex h-5 shrink-0 items-center whitespace-nowrap rounded-full ${bg} px-2 text-[11px] font-medium ${ink}`;
 
 export function History({ origin, onToggleSidebar }: { origin?: string; onToggleSidebar: () => void }) {
   const filter = parseOriginFilter(origin);
@@ -309,16 +313,16 @@ function ConvRow({ s, main, now, said, onRename, onArchive }: { s: Conversation;
                 title
               )}
             </span>
-            {main && <span className="inline-flex h-5 shrink-0 items-center whitespace-nowrap rounded-full bg-accent-tint px-2 text-[11px] font-medium text-accent-ink">{t("assistant-history.main_chat")}</span>}
-            {builtIn && <span data-testid="built-in" className="inline-flex h-5 shrink-0 items-center whitespace-nowrap rounded-full bg-field px-2 text-[11px] font-medium text-ink-2">{t("assistant-conversations.built_in")}</span>}
+            {main && <span className={pill("bg-accent-tint", "text-accent-ink")}>{t("assistant-history.main_chat")}</span>}
+            {builtIn && <span data-testid="built-in" className={pill("bg-field", "text-ink-2")}>{t("assistant-conversations.built_in")}</span>}
             {origin ? <OriginMark origin={origin} size={16} /> : <ConvChannel ids={s.channels} />}
           </span>
           {said ? (
-            <span className="mt-0.5 block truncate text-[12px] text-ink-3" data-said>
+            <span className={ROW_LINE} data-said>
               {markParts(said.snippet, said.ranges).map(([words, match], k) => (match ? <mark key={k} className="rounded-[3px] bg-accent-tint text-ink">{words}</mark> : <span key={k}>{words}</span>))}
             </span>
           ) : (
-            last && <span className="mt-0.5 block truncate text-[12px] text-ink-3">{last}</span>
+            last && <span className={ROW_LINE}>{last}</span>
           )}
         </span>
         <span className="flex shrink-0 flex-col items-end gap-1">
