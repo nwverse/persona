@@ -210,7 +210,9 @@ export function useFileOps({ mid, cwd, path = cwd, workspace = cwd, onChanged }:
   useEffect(() => {
     activeRemote.current.forEach((operation, id) => {
       if (operation.workspace === workspaceOwner) return;
-      operation.ac.abort();
+      const credential = operation.workspace.credential;
+      if (credential.owner !== credentialOwner() || credential.token !== getToken()) operation.ac.abort();
+      // Navigation only hides the row and stops polling. The authoritative POST continues unless credentials died.
       activeRemote.current.delete(id);
     });
     setRemoteOperations((ops) => ops.filter((op) => op.owner.workspaceOwner === workspaceOwner));
@@ -244,11 +246,10 @@ export function useFileOps({ mid, cwd, path = cwd, workspace = cwd, onChanged }:
     const id = setTimeout(() => setUploads((us) => us.filter((u) => u.state !== "done")), 1600);
     return () => clearTimeout(id);
   }, [uploads]);
-  // what everyone waits on goes when the panel does
+  // Uploads stop with the panel. Remote POSTs continue: dropping their handles only stops polling and hides the UI.
   useEffect(() => () => {
     active.current.forEach((ac) => ac.abort());
     active.current.clear();
-    activeRemote.current.forEach((operation) => operation.ac.abort());
     activeRemote.current.clear();
   }, []);
 
@@ -773,6 +774,7 @@ function RemoteOperationRow({ operation: op, onCancel }: { operation: RemoteOper
         >
           <span className={cx("block h-full rounded-full transition-[width] duration-200", op.state === "done" ? "bg-green" : "bg-accent")} style={{ width: `${pct}%` }} />
         </span>
+        <span className="mt-1 block truncate text-xs text-ink-3" title={detail}>{detail}</span>
       </span>
       {op.state !== "done" && <IconButton
         icon="x"

@@ -31,8 +31,8 @@ async function click(label: string) {
   await flush();
 }
 async function answer(call: Call, body: unknown, status = 200) { await act(async () => call.answer(body, status)); await flush(); }
-function Harness() {
-  ops = useFileOps({ mid: "machine-a", cwd: "/work", path: "/work/from", onChanged: changed });
+function Harness({ cwd = "/work" }: { cwd?: string }) {
+  ops = useFileOps({ mid: "machine-a", cwd, path: "/work/from", onChanged: changed });
   return <div>{ops.ui}</div>;
 }
 
@@ -101,6 +101,7 @@ describe("remote file operations", () => {
     const progress = host.querySelector<HTMLElement>('[role="progressbar"][aria-label="sample.txt"]');
     expect(progress?.getAttribute("aria-valuenow")).toBe("32");
     expect(progress?.getAttribute("aria-valuetext")).toContain("32");
+    expect(host.textContent).toContain("1 / 2 · 32 B / 100 B");
     expect(operationReads().length).toBeGreaterThan(0);
     await click(t("files-ops.copy_cancel", { name: target.name }));
     expect(byRoute("copy")[0].signal?.aborted).toBe(true);
@@ -120,6 +121,31 @@ describe("remote file operations", () => {
     expect(progress?.getAttribute("aria-valuetext")).toContain("1 / 2");
     expect(progress?.getAttribute("aria-valuetext")).not.toContain(t("files-ops.operation_preparing"));
     await click(t("files-ops.copy_cancel", { name: target.name }));
+  });
+
+  it("does not abort the authoritative POST when the panel unmounts", async () => {
+    vi.useFakeTimers();
+    pendingRemote = true;
+    await act(async () => ops.duplicate([target])); await flush();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100); }); await flush();
+    expect(host.querySelector('[role="progressbar"]')).not.toBeNull();
+    await act(async () => root.render(<div />)); await flush();
+    expect(host.querySelector('[role="progressbar"]')).toBeNull();
+    expect(byRoute("copy")[0].signal?.aborted).toBe(false);
+    await answer(byRoute("copy")[0], { copied: [{ from: target.path, to: "/work/from/sample 2.txt" }] });
+    expect(changed).not.toHaveBeenCalled();
+  });
+
+  it("does not abort the authoritative POST when the workspace changes", async () => {
+    vi.useFakeTimers();
+    pendingRemote = true;
+    await act(async () => ops.duplicate([target])); await flush();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100); }); await flush();
+    await act(async () => root.render(<Harness cwd="/elsewhere" />)); await flush();
+    expect(host.querySelector('[role="progressbar"]')).toBeNull();
+    expect(byRoute("copy")[0].signal?.aborted).toBe(false);
+    await answer(byRoute("copy")[0], { copied: [{ from: target.path, to: "/work/from/sample 2.txt" }] });
+    expect(changed).not.toHaveBeenCalled();
   });
 
   it("closes Copy To on start and retries a conflict with a fresh operation", async () => {

@@ -16,8 +16,9 @@ const base = (args[0] ?? "").replace(/\/$/, "");
 const hub = (flag("--hub") ?? base).replace(/\/$/, "");
 const shots = flag("--shots");
 const executable = flag("--executable");
+const largeText = args.includes("--large-text");
 if (!base || !shots) {
-  console.error("usage: node web/e2e/file-operations.mjs <web URL> [--hub <mock URL>] --shots <artifact-directory> [--executable <chromium>]");
+  console.error("usage: node web/e2e/file-operations.mjs <web URL> [--hub <mock URL>] --shots <artifact-directory> [--executable <chromium>] [--large-text]");
   process.exit(2);
 }
 mkdirSync(shots, { recursive: true });
@@ -56,10 +57,11 @@ async function open(browser, colorScheme) {
   page.on("pageerror", (error) => errors.push(String(error)));
   await page.goto(`${base}/?token=mock`);
   await page.waitForFunction(() => localStorage.getItem("persona.token"), null, { timeout: 15_000 });
-  await page.evaluate((theme) => {
+  await page.evaluate(({ theme, large }) => {
     localStorage.setItem("persona.theme", theme);
     localStorage.setItem("persona.language", "zh-Hans");
-  }, colorScheme);
+    if (large) localStorage.setItem("persona.text-size", "large");
+  }, { theme: colorScheme, large: largeText });
   await page.goto(`${base}/machines/macbook`);
   const files = page.getByRole("button", { name: "文件", exact: true });
   await files.waitFor({ state: "visible", timeout: 20_000 });
@@ -77,11 +79,14 @@ async function run(browser, colorScheme, kind) {
     await page.getByText(copying ? "创建副本" : "压缩", { exact: true }).click();
     const progress = page.locator('[role="progressbar"][aria-label="notes.txt"]');
     await progress.waitFor({ state: "visible", timeout: 12_000 });
-    await waitFor(async () => Number(await progress.getAttribute("aria-valuenow")) > 0, `${colorScheme} ${kind}: no polled byte progress`);
+    await waitFor(async () => Number(await progress.getAttribute("aria-valuenow")) >= 30, `${colorScheme} ${kind}: no polled byte progress`);
+    const detailText = await progress.evaluate((element) => element.nextElementSibling?.textContent ?? "");
+    if (!detailText.includes(" / ")) fail(`${colorScheme} ${kind}: file / byte counts are not visible`);
     const cancelName = copying ? "取消复制「notes.txt」" : "取消压缩「notes.zip」";
     const cancel = page.getByRole("button", { name: cancelName, exact: true });
     await cancel.waitFor({ state: "visible" });
-    await page.screenshot({ path: join(shots, `web-${kind}-progress-${colorScheme}.png`) });
+    await progress.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: join(shots, `web-${kind}-progress-${colorScheme}${largeText ? "-large" : ""}.png`) });
     await cancel.click();
     await progress.waitFor({ state: "detached", timeout: 5000 });
     const operation = await waitFor(async () => {
