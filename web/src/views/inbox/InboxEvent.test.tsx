@@ -18,21 +18,26 @@ vi.hoisted(() => {
   globalThis.CSS ??= { escape: (s: string) => s } as unknown as typeof CSS;
 });
 
-const calls = vi.hoisted(() => ({ list: [] as { path: string; json?: unknown }[], items: [] as unknown[] }));
+const calls = vi.hoisted(() => ({
+  list: [] as { path: string; json?: unknown; headers?: unknown }[],
+  items: [] as unknown[],
+  suggestion: undefined as (() => Promise<unknown>) | undefined,
+}));
 vi.mock("../../lib/api", async (orig) => ({
   ...(await orig<typeof import("../../lib/api")>()),
-  api: (path: string, init?: { json?: unknown }) => {
-    calls.list.push({ path, json: init?.json });
+  api: (path: string, init?: { json?: unknown; headers?: unknown }) => {
+    calls.list.push({ path, json: init?.json, headers: init?.headers });
     if (path.startsWith("/inbox?")) return Promise.resolve({ items: calls.items });
     if (path === "/mail/accounts") return Promise.resolve({ accounts: [] });
     if (path.startsWith("/mail/messages/")) {
       const uid = Number(path.split("/").pop()?.split("?")[0]);
       return Promise.resolve({ message: { uid, text: `mail body ${uid}`, seen: false } });
     }
-    if (path.endsWith("/suggestion")) return Promise.reject(new Error("offline"));
+    if (path.endsWith("/suggestion")) return calls.suggestion ? calls.suggestion() : Promise.reject(new Error("offline"));
     return Promise.resolve({});
   },
 }));
+vi.mock("../../ui/atoms", async (orig) => ({ ...(await orig<typeof import("../../ui/atoms")>()), toast: vi.fn() }));
 // the store's first snapshot is in (the list waits for it), with no agents waiting
 vi.mock("../../lib/store", async (orig) => {
   const m = await orig<typeof import("../../lib/store")>();
@@ -43,9 +48,11 @@ vi.mock("../../lib/translate", () => ({ useTranslatePrefs: () => ({ enabled: fal
 
 import type { InboxItem } from "../../lib/inbox";
 import { resetInboxForTests } from "../../lib/inbox";
+import { ApiError } from "../../lib/api";
 import { resetMailForTests } from "../../lib/mail";
 import { getState } from "../../lib/store";
 import type { Session } from "../../lib/types";
+import { toast } from "../../ui/atoms";
 import { InboxDetail } from "./InboxDetail";
 import { EventBody } from "./InboxEvent";
 import { InboxList } from "./InboxList";
@@ -92,6 +99,8 @@ beforeEach(() => {
   Object.assign(getState(), { sessions: {} });
   calls.list = [];
   calls.items = [];
+  calls.suggestion = undefined;
+  vi.mocked(toast).mockClear();
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -126,7 +135,7 @@ describe("收件箱事件：详情", () => {
     expect(reported.querySelector('[data-chain-icon="reported"]')).not.toBeNull();
     await press("展开全部（7）");
     expect(ids()).toEqual(["c1", "c2", "c3", "c4", "c5", "c6", "c7"]);
-    expect(host.querySelector('[data-chain-id="c3"] [data-chain-agent-state"]')?.textContent).toBe("需要你");
+    expect(host.querySelector('[data-chain-id="c3"] [data-chain-agent-state]')?.textContent).toBe("需要你");
     expect(host.querySelector('[data-chain-id="c4"] [data-chain-agent-state]')?.textContent).toBe("需要你");
     await press("收起");
     expect(ids()).toEqual(["c5", "c6", "c7"]);
