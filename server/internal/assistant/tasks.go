@@ -210,6 +210,11 @@ type tasksState struct {
 	// limitLooks: when a task agent's usage-limit wait is looked at again (taskTurnEndedAfter), one look per agent
 	// however many turns the wait's wakes end.
 	limitLooks map[SessionRef]time.Time
+	// sentBy: by agent (machine, session), the conversation that last sent it text for a task and when (noteAgentSend:
+	// agent_send, the owner's message on a task's card). A task its supervisor accepted opens again on its agent's new
+	// turn only after its own conversation sent it more (closedTurnReopens, #6726). In memory only: after a restart
+	// such a task stays closed until its conversation sends again or the owner reopens it.
+	sentBy map[[2]string]agentSent
 	// retrying: the tasks whose agent is starting again after a failed start (one start at a time, #1396).
 	retrying map[string]bool
 	// outcomes: the completions whose outcome was recorded (todo_outcome.go, outcomeKey).
@@ -240,7 +245,7 @@ type tasksState struct {
 func newTasksState() tasksState {
 	return tasksState{recoverBefore: time.Now(), plans: map[string]*TaskPlan{}, feed: map[string][]FeedItem{},
 		working: map[string]time.Time{}, receipted: map[string]time.Time{}, retrying: map[string]bool{},
-		outcomes: map[string]time.Time{}, reusing: map[string]bool{},
+		outcomes: map[string]time.Time{}, reusing: map[string]bool{}, sentBy: map[[2]string]agentSent{},
 		turns: turnsState{again: map[string]bool{}, looked: map[string]turnLook{}, recovering: map[string]bool{}, tries: map[string]int{},
 			retry:   map[string]turnRetry{},
 			judging: map[string]int{}, closed: map[SessionRef]turnLook{}}}
