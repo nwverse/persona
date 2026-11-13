@@ -13,7 +13,8 @@ import type { EvidenceSnippet } from "../lib/agent-chatlist-filter";
 import { storedValue } from "../lib/compatibility";
 import { useScope } from "../lib/current-assistant";
 import { SESSIONS_LIST_FEATURE } from "../lib/session-list";
-import { completeAgentList, GROUPING_KEY } from "../lib/sidebar-api";
+import { SESSIONS_TODO_FEATURE } from "../lib/session-groups";
+import { GROUPING_KEY, pagedAgentList } from "../lib/sidebar-api";
 import { filterAgentList } from "../lib/agent-list-filters";
 import { conversationPage } from "../lib/conversation-page";
 import { href, navigate, type Route } from "../lib/router";
@@ -33,6 +34,7 @@ import { copyFileMention, FilesHeading, FilesNotice, FileResultRow, openFileHit,
 import { t } from "../i18n";
 import { byTime } from "../lib/times";
 import { STATE_LABEL } from "../lib/state-labels";
+import { PHONE, useMedia } from "../lib/viewport";
 import type { AssistantSearchAnswer, AssistantSearchHit } from "../lib/assistant-search";
 
 interface Hit {
@@ -190,9 +192,11 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
   const interactions = useStore((s) => s.interactions);
   const bySession = useStore((s) => s.sessions);
   // "Filter Agents list" narrows the complete list; the hub's paged list keeps its own search field
-  const paged = useStore((s) => s.features.includes(SESSIONS_LIST_FEATURE));
+  const bounded = useStore((s) => s.features.includes(SESSIONS_LIST_FEATURE));
+  const byTodo = useStore((s) => s.features.includes(SESSIONS_TODO_FEATURE));
+  const todosSupported = useStore((s) => s.todosSupported);
   const several = useScope().several;
-  const completeList = completeAgentList(paged, pins, storedValue(GROUPING_KEY), several);
+  const completeList = !pagedAgentList({ bounded, byTodo, todosSupported, pins, stored: storedValue(GROUPING_KEY), several });
   const panesOn = useStore((s) => s.features.includes("terminal_panes"));
   // Persona chats found by what was said in them too (#6283): the manager's search, merged into the local matches
   const searchOn = useStore((s) => s.features.includes("assistant_search"));
@@ -251,6 +255,8 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
   // loaded on intent (the palette is idle-tier, src/startup-preload.ts IDLE_TIER_BUDGET): the first query typed loads
   // lib/assistant-search.ts; asked 200 ms after the last key, each query cancelling the one before
   const [found, setFound] = useState<{ q: string; answer?: AssistantSearchAnswer; marks?: typeof import("../lib/assistant-search").markParts }>({ q: "" });
+  // a found chat's line starts just before its match, as much of a lead-in as the row's width holds (#7045)
+  const phone = useMedia(PHONE);
   const asked = open && mode === "jump" && !operators && searchOn && Boolean(assistant) ? text.trim() : "";
   useEffect(() => {
     if (!asked) return;
@@ -534,7 +540,7 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
                     </span>
                   ) : h.said ? (
                     <span className={ROW_DETAIL} data-said>
-                      {(found.marks?.(h.said.snippet, h.said.ranges) ?? [[h.said.snippet, false] as [string, boolean]]).map(([words, match], k) => (match ? <mark key={k} className="rounded-[3px] bg-accent-tint text-ink">{words}</mark> : <span key={k}>{words}</span>))}
+                      {(found.marks?.(h.said.snippet, h.said.ranges, phone ? "phone" : "wide") ?? [[h.said.snippet, false] as [string, boolean]]).map(([words, match], k) => (match ? <mark key={k} className="rounded-[3px] bg-accent-tint text-ink">{words}</mark> : <span key={k}>{words}</span>))}
                     </span>
                   ) : (
                     <span className={ROW_DETAIL}>{[meta, shortPath(h.s.cwd)].filter(Boolean).join(" · ")}</span>

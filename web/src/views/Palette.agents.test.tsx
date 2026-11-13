@@ -18,6 +18,9 @@ const { getState, reset } = await import("../lib/store");
 const { closePalette, openPalette, setPaletteQuery } = await import("../lib/palette");
 const { getAgentListFilters, resetAgentListFilters } = await import("../lib/agent-list-filters");
 const { Palette } = await import("./Palette");
+// the palette imports lib/agent-search.ts with the first query typed: loaded here first, so that import is answered from
+// the module cache however busy the test run is
+await import("../lib/agent-search");
 
 const machines: Machine[] = [
   { id: "mac", name: "Mac Studio", online: true },
@@ -63,7 +66,7 @@ async function search(query: string, listShown = true) {
   setPaletteQuery(query);
   act(() => root.render(<Palette open onClose={() => closed++} onNewAgent={() => {}} listShown={listShown} />));
   // lib/agent-search.ts loads with the first query typed
-  for (let i = 0; i < 4; i++) await act(async () => { await new Promise((ok) => setTimeout(ok, 0)); });
+  for (let i = 0; i < 10; i++) await act(async () => { await new Promise((ok) => setTimeout(ok, 0)); });
   return document.body;
 }
 /** The Agent rows' titles, top to bottom. */
@@ -131,7 +134,8 @@ describe("⌘K as the Agents list's search", () => {
     expect(document.body.querySelector("[data-testid=palette-filter-list]")).toBeNull();
     act(() => root.unmount());
     root = createRoot(host);
-    Object.assign(getState(), { features: ["sessions_list"], sessionSummaries: sessions });
+    // the default By to-do is the paged list's on a hub that lists sessions by to-do (#6662)
+    Object.assign(getState(), { features: ["sessions_list", "sessions_todo"], sessionSummaries: sessions });
     await search("parser");
     expect(titles()).toContain("parser rewrite");
     expect(document.body.querySelector("[data-testid=palette-filter-list]")).toBeNull();

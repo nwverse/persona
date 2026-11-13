@@ -1025,10 +1025,12 @@ struct ChatView: View {
         return lines
     }
 
-    /// The main conversation folds its background rounds while the hub's switch is on (docs/apple/ios.md "Background rounds").
+    /// The main conversation and the leader conversations fold their background rounds while the hub's switch is on
+    /// (docs/apple/ios.md "Background rounds", #6595).
     private var foldsBackground: Bool {
         ChatLines.foldsBackground(assistant: style == .assistant, conversation: shownKey.sessionID,
-                                  main: model.assistantMain?.sessionID, on: model.mainBackgroundFolded)
+                                  main: model.assistantMain?.sessionID, on: model.mainBackgroundFolded,
+                                  leaders: Set(model.assistantLeaders))
     }
 
     /// A later turn must not make a frozen historical question look like a live one.
@@ -1544,9 +1546,10 @@ struct ChatView: View {
             // The line right after the last input: the start of what the agent did and said for it.
             if let i = lines.lastIndex(where: \.isInput), i + 1 < lines.count { id = lines[i + 1].id }
         case .message(let item):
-            // A hub link's message: brought to the middle and lit up, as a quote's is; further up than what is
-            // loaded, older pages the same way as for a saved place; not found, the chat stays at the newest.
-            if jumpToQuoted(ContextRef(kind: "quote", title: "", url: "", text: "", msg: item)) {
+            // A hub link's or a search result's message (#6284): brought to the middle and lit up as a quote's is, a
+            // little longer, as the chat has just opened (`landingHold`); further up than what is loaded, older pages
+            // the same way as for a saved place; not found, the chat stays at the newest.
+            if jumpToQuoted(ContextRef(kind: "quote", title: "", url: "", text: "", msg: item), hold: Theme.Quote.landingHold) {
                 entry = nil
             } else if store.backlogBuilt {
                 if store.hasMore, scratch.entryPages < Self.entryPageLimit { searchOlderForEntry() } else { entry = nil }
@@ -2322,7 +2325,8 @@ struct ChatView: View {
     /// From a quote in a sent bubble to the message it quotes (#986): brought to the middle of the list and lit up
     /// for a moment. False when it is not in the loaded chat (an older page, another conversation): the block shows
     /// its whole text instead.
-    private func jumpToQuoted(_ ref: ContextRef) -> Bool {
+    /// `hold`: how long the message stays lit (`Theme.Quote.landingHold` where the chat opened at it).
+    private func jumpToQuoted(_ ref: ContextRef, hold: Duration = Theme.Quote.flashHold) -> Bool {
         if ref.isForward { return openForwarded(ref) }
         if openContextLink(ref) { return true }
         guard ref.kind == "quote", !ref.msg.isEmpty else { return false }
@@ -2354,7 +2358,7 @@ struct ChatView: View {
             try? await Task.sleep(for: .milliseconds(120)) // an opened work line's steps are laid out first
             withAnimation(Theme.Motion.standard) { position.scrollTo(id: target, anchor: .center) }
             try? await Task.sleep(for: .milliseconds(250))
-            quoteFlash = QuoteFlashMark(line: target)
+            quoteFlash = QuoteFlashMark(line: target, hold: hold)
         }
         return true
     }
@@ -2836,7 +2840,7 @@ struct ChatView: View {
                     #if os(iOS)
                     .pickable(Self.pickBar(line), mark: Self.pickMark(line), pick: pick, selecting: pick.on, refused: pickRefused)
                     #endif
-                    .background { if quoteFlash?.line == line.id { QuoteFlash().id(quoteFlash?.id) } }
+                    .background { if let flash = quoteFlash, flash.line == line.id { QuoteFlash(hold: flash.hold).id(flash.id) } }
                     .flippedBack()
                     .debugLineY(line.id, scratch)
                     .landingFrame(line.id == landing, scratch)
@@ -4911,8 +4915,18 @@ struct FeishuLink: View {
 
 struct SuggestionPill: View {
     var text: String
+    var risky: Bool = false
     var fill: () -> Void
     var send: () -> Void
+
+    /// One policy for every direct-send affordance. The frozen Mac and unverified visionOS keep their existing behavior.
+    var directSend: (() -> Void)? {
+        #if os(iOS)
+        return risky ? nil : send
+        #else
+        return send
+        #endif
+    }
 
     var body: some View {
         Button {
@@ -4932,14 +4946,30 @@ struct SuggestionPill: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
-            Button { Haptics.success(); send() } label: { Label("Send Now", systemImage: "arrow.up.circle") }
+            if let directSend {
+                Button { Haptics.success(); directSend() } label: { Label("Send Now", systemImage: "arrow.up.circle") }
+            }
             Button(action: fill) { Label("Fill In", systemImage: Theme.Icon.insert) }
         } preview: {
             Text(text).font(Theme.Font.body).padding(Theme.Space.l).frame(maxWidth: 320, alignment: .leading)
         }
         .accessibilityLabel("Claude suggests: \(text)")
-        .accessibilityHint("Fills the input box. Touch and hold to send right away.")
-        .accessibilityAction(named: "Send Now", send)
+        .modifier(SuggestionAccessibility(send: directSend))
+    }
+}
+
+/// Risky suggestions have no direct-send accessibility action and do not advertise one. Safe suggestions keep both.
+private struct SuggestionAccessibility: ViewModifier {
+    var send: (() -> Void)?
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if let send {
+            content
+                .accessibilityHint("Fills the input box. Touch and hold to send right away.")
+                .accessibilityAction(named: "Send Now", send)
+        } else {
+            content.accessibilityHint("Fills the input box.")
+        }
     }
 }
 
@@ -5065,6 +5095,9 @@ struct Composer: View, Equatable {
     @State private var voiceNote: VoiceUnavailableNote?
     /// The model menu's "Other Model…" (#1644): a model ID typed by hand, through POST …/modes.
     @State private var typingModel = false
+    /// The main Persona chat's own model sheet (#6542): the conversation-scoped pick (#5033), opened from its model row.
+    @State private var showAssistantModel = false
+    @State private var assistantPanel: AssistantModelPanelModel?
 
     /// The voice call bound to this conversation, live or ended (docs/assistant/voice.md 6.2): the bar takes the box's place while
     /// it is on, and 「语音已结束 · 继续」 sits over the box after it ended by itself.
@@ -5144,6 +5177,24 @@ struct Composer: View, Equatable {
         return s.canSend && s.canTerminal && s.paneID != nil && !s.isCodex && !s.isTraex && !s.assistant
     }
 
+    /// The main Persona conversation, named by the hub's assistant snapshot: the only conversation with a
+    /// per-conversation model pick (#6911). A leader, the background supervisor or another assistant conversation
+    /// carries the assistant flag too, so that flag alone can't gate the picker.
+    private var isMainAssistantChat: Bool { model.assistantMain == key }
+    /// The hub keeps a conversation's own model pick (#5033); an older hub keeps nothing and the row stays read-only.
+    private var assistantModelPickAvailable: Bool { isMainAssistantChat && model.keepsConversationModelPick(key.group) }
+    /// What the main chat's next message runs on: its own pick, then the Main chat default, then the running process's
+    /// last model while the picker has not answered (the 11-13 Haiku/Opus divergence fix).
+    private var assistantEffective: AssistantModelChoice.Effective? {
+        guard isMainAssistantChat else { return nil }
+        return AssistantModelChoice.effective(session: model.session(key), response: model.cachedAssistantLaunchers(key.machineRef))
+    }
+    /// The model name the composer title and the modes menu row both show for the main chat, from the one effective
+    /// setup (#6911 M7): the two surfaces never name different models.
+    private var assistantEffectiveName: String? {
+        assistantEffective.flatMap { AssistantModelChoice.displayName($0, response: model.cachedAssistantLaunchers(key.machineRef)) }
+    }
+
     @ViewBuilder private var extensionPrompts: some View {
         if !declarations.prompts.isEmpty {
             Section("Extension Prompts") {
@@ -5214,10 +5265,20 @@ struct Composer: View, Equatable {
         return MentionToken.at(text, selection: selection)
     }
 
-    /// What the @ list offers here: this chat's files and its session's folder, then the other sessions.
+    /// What the @ list offers here: this chat's files and its session's folder, then Persona's workspaces and the other
+    /// sessions. The frozen Mac and visionOS composers keep their existing resources.
     private var mentionSource: MentionSource {
         MentionSource(machine: key.machineRef, cwd: model.session(key)?.cwd,
-                      files: { MentionRows.usedPaths(model.chat(key).items) }, except: key)
+                      files: { MentionRows.usedPaths(model.chat(key).items) }, except: key,
+                      workspaces: offersWorkspaceMentions)
+    }
+
+    private var offersWorkspaceMentions: Bool {
+        #if os(iOS)
+        return uploadDest == nil && model.session(key)?.assistant == true
+        #else
+        return false
+        #endif
     }
 
     /// The + menu's Mention: `@` at the caret, which opens the @ list (the web's @ button beside +).
@@ -5235,10 +5296,10 @@ struct Composer: View, Equatable {
         focused = true
     }
 
-    /// A session picked in the @ list: quoted over the box, once.
+    /// A workspace or session picked in the @ list: its context sits over the box, once.
     private func quoteMention(_ ref: ContextRef) {
-        guard !contexts.wrappedValue.contains(where: { $0.url == ref.url }) else { return }
-        contexts.wrappedValue.append(ref)
+        guard let updated = ContextRef.addingMention(ref, to: contexts.wrappedValue) else { return }
+        contexts.wrappedValue = updated
     }
 
     /// Effort and permission mode can change: Claude Code and the assistant (`SessionModeBar` shows them for the same).
@@ -5247,9 +5308,13 @@ struct Composer: View, Equatable {
     /// Only the effort can change: a Codex thread on its app-server (`Session.setsEffortOnly`).
     private var setsEffortOnly: Bool { model.session(key)?.setsEffortOnly == true }
 
-    /// The model button's title; with nothing to show or pick, no button.
+    /// The model button's title; with nothing to show or pick, no button. The main conversation names its *effective*
+    /// model (pick > Main chat default > running), so a hub-side change shows after the picker refreshes (#6542).
     private var modesTitle: SessionModes.ComposerTitle? {
         let effort = setsModes || setsEffortOnly
+        if let name = assistantEffectiveName {
+            return SessionModes.composerTitle(model: name, effort: effort ? SessionModes.effortLabel(model.session(key)?.effort) : nil)
+        }
         return SessionModesMenu.title(model.session(key), setsModes: effort) ?? (effort || canPickModel ? .init(model: String(localized: "Model [Assistant View c98e11]")) : nil)
     }
 
@@ -5343,7 +5408,7 @@ struct Composer: View, Equatable {
                     .transition(.opacity)
             }
             if let suggestion, !inCall {
-                SuggestionPill(text: suggestion) {
+                SuggestionPill(text: suggestion, risky: model.session(key)?.suggestionRisky == true) {
                     text = suggestion
                     selection = TextSelection(insertionPoint: suggestion.endIndex) // keep typing after it
                     focused = true
@@ -5430,7 +5495,9 @@ struct Composer: View, Equatable {
                     #endif
                 } modes: {
                     SessionModesMenu(key: key, session: model.session(key), picksModel: canPickModel, setsModes: setsModes,
-                                     setsEffortOnly: setsEffortOnly, otherModel: canPickModel ? { typingModel = true } : nil, pick: pickMode)
+                                     setsEffortOnly: setsEffortOnly, otherModel: canPickModel ? { typingModel = true } : nil,
+                                     assistantPick: assistantModelPickAvailable ? { showAssistantModel = true } : nil,
+                                     assistantModelName: assistantEffectiveName, pick: pickMode)
                 }
             } else if AppStyle.current.usesBeautifulUI {
                 // The BeautifulUI style's prompt bar; every other style keeps the original input line.
@@ -5661,6 +5728,22 @@ struct Composer: View, Equatable {
         #endif
         .modifier(ComposerCaptureSheets(camera: $showCamera, glasses: $showGlasses, scan: $showScan, pages: { addScan($0) }) { add($0) })
         .sheet(isPresented: $typingModel) { SessionTypedModelSheet(key: key, session: model.session(key)) }
+        .onChange(of: showAssistantModel) { _, on in
+            if on, assistantPanel == nil {
+                assistantPanel = AssistantModelPanelModel(key: key, machine: key.machineRef)
+            }
+        }
+        .sheet(isPresented: $showAssistantModel, onDismiss: { assistantPanel = nil }) {
+            if let assistantPanel {
+                AssistantModelSheet(session: model.session(key), panel: assistantPanel)
+            }
+        }
+        // Keep the effective Main chat model fresh so the composer title matches what the next message runs (#6542):
+        // re-read when the conversation is replaced (/clear) or Model Settings change.
+        .task(id: "\(key.sessionID)-\(model.launchersRevision)") {
+            guard assistantModelPickAvailable else { return }
+            _ = try? await model.assistantLaunchers(key.machineRef)
+        }
         .onChange(of: picks) { _, items in
             guard !items.isEmpty else { return }
             Task { await load(items) }
@@ -6036,7 +6119,6 @@ struct TerminalCover: View {
 /// page and resumes it there (#5521), as the web's line does; the words go above the two buttons, which stay on one line.
 private struct StoppedAgentBar: View {
 #if os(iOS)
-    @Environment(\.dynamicTypeSize) private var typeSize
     var session: Session
     var coordinator: CodexTakeoverCoordinator
 #endif
@@ -6055,10 +6137,7 @@ private struct StoppedAgentBar: View {
                     CodexTakeoverControl(session: session, coordinator: coordinator, onSession: onSession)
                 }
                 if let resume {
-                    // At accessibility sizes, stack the actions so neither label is cut short.
-                    let buttons = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: Theme.Space.s))
-                        : AnyLayout(HStackLayout(spacing: Theme.Space.s))
-                    buttons {
+                    HStack(spacing: Theme.Space.s) {
                         terminal
                         Button(action: resume) {
                             Label("Resume Session", systemImage: Theme.Icon.resume).font(Theme.Font.labelStrong).lineLimit(1)
@@ -6157,7 +6236,6 @@ struct QueueStrip: View {
     @State private var relayedExpanded = false
     /// One row's height with its spacing, as drawn (it follows the text size and the rows' line counts).
     @State private var rowHeight: CGFloat = 0
-    @Environment(\.dynamicTypeSize) private var typeSize
     private static let visibleRows: CGFloat = 3
 
     var body: some View {
@@ -6172,24 +6250,11 @@ struct QueueStrip: View {
             .padding(.top, Theme.Space.sm)
         } label: {
             Group {
-                if typeSize.isAccessibilitySize {
-                    // Side by side, Send Now (which keeps its width) left the title a few points and took the tap that
-                    // opens the strip (#4846): at these sizes the title wraps and Send Now has the line under it.
-                    VStack(alignment: .leading, spacing: Theme.Space.sm) {
-                        HStack(alignment: .firstTextBaseline, spacing: Theme.Space.sm) {
-                            tray
-                            title.multilineTextAlignment(.leading) // the label centers wrapped lines
-                        }
-                        sendNowButton
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    HStack(spacing: Theme.Space.sm) {
-                        tray
-                        title.lineLimit(1)
-                        Spacer(minLength: 0)
-                        sendNowButton
-                    }
+                HStack(spacing: Theme.Space.sm) {
+                    tray
+                    title.lineLimit(1)
+                    Spacer(minLength: 0)
+                    sendNowButton
                 }
             }
             .font(Theme.Font.labelStrong)
@@ -6314,7 +6379,7 @@ struct QueueStrip: View {
                             .lineLimit(1)
                         Spacer(minLength: 0)
                         ThemedIcon(Theme.Icon.expand)
-                            .font(Theme.Font.caption.weight(.semibold))
+                            .font(Theme.Font.captionStrong)
                             .foregroundStyle(.secondary)
                             .rotationEffect(.degrees(relayedExpanded ? 180 : 0))
                     }
@@ -7243,7 +7308,6 @@ struct WorkLine: View, Equatable {
     private let doing: WorkNow?
     @State private var shown: WorkNow?
     @State private var shownAt = Date.distantPast
-    @Environment(\.dynamicTypeSize) private var typeSize
     let openTerminal: (() -> Void)?
     let toggle: () -> Void
 
@@ -7361,25 +7425,15 @@ struct WorkLine: View, Equatable {
     }
 
     /// One line: the step's words give way (a path or a command in the middle, a sentence at the end), "+2" and the
-    /// time stay whole. At the accessibility text sizes, where beside those the words kept a letter: up to two lines of
-    /// words, room for both always kept so the line holds still as the steps change, and "+2" and the time on a line under them.
+    /// time stay whole.
     @ViewBuilder private func stepSummary(_ step: WorkNow, now: Date) -> some View {
         let took = Self.duration(from: start, to: now)
-        if typeSize.isAccessibilitySize {
-            VStack(alignment: .leading, spacing: Theme.Space.flush) {
-                Text(step.text).truncationMode(step.tail ? .tail : .middle).lineLimit(2, reservesSpace: true)
-                // Whole: on a line too narrow it wraps rather than cuts.
-                Text(step.trailer(took: took, alone: true)).lineLimit(nil)
-            }
-            .accessibilityElement(children: .combine)
-        } else {
-            HStack(spacing: Theme.Space.flush) {
-                Text(step.text).truncationMode(step.tail ? .tail : .middle)
-                Text(step.trailer(took: took)).fixedSize()
-            }
-            .lineLimit(1)
-            .accessibilityElement(children: .combine)
+        HStack(spacing: Theme.Space.flush) {
+            Text(step.text).truncationMode(step.tail ? .tail : .middle)
+            Text(step.trailer(took: took)).fixedSize()
         }
+        .lineLimit(1)
+        .accessibilityElement(children: .combine)
     }
 
     private func counted(now: Date) -> some View {
@@ -7500,16 +7554,18 @@ private struct ChatLiveText: View {
         #endif
         // Held: the store is not read, so the deltas do not draw this again.
         let text = held ?? (Self.shows(store) ? store.liveText : "")
+        // Held, or the stream over: the words whole, not revealed further (#6651).
+        let done = held != nil || store.liveDone
         if !text.isEmpty {
             if layout.on {
-                StreamingText(text: text)
+                StreamingText(text: text, done: done)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .chatBoxed(Theme.ChatBox.persona)
                     .chatMark("chat.live")
                     .id("live")
                     .flippedBack()
             } else {
-                StreamingText(text: text).chatMark("chat.live").id("live").flippedBack()
+                StreamingText(text: text, done: done).chatMark("chat.live").id("live").flippedBack()
             }
         }
     }
