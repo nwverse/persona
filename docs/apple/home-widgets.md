@@ -80,7 +80,7 @@ The same definition as the app, from the same code (principle 4):
 | To-dos | the count | the To-dos page's Today filter: due today, plus open overdue ones | `TodoStore`, `TodoListLogic` |
 | Usage | a window's percent, reset time | `GET /api/v1/usage/windows`, the Machines page's numbers | `UsageWindowsStore` |
 | Usage | tokens today, by the hour | the island's Tokens Today; the hours from `GET /api/v1/usage`'s `hourly` (#5721) | `FleetState.stats`, the usage summary |
-| Usage | money spent today | only what a gateway reports (`LauncherQuota.Usage.costUSD`); never estimated from prices | launcher quotas |
+| Usage | money spent today | only what a gateway reports (`LauncherQuota.Usage.costUSD`); never estimated from prices. Not read yet (phase 3, with the accounts in Edit Widget): until then the widget shows no money | launcher quotas |
 | Computers | online, load | `Machine.online`; load from `FleetState.stats.loads` | `AppModel.machines` |
 | Health | steps, sleep, resting heart rate | Health's own numbers, with the user's permission | `HealthTool.daily` / `.summary` |
 | Inbox | Need You, Unread | open items the triage marks as yours (`InboxStore.actionCount`); the Inbox badge's number | `InboxStore` |
@@ -164,4 +164,5 @@ shots, on each PR, are the proof (both DEBUG launch arguments, in `release.sh`'s
    Computers, Health; their data (`HomeWidgetData`, `HomeToday`, `HomeTodos`, `HomeUsage`); taps to the To-dos,
    Machines and Health pages.
 3. **Lock Screen, settings and the Smart Stack**: the accessory families, Edit Widget (entities for computers and
-   accounts read from the snapshot), relevance, background refresh, and the hub's push (#5721, its own PR).
+   accounts read from the snapshot), the gateways' money for Usage, relevance, background refresh, and the hub's push
+   (#5721, its own PR).
