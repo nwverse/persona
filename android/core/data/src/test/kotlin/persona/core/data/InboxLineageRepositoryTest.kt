@@ -43,6 +43,7 @@ class InboxLineageRepositoryTest {
     @Test fun treeUsesTheRawHubIdAndManagerAndMapsReturnedItemsToAppIds() = runTest {
         val fixture = Fixture(this, listOf(item("shared", "Current", manager = "m2")))
         try {
+            fixture.repository.refresh()
             val current = fixture.repository.snapshot.value.records.single()
             assertEquals(InboxItemKey.appId("shared", "m2"), current.item.id)
             val line = fixture.repository.inboxLine(current)!!
@@ -60,6 +61,7 @@ class InboxLineageRepositoryTest {
     @Test fun aSuccessfulParentWriteUsesRawIdsAppliesTheAnswerAndCanRefreshTheLine() = runTest {
         val fixture = Fixture(this, listOf(item("shared", "Before", manager = "m2")))
         try {
+            fixture.repository.refresh()
             val current = fixture.repository.snapshot.value.records.single()
             fixture.repository.setInboxParent(current, InboxParentRef("inbox", "parent"))
             assertEquals(listOf(Triple("shared", InboxParentRef("inbox", "parent"), "m2")), fixture.transport.parentCalls)
@@ -76,6 +78,7 @@ class InboxLineageRepositoryTest {
     @Test fun aFailedWriteLeavesTheShownItemAloneAndDoesNotReadANewLine() = runTest {
         val fixture = Fixture(this, listOf(item("shared", "Before", manager = "m2"))).apply { transport.failParent = true }
         try {
+            fixture.repository.refresh()
             val current = fixture.repository.snapshot.value.records.single()
             try { fixture.repository.setInboxParent(current, null); fail("Expected the write to fail") } catch (_: IOException) { }
             assertEquals("Before", fixture.repository.snapshot.value.records.single().item.title)
@@ -86,6 +89,7 @@ class InboxLineageRepositoryTest {
     @Test fun anOldHubHasNoLineButOtherReadFailuresStayFailures() = runTest {
         val fixture = Fixture(this, listOf(item("shared", "Current", manager = "m2")))
         try {
+            fixture.repository.refresh()
             val current = fixture.repository.snapshot.value.records.single()
             for (status in listOf(404, 405)) {
                 fixture.transport.treeFailure = CodedFailure(status)

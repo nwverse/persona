@@ -87,6 +87,7 @@ class InboxLineSectionShotsTest {
     private class Repository(private val line: InboxLineage) : InboxRepository {
         override val entries = MutableStateFlow(emptyList<InboxEntry>())
         override val snapshot = MutableStateFlow(InboxSnapshot())
+        override suspend fun refresh() = Unit
         override suspend fun inboxLine(item: InboxRecord): InboxLineage = line
         override fun conversation(feedId: String, startPosition: Long?) = flowOf(LarkConversation())
         override suspend fun loadOlder(feedId: String) = Unit

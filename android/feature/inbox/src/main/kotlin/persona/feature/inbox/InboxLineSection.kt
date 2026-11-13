@@ -78,6 +78,8 @@ internal fun InboxLineSection(repository: InboxRepository, record: InboxRecord, 
                         scope.launch {
                             try {
                                 repository.setInboxParent(unlink, null)
+                                // The write has succeeded. A failed reread is intentionally the same as a failed
+                                // first read: hide the section rather than misreport the completed write as failed.
                                 tree = try { repository.inboxLine(record) }
                                 catch (e: CancellationException) { throw e }
                                 catch (_: Exception) { null }
