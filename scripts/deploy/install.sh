@@ -833,7 +833,7 @@ if [ "$ROLE" = hub ]; then
 	get_hub_programs # the person said so at the question above, after personad was installed
 	echo ""
 	say hub_setup_next "$DEST/personad"
-	if "$DEST/personad" hub setup; then
+	if PERSONA_INSTALL_LANG=$INSTALL_LANG "$DEST/personad" hub setup; then
 		exit 0
 	fi
 	warn hub_setup_incomplete "$DEST/personad"

@@ -164,6 +164,8 @@ type Config struct {
 	AutoUpdateNodes bool `json:"auto_update_nodes,omitempty"`
 	// Name is what people see this hub as (hubName); empty: its machine's host name.
 	Name string `json:"name,omitempty"`
+	// InitialLocale is a new hub's language until a full-role client reports one.
+	InitialLocale i18n.Lang `json:"initial_locale,omitempty"`
 	// ShutdownTimeoutSeconds bounds the entire shutdown, including pool closure (default 8; policy, not a latency measurement).
 	ShutdownTimeoutSeconds int            `json:"shutdown_timeout_seconds,omitempty"`
 	Listen                 string         `json:"listen"`

@@ -18,7 +18,10 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/i18n"
 )
+
+const installLangEnv = "PERSONA_INSTALL_LANG"
 
 // installInputs are what newInstallConfig needs to know about this machine.
 type installInputs struct {
@@ -27,6 +30,7 @@ type installInputs struct {
 	tls     string // ":18662", or with an address: used as given
 	outside bool   // TLS on every address
 	agents  bool   // herdr or claude is here: keep this machine as a local machine
+	locale  i18n.Lang // installer's language; empty when setup was not started by it
 }
 
 // newInstallConfig is the hub.json a new install gets (docs/assistant/onboarding.md 4.1). These defaults are written into new
@@ -36,6 +40,9 @@ type installInputs struct {
 func newInstallConfig(in installInputs) *Config {
 	cfg := defaultConfig()
 	cfg.Listen = in.listen
+	if i18n.Valid(in.locale) {
+		cfg.InitialLocale = in.locale
+	}
 	if in.lanIP != "" {
 		cfg.PublicURL = "http://" + net.JoinHostPort(in.lanIP, portOf(in.listen))
 	}
@@ -269,6 +276,9 @@ func sameListen(flag, file, lan string) bool {
 // ones moves this one along by 100), whether there are agents to drive here.
 func (e *setupEnv) installInputs(notes *[]string) installInputs {
 	in := installInputs{lanIP: e.lanIPv4(), listen: e.o.listen, tls: e.o.tls, outside: e.o.outside}
+	if locale := i18n.Lang(e.getenv(installLangEnv)); i18n.Valid(locale) {
+		in.locale = locale
+	}
 	lp, _ := strconv.Atoi(portOf(in.listen))
 	tp, _ := strconv.Atoi(portOf(in.tls))
 	if !e.portFree(lp) || !e.portFree(tp) {
