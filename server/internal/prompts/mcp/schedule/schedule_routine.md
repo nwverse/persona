@@ -50,6 +50,17 @@ Set up a recurring routine: every day (or on some weekdays) at a time, Persona s
       "enum": ["off", "worthy", "every"],
       "description": "what of a run goes into the user's Inbox, independent of push: off (default for a new task), worthy (a run puts a row there with inbox_post only when it finds something worth a look; for a task that watches something), every (every run ends with a row made by Persona; for a briefing the user follows daily). Set it only when the user asked for it. Omit to keep an existing task's"
     },
+    "run_if": {
+      "type": ["object", "null"],
+      "description": "Optional owner-approved shell check on the routine computer before scheduled runs. Exit 0 runs; exit 1 skips. Other errors follow on_error. Omit to keep it or use null to remove it.",
+      "properties": {
+        "command": {"type": "string", "maxLength": 4096},
+        "timeout_s": {"type": "integer", "minimum": 1, "maximum": 60, "default": 30},
+        "on_error": {"type": "string", "enum": ["run", "skip"], "default": "run"}
+      },
+      "required": ["command"],
+      "additionalProperties": false
+    },
     "until": {
       "type": ["string", "null"],
       "description": "optional end time (RFC 3339 or 30m / 2h / 1d). After it, Persona turns the task off and records a skipped run instead of running. Omit to keep an existing task's end time; null clears it. Ignored for a one-off."

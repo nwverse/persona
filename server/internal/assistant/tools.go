@@ -211,7 +211,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		space, _ := s.knownSpace(ctx, self)
 		return s.describeSchedule(ctx, space), nil
 	case "schedule_routine":
-		return s.toolScheduleRoutine(ctx, self, args)
+		return s.toolScheduleRoutine(ctx, machine, self, args)
 	case "delete_routine", "cancel_followup":
 		var a struct{ ID string }
 		_ = json.Unmarshal(args, &a)
