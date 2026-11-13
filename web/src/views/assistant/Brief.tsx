@@ -48,16 +48,19 @@ function meta(row: BriefRow): string {
 
 function WaitingRow({ row }: { row: BriefRow }) {
   return (
-    <div className="flex items-center gap-3 py-1.5" data-brief-row="waiting">
-      <div className="min-w-0 flex-1">
-        <div className="text-[13.5px] font-medium [overflow-wrap:anywhere]">{row.title}</div>
-        <div className="text-[12px] text-ink-2">{meta(row)}</div>
+    <div className="@container" data-brief-row="waiting">
+      {/* Narrow: the words take the whole width and the link drops under them, as in the Accept row (#5569) */}
+      <div className="flex items-center gap-3 py-1.5 @max-md:flex-wrap @max-md:gap-y-2">
+        <div className="min-w-0 flex-1 @max-md:w-full @max-md:flex-none">
+          <div className="text-[13.5px] font-medium [overflow-wrap:anywhere]">{row.title}</div>
+          <div className="text-[12px] text-ink-2">{meta(row)}</div>
+        </div>
+        {webLink(row.link) && (
+          <Button href={webLink(row.link)} title={t("assistant-brief.open_row", { title: row.title })}>
+            {t("assistant-brief.open")}
+          </Button>
+        )}
       </div>
-      {webLink(row.link) && (
-        <Button href={webLink(row.link)} title={t("assistant-brief.open_row", { title: row.title })}>
-          {t("assistant-brief.open")}
-        </Button>
-      )}
     </div>
   );
 }
