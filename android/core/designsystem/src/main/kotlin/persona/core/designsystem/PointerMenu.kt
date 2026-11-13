@@ -92,10 +92,13 @@ internal fun pointerMenuSafeBounds(
     density: Density,
     layoutDirection: LayoutDirection,
 ): IntRect {
-    val left = insets.getLeft(density, layoutDirection)
+    val startInset = insets.getLeft(density, layoutDirection)
+    val endInset = insets.getRight(density, layoutDirection)
+    val left = if (layoutDirection == LayoutDirection.Rtl) endInset else startInset
+    val rightInset = if (layoutDirection == LayoutDirection.Rtl) startInset else endInset
     val top = insets.getTop(density)
     return IntRect(left, top,
-        (windowSize.width - insets.getRight(density, layoutDirection)).coerceAtLeast(left),
+        (windowSize.width - rightInset).coerceAtLeast(left),
         (windowSize.height - insets.getBottom(density)).coerceAtLeast(top))
 }
 

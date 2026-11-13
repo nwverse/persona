@@ -12,7 +12,7 @@ class ExtensionPageNavigationTest {
         val stacks = AppTab.entries.associateWith { mutableListOf(tabRoot(it)) }
         val route = Router().parse(RouteInput.DeepLink("persona://open?target=extension&extension=extension&ui=page"))!!
         assertEquals(AppTab.Persona, route.restore(stacks))
-        assertEquals(listOf(AssistantRoute, page), stacks.getValue(AppTab.Persona))
+        assertEquals(listOf(AssistantRoute, route.key), stacks.getValue(AppTab.Persona))
         stacks.getValue(AppTab.Persona).removeAt(stacks.getValue(AppTab.Persona).lastIndex)
         assertEquals(listOf(AssistantRoute), stacks.getValue(AppTab.Persona))
     }

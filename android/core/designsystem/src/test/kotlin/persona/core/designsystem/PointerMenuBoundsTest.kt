@@ -2,6 +2,7 @@ package persona.core.designsystem
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -107,7 +108,7 @@ class PointerMenuBoundsTest {
         val focus = FocusRequester()
         rule.setContent {
             PersonaTheme(darkTheme = false, reduceMotion = true) {
-                Box(Modifier.onPreviewKeyEvent {
+                Box(Modifier.fillMaxSize().onPreviewKeyEvent {
                     if (it.key == Key.Escape) { escapes++; true } else false
                 }.focusRequester(focus).focusTarget().testTag("host")) {
                     if (open) JPointerMenu(Offset.Zero, { open = false }, listOf(JAction("Copy") {}))
