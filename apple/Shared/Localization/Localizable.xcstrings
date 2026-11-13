@@ -181377,6 +181377,167 @@
           }
         }
       }
+    },
+    "When Done, Put It in the Inbox" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "When Done, Put It in the Inbox"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完了後に受信箱へ入れる"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跑完放进收件箱"
+          }
+        }
+      }
+    },
+    "Don’t" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Don’t"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "入れない"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不放"
+          }
+        }
+      }
+    },
+    "Only If Worth a Look" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Only If Worth a Look"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "見る価値があるときだけ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有值得看的才放"
+          }
+        }
+      }
+    },
+    "Every Time" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Every Time"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "毎回"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每次都放"
+          }
+        }
+      }
+    },
+    "Every run adds a row to your Inbox so you can follow up. Tapping it opens that chat." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Every run adds a row to your Inbox so you can follow up. Tapping it opens that chat."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "実行のたびに受信箱へ1行追加するので、フォローしやすくなります。開くとそのチャットが表示されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每次运行完都在收件箱里放一行，方便你跟进，点开就是那段对话。"
+          }
+        }
+      }
+    },
+    "A row is added to your Inbox only when a run finds something worth a look. Tapping it opens that chat." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A row is added to your Inbox only when a run finds something worth a look. Tapping it opens that chat."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "実行で見る価値のあることが見つかったときだけ、受信箱に1行追加します。開くとそのチャットが表示されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只有这次运行发现值得你看的事，才在收件箱里放一行，点开就是那段对话。"
+          }
+        }
+      }
+    },
+    "Nothing is added to your Inbox." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing is added to your Inbox."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "受信箱には入れません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不会放进收件箱。"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

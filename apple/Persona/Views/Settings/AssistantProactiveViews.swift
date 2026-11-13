@@ -526,6 +526,8 @@ struct AssistantTaskEditor: View {
     private var changed: Bool { saved.map { !Self.same($0, draft) } ?? true }
     /// Push When Done shows when the hub takes it (task_push), or the task already has it.
     private var showsPush: Bool { model.hubFeatures.contains(APIClient.ScheduledTask.pushFeature) || opened.pushesOnlyAsked }
+    /// When Done, Put It in the Inbox shows when the hub takes it (task_inbox), or the task already has a setting.
+    private var showsInbox: Bool { model.hubFeatures.contains(APIClient.ScheduledTask.inboxFeature) || !(opened.inbox ?? "").isEmpty }
     private var machineID: String { model.assistantConfig?.machineID ?? model.hubMachineID }
 
     var body: some View {
@@ -552,6 +554,7 @@ struct AssistantTaskEditor: View {
             }
             runsWithSection
             if showsPush { pushSection }
+            if showsInbox { inboxSection }
             conversationSection
             Section {
                 Button { Task { await runNow() } } label: {
@@ -692,6 +695,27 @@ struct AssistantTaskEditor: View {
             Text(draft.pushesOnlyAsked
                  ? String(localized: "Pushes only when a run decides you need to know and alerts you; otherwise it stays quiet. Errors and interruptions are pushed as usual. These tasks always run in their own chat, and messages you send in that chat aren't pushed when done either.")
                  : String(localized: "Pushes the answer to your phone after every run."))
+        }
+    }
+
+    /// When Done, Put It in the Inbox (docs/assistant/assistant.md「Put it in the Inbox when done」): nothing, a row only when a run finds something
+    /// worth a look, or a row after every run. Independent of Push When Done; Don't is sent as "" so a task switched back is saved as such.
+    private var inboxSection: some View {
+        Section {
+            SegmentedChoice(String(localized: "When Done, Put It in the Inbox"),
+                            [(value: "", label: String(localized: "Don’t")),
+                             (value: APIClient.ScheduledTask.inboxWorthy, label: String(localized: "Only If Worth a Look")),
+                             (value: APIClient.ScheduledTask.inboxEvery, label: String(localized: "Every Time"))],
+                            selection: Binding { draft.inbox ?? "" } set: { new in withAnimation(Theme.Motion.standard) { draft.inbox = new } })
+                .accessibilityIdentifier("task-inbox")
+        } header: {
+            Text("When Done, Put It in the Inbox")
+        } footer: {
+            Text(switch draft.inbox ?? "" {
+                 case APIClient.ScheduledTask.inboxEvery: String(localized: "Every run adds a row to your Inbox so you can follow up. Tapping it opens that chat.")
+                 case APIClient.ScheduledTask.inboxWorthy: String(localized: "A row is added to your Inbox only when a run finds something worth a look. Tapping it opens that chat.")
+                 default: String(localized: "Nothing is added to your Inbox.")
+                 })
         }
     }
 
@@ -873,7 +897,7 @@ struct AssistantTaskEditor: View {
     static func same(_ a: APIClient.ScheduledTask, _ b: APIClient.ScheduledTask) -> Bool {
         guard a.title == b.title, a.prompt == b.prompt, a.repeats == b.repeats, a.enabled == b.enabled, a.sessionID == b.sessionID,
               a.launcher == b.launcher, a.permissionMode == b.permissionMode, a.effort == b.effort,
-              (a.push ?? "") == (b.push ?? "") else { return false }
+              (a.push ?? "") == (b.push ?? ""), (a.inbox ?? "") == (b.inbox ?? "") else { return false }
         return switch a.repeats {
         case .once: a.at == b.at
         case .daily: a.time == b.time && Set(a.weekdays) == Set(b.weekdays)
