@@ -585,6 +585,23 @@ test('workspaces: caps.workspaces with createWorkspace, the list on change and t
     ['create', { cwd: '/w/app', workspace_id: 'ws-1', branch: 'feat', create_branch: true, base: 'main', name: 'feat', key: 'k1' }]])
   rt.workspacesChanged([row, made.workspace])
   await until('the new list', () => n.last('runtime.workspaces')?.workspaces.length === 2)
+  // Renaming and archiving are asked of the driver that has them, and refused as unsupported by one that has not.
+  await assert.rejects(n.peer.call('workspace.rename', { workspace_id: 'ws-2', title: 'x' }), (err) => err.code === 'unsupported')
+  await assert.rejects(n.peer.call('workspace.archive', { workspace_id: 'ws-2' }), (err) => err.code === 'unsupported')
+  const n2 = await startFakeNode(t)
+  const rt3 = createRuntime(minimal({
+    createWorkspace: async () => ({}),
+    renameWorkspace: async (p) => { got.push(['rename', p]); return p.space_id ? { space_name: p.title } : { workspace: { ...row, title: p.title } } },
+    archiveWorkspace: async (p) => { got.push(['archive', p]); return { archived_at: '2026-11-12T00:00:00.000Z' } },
+  }), { runtime: 'toy2', socketPath: n2.path, retryMs: 20 })
+  t.after(() => rt3.stop())
+  rt3.start()
+  await n2.ready
+  assert.equal((await n2.peer.call('workspace.rename', { workspace_id: 'ws-1', title: 'Main' })).workspace.title, 'Main')
+  assert.deepEqual(await n2.peer.call('workspace.rename', { space_id: 'p1', title: 'App' }), { space_name: 'App' })
+  assert.deepEqual(await n2.peer.call('workspace.archive', { workspace_id: 'ws-1' }), { archived_at: '2026-11-12T00:00:00.000Z' })
+  assert.deepEqual(got.slice(2), [['rename', { workspace_id: 'ws-1', title: 'Main' }], ['rename', { space_id: 'p1', title: 'App' }],
+    ['archive', { workspace_id: 'ws-1' }]])
 
   // Without createWorkspace nothing is declared, said or answered.
   const plain = await startFakeNode(t)

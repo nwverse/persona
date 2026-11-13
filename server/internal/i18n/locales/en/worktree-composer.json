@@ -50,5 +50,7 @@
   "runtime_folder": "{engine} keeps its worktrees in {path}; only the folder name can be chosen",
   "runtime_parent": "{engine} places a new worktree in the project of its source workspace; another parent cannot be chosen",
   "runtime_unconfirmed": "{engine} did not report the created worktree; refresh before retrying",
-  "runtime_prepare": "{engine} did not say where it keeps worktrees; update it and try again"
+  "runtime_prepare": "{engine} did not say where it keeps worktrees; update it and try again",
+  "runtime_not_owned": "{engine} did not make this worktree, so Persona does not delete it; remove it in {engine}",
+  "runtime_folder_kept": "This {engine} workspace is a folder, not a worktree; Persona deletes only worktrees {engine} made"
 }

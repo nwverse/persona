@@ -60,3 +60,14 @@ it("rechecks machine and owner changes before opening a source", async () => {
   fake.state.machines[0].online = true; chooseManager("other");
   await expect(item().onSelect()).rejects.toThrow(); expect(fake.openChild).not.toHaveBeenCalled();
 });
+it("offers Rename space on a Paseo space the catalog has workspaces of, and on no other runtime's", () => {
+  const paseo = { machine_id: "computer", session_id: "paseo-1", title: "Paseo Agent", status: "idle" as const, source_kind: "runtime" as const,
+    space_kind: "paseo", host: "paseo", space_id: "prj_0000000000000001", workspace_id: "wks_0000000000000001", cwd: "/repo/sample" };
+  space = { key: "paseo-space", machineId: "computer", name: "sample", sessions: [paseo] };
+  fake.catalog.workspaces = [{ id: "paseo-row", machine_id: "computer", source: "paseo", source_id: "wks_0000000000000001", cwd: "/repo/sample", title: "main",
+    project_id: "prj_0000000000000001", workspace_kind: "git", is_main: true }];
+  render(); expect(fake.items.some((i) => i.key === "rename")).toBe(true);
+  fake.catalog.workspaces = []; render(); expect(fake.items.some((i) => i.key === "rename")).toBe(false);
+  space = { key: "runtime-folder", machineId: "computer", name: "Sample", sessions: [{ ...paseo, space_kind: "agy", host: "agy" }] };
+  render(); expect(fake.items.some((i) => i.key === "rename")).toBe(false);
+});

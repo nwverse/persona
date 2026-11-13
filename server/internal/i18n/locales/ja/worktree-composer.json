@@ -50,5 +50,7 @@
   "runtime_folder": "{engine} はワークツリーを {path} に置きます。選べるのはフォルダ名だけです",
   "runtime_parent": "{engine} は新しいワークツリーを元のワークスペースのプロジェクトに置きます。別の親は選べません",
   "runtime_unconfirmed": "{engine} から作成結果が返されませんでした。更新して確認してから再試行してください",
-  "runtime_prepare": "{engine} がワークツリーの置き場所を返しませんでした。更新してから再試行してください"
+  "runtime_prepare": "{engine} がワークツリーの置き場所を返しませんでした。更新してから再試行してください",
+  "runtime_not_owned": "このワークツリーは {engine} が作成したものではないため、Persona は削除しません。{engine} で削除してください",
+  "runtime_folder_kept": "この {engine} ワークスペースはワークツリーではなくフォルダです。Persona が削除するのは {engine} が作成したワークツリーだけです"
 }

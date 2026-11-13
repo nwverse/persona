@@ -4,7 +4,9 @@
 // to Paseo. It starts a session from the "phone", watches it, sends to it, answers a permission, a question and a
 // plan, switches the mode, interrupts, renames, switches the model, rewinds, has a card answered in Paseo's own app, lives through Paseo
 // restarting, closes the session (archived in Paseo, it stays listed under its id) and sends to it again, archives it
-// once more across a restart of the bridge and continues it, and checks agents started or archived in Paseo itself.
+// once more across a restart of the bridge and continues it, and checks agents started or archived in Paseo itself, then
+// Paseo's workspaces: one with no agents in the catalog, a worktree Paseo makes from it, a session in it, renaming the
+// worktree and its project, and deleting the worktree (#6295, #6297).
 //
 //   PERSONAD=<personad binary, built after go generate> CLAUDE_BIN=<a Claude Code binary> [PASEO_BIN=paseo] \
 //     node integrations/paseo/e2e/run.mjs
@@ -383,6 +385,36 @@ const wtAgent = wtSid && await until('its agent', async () => (await paseo.reque
 await until('listed in its workspace', () => node.sessions().find((s) => s.session_id === wtSid)?.workspace_id, 30_000).catch(() => {})
 check('a session started in it: Paseo\'s agent is in that workspace, and its row names it', wtAgent?.workspaceId === wt?.workspace_id &&
   node.sessions().find((s) => s.session_id === wtSid)?.workspace_id === wt?.workspace_id, JSON.stringify({ ws: wtAgent?.workspaceId, row: node.sessions().find((s) => s.session_id === wtSid)?.workspace_id }))
+
+// ---- renaming and deleting Paseo's workspaces (#6297) ----
+
+// The worktree's title, then its project's name: set in Paseo, and said by the rows at once.
+await tryCall('worktree.rename', { workspace_id: wt?.workspace_id, kind: 'paseo', name: 'E2E work' })
+const titled = wt && await until('titled in Paseo', async () => {
+  const d = await paseoWs(wt.workspace_id)
+  return d?.title === 'E2E work' ? d : undefined
+}, 30_000).catch(() => undefined)
+const titledRow = wt && await until('titled in the catalog', async () => (await catalog()).find((w) => w.source_id === wt.workspace_id && w.title === 'E2E work'), 30_000).catch(() => undefined)
+check('a Paseo workspace renamed from Persona: its title in Paseo and in the catalog', titled?.title === 'E2E work' && titledRow?.title === 'E2E work',
+  JSON.stringify({ paseo: titled?.title, row: titledRow?.title }))
+const renamedSpace = await tryCall('space.rename', { workspace_id: repoRow?.project_id, name: 'E2E project' })
+const project = repoWs && await until('the project renamed in Paseo', async () => {
+  const d = await paseoWs(repoWs)
+  return d?.projectDisplayName === 'E2E project' ? d : undefined
+}, 30_000).catch(() => undefined)
+const spaceOf = () => node.sessions().find((s) => s.session_id === wtSid)?.space_name
+await until("the session's space", () => spaceOf() === 'E2E project', 30_000).catch(() => {})
+check("its project renamed from Persona: Paseo's project, the name the node answers, the session's space", renamedSpace?.name === 'E2E project' &&
+  project?.projectDisplayName === 'E2E project' && spaceOf() === 'E2E project', JSON.stringify({ answer: renamedSpace, paseo: project?.projectDisplayName, row: spaceOf() }))
+
+// Deleting the worktree: a preview, its confirmation; Paseo archives the workspace and removes the folder, the branch stays.
+const preview = wt && await tryCall('worktree.delete', { workspace_id: wt.workspace_id, kind: 'paseo', preview: true })
+const deleted = preview?.preview_token && await tryCall('worktree.delete', { workspace_id: wt.workspace_id, kind: 'paseo', preview_token: preview.preview_token,
+  ...(preview.dirty > 0 ? { force: true } : {}) }, 150_000)
+check('a Paseo worktree deleted from Persona: previewed, archived by Paseo; its folder is gone, its branch stays', preview?.path === wt?.path &&
+  preview?.branch === 'e2e/feature' && deleted?.removed === true && deleted?.state === 'removed' && !existsSync(wt.path) &&
+  git(repo, 'branch', '--list', 'e2e/feature') !== '' && !(await paseoWs(wt.workspace_id)) && !(await catalog()).some((w) => w.source_id === wt.workspace_id),
+  JSON.stringify({ preview, deleted }))
 
 // ---- the engine changed: the bridge stops ----
 

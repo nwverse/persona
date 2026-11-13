@@ -57,6 +57,7 @@ Optional (for each one present, the SDK declares the capability in `runtime.hell
 | `models({launcher, refresh})` / `check({launcher, cwd, prompt})` | The launcher's models as the runtime has them now (`caps.models`, the pickers' refresh) / Settings › Models "Test" run through the runtime with its own login (`caps.check`): one real prompt in the node's empty check directory, answered as `{ok, model, answer, error}` |
 | `archive({session_id})` / `unarchive({session_id})` | The runtime's own reversible archive (`caps.archive`, declared only when both exist): when the user archives a session in Persona, it is archived in the runtime too, and restored with it. Archive an idle session without stopping or closing anything (Persona refuses busy sessions first) and keep it restorable; both must be idempotent (already archived / restored is success). A runtime whose archive also stops the session, or that has no way back, leaves them out: the archive is then Persona's alone (`docs/protocol/protocol.md`, "Agent session archives") |
 | `createWorkspace({cwd, workspace_id, branch, create_branch, base, name, key})` / `prepareWorkspace({cwd, repo_root})` | Workspaces of its own (`caps.workspaces`, declared with `createWorkspace`): a worktree it makes as a workspace of its own / the folder it puts a repository's worktrees in. With them it lists its workspaces through `rt.workspacesChanged(list)`. Only an engine's are used; see "Workspaces" below |
+| `renameWorkspace({workspace_id, title})` / `renameWorkspace({space_id, title})`, `archiveWorkspace({workspace_id})` | With `caps.workspaces`: a workspace's title (resolves to `{workspace}`, its row now) or a space's name (resolves to `{space_name}`, the name it shows now) / the workspace archived, a worktree it made removed from the disk (its branch kept). Without them those requests are `unsupported`; see "Workspaces" below |
 | `watchChanged(id, watching, {transcript})` | The phone starts / stops watching a session (when a new node connects or the runtime stops, all stop): for runtimes that only follow a session while someone is watching (Paseo subscribes to the timeline per session) |
 
 In `createRuntime`'s options, a runtime that runs several Agents can also pass `launchers: [{name, model, agent, models}]`: besides `launcher`, the new-session form then has these entries, one per provider,
@@ -261,6 +262,14 @@ and calls `rt.workspacesChanged(list)` with the whole list whenever it changes (
   workspace's row with the folder and branch it actually has, once the checkout exists; the node lists it at once.
 - **Where** (`workspace.prepare {cwd, repo_root}` → `{checkouts}`): the folder the runtime puts that repository's worktrees
   in. The dialog's path must be in it; only the worktree's own folder name can be chosen.
+- **Renaming** (`workspace.rename`, #6297): "Rename" on a catalog row sends `{workspace_id, title}` (its title only), and
+  "Rename space" `{space_id, title}`: the space its sessions are grouped in, also when the apps named it by one of its
+  workspaces. Answer `{workspace}` / `{space_name}`, and list the new names (rows and workspaces) at once.
+- **Deleting** (`workspace.archive {workspace_id}`, #6297): sent only for a worktree the runtime made (`owned`), once the
+  user confirmed the node's preview (the changes it showed, the sessions in it, the checkout's identity). Archive the
+  workspace and its sessions, remove the worktree from the disk and keep its branch; answer once that is done. The node
+  counts it deleted when the workspace has left the list and the folder is gone. Closing a workspace (archiving it and
+  keeping its folder) is not asked of a runtime.
 
 ## Auto-update (optional)
 

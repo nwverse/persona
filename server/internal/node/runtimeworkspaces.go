@@ -113,7 +113,7 @@ func (h *runtimeConn) makesWorkspaces() bool {
 // setWorkspaces replaces its workspaces (runtime.workspaces).
 func (h *runtimeConn) setWorkspaces(list []runtimeWorkspace) {
 	h.mu.Lock()
-	h.workspaces = list
+	h.workspaces, h.workspacesSaid = list, true
 	h.mu.Unlock()
 }
 

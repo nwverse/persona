@@ -688,6 +688,10 @@ its branch by default. The optional merged-branch cleanup uses Git's safe branch
 the workspace, pane membership, available native socket identity and, for deletion, the checkout and reviewed file contents.
 An uncertain response is reconciled through the live catalog and filesystem. Reconciliation preserves one-use dispatch. A herdr parent with linked workspaces requires closing those child workspaces first.
 
+Paseo's rows (#6297) offer **Rename**, which sets the workspace's title in Paseo, and **Delete worktree** on a worktree Paseo made: the same
+preview and confirmation, also bound to the Agents in the workspace, then Paseo archives the workspace, removing the folder and keeping the
+branch (`docs/integrations/paseo.md` ("Spaces and workspaces")). Paseo has no Close: archiving while keeping the folder stays in its own app.
+
 ### A new agent in a worktree (#6115)
 
 A new agent can start in a Git worktree of its own, so agents on the same repository don't step on each other (after Claude Desktop, which gives each session a worktree under the repository and asks to keep or discard it on archive).
@@ -704,7 +708,8 @@ A new agent can start in a Git worktree of its own, so agents on the same reposi
   - **The branch** goes only with `delete_branch` (`git branch -d`, or `-D` with `force`).
 - **Paseo** (#6295): where the engine is Paseo, Paseo makes the worktree (same branch and folder name, in Paseo's worktrees folder) as a workspace of
   its own, which the agent's start then uses; `worktree/add` answers its `workspace_id`. `worktree/status` gives Paseo's folder as `checkouts` and never
-  calls Paseo's worktrees Persona's own (`ours: false`), so `worktree/remove` leaves them to Paseo.
+  calls Paseo's worktrees Persona's own (`ours: false`), so `worktree/remove` leaves them to Paseo; Delete worktree on the workspace's row
+  removes one through Paseo (#6297, below).
 - All three are full-device routes like section 23's, and extension tokens never reach them. The body is read field by field, plus the two switches (`flags`, booleans only).
 
 ## 24. Full herdr UI: a PTY client, switchable beside Single pane (#2357)
