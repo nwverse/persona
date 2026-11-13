@@ -783,7 +783,8 @@ separate objects and unchanged. This is a requested feature, with no new visual 
 ### 3.7.2 Tick boxes (iOS)
 
 - `.toggleStyle(.tickBox)` (`TickBoxToggleStyle` in `apple/Persona/DesignSystem/Components.swift`): a box, ticked (`Theme.Icon.checkedBox`, positive) or not (`Theme.Icon.uncheckedBox`, secondary), beside a short label. Tapping the box or the label flips it, and VoiceOver reads it as the toggle it is.
-- Only for a mark the user sets on one item among many, where a switch would outweigh the item: a file marked viewed in a code review (#827). Settings keep `Toggle`'s switch.
+- Only for a mark the user sets on one item among many, where a switch would outweigh the item: a file marked viewed in a code review (#827).
+- `TickBox` (same file, #7013) is the same box with a third state, a dash (`Theme.Icon.partlyCheckedBox`), for a mark that can cover part of an item: a file partly staged in a session's Git tab. It runs an action instead of flipping a binding (the state is the computer's, read back after the write), shows a spinner in the box's place while that runs, and sits in a square as large as a tap target; VoiceOver reads it as a toggle whose label says what a tap does ("Stage main.swift") and whose value says the state. Why not `TickBoxToggleStyle`: a toggle has two states, and staging has three. Settings keep `Toggle`'s switch.
 
 ### 3.8 Chips, badges, avatars, marks
 

@@ -54,6 +54,8 @@ extension Theme {
         static let uncheckedBox = "square"
         /// A box ticked: a file marked viewed in a code review (`TickBoxToggleStyle`), a done to-do in a document.
         static let checkedBox = "checkmark.square.fill"
+        /// A box part of which is ticked: a file partly staged in a session's Git tab (`TickBox`, #7013).
+        static let partlyCheckedBox = "minus.square.fill"
         static let todo = "checklist"
         /// Recent, or waiting to come back (reconnecting, last used).
         static let recent = "clock.arrow.circlepath"

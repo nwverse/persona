@@ -2069,6 +2069,29 @@
       },
       "extractionState" : "manual"
     },
+    "%@ is not on the remote yet: it is created on origin under the same name and tracked from now on. Never forced: if the remote has newer commits, the push stops and says so." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ is not on the remote yet: it is created on origin under the same name and tracked from now on. Never forced: if the remote has newer commits, the push stops and says so."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ はまだリモートにありません。origin に同名で作成し、以後追跡します。強制プッシュはしません。リモートに新しいコミットがあれば止めて知らせます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远端还没有 %1$@：会在 origin 上建同名分支，之后跟踪它。不会强制推送：远端有更新的提交时会停下并说明。"
+          }
+        }
+      }
+    },
     "%@ is offline" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -3162,6 +3185,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "%@ was deleted on the remote: pushing creates it again from %@. Never forced: if the remote has newer commits, the push stops and says so." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ was deleted on the remote: pushing creates it again from %2$@. Never forced: if the remote has newer commits, the push stops and says so."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ はリモートで削除されています。プッシュすると %2$@ から作り直します。強制プッシュはしません。リモートに新しいコミットがあれば止めて知らせます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远端已删除 %1$@：推送会用 %2$@ 重新建它。不会强制推送：远端有更新的提交时会停下并说明。"
+          }
+        }
+      }
     },
     "%@ wasn't switched: you can pick it yourself in Model Settings." : {
       "localizations" : {
@@ -6393,6 +6439,41 @@
       },
       "extractionState" : "manual"
     },
+    "%lld changes" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld change"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld changes"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "変更 %1$lld件"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "共 %1$lld 个改动"
+          }
+        }
+      }
+    },
     "%lld chats, %lld unread" : {
       "localizations" : {
         "zh-Hans" : {
@@ -6590,6 +6671,76 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "%lld commits go to %@. Never forced: if the remote has newer commits, the push stops and says so." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld commit goes to %2$@. Never forced: if the remote has newer commits, the push stops and says so."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld commits go to %2$@. Never forced: if the remote has newer commits, the push stops and says so."
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld件のコミットを %2$@ にプッシュします。強制プッシュはしません。リモートに新しいコミットがあれば止めて知らせます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 个提交会推到 %2$@。不会强制推送：远端有更新的提交时会停下并说明。"
+          }
+        }
+      }
+    },
+    "%lld commits to push" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld commit to push"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld commits to push"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プッシュ待ちのコミット%1$lld件"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 个提交待推送"
+          }
+        }
+      }
     },
     "%lld computers" : {
       "extractionState" : "manual",
@@ -7216,6 +7367,41 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "%lld files going in" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld file going in"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld files going in"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コミットする%1$lldファイル"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要提交的 %1$lld 个文件"
+          }
+        }
+      }
     },
     "%lld files have uncommitted changes. Removing the worktree loses them. [Agent Worktree]" : {
       "localizations" : {
@@ -9996,6 +10182,41 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%1$lldサイト"
+          }
+        }
+      }
+    },
+    "%lld staged" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld staged"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld staged"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld件をステージ済み"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已暂存 %1$lld 个"
           }
         }
       }
@@ -21327,6 +21548,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "iPhone 自己同意后才会被操控：在那台 iPhone 的 Persona 里打开 设置 › 连接器 › 这台 iPhone。"
+          }
+        }
+      }
+    },
+    "Another Git command is running there (the Agent's?): try again in a moment" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Another Git command is running there (the Agent's?): try again in a moment"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "別の Git コマンドが実行中です（エージェント？）。少し待ってからやり直してください"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "那边有别的 Git 命令在运行（可能是 Agent 的）：稍后再试"
           }
         }
       }
@@ -38265,6 +38509,29 @@
       },
       "extractionState" : "manual"
     },
+    "Commit" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Commit"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コミット"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "提交"
+          }
+        }
+      }
+    },
     "Commit %@" : {
       "localizations" : {
         "en" : {
@@ -38333,6 +38600,29 @@
       },
       "extractionState" : "manual"
     },
+    "Commit message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Commit message"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コミットメッセージ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "提交说明"
+          }
+        }
+      }
+    },
     "Commit the current changes following the conventions and push them" : {
       "comment" : "Message sent to the agent when the command is picked",
       "localizations" : {
@@ -38356,6 +38646,75 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Committed %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Committed %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ をコミットしました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已提交 %1$@"
+          }
+        }
+      }
+    },
+    "Committing" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Committing"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コミット中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在提交"
+          }
+        }
+      }
+    },
+    "Commit…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Commit…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コミット…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "提交…"
+          }
+        }
+      }
     },
     "Compact Context /compact" : {
       "localizations" : {
@@ -51946,6 +52305,29 @@
       },
       "extractionState" : "manual"
     },
+    "Detached HEAD: switch to a branch to commit" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Detached HEAD: switch to a branch to commit"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "デタッチされたHEAD：ブランチに切り替えるとコミットできます"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分离的 HEAD：切到分支后才能提交"
+          }
+        }
+      }
+    },
     "Detailed" : {
       "comment" : "Codex reasoning summary; also a verbosity",
       "localizations" : {
@@ -64209,6 +64591,29 @@
         }
       }
     },
+    "Git on that computer has no name and email to commit with" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Git on that computer has no name and email to commit with"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "そのコンピュータの Git にコミット用の名前とメールが設定されていません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "那台电脑上的 Git 没设置提交用的名字和邮箱"
+          }
+        }
+      }
+    },
     "GitHub markets: a private repo needs a read-only token (read access to this repo's Contents). A token helps a public repo too: it raises the limit from 60 reads an hour (shared by your whole network) to 5,000. Choose Public repositories with no permissions. It's stored encrypted on the hub, sent only to the market itself, and not shown again once saved. git: markets use the hub machine's SSH credentials and don't need one." : {
       "localizations" : {
         "en" : {
@@ -65445,6 +65850,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "没有静音、折叠或标为完成的群"
+          }
+        }
+      }
+    },
+    "HEAD is detached: switch to a branch first" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HEAD is detached: switch to a branch first"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HEAD がデタッチされています。先にブランチに切り替えてください"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前是分离的 HEAD：先切到一个分支"
           }
         }
       }
@@ -72125,6 +72553,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "你打开之后它被改了（可能是 Agent 或别的程序）。直接存会把那些改动冲掉。"
+          }
+        }
+      }
+    },
+    "It didn't go through" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "It didn't go through"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完了しませんでした"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有完成"
           }
         }
       }
@@ -92826,6 +93277,29 @@
       },
       "extractionState" : "manual"
     },
+    "No remote named origin to push to" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No remote named origin to push to"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プッシュ先の origin リモートがありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有名为 origin 的远端可推送"
+          }
+        }
+      }
+    },
     "No replies yet" : {
       "localizations" : {
         "en" : {
@@ -96476,6 +96950,29 @@
       },
       "extractionState" : "manual"
     },
+    "Not staged" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not staged"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未ステージ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未暂存"
+          }
+        }
+      }
+    },
     "Not started" : {
       "localizations" : {
         "en" : {
@@ -97474,6 +97971,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Nothing is staged: tick the files to commit" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing is staged: tick the files to commit"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ステージされた変更がありません。コミットするファイルにチェックしてください"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有暂存的改动：先勾选要提交的文件"
+          }
+        }
+      }
     },
     "Nothing left to handle" : {
       "localizations" : {
@@ -108124,6 +108644,29 @@
       },
       "extractionState" : "manual"
     },
+    "Persona on that computer is too old for this: update it" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona on that computer is too old for this: update it"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "そのコンピュータの Persona が古いため使えません。更新してください"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "那台电脑上的 Persona 版本太旧，不支持这个操作，请更新"
+          }
+        }
+      }
+    },
     "Persona on this computer is too old to create worktrees. Update it first." : {
       "localizations" : {
         "en" : {
@@ -112082,6 +112625,29 @@
       },
       "extractionState" : "manual"
     },
+    "Push %lld" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Push %1$lld"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プッシュ%1$lld"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "推送 %1$lld"
+          }
+        }
+      }
+    },
     "Push When Done" : {
       "localizations" : {
         "en" : {
@@ -112334,6 +112900,29 @@
         }
       }
     },
+    "Pushed %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pushed %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ をプッシュしました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已推送 %1$@"
+          }
+        }
+      }
+    },
     "Pushes only when a run decides you need to know and alerts you; otherwise it stays quiet. Errors and interruptions are pushed as usual. These tasks always run in their own chat, and messages you send in that chat aren't pushed when done either." : {
       "localizations" : {
         "en" : {
@@ -112402,6 +112991,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Pushing" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pushing"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プッシュ中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在推送"
+          }
+        }
+      }
     },
     "Put skills in ~/.persona/skills/ on the computer that runs the assistant, one directory each (with a SKILL.md inside)." : {
       "localizations" : {
@@ -135165,6 +135777,75 @@
       },
       "extractionState" : "manual"
     },
+    "Stage" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stage"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ステージ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂存"
+          }
+        }
+      }
+    },
+    "Stage %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stage %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ をステージ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂存 %1$@"
+          }
+        }
+      }
+    },
+    "Stage All" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stage All"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "すべてステージ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全部暂存"
+          }
+        }
+      }
+    },
     "Stage: %@ (step %lld of %lld)" : {
       "localizations" : {
         "zh-Hans" : {
@@ -145501,6 +146182,52 @@
       },
       "extractionState" : "manual"
     },
+    "The commit stays on this computer until you push." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The commit stays on this computer until you push."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コミットはプッシュするまでこのコンピュータにだけあります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "提交只保存在这台电脑上，推送以后才会到远端。"
+          }
+        }
+      }
+    },
+    "The commit was refused (a hook, usually pre-commit)" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The commit was refused (a hook, usually pre-commit)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コミットが拒否されました（通常は pre-commit などのフック）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "提交被拒绝了（通常是 pre-commit 之类的 hook）"
+          }
+        }
+      }
+    },
     "The computer that runs the assistant didn't respond in time" : {
       "localizations" : {
         "en" : {
@@ -150389,6 +151116,52 @@
       },
       "extractionState" : "manual"
     },
+    "The remote has newer commits: pull first, then push" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The remote has newer commits: pull first, then push"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リモートに新しいコミットがあります。先にプルしてからプッシュしてください"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远端有更新的提交：先拉取，再推送"
+          }
+        }
+      }
+    },
+    "The remote refused the credentials on that computer" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The remote refused the credentials on that computer"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リモートがそのコンピュータの認証情報を拒否しました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远端拒绝了那台电脑上的登录凭据"
+          }
+        }
+      }
+    },
     "The render page is missing" : {
       "localizations" : {
         "en" : {
@@ -153486,6 +154259,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "This branch has no upstream yet" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This branch has no upstream yet"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このブランチにはまだアップストリームがありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个分支还没有上游"
+          }
+        }
+      }
     },
     "This branch has nothing in common with the default branch" : {
       "localizations" : {
@@ -158225,6 +159021,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Tick the files to commit" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tick the files to commit"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コミットするファイルにチェック"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "勾选要提交的文件"
+          }
+        }
+      }
     },
     "Tier" : {
       "extractionState" : "manual",
@@ -163187,6 +164006,29 @@
         }
       }
     },
+    "Uncommitted changes would be overwritten: commit or stash these first" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Uncommitted changes would be overwritten: commit or stash these first"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コミットしていない変更が上書きされます。先にコミットかスタッシュしてください"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会覆盖未提交的改动：先提交或收起这些文件"
+          }
+        }
+      }
+    },
     "Under 1 min" : {
       "localizations" : {
         "en" : {
@@ -164611,6 +165453,75 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Unstage" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unstage"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ステージ解除"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消暂存"
+          }
+        }
+      }
+    },
+    "Unstage %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unstage %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ のステージを解除"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消暂存 %1$@"
+          }
+        }
+      }
+    },
+    "Unstage All" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unstage All"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "すべて解除"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全部取消暂存"
+          }
+        }
+      }
     },
     "Unstaged" : {
       "localizations" : {
@@ -182909,7 +183820,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "· 暂存 %1$lld"
+            "value" : "· 贮藏 %1$lld"
           }
         }
       },

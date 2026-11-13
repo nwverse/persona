@@ -510,6 +510,13 @@ Chat page:
     with `-showGitReload YES`.
     Branch-card Pull N fetches latest upstream in one tap, retained as Pull when synced for active remote checks; disable repeat taps while running, refresh status/files/history and show result.
     Clean-worktree fast-forward only, no auto stash/merge/rebase; existing stashes unchanged; explain no upstream/detached HEAD/uncommitted changes/divergence. Other Git views stay read-only.
+  - **Stage, commit, push** (#7013, the web's Git panel, `docs/protocol/protocol.md` `git/stage` · `git/commit` · `git/push`; `GitWriteModel.swift`, `GitWriteViews.swift`): only when the hub has `git_write`, on the iPhone and iPad (the Mac app is frozen); without it the tab is as before.
+    Each changed file has a tick box in front (`TickBox`: ticked all staged, a dash partly, empty none; `GitStageMark`, the web's `stageState`): a tap stages or unstages it at once, a swipe from the leading edge and the long-press menu do the same, a tap on the row still opens the diff.
+    While there are changes a bar floats over the bottom: every change's tick box (Stage All / Unstage All), how many are staged, and **Commit…**, which opens a sheet with the message and the staged files (off with nothing staged or a detached HEAD).
+    The message is the tab's, so it stays when the sheet closes or the commit is refused; the sheet can't be swiped away while hooks run (the hub waits up to five minutes).
+    **Push N** sits beside Pull when there are commits to send, no upstream yet, or an upstream deleted on the remote (`GitPushKind`, the web's `PushButton`; it takes the place of the ↑N count) and asks first in a system confirmation with the web's words (never forced; a new branch's upstream is made on origin).
+    One write at a time; the tapped box or button shows progress, the status comes from the write's answer, success buzzes and says so in a toast (Committed …, Pushed …), a refusal buzzes, says what happened in the web's words with the files and git's own words in an alert (`GitRefusal`), and reads the status again.
+    `GitWriteTests`, `GitWriteUITests` (mock hub `MOCK_FILES=1 MOCK_GIT_WRITE=1`; `MOCK_GIT_WRITE_FEATURE=0` keeps the repository without `git_write`, the tab as before).
   - Files (`FilesPane`): descend from session cwd, breadcrumbs jump levels, directories first, size/modification/Git flags (dot for changes within directory),
     hidden files off by default, menu toggle; tap file viewer.
     The machine page's Files row (below Agents, disabled when offline) opens that computer's home in the same pane (`cwd` is `~`).
