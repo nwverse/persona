@@ -1349,12 +1349,12 @@ if MOCK_CODEX_WAITING:
     SESSIONS.append(sess("macbook", CODEX_WAITING, "weather-app", "/Users/me/code/weather-app", "idle", "idle", "weather-app", 7, "codex", 3, 1,
                          "", agent="codex", launcher="codex", awaiting_first_message=True, capabilities=CODEX_WAITING_CAPS))
 
-# MOCK_TERMINAL_ONLY=1 (#6170): a Kiro CLI in a herdr pane, an Agent whose chat Persona cannot draw (no transcript): its empty
-# chat offers Open Terminal. Open it with -openSession macbook/<TERMINAL_ONLY>.
+# MOCK_TERMINAL_ONLY=1 (#6170): a Kiro CLI in a herdr pane, an Agent whose chat Persona cannot draw (the node's read_only_reason):
+# its chat offers the Terminal button over the composer. Open it with -openSession macbook/<TERMINAL_ONLY>.
 TERMINAL_ONLY = "c0de0000-0000-4000-8000-000000000002"
 if os.environ.get("MOCK_TERMINAL_ONLY") == "1":
     SESSIONS.append(sess("macbook", TERMINAL_ONLY, "kiro-demo", "/Users/me/code/kiro-demo", "idle", "idle", "kiro-demo", 8, "kiro", 1, 1,
-                         "", agent="kiro", launcher="kiro"))
+                         "", agent="kiro", launcher="kiro", read_only_reason="Persona 还不能读 kiro 的对话：手机上只能看终端、按键盘"))  # i18n-ignore
 
 
 # MOCK_RUN_HERE_CODEX=<mid,…> (#5504): those computers start Codex in a shell pane the user picked and keep that pane when

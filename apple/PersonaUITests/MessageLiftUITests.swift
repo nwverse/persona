@@ -264,9 +264,10 @@ final class MessageLiftUITests: XCTestCase {
 
     /// A line of words as `LiftLines` writes it: its glyphs, its first glyph's left edge, its baseline, its last glyph's
     /// right edge, and (the text view's) its last word's.
-    /// closes: the text view's line ends in a CJK closing bracket, which TextKit 1 draws narrower than SwiftUI there.
+    /// closes: the text view's line ends in a CJK closing bracket, which TextKit 1 draws narrower than SwiftUI there;
+    /// opens: it starts with a CJK opening bracket, which TextKit 1 draws narrower there too (the line is moved right).
     private struct Line: CustomStringConvertible {
-        var glyphs: Int, minX: Double, baseline: Double, maxX: Double, wordsMaxX: Double, closes = false
+        var glyphs: Int, minX: Double, baseline: Double, maxX: Double, wordsMaxX: Double, closes = false, opens = false
         var description: String { "\(glyphs)@(\(minX), \(baseline))…\(maxX)" + (wordsMaxX < maxX - 0.05 ? " (words …\(wordsMaxX))" : "") }
     }
 
@@ -276,7 +277,9 @@ final class MessageLiftUITests: XCTestCase {
     private static func parse(_ s: Substring) -> [Line] {
         s.split(separator: ";").compactMap { l in
             let v = l.split(separator: ",").compactMap { Double($0) }
-            return v.count >= 5 ? Line(glyphs: Int(v[0]), minX: v[1], baseline: v[2], maxX: v[3], wordsMaxX: v[4], closes: v.count > 5 && v[5] == 1) : nil
+            let brackets = v.count > 5 ? Int(v[5]) : 0
+            return v.count >= 5 ? Line(glyphs: Int(v[0]), minX: v[1], baseline: v[2], maxX: v[3], wordsMaxX: v[4],
+                                       closes: brackets & 1 != 0, opens: brackets & 2 != 0) : nil
         }
     }
 
@@ -307,7 +310,9 @@ final class MessageLiftUITests: XCTestCase {
     /// sameEngine: the lines hold the same glyphs. Else `b` is the text view's: its count may add a line's end, its line
     /// ends where the chat's does with or without the space there, and both end at its right edge (`edge`: a code line
     /// longer than its box runs on under the box's edge). A line that ends in a CJK closing bracket may end up to a fifth
-    /// of an em (17 pt) short: TextKit 1 draws that bracket narrower there (docs/lessons/ios.md).
+    /// of an em (17 pt) short: TextKit 1 draws that bracket narrower there (docs/lessons/ios.md). One that starts with a
+    /// CJK opening bracket may start up to as much in: TextKit 1 draws that bracket narrower there too, and the line is
+    /// moved right by what it lost, for the words after it to be on the chat's (#5982).
     private static func difference(_ a: [Line], _ b: [Line], dy: Double = 0, sameEngine: Bool = true, edge: Double = 0) -> String? {
         guard !a.isEmpty else { return "no lines" }
         guard a.count == b.count else { return "\(a.count) lines, then \(b.count):\n\(a)\n\(b)" }
@@ -315,7 +320,9 @@ final class MessageLiftUITests: XCTestCase {
             let end = sameEngine || edge <= 0 ? x.maxX : min(x.maxX, edge)
             var right = sameEngine ? abs(end - y.maxX) : min(abs(end - y.maxX), abs(end - y.wordsMaxX))
             if !sameEngine, y.closes, end - y.maxX > 0, end - y.maxX <= 3.4 { right = 0 }
-            let off = [abs(x.minX - y.minX), abs(x.baseline + dy - y.baseline), right].max()!
+            var left = abs(x.minX - y.minX)
+            if !sameEngine, y.opens, y.minX - x.minX > 0, y.minX - x.minX <= 3.4 { left = 0 }
+            let off = [left, abs(x.baseline + dy - y.baseline), right].max()!
             let count = sameEngine ? x.glyphs == y.glyphs : abs(x.glyphs - y.glyphs) <= 1
             if off > 0.5 || !count { return "line \(i + 1): \(x) then \(y) (moved by \(dy))\nall: \(a)\nthen: \(b)" }
         }
