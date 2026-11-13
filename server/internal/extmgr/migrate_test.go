@@ -5,9 +5,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/subscriptions"
+	"github.com/nwverse/persona/server/internal/subscriptionsui"
 )
 
 // A built-in whose Inbox feed is switched to its default subscription is not read in the round; the subscription's
@@ -57,5 +59,52 @@ func TestAMigratedBuiltinIsReadThroughItsSubscription(t *testing.T) {
 	got = ofExample(h.readInbox(ctx, roundPoll))
 	if len(got) != 1 || got[0].Counts || len(got[0].Things) != 1 || got[0].Things[0].Last != "b1" {
 		t.Fatalf("the built-in after switching back: %+v", got)
+	}
+}
+
+// A built-in with a default subscription switches to it from its page and back (#6345): the page sees the switch and
+// the subscription, which is made named as the source; iMessage's default reads its rows ready-made.
+func TestABuiltinSwitchesToItsDefaultSubscription(t *testing.T) {
+	h := newTestManager(t)
+	ctx := context.Background()
+	h.connectors = connector.NewRegistry(nil)
+	c := &inboxConnector{}
+	_ = h.addConnector(c)
+	h.subs = subscriptions.New(h.subscriptionOptions(subscriptions.NewMemStore()))
+	h.subsLive.Store(h.subs)
+	migrations[c.ID()] = subscriptions.Migration{Connector: c.ID(), Source: "notices", Recipe: migrations["imessage"].Recipe}
+	defer delete(migrations, c.ID())
+	b := builtinSources{h}
+	viaOf := func() *subscriptionsui.Via {
+		for _, s := range b.List(ctx) {
+			if s.ID == c.ID() {
+				return s.Via
+			}
+		}
+		t.Fatal("the built-in is not listed")
+		return nil
+	}
+	if v := viaOf(); v == nil || v.On || v.Subscription != "" {
+		t.Fatalf("before: %+v", v)
+	}
+	if err := b.SetMigrated(ctx, c.ID(), true, subscriptions.Actor{ID: "device:phone"}); err != nil {
+		t.Fatal(err)
+	}
+	if v := viaOf(); !v.On || v.Subscription != subscriptions.MigrationID(c.ID()) {
+		t.Fatalf("switched on: %+v", v)
+	}
+	s, _, err := h.subs.Get(ctx, subscriptions.MigrationID(c.ID()))
+	if err != nil || s.Label != connector.DisplayName(ctx, c) || s.Recipe.Mode != wire.ConnectorSubscriptionModeThings || s.ToInbox ||
+		s.RecipeOrigin != subscriptions.OriginPersona {
+		t.Fatalf("its subscription: %+v %v", s, err)
+	}
+	if err := b.SetMigrated(ctx, c.ID(), false, subscriptions.Actor{ID: "device:phone"}); err != nil || viaOf().On {
+		t.Fatalf("switched back: %v %+v", err, viaOf())
+	}
+	if err := b.SetMigrated(ctx, "github", true, subscriptions.Actor{}); err == nil {
+		t.Fatal("a source without a default switched")
+	}
+	if m := migrations["imessage"]; m.Recipe.Tool != "inbox_things" || m.Recipe.Mode != wire.ConnectorSubscriptionModeThings || m.Recipe.ItemsPath != "$.things" {
+		t.Fatalf("iMessage's default: %+v", m.Recipe)
 	}
 }

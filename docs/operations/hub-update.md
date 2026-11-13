@@ -40,7 +40,10 @@ from a vault at runtime rather than stored in the environment file.
 Enable the timer only after the bootstrap and publication checks below pass. The publisher is
 `scripts/release/publish_hub_release.py --config <ssh-config.json>`; its config
 supplies `remote_root` and `credentials_command`, which returns SSH credentials
-as JSON (`host`, `port`, `username`, `password`, or a fields array keyed by id).
+as JSON (`host`, `port`, `username` and either `password` or `key_filename`, or a
+fields array keyed by id). `key_filename` is the path of a private key file on the
+build machine, for hosts that only accept key logins; exactly one of the two must be
+set, and no other key or SSH agent is tried.
 SSH host keys must already be trusted. Credentials are never written to release
 artifacts. The publisher needs Python and Paramiko; the remote needs Python.
 The optional `release_namespace` defaults to `hub` and selects a feed below
