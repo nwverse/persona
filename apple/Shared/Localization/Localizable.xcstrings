@@ -144033,6 +144033,29 @@
       },
       "extractionState" : "manual"
     },
+    "The Mac is locked. Showing VNC until it’s unlocked." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The Mac is locked. Showing VNC until it’s unlocked."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac がロックされています。ロックが解除されるまで VNC で表示します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac 锁屏了，解锁前先用 VNC。"
+          }
+        }
+      }
+    },
     "The Meta glasses are not ready yet" : {
       "localizations" : {
         "en" : {
@@ -152812,6 +152835,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "This Mac hasn’t allowed video yet. Showing VNC." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This Mac hasn’t allowed video yet. Showing VNC."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この Mac はまだビデオを許可していません。VNC で表示します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台 Mac 还没允许视频，先用 VNC。"
+          }
+        }
+      }
     },
     "This Mac is locked. Unlock it to control it." : {
       "localizations" : {
@@ -168173,6 +168219,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "视频（流畅省流量）"
+          }
+        }
+      }
+    },
+    "Video stopped. Showing VNC for now." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Video stopped. Showing VNC for now."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ビデオが途切れました。いったん VNC で表示します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "视频断了，先用 VNC。"
           }
         }
       }

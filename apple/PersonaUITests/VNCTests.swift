@@ -877,6 +877,49 @@ final class VNCTests: XCTestCase {
 
     // MARK: Helpers
 
+    /// #3954: the video channel (the mock with MOCK_SCREEN_VIDEO=1, TEST_RUNNER_PERSONA_SCREEN_VIDEO=1). RFB signs in,
+    /// then video takes the picture (the phone sent `start` with its cap, and reports frames); the Mac locking puts VNC
+    /// back and says so in plain words, unlocking brings video back, and the stream dropping puts VNC back again.
+    @MainActor func testVideoTakesThePictureAndFallsBack() throws {
+        guard ProcessInfo.processInfo.environment["PERSONA_SCREEN_VIDEO"] == "1" else {
+            throw XCTSkip("needs the mock's video channel: MOCK_SCREEN_VIDEO=1 (PERSONA_SCREEN_VIDEO=1)")
+        }
+        let (app, _) = try signedInMachinePage()
+        let screen = app.descendants(matching: .any)["vnc-screen"].firstMatch
+        XCTAssertTrue(picture(screen, "video"), "video took the picture: \(screen.value ?? "")")
+        let state = try mockJSON("/mock/screen-video")
+        let start = (state["starts"] as? [[String: Any]])?.first
+        XCTAssertEqual(start?["max_kbps"] as? Int, 12_000, "Wi-Fi's cap: \(state)")
+        XCTAssertEqual(start?["codecs"] as? [String], ["hevc", "h264"])
+        XCTAssertGreaterThan(state["reports"] as? Int ?? 0, 0, "the phone reports frames")
+        func says(_ words: String) -> XCUIElement { app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", words)).firstMatch }
+        XCTAssertFalse(app.descendants(matching: .any)["screen-fallback"].exists, "nothing to explain")
+        shot(app, "vnc-video")
+
+        try mock(hub!, "/mock/screen-video?pause=locked")
+        XCTAssertTrue(picture(screen, "vnc"), "locked: VNC again")
+        XCTAssertTrue(says("Mac 锁屏了").waitForExistence(timeout: 5), "why:\n\(app.debugDescription)")
+        shot(app, "vnc-video-locked")
+        try mock(hub!, "/mock/screen-video?resume=1")
+        XCTAssertTrue(picture(screen, "video"), "unlocked: video again")
+        XCTAssertTrue(says("Mac 锁屏了").waitForNonExistence(timeout: 5))
+
+        try mock(hub!, "/mock/screen-video?drop=1")
+        XCTAssertTrue(picture(screen, "vnc"), "dropped: VNC again")
+        XCTAssertTrue(says("视频断了").waitForExistence(timeout: 5), "why:\n\(app.debugDescription)")
+        shot(app, "vnc-video-lost")
+    }
+
+    /// The picture the screen shows, as its DEBUG value says (`picture=video|vnc`), within 20 s.
+    @MainActor private func picture(_ screen: XCUIElement, _ want: String) -> Bool {
+        let deadline = Date.now.addingTimeInterval(20)
+        while Date.now < deadline {
+            if (screen.value as? String ?? "").contains("picture=\(want)") { return true }
+            usleep(250_000)
+        }
+        return false
+    }
+
     @MainActor private func live(_ app: XCUIApplication) -> Bool {
         let phase = app.descendants(matching: .any)["screen-phase"].firstMatch
         let deadline = Date.now.addingTimeInterval(30)
@@ -920,10 +963,13 @@ final class VNCTests: XCTestCase {
         wait(for: [done], timeout: 10)
     }
 
-    private func mockState() throws -> [String: Any] {
+    private func mockState() throws -> [String: Any] { try mockJSON("/mock/screen-password") }
+
+    /// One of the mock's own JSON answers.
+    private func mockJSON(_ path: String) throws -> [String: Any] {
         var out: [String: Any] = [:]
-        let done = expectation(description: "state")
-        URLSession.shared.dataTask(with: URL(string: hub! + "/mock/screen-password")!) { data, _, _ in
+        let done = expectation(description: path)
+        URLSession.shared.dataTask(with: URL(string: hub! + path)!) { data, _, _ in
             out = (data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }) ?? [:]
             done.fulfill()
         }.resume()

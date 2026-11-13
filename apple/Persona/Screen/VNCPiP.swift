@@ -280,6 +280,11 @@ import Synchronization
         MainActor.assumeIsolated {
             wanted = true // also when it starts by itself, the app going to the background with the page up
             starting = true
+            #if canImport(PersonaScreenKit)
+            // The small window shows RFB's picture (its source is prepared under the page all along, so this, not that,
+            // is when video steps aside, #3954).
+            if let ref { VNC.current(ref)?.video.hold("small window", true) }
+            #endif
             VNCPiPLog.add("小窗要开了") // i18n-ignore
         }
     }
@@ -310,6 +315,9 @@ import Synchronization
             VNCPiPLog.add("小窗关了") // i18n-ignore
             wanted = false
             starting = false
+            #if canImport(PersonaScreenKit)
+            if let ref { VNC.current(ref)?.video.hold("small window", false) }
+            #endif
             AppModel.shared.vncPiP = nil
             // Ready again under the page when it is up (and by itself again when the app goes to the background);
             // else the connection goes.
@@ -326,6 +334,9 @@ import Synchronization
         MainActor.assumeIsolated {
             starting = false
             guard let ref else { return }
+            #if canImport(PersonaScreenKit)
+            VNC.current(ref)?.video.hold("small window", false)
+            #endif
             fallBack(ref, from, why: String(localized: "The system didn't allow it (\(error.localizedDescription))"))
         }
     }

@@ -24,6 +24,8 @@ enum VNCMode: String, CaseIterable {
 /// what is sent still carries whole-framebuffer pixels.
 final class VNCScreenUIView: UIView, UIGestureRecognizerDelegate {
     let display = AVSampleBufferDisplayLayer()
+    /// The video channel's picture (#3954), over RFB's on its display while it shows.
+    let video = AVSampleBufferDisplayLayer()
     /// Holds the picture and cuts it to the part shown.
     private let clip = CALayer()
     private let pointerLayer = CALayer()
@@ -71,6 +73,9 @@ final class VNCScreenUIView: UIView, UIGestureRecognizerDelegate {
         display.videoGravity = .resize
         clip.masksToBounds = true
         clip.addSublayer(display)
+        video.videoGravity = .resizeAspect
+        video.isHidden = true
+        clip.addSublayer(video)
         layer.addSublayer(clip)
         pointerLayer.contentsGravity = .resizeAspect
         layer.addSublayer(pointerLayer)
@@ -152,6 +157,12 @@ final class VNCScreenUIView: UIView, UIGestureRecognizerDelegate {
         let port = viewport
         clip.frame = port.rect
         display.frame = port.framebufferFrame(screenSize)
+        #if os(iOS) && canImport(PersonaScreenKit)
+        if let v = session?.video {
+            video.isHidden = !v.showing
+            video.frame = port.frame(of: v.rect ?? CGRect(origin: .zero, size: screenSize))
+        }
+        #endif
         if let s = session {
             let at = toView(s.pointer)
             // The Mac's pointer at a size that reads, with the rings it needs (VNCPointerArt, #3075); the app's own arrow
@@ -166,9 +177,9 @@ final class VNCScreenUIView: UIView, UIGestureRecognizerDelegate {
             #if DEBUG
             // UI tests measure (the frame rate, the latency) and look (the pointer's size in points, #3075; the zoom and
             // where the pointer is drawn, #6196).
-            accessibilityValue = String(format: "fps=%.0f;latency=%.0f;mode=%@;pointer=%.0fx%.0f;zoom=%.2f;at=%.0f,%.0f", // i18n-ignore
+            accessibilityValue = String(format: "fps=%.0f;latency=%.0f;mode=%@;pointer=%.0fx%.0f;zoom=%.2f;at=%.0f,%.0f;picture=%@", // i18n-ignore
                                         s.fps, s.latency ?? -1, mode.rawValue, pointerLayer.frame.width, pointerLayer.frame.height,
-                                        port.rect.width / max(fitted.width, 1), at.x, at.y)
+                                        port.rect.width / max(fitted.width, 1), at.x, at.y, video.isHidden ? "vnc" : "video") // i18n-ignore
             #endif
         }
         CATransaction.commit()
@@ -426,6 +437,9 @@ struct VNCScreen: UIViewRepresentable {
         v.session = session
         v.onZoom = onZoom
         session.show(in: v.display)
+        #if os(iOS) && canImport(PersonaScreenKit)
+        session.video.show(in: v.video)
+        #endif
         onView(v)
         return v
     }
@@ -436,11 +450,17 @@ struct VNCScreen: UIViewRepresentable {
         v.interactive = interactive
         v.region = region
         _ = (session.pointer, session.size, session.cursor?.width, session.phase, session.fps) // redrawn as they change
+        #if os(iOS) && canImport(PersonaScreenKit)
+        _ = (session.video.showing, session.video.rect)
+        #endif
         v.place()
     }
 
     static func dismantleUIView(_ v: VNCScreenUIView, coordinator: ()) {
         v.session?.hide(from: v.display)
+        #if os(iOS) && canImport(PersonaScreenKit)
+        v.session?.video.hide(from: v.video)
+        #endif
     }
 }
 #else
