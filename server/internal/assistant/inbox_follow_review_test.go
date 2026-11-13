@@ -255,3 +255,22 @@ func TestNowKeyNeedsNoClock(t *testing.T) {
 }
 
 func ptrTime(t time.Time) *time.Time { return &t }
+
+// A muted filing is an earlier filing once the item was undone and filed again: a reply and a superseded filing
+// write no done chain entry, so the newest done entry is still the mute's and must not name this filing.
+func TestNowKeyStaleMutedEntryDoesNotNameALaterFiling(t *testing.T) {
+	past := time.Date(2026, 1, 1, 8, 0, 0, 0, time.UTC)
+	doneAt := past.Add(2 * time.Hour)
+	muted := InboxChainEntry{ID: "c1", At: past, Kind: ChainDone, Text: "Muted, done", By: DoneByMuted}
+	for _, doneBy := range []string{"replied", "superseded"} {
+		t.Run(doneBy, func(t *testing.T) {
+			it := nowItem()
+			it.DoneAt, it.DoneBy = &doneAt, doneBy
+			it.Chain = []InboxChainEntry{muted, {ID: "c2", At: doneAt, Kind: ChainSelfReplied, Text: "replied at the source"}}
+			want := map[string]string{"replied": NowDoneReplied, "superseded": NowDoneSuperseded}[doneBy]
+			if got := it.nowKey(); got != want {
+				t.Fatalf("done_by %q: nowKey = %q, want %q", doneBy, got, want)
+			}
+		})
+	}
+}
