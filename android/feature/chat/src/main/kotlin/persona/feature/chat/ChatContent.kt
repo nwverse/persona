@@ -139,7 +139,7 @@ private fun ChatMarkdownBody(text: String, id: String, bodyStyle: TextStyle, col
     // Inline code a tap copies, in the body's color on its well; inside a path's link it stays the link's (#2984).
     val copy = rememberCopy()
     val codeSpan = inlineCodeStyle(color)
-    // …except in a message whose words "Select" has selected in place: a tap there is the selection's (T5).
+    // …except in a message whose words "Select" has selected in place: a tap there is the selection's (#4210).
     val selecting = LocalSelectionAbove.current
     val annotator = remember(codeSpan, copy, selecting) { copyingCode(codeSpan, if (selecting) null else { words: String -> copy(words, null) }) }
     CompositionLocalProvider(LocalUriHandler provides uriHandler) {

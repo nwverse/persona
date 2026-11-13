@@ -27,7 +27,6 @@ import persona.core.domain.rewind.Rewind
 import persona.core.domain.sort.canSend
 import persona.core.designsystem.AppStyle
 import persona.core.designsystem.JAction
-import persona.core.designsystem.Haptic
 import persona.core.designsystem.JActionSheet
 import persona.core.designsystem.JDialog
 import persona.core.designsystem.PersonaTheme
@@ -37,7 +36,6 @@ import persona.core.designsystem.icons.PhIcons
 import persona.core.designsystem.onLongPress
 import persona.core.designsystem.onSecondaryClick
 import persona.core.designsystem.rememberCopy
-import persona.core.designsystem.rememberHaptics
 import persona.core.designsystem.stableAlpha
 
 /**
@@ -59,7 +57,7 @@ internal class MessageMenuState {
     /** What a swipe to the left quotes with (iOS #1058); null where messages cannot be quoted (read-only). */
     var quote by mutableStateOf<((MessageTarget) -> Unit)?>(null)
 
-    /** What "Quote" does with the words picked in a selected message (iOS #4549): the message and the words; null where messages cannot be quoted. */
+    /** What "Quote" does with the words picked in a selected message (iOS Select Text › Quote): the message and the words; null where messages cannot be quoted. */
     var quoteWords by mutableStateOf<((MessageTarget, String) -> Unit)?>(null)
 
     /**
@@ -155,7 +153,6 @@ internal fun MessageMenuSheet(
     var confirmCode by remember { mutableStateOf<MessageTarget?>(null) }
     val context = LocalContext.current
     val copy = rememberCopy()
-    val haptics = rememberHaptics()
     val target = menu.target
     val resources = LocalResources.current
     val extras = MessageExtras(fork = onFork != null, rewind = rewind != null, rewindBlock = rewind?.block, delete = onDelete != null,
@@ -163,7 +160,7 @@ internal fun MessageMenuSheet(
     if (target != null) JActionSheet(messageMenuActions(target, writes, onHandToPersona != null, resources, extras) { action ->
         when (action) {
             MessageAction.Copy -> { copy(target.text, null) }
-            MessageAction.Select -> { haptics(Haptic.Tap); menu.select(target) }
+            MessageAction.Select -> menu.select(target)
             MessageAction.Quote -> onQuote(target)
             MessageAction.Share -> {
                 if (pictures != null) { sharing = messagePicture(target, pictures) }

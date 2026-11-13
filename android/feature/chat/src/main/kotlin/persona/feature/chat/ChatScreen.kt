@@ -486,7 +486,7 @@ private fun ChatPage(
         composer.focusRequest++
     }
     val swipeQuote by rememberUpdatedState(quoteTarget)
-    // Quote in the menu of a selected message's words quotes the words picked (iOS #4549).
+    // Quote in the menu of a selected message's words quotes the words picked (iOS Select Text › Quote).
     val quoteWords: (MessageTarget, String) -> Unit = { target, words ->
         linkContexts = withQuote(linkContexts, messageQuote(words, target.user, session?.agentLabel ?: "Claude", target.id, ChatLinkContext.PART_SELECTION))
         composer.focusRequest++

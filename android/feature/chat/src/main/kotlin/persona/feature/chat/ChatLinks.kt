@@ -181,7 +181,7 @@ data class ChatLinkContext(
         const val QUOTE = "quote"
         /** The author of the user's own quoted message on the wire, whatever the app's language (iOS writes and reads the Chinese "me"). */
         const val QUOTE_ME = "我" // i18n-ignore: on the wire in every language, iOS writes and reads it
-        /** [ChatLinkContext.part] of a quote of the words picked in a selected message (iOS `ContextRef.selectionPart`, #4549). */
+        /** [ChatLinkContext.part] of a quote of the words picked in a selected message (iOS `ContextRef.selectionPart`). */
         const val PART_SELECTION = "selection"
         fun quote(text: String, from: String, msg: String, part: String = "") = ChatLinkContext(QUOTE, from, "", text.trim(), msg = msg, part = part)
 
