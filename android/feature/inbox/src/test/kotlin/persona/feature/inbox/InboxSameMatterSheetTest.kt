@@ -194,11 +194,11 @@ class InboxSameMatterSheetTest {
         rule.onNode(hasSetTextAction()).assertExists()
     }
 
-    @Test fun theSectionsBottomEntryOpensTheSamePickerWithoutAnotherTreeRead() {
+    @Test fun theSectionsBottomEntryReusesTheRootAndReadsEachDescendantOnce() {
         val current = record("current", "Current")
         val parent = record("parent", "Parent")
         val repository = FakeRepository(listOf(current), InboxLineage(InboxParentRef("inbox", "current"), current,
-            listOf(InboxLineAncestor(InboxParentRef("inbox", "parent"), parent))))
+            listOf(InboxLineAncestor(InboxParentRef("inbox", "parent"), parent)), children = listOf(parent)))
         rule.setContent {
             PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
                 CompositionLocalProvider(LocalAppFeedback provides feedback) {
