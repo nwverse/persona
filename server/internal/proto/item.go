@@ -29,9 +29,15 @@ const (
 // named after ("fold:" + its id, at its seq and time) through ThroughID. A chat shows the run folded into counts;
 // opening it fetches the run (session.items with from_seq / through_seq), which replaces the fold.
 type Fold struct {
-	Items      int                `json:"items"`
-	Tools      int                `json:"tools"`
-	Thoughts   int                `json:"thoughts"` // thoughts with words (blank ones are not shown)
+	Items    int `json:"items"`
+	Tools    int `json:"tools"`
+	Thoughts int `json:"thoughts"` // thoughts with words (blank ones are not shown)
+	// Errors: how many of the run's tool results were errors, and ToolNames the tools it called, each once in the
+	// order first called, at most FoldToolNamesMax: what a reader needs to tell a run that went wrong without opening
+	// it (docs/protocol/protocol.md "Folded work"). ToolNames is always a list: a fold without it (an older node) says
+	// neither.
+	Errors     int                `json:"errors"`
+	ToolNames  []string           `json:"tool_names"`
 	Until      time.Time          `json:"until"`
 	ThroughSeq int                `json:"through_seq"`
 	ThroughID  string             `json:"through_id"`
@@ -51,6 +57,9 @@ type Fold struct {
 	// a chat counts its turn's usage without opening the run. Absent when they carried none and from older nodes.
 	Usage []TokenUsage `json:"usage,omitempty"`
 }
+
+// FoldToolNamesMax bounds Fold.ToolNames.
+const FoldToolNamesMax = 10
 
 // FoldChange is one file a folded run's successful edits changed (docs/protocol/protocol.md "Folded work"): the lines
 // they added and removed, counted as the apps count an edit's diff and summed over the run's edits of that path.
@@ -167,6 +176,9 @@ type Item struct {
 	// Wake marks a background task's notice that started new work after the agent had finished its turn
 	// (not one absorbed mid-turn): the exchange before it is over and its last words are an answer.
 	Wake bool `json:"wake,omitempty"`
+	// Narration is assistant text that belongs to the work summary (Codex commentary). It is internal to the
+	// transcript and FoldWork: on the wire it is ordinary text, so clients need no new item kind or cache migration.
+	Narration bool `json:"-"`
 	// From names the Claude session that sent this message (cross-session messaging), not the user.
 	From string `json:"from,omitempty"`
 	// Injected: this user line is a message Persona put into the conversation for the model (a task's notice, a

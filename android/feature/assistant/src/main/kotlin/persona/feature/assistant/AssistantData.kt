@@ -35,6 +35,11 @@ import java.util.UUID
 internal data class ConversationGroups(
     val main: Session?, val directions: List<Session> = emptyList(), val others: List<Session> = emptyList(),
     val names: Map<String, String> = emptyMap(), val counts: Map<String, LeaderCounts> = emptyMap(),
+    /**
+     * The hub's direction tree (#4352), the same one [counts] is read from: each 常驻 lead folds open to its to-dos. Null
+     * from an older hub: the rows stay as they are.
+     */
+    val tree: persona.core.contracts.DirectionTree? = null,
     val recent: List<Session> = emptyList(),
     val background: String? = null,
 )
@@ -114,6 +119,7 @@ internal fun conversationGroups(
     return ConversationGroups(
         snapshot.conversations.firstOrNull { it.key == snapshot.mainSession && !it.archived },
         directions, others, names, snapshot.leaderCounts,
+        tree = snapshot.directionTree,
         recent = if (query.isBlank()) recentConversations(snapshot) else emptyList(),
         background = background,
     )
@@ -265,10 +271,15 @@ internal fun DeliveryState.pendingStatus(): PendingStatus? = when (this) {
     DeliveryState.Sent -> null
 }
 
-internal fun assistantStatus(session: Session?, messages: List<OutboxMessage>) = StatusLineState(
+internal fun assistantStatus(session: Session?, messages: List<OutboxMessage>,
+    submittingId: String? = null, receipts: List<persona.core.contracts.api.MessageSendReceipt> = emptyList()) = StatusLineState(
     ended = session?.agentState == AgentState.Offline,
-    submitting = messages.any { it.state == DeliveryState.Sending },
-    unconfirmed = messages.any { it.state in setOf(DeliveryState.Unknown, DeliveryState.Verifying, DeliveryState.NeedsConfirmation) },
+    submitting = (submittingId != null && receipts.none { it.clientMessageId == submittingId && it.state != "sending" }) ||
+        receipts.any { it.state == "sending" } ||
+        messages.any { message -> message.state == DeliveryState.Sending && receipts.none { it.clientMessageId == message.clientMessageId && it.state != "sending" } },
+    processing = receipts.any { it.processing },
+    unconfirmed = messages.any { it.state in setOf(DeliveryState.Unknown, DeliveryState.Verifying, DeliveryState.NeedsConfirmation) } ||
+        receipts.any { it.state == "unknown" },
     blocked = session?.agentState == AgentState.NeedsYou,
     working = session?.agentState == AgentState.Working,
 )
@@ -276,6 +287,28 @@ internal fun assistantStatus(session: Session?, messages: List<OutboxMessage>) =
 internal fun conversationTime(at: java.time.Instant?, locale: java.util.Locale,
     zone: java.time.ZoneId = java.time.ZoneId.systemDefault()): String? =
     at?.let { LocalizedFormats.format(it, LocalizedFormats.MONTH_DAY_TIME, locale, zone) }
+
+/**
+ * When a conversation last moved, as the history writes it (iOS `Fmt.relative`): "Just now" under 45 seconds, "5 min ago"
+ * under an hour, today the time ("14:30"), "Yesterday", within six days the weekday ("Tuesday"), else the month and day
+ * ("Nov 5"). Null when there is no time.
+ */
+internal fun historyTime(at: java.time.Instant?, res: android.content.res.Resources, now: java.time.Instant = java.time.Instant.now(),
+    zone: java.time.ZoneId = java.time.ZoneId.systemDefault()): String? {
+    at ?: return null
+    val locale = res.configuration.locales[0]
+    val seconds = java.time.Duration.between(at, now).seconds
+    val day = at.atZone(zone).toLocalDate()
+    val today = now.atZone(zone).toLocalDate()
+    return when {
+        seconds < 45 -> res.getString(R.string.assistant_time_just_now)
+        seconds < 3600 -> maxOf(1, (seconds / 60).toInt()).let { res.getQuantityString(R.plurals.assistant_time_minutes_ago, it, it) }
+        day == today -> LocalizedFormats.format(at, LocalizedFormats.TIME, locale, zone)
+        day == today.minusDays(1) -> res.getString(R.string.assistant_time_yesterday)
+        seconds < 6 * 86_400 -> LocalizedFormats.format(at, LocalizedFormats.WEEKDAY, locale, zone)
+        else -> LocalizedFormats.format(at, LocalizedFormats.MONTH_DAY, locale, zone)
+    }
+}
 
 /** The composition root adapts these options to the shared chat lane's presentation parameters. */
 data class AssistantChatOptions(

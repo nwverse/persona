@@ -329,6 +329,20 @@ end to end in `integrations/dsh/e2e/assistant.mjs`.
 
 ### Antigravity CLI
 
+The session's `last_text` preview contains assistant response text after the latest explicit user input. A new user
+input clears the previous reply preview, including input with no visible text. Thinking and tool records leave it empty
+until the assistant writes response text. This keeps user-authored questions out of awaiting-reply detection while
+preserving genuine assistant questions. User messages and tool records remain available in the conversation items.
+
+Native model errors can be omitted from the JSONL export even when ACP reports a completed prompt. When an idle
+summary has unexported steps, the companion reads at most the final eight native steps with `GetCascadeTrajectorySteps`.
+The result is cached against the summary and exported branch. Discovery opens the native service through read-only
+session listing. An omitted terminal error uses the shared assistant-text `API Error:` representation for the existing error card
+and populates the session's `turn_error`
+fields, including a subscription reset timestamp supplied in native quota metadata. New input and rewinds invalidate
+that result. Rejected ACP prompts also publish their failure through the session's error state.
+The history token includes the error format so connected clients refresh items cached before this representation.
+
 The implemented integration is for the **Antigravity CLI (`agy`)**, not the Antigravity desktop app. With the node running,
 start `node integrations/antigravity/companion.mjs` from the repository root. The companion connects to the node's runtime
 socket, lists CLI transcripts, and uses `agy acp` for terminal-less session creation, sending and interruption. It can also
@@ -357,6 +371,22 @@ Implementation: `integrations/antigravity/lib/runtime.js` and `integrations/anti
 Live text belongs to the ACP prompt currently executing. Queued prompts acquire the stream when they start, with an
 empty boundary. A tool call ends the current text message, so the next message replaces its words in the live slot.
 Each prompt clears its live text on completion, including when another prompt is queued.
+
+Session inventory, watch cursors, item pages and live item pushes read `transcript_full.jsonl` when available.
+Antigravity declares `caps.rewind` for idle Agent conversations. The selected message, duplicate occurrence from the
+end, and following user-input count are checked against `GetCascadeTrajectory`. The owned ACP process's private log
+identifies its loopback native service. `RevertToCascadeStep` receives `conversationOnly: true` and the preceding step
+index, including `-1` for an empty conversation. Native refusal propagates to the caller. The bridge uses the current
+native summary and replacement step indices to discard the abandoned export tail, then publishes a changed history
+token. This survives companion restarts without modifying native transcript files.
+
+The compact `transcript.jsonl` export can contain native `<truncated N bytes>` placeholders and can be ahead of
+the complete export. Use one source for sequences and content so a watch cannot advance past unread complete items.
+Older histories fall back to the compact export when the complete file is unavailable. Persona applies the SDK's
+normal page limits to complete native records and serves larger items through the full-item endpoint. The history
+scope includes `:full` to invalidate previously cached compact pages. Parsed files are cached by file identity, size
+and nanosecond modification/change times, bounded to 16 files and 64 MiB of source data. Files modified within the
+last second bypass the cache because rapid same-size writes can share a filesystem timestamp tick.
 
 ### Shared runtime behavior
 

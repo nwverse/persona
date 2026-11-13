@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import persona.core.contracts.Machine
 import persona.core.designsystem.*
+import persona.core.designsystem.dense
 import persona.feature.chat.UltracodeQuotaLines
 import persona.feature.chat.rememberUltracodeQuota
 import persona.core.designsystem.icons.PersonaIcons
@@ -45,10 +46,10 @@ internal fun NewAgentDialog(
     JSheet(onDismiss = { if (!state.starting) onDismiss() }, title = stringResource(R.string.agents_action_new_session)) {
         BackHandler(onBack = close)
         Column(Modifier.fillMaxWidth().weight(1f).imePadding()) {
-            LazyColumn(Modifier.weight(1f), list, contentPadding = PaddingValues(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            LazyColumn(Modifier.weight(1f), list, contentPadding = PaddingValues(bottom = 16.dp.dense), verticalArrangement = Arrangement.spacedBy(8.dp.dense)) {
                 newAgentItems(state, model, machines, query, { query = it }, close, onModels = { picking = true }, prompt, onBlocked = { helping = it })
             }
-            NewAgentFooter(state, model, machines, online, Modifier.fillMaxWidth().padding(top = 8.dp))
+            NewAgentFooter(state, model, machines, online, Modifier.fillMaxWidth().padding(top = 8.dp.dense))
         }
         if (picking) NewAgentModelSheet(state, model::pickModel, model::reloadModels, onDismiss = { picking = false })
         LauncherHelp(helping, state, model, onAddProvider?.let { add -> { helping = null; onDismiss(); add() } }) { helping = null }
@@ -159,7 +160,7 @@ private fun LazyListScope.newAgentItems(
         if (machine?.online != true) Text(stringResource(R.string.agents_new_space_offline), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
     } else item("machines") {
         JSectionHeader(stringResource(R.string.agents_new_machine))
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp.dense)) {
             machines.forEach { machine ->
                 JChip(machine.displayName, selected = machine.id == state.machineId, icon = PhIcons.Laptop,
                     status = if (machine.online) Status.Idle else Status.Offline,
@@ -285,7 +286,11 @@ private fun LazyListScope.newAgentItems(
     }
     item("prompt") {
         JTextField(state.prompt, model::prompt, enabled = !state.locked,
-            label = stringResource(if (state.agentType == "codex") R.string.agents_new_first_message_codex else R.string.agents_new_first_message),
+            label = stringResource(when {
+                state.promptRequired -> R.string.agents_new_first_message_codex
+                state.agentType == "codex" -> R.string.agents_new_first_message_codex_optional
+                else -> R.string.agents_new_first_message
+            }),
             minLines = 3, maxLines = 8, modifier = Modifier.fillMaxWidth().focusRequester(prompt))
     }
 }
@@ -304,7 +309,7 @@ private fun followSummary(res: Resources, state: NewAgentState): String {
 
 @Composable
 private fun NewAgentFooter(state: NewAgentState, model: NewAgentViewModel, machines: List<Machine>, online: Boolean, modifier: Modifier) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp.dense)) {
         if (state.pending != null) PendingBadge(if (state.starting) PendingStatus.Verifying else PendingStatus.Unconfirmed)
         state.error?.let { Text(it.resolve(), color = PersonaTheme.palette.ink2, style = PersonaTheme.type.callout) }
         if (!online) Text(stringResource(R.string.agents_new_offline_footer), color = PersonaTheme.palette.ink2, style = PersonaTheme.type.callout)
@@ -318,10 +323,10 @@ private fun NewAgentFooter(state: NewAgentState, model: NewAgentViewModel, machi
     }
 }
 
-/** A folder, a launcher or the configuration to follow, an online machine, and Codex's first message. */
-private fun startable(state: NewAgentState, machines: List<Machine>): Boolean =
+/** A folder, a launcher or the configuration to follow, an online machine, and a first message when required. */
+internal fun startable(state: NewAgentState, machines: List<Machine>): Boolean =
     state.selection.cwd.isNotBlank() && (state.selection.launcher.isNotBlank() || state.following) &&
-        machines.any { it.id == state.machineId && it.online } && (state.agentType != "codex" || state.prompt.isNotBlank())
+        machines.any { it.id == state.machineId && it.online } && (!state.promptRequired || state.prompt.isNotBlank())
 
 internal fun String.agentLabel() = when (this) { "claude" -> "Claude Code"; "codex" -> "Codex"; "traex" -> "TRAEX"; else -> this }
 internal val permissionModes = listOf("" to R.string.agents_mode_follow, "default" to R.string.agents_mode_default,

@@ -88,7 +88,8 @@ enum RecordingSamples {
 
     /// `-showMeetingSample recording|paused|interrupted`: a meeting 12:34 into its recording, as the recording page and its
     /// Live Activity show it (no microphone); `listening|taking-part|answered`: the same with Persona attending (#2981);
-    /// `room-listening|room-taking-part`: the same as a room meeting (#3862), whose sheet is the meeting page;
+    /// `room-listening|room-taking-part`: the same as a room meeting (#3862) started with the live view (phase 2), whose
+    /// sheet is the meeting page;
     /// `room-whiteboard`: `room-taking-part` started with photos, which adds a made-up whiteboard photo as the camera
     /// would (#3862 phase 3); `minutes` / `pending`: a finished meeting whose page opens (its minutes from the hub, or
     /// still being written). Both recordings are made up.
@@ -138,7 +139,9 @@ enum RecordingSamples {
         let photos = mode == "room-whiteboard"
         if ["listening", "taking-part", "answered"].contains(mode) || room {
             if room {
-                live.attendance = RecordingAttendance.room(mode == "room-listening" ? .listener : .participant, private: false, photos: photos)
+                // Started with the live view (#3862 phase 2): the page shows the room's topics once the hub has any.
+                live.attendance = RecordingAttendance.room(mode == "room-listening" ? .listener : .participant, private: false,
+                                                           photos: photos, liveView: true)
             } else {
                 live.attendance = RecordingAttendance(role: mode == "listening" ? .listener : .participant, session: nil,
                                                       sessionTitle: "Persona", mainPicked: true)
