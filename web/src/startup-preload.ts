@@ -241,8 +241,19 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * list that reads rows only (lib/session-list.ts), and a row's computer under a project on several; the sections
  * themselves, views/agents/GroupedSessions.tsx, load when a Browse by is chosen, which took 407 B back off; the same
  * code measured +1,396 B and +1,510 B on the two mains before, docs/lessons/web.md; the 30 B of room main had stay).
+ * +100 B for the scheduled tasks list's "Inbox: …" marks and the assistant's own Inbox row (#6430): the Japanese first
+ * screen was 49 B over with them, in three languages' text and a few lines of code.
+ * And 720 B for "By to-do" as one kind of row (#6458: main at 8269cd921 measured ja 476,774 B, 114 B over the budget
+ * before; this change takes it to 477,349 B, +575 B: the to-dos at the top level and their groups, "Recent (not running)"
+ * among them, as rows with a count, a state and an ⓘ, a to-do's state in the To-dos page's word, and the groups'
+ * explanations; the ⓘ's words, ui/InfoTipPanel.tsx, load the first time one is asked for, which took 287 B back off;
+ * 31 B of room).
+ * And 176 B for side sessions drawn under their parent, with main's own growth (#5935: main at 2d9596043 measured ja
+ * 477,447 B, 67 B over the budget before; this change takes it to 477,525 B, +78 B: lib/side-sessions.ts's
+ * arrangement, the paged list's use of it for its order and the Earlier split, and a row's parent identity in
+ * lib/runtime-list.ts; 31 B of room).
  */
-export const FIRST_SCREEN_BUDGET = 476_560;
+export const FIRST_SCREEN_BUDGET = 477_556;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
@@ -415,10 +426,11 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
  * And 475 B for finding a Persona chat by what was said in it in ⌘K (#6283, 2026-11-13: 43,846 B on main at 39b5b57403,
  * 44,444 B after, +598 B, of which 154 B fit the room main had: the merge of the manager's results into the palette's
  * rows and the matched sentence as a row's second line; the search itself, lib/assistant-search.ts, loads on the first
- * query typed, off the idle tier; 31 B of room so the next main does not tip it).
+ * query typed, off the idle tier; 31 B of room so the next main does not tip it). And 108 B for the same main
+ * with the lead row-title restoration (#6400: 44,583 B after merging it, +108 B, of which 0 B fit the old room).
  * Every other lazy page loads on intent, not at idle; raise it on purpose, in the change that needs it.
  */
-export const IDLE_TIER_BUDGET = 44_475;
+export const IDLE_TIER_BUDGET = 44_583;
 
 const gzip = promisify(gzipCompress);
 

@@ -427,3 +427,11 @@ deadline), the record was gone and no later connection told the conversation: an
 waited forever. A record that exists only so something is said later is cleared after the saying succeeded, and only if it
 still holds what was said (the woken conversation may already have re-armed new tasks). Being told twice after a send
 that timed out but was delivered is the cheaper failure.
+
+## A "which of these is it" model picks one even when none is (#6424)
+
+The Inbox judge was asked which open task an item belonged to and answered with an id the code only checked was among
+the candidates. Given seven unrelated tasks, it linked a GitHub bug report to a broad task whose notes shared a few
+words with it, and the link stuck. A selection model needs two guards: narrow the candidates by something exact first
+(the repository, the thread), skipping the call when none is left, and accept an answer only with evidence the code can
+check, such as a verbatim quote from the chosen candidate.
