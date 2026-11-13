@@ -1005,6 +1005,18 @@ other conversations) goes through one per-conversation queue (`assistant.relay`,
   A previous version reads the queue as before and drops the fields on its next save, after which those messages rank
   and wait as ordinary ones and no hold applies. A message queued before `queued_at` existed counts its 5 minutes from
   its own time (`at`).
+- **The owner's whole round comes first (#6394).** On top of the two-minute presence window stands the owner-turn
+  gate (`relayBook.ownerTurns`, in memory only). When the owner sends a message to a conversation, the gate arms for
+  it and every queued message waits for the whole of the round that starts for them, whatever its rank — including a
+  late `ask_user` answer that the five-minute decision cap would otherwise let through. The owner's own message never
+  enters this queue, and `interject_background` still moves a running background command out of its way
+  ("Interjecting while it answers"). A session list showing the conversation working confirms the round; one showing
+  it stopped (`idle`, `done` or `interrupted`) releases the gate, and the queue drains by rank again. Two safety
+  limits keep a gate from sticking when the lists say nothing: `ownerTurnStartWait` (one minute) when the round is
+  never seen working (a refused send, a conversation the list dropped), and `ownerTurnMax` (30 minutes) as a hard cap
+  for a round seen working but never seen stopped; the owner speaking again refreshes both. A restart loses the
+  in-memory gates, after which the persisted presence window alone holds as before. The owner's cards stay
+  unblocked: a gate holds the queue, never the owner's own answers (`relayMsg.Owner`).
 - **Not covered**: a meeting's feed (`meeting_feed.go`) is the live words of a meeting the owner had the conversation
   attend, so it is not held. Interrupting a round already running is F2 of the proposal.
 

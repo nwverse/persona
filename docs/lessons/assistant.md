@@ -1,5 +1,16 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- A presence window is not an owner-turn guarantee (#6394). The two-minute `ownerPresentFor` hold and the
+  five-minute `relayDecisionMax` cap let queued relayed/decision messages start new rounds behind the owner's back
+  once the window expires, even while the owner is still waiting on their own round. Keep the ranked queue and the
+  presence window, but add an in-memory per-conversation gate armed when the owner speaks (`relayBook.ownerTurns`)
+  that holds every rank until a session list shows the round stopped. Give it two safety releases — a short
+  `ownerTurnStartWait` when the round is never seen working (refused send, dropped conversation) and a hard
+  `ownerTurnMax` once seen working but never stopped — and make an expired gate return immediately rather than fall
+  back onto the presence window, or the cap is not authoritative. The gate is memory-only on purpose: a restart
+  degrades to the persisted presence window. Update the time-window tests by shortening the new limits in lockstep
+  with the presence timers instead of waiting real minutes.
+
 - Inbox handling chats are implementation details, not user-created conversations (#5723). `Untitled` suppresses
   automatic naming but does not hide a chat, and `titleFixed` still gives it the item's subject. Apply default
   archiving in the common session snapshot, not only after starting or finishing: restored chats and follow-up
