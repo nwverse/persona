@@ -199,7 +199,9 @@ final class VNCTests: XCTestCase {
 
         // Help.
         app.buttons["vnc-help"].tap()
-        XCTAssertTrue(app.descendants(matching: .any)["vnc-help-page"].firstMatch.waitForExistence(timeout: 5))
+        let helpPage = app.descendants(matching: .any)["vnc-help-page"].firstMatch
+        XCTAssertTrue(helpPage.waitForExistence(timeout: 5))
+        for _ in 0..<3 where !app.staticTexts["触控板模式"].exists { helpPage.swipeUp() } // below the fold on an iPhone (#6196's Landscape row)
         XCTAssertTrue(app.staticTexts["触控板模式"].exists, "\(app.debugDescription)")
         rest(2)
         shot(app, "vnc-help")
@@ -462,14 +464,16 @@ final class VNCTests: XCTestCase {
         shot(app, name); hold(name)
 
         menu.tap()
-        XCTAssertTrue(app.buttons["指针居中"].firstMatch.waitForExistence(timeout: 5), "⋯ opened:\n\(app.debugDescription)")
+        // Its first item: at the largest text sizes the rest are below the menu's fold.
+        let first = app.buttons["鼠标模式"].firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 5), "⋯ opened:\n\(app.debugDescription)")
         rest()
         XCTAssertEqual(app.state, .runningForeground, "the app went on ⋯")
         let item = app.buttons.matching(NSPredicate(format: "label == '小窗' AND identifier != 'vnc-pip'")).firstMatch
         XCTAssertNotEqual(app.buttons["vnc-pip"].exists, item.exists, "Picture in Picture under Close or in ⋯, once:\n\(app.debugDescription)")
         shot(app, name + "-more"); hold(name + "-more")
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.15)).tap()
-        XCTAssertTrue(app.buttons["指针居中"].firstMatch.waitForNonExistence(timeout: 5), "⋯ closed")
+        XCTAssertTrue(first.waitForNonExistence(timeout: 5), "⋯ closed")
 
         keyboardUp("after ⋯")
         clipboard.tap()
@@ -801,7 +805,7 @@ final class VNCTests: XCTestCase {
         XCTAssertGreaterThan(try scrolls(), 0, "Trackpad Mode: the scroll reached the Mac")
         XCTAssertEqual(readout(screen).zoom, 1, accuracy: 0.01, "Trackpad Mode: the scroll did not zoom")
         hold("vnc-trackpad-scrolled")
-        screen.pinch(withScale: 2.5, velocity: 2)
+        screen.pinch(withScale: 4, velocity: 3) // XCUITest's fingers start ~12 pt apart: the first 10 pt only decide
         rest(2)
         XCTAssertEqual(readout(screen).zoom, 1, accuracy: 0.01, "Trackpad Mode: a pinch does not zoom")
         shot(app, "vnc-trackpad-two-fingers"); hold("vnc-trackpad-pinched")
@@ -814,7 +818,7 @@ final class VNCTests: XCTestCase {
         XCTAssertGreaterThan(try scrolls(), 0, "Mouse Mode: the scroll reached the Mac")
         XCTAssertEqual(readout(screen).zoom, 1, accuracy: 0.01, "Mouse Mode: the scroll did not zoom")
         hold("vnc-mouse-scrolled")
-        screen.pinch(withScale: 2.5, velocity: 2)
+        screen.pinch(withScale: 4, velocity: 3) // XCUITest's fingers start ~12 pt apart: the first 10 pt only decide
         rest(2)
         XCTAssertGreaterThan(readout(screen).zoom, 1.5, "Mouse Mode: a pinch zooms")
         shot(app, "vnc-mouse-pinched"); hold("vnc-mouse-pinched")
