@@ -24,7 +24,7 @@ import (
 //   - index: the search index (kb/search_index.go; .search/ in the data dir, which only this lane writes). It reads
 //     the files changed since its last run; its first run on an existing archive reads them all, which is why it
 //     has a lane of its own: search answers meanwhile by reading the files the index has not reached. Not at every
-//     kick (kbIndexEvery): a run looks at every file.
+//     kick (kbIndexEvery): a run looks at every file. A run that failed waits longer each time (kbIndexRetry).
 //
 // The loop (kbLoop) starts a lane when it is due (a round's time, a wake, a kick) and not still running; one still
 // running when it became due starts again as soon as it ends, as a round used to after a long one.
@@ -94,7 +94,7 @@ func (k *kbLanes) startDue(prepare func() bool, run func(l *kbLane)) {
 
 // kbLaneSet is the knowledge base's lanes; r is the archive lane's own bookkeeping (only that lane touches it).
 func (s *Service) kbLaneSet(r *kbRounds) *kbLanes {
-	var indexed time.Time // when the index lane last ran (only that lane touches it)
+	indexed := &kbIndexRuns{} // the index lane's bookkeeping (only that lane touches it)
 	return newKBLanes(
 		&kbLane{name: "archive", run: func(ctx context.Context, e *kb.Engine) { s.kbArchiveLane(ctx, e, r) }},
 		&kbLane{name: "topics", run: func(ctx context.Context, e *kb.Engine) {
@@ -108,7 +108,7 @@ func (s *Service) kbLaneSet(r *kbRounds) *kbLanes {
 		// All-day recordings' recaps (kb/day_recap_write.go): one recording's notes or recap a run, and the day's push
 		// at its recap time; appends that finished an hour wake it.
 		&kbLane{name: "recap", run: func(ctx context.Context, e *kb.Engine) { e.WriteDayRecaps(ctx, 1) }},
-		&kbLane{name: "index", run: func(ctx context.Context, e *kb.Engine) { s.kbIndexLane(ctx, e, &indexed) }},
+		&kbLane{name: "index", run: func(ctx context.Context, e *kb.Engine) { s.kbIndexLane(ctx, e, indexed) }},
 	)
 }
 
@@ -118,30 +118,72 @@ const (
 	// the index has not read yet costs a search one read, so nothing waits for it. A first build, an index that
 	// failed a check and text deleted on purpose (kb.Store.SearchIndexWanted) do not wait.
 	kbIndexEvery = time.Minute
+	// A run that failed (a full disk, a directory it may not write) is not tried again at the next kick: each try
+	// looks at every file and reads a batch before it fails. The next waits kbIndexRetry, twice as long after every
+	// failure in a row, up to kbIndexRetryMax, whatever is asked of it meanwhile. The first wait is short because
+	// one kind of failure mends itself: an index that fails a check while it is merged is built again by the run
+	// after, and search reads every file until then.
+	kbIndexRetry    = 15 * time.Second
+	kbIndexRetryMax = 5 * time.Minute
 	// An index run that read this many files, or took this long, is worth a log line (a first build, the catch-up
 	// after an import); the few files of an ordinary round are not.
 	kbIndexSayFiles = 1000
 	kbIndexSayTook  = 5 * time.Second
 )
 
+// kbIndexRuns is what the index lane keeps between its runs.
+type kbIndexRuns struct {
+	last time.Time // when it last ran
+	// After a run that failed: how long the next one waits, how many failed in a row, and the failure the log has
+	// already (kbIndexCause), said once however often it comes back.
+	wait   time.Duration
+	failed int
+	said   string
+}
+
 // kbIndexLane is one run of the index lane: the search index brought up to date with the files, unless the last
-// run (*last) was within kbIndexEvery and nothing is asked of this one; it reports whether it ran. A run cut short
-// (the manager stops) keeps what it read. The log says counts and times, and an error names at most a file of the
-// index: never a file of the archive, never a word.
-func (s *Service) kbIndexLane(ctx context.Context, e *kb.Engine, last *time.Time) bool {
-	if time.Since(*last) < kbIndexEvery && !e.Store.SearchIndexWanted() {
+// run was within kbIndexEvery and nothing is asked of this one, or it failed and its wait is not over; it reports
+// whether it ran. A run cut short (the manager stops) keeps what it read. The log says counts and times, and an
+// error names at most a file of the index: never a file of the archive, never a word.
+func (s *Service) kbIndexLane(ctx context.Context, e *kb.Engine, r *kbIndexRuns) bool {
+	since := time.Since(r.last)
+	if since < r.wait || since < kbIndexEvery && !e.Store.SearchIndexWanted() {
 		return false
 	}
 	stats, err := e.UpdateSearchIndex(ctx)
-	*last = time.Now()
+	r.last = time.Now()
 	switch {
-	case err != nil && ctx.Err() == nil:
-		s.logf("kb: search index: %v (search reads the files it does not have)", err)
-	case stats.Rebuilt || stats.Read >= kbIndexSayFiles || stats.Took >= kbIndexSayTook:
-		s.logf("kb: search index: read %d of %d file(s) in %s (waiting %d, dropped %d, merged %v, started again %v)",
-			stats.Read, stats.Files, stats.Took.Round(time.Millisecond), stats.Waiting, stats.Dropped, stats.Merged, stats.Rebuilt)
+	case err != nil && ctx.Err() != nil: // stopped with the manager: neither done nor failed
+	case err != nil:
+		r.wait = min(max(2*r.wait, kbIndexRetry), kbIndexRetryMax)
+		r.failed++
+		if cause := kbIndexCause(err); cause != r.said {
+			r.said = cause
+			s.logf("kb: search index: %v (search reads the files it does not have; trying again after %s, then less often, up to every %s; this failure is logged once)", err, r.wait, kbIndexRetryMax)
+		}
+	default:
+		if r.failed > 0 {
+			s.logf("kb: search index: updating again after %d failed run(s)", r.failed)
+		}
+		r.wait, r.failed, r.said = 0, 0, ""
+		if stats.Rebuilt || stats.Read >= kbIndexSayFiles || stats.Took >= kbIndexSayTook {
+			s.logf("kb: search index: read %d of %d file(s) in %s (waiting %d, dropped %d, merged %v, started again %v)",
+				stats.Read, stats.Files, stats.Took.Round(time.Millisecond), stats.Waiting, stats.Dropped, stats.Merged, stats.Rebuilt)
+		}
 	}
 	return true
+}
+
+// kbIndexCause is what tells one failure of the index from another: the innermost error's text, without the file
+// it was met at (a new file of the index has another name at every try).
+func kbIndexCause(err error) string {
+	for {
+		next := errors.Unwrap(err)
+		if next == nil {
+			return err.Error()
+		}
+		err = next
+	}
 }
 
 // kbRunLane runs one go of l with e, under kbRun, and logs what it did when it called the model or took longer than a

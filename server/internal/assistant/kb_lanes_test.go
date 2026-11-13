@@ -3,8 +3,11 @@ package assistant
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -127,22 +130,22 @@ func TestKBIndexLaneRunsWhenThereIsSomethingToDo(t *testing.T) {
 	s := newKBService(t, newFakeHub())
 	e := kbEng(t, s)
 	ctx := context.Background()
-	var last time.Time
+	r := &kbIndexRuns{}
 	if e.Store.SearchIndexReady() || !e.Store.SearchIndexWanted() {
 		t.Fatal("a new archive says it has a search index")
 	}
-	if !s.kbIndexLane(ctx, e, &last) || !e.Store.SearchIndexReady() || last.IsZero() {
+	if !s.kbIndexLane(ctx, e, r) || !e.Store.SearchIndexReady() || r.last.IsZero() {
 		t.Fatal("the first run built no index")
 	}
-	if s.kbIndexLane(ctx, e, &last) {
+	if s.kbIndexLane(ctx, e, r) {
 		t.Fatal("ran again at once with nothing asked of it")
 	}
 	e.Store.SearchIndexPurge()
-	if !s.kbIndexLane(ctx, e, &last) || e.Store.SearchIndexWanted() {
+	if !s.kbIndexLane(ctx, e, r) || e.Store.SearchIndexWanted() {
 		t.Fatal("text was deleted on purpose and the index waited")
 	}
-	last = last.Add(-kbIndexEvery)
-	if !s.kbIndexLane(ctx, e, &last) {
+	r.last = r.last.Add(-kbIndexEvery)
+	if !s.kbIndexLane(ctx, e, r) {
 		t.Fatalf("did not run %s after its last run", kbIndexEvery)
 	}
 	// The loop's lanes have it, and a round runs it.
@@ -161,5 +164,101 @@ func TestKBIndexLaneRunsWhenThereIsSomethingToDo(t *testing.T) {
 	s.kbRunLane(ctx, e, lane)
 	if _, err := os.Stat(filepath.Join(e.Store.Dir, kb.SearchIndexDir, "manifest.json")); err != nil {
 		t.Fatalf("the lane wrote no index: %v", err)
+	}
+}
+
+// An index run that fails (here: the index's directory cannot be made, as with a full disk or a directory the hub
+// may not write) is not tried again at every kick: the next waits, longer after every failure in a row up to
+// kbIndexRetryMax, and the log has the failure once however often it comes back. Another failure is said; so is the
+// run that works again, after which the lane is as it was.
+func TestKBIndexLaneWaitsAfterARunThatFailed(t *testing.T) {
+	s := newKBService(t, newFakeHub())
+	e := kbEng(t, s)
+	ctx := context.Background()
+	var logged []string
+	s.logf = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
+	index := filepath.Join(e.Store.Dir, kb.SearchIndexDir)
+	// A file where the index's directory goes: nothing can be written in it, whoever runs the test.
+	if err := os.WriteFile(index, []byte("not a directory\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := &kbIndexRuns{}
+	if !s.kbIndexLane(ctx, e, r) {
+		t.Fatal("the first run did not start")
+	}
+	if len(logged) != 1 || r.failed != 1 || r.wait != kbIndexRetry {
+		t.Fatalf("after the first failed run: logged %q, %d failed, waiting %s; want one line, one failure, %s", logged, r.failed, r.wait, kbIndexRetry)
+	}
+	if !e.Store.SearchIndexWanted() {
+		t.Fatal("the index is not wanted: the kicks below would not have started a run anyway")
+	}
+	// Kicks: an index is still wanted, and no run starts until the wait is over.
+	for range 5 {
+		if s.kbIndexLane(ctx, e, r) {
+			t.Fatalf("ran again within %s of a run that failed", r.wait)
+		}
+	}
+	// The wait over, time after time: it grows to kbIndexRetryMax, and the same failure is not said again.
+	waits := []time.Duration{}
+	for range 8 {
+		r.last = r.last.Add(-r.wait)
+		if !s.kbIndexLane(ctx, e, r) {
+			t.Fatalf("did not run %s after the run that failed", r.wait)
+		}
+		waits = append(waits, r.wait)
+		if s.kbIndexLane(ctx, e, r) {
+			t.Fatalf("ran again within %s of a run that failed", r.wait)
+		}
+	}
+	want := []time.Duration{30 * time.Second, time.Minute, 2 * time.Minute, 4 * time.Minute, kbIndexRetryMax, kbIndexRetryMax, kbIndexRetryMax, kbIndexRetryMax}
+	if !reflect.DeepEqual(waits, want) {
+		t.Fatalf("the waits after each failure were %v, want %v", waits, want)
+	}
+	if len(logged) != 1 || r.failed != 9 {
+		t.Fatalf("after %d failed runs the log has %d line(s): %q", r.failed, len(logged), logged)
+	}
+	// Another failure is said: the directory is there now, its manifest cannot be read.
+	if err := os.Remove(index); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(index, "manifest.json"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	r.last = r.last.Add(-r.wait)
+	if !s.kbIndexLane(ctx, e, r) || len(logged) != 2 || logged[1] == logged[0] || r.wait != kbIndexRetryMax {
+		t.Fatalf("after another failure: logged %q, waiting %s", logged, r.wait)
+	}
+	for _, l := range logged {
+		if !strings.HasPrefix(l, "kb: search index: ") {
+			t.Errorf("the log line %q is not the index's", l)
+		}
+	}
+	// It works again: said once, the index is built, and the lane is back to its ordinary pace.
+	if err := os.RemoveAll(index); err != nil {
+		t.Fatal(err)
+	}
+	if s.kbIndexLane(ctx, e, r) {
+		t.Fatal("ran before its wait was over")
+	}
+	r.last = r.last.Add(-r.wait)
+	if !s.kbIndexLane(ctx, e, r) || !e.Store.SearchIndexReady() {
+		t.Fatal("the run after the directory was put right built no index")
+	}
+	if r.wait != 0 || r.failed != 0 || r.said != "" {
+		t.Fatalf("after a run that worked: %+v", r)
+	}
+	if n := len(logged); n < 3 || !strings.Contains(logged[2], "updating again after 10 failed run(s)") {
+		t.Fatalf("the log after the run that worked: %q", logged)
+	}
+	if s.kbIndexLane(ctx, e, r) {
+		t.Fatal("ran again at once with nothing asked of it")
+	}
+	// A run stopped with the manager is not a failure: nothing waits because of it.
+	e.Store.SearchIndexPurge()
+	stopped, cancel := context.WithCancel(ctx)
+	cancel()
+	said := len(logged)
+	if !s.kbIndexLane(stopped, e, r) || r.wait != 0 || r.failed != 0 || len(logged) != said {
+		t.Fatalf("after a run stopped with the manager: %+v, logged %q", r, logged[said:])
 	}
 }
