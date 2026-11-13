@@ -180,6 +180,25 @@ describe("Hand to AI: what the default does on the way out", () => {
     expect(calls.some(filed)).toBe(false);
   });
 
+  it("an agent leaves the item open by default and files it when the user ticked the box", async () => {
+    await reloadInbox();
+    render();
+    agentRow();
+    const button = [...document.body.querySelectorAll("button")].find((b) => b.textContent?.trim() === "发送")!;
+    await act(async () => button.click());
+    await vi.waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url === "/api/v1/sessions/mac/s1/messages")).toBe(true));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(calls.some(filed)).toBe(false);
+
+    resetInboxForTests();
+    await reloadInbox();
+    render();
+    agentRow();
+    toggle();
+    await act(async () => [...document.body.querySelectorAll("button")].find((b) => b.textContent?.trim() === "发送")!.click());
+    await vi.waitFor(() => expect(calls.some(filed)).toBe(true));
+  });
+
   it("New agent… starts the agent and leaves the item open by default", async () => {
     await reloadInbox();
     render();
