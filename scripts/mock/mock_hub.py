@@ -2882,6 +2882,10 @@ def _direction_agents(t, sessions):
     return roots
 
 
+def _direction_running(agents):
+    return any(a.get("state") == "working" or _direction_running(a.get("children") or []) for a in agents)
+
+
 def mock_direction_tree():
     """GET /api/v1/assistant/directions/tree (#4352): each current leader with the open to-dos it supervises, then the
     secretary's group (the main conversation's id) with the rest. The real hub decides the states with the To-dos page's
@@ -2904,7 +2908,8 @@ def mock_direction_tree():
         tasks.sort(key=lambda x: x["_at"], reverse=True)
         tasks.sort(key=lambda x: _DIRECTION_STATE_ORDER[x["state"]])
         counts = {k: sum(1 for x in tasks if x["state"] == k) for k in _DIRECTION_STATE_ORDER}
-        return {"id": did, "name": name, **extra, "counts": counts,
+        # an Agent under it at work, at any depth and whatever its task's state (#6626, the hub's treeRunning)
+        return {"id": did, "name": name, **extra, "counts": counts, "running": any(_direction_running(x["agents"]) for x in tasks),
                 "tasks": [{k: v for k, v in x.items() if k != "_at"} for x in tasks]}
 
     out = [direction(lid, MOCK_DIRECTION_NAMES.get(lid, ""), groups[lid]) for lid in MOCK_LEADERS]
@@ -19774,6 +19779,10 @@ def bump(what, session=None):
     return {"error": "nothing to bump"}
 
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import stream_trace  # /mock/say?trace=… (#6651)
+
+
 # /mock/say?drop=1: the reply is written and the session list moves, but its push never reaches the page (#3139).
 # /mock/say?preset=markdown: a long reply whose blocks change height as they render (a code block, a table, a list),
 # for StreamingScrollTests: streamed at the hub's pace it shows whether the chat holds still while it grows.
@@ -20136,7 +20145,7 @@ def narrate(step, words, answer, steps=8, ms=250, line=True, ask="帮我把网�
     return {"error": "step is start or finish"}
 
 
-def say(text, user=None, stream=False, steps=10, ms=300, late=0, drop=False, upto=0):
+def say(text, user=None, stream=False, steps=10, ms=300, late=0, drop=False, upto=0, plan=None):
     """A reply (after `user`'s message, if given) in every conversation an app has open (/mock/say). `stream`: the
     message first, then the reply arrives as growing `delta` text over about 3 s, like the Persona assistant's. `drop`: the
     transcript grows and the session list says so (updated_at), but the items push is lost: the page has to notice (#3139).
@@ -20156,7 +20165,12 @@ def say(text, user=None, stream=False, steps=10, ms=300, late=0, drop=False, upt
                     send({"type": "items", "machine_id": mid, "session_id": sid, "items": asked, **span(asked, before)})
                     user = None
                 shown = text[:upto] if upto > 0 else text
-                for k in range(1, steps + 1):
+                if plan:  # a recorded stream's cadence (&trace=…): each send at its time, the text so far
+                    began = time.monotonic()
+                    for at, n in plan:
+                        time.sleep(max(0, at / 1000 - (time.monotonic() - began)))
+                        send({"type": "delta", "machine_id": mid, "session_id": sid, "text": shown[:n]})
+                for k in range(1, 0 if plan else steps + 1):
                     time.sleep(ms / 1000)
                     send({"type": "delta", "machine_id": mid, "session_id": sid, "text": shown[:len(shown) * k // steps]})
                 if upto > 0:
@@ -22817,9 +22831,13 @@ class H(BaseHTTPRequestHandler):
             # &history=mock-1.r1: the transcript's history token from now on, on pushes and pages alike (a branch was abandoned,
             # the file was rewritten: docs/protocol/protocol.md "Continuity of items"); /mock/reset puts mock-1 back.
             if q.get("history", [""])[0]: HISTORY_NOW["token"] = q["history"][0]
-            args = (SAY_PRESETS.get(q.get("preset", [""])[0]) or q.get("text", ["好了。"])[0], q["user"][0] if "user" in q else None, q.get("stream", ["0"])[0] == "1",
+            # &trace=markdown|prose&node=lead|trail: a recorded reply at the cadence the node sends it (scripts/mock/stream_trace.py, #6651).
+            trace = stream_trace.load(q["trace"][0]) if q.get("trace", [""])[0] else None
+            plan = stream_trace.deltas(trace["tokens"], q.get("node", ["trail"])[0]) if trace else None
+            args = (trace["text"] if trace else SAY_PRESETS.get(q.get("preset", [""])[0]) or q.get("text", ["好了。"])[0], q["user"][0] if "user" in q else None,
+                    q.get("stream", ["0"])[0] == "1" or trace is not None,
                     int(q.get("steps", ["10"])[0]), int(q.get("ms", ["300"])[0]), int(q.get("late", ["0"])[0]), q.get("drop", ["0"])[0] == "1",
-                    int(q.get("upto", ["0"])[0]))
+                    int(q.get("upto", ["0"])[0]), plan)
             threading.Thread(target=say, args=args, daemon=True).start()
             return self.send_json({"ok": True})
         if MOCK_LARK and (p.startswith("/api/v1/lark/") or p == "/mock/lark") and fs_get(self, p, q): return  # area: feishu chat page
