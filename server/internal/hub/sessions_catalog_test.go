@@ -144,8 +144,8 @@ func TestSessionCatalogGroupsARepositoryAcrossComputers(t *testing.T) {
 	// Projects by count, then name, then id; a project's places by count, then computer, then path. A project is
 	// named, and its origin spelled, as its first place has them.
 	want := []catalogProject{
-		{ID: "git:git.example.com/team/app", Name: "app", Origin: "git.example.com/team/app", Total: 3, Places: []catalogPlace{
-			{MachineID: "mac", Path: "/Users/me/code/app", Total: 2}, {MachineID: "pc", Path: `C:\code\App`, Total: 1}}},
+		{ID: "git:git.example.com/team/app", Name: "app", Origin: "git.example.com/team/app", Total: 3, NeedsYou: 1, Places: []catalogPlace{
+			{MachineID: "mac", Path: "/Users/me/code/app", Total: 2, NeedsYou: 1}, {MachineID: "pc", Path: `C:\code\App`, Total: 1}}},
 		{ID: "dir:notes", Name: "notes", Total: 3, Places: []catalogPlace{
 			{MachineID: "mac", Path: "/Users/me/notes", Total: 1}, {MachineID: "pc", Path: `D:\work\Notes`, Total: 1}, {MachineID: "pc", Path: `D:\work\Notes\`, Total: 1}}},
 		{ID: "dir:app", Name: "app", Total: 1, Places: []catalogPlace{{MachineID: "nas", Path: "/volume1/code/app", Total: 1}}},
@@ -158,7 +158,7 @@ func TestSessionCatalogGroupsARepositoryAcrossComputers(t *testing.T) {
 		t.Fatalf("projects:\n got %+v\nwant %+v", got.Projects, want)
 	}
 	wantSpaces := []catalogSpace{
-		{MachineID: "mac", ID: "w1", Name: "Release", Total: 2}, {MachineID: "pc", ID: "ws-9", Name: "ws-9", Total: 2},
+		{MachineID: "mac", ID: "w1", Name: "Release", Total: 2, NeedsYou: 1}, {MachineID: "pc", ID: "ws-9", Name: "ws-9", Total: 2},
 		{MachineID: "pc", ID: "w1", Name: "Desk", Total: 1}, {MachineID: "mac", ID: "w2", Name: "Writing", Total: 1},
 		// each computer's rows in no space, last
 		{MachineID: "nas", Total: 2}, {MachineID: "mac", Total: 1},
@@ -202,7 +202,7 @@ func TestSessionCatalogFollowsTheFiltersAndPlaces(t *testing.T) {
 	h, _, _ := threeComputers(t)
 	needs := readCatalog(t, h, "&state=needs_you")
 	if needs.Total != 1 || len(needs.Projects) != 1 || needs.Projects[0].ID != "git:git.example.com/team/app" || needs.Projects[0].Total != 1 ||
-		len(needs.Spaces) != 1 || needs.Spaces[0].Name != "Release" {
+		needs.Projects[0].NeedsYou != 1 || len(needs.Spaces) != 1 || needs.Spaces[0].Name != "Release" || needs.Spaces[0].NeedsYou != 1 {
 		t.Fatalf("needs you: %+v", needs)
 	}
 	if one := readCatalog(t, h, "&machine_id=pc"); one.Total != 3 || len(one.Projects) != 2 || project(one, "git:git.example.com/team/app").Total != 1 {

@@ -139,6 +139,7 @@ func TestPlaceCountsFollowTheFilters(t *testing.T) {
 	pc := []Item{placed("pc-1", "pc", "/code/app", "w1", 4), placed("pc-2", "pc", `C:\notes`, "w1", 5)}
 	pc[1].SearchText = "Quarterly notes"
 	pc[1].Fold = &Fold{Root: "pc-1"}
+	pc[0].Fold = &Fold{State: "needs_you"} // its own state is working: it needs the user through its child
 	index.ReplaceOwned("mac", "assistant", mac)
 	index.ReplaceOwned("pc", "m-0b0b0b", pc)
 
@@ -146,25 +147,27 @@ func TestPlaceCountsFollowTheFilters(t *testing.T) {
 	if err != nil || all.Total != 5 || all.Revision != index.Revision() {
 		t.Fatalf("all: %+v %v", all, err)
 	}
-	wantProject := map[Place]int{{"mac", "/code/app"}: 2, {"mac", ""}: 1, {"pc", "/code/app"}: 1, {"pc", `C:\notes`}: 1}
-	wantGroup := map[Place]int{{"mac", "w1"}: 1, {"mac", "w2"}: 1, {"mac", ""}: 1, {"pc", "w1"}: 2}
+	// a place's count, and how many of them need the user (mac-2 does)
+	wantProject := map[Place]PlaceCount{{"mac", "/code/app"}: {2, 1}, {"mac", ""}: {1, 0}, {"pc", "/code/app"}: {1, 0}, {"pc", `C:\notes`}: {1, 0}}
+	wantGroup := map[Place]PlaceCount{{"mac", "w1"}: {1, 0}, {"mac", "w2"}: {1, 1}, {"mac", ""}: {1, 0}, {"pc", "w1"}: {2, 0}}
 	if !reflect.DeepEqual(all.Project, wantProject) || !reflect.DeepEqual(all.Group, wantGroup) {
 		t.Fatalf("project %v, group %v", all.Project, all.Group)
 	}
 	for name, test := range map[string]struct {
 		options Options
 		total   int
-		project map[Place]int
+		project map[Place]PlaceCount
 	}{
-		"state":      {Options{State: "needs_you"}, 1, map[Place]int{{"mac", "/code/app"}: 1}},
-		"search":     {Options{Q: "quarterly"}, 1, map[Place]int{{"pc", `C:\notes`}: 1}},
-		"machine":    {Options{Machine: "pc"}, 2, map[Place]int{{"pc", "/code/app"}: 1, {"pc", `C:\notes`}: 1}},
-		"manager":    {Options{Manager: "assistant"}, 3, map[Place]int{{"mac", "/code/app"}: 2, {"mac", ""}: 1}},
-		"no private": {Options{NoPrivate: true}, 4, map[Place]int{{"mac", "/code/app"}: 2, {"pc", "/code/app"}: 1, {"pc", `C:\notes`}: 1}},
-		"roots":      {Options{Roots: true}, 4, map[Place]int{{"mac", "/code/app"}: 2, {"mac", ""}: 1, {"pc", "/code/app"}: 1}},
-		"places":     {Options{Places: []Place{{"pc", "/code/app"}}}, 1, map[Place]int{{"pc", "/code/app"}: 1}},
-		"one row":    {Options{ID: "mac-2"}, 1, map[Place]int{{"mac", "/code/app"}: 1}},
-		"no row":     {Options{ID: "missing"}, 0, map[Place]int{}},
+		"state":      {Options{State: "needs_you"}, 1, map[Place]PlaceCount{{"mac", "/code/app"}: {1, 1}}},
+		"search":     {Options{Q: "quarterly"}, 1, map[Place]PlaceCount{{"pc", `C:\notes`}: {1, 0}}},
+		"machine":    {Options{Machine: "pc"}, 2, map[Place]PlaceCount{{"pc", "/code/app"}: {1, 0}, {"pc", `C:\notes`}: {1, 0}}},
+		"manager":    {Options{Manager: "assistant"}, 3, map[Place]PlaceCount{{"mac", "/code/app"}: {2, 1}, {"mac", ""}: {1, 0}}},
+		"no private": {Options{NoPrivate: true}, 4, map[Place]PlaceCount{{"mac", "/code/app"}: {2, 1}, {"pc", "/code/app"}: {1, 0}, {"pc", `C:\notes`}: {1, 0}}},
+		// a parent counts as needing the user when a child folded under it does (pc-1, through pc-2's fold)
+		"roots":   {Options{Roots: true}, 4, map[Place]PlaceCount{{"mac", "/code/app"}: {2, 1}, {"mac", ""}: {1, 0}, {"pc", "/code/app"}: {1, 1}}},
+		"places":  {Options{Places: []Place{{"pc", "/code/app"}}}, 1, map[Place]PlaceCount{{"pc", "/code/app"}: {1, 0}}},
+		"one row": {Options{ID: "mac-2"}, 1, map[Place]PlaceCount{{"mac", "/code/app"}: {1, 1}}},
+		"no row":  {Options{ID: "missing"}, 0, map[Place]PlaceCount{}},
 	} {
 		got, err := index.PlaceCounts(test.options)
 		if err != nil || got.Total != test.total || !reflect.DeepEqual(got.Project, test.project) {

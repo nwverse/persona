@@ -36,11 +36,13 @@ type sessionCatalog struct {
 // computer spelled it, without credentials. Places are its directories, the ones a place= filter takes. The rows in
 // no directory are the last project, with an empty ID and name, a place with an empty path for each of their computers.
 type catalogProject struct {
-	ID     string         `json:"id"`
-	Name   string         `json:"name"`
-	Origin string         `json:"origin,omitempty"`
-	Total  int            `json:"total"`
-	Places []catalogPlace `json:"places"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Origin string `json:"origin,omitempty"`
+	Total  int    `json:"total"`
+	// NeedsYou: how many of them need the user, by the state the list filters by (the folded one with roots=1).
+	NeedsYou int            `json:"needs_you,omitempty"`
+	Places   []catalogPlace `json:"places"`
 }
 
 // catalogPlace is one directory of a project: Path is the rows' project attribute there (repo_root, else
@@ -49,6 +51,7 @@ type catalogPlace struct {
 	MachineID string `json:"machine_id"`
 	Path      string `json:"path"`
 	Total     int    `json:"total"`
+	NeedsYou  int    `json:"needs_you,omitempty"`
 }
 
 // catalogSpace is one computer's space: ID is the rows' group attribute there (space_id, else workspace_id), which
@@ -58,6 +61,7 @@ type catalogSpace struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
 	Total     int    `json:"total"`
+	NeedsYou  int    `json:"needs_you,omitempty"`
 }
 
 const (
@@ -308,7 +312,7 @@ func (h *Hub) sessionCatalogOf(ctx context.Context, index *sessionlist.Index, op
 		if !seen(p.Machine) {
 			continue
 		}
-		out.Total += n
+		out.Total += n.Total
 		if p.Key != "" {
 			places = append(places, p)
 		}
@@ -336,8 +340,9 @@ func (h *Hub) sessionCatalogOf(ctx context.Context, index *sessionlist.Index, op
 			project = &catalogProject{ID: id}
 			projects[id] = project
 		}
-		project.Total += n
-		project.Places = append(project.Places, catalogPlace{MachineID: p.Machine, Path: p.Key, Total: n})
+		project.Total += n.Total
+		project.NeedsYou += n.NeedsYou
+		project.Places = append(project.Places, catalogPlace{MachineID: p.Machine, Path: p.Key, Total: n.Total, NeedsYou: n.NeedsYou})
 	}
 	for _, project := range projects {
 		slices.SortFunc(project.Places, func(a, b catalogPlace) int {
@@ -362,7 +367,7 @@ func (h *Hub) sessionCatalogOf(ctx context.Context, index *sessionlist.Index, op
 		if !seen(p.Machine) {
 			continue
 		}
-		space := catalogSpace{MachineID: p.Machine, ID: p.Key, Total: n}
+		space := catalogSpace{MachineID: p.Machine, ID: p.Key, Total: n.Total, NeedsYou: n.NeedsYou}
 		if p.Key != "" {
 			space.Name = cmp.Or(names[p], p.Key)
 		}
@@ -388,7 +393,7 @@ func lastIfEmpty(a, b string) int {
 
 // spaceNames is what the kept rows of machines call each counted space: the first named row of a space, in its
 // machine's list order.
-func (h *Hub) spaceNames(machines map[string]bool, counted map[sessionlist.Place]int) map[sessionlist.Place]string {
+func (h *Hub) spaceNames(machines map[string]bool, counted map[sessionlist.Place]sessionlist.PlaceCount) map[sessionlist.Place]string {
 	names := map[sessionlist.Place]string{}
 	for _, m := range h.machinesNow() {
 		if !machines[m.cfg.ID] {
