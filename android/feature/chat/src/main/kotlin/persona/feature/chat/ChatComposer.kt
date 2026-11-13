@@ -61,6 +61,8 @@ fun ChatComposer(
     onNotice: (String) -> Unit,
     // Content queued outside the text field (selected page context) also makes the draft sendable.
     extraContent: Boolean = false,
+    /** Persona's conversation, including a new one: its own command list, never an Agent session's quick commands. */
+    assistantChat: Boolean = false,
     enabled: Boolean = true,
     placeholder: String = stringResource(R.string.chat_composer_placeholder),
     leading: (@Composable RowScope.() -> Unit)? = null,
@@ -295,8 +297,11 @@ fun ChatComposer(
     val dictate = dictation?.takeIf { enabled }
     // The main conversation's /clear (#5100): offered while it works too (the hub stops the turn), and it never asks first.
     val mainClear = LocalMainChatClear.current?.takeIf { enabled }
-    val suggestions = if (enabled) SlashCommand.suggestions(state.value.text, canClear && !working || mainClear != null,
-        model = onModel != null, loop = loop) else emptyList()
+    val suggestions = if (!enabled) emptyList() else if (assistantChat || mainClear != null) {
+        SlashCommand.mainSuggestions(state.value.text, clear = mainClear != null, resources = resources)
+    } else {
+        SlashCommand.suggestions(state.value.text, canClear && !working, resources, model = onModel != null, loop = loop)
+    }
     val hint = if (enabled && loop) loopHint(state.value.text, resources) else null
     // @: the word being typed just before the caret, while nothing is selected and no "/" list is open.
     val selection = state.value.selection

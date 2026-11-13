@@ -20,7 +20,8 @@ import persona.core.designsystem.PersonaTheme
 /**
  * The main conversation's `/clear` in its composer (#5100, the web's #5095): offered in the "/" list and sent alone it
  * clears through [LocalMainChatClear] instead of going to Persona, with no confirmation; a failure puts `/clear` back;
- * anything more is a message. Without the local (another chat, a hub without `assistant_main_clear`) nothing changes.
+ * anything more is a message. Without the local on an Assistant chat (a hub without `assistant_main_clear`) no command is
+ * offered and sending is unchanged; Agent composers leave [ChatComposer]'s `assistantChat` flag false.
  */
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35], qualifiers = "en-w400dp-h900dp-xhdpi")
@@ -35,7 +36,7 @@ class MainChatClearTest {
             PersonaTheme(reduceMotion = true) {
                 CompositionLocalProvider(LocalMainChatClear provides clear) {
                     ChatComposer(SessionKey("mac", "main"), state, working = working, sending = false, canClear = false, service = null,
-                        onSend = { sent++ }, onCommand = {}, onNotice = {})
+                        onSend = { sent++ }, onCommand = {}, onNotice = {}, assistantChat = true)
                 }
             }
         }
@@ -67,6 +68,7 @@ class MainChatClearTest {
     @Test fun theSlashListOffersItWhileTheConversationWorksToo() {
         mount(working = true)
         type("/cl")
+        rule.onNodeWithText("Clear the chat and start over").assertExists()
         rule.onNodeWithText("/clear").performClick()
         rule.runOnIdle {
             assertEquals(1, clears.size)
@@ -87,6 +89,10 @@ class MainChatClearTest {
 
     @Test fun withoutItTheMainConversationHasNoClear() {
         mount(clear = null)
+        type("/")
+        rule.onAllNodesWithText("/clear").assertCountEquals(0)
+        rule.onAllNodesWithText("/compact").assertCountEquals(0)
+        rule.onAllNodesWithText("/continue").assertCountEquals(0)
         type("/cl")
         rule.onAllNodesWithText("/clear").assertCountEquals(0)
         type("/clear")
