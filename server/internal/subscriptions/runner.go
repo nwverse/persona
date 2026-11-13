@@ -103,7 +103,7 @@ func (s *Service) startDue(ctx context.Context) *sync.WaitGroup {
 		if IsPush(sub) {
 			continue // filled by its device, never pulled
 		}
-		asked := s.asked[sub.ID]
+		asked := s.asked[sub.ID] || s.kicked[sub.ID] && pullScheduled(sub)
 		if !asked && (!pullScheduled(sub) || sub.NextRunAt == nil || sub.NextRunAt.After(now)) {
 			continue
 		}
@@ -166,6 +166,7 @@ func (s *Service) runOne(ctx context.Context, id string) {
 	}
 	s.mu.Lock()
 	asked := s.asked[id]
+	kicked := s.kicked[id] && pullScheduled(*sub) // still on: a changed event brought its run forward
 	g := s.gateOf(sub.Connector)
 	now := s.now()
 	g.prune(now)
@@ -183,10 +184,16 @@ func (s *Service) runOne(ctx context.Context, id string) {
 		resume = g.calls[0].Add(time.Hour)
 	}
 	s.mu.Unlock()
-	if !asked && (!pullScheduled(*sub) || sub.NextRunAt == nil || sub.NextRunAt.After(now)) {
+	if !asked && !kicked && (!pullScheduled(*sub) || sub.NextRunAt == nil || sub.NextRunAt.After(now)) {
+		s.mu.Lock()
+		delete(s.kicked, id) // switched off since
+		s.mu.Unlock()
 		return
 	}
 	if paused || full {
+		s.mu.Lock()
+		delete(s.kicked, id) // held back by the connector's limits: the schedule runs it
+		s.mu.Unlock()
 		// Not a run: the connector's limits hold it back. A pause shows; the hourly budget only moves the run.
 		next := *sub
 		next.NextRunAt = &resume
@@ -205,6 +212,7 @@ func (s *Service) runOne(ctx context.Context, id string) {
 	}
 	s.mu.Lock()
 	delete(s.asked, id)
+	delete(s.kicked, id)
 	s.mu.Unlock()
 	s.execute(ctx, *sub, asked, now)
 }

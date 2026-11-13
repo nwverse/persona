@@ -118,6 +118,7 @@ type Service struct {
 	busy     map[string]bool // connectors whose subscriptions are running now
 	running  int
 	asked    map[string]bool // subscriptions asked to run now
+	kicked   map[string]bool // subscriptions their connector's changed event made due (ConnectorChanged)
 	wake     chan struct{}
 
 	// Push sources (push.go): one push at a time, and each device's items in the last hour.
@@ -161,7 +162,7 @@ func New(o Options) *Service {
 		o.Delivered = func(Subscription) {}
 	}
 	return &Service{o: o, catalogs: map[string]catalogEntry{}, reading: map[string]bool{}, gates: map[string]*gate{},
-		busy: map[string]bool{}, asked: map[string]bool{}, wake: make(chan struct{}, 1), pushed: map[string][]time.Time{}}
+		busy: map[string]bool{}, asked: map[string]bool{}, kicked: map[string]bool{}, wake: make(chan struct{}, 1), pushed: map[string][]time.Time{}}
 }
 
 func (s *Service) now() time.Time { return s.o.Clock.Now().UTC() }
@@ -933,6 +934,37 @@ func (s *Service) RunNow(ctx context.Context, id string, by Actor) (Subscription
 	now := s.now()
 	out.NextRunAt = &now
 	return out, nil
+}
+
+// changedGap is the least time between a subscription's last run and one its connector's changed event starts (#6247).
+const changedGap = time.Minute
+
+// ConnectorChanged runs soon the subscriptions of connector id that are on and pull items on a schedule: the connector
+// said it has something new, as it kicks the Inbox for its own (#6247). A subscription is run so at most once a
+// changedGap after its last run, and never sooner than its source's own minimum; the connector's call gap, hourly
+// budget and pauses hold as for any run, and a run they hold back is left to the schedule. A snapshot keeps its
+// schedule. The run is a scheduled one brought forward.
+func (s *Service) ConnectorChanged(ctx context.Context, id string) {
+	all, err := s.o.Store.ListSubscriptions(ctx)
+	if err != nil {
+		s.o.Logf("subscriptions: %s changed: %v", id, err)
+		return
+	}
+	now, kicked := s.now(), false
+	s.mu.Lock()
+	for _, sub := range all {
+		if sub.Connector != id || IsPush(sub) || !on(sub) || sub.Recipe.Mode == wire.ConnectorSubscriptionModeSnapshot {
+			continue
+		}
+		if last := sub.LastRunAt; last != nil && now.Sub(*last) < max(changedGap, time.Duration(sub.SourceMin)*time.Second) {
+			continue
+		}
+		s.kicked[sub.ID], kicked = true, true
+	}
+	s.mu.Unlock()
+	if kicked {
+		s.poke()
+	}
 }
 
 // Delete removes a subscription with its dedup keys and pending items. withData also has the destinations remove what
