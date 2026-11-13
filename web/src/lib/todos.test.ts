@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { Machine, Session } from "./types";
 import {
+  DECISIONS_FIRST,
+  shownDecisions,
   heldDelivery,
   isCancelled,
   cancellationReason,
@@ -920,5 +922,25 @@ describe("取消是独立状态，不是完成 (#5732)", () => {
     expect(cancellationReason(legacy)).toBe("Not needed");
     expect(todoStatusLabel(legacy, "done")).toBe("已取消");
     expect(isCancelled(closed)).toBe(false);
+  });
+});
+
+describe("a to-do's decisions shown (#6447)", () => {
+  const list = Array.from({ length: 12 }, (_, i) => `d${i + 1}`);
+
+  it("shows the first five by default, in the list's order", () => {
+    expect(DECISIONS_FIRST).toBe(5);
+    expect(shownDecisions(list, "first")).toEqual(["d1", "d2", "d3", "d4", "d5"]);
+  });
+
+  it("shows every one, or none once folded", () => {
+    expect(shownDecisions(list, "all")).toEqual(list);
+    expect(shownDecisions(list, "folded")).toEqual([]);
+  });
+
+  it("shows a short list whole by default, and never changes the list it is given", () => {
+    expect(shownDecisions(["a", "b"], "first")).toEqual(["a", "b"]);
+    expect(shownDecisions([], "first")).toEqual([]);
+    expect(list).toHaveLength(12);
   });
 });
