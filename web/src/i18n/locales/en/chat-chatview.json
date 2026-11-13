@@ -1,4 +1,5 @@
 {
+  "skills_route": "Selected skills belong to this assistant. Cancel task routing before sending.",
   "share": "Share…",
   "forked": "Branched to a new chat",
   "fork_failed": "Couldn't branch: {error}",

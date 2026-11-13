@@ -364,15 +364,10 @@ func TestTernClaudeTakesItsOwnStatus(t *testing.T) {
 	f.mu.Lock()
 	f.capture = screenFixture(t, "claude-2.1.309-auto-mode-notice-120.txt")
 	f.mu.Unlock()
-	for end := time.Now().Add(2 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+	waitWithin(t, 2*time.Second, "a dialog on a resting Claude's screen, with no status of its own, to block it", func() bool {
 		s := byID(listSessions(t, n))[sidA]
-		if s.Status == proto.StatusBlocked && strings.HasPrefix(s.AttentionReason, "We're changing auto mode") {
-			break
-		}
-		if time.Now().After(end) {
-			t.Fatalf("a dialog on a resting Claude's screen, no status of its own: %s %q", s.Status, s.AttentionReason)
-		}
-	}
+		return s.Status == proto.StatusBlocked && strings.HasPrefix(s.AttentionReason, "We're changing auto mode")
+	})
 }
 
 // A claude in a Tern block names its block in TERN_PANE: while Tern lists a claude in that pane it is Tern's
