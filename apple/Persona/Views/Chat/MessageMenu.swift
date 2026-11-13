@@ -19,12 +19,6 @@ final class MessageMenu {
     /// The lifted message's words selected where they are (#603, `LiftSelection.swift`): a second long press on it, or
     /// Select Text. nil: lifted with its bar.
     var inPlace: InPlaceSelect?
-    /// The lifted copy of a message drawn in parts lays out all of its parts (#5221): asked for when its words are to
-    /// be selected (the text view over them follows every line). Until then it lays out only the parts near the screen.
-    var liftWhole = false
-    /// Selecting asked for while that copy lays out all of its parts: `LiftedMessage` starts it once they are there,
-    /// with what showed kept where it was.
-    @ObservationIgnored var pendingSelect: InPlaceSelect?
     /// The message being shared as a card.
     var sharing: ShareMessage?
     /// Forward (#3807): the chat makes the pressed message a forward and opens its picker (`forwarding`). nil: the bar
@@ -99,27 +93,21 @@ final class MessageMenu {
     }
 
     func close() {
-        pendingSelect = nil
-        if selected != nil || lift != nil || inPlace != nil || liftWhole {
+        if selected != nil || lift != nil || inPlace != nil {
             withAnimation(Theme.Motion.conceal) {
                 selected = nil
                 lift = nil
                 inPlace = nil
-                liftWhole = false
             }
         }
     }
 
     /// Selects the lifted message's words where they are: the word at `point` (in the window), or all of them. A
-    /// message drawn in parts first lays out all of them (`liftWhole`); the selecting starts once they are there.
+    /// message drawn in parts stays as it is, its parts near the screen laid out (#5291): the text view over them holds
+    /// all of its words.
     func selectInPlace(at point: CGPoint?) {
-        guard let lift else { return }
+        guard lift != nil else { return }
         Haptics.tap()
-        if lift.part != nil, !liftWhole {
-            pendingSelect = InPlaceSelect(at: point)
-            liftWhole = true
-            return
-        }
         withAnimation(Theme.Motion.state) { inPlace = InPlaceSelect(at: point) }
     }
 

@@ -7,6 +7,7 @@ import (
 	"unicode/utf16"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -21,8 +22,8 @@ import (
 
 var (
 	// A quoted context with its attributes (web lib/compatibility.ts CONTEXT_RE); transcript.ContextRe is the snapshot's bare tag.
-	searchContextRe  = lazyre.New(`(?s)<(?:persona|jarvis)-context\b[^>]*>.*?</(?:persona|jarvis)-context>\s*`)
-	searchFileRe     = lazyre.New(`<(?:persona|jarvis)-file\b[^>]*?/?>(?:\s*</(?:persona|jarvis)-file>)?`)
+	searchContextRe  = lazyre.New(`(?s)<` + compat.ContextPattern() + `\b[^>]*>.*?</` + compat.ContextPattern() + `>\s*`)
+	searchFileRe     = lazyre.New(`<` + compat.FilePattern() + `\b[^>]*?/?>(?:\s*</` + compat.FilePattern() + `>)?`)
 	searchPastedRe   = lazyre.New(`(?s)<pasted_content\b[^>]*>(.*?)</pasted_content>`)
 	searchImagesRe   = lazyre.New(`(?s)<attached_images>.*?</attached_images>`)
 	searchImageNumRe = lazyre.New(`\[Image #\d+\]\s?`)

@@ -1469,9 +1469,11 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       el.scrollIntoView({ block: tall ? "start" : "center", behavior: "auto" });
       land(el, el.getBoundingClientRect().top - sc.getBoundingClientRect().top);
       unlight();
-      void el.getBoundingClientRect(); // the same row picked again lights again
-      el.setAttribute("data-search-hit", "");
-      lit.current = { el, timer: window.setTimeout(unlight, HIT_MS) };
+      // the ring hugs what it marks: your bubble itself, not its row's padding (#6426)
+      const ring = (el.matches("[data-user-bubble]") && el.querySelector<HTMLElement>("[data-hit-target]")) || el;
+      void ring.getBoundingClientRect(); // the same row picked again lights again
+      ring.setAttribute("data-search-hit", "");
+      lit.current = { el: ring, timer: window.setTimeout(unlight, HIT_MS) };
     });
   }, [ctx.scope, follow, unlight, land]);
   // the work the hub folded, fetched for the search while it is open (useFoldSearch, #6281): a hit in it opens its fold

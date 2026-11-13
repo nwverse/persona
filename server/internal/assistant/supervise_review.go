@@ -140,6 +140,11 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	if a.UserCheck && verdict != reviewAccepted {
 		return "", fmt.Errorf("user_check applies to accepted only")
 	}
+	if verdict == reviewAccepted { // done_needs_delivery: its PR is live first (supervise_review_delivery.go)
+		if err := s.acceptedDeliveryError(ctx, t, strings.TrimSpace(a.Link), a.Outcome); err != nil {
+			return "", err
+		}
+	}
 	// A legacy task without a ledger stays unsupervised when main accepts or cancels it; closing it must not invent a
 	// new supervision topology. Rework, needs_user and parked require an existing supervised task.
 	ledger := t.Supervision != nil

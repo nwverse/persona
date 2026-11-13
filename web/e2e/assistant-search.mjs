@@ -50,6 +50,8 @@ try {
       await said.click();
       await page.waitForURL(/[?&]at=/, { timeout: 10_000 });
       await page.locator("[data-search-hit]", { hasText: "BlueLane" }).waitFor({ timeout: 15_000 });
+      // the ring is on the bubble itself, not on its row (#6426)
+      assert.equal(await page.locator("[data-search-hit][data-hit-target]").count(), 1, "the ring hugs the bubble");
       await page.screenshot({ path: join(shots, `${scheme}-${tag}-palette-landed.png`) });
 
       // All chats: early history, paged back for

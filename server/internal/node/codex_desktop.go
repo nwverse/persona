@@ -227,9 +227,10 @@ type codexAppProject struct {
 }
 
 type codexAppStateCache struct {
-	mtime time.Time
-	size  int64
-	state *codexAppState
+	mtime   time.Time
+	size    int64
+	dbStamp string // the state database's stamp when its projects were merged (readCodexAppProjects, #6388)
+	state   *codexAppState
 }
 
 var codexAppStates sync.Map // home → codexAppStateCache
@@ -240,9 +241,13 @@ func loadCodexAppState(home string) *codexAppState {
 	if err != nil {
 		return nil
 	}
+	dbStamp := ""
+	if db := codexAppDBPath(home); db != "" {
+		dbStamp = fileStamp(db) + fileStamp(db+"-wal")
+	}
 	if v, ok := codexAppStates.Load(home); ok {
 		c := v.(codexAppStateCache)
-		if c.mtime.Equal(st.ModTime()) && c.size == st.Size() {
+		if c.mtime.Equal(st.ModTime()) && c.size == st.Size() && c.dbStamp == dbStamp {
 			return c.state
 		}
 	}
@@ -292,9 +297,19 @@ func loadCodexAppState(home string) *codexAppState {
 	for id := range s.assigned {
 		add(id)
 	}
+	// The migrated App keeps its projects in the state database, not in local-projects (#6388): merge them, with the
+	// json's own projects winning an id both have.
+	for id, p := range readCodexAppProjects(home) {
+		if s.projects == nil {
+			s.projects = map[string]codexAppProject{}
+		}
+		if _, ok := s.projects[id]; !ok {
+			s.projects[id] = p
+		}
+	}
 	slices.Sort(s.sidebar)
 	s.sidebar = slices.Compact(s.sidebar)
-	codexAppStates.Store(home, codexAppStateCache{mtime: st.ModTime(), size: st.Size(), state: s})
+	codexAppStates.Store(home, codexAppStateCache{mtime: st.ModTime(), size: st.Size(), dbStamp: dbStamp, state: s})
 	return s
 }
 
