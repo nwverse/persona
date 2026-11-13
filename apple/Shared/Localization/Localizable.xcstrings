@@ -67932,6 +67932,29 @@
       },
       "extractionState" : "manual"
     },
+    "How to turn it on" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "How to turn it on"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オンにする方法"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "怎么开"
+          }
+        }
+      }
+    },
     "How to wake it" : {
       "localizations" : {
         "en" : {
@@ -99707,6 +99730,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "On that Mac, turn on Persona Screen in System Settings › Privacy & Security › Screen & System Audio Recording." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On that Mac, turn on Persona Screen in System Settings › Privacy & Security › Screen & System Audio Recording."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "その Mac の「システム設定 › プライバシーとセキュリティ › 画面収録とシステムオーディオ録音」で Persona Screen をオンにしてください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在那台 Mac 的「系统设置 › 隐私与安全性 › 录屏与系统录音」里打开 Persona Screen。"
+          }
+        }
+      }
     },
     "On that computer, open a terminal, paste the line below and press Return. It installs Persona and connects." : {
       "localizations" : {
@@ -137460,6 +137506,30 @@
       },
       "extractionState" : "manual"
     },
+    "Still going through older chats; some may not show yet." : {
+      "comment" : "Under the assistant sidebar's search results while the manager's chat index is still reading older chats (#6284)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Still going through older chats; some may not show yet."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "以前のチャットを整理中です。まだ表示されないものがあります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "较早的对话还在整理，可能有些暂时搜不到。"
+          }
+        }
+      }
+    },
     "Still needs" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -144181,6 +144251,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "The Mac is locked. Showing VNC until it’s unlocked." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The Mac is locked. Showing VNC until it’s unlocked."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac がロックされています。ロックが解除されるまで VNC で表示します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac 锁屏了，解锁前先用 VNC。"
+          }
+        }
+      }
     },
     "The Meta glasses are not ready yet" : {
       "localizations" : {
@@ -152961,6 +153054,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "This Mac hasn’t allowed video yet. Showing VNC." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This Mac hasn’t allowed video yet. Showing VNC."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この Mac はまだビデオを許可していません。VNC で表示します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台 Mac 还没允许视频，先用 VNC。"
+          }
+        }
+      }
     },
     "This Mac is locked. Unlock it to control it." : {
       "localizations" : {
@@ -161834,6 +161950,29 @@
       },
       "extractionState" : "manual"
     },
+    "Turn On Video for This Mac" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Turn On Video for This Mac"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この Mac でビデオをオンにする"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "为这台 Mac 打开视频"
+          }
+        }
+      }
+    },
     "Turn On “%@”?" : {
       "localizations" : {
         "en" : {
@@ -168322,6 +168461,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "视频（流畅省流量）"
+          }
+        }
+      }
+    },
+    "Video stopped. Showing VNC for now." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Video stopped. Showing VNC for now."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ビデオが途切れました。いったん VNC で表示します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "视频断了，先用 VNC。"
           }
         }
       }
@@ -185063,6 +185225,236 @@
           }
         }
       }
+    },
+    "Assistant says" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Assistant says"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アシスタントによると"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "助手说"
+          }
+        }
+      }
+    },
+    "Please try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Please try again."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "もう一度試してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请再试一次。"
+          }
+        }
+      }
+    },
+    "Say something" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Say something"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ひとこと伝える"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "说一句"
+          }
+        }
+      }
+    },
+    "Try again [Inbox Detail]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Try again"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "もう一度試す"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "再试一次"
+          }
+        }
+      }
+    },
+    "Not the same matter" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not the same matter"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "別の件です"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不是同一件事"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Same matter as…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Same matter as…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同じ件…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "是同一件事…"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Marked as not the same matter" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Marked as not the same matter"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "別の件として記録しました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已标为不是同一件事"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Linked to “%@”" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Linked to “%1$@”"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%1$@」にまとめました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已连到「%1$@」"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Search titles and places" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Search titles and places"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "タイトルと場所を検索"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索标题和位置"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "No open matters match" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No open matters match"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一致する未処理の項目はありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有符合的未处理事项"
+          }
+        }
+      },
+      "extractionState" : "manual"
     },
     "people [KB Unlink]" : {
       "extractionState" : "manual",
