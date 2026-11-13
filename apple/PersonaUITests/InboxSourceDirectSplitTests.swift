@@ -141,19 +141,14 @@ final class InboxSourceDirectSplitTests: XCTestCase {
         requireHittable(source, "View original on the item detail")
     }
 
-    /// Back as a finger does it, from the detail column's own leading edge: the right column's navigation bar's left
-    /// side (the divider's edge itself did not start the pop on an iPad).
+    /// Back as a finger does it, from the window's left edge: on an iPad the navigation bar spans the window (minX 0),
+    /// so neither the divider's edge nor a right column's bar names where the pop starts.
     @MainActor private func swipeBackInDetailColumn() {
         sleep(1) // once the push has settled
         let window = app.windows.firstMatch
-        let detail = app.navigationBars.allElementsBoundByIndex.last { $0.exists && $0.frame.minX > 50 }
-        XCTAssertNotNil(detail, "no navigation bar in the detail column:\n\(app.debugDescription)")
-        guard let detail else { return }
-        let x = detail.frame.minX - window.frame.minX + 2
-        let start = window.coordinate(withNormalizedOffset: .zero)
-            .withOffset(CGVector(dx: x, dy: window.frame.height * 0.5))
-        start.press(forDuration: 0.1, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)),
-                    withVelocity: .slow, thenHoldForDuration: 0.1)
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0.5))
+            .press(forDuration: 0.1, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5)),
+                   withVelocity: .slow, thenHoldForDuration: 0.1)
     }
 
     // MARK: - The hub's declarations
