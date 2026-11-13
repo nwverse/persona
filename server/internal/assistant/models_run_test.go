@@ -136,6 +136,26 @@ func TestCodexOnlyAPIPurposeStatusExplainsTheLimitation(t *testing.T) {
 	}
 }
 
+// A node-reported launcher in the stored last-seen snapshot selects the Codex explanation without an online refresh.
+func TestNoAPIStatusUsesStoredNodeLauncherSnapshot(t *testing.T) {
+	s, f, _ := modelService(t)
+	ctx := context.Background()
+	if err := s.store().PutSetting(ctx, launchersZshrcKey, map[string][]proto.Launcher{
+		"server": {{Name: "cx", Source: "zshrc", Agent: "codex"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before := len(f.calls)
+	if got := s.noAPIStatus(ctx); got != modelCodexNoAPIStatus {
+		t.Fatalf("status key %q, want %q", got, modelCodexNoAPIStatus)
+	}
+	for _, call := range f.calls[before:] {
+		if call.Method == DeviceLaunchersList {
+			t.Fatalf("status selection refreshed launchers on %s", call.Device)
+		}
+	}
+}
+
 // Without a model the done judge leaves a visible waiting reason on the task instead of only logging it.
 func TestUnconfiguredDoneJudgeLeavesTheReasonOnTheTask(t *testing.T) {
 	s, f, _ := modelService(t)
