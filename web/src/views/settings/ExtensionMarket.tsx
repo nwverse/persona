@@ -25,6 +25,9 @@ import { askSignIn } from "../../lib/extension-auth";
 import { useStore } from "../../lib/store";
 import { OperationSteps, useOperation } from "./ExtensionOperation";
 
+// A paragraph of body text in the market's pages and dialogs, as each writes it.
+const BODY = "text-[12.5px] leading-relaxed text-ink-2";
+
 function Back({ label, onBack, right }: { label: string; onBack: () => void; right?: React.ReactNode }) {
   return (
     <div className="mb-3 flex items-center gap-2">
@@ -180,7 +183,7 @@ export function MarketCatalog({ onBack, onOpen, onMarkets }: { onBack: () => voi
 
       <Group title={data && !error && !updating ? t("settings-extensionmarket.extension_count", { count: data.extensions.length }) : t("settings-extensionmarket.extensions")}>
         {updating && data && (
-          <p role="status" className="flex items-center gap-2 px-4 py-2 text-[12px] text-ink-3">
+          <p role="status" className="flex items-center gap-2 px-4 py-2 text-label text-ink-3">
             <Spinner />
             {t("settings-extensionmarket.updating")}
           </p>
@@ -213,8 +216,8 @@ export function MarketCatalog({ onBack, onOpen, onMarkets }: { onBack: () => voi
               key={`${it.market}/${it.id}`}
               type="button"
               onClick={() => onOpen(it)}
-              aria-busy={updating || undefined}
-              className={cx("flex w-full items-center gap-3 px-4 py-3 text-left transition-[colors,opacity] hover:bg-hover", updating && "opacity-50")}
+              aria-busy={updating || undefined} // a filter, not opacity: the row's fade-up animation holds opacity at 1
+              className={cx("flex w-full items-center gap-3 px-4 py-3 text-left transition-[colors,filter] hover:bg-hover", updating && "[filter:opacity(0.5)]")}
               style={{ animation: `fade-up 320ms ${EASE} ${Math.min(i, 8) * 30}ms both` }}
             >
               <ExtensionLogo url={it.icon_url} manager="" iconSize={16} className={cx("flex size-9 shrink-0 items-center justify-center rounded-[9px]", it.installed ? "bg-accent-tint text-accent-ink" : "bg-inset text-ink-3 shadow-hairline")} />
@@ -358,7 +361,7 @@ export function MarketItem({ market, id, manager, onBack, onInstalled }: { marke
         </div>
         {(it?.description || it?.tags?.length || it?.problem || error || managerName) && (
           <div className="flex flex-col gap-2 border-t border-line px-4 py-3">
-            {it?.description && <p className="text-[12.5px] leading-relaxed text-ink-2">{it.description}</p>}
+            {it?.description && <p className={BODY}>{it.description}</p>}
             {!!it?.tags?.length && (
               <div className="flex flex-wrap gap-1">
                 {it.tags.map((tag) => (
@@ -694,13 +697,13 @@ export function UninstallDialog({ id, name, version, pack, onClose, onDone }: { 
       }
     >
       {warnings ? <div role="status">
-        <p className="text-[12.5px] leading-relaxed text-ink-2">{t("settings-extensionmarket.uninstalled_warnings")}</p>
+        <p className={BODY}>{t("settings-extensionmarket.uninstalled_warnings")}</p>
         <ul className="mt-3 space-y-2">
           {warnings.map((warning, index) => <li key={index} className="rounded-control bg-orange-tint px-3 py-2 text-[12.5px] leading-relaxed whitespace-pre-wrap break-all text-orange">{warning}</li>)}
         </ul>
       </div> : <>
       {version && <Row label={t("settings-extensions.version")} mono wrapValue>{version}</Row>}
-      <p className="text-[12.5px] leading-relaxed text-ink-2">{t("settings-extensionmarket.uninstall_body")}</p>
+      <p className={BODY}>{t("settings-extensionmarket.uninstall_body")}</p>
       {/* The choices, one row each in one box (#4072): keep the data, and for a pack its members too. */}
       <div className="mt-3 divide-y divide-line overflow-hidden rounded-control bg-inset shadow-hairline">
         <UninstallChoice checked={keep} onChange={setKeep} title={t("settings-extensionmarket.keep_data")} hint={t("settings-extensionmarket.keep_data_hint")} />
