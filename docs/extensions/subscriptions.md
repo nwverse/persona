@@ -143,6 +143,7 @@ A run writes its seen keys, its items and the cursor or bounded page continuatio
   - three failed calls in a row pause the connector, 1 minute first, doubling up to 6 hours.
 - A subscription's own failure retries after its interval × 2ⁿ, at most 6 hours, and never stops it. Two runs in a row whose items lose their title, or whose list is gone, pause it in `needs_recipe`, as does a tool that changed so that it no longer takes the recipe's arguments; a tool whose description changed while it still fits carries on.
 - A connector that is not `ok` or is switched off is `not_connected`: no failure, no run recorded, and it resumes by itself.
+- A connector's `changed` event (any scope) brings forward the next run of its subscriptions that are on and pull items (#6247), as it kicks the Inbox for the connector's own things. Each runs this way at most once a minute after its last run, and never sooner than the source's `min_interval_seconds`. The limits above still hold, and a run they hold back is left to the schedule. The run is recorded as `scheduled`; snapshots and push sources keep their own timing. A source that announces new items so reaches the Inbox in seconds, not at its next pull.
 - Intervals are at least 5 minutes and the source's `min_interval_seconds`; snapshots at least an hour, by default once a day at `daily_at` (08:00 in the user's time zone). Items default to every 15 minutes, or the source's minimum when longer.
 - Logs carry counts and states only. Creating, changing, running now and deleting are recorded in `plugin_audit` (`subscription_created`, `subscription_updated` with the changed field names, `subscription_run_now`, `subscription_deleted`).
 
@@ -306,6 +307,19 @@ pages would make.
 - **Undo.** Changes are recorded in `plugin_audit` with the actor `assistant`; an update's answer carries `previous`,
   the values that put it back with another confirmed save.
 - A meeting's turn refuses `subscription_save` and `subscription_run` like any tool that is not a meeting's.
+
+### Built-in sources switched to their default subscription
+
+A built-in source's Inbox feed can be switched to its default subscription and back (#6265; `docs/design/proposals/inbox-sources-migration.md`, decisions 1–3). The code is `server/internal/subscriptions/migrate.go`.
+
+- **Identity.** The default subscription has a fixed id, `sub_m_<connector>` (`MigrationID`); a random id's rest is hex, so no other starts so. While it is switched on (`migrated`, the time it was), the manager leaves the built-in out of the Inbox round (`readConnectors`). It hands the subscription's rows under the built-in's own source id, with the items' own threads and ids instead of `sub:<id>:` threads. The Inbox's item ids (`<source>:sha1(thread, last)`), mutes, policies, done threads, read errors and replies (through the built-in's connector) then match the built-in's, as long as the recipe maps the same thread and id.
+- **The switch** is `Service.Migrate(Migration, on)`, given each source's default recipe.
+  - **On** makes the subscription when there is none, both destinations off, and sets `migrated`; it is pulled at once. Its catch-up reaches a day back and comes as rows, never a digest. The rows the built-in already brought are known by their ids, so nothing between the built-in's last round and the subscription's first is missed, and nothing comes twice.
+  - **Off** clears `migrated`. The subscription stays, not pulled, with its seen keys and items; the built-in is read again from the next round.
+  - Deleting the subscription switches it back first.
+- **Mixed versions and rollback.** `migrated` is kept with the subscription's run data; its own `to_inbox` and `to_kb` stay false. A manager from before this knows neither the field nor the id, sees an off subscription, and never pulls it. The built-in's own feed is never switched off, so rolling the hub back restores the built-in on its next round, with no duplicates. Its pages are drawn by the manager, so no client needs a feature flag.
+- **The knowledge base** stays on the built-in's path (decision 3): `migrated` moves only the Inbox feed.
+- **For the AI twin** a switched source's rows read as the built-in's: the round names no subscription (`via`) for them.
 
 ### Push sources
 

@@ -97,6 +97,23 @@ func validModes(mode, effort string) error {
 	return nil
 }
 
+// validModesFor validates a start's mode / effort against the launcher it runs on: a Codex start takes Codex's own
+// effort list (ultra included, proto.CodexEffortLevels), everything else keeps Claude Code's. Permission modes stay
+// Claude's for both.
+func validModesFor(launcher, mode, effort string) error {
+	if mode != "" && !slices.Contains(permissionModes, mode) {
+		return fmt.Errorf("unknown permission mode %q", mode)
+	}
+	levels := effortLevels
+	if launcherAgentType(launcher) == "codex" {
+		levels = append([]string{effortAuto}, proto.CodexEffortLevels...)
+	}
+	if effort != "" && !slices.Contains(levels, effort) {
+		return fmt.Errorf("unknown effort level %q", effort)
+	}
+	return nil
+}
+
 // modeFlags are the claude flags starting a session with a mode / effort (values already validated).
 func modeFlags(mode, effort string) string {
 	var b strings.Builder

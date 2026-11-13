@@ -358,6 +358,9 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(opened.hasAttribute("data-needs-open")).toBe(true);
     expect(opened.querySelector("button[aria-expanded=true]")).not.toBeNull();
     expect(opened.textContent).toContain("8080");
+    // its title is the fold toggle, so the opened card has its own way to the task (#6255)
+    expect(opened.querySelectorAll("[data-needs-open-entry]")).toHaveLength(1);
+    expect(opened.querySelector("[data-needs-open-entry]")!.getAttribute("title")).toContain("Demo task");
     act(() => opened.querySelector<HTMLButtonElement>("button[aria-expanded=true]")!.click());
     expect(host.querySelector('[data-needs-row="task:tray-task"]')!.tagName).toBe("BUTTON");
     // every row is folded again when the tray is closed and opened

@@ -291,7 +291,8 @@ func applyRun(cur *Subscription, c RunCommit, withState bool) {
 	cur.LastRunAt, cur.LastOKAt, cur.LastNewCount = out.LastRunAt, out.LastOKAt, out.LastNewCount
 	cur.WeakDedup, cur.Shape, cur.NextRunAt = out.WeakDedup, out.Shape, out.NextRunAt
 	cur.SourceName, cur.Icon, cur.Service, cur.SourceMin, cur.MaxCallsPerHour = out.SourceName, out.Icon, out.Service, out.SourceMin, out.MaxCallsPerHour
-	if sameTime(cur.InboxFrom, out.InboxFrom) { // the catch-up mark of the Inbox turned on as the run saw it, not of another
+	// The catch-up mark of the Inbox turned on (or switched to it, #6265) as the run saw it, not of another.
+	if sameTime(cur.InboxFrom, out.InboxFrom) && sameTime(cur.Migrated, out.Migrated) {
 		cur.InboxCatchup = out.InboxCatchup
 		if out.InboxGroup == groupOf(cur.Recipe) { // the rows' grouping, while the recipe still groups that way
 			cur.InboxGroup, cur.InboxGroupFrom = out.InboxGroup, out.InboxGroupFrom
