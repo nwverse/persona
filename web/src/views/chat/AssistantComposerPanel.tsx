@@ -37,17 +37,17 @@ export function AssistantComposerPanel(props: ComponentProps<typeof ComposerPane
       rows,
       loading: current.status === "loading",
       status: current.status && (
-        <div role="status" className="mt-1.5 shrink-0 border-t border-line px-[10px] pt-2 pb-1 text-[12px] text-ink-3">{t(`chat-composerpanel.skills_${current.status}`)}</div>
+        <div role="status" className="mt-1.5 shrink-0 border-t border-line px-[10px] pt-2 pb-1 text-xs text-ink-3">{t(`chat-composerpanel.skills_${current.status}`)}</div>
       ),
       row: (skill, common) => (
-        <button key={skill.id} {...common} title={`${skill.name} · ${skill.source}\n${skill.description ?? ""}`} className="relative z-10 flex min-h-14 w-full items-center gap-2 rounded-[8px] px-[10px] py-2 text-left text-[14px] text-ink">
+        <button key={skill.id} {...common} title={`${skill.name} · ${skill.source}\n${skill.description ?? ""}`} className="relative z-10 flex min-h-14 w-full items-center gap-2 rounded-[8px] px-[10px] py-2 text-left text-sm text-ink">
           <Icon name="spark" size={16} className="shrink-0 text-ink-3" />
           <span className="min-w-0 flex-1">
             <span className="flex items-baseline gap-2">
               <span className="truncate font-medium">{skill.name}</span>
-              <span className="min-w-0 truncate text-[12px] text-ink-3">{skill.source}</span>
+              <span className="min-w-0 truncate text-xs text-ink-3">{skill.source}</span>
             </span>
-            <span className="block truncate text-[12px] text-ink-3">{skill.description}</span>
+            <span className="block truncate text-xs text-ink-3">{skill.description}</span>
           </span>
         </button>
       ),
