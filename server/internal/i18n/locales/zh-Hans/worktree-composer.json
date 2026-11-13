@@ -51,6 +51,11 @@
   "runtime_parent": "{engine} 把新工作树放在源工作区所在的项目里，不能另选父工作区",
   "runtime_unconfirmed": "{engine} 未返回创建结果，请刷新检查后再重试",
   "runtime_prepare": "{engine} 没有说明它把工作树放在哪里；更新后再试",
+  "runtime_source_required": "请选择从哪个工作区或文件夹新建工作树",
+  "runtime_folder_name": "{engine} 不能用“{name}”做工作树的文件夹名；请用英文字母或数字",
+  "runtime_folder_taken": "{path} 已经存在，{engine} 会把工作树放到别处；请换一个名字",
+  "runtime_slow": "{engine} 没能及时建好工作树；重试前先刷新，看看它是否已经出现",
+  "agent_branch_exhausted": "Agent 的工作树没有可用的分支名：它的名字和后面 49 个都已被占用",
   "runtime_not_owned": "这个工作树不是 {engine} 建的，Persona 不删除它；请在 {engine} 里处理",
   "runtime_folder_kept": "这个 {engine} 工作区是普通文件夹，不是工作树；Persona 只删除 {engine} 自己建的工作树"
 }

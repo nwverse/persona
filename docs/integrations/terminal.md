@@ -663,8 +663,9 @@ These suggestions apply only to creation and do not establish ownership for clos
     An answer on another branch all the same (checked out elsewhere meanwhile, or Orca's own folder setting taken) is an error naming what Orca made and where (nothing is deleted), not a success.
 - **Delegate to Paseo** (#6295, `node/runtimeworkspaces.go`): on a Paseo Git workspace (web only), the bridge has Paseo make the worktree as a workspace of
   its own (runtime `workspace.create`, Paseo's `workspace.create.request`), after the node's guards below. The folder is Paseo's: prepare's `path` is
-  Paseo's worktrees folder for the repository and the checkout path must be in it (only its last element can be chosen). No terminal opens; the dialog's
-  next step is Start Agent in the new workspace. Details in `docs/integrations/paseo.md` ("Spaces and workspaces").
+  Paseo's worktrees folder for the repository and the checkout path must be in it (only its last element can be chosen, taken as Paseo names a folder:
+  `[a-z0-9]` runs joined by single hyphens, at most 50 characters; one whose folder exists at all, an empty one too, is refused, since Paseo would make
+  `<name>-1` instead). No terminal opens; the dialog's next step is Start Agent in the new workspace. Details in `docs/integrations/paseo.md` ("Spaces and workspaces").
 - **Old herdr without `worktree`, and Herdr App**: node falls back to `git worktree add` (existing local branch unchanged, otherwise `-b` from repository HEAD, no `--force`), then the host opens an ordinary workspace in the checkout (no native worktree grouping).
   If checkout succeeds but workspace creation fails, keep checkout and explain in error. Other hosts (Tern, botmux) don't support it; menu hidden.
 - **Capability**: each host in `GET /machines/{mid}/panes` adds boolean `worktree` alongside `new_tab`; older nodes without it hide menu.
@@ -708,10 +709,14 @@ A new agent can start in a Git worktree of its own, so agents on the same reposi
   - **Refused:** a folder that is not one of Persona's worktrees (the worktree's own folder, not one inside it), and one a live agent still runs in.
   - **Refused unless `force`:** uncommitted changes (`worktree_dirty`, with the count), and deleting a branch with unmerged commits (`worktree_unmerged`). The client asks the user before sending `force`.
   - **The branch** goes only with `delete_branch` (`git branch -d`, or `-D` with `force`).
-- **Paseo** (#6295): where the engine is Paseo, Paseo makes the worktree (same branch and folder name, in Paseo's worktrees folder) as a workspace of
-  its own, which the agent's start then uses; `worktree/add` answers its `workspace_id`. `worktree/status` gives Paseo's folder as `checkouts` and never
-  calls Paseo's worktrees Persona's own (`ours: false`), so `worktree/remove` leaves them to Paseo; Delete worktree on the workspace's row
-  removes one through Paseo (#6297, below).
+- **The engine that makes it**: `worktree/add` and New Agent's `worktree/status` carry the engine the agent opens in (`kind`), Close and Delete the one it
+  ran in (the session's `host`); without one, the computer's default engine. The web, iOS and Android send it where they know it.
+- **Paseo** (#6295): where the engine is Paseo, Paseo makes the worktree (same branch and folder name, as Paseo names folders, in Paseo's worktrees
+  folder; a name whose folder exists, an empty one too, is taken) as a workspace of its own, which the agent's start then uses; `worktree/add` answers its
+  `workspace_id`. `worktree/status` gives Paseo's folder as `checkouts`, and calls a worktree Persona's (`ours`) only when it is the folder of a
+  worktree workspace Paseo made (#6297); `worktree/remove` then archives that workspace through Paseo, which removes the folder, with Delete
+  worktree's guards (below): refused while another session is in the workspace or an agent still runs in the folder, and for uncommitted changes or
+  an unmerged branch unless `force`; the branch goes after the folder only with `delete_branch`.
 - All three are full-device routes like section 23's, and extension tokens never reach them. The body is read field by field, plus the two switches (`flags`, booleans only).
 
 ## 24. Full herdr UI: a PTY client, switchable beside Single pane (#2357)

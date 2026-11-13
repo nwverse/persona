@@ -94,7 +94,12 @@ func (n *Node) worktreeAdd(ctx context.Context, kind, cwd, branch, nameHint stri
 		}
 		return proto.WorktreeAdded{Path: dest, Branch: b, Root: repo.root}, nil
 	}
-	return res, refusal("worktree_failed", "no free branch name for the agent's worktree", nil)
+	return res, noAgentBranch(ctx)
+}
+
+// noAgentBranch is the refusal when the agent's own branch name and the next 49 are all taken.
+func noAgentBranch(ctx context.Context) error {
+	return refusal("worktree_failed", composerError(ctx, "agent_branch_exhausted").Error(), nil)
 }
 
 func branchExists(ctx context.Context, root, branch string) bool {

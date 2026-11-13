@@ -51,6 +51,11 @@
   "runtime_parent": "{engine} は新しいワークツリーを元のワークスペースのプロジェクトに置きます。別の親は選べません",
   "runtime_unconfirmed": "{engine} から作成結果が返されませんでした。更新して確認してから再試行してください",
   "runtime_prepare": "{engine} がワークツリーの置き場所を返しませんでした。更新してから再試行してください",
+  "runtime_source_required": "ワークツリーの作成元にするワークスペースかフォルダを選んでください",
+  "runtime_folder_name": "{engine} は「{name}」をワークツリーのフォルダ名にできません。英字か数字を使ってください",
+  "runtime_folder_taken": "{path} はすでに存在するため、{engine} はワークツリーを別の場所に作ってしまいます。別の名前を選んでください",
+  "runtime_slow": "{engine} は時間内にワークツリーを作り終えませんでした。再試行する前に、更新して作成されたか確認してください",
+  "agent_branch_exhausted": "エージェントのワークツリーに使えるブランチ名がありません。その名前と続く 49 個がすべて使われています",
   "runtime_not_owned": "このワークツリーは {engine} が作成したものではないため、Persona は削除しません。{engine} で削除してください",
   "runtime_folder_kept": "この {engine} ワークスペースはワークツリーではなくフォルダです。Persona が削除するのは {engine} が作成したワークツリーだけです"
 }

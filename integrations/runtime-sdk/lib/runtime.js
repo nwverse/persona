@@ -79,11 +79,13 @@ export function defaultSocketPath() {
  *   there too. The node sends it only for a session the runtime lists as done (unread).
  * @property {(params: {cwd: string, workspace_id?: string, branch?: string, create_branch?: boolean, base?: string,
  *   name?: string, key?: string}) => Promise<{workspace: object}>} [createWorkspace] - a worktree of the repository cwd is
- *   in, made by the runtime as a workspace of its own (caps.workspaces): branch checked out as it is (create_branch
- *   false), or made from base; no branch: the runtime names the branch and the folder. Resolves to the new
- *   workspace's row (rt.workspacesChanged's shape) with the folder and branch it actually has.
+ *   in, made by the runtime as a workspace of its own (caps.workspaces, with prepareWorkspace): branch checked out as it
+ *   is (create_branch false), or made from base, in the folder name (a-z, 0-9 and single hyphens, at most 50) under
+ *   prepareWorkspace's; no branch: the runtime names the branch and the folder. Resolves to the new workspace's row
+ *   (rt.workspacesChanged's shape) with the folder and branch it actually has.
  * @property {(params: {cwd: string, repo_root: string}) => Promise<{checkouts: string}>} [prepareWorkspace] - the
- *   folder createWorkspace puts worktrees of that repository in (repo_root: its main checkout), for the dialog to show.
+ *   folder createWorkspace puts worktrees of that repository in (repo_root: its main checkout), for the dialog to show;
+ *   caps.workspaces takes both.
  * @property {(params: {workspace_id?: string, space_id?: string, title: string}) => Promise<{workspace?: object,
  *   space_name?: string}>} [renameWorkspace] - with caps.workspaces: a workspace's title (workspace_id; resolves to its
  *   row as it is now), or the name of the space its sessions are grouped in (space_id; resolves to the name the space
@@ -153,6 +155,9 @@ export function createRuntime(driver, options) {
   let launchers = Array.isArray(options.launchers) ? options.launchers : undefined
   // Its workspaces (runtime.workspaces), as workspacesChanged last gave them: said again to every node it connects to.
   let workspaces
+  // Workspaces of its own (caps.workspaces) take both: the node asks where the worktrees go (prepareWorkspace) before
+  // every one it has the runtime make (createWorkspace), so one without the other could make none.
+  const keepsWorkspaces = typeof driver.createWorkspace === 'function' && typeof driver.prepareWorkspace === 'function'
 
   let peer
   let stopped = false
@@ -262,7 +267,7 @@ export function createRuntime(driver, options) {
     // Its own archive, both ways: an archive Persona could not undo is not offered.
     if (typeof driver.archive === 'function' && typeof driver.unarchive === 'function') caps.archive = true
     // Workspaces of its own, which it lists (workspacesChanged) and makes worktrees as.
-    if (typeof driver.createWorkspace === 'function') caps.workspaces = true
+    if (keepsWorkspaces) caps.workspaces = true
     if (options.resume === true && caps.start) caps.resume = true
     // It keeps no "always allow" rule of its own: the hub remembers one per session and tool for it (#3974).
     if (options.keepAlways === true) caps.keep_always = true
@@ -368,7 +373,7 @@ export function createRuntime(driver, options) {
     retryMs = baseRetry
     log('persona: connected to the node')
     // Its workspaces, which this node has not heard of: a node keeps a runtime's only while it is connected.
-    if (workspaces && typeof driver.createWorkspace === 'function') p.notify('runtime.workspaces', { workspaces })
+    if (workspaces && keepsWorkspaces) p.notify('runtime.workspaces', { workspaces })
     schedulePush(0)
     hubChanged()
     const why = await p.done
@@ -817,15 +822,14 @@ export function createRuntime(driver, options) {
         return res
       }
       case 'workspace.prepare':
-        need(driver.createWorkspace, 'workspaces')
-        return need(driver.prepareWorkspace, 'workspace.prepare')(params)
+        return need(keepsWorkspaces && driver.prepareWorkspace, 'workspaces')(params)
       case 'workspace.create':
-        return need(driver.createWorkspace, 'workspaces')(params)
+        return need(keepsWorkspaces && driver.createWorkspace, 'workspaces')(params)
       case 'workspace.rename':
-        need(driver.createWorkspace, 'workspaces')
+        need(keepsWorkspaces && driver.createWorkspace, 'workspaces')
         return need(driver.renameWorkspace, 'workspace.rename')(params)
       case 'workspace.archive':
-        need(driver.createWorkspace, 'workspaces')
+        need(keepsWorkspaces && driver.createWorkspace, 'workspaces')
         return need(driver.archiveWorkspace, 'workspace.archive')(params)
     }
     throw new RpcError(`unknown method ${method}`, 'unsupported')
@@ -880,13 +884,14 @@ export function createRuntime(driver, options) {
     /**
      * Its workspaces changed (one made, renamed, archived, or its branch moved): the whole list, which the node keeps
      * in place of the last (runtime.workspaces), and which every node it connects to later is told at once. Only for a
-     * driver with createWorkspace (caps.workspaces). A row is {workspace_id, title, cwd, kind (checkout | worktree |
-     * folder), branch?, space_id?, space_name?, repo_root?, owned?}: docs/protocol/protocol.md "Runtime ↔ node".
+     * driver with createWorkspace and prepareWorkspace (caps.workspaces). A row is {workspace_id, title, cwd, kind
+     * (checkout | worktree | folder), branch?, space_id?, space_name?, repo_root?, owned?}: docs/protocol/protocol.md
+     * "Runtime ↔ node".
      * @param {object[]} list
      */
     workspacesChanged(list) {
       workspaces = Array.isArray(list) ? list : []
-      if (typeof driver.createWorkspace === 'function') peer?.notify('runtime.workspaces', { workspaces })
+      if (keepsWorkspaces) peer?.notify('runtime.workspaces', { workspaces })
     },
     append,
     stream,

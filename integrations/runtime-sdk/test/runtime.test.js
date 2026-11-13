@@ -557,7 +557,7 @@ test('archive: caps.archive only with both ways, calls reach the driver, one way
   await assert.rejects(half.peer.call('session.archive', { session_id: 's1' }), (err) => err.code === 'unsupported')
 })
 
-test('workspaces: caps.workspaces with createWorkspace, the list on change and to every node, creation and its folder', async (t) => {
+test('workspaces: caps.workspaces with createWorkspace and prepareWorkspace, the list on change and to every node, creation and its folder', async (t) => {
   const n = await startFakeNode(t)
   const got = []
   const row = { workspace_id: 'ws-1', title: 'main', cwd: '/w/app', kind: 'checkout', branch: 'main', space_id: 'p1', space_name: 'app' }
@@ -591,6 +591,7 @@ test('workspaces: caps.workspaces with createWorkspace, the list on change and t
   const n2 = await startFakeNode(t)
   const rt3 = createRuntime(minimal({
     createWorkspace: async () => ({}),
+    prepareWorkspace: async () => ({ checkouts: '/w/trees' }),
     renameWorkspace: async (p) => { got.push(['rename', p]); return p.space_id ? { space_name: p.title } : { workspace: { ...row, title: p.title } } },
     archiveWorkspace: async (p) => { got.push(['archive', p]); return { archived_at: '2026-11-12T00:00:00.000Z' } },
   }), { runtime: 'toy2', socketPath: n2.path, retryMs: 20 })
@@ -603,17 +604,24 @@ test('workspaces: caps.workspaces with createWorkspace, the list on change and t
   assert.deepEqual(got.slice(2), [['rename', { workspace_id: 'ws-1', title: 'Main' }], ['rename', { space_id: 'p1', title: 'App' }],
     ['archive', { workspace_id: 'ws-1' }]])
 
-  // Without createWorkspace nothing is declared, said or answered.
-  const plain = await startFakeNode(t)
-  const rt2 = createRuntime(minimal({ prepareWorkspace: async () => ({ checkouts: '/x' }) }), { runtime: 'plain', socketPath: plain.path, retryMs: 20 })
-  t.after(() => rt2.stop())
-  rt2.workspacesChanged([row])
-  rt2.start()
-  await plain.ready
-  assert.equal(plain.hello.caps.workspaces, undefined)
-  await assert.rejects(plain.peer.call('workspace.create', { cwd: '/w/app' }), (err) => err.code === 'unsupported')
-  await assert.rejects(plain.peer.call('workspace.prepare', { cwd: '/w/app' }), (err) => err.code === 'unsupported')
-  assert.equal(plain.last('runtime.workspaces'), undefined)
+  // Without both nothing is declared, said or answered: the node asks where the worktrees go before each one it has
+  // made, so either alone could make none.
+  const renames = { renameWorkspace: async () => ({ space_name: 'x' }), archiveWorkspace: async () => ({}) }
+  for (const [name, half] of [['prepare-only', { prepareWorkspace: async () => ({ checkouts: '/x' }), ...renames }],
+    ['create-only', { createWorkspace: async () => ({ workspace: { workspace_id: 'ws-9', cwd: '/x/y' } }), ...renames }]]) {
+    const plain = await startFakeNode(t)
+    const rt2 = createRuntime(minimal(half), { runtime: name, socketPath: plain.path, retryMs: 20 })
+    t.after(() => rt2.stop())
+    rt2.workspacesChanged([row])
+    rt2.start()
+    await plain.ready
+    assert.equal(plain.hello.caps.workspaces, undefined, name)
+    await assert.rejects(plain.peer.call('workspace.create', { cwd: '/w/app' }), (err) => err.code === 'unsupported')
+    await assert.rejects(plain.peer.call('workspace.prepare', { cwd: '/w/app' }), (err) => err.code === 'unsupported')
+    await assert.rejects(plain.peer.call('workspace.rename', { space_id: 'p1', title: 'x' }), (err) => err.code === 'unsupported')
+    await assert.rejects(plain.peer.call('workspace.archive', { workspace_id: 'ws-1' }), (err) => err.code === 'unsupported')
+    assert.equal(plain.last('runtime.workspaces'), undefined, name)
+  }
 })
 
 test('a watch for a session the node reads from its transcript streams live text only', async (t) => {
