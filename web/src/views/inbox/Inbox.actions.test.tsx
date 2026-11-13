@@ -89,6 +89,13 @@ describe("inbox merge and add to to-dos (#6480)", () => {
     await click(boxes()[0]);
     await click(boxes()[1]);
   };
+  it("the phone's icon-only Merge and Add to to-dos are named for screen readers and hover", async () => {
+    await click(button("选择"));
+    for (const name of ["合并", "加入待办"]) {
+      const b = host.querySelector(`[role="toolbar"] button[aria-label="${name}"]`);
+      expect(b?.getAttribute("title")).toBe(name);
+    }
+  });
   it("Merge needs two rows; it merges them into one row that says so, and ends selecting", async () => {
     await click(button("选择"));
     await click(boxes()[0]);

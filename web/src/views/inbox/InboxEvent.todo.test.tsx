@@ -57,4 +57,15 @@ describe("to-do suggestion", () => {
     expect(body).toMatchObject({ action: "confirm", text: "回复新报价" });
     expect(body?.due).toBeUndefined();
   });
+  it("All day is a switch: on hides the time, off asks for one (9:00 to start with) and sends a moment", async () => {
+    act(() => root.render(<SuggestionCard item={item} suggestion={item.suggestion!} />));
+    const sw = () => host.querySelector<HTMLElement>('[role="switch"]')!;
+    expect(sw().getAttribute("aria-checked")).toBe("true");
+    expect(host.querySelector("[data-todo-time]")).toBeNull();
+    await act(async () => sw().click());
+    expect(host.querySelector<HTMLInputElement>("[data-todo-time]")?.value).toBe("09:00");
+    await act(async () => [...host.querySelectorAll("button")].find((b) => b.textContent?.trim() === "加入待办")?.click());
+    const body = sent.calls.find((c) => c.path.endsWith("/suggestion"))?.json;
+    expect(body?.due).toBe(new Date(2026, 10, 20, 9, 0).toISOString());
+  });
 });
