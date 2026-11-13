@@ -165,6 +165,10 @@ func TestDecisionThatCannotBeKeptAsHeldIsPushed(t *testing.T) {
 	s.loadAcceptLocked(context.Background())
 	s.accept.mu.Unlock()
 	st := &acceptPutFails{memStore: &memStore{}, fail: true}
+	// Only the acceptance write fails: keep the settings so the replacement store cannot reset the briefing's time zone.
+	if err := st.memStore.PutSetting(context.Background(), settingsKey, s.settings(context.Background())); err != nil {
+		t.Fatal(err)
+	}
 	s.store = func() Store { return st }
 	setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
 	res := reviewTask(t, s, todo.ID, waitingDecision())

@@ -496,6 +496,9 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
     var delivery: TodoDelivery?
     /// The to-dos that carried the same brief, oldest first (#5732); nil on older hubs and caches.
     var lineage: [TodoLineageStep]?
+    /// Nobody is working on it (#3618, docs/assistant/todos.md "Nobody is working on this"): every agent of this open
+    /// to-do is gone and nothing brings one back. Nil otherwise, and from a hub before it.
+    var orphaned: TodoOrphaned?
     /// The manager whose to-do it is, as the hub's merged list stamps it (docs/protocol/protocol.md "Per-manager
     /// routing"): the pages list the current assistant's, and a request about it names this one. Nil with one manager,
     /// and on an answer about one to-do, which keeps the stamp the list gave it.
@@ -504,7 +507,7 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
     var decisionReview: DecisionReview?
 
     enum CodingKeys: String, CodingKey {
-        case id, title, notes, origin, agents, spaces, quiet, stage, supervision, priority, ask, delivery, lineage, manager
+        case id, title, notes, origin, agents, spaces, quiet, stage, supervision, priority, ask, delivery, lineage, manager, orphaned
         case decisionReview = "decision_review"
         case doneAt = "done_at", createdAt = "created_at", updatedAt = "updated_at", reopenedAt = "reopened_at", seenAt = "seen_at", planID = "plan_id", startError = "start_error",
              doneBy = "done_by", doneReason = "done_reason", cancelledAt = "cancelled_at", cancelledReason = "cancelled_reason", prURL = "pr_url", dueAt = "due_at", dueDate = "due_date",
@@ -517,7 +520,8 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
          agents: [Agent] = [], spaces: [Space]? = nil, quiet: Bool = false, stage: String? = nil, prURL: String? = nil,
          supervision: TaskSupervision? = nil, dueAt: Date? = nil, dueDate: String? = nil, remindAt: Date? = nil,
          remindedAt: Date? = nil, priority: String? = nil, ask: TodoAsk? = nil, reopenedAt: Date? = nil,
-         delivery: TodoDelivery? = nil, lineage: [TodoLineageStep]? = nil, manager: String? = nil, seenAt: Date? = nil, decisionReview: DecisionReview? = nil) {
+         delivery: TodoDelivery? = nil, lineage: [TodoLineageStep]? = nil, manager: String? = nil, seenAt: Date? = nil,
+         decisionReview: DecisionReview? = nil, orphaned: TodoOrphaned? = nil) {
         self.id = id
         self.title = title
         self.notes = notes
@@ -549,6 +553,7 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
         self.manager = manager
         self.seenAt = seenAt
         self.decisionReview = decisionReview
+        self.orphaned = orphaned
     }
 
     init(from decoder: Decoder) throws {
@@ -590,10 +595,15 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
         manager = try c.decodeIfPresent(String.self, forKey: .manager)
         // New: only on an open task whose latest review needs the owner; one that does not decode is as if there were none.
         decisionReview = (try? c.decodeIfPresent(DecisionReview.self, forKey: .decisionReview)) ?? nil
+        // New (#3618): absent from older hubs; one that does not decode is as if there were none.
+        orphaned = (try? c.decodeIfPresent(TodoOrphaned.self, forKey: .orphaned)) ?? nil
     }
 
     /// An ended task cannot keep an old decision card alive.
     var openAsk: TodoAsk? { doneAt == nil && ask?.askedAt.isEmpty == false ? ask : nil }
+    /// "Nobody is working on this" and why, for an open to-do the hub found orphaned (the web's `orphanedLine`); nil
+    /// for every other.
+    var orphanedLine: String? { doneAt == nil ? orphaned?.line : nil }
     var activeAgents: [Agent] { agents.filter(\.isActive) }
     /// The hub ended it because its agent did not start.
     var failedToStart: Bool { !(startError ?? "").isEmpty }
@@ -602,6 +612,45 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
     /// Cancellation is not completion, including the legacy supervision-only form (#5732).
     var isCancelled: Bool { cancelledAt != nil || doneBy == "cancelled" || reviewState == .cancelled }
     var cancellationReason: String? { isCancelled ? cancelledReason ?? doneReason : nil }
+}
+
+/// Why nobody works on an open to-do (`orphaned`, #3618): `error` (its agent closed after a model error nothing
+/// retries), `offline` (its computer is not connected) or `closed` (the tabs of its agents are closed and nothing
+/// wakes them); `since` is when the hub first saw it so. Kept as the hub sent it: a reason this build does not know
+/// says only that nobody is working on it.
+nonisolated struct TodoOrphaned: Codable, Hashable, Sendable {
+    var reason: String?
+    var since: Date?
+
+    enum CodingKeys: String, CodingKey { case reason, since }
+
+    init(reason: String? = nil, since: Date? = nil) {
+        self.reason = reason
+        self.since = since
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        reason = try? c.decodeIfPresent(String.self, forKey: .reason)
+        since = try? c.decodeIfPresent(Date.self, forKey: .since)
+    }
+
+    /// The reason in a few words; nil for one this build does not know.
+    var reasonText: String? {
+        switch reason {
+        case "error": String(localized: "closed after an error")
+        case "offline": String(localized: "computer offline")
+        case "closed": String(localized: "closed [Orphaned]")
+        default: nil
+        }
+    }
+
+    /// "Nobody is working on this · closed after an error".
+    var line: String {
+        let lead = String(localized: "Nobody is working on this")
+        guard let reasonText else { return lead }
+        return String(localized: "\(lead) · \(reasonText)")
+    }
 }
 
 /// Where a task's finished work stands (`delivery`): `live`, `pr`, `merged`, `off` or `none`, what holds it and who
@@ -1020,12 +1069,20 @@ nonisolated extension APIClient {
 
     /// The Accept button of a `brief` item's to-do to verify (#2320; the to-do rows' one too, #2056): `askedAt` is the round's
     /// ask as the hub sent it. A 409 means that round is over (asked again since, or already verified).
-    func acceptTodo(_ id: String, askedAt: String) async throws {
+    /// A decision (#3804) is answered through the same route: `option` is the label of the option chosen (the
+    /// recommended one is the plain OK), `response` one of the fixed answers (`TodoAsk.Response`); neither is sent
+    /// for the plain accept, so an older hub sees the body it always did.
+    func acceptTodo(_ id: String, askedAt: String, option: String? = nil, response: String? = nil) async throws {
         struct Body: Encodable {
             var askedAt: String
-            enum CodingKeys: String, CodingKey { case askedAt = "asked_at" }
+            var option: String?
+            var response: String?
+            enum CodingKeys: String, CodingKey {
+                case option, response
+                case askedAt = "asked_at"
+            }
         }
-        _ = try await post("/api/v1/todos/\(Self.pathPart(id))/accept", body: Body(askedAt: askedAt))
+        _ = try await post("/api/v1/todos/\(Self.pathPart(id))/accept", body: Body(askedAt: askedAt, option: option, response: response))
     }
 
     /// Don't handle on a decision row (`decision_review`, docs/protocol/protocol.md): the round `reviewAt` stays hidden from
