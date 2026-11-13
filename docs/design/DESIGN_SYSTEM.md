@@ -1323,6 +1323,11 @@ control when it sits lower in the row.
 
 ### 4.8 Pending requests
 
+Task decisions on the web reuse the task-routing chip for **Answer in chat** (#5929). It identifies the task and
+states visibly that the next message is saved as the answer; its existing cancel action switches back to ordinary
+discussion. The original decision round travels with the answer. Only a delivered and recorded answer removes the
+pending card; neither navigation, an unrelated chat message, nor an answer to a different Agent question does.
+
 Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and waiting for a reply.
 
 - **Home**: the bottom of the session page, a stack of cards above the composer, which stays usable (iOS `PendingCards`;
