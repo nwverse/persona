@@ -40,7 +40,6 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import persona.core.contracts.api.ConnectionState
 import persona.core.contracts.api.InboxEntry
-import persona.core.contracts.Session
 import persona.core.contracts.inboxEventFields
 import persona.core.designsystem.AppStyle
 import persona.core.designsystem.PersonaTheme
@@ -84,7 +83,7 @@ class InboxShowcaseShotsTest {
 
     private fun JsonObject.text(key: String) = (this[key] as? JsonPrimitive)?.contentOrNull
 
-    private fun showcase(): Pair<List<InboxRecord>, Instant> {
+    private fun showcase(): Triple<List<InboxRecord>, List<AgentSession>, Instant> {
         val root = System.getProperty("persona.repo.root")?.let(::File) ?: generateSequence(File(".").canonicalFile) { it.parentFile }
             .first { File(it, ".git").exists() && File(it, "android").isDirectory }
         val fixture = Json.parseToJsonElement(File(root, "spec/fixtures/inbox/showcase.json").readText()).jsonObject
@@ -103,7 +102,8 @@ class InboxShowcaseShotsTest {
                 source = item.text("source").orEmpty(), event = event,
             )
         }
-        return records to Instant.parse(fixture.getValue("now_clock").jsonPrimitive.content)
+        val sessions = fixture["sessions"]?.jsonArray?.map { AgentSession.fromJson(it.jsonObject) }.orEmpty()
+        return Triple(records, sessions, Instant.parse(fixture.getValue("now_clock").jsonPrimitive.content))
     }
 
     private fun saveShot(name: String, tag: String) {
@@ -129,7 +129,7 @@ class InboxShowcaseShotsTest {
     }
 
     @Test fun drawsTheSharedListInEveryLanguageStyleAndAppearance() {
-        val (records, clock) = showcase()
+        val (records, _, clock) = showcase()
         val inbox = ShowcaseInbox(records)
         var style by mutableStateOf(AppStyle.Glass)
         var dark by mutableStateOf(false)
@@ -173,9 +173,8 @@ class InboxShowcaseShotsTest {
     }
 
     @Test fun drawsTheSharedDetailFoldedAndExpandedInEveryLanguageStyleAndAppearance() {
-        val (records, clock) = showcase()
-        val agent = AgentSession(Session(machineId = "m1", sessionId = "s-agent", status = "blocked", state = "needs_you", awaitsReply = true))
-        val inbox = ShowcaseInbox(records, listOf(agent))
+        val (records, liveSessions, clock) = showcase()
+        val inbox = ShowcaseInbox(records, liveSessions)
         val detail = records.first { it.item.id == "sc-1" }
         var style by mutableStateOf(AppStyle.Glass)
         var dark by mutableStateOf(false)

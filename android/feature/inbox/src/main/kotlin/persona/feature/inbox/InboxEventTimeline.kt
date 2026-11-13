@@ -76,6 +76,12 @@ internal fun chainAgentSession(entry: InboxChainEntry, sessions: List<AgentSessi
         ?: sessions.firstOrNull { GroupKeys.raw(it.session.machineId) == machine && it.session.sessionId == session }
 }
 
+/** Whether this is the last agent step for its session in hub order, and its live state can be shown. */
+internal fun showsAgentState(chain: List<InboxChainEntry>, entry: InboxChainEntry, sessions: List<AgentSession>): Boolean {
+    val session = chainAgentSession(entry, sessions) ?: return false
+    return chain.lastOrNull { chainAgentSession(it, sessions) === session }?.id == entry.id
+}
+
 /** A reported row shows the original words, not the old app's "Assistant says:" prefix a second time. */
 internal fun chainEntryText(entry: InboxChainEntry): String =
     if (entry.kind == "reported") entry.detail?.takeIf { it.isNotBlank() } ?: entry.text else entry.text
@@ -156,7 +162,7 @@ private fun ChainRow(
     val time = chainTime(entry.at, currentLocale, clock(), zone)
     val reported = entry.kind == "reported"
     val agent = chainAgentSession(entry, sessions)
-    val agentState = agent?.let { it.stateWord(mutes.mutes(it)).text() }
+    val agentState = if (showsAgentState(record.event.chain, entry, sessions)) agent?.let { it.stateWord(mutes.mutes(it)).text() } else null
     JRow(onClick = when (target) {
         ChainTarget.None -> null
         ChainTarget.Inline -> ({ open = !open })

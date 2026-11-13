@@ -6,6 +6,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -68,6 +69,24 @@ class InboxTimelineTest {
         assertEquals("Assistant says: sent it", chainEntryText(reported.copy(detail = "  ")))
         val linked = reported.copy(link = InboxChainLink(type = "session", machineId = "m1", sessionId = "s1"))
         assertTrue(chainRowTarget(linked, record) is ChainTarget.Page)
+    }
+
+    @Test fun agentStateAppearsOnlyOnTheNewestEntryForEachSession() {
+        val working = agent("m1", "s1", "working")
+        val other = agent("m2~g12345678", "s2", "unread")
+        val offline = agent("m3", "s3", "offline")
+        val sessions = listOf(working, other, offline)
+        val first = entry("agent", "m1", "s1")
+        val latest = entry("agent_stopped", "m1", "s1")
+        val second = entry("agent", "m2", "s2")
+        val third = entry("agent", "m3", "s3")
+        val chain = listOf(first, latest, second, third)
+        assertFalse(showsAgentState(chain, first, sessions))
+        assertTrue(showsAgentState(chain, latest, sessions))
+        assertTrue(showsAgentState(chain, second, sessions))
+        // Offline is a real state too and uses the same stateWord as the Agents list; only a missing session has no words.
+        assertTrue(showsAgentState(chain, third, sessions))
+        assertFalse(showsAgentState(chain, latest, emptyList()))
     }
 
     private fun agent(machine: String, session: String, state: String, awaits: Boolean = false) = AgentSession(
