@@ -12,6 +12,8 @@ export class TranscriptModel {
   private fillRunning: boolean = false;
   private refreshing: boolean = false;
   private refreshAgain: boolean = false;
+  private fillRequested: boolean = false;
+  private pendingFetches: Promise<void> = Promise.resolve();
   private readonly row: ResourceRow;
   private readonly repository: HubRepository;
   private readonly local: LocalStore;
@@ -49,7 +51,10 @@ export class TranscriptModel {
   }
   async latest(): Promise<void> {
     if (!this.active) return;
-    if (this.refreshing) { this.refreshAgain = true; return; }
+    const pending = this.pendingFetches;
+    let release: () => void = () => {};
+    this.pendingFetches = new Promise<void>(resolve => { release = resolve; });
+    if (this.refreshing) { this.refreshAgain = true; release(); return; }
     this.refreshing = true;
     try {
       const data = await this.repository.call(this.path('lines=80&fold_work=1&lazy_images=1'));
@@ -58,14 +63,26 @@ export class TranscriptModel {
     } catch (error) { if (this.active) this.failure(error as Error); }
     finally {
       this.refreshing = false;
+      // A latest-page response may close the fill but leave a push heard while it was in flight unfetched. Do not
+      // leave the transport's gate held while that follow-up is dropped; a failed latest also releases the gate.
+      this.sync.finishFill();
+      if (this.active && (this.sync.behind || this.fillRequested || this.reducer.items.some((item) => item.seq > this.reducer.covered))) {
+        this.fillRequested = false;
+        this.fillNow();
+      }
       if (this.refreshAgain && this.active) { this.refreshAgain = false; this.latest(); }
+      release();
     }
   }
   receive(data: Record<string, Object>): void {
     if (!this.active || Wire.text(data, 'machine_id') !== this.row.machine || Wire.text(data, 'session_id') !== (this.row.session || this.row.id)) return;
     const batch = this.batch(data);
     if (Wire.text(data, 'type') === 'items_replace') this.sync.reload(batch.items, batch.history || null, batch.toSeq || null, batch.hasMore === true);
-    else this.drive(this.sync.settle(this.reducer.apply(batch))).catch((error: Error) => this.failure(error));
+    else {
+      const gap = this.reducer.apply(batch);
+      if (gap === 'fill') this.fillRequested = true;
+      this.drive(this.sync.settle(gap)).catch((error: Error) => this.failure(error));
+    }
     this.emit();
   }
   async older(): Promise<void> { await this.drive(this.sync.loadOlder()); }
@@ -75,6 +92,7 @@ export class TranscriptModel {
     for (const action of actions) {
       if (!this.active) return;
       if (action.kind === 'fetch_after') {
+        this.fillRequested = true;
         if (this.fillRunning) continue;
         this.fillRunning = true;
         try {
@@ -98,6 +116,7 @@ export class TranscriptModel {
         if (action.sinceSeq !== undefined) payload['since_seq'] = action.sinceSeq;
         this.repository.transport.send(JSON.stringify(payload));
       } else if (action.kind === 'fetch_latest') {
+        await this.pendingFetches;
         await this.latest();
       } else if (action.kind === 'fetch_older') {
         try {
@@ -114,6 +133,21 @@ export class TranscriptModel {
       }
     }
   }
+  private async fillNow(): Promise<void> {
+    if (!this.active || this.fillRunning) return;
+    this.fillRunning = true;
+    try {
+      const data = await this.repository.call(this.path('after_seq=' + this.reducer.covered + '&lazy_images=1'));
+      if (!this.active) return;
+      this.emit();
+      await this.drive(this.sync.after(this.batch(data)).actions);
+    } catch (error) {
+      this.sync.finishFill();
+      if (error instanceof Error) throw error;
+      throw new Error('failed');
+    } finally { this.fillRunning = false; }
+  }
+
   private emit(): void {
     if (!this.active) return;
     this.publish(this.reducer.items, this.reducer.hasMore === true);
