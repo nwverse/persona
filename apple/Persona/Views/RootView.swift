@@ -393,18 +393,21 @@ struct RootView: View {
 }
 
 /// The iPad's routes (`PadRouter`) and its Settings, on the tabs: a sheet on the iPad; on a phone (iPhone Duo open) the
-/// whole window, one column across, as ChatGPT shows its account page there, not a sheet over half of it (#3701).
+/// whole window, one column across, as ChatGPT shows its account page there, not a sheet over half of it (#3701). At a
+/// phone's own width (the Sidebar layout's drawer, #6332) the sheet the shell shows it in.
 private struct PadRoutes: ViewModifier {
     @Environment(AppModel.self) private var model
+    @Environment(\.horizontalSizeClass) private var width
     let router: PadRouter
     private let phone = UIDevice.current.userInterfaceIdiom == .phone
+    private var cover: Bool { phone && width == .regular }
 
     func body(content: Content) -> some View {
         @Bindable var model = model
         content
             .environment(\.padRouter, router)
-            .sheet(isPresented: phone ? .constant(false) : $model.shellSettings) { settings.presentationSizing(.page) }
-            .fullScreenCover(isPresented: phone ? $model.shellSettings : .constant(false)) {
+            .sheet(isPresented: cover ? .constant(false) : $model.shellSettings) { settings.presentationSizing(.page) }
+            .fullScreenCover(isPresented: cover ? $model.shellSettings : .constant(false)) {
                 settings
                     .environment(\.horizontalSizeClass, .compact)
                     .accessibilityAction(.escape) { model.shellSettings = false } // VoiceOver's scrub, as on a sheet

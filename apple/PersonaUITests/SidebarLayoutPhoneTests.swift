@@ -8,6 +8,8 @@ final class SidebarLayoutPhoneTests: XCTestCase {
     private var app: XCUIApplication!
     private var hub = ""
     private let agent = "macbook/a1f3c2d4-0000-4000-8000-000000000001"
+    /// The mock's main conversation: the shots open on it, as a fresh install does (an earlier test's New Chat stays).
+    private let main = "server/b2e4d6f8-0000-4000-8000-000000000001"
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -25,6 +27,7 @@ final class SidebarLayoutPhoneTests: XCTestCase {
         // `-holdChromeOpen`: an Agent's chat keeps its header open (its title), as the other chat tests do.
         let layout = layoutPinned ? ["-app.navigation", "sidebar"] : []
         app.launchArguments = ["-pairURL", pair, "-dev.openChat", "", "-holdChromeOpen", "YES"] + layout + extra
+        app.launchEnvironment["PERSONA_UI_TEST_SESSION"] = "1" // the chat's title carries its session (`chat.title`'s value)
         app.launchPinned()
     }
 
@@ -43,9 +46,9 @@ final class SidebarLayoutPhoneTests: XCTestCase {
                        "\(step):\n\(app.debugDescription)")
     }
 
-    /// Scrolls the drawer until `target` can be tapped.
+    /// Scrolls the drawer until `target` can be tapped. The drawer's host names the column, as the Separate layout's.
     @MainActor private func reach(_ target: XCUIElement, _ step: String) {
-        let column = element("unified-sidebar")
+        let column = element("assistant-sidebar")
         for _ in 0..<10 where !(target.exists && target.isHittable) { column.swipeUp(velocity: .slow) }
         XCTAssertTrue(target.exists && target.isHittable, "\(step): not reached in the drawer:\n\(app.debugDescription)")
     }
@@ -102,6 +105,52 @@ final class SidebarLayoutPhoneTests: XCTestCase {
         XCTAssertTrue(element("sidebar-drawer-button").exists, "the chat has a back instead of the face")
     }
 
+    /// Settings › Appearance › Navigation on a phone: each choice applies at once and Settings stays on its page; the
+    /// Sidebar layout's drawer has Settings at its foot.
+    @MainActor func testTheChoiceAppliesAtOnce() {
+        launch(["-tab", "settings", "-openAppearance", "navigation"], layoutPinned: false)
+        let separate = element("navigation-layout-separate"), sidebar = element("navigation-layout-sidebar")
+        XCTAssertTrue(separate.waitForExistence(timeout: 20), "no Navigation page:\n\(app.debugDescription)")
+        func pick(_ choice: XCUIElement, _ step: String) {
+            choice.tap()
+            let chosen = NSPredicate { _, _ in choice.exists && choice.isSelected }
+            XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: chosen, object: NSNull())], timeout: 10),
+                           .completed, "\(step): not chosen, or Settings closed:\n\(app.debugDescription)")
+        }
+        pick(sidebar, "Sidebar")
+        closeSettings()
+        let face = element("assistant-sidebar-button")
+        XCTAssertTrue(face.waitForExistence(timeout: 10), "no face in the bar:\n\(app.debugDescription)")
+        XCTAssertFalse(app.buttons["Agents"].firstMatch.exists, "the Assistant | Agents switch is still there")
+        face.tap()
+        let settings = element("sidebar-settings")
+        XCTAssertTrue(settings.waitForExistence(timeout: 10) && settings.isHittable, "no Settings in the drawer:\n\(app.debugDescription)")
+        settings.tap()
+        // Closed from its first page (above), Settings opens there again, as over the shell: Appearance › Navigation.
+        let appearance = element("settings-appearance"), navigation = element("settings-navigation")
+        XCTAssertTrue(appearance.waitForExistence(timeout: 10), "Settings did not open from the drawer:\n\(app.debugDescription)")
+        appearance.tap()
+        XCTAssertTrue(navigation.waitForExistence(timeout: 10), "no Navigation row:\n\(app.debugDescription)")
+        for _ in 0..<6 where !navigation.isHittable { app.swipeUp(velocity: .slow) }
+        navigation.tap()
+        XCTAssertTrue(separate.waitForExistence(timeout: 10), "Settings is not on Navigation:\n\(app.debugDescription)")
+        pick(separate, "Separate")
+        closeSettings()
+        XCTAssertTrue(app.buttons["Agents"].firstMatch.waitForExistence(timeout: 10), "the switch did not come back:\n\(app.debugDescription)")
+    }
+
+    /// Settings' × is on its first page, as over the shell: back from Navigation (and Appearance) first.
+    @MainActor private func closeSettings() {
+        let close = app.buttons["settings-close"].firstMatch, back = app.navigationBars.buttons["BackButton"].firstMatch
+        for _ in 0..<3 where !close.exists && back.exists {
+            back.tap()
+            _ = close.waitForExistence(timeout: 2)
+        }
+        XCTAssertTrue(close.waitForExistence(timeout: 10), "no × on Settings:\n\(app.debugDescription)")
+        close.tap()
+        waitGone(close, "Settings stayed")
+    }
+
     /// Screenshots for review (#6332): light and dark, the default text size and xxxLarge (where the interface stops growing,
     /// #6448): the conversation, the drawer
     /// at its top, the drawer at the Agents' Needs You (its foot's jump), an Agent's chat.
@@ -111,7 +160,7 @@ final class SidebarLayoutPhoneTests: XCTestCase {
             for size in ["default", "xxxlarge"] {
                 var extra = ["-ui.scheme", look]
                 if size == "xxxlarge" { extra += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryXXXL"] }
-                launch(["-tab", "assistant"] + extra)
+                launch(["-tab", "assistant", "-openAssistant", main] + extra)
                 XCTAssertTrue(element("assistant-sidebar-button").waitForExistence(timeout: 20), "\(look) \(size): no bar")
                 settle()
                 dismissIconNotice()

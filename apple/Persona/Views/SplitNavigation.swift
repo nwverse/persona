@@ -122,9 +122,10 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
     /// The Sidebar layout on a phone (#6332): the list in the drawer that slides in from the left, the pages one stack
     /// whose root is `empty` (the Persona conversation). What the list opens is that stack's first page, as beside an
     /// iPad's column, with the drawer's button where its back would be (`SplitDetail.drawer`), and a drag to the right on
-    /// it opens the drawer as on the conversation (`AssistantDrawerLayout.firstPages`).
+    /// it opens the drawer as on the conversation (`AssistantDrawerLayout.firstPages`). Behind the drawer, the Agents
+    /// list's own page color: its head and foot and the list are one surface, in dark mode too.
     private func drawerLayout(_ drawer: AssistantDrawer) -> some View {
-        AssistantDrawerLayout(drawer: drawer, enabled: path.count <= 1, firstPages: true, sidebar: { sidebar }, page:
+        AssistantDrawerLayout(drawer: drawer, enabled: path.count <= 1, backdrop: Theme.groupedPage, firstPages: true, sidebar: { sidebar }, page:
             NavigationStack(path: $path) { empty.modifier(destinations) })
             .environment(\.splitDetail, SplitDetail(isFirstPage: path.count <= 1, listHidden: true, drawer: true))
             .environment(\.splitShowList, SplitShowList(show: { drawer.open() }))

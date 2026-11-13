@@ -848,7 +848,9 @@ regular width it stays beside the page. The Mac (frozen) and Apple Vision Pro ke
   yields to a second page's back swipe, `DrawerPan.firstPages`). A pick closes the drawer. Choosing Agents by itself
   opens the drawer at the Agents. While the drawer is in, the Agents list holds its updates as a covered list does, and
   the Persona rows keep the list they last showed (`SidebarFeed`). The conversation is the iPhone's (`shellChat`, the
-  shell's new-conversation page).
+  shell's new-conversation page). Behind the drawer is the Agents list's own page color (`Theme.groupedPage`), so its
+  head, list and foot are one surface in dark mode too. Settings is the sheet the shell shows it in (`PadRoutes`: the
+  whole window only at a phone's regular width), so it opens and closes the same way in both layouts.
 - **Routes** (`PadRouter(unified: true)`): notifications, links, Live Activities, widgets, quick actions and Siri /
   Shortcuts set `AppModel.selectedTab` and `openChat` as in the Separate layout and land on the same chat or page: an
   Agent's chat opens beside the sidebar (the Agents list takes `openChat` as before); `.assistant` goes back to the
@@ -860,7 +862,7 @@ regular width it stays beside the page. The Mac (frozen) and Apple Vision Pro ke
   `RootTabs` and the shell are drawn as before (pixel comparisons in #6332's PR).
 - Tests: `SidebarLayoutRoutingTests` (the router), `SidebarLayoutTests` (iPad UI: the column, a pick replacing the
   page, the routes), `SidebarLayoutPhoneTests` (iPhone UI: the drawer, a pick replacing the page, the face where a back
-  would be). DEBUG: `-app.navigation sidebar` launches in the Sidebar layout; `-openAppearance navigation` opens
+  would be, the setting switching both ways at once). DEBUG: `-app.navigation sidebar` launches in the Sidebar layout; `-openAppearance navigation` opens
   the setting's page.
 
 ## Home-screen quick actions (#3199)
