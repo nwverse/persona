@@ -1401,6 +1401,29 @@
       },
       "extractionState" : "manual"
     },
+    "%@ and %lld more [Meeting Gaps]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ and %2$lld more"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@，另有 %2$lld 段"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ ほか %2$lld 件"
+          }
+        }
+      }
+    },
     "%@ answered; work continues in the background" : {
       "localizations" : {
         "en" : {
@@ -10442,6 +10465,53 @@
       },
       "extractionState" : "manual"
     },
+    "%lld terms" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld term"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld terms"
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans" : {
+          "variations" : {
+            "plural" : {
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld 个"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "variations" : {
+            "plural" : {
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld 件"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "%lld things waiting for you" : {
       "localizations" : {
         "en" : {
@@ -13554,6 +13624,52 @@
         }
       }
     },
+    "A meeting's audio, Talk included, goes through your hub to %@, and the hub deletes it once the meeting's minutes are written. The transcript and the minutes are kept as long as your retention settings say." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A meeting's audio, Talk included, goes through your hub to %1$@, and the hub deletes it once the meeting's minutes are written. The transcript and the minutes are kept as long as your retention settings say."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会议的音频（包括“说话”）会经你的 hub 发送到 %1$@，会议纪要写好后 hub 就删除它。文字稿和会议纪要按你的保留设置保存。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会議の音声は（「話す」を含め）ハブを経由して %1$@ に送られ、議事録ができるとハブが削除します。文字起こしと議事録は保存期間の設定どおりに保存されます。"
+          }
+        }
+      }
+    },
+    "A meeting's audio, Talk included, goes through your hub to the speech service it is set up with, and the hub deletes it once the meeting's minutes are written. The transcript and the minutes are kept as long as your retention settings say." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A meeting's audio, Talk included, goes through your hub to the speech service it is set up with, and the hub deletes it once the meeting's minutes are written. The transcript and the minutes are kept as long as your retention settings say."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会议的音频（包括“说话”）会经你的 hub 发送到它配置的语音服务，会议纪要写好后 hub 就删除它。文字稿和会议纪要按你的保留设置保存。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会議の音声は（「話す」を含め）ハブを経由して、ハブに設定された音声サービスに送られ、議事録ができるとハブが削除します。文字起こしと議事録は保存期間の設定どおりに保存されます。"
+          }
+        }
+      }
+    },
     "A model ID can't contain line breaks or control characters" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -15710,6 +15826,29 @@
         }
       }
     },
+    "Add [Meeting Glossary]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "追加"
+          }
+        }
+      }
+    },
     "Add [Todo Decisions]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -15775,6 +15914,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "添加书签"
+          }
+        }
+      }
+    },
+    "Add a Name or Word" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add a Name or Word"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加名字或词语"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "名前や語句を追加"
           }
         }
       }
@@ -26606,6 +26768,29 @@
       },
       "extractionState" : "manual"
     },
+    "Being said: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Being said: %1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在说：%1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "話し中：%1$@"
+          }
+        }
+      }
+    },
     "Binary" : {
       "localizations" : {
         "en" : {
@@ -27821,6 +28006,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Built-In [Meeting Transcription]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Built-In"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "内置"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "内蔵"
+          }
+        }
+      }
     },
     "Built-in" : {
       "localizations" : {
@@ -62852,6 +63060,29 @@
         }
       }
     },
+    "For this iPhone only. With it on, a meeting transcribed on the hub sends no audio over cellular data: this iPhone transcribes it meanwhile, and the audio goes to the hub once you're on Wi-Fi. An hour of meeting is about 115 MB." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "For this iPhone only. With it on, a meeting transcribed on the hub sends no audio over cellular data: this iPhone transcribes it meanwhile, and the audio goes to the hub once you're on Wi-Fi. An hour of meeting is about 115 MB."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只对这台 iPhone 生效。打开后，在 hub 上转写的会议不会用蜂窝数据发送音频：这期间由这台 iPhone 转写，连上 Wi-Fi 后再把音频发给 hub。一小时的会议大约 115 MB。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この iPhone だけの設定です。オンにすると、ハブで文字起こしする会議はモバイルデータ通信で音声を送りません。その間はこの iPhone が文字起こしし、Wi-Fi につながったら音声をハブに送ります。1時間の会議で約 115 MB です。"
+          }
+        }
+      }
+    },
     "For: %@" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -64392,6 +64623,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Glossary [Meeting Transcription]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Glossary"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "词表"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用語集"
+          }
+        }
+      }
     },
     "Glow While Replying" : {
       "localizations" : {
@@ -68089,6 +68343,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "ハブのみ"
+          }
+        }
+      }
+    },
+    "Hub Transcription on Wi-Fi Only" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hub Transcription on Wi-Fi Only"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅在 Wi-Fi 下用 hub 转写"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハブでの文字起こしは Wi-Fi のみ"
           }
         }
       }
@@ -86510,6 +86787,29 @@
         }
       }
     },
+    "Names and words the hub's transcription should spell right, such as people, products and projects: up to 200, each at most 40 characters. A meeting's title and its attendees are added by themselves." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Names and words the hub's transcription should spell right, such as people, products and projects: up to 200, each at most 40 characters. A meeting's title and its attendees are added by themselves."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "希望 hub 转写时写对的名字和词语，比如人名、产品和项目：最多 200 个，每个不超过 40 个字。会议标题和参会人会自动加上。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハブの文字起こしで正しく書いてほしい名前や語句（人名、製品、プロジェクトなど）。最大 200 件、各 40 文字まで。会議のタイトルと参加者は自動で加わります。"
+          }
+        }
+      }
+    },
     "Names are 1 to 40 characters" : {
       "localizations" : {
         "en" : {
@@ -90600,6 +90900,29 @@
       },
       "extractionState" : "manual"
     },
+    "No audio on the hub for %@. This iPhone's text fills in there." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No audio on the hub for %1$@. This iPhone's text fills in there."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "hub 缺少 %1$@ 的音频，这些地方用这台 iPhone 的文字补上。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハブには %1$@ の音声がありません。その部分はこの iPhone のテキストで補います。"
+          }
+        }
+      }
+    },
     "No audio recorded" : {
       "localizations" : {
         "en" : {
@@ -93880,6 +94203,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "None [Meeting Glossary]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "None"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "なし"
+          }
+        }
+      }
     },
     "None [Personal Agent Prefs fcd40e]" : {
       "localizations" : {
@@ -99430,6 +99776,29 @@
       },
       "extractionState" : "manual"
     },
+    "On This iPhone [Meeting Transcription]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On This iPhone"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在这台 iPhone 上"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この iPhone で"
+          }
+        }
+      }
+    },
     "On [Assistant Proactive Views 8da97d]" : {
       "localizations" : {
         "en" : {
@@ -99567,6 +99936,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "必要なときに取得"
+          }
+        }
+      }
+    },
+    "On iPhone: %@ [Recording Line]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On iPhone: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本机转写：%1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iPhone で文字起こし：%1$@"
           }
         }
       }
@@ -99799,6 +100191,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "On the Hub [Meeting Transcription]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On the Hub"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 hub 上"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハブで"
+          }
+        }
+      }
     },
     "On the Lock Screen you can Allow/Approve (after unlocking) or Deny directly. The Dynamic Island appears only when unlocked and always shows details." : {
       "localizations" : {
@@ -128311,6 +128726,29 @@
       },
       "extractionState" : "manual"
     },
+    "Sending the missing audio to the hub…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sending the missing audio to the hub…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在把缺少的音频发给 hub…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "足りない音声をハブに送っています…"
+          }
+        }
+      }
+    },
     "Sending the program" : {
       "localizations" : {
         "en" : {
@@ -134922,6 +135360,29 @@
         }
       }
     },
+    "Speech Service" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Speech Service"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "语音服务"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "音声サービス"
+          }
+        }
+      }
+    },
     "Speech recognition is off. Allow it for Persona in Settings." : {
       "localizations" : {
         "en" : {
@@ -136863,25 +137324,25 @@
         }
       }
     },
-    "Starts recording a meeting in Persona, named after the calendar event happening now. Audio stays on this iPhone, except while you hold Talk: what is said then goes to the voice service. The transcript goes to Knowledge." : {
+    "Starts recording a meeting in Persona, named after the calendar event happening now. Audio stays on this device, except while you hold Talk: what is said then goes to the voice service. If you set meetings to be transcribed on the hub, the meeting's audio, Talk included, goes through your hub to its speech service, and the hub deletes it once the minutes are written. The transcript goes to Knowledge." : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Starts recording a meeting in Persona, named after the calendar event happening now. Audio stays on this iPhone, except while you hold Talk: what is said then goes to the voice service. The transcript goes to Knowledge."
+            "value" : "Starts recording a meeting in Persona, named after the calendar event happening now. Audio stays on this device, except while you hold Talk: what is said then goes to the voice service. If you set meetings to be transcribed on the hub, the meeting's audio, Talk included, goes through your hub to its speech service, and the hub deletes it once the minutes are written. The transcript goes to Knowledge."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在 Persona 中开始会议录音，以日历里正在进行的会议命名。音频保留在这台 iPhone 上，只有按住“说话”时例外：那时说的内容会发送到语音服务。转写文字进入知识库。"
+            "value" : "在 Persona 中开始会议录音，以日历里正在进行的会议命名。音频保留在这台设备上，只有按住“说话”时例外：那时说的内容会发送到语音服务。如果你设置了在 hub 上转写会议，会议的音频（包括“说话”）会经你的 hub 发送到它的语音服务，会议纪要写好后 hub 就删除这段音频。转写文字进入知识库。"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Personaで会議の録音を始め、カレンダーで進行中の予定の名前を付けます。音声はこの iPhone に残ります。ただし「話す」を押している間は例外で、そのときに話された内容は音声サービスに送られます。文字起こしはナレッジに入ります。"
+            "value" : "Personaで会議の録音を始め、カレンダーで進行中の予定の名前を付けます。音声はこのデバイスに残ります。ただし「話す」を押している間は例外で、そのときに話された内容は音声サービスに送られます。会議をハブで文字起こしする設定にした場合は、会議の音声（「話す」を含む）がハブ経由でその音声サービスに送られ、議事録ができるとハブが削除します。文字起こしはナレッジに入ります。"
           }
         }
       }
@@ -146643,6 +147104,29 @@
       },
       "extractionState" : "manual"
     },
+    "The glossary holds at most 200 terms." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The glossary holds at most 200 terms."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "词表最多 200 个。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用語集は最大 200 件です。"
+          }
+        }
+      }
+    },
     "The hub archives and condenses your Lark and email conversations, organizes them into projects, people, docs and meetings, and ranks them by importance and relevance." : {
       "localizations" : {
         "en" : {
@@ -146827,6 +147311,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "The hub couldn't transcribe it, so this iPhone's transcript is used." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The hub couldn't transcribe it, so this iPhone's transcript is used."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "hub 没能转写，所以用这台 iPhone 的转写。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハブで文字起こしできなかったため、この iPhone の文字起こしを使います。"
+          }
+        }
+      }
     },
     "The hub didn't respond. Try again later." : {
       "localizations" : {
@@ -147173,6 +147680,29 @@
       },
       "extractionState" : "manual"
     },
+    "The hub is finishing the transcript…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The hub is finishing the transcript…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "hub 正在完成文字稿…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハブが文字起こしを仕上げています…"
+          }
+        }
+      }
+    },
     "The hub is out of date; some features won't work" : {
       "localizations" : {
         "en" : {
@@ -147470,6 +148000,29 @@
       },
       "extractionState" : "manual"
     },
+    "The hub isn't transcribing right now. Showing this iPhone's transcript." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The hub isn't transcribing right now. Showing this iPhone's transcript."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "hub 暂时没有在转写。先显示这台 iPhone 的转写。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハブは今、文字起こしできていません。この iPhone の文字起こしを表示しています。"
+          }
+        }
+      }
+    },
     "The hub keeps only the reference and fetches the key from its provider when it's needed." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -147695,6 +148248,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "这是 hub 自己运行的助手，不能删除或换地方装"
+          }
+        }
+      }
+    },
+    "The hub stopped transcribing this meeting. Showing this iPhone's transcript." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The hub stopped transcribing this meeting. Showing this iPhone's transcript."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "hub 已停止转写这场会议。显示这台 iPhone 的转写。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハブはこの会議の文字起こしを止めました。この iPhone の文字起こしを表示しています。"
           }
         }
       }
@@ -148097,6 +148673,75 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "hub 自己的"
+          }
+        }
+      }
+    },
+    "The hub's speech service isn't ready, so meetings are transcribed on this iPhone until it is." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The hub's speech service isn't ready, so meetings are transcribed on this iPhone until it is."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "hub 的语音服务还没准备好，在它准备好之前，会议在这台 iPhone 上转写。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハブの音声サービスの準備ができていないため、準備ができるまで会議はこの iPhone で文字起こしされます。"
+          }
+        }
+      }
+    },
+    "The hub's transcript is final." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The hub's transcript is final."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "hub 的文字稿已定稿。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハブの文字起こしは確定しました。"
+          }
+        }
+      }
+    },
+    "The hub's transcription wasn't ready when this meeting started." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The hub's transcription wasn't ready when this meeting started."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这场会议开始时，hub 的转写还没准备好。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この会議が始まったとき、ハブの文字起こしは準備ができていませんでした。"
           }
         }
       }
@@ -149085,6 +149730,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "纪要没能整理出来。"
+          }
+        }
+      }
+    },
+    "The missing audio goes to the hub once you're on Wi-Fi." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The missing audio goes to the hub once you're on Wi-Fi."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连上 Wi-Fi 后，缺少的音频会发给 hub。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wi-Fi につながると、足りない音声がハブに送られます。"
           }
         }
       }
@@ -157014,6 +157682,121 @@
         }
       }
     },
+    "This meeting's audio also went through your hub to its speech service; the hub deletes it once the minutes are written. After the retention period (%lld days) the recording is cleared from this device and Knowledge." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This meeting's audio also went through your hub to its speech service; the hub deletes it once the minutes are written. After the retention period (%1$lld days) the recording is cleared from this device and Knowledge."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这场会议的音频还经你的 hub 发送到了它的语音服务；会议纪要写好后，hub 会删除这段音频。过了保留期（%1$lld 天）本机和知识库里都会清掉这段录音。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この会議の音声はハブを経由して音声サービスにも送られました。議事録ができるとハブはその音声を削除します。保存期間（%1$lld日）を過ぎると、このデバイスとナレッジの両方から消去されます。"
+          }
+        }
+      }
+    },
+    "This meeting's audio, Talk included, goes through your hub to %@, and the hub deletes it once the minutes are written." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This meeting's audio, Talk included, goes through your hub to %1$@, and the hub deletes it once the minutes are written."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这场会议的音频（包括“说话”）会经你的 hub 发送到 %1$@，会议纪要写好后 hub 就删除它。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この会議の音声は（「話す」を含め）ハブを経由して %1$@ に送られ、議事録ができるとハブが削除します。"
+          }
+        }
+      }
+    },
+    "This meeting's audio, Talk included, goes through your hub to %@. The hub deletes the audio once the minutes are written; the text is kept for %lld days." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This meeting's audio, Talk included, goes through your hub to %1$@. The hub deletes the audio once the minutes are written; the text is kept for %2$lld days."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这场会议的音频（包括“说话”）会经你的 hub 发送到 %1$@。会议纪要写好后，hub 会删除这段音频；文字保留 %2$lld 天。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この会議の音声は（「話す」を含め）ハブを経由して %1$@ に送られます。議事録ができるとハブは音声を削除します。テキストは %2$lld 日間保存されます。"
+          }
+        }
+      }
+    },
+    "This meeting's audio, Talk included, goes through your hub to the speech service it is set up with, and the hub deletes it once the minutes are written." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This meeting's audio, Talk included, goes through your hub to the speech service it is set up with, and the hub deletes it once the minutes are written."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这场会议的音频（包括“说话”）会经你的 hub 发送到它配置的语音服务，会议纪要写好后 hub 就删除它。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この会議の音声は（「話す」を含め）ハブを経由して、ハブに設定された音声サービスに送られ、議事録ができるとハブが削除します。"
+          }
+        }
+      }
+    },
+    "This meeting's audio, Talk included, goes through your hub to the speech service it is set up with. The hub deletes the audio once the minutes are written; the text is kept for %lld days." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This meeting's audio, Talk included, goes through your hub to the speech service it is set up with. The hub deletes the audio once the minutes are written; the text is kept for %1$lld days."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这场会议的音频（包括“说话”）会经你的 hub 发送到它配置的语音服务。会议纪要写好后，hub 会删除这段音频；文字保留 %1$lld 天。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この会議の音声は（「話す」を含め）ハブを経由して、ハブに設定された音声サービスに送られます。議事録ができるとハブは音声を削除します。テキストは %1$lld 日間保存されます。"
+          }
+        }
+      }
+    },
     "This meeting's transcript has expired, so it takes no more photos." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -160538,6 +161321,29 @@
       },
       "extractionState" : "manual"
     },
+    "Transcribe Meetings" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transcribe Meetings"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会议转写"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会議の文字起こし"
+          }
+        }
+      }
+    },
     "Transcribed" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -160557,6 +161363,52 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已转写"
+          }
+        }
+      }
+    },
+    "Transcribed on the hub" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transcribed on the hub"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 hub 上转写"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハブで文字起こし"
+          }
+        }
+      }
+    },
+    "Transcribed on this iPhone" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transcribed on this iPhone"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在这台 iPhone 上转写"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この iPhone で文字起こし"
           }
         }
       }
@@ -160721,6 +161573,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Transcription [Meeting Transcription]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transcription"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "转写"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文字起こし"
+          }
+        }
+      }
     },
     "Transcription didn't finish: %@" : {
       "extractionState" : "manual",
@@ -170185,6 +171060,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在等待 Persona 重新连接并确认版本…"
+          }
+        }
+      }
+    },
+    "Waiting for Wi-Fi to send the audio to the hub. Showing this iPhone's transcript." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Waiting for Wi-Fi to send the audio to the hub. Showing this iPhone's transcript."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等连上 Wi-Fi 再把音频发给 hub。先显示这台 iPhone 的转写。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wi-Fi につながったら音声をハブに送ります。今はこの iPhone の文字起こしを表示しています。"
           }
         }
       }
@@ -181373,19 +182271,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "meetings recording attendance transcription minutes"
+            "value" : "meetings recording attendance transcription minutes glossary wi-fi hub"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "会议 录音 参会 转写 纪要"
+            "value" : "会议 录音 参会 转写 纪要 词表 Wi-Fi hub"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "会議 録音 参加 文字起こし 議事録"
+            "value" : "会議 録音 参加 文字起こし 議事録 用語集 Wi-Fi ハブ"
           }
         }
       }
@@ -183487,6 +184385,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "“%@” is longer than 40 characters." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%1$@” is longer than 40 characters."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%1$@”超过了 40 个字。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%1$@」は 40 文字を超えています。"
+          }
+        }
+      }
     },
     "“%@” is no longer there" : {
       "localizations" : {
