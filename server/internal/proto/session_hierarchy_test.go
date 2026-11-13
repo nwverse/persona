@@ -211,3 +211,50 @@ func TestTokens32(t *testing.T) {
 		t.Fatal("Tokens32 does not saturate")
 	}
 }
+
+// The conversation's earlier stretches (#5054) are a key of the row, oldest first, written by hand as the reflect
+// encoder writes them, and come back as they went; setting the same ones makes no new hierarchy, and copies are not
+// shared with the caller's slice.
+func TestSessionEngineHistory(t *testing.T) {
+	t1 := time.Date(2026, 11, 12, 9, 0, 0, 0, time.UTC)
+	t2 := t1.Add(time.Hour)
+	legs := []EngineLeg{{SessionID: "claude-1", Agent: "claude", Until: t1}, {SessionID: "codex-1", Agent: "codex", Until: t2}}
+	var s Session
+	s.SessionID = "claude-1"
+	s.SetEngineHistory(legs)
+	legs[0].SessionID = "changed"
+	if got := s.EngineHistory()[0].SessionID; got != "claude-1" {
+		t.Fatalf("the row's history follows the caller's slice: %q", got)
+	}
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `"engine_history":[{"session_id":"claude-1","agent":"claude","until":"2026-11-12T09:00:00Z"},{"session_id":"codex-1","agent":"codex","until":"2026-11-12T10:00:00Z"}]`
+	if !strings.Contains(string(b), want) {
+		t.Fatalf("%s has no %s", b, want)
+	}
+	ref, err := json.Marshal(wireOf((*sessionJSON)(&s)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(ref) != string(b) {
+		t.Fatalf("written by hand:\n%s\nreflect encoder:\n%s", b, ref)
+	}
+	var back Session
+	if err := json.Unmarshal(b, &back); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(back.EngineHistory(), s.EngineHistory()) {
+		t.Fatalf("round trip: %+v, want %+v", back.EngineHistory(), s.EngineHistory())
+	}
+	h := s.Hierarchy
+	s.SetEngineHistory([]EngineLeg{{SessionID: "claude-1", Agent: "claude", Until: t1}, {SessionID: "codex-1", Agent: "codex", Until: t2}})
+	if s.Hierarchy != h {
+		t.Fatal("the same history made a new hierarchy")
+	}
+	s.SetEngineHistory(nil)
+	if s.Hierarchy != nil || s.EngineHistory() != nil {
+		t.Fatalf("no history left a hierarchy: %+v", s.Hierarchy)
+	}
+}

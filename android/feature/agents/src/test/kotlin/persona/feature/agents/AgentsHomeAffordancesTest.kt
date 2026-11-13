@@ -14,6 +14,7 @@ import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTouchInput
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
@@ -131,6 +132,26 @@ class AgentsHomeAffordancesTest {
         rule.onAllNodesWithText("Interrupt").assertCountEquals(0)
     }
 
+    /** A runtime's session (#6294): no terminal, so Rename and Close agent only where its node says it can. */
+    private fun runtimeRow(capabilities: SessionCapabilities) = Session("box", "paseo", title = "Runtime task", status = "working",
+        state = "working", sourceKind = "runtime", agent = "claude", capabilities = capabilities)
+
+    @Test fun aRuntimeRowRenamesAndClosesWhereItsNodeSays() {
+        showScreen(rows = listOf(runtimeRow(SessionCapabilities(read = true, send = true, close = true, rename = true))))
+        rule.onNodeWithText("Runtime task").performTouchInput { longClick() }
+        rule.onNodeWithText("Rename").assertIsDisplayed()
+        rule.onNodeWithText("Close agent").assertIsDisplayed()
+        rule.onNodeWithText("Copy resume command").assertDoesNotExist()
+    }
+
+    @Test fun aRuntimeRowFromAnOlderNodeOffersNeither() {
+        showScreen(rows = listOf(runtimeRow(SessionCapabilities(read = true, send = true))))
+        rule.onNodeWithText("Runtime task").performTouchInput { longClick() }
+        rule.onNodeWithText("Mute").assertIsDisplayed()
+        rule.onNodeWithText("Rename").assertDoesNotExist()
+        rule.onNodeWithText("Close agent").assertDoesNotExist()
+    }
+
     @Test fun groupingLight() = shootGrouping(dark = false)
     @Test fun groupingDark() = shootGrouping(dark = true)
 
@@ -152,9 +173,10 @@ class AgentsHomeAffordancesTest {
         showScreen()
         rule.onAllNodesWithText("Requests and history").assertCountEquals(0)
         rule.onNodeWithContentDescription("List settings").performClick()
-        rule.onNodeWithText("Machine monitor").assertIsDisplayed()
+        // Glass's ⋯ holds Display's four choices too (#4338 A9): its end is a scroll away in a 900dp window.
+        rule.onNodeWithText("Machine monitor").performScrollTo().assertIsDisplayed()
         rule.onNodeWithText("Requests and history")
-            .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Button)).performClick()
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Button)).performScrollTo().performClick()
         rule.onNodeWithText("Requests waiting for you").assertIsDisplayed()
     }
 

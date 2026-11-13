@@ -659,7 +659,7 @@ struct KnowledgeDetailView: View {
                 // Empty once the header's parts are taken out (a summary that is just the one line): no blank card.
                 if let sum = d.summary, case let profile = Self.profile(sum, oneLine: shown.oneLine), !profile.isEmpty {
                     Section("Profile") {
-                        Markdown(Links.markdown(MathMarkdown.rewrite(profile))).markdownTheme(.persona).textSelection(.enabled)
+                        Markdown(Links.markdown(MathMarkdown.rewrite(profile))).markdownTheme(.persona).readingContent().textSelection(.enabled)
                             .padding(.vertical, Theme.Space.sm)
                     }
                 }
@@ -976,7 +976,9 @@ struct KnowledgeDetailView: View {
     }
 
     /// The entry as last loaded (a linked row or a search hit starts with only its name or id).
-    private var shown: KBEntry {
+    private var shown: KBEntry { Self.shown(entry, detail: detail) }
+
+    nonisolated static func shown(_ entry: KBEntry, detail: KBDetailResponse?) -> KBEntry {
         guard let m = detail?.detail.meta else { return entry }
         var e = entry
         if let n = m["name"]?.string ?? m["title"]?.string, !n.isEmpty { e.name = n }
@@ -988,12 +990,18 @@ struct KnowledgeDetailView: View {
         return e
     }
 
-    private var context: ContextRef {
+    private var context: ContextRef { Self.contextRef(entry, detail: detail) }
+
+    /// The entry as context for the agent: Hand to AI and Ask Persona here, and the composer's Add as Context › Knowledge
+    /// Note… (#3721), whose block leads back here (`persona://kb/<kind>/<id>`). Its summary (else its line), the latest of
+    /// its timeline and where it is in the knowledge base.
+    static func contextRef(_ entry: KBEntry, detail: KBDetailResponse?, link: Bool = false) -> ContextRef {
         let kindTitle = KBKind(rawValue: entry.kind)?.title ?? ""
         var text = detail?.detail.summary ?? entry.oneLine ?? ""
         if let log = detail?.detail.log, !log.isEmpty { text += "\n\n时间线（最近）：\n" + log.suffix(10).joined(separator: "\n") } // i18n-ignore
         if let path = detail?.detail.path { text += "\n\n知识库目录：\(path)" } // i18n-ignore
-        return ContextRef(kind: "context", title: "\(kindTitle) · \(shown.name)", url: "", text: text)
+        let url = link ? "persona://kb/\(entry.kind)/\(entry.id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? entry.id)" : ""
+        return ContextRef(kind: "context", title: "\(kindTitle) · \(shown(entry, detail: detail).name)", url: url, text: text)
     }
 
     private var agentPrompt: String {
@@ -1075,7 +1083,7 @@ struct KBMomentView: View {
                 }
                 if let chunks {
                     ForEach(Array(chunks.enumerated()), id: \.offset) { _, c in
-                        Markdown(c).markdownTheme(.persona)
+                        Markdown(c).markdownTheme(.persona).readingContent()
                     }
                 } else if let error {
                     Label(error, systemImage: Theme.Icon.error).foregroundStyle(Theme.danger).font(Theme.Font.caption)

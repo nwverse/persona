@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { addQuote, getQuotes, sendDraft, setQuotes } from "../../lib/drafts";
 import { toast } from "../../ui/atoms";
 import { Composer, type Outgoing } from "./Composer";
+import { onPermissionPicker } from "../../lib/permissions-command";
 import { t } from "../../i18n";
 
 // imagePayload decodes on a canvas, which jsdom has not: each read waits on a promise the test settles
@@ -245,7 +246,7 @@ describe("Composer image object URLs", () => {
 describe("Composer file upload that finishes after the box moved on", () => {
   const box = () => host.querySelector("textarea")!;
   const renderOn = (draftKey: string) => act(() => root.render(<Composer draftKey={draftKey} machineId="m1" placeholder="" onSend={async () => true} />));
-  const spinning = () => !host.querySelector('button[aria-label="添加图片或文件"] svg');
+  const spinning = () => !host.querySelector("button[data-composer-plus] svg");
   const pickNotes = async () => {
     await pickFile(new File(["notes"], "notes.txt", { type: "text/plain" }));
     expect(uploads).toHaveLength(1);
@@ -372,6 +373,26 @@ describe("Composer suggestion", () => {
     show({ onSend, working: true });
     show({ onSend });
     expect(pill()).not.toBeNull();
+  });
+
+  it("is spent by any message sent, until the agent has worked", async () => {
+    show();
+    act(() => pill()!.querySelector("button")!.click());
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="发送"]')!.click());
+    show();
+    expect(pill()).toBeNull();
+    show({ working: true });
+    show();
+    expect(pill()).not.toBeNull();
+  });
+
+  it("has no one-tap send when it is risky, and still fills in", () => {
+    const onSend = vi.fn(async () => true);
+    act(() => root.render(<Composer draftKey="s" placeholder="" suggestion="push to main" suggestionRisky onSend={onSend} />));
+    expect(pill()!.querySelectorAll("button").length).toBe(1);
+    act(() => pill()!.querySelector("button")!.click());
+    expect(host.querySelector("textarea")!.value).toBe("push to main");
+    expect(onSend).not.toHaveBeenCalled();
   });
 
   it("is not there while the agent works or something is in the box", () => {
@@ -606,7 +627,7 @@ describe("Composer Escape the box uses itself", () => {
 });
 
 describe("sending while another send is in flight", () => {
-  const sendButton = () => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-composer.send")}"]`)!;
+  const sendButton = () => host.querySelector<HTMLButtonElement>('button[data-testid="composer-send"]')!;
   const type = (key: string, text: string) => act(() => void sendDraft(key, { type: "replace", text }));
   const click = (el: Element) => act(() => el.dispatchEvent(new MouseEvent("click", { bubbles: true })));
 
@@ -684,7 +705,7 @@ describe("the trailing slot", () => {
     const order = [...row.children].map((c) => (c.matches("[data-pill]") ? "pill" : c.querySelector("[data-footer]") ? "footer" : c.getAttribute("data-testid") ?? c.getAttribute("aria-label") ?? c.tagName));
     const at = order.indexOf("pill");
     expect(order[at - 1]).toBe("footer");
-    expect(order.slice(at + 1)).toEqual(["composer-voice", t("chat-composer.send")]);
+    expect(order.slice(at + 1)).toEqual(["composer-voice", "composer-send"]);
     expect(row.closest("[class*='@container/composer']")).not.toBeNull();
   });
 });
@@ -714,7 +735,7 @@ describe("the / palette", () => {
     typeInto("/co");
     await until(() => expect(rows()).toEqual(["compact", "context"]));
     typeInto("/");
-    expect(rows()).toHaveLength(8);
+    expect(rows()).toHaveLength(10); // with /workflows (#5421) and /permissions (#6476)
     expect(palette()!.textContent).not.toContain("Esc");
   });
 
@@ -758,6 +779,35 @@ describe("the / palette", () => {
     expect(palette()).toBeNull();
     typeInto("/c");
     expect(palette()).not.toBeNull();
+  });
+
+  // #6476: /permissions opens the conversation's permission menu, picked in the palette or typed and sent; with no
+  // picker to open (an agent without modes), the words go as they are
+  it("opens the permission menu for /permissions instead of sending it", async () => {
+    const onSend = vi.fn(async () => true);
+    const opened = vi.fn();
+    const off = onPermissionPicker("perm", opened);
+    render("perm", onSend);
+    typeInto("/perm");
+    await until(() => expect(rows()).toEqual(["permissions"]));
+    key("Enter");
+    expect(opened).toHaveBeenCalledTimes(1);
+    expect(box().value).toBe("");
+    expect(palette()).toBeNull();
+    typeInto("/permissions");
+    key("Escape");
+    await act(async () => {
+      box().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    });
+    expect(opened).toHaveBeenCalledTimes(2);
+    expect(onSend).not.toHaveBeenCalled();
+    off();
+    typeInto("/permissions");
+    key("Escape");
+    await act(async () => {
+      box().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    });
+    expect(onSend).toHaveBeenCalledWith(expect.objectContaining({ text: "/permissions" }));
   });
 
   it("is not offered where there are no commands", async () => {

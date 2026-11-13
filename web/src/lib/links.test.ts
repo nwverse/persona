@@ -6,7 +6,8 @@ vi.mock("./api", () => ({ api: vi.fn(), enc: encodeURIComponent, getToken: () =>
 
 import { api } from "./api";
 import { parseUserText } from "./turns";
-import { getPanel } from "./panel";
+import { closePanel, getPanel } from "./panel";
+import { setAgentOpenMode } from "./agent-open";
 import { navigate } from "./router";
 import { NARROW } from "./viewport";
 import {
@@ -123,12 +124,37 @@ describe("where a link opens", () => {
     expect(linkHref(`${hub}/todos?id=todo_1`)).toBe(`${hub}/todos?id=todo_1`);
   });
 
-  it("opens this hub's agent and task links as pages at every width, never in the panel (#5096)", () => {
+  it("opens this hub's agent and task links in the panel on a wide screen, as pages on a narrow one (#5424)", () => {
+    const hub = "https://hub.example.com";
+    vi.stubGlobal("location", { origin: hub, href: `${hub}/persona`, pathname: "/persona", search: "" });
+    const narrow = { value: false };
+    vi.stubGlobal("matchMedia", (q: string) => ({ get matches() { return q === NARROW && narrow.value; }, addEventListener() {}, removeEventListener() {} }));
+    try {
+      const before = vi.mocked(navigate).mock.calls.length;
+      openLink(`${hub}/s/m1/abc-1`);
+      expect(getPanel()).toEqual({ kind: "agent", mid: "m1", sid: "abc-1" });
+      openLink(`${hub}/todos?id=todo_1`);
+      expect(getPanel()).toEqual({ kind: "task", todo: "todo_1" });
+      expect(vi.mocked(navigate).mock.calls.length).toBe(before);
+      closePanel();
+      narrow.value = true;
+      openLink(`${hub}/s/m1/abc-1`);
+      openLink(`${hub}/todos?id=todo_1`);
+      expect(getPanel()).toBeNull();
+      expect(vi.mocked(navigate).mock.calls.slice(-2)).toEqual([[{ name: "session", mid: "m1", sid: "abc-1" }], [{ name: "todos", id: "todo_1" }]]);
+    } finally {
+      closePanel();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("opens this hub's agent and task links as pages at every width, never in the panel, set to Full page (#5096)", () => {
     const hub = "https://hub.example.com";
     vi.stubGlobal("location", { origin: hub, href: `${hub}/persona`, pathname: "/persona", search: "" });
     const narrow = { value: false };
     // viewport.ts keeps the list it got, so `matches` follows `narrow`
     vi.stubGlobal("matchMedia", (q: string) => ({ get matches() { return q === NARROW && narrow.value; }, addEventListener() {}, removeEventListener() {} }));
+    setAgentOpenMode("page");
     try {
       expect(opensInApp(`${hub}/s/m1/abc-1`)).toBe(true);
       expect(opensInApp("https://other.example.com/s/m1/abc-1")).toBe(false);
@@ -147,6 +173,7 @@ describe("where a link opens", () => {
       expect(getPanel()).toBeNull();
       expect(vi.mocked(navigate).mock.calls.at(-1)).toEqual([{ name: "persona", sid: "conv-1" }]);
     } finally {
+      setAgentOpenMode("panel");
       vi.unstubAllGlobals();
     }
   });

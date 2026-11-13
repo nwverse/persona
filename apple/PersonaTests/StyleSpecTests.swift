@@ -84,6 +84,25 @@ struct StyleSpecTests {
         #expect(found.isEmpty, "the accent on the page under 3:1: \(found)")
     }
 
+    /// A secondary soft button (Clay, Island) draws its label in the tint on `card` (`SoftButtonStyle`, #6157): the accent
+    /// and the danger color ≥ 3:1 on it. The glass and bordered buttons' fills are the system's, not tokens:
+    /// `ButtonContrastUITests` measures those on screen.
+    @Test func secondarySoftButtonsRead() {
+        var found: [String] = []
+        for style in AppStyle.allCases where style.component.buttons == .soft {
+            for (name, colors) in Self.colors {
+                let spec = StyleSpec(style.component, colors)
+                for (look, ui) in Self.appearances {
+                    for (what, ink) in [("accent", spec.accent), ("danger", spec.extensionColors?.danger ?? Theme.Role.dangerColor)] {
+                        let c = Self.contrast(ink, spec.card, ui)
+                        if c < 3 { found.append("\(style.rawValue)+\(name) \(look) \(what): \(String(format: "%.2f", c))") }
+                    }
+                }
+            }
+        }
+        #expect(found.isEmpty, "a soft secondary button's label under 3:1 on the card: \(found)")
+    }
+
     /// What sits in the user's own message (#5204): its words, and the blocks it opens with (quotes, forwards, text to
     /// change, comments), whose rule, heading and words are the words' color, ≥ 4.5:1 on the block's fill laid over the
     /// bubble; a path linked in the words ≥ 3:1. On Persona's main conversation's box and on the style's bubble, at its
@@ -123,6 +142,38 @@ struct StyleSpecTests {
         #expect(Self.hex(ink) == hex.light && Self.hex(ink, .dark) == hex.dark)
         #expect(PersonaPalette.contrast(hex.light, Theme.ChatBox.personaHex.light) >= 4.5)
         #expect(PersonaPalette.contrast(hex.dark, Theme.ChatBox.personaHex.dark) >= 4.5)
+    }
+
+    /// The Mac window's chrome a style brings (`StyleSpec.MacChrome`, Lark's), in the style's own colors: a selected
+    /// row's icon in the accent ≥ 3:1 on the sections column's raised block and on the selection's wash over the side
+    /// column and over the page, the row's words ≥ 4.5:1 on that wash, and the white letter ≥ 3:1 on every monogram
+    /// hue (a heading-sized letter, so the large-text floor).
+    @Test func theMacChromeReads() {
+        var found: [String] = []
+        for style in AppStyle.allCases {
+            let chrome = style.component.mac
+            let spec = StyleSpec(style.component, style.component.colors)
+            for (look, ui) in Self.appearances {
+                func check(_ what: String, _ a: (Double, Double, Double), _ b: (Double, Double, Double), _ floor: Double) {
+                    let c = Self.contrast(a, b)
+                    if c < floor { found.append("\(style.rawValue) \(look) \(what): \(String(format: "%.2f", c))") }
+                }
+                let accent = Self.rgb(spec.accent, ui)
+                if let raised = chrome.sidebarSelected { check("icon on the raised block", accent, Self.rgb(raised, ui), 3) }
+                if let tint = chrome.selectionTint {
+                    let unders: [(String, Color)] = [("side column", chrome.sideColumn ?? spec.page), ("page", spec.page)]
+                    for (name, under) in unders {
+                        let wash = Self.over(spec.accent.opacity(tint), Self.rgb(under, ui), ui)
+                        check("icon on the selection over the \(name)", accent, wash, 3)
+                        check("words on the selection over the \(name)", Self.rgb(Theme.primaryText, ui), wash, 4.5)
+                    }
+                }
+                for (i, hue) in chrome.monogramHues.enumerated() {
+                    check("white on monogram hue \(i)", Self.rgb(Theme.onSolid, ui), Self.rgb(hue, ui), 3)
+                }
+            }
+        }
+        #expect(found.isEmpty, "the Mac chrome under its floors: \(found)")
     }
 
     /// The colored canvases stay darker than the system's grouped cells in dark (#1C1C1E): Clay's at #1D1A23 was one

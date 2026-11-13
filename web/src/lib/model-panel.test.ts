@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest";
 import {
   addFavorite,
+  ALL_GROUP_MAX,
   alignedScrollTop,
   contextSize,
   copySetup,
@@ -126,6 +127,31 @@ describe("the sections of a view", () => {
   });
 });
 
+describe("a long list in the All view", () => {
+  const many = (n: number, prefix: string): PanelModel[] => Array.from({ length: n }, (_, i) => ({ id: `${prefix}-${i}`, name: `${prefix} ${i}`, efforts: [] }));
+  const big = (over: Partial<PanelProvider> = {}) => gateway({ models: many(20, "gw"), ...over });
+
+  it("each provider group shows its first rows and how many it has, while several providers are listed", () => {
+    const groupOf = (o: Partial<SectionsInput>) => panelSections(input(o)).find((s) => s.provider?.id === "gw")!;
+    const g = groupOf({ providers: [claude(), big(), codex()] });
+    expect(g.rows.map((r) => r.model.id)).toEqual(many(ALL_GROUP_MAX, "gw").map((m) => m.id));
+    expect(g.total).toBe(20);
+    // a short group is whole and has no total
+    expect(panelSections(input({ providers: [claude(), big(), codex()] })).find((s) => s.provider?.id === "codex")!.total).toBeUndefined();
+  });
+
+  it("the model that runs now stays in its cut group; a provider's view, a search and a single provider show everything", () => {
+    const running = state({ current: { provider: "gw", model: "gw-15" }, recommended: [], starting: true });
+    const cut = panelSections(input({ providers: [claude(), big(), codex()], state: running })).find((s) => s.provider?.id === "gw")!;
+    expect(cut.rows.map((r) => `${r.model.id}${r.current ? "*" : ""}`)).toEqual([...many(ALL_GROUP_MAX, "gw").map((m) => m.id), "gw-15*"]);
+    expect(cut.total).toBe(20);
+    const whole = (o: Partial<SectionsInput>) => panelSections(input({ providers: [claude(), big(), codex()], ...o })).find((s) => s.provider?.id === "gw");
+    expect(whole({ view: { kind: "provider", provider: "gw" } })?.rows).toHaveLength(20);
+    expect(whole({ query: "gw" })?.rows).toHaveLength(20);
+    expect(panelSections(input({ providers: [big()], state: state({ current: null, recommended: [] }) }))[0].rows).toHaveLength(20);
+  });
+});
+
 describe("the search", () => {
   it("matches every word against the name, id, concrete model, description and provider", () => {
     const p = claude();
@@ -243,6 +269,16 @@ describe("what can be picked and customized", () => {
     expect(rowBlock(claude({ models: null }), {})).toEqual({ reason: "" });
     // a list shown from before and read again behind it can be picked
     expect(rowBlock(claude({ loading: true }), {})).toBeUndefined();
+  });
+
+  it("the model that runs now can be picked back while a switch waits (it drops the switch), unless the chat is busy", () => {
+    const fixed = codex({ unavailable: "Codex can't change the model" });
+    const waiting = { pending: { provider: "claude", model: "opus" } };
+    expect(rowBlock(fixed, waiting, true)).toBeUndefined();
+    // its other rows stay off, and so does it with no switch waiting
+    expect(rowBlock(fixed, waiting)).toEqual({ reason: "Codex can't change the model" });
+    expect(rowBlock(fixed, {}, true)).toEqual({ reason: "Codex can't change the model" });
+    expect(rowBlock(fixed, { ...waiting, busy: "Working" }, true)).toEqual({ reason: "Working" });
   });
 
   it("the model that runs now keeps its flyout when edits apply live, even when picks are off", () => {

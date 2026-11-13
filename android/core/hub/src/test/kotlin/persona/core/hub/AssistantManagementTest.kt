@@ -113,6 +113,45 @@ class AssistantManagementTest {
         }
     }
 
+    /**
+     * #5055: a Persona chat's pick is kept with `PUT …/model` (the launcher, the model unless it is the default entry, the
+     * effort, the chat's computer) and dropped with `DELETE`; a refusal keeps the hub's words. The panel's providers come
+     * from `?purpose=assistant`, with the default and what can't run there.
+     */
+    @Test fun aPersonaChatsPickIsKeptAndDroppedOnTheHub() = runBlocking {
+        MockWebServer().use { server ->
+            val api = HttpAssistantManagement(server.url("/").toString(), "test-token", OkHttpClient())
+            server.enqueue(MockResponse().setBody("""{"ok":true,"model_pick":{"launcher":"team","model":"sonnet","effort":"low"}}"""))
+            val kept = api.setModelPick(SessionKey("mac", "c2"), persona.core.contracts.ModelPick("team", "sonnet", "low"))
+            assertEquals(persona.core.contracts.ModelPick("team", "sonnet", "low"), kept)
+            val put = server.takeRequest()
+            assertEquals("PUT", put.method)
+            assertEquals("/api/v1/assistant/conversations/c2/model", put.path)
+            assertEquals(buildJsonObject { put("launcher", "team"); put("model", "sonnet"); put("effort", "low"); put("machine_id", "mac") },
+                JsonCodec.parseToJsonElement(put.body.readUtf8()))
+            server.enqueue(MockResponse().setBody("""{"ok":true}"""))
+            api.setModelPick(SessionKey("mac", "c2"), persona.core.contracts.ModelPick("claude"))
+            assertEquals(buildJsonObject { put("launcher", "claude"); put("machine_id", "mac") }, JsonCodec.parseToJsonElement(server.takeRequest().body.readUtf8()))
+            server.enqueue(MockResponse().setBody("""{"ok":true}"""))
+            api.clearModelPick(SessionKey("mac", "c2"))
+            val delete = server.takeRequest()
+            assertEquals("DELETE" to "/api/v1/assistant/conversations/c2/model", delete.method to delete.path)
+            server.enqueue(MockResponse().setResponseCode(409).setBody("""{"error":"这台电脑不在这个服务商的范围内","code":"launcher_out_of_scope"}"""))
+            val refused = runCatching { api.setModelPick(SessionKey("mac", "c2"), persona.core.contracts.ModelPick("team")) }.exceptionOrNull() as HubFailure
+            assertEquals(409 to "launcher_out_of_scope", refused.status to refused.code)
+            assertEquals("这台电脑不在这个服务商的范围内", refused.message)
+            server.takeRequest()
+            server.enqueue(MockResponse().setBody("""{"launchers":[{"name":"team","display_name":"Team API","agent_type":"claude"}],
+                "default":{"provider":"claude","model":"opus","effort":"high"},
+                "unavailable":[{"name":"resp","kind":"api","api":"responses","code":"api_protocol","reason":"用的是 Responses 协议"}]}"""))
+            val launchers = api.assistantLauncherList("mac")
+            assertEquals("/api/v1/machines/mac/launchers?purpose=assistant", server.takeRequest().path)
+            assertEquals("Team API", launchers.launchers.single().title)
+            assertEquals("opus", launchers.default?.model)
+            assertEquals("api_protocol" to "用的是 Responses 协议", launchers.unavailable.single().let { it.code to it.reason })
+        }
+    }
+
     /** C12 (#4339, iOS `AssistantSidebar`): Rename…, Archived (N) and Unarchive on the routes iOS uses. */
     @Test fun renameUnarchiveAndTheArchivedListUseTheirRoutes() = runBlocking {
         MockWebServer().use { server ->
@@ -211,6 +250,37 @@ class AssistantManagementTest {
             // Anything else stays the hub failure it is.
             server.enqueue(MockResponse().setResponseCode(500).setBody("""{"error":"boom"}"""))
             try { api.newMainConversation(true, "main-1"); fail("A failure must throw") }
+            catch (failure: HubFailure) { assertEquals(500, failure.status) }
+        }
+    }
+
+    // Clear context (#5100, the hub's #5095): the main conversation on screen as `expect`, the one put away back; a 409 with
+    // a code is the hub's refusal in its words, anything else the failure it is.
+    @Test fun clearMainSendsTheExpectedConversationAndTurnsRefusalsIntoTheHubsWords() = runBlocking {
+        MockWebServer().use { server ->
+            val api = HttpAssistantManagement(server.url("/").toString(), "test-token", OkHttpClient())
+            server.enqueue(MockResponse().setBody("""{"ok":true,"archived":"main-1"}"""))
+            assertEquals("main-1", api.clearMainConversation("main-1"))
+            val cleared = server.takeRequest()
+            assertEquals("POST", cleared.method)
+            assertEquals("/api/v1/assistant/main/clear", cleared.path)
+            assertEquals("""{"expect":"main-1"}""", cleared.body.readUtf8())
+
+            // No main conversation known: no `expect`, and nothing put away.
+            server.enqueue(MockResponse().setBody("""{"ok":true,"archived":""}"""))
+            assertEquals("", api.clearMainConversation(null))
+            assertEquals("{}", server.takeRequest().body.readUtf8())
+
+            server.enqueue(MockResponse().setResponseCode(409).setBody("""{"code":"main_changed","error":"主对话已经在别的设备上换过了"}"""))
+            try { api.clearMainConversation("main-1"); fail("A refusal must throw") }
+            catch (refused: AssistantRefused) {
+                assertEquals("main_changed", refused.code)
+                assertEquals("主对话已经在别的设备上换过了", refused.message)
+            }
+            server.takeRequest()
+
+            server.enqueue(MockResponse().setResponseCode(500).setBody("""{"error":"boom"}"""))
+            try { api.clearMainConversation("main-1"); fail("A failure must throw") }
             catch (failure: HubFailure) { assertEquals(500, failure.status) }
         }
     }

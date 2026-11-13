@@ -1,6 +1,7 @@
 package proto
 
 import (
+	"slices"
 	"strings"
 	"time"
 )
@@ -28,10 +29,17 @@ func (s Session) IsSubtask() bool {
 }
 
 // SessionHierarchy is a Session's place among the sessions that started one another (docs/protocol/protocol.md
-// "Session hierarchy") and when it began. Each member is a key of the row itself on the wire. A Session holds it by
-// pointer (Session.Hierarchy, nil when every member is empty): the four fields inline would take every row past its
-// size class (TestSessionFitsItsSizeClass), and only a few rows have any of them.
+// "Session hierarchy"), when it began, and its completed task ownership. Each member is a key of the row itself on
+// the wire. A Session holds it by pointer (Session.Hierarchy, nil when every member is empty): these sparse fields
+// inline would take every row past its size class (TestSessionFitsItsSizeClass).
 type SessionHierarchy struct {
+	// CompletedTodo is display-only task ownership. Keep this sparse reference out of every Session's hot row.
+	CompletedTodo *TodoRef `json:"completed_todo,omitempty"`
+	// ParentAgentID is the session on the same machine this one is drawn under while staying a session of its own: its
+	// own row, state, sends, unread and counts (docs/protocol/protocol.md "Session hierarchy"). Unlike
+	// parent_session_id it makes no child: nothing folds it, and it is no subagent. Set by the node: a Claude desktop
+	// app's side session names the session it was started from, while that one is listed too (claudedesktop.go, #5935).
+	ParentAgentID string `json:"parent_agent_id,omitempty"`
 	// StartedAt is when the session began: its transcript's first line, a runtime's created time. Set by the node where
 	// it knows it (Codex rollouts, runtime rows); zero when it does not.
 	StartedAt time.Time `json:"started_at,omitzero"`
@@ -50,6 +58,29 @@ type SessionHierarchy struct {
 	// Children counts the sessions folded under this one, all depths, by their own states. Set by the manager on the
 	// topmost listed ancestor only.
 	Children *SessionChildren `json:"children,omitempty"`
+	// EngineHistory is the conversation's earlier stretches, oldest first, when it moved between Claude Code and Codex
+	// (#5054, docs/protocol/protocol.md "Switching a running Agent to another engine"): the session that ran each and
+	// when it was switched away from. Only the session running the conversation now carries it; the sessions it names
+	// are left out of the machine's list (one conversation, one row), and their transcripts stay readable and resumable.
+	// A session may be named more than once (switched back to and away again), each time for another stretch. Set by
+	// the node.
+	EngineHistory []EngineLeg `json:"engine_history,omitempty"`
+}
+
+// EngineLeg is one earlier stretch of a conversation (SessionHierarchy.EngineHistory): the session that ran it, its
+// engine ("claude" or "codex"), and when the conversation was switched away from it. The stretch began when the one
+// before it ended (the first: when its session began).
+type EngineLeg struct {
+	SessionID string    `json:"session_id"`
+	Agent     string    `json:"agent"`
+	Until     time.Time `json:"until"`
+}
+
+// SameEngineHistory: a and b name the same stretches.
+func SameEngineHistory(a, b []EngineLeg) bool {
+	return slices.EqualFunc(a, b, func(x, y EngineLeg) bool {
+		return x.SessionID == y.SessionID && x.Agent == y.Agent && x.Until.Equal(y.Until)
+	})
 }
 
 // FoldedAsWorker is SessionHierarchy.FoldedAs for a worker of a tab team: another running Agent in the tab whose first
@@ -66,8 +97,26 @@ type SessionChildren struct {
 }
 
 func (h *SessionHierarchy) empty() bool {
-	return h.StartedAt.IsZero() && h.AskingParentSessionID == "" && h.FoldedUnder == "" && h.FoldedAs == "" &&
-		h.Children == nil
+	return h.ParentAgentID == "" && h.StartedAt.IsZero() && h.AskingParentSessionID == "" && h.FoldedUnder == "" && h.FoldedAs == "" &&
+		h.Children == nil && len(h.EngineHistory) == 0 && h.CompletedTodo == nil
+}
+
+// CompletedTodo is the last completed association for navigation, never active work.
+func (s *Session) CompletedTodo() *TodoRef {
+	if s.Hierarchy == nil {
+		return nil
+	}
+	return s.Hierarchy.CompletedTodo
+}
+
+// SetCompletedTodo preserves the copy-on-write sparse metadata shared by session copies.
+func (s *Session) SetCompletedTodo(todo *TodoRef) {
+	if s.CompletedTodo() == todo {
+		return
+	}
+	h := s.hierarchy()
+	h.CompletedTodo = todo
+	s.setHierarchy(h)
 }
 
 // hierarchy is a copy of s's hierarchy to change, its children copied too: the one s holds is shared.
@@ -80,6 +129,7 @@ func (s *Session) hierarchy() SessionHierarchy {
 		c := *h.Children
 		h.Children = &c
 	}
+	h.EngineHistory = slices.Clone(h.EngineHistory)
 	return h
 }
 
@@ -90,6 +140,25 @@ func (s *Session) setHierarchy(h SessionHierarchy) {
 		return
 	}
 	s.Hierarchy = &h
+}
+
+// ParentAgentID is the session this one is drawn under while staying its own (SessionHierarchy.ParentAgentID); "" when
+// none.
+func (s *Session) ParentAgentID() string {
+	if s.Hierarchy == nil {
+		return ""
+	}
+	return s.Hierarchy.ParentAgentID
+}
+
+// SetParentAgentID sets the session this one is drawn under ("" for none), with no new hierarchy when it already is.
+func (s *Session) SetParentAgentID(id string) {
+	if s.ParentAgentID() == id {
+		return
+	}
+	h := s.hierarchy()
+	h.ParentAgentID = id
+	s.setHierarchy(h)
 }
 
 // StartedAt is when the session began (SessionHierarchy.StartedAt); zero when not known.
@@ -130,6 +199,26 @@ func (s *Session) Children() SessionChildren {
 		return SessionChildren{}
 	}
 	return *s.Hierarchy.Children
+}
+
+// EngineHistory is the conversation's earlier stretches this session continues (SessionHierarchy.EngineHistory),
+// oldest first; nil when it never moved between engines. Shared with the row's other copies: not to be changed.
+func (s *Session) EngineHistory() []EngineLeg {
+	if s.Hierarchy == nil {
+		return nil
+	}
+	return s.Hierarchy.EngineHistory
+}
+
+// SetEngineHistory sets the conversation's earlier stretches (nil: none), with no new hierarchy when it already has
+// them.
+func (s *Session) SetEngineHistory(legs []EngineLeg) {
+	if SameEngineHistory(s.EngineHistory(), legs) {
+		return
+	}
+	h := s.hierarchy()
+	h.EngineHistory = slices.Clone(legs)
+	s.setHierarchy(h)
 }
 
 // SetStartedAt sets when the session began (zero: not known), with no new hierarchy when it is already so.

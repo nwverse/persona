@@ -81,8 +81,10 @@ type StartParams struct {
 	ConfigDir      string        `json:"config_dir,omitempty"` // Claude profile on the target machine; "" private, "legacy" old resolution, "default" unset
 	PermissionMode string        `json:"permission_mode,omitempty"`
 	Effort         string        `json:"effort,omitempty"`
-	Purpose        string        `json:"purpose,omitempty"`    // the model configuration's purpose; "" is the main chat's
-	MachineID      string        `json:"machine_id,omitempty"` // "" is the assistant's machine
+	// ServiceTier: the native speed for a new Codex conversation, acknowledged before its first turn. Independent of Effort.
+	ServiceTier string `json:"service_tier,omitempty"`
+	Purpose     string `json:"purpose,omitempty"`    // the model configuration's purpose; "" is the main chat's
+	MachineID   string `json:"machine_id,omitempty"` // "" is the assistant's machine
 	// Space: "health" starts it in the health space (its own directory, instructions and memory, docs/assistant/health.md);
 	// "" is the assistant's own.
 	Space string `json:"space,omitempty"`
@@ -160,6 +162,12 @@ const (
 	// PluginsSkillsNeed: {machine_id, names} → {}: the machine's node lacks these skills (its assistant.prepare said
 	// plugin_skills_need): their files go next time.
 	PluginsSkillsNeed = "plugins.skills_need"
+	// PluginsProjectContext: ProjectContextParams → ExtensionContextResult: what the extensions wrote for these
+	// projects' background (assistant_data.go).
+	PluginsProjectContext = "plugins.project_context"
+	// PluginsInboxContext: {} → ExtensionContextResult: what the extensions wrote for the Inbox's triage and drafts,
+	// and the sentences a draft must not repeat.
+	PluginsInboxContext = "plugins.inbox_context"
 
 	// SettingsList: {} → {settings: [Setting]}: the hub's own settings persona_settings offers; app.tool persona_settings
 	// runs get / set / add / remove on them (a change waits for the user's approval on the phone).

@@ -84,7 +84,7 @@ internal object SubagentCardText {
      */
     fun meta(res: Resources, agent: Subagent?, took: Long?, assistant: Boolean): Meta = Meta(
         harness = if (assistant) null else res.getString(R.string.chat_subagent_harness_claude),
-        model = Subagents.modelChip(agent?.model).ifEmpty { null },
+        model = persona.core.domain.modelShortName(agent?.model).ifEmpty { null },
         tokens = agent?.tokens?.takeIf { it > 0 }?.let { res.getString(R.string.chat_subagent_tokens, Subagents.tokens(it)) },
         uses = agent?.steps?.takeIf { it > 0 }?.let { res.getQuantityString(R.plurals.chat_subagent_tool_uses, it, it) },
         took = took?.let { workDuration(res, it) },
@@ -170,7 +170,7 @@ private fun StatusWord(status: SubagentStatus, word: String) {
     val color = if (status == SubagentStatus.Failed) palette.danger.text else palette.ink2
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
         when (status) {
-            SubagentStatus.Running -> JSpinner(Modifier.size(Tokens.Space.m), color = palette.ink2, stroke = Tokens.Space.xxs)
+            SubagentStatus.Running -> JSpinner(Modifier.size(Tokens.Space.Standard.m), color = palette.ink2, stroke = Tokens.Space.Standard.xxs)
             SubagentStatus.Failed -> JIcon(PersonaIcons.error, null, size = Tokens.Space.m, tint = color, decorative = true)
             SubagentStatus.Stopped -> JIcon(PersonaIcons.interrupt, null, size = Tokens.Space.m, tint = color, decorative = true)
             SubagentStatus.Completed -> JIcon(PersonaIcons.done, null, size = Tokens.Space.m, tint = color, decorative = true)

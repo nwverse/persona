@@ -118,6 +118,27 @@ class ChatDetailsTest {
         assertNull(openRecapId(lines(exchange), closed = null))
     }
 
+    private fun resources(locale: java.util.Locale) =
+        context.createConfigurationContext(android.content.res.Configuration(context.resources.configuration).apply { setLocale(locale) }).resources
+
+    @Test fun theOpenRecapSaysOneFullStop() {
+        // A recap that ends a sentence keeps its own mark; the template adds none.
+        assertEquals("离开期间回顾：测试都过了。点按关闭", recapSpoken(res, "测试都过了。"))
+        assertEquals("离开期间回顾：真的过了吗？点按关闭", recapSpoken(res, "真的过了吗？"))
+        assertEquals("离开期间回顾：过了！点按关闭", recapSpoken(res, "过了！ "))
+        assertEquals("离开期间回顾：测试都过了。点按关闭", recapSpoken(res, "测试都过了"))
+        val ja = resources(java.util.Locale.JAPANESE)
+        assertEquals("不在中のまとめ：テストは通りました。タップして閉じる", recapSpoken(ja, "テストは通りました。"))
+        assertEquals("不在中のまとめ：テストは通りました．タップして閉じる", recapSpoken(ja, "テストは通りました．"))
+        assertEquals("不在中のまとめ：テストは通りました。タップして閉じる", recapSpoken(ja, "テストは通りました"))
+        val en = resources(java.util.Locale.ENGLISH)
+        assertEquals("Recap while you were away: The tests pass. Tap to close", recapSpoken(en, "The tests pass."))
+        assertEquals("Recap while you were away: Did they pass? Tap to close", recapSpoken(en, "Did they pass?"))
+        assertEquals("Recap while you were away: The tests pass. Tap to close", recapSpoken(en, "The tests pass"))
+        // Other closing marks still get the template's full stop.
+        assertEquals("Recap while you were away: Done (mostly). Tap to close", recapSpoken(en, "Done (mostly)"))
+    }
+
     @Test fun closedRecapsAreKeptOnThisDeviceAndPruned() {
         val store = ClosedRecaps(context)
         assertNull(store.closed(key))
@@ -206,7 +227,7 @@ class ChatDetailsTest {
     }
 
     private val recapped = listOf(user(1, "修好导入重试"), reply(2, "修好了。"), recap(3, "**这一轮**：修了导入重试，测试都过了。"))
-    private val openSpoken = "离开期间回顾：这一轮：修了导入重试，测试都过了。。点按关闭"
+    private val openSpoken = "离开期间回顾：这一轮：修了导入重试，测试都过了。点按关闭"
 
     @Test fun glassOpensTheNewestRecapUntilTapped() {
         context.getSharedPreferences("closed_recaps", Context.MODE_PRIVATE).edit().clear().commit()

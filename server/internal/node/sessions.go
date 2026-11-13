@@ -74,7 +74,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	for _, id := range slices.Sorted(maps.Keys(agents)) {
 		a := agents[id]
 		if !onList[id] { // a pane on Claude's agents list stays idle: the transcript is its parked session's (claudebg.go)
-			a.AgentStatus = n.claudeStatus(id, a, now)
+			a.AgentStatus = n.liveStatus(id, a, now)
 		}
 		s := proto.Session{
 			SessionID: id, Cwd: a.Cwd, Status: a.AgentStatus, PaneID: a.PaneID, TabID: a.TabID,
@@ -199,8 +199,12 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			s.AsksRead = true
 		}
 		if a.Agent == "codex" {
+			if _, thread, err := n.codexOwner(id); err == nil && thread.model != "" {
+				s.Model = thread.model
+			}
 			n.codexEffortRow(id, &s.Efforts, &s.Effort, rollout) // joined on its app-server: its effort (codex_effort.go)
 			n.codexSpeedRow(&s)
+			n.codexRewindRow(id, &s)
 		}
 		if piFamily(a.Agent) {
 			n.mergePiRow(&s) // its conversation is the extension's (pi.go)
@@ -290,11 +294,17 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	n.listRows.Store(int32(max(peak, len(out))))
 	// Terminal-owned Codex parents were already seen before history was added: over the whole list, before any row goes.
 	resolveCodexHierarchy(out)
+	// A conversation that moved between Claude Code and Codex is one row, the session running it now: the sessions it
+	// ran in before are left out (engine_switch.go).
+	var earlier map[string]bool
+	if chains := n.state.engineHistories(); chains != nil {
+		earlier = joinStretches(out, chains)
+	}
 	// The rows kept move down over the dropped ones, in order.
 	j = 0
 	for i := range out {
 		s := &out[i]
-		if !n.sessionScopeAllows(s.Cwd) {
+		if earlier[s.SessionID] || !n.sessionScopeAllows(s.Cwd) {
 			continue
 		}
 		if s.Cwd != "" && n.cwdBlocked(s.Cwd) && !n.isAssistantSession(s.SessionID) && !n.keptSessions()[s.SessionID] {
@@ -318,6 +328,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		return nil
 	}
 	out = out[:j]
+	linkSideSessions(out, n.offlineParents()) // the desktop app's side sessions under the sessions that started them (#5935)
 	sortNewestFirst(out)
 	return out
 }
@@ -361,7 +372,8 @@ func (n *Node) decorateIn(s *proto.Session, pass *codexListPass) {
 	}
 	if st, ok := n.decorateState(s); ok {
 		s.Compaction = st.Compaction
-		s.PendingSwitch = st.PendingSwitch // launcher_switch.go
+		s.PendingSwitch = st.PendingSwitch   // launcher_switch.go
+		s.SetEngineHistory(st.EngineHistory) // engine_switch.go
 	}
 	if s.PendingSwitch == nil {
 		s.PendingSwitch = n.unrecordedSwitch(s.SessionID)
@@ -376,6 +388,7 @@ func (n *Node) decorateIn(s *proto.Session, pass *codexListPass) {
 		s.Title = filepath.Base(s.Cwd)
 	}
 	s.BypassAvailable = n.hooks.canBypass(s.SessionID) // modes.go claudeCanBypass
+	n.modeRestartRow(s)                                // mode_restart.go
 	n.ultracodeRow(s, pass)
 }
 

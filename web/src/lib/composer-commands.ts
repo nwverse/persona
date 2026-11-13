@@ -1,10 +1,12 @@
 // What an agent's composer offers and refuses, by what the session can do (iOS ChatView canPickModel / canClear,
 // Android canTypeClaudeCommands): the "/" list and the cap on pictures.
 import { agentName, sessionAgent } from "./agent-kind";
+import { WORKFLOWS_COMMAND } from "./background-panel";
 import { canSwitchModel } from "./model-switch";
 import { hasLoop, LOOP_TEXT } from "./loop-command";
 import { sessionCan, stateOf } from "./format";
 import type { Session } from "./types";
+import { canPickPermissions, PERMISSIONS_COMMAND } from "./permissions-command";
 
 /** Pictures one message takes (iOS ChatView, MacComposerDrop.maxImages, Android ChatComposer). */
 export const MAX_IMAGES = 4;
@@ -20,9 +22,10 @@ export function paneClaude(s: Session | undefined): boolean {
   return sessionCan(s, "send") && sessionCan(s, "terminal");
 }
 
-/** The agent commands the "/" list shows for `s`: /model where the model can switch, /clear for pane Claude while it
- *  neither works nor waits for you, /loop for Claude agents. The agent's own slash commands (`agent`) are labelled with
- *  its name, the source the palette shows on their row. */
+/** The agent commands the "/" list shows for `s`: /model where the model can switch, /permissions where the permission
+ *  picker is (lib/permissions-command.ts), /clear for pane Claude while it
+ *  neither works nor waits for you, /loop and /workflows (its Background tasks panel, #5421) for Claude Code Agents. The
+ *  agent's own slash commands (`agent`) are labelled with its name, the source the palette shows on their row. */
 export function agentCommands<C extends { text: string; agent?: boolean; source?: string }>(all: C[], s: Session | undefined): C[] {
   const st = s ? stateOf(s) : "offline";
   const who = s ? sessionAgent(s) : undefined;
@@ -31,8 +34,10 @@ export function agentCommands<C extends { text: string; agent?: boolean; source?
     .filter((c) => {
       const word = c.text.trim();
       if (word === "/model") return paneClaude(s) && canSwitchModel(s);
+      if (word === PERMISSIONS_COMMAND) return canPickPermissions(s);
       if (word === "/clear") return paneClaude(s) && st !== "working" && st !== "needs_you";
       if (c.text === LOOP_TEXT) return hasLoop(s);
+      if (word === WORKFLOWS_COMMAND) return hasLoop(s) && !s?.assistant;
       return true;
     })
     .map((c) => (c.agent ? { ...c, source: name } : c));

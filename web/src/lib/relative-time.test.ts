@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { initI18n } from "../i18n";
 import { exactTime, relativeTime } from "./relative-time";
 
@@ -9,7 +9,10 @@ const MIN = 60_000;
 const HOUR = 60 * MIN;
 const DAY = 24 * HOUR;
 
-afterEach(() => initI18n("zh-Hans"));
+afterEach(() => {
+  vi.restoreAllMocks();
+  return initI18n("zh-Hans");
+});
 
 describe("relativeTime", () => {
   it.each([
@@ -22,11 +25,15 @@ describe("relativeTime", () => {
     expect(ages.map((ms) => relativeTime(before(ms), now))).toEqual(words);
   });
 
+  // The date follows the system's region when the system speaks the interface language (docs/protocol/i18n.md
+  // "Formatting locale"): Node's navigator reports the machine's locale, so each case says the system's.
   it.each([
-    ["en", "Nov 5, 09:07", "Jan 2, 2025, 23:59"],
-    ["zh-Hans", "11月5日 09:07", "2025年1月2日 23:59"],
-    ["ja", "11月5日 09:07", "2025年1月2日 23:59"],
-  ])("gives the date and time from a week on as the chat writes them in %s, the year only when it is another", async (lang, thisYear, another) => {
+    ["en", "en-US", "Nov 5, 09:07", "Jan 2, 2025, 23:59"],
+    ["en", "en-AU", "5 Nov, 09:07", "2 Jan 2025, 23:59"],
+    ["zh-Hans", "zh-CN", "11月5日 09:07", "2025年1月2日 23:59"],
+    ["ja", "ja-JP", "11月5日 09:07", "2025年1月2日 23:59"],
+  ])("gives the date and time from a week on as the chat writes them in %s on a %s system, the year only when it is another", async (lang, system, thisYear, another) => {
+    vi.spyOn(navigator, "languages", "get").mockReturnValue([system]);
     await initI18n(lang);
     expect(relativeTime(new Date(2026, 10, 5, 9, 7).toISOString(), now)).toBe(thisYear);
     expect(relativeTime(new Date(2025, 0, 2, 23, 59).toISOString(), now)).toBe(another);

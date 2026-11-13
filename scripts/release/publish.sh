@@ -28,6 +28,8 @@ _env=$(python3 scripts/persona_config.py env) || exit $?
 eval "$_env"; unset _env
 [ -n "$PERSONA_PUBLISH_URL" ] || { echo "publish.site_url is not set in the config (docs/operations/config.md)" >&2; exit 2; }
 WRANGLER="${PERSONA_WRANGLER:-}"
+SITE_LANGUAGE_CHECK="${PERSONA_SITE_LANGUAGE_CHECK:-$PWD/scripts/release/site_language_check.sh}"
+SITE_LANGUAGE_FAILED=""
 DL_BUCKET="${PERSONA_DL_BUCKET:-persona-dl}" # the r2_buckets binding DL in site/wrangler.jsonc
 # wr <dir> <args…>: wrangler in <dir> (a copy of site/, for its account).
 wr() { local dir="$1"; shift; (cd "$dir" && if [ -n "$WRANGLER" ]; then "$WRANGLER" "$@"; else npx wrangler "$@"; fi); }
@@ -86,7 +88,8 @@ health = json.load(sys.stdin)
 sys.exit(0 if isinstance(health, dict) and health.get("ok") is True and health.get("apns") is True else 1)' 2>/dev/null
 }
 # deploy_site <dir>: deploy that copy of site/ (with dl/ and install.sh in it), the log in <dir>/../deploy.log. A push
-# relay that worked before the deploy must still work after it; a site that runs none gets only a note.
+# relay that worked before the deploy must still work after it; a site that runs none gets only a note. A language-check
+# failure is loud but deferred: every normal post-deploy release check still runs before site_language_result fails.
 deploy_site() {
   local dir="$1" log="$1/../deploy.log" relay_before=""
   relay_ok && relay_before=1
@@ -97,10 +100,20 @@ deploy_site() {
     || { tail -20 "$log" >&2; echo "deploy failed; see $log (only run cf auth login for authentication errors)" >&2; exit 1; }
   if [ -z "$relay_before" ]; then
     echo "note: $PERSONA_PUBLISH_URL/relay/v1/health was not healthy before this deploy either (docs/operations/push-relay.md)" >&2
-    return 0
+  else
+    settled "the push relay's health check" relay_ok \
+      || { echo "the push relay worked before this deploy and does not now: check the Worker's secrets (docs/operations/site.md)" >&2; exit 1; }
   fi
-  settled "the push relay's health check" relay_ok \
-    || { echo "the push relay worked before this deploy and does not now: check the Worker's secrets (docs/operations/site.md)" >&2; exit 1; }
+  if ! "$SITE_LANGUAGE_CHECK" "$PERSONA_PUBLISH_URL"; then
+    SITE_LANGUAGE_FAILED=1
+    printf '\n*** SITE LANGUAGE CHECK FAILED ***\nThe external entry may be caching one visitor\x27s language for everyone. Fix its cache as documented in docs/operations/site.md, "Current routing". Other release checks will still run.\n\n' >&2
+  fi
+  return 0
+}
+site_language_result() {
+  [ -z "${SITE_LANGUAGE_FAILED:-}" ] && return 0
+  echo "publish failed the site language check after completing the other release checks (docs/operations/site.md, \"Current routing\")" >&2
+  return 1
 }
 
 # SITE_ONLY: no new build. The release served now (VERSION, SHA256SUMS, latest.json, SLOT and install.sh) is fetched
@@ -133,6 +146,7 @@ if [ -n "${SITE_ONLY:-}" ]; then
   done
   settled "served install.sh" same_as_served install.sh "$OUT/install.sh" || exit 1
   settled "the served downloads" check_served "$OUT/dl/SHA256SUMS" "$SLOT" || exit 1
+  site_language_result || exit 1
   echo "site deployed with personad $VERSION unchanged: $PERSONA_PUBLISH_URL"
   exit 0
 fi
@@ -208,6 +222,24 @@ for t in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64; do
       -o "../$OUT/bin/$p-${t%/*}-${t#*/}" "./cmd/$p")
   done
 done
+# adhoc_identifiers <dir>: the darwin builds in dir, signed ad hoc again under their program's identifier
+# (com.nwverse.personad, com.nwverse.persona-node, ...) in place of the a.out Go's linker always writes. Only the name
+# changes: an ad-hoc signature's designated requirement stays the build's cdhash, so keeping macOS privacy permissions
+# across updates takes a certificate on the node's Mac (docs/operations/mac-node-signing.md). Only on a Mac, which has
+# codesign; builds made elsewhere keep a.out.
+adhoc_identifiers() {
+  local f prog
+  [ "$(uname -s)" = Darwin ] && command -v codesign >/dev/null 2>&1 || return 0
+  for f in "$1"/*-darwin-amd64 "$1"/*-darwin-arm64; do
+    [ -f "$f" ] || continue
+    prog=${f##*/}
+    prog=${prog%-darwin-*}
+    codesign --force --sign - --identifier "com.nwverse.$prog" "$f" 2>/dev/null ||
+      echo "note: $f keeps the Go linker's ad-hoc identifier a.out (codesign failed)" >&2
+  done
+}
+# Before anything hashes or packs them.
+adhoc_identifiers "$OUT/bin"
 cleanup
 python3 scripts/persona_identity.py --render-installer scripts/deploy/install.sh "$OUT/install.sh" "$PERSONA_PUBLISH_URL/dl"
 
@@ -308,4 +340,5 @@ settled "the served downloads" check_served "$OUT/bin/SHA256SUMS" "$SLOT" || exi
 for v in "${VERSIONS[@]}"; do
   settled "dl/$v/" check_versioned "$OUT/bin" "$v" || exit 1
 done
+site_language_result || exit 1
 echo "personad $VERSION published: curl -fsSL $PERSONA_PUBLISH_URL/install.sh | sh"

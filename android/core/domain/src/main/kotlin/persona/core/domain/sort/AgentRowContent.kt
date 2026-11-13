@@ -4,6 +4,7 @@ import persona.core.contracts.AgentState
 import persona.core.contracts.CoreText
 import persona.core.contracts.CoreText.Key
 import persona.core.contracts.Session
+import persona.core.domain.modelShortName
 
 // What an Agents row says beside its title and its latest words, as iOS's default row draws it (the Avatar style:
 // `AgentRowStyles.swift`, `SlotRow` in `ChatsView.swift`; #4338 A9). The rows draw it; the rules are here, with their tests.
@@ -13,7 +14,10 @@ import persona.core.contracts.Session
  * opened, where it runs, the model, its to-do, the bell of a muted one.
  */
 data class AgentRowContent(
-    /** Before the latest words: Needs you, Awaiting reply or Waiting in the background; null where its mark says it alone. */
+    /**
+     * Before the latest words: Needs you, Awaiting reply or Waiting in the background; null where its mark says it alone.
+     * State Cards spell every state but Seen out at the card's foot instead ([cardStateWord]).
+     */
     val stateWord: CoreText?,
     /** Where it was opened, the tag line 3 starts with (iOS `sourceLabel`): a Lark group's topic or a terminal pane. */
     val source: AgentSource?,
@@ -24,7 +28,10 @@ data class AgentRowContent(
      * which never give way to the rest of the line.
      */
     val place: List<CoreText>,
-    /** The model it runs on (iOS `modelShortName`). */
+    /**
+     * The model it runs on, by its short name ([rowModel]): never the raw id (`DESIGN_SYSTEM.md` 3.4, 5.6), which iOS's
+     * row still shows.
+     */
     val model: String?,
     /** Its to-do's title. */
     val todo: String?,
@@ -62,8 +69,15 @@ data class AgentRowContext(
     val stateSection: Boolean = false,
 )
 
-/** What [AgentRowContent] says for this session, drawn in [context]; [muted]: it or its space is muted. */
-fun AgentSession.rowContent(context: AgentRowContext = AgentRowContext(), muted: Boolean = false): AgentRowContent {
+/**
+ * What [AgentRowContent] says for this session, drawn in [context] in the list's [display]; [muted]: it or its space is
+ * muted.
+ */
+fun AgentSession.rowContent(
+    context: AgentRowContext = AgentRowContext(),
+    muted: Boolean = false,
+    display: AgentListDisplay = AgentListDisplay.Avatar,
+): AgentRowContent {
     val s = session
     val place = mutableListOf<CoreText>()
     val pane = context.pane
@@ -81,10 +95,10 @@ fun AgentSession.rowContent(context: AgentRowContext = AgentRowContext(), muted:
     }
     if (context.located) context.machine?.takeIf(String::isNotBlank)?.let { place += CoreText.plain(it) }
     return AgentRowContent(
-        stateWord = rowStateWord(muted).takeUnless { context.stateSection },
+        stateWord = (if (display.rowParts.stateAtFoot) cardStateWord(muted) else rowStateWord(muted)).takeUnless { context.stateSection },
         source = s.agentSource?.takeIf { !s.assistant },
         place = place,
-        model = s.modelShortName,
+        model = s.rowModel,
         todo = s.todo?.title?.takeIf(String::isNotBlank),
         muted = muted,
     )
@@ -102,8 +116,11 @@ fun AgentSession.rowStateWord(muted: Boolean): CoreText? = when {
     else -> null
 }
 
-/** The model a row names (iOS `Session.modelShortName`): the session's model, else its launcher's; null for none. */
-val Session.modelShortName: String? get() = (model ?: launcher)?.trim()?.takeIf(String::isNotEmpty)
+/**
+ * The model a row names: the session's model, else its launcher's (as iOS's `Session.modelShortName`), by its short name
+ * (`modelShortName`, the web's `modelChipLabel`); null for none.
+ */
+val Session.rowModel: String? get() = modelShortName(model ?: launcher).takeIf(String::isNotEmpty)
 
 /**
  * The list holds agents of more than one computer (iOS `AgentListProjection.byHost`), so a row outside the tree names

@@ -6,7 +6,7 @@ import { chosenManager, defaultKnown, defaultManager, fromShownManager, noteConv
 import { BASE } from "./base";
 import { mainConversationMachine, clearMemoryPages, discardFeedCache, feedCacheScope, readFeedCache } from "./feed-cache";
 import { useRef, useSyncExternalStore } from "react";
-import { agentsChanged, refreshAgentPrefs, refreshAgentSessions, resetAgents, setAgentListMode } from "./agents";
+import { AGENTS_PAGE_COUNTS_FEATURE, agentsChanged, refreshAgentPrefs, refreshAgentSessions, resetAgents, setAgentListMode, setPersonalPageCounts } from "./agents";
 import { onRuntimeChanges, runtimeIdentity, runtimeRemoval, runtimeSessions, SESSIONS_LOOKUP_FEATURE, SESSIONS_PAGE_COUNTS_FEATURE, setRuntimePageCounts } from "./runtime-list";
 import { sameValue } from "./stable-lines";
 import { SESSIONS_LIST_FEATURE, type ListCounts } from "./session-list";
@@ -14,7 +14,7 @@ import { SESSIONS_HIERARCHY_FEATURE } from "./child-sessions";
 import { applySessionDelta, SESSIONS_DELTA_FEATURE, sessionRefreshed, sessionSnapshot } from "./sessions-delta";
 import { dueMarks, heldRows, liveMarks, markOver, newMark, nextDue, unansweredMarks, type SeenMark, type SeenMarks } from "./seen-outbox";
 import { probeEdge } from "./edge-auth";
-import { api, ApiError, CLIENT_FEATURES, CLIENT_PONG_TIMEOUT, CLIENT_PLATFORM, CLIENT_VERSION, errorText, getToken, sessionPath } from "./api";
+import { api, ApiError, CLIENT_FEATURES, CLIENT_PONG_TIMEOUT, CLIENT_PLATFORM, CLIENT_VERSION, errorText, getToken, credentialOwner, sessionPath } from "./api";
 import { currentLanguage } from "../i18n";
 import type { AgentMutes } from "./agent-groups";
 import { stateOf } from "./format";
@@ -33,6 +33,7 @@ import { setOfflineProbe } from "./feedback";
 import { readDirectionTree } from "./direction-names";
 import { unnamedTaskConversations } from "./background-supervisor";
 import { directionTreeAwaitsHello } from "./direction-tree";
+import { configureMessageFeedback, resetMessageFeedback } from "./message-send";
 import { afterEvent, afterHello, graceUntil, isResumed, NO_CURSOR, RESTART_FAST_MS, retryDelay, shownConn, wsQuery, type Drop, type EventCursor } from "./reconnect";
 
 export type Conn = "connecting" | "online" | "offline";
@@ -293,13 +294,13 @@ async function lookUpTaskAgents() {
 
 const cardRowsAsked = new Set<string>();
 let cardRowsFor: Interaction[] | null = null;
-/** A child session's card (`folded_under`, #5120) whose session no list holds: a paging hub leaves child sessions out of
- *  the Agents list's pages (`roots`). One exact lookup for its row (`sessions_lookup`) puts it among the row hints, so the
+/** A pending card whose session no list holds: a paging hub can leave both child and off-page root sessions out of
+ *  the Agents list's pages. One exact lookup for its row (`sessions_lookup`) puts it among the row hints, so the
  *  card can be answered wherever it shows (the main chat's Needs you, the Inbox), not only on its parent's open page. */
 async function lookUpCardSessions() {
   if (state.interactions === cardRowsFor || !state.features.includes(SESSIONS_LOOKUP_FEATURE)) return;
   cardRowsFor = state.interactions;
-  const missing = new Set(state.interactions.filter((ix) => ix.folded_under && ix.session_id && !getSession(ix.machine_id, ix.session_id))
+  const missing = new Set(state.interactions.filter((ix) => ix.session_id && !getSession(ix.machine_id, ix.session_id))
     .map((ix) => runtimeIdentity({ machine_id: ix.machine_id, session_id: ix.session_id } as Session)));
   for (const id of [...missing].filter((x) => !cardRowsAsked.has(x)).slice(0, 20)) {
     cardRowsAsked.add(id);
@@ -520,8 +521,9 @@ export function onAppSocket(listener: (connected: boolean) => void) {
   socketListeners.add(listener);
   return () => { socketListeners.delete(listener); };
 }
+let receiptOwner: string | undefined;
 function socketChanged(connected: boolean) {
-  if (!connected) authenticatedSocket = null;
+  if (!connected) { authenticatedSocket = null; receiptOwner = undefined; }
   socketListeners.forEach((listener) => listener(connected));
 }
 /** A WebSocket open event or cached features cannot substitute for this connection's authenticated hello. */
@@ -742,6 +744,7 @@ function onMessage(msg: Record<string, unknown>) {
   cursor = msg.type === "hello" ? afterHello(cursor, msg) : afterEvent(cursor, msg);
   switch (msg.type) {
     case "hello": {
+      receiptOwner = msg.message_send_state === 1 ? credentialOwner() : undefined;
       helloHooks.forEach((f) => f()); // e.g. a hub that came back may serve a new web build (lib/new-version.ts)
       setCompatibilityFeatures(Array.isArray(msg.features) ? msg.features as string[] : []);
       const mesh = (msg.mesh as { hubs?: MeshHub[] } | undefined)?.hubs;
@@ -760,6 +763,7 @@ function onMessage(msg: Record<string, unknown>) {
       // a hub that folds child sessions (#5120): the Agents list and its counts leave them out, each parent counted once
       runtimeSessions.setRoots(state.features.includes(SESSIONS_HIERARCHY_FEATURE));
       setRuntimePageCounts(state.features.includes(SESSIONS_PAGE_COUNTS_FEATURE));
+      setPersonalPageCounts(state.features.includes(AGENTS_PAGE_COUNTS_FEATURE));
       setAgentListMode(state.features.includes(SESSIONS_LIST_FEATURE));
       taskRowsAsked.clear();
       cardRowsAsked.clear();
@@ -1494,6 +1498,7 @@ function resendSeen() {
 
 export function reset() {
   disconnect();
+  resetMessageFeedback();
   cursor = NO_CURSOR; // another login: another stream
   ixChanges.clear();
   resolvedSeen.clear();
@@ -1547,3 +1552,5 @@ export function reset() {
     link: { ...NO_LINK, networkUp: networkUp() },
   });
 }
+
+configureMessageFeedback({ getSession, send, onHubEvent, subscribe, receiptsAllowed: () => appSocketReady() && receiptOwner === credentialOwner() });

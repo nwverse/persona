@@ -341,10 +341,14 @@ export const workLineOpens = (g: WorkGroupNode, _style: WorkLineStyle, _turnLive
  *  super rule 2 does not allow), each remembering its own choice after that. */
 export const nestedLineDefault = (_style: WorkLineStyle): boolean => true;
 
+/** How a duration reads where it ticks (cindy's status bar options): from `0s`, and `1m 0s` rather than `1m`. */
+export const TICKING_DURATION = { minimumSeconds: 0, alwaysShowRemainder: true } as const;
+
 /** cindy's formatSessionDuration: under an hour `6s`, `1m 5s`, `2m` (the same in every language's catalog; at least a
- *  second); from an hour the language's form, always with the minutes ("1h 0m", "1 小时 0 分", "1時間0分"; "1d 2h 5m"). */
-export function workDuration(msValue: number): string {
-  const total = Math.max(1, Math.round((Number.isFinite(msValue) ? msValue : 0) / 1000));
+ *  second); from an hour the language's form, always with the minutes ("1h 0m", "1 小时 0 分", "1時間0分"; "1d 2h 5m").
+ *  `opts` are cindy's formatDuration options, so the running bar (TICKING_DURATION) and the summaries share one format. */
+export function workDuration(msValue: number, opts: { minimumSeconds?: number; alwaysShowRemainder?: boolean } = {}): string {
+  const total = Math.max(opts.minimumSeconds ?? 1, Math.round((Number.isFinite(msValue) ? msValue : 0) / 1000));
   if (total < 60) return t("lib-work-groups.dur_seconds", { s: total });
   if (total >= 3600) {
     const d = Math.floor(total / 86_400);
@@ -354,7 +358,7 @@ export function workDuration(msValue: number): string {
   }
   const m = Math.floor(total / 60);
   const s = total % 60;
-  return s ? t("lib-work-groups.dur_minutes_seconds", { m, s }) : t("lib-work-groups.dur_minutes", { m });
+  return s || opts.alwaysShowRemainder ? t("lib-work-groups.dur_minutes_seconds", { m, s }) : t("lib-work-groups.dur_minutes", { m });
 }
 
 /** A finished group's title: "Worked for 1m 5s" ("Work details" without its times), and what it read when that is all

@@ -1,15 +1,17 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Outgoing } from "./Composer";
+import type { MentionSource } from "./ComposerPanel";
 import type { Item, Session } from "../../lib/types";
 import { getFeedState, setRoute } from "../../lib/feed";
 import { outboxKey, type OutboxEntry } from "../../lib/outbox";
 import { toast } from "../../ui/atoms";
 import { t } from "../../i18n";
-import { ChatView, ComposerFooter, footerRows } from "./ChatView";
+import { ChatView, ComposerSource, footerRows } from "./ChatView";
 
 const captured = vi.hoisted(() => ({
   onSend: undefined as ((out: Outgoing) => Promise<boolean>) | undefined,
+  mention: undefined as MentionSource | undefined,
   session: { machine_id: "hub", session_id: "c1", title: "Conversation", cwd: "/code", status: "idle" } as Session,
   items: [] as Item[],
   /** The chat's outbox (lib/outbox.ts), by outboxKey. */
@@ -26,8 +28,9 @@ vi.mock("./Composer", async (importOriginal) => {
   const { useLinkManager } = await import("../../lib/manager-choice");
   return {
     ...await importOriginal<typeof import("./Composer")>(),
-    Composer: ({ onSend }: { onSend: (out: Outgoing) => Promise<boolean> }) => {
+    Composer: ({ onSend, mention }: { onSend: (out: Outgoing) => Promise<boolean>; mention?: MentionSource }) => {
       captured.onSend = onSend;
+      captured.mention = mention;
       captured.linkManager = useLinkManager();
       return <div data-testid="composer" />;
     },
@@ -105,6 +108,9 @@ let fetcher: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   setRoute("c1", null);
   captured.onSend = undefined;
+  captured.mention = undefined;
+  delete captured.session.manager;
+  delete captured.session.agent;
   captured.items = [];
   captured.outbox = {};
   captured.error = "";
@@ -122,6 +128,15 @@ afterEach(() => {
 });
 
 describe("ChatView composer task routing", () => {
+  it("wires ordinary Agent catalogs to the session's manager and preserves the selected ref in its send", async () => {
+    captured.session.manager = "helper-agent";
+    captured.session.agent = "codex";
+    const text = '<persona-context kind="skill" ref="opaque-session-skill">review</persona-context>\nReview this';
+    expect(await sender(false)({ text, images: [] })).toBe(true);
+    expect(captured.mention?.skills).toMatchObject({ agent: true, manager: "helper-agent", session: "c1" });
+    expect(JSON.parse(fetcher.mock.calls[0][1].body).text).toContain('ref="opaque-session-skill"');
+    expect(JSON.parse(fetcher.mock.calls[0][1].body).text).toContain("Review this");
+  });
   it.each(["Look at this", ""])("rejects a routed image with text %j without delivering to Persona or dropping the route", async (text) => {
     setRoute("c1", "task1");
     const out = { text, images: [image] };
@@ -147,6 +162,13 @@ describe("ChatView composer task routing", () => {
     const [url, init] = fetcher.mock.calls[0];
     expect(url).toBe("/api/v1/sessions/hub/c1/messages");
     expect(JSON.parse(init.body)).toMatchObject({ text: "Look at this", images: [image] });
+  });
+
+  // a terminal Claude held on a question at the computer reads it only once that is answered (#5890)
+  it.each([[true, 1], [false, 0]])("says when the message waits on the computer (waits_on_computer=%j)", async (waits, toasts) => {
+    fetcher.mockResolvedValueOnce({ ok: true, status: 200, text: async () => JSON.stringify(waits ? { ok: true, waits_on_computer: true } : { ok: true }) });
+    expect(await sender(false)({ text: "One more thing", images: [] })).toBe(true);
+    expect(vi.mocked(toast).mock.calls.filter(([text]) => text === t("lib-outbox.waits_on_computer"))).toEqual(toasts ? [[t("lib-outbox.waits_on_computer"), "info"]] : []);
   });
 });
 
@@ -186,7 +208,7 @@ describe("the reply bar while a message is sent", () => {
 });
 
 describe("Agent context usage", () => {
-  it("leaves the header and appears in the row below the composer, with no empty row when unknown", () => {
+  it("leaves the header and appears in the row below the composer, at the right of the folder; no empty row when there is neither", () => {
     const was = captured.session;
     try {
       captured.session = { ...was, agent: "claude", context_tokens: 78000, context_window: 200000 };
@@ -196,7 +218,12 @@ describe("Agent context usage", () => {
       expect(html).toContain('data-composer-usage');
       expect(html).toContain('aria-valuenow="61"');
       expect(html.indexOf('data-testid="composer"')).toBeLessThan(html.indexOf("data-composer-usage"));
+      expect(html.indexOf("data-composer-source")).toBeLessThan(html.indexOf('aria-valuenow="61"'));
       captured.session = { ...was, agent: "claude", context_tokens: undefined, context_window: undefined };
+      const unknown = renderToStaticMarkup(<ChatView mid="hub" sid="c1" />);
+      expect(unknown).toContain("data-composer-source");
+      expect(unknown).not.toContain("aria-valuenow");
+      captured.session = { ...was, agent: "claude", cwd: "", context_tokens: undefined, context_window: undefined };
       expect(renderToStaticMarkup(<ChatView mid="hub" sid="c1" />)).not.toContain('data-composer-usage');
     } finally {
       captured.session = was;
@@ -241,27 +268,23 @@ it("keeps a remembered Agent chat on screen when its refresh fails", () => {
   expect(html).not.toContain(t("chat-chatview.retry"));
 });
 
-describe("composer footer rows (#3533)", () => {
+describe("the line under the composer (#3533, #5324)", () => {
   it("lists the folder in full, labelled; the launcher and model are the model pill's (#5032)", () => {
     const s = { machine_id: "m", session_id: "s", launcher: "claude", model: "anthropic/claude-opus-5-5", cwd: "/Users/me/code/weather" } as Session;
     expect(footerRows(s).map((r) => [r.key, r.label, r.hint])).toEqual([["folder", "~/code/weather", t("chat-sessiondialogs.folder")]]);
   });
-  it("an Agent's footer keeps the permission chip and the folder, without the launcher, the model or an effort chip (#5032)", () => {
+  it("the line under the box keeps the folder and where it comes from, without the launcher or the model (#5032, #5324)", () => {
     const s = { machine_id: "m", session_id: "s", status: "idle", agent: "claude", launcher: "gateway-cc", model: "claude-opus-5-5", effort: "high", permission_mode: "plan", cwd: "/Users/me/code/weather" } as Session;
-    const html = renderToStaticMarkup(<ComposerFooter session={s} />);
-    expect(html).toContain(`title="${t("chat-sessiondialogs.permission_mode")}"`);
-    expect(html).not.toContain(`title="${t("chat-sessiondialogs.effort")}"`);
+    const html = renderToStaticMarkup(<ComposerSource session={s} />);
+    expect(html).toContain("data-composer-source");
     expect(html).toContain("~/code/weather");
+    expect(html).toContain('title="/Users/me/code/weather"');
     expect(html).not.toContain("gateway-cc");
     expect(html).not.toContain("opus");
-    // a Codex thread (effort only): its effort is on the pill, the footer has no chip at all
-    const codex = renderToStaticMarkup(<ComposerFooter session={{ ...s, agent: "codex", source_kind: "codex_app_server", capabilities: { send: true }, efforts: ["low", "high"] } as Session} />);
-    expect(codex).not.toContain("<button type=\"button\" title=");
-    // a Persona conversation: its permission chip too, its launcher, model and effort on its pill (#5033)
-    const persona = renderToStaticMarkup(<ComposerFooter session={{ ...s, assistant: true }} assistant />);
-    expect(persona).toContain(`title="${t("chat-sessiondialogs.permission_mode")}"`);
-    expect(persona).not.toContain(`title="${t("chat-sessiondialogs.effort")}"`);
-    expect(persona).not.toContain("gateway-cc");
+    // the permission picker is in the composer's toolbar now, not on this line
+    expect(html).not.toContain(t("lib-session-actions.mode_plan"));
+    // a Persona conversation shows no folder
+    expect(renderToStaticMarkup(<ComposerSource session={{ ...s, assistant: true }} assistant />)).not.toContain("weather");
   });
   it("leaves out what is missing, and in a Persona conversation the folder too", () => {
     const s = { machine_id: "m", session_id: "s", launcher: "claude", model: "opus", cwd: "/code" } as Session;

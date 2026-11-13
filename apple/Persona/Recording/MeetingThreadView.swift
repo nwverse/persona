@@ -40,7 +40,8 @@ struct MeetingThreadView: View {
     }
 
     @Environment(AppModel.self) private var model
-    @Environment(\.dynamicTypeSize) private var size
+    /// The size the lines' words read at: their layout follows it, not the interface's cap.
+    @Environment(\.readingTypeSize) private var reading
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var conversation = MeetingConversation.shared
     /// This view's hold on the conversations it shows (`AppModel.subscribe`).
@@ -82,7 +83,7 @@ struct MeetingThreadView: View {
                 justMeRows(mine)
             } else {
                 roomPart(roomKey: roomKey, meeting: meeting, local: local)
-                if mode == .after { followupRows(followupKey, sends: sends) }
+                if mode == .after { followupRows(followupKey, sends: sends, read: meeting.loaded || meeting.missing) }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -320,8 +321,21 @@ struct MeetingThreadView: View {
 
     // MARK: After the meeting
 
-    @ViewBuilder private func followupRows(_ key: SessionKey?, sends: [MeetingConversation.FollowupSend]) -> some View {
-        afterDivider
+    /// `read`: the hub has answered for the meeting (`loaded` or `missing`). Until then the follow-up's and the room's keys
+    /// are unknown even where it has them (made on another device, or a room that came up), so the hint waits for it, as
+    /// `MeetingConversation.running` waits for `loaded`: it would flash, or stay when the read fails.
+    @ViewBuilder private func followupRows(_ key: SessionKey?, sends: [MeetingConversation.FollowupSend], read: Bool) -> some View {
+        // Between the room's part and the follow-up: a recording that never had a room, and a room meeting whose room never
+        // came up with no asks, have nothing before it (#3862 phase 6), and their thread is the follow-up alone. The
+        // divider comes with what is before it, which comes with that read.
+        let roomPart = conversation.roomKey(entry.id) != nil || !roomRows.isEmpty || !apart.isEmpty
+        if roomPart { afterDivider }
+        if read, key == nil, sends.isEmpty, !roomPart {
+            Text("Ask Persona about this meeting: what was decided, who does what, or a follow-up email.")
+                .font(Theme.Font.secondary).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("meeting-followup-empty")
+        }
         if let key {
             let store = model.chat(key)
             if store.hasMore { earlier(key, identifier: "meeting-followup-earlier") }
@@ -436,17 +450,14 @@ struct MeetingThreadView: View {
                 .accessibilityIdentifier("meeting-thread-ended")
         case .lines(let id, _, let lines):
             let full = lines.count == 1 ? String(localized: "1 line from the meeting") : String(localized: "\(lines.count) lines from the meeting")
-            let short = lines.count == 1 ? String(localized: "1 line") : String(localized: "\(lines.count) lines")
-            fold(id, title: size.isAccessibilitySize ? short : full, spoken: full, symbol: Theme.Icon.quote) {
+            fold(id, title: full, spoken: full, symbol: Theme.Icon.quote) {
                 linesList(lines)
             }
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("meeting-thread-lines")
         case .heard(let id, _, let clock, let lines, _):
             let full = clock.isEmpty ? String(localized: "What was just said") : String(localized: "What was just said (\(clock))")
-            // At accessibility sizes the time steps aside (its lines carry theirs): the capsule stays one line.
-            fold(id, title: size.isAccessibilitySize ? String(localized: "What was just said") : full, spoken: full,
-                 symbol: Theme.Icon.voiceListening) {
+            fold(id, title: full, spoken: full, symbol: Theme.Icon.voiceListening) {
                 linesList(lines)
             }
             .accessibilityElement(children: .combine)
@@ -538,7 +549,7 @@ struct MeetingThreadView: View {
     }
 
     /// A folded row: one line in a capsule, a tap opens what it holds under it. The capsule is a button, so its words
-    /// stay on one line at every size (shorter ones at accessibility sizes, `spoken` saying them whole).
+    /// stay on one line at every size (`spoken` says them whole).
     private func fold<Content: View>(_ id: String, title: String, spoken: String, symbol: String,
                                      @ViewBuilder content: () -> Content) -> some View {
         let isOpen = open.contains(id)
@@ -584,9 +595,9 @@ struct MeetingThreadView: View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
             ForEach(lines.indices, id: \.self) { index in
                 let stamp = Text(lines[index].clock).font(Theme.Font.caption.monospacedDigit()).foregroundStyle(.secondary)
-                let words = Text(lines[index].text).font(Theme.Font.secondary).textSelection(.enabled)
+                let words = Text(lines[index].text).readingContent().font(Theme.Font.secondary).textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
-                if size.isAccessibilitySize {
+                if reading?.isAccessibilitySize == true {
                     VStack(alignment: .leading, spacing: Theme.Space.xxs) { stamp; words }
                 } else {
                     HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) { stamp; words }
@@ -695,8 +706,6 @@ private struct MeetingPhotoRow: View {
     @Binding var confirming: MeetingPhotoItem?
     @Binding var viewing: MeetingPhotoItem?
 
-    @Environment(\.dynamicTypeSize) private var size
-
     var body: some View {
         if let item = album.items[photoID] {
             row(item)
@@ -715,10 +724,8 @@ private struct MeetingPhotoRow: View {
     private func row(_ item: MeetingPhotoItem) -> some View {
         let busy = album.deleting.contains(item.photoID)
         let problem = album.problems[item.photoID]
-        let layout = size.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: Theme.Space.s))
-            : AnyLayout(HStackLayout(alignment: .top, spacing: Theme.Space.m))
         return VStack(alignment: .leading, spacing: Theme.Space.s) {
-            layout {
+            HStack(alignment: .top, spacing: Theme.Space.m) {
                 Button { viewing = item } label: {
                     MeetingPhotoThumb(recording: recording, photoID: item.photoID, n: item.n, ready: item.hasImage)
                 }
@@ -818,9 +825,7 @@ private struct MeetingPhotoRow: View {
     /// A failed photo's buttons: Retry when sending it again can help, and Delete Photo, so a refusal the hub would give
     /// again never leaves the row with nothing to do but a hidden long press.
     private func failedControls(_ item: MeetingPhotoItem) -> some View {
-        let layout = size.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: Theme.Space.s))
-            : AnyLayout(HStackLayout(spacing: Theme.Space.s))
-        return layout {
+        return HStack(spacing: Theme.Space.s) {
             if item.retryable, let local = item.local {
                 Button { MeetingPhotos.shared.retry(local.id) } label: { Label("Retry", systemImage: Theme.Icon.retry).lineLimit(1) }
                     .themedButton()

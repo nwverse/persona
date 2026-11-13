@@ -20,6 +20,8 @@ class InboxSuggestionStale(val item: JsonObject?) : IllegalStateException("sugge
 interface InboxAssistantTransport {
     val scope: String
     suspend fun inbox(): JsonObject
+    /** One item by its hub id, including a done item the list no longer carries; 404 means it does not exist. */
+    suspend fun item(itemId: String): JsonObject = throw UnsupportedOperationException("Inbox item lookup unavailable")
     suspend fun larkConversations(cursor: String? = null): JsonObject = throw UnsupportedOperationException("Conversation metadata unavailable")
     suspend fun larkConversationsForAccount(account: Int?, cursor: String? = null): JsonObject {
         require(account == null) { "Account-specific conversation metadata unavailable" }
@@ -55,12 +57,23 @@ interface InboxAssistantTransport {
     suspend fun handOff(itemId: String, text: String, clientId: String): JsonObject =
         throw UnsupportedOperationException("Inbox hand-off route unavailable")
     /**
+     * Records an item's hand-off to the Agent [session] that accepted its existing outbox message
+     * (`POST /api/v1/inbox/{id}/handoff` with `kind=agent` and no text), answering the hub's object. A blank [title] is omitted.
+     */
+    suspend fun recordAgentHandOff(itemId: String, session: SessionKey, title: String, clientId: String): JsonObject =
+        throw UnsupportedOperationException("Inbox Agent hand-off route unavailable")
+    /**
      * Acts on an item's suggestion (`POST /api/v1/inbox/{id}/suggestion`, inbox phase 1): [action] is confirm, reject or
      * instruct, [version] the suggestion's as shown, [text] the edited text (confirm) or the words (instruct). Answers
      * the item; throws [InboxSuggestionStale] with the current item when the hub has a newer suggestion (409).
      */
     suspend fun suggestion(itemId: String, version: Long, action: String, text: String?, clientId: String): JsonObject =
         throw UnsupportedOperationException("Inbox suggestions unavailable")
+    /** An item's ancestors and direct children (`GET /api/v1/inbox/tree/{kind}/{id...}`). */
+    suspend fun tree(kind: String, id: String): JsonObject = throw UnsupportedOperationException("Inbox tree unavailable")
+    /** Sets [itemId]'s parent, or clears it when [parent] is null (`PUT /api/v1/inbox/{id}/parent`). */
+    suspend fun setParent(itemId: String, parent: InboxParentRef?): JsonObject =
+        throw UnsupportedOperationException("Inbox parent route unavailable")
     suspend fun replyMail(itemId: String, text: String, clientId: String, target: MailReplyTarget): JsonObject =
         throw UnsupportedOperationException("Checked mail replies unavailable")
     suspend fun messages(feedId: String, around: Long? = null, before: String? = null, after: String? = null): JsonObject
@@ -107,6 +120,12 @@ interface InboxAssistantTransport {
     /** [createConversation] for one manager (null: the default), as [assistantOf]. */
     suspend fun createConversationOf(manager: String?, main: Boolean, launcher: String? = null): JsonObject =
         if (launcher == null) createConversation(main) else createConversation(main, launcher)
+    /**
+     * [createConversationOf] with the model and effort picked on the new-chat page (`POST /api/v1/assistant/conversations`
+     * `{launcher, model?, effort?}`), which a hub with `assistant_model_pick` keeps as the chat's `model_pick` (#5033).
+     */
+    suspend fun createConversationOf(manager: String?, main: Boolean, pick: persona.core.contracts.ModelPick): JsonObject =
+        createConversationOf(manager, main, pick.launcher)
     suspend fun pins(): JsonObject
     suspend fun mutes(): JsonObject
     suspend fun media(ref: String): ByteArray
@@ -189,6 +208,8 @@ interface AssistantConversations : AssistantRepository {
     suspend fun startConversation(): SessionKey
     /** A new conversation that runs on [launcher], for it alone (iOS StarterComposer's model menu): the default stays. */
     suspend fun startConversation(launcher: String): SessionKey = throw UnsupportedOperationException("Picking a launcher unavailable")
+    /** A new conversation on the setup picked for it on the new-chat page's model panel (#5055): its launcher, model and effort. */
+    suspend fun startConversation(pick: persona.core.contracts.ModelPick): SessionKey = startConversation(pick.launcher)
     /**
      * The chats of the assistant's [space] ([AssistantSpace]), read from the hub each time: they are never in [assistant]'s
      * list. Each carries [space] even from a hub that leaves it out of this list.

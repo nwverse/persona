@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -598,8 +601,124 @@ func TestBackgroundSupervisorModelPurpose(t *testing.T) {
 	if again, _ := s.resolveModel(ctx, "assistant"); again != main {
 		t.Fatalf("the main chat's model moved with it: %+v", again)
 	}
-	if slices.Contains(modelConfigIDs, purposeSupervise) {
-		t.Fatal("the apps' catalog lists a purpose they do not know yet")
+	// The catalog lists it once, last of the built-in uses, as the one read by its own id (#5806): an app that still
+	// asks for it apart finds it listed and draws one row.
+	var catalog struct {
+		Purposes []ModelPurpose `json:"purposes"`
+	}
+	if r := modelRequest(s, "GET", "", ""); r.Code != 200 || json.Unmarshal(r.Body.Bytes(), &catalog) != nil {
+		t.Fatalf("catalog: %d %s", r.Code, r.Body.String())
+	}
+	listed := slices.DeleteFunc(slices.Clone(catalog.Purposes), func(p ModelPurpose) bool { return p.ID != purposeSupervise })
+	if len(listed) != 1 || catalog.Purposes[len(catalog.Purposes)-1].ID != purposeSupervise {
+		t.Fatalf("the catalog's rows for it: %+v", listed)
+	}
+	if own := purposeOf(t, s, purposeSupervise); !reflect.DeepEqual(listed[0], own) || own.Description == "" || own.Launch != "headless" {
+		t.Fatalf("listed %+v, by its id %+v", listed[0], own)
+	}
+}
+
+// A Persona-managed provider only the background supervisor runs on is not deleted underneath it: 409 with the
+// "still used" error naming the use, in the request's language, and nothing changed (#5806).
+func TestProviderOfBackgroundSupervisorIsNotDeleted(t *testing.T) {
+	s, _, _ := modelService(t)
+	ctx := context.Background()
+	putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "supervise-only"}}, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "unused"}})
+	if uses, err := s.providerModelUses(ctx, "launcher.supervise-only"); err != nil || len(uses) != 0 {
+		t.Fatalf("before it is chosen: %v %v", uses, err)
+	}
+	if r := modelRequest(s, "PATCH", purposeSupervise, `{"revision":0,"provider":"launcher.supervise-only","model":"small-model"}`); r.Code != 200 {
+		t.Fatalf("giving it its own provider: %d %s", r.Code, r.Body.String())
+	}
+	if main, err := s.resolveModel(ctx, "assistant"); err != nil || main.Provider == "launcher.supervise-only" {
+		t.Fatalf("the main chat runs on it too: %+v %v", main, err)
+	}
+	before, err := s.readStoredLaunchers(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+		name := purposeName(l, purposeSupervise)
+		res, err := serveHTTP(ctx, s, assistantwire.HTTPRequest{
+			Method: "DELETE", Path: "/api/v1/launchers/supervise-only", Header: map[string][]string{"Accept-Language": {string(l)}},
+		}, s.lang)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var body struct {
+			Error string `json:"error"`
+		}
+		_ = json.Unmarshal(res.Body, &body)
+		want := i18n.T(l, "assistant-models_launchers.err_in_use", i18n.Args{"uses": name})
+		if res.Status != 409 || body.Error != want || name == "" || strings.HasPrefix(name, "assistant-models.") {
+			t.Fatalf("%s delete: %d %s; want 409 %q", l, res.Status, res.Body, want)
+		}
+	}
+	if after, err := s.readStoredLaunchers(ctx); err != nil || !reflect.DeepEqual(after, before) {
+		t.Fatalf("the refused deletion changed the providers: %+v %v", after, err)
+	}
+	// One nothing runs on still goes, and so does this one once the background supervisor follows the main chat again.
+	if r := request(s, "DELETE", "/api/v1/launchers/unused", ""); r.Code != 200 {
+		t.Fatalf("an unused provider: %d %s", r.Code, r.Body.String())
+	}
+	rev := purposeOf(t, s, purposeSupervise).Revision
+	if r := modelRequest(s, "PATCH", purposeSupervise, fmt.Sprintf(`{"revision":%d,"provider":null,"model":null}`, rev)); r.Code != 200 {
+		t.Fatalf("following the main chat again: %d %s", r.Code, r.Body.String())
+	}
+	if r := request(s, "DELETE", "/api/v1/launchers/supervise-only", ""); r.Code != 200 {
+		t.Fatalf("once nothing runs on it: %d %s", r.Code, r.Body.String())
+	}
+}
+
+// While it follows the main chat, the main chat's provider is the background supervisor's too: the refused deletion
+// names both, and so does what an import, or hiding the alias, reads before it takes the alias out (#5806). With a
+// provider of its own it is named alone.
+func TestProviderUsesNameTheBackgroundSupervisor(t *testing.T) {
+	s, _, _ := modelService(t)
+	putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "shared"}}, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "supervise-only"}})
+	l := s.requestCtxLang(context.Background())
+	main, own := purposeName(l, "assistant"), purposeName(l, purposeSupervise)
+	uses := func(name string) []string {
+		t.Helper()
+		r := request(s, "GET", "/api/v1/launchers/"+name+"/uses", "")
+		var body struct {
+			Uses []string `json:"uses"`
+		}
+		if err := json.Unmarshal(r.Body.Bytes(), &body); r.Code != 200 || err != nil {
+			t.Fatalf("uses of %s: %d %s %v", name, r.Code, r.Body.String(), err)
+		}
+		return body.Uses
+	}
+	rev := purposeOf(t, s, "assistant").Revision
+	if r := modelRequest(s, "PATCH", "assistant", fmt.Sprintf(`{"revision":%d,"provider":"launcher.shared","model":"big-model"}`, rev)); r.Code != 200 {
+		t.Fatalf("the main chat's provider: %d %s", r.Code, r.Body.String())
+	}
+	if p := purposeOf(t, s, purposeSupervise); p.Override.Provider != "" || p.Effective.Provider != "launcher.shared" {
+		t.Fatalf("it does not follow the main chat: %+v", p)
+	}
+	if got := uses("shared"); !reflect.DeepEqual(got, []string{main, own}) || main == own {
+		t.Fatalf("uses while it follows the main chat: %v; want %q and %q", got, main, own)
+	}
+	r := request(s, "DELETE", "/api/v1/launchers/shared", "")
+	want := i18n.T(l, "assistant-models_launchers.err_in_use", i18n.Args{"uses": main + i18n.T(l, "assistant-models_launchers.list_sep") + own})
+	var refused struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(r.Body.Bytes(), &refused)
+	if r.Code != 409 || refused.Error != want {
+		t.Fatalf("deleting the provider both run on: %d %s; want 409 %q", r.Code, r.Body.String(), want)
+	}
+	if got := uses("supervise-only"); len(got) != 0 {
+		t.Fatalf("uses before it is chosen: %v", got)
+	}
+	if r := modelRequest(s, "PATCH", purposeSupervise, `{"revision":0,"provider":"launcher.supervise-only","model":"small-model"}`); r.Code != 200 {
+		t.Fatalf("giving it its own provider: %d %s", r.Code, r.Body.String())
+	}
+	if got := uses("supervise-only"); !reflect.DeepEqual(got, []string{own}) {
+		t.Fatalf("uses of its own provider: %v; want %q", got, own)
+	}
+	if got := uses("shared"); !reflect.DeepEqual(got, []string{main}) {
+		t.Fatalf("uses of the main chat's provider once it has its own: %v; want %q", got, main)
 	}
 }
 
@@ -713,6 +832,7 @@ func TestBackgroundSupervisorGoneAfterRestartKeepsItsQueuedMessage(t *testing.T)
 // are quiet.
 func TestOwnerPresenceAndTheBackgroundSupervisorsQueue(t *testing.T) {
 	presenceTimes(t, 400*time.Millisecond, time.Hour)
+	ownerTurnTimes(t, 400*time.Millisecond, time.Hour)
 	s, f, _ := newBackgroundService(t)
 	stopHolds(t, s)
 	ctx := context.Background()

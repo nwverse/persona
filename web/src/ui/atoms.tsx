@@ -520,8 +520,9 @@ export function Menu({
     // pointerdown, not mousedown: lifting the finger after a long press that opened the menu sends a compatibility
     // mousedown at the finger, outside the menu, which closed it at once. A tap outside still closes it.
     const down = (e: PointerEvent) => {
-      const t = e.target as Element | null;
-      if (t?.closest?.(`[data-menu="${CSS.escape(id)}"]`) || anchor?.contains(t as Node)) return;
+      // A pointer target may be window/document, not an Element: only an actual Node can go to contains.
+      const t = e.target;
+      if ((t instanceof Element && t.closest(`[data-menu="${CSS.escape(id)}"]`)) || (t instanceof Node && anchor?.contains(t))) return;
       onClose();
     };
     const key = (e: KeyboardEvent) => {
@@ -772,7 +773,7 @@ function MenuRow({ item: it, asking, working, refCb, onHover, onChoose }: { item
       ref={refCb}
       role={it.radio ? "menuitemradio" : "menuitem"}
       type="button"
-      title={it.state ? `${it.label} · ${STATE_LABEL[it.state]}` : undefined}
+      title={it.state ? `${it.label} · ${STATE_LABEL[it.state]}` : it.tip}
       disabled={it.disabled}
       aria-haspopup={it.children ? "menu" : undefined}
       aria-keyshortcuts={it.accel}
@@ -795,7 +796,7 @@ function MenuRow({ item: it, asking, working, refCb, onHover, onChoose }: { item
         // label over its explanation, both wrapping: the explanation never pushes the label (or the check) off the row
         <span className="min-w-0 flex-1">
           <span className="block break-words">{label}{tag}</span>
-          <span id={detailId} className="mt-0.5 block text-[11.5px] leading-snug break-words text-ink-3">{detail}</span>
+          <span id={detailId} className="mt-0.5 block text-[11.5px] leading-snug break-words whitespace-pre-line text-ink-3">{detail}</span>
         </span>
       ) : (
         <span className={cx("min-w-0 flex-1", it.wrap ? "break-all" : "truncate", it.mono && "font-mono")}>{label}{tag}</span>
@@ -967,6 +968,8 @@ export function Dialog({
   children,
   width = 440,
   footer,
+  labelledBy,
+  describedBy,
 }: {
   open: boolean;
   onClose: () => void;
@@ -974,6 +977,10 @@ export function Dialog({
   children: React.ReactNode;
   width?: number;
   footer?: React.ReactNode;
+  /** With no `title`: the id of the heading the body draws itself (a confirmation laid out as one block). */
+  labelledBy?: string;
+  /** The id of the text that says what the dialog asks. */
+  describedBy?: string;
 }) {
   const panel = useRef<HTMLDivElement>(null);
   const titleId = useId();
@@ -1008,7 +1015,8 @@ export function Dialog({
         ref={panel}
         role="dialog"
         aria-modal={open || undefined}
-        aria-labelledby={shown.title ? titleId : undefined}
+        aria-labelledby={shown.title ? titleId : labelledBy}
+        aria-describedby={describedBy}
         tabIndex={-1}
         className="flex max-h-[calc(88vh-(--spacing(8)))] w-full max-w-(--dialog-w) animate-[slide-up_220ms_var(--ease-out-strong)_both] flex-col overflow-hidden rounded-[14px] bg-surface shadow-overlay outline-none max-sm:max-h-[calc(var(--kb-h)*0.9)] max-sm:max-w-none max-sm:animate-none max-sm:rounded-b-none max-sm:transition-transform max-sm:duration-300 max-sm:ease-(--ease-out-strong) max-sm:starting:translate-y-full"
         style={{ "--dialog-w": `${width}px` } as React.CSSProperties}

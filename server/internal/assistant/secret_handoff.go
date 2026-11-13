@@ -188,15 +188,10 @@ func (s *Service) handoffApprove(ctx context.Context, convMachine, self string, 
 	}
 	l := s.lang(ctx)
 	input := proto.SecretHandoffInput{}
-	var items, names []string
+	var names []string
 	for _, v := range h.vars {
 		input.Variables = append(input.Variables, proto.SecretHandoffVariable{Name: v.Name, Provider: v.Provider.Extension,
 			ProviderName: v.Provider.Name, Title: v.Title})
-		item := v.Provider.Name
-		if v.Title != "" {
-			item += " › " + v.Title
-		}
-		items = append(items, i18n.T(l, "assistant-secret_handoff.item", i18n.Args{"item": item, "name": v.Name}))
 		names = append(names, v.Name)
 	}
 	// Where it runs and what it is asked, for the card itself: never in the summary, which is also the push's text.
@@ -206,7 +201,7 @@ func (s *Service) handoffApprove(ctx context.Context, convMachine, self string, 
 	expires := now.Add(handoffCardWait)
 	ix := proto.Interaction{ID: "ix_" + randomHex(6), MachineID: convMachine, SessionID: self, SessionTitle: "Persona",
 		Kind: proto.IxPermission, ToolName: proto.SecretHandoffTool, ToolInput: raw, ToolTitle: i18n.T(l, "assistant-secret_handoff.title"),
-		Summary:     handoffSummary(l, strings.Join(items, "; "), agent, h.machineName),
+		Summary:     handoffSummary(l, len(names), agent, h.machineName),
 		AlwaysLabel: i18n.T(l, "assistant-secret_handoff.always", i18n.Args{"launcher": h.launcher, "machine": h.machineName}),
 		CreatedAt:   now, ExpiresAt: expires}
 	r, err := s.ask(ctx, ix)
@@ -246,13 +241,14 @@ func (s *Service) handoffApprove(ctx context.Context, convMachine, self string, 
 	return approvedBy, "", nil
 }
 
-// handoffSummary is the card's one line: which items go to which Agent on which computer; an Agent without a name yet
+// handoffSummary is the card's one line, also the "Needs you" row's and the push's: which Agent asks for how many
+// secrets on which computer, the Agent and the number first (the items are on the card); an Agent without a name yet
 // (a conversation not titled yet) is "an Agent", as the cards say.
-func handoffSummary(l i18n.Lang, items, agent, machine string) string {
+func handoffSummary(l i18n.Lang, count int, agent, machine string) string {
 	if strings.TrimSpace(agent) == "" {
-		return i18n.T(l, "assistant-secret_handoff.summary_unnamed", i18n.Args{"items": items, "machine": machine})
+		return i18n.T(l, "assistant-secret_handoff.summary_unnamed", i18n.Args{"count": count, "machine": machine})
 	}
-	return i18n.T(l, "assistant-secret_handoff.summary", i18n.Args{"items": items, "agent": agent, "machine": machine})
+	return i18n.T(l, "assistant-secret_handoff.summary", i18n.Args{"count": count, "agent": agent, "machine": machine})
 }
 
 // handoffUserTurn reports whether the user asked for this start themselves, the only case an Always rule may spare the
