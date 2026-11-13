@@ -94,6 +94,10 @@ before the hook and transcript rules below:
 Why (#6312): Claude Code 2.1.321 marks itself `waiting` the moment its question shows, but Persona listed such a Claude as Working for 45 seconds (its transcript's
 latest write), then as Unknown, which the overview does not show: it never needed the user and got no card. A finished turn stayed Unknown too.
 
+### Claude in the desktop app
+
+A Claude Code session of Claude's desktop app takes its status from its own `sessions/<pid>.json`, as above (`busy` → `working`, `waiting` → `blocked`). `idle` and `shell` are `done` while the session's last turn ended unseen. It counts as seen once the app brought it into view, or once the node found someone at the app with the session shown. Otherwise it is `idle`. The phone shows Unread for `done`, and the finished push follows the usual rules (#6477, `../integrations/claude-integration.md` ("Unread when a turn ends unseen")).
+
 ### Hook turn signals
 
 herdr's state is often wrong (`done` while still working, #2069), and the title glyph and the transcript's latest write are only inference. Claude sessions Persona starts carry Persona's hooks; sessions the user starts themselves, once `claude_global_hooks` is on, get global report-only hooks (`../integrations/claude-integration.md` ("Global report-only hooks"))

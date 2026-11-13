@@ -37,6 +37,10 @@ type claudeDesktopEntry struct {
 	prior      []string // priorCliSessionIds
 	title, cwd string   // as the sidebar shows it, and where it runs
 	local      string   // the app's own id of the session (sessionId, local_<uuid>): its link opens it (claudedesktop_open.go)
+
+	// focused and turnEdge (ms, 0 unknown): when the app last brought the session into view (lastFocusedAt), and when a
+	// turn of it last began or ended (lastTurnEdgeAt). claudedesktop_unread.go reads them.
+	focused, turnEdge int64
 }
 
 type claudeDesktopFile struct {
@@ -55,6 +59,10 @@ type claudeDesktopIndex struct {
 	visible map[string]bool               // a session's current transcript → some entry naming it is unarchived
 	earlier map[string][]claudeDesktopNow // an earlier transcript → the sessions that ran it before
 	about   map[string]claudeDesktopAbout // an unarchived session's current transcript → its title and directory
+	seen    map[string]claudeDesktopSeen  // an unarchived session's current transcript → its two times (claudedesktop_unread.go)
+	// lastShown (ms) is the latest time the app brought any unarchived session into view: the session it shows now
+	// was brought into view then (claudeDesktopIndex.shown).
+	lastShown int64
 }
 
 type claudeDesktopAbout struct{ title, cwd, local string }
@@ -72,7 +80,8 @@ func readClaudeDesktopIndex(home string) claudeDesktopIndex {
 		found, _ := filepath.Glob(filepath.Join(dir, "claude-code-sessions", "*", "*", "local_*.json"))
 		paths = append(paths, found...)
 	}
-	x := claudeDesktopIndex{visible: map[string]bool{}, earlier: map[string][]claudeDesktopNow{}, about: map[string]claudeDesktopAbout{}}
+	x := claudeDesktopIndex{visible: map[string]bool{}, earlier: map[string][]claudeDesktopNow{}, about: map[string]claudeDesktopAbout{},
+		seen: map[string]claudeDesktopSeen{}}
 	claudeDesktopFiles.Lock()
 	defer claudeDesktopFiles.Unlock()
 	current := make(map[string]bool, len(paths))
@@ -94,6 +103,8 @@ func readClaudeDesktopIndex(home string) claudeDesktopIndex {
 		x.visible[e.transcript] = x.visible[e.transcript] || !e.archived
 		if !e.archived {
 			x.about[e.transcript] = claudeDesktopAbout{e.title, e.cwd, e.local}
+			x.seen[e.transcript] = claudeDesktopSeen{focused: e.focused, turnEdge: e.turnEdge}
+			x.lastShown = max(x.lastShown, e.focused)
 		}
 		for _, old := range e.prior {
 			x.earlier[old] = append(x.earlier[old], claudeDesktopNow{e.transcript, e.archived})
@@ -119,6 +130,8 @@ func readClaudeDesktopEntry(path string) claudeDesktopEntry {
 		Title      string   `json:"title"`
 		Cwd        string   `json:"cwd"`
 		Local      string   `json:"sessionId"`
+		Focused    float64  `json:"lastFocusedAt"`
+		TurnEdge   float64  `json:"lastTurnEdgeAt"`
 	}
 	if json.Unmarshal(b, &raw) != nil || !validID(raw.Transcript) {
 		return claudeDesktopEntry{}
@@ -131,7 +144,8 @@ func readClaudeDesktopEntry(path string) claudeDesktopEntry {
 	if !strings.HasPrefix(local, "local_") || !validID(strings.TrimPrefix(local, "local_")) {
 		local = "" // it goes into a link: only the app's own form
 	}
-	return claudeDesktopEntry{transcript: raw.Transcript, archived: raw.Archived, prior: raw.Prior, title: raw.Title, cwd: cwd, local: local}
+	return claudeDesktopEntry{transcript: raw.Transcript, archived: raw.Archived, prior: raw.Prior, title: raw.Title, cwd: cwd, local: local,
+		focused: int64(raw.Focused), turnEdge: int64(raw.TurnEdge)}
 }
 
 // listed: transcript id is the one an unarchived session of the desktop app runs: the sidebar lists it, so the offline
