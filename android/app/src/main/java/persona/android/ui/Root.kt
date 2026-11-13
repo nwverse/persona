@@ -570,6 +570,11 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                         }
                     },
                     onRetired = { key -> sidebar.retired = sidebar.retired + key },
+                    onOpenTodo = { id -> sidebarDestination(TodoDetailRoute(id)) },
+                    onOpenAgent = { key ->
+                        sidebar.opened.value = false
+                        selected = openResolved(ResolvedRoute(AppTab.Agents, ChatRoute(key.machineId, key.sessionId, ConversationKind.Agent)))
+                    },
                     // The current assistant at the sidebar's head; its roster opens under it.
                     switcher = { head, trailing, fallback ->
                         persona.feature.settings.AssistantSwitcher(services.managers.takeUnless { services.demo }, waiting,
@@ -692,7 +697,8 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
             session.terminal?.let { terminalEntries(navigator, it, { key -> sessions.firstOrNull { s -> s.key == key }?.displayTitle },
                 panes = shell.terminalPanes.takeIf { session.demo == null }, sessions = session.sessions,
                 routed = shell::groupTerminal,
-                resumer = SessionTerminalResumer({ session.sessions.sessions.value }, { session.agentsWiring.state.value.creation })) }
+                resumer = SessionTerminalResumer({ session.sessions.sessions.value }, { session.agentsWiring.state.value.creation },
+                    { session.sessions.machines.value })) }
                 ?: run {
                     entry<TerminalRoute> { UnavailablePage(stringResource(R.string.app_demo_no_terminal), navigator) }
                     entry<persona.core.navigation.TerminalPanesRoute> { UnavailablePage(stringResource(R.string.app_demo_no_terminal), navigator) }

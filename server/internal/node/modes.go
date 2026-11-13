@@ -82,6 +82,8 @@ type sessionModes struct {
 	// Codex: an effort waiting for the phone's next turn/start on a Codex thread whose app-server has no
 	// thread/settings/update (codex_effort.go); nil none. Apart from Mode / Effort, which are Claude's.
 	Codex *codexPending
+	// App: the effort the phone set for the next turn of a chat of the Codex App (codex_desktop_effort.go); nil none.
+	App *codexAppPick
 	// Model: the model the app switched a Claude Code session to, shown until its transcript shows another (model_switch.go).
 	Model     *pendingModel
 	Ultracode *ultracodeState // independent, session-only workflow switch (ultracode.go)
@@ -92,6 +94,23 @@ func validModes(mode, effort string) error {
 		return fmt.Errorf("unknown permission mode %q", mode)
 	}
 	if effort != "" && !slices.Contains(effortLevels, effort) {
+		return fmt.Errorf("unknown effort level %q", effort)
+	}
+	return nil
+}
+
+// validModesFor validates a start's mode / effort against the launcher it runs on: a Codex start takes Codex's own
+// effort list (ultra included, proto.CodexEffortLevels), everything else keeps Claude Code's. Permission modes stay
+// Claude's for both.
+func validModesFor(launcher, mode, effort string) error {
+	if mode != "" && !slices.Contains(permissionModes, mode) {
+		return fmt.Errorf("unknown permission mode %q", mode)
+	}
+	levels := effortLevels
+	if launcherAgentType(launcher) == "codex" {
+		levels = append([]string{effortAuto}, proto.CodexEffortLevels...)
+	}
+	if effort != "" && !slices.Contains(levels, effort) {
 		return fmt.Errorf("unknown effort level %q", effort)
 	}
 	return nil

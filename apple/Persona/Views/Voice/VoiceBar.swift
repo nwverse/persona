@@ -55,7 +55,8 @@ struct VoiceBar: View {
         .shellScaled()
         .modifier(VoiceFeedback(call: call, kind: line.kind, text: line.text, cards: cards.map(\.id)))
         .sheet(isPresented: $showCaptions) { VoiceTranscriptSheet(call: call, persona: model.assistantShownName(in: key)) }
-        .modelConfigurationSheet(isPresented: $showModel, purposeID: "plugin." + call.extensionID)
+        // The default assistant's: calls talk to its voice extension.
+        .modelConfigurationSheet(isPresented: $showModel, purposeID: "plugin." + call.extensionID, owner: .defaultAssistant)
         // The voice's model may have changed in the sheet: the call picks it up on a new connection.
         .onChange(of: showModel) { _, open in
             guard !open, let api = model.api(key.group) else { return }
@@ -370,6 +371,7 @@ struct VoiceBar: View {
         case .stopAgent: String(localized: "Stop \(label)")
         case .resend: String(localized: "Resend")
         case .clearAndSend: String(localized: "Clear and Send")
+        case .sendAnyway: String(localized: "Send Anyway")
         case .returnPlan: String(localized: "Send Back as Feedback")
         case .dismiss: String(localized: "Never Mind")
         }
@@ -379,6 +381,7 @@ struct VoiceBar: View {
         switch action {
         case .stopAgent: Theme.Icon.interrupt
         case .resend, .clearAndSend: Theme.Icon.retry
+        case .sendAnyway: Theme.Icon.send
         case .returnPlan: Theme.Icon.reply
         case .dismiss: Theme.Icon.close
         }
@@ -393,6 +396,9 @@ struct VoiceBar: View {
             call.resend(run)
         case .clearAndSend(let run):
             call.resend(run, clearingDraft: true)
+        case .sendAnyway(let run):
+            // The user's own confirmation: the hub sends it past the user-speech gate (docs/assistant/voice.md 3.2 resend).
+            call.resend(run)
         case .returnPlan(let card, _, let run):
             // The app's own answer to the card (decision 5: the user tapped it), with the refused words as the feedback.
             call.dismiss(run: run)

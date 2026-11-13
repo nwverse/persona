@@ -13,6 +13,19 @@ struct CodexTakeoverTests {
         #expect(old.takeover == nil && !old.send)
     }
 
+    @Test func takeoverPreservesIndependentSourceCapabilities() throws {
+        let data = Data(#"{"read":true,"close":false,"rename":false,"model":true,"rewind":true,"rewind_code":true,"takeover":{"running":true,"can_resume":false}}"#.utf8)
+        let caps = try JSON.decoder.decode(SessionCapabilities.self, from: data)
+        #expect(caps.read && !caps.send)
+        #expect(caps.close == false && caps.rename == false)
+        #expect(caps.model == true && caps.rewind == true && caps.rewindCode == true)
+        #expect(caps.takeover?.running == true && caps.takeover?.canResume == false)
+
+        let encoded = try JSONEncoder().encode(caps)
+        let again = try JSON.decoder.decode(SessionCapabilities.self, from: encoded)
+        #expect(again == caps)
+    }
+
     @Test @MainActor func takeoverAPIUsesExpectedPathAndBody() async throws {
         let hub = FakeHub()
         let path = "/api/v1/machines/mac%20one/codex/thread%2F1/takeover"

@@ -60,6 +60,11 @@ data class Machine(
     @SerialName("node_mismatch") val nodeMismatch: Boolean? = null,
     /** The terminal engine chosen for this machine (docs/integrations/engines.md); hubs send it always, herdr when never chosen. */
     @SerialName("engine") val engine: String = "herdr",
+    /**
+     * The terminal hosts this machine enables side by side (#2576 / #3302); empty when none are enabled; null from an older
+     * hub that only sent [engine]. Resume in Terminal (#5565) reads the empty set as "no terminal engine".
+     */
+    @SerialName("engine_hosts") val engineHosts: List<String>? = null,
     /** What the node found there; empty from older hubs and nodes, and while the machine is offline. */
     @SerialName("engines") val engines: List<DetectedEngine> = emptyList(),
     /** The hub is installing its own personad build there ("Redeploy"). */
@@ -220,7 +225,10 @@ data class BackgroundTask(
     val isWorkflow: Boolean get() = kind == "workflow"
 }
 
-/** What a session with a [Session.sourceKind] allows; a missing field is a refusal (docs/protocol/protocol.md "Codex sources and capabilities"). */
+/**
+ * What a session with a [Session.sourceKind] allows; a missing field is a refusal (docs/protocol/protocol.md "Codex sources
+ * and capabilities"), except the optional ones, whose null keeps the app's own rule.
+ */
 @KeepGeneratedSerializer
 @Serializable(with = SessionCapabilitiesSerializer::class)
 data class SessionCapabilities(
@@ -232,6 +240,16 @@ data class SessionCapabilities(
     val attach: Boolean = false,
     /** Null on an older hub: the client keeps its agent-based rule instead of treating the field as a refusal. */
     val modes: Boolean? = null,
+    /** Close the agent, terminal or not (a runtime's session, #6294); null from an older node: the app keeps its terminal rule. */
+    val close: Boolean? = null,
+    /** Rename it, terminal or not (a runtime's session, #6294); null from an older node: the app keeps its terminal rule. */
+    val rename: Boolean? = null,
+    /** Switch its model through `POST …/modes`; null from an older node: the app keeps its Claude-in-a-terminal rule. */
+    val model: Boolean? = null,
+    /** Rewind to before one of your messages; null from an older node: the app keeps its Claude-in-a-terminal rule. */
+    val rewind: Boolean? = null,
+    /** A rewind may put the files back too ("Code and conversation"); null from an older node: as its [rewind] rule says. */
+    @SerialName("rewind_code") val rewindCode: Boolean? = null,
 )
 
 /**
@@ -455,6 +473,8 @@ data class Session(
     @SerialName("starting") val starting: Boolean = false,
     /** Why starting it failed; the session is offline and sends get the same error. */
     @SerialName("start_error") val startError: String? = null,
+    /** Codex is open in its pane and has no thread until its first message. */
+    @SerialName("awaiting_first_message") val awaitingFirstMessage: Boolean = false,
     /**
      * The channels messages came into this conversation from, newest first (`wechat`, `feishu`; docs/extensions/channels.md
      * "Source marks"): the conversation list draws the latest's mark. Older hubs never send it.

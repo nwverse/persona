@@ -166,7 +166,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		// Only an actual terminal start can recheck a repaired terminal shell.
 		// An explicit retry keeps that existing recovery path on the fixed target;
 		// login-shell checks and authentication gates are not bypassed.
-		if r, bad := s.launcherUnusable(ctx, m.ID, s.startLauncher(ctx, t.Launcher)); bad && !(retry && r.Kind == errKindNotInTerminal) {
+		// A failing record is probed once on the spot first, as a detour does: periodic checks may be off, and a
+		// record a fix made stale would otherwise refuse this machine until someone rechecked by hand.
+		if r, bad := s.launcherUnusableNow(ctx, m.ID, s.startLauncher(ctx, t.Launcher)); bad && !(retry && r.Kind == errKindNotInTerminal) {
 			return "", "", i18n.Err("assistant-tasks.fixed_launcher_unhealthy", i18n.Args{
 				"machine": m.ID, "launcher": t.Launcher, "reason": r.Error,
 			})
