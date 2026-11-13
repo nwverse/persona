@@ -129,6 +129,9 @@ func (s *Service) workGuard(v *workView, e db.SessionWork, ownCard bool) (proto.
 	if v.failed[e.MachineID] {
 		return c, "offline" // the hub could not say: nothing is decided on it now
 	}
+	if ok && modelWorkRecovered(c, e) {
+		return c, "model recovered"
+	}
 	closed, err := s.completedTodo(v.ctx, e.MachineID, e.SessionID)
 	if err != nil {
 		return c, "todo state unavailable"
@@ -174,6 +177,9 @@ func (s *Service) workWake(ctx context.Context, v *workView, k [2]string, now ti
 	c, why := s.workGuard(s.newWorkView(ctx), e, false)
 	switch why {
 	case "":
+	case "model recovered":
+		s.retireRecoveredModelWork(e)
+		return
 	case "offline", "todo state unavailable":
 		before := e
 		at := now.Add(time.Minute).UTC() // try again when it is back
@@ -366,11 +372,10 @@ func (s *Service) cardsUp(ctx context.Context) map[string]proto.Interaction {
 // still waits for its answer when the session was looked at (as one the hub kept up does), and is kept for a later
 // tick while its machine or session is not back as it was — right after a hub restart the nodes reconnect and report
 // their sessions over the next seconds, a node that restarted too before it has read the transcripts.
-func (s *Service) cardBack(v *workView, e db.SessionWork, now time.Time) (*proto.Interaction, bool) {
+func workCardBack(c proto.Session, why string, e db.SessionWork, now time.Time) (*proto.Interaction, bool) {
 	if now.After(e.TurnAt.Add(workCardTTL)) || len(e.Work.Questions) == 0 {
 		return nil, false
 	}
-	c, why := s.workGuard(v, e, true)
 	switch why {
 	case "", "looked at in herdr":
 		ix := workCard(e.MachineID, c, e.Work, e.InteractionID)
@@ -383,6 +388,56 @@ func (s *Service) cardBack(v *workView, e db.SessionWork, now time.Time) (*proto
 		}
 	}
 	return nil, true
+}
+
+// modelWorkRecovered accepts only confirmed success, even if the old work was incorrectly stamped with that turn's
+// time. An absent error can also mean a stale read, an active retry or a process exit, and does not prove recovery.
+func modelWorkRecovered(c proto.Session, e db.SessionWork) bool {
+	if !c.SilentTurnSucceeded || c.UpdatedAt.Before(e.TurnAt) || c.TurnError != "" || c.FailureReason != "" {
+		return false
+	}
+	switch c.Status {
+	case proto.StatusDone, proto.StatusIdle, proto.StatusOffline, proto.StatusInterrupted:
+	default:
+		return false
+	}
+	return isTransientModelWork(e)
+}
+
+func isTransientModelWork(e db.SessionWork) bool {
+	w := e.Work
+	if w.Phase != proto.WorkBlocked || w.ResetsAt != nil {
+		return false
+	}
+	if w.On == proto.WaitTransient {
+		return true
+	}
+	// An exhausted transient retry is stored as a user decision. Recognize existing cards by their rule, count and
+	// canonical first action (cards may have been written in another language).
+	return w.On == proto.WaitUser && w.By == "rule" && e.Retries > 0 && len(w.Questions) == 1 &&
+		len(w.Questions[0].Options) > 0 && canonicalAnswer(w.Questions[0].Options[0].Label) == answerRetry
+}
+
+func (s *Service) retireRecoveredModelWork(e db.SessionWork) {
+	k := [2]string{e.MachineID, e.SessionID}
+	s.work.mu.Lock()
+	current := s.work.entries[k]
+	if current == nil || !current.UpdatedAt.Equal(e.UpdatedAt) {
+		s.work.mu.Unlock()
+		return // a newer decision won
+	}
+	delete(s.work.cards, current.InteractionID)
+	clearRecoveredModelWork(current)
+	saved := *current
+	s.work.mu.Unlock()
+	s.saveWork(saved)
+	s.publishSoon()
+}
+
+func clearRecoveredModelWork(e *db.SessionWork) {
+	e.WakeAt, e.InteractionID, e.Retries = nil, "", 0
+	e.Work = proto.WorkState{}
+	e.UpdatedAt = time.Now().UTC()
 }
 
 // wentOn: c went on from e's turn — it works again, or a later turn ended. A session that reads older than the turn
@@ -401,12 +456,19 @@ func (s *Service) cardTick(ctx context.Context, v *workView, k [2]string, now ti
 	s.work.mu.Lock()
 	_, out := s.work.cards[e.InteractionID]
 	s.work.mu.Unlock()
+	c, why := s.workGuard(v, e, true)
+	if why == "model recovered" {
+		s.retireRecoveredModelWork(e)
+		if !out {
+			s.recordEnd(e.InteractionID, "cancelled", nil)
+		}
+		return
+	}
 	var drop bool
 	if out {
-		c, why := s.workGuard(v, e, true)
 		drop = now.After(e.TurnAt.Add(workCardTTL)) || why == "task done" || why == "moved on" && wentOn(c, e)
 	} else {
-		ix, keep := s.cardBack(v, e, now)
+		ix, keep := workCardBack(c, why, e, now)
 		if ix != nil {
 			s.work.mu.Lock()
 			current, exists := s.work.entries[k]

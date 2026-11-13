@@ -239,6 +239,12 @@ func (s *Service) workAnswer(ctx context.Context, id string, r proto.Resolution)
 		s.work.mu.Unlock()
 	}()
 	key := [2]string{ix.MachineID, ix.SessionID}
+	if e, ok := s.workEntry(key); ok && e.InteractionID == ix.ID && isTransientModelWork(e) {
+		if c, found := s.newWorkView(ctx).session(ix.MachineID, ix.SessionID); found && modelWorkRecovered(c, e) {
+			s.retireRecoveredModelWork(e)
+			return true, errGone(id)
+		}
+	}
 	turn := ix.ExpiresAt.Add(-workCardTTL)
 	after := time.Since(turn).Seconds()
 	// done takes the card off its turn's work as the work is now (the agent may have gone on meanwhile), with change.

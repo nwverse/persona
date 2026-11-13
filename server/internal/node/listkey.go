@@ -27,6 +27,9 @@ func listKeySized(list []proto.Session, size int) string {
 		w.str(s.ParentSpaceID, '|')
 		w.str(s.SlotName, '|')
 		w.str(s.LastText, '|')
+		if s.SilentTurnSucceeded {
+			w.b.WriteString("silent-success|")
+		}
 		w.int(s.UpdatedAt.Unix()/10, '|')
 		w.quotes(s.Queued)
 		w.b.WriteByte('|')

@@ -24,6 +24,7 @@ func (m *Meta) ClaudeTurnStarted(wake bool) {
 	}
 	resumes := m.TurnErrorResumes && wake
 	m.clearTurnError()
+	m.clearSilentSuccess()
 	m.TurnErrorResumes, m.turnWorked = resumes, false
 	m.turnParts = nil
 	m.resumesSaid = m.resumesSaid || !wake
@@ -37,6 +38,10 @@ func (m *Meta) TurnErrorResumesSaid() bool { return m.resumesSaid }
 // ReadingTail: the lines parsed from here on are the transcript's tail, after its head was read for the title (a
 // prompt there says nothing of a wait at the end): TurnErrorResumesSaid counts the tail's lines only.
 func (m *Meta) ReadingTail() { m.resumesSaid = false }
+
+func (m *Meta) clearSilentSuccess() {
+	m.SilentTurnSucceeded, m.silentSuccessLine = false, ""
+}
 
 func (m *Meta) clearTurnError() {
 	m.TurnError, m.TurnErrorKind, m.TurnErrorResetsAt = "", "", time.Time{}
@@ -55,6 +60,7 @@ func (m *Meta) claudeReply(e *entry, blocks []block, shown bool) {
 		}
 		return
 	}
+	m.clearSilentSuccess()
 	var parts []string
 	for _, b := range blocks {
 		if b.Type == "text" {

@@ -92,6 +92,13 @@ Use synthetic conversations for screenshots, not the user's real main conversati
   stream hidden after the turn stops too: the store can retain it until its transcript item arrives. Determine its
   newest transcript owner, not only whether the round is still running.
 
+## A silent completion still supersedes a model error (#6221)
+
+A last-text preview may skip a host's no-message marker and recover older text from outside the bounded tail. Never
+promote that preview's old error into the current turn when a real model reply ended successfully. Carry the positive
+outcome separately through the session row; a new error or retry invalidates it, and process exit alone proves nothing.
+Leave the historical error in the transcript.
+
 ## Refusal fallback is session state, not a model setting (#2203)
 
 A `system/model_refusal_fallback` row with session scope can explain a model-route 404 several turns later. Preserve

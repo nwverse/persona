@@ -496,18 +496,32 @@ func (s *Service) loadWork(ctx context.Context) bool {
 		if up == nil {
 			up = s.cardsUp(ctx)
 		}
-		if ix, ok := up[e.InteractionID]; ok && !now.After(e.TurnAt.Add(workCardTTL)) {
+		ix, alreadyUp := up[e.InteractionID]
+		if alreadyUp && !now.After(e.TurnAt.Add(workCardTTL)) && !isTransientModelWork(e) {
 			ix.CanCancel = true // The manager can retire its own cards, including cards restored from older hubs.
 			cards[e.InteractionID] = ix
 			continue
 		}
-		switch ix, keep := s.cardBack(v, e, now); {
-		case ix != nil:
-			cards[e.InteractionID] = *ix
-		case !keep:
-			forgotIDs = append(forgotIDs, e.InteractionID)
-			rows[i].InteractionID, rows[i].Work.InteractionID = "", ""
+		c, why := s.workGuard(v, e, true)
+		switch {
+		case why == "model recovered":
+			clearRecoveredModelWork(&rows[i])
 			forgot = append(forgot, rows[i])
+			if !alreadyUp {
+				forgotIDs = append(forgotIDs, e.InteractionID)
+			}
+		case alreadyUp && !now.After(e.TurnAt.Add(workCardTTL)):
+			ix.CanCancel = true
+			cards[e.InteractionID] = ix
+		default:
+			switch ix, keep := workCardBack(c, why, e, now); {
+			case ix != nil:
+				cards[e.InteractionID] = *ix
+			case !keep:
+				forgotIDs = append(forgotIDs, e.InteractionID)
+				rows[i].InteractionID, rows[i].Work.InteractionID = "", ""
+				forgot = append(forgot, rows[i])
+			}
 		}
 	}
 	s.work.mu.Lock()

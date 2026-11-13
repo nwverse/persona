@@ -314,7 +314,7 @@ func latestTurnError(sess proto.Session) (text, kind string) {
 	if text := strings.TrimSpace(sess.TurnError); text != "" {
 		return text, sess.TurnErrorKind
 	}
-	if text := strings.TrimSpace(sess.LastText); assistantwire.CutOff(text) {
+	if text := strings.TrimSpace(sess.LastText); !sess.SilentTurnSucceeded && assistantwire.CutOff(text) {
 		return text, ""
 	}
 	return "", ""

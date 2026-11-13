@@ -182,6 +182,7 @@ func (n *Node) scanOffline() []proto.Session {
 			SessionID: id, Title: title, Cwd: cwd, Status: proto.StatusOffline, Model: m.model,
 			Agent: "claude", AgentSurface: m.surface,
 			LastText: snippet(m.lastText), UpdatedAt: lastUsed(m, c.st), Rev: c.st.Size(),
+			SilentTurnSucceeded: m.silentTurnSucceeded,
 		}
 		s.Activity, s.ActivityAt = m.activityOf()
 		setContext(&s, m)

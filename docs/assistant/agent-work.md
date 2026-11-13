@@ -242,6 +242,8 @@ later without sending.
 - Exponential backoff (`retryBackoff`): `retry_base_seconds` (default 15) doubled for each attempt, so 15 s, 30 s, 60 s, 120 s, 240 s; a rate limit (429, "rate limit",
   "too many requests") waits four times as long (60 s … 960 s); never more than 30 minutes. Up to 5 consecutive attempts (`agents.triage.max_retries`).
   A turn that ends otherwise (normally, or on an error that is not transient) starts the count again.
+  A confirmed silent completion also retires an obsolete model retry and its decision card, even when that card was
+  incorrectly stamped with the successful turn's time. Missing error metadata or process exit alone is not recovery.
 - If all fail: the session keeps its error and the apps' "Retry", as before. With the main switch and `decide` on, also a `blocked · user` card,
   "The model service keeps failing after 5 automatic retries: <original text>", with options "Try Again" / "Leave it for now".
 - Send exactly `继续` ("Continue"), the same text sent by "Retry" on the App's error card (`continueText`).

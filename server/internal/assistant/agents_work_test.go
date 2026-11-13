@@ -1235,3 +1235,71 @@ func TestApprovedWaitIsNotAskedAgain(t *testing.T) {
 		t.Fatalf("approval outlived the user's own message: %+v", e)
 	}
 }
+
+func TestSilentSuccessRetiresStaleModelRetry(t *testing.T) {
+	for _, mode := range []string{"scheduled retry", "published card", "restored card", "late Retry tap", "continued failure", "new error wins", "exit without success", "exit after success"} {
+		t.Run(mode, func(t *testing.T) {
+			s, f := workService(t)
+			ctx := context.Background()
+			k := [2]string{"box", "s1"}
+			now := time.Now().UTC()
+			c := apiErrorTurn(k[1], "API Error: Connection refused (ECONNREFUSED)")
+			c.UpdatedAt = now.Add(-time.Minute)
+			f.setSessions(k[0], c)
+			w, _, _ := triageRules(c, time.UTC, "")
+			w.TurnAt, w.By = c.UpdatedAt, "rule"
+			e := db.SessionWork{MachineID: k[0], SessionID: k[1], TurnAt: w.TurnAt, Work: *w}
+			if mode != "scheduled retry" {
+				e.Retries = maxRetries(s.triageCfg(ctx))
+			}
+			s.actOn(ctx, s.newWorkView(ctx), k[0], c, &e)
+			id := e.InteractionID
+			if mode == "scheduled retry" {
+				if e.WakeAt == nil {
+					t.Fatal("setup: no scheduled retry")
+				}
+			} else if id == "" {
+				t.Fatal("setup: no exhausted-retry card")
+			}
+			s.putWork(ctx, e)
+			if mode == "restored card" {
+				s.work.mu.Lock()
+				delete(s.work.cards, id)
+				s.work.mu.Unlock()
+			}
+			// Reproduce the actual stale card, which was generated against the newer reply's timestamp.
+			c.TurnError = ""
+			c.SilentTurnSucceeded = mode != "continued failure" && mode != "exit without success"
+			if mode == "continued failure" || mode == "new error wins" {
+				c.TurnError = c.LastText
+			}
+			if mode == "exit without success" || mode == "exit after success" {
+				c.Status, c.State = proto.StatusOffline, proto.StateOffline
+			}
+			f.setSessions(k[0], c)
+			if mode == "late Retry tap" {
+				q := e.Work.Questions[0]
+				handled, err := s.workAnswer(ctx, id, proto.Resolution{Answers: map[string]string{q.Question: q.Options[0].Label}})
+				if !handled || err == nil {
+					t.Fatalf("obsolete retry accepted: handled=%v, error=%v", handled, err)
+				}
+			} else {
+				s.workTick(ctx, now.Add(time.Minute))
+			}
+			got := entryOf(t, s, k[1])
+			if c.SilentTurnSucceeded && c.TurnError == "" {
+				if got.WakeAt != nil || got.InteractionID != "" || got.Retries != 0 || workShown(&got.Work) || len(s.workCards()) != 0 {
+					t.Fatalf("obsolete work survived recovery: %+v, cards=%d", got, len(s.workCards()))
+				}
+				if err, _ := latestTurnError(c); err != "" {
+					t.Fatalf("historical preview became a new error: %q", err)
+				}
+			} else if got.InteractionID != id || got.Retries != e.Retries || len(s.workCards()) != 1 {
+				t.Fatalf("current error or uncertain exit lost its retry decision: %+v, cards=%d", got, len(s.workCards()))
+			}
+			if sent := f.sentToAgents(); len(sent) != 0 {
+				t.Fatalf("unexpected continuation: %v", sent)
+			}
+		})
+	}
+}

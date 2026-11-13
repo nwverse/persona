@@ -1261,3 +1261,57 @@ func TestBotmuxDashboardFormats(t *testing.T) {
 		}
 	}
 }
+
+// The real model can finish silently after an outage, even when the old error is outside the bounded
+// transcript tail. The historical error is not the latest result.
+func TestBotmuxSilentSuccessSupersedesModelFailure(t *testing.T) {
+	const failure = "API Error: Connection refused (ECONNREFUSED)"
+	const newer = "API Error: 503 Service Unavailable"
+	at := time.Now().Add(-time.Minute).UTC().Truncate(time.Second)
+	reply := func(at time.Time, model, text, stop string, failed bool) string {
+		return fmt.Sprintf(`{"type":"assistant","timestamp":%q,"isApiErrorMessage":%t,"message":{"role":"assistant","model":%q,"stop_reason":%q,"content":[{"type":"text","text":%q}]}}`,
+			at.Format(time.RFC3339), failed, model, stop, text)
+	}
+	old := reply(at, "<synthetic>", failure, "stop_sequence", true)
+	success := reply(at.Add(8*time.Second), "fixture-model", "BOTMUX_NOTHING_TO_SEND", "end_turn", false)
+	ongoing := fmt.Sprintf(`{"type":"system","subtype":"api_error","timestamp":%q,"retryAttempt":1,"maxRetries":5,"error":{"message":"ECONNREFUSED"}}`, at.Add(10*time.Second).Format(time.RFC3339))
+	padding := `{"type":"api-request","content":"` + strings.Repeat("x", quickTail+1) + `"}`
+	for _, tc := range []struct {
+		name, liveness, turn string
+		lines                []string
+		hostErrorAt          time.Time
+		wantStatus, wantText string
+		success              bool
+	}{
+		{"old error then success", "alive", "idle", []string{old, success}, time.Time{}, proto.StatusDone, "", true},
+		{"old error outside bounded tail", "alive", "idle", []string{old, padding, success}, time.Time{}, proto.StatusDone, "", true},
+		{"old host preview", "alive", "idle", []string{old, success}, at, proto.StatusDone, "", true},
+		{"new host error", "alive", "idle", []string{old, success}, at.Add(9 * time.Second), proto.StatusDone, failure, false},
+		{"ongoing retry", "alive", "working", []string{old, success, ongoing}, time.Time{}, proto.StatusWorking, "", false},
+		{"new terminal error", "alive", "idle", []string{old, success, reply(at.Add(12*time.Second), "<synthetic>", newer, "stop_sequence", true)}, time.Time{}, proto.StatusDone, newer, false},
+		{"exit without success", "not_running", "unknown", []string{old}, time.Time{}, proto.StatusOffline, failure, false},
+		{"exit after success", "not_running", "unknown", []string{old, success}, time.Time{}, proto.StatusOffline, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n, f, _, home := bmxNode(t)
+			row := bmxRow(sidA, "claude-code", tc.liveness, tc.turn, false, "fixture")
+			if !tc.hostErrorAt.IsZero() {
+				row["raw"] = map[string]any{"title": "fixture", "previewBotState": "replied",
+					"previewBotText": failure, "previewBotAt": tc.hostErrorAt.UnixMilli()}
+			}
+			f.rows = []map[string]any{row}
+			path := writeTranscript(t, home, bmxCwd, sidA, at.Add(15*time.Second), tc.lines...)
+			got := byID(listSessions(t, n))[sidA]
+			if got.Status != tc.wantStatus || got.LastText != tc.wantText || got.SilentTurnSucceeded != tc.success {
+				t.Fatalf("status=%q last_text=%q turn_error=%q silent_success=%v", got.Status, got.LastText, got.TurnError, got.SilentTurnSucceeded)
+			}
+			if tc.success && got.TurnError != "" || tc.wantText == newer && got.TurnError != newer {
+				t.Fatalf("turn error: %q", got.TurnError)
+			}
+			// This is a read-only correction to the summary, not a rewrite of the error in chat history.
+			if b, err := os.ReadFile(path); err != nil || !strings.Contains(string(b), failure) {
+				t.Fatalf("historical failure missing: %v", err)
+			}
+		})
+	}
+}

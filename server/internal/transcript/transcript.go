@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -42,11 +43,12 @@ type entry struct {
 	} `json:"compactMetadata"`
 	Content json.RawMessage `json:"content"`
 	Message *struct {
-		Role    string          `json:"role"`
-		Model   string          `json:"model"`
-		ID      string          `json:"id"`
-		Content json.RawMessage `json:"content"`
-		Usage   *claudeUsage    `json:"usage"`
+		Role       string          `json:"role"`
+		Model      string          `json:"model"`
+		ID         string          `json:"id"`
+		StopReason string          `json:"stop_reason"`
+		Content    json.RawMessage `json:"content"`
+		Usage      *claudeUsage    `json:"usage"`
 	} `json:"message"`
 	AITitle        string `json:"aiTitle"`
 	CustomTitle    string `json:"customTitle"`
@@ -267,6 +269,9 @@ type Meta struct {
 	// LastTextAt is when the agent last wrote text, botmux's sentinel included (it ends a turn that answered in the
 	// Feishu topic): zero when it never did.
 	LastTextAt time.Time
+	// SilentTurnSucceeded is a real end-of-turn reply whose only text is the hidden BotMux sentinel.
+	SilentTurnSucceeded bool
+	silentSuccessLine   string
 	// LastPromptAt is when the latest message to the agent came in (typed, sent or delivered by a host), zero when
 	// none did or it had no time.
 	LastPromptAt time.Time
@@ -642,6 +647,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 		case "compact_boundary":
 			text = CompactedNotice
 		case "api_error":
+			meta.clearSilentSuccess()
 			// Claude Code writes one line per retry (retryAttempt 1..maxRetries): show the first and, if it never
 			// got through, the last.
 			if e.RetryAttempt > 1 && (e.MaxRetries == 0 || e.RetryAttempt < e.MaxRetries) {
@@ -823,7 +829,17 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 				}
 				it := mk(i, "assistant", proto.KindText)
 				it.Text = clip(b.Text)
-				meta.said(withoutBotmuxSentinel(b.Text), e.Timestamp)
+				preview := withoutBotmuxSentinel(b.Text)
+				if preview == "" && strings.TrimSpace(b.Text) == botmuxSentinel && model != "" &&
+					!e.IsSidechain && !e.IsAPIErrorMessage && e.Message.StopReason == "end_turn" {
+					meta.SilentTurnSucceeded, meta.silentSuccessLine, meta.tree.silentSuccess = true, e.UUID, true
+					if assistantwire.CutOff(meta.LastText) {
+						meta.LastText = ""
+					}
+				} else if preview != "" {
+					meta.clearSilentSuccess()
+				}
+				meta.said(preview, e.Timestamp)
 				out = append(out, it)
 			case "thinking":
 				if strings.TrimSpace(b.Thinking) == "" {

@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/closeout"
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/identity"
@@ -167,6 +168,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 					s.Model = n.shownModel(id, m.model) // the pick made in the app until a reply shows the real one (model_switch.go)
 				}
 				m.turnErr.set(&s)
+				s.SilentTurnSucceeded = m.silentTurnSucceeded
 				s.Activity, s.ActivityAt = m.activityOf()
 				setContext(&s, m)
 				s.ModelFallback = m.modelFallback
@@ -187,8 +189,13 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		// The host's record of the answer (botmux's reply in the topic), unless the transcript has words well after it:
 		// the session went on outside the host (a `claude --resume` in a terminal). Text written in the same turn
 		// right after the reply (the sentinel, a closing line) comes within minutes.
-		if a.LastText != "" && (a.LastTextAt.IsZero() || !textAt.After(a.LastTextAt.Add(hostTextSlack))) {
+		hostError := assistantwire.CutOff(a.LastText)
+		staleFailure := s.SilentTurnSucceeded && hostError && !a.LastTextAt.IsZero() && textAt.After(a.LastTextAt)
+		if a.LastText != "" && !staleFailure && (a.LastTextAt.IsZero() || !textAt.After(a.LastTextAt.Add(hostTextSlack))) {
 			s.LastText = snippet(a.LastText)
+			if hostError {
+				s.SilentTurnSucceeded = false // a newer or undated failure is not superseded by the transcript
+			}
 			// A message to the agent after the host's answer answered its question (#5096); a host that gives no time
 			// for its answer is taken as the latest word.
 			if !a.LastTextAt.IsZero() && promptAt.After(a.LastTextAt) {

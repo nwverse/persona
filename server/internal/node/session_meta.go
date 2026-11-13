@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/closeout"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -74,7 +75,8 @@ type quickMeta struct {
 	// transcript's (turn_duration, an interrupt)
 	turnClosed bool
 	// claudeTurn: a Claude transcript whose tail has a turn started and not finished (transcript.Meta.TurnOpen)
-	claudeTurn bool
+	claudeTurn          bool
+	silentTurnSucceeded bool
 	// contentAt: the newest line in the tail that has a time, when the transcript last said something. Not the file's
 	// mtime: Claude Code rewrites its trailing metadata (last-prompt, ai-title, mode…, no timestamps) in place while
 	// idle, and that is no sign of work (#5967).
@@ -159,6 +161,7 @@ func (n *Node) meta(path string, st os.FileInfo) quickMeta {
 			// that it resumes by itself stays: it keeps anything from typing into the session, the safe side too, and the
 			// writes that make the read stale are its own continuation at the reset or the wakes of the wait (#1710).
 			m.turnErr = turnFailure{resumes: m.turnErr.resumes}
+			m.silentTurnSucceeded = false // the unparsed writes may be a new retry or failure
 		}
 		return m
 	}
@@ -319,6 +322,11 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 		} else {
 			m.lastText = lastWordsBefore(f, off)
 		}
+	}
+	m.silentTurnSucceeded = tm.SilentTurnSucceeded
+	if m.silentTurnSucceeded && assistantwire.CutOff(m.lastText) {
+		// The bounded tail can fall back to text written before the successful silent reply.
+		m.lastText, m.answer = "", ""
 	}
 	if !m.lastPromptAt.After(m.lastTextAt) { // a message after the question answered it (#5096)
 		m.asks = closeout.AskOf(m.lastText)

@@ -7,6 +7,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -50,9 +51,10 @@ type treeLine struct {
 	turnEnd      bool // a turn_duration line: the turn it closes ended
 	// said / saidAt: the agent's words on this line (Meta.LastText / LastTextAt as it set them); spoke says it wrote
 	// text at all (said is "" for botmux's sentinel alone).
-	said   string
-	saidAt time.Time
-	spoke  bool
+	said          string
+	saidAt        time.Time
+	spoke         bool
+	silentSuccess bool
 }
 
 // treeRec is a line with a uuid, as the tree keeps it: prompt says it is one of the user's own messages, reply that it
@@ -444,6 +446,9 @@ func (t *Tail) Skipped(line []byte) {
 // no words in the lines read are left. A turn error said on such a branch goes too: the conversation that is left did
 // not fail there, and nothing older comes back (the user went back to start over).
 func (t *Tail) Settle(meta *Meta) bool {
+	if meta.silentSuccessLine != "" && t.tree.hidden[meta.silentSuccessLine] {
+		meta.clearSilentSuccess()
+	}
 	if meta.turnErrorLine != "" && t.tree.hidden[meta.turnErrorLine] {
 		meta.clearTurnError()
 	}
@@ -464,6 +469,8 @@ func (t *Tail) Settle(meta *Meta) bool {
 		}
 		if w.said != "" {
 			meta.LastText = w.said
+		} else if w.silentSuccess && assistantwire.CutOff(meta.LastText) {
+			meta.LastText = ""
 		}
 		meta.LastTextAt = w.saidAt
 	}

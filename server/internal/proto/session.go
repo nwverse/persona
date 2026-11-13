@@ -282,6 +282,9 @@ type Session struct {
 	// AsksRead: the node read Asks off the reply (an empty Asks then means it asks nothing, or the user answered it);
 	// without it (an older node, a host that does not say) the hub reads the list's last words when they are whole.
 	AsksRead bool `json:"asks_read,omitempty"`
+	// SilentTurnSucceeded is positive evidence that the latest Claude turn ended with a hidden success marker.
+	// Its preview may still describe an earlier turn. Omitted when the node has no such evidence.
+	SilentTurnSucceeded bool `json:"silent_turn_succeeded,omitempty"`
 	// AwaitsReply: the agent stopped on a question to the user nobody has answered yet (docs/protocol/agent-states.md "Awaiting your reply",
 	// #5096) — it asks (Asks, or the triage says it waits on the user) and has no card, error or background work. Set by
 	// the hub on a stopped session (Unread or Seen); an Seen one is listed as Awaiting Reply, not folded with the idle ones.
