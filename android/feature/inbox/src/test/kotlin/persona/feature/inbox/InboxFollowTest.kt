@@ -13,6 +13,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -155,7 +156,7 @@ class InboxFollowTest {
         val root = System.getProperty("persona.repo.root")?.let(::File) ?: generateSequence(File(".").canonicalFile) { it.parentFile }
             .first { File(it, ".git").exists() && File(it, "android").isDirectory }
         val file = File(root, "spec/fixtures/inbox/time.json")
-        if (!file.exists()) return // The shared fixture arrives with #7203; this test exercises it as soon as it is present.
+        assumeTrue(file.exists()) // The shared fixture arrives with #7203; this test exercises it as soon as it is present.
         val fixture = Json.parseToJsonElement(file.readText()).jsonObject
         for (case in fixture.getValue("cases").jsonArray.map { it.jsonObject }) for (language in languages) {
             val name = case.getValue("name").jsonPrimitive.content
