@@ -108,8 +108,8 @@ iOS / Android have both entry points (Android Machines is under Agents: **List s
 | Answer dialogs (permissions, options) | Yes | Yes (screen-based) | Yes (screen-based) | Yes (screen-based) | Yes (cards, also answerable in Paseo app) |
 | Close sessions from phone | Yes | Yes | Yes | Yes | Backend supports archiving in Paseo; app button currently only for terminal sessions |
 | Create sessions from phone; Resume a stopped one from its terminal page (a message does not, #4754) | Yes | Yes (a new tab in the Herdr App space for the directory, #2532) | Yes (create; resume a stopped Claude session, #5548) | Yes | Yes (each Paseo provider is a launcher; a message continues a Paseo session) |
-| Create a worktree from a workspace ([terminal.md](terminal.md), "23. New worktree…") | Yes (herdr 0.9 creates it; older versions fall back to git) | Yes (Persona falls back to git and opens a Herdr App space) | Yes (Orca creates it under the original workspace and owns the checkout directory) | No | No |
-| Rename spaces / tabs | Yes | Yes (written into Herdr App's layout) | No | Yes | No (backend supports session names; app button currently only for terminal sessions) |
+| Create a worktree from a workspace ([terminal.md](terminal.md), "23. New worktree…") | Yes (herdr 0.9 creates it; older versions fall back to git) | Yes (Persona falls back to git and opens a Herdr App space) | Yes (Orca creates it under the original workspace and owns the checkout directory) | No | Yes on the web (Paseo creates it in its own worktrees folder as a Paseo workspace, #6295, and deletes one it made, #6297; `docs/integrations/paseo.md` ("Spaces and workspaces")) |
+| Rename spaces / tabs | Yes | Yes (written into Herdr App's layout) | No | Yes | Spaces (Paseo's projects) and workspace titles on the web, #6297; no tabs (backend supports session names; app button currently only for terminal sessions) |
 | Live terminal, phone takeover | Yes | No | No | No | No (no terminal) |
 | Colored screen reads, draft detection | Yes | No (plain text, dialogs only) | No (plain text, dialogs only) | Yes | No (no terminal) |
 | Change permission mode / thinking effort | Yes | Supported, untested | Supported, untested | Supported, untested | Yes (end-to-end tested) |
@@ -178,7 +178,7 @@ Selecting `herdr-both` attaches both herdr and herdr-core hosts:
 - **Agents**: Tern does not say what runs in a block (a block's `program` is the shell it started), so a look asks `tern process` for each terminal
   block's foreground process, four at a time: `claude`, `codex` (also behind `node` / `bun`). A shell or classic herdr's client in front is no agent
   of Tern's (herdr run in a Tern tab keeps its own panes). Tern reports no agent state, and its own `working` flag misses Claude thinking quietly:
-  a Claude's state is the status Claude Code keeps in its `sessions/<pid>.json` (busy, idle, or waiting on a dialog of its own), else its transcript
+  a Claude's state is the status Claude Code keeps in its `sessions/<pid>.json` (busy, idle, shell when idle with a background command running, or waiting on a dialog of its own), else its transcript
   and hooks as on the other hosts (`docs/protocol/agent-states.md`, "Claude in a Tern block").
 - **Changes**: `tern events` for the first window (blocks spawned, exited or closed, layouts, titles, working directories, bells; a bell is urgent).
   The node still snapshots every 10 seconds, which covers other windows. Every `tern` call is a client of its own, so the `client_*` events are

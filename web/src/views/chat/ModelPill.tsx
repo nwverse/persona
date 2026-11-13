@@ -221,7 +221,12 @@ export const AssistantModelPill = memo(function AssistantModelPill({ session }: 
   const assistant = useStore((s) => s.assistant);
   const kept = useStore((s) => hubHas(s.features, ASSISTANT_MODEL_PICK_FEATURE));
   const mid = session?.machine_id ?? assistant?.machine_id ?? "";
-  const chat: AssistantChat = { session, isMain: Boolean(session && assistant?.main === session.session_id), kept, config: assistant?.launcher };
+  const isMain = Boolean(session && assistant?.main === session.session_id);
+  // Only the main conversation has a per-conversation model pick (#6911): a leader, the background supervisor or
+  // another assistant conversation shows no pill and follows the default or what it started with. No session is the
+  // new-main-chat page, whose pick goes with the main conversation's start.
+  if (session && !isMain) return null;
+  const chat: AssistantChat = { session, isMain, kept, config: assistant?.launcher };
   const key = assistantPickKey(chat);
   // this page's picks (an older hub, the new-conversation page) draw it again
   const picked = usePickedLauncher(key);
@@ -232,6 +237,14 @@ export const AssistantModelPill = memo(function AssistantModelPill({ session }: 
   useEffect(() => {
     if (mid) void readAssistantLaunchers(mid);
   }, [mid]);
+  // A long-open page must still show the effective Main chat model after a hub-side change (#6542): a push that bumps
+  // this conversation's revision re-reads the picker, so the pill can't keep an old model the hub no longer resolves.
+  const lastRev = useRef<number | undefined>(session?.rev);
+  useEffect(() => {
+    if (!mid || session?.rev === undefined || session.rev === lastRev.current) return;
+    lastRev.current = session.rev;
+    void readAssistantLaunchers(mid, { again: true });
+  }, [mid, session?.rev]);
   // a pick of this page's that the list no longer offers (gone, or it can't run the assistant) goes back to the default,
   // its model and effort with it: on the new-conversation page they would otherwise go with the start
   useEffect(() => {

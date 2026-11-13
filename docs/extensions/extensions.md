@@ -1865,6 +1865,9 @@ Quota extensions contribute `quota` and answer a launcher's quota (`docs/integra
    methods are GET / POST / PUT / DELETE / HEAD only, request body at most 1 MB, response at most 4 MB, and redirects are only followed to the same origin.
 3. The extension returns `{report}` (`Report` in `server/internal/quota`: `key_name`, `usage`, `budget`, `pools`, `note`…; when `gateway` / `gateway_name` are omitted, the contribution's id / name are used; the app shows `gateway_name`);
    if it is not its gateway, it returns the error code `unsupported` and the hub asks the next one.
+   Each `usage` entry may say what its `label` covers in `period`: `day`, `week` or `month`, in the user's `tz`. Clients
+   add up only entries that say (the iPhone's Usage widget takes the `cost_usd` of the `day` ones); an entry without it
+   is shown by its label alone.
 
 **Outside the launcher page** (#2846): sidebar pages (`nav_page`), cards and widgets have no launcher context, so extensions that accepted `launcher_keys` can look up launchers themselves:
 
@@ -2511,8 +2514,11 @@ A hub picture that fails to load may have outlived its token, so the page is dra
 A row's extra actions open from a right click, a half-second press on a touch screen and the … button at its end (no swipe on the web).
 The component showcase's version 6 pages are `web/src/showcase/v6` (with their pictures in `web/src/showcase/images`) until the showcase extension's own snapshots have them.
 
-**iOS** (#827) draws it in parts and sends 6 only when all of it is drawn, after the rest of UI version 5; meanwhile the hub downgrades it as for any older app. Drawn so far: row controls, the styles
-(the 45 icons, named colors, `title` / `headline`), row actions, charts and sparks, tiles (grid, carousel) and the new fields; see "App: Settings › Extensions" below. One difference from the web and Android: a switch that asks first has already moved when the alert shows (a system switch cannot be held where it was), and Cancel puts it back.
+**iOS** (#827) draws all of it, with the rest of UI version 5, and sends 6: whole pages and the native stream (`ExtensionUIContext.pageVersion`,
+`ExtensionPageStream.uiVersion`) and the app's own cards and sections (`ExtensionUIContext.cardVersion`; version 4–5's code components there read-only, `ExtensionCodeSummary`),
+every `ExtensionViewModel` saying what the app's renderer draws (`drawnByApp`). Widgets, the watch and the system extensions keep the Shared version, 3: they draw none of it.
+The frozen Mac app compiles the same code but keeps what it reported before (pages 4, the stream 5, cards 3), so the hub goes on downgrading for it (`docs/apple/mac.md`: new features skip it).
+See "App: Settings › Extensions" below for each part. One difference from the web and Android: a switch that asks first has already moved when the alert shows (a system switch cannot be held where it was), and Cancel puts it back.
 
 ## System-level placements (#1858)
 
@@ -2905,7 +2911,7 @@ UI placements `extension` / `extension_name` and `plugin` / `plugin_name`, marke
 Features accept new and old names (`hasExtensionFeature("ui_slots")` means `extension_ui_slots` or `plugin_ui_slots`, likewise `"manager"`); both `extension_ui` and `plugin_ui` events
 are accepted (new hubs send both; badges are set values, so receiving twice is harmless); channel `settings_url` accepts `settings/extensions/<id>` and `settings/plugins/<id>`.
 Views, components, actions, responses, placements and context all use schema-generated types (`apple/Shared/Generated/ExtensionWire.swift`, #1860); the app only adds decoding helpers alongside them
-(`ExtensionUIModel.swift`: `ExtensionUIPlace.owner` accepts both key forms, `ExtensionUIContext.here(…)` includes time zone, language, platform and `ui_version: 3`).
+(`ExtensionUIModel.swift`: `ExtensionUIPlace.owner` accepts both key forms, `ExtensionUIContext.here(…)` includes time zone, language, platform and `ui_version: 3`, the Shared version widgets and the watch send; every page or card the app draws sends 6, #827).
 
 - List: each extension's name and status (**On** / **Starting** / **Needs Setup** / **Off** / **Not available on this hub** / **Something Went Wrong**; both `running` and `stopped` are **On**), opening details on tap; footer explains installation via the hub's admin UI (`/admin`) or on the hub machine (`personad extension`).
 - Details: status, version, source, description, small running-state text ("Running" / "Not running; starts when needed"), "Missing: …" and errors; **Enabled** switch; **Settings** form drawn from `form.fields` (text, numbers, toggles, choices, text lists / multiselect,
@@ -2926,7 +2932,7 @@ Views, components, actions, responses, placements and context all use schema-gen
   then an **Extensions** section with one row per `nav_page` (`icon` maps to `Theme.Icon.plugin…`, unknown icons use the extension icon; numeric badges use `CountBadge`, text `Chip`),
   summing badges on the Settings tab and the new shell drawer's Settings button (a dot for text-only badges). Mac: `nav_page` in the left section column before Settings (`MacShellState.pluginPage`),
   cards above the **Settings › Extensions** list. Machine details add each `machine_section` after the machine's own sections (`ExtensionMachineModel`, using the machine's hub group),
-  hiding the section on hub 404. Every draw/action includes `context` (`ExtensionUIContext.here`: `tz`, `locale`, `platform`, `ui_version: 3`, `size`, `launcher` / `machine` / `item`).
+  hiding the section on hub 404. Every draw/action includes `context` (`ExtensionUIContext.here`: `tz`, `locale`, `platform`, `ui_version` (6 for the app's pages and cards, #827), `size`, `launcher` / `machine` / `item`).
   New items: `chart` uses Swift Charts (`DataChart`: side-by-side / stacked bars, lines, data colors when series lack `tone`; press or hover a column to show each series' `display`,
   no axes in compact, only endpoint labels, thinning labels when numerous); `stat_grid` (`ViewThatFits`: all in one row if possible, otherwise 3 or 2 per row); `segmented`
   (`SegmentedChoice`, immediately sends `values: {name: value}` on selection); unknown items skipped, unknown `tone` treated as `neutral`. `refresh_after` counts only with the page and
@@ -2975,7 +2981,14 @@ Views, components, actions, responses, placements and context all use schema-gen
   rather than showing a date nobody chose, and a set one has a clear button. `multichoice`: a menu of toggles that stays open while picking, the chosen ones named beside the label, sent as a
   JSON array in the choices' order (anything else reads as none chosen). `multiline`: a field that grows from 3 to 8 lines. A field's `detail` is a line of help under it. Unit tests
   `ExtensionFieldValuesTests`; screenshots of `showcase › inputs-v6`.
-- UI version 5's code review (#827, "UI version 5: code review"), drawn in parts (pages send 4 until all of version 6 is drawn too, so the hub strips these fields for iOS meanwhile).
+- UI version 6's pictures (#827, `ExtensionMedia.swift`): an `image` in its shape (`aspect`; `auto` from `width` / `height`), cropped or fitted (`fit`), its caption under it, VoiceOver
+  reading its `alt`; a tap opens the app's `ImageViewer` unless `no_zoom`. A tile's picture, a row's thumbnail and avatar likewise. A `url` loads without the app's credentials; a `path`
+  only when it is the hub's image route for the page's own extension (`ExtensionViewModel.isHubPicture`), through the page with the device's credentials and `w` about as many pixels as it
+  is drawn; when a hub picture fails (its token may have run out) the page is drawn again, at most once a minute. Not loaded: the plain fill; failed: the alt text over a broken-picture mark.
+  Mock: `showcase` pages get a `path` beside every `ref` and the route answers a made-up picture of its shape (`missing`: 404). Unit tests `ExtensionMediaTests`; screenshots of `showcase › image`.
+  A section whose every component this app leaves out (one it doesn't know) is not drawn, rather than its title alone over
+  nothing; a section sent with no components keeps its title (`ExtensionParts.of`).
+- UI version 5's code review (#827, "UI version 5: code review").
   Reading (`ExtensionCodeReview.swift`, the code page): the words that changed in a removed and added pair on a stronger fill (PersonaKit's `LineDiff` word comparison, worked out once per hunk);
   generated files and lockfiles (by the extension's `generated` or the web's path list), changes over 400 lines and viewed files start folded with a line saying why and **Show**; a generated
   file without hunks is not loaded by itself. Each diff's header has a **Viewed** tick box (`.toggleStyle(.tickBox)`): checked, the file folds; unchecked, it stays as it is. With `mark_viewed`
@@ -2990,7 +3003,9 @@ Views, components, actions, responses, placements and context all use schema-gen
   **Suggest Change** (`suggestions`, new side) starts a ```suggestion block from the lines as they are. A comment's suggestion is drawn as a small diff of the lines it is on; **Resolve** /
   **Reopen** send `resolve`; a resolved thread is folded to its first comment. Unit tests `ExtensionCodeReviewTests`, UI test `ExtensionCodeReviewUITests` (`showcase › snapshots › code-review-v5`; the mock answers
   `context` with made-up lines of a 90-line file).
-- UI version 6 (#827, "UI version 6"), drawn in parts; pages keep sending 4 and cards 3 until all of it is drawn, so the hub still downgrades it for iOS meanwhile.
+- UI version 6 (#827, "UI version 6"): pages, the native stream and the app's cards and sections send 6 (`pageVersion`, `ExtensionPageStream.uiVersion`, `cardVersion`), so the hub sends
+  version 6 as it is; a card or a section draws version 4–5's code components read-only (`ExtensionCodeSummary`: a header, a path, up to 12 files with what changed, 20 lines of code,
+  5 comments of a thread, a composer with only the buttons the card can use: none in the assistant's read-only cards, so none is drawn there); widgets, the watch and the system extensions keep 3.
   Row controls (`ExtensionControls.swift`, `ExtensionControlRow`): a switch or a stepper at the row's end, a slider on a line under it, all system controls labeled by the row's title and read out with
   their value as written (`display` for the value the extension drew, else the number in the user's locale and the unit); a row with its own action does it from its words, the control beside them.
   A switch sends at once, a slider when the finger lifts (moved without a drag, by VoiceOver or a keyboard, 0.6 s after the last move), a stepper 0.6 s after the last tap. `action.confirm` asks
@@ -3639,8 +3654,9 @@ The form's upstream has no `tools` switch, so it is auto: it declares the functi
   - **Prefer deletion on failure**: delete whether or not key-presence can be read (idempotent); unreadable presence still returns `secrets_cleared`. If deletion fails, save nothing, return 500 `secret_not_cleared`;
     if config save fails after deletion (database write failure, 409), the error also includes `secrets_cleared` and the old address remains. Invalid form config (400) changes nothing and keeps the key.
 - **Model fallback**: if the selected model's upstream disappears (address cleared, manager.json changed), no error/disconnect: use default model and voice, then send nonfatal `error{code: "model_unavailable"}` after connecting.
-- **`GET /info`**: `{"protocol": 2, "features": ["target", "runs", "asks", "resume", "suspend", "speak"], "setup"?: "…", "warnings"?: ["…"]}`, without keys or upstream list. `protocol` is the highest voice-frame version this extension speaks (2 since #3502; clients not sending `protocol: 2` in `start` still use protocol 1 from this section); `features` lists only implemented capabilities (`docs/assistant/voice.md` ("Version negotiation")).
+- **`GET /info`**: `{"protocol": 2, "features": ["target", "runs", "asks", "resume", "suspend", "speak", "meeting"], "setup"?: "…", "warnings"?: ["…"]}`, without keys or upstream list. `protocol` is the highest voice-frame version this extension speaks (2 since #3502; clients not sending `protocol: 2` in `start` still use protocol 1 from this section); `features` lists only implemented capabilities (`docs/assistant/voice.md` ("Version negotiation")).
 - **`POST /speak`** (#5004, feature `speak`): `{"text", "model"?, "voice"?, "lang"?}` read aloud in its own upstream session (no tools, instructions to say the text exactly as written); answers `200` `audio/pcm` with `X-Persona-Audio-Rate` and the reply's PCM16 as it comes, or, before any audio, `{"error", "code"}` with `400 bad_request`, `403 forbidden` (not a full device), `503 no_upstream`, `502 upstream_forbidden`, `503 upstream_unavailable`, `502 upstream_failed` or `504 no_audio`. The iPhone says meeting answers with it outside a call; details in `docs/assistant/voice.md` ("Reading a text aloud").
+- **Meeting calls** (#3862 phase 4, feature `meeting`): a protocol 2 `start` with `mode: "meeting"` and `recording_id`, bound to a recorded meeting's room, that hears only what the owner says while holding Talk (`talk` frames) and hands every question to the room; a room takes no other call (`meeting_room`). Details in `docs/assistant/voice.md` ("Meeting calls").
 - **Meeting transcription** (#3862 phase 5): the manifest also contributes `transcription: [{"id": "gpt-live", "name": "GPT-Live"}]` beside its voice (its kind stays `voice`), with the same upstreams and key.
   It transcribes only through a GPT-Live (`live` dialect) upstream: the default model's when its upstream is one, else the first `live` upstream's default; with none,
   `GET /transcription/gpt-live/info` says `setup: "live_upstream"`. See "Transcription" above and [meeting-minutes.md](../assistant/meeting-minutes.md) "The built-in adapter".

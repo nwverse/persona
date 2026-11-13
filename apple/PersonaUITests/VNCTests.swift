@@ -36,8 +36,8 @@ final class VNCTests: XCTestCase {
         XCTAssertTrue(password.waitForExistence(timeout: 30), "the sign-in:\n\(app.debugDescription)")
         shot(app, "vnc-signin")
         password.tap()
-        // Return connects, as from a keyboard: on an iPad with a hardware keyboard typing hides the on-screen one, and
-        // the form slides down under a tap aimed at Connect.
+        // Return connects, as from a keyboard: at the largest text sizes Connect sits under the keyboard, and on an iPad
+        // with a hardware keyboard typing hides the on-screen one and the form slides down under a tap aimed at it.
         password.typeText("mock-pass\n")
         XCTAssertTrue(live(app), "signed in")
         rest()

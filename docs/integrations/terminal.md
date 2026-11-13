@@ -496,6 +496,7 @@ Previously streams (sections 2/11) resolved pane from session id (`paneFor`: `ag
 
 On an address, node validates the pane against the host's latest snapshot (refresh once if missing); otherwise `pane … is not running`, never pointing outside snapshots.
 Web opens panes with Agent sessions by **session id** (sharing the exact hub stream with chat terminal panels, same control/taken rules); only sessionless panes use addresses.
+The iOS app opens a plain terminal by its address too (the Terminals page, Open Terminal Here); such an address has no session row, so the app's gate for streams and keys lets it through on its own (section 30).
 
 ### List panes: `panes.list`
 
@@ -509,6 +510,8 @@ A pane with no Agent carries `foreground`, the program in front as the host name
 
 `POST /api/v1/machines/{mid}/panes {workspace_id, kind?}` → node calls host `CreateSlot` (herdr `tab create --no-focus`, computer view doesn't jump) to open a tab in that space,
 named `shell` (`-2` suffix on collision), at **the space's own directory** (host-reported, otherwise home). Returns `{pane, terminal, tab_id}`, then web opens it. Called when the user clicks + beside a space, or Open Terminal Here in the file page.
+
+**No workspace yet**: a computer whose engine opens tabs (`new_tab`) but has no workspace still gets a terminal. Where the hub has the `pane_new_space` feature, clients show "No terminals open on this computer." with **New Terminal** (and a home-folder entry in the computer's menu), which sends `{kind, cwd: "~", new_space: true}`. The node finds no workspace to put the tab in and calls the host's `CreateSpace` in that folder (the home folder for `~`), the way an Agent start does, and names its first tab `shell`; Open Terminal Here on such a computer takes the same path. A node without the `pane_new_space` capability would answer "no workspace", so the hub answers 409 `node_outdated` ("update this computer") to `new_space` instead. With no host that opens tabs, or a hub without `pane_new_space`, clients say terminals appear when an Agent starts there.
 
 **Open Terminal Here** (#5832; hub feature and node capability `pane_cwd`): the request may carry `cwd`, a folder (`~/…` or absolute). The node checks it with the read guard (a key folder or iCloud Drive is refused) and that it is a folder, and gives it to the host as the new tab's starting directory; with `cwd` and no `workspace_id` the tab opens in the first workspace of a host that opens tabs. The folder is never typed into the shell, so a request still cannot run a command (the rule below). The hub answers 409 `node_outdated` for `cwd` to a node without the capability rather than open the terminal elsewhere. The earlier rule that a request could not name a directory is relaxed for this: a full device can `cd` anywhere in the shell it opens, so starting there gives nothing more.
 
@@ -659,6 +662,11 @@ These suggestions apply only to creation and do not establish ownership for clos
   - **Conflicts Orca does not fail on are stopped by the node**: for a branch checked out in another worktree, or a folder that exists (an empty one too), Orca 1.4 does not fail but quietly makes `<branch>-2` in `<name>-2` (measured on Orca 1.4.250 on 2026-11-05; `branchIntent` does not prevent it).
     So the node reads `git worktree list --porcelain` first (and creates nothing when it cannot), answers "branch … is already checked out at …" for a branch in use, and refuses an existing checkout path (an empty directory git could use, Orca cannot); Orca is not called in either case.
     An answer on another branch all the same (checked out elsewhere meanwhile, or Orca's own folder setting taken) is an error naming what Orca made and where (nothing is deleted), not a success.
+- **Delegate to Paseo** (#6295, `node/runtimeworkspaces.go`): on a Paseo Git workspace (web only), the bridge has Paseo make the worktree as a workspace of
+  its own (runtime `workspace.create`, Paseo's `workspace.create.request`), after the node's guards below. The folder is Paseo's: prepare's `path` is
+  Paseo's worktrees folder for the repository and the checkout path must be in it (only its last element can be chosen, taken as Paseo names a folder:
+  `[a-z0-9]` runs joined by single hyphens, at most 50 characters; one whose folder exists at all, an empty one too, is refused, since Paseo would make
+  `<name>-1` instead). No terminal opens; the dialog's next step is Start Agent in the new workspace. Details in `docs/integrations/paseo.md` ("Spaces and workspaces").
 - **Old herdr without `worktree`, and Herdr App**: node falls back to `git worktree add` (existing local branch unchanged, otherwise `-b` from repository HEAD, no `--force`), then the host opens an ordinary workspace in the checkout (no native worktree grouping).
   If checkout succeeds but workspace creation fails, keep checkout and explain in error. Other hosts (Tern, botmux) don't support it; menu hidden.
 - **Capability**: each host in `GET /machines/{mid}/panes` adds boolean `worktree` alongside `new_tab`; older nodes without it hide menu.
@@ -684,6 +692,10 @@ its branch by default. The optional merged-branch cleanup uses Git's safe branch
 the workspace, pane membership, available native socket identity and, for deletion, the checkout and reviewed file contents.
 An uncertain response is reconciled through the live catalog and filesystem. Reconciliation preserves one-use dispatch. A herdr parent with linked workspaces requires closing those child workspaces first.
 
+Paseo's rows (#6297) offer **Rename**, which sets the workspace's title in Paseo, and **Delete worktree** on a worktree Paseo made: the same
+preview and confirmation, also bound to the Agents in the workspace, then Paseo archives the workspace, removing the folder and keeping the
+branch (`docs/integrations/paseo.md` ("Spaces and workspaces")). Paseo has no Close: archiving while keeping the folder stays in its own app.
+
 ### A new agent in a worktree (#6115)
 
 A new agent can start in a Git worktree of its own, so agents on the same repository don't step on each other (after Claude Desktop, which gives each session a worktree under the repository and asks to keep or discard it on archive).
@@ -698,6 +710,14 @@ A new agent can start in a Git worktree of its own, so agents on the same reposi
   - **Refused:** a folder that is not one of Persona's worktrees (the worktree's own folder, not one inside it), and one a live agent still runs in.
   - **Refused unless `force`:** uncommitted changes (`worktree_dirty`, with the count), and deleting a branch with unmerged commits (`worktree_unmerged`). The client asks the user before sending `force`.
   - **The branch** goes only with `delete_branch` (`git branch -d`, or `-D` with `force`).
+- **The engine that makes it**: `worktree/add` and New Agent's `worktree/status` carry the engine the agent opens in (`kind`), Close and Delete the one it
+  ran in (the session's `host`); without one, the computer's default engine. The web, iOS and Android send it where they know it.
+- **Paseo** (#6295): where the engine is Paseo, Paseo makes the worktree (same branch and folder name, as Paseo names folders, in Paseo's worktrees
+  folder; a name whose folder exists, an empty one too, is taken) as a workspace of its own, which the agent's start then uses; `worktree/add` answers its
+  `workspace_id`. `worktree/status` gives Paseo's folder as `checkouts`, and calls a worktree Persona's (`ours`) only when it is the folder of a
+  worktree workspace Paseo made (#6297); `worktree/remove` then archives that workspace through Paseo, which removes the folder, with Delete
+  worktree's guards (below): refused while a session in the workspace still runs (the closed agent has stopped by then; the clients try again for
+  a few seconds) or an agent of another engine runs in the folder, and for uncommitted changes or an unmerged branch unless `force`; the branch goes after the folder only with `delete_branch`.
 - All three are full-device routes like section 23's, and extension tokens never reach them. The body is read field by field, plus the two switches (`flags`, booleans only).
 
 ## 24. Full herdr UI: a PTY client, switchable beside Single pane (#2357)
@@ -1086,3 +1106,24 @@ The herdr server is the one the computer's own herdr window uses too. iOS keeps 
 ### Tests
 
 - `cd web && npm test`: `lib/terminal-appearance.test.ts` (default, stored values, notifications), `terminal/colors.test.ts` (`styles.css` scopes every token the terminal reads; a dark terminal on a light page is Match page on a dark page, with a theme color and with an extension theme), `terminal/appearance.test.ts` (both feeds: palette; Full view's 996 answers and 2031 reports on page and setting changes), `terminal/TerminalOptions.test.tsx` (the row), `terminal/FullTerminal.test.tsx` (Full view's gear: only Appearance).
+
+## 30. A subscription nobody answers: the wait is bounded (iOS and web, #6327)
+
+Open Terminal Here on the iPhone sat on **Taking over…** with a spinner for good. The app never sent `terminal_subscribe`: it allowed streams and keys only for a session whose row says it has a terminal (`canTerminal`), and a `pane:` address (section 19) has no row. `AppModel.canUseTerminal` now lets a `pane:` address through for the subscription, the keys, the wheel, clicks and the mouse. `keys()` over HTTP stays session-only, as the node's `session.keys` does. The mock UI tests had missed it because they run without `MOCK_TERMINAL_STREAM`, where the feed polls `GET …/screen` and never subscribes.
+
+The same page could also wait forever on a subscription the hub never answers, for example a takeover whose `terminal.watch` went with a node connection that a deploy closed. Both feeds (`TerminalFeed.swift`, `web/src/views/session/terminal/feed.ts`) now bound that wait:
+
+- **What counts as an answer**: a subscription from a whole frame is answered by its first frame. One that asks to drive needs the hub's `terminal_control` too, together with a frame or the screen it continues. A subscription that continues the frames the page already has, and only watches, is not timed: an idle pane sends nothing.
+- **From 4 seconds** without a first screen, the link status says **No terminal yet · Waiting for the computer…** with Retry, as the web already did (`TerminalLinkStatus` counts from `waitingSince` until a screen came).
+- **At 10 seconds** (`answerLimit`, `ANSWER_LIMIT_MS`) the feed unsubscribes at the hub and fails with a reason: **<computer> is offline** when the hub lists it offline, else **<computer> isn't answering**. The spinner gives way to the reason, and the backoff (1, 2, 4, 8, 15 s) subscribes again from a whole frame. A hub error for an offline computer is shown in those words too, never the hub's raw text, which can name the machine by id.
+- **Retry** while a subscription is still unanswered unsubscribes first. Otherwise the hub would treat it as the same subscription again and start no new watch (`terminalSubscribe`: same device, same size).
+- **The computer comes back online** (the `machines` push): the feed subscribes again, and takes the terminal over, at once rather than at the backoff's turn.
+- **The size chip** (iOS) and the size label (web) say **Taking over…** between tries: the feed still takes the terminal over, and the next try asks again. Before, a failed try set it back to off, and the chip showed Wrap (the web: View only), the controls of a mirror that had given up. Only a session that isn't running, or a node that can't stream (the feed reads the screen instead), goes back to watching. On iOS the chip also goes back to Taking over… while the hub link is down, as the web's does: the hub no longer knows who drives.
+
+Hub: when a computer's connection ends (`connectionEnded` → `terminalsEnded`), a `terminal.watch` still on its way to that connection is cancelled (`termRelay.life`). Before, it held the session's call lock until its 20-second deadline, so the next takeover, on the node's new connection, waited behind it. A node's own `terminal.end` does not cancel anything: watches to a live connection stay one at a time.
+
+### Tests
+
+- Hub: `terminal_reconnect_test.go`. The node's connection closes with the takeover's watch on its way: the app is told at once, and subscribing again takes over on the new connection. The hub hears of the reconnect before the old call fails: the next takeover goes through within 3 seconds, not after 20.
+- iOS: `TerminalTakeoverTests` (a `pane:` terminal takes over and takes keys; the 10-second limit, its reason and the fresh subscription; Retry unsubscribes first; back online subscribes at once). `TerminalTakeoverHangTests` is the UI flow with screenshots, against the mock's `/mock/terminal_node?state=stalled|gone|back`.
+- Web: `terminal/feed.test.ts` (the same three cases).

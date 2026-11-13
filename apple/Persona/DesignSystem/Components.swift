@@ -223,6 +223,10 @@ struct Chip: View {
     var compact = false
 
     var body: some View {
+        chipBody.accessibilityShowsLargeContentViewer()
+    }
+
+    @ViewBuilder private var chipBody: some View {
         if compact {
             Text(text).lineLimit(1)
                 .font(Theme.Font.label)
@@ -388,6 +392,7 @@ struct CountBadge: View {
                 .background(fill, in: .capsule)
                 .fixedSize()
                 .accessibilityLabel(label ?? String(count))
+                .accessibilityShowsLargeContentViewer()
         }
     }
 
@@ -574,8 +579,14 @@ struct CloseAgentSheet: View {
             .padding(.horizontal, Theme.Space.xl)
 
             VStack(alignment: .leading, spacing: Theme.Space.m) {
-                fact(Theme.Icon.end, String(localized: "Stops the current task, quits \(session.agentLabel), and closes its terminal tab (only this pane when split)"))
-                fact(Theme.Icon.retry, String(localized: "The chat history is kept; continue later with \(session.resumeCommand)"))
+                if session.canTerminal {
+                    fact(Theme.Icon.end, String(localized: "Stops the current task, quits \(session.agentLabel), and closes its terminal tab (only this pane when split)"))
+                    fact(Theme.Icon.retry, String(localized: "The chat history is kept; continue later with \(session.resumeCommand)"))
+                } else {
+                    // A session without a terminal (a runtime's, #6294) ends where it runs; whether its history stays is
+                    // its runtime's, so the sheet does not promise it.
+                    fact(Theme.Icon.end, String(localized: "Stops the current task and ends this session"))
+                }
             }
             .padding(Theme.Space.l)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -609,7 +620,9 @@ struct CloseAgentSheet: View {
                             onClosed(session.key)
                             dismiss()
                             // Once it is gone: the node refuses a worktree an agent still works in.
-                            if let worktree { await model.cleanUpWorktree(session.machineRef, worktree, cleanup) }
+                            if let worktree {
+                                await model.cleanUpWorktree(session.machineRef, worktree, cleanup, kind: AgentWorktree.engine(of: session))
+                            }
                         } else {
                             failure = model.toast?.message ?? String(localized: "Couldn't stop. The agent and its tab were kept; try again.")
                             closing = false
@@ -728,7 +741,7 @@ struct DeleteAgentSheet: View {
                         if await model.deleteSession(session.key) {
                             onDeleted(session.key)
                             dismiss()
-                            await model.cleanUpWorktree(session.machineRef, worktree, cleanup)
+                            await model.cleanUpWorktree(session.machineRef, worktree, cleanup, kind: AgentWorktree.engine(of: session))
                         } else {
                             deleting = false
                         }

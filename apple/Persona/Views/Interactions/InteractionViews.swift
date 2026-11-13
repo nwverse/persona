@@ -107,7 +107,7 @@ struct InteractionPreviewCard: View {
                     .foregroundStyle(StatusPalette.needsYou.dot)
                     .scaledFrame(width: Theme.Size.icon) // one column: the titles line up card to card
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                    Text(title).font(Theme.Font.heading).lineLimit(1)
+                    Text(title).font(Theme.Font.heading).lineLimit(2) // a row title may wrap; the buttons below never do
                     if showsPlace {
                         Text(interaction.placeLine(machine: machine))
                             .font(Theme.Font.label)
@@ -292,6 +292,8 @@ struct InteractionPanel: View {
     @Environment(\.cardRoom) private var room
     @Environment(\.cardFits) private var fits
     @Environment(\.cardArea) private var area
+    /// A lone question card that may grow past half the page (`PendingCards.growsAlone`, #6277): the area is its only cap.
+    @Environment(\.cardTakesArea) private var takesArea
     /// The header row's height: with the card's margins, what of `fits` the form may not have.
     @State private var headerHeight: CGFloat = 0
     /// The plan full screen. Its button sits in this header: floating over the plan it covered the last line.
@@ -316,7 +318,21 @@ struct InteractionPanel: View {
     /// The same fit without the keyboard: a long question's actions stay inside the cards' actual area, not below it.
     private var areaCap: CGFloat { cap(for: area) }
 
-    private var formCap: CGFloat { min(room > 0 ? room * 0.55 : .infinity, fitsCap, areaCap) }
+    /// A little over half of what the page has; a lone question growing past half the page (`takesArea`) has only the
+    /// area's cap, or this would stop it short again.
+    private var formCap: CGFloat { min(room > 0 && !takesArea ? room * 0.55 : .infinity, fitsCap, areaCap) }
+
+    /// The forms that keep their answers out of their own one scroll area, which the panel caps (`cardFormCap`): questions
+    /// (#4839), permissions, plans and the default style's terminal dialogs (#6605). A password, a form to fill in, an MCP
+    /// form, a raw terminal and Beautiful UI's terminal dialog scroll whole in the panel, capped to the cards' area too.
+    private var ownsScroll: Bool {
+        switch interaction.kind {
+        case .question, .plan: true
+        case .permission: !interaction.requiresInput
+        case .screen: !AppStyle.current.usesBeautifulUI && interaction.screenDialog != nil
+        case .elicitation: false
+        }
+    }
 
     /// The keyboard leaves the card so little that under its header row the form would show the question and hardly
     /// a choice (a small iPhone, the shell's composer): the row (its title, ⋯ and fold) steps aside while the keyboard
@@ -330,8 +346,8 @@ struct InteractionPanel: View {
         VStack(alignment: .leading, spacing: Theme.Space.m) {
             if !headerAway { header }
             if !collapsed {
-                if interaction.kind == .question {
-                    // Question forms own their options' scroll and keep their actions outside it (#4839).
+                if ownsScroll {
+                    // These forms own their one scroll area and keep their answers outside it (#4839, #6605).
                     form.environment(\.cardFormCap, formCap)
                         .transition(.opacity)
                 } else {
@@ -354,8 +370,8 @@ struct InteractionPanel: View {
                         formPosition = ScrollPosition(edge: .top)
                     }
                     // At most a little over half of what the page has (not the screen: iPhone Duo's displays differ), and
-                    // with the keyboard up no more than lets the whole card fit the cards' area.
-                    .frame(height: room > 0 ? min(formHeight == 0 ? room : formHeight, room * 0.55, fitsCap) : nil)
+                    // no more than lets the whole card fit the cards' area: a card taller than it scrolled there too (#6605).
+                    .frame(height: room > 0 ? min(formHeight == 0 ? room : formHeight, formCap) : nil)
                     .transition(.opacity)
                 }
                 // A standing rule the hub suggests on a question a supervisor passed up (#5802); nothing otherwise.
@@ -473,10 +489,14 @@ struct QuestionForm: View {
     @State private var writing = false
     /// Several questions (#2970): the review shown before the answers go.
     @State private var reviewing = false
+    @State private var failureHeight: CGFloat = 0
     @FocusState private var otherFocused: Bool
 
     private var questions: [Question] { interaction.questions ?? [] }
     private var stepped: Bool { QuestionSteps.enabled(questions) }
+    /// Its answer is on the way (#6279): this form sent it a moment ago, or the model says so (the card was drawn again).
+    private var isSending: Bool { sending || model.answerProgress(interaction.uid) == .sending }
+    private var failure: String? { model.answerFailure(interaction.uid) }
 
     var body: some View {
         if AppStyle.current.usesBeautifulUI { BUIQuestionForm(interaction: interaction) } else { plainLayout }
@@ -490,8 +510,12 @@ struct QuestionForm: View {
             }
             .scrollBounceBehavior(.basedOnSize)
             .frame(height: contentCap)
+            if let failure, !isSending {
+                AnswerFailureRow(message: failure) { retry() }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { failureHeight = $0 }
+            }
             if showsReviewFooter {
-                ScreenReviewFooter(rows: QuestionSteps.rows(questions, answers: shownAnswers), sending: sending ? "submit" : nil,
+                ScreenReviewFooter(rows: QuestionSteps.rows(questions, answers: shownAnswers), sending: isSending ? "submit" : nil,
                                    back: { withAnimation(Theme.Motion.standard) { reviewing = false } }, submit: { send() }, answer: nil)
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0 }
             } else if showsFooter {
@@ -506,7 +530,7 @@ struct QuestionForm: View {
 
     private var contentCap: CGFloat? {
         guard formCap > 0, formCap.isFinite else { return nil }
-        let fixed = showsFooter || showsReviewFooter ? footerHeight + Theme.Space.m : 0
+        let fixed = (showsFooter || showsReviewFooter ? footerHeight + Theme.Space.m : 0) + (failure != nil ? failureHeight + Theme.Space.m : 0)
         let available = max(formCap - fixed, Theme.Size.tapTarget)
         return min(contentHeight == 0 ? available : contentHeight, available)
     }
@@ -518,7 +542,7 @@ struct QuestionForm: View {
                 ScreenSteps(steps: QuestionSteps.steps(questions) { answer(questions[$0]) != nil }, current: reviewing ? nil : page)
             }
             if stepped, reviewing {
-                ScreenReview(rows: QuestionSteps.rows(questions, answers: shownAnswers), sending: sending ? "submit" : nil,
+                ScreenReview(rows: QuestionSteps.rows(questions, answers: shownAnswers), sending: isSending ? "submit" : nil,
                              back: { withAnimation(Theme.Motion.standard) { reviewing = false } },
                              submit: { send() }, showsFooter: false)
             } else if questions.indices.contains(page) {
@@ -587,6 +611,8 @@ struct QuestionForm: View {
                     }
                 }
                 Spacer(minLength: 0)
+                // The picked row says it is on its way (one question, one choice: the tap was the answer).
+                if isSending, selected, !needsFooter { SendingMark() }
             }
             .multilineTextAlignment(.leading)
             .padding(.horizontal, Theme.Space.l)
@@ -595,7 +621,7 @@ struct QuestionForm: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .disabled(sending)
+        .disabled(isSending)
         .accessibilityLabel(label + (recommended ? String(localized: ", recommended", comment: "Accessibility suffix: the recommended option") : "")
                             + (assistantPick ? String(localized: ", the assistant's pick", comment: "Accessibility suffix: the option the assistant recommends") : "")
                             + (selected ? String(localized: ", selected", comment: "Accessibility suffix: a selected option") : ""))
@@ -625,11 +651,15 @@ struct QuestionForm: View {
                         if !v.trimmingCharacters(in: .whitespaces).isEmpty, !q.multiSelect { picks[q.question] = [] }
                     }
                 if !needsFooter, !text.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Button { submit() } label: {
-                        ThemedIcon(Theme.Icon.submit).font(Theme.Font.title).foregroundStyle(Theme.accent)
+                    if isSending {
+                        SendingMark()
+                    } else {
+                        Button { submit() } label: {
+                            ThemedIcon(Theme.Icon.submit).font(Theme.Font.title).foregroundStyle(Theme.accent)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Send answer")
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Send answer")
                 }
             } else {
                 Text("Other answer…").foregroundStyle(.secondary)
@@ -659,13 +689,13 @@ struct QuestionForm: View {
             Spacer(minLength: 0)
             Button { advance() } label: {
                 HStack(spacing: Theme.Space.sm) {
-                    if sending { ProgressView().controlSize(.small).tint(.white) }
-                    Text(isLast ? String(localized: "Submit") : String(localized: "Next [Interaction Views f82c68]")).lineLimit(1)
+                    if isSending { ProgressView().controlSize(.small).tint(.white) }
+                    Text(isSending ? String(localized: "Sending…") : isLast ? String(localized: "Submit") : String(localized: "Next [Interaction Views f82c68]")).lineLimit(1)
                 }
                 .padding(.horizontal, Theme.Space.s)
             }
             .themedButton(prominent: true)
-            .disabled(!canAdvance || sending)
+            .disabled(!canAdvance || isSending)
         }
         .controlSize(.regular)
     }
@@ -734,6 +764,7 @@ struct QuestionForm: View {
     }
 
     private func send() {
+        guard !isSending else { return } // a second tap sends nothing
         sending = true
         otherFocused = false
         var answers: [String: String] = [:]
@@ -742,6 +773,47 @@ struct QuestionForm: View {
             await model.resolve(interaction, Resolution(answers: answers))
             sending = false
         }
+    }
+
+    /// The same answer again, with the op id it had (the picks and text are still here).
+    private func retry() {
+        guard !isSending else { return }
+        sending = true
+        Task {
+            await model.retryAnswer(interaction)
+            sending = false
+        }
+    }
+}
+
+/// "Sending…" on the row (or the button) whose answer is on its way (#6279).
+struct SendingMark: View {
+    var body: some View {
+        HStack(spacing: Theme.Space.sm) {
+            ProgressView().controlSize(.small)
+            Text("Sending…").font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// A question whose answer failed: the error and Retry, under the card's options, which keep what was picked (#6279).
+struct AnswerFailureRow: View {
+    var message: String
+    var retry: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: Theme.Space.m) {
+            ThemedIcon(Theme.Icon.errorFilled).font(Theme.Font.labelStrong).foregroundStyle(Theme.danger)
+            Text("Couldn't send: \(message)")
+                .font(Theme.Font.caption).foregroundStyle(Theme.danger)
+                .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            Button { retry() } label: { Text("Retry").lineLimit(1) }
+                .themedButton(prominent: true)
+                .controlSize(.regular)
+        }
+        .accessibilityElement(children: .contain)
     }
 }
 
@@ -756,56 +828,63 @@ struct PlanForm: View {
         if AppStyle.current.usesBeautifulUI { BUIPlanForm(interaction: interaction, showFull: $showFull) } else { plain }
     }
 
+    /// The plan's first lines (Show Full Text opens it whole, #6605) over the answers, which stay in view.
     @ViewBuilder private var plain: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.m) {
-            ScrollView {
-                Markdown(MarkdownMemo.content(interaction.plan ?? ""))
-                    .markdownTheme(.persona)
-                    .markdownTextStyle { ForegroundColor(Theme.primaryText) }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .scaledFrame(maxHeight: Theme.Size.box200)
-            .scrollBounceBehavior(.basedOnSize)
-            if rejecting {
-                // The card's own agent: a runtime's plan (DSH…) names it, as AgentPermissionForm does; nil is Claude Code.
-                TextField(String(localized: "Tell \(interaction.agentName ?? "Claude") what to change…"), text: $feedback, axis: .vertical)
-                    .lineLimit(2...6)
-                    .padding(Theme.Space.m)
-                    .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
-                HStack {
-                    Button("Cancel") { withAnimation { rejecting = false } }.themedButton()
-                    Button {
-                        Task { await model.resolve(interaction, Resolution(approve: false, feedback: feedback)) }
-                    } label: { Text("Send Back [Notification Actions cd3150]").lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity) }
-                        .themedButton(prominent: true)
-                }
-            } else {
-                Button {
-                    Task { await model.resolve(interaction, Resolution(approve: true, mode: "bypassPermissions")) }
-                } label: {
-                    Label("Approve & Auto-Run", systemImage: Theme.Icon.run).lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity)
-                }
-                .themedButton(prominent: true)
-                .controlSize(.large)
-                HStack {
-                    Button {
-                        Task { await model.resolve(interaction, Resolution(approve: true, mode: "acceptEdits")) }
-                    } label: { Text("Auto-Accept Edits").lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity) }
-                    Button { withAnimation { rejecting = true } } label: { Text("Send Back [Notification Actions a20f13]").lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity) }
-                }
-                .themedButton()
-            }
+        CardForm {
+            CardPlan(plan: interaction.plan ?? "") { showFull = true }
+        } answers: {
+            answers
         }
-        .sheet(isPresented: $showFull) {
-            NavigationStack {
-                ScrollView {
-                    Markdown(MarkdownMemo.content(interaction.plan ?? "")).markdownTheme(.persona)
-                        .markdownTextStyle { ForegroundColor(Theme.primaryText) }.padding()
-                }
-                .navigationTitle(PlanText.title(interaction.plan ?? ""))
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done [Extension System Presentation c0b3fb]") { showFull = false } } }
+        .sheet(isPresented: $showFull) { PlanTextSheet(plan: interaction.plan ?? "") { showFull = false } }
+    }
+
+    @ViewBuilder private var answers: some View {
+        if rejecting {
+            // The card's own agent: a runtime's plan (DSH…) names it, as AgentPermissionForm does; nil is Claude Code.
+            TextField(String(localized: "Tell \(interaction.agentName ?? "Claude") what to change…"), text: $feedback, axis: .vertical)
+                .lineLimit(2...6)
+                .padding(Theme.Space.m)
+                .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
+            HStack {
+                Button("Cancel") { withAnimation { rejecting = false } }.themedButton()
+                Button {
+                    Task { await model.resolve(interaction, Resolution(approve: false, feedback: feedback)) }
+                } label: { Text("Send Back [Notification Actions cd3150]").lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity) }
+                    .themedButton(prominent: true)
             }
+        } else {
+            Button {
+                Task { await model.resolve(interaction, Resolution(approve: true, mode: "bypassPermissions")) }
+            } label: {
+                Label("Approve & Auto-Run", systemImage: Theme.Icon.run).lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity)
+            }
+            .themedButton(prominent: true)
+            .controlSize(.large)
+            HStack {
+                Button {
+                    Task { await model.resolve(interaction, Resolution(approve: true, mode: "acceptEdits")) }
+                } label: { Text("Auto-Accept Edits").lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity) }
+                Button { withAnimation { rejecting = true } } label: { Text("Send Back [Notification Actions a20f13]").lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity) }
+            }
+            .themedButton()
+        }
+    }
+}
+
+/// A plan whole, from its card's Show Full Text or its header's button: it scrolls here.
+struct PlanTextSheet: View {
+    var plan: String
+    var done: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                Markdown(MarkdownMemo.content(plan)).readingContent().markdownTheme(.persona)
+                    .markdownTextStyle { ForegroundColor(Theme.primaryText) }.padding()
+            }
+            .navigationTitle(PlanText.title(plan))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done [Extension System Presentation c0b3fb]") { done() } } }
         }
     }
 }
@@ -823,49 +902,51 @@ struct PermissionForm: View {
         else if AppStyle.current.usesBeautifulUI { BUIPermissionForm(interaction: interaction) } else { plain }
     }
 
+    /// What it asks in the card's scroll area, a long command folded (#6605); Deny / Allow under it, always in view.
     @ViewBuilder private var plain: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.m) {
+        let tool = interaction.toolDisplayName ?? String(localized: "Tool")
+        CardForm {
             HStack(spacing: Theme.Space.s) {
                 ThemedIcon(ToolPresentation.symbol(interaction.toolName ?? "")).foregroundStyle(Theme.accent)
-                Text(interaction.toolDisplayName ?? String(localized: "Tool")).font(Theme.Font.secondaryStrong)
+                Text(tool).font(Theme.Font.secondaryStrong)
             }
             if let diff = PermissionDiff(interaction) {
                 PermissionDiffView(diff: diff, key: interaction.id)
             } else {
-                Text(interaction.permissionSubject ?? "")
-                    .font(Theme.Font.code)
-                    .padding(Theme.Space.m)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Theme.codeBackground, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
-                    .textSelection(.enabled)
+                CardCode(text: interaction.permissionSubject ?? "", title: tool, id: "permission-command")
             }
-            HStack {
-                Button { Task { await model.resolve(interaction, Resolution(allow: false)) } } label: {
-                    Text("Deny").lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity)
-                }
-                .themedButton()
-                Button { Task { await model.resolve(interaction, Resolution(allow: true)) } } label: {
-                    Text("Allow [Notification Actions ce7ef2]").lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity)
-                }
-                .themedButton(prominent: true)
+        } answers: {
+            answers
+        }
+    }
+
+    @ViewBuilder private var answers: some View {
+        HStack {
+            Button { Task { await model.resolve(interaction, Resolution(allow: false)) } } label: {
+                Text("Deny").lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity)
             }
-            .controlSize(.large)
-            if interaction.offersAlways {
-                Button("Always Allow in Session") {
-                    Task { await model.resolve(interaction, Resolution(allow: true, always: true)) }
-                }
-                #if os(macOS)
-                // A text link as on iOS: the Mac's default style made it a third push button under Deny / Allow.
-                .buttonStyle(.link)
-                #endif
-                // One line on every platform (button labels never wrap): large text or a narrow card shrinks it.
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                .font(Theme.Font.caption)
-                .frame(maxWidth: .infinity)
-                if let scope = interaction.alwaysScopeDetail {
-                    Text(scope).font(Theme.Font.caption).foregroundStyle(.secondary)
-                }
+            .themedButton()
+            Button { Task { await model.resolve(interaction, Resolution(allow: true)) } } label: {
+                Text("Allow [Notification Actions ce7ef2]").lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity)
+            }
+            .themedButton(prominent: true)
+        }
+        .controlSize(.large)
+        if interaction.offersAlways {
+            Button("Always Allow in Session") {
+                Task { await model.resolve(interaction, Resolution(allow: true, always: true)) }
+            }
+            #if os(macOS)
+            // A text link as on iOS: the Mac's default style made it a third push button under Deny / Allow.
+            .buttonStyle(.link)
+            #endif
+            // One line on every platform (button labels never wrap): large text or a narrow card shrinks it.
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .font(Theme.Font.caption)
+            .frame(maxWidth: .infinity)
+            if let scope = interaction.alwaysScopeDetail {
+                Text(scope).font(Theme.Font.caption).foregroundStyle(.secondary)
             }
         }
     }
@@ -887,11 +968,14 @@ struct AgentPermissionForm: View {
         if AppStyle.current.usesBeautifulUI { BUIPermissionForm(interaction: interaction) } else { plain }
     }
 
+    /// The tool, the agent's reason and the command (folded when long, #6605) in the card's scroll area; Deny / Approve,
+    /// Always Approve and Deny and Explain under it, always in view.
     @ViewBuilder private var plain: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.m) {
+        let tool = interaction.toolName ?? String(localized: "Tool")
+        CardForm {
             HStack(spacing: Theme.Space.s) {
                 ThemedIcon(ToolPresentation.symbol(interaction.toolName ?? "")).foregroundStyle(Theme.accent)
-                Text(interaction.toolName ?? String(localized: "Tool")).font(Theme.Font.secondaryStrong)
+                Text(tool).font(Theme.Font.secondaryStrong)
             }
             if let reason = interaction.reason, !reason.isEmpty {
                 Text(reason)
@@ -902,43 +986,43 @@ struct AgentPermissionForm: View {
             if let diff = PermissionDiff(interaction) {
                 PermissionDiffView(diff: diff, key: interaction.id)
             } else {
-                Text(interaction.permissionSubject ?? "")
-                    .font(Theme.Font.code)
-                    .padding(Theme.Space.m)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Theme.codeBackground, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
-                    .textSelection(.enabled)
+                CardCode(text: interaction.permissionSubject ?? "", title: tool, id: "permission-command")
             }
-            HStack {
-                Button { Task { await model.resolve(interaction, Resolution(allow: false)) } } label: {
-                    Text("Deny").lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity)
-                }
-                .themedButton()
-                Button { Task { await model.resolve(interaction, Resolution(allow: true)) } } label: {
-                    Text("Approve [Interaction Views 905819]").lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity)
-                }
-                .themedButton(prominent: true)
-            }
-            .controlSize(.large)
-            if interaction.offersAlways {
-                Button {
-                    Task { await model.resolve(interaction, Resolution(allow: true, always: true)) }
-                } label: {
-                    if let always = interaction.alwaysLabel, !always.isEmpty {
-                        Text("Always Approve · \(always)").lineLimit(1).minimumScaleFactor(0.8)
-                    } else {
-                        Text("Always Approve").lineLimit(1).minimumScaleFactor(0.8)
-                    }
-                }
-                #if os(macOS)
-                .buttonStyle(.link)
-                #endif
-                .font(Theme.Font.caption)
-                .frame(maxWidth: .infinity)
-                .accessibilityIdentifier("codex-always")
-            }
-            reasonRow
+        } answers: {
+            answers
         }
+    }
+
+    @ViewBuilder private var answers: some View {
+        HStack {
+            Button { Task { await model.resolve(interaction, Resolution(allow: false)) } } label: {
+                Text("Deny").lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity)
+            }
+            .themedButton()
+            Button { Task { await model.resolve(interaction, Resolution(allow: true)) } } label: {
+                Text("Approve [Interaction Views 905819]").lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity)
+            }
+            .themedButton(prominent: true)
+        }
+        .controlSize(.large)
+        if interaction.offersAlways {
+            Button {
+                Task { await model.resolve(interaction, Resolution(allow: true, always: true)) }
+            } label: {
+                if let always = interaction.alwaysLabel, !always.isEmpty {
+                    Text("Always Approve · \(always)").lineLimit(1).minimumScaleFactor(0.8)
+                } else {
+                    Text("Always Approve").lineLimit(1).minimumScaleFactor(0.8)
+                }
+            }
+            #if os(macOS)
+            .buttonStyle(.link)
+            #endif
+            .font(Theme.Font.caption)
+            .frame(maxWidth: .infinity)
+            .accessibilityIdentifier("codex-always")
+        }
+        reasonRow
     }
 
     /// "Deny and Explain…": a quiet row that turns into a field with its own send arrow.
@@ -1022,14 +1106,24 @@ struct ScreenForm: View {
         let stepping = ScreenStepsLogic.enabled && d.steps.count > 1
         let step = stepping ? model.screenStep(interaction, d) : nil
         let moving = stepping && model.isMoving(interaction)
-        return VStack(alignment: .leading, spacing: Theme.Space.m) {
+        let reviewing = stepping && (d.review || holding != nil)
+        // What it asks in the card's one scroll area, the answers under it in view (#6605). Short choices (Yes / No, a few
+        // without descriptions) are the answers; longer ones scroll with the question, as a question card's do (#4839).
+        let pinned = !reviewing && Self.pinsChoices(d)
+        return CardForm {
             if !d.steps.isEmpty {
                 ScreenSteps(steps: d.steps, current: step)
             }
-            if stepping, d.review || holding != nil {
+            if reviewing {
                 review(d, moving: moving)
             } else {
-                question(d, stepping: stepping, step: step, moving: moving)
+                question(d)
+                if !pinned { choices(d, step: step) }
+            }
+        } answers: {
+            if !reviewing {
+                if pinned { choices(d, step: step) }
+                footer(d, stepping: stepping, step: step, moving: moving)
             }
             // A row; at the largest text sizes, where it has no room, one under another, each still on one line.
             ViewThatFits(in: .horizontal) {
@@ -1047,6 +1141,14 @@ struct ScreenForm: View {
             .buttonStyle(.plain)
             .foregroundStyle(Theme.accent)
         }
+    }
+
+    /// The choices go under the scroll area, always in view: a command's Allow / Deny, or up to four single choices with
+    /// no descriptions (Yes / No and the like). A question's longer options scroll with it.
+    nonisolated static func pinsChoices(_ d: ScreenParser.Dialog) -> Bool {
+        if d.allowDeny != nil { return true }
+        let choices = d.options.filter { $0.kind != .chat }
+        return !d.multi && choices.count <= 4 && choices.allSatisfy { $0.detail == nil }
     }
 
     /// Answering some other way: in the chat, or (on the review) Cancel.
@@ -1074,26 +1176,22 @@ struct ScreenForm: View {
         .accessibilityIdentifier("screen-card-terminal")
     }
 
-    /// The question: its options, then Next (a multi-select one's Submit) and Previous. A command's permission prompt
-    /// (#5266) says what is asked in plain words and answers its Yes / No with Allow / Deny.
-    @ViewBuilder private func question(_ d: ScreenParser.Dialog, stepping: Bool, step: Int?, moving: Bool) -> some View {
+    /// The question. A command's permission prompt (#5266) says what is asked in plain words; a terminal's words under
+    /// the question fold past a few lines (#6605).
+    @ViewBuilder private func question(_ d: ScreenParser.Dialog) -> some View {
             if let eyebrow = Self.eyebrow(d) {
                 Text(eyebrow).font(Theme.Font.labelStrong).foregroundStyle(.secondary)
             }
             if let ask = d.commandAsk {
                 Text(CommandAsk.title(agent: agentLabel)).font(Theme.Font.heading).fixedSize(horizontal: false, vertical: true)
-                ScreenCommandAskBody(ask: ask)
+                ScreenCommandAskBody(ask: ask, agent: agentLabel)
             } else {
                 if !d.question.isEmpty {
                     Text(d.question).font(Theme.Font.heading).fixedSize(horizontal: false, vertical: true)
                 }
                 if let detail = d.detail {
-                    Text(detail)
-                        .font(Theme.Font.code)
-                        .foregroundStyle(.secondary)
-                        .padding(Theme.Space.m)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
+                    CardCode(text: detail, title: d.question.isEmpty ? panelTitle : d.question, box: .well, secondary: true,
+                             id: "screen-detail")
                 }
             }
             if d.review && d.incomplete {
@@ -1101,19 +1199,30 @@ struct ScreenForm: View {
                     .font(Theme.Font.captionMedium)
                     .foregroundStyle(Theme.caution)
             }
-            if let pair = d.allowDeny {
-                allowDeny(pair, d)
-            } else {
-                choiceRows(d, step: step)
-            }
-            if moving {
-                ScreenMoving()
-            } else if d.multi {
-                multiFooter(d, stepping: stepping, step: step)
-            } else if stepping {
-                stepFooter(d, step)
-            }
     }
+
+    /// Its options; a command's Yes / No as Allow / Deny.
+    @ViewBuilder private func choices(_ d: ScreenParser.Dialog, step: Int?) -> some View {
+        if let pair = d.allowDeny {
+            allowDeny(pair, d)
+        } else {
+            choiceRows(d, step: step)
+        }
+    }
+
+    /// Next (a multi-select one's Submit) and Previous, or the step moving.
+    @ViewBuilder private func footer(_ d: ScreenParser.Dialog, stepping: Bool, step: Int?, moving: Bool) -> some View {
+        if moving {
+            ScreenMoving()
+        } else if d.multi {
+            multiFooter(d, stepping: stepping, step: step)
+        } else if stepping {
+            stepFooter(d, step)
+        }
+    }
+
+    /// The card's title, as its header has it: what the sheet of a terminal's words is called when it asks no question.
+    private var panelTitle: String { String(localized: "\(agentLabel) Has a Question") }
 
     /// The agent's label for the heading: the session's, Claude when it is not known here.
     private var agentLabel: String { model.session(interaction.sessionKey)?.agentLabel ?? "Claude" }
@@ -1652,10 +1761,14 @@ struct BUIQuestionForm: View {
     @State private var round = 0
     @State private var sending = false
     @State private var notesHeight: CGFloat = 0
+    @State private var failureHeight: CGFloat = 0
     @State private var reviewHeight: CGFloat = 0
     @State private var reviewFooterHeight: CGFloat = 0
 
     private var questions: [Question] { interaction.questions ?? [] }
+    /// Its answer is on the way (#6279): sent from this form, or the model says so.
+    private var isSending: Bool { sending || model.answerProgress(interaction.uid) == .sending }
+    private var failure: String? { model.answerFailure(interaction.uid) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.m) {
@@ -1664,12 +1777,24 @@ struct BUIQuestionForm: View {
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { notesHeight = $0 }
             }
             card
+            if let failure, !isSending {
+                AnswerFailureRow(message: failure) {
+                    sending = true
+                    Task { await model.retryAnswer(interaction); sending = false }
+                }
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { failureHeight = $0 }
+            }
+        }
+        // A failed answer: the card is built again from its answers, no longer in its sent state.
+        .onChange(of: failure) { _, now in
+            if now != nil { round += 1 }
         }
     }
 
     private var cardCap: CGFloat? {
         guard formCap > 0, formCap.isFinite else { return nil }
-        let notes = interaction.isDelegating || interaction.delegate != nil ? notesHeight + Theme.Space.m : 0
+        let notes = (interaction.isDelegating || interaction.delegate != nil ? notesHeight + Theme.Space.m : 0)
+            + (failure != nil ? failureHeight + Theme.Space.m : 0)
         return max(formCap - notes, Theme.Size.tapTarget)
     }
 
@@ -1685,7 +1810,7 @@ struct BUIQuestionForm: View {
             // way back to it.
             VStack(alignment: .leading, spacing: Theme.Space.m) {
                 ScrollView {
-                    ScreenReview(rows: QuestionSteps.rows(questions, answers: Self.shown(held, questions)), sending: sending ? "submit" : nil,
+                    ScreenReview(rows: QuestionSteps.rows(questions, answers: Self.shown(held, questions)), sending: isSending ? "submit" : nil,
                                  back: { reopen(at: questions.count - 1) },
                                  submit: { send(held) },
                                  answer: { (row: ScreenReviewRow) in reopen(at: row.index) }, showsFooter: false)
@@ -1693,7 +1818,7 @@ struct BUIQuestionForm: View {
                 }
                 .scrollBounceBehavior(.basedOnSize)
                 .frame(height: reviewCap)
-                ScreenReviewFooter(rows: QuestionSteps.rows(questions, answers: Self.shown(held, questions)), sending: sending ? "submit" : nil,
+                ScreenReviewFooter(rows: QuestionSteps.rows(questions, answers: Self.shown(held, questions)), sending: isSending ? "submit" : nil,
                                    back: { reopen(at: questions.count - 1) }, submit: { send(held) },
                                    answer: { (row: ScreenReviewRow) in reopen(at: row.index) })
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { reviewFooterHeight = $0 }
@@ -1701,14 +1826,16 @@ struct BUIQuestionForm: View {
         } else {
             let picks = Delegated.recommendedLabels(questions, interaction.delegate?.recommend)
             ApprovalCard(questions: zip(questions, picks).map { Self.card($0, picks: $1) }, startAt: startAt, answers: kept, skipLabel: nil,
-                         continueLabel: String(localized: "Next [Interaction Views f82c68]"), sendLabel: String(localized: "Submit"),
-                         customPlaceholder: String(localized: "Other answer…"), sentMessage: String(localized: "Sent"),
-                         options: .panel(maxHeight: cardCap, rejectsDraggedPicks: true)) { answers in
+                         continueLabel: String(localized: "Next [Interaction Views f82c68]"), sendLabel: isSending ? String(localized: "Sending…") : String(localized: "Submit"),
+                         customPlaceholder: String(localized: "Other answer…"),
+                         sentMessage: isSending ? String(localized: "Sending…") : String(localized: "Sent"),
+                         options: .panel(sending: isSending, maxHeight: cardCap, rejectsDraggedPicks: true)) { answers in
                 Haptics.tap()
                 if QuestionSteps.enabled(questions) { // the review first
                     withAnimation(Theme.Motion.standard) { held = answers; kept = answers }
                 } else {
-                    Task { await model.resolve(interaction, Resolution(answers: Self.answers(answers, questions))) }
+                    kept = answers // a failed answer builds the card again with them
+                    send(answers)
                 }
             }
             .id(round)
@@ -1723,6 +1850,7 @@ struct BUIQuestionForm: View {
     }
 
     private func send(_ answers: ApprovalAnswers) {
+        guard !isSending else { return } // a second tap sends nothing
         sending = true
         Task {
             await model.resolve(interaction, Resolution(answers: Self.answers(answers, questions)))
@@ -1782,6 +1910,7 @@ struct BUIQuestionForm: View {
 /// write what to change in the card's field and send.
 struct BUIPlanForm: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.cardFormCap) private var formCap
     var interaction: Interaction
     @Binding var showFull: Bool
 
@@ -1794,31 +1923,18 @@ struct BUIPlanForm: View {
         ApprovalCard(questions: [ApprovalQuestion(String(localized: "Go ahead with this plan?"), choices: Self.choices,
                                                   customPlaceholder: String(localized: "Send back with what to change…"))],
                      skipLabel: nil, sendLabel: String(localized: "Send"), sentMessage: String(localized: "Sent"),
-                     options: .panel()) { answers in
+                     options: .panel(maxHeight: formCap.isFinite && formCap > 0 ? formCap : nil)) { answers in
             Haptics.tap()
             Task { await model.resolve(interaction, Self.resolution(answers)) }
         } context: { _ in
-            ScrollView {
-                Markdown(MarkdownMemo.content(interaction.plan ?? ""))
-                    .markdownTheme(.persona)
-                    .markdownTextStyle { ForegroundColor(Theme.primaryText) }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .scaledFrame(maxHeight: Theme.Size.box200)
-            .scrollBounceBehavior(.basedOnSize)
+            // Its first lines, Show Full Text for the rest (#6605): it scrolled in a box of its own inside the card's scroll.
+            CardPlan(plan: interaction.plan ?? "", lines: Self.planLines) { showFull = true }
         }
-        .sheet(isPresented: $showFull) {
-            NavigationStack {
-                ScrollView {
-                    Markdown(MarkdownMemo.content(interaction.plan ?? "")).markdownTheme(.persona)
-                        .markdownTextStyle { ForegroundColor(Theme.primaryText) }.padding()
-                }
-                .navigationTitle(PlanText.title(interaction.plan ?? ""))
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done [Extension System Presentation c0b3fb]") { showFull = false } } }
-            }
-        }
+        .sheet(isPresented: $showFull) { PlanTextSheet(plan: interaction.plan ?? "") { showFull = false } }
     }
+
+    /// The plan's lines over the card's two choices and its field: fewer than the default style's, whose buttons are smaller.
+    private static let planLines = 6
 
     static func resolution(_ a: ApprovalAnswers) -> Resolution {
         let feedback = (a.custom[0] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1837,6 +1953,7 @@ struct BUIPlanForm: View {
 /// does) / Deny, with Codex's reason over the command.
 struct BUIPermissionForm: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.cardFormCap) private var formCap
     var interaction: Interaction
 
     private var choices: [ApprovalQuestion.Choice] { Self.choices(interaction) }
@@ -1865,7 +1982,8 @@ struct BUIPermissionForm: View {
         ApprovalCard(questions: [ApprovalQuestion(ask, choices: choices,
                                                   customPlaceholder: String(localized: "Deny and explain why…"))],
                      skipLabel: nil, sendLabel: String(localized: "Send"), sentMessage: String(localized: "Sent"),
-                     options: .panel()) { answers in
+                     // Capped, the card scrolls what it asks over Send, which stays in view (#6605).
+                     options: .panel(maxHeight: formCap.isFinite && formCap > 0 ? formCap : nil)) { answers in
             Haptics.tap()
             Task { await model.resolve(interaction, Self.resolution(answers, choices: choices)) }
         } context: { _ in
@@ -1888,17 +2006,19 @@ struct BUIPermissionForm: View {
         if let diff = PermissionDiff(interaction) { PermissionDiffView(diff: diff, key: interaction.id) } else { subject }
     }
 
+    /// The command or path with its tool's icon in a code box; a long one folded to a few lines (`CardCode`, #6605).
     private var subject: some View {
         HStack(alignment: .top, spacing: Theme.Space.s) {
             ThemedIcon(ToolPresentation.symbol(interaction.toolName ?? "")).foregroundStyle(Theme.accent)
-            Text(interaction.permissionSubject ?? "")
-                .font(Theme.Font.code)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            CardCode(text: interaction.permissionSubject ?? "", title: interaction.toolDisplayName ?? String(localized: "Tool"),
+                     lines: Self.commandLines, box: .none, id: "permission-command")
         }
         .padding(Theme.Space.m)
         .background(Theme.codeBackground, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
     }
+
+    /// The command's lines before Show All: a few, over the card's choices and its field (Send stays in view under them).
+    private static let commandLines = 4
 
     static func resolution(_ a: ApprovalAnswers, choices: [ApprovalQuestion.Choice]) -> Resolution {
         let reason = (a.custom[0] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2037,14 +2157,11 @@ struct BUIScreenForm: View {
                         .foregroundStyle(Theme.caution)
                 }
                 if let ask = d.commandAsk {
-                    ScreenCommandAskBody(ask: ask, compact: true)
+                    ScreenCommandAskBody(ask: ask, agent: model.session(interaction.sessionKey)?.agentLabel ?? "Claude", compact: true)
                 } else if let detail = d.detail {
-                    Text(detail)
-                        .font(Theme.Font.code)
-                        .foregroundStyle(.secondary)
-                        .padding(Theme.Space.m)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Theme.codeBackground, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
+                    // A long one folded, as the command is (#6605): Send stays in the panel's view.
+                    CardCode(text: detail, title: d.question.isEmpty ? (d.header ?? "") : d.question,
+                             lines: CommandAsk.compactFoldedLines, secondary: true, id: "screen-detail")
                 }
             }
     }

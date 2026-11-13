@@ -10,9 +10,19 @@ struct AssistantProfileView: View {
     @State private var runs: [APIClient.ScheduleRun]?
     @State private var memoryCount: Int?
     @State private var placeCount: Int?
+    @State private var nextSuggestionsModel = NextSuggestionsModel()
+    /// The rename sheet (the assistant's own name, #6401).
+    @State private var renaming = false
+    @State private var newName = ""
+    @State private var renameError: String?
     #if DEBUG
     @State private var debugPage: String?
     #endif
+
+    /// The assistant's name shown across the app: the current manager's when the hub has a roster, else the look's own.
+    private var displayName: String { model.assistantShownName }
+    /// A hub with a roster lets the assistant be renamed; an older hub is read-only.
+    private var canRename: Bool { model.currentAssistant != nil }
 
     private var machineID: String { model.assistantConfig?.machineID ?? model.hubMachineID }
     private var assistantCwd: String {
@@ -34,6 +44,22 @@ struct AssistantProfileView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
         .refreshable { await load() }
+        .screenProbe("assistant-next-suggestions", NextSuggestionsProbe(loaded: nextSuggestionsModel.loaded))
+        #if os(iOS)
+        // A hub switch need not change assistantSwitches (New Chat can keep it nil), but it still changes this model's scope.
+        .onChange(of: NextSuggestionsScope(hub: model.hub?.group, assistant: model.assistantSwitches)) {
+            Task { await nextSuggestionsModel.restart() }
+        }
+        #endif
+        .alert(String(localized: "Change the assistant's name"), isPresented: $renaming) {
+            TextField(String(localized: "Name your assistant"), text: $newName)
+                .onChange(of: newName) { renameError = nil }
+            Button(String(localized: "Cancel"), role: .cancel) {}
+            Button(String(localized: "Save")) { Task { await saveName() } }
+                .disabled(!ManagersText.validName(newName) || newName.trimmingCharacters(in: .whitespacesAndNewlines) == displayName)
+        } message: {
+            if let renameError { Text(renameError) }
+        }
         #if DEBUG
         .onAppear {
             if debugPage == nil, let p = UserDefaults.standard.string(forKey: "openAssistantPage"),
@@ -116,6 +142,19 @@ struct AssistantProfileView: View {
                     Text(Self.foldFooter)
                 }
             }
+            #if os(iOS)
+            if let suggestions = nextSuggestions {
+                Section {
+                    Toggle(isOn: suggestions) {
+                        Label(Self.nextSuggestionsTitle, systemImage: Theme.Icon.ai).lineLimit(1)
+                    }
+                    .accessibilityIdentifier("assistant-next-suggestions")
+                    .disabled(nextSuggestionsModel.saving)
+                } footer: {
+                    Text(Self.nextSuggestionsFooter)
+                }
+            }
+            #endif
             if let own = ownTasks {
                 Section {
                     Toggle(isOn: own) {
@@ -200,6 +239,17 @@ struct AssistantProfileView: View {
                         }
                     }
                 }
+                #if os(iOS)
+                if let suggestions = nextSuggestions {
+                    BUIListSection(footer: Self.nextSuggestionsFooter) {
+                        BUIListRow(Self.nextSuggestionsTitle) { IconTile(Theme.Icon.ai, tint: Theme.accent) } trailing: {
+                            Toggle(Self.nextSuggestionsTitle, isOn: suggestions).labelsHidden()
+                                .accessibilityIdentifier("assistant-next-suggestions")
+                                .disabled(nextSuggestionsModel.saving)
+                        }
+                    }
+                }
+                #endif
                 if let own = ownTasks {
                     BUIListSection(footer: Self.ownTasksFooter) {
                         BUIListRow(Self.ownTasksTitle) { IconTile(Theme.Icon.supervised, tint: Theme.accent) } trailing: {
@@ -232,7 +282,25 @@ struct AssistantProfileView: View {
         VStack(spacing: Theme.Space.m) {
             PersonaAvatar(size: 88, working: working)
                 .shadow(color: Theme.persona.opacity(0.3), radius: 16, y: 6)
-            Text(model.persona.name).font(Theme.Font.display).fontDesign(.rounded)
+            HStack(spacing: Theme.Space.xs) {
+                Text(displayName).font(Theme.Font.display).fontDesign(.rounded).lineLimit(1).minimumScaleFactor(0.7)
+                if canRename {
+                    Button {
+                        newName = displayName
+                        renameError = nil
+                        renaming = true
+                    } label: {
+                        ThemedIcon(Theme.Icon.edit)
+                            .font(Theme.Font.heading)
+                            .foregroundStyle(.secondary)
+                            .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
+                            .contentShape(.circle)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(String(localized: "Edit name"))
+                    .accessibilityIdentifier("assistant-rename")
+                }
+            }
             Text("Your personal assistant · on \(machineName)")
                 .font(Theme.Font.secondary)
                 .foregroundStyle(.secondary)
@@ -275,14 +343,33 @@ struct AssistantProfileView: View {
     private static let quietTitle = String(localized: "Notify Only in Main Chat")
     private static let quietFooter = String(localized: "Tasks started from the main chat stay out of the Dynamic Island, notifications, and badges. Persona tells you in the main chat when they finish, need your answer, or fail. Only affects tasks started from now on.")
 
-    /// The main conversation folds its background rounds (docs/apple/ios.md "Background rounds"); nil (no switch) from a
-    /// hub without the setting.
+    /// The main conversation and the leader conversations fold their background rounds (docs/apple/ios.md
+    /// "Background rounds", #6595); nil (no switch) from a hub without the setting.
     private var backgroundFolded: Binding<Bool>? {
         guard let on = model.assistantConfig?.mainBackgroundFolded else { return nil }
         return Binding(get: { on }, set: { v in Task { await model.setMainBackgroundFolded(v) } })
     }
     private static let foldTitle = String(localized: "Fold background rounds")
-    private static let foldFooter = String(localized: "Rounds that another conversation, a scheduled task or a follow-up started in the main chat show as one line you can open. Rounds that ask or tell you something stay shown.")
+    private static let foldFooter = String(localized: "Rounds that another conversation, a scheduled task or a follow-up started in the main chat or a leader conversation show as one line you can open. Rounds that ask or tell you something stay shown.")
+
+    /// JSON-object probe payload; the UI-test reader cannot encode a top-level Bool back to JSON.
+    private struct NextSuggestionsProbe: Equatable, Encodable {
+        var loaded: Bool
+    }
+
+    /// The current hub and assistant together: either one can move a still-open profile to another settings scope.
+    private struct NextSuggestionsScope: Equatable {
+        var hub: String?
+        var assistant: Int
+    }
+
+    /// Hub-made next-message suggestions (#4696); nil (no switch) from a hub without the setting.
+    private var nextSuggestions: Binding<Bool>? {
+        guard let on = nextSuggestionsModel.value else { return nil }
+        return Binding(get: { nextSuggestionsModel.value ?? on }, set: { v in Task { await nextSuggestionsModel.set(v) } })
+    }
+    private static let nextSuggestionsTitle = String(localized: "Suggest the Next Message")
+    private static let nextSuggestionsFooter = String(localized: "After a reply in a chat you have open, a small model suggests what you might send next, above the empty message box. Claude Code in a terminal keeps its own suggestions. Uses one extra model call per reply; the model is set under Model configuration › Next-message suggestions.")
 
     /// The main conversation follows up its own tasks instead of the background supervisor (#5083,
     /// docs/assistant/unified-entry.md "Background supervisor"); nil (no switch) from a hub without the setting.
@@ -328,6 +415,9 @@ struct AssistantProfileView: View {
     /// Reloaded each time the page shows (coming back from a sub-page included).
     private func load() async {
         guard let api = model.api else { return }
+        #if os(iOS)
+        async let suggestionsRead = nextSuggestionsModel.load()
+        #endif
         async let r = try? api.scheduledTasks()
         async let h = try? api.scheduleRuns()
         async let m = try? api.assistantMemory()
@@ -339,11 +429,33 @@ struct AssistantProfileView: View {
         runs = await h
         if let files = await m { memoryCount = files.filter { $0.name != AssistantMemoryEntry.index }.count }
         placeCount = (await p)?.count
+        #if os(iOS)
+        await suggestionsRead
+        #endif
     }
 
     /// Saved Places' row detail: how many there are, nothing when none.
     private var placesDetail: String? {
         placeCount.flatMap { $0 > 0 ? String(localized: "\($0) places", comment: "Saved places count") : nil }
+    }
+
+    /// Renames the current assistant (PATCH /managers/{id}); the hub keeps the name and pushes it to every device.
+    private func saveName() async {
+        let name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let manager = model.currentAssistant, let api = model.api,
+              ManagersText.validName(name), name != displayName else {
+            renaming = false
+            return
+        }
+        do {
+            try await api.renameManager(manager.id, to: name)
+            if let group = model.hub?.group { await model.refreshManagerRoster(group) }
+            Haptics.success()
+            model.toast = Toast(String(localized: "Name saved"), style: .success)
+            renaming = false
+        } catch {
+            renameError = error.shown ?? String(localized: "Can't reach the hub")
+        }
     }
 }
 

@@ -36,9 +36,10 @@ import (
 )
 
 type Node struct {
-	Version string
-	updater *nodeupdate.Manager // resident-owned, shared across attach connections
-	reload  *ResidentReload     // admission/draining while the attach transport stays available
+	Version      string
+	skillImports assistantskills.Importer
+	updater      *nodeupdate.Manager // resident-owned, shared across attach connections
+	reload       *ResidentReload     // admission/draining while the attach transport stays available
 
 	// dataDirOnce finds the data folder the path guard refuses the credentials of (pathguard.go dataDirs).
 	dataDirOnce sync.Once
@@ -50,6 +51,8 @@ type Node struct {
 	questions questionCalls
 	// closeoutBriefs: what the manager said to tell each starting session of the closeout's form (closeout_start.go).
 	closeoutBriefs closeoutBriefs
+	// desktopSeen: when someone was found attending a session in Claude's desktop app (claudedesktop_unread.go).
+	desktopSeen desktopSeenStore
 
 	// bootAt: when this node started. A session whose record says it was started in a pane before this ran in the
 	// previous herdr server, so the restart is what ended it (interrupted.go).
@@ -111,11 +114,16 @@ type Node struct {
 
 	mu      sync.Mutex
 	titleMu sync.Mutex // orders the custom-title lines renames write (rename.go retitle)
+	deltaMu sync.Mutex // orders the session.delta sends (emitDelta, flushPartial)
 	state   *stateFile
 	files   map[string]*transcript.File // session id -> parsed transcript
 	paths   map[string]string           // session id -> transcript path
 	pathsAt map[string]time.Time        // when a path was last reported or chosen (transcriptPath looks again after 30 s)
-	watches map[string]*watch
+	// projectGlobs counts globProjects calls, each a read of every projects directory: one per row looked up again
+	// was a few hundred a list on a computer with many parked sessions, past the half minute a found path is trusted for.
+	projectGlobs atomic.Int64
+	listPush     listPush // the list pushes sends ask for, one build at a time (notifySessionsSoon)
+	watches      map[string]*watch
 	// pumping: the shared watch pump runs (session_watch.go watchPump); it stops when watches is empty.
 	pumping bool
 	// waiting: watches of sessions with no transcript yet (watchFor), so session.unwatch finds them (#5389).
@@ -162,6 +170,7 @@ type Node struct {
 	live      liveReplies                // the replies Claude is showing, from its MessageDisplay hook (livereply.go)
 	bgWait    bgWatch                    // whether background commands only wait (bgwait.go)
 	codices   *codexRegistry
+	takeovers codexTakeovers
 	usageWin  usageWindowsState // subscription rate-limit windows (usagewindows.go, #2432)
 	machineID string
 	sends     sentLog         // recent client_msg_ids (sendsafe.go)
@@ -285,6 +294,12 @@ type Node struct {
 	assistantLife typingLocks
 	restores      restoreMarks // "back to the configured model" asked, until newer model evidence (model_restore.go)
 	hookFlights   hookFlights  // hook calls in progress by session: their process waits on them (model_restore.go)
+
+	// screens: live-screen hardware video channel (#3954). Login binding per `pair` and the busy count (screen.go).
+	// screenStart starts the capture/encode helper (Persona Screen.app) for a stream: startScreenHelper on a Mac
+	// (screenhelper.go), nil elsewhere, where screen.dial returns video_unavailable and the screen stays RFB only.
+	screens     *screenLogins
+	screenStart func(ctx context.Context, id, pair string, keepAwake bool, done func()) error
 }
 
 func New(version string) (*Node, error) {
@@ -334,10 +349,14 @@ func New(version string) (*Node, error) {
 		hooks:    &hookTurns{},
 		codices:  newCodexRegistry(),
 		runtimes: newRuntimeRegistry(),
+		screens:  newScreenLogins(),
 	}
 	n.sessionScope = scope
 	if n.uid, err = LoadMachineUID(dir); err != nil {
 		n.logger.Printf("machine uid: %v", err) // the hubs then treat this computer as theirs alone
+	}
+	if runtime.GOOS == "darwin" {
+		n.screenStart = n.startScreenHelper // Persona Screen, the live screen's video helper (#3954)
 	}
 	n.configureCodex(proto.CodexConfig{})
 	n.hosts = host.NewRegistry(nodeHosts(proto.EngineHerdr, false, n.logger.Printf)...) // herdr until engine.use, botmux until the hub says
@@ -616,6 +635,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "clipboard.set":
 		return clipboardSet(ctx, params)
 	}
+	if method == codexTakeoverPrepare || method == codexTakeoverCommit {
+		return n.codexTakeoverCall(ctx, method, params)
+	}
 	var p struct {
 		Path             string        `json:"path"`
 		Paths            []string      `json:"paths"`
@@ -702,6 +724,15 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return nil, fmt.Errorf("bad params: %w", err)
 		}
 	}
+	hasSelectedSkills := false
+	if method == "session.send" && !n.isAssistantSession(p.SessionID) {
+		refs, err := assistantskills.References(p.Text)
+		if err != nil {
+			return nil, skillSelectionError(err)
+		}
+		hasSelectedSkills = len(refs) > 0
+		ctx = withSkillOwner(ctx, p.SkillOwner)
+	}
 	if isCodexWaitID(p.SessionID) && (strings.HasPrefix(method, "session.") || strings.HasPrefix(method, "terminal.")) {
 		// A Codex opened with no first message (codex_waiting.go): the thread it became since the client looked, or
 		// what its row answers while it waits.
@@ -709,6 +740,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			p.SessionID, params = t, withSessionID(params, t)
 		} else if w := n.codexWaitByID(p.SessionID); w != nil {
 			if method == "session.send" {
+				if hasSelectedSkills {
+					return nil, skillSelectionError(assistantskills.ErrReference)
+				}
 				return n.sendFirstCodexCall(ctx, w, params, p.Text, p.Images)
 			}
 			if r, err, handled := n.codexWaitCalls(method, p.SessionID); handled {
@@ -734,6 +768,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	if n.codexBlocked(p.ResumeSessionID) && devicewire.IsSessionStart(method) {
 		return nil, refusal("identity_conflict", "会话 ID 与另一来源重复，不能恢复", nil)
 	}
+	if method == "session.skills" {
+		return n.sessionSkillCatalog(ctx, p.SkillOwner, p.SessionID)
+	}
 	if devicewire.IsSessionStart(method) && n.externalCodex(p.ResumeSessionID) && !n.codexResumable(withStartHost(ctx, p.Host), p.ResumeSessionID) { // codex_resume.go
 		return nil, refusal("codex_read_only", "外部 Codex 会话只能接入原 app-server，不能用启动器恢复", nil)
 	}
@@ -750,13 +787,19 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return ok(err)
 		}
 	}
-	if n.externalCodex(p.SessionID) {
+	// A session a connected runtime lists is the runtime's, also when its thread is in this machine's own Codex inventory
+	// (a Codex CLI process the runtime hosts): its calls go on to the runtime below.
+	if h, _, _ := n.runtimes.belongs(p.SessionID); h == nil && n.externalCodex(p.SessionID) {
 		switch method {
 		case "session.keys", "session.screen", "session.screen.before", "terminal.watch", "session.close", "session.queue.edit", "session.queue.send_now", "session.rename", "assistant.send":
 			return nil, refusal("codex_read_only", "这个会话没有终端或启动器控制能力，请在原 app-server 中操作", nil)
 		case "session.modes":
-			// Its effort, on the app-server running it (codex_effort.go); nothing else.
+			// Its effort, on the app-server running it (codex_effort.go), or in the Codex App window that has it
+			// (codex_desktop_effort.go); nothing else.
 			if _, _, driven := n.codexEffortThread(p.SessionID); !driven {
+				if src, found := n.codexSource(p.SessionID); found && codexDesktopChat(src) {
+					return ok(n.codexDesktopModes(ctx, p.SessionID, src, p.Model, p.PermissionMode, p.Effort))
+				}
 				return nil, refusal("codex_read_only", "这个会话没有终端或启动器控制能力，请在原 app-server 中操作", nil)
 			}
 			if p.Model != "" {
@@ -803,6 +846,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	} else if h, err := n.runtimeFor(ctx, method, p.SessionID); err != nil {
 		return nil, err
 	} else if h != nil {
+		if hasSelectedSkills {
+			return nil, skillSelectionError(assistantskills.ErrReference)
+		}
 		if err := n.switchNowElsewhere(method, p.SessionID, params); err != nil {
 			return nil, err // the runtime would take the message without the switch (launcher_switch.go)
 		}
@@ -810,6 +856,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return res, err
 		}
 	} else if r, ok := n.terminalOnly(p.SessionID); ok { // a pi or opencode without its extension, any other agent (opencode.go)
+		if hasSelectedSkills {
+			return nil, skillSelectionError(assistantskills.ErrReference)
+		}
 		if err := n.switchNowElsewhere(method, p.SessionID, params); err != nil {
 			return nil, err
 		}
@@ -1048,7 +1097,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		n.configured()          // a hub that lists without engine.use keeps herdr (engine.go)
 		n.useBotmux(true, true) // and one that lists without saying botmux keeps it, as before (hostbotmux.go)
 		n.sent.answering(ctx)   // the manager may take this list as its own: the next push goes whatever it is
-		return map[string]any{"sessions": n.sessionList(ctx, true)}, nil
+		list := n.sessionList(ctx, true)
+		// update_busy: node.update.commit would refuse now; the manager waits on it before sending a build (node_update_idle).
+		return map[string]any{"sessions": list, "update_busy": updateWouldCut(AssistantsBusy(), list)}, nil
 	case "session.start.options":
 		return n.workSessionOptions(ctx, p.Name, p.ConfiguredAgent, "", p.Configured, true)
 	case "session.start", devicewire.MethodStartWorkSession:
@@ -1158,7 +1209,15 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			// still there (stopped.go).
 			ctx = n.inKeptTerminal(ctx, p.ResumeSessionID, r.cwd)
 		}
-		s, err := n.start(ctx, r.cwd, r.launcher, p.Prompt, p.ResumeSessionID, p.WorkspaceID, r.mode, r.effort, r.tab, "", p.AgentType, r.execution)
+		// A hub that named the session id gets exactly that session (the async branch above already does): the hub
+		// uses it to reconcile a start whose answer never comes back by exact id. Only Claude starts run under a
+		// caller's id; the other agents pick their own inside n.start, which leaves an empty id to that path. An old
+		// hub sends nothing, so the behavior there is unchanged.
+		newID := ""
+		if validID(p.SessionID) {
+			newID = p.SessionID
+		}
+		s, err := n.start(ctx, r.cwd, r.launcher, p.Prompt, p.ResumeSessionID, p.WorkspaceID, r.mode, r.effort, r.tab, newID, p.AgentType, r.execution)
 		if err == nil && p.ResumeSessionID != "" {
 			n.forkStarted(p.ResumeSessionID)
 		}
@@ -1212,6 +1271,25 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			id, err := send()
 			if err == nil && id != "" {
 				n.expectFirstLine(id, opts.ClientMsgID, p.Text, len(p.Images), at)
+			}
+			return map[string]any{"session_id": id}, err
+		}
+		var once struct {
+			OnceID string `json:"once_id"`
+		}
+		_ = json.Unmarshal(params, &once)
+		if p.NewSessionID == "" && p.SessionID != "" && once.OnceID != "" {
+			// A message its sender may try again under the same once_id (the manager's relays between conversations,
+			// relay_once.go): sent once. The sender waits a bounded time and asks again when no answer came in it; the
+			// first send may have written the line already, and a second one made the conversation read it twice. The
+			// id is no client_msg_id: a line that carries one reads as the owner's own message.
+			var id string
+			err := n.sends.once(once.OnceID, func() (err error) {
+				id, err = send()
+				return err
+			})
+			if err == nil && id == "" {
+				id = p.SessionID // the same message asked again while it went: the conversation it went to
 			}
 			return map[string]any{"session_id": id}, err
 		}
@@ -1470,6 +1548,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			Force        bool   `json:"force"`
 		}
 		_ = json.Unmarshal(params, &a)
+		ctx = worktreeComposerContext(ctx, params) // its refusals in the request's language (the hub sends it)
 		switch method {
 		case "worktree.add":
 			return n.worktreeAdd(ctx, p.Kind, p.Cwd, p.Branch, a.NameHint)
@@ -1587,6 +1666,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "session.unwatch":
 		n.unwatch(p.SessionID)
 		return ok(nil)
+	case "session.seen": // the user saw it in Persona: only a runtime keeping its own unread mark is told (runtimes_calls.go)
+		return ok(nil)
 	case "codex.settings":
 		list, err := n.getCodexSettings()
 		return map[string]any{"settings": list}, err
@@ -1691,6 +1772,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.readFile(p.Path, p.Cwd, p.Offset, p.Stream)
 	case "port.dial":
 		return n.portDial(ctx, params)
+	case "screen.dial": // live-screen video channel (#3954): start the capture helper for a signed-in pair (screen.go)
+		return n.screenDial(ctx, params)
 	case "port.probe":
 		return n.portProbeRPC(ctx, params)
 	case "preview.servers": // a session folder's dev servers, from its .claude/launch.json (preview_launch.go)
@@ -1713,8 +1796,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return nil, err
 		}
 		return map[string]any{"ok": true, "name": name}, nil
-	case "worktree.rename":
-		return ok(n.renameWorktree(ctx, p.Kind, p.WorkspaceID, p.Name))
+	case "worktree.rename": // its refusals in the request's language (the hub sends it)
+		return ok(n.renameWorktree(worktreeComposerContext(ctx, params), p.Kind, p.WorkspaceID, p.Name))
 	case "session.rename":
 		return ok(n.renameSession(ctx, p.SessionID, p.TabName, p.Title))
 	case "todo.sync_session_tokens":
@@ -1753,6 +1836,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return map[string]any{"commits": list}, err
 	case "git.stage", "git.commit", "git.push", "git.branches", "git.switch", "git.stash", "git.pr", "git.pr_create", "git.pr_merge":
 		return n.gitWrite(ctx, method, params) // the Git panel's writes and pull request (gitwrite.go, gitpr.go)
+	case "skills.import":
+		return n.importSkill(ctx, params)
 	case "skills.list": // the skills the assistant gets on this machine (docs/operations/hub-update.md "Skills move out of the binary")
 		var catalog struct {
 			skillCatalogRequest

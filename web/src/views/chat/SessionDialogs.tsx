@@ -3,7 +3,8 @@ import { useEffect, useRef, useState } from "react";
 import { api, enc, errorText, HubTimeoutError, pastHub, sessionPath } from "../../lib/api";
 import { ago, externalLink, resumeCommand, sessionCan, sessionTitle, shortPath, tabLabel } from "../../lib/format";
 import { openLink } from "../../lib/links";
-import { effortTitle, modeTitle, renameBody } from "../../lib/session-actions";
+import { BYPASS_MODE, effortTitle, modeTitle, renameBody } from "../../lib/session-actions";
+import { bypassRestarts } from "../../lib/header-mode";
 import { sessionLauncher } from "../../lib/model-switch";
 import { href, navigate, parse, showsSession } from "../../lib/router";
 import { stripBase } from "../../lib/base";
@@ -197,14 +198,15 @@ export function RenameDialog({ session, open, onClose }: { session: Session; ope
       >
         {hasTab && <Field label={t("chat-sessiondialogs.tab_name")} value={tab} onChange={setTab} autoFocus />}
         <Field label={t("chat-sessiondialogs.session_name")} value={title} onChange={setTitle} autoFocus={!hasTab} />
-        <p className="text-[12px] leading-relaxed text-ink-3">{session.assistant ? t("chat-sessiondialogs.rename_hint_assistant") : t("chat-sessiondialogs.rename_hint_agent")}</p>
+        {/* the agent's hint is about herdr's tab and Claude's /rename: a session without a terminal (a runtime's) has neither */}
+        {(session.assistant || sessionCan(session, "terminal")) && <p className="text-[12px] leading-relaxed text-ink-3">{session.assistant ? t("chat-sessiondialogs.rename_hint_assistant") : t("chat-sessiondialogs.rename_hint_agent")}</p>}
         <button type="submit" hidden />
       </form>
     </Dialog>
   );
 }
 
-// "Rename space": herdr's workspace (and the pins / mutes that name it).
+// "Rename space": herdr's workspace, or Paseo's project (and the pins / mutes that name it). The hint is herdr's.
 export function RenameSpaceDialog({ session, open, onClose }: { session: Session; open: boolean; onClose: () => void }) {
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -252,7 +254,7 @@ export function RenameSpaceDialog({ session, open, onClose }: { session: Session
         }}
       >
         <Field label={t("chat-sessiondialogs.space_name")} value={name} onChange={setName} autoFocus />
-        <p className="text-[12px] leading-relaxed text-ink-3">{t("chat-sessiondialogs.rename_space_hint")}</p>
+        {session.space_kind !== "paseo" && <p className="text-[12px] leading-relaxed text-ink-3">{t("chat-sessiondialogs.rename_space_hint")}</p>}
         <button type="submit" hidden />
       </form>
     </Dialog>
@@ -285,13 +287,17 @@ function modeChangeError(e: unknown) {
  *  a pick applies the model and then the effort, and the second must build on the session the first changed. */
 export async function applyModes(latest: () => Session, patch: { permission_mode?: string; effort?: string; model?: string }): Promise<boolean> {
   const base = latest();
-  const before = { permission_mode: base.permission_mode, effort: base.effort, model: base.model };
-  upsertSession({ ...base, ...patch });
+  const before = { permission_mode: base.permission_mode, effort: base.effort, model: base.model, bypass_pending: base.bypass_pending };
+  // Full access the agent reaches only by a restart (#6476): drawn as waiting for it, in the mode it still runs in;
+  // any other mode drops a restart that waits
+  const restart = patch.permission_mode === BYPASS_MODE && bypassRestarts(base);
+  const drawn: Partial<Session> = restart ? { ...patch, permission_mode: base.permission_mode, bypass_pending: true } : patch.permission_mode ? { ...patch, bypass_pending: undefined } : patch;
+  upsertSession({ ...base, ...drawn });
   try {
     await api(`${sessionPath(base.machine_id, base.session_id)}/modes`, { method: "POST", json: patch, timeout: MODE_CONFIRM_MS });
     return true;
   } catch (e) {
-    if (!(e instanceof HubTimeoutError)) upsertSession({ ...latest(), ...Object.fromEntries(Object.keys(patch).map((k) => [k, before[k as keyof typeof before]])) });
+    if (!(e instanceof HubTimeoutError)) upsertSession({ ...latest(), ...Object.fromEntries(Object.keys(drawn).map((k) => [k, before[k as keyof typeof before]])) });
     modeChangeError(e);
     return false;
   }
@@ -355,7 +361,7 @@ export function DeleteSessionDialog({ session, machineName, open, onClose }: { s
       if (location.pathname === href({ name: "session", mid: session.machine_id, sid: session.session_id })) navigate({ name: "home" }, true);
       toast(t("chat-sessiondialogs.deleted"), "ok");
       onClose();
-      await runCleanup(session.machine_id, wt, cleanup);
+      await runCleanup(session.machine_id, wt, cleanup, session.host);
     } catch (e) {
       toast(t("chat-sessiondialogs.delete_failed", { error: errorText(e) }), "error");
     } finally {
@@ -404,11 +410,12 @@ function useAgentWorktree(s: Session, open: boolean): WorktreeStatus | null {
     setSt(null);
     if (!open || !s.cwd) return;
     const c = new AbortController();
-    void worktreeStatus(s.machine_id, s.cwd, c.signal).then((x) => {
+    // asked of the engine it ran in, which made it (a Paseo agent's is Paseo's)
+    void worktreeStatus(s.machine_id, s.cwd, c.signal, s.host).then((x) => {
       if (!c.signal.aborted) setSt(x?.ours && x.path ? x : null);
     });
     return () => c.abort();
-  }, [open, s.machine_id, s.cwd]);
+  }, [open, s.machine_id, s.cwd, s.host]);
   return st;
 }
 
@@ -419,12 +426,13 @@ export function cleanupReady(st: WorktreeStatus | null, c: Cleanup): boolean {
   return c.confirmed || (loss.dirty === 0 && loss.unmerged === 0);
 }
 
-/** After the agent is closed or deleted: removes its worktree when asked, forced only for what the user confirmed. */
-async function runCleanup(mid: string, st: WorktreeStatus | null, c: Cleanup) {
+/** After the agent is closed or deleted: removes its worktree when asked, forced only for what the user confirmed, by
+ *  the engine the agent ran in (kind: its host). */
+async function runCleanup(mid: string, st: WorktreeStatus | null, c: Cleanup, kind?: string) {
   if (!st?.path || !c.remove) return;
   const loss = worktreeLoss(st, c.deleteBranch);
   try {
-    const r = await removeAgentWorktree(mid, st.path, { deleteBranch: c.deleteBranch, force: loss.dirty > 0 || loss.unmerged > 0 });
+    const r = await removeAgentWorktree(mid, st.path, { deleteBranch: c.deleteBranch, force: loss.dirty > 0 || loss.unmerged > 0, kind });
     toast(t(r.branch_deleted ? "chat-sessiondialogs.wt_removed_branch" : "chat-sessiondialogs.wt_removed"), "ok");
   } catch (e) {
     toast(t("chat-sessiondialogs.wt_remove_failed", { error: errorText(e) }), "error");
@@ -505,7 +513,7 @@ export function CloseAgentDialog({ open, onClose, onClosed, session, machineName
       onClose();
       if (onClosed) onClosed();
       else if (showsSession(parse(stripBase(location.pathname), location.search), session.machine_id, session.session_id)) navigate({ name: "home" });
-      await runCleanup(session.machine_id, wt, cleanup);
+      await runCleanup(session.machine_id, wt, cleanup, session.host);
     } catch (e) {
       toast(t("chat-chatview.close_failed", { error: errorText(e) }), "error");
     } finally {

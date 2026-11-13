@@ -34,11 +34,21 @@ type Report struct {
 }
 
 type Usage struct {
-	Label    string   `json:"label"` // today / this week / this month (in Chinese)
+	Label string `json:"label"` // today / this week / this month (in Chinese)
+	// Period is what Label covers, for clients that add the numbers up: PeriodDay, PeriodWeek or PeriodMonth, in the
+	// user's time zone (quota.query's tz). "" when the extension does not say: then no client takes it for any period.
+	Period   string   `json:"period,omitempty"`
 	Requests int64    `json:"requests"`
 	Tokens   int64    `json:"tokens"`
 	CostUSD  *float64 `json:"cost_usd,omitempty"`
 }
+
+// The periods a Usage may name.
+const (
+	PeriodDay   = "day"
+	PeriodWeek  = "week"
+	PeriodMonth = "month"
+)
 
 // Pool is an account or provider the key's requests go to.
 type Pool struct {

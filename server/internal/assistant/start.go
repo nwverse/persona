@@ -307,6 +307,14 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 		return proto.Session{}, err
 	}
 	used, _ := params["launcher"].(string)
+	// A profile is Claude Code's: the node refuses a config_dir for any other agent before starting it (#6467). Judged
+	// here, by the launcher the start finally runs on, not the one asked for: the model configuration and a fallback
+	// can both change it.
+	if _, asked := params["config_dir"]; asked && used != "" && used != "claude" {
+		if agent := s.launcherAgent(ctx, machine, used); agent != "" && agent != "claude" {
+			delete(params, "config_dir")
+		}
+	}
 	if model, _ := params["model"].(string); p.Model != "" && model == p.Model {
 		// A launcher that sets its own --model, or whose agent takes none, would not run it (model_pick.go).
 		if err := s.pickedModelRefusal(ctx, machine, used, model); err != nil {
@@ -519,7 +527,7 @@ func (s *Service) startMain(ctx context.Context, p StartParams) (proto.Session, 
 		return proto.Session{}, err
 	}
 	if carried != nil {
-		s.keepStartPick(ctx, &sess, carried.Launcher, carried.Model, carried.Effort)
+		s.keepStartPick(ctx, &sess, carried.Launcher, carried.Model, carried.Effort, true)
 	}
 	if _, err := s.updateSettings(ctx, func(v *Settings) error {
 		*v = s.effective(ctx, *v)
@@ -853,8 +861,9 @@ func (s *Service) startRoutes() {
 			apierr.Call(w, err)
 			return
 		}
-		if in.Purpose == "" && in.Guest == nil {
-			s.keepStartPick(ctx, &sess, in.Launcher, in.Model, in.Effort) // its later messages keep what it started on
+		if in.Purpose == "" && in.Guest == nil && in.Main {
+			// Only the main conversation keeps its start as a per-conversation pick (#6911).
+			s.keepStartPick(ctx, &sess, in.Launcher, in.Model, in.Effort, in.Main)
 		}
 		if in.ReportTasks && !in.Main {
 			s.markReporter(ctx, sess.MachineID, sess.SessionID)
@@ -1072,7 +1081,8 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 
 // sendModel puts into p (a message for one of the assistant's conversations, sid on machine) which launcher and model
 // run it: one picked in the chat's menu (sent with the message) wins; else the main conversation and a scheduled
-// task's own conversation (the morning briefing's, #1544) follow Model configuration › Main chat, and the others keep what they run. Those two follow
+// task's own conversation (the morning briefing's, #1544), a leader conversation and the background supervisor follow
+// Model configuration › Main chat, and the others keep what they run. Those follow
 // the setting on every message, not what they ran last: once a run had moved one to another launcher, every later
 // message stayed there (#1518). A launcher or model that is gone falls back to the assistant's. A picked one is checked
 // and fingerprinted like a configured one. The phone's messages, the node's own and the follow-ups the assistant
@@ -1091,7 +1101,11 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 	if cfg.InterjectBackground != nil && *cfg.InterjectBackground {
 		p["interject_background"] = true
 	}
-	followsSetting := cfg.Main != "" && cfg.Main == sid && cfg.mainRouteMachine() == machine || s.isTaskConversation(ctx, machine, sid)
+	// A leader conversation and the background supervisor follow it too: the hub's own messages (supervision, digests)
+	// drive them and pick nothing, so a model a failed turn's recovery moved one to (node/assistant_recovery.go: Opus
+	// down to Haiku on a run of 429s) was carried over as what it runs, for good.
+	followsSetting := cfg.Main != "" && cfg.Main == sid && cfg.mainRouteMachine() == machine || s.isTaskConversation(ctx, machine, sid) ||
+		s.isLeader(ctx, sid) || s.isBackground(ctx, sid)
 	picked := false // a model picked with this message
 	if m, ok := p["model"].(string); ok && strings.TrimSpace(m) != "" {
 		m = strings.TrimSpace(m)

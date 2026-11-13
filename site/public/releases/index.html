@@ -12,6 +12,9 @@
 <meta property="og:url" content="https://personaside.com/releases/">
 <meta property="og:image" content="https://personaside.com/img/recording.webp">
 <link rel="canonical" href="https://personaside.com/releases/">
+<link rel="alternate" hreflang="zh-CN" href="https://personaside.com/releases/">
+<link rel="alternate" hreflang="en" href="https://personaside.com/en/releases/">
+<link rel="alternate" hreflang="x-default" href="https://personaside.com/releases/">
 <meta name="theme-color" content="#EFE4D6" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#131217" media="(prefers-color-scheme: dark)">
 <link rel="icon" href="/favicon.png" media="(prefers-color-scheme: light)">
@@ -158,10 +161,16 @@ section.block{padding:76px 0;border-top:2px solid var(--sky-line)}
 .tk-stats div{display:flex;flex-direction:column-reverse}
 .tk-stats dt{font-size:13.5px;color:var(--mist)}
 .tk-stats dd{margin:0;font:800 30px/1.1 var(--mark);letter-spacing:-.02em}
-.tk-main{display:flex;flex-direction:column;justify-content:center;padding:34px 40px 32px 52px;min-width:0}
+.tk-main{display:flex;flex-direction:column;justify-content:center;padding:34px 36px 32px 48px;min-width:0}
 .tk-for{display:flex;align-items:center;gap:12px;margin:0;font-size:15px;color:var(--mist)}
 .tk-for svg{width:22px;height:22px;flex:none;color:var(--ink)}
-.tk-title{margin:10px 0 0;font:700 clamp(23px,2.4vw,30px)/1.3 var(--sans);letter-spacing:-.01em}
+.tk-tabs{display:flex;flex-wrap:wrap;gap:6px;margin-top:16px}
+.tab{display:inline-flex;align-items:center;gap:6px;min-height:38px;padding:0 11px;border:2px solid var(--sky-line);border-radius:999px;background:var(--paper);
+  font:600 13.5px/1 var(--sans);white-space:nowrap;cursor:pointer;transition:border-color .15s ease,background .15s ease}
+.tab svg{width:16px;height:16px;flex:none}
+.tab:hover{border-color:var(--ink)}
+.tab[aria-pressed="true"]{border-color:var(--ink);background:var(--ink);color:var(--paper)}
+.tk-title{margin:20px 0 0;font:700 clamp(23px,2.4vw,30px)/1.3 var(--sans);letter-spacing:-.01em}
 .tk-actions{display:flex;flex-wrap:wrap;gap:12px;margin-top:24px}
 .tk-meta{margin:16px 0 0;font:400 13px/1.7 var(--mono);color:var(--mist);overflow-wrap:anywhere;white-space:pre-line}
 .tk-other{margin-top:22px;padding-top:18px;border-top:2px solid var(--sky-line);display:flex;flex-wrap:wrap;gap:8px 22px;font-size:15px}
@@ -178,13 +187,6 @@ section.block{padding:76px 0;border-top:2px solid var(--sky-line)}
 .loading .tk-date{width:11em}
 .loading .tk-title{width:9em}
 .loading .tk-ver,.loading .tk-date,.loading .tk-title{background:linear-gradient(90deg,var(--sk-a) 0,var(--sk-b) 50%,var(--sk-a) 100%) 0 0/200% 100%;animation:sheen 1.4s linear infinite;border-radius:10px}
-
-/* ---------- highlights ---------- */
-.hl{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin:0;padding:0;list-style:none}
-.hl li{display:flex;flex-direction:column;gap:12px;padding:20px;background:var(--paper);border:var(--stroke);border-radius:var(--r);box-shadow:var(--lift)}
-.hl .area{align-self:flex-start;padding:4px 10px;border-radius:999px;background:var(--sky-tint);font:600 12.5px/1.2 var(--sans);color:var(--mist)}
-.hl p{margin:0;font-size:15.5px;line-height:1.6;color:var(--body)}
-.src-note{margin:16px 0 0;font-size:13.5px;color:var(--mist)}
 
 /* ---------- devices ---------- */
 .devices{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}
@@ -211,6 +213,21 @@ section.block{padding:76px 0;border-top:2px solid var(--sky-line)}
 .dl.primary .r{color:var(--on-color);opacity:.75}
 .dl.off{border-style:dashed;border-color:var(--sky-line);color:var(--mist);pointer-events:none}
 .dev-sub-link{margin-top:12px;font-size:14px}
+
+/* the web app's steps: numbered, in the ticket and on its card */
+.tk-guide,.dev-guide{counter-reset:step;margin:0;padding:0;list-style:none;display:grid;gap:14px}
+.tk-guide{width:100%}
+.tk-guide li,.dev-guide li{position:relative;padding-left:40px;counter-increment:step}
+.tk-guide li::before,.dev-guide li::before{content:counter(step);position:absolute;left:0;top:1px;display:grid;place-items:center;width:26px;height:26px;
+  border:2px solid var(--ink);border-radius:50%;background:var(--paper);font:600 13px/1 var(--mono)}
+.tk-guide li:first-child::before,.dev-guide li:first-child::before{background:var(--cheek);color:var(--on-color)}
+.tk-guide b,.dev-guide b{display:block;font-size:15.5px;line-height:1.5}
+.tk-guide span,.dev-guide span{display:block;font-size:14px;line-height:1.65;color:var(--body);overflow-wrap:anywhere}
+.tk-guide code,.dev-guide code{display:inline-block;margin:2px 0 0;padding:1px 7px;border-radius:6px;background:var(--sky-tint);color:var(--ink);font-size:.92em;white-space:nowrap}
+.dev.guide .dev-what{flex:none}
+.dev-guide{flex:1;margin-top:14px;gap:12px}
+.dev-guide b{font-size:14.5px}
+.dev-guide span{font-size:13.5px}
 
 /* ---------- components (disclosure) ---------- */
 .parts{background:var(--paper);border:var(--stroke);border-radius:var(--r);box-shadow:var(--lift)}
@@ -284,7 +301,6 @@ details[open] > .rel-body,details[open] > .parts-body{animation:drop .28s ease b
 
 /* ---------- smaller screens ---------- */
 @media (max-width:1080px){
-  .hl{grid-template-columns:repeat(2,minmax(0,1fr))}
   .devices{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 @media (max-width:860px){
@@ -299,15 +315,15 @@ details[open] > .rel-body,details[open] > .parts-body{animation:drop .28s ease b
 @media (max-width:640px){
   :root{--page:calc(100vw - 32px)}
   body{font-size:16px}
-  .top nav a:not(.go){display:none}
+  .top nav a:not(.go):not(.lang){display:none}
   .intro{padding:14px 0 30px}
   .lede{font-size:16.5px}
-  .ticket{margin-bottom:64px;border-radius:24px}
+  .ticket{margin-bottom:64px;margin-right:7px;border-radius:24px}
   .stub{padding:26px 24px 24px;border-radius:22px 22px 0 0}
   .tk-main{padding:28px 22px 24px}
   .tk-actions .btn{width:100%}
   section.block{padding:56px 0}
-  .hl,.devices{grid-template-columns:minmax(0,1fr)}
+  .devices{grid-template-columns:minmax(0,1fr)}
   .rel{padding-left:36px}
   .history::before{left:8px}
   .rel::before{left:0}
@@ -337,6 +353,7 @@ details[open] > .rel-body,details[open] > .parts-body{animation:drop .28s ease b
     <a href="/releases/" aria-current="page">下载</a>
     <a href="https://github.com/nwverse/persona" target="_blank" rel="noopener">GitHub</a>
     <a class="go" href="/#start">开始用</a>
+    <a class="lang" href="/en/releases/?lang=en" hreflang="en" lang="en" aria-label="View in English">EN</a>
   </nav>
 </header>
 
@@ -359,6 +376,7 @@ details[open] > .rel-body,details[open] > .parts-body{animation:drop .28s ease b
     </div>
     <div class="tk-main" id="tk-main">
       <p class="tk-for" id="tk-for">正在看你用的是什么设备</p>
+      <div class="tk-tabs" id="tk-tabs" role="group" aria-label="选择设备" hidden></div>
       <p class="tk-title" id="tk-title">下载 Persona</p>
       <div class="tk-actions" id="tk-actions">
         <a class="btn btn-paper" href="https://github.com/nwverse/persona/releases/latest" target="_blank" rel="noopener">在 GitHub 上下载</a>
@@ -372,18 +390,6 @@ details[open] > .rel-body,details[open] > .parts-body{animation:drop .28s ease b
     </div>
   </article>
   <noscript><p class="notice notice-amber"><i aria-hidden="true"></i><span>这个页面需要 JavaScript 才能列出安装包。也可以直接去 <a href="https://github.com/nwverse/persona/releases/latest">GitHub 的最新版本页</a>下载。</span></p></noscript>
-
-  <section class="block" id="highlights" hidden>
-    <div class="sec-head">
-      <div>
-        <h2 id="hl-title">这一版的亮点</h2>
-        <p id="hl-sub"></p>
-      </div>
-      <a class="link" id="hl-notes" href="https://github.com/nwverse/persona/releases/latest" target="_blank" rel="noopener">完整更新说明</a>
-    </div>
-    <ul class="hl" id="hl-list"></ul>
-    <p class="src-note">摘自 GitHub 上的发布说明，保留英文原文。</p>
-  </section>
 
   <section class="block" id="devices">
     <div class="sec-head">
