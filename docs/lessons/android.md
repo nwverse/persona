@@ -643,3 +643,7 @@ Skipping onboarding does not skip password sign-in. Tests of manual or scan pair
 ## First-message handoff must cross decorators and filtered lists (#4999)
 
 The composer decorator posts messages itself, so handling a successful response only in its underlying transport misses the production send and manual-refusal retry paths. Share the successful-response handler with the decorator and test that path. Keep a start/send receipt's session metadata separately from a paged list's membership: a newly started idle pane, or its working thread, may be excluded by the current filter. Bind a send reply to its exact previous waiting session; scanning old receipts by pane can select an earlier run after the pane is reused. For a terminal first message, match the same computer and pane only in current rows. If the current list excludes the thread, keep the waiting page without fetching extra pages. Never infer the new thread from its directory.
+
+## Resolve horizontal window insets with layout direction
+
+Compose `WindowInsets.getLeft` and `getRight` require both `Density` and `LayoutDirection`; only the vertical getters take density alone. Pass `LocalLayoutDirection.current` instead of copying the vertical call shape. Test pointer or popup clamping with asymmetric physical insets in both directions: LTR and RTL resolve different left/right values, while the resulting bounds and menu origin remain physical window coordinates.
