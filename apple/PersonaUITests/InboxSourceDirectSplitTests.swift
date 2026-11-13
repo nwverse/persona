@@ -87,18 +87,26 @@ final class InboxSourceDirectSplitTests: XCTestCase {
         shot("view-1-detail")
     }
 
-    /// The row in the list column: its title, hittable, left of the divider.
+    /// The row in the list column: its title, hittable, on the divider's side of the Inbox's own toolbar (the list is
+    /// not assumed to be the left column).
     @MainActor private func itemRow() -> XCUIElement? {
         let divider = element("split.divider.assistant.list")
+        let inbox = element("inbox.more")
         _ = divider.waitForExistence(timeout: 10)
-        let edge = divider.exists ? divider.frame.maxX : app.windows.firstMatch.frame.midX
         for attempt in 0..<8 {
             let rows = app.staticTexts.matching(NSPredicate(format: "label == %@", Self.itemTitle)).allElementsBoundByIndex
-            if let row = rows.first(where: { $0.exists && $0.isHittable && $0.frame.maxX < edge }) { return row }
+            if let row = rows.first(where: { listSide($0, divider: divider, inbox: inbox) }) { return row }
             if attempt == 0 { _ = app.staticTexts[Self.itemTitle].firstMatch.waitForExistence(timeout: 10) }
             app.swipeUp(velocity: .slow)
         }
         return nil
+    }
+
+    /// `e` is in the list column: hittable and, with the divider read, on the same side of it as the Inbox's toolbar.
+    @MainActor private func listSide(_ e: XCUIElement, divider: XCUIElement, inbox: XCUIElement) -> Bool {
+        guard e.exists && e.isHittable else { return false }
+        guard divider.exists, inbox.exists else { return true }
+        return (e.frame.midX > divider.frame.midX) == (inbox.frame.midX > divider.frame.midX)
     }
 
     // MARK: - The chat, the list and the way back
