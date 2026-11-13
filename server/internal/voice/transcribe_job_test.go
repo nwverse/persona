@@ -764,6 +764,39 @@ func TestTranscriptionReplayKeepsTheReference(t *testing.T) {
 	}
 }
 
+// A poor reference does not keep a window's text from the sessions. The live check's opening window had as its
+// reference a live caption that caught a few words of it (22 characters over 14 s of speech) while both sessions
+// heard all of it: a reference much shorter than the sessions' text is not checked against, and the sessions, which
+// agree, are trusted. Sessions that agree with each other are trusted too over a reference of their length none of
+// them is near (another sentence's caption).
+func TestTranscriptionReplayPoorReference(t *testing.T) {
+	trFast(t)
+	_, srv, logs, _ := trLive(t, voicetest.Script{Sentences: trScript})
+	for _, tt := range []struct {
+		name string
+		refs []voicetest.Line
+		log  string
+	}{
+		{"too short", []voicetest.Line{{Start: 0.5, End: 5.6, Text: "Ford cap 这词还是"}}, "too short to check the sessions against"},
+		{"another sentence", []voicetest.Line{{Start: 0.5, End: 3.0, Text: trScript[4].Text}, {Start: 3.8, End: 5.6, Text: trScript[3].Text}},
+			"the sessions agree with each other, not with the reference"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			tc := replayStart(t, srv, 40, tt.refs)
+			tc.stream(voicetest.PCM(voicetest.Script{Sentences: trScript[:2]}, 6.5), 1000)
+			tc.send(extwire.TranscriptionFrame{Type: extwire.TFEnd})
+			frames := tc.done()
+			sameTexts(t, frames, trScript[:2])
+			if ws := windowsCover(t, frames, 6.5); ws[0].Kept {
+				t.Errorf("windows %s", windowList(ws))
+			}
+			if !strings.Contains(logs.String(), tt.log) {
+				t.Errorf("log:\n%s", logs)
+			}
+		})
+	}
+}
+
 // Without a reference, three sessions per window and two of them must agree; the reference's edges cut windows.
 func TestTranscriptionReplayWithoutAReference(t *testing.T) {
 	trFast(t)

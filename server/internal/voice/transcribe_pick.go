@@ -143,11 +143,14 @@ func medoid(texts []string, keep []int, anchor *string) int {
 
 // trAgree is which of keep agree with another: one further than trDropOver from every other one is left out. Of two,
 // both stay when they agree and neither does when they do not.
-func trAgree(texts []string, keep []int) []int {
+func trAgree(texts []string, keep []int) []int { return trAgreeWithin(texts, keep, trDropOver) }
+
+// trAgreeWithin is which of keep are within most of another one.
+func trAgreeWithin(texts []string, keep []int, most float64) []int {
 	var out []int
 	for _, i := range keep {
 		for _, k := range keep {
-			if k != i && normDistance(texts[i], texts[k]) <= trDropOver {
+			if k != i && normDistance(texts[i], texts[k]) <= most {
 				out = append(out, i)
 				break
 			}
@@ -200,12 +203,35 @@ func pickLive(caption string, texts []string) (pick int, dropped []bool) {
 	return medoid(texts, keep, nil), dropped
 }
 
-// pickReplay chooses a final-pass window's text. With a reference (ref has text): a session that stopped early or is
-// further than trDropOver from it is dropped, and the medoid of the rest wins (of two, the one closer to the
-// reference); with none left the reference stays (kept). Without one: of the sessions that did not stop early, one
-// that agrees with no other is dropped and the medoid of the rest wins; with fewer than two left the window gets no
-// text of the pass (kept: the hub keeps what it has).
-func pickReplay(ref *string, texts []string, stoppedEarly []bool) (pick int, kept bool) {
+// How a final-pass window's reference was used (pickReplay).
+type trRefUse int
+
+const (
+	trRefNone     trRefUse = iota // no reference
+	trRefChecked                  // the sessions were checked against it
+	trRefShort                    // too short to check against: chosen as without one
+	trRefOutvoted                 // the sessions agree with each other and none with it: trusted over it
+)
+
+// A final-pass window's reference none of its sessions is near that has fewer letters and digits (normalized) than
+// trRefShortShare of the sessions' text (their lower median), or than trRefPerSecond per second of the window's
+// speech while the sessions wrote more, is not checked against: it caught only a few words of the window (measured: a
+// live caption of 22 characters over 14 s of speech, against sessions of 164 and 204 that heard all of it). Sessions
+// within trAgreeClose of each other are trusted over a reference none of them is near.
+const (
+	trRefShortShare = 0.5
+	trRefPerSecond  = 2.0
+	trAgreeClose    = 0.3
+)
+
+// pickReplay chooses a final-pass window's text (speech: its seconds of speech). With a reference (ref has text): a
+// session that stopped early or is further than trDropOver from it is dropped, and the medoid of the rest wins (of
+// two, the one closer to the reference). With none left: a reference much shorter than the sessions' text
+// (trRefShortShare, trRefPerSecond) counts as none; otherwise sessions that agree with each other (within
+// trAgreeClose, two or more with text) are trusted over it (their medoid), else the reference stays (kept). Without
+// one: of the sessions that did not stop early, one that agrees with no other is dropped and the medoid of the rest
+// wins; with fewer than two left the window gets no text of the pass (kept: the hub keeps what it has).
+func pickReplay(ref *string, texts []string, stoppedEarly []bool, speech float64) (pick int, kept bool, use trRefUse) {
 	var keep []int
 	for i := range texts {
 		if !stoppedEarly[i] {
@@ -213,22 +239,47 @@ func pickReplay(ref *string, texts []string, stoppedEarly []bool) (pick int, kep
 		}
 	}
 	if ref != nil && trHasText(*ref) {
-		var near []int
+		var near, said []int
 		for _, i := range keep {
 			if normDistance(texts[i], *ref) <= trDropOver {
 				near = append(near, i)
 			}
+			if trHasText(texts[i]) {
+				said = append(said, i)
+			}
 		}
-		if len(near) == 0 {
-			return -1, true
+		switch close := trAgreeWithin(texts, said, trAgreeClose); {
+		case len(near) > 0:
+			return medoid(texts, near, ref), false, trRefChecked
+		case refShort(*ref, texts, keep, speech):
+			use = trRefShort // chosen as without a reference
+		case len(close) >= 2:
+			return medoid(texts, close, nil), false, trRefOutvoted
+		default:
+			return -1, true, trRefChecked
 		}
-		return medoid(texts, near, ref), false
 	}
 	keep = trAgree(texts, keep)
 	if len(keep) < 2 {
-		return -1, true
+		return -1, true, use
 	}
-	return medoid(texts, keep, nil), false
+	return medoid(texts, keep, nil), false, use
+}
+
+// refShort: reference ref is much shorter than the text of the sessions keep (indexes into texts): under
+// trRefShortShare of their lower median length (one session that writes too much does not make it short), or under
+// trRefPerSecond per second of speech while that is longer.
+func refShort(ref string, texts []string, keep []int, speech float64) bool {
+	if len(keep) == 0 {
+		return false
+	}
+	lens := make([]int, len(keep))
+	for k, i := range keep {
+		lens[k] = len(trNorm(texts[i]))
+	}
+	slices.Sort(lens)
+	median, n := float64(lens[(len(lens)-1)/2]), float64(len(trNorm(ref)))
+	return n < trRefShortShare*median || (n < trRefPerSecond*speech && n < median)
 }
 
 func containsInt(s []int, v int) bool {

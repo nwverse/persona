@@ -343,13 +343,19 @@ func (j *trJob) replayPick(rw *trReplayWin) {
 			}
 			dist = append(dist, d)
 		}
-		pick, k := pickReplay(ref, texts, stopped)
+		pick, k, use := pickReplay(ref, texts, stopped, j.vad.speechIn(rw.from, rw.to))
 		kept = k
 		if pick >= 0 {
 			sentences = spreadSentences(pieces[pick], speech, trSeconds(rw.from), trSeconds(rw.to))
 			how = fmt.Sprintf("sent session %d's text", rw.sessions[pick].no)
 		} else {
 			how = "none trusted: the hub keeps its text"
+		}
+		switch use {
+		case trRefShort:
+			how = fmt.Sprintf("the reference (%d characters) is too short to check the sessions against; %s", runeLen(*ref), how)
+		case trRefOutvoted:
+			how = "the sessions agree with each other, not with the reference; " + how
 		}
 		how = strings.Join(dist, ", ") + "; " + how
 	}

@@ -86,26 +86,42 @@ func TestPickReplay(t *testing.T) {
 	near := "下周三之前 Alice 要把 pricing 的 proposal 发出"
 	rogue := voicetest.InventedReplies[0]
 	ref := "下周三之前 alice 要把 pricing 的 proposol 发出来。"
+	// The live check's opening window: both sessions heard it, the reference was a live caption of a few words.
+	opening := "好，人都到齐了，我们开始今天的发布评审。先说 iOS 这边，离线编辑基本做完了，现在在修 sync conflict 的问题。" +
+		"The backend merge API now returns the conflicting paragraphs, so the client can show them to the user."
+	caption := "Board cap 这词还是保持在 4 兆吗？"
+	other := "Let's keep the landing page on the web, so it does not need another app review."
 	for _, tt := range []struct {
 		name    string
 		ref     *string
 		texts   []string
 		stopped []bool
+		speech  float64
 		pick    int
 		kept    bool
+		use     trRefUse
 	}{
-		{"with a reference", &ref, []string{rogue, said}, []bool{false, false}, 1, false},
-		{"of two, the closer to the reference", &ref, []string{near, said}, []bool{false, false}, 1, false},
-		{"none near: the reference stays", &ref, []string{rogue, voicetest.InventedReplies[1]}, []bool{false, false}, -1, true},
-		{"stopped early", &ref, []string{said, near}, []bool{true, false}, 1, false},
-		{"without: two of three", nil, []string{said, rogue, near}, []bool{false, false, false}, 0, false},
-		{"without: none agree", nil, []string{said, rogue, voicetest.InventedReplies[1]}, []bool{false, false, false}, -1, true},
-		{"without: one left", nil, []string{said, near, rogue}, []bool{true, false, false}, -1, true},
-		{"an empty reference is none", new(""), []string{said, rogue, near}, []bool{false, false, false}, 0, false},
+		{"with a reference", &ref, []string{rogue, said}, []bool{false, false}, 3, 1, false, trRefChecked},
+		{"of two, the closer to the reference", &ref, []string{near, said}, []bool{false, false}, 3, 1, false, trRefChecked},
+		{"none near: the reference stays", &ref, []string{rogue, voicetest.InventedReplies[1]}, []bool{false, false}, 3, -1, true, trRefChecked},
+		{"stopped early", &ref, []string{said, near}, []bool{true, false}, 3, 1, false, trRefChecked},
+		{"without: two of three", nil, []string{said, rogue, near}, []bool{false, false, false}, 3, 0, false, trRefNone},
+		{"without: none agree", nil, []string{said, rogue, voicetest.InventedReplies[1]}, []bool{false, false, false}, 3, -1, true, trRefNone},
+		{"without: one left", nil, []string{said, near, rogue}, []bool{true, false, false}, 3, -1, true, trRefNone},
+		{"an empty reference is none", new(""), []string{said, rogue, near}, []bool{false, false, false}, 3, 0, false, trRefNone},
+		{"a reference far shorter than the sessions", &caption, []string{opening, opening}, []bool{false, false}, 14, 0, false, trRefShort},
+		{"a short reference, sessions apart: kept", &caption, []string{opening, rogue}, []bool{false, false}, 14, -1, true, trRefShort},
+		{"a short reference, one session left: kept", &caption, []string{opening, ""}, []bool{false, true}, 14, -1, true, trRefShort},
+		{"under two characters a second of speech", new("export cap 保持在四兆"), []string{said, said}, []bool{false, false}, 12, 0, false, trRefShort},
+		{"short, but as long as the sessions", new("好的。"), []string{"好的。", "好的"}, []bool{false, false}, 2, 0, false, trRefChecked},
+		{"sessions agree, the reference another sentence", &other, []string{opening[:150], opening[:150]}, []bool{false, false}, 8, 0, false, trRefOutvoted},
+		{"two rogues far from it and each other", &ref, []string{rogue, voicetest.InventedReplies[2]}, []bool{false, false}, 3, -1, true, trRefChecked},
+		{"a rogue that writes much does not make it short", &ref, []string{rogue + " " + rogue, said}, []bool{false, false}, 3, 1, false, trRefChecked},
+		{"sessions that wrote nothing do not outvote it", &ref, []string{"", ""}, []bool{false, false}, 3, -1, true, trRefChecked},
 	} {
-		pick, kept := pickReplay(tt.ref, tt.texts, tt.stopped)
-		if pick != tt.pick || kept != tt.kept {
-			t.Errorf("%s: %d %v, want %d %v", tt.name, pick, kept, tt.pick, tt.kept)
+		pick, kept, use := pickReplay(tt.ref, tt.texts, tt.stopped, tt.speech)
+		if pick != tt.pick || kept != tt.kept || use != tt.use {
+			t.Errorf("%s: %d %v %d, want %d %v %d", tt.name, pick, kept, use, tt.pick, tt.kept, tt.use)
 		}
 	}
 }
