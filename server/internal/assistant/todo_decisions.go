@@ -13,6 +13,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -38,7 +39,27 @@ func (s *Service) todoDecisionRoutes() {
 			apierr.Write(w, http.StatusInternalServerError, err)
 			return
 		}
-		apierr.WriteJSON(w, map[string]any{"decisions": list})
+		type decisionView struct {
+			db.TodoDecisionRow
+			PhaseCompletedAt *time.Time `json:"phase_completed_at,omitempty"`
+		}
+		todo, hasTodo := s.todoNow(id)
+		views := make([]decisionView, 0, len(list))
+		var earlierLabel string
+		for _, row := range list {
+			view := decisionView{TodoDecisionRow: row}
+			if at, ok := completionOfDecision(row); ok {
+				view.PhaseCompletedAt = &at
+				if _, earlier := earlierOutcomeSummary(todo, row); hasTodo && earlier {
+					if earlierLabel == "" {
+						earlierLabel = i18n.T(s.requestLang(r), "assistant-tasks.earlier_phase_outcome")
+					}
+					view.Question = earlierLabel
+				}
+			}
+			views = append(views, view)
+		}
+		apierr.WriteJSON(w, map[string]any{"decisions": views})
 	})
 
 	// POST /api/v1/todos/{id}/decisions: write one {question, choice, reason?, supersedes_id?, source?, ref?}. A device
@@ -303,7 +324,7 @@ func (s *Service) agentDecisionTool(ctx context.Context, machine, session, name 
 		if len(list) == 0 {
 			return fmt.Sprintf("Todo %s (%q) has no decisions yet.", t.ID, t.Title), nil
 		}
-		b, _ := json.Marshal(map[string]any{"todo": map[string]string{"id": t.ID, "title": t.Title}, "decisions": agentDecisionViews(list)})
+		b, _ := json.Marshal(map[string]any{"todo": map[string]string{"id": t.ID, "title": t.Title}, "decisions": agentDecisionViews(t, list)})
 		return string(b), nil
 	}
 	var a struct {
@@ -352,24 +373,32 @@ func (s *Service) agentDecisionTool(ctx context.Context, machine, session, name 
 
 // agentDecisionView is a decision as todo_decisions gives it to an agent: who made the call, in words.
 type agentDecisionView struct {
-	ID         string `json:"id"`
-	Question   string `json:"question"`
-	Choice     string `json:"choice"`
-	Reason     string `json:"reason,omitempty"`
-	By         string `json:"by"` // user / agent
-	Supersedes string `json:"supersedes,omitempty"`
-	At         string `json:"at"`
+	ID               string     `json:"id"`
+	Question         string     `json:"question"`
+	Choice           string     `json:"choice"`
+	Reason           string     `json:"reason,omitempty"`
+	By               string     `json:"by"` // user / agent
+	Supersedes       string     `json:"supersedes,omitempty"`
+	At               string     `json:"at"`
+	PhaseCompletedAt *time.Time `json:"phase_completed_at,omitempty"`
+	SourceSession    string     `json:"source_session,omitempty"`
+	Historical       bool       `json:"historical,omitempty"`
 }
 
-func agentDecisionViews(list []db.TodoDecisionRow) []agentDecisionView {
+func agentDecisionViews(todo Todo, list []db.TodoDecisionRow) []agentDecisionView {
 	out := make([]agentDecisionView, 0, len(list))
 	for _, r := range list {
 		by := "user"
 		if r.Source == db.DecisionAgent || r.Source == db.DecisionOutcome {
 			by = "agent"
 		}
-		out = append(out, agentDecisionView{ID: r.ID, Question: r.Question, Choice: r.Choice, Reason: r.Reason, By: by,
-			Supersedes: r.SupersedesID, At: r.CreatedAt.UTC().Format(time.RFC3339)})
+		view := agentDecisionView{ID: r.ID, Question: r.Question, Choice: r.Choice, Reason: r.Reason, By: by,
+			Supersedes: r.SupersedesID, At: r.CreatedAt.UTC().Format(time.RFC3339)}
+		if at, ok := completionOfDecision(r); ok {
+			view.PhaseCompletedAt, view.SourceSession = &at, r.SourceSession
+			_, view.Historical = earlierPhase(todo, r)
+		}
+		out = append(out, view)
 	}
 	return out
 }
@@ -402,7 +431,8 @@ func (s *Service) todoDecisionsContext(ctx context.Context, todoID string) strin
 	}
 	var title string
 	agents := map[[2]string]string{}
-	if t, ok := s.todoNow(todoID); ok {
+	t, hasTodo := s.todoNow(todoID)
+	if hasTodo {
 		title = t.Title
 		for _, a := range t.Agents {
 			agents[[2]string{a.MachineID, a.SessionID}] = a.Title
@@ -414,6 +444,9 @@ func (s *Service) todoDecisionsContext(ctx context.Context, todoID string) strin
 		from := ""
 		if r.Source == db.DecisionOutcome {
 			from = "Agent 做完时记的，不是用户定的" // todo_outcome.go: pulled out of a reply, the user did not make it
+			if _, earlier := earlierPhase(t, r); hasTodo && earlier {
+				from = "前一阶段的记录，不代表待办当前已完成，也不是用户定的" // i18n-ignore: model prompt
+			}
 		} else if r.Source == db.DecisionAgent {
 			from = "Agent 干活时记的，不是用户定的" // i18n-ignore: a line of the prompt the model reads (prompts/todo/decisions.md); todo_decision_add, the agent's own call
 		} else if r.Source == db.DecisionThread {

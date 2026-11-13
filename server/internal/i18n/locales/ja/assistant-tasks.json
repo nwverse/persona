@@ -34,6 +34,7 @@
   "route_no_agent": "このタスクには実行中のエージェントがありません",
   "route_agents_stopped": "このタスクのエージェントはすべて停止しているため、送信していません。タスクにメッセージを送ると、新しいエージェントが開始されます。",
   "route_offline": "そのコンピューターはオフラインです",
+  "earlier_phase_outcome": "以前の段階の結果",
   "outcome_question": "完了時の結論",
   "outcome_pitfall": "つまずいた点",
   "adopt_notes": "監督下に置いた：{agent} · {machine} · {cwd}",
