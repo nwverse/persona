@@ -6,7 +6,7 @@ import { ago, baseName, sessionTitle, stateOf } from "../../lib/format";
 import { agentLabel } from "../../lib/mentions";
 import { machineWithHub } from "../../lib/mesh";
 import { href, onLinkClick } from "../../lib/router";
-import { runtimeIdentity, runtimeOrder, runtimePlace, runtimeRemoval, runtimeSessions } from "../../lib/runtime-list";
+import { runtimeIdentity, runtimeOrder, runtimeParentIdentity, runtimePlace, runtimeRemoval, runtimeSessions } from "../../lib/runtime-list";
 import { SESSIONS_CATALOG_FEATURE } from "../../lib/session-groups";
 import { readWorkSessionCounts, WorkSessionList, workSessionCountsPath, workSessionQuery, type WorkSessionFilters } from "../../lib/work-session-list";
 import { SESSIONS_LIST_FEATURE } from "../../lib/session-list";
@@ -222,7 +222,7 @@ function LegacyBrowser({ activeSession, machines, onSelect }: WorkSessionBrowser
   const catalog = useStore((s) => s.features.includes(SESSIONS_CATALOG_FEATURE));
   return <div className="@container/work-sessions">
     <p className="px-2 pt-2 text-xs text-ink-3">{copy("legacy")}</p>
-    <PagedSessionList root={runtimeSessions} path="/sessions" identity={runtimeIdentity} compare={runtimeOrder} removeIdentity={runtimeRemoval}
+    <PagedSessionList root={runtimeSessions} path="/sessions" identity={runtimeIdentity} compare={runtimeOrder} removeIdentity={runtimeRemoval} parentOf={runtimeParentIdentity}
       event="sessions_list" catalog={catalog} placeOf={runtimePlace} label={(dimension, id) => dimension === "machine" ? machineWithHub(id, machines) : id}
       renderRow={(session) => <WorkSessionRow session={session} name={machineWithHub(session.machine_id, machines)}
         active={activeSession?.machineId === session.machine_id && activeSession.sessionId === session.session_id}

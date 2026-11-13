@@ -50,6 +50,10 @@ type Connector struct {
 	inboxBotAppID     string
 	inboxBotOpenID    string
 
+	// chatRecords are the chats' own records a conversation page read (threads.go conversationChat), by chat id.
+	recordsMu   sync.Mutex
+	chatRecords map[string]chatRecord
+
 	mu      sync.Mutex
 	pending *adapter.LoginProcess
 }
