@@ -26,7 +26,7 @@ private actor AssistantPUTGate {
     }
 }
 
-/// Settings › Persona › Suggest the next message: optional wire support and the dedicated model's optimistic,
+/// Settings › Assistant › Suggest the Next Message: optional wire support and the dedicated model's optimistic,
 /// assistant-scoped writes. All hubs and identifiers are synthetic.
 @MainActor struct NextSuggestionsModelTests {
     private static func state(next: Bool? = nil) -> String {

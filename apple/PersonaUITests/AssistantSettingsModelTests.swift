@@ -81,8 +81,17 @@ final class AssistantSettingsModelTests: XCTestCase {
         let app = launch(["-openAssistantPage", "assistant"])
         let toggle = app.switches["assistant-main-supervises-own-tasks"].firstMatch
         XCTAssertTrue(app.staticTexts["定时任务"].firstMatch.waitForExistence(timeout: 10))
-        for _ in 0..<6 where !toggle.isHittable { app.swipeUp() }
+        let viewport = app.windows.firstMatch.frame.insetBy(dx: 0, dy: 100)
+        for _ in 0..<12 where !(toggle.exists && viewport.contains(toggle.frame)) {
+            let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.70))
+            let to = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.55))
+            from.press(forDuration: 0.05, thenDragTo: to)
+            usleep(200_000)
+        }
+        usleep(800_000) // Let the list coast to a stop; a tap while it coasts only stops the scroll.
         XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+        XCTAssertTrue(toggle.isHittable && viewport.contains(toggle.frame),
+                      "the whole switch must be visible before the tap: \(toggle.frame)")
         XCTAssertEqual(toggle.value as? String, "0")
         XCTAssertTrue(app.staticTexts["主对话自己督办它派出的任务"].firstMatch.exists)
         shot(app, "assistant-main-supervises-own-tasks-off")
@@ -94,7 +103,7 @@ final class AssistantSettingsModelTests: XCTestCase {
         try setFlag(key, false)
     }
 
-    /// Settings › Assistant › Suggest the next message (#4696): a supporting hub's explicit off value is visible, and the
+    /// Settings › Assistant › Suggest the Next Message (#4696): a supporting hub's explicit off value is visible, and the
     /// switch writes the sparse setting through the real profile page.
     @MainActor func testNextSuggestionsSwitch() throws {
         let key = "next_suggestions"
@@ -130,6 +139,22 @@ final class AssistantSettingsModelTests: XCTestCase {
         XCTAssertEqual(toggle.value as? String, "0")
         XCTAssertTrue(app.staticTexts["建议下一句"].firstMatch.exists)
         shot(app, "assistant-next-suggestions-default-off")
+    }
+
+    /// Apple's English settings title is Title Case; the web deliberately keeps its sentence-case title.
+    @MainActor func testNextSuggestionsEnglishTitleCase() throws {
+        let key = "next_suggestions"
+        try setFlag(key, false)
+        defer { try? setFlag(key, false) }
+        let app = launch(["-openAssistantPage", "assistant", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"])
+        let toggle = app.switches["assistant-next-suggestions"].firstMatch
+        XCTAssertTrue(app.navigationBars["Persona"].waitForExistence(timeout: 10))
+        for _ in 0..<8 where !toggle.isHittable { app.swipeUp() }
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+        XCTAssertEqual(toggle.value as? String, "0")
+        XCTAssertTrue(app.staticTexts["Suggest the Next Message"].firstMatch.exists)
+        XCTAssertFalse(app.staticTexts["Suggest the next message"].firstMatch.exists)
+        shot(app, "assistant-next-suggestions-english")
     }
 
     /// The row remains reachable and its switch hittable at the largest accessibility text size.

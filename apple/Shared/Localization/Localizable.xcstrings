@@ -139126,12 +139126,12 @@
         }
       }
     },
-    "Suggest the next message" : {
+    "Suggest the Next Message" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Suggest the next message"
+            "value" : "Suggest the Next Message"
           }
         },
         "ja" : {

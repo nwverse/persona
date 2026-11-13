@@ -368,7 +368,7 @@ struct AssistantProfileView: View {
         guard let on = nextSuggestionsModel.value else { return nil }
         return Binding(get: { nextSuggestionsModel.value ?? on }, set: { v in Task { await nextSuggestionsModel.set(v) } })
     }
-    private static let nextSuggestionsTitle = String(localized: "Suggest the next message")
+    private static let nextSuggestionsTitle = String(localized: "Suggest the Next Message")
     private static let nextSuggestionsFooter = String(localized: "After a reply in a chat you have open, a small model suggests what you might send next, above the empty message box. Claude Code in a terminal keeps its own suggestions. Uses one extra model call per reply; the model is set under Model configuration › Next-message suggestions.")
 
     /// The main conversation follows up its own tasks instead of the background supervisor (#5083,

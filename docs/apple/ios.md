@@ -403,11 +403,12 @@ Chat page:
   advertise one; the ordinary composer Send still works after review. Missing, null or malformed risk values decode as false.
   Typing hides the pill. Mock `MOCK_SUGGESTION=1` covers the review Agent; `MOCK_NEXT_SUGGESTIONS=1` covers a safe main-Persona
   pill, a risky assistant pill, safe Agents and the native switch. Tests: `SuggestionRiskTests`, `SuggestionTests`.
-- Settings › Assistant › **Suggest the next message** (#4696) reads and sparsely writes `next_suggestions` through
+- Settings › Assistant › **Suggest the Next Message** (#4696) reads and sparsely writes `next_suggestions` through
   `GET/PUT /api/v1/assistant`. It is off by default on a supporting hub; an older hub that omits the field keeps it nil and hides
   the row. `NextSuggestionsModel` (an `@Observable` model with `AssistantDeps`, tested against `FakeHub`) loads the current
   assistant's value, shows a change optimistically, accepts the response and rolls back on failure, fencing late work across an
-  assistant or hub switch. Its title and footer match the web in en, zh-Hans and ja. Tests: `NextSuggestionsModelTests`,
+  assistant or hub switch. The English title uses Apple Title Case while the web keeps **Suggest the next message** in sentence
+  case; the zh-Hans and ja titles and the footer in all three languages match the web. Tests: `NextSuggestionsModelTests`,
   `AssistantSettingsModelTests.testNextSuggestionsSwitch`; a separate untouched-mock run proves the default is off, and the
   legacy-mock case waits for the app's successful-read probe before proving the row is absent.
 - Sending clears input immediately and displays Sending bubble (`ChatStore.pending`), request background; same text in transcript
