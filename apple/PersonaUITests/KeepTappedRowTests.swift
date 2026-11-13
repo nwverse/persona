@@ -136,9 +136,10 @@ final class KeepTappedRowTests: XCTestCase {
         // Nothing asked of the app while it measures: every query of its accessibility tree costs it frames.
         Thread.sleep(forTimeInterval: 3.6) // `UnfoldTrace.window`
         guard seq() != before, let r = results().last else { XCTFail("KEEP \(label): the tap measured nothing"); return nil }
-        print("KEEP \(label) \(r.what): moved \(r.moved) end \(r.end) step \(r.step ?? -1) gap \(r.gap ?? -1) top \(r.top ?? -1) ys "
-              + r.ys.map { $0.map(String.init) ?? "-" }.joined(separator: " ")
-              + " drawn " + (r.drawn ?? []).map { $0.map(String.init) ?? "-" }.joined(separator: " "))
+        // In steps: Xcode 26.0 can't type-check it as one expression in time.
+        let ys: String = r.ys.map { $0.map(String.init) ?? "-" }.joined(separator: " ")
+        let drawn: String = (r.drawn ?? []).map { $0.map(String.init) ?? "-" }.joined(separator: " ")
+        print("KEEP \(label) \(r.what): moved \(r.moved) end \(r.end) step \(r.step ?? -1) gap \(r.gap ?? -1) top \(r.top ?? -1) ys \(ys) drawn \(drawn)")
         return r
     }
 

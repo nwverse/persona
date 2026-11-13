@@ -25,13 +25,13 @@ This table only points the way. Values and rules live in the sections it names, 
 | A color, font, spacing, radius, size or animation | the tokens in section 2 | 1.2 rule 1, 2 |
 | An icon or a brand mark | `ThemedIcon`, `IconTile`, `BrandMark` | 2.8 |
 | A field for a secret | `SecretField` | 1.2 rule 4 |
-| A key that may be a secret provider's reference | `KeyField` (web) | 1.2 rule 4 |
+| A key that may be a secret provider's reference | `ProviderKeyField` (iOS), `KeyField` (web) | 1.2 rule 4 |
 | A new setting | Settings, showing its current value | principles 2 and 3 |
 | Any UI change | the UI change self-check | 1.4 |
 
 ## Product design principles
 
-The six product design principles, with their rules, how to check each one and recent cases, live in `docs/design/PRINCIPLES.md`: 1 defaults first, 2 progressive disclosure, 3 user control, 4 consistency first, 5 model and product are separate, 6 rules are checkable. They decide product questions before any rule in this document applies. "Principle N" below refers to that numbering. Apple's Human Interface Guidelines are a source for this document, not its authority: what Persona takes from them is rewritten here as Persona rules (sections 2 to 6), and `docs/design/HIG_AUDIT.md` records where the code still falls short.
+The seven product design principles, with their rules, how to check each one and recent cases, live in `docs/design/PRINCIPLES.md`: 1 defaults first, 2 progressive disclosure, 3 user control, 4 consistency first, 5 model and product are separate, 6 rules are checkable, 7 fast, local-first and stateful. They decide product questions before any rule in this document applies. "Principle N" below refers to that numbering. Apple's Human Interface Guidelines are a source for this document, not its authority: what Persona takes from them is rewritten here as Persona rules (sections 2 to 6), and `docs/design/HIG_AUDIT.md` records where the code still falls short.
 
 ## 1. Purpose, scope and sources of truth
 
@@ -62,10 +62,11 @@ Relationship to other docs:
 
 1. UI code uses only tokens: font level, `Theme.Space`, `Theme.Radius`, `Theme.Size` with `scaledFrame`, `Theme.Motion`, role colors, `Theme.Icon`. A plain `frame` is for lines of 4 pt or less.
 2. Never restyle an existing screen directly. A new look is a new `AppStyle` or `ThemeColor`. A change that brings a screen in line with this document is a fix, not a new look; when it changes what a primary screen shows, it is a large change (section 1.4).
-3. Button text never wraps (decided 2026-11-10). A button label stays on one line at every text size. When a label would be truncated, work through these in order: (a) shorten the copy, in every language; (b) ask whether a button is the right control here, since long or user-supplied text is content and belongs in a row, a list or the body, and a set of actions that doesn't fit goes into a menu; (c) at accessibility text sizes (`dynamicTypeSize.isAccessibilitySize`) stack the whole button group vertically, primary action first, each label still on one line. `minimumScaleFactor` is a last resort for small overflows such as long translations, never the fix for a label that is too long. HIG-003 and HIG-012 in `docs/design/HIG_AUDIT.md` are tracked against this rule.
+3. Button text never wraps (decided 2026-11-10). A button label stays on one line at every text size. When a label would be truncated, work through these in order: (a) shorten the copy, in every language; (b) ask whether a button is the right control here, since long or user-supplied text is content and belongs in a row, a list or the body, and a set of actions that doesn't fit goes into a menu (a decision row's actions are not hidden in a menu: see the exception below); (c) at accessibility text sizes (`dynamicTypeSize.isAccessibilitySize`) stack the whole button group vertically, primary action first, each label still on one line. Exception, decided in `docs/design/task-cards.md` P1 (#5569): on a narrow width the owner-decision row's text takes the full width and its buttons go below it, the secondary buttons together in one row (wrapping onto the next line whole when they do not fit) and the primary button on its own full-width line last, at every text size; there is no Actions menu. `minimumScaleFactor` is a last resort for small overflows such as long translations, never the fix for a label that is too long. HIG-003 and HIG-012 in `docs/design/HIG_AUDIT.md` are tracked against this rule.
 4. Use `SecretField`, not `SecureField`, for tokens and keys. A key a secret provider's reference can stand in for uses
-   `KeyField` (web): its **Use a reference** switch stays with that key, at the end of the key's label row, so in a list of
-   computers' keys each switch sits with its own, and a reference is typed in plain text, never masked
+   `ProviderKeyField` (iOS) or `KeyField` (web): its **Use a reference** switch stays with that key (on the web, at the end
+   of the key's label row, so in a list of computers' keys each switch sits with its own), and a reference is typed in plain
+   text, never masked
    (`docs/extensions/secret-providers.md` "In the apps").
 5. Never write `glassEffect` or `.glass` directly. Go through `.surface` and `.themedButton`.
 6. Docs are English only. User-visible strings go through the string catalogs (section 5.5).
@@ -105,6 +106,7 @@ Colors are written light/dark. iOS sizes are at the default text size.
 | --- | --- | --- | --- | --- |
 | `accent` | from the theme color; blue `#007AFF`/`#0A84FF` | `apple/Shared/Design/Theme.swift:104` | `--accent` `#0285ff`/`#3d9aff` (differs; preset "blue" matches Apple) | Glass accent same as Apple |
 | `danger` | `#D93A3A`/`#FF5F57` | `apple/Shared/Design/Theme.swift:136` | `--red` `#bd3038`/`#ff9499` | same as Apple |
+| `danger` wash | `danger` at 12% | `apple/Shared/Design/Theme.swift` (the failed and interrupted conclusion cards) | `--danger-wash` = `--red` at 12% (#5569); `--red-tint` stays neutral | same as Apple |
 | `positive` | `#248A3D`/`#30D158` | `apple/Shared/Design/Theme.swift:137` | `--green` `#107638`/`#6dd697` | same as Apple |
 | `caution` / `cautionText` | `#F08A00`/`#FF9F0A`; `#B35400`/`#FF9F0A` | `apple/Shared/Design/Theme.swift:138` | `--orange` `#a64c00`/`#eea66d` (one token) | same as Apple |
 | `ai` | `#5B4FD6`/`#9C94FF` | `apple/Shared/Design/Theme.swift:140` | `--ai` same | same |
@@ -124,10 +126,10 @@ Defined once in `apple/Shared/StatusPalette.swift:19-36` and shared by the app, 
 | Needs you | system blue `#007AFF`/`#0A84FF` | `#0064C8`/`#409CFF` | blue since #6231 |
 | Working | `#E8890C`/`#FFB224` | `#A35A00`/`#FFB224` | amber |
 | Unread / awaiting reply | `#30A46C`/`#4CC38A` | `#1D7A4C`/`#4CC38A` | green |
-| Waiting in the background | working dot at 0.6 | secondary | clock mark |
+| Waiting in the background | working dot at 0.6 | secondary | clock mark; its soft fill the working dot at 0.08 |
 | Idle / Offline | secondary at 0.55 / 0.3 | secondary | gray |
 
-Needs you is blue on every client (`docs/design/DECISIONS.md`, 11-11). Android reads these values from the generated tokens (`spec/tokens/color.status.json`); the web still uses amber (`web/src/styles.css:233`), DS-01.
+Needs you is blue on every client (`docs/design/DECISIONS.md`, 11-11). Android reads these values from the generated tokens (`spec/tokens/color.status.json`); the web still uses amber (`web/src/styles.css:233`), DS-01. Waiting in the background is `status.<mode>.backgroundWaiting` there; Android Glass draws it as iOS does (`PersonaPalette.backgroundWaiting`, picked by `PersonaPalette.status(status, waitsInBackground)` as iOS's `Session.stateTone`), and Brief and Board keep Working's colors for it. It is also a count of its own, on every client and in every style: the quick filters and a heading's state counts (`StateCounts`: a computer's or a space's) leave such an agent out of Working and show it with the clock.
 
 #### Fills, diff, hues, shell neutrals
 
@@ -135,7 +137,7 @@ Needs you is blue on every client (`docs/design/DECISIONS.md`, 11-11). Android r
 | --- | --- | --- |
 | `Fill` | `well` quaternary system fill, `chip` tertiary, `pressed` secondary, `scrim` black 0.45 dark / 0.2 light | `apple/Shared/Design/Theme.swift:229-240` |
 | `Diff` | add `#1D7A4C`/`#4CC38A`, del `#C62B33`/`#FF6369`, changed `#8A6A00`/`#E3B341` | `apple/Shared/Design/Theme.swift:170-176` |
-| `Hue` (categories only) | blue, orange, green, purple, indigo, pink, gray | `apple/Shared/Design/Theme.swift:812-822` |
+| `Hue` (categories only) | blue, orange, green, purple, indigo, pink, gray; with red, amber, yellow, teal, also an extension's 11 named colors (UI version 6, `ExtensionUIStyle.color`), on marks only, never text | `apple/Shared/Design/Theme.swift` |
 | `ModeTone` (permission modes, #3719) | asks first: secondary ink; plans: teal `#0E7C86`/`#4FD1C5`; acts within limits (Auto-Edit, Auto): `Hue.purple`; allows everything: `danger`. None is an agent state's color | `apple/Shared/Design/Theme.swift` (`Theme.ModeTone`) |
 | `Shell` (same in every style) | composer `#FFFFFF`/`#1F1F21`, stroke `#E3E3E3`/`#3A3A3C`, ink `#0D0D0D`/`#F2F2F2`, segment `#E6E6E6`/`#3A3A3C`, drawer `#F9F9F9`/`#171717` | `apple/Shared/Design/Theme.swift:840-873` |
 | `ChatBox` | user `#E3EDFD`/`#1C2F47`, persona `#F0F0F3`/`#2A2A2E` | `apple/Shared/Design/ChatLayoutTokens.swift:18-23` |
@@ -182,7 +184,7 @@ Notes:
 
 - The names do not match Apple's text-style names (`caption` is footnote, `label` is Apple's caption). Keep the Persona names in code and use the table above in docs.
 - Emphasis tokens (`bodyStrong`, `secondaryStrong`, `captionStrong`, `labelStrong` and so on, `:356-365`) are the only way to change weight. `TypeScaleTests` forbids `.weight(` on a level.
-- Android Glass reads the same levels from `spec/tokens/type.json` (`Tokens.Type`, `android/core/designsystem/src/main/kotlin/persona/core/designsystem/Typography.kt`): each role takes a level's size and weight, emphasis is semibold, and line height is left to the platform. `scripts/assets/test_gen_tokens.py` checks the levels against `Theme.Font` and `Theme.Level` (DS-12, resolved 11-11).
+- All non-overridden Glass roles retain their existing `Tokens.Type` mappings from `spec/tokens/type.json`, including shared weights. Long-form reading uses the documented Android-specific values in `spec/tokens/type-glass.json` (`Tokens.TypeGlass`, #5780): body / bodyStrong / voice 16sp and callout / labelSmall 14sp, one point below the corresponding iOS levels. Emphasis is semibold, line height is left to the platform, and Brief / Board are unchanged. `scripts/assets/test_gen_tokens.py` checks the shared levels against `Theme.Font` and `Theme.Level` (DS-12, resolved 11-11).
 - Web has no type tokens: about 3,000 `text-[Npx]` uses across 20 sizes, some below 11 px.
 - Mac uses fixed sizes times `Font.scale`, floor 11 pt.
 
@@ -211,6 +213,8 @@ Dynamic Type behavior:
 
 `sm` (6) is smaller than `s` (8), which reads backwards (DS-17). Web has no spacing tokens (Tailwind 4 px steps; page margin 20/32 px). Android has the same names and values since 11-11 (`spec/tokens/dimension.json`, #4209); its old `xl` (20), which iOS's spacing lacks, became `Tokens.Size.iconXS` where it sized an icon and the gap iOS uses everywhere else (DS-05). Off-grid values in use: card padding default 14, watch card 10/12, chip vertical 2.5 (DS-09).
 
+Android has a device setting, Settings › Appearance › Layout density (#5564): Standard (the default) draws these values; Compact halves every `Tokens.Space` value (16 → 8, 12 → 6, 8 → 4) and the off-scale paddings written as `N.dp.dense`, takes the style page margin (`pagePadding`) to 0.625 (Glass 16 → 10), rounds corners less (`Tokens.Radius`, `PersonaTheme.shapes` and `N.dp.corner` × 0.6; pills stay pills) and lowers minimum row and button heights written as `N.dp.row` to 0.8 (40 → 32). Text and icons keep their sizes, so a spacing or radius token that sizes something (an icon, a dot, a spinner, a stroke) uses `Tokens.Space.Standard` / `Tokens.Radius.Standard`, which do not follow the setting; new code sizes things with `Tokens.Size` instead, and writes a hard-coded padding as `N.dp.dense`. iOS and web have no density setting yet.
+
 ### 2.4 Radius
 
 `Theme.Radius` (`apple/Shared/Design/Theme.swift:181-198`):
@@ -234,7 +238,7 @@ Outside the scale: composer 32 (`Shell.composerRadius`, `apple/Shared/Design/The
 
 - Hit target: `tapTarget` 44 (`:507`), drawn through `tapTargetFrame()` (a square for a small control) or `tapTargetHeight()` (a row or a heading that is a button and draws less, as wide as it is; #3753). A line of text that is a link in a row under a card, where a taller row would push the card's buttons under the composer, uses `tapTargetOutset()`: its touch area grows `Space.l` above and below, its layout does not (#5392). Same number under other names: `searchField`, `switchHeight`, `Watch.minRowHeight`, `Sidebar.row` (iOS), `voiceThreadRoom`. Android uses 48 as its platform floor (`Tokens.MinTouch`).
 - Dots 6-10, marks 12-18, icons 20-26, wells 28-38, avatars 40-48. Neighbors differ by 1 to 2 pt (DS-10).
-- Named by value: `box50` to `box380` (DS-10). Android's generated tokens carry only the sizes it draws with, under the same names (`spec/tokens/dimension.json`, checked against `Theme.Size`); the space page's cards added `hairline`, `line`, `dotL` and `box150`.
+- Named by value: `box50` to `box380` (DS-10). Android's generated tokens carry only the sizes it draws with, under the same names (`spec/tokens/dimension.json`, checked against `Theme.Size`); the space page's cards added `hairline`, `line`, `dotL` and `box150`, the strip of the images a turn looked at `box64` and `box80`, the pill while a chat's model operates a Mac `box280`, the queue strip's number disc `badge`.
 - The Mac's pointer over its picture in the app's VNC: at least `pointer` 22 tall, about macOS's own size (`VNCPointerArt`, #3075).
 - Widths: `readable` 560 (web chat column 880, pages 760), sidebar 340/400/480, drawer `min(0.82 x width, 380)` (Android the same).
 - Sidebar rows: `Theme.Sidebar` (`apple/Shared/Design/SidebarMetrics.swift`), 44 on iOS; 24/28/32 on Mac; web 32 (touch 44 via a hit-area expander).
@@ -296,7 +300,7 @@ Reduce Motion:
   No new style, setting or navigation is added; at accessibility sizes the market row puts its full name above the
   version and status instead of squeezing all three beside the logo.
 - Web draws about 80 stroke glyphs (`web/src/ui/icons.tsx`, 15 px, stroke 1.9). Android uses Phosphor. There is no shared glyph map.
-- Catalog package logos (#4780) replace only the generic extension glyph inside its existing leading tile in the market list, market detail, installed list and installed detail. A shared logo component keeps the tile's geometry and fallback glyph. Loaded artwork has a fixed light neutral backing (`--extension-logo-backing` on web, `PersonaPalette.catalogLogoBackground` on Android) so transparent dark marks remain legible in either appearance. Missing, invalid, loading and failed artwork retain the earlier role-tinted generic mark; a changed URL can retry. The image fits without cropping and is decorative beside the package name. Only anonymous absolute HTTPS URLs without account credentials load. Downloads, when supplied, use secondary text (`--extension-meta-size` on web, scaled by the existing text-size transform) and the same GHCR package total across versions on every surface, never an install/user count; unknown counts add no line. This adds package identity to an existing component, not a new style or theme. Other marks, actions and primary screens stay unchanged.
+- Catalog package logos (#4780) replace only the generic extension glyph inside its existing leading tile in the market list, market detail, installed list and installed detail. A shared logo component keeps the tile's geometry and fallback glyph. Loaded artwork has a fixed light neutral backing (`--extension-logo-backing` on web, `PersonaPalette.catalogLogoBackground` on Android) so transparent dark marks remain legible in either appearance. Missing, invalid, loading and failed artwork retain the earlier role-tinted generic mark; a changed URL can retry. The image fits without cropping and is decorative beside the package name. Bundled catalog artwork (#5461) is a square PNG inside the versioned extension package; the hub verifies/reads it and returns an authenticated relative `icon_url`. Web uses its selected hub connection to fetch bytes and displays a local Blob URL; Android uses its authenticated hub image loader. Missing, stale or unavailable bundled files keep the same fallback. Legacy absolute HTTPS sources still load anonymously without hub or market credentials. Publisher limits and authenticated image routes are in `docs/extensions/extensions.md` ("Bundled catalog artwork"). Downloads, when supplied, use secondary text (`--extension-meta-size` on web, scaled by the existing text-size transform) and the same GHCR package total across versions on every surface, never an install/user count; unknown counts add no line. This adds package identity to an existing component, not a new style or theme. Other marks, actions and primary screens stay unchanged.
 
 `Theme.Icon.phoneControl` (`iphone.radiowaves.left.and.right`) is the assistant operating an iPhone through a computer:
 the phone-control sections and the `iphone_*` tools. Why a separate symbol: `Theme.Icon.phone` (`iphone`) already means a
@@ -320,6 +324,24 @@ drawn in gray at the end of the call's row: the call did not run, so it is not a
 
 Source: `apple/Shared/Design/Theme.swift:11-39`, `apple/Shared/Design/StyleSpec.swift`. Style and theme color are independent axes; `StyleSpecTests` checks every pair. New code never switches on `AppStyle`. It reads the composed spec. Web has one look (the Beautiful style). Android has Glass, Brief and Board, so only Glass is common to both platforms.
 
+On the Mac a style may also bring the window's chrome (`StyleSpec.MacChrome`), read only through the tokens in
+`apple/Mac/Design/MacTokens.swift` and `Theme.monogram(_:)`: the sections column, the side column beside a list, how the
+shell's lists show the selected row and the row under the pointer, and the discs of names without a picture. Every style
+but Lark keeps the system's (`.system`), so their Mac windows are unchanged; the iPhone, iPad and watch draw none of it.
+Lark's follows the Feishu desktop window (#5598):
+
+| Part | Light / dark | Token |
+| --- | --- | --- |
+| Sections column | `#E4EAF6` / `#1C1D21` | `Theme.macSidebar` |
+| Selected section | a raised block `#FFFFFF` / `#2C2E34`, its icon in the accent, the title semibold | `Theme.Fill.macSidebarSelected`, `Theme.macSelectedIcon`, `Theme.macSelectedWeight` |
+| Side column (Inbox's filters) | `#EDF1F7` / `#18191C` | `Theme.macSideColumn` |
+| Other selected rows | the accent at 12 %, the icon in the accent | `Theme.Fill.macSelected` |
+| Row under the pointer | `#1F2329` / `#FFFFFF` at 6 % | `Theme.Fill.macHover` |
+| Names without a picture | one of nine hues picked by the name (the same on every launch), white letter ≥ 3.6:1 | `Theme.monogram(_:)` |
+
+`StyleSpecTests.theMacChromeReads` checks it in the style's own colors: the accent icon ≥ 3:1 on every selected shade,
+the row's words ≥ 4.5:1, the white letter ≥ 3:1 on every hue.
+
 ## 3. Components
 
 For every component: use the design-system one, not a lookalike. Counts are approximate uses at the snapshot. "Platforms" lists web and Android equivalents.
@@ -328,11 +350,25 @@ For every component: use the design-system one, not a lookalike. Counts are appr
 
 - Use: the one message input for Assistant and Agents chats on iPhone, iPad and Mac.
 - Anatomy: collapsed line `[+] field [mic] [voice/stop]`; expanded card with the field on top and a row `[+] ... [model/effort] [mic] [send]`. Both shapes share one text field so focus and IME text survive the change.
-- Tokens: radius 32, min field height 44, 3 to 8 lines, 22% of viewport (`apple/Shared/Design/Theme.swift:852-857`), fill and stroke from `Shell`.
+- Tokens: radius 32, min field height 44, iOS grows from one through six lines then scrolls (`Theme.Shell.composerPhoneMaximumLines`); Mac retains its eight-line cap. Fill and stroke come from `Shell`.
+- Draft scrolling (iOS, #5650): typing and cursor movement keep the caret visible; unrelated layout updates only correct an offset past the content end. A manual scroll wins over queued caret work and stays put until new input or cursor movement.
+- Full-page editor (iOS, #5650): a dedicated upper-right control row contains Hide Keyboard and Collapse, in the composer's neutral icon ink, with 44 pt touch targets. Quotes and editable text start below that row, never behind the controls. This serves anyone composing and reviewing a long message; it requires no new setting.
 - States: expanded when focused, non-empty or holding attachments; send hidden when empty and replaced by voice or stop; send gate button when the main conversation is not ready.
+- Model menu (`[model/effort]`, #4322): titled sections, "Model" and "Thinking Effort", their choices as switches with the current one checked (`MenuChoice` in `apple/Persona/Views/Chat/SessionModes.swift`; a running agent's `SessionModesMenu`, a new conversation's `StarterModesMenu`). Never an inline `Picker` in a titled section: an iOS menu draws no title over its options (`docs/lessons/ios.md`). The Agents header's mode menu (#3719) uses the same switches.
 - Accessibility: every control labelled; hold-to-talk has a hint and a tap action (`apple/Persona/DesignSystem/ComposerHoldMic.swift:105-110`). Reduce Motion read in the bar.
 - Source: `apple/Persona/DesignSystem/ShellComposerBar.swift:11`, `apple/Persona/DesignSystem/ComposerButtons.swift`.
 - Platforms: web composer (14 px radius, 28 px buttons, `web/src/views/chat/Composer.tsx:648`); Android `ComposerFrame` (radius 32 in Glass).
+- Web and Android text growth (owner-requested correction, #5645 / #5648): grow with the draft to six visible lines,
+  then scroll inside the same field. Keep the caret visible when typing or moving it; unrelated updates never take
+  over a manual draft scroll. Web reserves room for its toolbar in exceptionally short visible viewports (35% input
+  share); that safety cap is not the old 22% cap that stopped an ordinary keyboard-sized phone at three or four lines.
+  The existing phone-only full-screen editors are unchanged; their control colors and text placement were inspected,
+  not redesigned in this correction.
+- Pictures and videos (iOS `mediaPicker`, `VideoAttachmentsBar`, `PasteImageChip`): + › Photos takes pictures and videos,
+  four together. A video waits above the field as a row with the video mark, its name and, once on the computer, "size ·
+  length", and ✕. While the clipboard holds a picture not yet offered, the focused composer offers **Paste** (the accent's
+  capsule on iOS, a Secondary button on Android) and ✕ **Don't paste** at its top, once per copy; the field itself pastes
+  only text. Android: the video row in every style, the Paste chip on Glass (`ComposerPaste.kt`).
 - Web bottom row (#5324, cindy's toolbar at the owner's request; cindy wins over this section's earlier rules for it):
   `[+][permission picker] … [model pill][Stop][voice][send / queue / stop]`. The + and the picker are bare 30 px round
   controls that show the model pill's frame (`line-strong` border, `hover` fill) on hover or while open; the action is one
@@ -350,7 +386,7 @@ For every component: use the design-system one, not a lookalike. Counts are appr
   active row. Empty: three 44 px pulsing rows while reading, "No matching items" for a query with nothing.
 - Web permission picker (#5324, `PermissionPicker.tsx`): the mode's symbol (14 px), its name (13 px, truncates) and a
   chevron; Full access tints the words `red`, Auto-review `mode-acts`; under a 300 px composer (a 320 px phone) only
-  the symbol. Its menu is the shared `Menu` (300 px) with each mode's symbol, name and check; descriptions are tooltips
+  the symbol. A mode not reported yet is named by no value: the raised hand and "Permission mode", no tooltip (#5756). Its menu is the shared `Menu` (300 px) with each mode's symbol, name and check; descriptions are tooltips
   (`MenuItem.tip`), except a disabled row's reason and a row asking again, which stay under the name.
 - Web under the box (#5324): the source and folder line at the left (12 px `ink-3`, a folder mark, truncating, full
   values on hover; an ⓘ menu at phone width), the context meter at the right.
@@ -427,6 +463,33 @@ For every component: use the design-system one, not a lookalike. Counts are appr
   Persona's place in the message actions; the card over the composer (`ForwardBar`) and in the bubble (`ForwardBlock`)
   are the quote bar's and quote card's shapes (`views/chat/Quote.tsx`) with the `forward` icon, and Forward to is a
   `Dialog` (a bottom sheet on phones) with palette-style rows; no Share as Image row, as the web has no share card.
+- Forwarding several at once (#3838): the entry is a row at the top of Forward To, "Select Messages…" (「多选…」), never
+  a bar item next to Select Text, and the message bar keeps its width. Selecting in a chat is the Inbox Select's pattern:
+  a round mark on each message's leading edge (filled accent when picked), a tap anywhere on the message toggles it, the
+  composer gives way to a bar with Cancel, "N Selected" and Forward N (disabled at 0), and Cancel leaves the chat as it
+  was. Several forwards of one chat are one row over the composer (a line each, one ×) and one card in the bubble (each
+  message's author, time and two lines, each opening it; past three, "N More"). Web (#3838): "Select messages…" is the
+  first row of Forward to; while selecting, each message with a Forward has a checkbox (`ui/CheckMark`) in its first
+  place, a click anywhere on it toggles it and nothing inside it answers (no hover bar or menus), and the bar in the
+  composer's place reads Cancel, "N selected" and Forward N; Esc cancels too. The row over the composer is
+  `ForwardGroupBar` and the bubble's card `ForwardGroupBlock` (`views/chat/ForwardGroup.tsx`), past three "N more".
+- Share as Image (iOS `MessageShareSheet`): a full-screen page with the message as a card (who said it, where and when, the
+  words with code blocks that wrap and have no Copy bar, a quiet Persona mark, on a pale blue-to-lilac gradient), Light /
+  Dark at the top, and Share (the picture), Save, Copy and Share Text along the bottom; the card is 390 pt wide, wider for
+  tables, code and very tall cards, at most 520 pt (`ShareCardWidth`). Android has no Forward: on Glass the message
+  menu's Share opens the page (`MessageSharePage`, Light / Dark in the top bar, the picture drawn from the card's
+  `GraphicsLayer`); Brief and Board share the words.
+- A message sent from here and not in the transcript yet (iOS `PendingBubble`): drawn as a sent bubble at once, with a
+  mark before it, level with its last line: a quiet clock while it sends; a clock while it waits for the network, whose
+  small menu is Retry Now and Don't Send, with "Sends when connected" under the bubble; a red mark once it failed, with
+  Resend and Delete. Waiting or failed, the bubble is at 0.6. The long press ends in the mark's own word (Don't Send or
+  Delete). A failed one with messages sent after it sits before the first of them, at the end of the exchange it was
+  written in (`ChatLines.placeFailed`; Android in every style, `placeFailed`). Android draws the bubble so on Glass
+  (`OutboxBubble`, #4339 C9) and keeps its status line for a delivery the phone has to check.
+- The images a turn's work looked at (iOS `ViewedImagesRow`, docs/protocol/protocol.md "Images viewed this turn"): bare
+  thumbnails between the work line and the answer, `box64` tall in a strip that scrolls sideways, one alone `box80`, each
+  as wide as its picture (¾ to 1.6 of its height), with a small mark for a screenshot or a web page and nothing written
+  around them; a tap opens the viewer on the turn's images. Android draws it on Glass (`ViewedImagesRow`, #4339 C9).
 - No shared bubble component exists. Messages, Tasks and Lark rebuild it with different paddings and gutters (DS-20).
 - Web: user bubble 14 px radius; replies unboxed. Android: 20 dp in Glass, max width 86%.
 - Web reply bar (#5314, `ReplyBar`; the owner's requested alignment with cindy's `MessageActionBar`, 2026-11-12): only
@@ -436,13 +499,32 @@ For every component: use the design-system one, not a lookalike. Counts are appr
   icons, `--ink-3`, `--ink` on `--hover-2` under the pointer. Shown on hover or keyboard focus, it stays 250 ms after
   the pointer leaves and fades over 250 ms; an open ⋯ keeps it. Touch screens keep the copy + ⋯ row under that reply;
   the right-click / long-press menu keeps every action. A reply cut short by an error or an interruption carries
-  cindy's "This reply did not complete" line above it (13 px `--ink-2`). Details: `docs/web/web.md` ("Reply bar").
+  cindy's "This reply did not complete" line above it (13 px `--ink-2`). After the time (#5426, `TurnUsage`, cindy's
+  usage cell): what the exchange cost, 6 px on, 12 px `--ink-3`, half a pixel down, "Worth $0.12" in an Agent session
+  with cindy's usage card (320 px, `--surface`, `--line` border, 12 px radius, `shadow-overlay`, 16 px padding, 12 px
+  `--ink-2` lines; under the text from its start, above it when the chat has no room below; 250 ms into a hover, held
+  on the card, gone 220 ms after the pointer leaves, pinned by a click, Esc or a press elsewhere closes it, the bar
+  stays while it is open), or without a cost "23.4k tokens" with their lines in the dark tooltip (`--tooltip-bg`,
+  13 px, at most 420 px, 500 ms into a hover, never pinned by a pointer). A Persona conversation shows only "≈ $0.12"
+  and one plain line, and nothing without a cost (super rules 0 and 4). On touch screens the text ends the copy + ⋯
+  row: a tap holds the card or the tooltip, and a second tap on the text or a press elsewhere closes it.
+  Details: `docs/web/web.md` ("Reply bar").
 - Model change divider (web, #5034, `ModelChangeDivider`): where an exchange's reply came from another model than the
   previous visible reply, between that exchange's message and its reply: two `--line-strong` hairlines and a centered
   pill chip (`⇄` 12 px, "Opus 5.5 → Sonnet 4.5", 11 px `--ink-3`, `--line-strong` border, `bg-page/50`, padding 10 × 4),
   `role="separator"` with "Model changed from … to …"; not a control. Only the transcript's record of the replying model
   counts, never the picker (`docs/web/web.md`, "Model change divider"). Follows cindy's model-only switch chip at the
   user's request (2026-11-12), with model names instead of raw ids.
+- Engine switch divider (web, #5054, `EngineSwitchDivider`): above the first message a conversation's other engine got
+  (Claude Code ↔ Codex), the model change divider's row with a chip "⇄ Switched from Claude Code to Codex · <model> ·
+  <badge> ›": the badge "session resumed" when the engine's earlier session was resumed, else "Continued from summary".
+  When the switch carried a handoff the chip is a button (tooltip "View handoff context", `aria-expanded`) that opens a
+  panel under the line: `rounded-card`, 1 px `--line-strong` border, `bg-inset`, padding 16 × 12, an 11 px medium `--ink-3`
+  title, the handoff in 12 / 1.55 monospace `--tool-ink`, at most 16 rem high, scrolling, selectable; opened or not is
+  remembered per divider. `role="separator"` is the left hairline, labelled "Switched from … to …". Under 640 px the chip
+  reads "Claude Code → Codex · <badge>". That exchange draws no model change divider. Follows cindy's agent switch card
+  at the user's request (2026-11-12), with the model's name instead of its raw id and the badge always shown
+  (`docs/web/web.md`, "Engine switch divider").
 
 ### 3.3 Cards and surfaces
 
@@ -451,10 +533,14 @@ For every component: use the design-system one, not a lookalike. Counts are appr
 | `.surface(in:)` | floating panels: composer, strips, toasts, notices | `apple/Persona/DesignSystem/Styling.swift:8` |
 | `.card()` | grouped-row card, padding default 14 | `apple/Persona/DesignSystem/Components.swift:429` |
 | `NoticeBanner` | persistent in-page notice, neutral, caution or danger, one action | `apple/Persona/DesignSystem/Notice.swift:7` |
-| `TaskOpenButton` | compact task-title + Open navigation row, one line with a 44 pt minimum hit area | `apple/Persona/DesignSystem/TaskOpenButton.swift` |
+| `DispatchHandoffCard` | one card per dispatched task in the chat: ↳ well, title, New / Already Active / Resumed badge, last-active time and state, ↗; a failed start says why in red; one tappable element (`dispatch.task.<id>`) | `apple/Persona/Views/Assistant/Tasks/DispatchHandoffCard.swift` |
+| `PlanBriefView` | a plan task's brief before Start: who asked (two lines), one summary line, Show All for the goal, criteria, time and limits | `apple/Persona/Views/Assistant/Tasks/PlanBriefView.swift` |
 | `ReadinessCard` | what the main conversation still needs | `apple/Persona/DesignSystem/ReadinessCard.swift:8` |
+| `PlaceMapCard` | where the phone is, or the places a location tool found, as a map under the turn's work line | `apple/Persona/Views/Assistant/Tasks/PlaceMap.swift` |
 
-`.card()` uses the system grouped background, not the style's card color, so it does not follow Clay, Island or Lark (DS-07). The space page's cards (`SlotCard` and the dashed new-tab card in `apple/Persona/Views/Chats/SpaceView.swift`) are `.card(padding: 12)` with a minimum height of `box150`; Android Glass draws the same page with `AgentSlotCard`, `AgentNewTabCard` and `AgentCardRow` (`android/core/designsystem/src/main/kotlin/persona/core/designsystem/AgentSpaceCards.kt`), on its opaque card color with the hairline stroke, since its translucent card color is nearly invisible on the dark page (#4338). Inset wells (`Fill.well`) are rebuilt by hand in 24+ places. Web has no shared card outside the admin app.
+`.card()` uses the system grouped background, not the style's card color, so it does not follow Clay, Island or Lark (DS-07). The space page's cards (`SlotCard` and the dashed new-tab card in `apple/Persona/Views/Chats/SpaceView.swift`) are `.card(padding: 12)` with a minimum height of `box150`; Android Glass draws the same page with `AgentSlotCard`, `AgentNewTabCard` and `AgentCardRow` (`android/core/designsystem/src/main/kotlin/persona/core/designsystem/AgentSpaceCards.kt`), on its opaque card color with the hairline stroke, since its translucent card color is nearly invisible on the dark page (#4338). The page of a computer's projects that the space page's computer opens (`apple/Persona/Views/Chats/MachineSpacesView.swift`) is an inset grouped list: a summary row, a Working section and an Idle section, each with its count in the state's tone, each project a row that opens its space page; Android sets the same rows in `JGroupItem` cards and `JRow`s (`AgentMachineSummary`, `AgentProjectLine`, `AgentIdleProjectLine`, #4338 A11); in dark the cards are the system's lighter gray on the black page (`JGroupItem(grouped = true)`, the opaque card color, as Settings' grouped surfaces), since the translucent glass fill is near-invisible there. Inset wells (`Fill.well`) are rebuilt by hand in 24+ places. Web has no shared card outside the admin app.
+
+**Place map card** (iOS, #5543, `PlaceMapCard`): a quick result like the added-reminder card (`QuickResultCard`): the same `Fill.well` and `Radius.card`, under the turn's work line, with the tool calls still folded (super rule 2). On top, a still map `Size.chatMap` tall (160, scaled), made by `MKMapSnapshotter` off the main thread for the card's size and appearance and cached (bound 24); while it is made the well's fill holds the same height, so nothing below moves. Places carry `CountBadge` numbers on the accent in the order the tool returned them, which is the order the answer counts in; the phone's own fix is an accent dot. Under the map, the first three places as rows (number, name in `secondaryStrong`, distance and address in `caption`) with an icon-only Directions button (`Icon.directions`, 44 pt target, spoken "Directions to <place>"), then "N more on the map". Tapping the map opens a sheet with a live `Map`, the same numbers as `Marker` monograms, every place's row and Done. Why a new card: no existing component shows places, and a live map in the chat would redraw while scrolling (`docs/apple/performance.md`, P8). No setting; nothing is drawn for a failed, empty or running call. **Hand-off** (#5545): directions `phone_maps_navigate` opened in Apple Maps are the same card with one place, the destination: on the map a white `Icon.place` in an accent circle (the accent dot stays the phone's own fix), and one row with Maps' app icon (`BrandMark`, `Brand.iosMaps`, as Settings › Connectors draws it), the destination's name, the mode and "Opened in Maps" in `caption`, and the icon-only button (`Icon.directions`, spoken "Open directions to <place> in Maps") that opens the same directions in the same mode again. Nothing opens Maps without a tap, and the words say Maps navigates, not Persona. **Route** (#5544): a route `phone_maps_route` worked out is the same card with the destination: on the map the route's line in the accent (`Size.barWide`, round caps and joins) from the phone's accent dot to the destination's mark, the same line as a `MapPolyline` in the sheet; one row with `Icon.place`, the destination, "Walking · 6 min · 420 m" in `caption`, and the icon-only button (`Icon.directions`, spoken "Start directions to <place> in Maps") that hands the route to Maps in its mode. Transit has no line (Apple Maps gives apps none), only the destination with its time and distance.
 
 The web task plan's workspace row (#3659) reuses the assistant form `fieldClass`, native labelled selects/inputs, and
 the existing plan Edit dialog. The compact policy choice stays on the plan card because it authorizes where a task
@@ -485,19 +571,19 @@ The brief box (web, #3822; `web/src/views/assistant/TaskBrief.tsx`) shows what a
 
 The status words are the task cards' (`taskStatusWord`), and the count on the top bar's button is the running background tasks and runs (`backgroundCount`), the same number the panel's Running section shows without the loop.
 
-**Hand-off cards** (web, #5096; the owner asked that this part of the main chat follow cindy's `SessionHandoffCard` exactly, which replaces the "Dispatched: <title> · Open" line and the task side panel). Each Agent a dispatch started or a task took over is one full-width card in the chat (`views/assistant/Handoff.tsx`):
+**Hand-off cards** (web, #5096; the owner asked that this part of the main chat follow cindy's `SessionHandoffCard` exactly, which replaces the "Dispatched: <title> · Open" line). iOS draws the same shape (`DispatchHandoffCard`, #5569): a well with ↳, title and badge, "3 min. ago · state", ↗, one card per task (its lead Agent) rather than per Agent, the failure line in `Theme.danger`. Each Agent a dispatch started or a task took over is one full-width card in the chat (`views/assistant/Handoff.tsx`):
 - **Frame:** a bordered `rounded-xl` surface, 16 px padding and 14 px gaps (12 / 12 at phone width), whose border turns `--ink` on hover.
 - **Mark:** a 36 px round `--field` well with the ↳ mark (`cornerDownRight`), which inverts on hover.
 - **Title line:** the title (14 px semibold, one line) and a 10 px uppercase pill badge: New and Resumed are filled `--ink`, Already active is outlined.
 - **Second line** (12 px): the history mark, "last active …" (the time alone at phone width), then ` · ` and the Agent's state from `StatusMark` and `lib/state-labels.ts`, in the attention color when it needs the user.
 - **End:** ↗ (`arrowUpRight`).
-- **Open:** the card opens the Agent's page. Before an Agent is up, the card has no ↗ unless the to-do can be opened, and its second line says the Agent is starting, why it did not start (`--red`), or that the task closed or is gone.
+- **Open:** the card opens the Agent where Settings › Agent preferences › "How Agents open" says (#5424): the side panel beside the chat (the default; over the chat on a phone-sized window), or the Agent's page. The card looks the same either way. Before an Agent is up, the card has no ↗ unless the task can be opened, and its second line says the Agent is starting, why it did not start (`--red`), or that the task closed or is gone.
 
 Two departures from cindy, both from Persona's rules:
 - cindy shows a short session id on the card. The Assistant's chat keeps ids out of sight (super rule 4, section 5.6), so here it is only in the card's tooltip.
 - The state word is added, so an Agent that needs the user is visible without opening anything (section 3.4).
 
-The Agent's page opened from a card shows cindy's way-back strip above the chat (`views/chat/HandoffBack.tsx`): a 40 px `rounded-xl` bordered row at the chat column's width, ↰ (`cornerUpLeft`) and "Came from <conversation> · click to return", with ✕ to put it away. Returning goes back in the history, and the chat opens where it was left (`lib/handoff.ts`).
+Set to Full page, the Agent's page opened from a card shows cindy's way-back strip above the chat (`views/chat/HandoffBack.tsx`): a 40 px `rounded-xl` bordered row at the chat column's width, ↰ (`cornerUpLeft`) and "Came from <conversation> · click to return", with ✕ to put it away. Returning goes back in the history, and the chat opens where it was left (`lib/handoff.ts`).
 
 No new token. The two icons are added to `ui/icons.tsx` in the existing stroke grammar. iOS and Android keep the dispatched line and task details for now (#5110).
 
@@ -509,6 +595,25 @@ No new token. The two icons are added to `ui/icons.tsx` in the existing stroke g
 - **Review** opens the branch's review (commits and uncommitted work); a file row goes to its file there, or opens the file itself when the review does not list it or the file is outside the session's folder.
 
 Deviations from cindy: no Undo / Reapply (Persona cannot apply or revert a turn's patch), the plain `file` mark instead of file-type icons, rows a finger tall on touch screens (6.3), and 评审 for Review in Chinese (the Review panel's word). The `fileDiff` and `alertCircle` marks are added to `ui/icons.tsx` (Lucide's file-diff and circle-alert, as cindy's); no new token.
+
+#### Connected Inbox message cards (#856)
+
+Lark CLI Inbox items with a source AppLink offer **Open in Feishu** (or **Open in Lark**)
+while **AI draft reply** remains available. This secondary Button opens the source client at the original
+message or topic using the CLI's unmodified link. Missing links have no opening action;
+the existing in-app Original action remains available.
+For older items without a stored link, the loaded original message supplies the
+same action next to the reply-target details; a stored header action is never duplicated.
+
+The web Inbox uses the existing connector conversation for source-provided messages;
+legacy collected text is never split into inferred messages. A supported card uses
+`bg-surface`, `rounded-card`, the existing stroke icons and the Markdown/link reader.
+Its linked subject and description come first; author, repository and original text
+are disclosed in details. Long descriptions have a preview, reversible expansion
+and a bottom collapse action that restores focus to the expansion control.
+Reply targets show a friendly name and a source-backed preview when available;
+opaque routing IDs and read diagnostics stay in details. The layout changes no
+sending identity or confirmation behavior.
 
 ### 3.4 Lists and rows
 
@@ -523,11 +628,20 @@ Deviations from cindy: no Undo / Reapply (Persona cannot apply or revert a turn'
 - **Recap pages reuse the minutes' layout** (#4741, a recorded day's page, `RecordingDayView`): a compact header, then the recap drawn as a meeting's minutes are (`RecordingMinutesSections`, `docs/apple/recording.md` "Minutes"), then one last section: a **Transcript** link to the day's transcript on its own page (`RecordingDayTranscriptView`, by the hour), with the actions under it (**Erase Last 10 Minutes** on today's day while it is open, **Delete Recording**). A meeting's page instead shows its transcript inline, in a section of its own above its actions. The recap: summary with Copy and Share; the timeline as sections named for the time of day (Morning, Afternoon, Evening) with a meeting entry marked by `Theme.Icon.meetingMark` and its name; points and suggested to-dos as the minutes' items (a mark, the words, `RecordingMinutes.byline`, a time chip: `Chip` `.tint(Theme.accent)`, compact, with a 44 pt hit area, opening the transcript at that line and lighting it for 2 s). Before it exists the section says what it waits for, "Writing the recap…" with a spinner, or the failure with Retry, as minutes do. Suggested to-dos are read-only here, with a footer saying they are confirmed on the web.
 - Web rows: 32 px desktop, 44 px touch. Android rows: min 56 dp.
 - Web sidebar groups share visible disclosure chevrons and sticky, interactive headings in every grouping (to-do, computer, repository, project and state). Nested group headings stack below their parents and the measured Persona row; the next sibling replaces the current heading as it scrolls past. The Agents title, grouping segments and quick filters form one sticky toolbar below Persona (at the viewport top on the phone Agents page). One inward-chevron button toggles between Collapse all when any visible group is open and Expand all when they are all folded; its spoken label and tooltip name the next action. The toolbar stays above the section headings on an opaque theme background, with no fog over the first heading. The existing menu retains both explicit actions, affecting its groups and nested disclosures while keeping the block and grouping controls open. Individual folds remain independently reversible; flat conversation lists have no invented group headings.
-- Status sections (web To-dos, #3156): a list grouped by what the user should do next uses folding section titles in a fixed order (urgent first, then the rest folded), one row per piece of work with related items behind an "N related" disclosure, and stale items folded under Shelved with a one-tap Restore instead of being hidden or deleted. Rules in `docs/assistant/todo-status-sop.md`. Why not the folder groups: they say where work lives, not who has to act.
+- Status sections (web To-dos, #3156): a list grouped by what the user should do next uses folding section titles in a fixed order (what the user has to act on, then the unfinished work, then what just finished; only Shelved and Done start folded, Done last, #5707), one row per piece of work with related items behind an "N related" disclosure, and stale items folded under Shelved with a one-tap Restore instead of being hidden or deleted. A row that is only worth a look (Just finished) has a one-tap **Got it** under its words, the same secondary button as Restore (iOS: also a leading swipe action after the full swipe's own), which files it under Done at once with an Undo toast (4.4, reversible rung); opening the item counts as seeing it, without a word. Rules in `docs/assistant/todo-status-sop.md` ("Seen"). Why not the folder groups: they say where work lives, not who has to act. Why unfinished work above Just finished: what still has to be done should not take a scroll and a tap while finished work sits above it.
   - Section titles are the Agents list's state headers (`SectionHeader`: the name and a `CountBadge` in the state's tone; `FoldButton` for the folding ones), and the count is the items listed under the title. No separate summary line repeats them (#3712).
   - "N related" sits inside the row it belongs to, under its words; opened, the related rows come under it a level in, with a line down their side.
   - A filter and a sort for such a list go in one button's menu next to the view switch (on the web, next to the search field), the active filter also as a chip that clears it ("List controls" below); the sort orders rows inside each section and never moves a section (To-dos on iOS, Android and the web, #3740).
 - Older rows folded by activity (web paged Agents list, #4236): an "Active within" menu beside the list's count (Any time, the default, then 24 hours, 7 days, 30 days) folds the rows last active before the window into one Earlier group at the list's end, folded by default, with how many it holds and how many of them need the user on its header. It is a display choice ("List controls": grouping and display), not a filter: no row leaves the list, no count changes, and Any time undoes it. Why not a filter chip: a filter hides rows, and sessions that need the user must stay visible (below).
+
+#### Long lists on a detail page
+
+A section of a page about one thing (a computer's page) lists its items in place only while there are **three or fewer**. From four, the section folds to one summary row: how many, then the one or two facts that need attention, with a disclosure chevron (#5821, Browser Sign-ins on iOS `BrowserLoginsSection` and the web `BrowserLogins`: "48 sites" over "First expires 11/24/2026 · 2 expired", the expired count in the caution color). The section's own header keeps its title, its count and its main action (Import); nothing else of the list stays on the page.
+
+- **Where the list opens**: iOS pushes a page of its own (`BrowserLoginsListView`, a `List`); the web opens it in place under the summary row (`Collapse`, the list held to 60% of the viewport and scrolling), the machine page's way of showing more (Node health's "Show all checks").
+- **The whole list**: a search field that filters by name, applied 150 ms after the last key; an order, by name by default, with the one that matters for the list as the other choice (Expiring first: expired on top, those without a date last); a mark on the items that need attention (an Expired chip in caution, as the brief box's Overdue in 3.3; not red: nothing failed).
+- **Row actions**: a swipe and the long press on iOS, a row-end ⋯ menu on the web (and on iOS's in-place rows), never a button on every row. Several at once: Select (iOS edit mode, Select All / Deselect All and "Clear N" in the bottom bar) or checkboxes with a select-all box (web). Every destructive action asks first (4.4, rung 2), naming the item, or how many.
+- Why three: the session's file card shows three rows before "Show N more files" (3.3), and on a phone a fourth row with its date already pushes the sections below a screen away. The chat's queued messages show four in full because each is one line without actions.
 
 #### Sessions that need the user
 
@@ -539,7 +653,7 @@ A herdr tab's workers are the same (web, #5180; the owner asked on 2026-11-12 th
 
 #### The work-item row
 
-The Agents list, the Inbox's Agent section, the Assistant home and history show a session with the same content, in every Agents row style (Avatar, Two Lines, State Cards, Compact List):
+The Agents list, the Inbox's Agent section, the Assistant home and history show a session with the same content, in every Agents row style (Avatar, Two Lines, State Cards, Compact List; iOS's ⋯ › Display and Settings › Appearance › Agents List Layout, Android's ⋯ › Display and Settings › Interface style on Glass, where the parts each style draws come from `rowParts` in core/domain, #4338 A9):
 
 - Leading: one source mark, the Agent's brand or a contact's avatar. The row's one state sits on its corner, chosen by the order in section 5.6. iOS (`AgentAvatar`) and Android's Glass row put the mark in a round well with the state's dot on its corner, rimmed apart from the well.
 - Line 1: the session's title, with the time on the right, localized ("6 min ago").
@@ -547,7 +661,7 @@ The Agents list, the Inbox's Agent section, the Assistant home and history show 
 - Line 3, optional: computer · project, leaving out what the grouping already shows, then the model's short name. iOS's Avatar row and Android's Glass row (#4338 A9) draw it as the source tag, the tab (space › tab outside the tree), the computer only while the list mixes computers, the model, the to-do as an outlined chip and the muted mark; Android's words come from `rowContent` in core/domain, its model's short name from `modelShortName` (the web's `modelChipLabel`; iOS's row still shows the raw string).
 - Never in a row: raw model IDs, session IDs or engine badges. At most one count badge.
 - Answers in the row: a question's choices, and a tool approval whose full command is shown and whose action is low-risk (Deny, Allow Once). Plans, high-risk actions and Always Allow for This Session open the session, where the context is.
-- Views grouped by location draw these rows too (#3753): By Repository's computer, repository and worktree are lines of their own, each worktree's sessions in these rows under its line. The Mac's By Repository cards (frozen) keep their rows (`WorkspaceAgentRow`). On iOS and on Android's Glass style each repository is a card: its header has the folder, the bold name and the chevron, no counts, with its actions in its long press (`RepoCardHeader`, Android `AgentRepoHeader`); a worktree's line has its mark, its name, a Primary chip on the main checkout, the branch when the name is not it or Detached HEAD as a caution, "N agents" or Idle at the end, dimmed while its computer is offline (`RepoWorktreeLine`, Android `AgentWorktreeLine`, #4338 A7). A computer's repositories with nothing going on follow its busy ones under Idle Repositories with their count, one card with a row each: the folder, the name, "N agents · tab names", when it last moved and a chevron, a tap opening its agents under it (`QuietSpaceRow`, Android `AgentIdleRepoRow`). A busy worktree's idle agents fold behind one line, "2 idle · review · research", and once opened "Hide N Idle" after them folds them again (`RepoIdleLine`, Android `AgentRepoIdleLine`, #4338 A8).
+- Views grouped by location draw these rows too (#3753): By Repository's computer, repository and worktree are lines of their own, each worktree's sessions in these rows under its line. The Mac's By Repository cards (frozen) keep their rows (`WorkspaceAgentRow`). On iOS and on Android's Glass style each repository is a card: its header has the folder, the bold name and the chevron, no counts, with its actions in its long press (`RepoCardHeader`, Android `AgentRepoHeader`); a worktree's line has its mark, its name, a Primary chip on the main checkout, the branch when the name is not it or Detached HEAD as a caution, "N agents" or Idle at the end, dimmed while its computer is offline (`RepoWorktreeLine`, Android `AgentWorktreeLine`, #4338 A7). A computer's repositories with nothing going on follow its busy ones under Idle Repositories with their count, one card with a row each: the folder, the name, "N agents · tab names", when it last moved and a chevron, a tap opening its agents under it (`QuietSpaceRow`, Android `AgentIdleRepoRow`). A busy worktree's idle agents fold behind one line, "2 idle · review · research", and once opened "Hide N Idle" after them folds them again (`RepoIdleLine`, Android `AgentRepoIdleLine`, #4338 A8). By Project's spaces fold theirs behind one "N more idle" row the same way: it opens them and, once open, "Hide N Idle" follows them and folds them again (`collapseRow`, Android `AgentIdleRow`'s `open`, Glass).
 
 #### List controls
 
@@ -562,19 +676,21 @@ A list's controls come in four kinds. Each kind looks like itself, so that narro
 
 Search may take query operators and scopes; they live inside the search field.
 
-Android's `JMenu` takes a choice list in groups: an action can open a group with a title (`JAction.section`, drawn after a rule) and carry a quiet line under its label (`JAction.subtitle`), as the To-dos list's Show (each choice with how many it would show) and Sort by (#3740). A status section's count can sit in a capsule of its state's tone (`JSectionHeader` `countTone`, the To-dos list's sections, #3712), as iOS `CountBadge`. A one-line notice over a list keeps its action on its line as a text button (`JNotice` `inlineAction`: "1 more waiting on you, not in This week · Show all").
+Android's `JMenu` takes a choice list in groups: an action can open a group with a title (`JAction.section`, drawn after a rule; `JActionSheet` draws it too, over its labels' column, as the Agents ⋯'s Display) and carry a quiet line under its label (`JAction.subtitle`), as the To-dos list's Show (each choice with how many it would show) and Sort by (#3740). A status section's count can sit in a capsule of its state's tone (`JSectionHeader` `countTone`, the To-dos list's sections, #3712), as iOS `CountBadge`. A one-line notice over a list keeps its action on its line as a text button (`JNotice` `inlineAction`: "1 more waiting on you, not in This week · Show all").
 
 ### 3.5 Navigation
 
-- Shell (compact width): Assistant and Agents as pages on a strip, a drawer sidebar, no tab bar. Top bar: persona button, `ShellSwitch`, circle button (`apple/Persona/DesignSystem/ShellComponents.swift:19,258,294`). Re-tapping the selected segment opens its menu.
-- Regular width: system tab view and split navigation; the same sidebar in a column.
-- Assistant switcher on Apple (sidebar header, `apple/Persona/Views/Assistant/AssistantSwitcher.swift`, with two or more installed assistants, `ManagerRoster.isMulti`; the rules every client shares are in the "Assistant switcher" bullet below): the persona face with a state dot at its foot, the current assistant's name with a down arrow and its state line; a tap opens a popover list of the hub's assistants on a solid panel (`Theme.card`: through glass the badges behind it showed beside the rows), each row the first letter on a solid disc in its color with a state dot at its foot (green online, gray offline, orange installing, ringed in the panel's color), name, Default chip (only beside another assistant), state line (up to three lines at the accessibility sizes) and a check on the current one; an offline row is dimmed as a whole (`Theme.Fade.offline`) and still pickable. Then New Assistant and Manage Assistants…, which stay whole and tappable at the largest text size while the rows scroll above them. Rows are at least 44 pt and one line each. Why a popover and not a `Menu`: a row carries a colored avatar, a status dot, a chip and a second line, which a system menu item cannot draw, and the same list is drawn on web and Android. It is the only place that switches assistants; pages do not add their own.
+- Shell (compact width): Assistant and Agents as pages on a strip, a drawer sidebar, no tab bar. Top bar: persona button, `ShellSwitch`, circle button (`apple/Persona/DesignSystem/ShellComponents.swift:19,258,294`). Re-tapping Assistant opens its menu. Explicitly selecting Agents opens its list, clearing any retained detail navigation; re-tapping Agents from a detail returns to the list. Re-tapping Agents while already at the list opens the existing list-options menu. A card, notification or session link remains a targeted open and goes directly to that Agent, not through the list. This list-first rule serves people moving between their everyday Assistant conversation and Agent work, without a setting or a new visual style.
+- Regular width: system tab view and split navigation; the same sidebar in a column. On iOS, selecting or reselecting Agents follows the same list-first rule, leaving the split's detail empty until an Agent is explicitly opened. Agent sidebar links use the bound detail path, not a separate implicit split selection, so clearing navigation also clears a row-opened detail without rebuilding the list. Cold-launch and width-change restoration remain separate from explicit tab selection.
+- Assistant switcher on Apple (sidebar header, `apple/Persona/Views/Assistant/AssistantSwitcher.swift`, once a roster is known (read in this run, or kept from the last launch) and the current assistant can be shown, including with one installed assistant; the rules every client shares are in the "Assistant switcher" bullet below): the persona face with a state dot at its foot, the current assistant's name with a down arrow and its state line; a tap opens a popover list of the hub's assistants on a solid panel (`Theme.card`: through glass the badges behind it showed beside the rows), each row the first letter on a solid disc in its color with a state dot at its foot (green online, gray offline, orange installing, ringed in the panel's color), name, Default chip (only beside another assistant), state line (up to three lines at the accessibility sizes) and a check on the current one or, on any other with something waiting, its count (`CountBadge`'s `.needs` look; VoiceOver says "n things waiting for you"); an offline row is dimmed as a whole (`Theme.Fade.offline`) and still pickable. While another assistant has something waiting the face carries a mark at its head (`AssistantWaitingDot`, the needs-you color, ringed like the state dot; beside the name where the face is not drawn), and the header's spoken name says so. A page of an offline assistant's merged things (the inbox, to-dos) shows `AssistantOfflineNotice` in place of its empty state: laid out as `EmptyStateView`, with the assistant's avatar and its offline mark (`AssistantMonogram`, faded as an offline row) where that has its symbol, then "<name> Is Offline" and when it last synced. Then New Assistant and Manage Assistants…, which stay whole and tappable at the largest text size while the rows scroll above them. Rows are at least 44 pt and one line each. Why a popover and not a `Menu`: a row carries a colored avatar, a status dot, a chip and a second line, which a system menu item cannot draw, and the same list is drawn on web and Android. The sidebar and Settings reuse this same popover/list; pages do not add another switcher implementation.
 - Page titles: `.pageTitle`, `.detailTitle` (`apple/Persona/DesignSystem/PageTitle.swift`).
+- An Agent chat's header folds into a slim bar (iOS `ChromeHeader` and `compactChrome` in `apple/Persona/Views/Chat/ChatView.swift`, `docs/apple/ios.md`; Android on Glass `JFoldingHeader` and `ChatSlimBar`, #4339 C4): it follows the list's own scrolling (toward the newest it folds, back into the history it opens), is never left half way when the finger lifts (folded at the newest end, else the nearer end), and folds by itself after 3 s without a touch while nothing is presented over the page. The slim bar is back and a centered capsule (the agent's mark, the state's dot, the title; Connecting… while the hub is out of reach) that opens the header again; nothing on its right. The open header's second line leads with the state's words (iOS `ChatView.stateWords`): "Working N min" while a turn runs ("N hr M min" past an hour; the work line has the seconds), the state's name otherwise, "Working (Background)" once the turn ended and a workflow keeps the agent going, "Waiting in the background" when all it runs only waits; that wait is drawn with the clock for its dot, in the lighter tone, in the slim bar's dot too. Android also opens it when a new request arrives, and never folds by itself while animations are off. The open header's title opens Session Info.
 - Side rail for iPhone Duo (`apple/Persona/DesignSystem/ShellSideRail.swift:50`). Under its side bars the shell's pages never move sideways: they cross-fade instead of sliding, and the drawer's sidebar slides in over the page, which stays (`docs/apple/ios.md`, "iPhone Duo").
 - Platforms: web phone shell matches (drawer plus top-bar switch); Android `HomeNavigation` has a 36 dp segment height versus Apple's 44 (DS-18).
-- Web assistant identity appears in navigation and conversation chrome only with at least two installed assistants (offline assistants count; pending installs do not). With one, keep the earlier product header and controls, without the assistant name, avatar, status/computer line or roster dropdown. Web keeps AppMark, Persona, connection/computer status and its appearance menu; `ASSISTANT_MENU_WIDTH` in `web/src/ui/menu-model.ts` preserves the product menu's 220 px and the roster's 264 px widths. Android keeps the assistant's name, avatar, status and sidebar switcher with one installed assistant, without a Default tag. Settings › Assistants still provides New assistant. Conversation titles remain their existing product/session titles and messages add no roster identity with one assistant; the user's chosen Persona look stays unchanged. The maintainer requested the simplified header for web only.
-- Assistant switcher (Android: one or more installed assistants; web: two or more): the head of the sidebar is the current assistant (avatar, name, status line, a chevron) and opens the roster: installed assistants as a single-choice list (the default tagged, the current one checked, a count on the others, an offline one's whole row faded to 55% and still selectable), the ones still installing, then New assistant and Manage assistants… (`docs/assistant/managers.md`, "The current assistant"). Web: `web/src/views/AssistantSwitcher.tsx`, a `Menu` whose rows take a lead mark, a tag, a count (with the words a screen reader says for it, `badgeLabel`) and a faded state (`dim`); the row's earlier entries (appearance's three rows under a heading, other hubs, Settings, Disconnect) follow under a divider. The menu scrolls, and no submenu opens over its last rows, so every row stays reachable at 200% zoom and the largest text size. Settings' first group ("<name>'s settings") titles itself with the same avatar and name, and its **Switch**, a text button at the title's end, opens the same rows (web: `AssistantSwitchButton`, `views/settings/SettingsGroups.tsx`); the rows of that group read and write the current assistant only. Why a new pattern: the assistant is a scope for the whole app, not a page, so it sits above the pages rather than in the assistant page's top bar where the segmented switcher was. Android: `AssistantSwitcher` opens the roster in `JMenu` (its content slot holds the rows above New assistant and Manage assistants…), as wide as the sidebar and over its rows, closed by a tap outside, scrolled when it does not fit.
-- Apple keeps the persona name, circular avatar, sidebar identity/status footer, personalized composer prompt and voice attribution with one assistant or a legacy roster. The switcher remains limited to two or more installed assistants. #4689 withdraws the Apple identity-hiding change in #3975 at the user's request; web and Android are unchanged.
+- Android home selection (#5638): choosing **Agents from Assistant** opens its list root, even when a session, request or terminal was open there before. Keep the existing root and list state, and keep Assistant's current conversation. A task/session entry or notification/session link still opens its requested detail directly; Back from an Agent opened in Assistant returns to the originating page. Re-tapping an already selected Glass segment still opens its menu. This separates a primary-destination choice from targeted detail navigation without a setting or new component.
+- Web assistant identity appears in navigation whenever the hub supplies a displayable current assistant, including with one installed assistant. The desktop sidebar and phone drawer head show the current assistant's name, first-character avatar with its status dot, and status/computer line, and open the roster menu. Web remembers the last header id and name per hub, including the default assistant's, for display only: a reload or transient roster-read failure keeps that identity instead of flashing the product header, while a genuinely unsupported roster route (404) clears it and returns to the product header. An empty roster or no displayable current identity also restores AppMark, Persona, connection/computer status and the original Appearance/other-hubs/Settings/Disconnect menu. `ASSISTANT_MENU_WIDTH` in `web/src/ui/menu-model.ts` is 264 px for the assistant menu and 220 px for the product menu. Android keeps the assistant's name, avatar, status and sidebar switcher with one installed assistant, without a Default tag. With one installed assistant and a roster, Settings' first group keeps "<name>'s settings" and **Switch**, and Settings › Assistants still provides New assistant. Web conversation titles and message identity still follow `multiManager`: with one assistant or no roster they keep their existing product/session titles and messages add no roster identity. Showing this identity does not enable filtering, badges, extra requests, manager headers/query parameters or `needs_you` reads; those remain under `multiManager`. The user's chosen Persona look stays unchanged.
+- Assistant switcher (Android: one or more installed assistants; web: a displayable current assistant identity, fresh or cached): the head of the sidebar is the current assistant (avatar, name, status line, a chevron) and opens the roster: installed assistants as a single-choice list (the default tagged only when more than one assistant is installed, the current one checked, a count on the others, an offline one's whole row faded to 55% and still selectable), the ones still installing, then New assistant and Manage assistants… (`docs/assistant/managers.md`, "The current assistant"). Web: `web/src/views/AssistantSwitcher.tsx`, a `Menu` whose rows take a lead mark, a tag, a count (with the words a screen reader says for it, `badgeLabel`) and a faded state (`dim`); the row's earlier entries (appearance's three rows under a heading, other hubs, Settings, Disconnect) follow under a divider. With one installed assistant, web shows the same head and a one-row roster with no Default tag; New assistant and Manage assistants… remain in the menu, so creation is not confined to Settings. The menu scrolls, and no submenu opens over its last rows, so every row stays reachable at 200% zoom and the largest text size. Settings' first group ("<name>'s settings") titles itself with the same avatar and name, and its **Switch**, a text button at the title's end, opens the same rows (web: `AssistantSwitchButton`, `views/settings/SettingsGroups.tsx`); the rows of that group read and write the current assistant only. Why a new pattern: the assistant is a scope for the whole app, not a page, so it sits above the pages rather than in the assistant page's top bar where the segmented switcher was. Android: `AssistantSwitcher` opens the roster in `JMenu` (its content slot holds the rows above New assistant and Manage assistants…), as wide as the sidebar and over its rows, closed by a tap outside, scrolled when it does not fit.
+- Apple keeps the persona name, circular avatar, sidebar identity/status footer, personalized composer prompt and voice attribution with one assistant or a legacy roster. Once a roster is known (read in this run, or kept from the last launch) and the current assistant can be shown, the switcher appears with one installed assistant too: a one-assistant roster has no Default chip, and New Assistant and Manage Assistants… remain below it. Without a roster, the sidebar keeps the persona's name as its title. Settings independently titles its first group **<name>'s Settings** and shows **Switch** whenever the hub answers a roster, including with one installed assistant; Switch reuses the sidebar's popover/list rather than implementing a second switcher, and the single-assistant list keeps its Default chip hidden. A legacy hub without a roster keeps the neutral **Current Assistant's Settings** heading and no Switch. #4689 withdrew the Apple identity-hiding change in #3975 at the user's request; #5616 shows the switcher with one assistant on every client.
 
 - Android Settings (#5233) keeps the current-assistant / this-device / Hub scopes and reuses `JSearchField`, `JListPage`, `JGroupItem`, `JRow`, `JSectionHeader` and the assistant switcher. Search narrows localized entry names and aliases, never account values; clearing it restores the same scopes, and no match uses `JEmptyState`. Models shows uses before a folded Advanced group. Agent groups runtime settings and session triage; Notifications and background groups mobile controls and one phone-check list; About and updates groups app update actions; Connection groups status, address, pairing and diagnostics. These groups reduce navigation choices without changing behavior defaults. Old destinations remain reachable. See `docs/android/android.md`, "Settings navigation and search" for the entry map and capability limits. This requested structure change is a large UI change requiring human screenshot review.
 
@@ -621,19 +737,31 @@ automatic naming hides the advanced controls without losing their values. Saves 
 show only confirmed values. Native custom titles and manual renames are protected; task names and tab labels are
 separate objects and unchanged. This is a requested feature, with no new visual style, component or motion.
 
+### 3.7.2 Tick boxes (iOS)
+
+- `.toggleStyle(.tickBox)` (`TickBoxToggleStyle` in `apple/Persona/DesignSystem/Components.swift`): a box, ticked (`Theme.Icon.checkedBox`, positive) or not (`Theme.Icon.uncheckedBox`, secondary), beside a short label. Tapping the box or the label flips it, and VoiceOver reads it as the toggle it is.
+- Only for a mark the user sets on one item among many, where a switch would outweigh the item: a file marked viewed in a code review (#827). Settings keep `Toggle`'s switch.
+
 ### 3.8 Chips, badges, avatars, marks
 
 `Chip` (look neutral, tint or outline), `CountBadge` (99+ cap), `LinkBadge`, `Monogram`, `AgentMark`, `BrandMark`, `SessionAvatar`, `ThreadAvatar`. Chips are text-only and read as their text. Decorative marks are hidden from VoiceOver when adjacent text names them. Sources are in `apple/Persona/DesignSystem/Components.swift` and neighbors.
 
 Apple counts and row marks (#4538): `CountBadge` takes the web's three looks by name. `.needs` (Needs you's text on its soft tint) is for what waits for the user, `.neutral` (white on `Theme.countBadge` gray, the default) for a passive total such as unread messages or items in a group, and `.accent` (white on the accent) for a mention or the selected item. It shows nothing at zero and "99+" past 99 (`CountBadge.text`, which the tab and pane badges that must be plain strings also use); VoiceOver reads the exact number unless the host passes its own `label`. A dense row's state at its end is `RowStateMark`: Needs you a still blue dot, Unread a green dot, Working the amber spinner (`WorkingIndicator`), nothing otherwise, used by the Assistant sidebar's rows (the main chat and the Directions) and by All Chats (`AutoConversationsView`). Why: the sidebar drew Unread in the accent, the same blue as Needs you, so the two states looked alike, and its Needs you counts were white on solid blue while every other Needs you count was blue on the tint.
 
+App icon badge (#5824): the number on the app's icon (iPhone home screen, Mac Dock) is the sum of the
+tab bar's count badges (Persona, Agents, Inbox), computed by one function (`AppIconBadge.count`), never a count of its
+own. A new tab badge joins the sum only if it counts what waits for the user or is unread; a passive total (open
+to-dos) or an extension's badge stays out. `docs/apple/ios.md` "App icon badge (#5824)".
+
 "On another computer" (web, #5421, cindy's `RemoteSignalOverlay`): `AgentMark` `remote` adds one arc and a dot off the mark's upper right, in the mark's text color, overhanging its box without taking room (a 16-unit canvas whose lower-left 12.5 units are the mark). The web chat's top bar draws every Agent's mark with it, since an Agent always runs on one of the user's computers: the mark's hover and accessible name say "Agent runs on {computer}", and while that computer is offline the mark is at 75 % opacity and says it continues once the computer is back.
 
-Web chat top bar (#5421, the owner's requested alignment with cindy's `SessionContentHeader`, 2026-11-12; `docs/web/web.md` "The top bar"): one line. At its start, in order: the pin mark and the loop mark (13 px, `--ink-3`, only when they apply), the Agent's mark (14 px, `remote`), the title (14 px medium, truncating; a double-click edits it in place, Enter or blur saves, Esc cancels), ⋯ (28 px, 15 px icon, `--ink-3`) and the git branch (12 px, `--ink-3`, from 800 px of header width, not interactive). At its end, the side panels' buttons (Background tasks, Team, Files) and the one button to the other view. It shows no state, model, permission mode, subtitle, goal or space button: the state is the running status bar's and the row's, the mode the composer picker's, the goal a bar over the composer. The bar stays 56 px tall (cindy's 46) so it lines up with every other page header and side panel header. A Persona conversation keeps its face before the title and the same order.
+Web chat top bar (#5421, the owner's requested alignment with cindy's `SessionContentHeader`, 2026-11-12; `docs/web/web.md` "The top bar"): one line. At its start, in order: the pin mark and the loop mark (13 px, `--ink-3`, only when they apply), the Agent's mark (14 px, `remote`), the title (14 px medium, truncating; a double-click edits it in place, Enter or blur saves, Esc cancels), ⋯ (28 px, 15 px icon, `--ink-3`) and the git branch (12 px, `--ink-3`, from 800 px of header width, not interactive). At its end, the side panels' buttons (Background tasks, Team, Files) and the one button to the other view. It shows no state, model, permission mode, subtitle, goal or space button: the state is the running status bar's and the row's, the mode the composer picker's, the goal a bar over the composer. The bar stays 56 px tall (cindy's 46) so it lines up with every other page header and side panel header. A Persona conversation keeps its face before the title and the same order. In a task's or an Agent's side panel (#5424, while Settings › How Agents open says Side panel) the same bar is the panel's only header: the task's title in place of the Agent's (its state and place in the title's tooltip, no in-place rename), a task with several Agents adds ⌄ to switch after the title, ⋯ starts with the panel's own rows (Open in new window, Remove task…), the same space's other Agents are left out, and × at the end closes the panel.
 
-Assistant avatar: a disc with the first character of the assistant's name. The default assistant's is the AI purple; any other takes one of five hues (blue, green, orange, pink, indigo, in that order) by the sum of its id's UTF-8 bytes modulo 5, so every client colors the same assistant alike. A status mark sits at its foot (online green, offline neutral, installing orange) and, on the sidebar's head only, a mark at its head when another assistant has something waiting. Web: `web/src/ui/AssistantAvatar.tsx` with the `--ai` and `--hue-*` tokens. The letter is sized by the disc, not by the system's text size, so it never outgrows it. Android: `JManagerAvatar` (the status mark's ring is cut out of the disc, so the surface behind shows around it), with `JAssistantSwitcherHeader` and `JAssistantSwitcherRow` for the sidebar's head and the roster's rows (an offline one's row faded with `HomeTokens.assistantOfflineAlpha`), and `JAssistantSettingsHeader` for the head of Settings' first group (the monogram at `HomeTokens.assistantAvatarHeader`, the title, and a Switch text button opening the same roster). Apple: `AssistantMonogram` (`Monogram` drawn on the assistant's hue, its letter in the panel's color and capped at the largest standard text size) with `AssistantStateDot` (ringed in the color it sits on), an offline row faded with `Theme.Fade.offline`; the sidebar's head keeps the Persona face with the same dot. Why not the person avatar (`Monogram`, Android `JAvatar`): that one sits on the neutral surface, and here the color is what tells the assistants apart.
+Assistant avatar: a disc with the first character of the assistant's name. The default assistant's is the AI purple; any other takes one of five hues (blue, green, orange, pink, indigo, in that order) by the sum of its id's UTF-8 bytes modulo 5, so every client colors the same assistant alike. A status mark sits at its foot (online green, offline neutral, installing orange) and, on the sidebar's head only, a mark at its head when another assistant has something waiting. Web: `web/src/ui/AssistantAvatar.tsx` with the `--ai` and `--hue-*` tokens. The letter is sized by the disc, not by the system's text size, so it never outgrows it. Android: `JManagerAvatar` (the status mark's ring is cut out of the disc, so the surface behind shows around it), with `JAssistantSwitcherHeader` and `JAssistantSwitcherRow` for the sidebar's head and the roster's rows (an offline one's row faded with `HomeTokens.assistantOfflineAlpha`), and `JAssistantSettingsHeader` for the head of Settings' first group (the monogram at `HomeTokens.assistantAvatarHeader`, the title, and a Switch text button opening the same roster). Apple: `AssistantMonogram` (`Monogram` drawn on the assistant's hue, its letter in the panel's color and capped at the largest standard text size) with `AssistantStateDot` (ringed in the color it sits on), an offline row faded with `Theme.Fade.offline`; the sidebar's head keeps the Persona face with the same dot, and `AssistantWaitingDot` at its head. Why not the person avatar (`Monogram`, Android `JAvatar`): that one sits on the neutral surface, and here the color is what tells the assistants apart.
 
 The web task stage strip (#3380) reuses `TodoStageBar` on the task detail, home card and briefing. `stage_kind: general` omits the strip: the existing task status already describes non-code progress. Code tasks keep the six steps and `aria-current="step"`; unknown kinds retain the legacy display. `plan` is current only for a pending plan-approval card before review, not guessed from prose or a running state. GitHub links retain `PR #N`; GitLab-style merge request paths on any host read `MR !N`, with the existing link behavior and tokens unchanged. No new setting, visual style or motion is introduced.
+
+On iOS, at the accessibility text sizes, `TodoStageBar` draws its six dots and their lines as at every size but without the step names, which ended in "…" in a sixth of the width each (HIG-027). One line under the dots names the current step and its place, "Step 2 of 6 · Develop", in the current name's style, and wraps if it has to; a no-break space before the "·" keeps it at the end of the first line, so the second line never starts with it (in every language). VoiceOver reads each dot in full (its name, its place, and done, current step or still ahead), and the line, which says the same, is hidden from it. Below those sizes the bar is unchanged: one element saying the stage (#5892).
 
 Model configuration reuses settings `Group` / `Row` and neutral `Pill` components for execution-form groups and chips
 (`docs/assistant/model-config.md`, "Execution form"). Long explanatory pills opt into `wrap` on narrow rows; other
@@ -650,11 +778,47 @@ This is a requested status correction, not a new style or setting; the existing 
 Workflow phase text may ellipsize, but the done/started count stays visible; simultaneous command/subagent counts
 use another subtitle line rather than pushing the workflow count out of the row.
 
+Agent header loop and background pill (iOS `ActivityChips` in `apple/Persona/Views/Session/SessionPanes.swift`; Android Glass `JActivityPill`, #4339 C8): one neutral pill held at the trailing end of the header's second row, as tall as the tabs beside it: the loop's arrows in the loop color with its next time (Running once due, Loop without one), a divider, and the background tasks' count by a neutral gear (whether they work or only wait is the title line's state). Its sheet holds the loop with Stop Loop (asks first, then asks the agent to stop scheduling) and each background task with View Output. The folded slim bar shows none of it.
+
+The pill while a chat's model operates a Mac (iOS `ComputerActivityPill` and its face `DockPillLabel` in `apple/Persona/Views/Machines/ScreenViewer.swift` and `apple/Persona/Views/Assistant/Tasks/TaskViews.swift`; Android Glass `JDockPill` and `ChatComputerPill`, #4339 C9 and C18; `docs/extensions/computer-use.md` "App"): "Controlling MacBook · Click AC → 6 → × → 7 → =" in one neutral capsule, a small spinner before the words while the call runs, the screen icon once it ended ("Just controlled …"), which stays six seconds and fades. Caption-sized semibold words on one line that give way at `box280`. It comes from the chat's own transcript, the newest computer tool call (the assistant's `computer_run` / `computer_state` naming a Mac the app knows, or an Agent's own Cua Driver tools on its computer), not from a hub field. An Agent's chat puts it over the cards and the composer; Persona's conversation after its entries (iOS, in their row) or, on Android, on a line of its own under them, since a phone leaves it too little room beside them. A tap opens that Mac's live screen on iOS; Android has none, so a tap opens the work line that holds the call, where its steps come in as words (with no such line it is words only, as iOS's is for a Mac whose screen can't be shown). Brief and Board draw none.
+
+Where a message goes in Persona's conversations (iOS `RouteChip` and `TaskMentionList`, web `RouteChip`, Android
+`TaskRouteChip`; #4339 C15): while the next message goes straight to a task, one accent-tinted chip sits right above the
+composer, under the action or tray bar: the send mark, "Message “task”", and a × of its own read "Hand to Persona" that
+gives the message back to Persona. The route never shows only inside a tray. It is behaviour, so every style shows it,
+each with its own chip (Android `JChip(accent, onRemove)`). @ lists the conversation's open tasks (not done or failed,
+newest first) with their state's dot and where they run, and a pick takes the @word out and sets the same route a task's
+Message sets. iOS draws them as a panel of their own above the action bar ("Message a Task", or "No tasks in this chat
+yet"); Android puts them first in the composer's one @ list under "Message a task", the files and sessions after them
+under "Mention a file or session", the typed word narrowing all of them, so the list takes no more room above the
+keyboard than before.
+
+New chat's @ (iOS `StarterComposer` with `MentionSource(machine:)`, Android `starterMentionSource`; #4339 C16): a
+conversation that doesn't exist yet has no tasks, files or folder, so the list offers the agents' sessions on every
+computer (newest first, at most eight, Persona's own conversations left out) and, once a typed word is an absolute or `~`
+path with a slash, that folder alone, read from the assistant's computer: folders first, then files, names that start with
+the word first, hidden ones only after a typed dot. A picked folder stays typed with its slash and the list browses it;
+a picked file types `@path `; a picked session waits over the composer as a chat's quote card and goes in front of the
+first message as a `<persona-context>` tag. While the list is open, what needs the user over the composer steps aside
+(iOS `MentionMenuOpen`): above the keyboard the lines, the list and the composer don't fit together. They fade and fold
+away as the list comes in and back as it goes, in the state motion (`Tokens.Motion.State`; iOS `withAnimation(Theme.Motion.standard)`;
+Android `NeedsStepAside`, the list growing in with the same spring on Glass), and the dock keeps the page's own backdrop
+meanwhile, so the things to ask fade out above it instead of being cut at the composer. Same rows and words
+as a chat's @ list ("Reading folder…", "Nothing matches in this folder" while browsing); every style draws it in its own
+list, since it is behaviour.
+
+A chat's @ list (iOS `ComposerMentionMenu` with `MentionSource(machine:cwd:files:)`, Android `mentionRows`; #4339 C16) reads
+its session's computer: after the files its tools used it lists the session folder's own entries (folders first, then files,
+hidden ones only after a typed dot, at most twelve, none a used file already is; "Folder" for a folder and "Session folder"
+for a file beside the name), then the other sessions; a word with a slash lists that folder alone, relative to the session's,
+and a picked folder keeps the list browsing it. The + menu has the same list's first step, "Mention a file or session", in
+every composer that has an @ list: it types the `@` at the caret, as the @ button beside + does.
+
 Agent header permission mode (#3719, `HeaderModeButton` in `apple/Persona/Views/Chat/SessionModes.swift`): an icon-only
 capsule at the trailing end of the open Agents header's second row, under `⋯`, as tall as the tabs, with a 44 pt target that
 overhangs the row. It draws the mode menu's own symbol (one per mode) in its `ModeTone`, tinted as `ModeChip` tints a
 mode that is not the quiet one; Ask First is the quiet gray, never hidden, so the control stays in one place. A mode not
-reported yet is the plain permissions symbol, never a guessed Ask First. The words are in its menu (headed "Permission Mode: …" as on the web and Android,
+reported yet is the plain permissions symbol, never a guessed Ask First. The words are in its menu (headed "Permission Mode: …" as on the web and Android; just "Permission Mode" while no mode is reported, as the capsule says it, `SessionModes.modeHeading`, #5596;
 then the mode list, current one checked, Allow Everything disabled with its reason where the agent cannot take it), its VoiceOver label
 and the pointer tooltip. Going into Allow Everything asks first; so does leaving it when the agent cannot come back
 (`SessionModes.confirmation`), on the header and the composer's model menu alike. An agent whose mode can be neither
@@ -692,9 +856,19 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   disabled (50% opacity, no pointer), and a label (not a button) where nothing can be switched. The click keeps the caret
   in the message box.
 - Panel while a switch waits: one warning line at the top of the list (the panel's `note`: `warning` icon, 11 px,
-  `--orange`), "Switches on your next message: the Agent restarts on {launcher} and keeps this conversation"; a recorded
-  pick is confirmed by a toast ("Switch scheduled: …"). Cindy's "Switch Agent?" confirmation is for an engine change,
-  which Persona does not offer yet (#5054); a launcher switch keeps the conversation and its engine, so it asks nothing.
+  `--orange`, wrapping), "Switches on your next message: the Agent restarts on {launcher} and keeps this conversation"
+  for another launcher of the same engine, "Switching engines rebuilds context and may lose content" for the other engine
+  (#5054); a recorded pick is confirmed by a toast ("Switch scheduled: …"). A launcher switch keeps the conversation and
+  its engine, so it asks nothing.
+- "Switch Agent?" (web, #5054, `web/src/views/chat/EngineSwitchDialog.tsx`, `docs/web/web.md` "Switching an Agent between
+  Claude Code and Codex"): a pick of the other engine's model asks first, unless that engine is already the waiting
+  switch's (Cindy's rule). Persona's `Dialog` with no title bar (named by `labelledBy` / `describedBy`), 400 px wide,
+  padding 16: the title 18 / 28 medium `ink`, the text 16 / 24 `ink-2` 8 px under it, a "Don't remind me again" checkbox
+  (13 px, a 14 px native box in the accent) 16 px under that, the footer 24 px lower, right-aligned with a 10 px gap:
+  **Switch Agent** (primary) first, then **Keep Current Agent** (secondary), each at least 96 px and one line. A sheet on
+  phones; Escape, the backdrop and Back keep things as they were. The model panel stays open under it (held below the
+  backdrop) and closes once the switch is recorded. The pending pill names the engine and the target model with that
+  model's own effort.
 - Panel (`web/src/ui/model-panel/`): opens above the pill, right edges aligned, 6 px gap, 8 px from the window's edges;
   300–460 px wide, a 428 px body (a 48 px rail of Recent, Favorites, All and one cell per provider beside the model list),
   search on top, "Configure models" at the bottom; two-line rows with hover-revealed Favorite and Customize; the model that
@@ -716,8 +890,26 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   `--effort-medium` #14B8A6, `--effort-high` #3B82F6, `--effort-xhigh` #4F46E5, `--effort-max` #8B5CF6, Codex's ultra on
   max) and `--fast` (#3B9EFF), used inside the flyout only: the pill never colours its effort or its bolt.
 - Deviations from Cindy: letter tiles instead of vendor logos; price and quota appear only where the catalog / launcher
-  answer supplies them; ↑↓ also move between rows; providers and engines that can't be switched to yet are listed with
-  their rows off and the reason; a pending switch names the launcher rather than the engine.
+  answer supplies them; ↑↓ also move between rows; providers and engines that can't be switched to (an older hub, a chat
+  that can't switch) are listed with their rows off and the reason; a pending switch to another launcher of the same
+  engine names the launcher rather than the engine; the engine warning line wraps rather than truncating; "Switch Agent?"
+  sits high on a computer and is a sheet on a phone, with no close ×.
+- Android's existing-conversation equivalent (#4663, `ConversationLauncherChip`) reuses the composer's `JChip` and a
+  `JActionSheet` with Launcher and Model sections, not a second visual selector. It reads only the hub's
+  `?purpose=assistant` list. The sheet says the pick applies from the next message until changed and leaves settings
+  unchanged; **Use the default** clears it. The pick follows every later send and retry in that conversation. Older hubs
+  without a model list keep the launcher choices and show one disabled explanation row. No new token or style.
+- Android (Glass only, #5055; Brief and Board keep their Mode sheet, launcher chips and header mode button, decision 8):
+  `JModelPill`, `JModelPanel` and `JModelChangeDivider` in `android/core/designsystem` (`docs/android/android-design.md`
+  2.2), from tokens: the pill `wellXS` tall with `Space.s` sides, the tile at `markS`, the name in `caption` (at most
+  `box120` under 600 dp of composer), the marks at `markXS`; the same width rules, so on a phone the pill is the tile and
+  the chevron. It shows while the composer's toolbar does (focused or with a draft), as Android's mode button did. The
+  panel is a sheet (search, the rail, two-line rows, the strip for Persona chats) whose Customize is a page of the same
+  sheet; the star and Customize are always shown (no hover on a phone) and a provider's reason sits under its group's
+  name. The strip's text button is the design system's quiet `JTextButton` (`ink2` on Glass) rather than `accent-ink`.
+  The header's mode button moved into the composer beside the pill (decision 11). The divider uses the model mark (no
+  arrows-left-right glyph in Android's set yet). Not yet: the other engine's switch and its dialog (#5054), Codex's Fast,
+  quota bars and prices, forgetting a typed id.
 
 ### 3.9 Empty states
 
@@ -734,6 +926,7 @@ chat (#5033), where the panel only offers models and says plainly which one the 
 | Transient result | `Toast` shown by `ToastCapsule` (`apple/Persona/DesignSystem/Toasts.swift:7`) |
 | Chat API failure | Web: `ErrorNotice` (`web/src/ui/ErrorNotice.tsx`), a neutral card with the red mark only and **Error details**; the error the chat stopped on is its banner over the composer with its actions (Retry, Fix it, Edit last message) and ✕, an older one the record in the chat; apps: `APIErrorCard` with details and Retry |
 | Chat loading and waiting | iOS `ChatSkeleton` (five rounded bars of `Theme.Size.markS`, the first at the trailing edge, breathing between `Fill.well` and `Fill.chip`) while a chat's first page loads, its load error as a danger line at the chat's newest end, and `TypingIndicator` ("Claude is getting ready…", three pulsing dots) under your message until its turn's work line comes; Android `ChatSkeleton` and the error line on Glass, `TypingLine` in every style (#4339 C9) |
+| The day over a message | iOS `DayLine` (`Theme.Font.caption`, tertiary, centered): over the first line of each day in Persona's conversation, never in an Agent's chat, and over a first message the transcript does not have yet (the first-message page, a conversation with an empty transcript), so the day does not appear above it later (#1911); Android `DayLine`: the transcript's in every style, those pending ones on Glass (#4339 C18) |
 
 Toasts: error, success or info; one slot, so a new toast replaces the old. Duration 2.5 s, 4 s for errors, 5 s with an action (`apple/Persona/DesignSystem/Toasts.swift:57`). Drawn in a pass-through window and announced to VoiceOver. About 255 call sites. Loading and error shapes are inconsistent across screens (DS-15, DS-16). Web toasts are dark capsules at the bottom (2.8 / 5.2 / 6 s). Android draws the same toast (`JToastHost`, one per window: the root's, and the image viewer's) and keeps system toasts for places where no Persona screen shows (DS-25).
 
@@ -777,12 +970,31 @@ The watch widget extension doesn't build `Theme`, so complications take their fo
 - **The stale face**: a recording snapshot is trusted only while the app keeps rewriting it (every 10 minutes while recording); the timeline carries a second entry at `AllDaySnapshot.staleAfter` (25 minutes after the last write), which shows "Check recording", how long since it was last heard, the triangle, orange. Why: if the app dies without a word, a face still saying "Recording all day" would be a lie.
 - **Taps** open the app with the action the face offers (`persona://allday?action=start|continue|open`): start when off, continue when paused or stopped, the page when recording or stale. Only the app in front can open the microphone, so the face never acts on its own.
 - VoiceOver reads the title, the running time as its value and what a tap does as its hint. `-openWatchItem allday-complication` previews every family in every state.
+- **Record** (#5493, `MeetingRecordingComplication`; circular, corner, rectangular, inline, the Smart Stack): static, the recording mark in the system's red and **Record**, the word of every start ("One Record entry (#5243)"); the rectangular face adds "Meeting" under it (what a tap records; a longer line was cut short in en and ja). A tap opens the app straight into a meeting recording (`persona://record?meeting=1`), or marks the meeting while all-day recording runs. Its kind stays `persona.watch.meeting-recording`. `-openWatchItem record-complication` previews every family.
+
+### 3.14 Home Screen and Lock Screen widgets
+
+The widget extension doesn't build `Theme`: Persona's widgets take their colors, type, sizes and marks from `HomeWidgetTokens` (`apple/Shared/Design/HomeWidgetTokens.swift`), whose symbols mirror `Theme.Icon` with an `// icon:` note, as the watch's complications do. Heroes, rings and faces are fixed sizes (the system sets a widget's size); every line of words is a text style. Every widget in `docs/apple/home-widgets.md`.
+
+- **One widget, one job, one hero**: a number, a ring, a chart or a button, as the system's own widgets (Calendar, Reminders, Fitness, Batteries). A plain surface, no card inside a card; a small widget never holds a list.
+- **One color per widget**, on its name at the top left and its hero; the agent states keep `StatusPalette`'s.
+- **The persona is an accent**: a small face at the top right whose mood says how that widget's subject is, the empty states, and the state before pairing. It never takes the hero's place.
+- **Every rendering mode**: in tinted, clear and Lock Screen modes every colored part goes in the accent group (`homeTone`, `homeAccent()`); a mark on a filled disc is knocked out of it; Mochi becomes a line drawing (`MochiGlyph`).
+- **Counts** are the app's own (Needs You per session, section 4.8; the Inbox's Needs You; the Machines page's windows); inbox and health content is `privacySensitive`. A to-do ticked on a widget shows done at once and says so in red when the hub refuses it.
+
+### 3.15 Charts (iOS)
+
+- `DataChart` (`apple/Persona/DesignSystem/DataChart.swift`): bars, lines and areas over categories, a few series in the data hues, holding a category reads it; a card's is compact (no axis text).
+- `RingChart`: a donut (its total in the hole) or a pie, one series of a few parts.
+- `CandleChart`: candlesticks with an optional volume chart under them; rising and falling colors come from the caller (the diff's green and red); holding a candle reads its prices, else the last one's.
+- `TrendLine`: a trend line the size of a word, no axes, in the quiet ink unless given a color; VoiceOver reads where it went and its lowest and highest.
+- Charts never take a hex: series use role colors, the data hues or `Theme.Hue`; text around them stays in the text's colors.
 
 ## 4. Interaction patterns
 
 ### 4.1 Navigation hierarchy (super rule 3)
 
-`docs/SUPER_RULES.md` rule 3: Assistant and Agents are the only primary home destinations on iOS, Android and web. Settings opens from the sidebar. Everything else (Inbox, To-dos, Scheduled Tasks, Knowledge, Machines, Health, extension pages) is pushed from the drawer. Push by value for new pages; mixing view-based and value-based pushes in one stack is a known trap. An optional Messages page can be switched on and becomes a third primary destination; whether that fits rule 3 needs the rule owner (DS-26).
+`docs/SUPER_RULES.md` rule 3: Assistant and Agents are the only primary home destinations on iOS, Android and web. Settings opens from the sidebar. Everything else (Recordings, Inbox, To-dos, Scheduled Tasks, Knowledge, Machines, Health, extension pages) is pushed from the drawer. Push by value for new pages; mixing view-based and value-based pushes in one stack is a known trap. An optional Messages page can be switched on and becomes a third primary destination; whether that fits rule 3 needs the rule owner (DS-26).
 
 A dispatched task's Open link (#3711) is a compact row using existing typography, fill, radius and 44 pt touch-target
  tokens, not a filter or a link to the whole In Progress list. One task shows its title and Open; a plan lists only its
@@ -825,6 +1037,8 @@ before common choices. It introduces no visual style, color palette, model defau
 | Link card drag | to 0.6 it stops blocking the chat; further down it closes |
 | Terminal cover drag | its bar follows the finger; past 140 pt or a fast flick it closes. The bar, with a 44 pt Close, is there in every state; with no terminal the whole area drags (#4328). Android the same (140 dp, a flick whose half second of glide passes 420 dp; `TerminalCover`, #4339 C7), its bar under a handle, with Back closing it too |
 | Tap on a saved place's map | moves the place there (#4248); search and Use Current Location do the same without the gesture |
+| Hold a to-do on the calendar | after 0.35 s held still it follows the finger (a pointer: once it moves) to another time, day or All Day row; saved on release with Undo in the toast; "Change Due Date…" for VoiceOver (`docs/assistant/todos.md`, "Calendar") |
+| Long press / trailing swipe on an extension's row or tile | its extra actions (`.extensionRowActions`, UI version 6): the menu has them all, usual ones first and destructive ones red and last; the swipe has those marked `swipe`, the destructive one at the edge, never run by a full swipe; one with `confirm` asks in an alert with Cancel; VoiceOver has them as the row's actions |
 
 Every gesture-only action needs a plain alternative for VoiceOver and Switch Control (see the audit).
 
@@ -836,7 +1050,24 @@ navigator on current main and is outside this fix's scope; it must not use its t
 
 ### 4.3 Feedback and haptics
 
-`Haptics` (`apple/Persona/App/AppModel.swift`): `tap` (light impact), `success`, `error`, `attention` (warning). 443 call sites on 11-11 (tap 243, success 129, error 57, attention 14); no-op on visionOS; generators are created per call. One direct UIKit use remains (`apple/Persona/Views/Chat/ChatEdgeScrub.swift`). Android has the same four kinds (`android/core/designsystem/src/main/kotlin/persona/core/designsystem/Haptics.kt`: tap is a context click, success confirm, attention a gesture threshold, error reject; the system's touch-feedback setting decides whether they play).
+Message feedback (#5258, principle 7, super rule 5) reuses the chat's status line and pending bubble, not a new card or
+style. Show Sending immediately from local state, then Processing on the hub's `message_send_state` receipt; do not wait
+for a model token or overwrite `Session.status`. The pending-send overlay is scoped to the conversation and message,
+survives stale snapshots, and hands off to actual execution or queued state on delivery. Failure removes only its own
+overlay and keeps the existing draft, failed-bubble and uncertain-delivery recovery. The full wire and reconnect rules
+are in `docs/protocol/protocol.md` ("Message feedback (#5258)"). Apply the same definition in Assistant and Agent chats.
+
+| Message state | en | zh-Hans | ja |
+| --- | --- | --- | --- |
+| Local input pending | Sending | 发送中 | 送信中 |
+| Hub received; execution may still be preparing | Processing | 处理中 | 処理中 |
+
+These are message states, not answers to an approval or a claim that the model is already working. Receipt alone does
+not enable Stop or promise cancellation of the pending HTTP request. Keep existing answer
+labels and the authoritative Working/Needs you/queued state words. Verify dark/light in the existing styles and measure
+send-to-feedback separately from send-to-input delivery; a transport receipt's queue timestamp is not a client paint.
+
+`Haptics` (`apple/Persona/App/AppModel.swift`): `tap` (light impact), `selection` (a tick), `success`, `error`, `attention` (warning). 443 call sites on 11-11 (tap 243, success 129, error 57, attention 14); no-op on visionOS; generators are created per call. One direct UIKit use remains (`apple/Persona/Views/Chat/ChatEdgeScrub.swift`). Android has the same four kinds (`android/core/designsystem/src/main/kotlin/persona/core/designsystem/Haptics.kt`: tap is a context click, success confirm, attention a gesture threshold, error reject; the system's touch-feedback setting decides whether they play).
 
 Which action gives which haptic, on both (#4209; the rule iOS follows):
 
@@ -844,6 +1075,7 @@ Which action gives which haptic, on both (#4209; the rule iOS follows):
 | --- | --- |
 | Copy | success, with a "Copied" notice (Android: every copy goes through `rememberCopy()`) |
 | Send, Stop, switching pages, opening the avatar menu | tap |
+| Carrying something to a new place: a to-do held on the calendar (#2045) | tap on the pick-up; selection at each new quarter hour or day it would land on |
 | Pressing Approve, Deny or a choice | tap on the press; success when the answer went through |
 | Archive a conversation or an Agent | tap, then its "Archived" notice (iOS `archiveConversation`; marking a to-do done plays none) |
 | Save, an answer or approval that went through | success |
@@ -884,11 +1116,18 @@ reads as text until Edit opens it for typing, and **Done** closes it (iOS `Messa
 The original card's not-sent receipt remains inspectable. This deliberately does not reuse Inbox completion, which
 would suppress future progress replies for the same source. The API contract is in `docs/assistant/agent-work.md`.
 
+A hand-off write-back card (#5932, web `HandoffCard`, iOS `HandoffCardView`) is the same card for an Inbox item the
+user handed to the conversation: the item's summary over the reply, **Send** primary (**Got It** for a conclusion),
+**Edit** on iOS beside it (the web edits in place) and **Later**, which folds it to one line. It has no Don't handle:
+the item is still in the Inbox, where it can be turned down. Its state comes from the item, so it is never a second
+count of the same request. The main conversation's **Wrap up: <title>** chips over the composer follow `RouteChip`'s
+capsule, one per open item handed to it, at most two.
+
 Today there are seven mechanisms and the same action can use different ones (DS-24). Archive in the sidebar, to-do swipe delete and mail-account delete have no confirmation and no Undo. Only the Mac discards edits with a prompt.
 
 ### 4.5 Push, notifications and reminders
 
-- The system prompt appears right after pairing and at launch, with no in-app explanation first (`apple/Persona/App/PushRegistrar.swift:16-33`). Requested options include time-sensitive. When denied, Settings explains and deep-links.
+- The system prompt appears right after pairing and at launch, with no in-app explanation first (`apple/Persona/App/PushRegistrar.swift:41-53`, the options at `:174`). Requested options include time-sensitive. When denied, Settings explains and deep-links; allowing it there registers when the app comes back (#1861).
 - Foreground: the system banner, suppressed for the visible session. No custom in-app push banner.
 - Actions: Allow (needs unlock) and Deny on permissions; Approve and Send Back on plans; Reply on done (`apple/Persona/App/NotificationActions.swift:19-52`). Failures are posted as local notifications.
 - Live Activity: Allow and Deny buttons; Allow requires authentication. Stale after 15 minutes.
@@ -973,9 +1212,16 @@ on hover) hides the pill until the plan changes. The pill also goes once every s
 user's starts another turn.
 
 A tool row names its tool in words on iOS, the web and Android (#2986; Android `ToolNaming.kt`, #4339): Claude Code's tools have verbs of their own, another
-server's MCP tool reads "<Server> · <Tool>" ("GitHub · Create issue"), and any other name is humanized. Opened, a tool
-no table knows shows its arguments as `key: value` lines, with the JSON one tap away under Raw Input (`RawInputToggle`,
-shared with computer tools). Details in `docs/lessons/ios.md`.
+server's MCP tool reads "<Server> · <Tool>" ("GitHub · Create issue"), and any other name is humanized. What the call is
+about follows, picked from its input by the field that says the most (`ToolNaming.subject`; Android, whose rows show no
+verb, puts it under the name where the tool's own icon doesn't say it). Two subjects are words of their own: several
+findings by their count ("2 findings") and a wake-up with no reason by its delay ("5 min"). A computer tool names the Mac
+as the user knows it ("MacBook", not the `macbook` the tool wrote). Opened, a tool
+no table knows shows its arguments as `key: value` lines, and a tool that operates a Mac its steps in words ("Click AC →
+6 → ×") with what the driver answered and the picture it brought back, each with the JSON one tap away under Raw Input
+(`RawInputToggle`; Android draws both on Glass, `ToolArguments` and `ComputerToolDetail`, with the same inline toggle,
+and Brief and Board keep the input as code with the reader's Raw input button). The cases both platforms follow are in
+`spec/fixtures/tool-names`. Details in `docs/lessons/ios.md`.
 
 A tool row says what its call came to when the node sends `outcome` (#4303, `docs/protocol/protocol.md` "Tool
 outcomes"). Only a call that ran and failed turns the row and its chip red, and its result says "Exit code N". A call
@@ -1013,11 +1259,34 @@ control when it sits lower in the row.
 
 Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and waiting for a reply.
 
-- **Home**: the bottom of the session page. A request that blocks the Agent stays visible there until it is answered or folded, and says why the Agent waits ("Answer this so Claude can continue"). Several read "1 of 3", one open at a time; any can be folded to answer later.
-  A Persona conversation's own requests (its model's tool approvals, `ask_user`) are the same: above its composer, under
-  the Needs you / In progress entries, on every client (#4883: on the web and Android they sat only in the closed Needs
-  you tray, and an owner waited minutes on an approval no screen in the chat showed). Needs you still counts them, and
-  its row for one closes the tray onto the card instead of drawing it a second time.
+- **Home**: the bottom of the session page, a stack of cards above the composer, which stays usable (iOS `PendingCards`;
+  Android `DecisionStack` and `DecisionDock`, #4210 T6). A request that blocks the Agent stays visible there until it is
+  answered or folded, and says why the Agent waits ("Answer this so Claude can continue"). The cards stack as they come
+  while they fit in half the page; past it they scroll on their own under "N pending", permissions first and then the
+  newest, and a new card brings the stack back to its top. "N pending" counts the cards in the stack. With the keyboard
+  up the cards take the conversation's room above the rest of the footer, the composer staying over the keyboard, and
+  "N pending" is left off a lone card. Each card folds on its own: a tap on its header folds it to one line, its title and
+  what it asks, and another opens it; any can be folded to answer later. A message typed while a card waits is sent as
+  any other, also while a permission holds the Agent (iOS sends it the same way). Each style keeps its own card: on
+  Android, Glass a floating card inset like the composer, Brief a rounded card with a light shadow, Board a bordered card
+  under its amber rule.
+  A Persona conversation's own requests (its model's tool approvals, `ask_user`) are the same: the stack above its
+  composer, under the Needs you / In progress entries and the route chip, on every client (#4883: on the web and Android
+  they sat only in the closed Needs you tray, and an owner waited minutes on an approval no screen in the chat showed).
+  Needs you still counts them, and its row for one closes the tray onto the card instead of drawing it a second time.
+  The stack holds the conversation's own cards alone, so its "N pending" (shown only past half the page) counts only them.
+  What the conversation's tasks ask is a card of its own above the entries (iOS `TaskQuestions`, #4339 C10): the oldest
+  question of their Agents, under its task's name with the ask mark in the needs-you tone and, at the end of that line,
+  "N more" for the tasks' other questions; it is answered there, and the next comes up once it is. The three numbers
+  count three things and say so: "N pending" the conversation's own cards in the stack, "N more" the tasks' other
+  questions, and Needs you its rows (one for each task or Agent that asks, plus the conversation's own cards, plans and
+  drafts). An open plan is also a card among the conversation's lines (iOS `FeedLine`, Android on Glass `GlassPlanCard`), at the
+  end of the exchange it happened in: its tasks, where each would run, "Start these directly", then Start, Edit and Don't start;
+  once started the dispatched line takes its place, and a dismissed one reads "Not started · N tasks". A task's or an Agent's row in the tray opens that task's or Agent's detail, as iOS's rows do, where its page
+  and its cards are; it never brings a card into the stack, which is the conversation's own. On Android the two places
+  of cards share the room the footer leaves above the composer (iOS draws the question uncapped): each takes at most half
+  the page, and with both on screen each has at least half of that room, a card that needs less leaving the rest to the
+  other, so the composer stays on the page.
   A child session's request (web, #5120: `folded_under`) has its parent's page as its home: shown there with the
   parent's own, "From subagent · <title>", counted once under the parent, and every link to it opens the parent.
   A lead's worker's request (web, #5180) has the lead's page as its home too. While the Team panel shows that worker,
@@ -1032,6 +1301,23 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   the call once it runs (`PermissionDiffView`: the file header with +N −N, then each edit's `DiffView`), eight rows of each
   diff until Show All and four at the accessibility sizes, so the card's choices stay in view. A card that carries only the
   path (a Codex edit read off its terminal) shows the path as before.
+- **A command asked about on the terminal** (#5266): a permission prompt the hub reads off an Agent's screen (Claude
+  Code's own safety check in bypass mode, "Bash command … Do you want to proceed?") is a tool approval, titled as one
+  ("Claude is waiting for your approval"), with "Claude wants to run a command" in place of the terminal's question. Its
+  body: the agent's own words for the command, the command in code type (three rows on iOS until Show All; the web shows
+  four, and the toggle only when the rows cut something), the warning in plain words ("Can't confirm this command won't
+  delete files", a generic line for a warning there are no words for) with Claude Code's own warning and countdown under
+  Show original, and the countdown as a line that runs ("Denied automatically in 1:44", then what happens when it ran
+  out). iOS draws the time with `Text(timerInterval:)` and switches to the words for the end after one sleep until then,
+  with no timer of its own; the web redraws the line once a second while it is shown. The prompt's Yes / No are Deny /
+  Allow (primary); a prompt with more choices keeps their labels as numbered rows. Beautiful UI's card keeps its choice
+  rows and Send (as its permission card) and is tighter (`compact`, #5556), so Send stays in the half-page pending
+  area's view: the agent's words in the secondary type close over the command (as that card's reason), two rows of the
+  command, the countdown beside the warning where the row has room. Components: `ScreenCommandAskBody`,
+  `ScreenCountdown` (iOS, default style and Beautiful UI), `CommandScreenCard` (web
+  `web/src/views/chat/CommandScreenCard.tsx`, its own chunk loaded when the first such card shows; until it is in the
+  card is the terminal's question as before); the rules in `apple/Shared/CommandAsk.swift`, `web/src/lib/command-ask.ts`
+  and `web/src/lib/command-ask-lines.ts`.
 - **Buttons**: for a tool approval, in this order: Deny, Always Allow for This Session, Allow Once (primary). High-risk actions offer no "always" and ask twice.
 - **Secret hand-off (#3962)**: the card that hands a provider's secret values to one Agent run is a permission card with the tool
   approval's title ("Waiting for your approval") and buttons (Deny, Always allow, Allow); its body names each variable with the
@@ -1040,7 +1326,18 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   Siri, and no key approves it (`docs/extensions/secret-providers.md` "In the apps").
 - **Task-review decisions (web, #4808)**: reuse the answerable decision row, its recommendation tag, the `Button` action group and the draft's Later / Don't handle labels. The two secondary actions stay on a separate footer so they never displace the recommended choice; the footer follows the tray's scrolling edge and uses the existing 44 px button minimum. Later defers only this browser session and this review round. Don't handle persists a dismissal of this exact review, offers receipt-scoped Undo, leaves the task open and takes no option; a dismissed review cannot take its timed default. A new review is visible again. The web hides the row and updates its count optimistically; a confirmed same-round dismissal stays hidden across reads and reloads, while a failed write restores the row with an error. An old Agent runtime error does not override dismissal or Later for that review; an actual Agent input request keeps its home visible. Old reviews without an acceptance ask show their original explanation and these same controls, never invented choices or an acceptance button with a made-up round. This is a requested correction to the existing row, not a new style or setting.
 - **Questions**: one at a time, with single choice, multiple choice, Other and voice. An unsent answer is kept as a draft per request. On iOS, a long assistant `ask_user` or hook question form's choices (or its review) own one vertical scroll while Previous / Next / Submit stay outside it and visible in the actual pending-card area, in both interface styles. One such card never needs a second, outer scroll; that is reserved for moving between several cards. Dragging through choices only scrolls and never picks one.
+- **A question the assistant answered** (iOS `DelegatedCard`, web `Delegated.tsx`, Android on Glass): no longer a pending request, so it is counted nowhere and has no Needs you row. The newest one for the Agent is a card over its chat's composer, after the Agent's own cards, until its × puts it away: "Answered by the assistant", each question with the answer as it is now, "Why: …", and Change Answer while the chat takes messages. Change Answer's sheet starts from the answers so far and sends only what changed, as a message to the Agent. Session Info lists every one with the same body and Change Answer.
 - **Everywhere at once**: the first decision on any surface (phone, web, notification, watch) wins. Every other entry updates at once, with a light haptic, and offers Undo where the action can be undone.
+
+### 4.8.0 Task cards (web, #5569)
+
+The task cards follow `docs/design/task-cards.md`, which holds the state tables and the reasons.
+
+- **Conclusion cards.** The chat draws a card for each way a task ended (done, stopped, failed to start, interrupted); reviews and reports stay out of it. A failed card keeps Retry, an interrupted one Continue and View. Failed and interrupted cards sit on `--danger-wash`, and their words are `--ink`, not `--ink-2` / `--ink-3`: the wash over the light canvas is 4.31:1 for `--red` and 4.37:1 for `--ink-2`. The hand-off card of a task whose failed card says why only says it did not start.
+- **Accept and decision rows** stack when their container is narrow (a container query, not the viewport): the words take the whole width, the secondary buttons one row, the primary its own full-width line. Never a menu.
+- **Progress rows.** The status word is its own right-aligned column, then a fixed end slot: `›` where the row opens something, a check once finished, an info mark for a usage limit. A task whose Agent is not up says Starting. A usage limit's second line says when it resets.
+- **Needs you rows with something to answer are folded to one line** (mark, title, what it waits for, the kind) and open in place on a click of the line or its chevron (`aria-expanded`); the card leaves with the answer, and every row is folded again when the tray changes. The conversation's own cards stay in the chat, and their rows close the tray onto them.
+- **Hard-coded font sizes.** `text-[13px]` and its kin may only fall: `scripts/ci/web_font_ratchet.py` (`docs/operations/testing.md`).
 
 ### 4.8.1 Records of interruptions
 
@@ -1294,6 +1591,7 @@ done, not applicable, or deviated (with the reason). It is short on purpose. The
 - [ ] Consistency: lists the existing components, patterns and count definitions reused; a number shown under an existing name uses the same rule. Anything new has its reason written down and an update to this document (principle 4).
 - [ ] Model and product separate: names which of speed, model, presentation or features it touches, and changes none of the others (principle 5).
 - [ ] Checkable: each item above marked done carries its evidence (screenshot, test name, command output) in the PR (principle 6).
+- [ ] Fast, local-first and stateful: local Sending is immediate, hub receipt shows Processing, failure recovers; before/after feedback and execution timings are separate (principle 7).
 
 **Rules**
 
@@ -1365,20 +1663,22 @@ Apple reuses the pairing Form, Section, Picker, toolbar and Theme tokens.
 The live recording sheet's page for a room meeting (a phone meeting recording started while the hub listed
 `meeting_conversation`; contract: `docs/assistant/meeting-minutes.md`, "Meeting conversation (#3862)"; the phone's side:
 `docs/apple/recording.md`, "The meeting conversation (#3862)"). It is `MeetingPage`, shown by `RecordingLiveSheet`: live
-while the meeting records, and after Stop the same page in its after mode, continuing as the meeting's thread; a past
-meeting's recording page pushes the after mode (row **Meeting Conversation**). Ordinary recordings and #3746 meetings keep
-the live view and the wrap-up unchanged. Reason: the meeting is one conversation from its start to its follow-up, so the
+while the meeting records, and after Stop the same page in its after mode, continuing as the meeting's thread; any
+finished recording's page with something to talk about (a note, a meeting no room attended, a room meeting) pushes the
+after mode (row **Talk about this meeting**, phase 6). Ordinary recordings and #3746 meetings keep the live view and the
+wrap-up unchanged while they record. Reason: the meeting is one conversation from its start to its follow-up, so the
 page the user watches during the meeting is the page they keep writing in after it.
 
 - **Structure, live**: a header (title in `Theme.Font.title`, the page menu, **Hide**), a state line (the recording dot,
   the system-ticked clock, the state word), a subtitle (the role, "On this iPhone", "Private" when marked), a problem as a
-  caution `NoticeBanner` when the room can't take part, the **Live** box, the thread's section header, the thread, and the
-  bar pinned through `safeAreaInset`. While the field has the keyboard the top of the page steps aside as the bar's
-  controls do: the subtitle hides and the Live box keeps only its newest line, so the thread keeps its height (the
+  caution `NoticeBanner` when the room can't take part, **Topics** (phase 2, below), the **Live** box, the thread's
+  section header, the thread, and the bar pinned through `safeAreaInset`. While the field has the keyboard the top of the
+  page steps aside as the bar's controls do: the subtitle and Topics hide and the Live box keeps only its newest line, so the thread keeps its height (the
   structure stays the same, so the thread's scroll position holds). At accessibility sizes a one-line header (dot, time,
   menu, Hide) stays fixed, the rest scrolls as one, and the bar stays pinned.
 - **Structure, after**: **Done** when it is in the sheet, a status card (title, start–end, the minutes' state with
-  **Open Minutes** / **Open Recording** as a plain themed button, since the composer is the page's primary action) kept
+  **Open Minutes** / **Open Recording** as a plain themed button, since the composer is the page's primary action; in the
+  sheet and where the minutes push opened the page, not when pushed from the recording's page, whose Back returns there) kept
   above the thread rather than scrolled away with it (the thread follows its end), the room's thread, the **After the
   Meeting** divider, the follow-up's thread, and the composer alone in the bar. At accessibility sizes and while the
   keyboard is up the card is one fixed line (the minutes' state, Open as an icon with its name as the label), and the
@@ -1404,6 +1704,15 @@ page the user watches during the meeting is the page they keep writing in after 
   no `room`): the subtitle and the thread's header say "Persona can't take part right now", the field asks nothing of the
   room and [+] goes, with a caption that says so; Just me stays. The same rule (`MeetingAsk.canAsk`) decides the asks
   themselves and the Live Activity.
+- **Topics (phase 2)**: in a meeting started while the hub listed `meeting_live_view`, once the room set any, a section
+  under the header and above the Live box: "Topics" (caption strong, secondary, a header for VoiceOver) and one
+  horizontal row of `Chip`s in the room's order, scrolled so the current one is in view (without motion under Reduce
+  Motion), each at most `Theme.Size.meetingTopicChip` wide (scaled with the text; a longer title is cut). The state is in
+  words, never the color alone: **Done: <title>** on the neutral fill, **Now: <title>** in the accent tint, an open topic
+  its title alone in the outline look (the sketch's `[ ]`); VoiceOver reads each as one element with its state, an open
+  one "Not yet: <title>". It steps aside while the field has the keyboard, as the subtitle does; at accessibility sizes
+  it scrolls with the rest. Nothing shows before the first topics. Reason: the topics say where the meeting is at a
+  glance, and words keep them readable in either appearance and to VoiceOver.
 - **Live box**: a `.surface` card with the radius `Theme.Radius.card`: "Live" and, on the right, how far the transcript
   is behind ("About N s behind", or "Listening…" before any line), then the last `Theme.Recording.liveLines` sentences
   (time in monospaced digits, secondary; two lines of text at most) and **Full Transcript**, which pushes the whole
@@ -1421,7 +1730,21 @@ page the user watches during the meeting is the page they keep writing in after 
   entries. Asks the room's thread doesn't hold (still asking, failed, answered from material) keep the existing
   `MeetingExchangeRow` look.
 - **The After the Meeting divider**: a centered caption between two hairlines, the look of the chat's `CompactDivider`,
-  between the room's thread and the follow-up's.
+  between the room's thread and the follow-up's. With nothing before it (a recording that never had a room, a room that
+  never came up and no asks) there is no divider: the thread is the follow-up alone, and until it starts one secondary
+  line says what to ask ("Ask Persona about this meeting: what was decided, who does what, or a follow-up email."),
+  shown once the hub has answered for the meeting, so it never flashes over a follow-up or room made elsewhere.
+- **Talk about this meeting (phase 6)**: on the recording's page one row, in the section under the header beside
+  Private Meeting, drawn as that row (a `Label` with the style's `Theme.Icon.conversation`, one line), pushing the after
+  mode; it shows for any recording that ended (not rolling or all-day) with text, minutes or a conversation the hub holds
+  (past retention not the text), on a hub with the meeting conversation. It is a row, not a button: the page's primary content stays the minutes, and
+  the composer is the thread's. The minutes push opens the same page over Recordings, with Open to the recording's page,
+  and the live sheet of a recording running then doesn't present itself over it.
+- **Voice after the meeting (phase 6)**: once the follow-up exists, the composer has the chat's **Voice Chat** button
+  (`ComposerVoiceButton`, the plain face) before the field, where the live page has [+]; at accessibility sizes it is in
+  the row under the field. During the call the chat's `VoiceBar` takes the composer's place, and a call that ended by
+  itself leaves the chat's `VoiceEndedStrip` over the composer, as in a chat (section 3.1). No voice before the follow-up
+  exists, and none while something records.
 - **Photos (phase 3)**: in a meeting started while the hub listed `meeting_photos`, [+] also has **Take Photo** (where
   the device has a camera) and **Choose Photos** (the system picker, images only, at most
   `Theme.Recording.photoPickLimit` at once), live only and never with Just Me on: a photo is the meeting's material,
@@ -1479,8 +1802,9 @@ page the user watches during the meeting is the page they keep writing in after 
   face the room. Its answers are never spoken, announced to VoiceOver, put in the Live Activity or pushed; a card the turn
   raises (one raised since its question, while its turn is the newest) is answered in the main chat, which the thread
   says in one line.
-- **Page menu**: the **Persona** role picker and the **Private Meeting** switch (`PUT …/private`; a refusal shows its
-  words, "Couldn't change Private Meeting. Try again." when the hub names no reason). The mark shows as the hub has it
+- **Page menu**: the **Persona** role picker, the **Private Meeting** switch (`PUT …/private`; a refusal shows its
+  words, "Couldn't change Private Meeting. Try again." when the hub names no reason) and Meeting / Note
+  ("One Record entry (#5243)" below). The mark shows as the hub has it
   once it said anything (absent: private); the start's choice stands in only until then. The start shows the same switch
   under the role, off by default, and no Who Attends. VoiceOver names the three menus apart: the page menu "Meeting
   options", [+] "Add to the conversation", the control row's "More".
@@ -1498,16 +1822,60 @@ page the user watches during the meeting is the page they keep writing in after 
   `meeting-photo-uploading`, `meeting-photo-material`, `meeting-photo-failed`, `meeting-photo-deleting`,
   `meeting-photo-unlisted`), `meeting-photo-retry`, `meeting-photo-remove`, `meeting-photo-note`,
   `meeting-photo-reading`, `meeting-photo-removed`, `meeting-photo-delete`, `meeting-photo-delete-confirm`,
-  `meeting-photo-delete-problem`, `meeting-photo-viewer`, `meeting-photo-viewer-done`, `meeting-photo-problem`; in the
-  minutes `minutes-photo` and `minutes-photo-removed`,
+  `meeting-photo-delete-problem`, `meeting-photo-viewer`, `meeting-photo-viewer-done`, `meeting-photo-problem`; the
+  topics `meeting-topics` and each chip `meeting-topic-done|current|open`; in the minutes `minutes-photo` and
+  `minutes-photo-removed`,
   `meeting-ask-field`, `meeting-ask-send`
   (the two shared with the live bar's typed question), `meeting-ask-caption`, `meeting-ask-notice`, `recording-more`,
-  `meeting-page-stop-speaking`, `meeting-after-status`, `meeting-after-divider`, `meeting-followup-retry`; at the start
-  `meeting-private-start`; on the recording's page `recording-private` and `recording-meeting-conversation`; the sheet's
+  `meeting-page-stop-speaking`, `meeting-after-status`, `meeting-after-divider`, `meeting-followup-retry`,
+  `meeting-followup-empty`, `meeting-voice` (and the chat's `voice-bar`, `voice-ended`); at the start
+  `meeting-private-start`; on the recording's page `recording-private` and `recording-talk`; the sheet's
   shared ones (`recording-now-title`, `recording-live-timer`, `recording-live-hide`, `recording-pause`,
   `recording-bookmark`, `recording-stop`, `recording-wrapup-title`, `recording-wrapup-open`, `recording-wrapup-done`)
-  keep their names. UI tests: `MeetingConversationUITests`.
-- Platforms: the web shows the same thread on the recording detail (**Conversation**); Android has no meeting page yet.
+  keep their names. UI tests: `MeetingConversationUITests`, `MeetingLiveViewUITests` (the topics), `TalkAboutMeetingUITests`.
+- Platforms: the web shows the same thread on the recording detail (**Conversation**, with **Talk about this meeting**
+  from phase 6); Android has no meeting page yet.
+
+## One Record entry (#5243)
+
+Every place that starts a recording on the iPhone and the watch says **Record** and does one thing: it records a
+meeting (minutes, and Persona can attend with the hub's default role), named after the calendar event on now when there
+is one, or opens the recording running. That is the Recordings page's button, the main conversation's + list, the home
+screen's menu, the Control and Siri / Shortcuts, and on the watch its recording page's button and its complication.
+Reason: two large buttons, **Meeting Recording** and **Start Recording**, looked alike and owners couldn't tell which
+to press; impromptu talks are meetings too (principles 1 and 4).
+
+- **The drawer's row is a place, not a start** (#5517): **Recordings** (录音 / 録音), first among the drawer's places,
+  opens the Recordings page, as each row under it opens its page; Record there starts. While a recording runs the row
+  reads **Recording… Open** and opens it. Reason: the row said Record and started at a tap, while in zh-Hans and ja it
+  reads as the page's name, so owners tapping it to see their recordings got one running (principle 4: a drawer row
+  goes somewhere; a verb belongs on the control that acts).
+
+- **The Recordings page**: Record is the one prominent button (`.themedButton(prominent: true)`, one line, the icon going
+  at accessibility sizes), with the calendar line under it. The options follow as one row each: **Type**, a menu
+  `Picker` (Meeting / Note, Meeting for every start, never remembered), then for a meeting Persona, Private Meeting or Who
+  Attends, then language and microphone. Note hides the meeting's options and the calendar line and shows one caption
+  ("No minutes, and Persona stays out."); the same Record button then records a note (progressive disclosure, principle 2).
+  Note is never a second button (section 3.7).
+- **While it records**: the live sheet's page menu ends with the same choice, Meeting and Note with their marks (a menu
+  section, the current one checked), so it can change after the start (principle 3): the meeting page's menu, and in the live view a page menu beside **Hide** (the ellipsis, named
+  "Recording options" for VoiceOver, apart from the Persona strip's "Persona" and the bar's "More"). Turning a meeting into
+  a note turns Persona off, and the sheet shows the live view; turning it back makes it a meeting with Persona's part as a
+  start would get it, and a room meeting's page again.
+- Identifiers for tests: `recording-meeting-start` (Record), `recording-kind` and `recording-kind-detail` at the start,
+  `recording-page-menu` and `recording-kind-now` while recording; `sidebar-meeting-recording` for the drawer's Recordings row. UI
+  tests: `RecordEntryUITests`.
+- **The watch** (#5493) has the same one entry, sized for a wrist. Its home list's row is a place, **Recordings**
+  (`WatchMeetingEntries`), opening the recording page; "Recording… Open" while a recording runs. On that page
+  **Record** is the one prominent button (`.borderedProminent`, one line), always a meeting. **Type: Meeting** under it
+  is a text button (`.borderless`, the secondary font) with the kind's mark, as the iPhone's Type row: Record's
+  qualifier, never a second start button, with no capsule of its own, so Record stays the one large button at the top.
+  A tap switches it to **Type: Note**, which shows "No minutes, and Persona stays out." under it, for that one start;
+  never remembered. Why a tap and not a picker: two values, one tap each way, and a watch picker pushes a page or fills
+  the screen with a wheel. The **Record** complication stays a one-tap start of a meeting, as the Control on the
+  iPhone. While all-day recording runs, Mark Meeting stands in for every start (one microphone). Identifiers:
+  `watch-meeting-recording` (the row), `watch-recording-start` (Record), `watch-recording-kind` and
+  `watch-recording-kind-detail`. The watch is dark only (section 6.1), so its screenshots have no light variant.
 
 ## Checking typed credentials by themselves (#4881)
 
@@ -1627,6 +1995,19 @@ what was decided, and the transcript stays one tap away (principle 2) instead of
   style).
 - Platforms: visionOS keeps the minutes' sections above the transcript; the web and Android have no Summary yet.
 
+## File page (#5827)
+
+Who it serves: people working with their computers' files from the phone or the browser (an Agent's Files tab, a computer's Files). Where it lives and what it does: docs/apple/ios.md "File page", docs/web/web.md "Side panels".
+
+- **Path bar**: Back, Forward and Up as the page's circle buttons (`.themedButton()` clipped to a circle on iOS, `IconButton` on the web), then the path from the home (`Theme.Icon.home`) or `/`, every folder a button, the current one on `Theme.Fill.chip` (web `bg-field`), separated by `Theme.Icon.pathSeparator`. The session's folder carries a compact accent `Chip` "Session"; a folder outside the home ends with a compact `Chip` "Read Only" (`Theme.Icon.locked`). Why not the breadcrumb alone: the page now leaves the session's folder, so the path is the whole one and the history is a browser's.
+- **Find field** under the path bar, beside the page's tool buttons: a capsule of `Theme.Fill.chip` at `Theme.Size.wellS` (the buttons' height) with the search mark and a clear button; the web's `SearchField` `sm`. Results replace the list while there are words in it.
+- **Info**: a sheet with medium and large detents on iOS (a grouped list of `LabeledContent` rows, `.themedRow()`), a `Dialog` on the web, both with Copy Path; permissions in plain words before the code (`rw-r--r-- · 644`), the code in `Theme.Font.code`.
+- **＋ menu** (#5828): the page's add button (`Theme.Icon.add`; web `plus`) opens New Folder (`Theme.Icon.newFolder`) and New Text File (`Theme.Icon.newFile`), then the uploads, each section apart; a name is asked in an alert on iOS (as Rename) and a `Dialog` on the web, the name before the extension selected.
+- **Permissions** (#5831): a grid of system switches (iOS) or checkboxes (web), a row per owner / group / everyone else and a column per read / write / run, each switch labeled "who: what" for VoiceOver; Save is the confirmation action and asks in an alert or `Dialog` that names the change in words and codes (section 4.4, rung 2: not undoable from here).
+- **Selection bar** (#5830): while selecting, five equal cells on a `.surface` card under the list, each a `ThemedIcon` over its word in `Theme.Font.label` (one line, scaling down to 80%), Trash in the danger color; disabled cells at 40%. The count sits where the find field was. Duplicate is `Theme.Icon.duplicate`, Compress `Theme.Icon.fileArchive`.
+- **Editor** (#5829): full screen on iOS with Cancel and Save in the bar (Save the confirmation action), the title the file's name and "Edited" under it once changed; the keyboard bar's keys are the system's plain buttons with `Theme.Icon` symbols (`indent` is new). The web edits in place of the viewer with Cancel and a primary Save. The conflict asks in an alert (iOS) or a `Dialog` (web): Save as Copy first, Overwrite Anyway destructive and confirmed again.
+- **Symlinks**: `Theme.Icon.symlink` on the icon's corner (accent), `Theme.Icon.error` in `Theme.danger` for a broken one, whose second line is the danger color too.
+
 ## Starting from what you already have (#5193)
 
 Where a form sets something up that the user may already have working elsewhere (the web provider wizard's first step),
@@ -1645,3 +2026,51 @@ enabled once something is chosen, with **Back** to the list. Reason: retyping an
 already has is slow and error-prone, and an import that fills the form instead of saving keeps the user in control
 (principles 1 and 3); reusing the wizard's rows, status line, radio cards and the import dialog keeps one way to set a
 provider up (principle 4). It adds no setting, style or motion.
+
+An import link (#5420) is the same paste view opened by a link instead of typed into. Opening the link goes straight to
+that view in its link mode: no text area, a row with the link icon saying it was opened from a link and, in secondary
+text, that nothing is saved until Save, with **Paste something else** (the status line's action) to go back to the text
+area. The link is read at once and its drafts, choices and notes look exactly like a paste's, so the wizard does not
+grow a second way to review a provider; a refused link is one plain line about what is wrong with it, never its
+content. Copying a link starts from the provider's dialog: a ⋯ `IconButton` before Edit opens a `Menu` (one row, **Copy
+import link**), and the row opens a `Dialog` in place of the provider's (Edit does the same), with one line on what the
+link brings, a `Switch` **Put a key in the link** that is off, and **Copy link** as the one primary button. Turning the
+switch on widens what the link exposes, so, as in "Sharing a conversation publicly" (4.9), the key field comes with an
+orange warning block (the warning mark, `--orange`) on where links travel, visible before Copy; the key is never
+fetched from the hub and goes when the dialog closes. Reason: a link is how gateways and friends hand a setup over
+(principle 1), the review and Save stay the user's (principle 3), and the risky part is opt-in and explained
+(principle 2); it reuses the paste view, `Menu`, `Dialog`, `Switch` and the copy notice, and adds no setting, style or
+motion.
+
+## GitHub star prompts (#5761)
+
+Persona is open source, and, as Orca does, it asks for a GitHub star in three quiet places on the web and Android
+clients, with iOS to follow (#5910); the frozen Mac app, the watch and Vision have none. When each shows is one rule for every client, replayed from
+`spec/fixtures/star-prompt` (principle 4); the state is the device's own (browser storage, `UserDefaults`, device-wide
+preferences) and never goes to the hub. Whether the user really starred can't be known, so a tap on **Star on GitHub**
+from any of them counts and ends all three on that device. It opens the project outside the app, where the user's
+GitHub session is: a new tab on the web, the GitHub app or the browser on the phones, never the in-app links card (4.6).
+
+- **The empty Agents page's pill**: a small rounded pill, the star mark and **Star on GitHub** with a ✕ (**Hide**) at its
+  end, on the Agents page's empty surface: on the web the start area when nothing is open (pinned to its foot, under
+  "Open a session"; a phone's web never shows that area), on iOS and Android under "Start your first session". ✕ hides
+  it for good on that device.
+- **The milestone line**: once the device has started 20 Agents, a line in the hub notice's slot of the Agents list, in
+  its look (the star mark in the accent, the words in secondary text, ✕ at the end): "Enjoying Persona? It's open
+  source, and a star on GitHub helps others find it." with **Star on GitHub** under the words (beside them a narrow
+  sidebar cut the sentence short). ✕ (**Later**) doubles the count it waits for, past the Agents started so far, and
+  keeps it away three days. It never shows while a session needs the user, a card waits or a search is on, so it never
+  pushes a waiting row down (3.4, 4.8).
+- **The onboarding toast**: once per device, when first setup finishes (iOS: the checklist's **Get started**; Android:
+  the readiness screen's **Done**; the web: this tab seeing setup turn ready, or the first answer come, on a hub that
+  never answered a first message, so a long-time user whose computer went away and came back is not taken for a new
+  one), the platform's toast with an action: "All set! If you like Persona, a star helps others find it." and **Star on
+  GitHub**; it is short so the words fit a phone's three toast lines beside the button. On the web it stays until closed
+  (`sticky`); on the phones it goes after the platform's time for a toast with a button.
+
+Reason: the pill and the line live only in Agents, whose people know GitHub, and wait for a quiet moment; the toast is
+the one place an everyday user meets it, so it says what to do in plain words and goes away on its own on the phones
+(principles 1 and 2). They reuse the hub notice's line, each platform's toast with an action and the existing star
+icon (`Theme.Icon.gitHubStar`, an alias of the plugin star; Android `PersonaIcons.gitHubStar`; the web's `star`), and
+add no setting, style or motion. Deviation (principle 3): hiding the pill or putting the line off is not a setting with
+an undo; a prompt dismissed is a prompt answered, and the rule above already brings the line back less and less often.

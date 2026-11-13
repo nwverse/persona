@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"slices"
@@ -68,10 +69,12 @@ type fleetBook struct {
 	clients            assistantwire.Clients
 	prev               map[string]map[string]turnPrev // each machine's list setSessions saw last, by session id
 
-	// sent: each machine's last session list told the hub (fleet.sessions), as JSON. sentMu is held while a list is
-	// decorated and told (publishList), so the lists reach the hub in the order they were made.
+	// sent: what is kept of each machine's last session list told the hub (fleet.sessions): its length and digest, not
+	// its bytes. sentMu is held while a list is decorated, encoded into enc and told (publishList), so the lists reach
+	// the hub in the order they were made; enc is the one buffer every list is encoded into, reused.
 	sentMu sync.Mutex
-	sent   map[string][]byte
+	sent   map[string]sentList
+	enc    bytes.Buffer
 	// shown: the rows awaiting a reply of the list last told the hub for each machine, decorated (the reminders of
 	// agents awaiting a reply read them instead of decorating every list each minute, agents_reply.go).
 	shownMu sync.Mutex
@@ -175,6 +178,34 @@ func (g guardedStore) InteractionOutcome(ctx context.Context, id string) (status
 func (g guardedStore) Interactions(ctx context.Context, machine, session string, limit int) (out []db.InteractionRecord, err error) {
 	defer guard(&err)
 	return g.st.Interactions(ctx, machine, session, limit)
+}
+
+// lateAnswerer is a store that records an answer given after a card expired (db.DB); one without it records none.
+type lateAnswerer interface {
+	LateAnswer(ctx context.Context, id string, answers map[string]string, by, reason string) (bool, error)
+}
+
+func (g guardedStore) LateAnswer(ctx context.Context, id string, answers map[string]string, by, reason string) (ok bool, err error) {
+	defer guard(&err)
+	l, has := g.st.(lateAnswerer)
+	if !has {
+		return false, errNoTable
+	}
+	return l.LateAnswer(ctx, id, answers, by, reason)
+}
+
+// interactionPager is a store that pages the history by time (db.DB); one without it answers errNoTable.
+type interactionPager interface {
+	InteractionsPage(ctx context.Context, q db.InteractionQuery) (db.InteractionPage, error)
+}
+
+func (g guardedStore) InteractionsPage(ctx context.Context, q db.InteractionQuery) (out db.InteractionPage, err error) {
+	defer guard(&err)
+	p, ok := g.st.(interactionPager)
+	if !ok {
+		return out, errNoTable
+	}
+	return p.InteractionsPage(ctx, q)
 }
 
 func (g guardedStore) AllowAlways(ctx context.Context, session, tool string, keys []string) (err error) {

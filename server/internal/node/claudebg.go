@@ -300,6 +300,15 @@ func (n *Node) sendOutside(ctx context.Context, id, text string, images []proto.
 	}
 	if peerTaken(ctx, func() string { return n.transcriptPath(id) }, offset, text, peerConfirmWait) {
 		log.Printf("send %s: claude %d (%s) took it through its inbox", id, c.pid, c.Entrypoint)
+		// Taken into its queue while a question or permission prompt holds it: Claude reads the message only once that
+		// is answered at the computer, which the answer says (waits_on_computer). The status is read once, after the
+		// take: a prompt that opened just after a busy session queued the message marks it too, and rightly, since it
+		// still waits on the computer.
+		if now, ok := n.outsideClaude(id); ok && claudeBgStatus[now.Status] == proto.StatusBlocked {
+			if w, ok := ctx.Value(computerWaitKey{}).(*bool); ok {
+				*w = true
+			}
+		}
 		return true, nil
 	}
 	if err != nil {
@@ -308,6 +317,16 @@ func (n *Node) sendOutside(ctx context.Context, id, text string, images []proto.
 	}
 	log.Printf("send %s: written to claude %d's inbox, not taken within %s (held or dropped there)", id, c.pid, peerConfirmWait)
 	return true, unconfirmed()
+}
+
+// computerWaitKey is where sendOutside leaves, for session.send's answer, that the session took the message while
+// waiting on a dialog only the computer can answer (withComputerWait).
+type computerWaitKey struct{}
+
+// withComputerWait gives sendOutside somewhere to say the message waits behind a dialog on the computer.
+func withComputerWait(ctx context.Context) (context.Context, *bool) {
+	w := new(bool)
+	return context.WithValue(ctx, computerWaitKey{}, w), w
 }
 
 // unconfirmed is the outcome of a message the inbox read but the session has not taken: delivery unknown.

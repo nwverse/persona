@@ -166,10 +166,11 @@ struct InteractionPreviewCard: View {
         }
     }
 
-    /// A terminal dialog that reads as a question is titled like one (as in the chat's panel).
+    /// A terminal dialog that reads as a question is titled like one (as in the chat's panel); a command's permission
+    /// prompt as the permission card is (#5266).
     private var title: String {
-        if interaction.kind == .screen, interaction.screenDialog != nil {
-            return String(localized: "\(agentLabel) Has a Question")
+        if interaction.kind == .screen, let d = interaction.screenDialog {
+            return d.commandAsk != nil ? String(localized: "\(agentLabel) Is Waiting for Your Approval") : String(localized: "\(agentLabel) Has a Question")
         }
         return interaction.title
     }
@@ -178,7 +179,10 @@ struct InteractionPreviewCard: View {
     /// the terminal shows.
     private var detail: String? {
         guard interaction.kind == .screen else { return nil }
-        if let d = interaction.screenDialog { return d.detail.map { ScreenParser.plainLines($0, max: 3) } }
+        if let d = interaction.screenDialog {
+            if let ask = d.commandAsk { return ask.command }
+            return d.detail.map { ScreenParser.plainLines($0, max: 3) }
+        }
         return ScreenParser.waitingOn(interaction.screen ?? "")
     }
 
@@ -207,7 +211,16 @@ struct InteractionPreviewCard: View {
             }
         case .screen:
             // Only when the hub read the dialog too (it checks the screen before pressing the key).
-            if interaction.dialog != nil, let d = interaction.screenDialog {
+            if interaction.dialog != nil, let d = interaction.screenDialog, let pair = d.allowDeny {
+                // A command's Yes / No (#5266): Deny and Allow, as on a permission card.
+                HStack {
+                    Button(String(localized: "Allow [Notification Actions ce7ef2]")) { Task { await model.resolve(interaction, Resolution(option: pair.allow.key)) } }
+                        .themedButton(prominent: true)
+                    Button("Deny") { Task { await model.resolve(interaction, Resolution(option: pair.deny.key)) } }
+                        .themedButton()
+                }
+                .controlSize(.small)
+            } else if interaction.dialog != nil, let d = interaction.screenDialog {
                 // Every plain option: a length cap here silently dropped options whose labels ran long — wrapped
                 // terminal rows rejoin into one label, and a "(Recommended)" suffix (drawn as the Recommended chip, not
                 // words) pushed the first option over most often — and the row still looked complete (#1069).
@@ -286,13 +299,16 @@ struct InteractionPanel: View {
     /// The form asks to keep its end in sight (`CardFormKeepsEnd`), and where its scroll area is.
     @State private var keepsEnd = false
     @State private var formPosition = ScrollPosition(edge: .top)
+    /// The suggested rule's line under the form (#5802) while it is drawn: what of the card the form may not have.
+    @State private var suggestionHeight: CGFloat = 0
 
     /// The form's cap while the keyboard is up (`cardFits`): the area less the card's header and margins; at least a tap
     /// target, so a sliver of a form never shows (a small iPhone with the shell's composer leaves the cards little more).
     private func cap(for available: CGFloat) -> CGFloat {
         guard available > 0, headerHeight > 0 else { return .infinity }
         let row = headerAway ? 0 : headerHeight + Theme.Space.m // the row and the gap under it
-        return max(available - row - Theme.Space.m - Theme.Space.l, Theme.Size.tapTarget) // and the margins
+        let line = suggestionHeight > 0 ? suggestionHeight + Theme.Space.m : 0 // a suggested rule's line and its gap
+        return max(available - row - line - Theme.Space.m - Theme.Space.l, Theme.Size.tapTarget) // and the margins
     }
 
     private var fitsCap: CGFloat { cap(for: fits) }
@@ -342,6 +358,10 @@ struct InteractionPanel: View {
                     .frame(height: room > 0 ? min(formHeight == 0 ? room : formHeight, room * 0.55, fitsCap) : nil)
                     .transition(.opacity)
                 }
+                // A standing rule the hub suggests on a question a supervisor passed up (#5802); nothing otherwise.
+                RuleSuggestionLine(suggestion: interaction.suggestion,
+                                   card: .interaction(uid: interaction.uid, manager: interaction.manager),
+                                   group: interaction.group, height: $suggestionHeight)
             }
         }
         .padding(.horizontal, Theme.Space.l)
@@ -420,16 +440,17 @@ struct InteractionPanel: View {
         case .question: interaction.questions?.first?.question ?? ""
         case .plan: PlanText.title(interaction.plan ?? "")
         case .permission: interaction.permissionTarget ?? ""
-        case .screen: interaction.screenDialog?.question ?? ""
+        case .screen: interaction.askLine(includeToolName: false) ?? ""
         case .elicitation: interaction.elicitation?.message ?? ""
         }
     }
 
-    /// A terminal dialog that reads as a question is titled like one.
+    /// A terminal dialog that reads as a question is titled like one; a command's permission prompt as the permission
+    /// card is (#5266).
     private var panelTitle: String {
-        if interaction.kind == .screen, interaction.screenDialog != nil {
+        if interaction.kind == .screen, let d = interaction.screenDialog {
             let name = model.session(interaction.sessionKey)?.agentLabel ?? "Claude"
-            return String(localized: "\(name) Has a Question")
+            return d.commandAsk != nil ? String(localized: "\(name) Is Waiting for Your Approval") : String(localized: "\(name) Has a Question")
         }
         return interaction.title
     }
@@ -1053,29 +1074,81 @@ struct ScreenForm: View {
         .accessibilityIdentifier("screen-card-terminal")
     }
 
-    /// The question: its options, then Next (a multi-select one's Submit) and Previous.
+    /// The question: its options, then Next (a multi-select one's Submit) and Previous. A command's permission prompt
+    /// (#5266) says what is asked in plain words and answers its Yes / No with Allow / Deny.
     @ViewBuilder private func question(_ d: ScreenParser.Dialog, stepping: Bool, step: Int?, moving: Bool) -> some View {
             if let eyebrow = Self.eyebrow(d) {
                 Text(eyebrow).font(Theme.Font.labelStrong).foregroundStyle(.secondary)
             }
-            if !d.question.isEmpty {
-                Text(d.question).font(Theme.Font.heading).fixedSize(horizontal: false, vertical: true)
-            }
-            if let detail = d.detail {
-                Text(detail)
-                    .font(Theme.Font.code)
-                    .foregroundStyle(.secondary)
-                    .padding(Theme.Space.m)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
+            if let ask = d.commandAsk {
+                Text(CommandAsk.title(agent: agentLabel)).font(Theme.Font.heading).fixedSize(horizontal: false, vertical: true)
+                ScreenCommandAskBody(ask: ask)
+            } else {
+                if !d.question.isEmpty {
+                    Text(d.question).font(Theme.Font.heading).fixedSize(horizontal: false, vertical: true)
+                }
+                if let detail = d.detail {
+                    Text(detail)
+                        .font(Theme.Font.code)
+                        .foregroundStyle(.secondary)
+                        .padding(Theme.Space.m)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
+                }
             }
             if d.review && d.incomplete {
                 Label("Some questions are unanswered", systemImage: Theme.Icon.error)
                     .font(Theme.Font.captionMedium)
                     .foregroundStyle(Theme.caution)
             }
+            if let pair = d.allowDeny {
+                allowDeny(pair, d)
+            } else {
+                choiceRows(d, step: step)
+            }
+            if moving {
+                ScreenMoving()
+            } else if d.multi {
+                multiFooter(d, stepping: stepping, step: step)
+            } else if stepping {
+                stepFooter(d, step)
+            }
+    }
+
+    /// The agent's label for the heading: the session's, Claude when it is not known here.
+    private var agentLabel: String { model.session(interaction.sessionKey)?.agentLabel ?? "Claude" }
+
+    /// A command prompt's No and Yes as the permission card's Deny and Allow (`PermissionForm`): the keys are still the
+    /// prompt's own options.
+    private func allowDeny(_ pair: (allow: ScreenParser.Dialog.Option, deny: ScreenParser.Dialog.Option), _ d: ScreenParser.Dialog) -> some View {
+        HStack {
+            Button { send(pair.deny.key, answer(pair.deny)) } label: {
+                answerLabel(String(localized: "Deny"), sending: sending == pair.deny.key)
+            }
+            .themedButton()
+            .accessibilityIdentifier("screen-deny")
+            Button { send(pair.allow.key, answer(pair.allow)) } label: {
+                answerLabel(String(localized: "Allow [Notification Actions ce7ef2]"), sending: sending == pair.allow.key)
+            }
+            .themedButton(prominent: true)
+            .accessibilityIdentifier("screen-allow")
+        }
+        .controlSize(.large)
+        .disabled(sending != nil)
+    }
+
+    private func answerLabel(_ title: String, sending: Bool) -> some View {
+        ZStack {
+            Text(title).lineLimit(1).minimumScaleFactor(0.8).opacity(sending ? 0 : 1)
+            if sending { ProgressView().controlSize(.small) }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    /// The options in one grouped box, numbered like the terminal.
+    private func choiceRows(_ d: ScreenParser.Dialog, step: Int?) -> some View {
             let choices = d.options.filter { $0.kind != .chat }
-            VStack(spacing: 0) {
+            return VStack(spacing: 0) {
                 ForEach(Array(choices.enumerated()), id: \.element.key) { i, opt in
                     if i > 0 { Divider().padding(.leading, 50) }
                     switch (opt.kind, d.multi) {
@@ -1087,13 +1160,6 @@ struct ScreenForm: View {
                 }
             }
             .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
-            if moving {
-                ScreenMoving()
-            } else if d.multi {
-                multiFooter(d, stepping: stepping, step: step)
-            } else if stepping {
-                stepFooter(d, step)
-            }
     }
 
     /// The review: the terminal's review tab, or the one shown before the last multi-select answer goes.
@@ -1909,10 +1975,18 @@ struct BUIScreenForm: View {
 
     private func card(_ d: ScreenParser.Dialog, choices: [ScreenParser.Dialog.Option], typing: ScreenParser.Dialog.Option?,
                       shown: ApprovalAnswers, stepping: Bool, step: Int?) -> some View {
-            ApprovalCard(
+            // A command's permission prompt (#5266): its heading in plain words, its Yes / No as Allow / Deny.
+            let allowDeny = d.allowDeny
+            return ApprovalCard(
                 questions: [ApprovalQuestion(
-                    d.question.isEmpty ? (d.header ?? "") : d.question, kind: d.multi ? .multiple : .single,
+                    d.commandAsk != nil ? CommandAsk.title(agent: model.session(interaction.sessionKey)?.agentLabel ?? "Claude")
+                        : d.question.isEmpty ? (d.header ?? "") : d.question,
+                    kind: d.multi ? .multiple : .single,
                     choices: choices.map { o in
+                        if let allowDeny {
+                            return ApprovalQuestion.Choice(o.key == allowDeny.allow.key ? String(localized: "Allow [Notification Actions ce7ef2]")
+                                                           : String(localized: "Deny"))
+                        }
                         let (label, recommended) = QuestionForm.display(o.label)
                         return ApprovalQuestion.Choice(label, detail: o.detail, tag: recommended ? String(localized: "Recommended") : nil)
                     },
@@ -1962,7 +2036,9 @@ struct BUIScreenForm: View {
                         .font(Theme.Font.captionMedium)
                         .foregroundStyle(Theme.caution)
                 }
-                if let detail = d.detail {
+                if let ask = d.commandAsk {
+                    ScreenCommandAskBody(ask: ask, compact: true)
+                } else if let detail = d.detail {
                     Text(detail)
                         .font(Theme.Font.code)
                         .foregroundStyle(.secondary)

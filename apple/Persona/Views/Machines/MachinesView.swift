@@ -78,7 +78,8 @@ struct MachinesView: View {
 
     var body: some View {
         // Behind another section (the Mac keeps the page, `MacPageStack`): as they are now, not followed push by push.
-        let machines = settingsScope ? settingsMachines : model.machines(inFront: inFront)
+        // The current assistant's computers, where the hub has several assistants; Settings lists its own scope's.
+        let machines = settingsScope ? settingsMachines : model.scopedMachines(inFront: inFront)
         let agents = MachineDetailView.agentsByMachine(model, inFront: inFront)
         let tallies = Dictionary(machines.map { ($0.ref, AgentTally(agents[$0.ref] ?? [])) }, uniquingKeysWith: { a, _ in a })
         let alerts = Dictionary(machines.map { ($0.ref, alertLevel($0)) }, uniquingKeysWith: { a, _ in a })

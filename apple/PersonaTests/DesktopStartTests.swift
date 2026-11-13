@@ -19,6 +19,8 @@ struct DesktopStartTests {
         #expect(ls[3].isCodex) // the Codex App's is a Codex launcher: it starts with its first message
         // Run Agent Here types the launcher into a shell: not one that starts in an app.
         #expect(ls.map(NodeMenu.launchableHere) == [false, true, true, false])
+        // Nor does its footer send the user to New Session for a Codex that starts in the App.
+        #expect(NodeMenu.runHereFooter(ls) == NodeMenu.runHereFooter([ls[1]]))
     }
 
     @Test func browsingStartsWhereMostOfTheAppsProjectsAre() {

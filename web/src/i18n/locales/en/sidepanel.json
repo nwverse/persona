@@ -7,5 +7,7 @@
   "preview": "Preview",
   "review": "Review",
   "team": "Team",
-  "background": "Background tasks"
+  "background": "Background tasks",
+  "task": "Task",
+  "agent": "Agent"
 }

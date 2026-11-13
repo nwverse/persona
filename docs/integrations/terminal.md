@@ -24,8 +24,10 @@ That evening it briefly became view-only (abc18a9: removed key bar, typing and c
 - Each frame uses synchronized output (`ESC[?2026h … ESC[?2026l`), ending with cursor position and visibility (`ESC[45;16H ESC[?25h`): **there is a cursor**, with live typing echo.
 - Few sequences: CUP, ED(2J), SGR (full forms such as `0;1;38;5;N;49m`), DECTCEM, 2026, OSC 8 links (`ESC]8;;url ESC\`, passed through unchanged).
 - **`--cols/--rows` must equal pane dimensions**: smaller crops the top-left (not reflow); larger adds blank space. Without flags, uses the caller's terminal size.
-  Pane size comes from `rect` in `pane.layout`; resizing a pane makes herdr send another `full` frame, but still at the dimensions specified when observing, so after `layout.updated` the node
-  must reopen observe at the new size.
+  The node takes the size from the pane's terminal (`herdr.Client.TermSize`: `pane.process_info`'s shell → its tty's window size; macOS through `sysctl kern.proc.pid`, Linux through `/proc`, no process started),
+  with `rect` in `pane.layout` as the fallback. The layout alone is right only while a herdr client is attached: with none it reports herdr's headless default (120×40) while the pane keeps the last client's size,
+  and observing at 120×40 a pane that is really 193×59 lost the right edge and the bottom rows (measured, herdr 0.9.3, #5409). Resizing a pane makes herdr send another `full` frame, but still at the dimensions
+  specified when observing, so the node checks the size every 2 s and reopens observe at the new size.
 - Observers see the screen currently displayed in the pane: if someone scrolls up on the computer (herdr scroll offset), observers see that scrolled content too; same for alternate screen (whatever herdr displays).
 - OSC 52 (clipboard write) and bells from the program are handled by herdr and **never appear in the stream**; title comes from `terminal_title` in `pane.get`.
   Tested on herdr 0.9.5 on 2026-11-04 for observe, control and `terminal attach`; see section 18.
@@ -445,6 +447,10 @@ Single pane reads herdr's observe/control streams, which don't carry it ("Progra
 - **IME**: page key handling (Shift+Enter, copy) yields on `isComposing` or `keyCode === 229`, leaving composition to xterm.
 - **Fonts**: before opening xterm, wait for `document.fonts.load("<size>px <font stack>", "W中")` (中 is the CJK measurement glyph), up to 1.5 seconds, avoiding late fonts and wrong cell measurements. JetBrains Mono in `--font-mono` currently has no `@font-face`, using local fonts,
   so this returns nearly immediately today; useful once web fonts are bundled.
+  The shared stack includes DejaVu Sans Mono and Liberation Mono before UI/platform fallbacks for Linux (#5768).
+  A missing desktop family can resolve through Fontconfig to a proportional face, inflating xterm's W-based cell
+  width and its letter-spacing correction. The range-limited, size-adjusted CJK face goes first in the terminal stack
+  so a named fallback containing CJK glyphs cannot shadow it.
 - **Shift+Enter → `ESC CR`** already existed (`encodeKey` and key handling in `feed.ts`); moved to `keyDecision` with IME exception added.
 
 ### Program OSC 52 and color queries never reach pane streams
@@ -502,7 +508,9 @@ A pane with no Agent carries `foreground`, the program in front as the host name
 ### New terminal: `panes.new` (optional, explicit action)
 
 `POST /api/v1/machines/{mid}/panes {workspace_id, kind?}` → node calls host `CreateSlot` (herdr `tab create --no-focus`, computer view doesn't jump) to open a tab in that space,
-named `shell` (`-2` suffix on collision), at **the space's own directory** (host-reported, otherwise home); **request cannot specify directory**. Returns `{pane, terminal, tab_id}`, then web opens it. Only called when user clicks + beside a space.
+named `shell` (`-2` suffix on collision), at **the space's own directory** (host-reported, otherwise home). Returns `{pane, terminal, tab_id}`, then web opens it. Called when the user clicks + beside a space, or Open Terminal Here in the file page.
+
+**Open Terminal Here** (#5832; hub feature and node capability `pane_cwd`): the request may carry `cwd`, a folder (`~/…` or absolute). The node checks it with the read guard (a key folder or iCloud Drive is refused) and that it is a folder, and gives it to the host as the new tab's starting directory; with `cwd` and no `workspace_id` the tab opens in the first workspace of a host that opens tabs. The folder is never typed into the shell, so a request still cannot run a command (the rule below). The hub answers 409 `node_outdated` for `cwd` to a node without the capability rather than open the terminal elsewhere. The earlier rule that a request could not name a directory is relaxed for this: a full device can `cd` anywhere in the shell it opens, so starting there gives nothing more.
 
 ### Permissions
 
@@ -601,7 +609,10 @@ with node methods `panes.close` / `panes.split` / `panes.agent` / `panes.git` / 
 - **Run Agent Here…**: only panes at shell prompts (no Agent, no bound session, all foreground programs shells; unreadable foreground also rejected). `panes.agent {pane, launcher}` reuses the full `start` pipeline—
   same launcher command, trust-dialog handling, readiness wait, pane binding, continuation command—without creating a tab, replacing `newTab` with selected pane in `context` (`withAdoptedPane`). Failure **doesn't** close this pane (new-tab failures do close the new tab).
   It answers `{session_id}`, and the clients open that agent's chat as New Agent opens the one it starts (#3287).
-  Web lists only Claude Code launchers (Codex/compatible Codex forks startup needs a first message, menu has no composer).
+  Web and iOS list Claude Code launchers, and Codex launchers that carry `run_here: true` (#5504; web `launchableHere` in `web/src/lib/node-actions.ts`, iOS `NodeMenu.launchableHere`).
+  The node starts such a Codex in the pane with no first message and answers its waiting row (`docs/integrations/codex.md`, "Starting without a first message"), which the clients open. A start that fails never closes the pane or queues it for cleanup (`startCodex`, `node/codex_start.go`); a Codex whose box never comes is `codex_no_box_here`.
+  An older node's Codex launchers lack `run_here`: there a failed start would close its pane, here the user's own shell, so they stay out and Codex starts from New Agent in a tab of its own (#5275). iOS's footer says so only on a computer with such a launcher (`NodeMenu.runHereFooter`).
+  Tests: `node/run_here_codex_test.go` (the start in a shell pane with history above Codex, its waiting row and first message; a failed start leaving the pane), `assistant/models_launchers_runhere_test.go`, the clients' unit tests. Checked live on a Mac (Codex 0.153.4, herdr 0.9.3, 2026-11-12): Codex came up in a scratch shell pane under its history, the pane listed as its waiting row, and `/quit` left the shell.
 - **Git**: run in pane directory (workspace uses its own), reject non-repositories (`not_a_repository`).
   Results and refusals are codes (#1888): success carries an `outcome` (`fetched`, `up_to_date`, `pulled`, `nothing_to_push`, `pushed`) that web and iOS say in their own strings, with an English `message` for older clients; each refusal is a coded 409 the hub words in the client's language (`rpc-errors`: `no_directory`, `detached_head`, `no_upstream`, `uncommitted_changes`, `not_fast_forward`, `push_rejected`; `pull_failed` / `push_failed` / `fetch_failed` carry git's words), the node's words as `detail`. **Pull** uses existing `gitPull`: fast-forward only, reject uncommitted changes; **Fetch** `git fetch --no-recurse-submodules`.
   **Push** asks first in every client (#1883, like the Git panel's Push; Pull and Fetch don't change the remote and run at once). It requires branch/upstream and pending commits (otherwise the `nothing_to_push` outcome), explicit `refs/heads/<branch>:<upstream branch>` without `+`, preventing force push even if `remote.<name>.push = +…` is configured. A remote that rejects a branch behind it is `push_rejected` (pull first; git's words in `detail`).
@@ -660,6 +671,13 @@ Same shape as Moshi `worktree/prepare` + `worktree/create`.
 ### Advanced Orca worktree actions
 
 The local Orca adapter also provides a capability-gated composer, GitHub issue/PR source lookup, sparse presets and preview-confirmed workspace removal. The exact HTTP fields, adapter/runtime capability distinction, receipt handling and deletion reconciliation are specified in [the protocol](../protocol/protocol.md#orca-worktree-composer-and-removal). Legacy branch/path creation remains available. Removal keeps branches by default, unregisters folder workspaces without deleting their directories, and requires a fresh instance-bound preview when identity or dirty content changes. A background acknowledgement is not completion; clients reconcile without automatically repeating the destructive request.
+
+The sidebar also offers **Close workspace** for herdr. Confirmation ends its terminals and keeps the directory, files
+and branches, including a main checkout or a workspace whose directory has disappeared. A linked Git checkout also
+offers **Delete worktree** after its directory is verified. Deletion previews the checkout's changed files and keeps
+its branch by default. The optional merged-branch cleanup uses Git's safe branch deletion. Each confirmation binds
+the workspace, pane membership, available native socket identity and, for deletion, the checkout and reviewed file contents.
+An uncertain response is reconciled through the live catalog and filesystem. Reconciliation preserves one-use dispatch. A herdr parent with linked workspaces requires closing those child workspaces first.
 
 ### A new agent in a worktree (#6115)
 

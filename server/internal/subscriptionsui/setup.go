@@ -175,10 +175,27 @@ func (p *pages) recipeFrom(ps []param, values map[string]string) subscriptions.R
 	}
 	f := wire.ConnectorSubscriptionFields{Title: values["f.title"], Time: values["f.time"], Sender: values["f.sender"],
 		Body: values["f.body"], Link: values["f.link"], DueDate: values["f.due_date"], ID: values["f.id"], Thread: values["f.thread"]}
+	// The form has no pickers for who and where (#6165): the recipe's own stay while it reads the same tool.
+	if own := p.ownFields(); own != nil {
+		f.SenderID, f.Chat, f.ChatName = own.SenderID, own.Chat, own.ChatName
+	}
 	if f != (wire.ConnectorSubscriptionFields{}) {
 		r.Fields = &f
 	}
 	return r
+}
+
+// ownFields are the fields of the subscription the form changes while its recipe reads the form's tool; nil for a
+// new subscription or another tool.
+func (p *pages) ownFields() *wire.ConnectorSubscriptionFields {
+	if p.st.ID == "" {
+		return nil
+	}
+	s, _, err := p.svc.Get(p.ctx, p.st.ID)
+	if err != nil || s.Recipe.Tool != p.st.T {
+		return nil
+	}
+	return s.Recipe.Fields
 }
 
 // tool is the catalog tool the setup page is for, with its source; nil when the catalog no longer has it.

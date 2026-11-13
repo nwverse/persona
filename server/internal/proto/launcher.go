@@ -18,6 +18,10 @@ type Launcher struct {
 	// PromptOptional: a Codex launcher this node starts with no first message too (docs/integrations/codex.md
 	// "Starting without a first message"). Older nodes leave it out: their Codex starts need the first message.
 	PromptOptional bool `json:"prompt_optional,omitempty"`
+	// RunHere: a Codex launcher this node starts in a shell pane the user picked (Run Agent Here) and never closes or
+	// queues that pane for cleanup when the start fails (#5504; docs/integrations/terminal.md, section 21). Older
+	// nodes leave it out: Run Agent Here offers them Claude Code only.
+	RunHere bool `json:"run_here,omitempty"`
 	// Assistant: a runtime's launcher that may run the Persona assistant (docs/integrations/runtimes.md "Assistant"), whatever its agent.
 	Assistant bool `json:"assistant,omitempty"`
 }
@@ -99,6 +103,9 @@ type ModelPrice struct {
 	Input     float64  `json:"input"`
 	Output    float64  `json:"output"`
 	CacheRead *float64 `json:"cache_read,omitempty"`
+	// CacheWrite: a 5-minute cache write; CacheWrite1h a 1-hour one (absent: CacheWrite's price, as cindy prices it).
+	CacheWrite   *float64 `json:"cache_write,omitempty"`
+	CacheWrite1h *float64 `json:"cache_write_1h,omitempty"`
 }
 
 // AgentModel is one model of the list: Claude Code's initialize, Codex's model/list.
