@@ -1,114 +1,193 @@
-// /releases/data.json: the small metadata behind the Releases page. Packages are never proxied.
+// /releases/data.json: the small metadata behind the /releases/ page (docs/operations/site.md, "Releases page").
 //
-// Only published v* version tags in nwverse/persona are product releases; media releases such as promo-v1 are not.
-// The latest stable release is the highest semantic version, not whichever tag was created most recently. A cached
-// copy is fresh for ten minutes and survives a GitHub outage for up to 30 days, marked stale by the page.
-// Every download URL is checked against the repository's own GitHub releases/download/ prefix. There is deliberately
-// no download route here: the browser follows the GitHub URL, and GitHub serves the bytes, not our entry or Worker.
-export const RELEASE_REPO = "nwverse/persona";
-export const RELEASES_URL = `https://api.github.com/repos/${RELEASE_REPO}/releases?per_page=100`;
-export const RELEASES_PAGE = `https://github.com/${RELEASE_REPO}/releases`;
-const DOWNLOAD_ROOT = `${RELEASES_PAGE}/download/`;
-const CACHE_KEY = "https://persona-releases.invalid/v1";
-const FRESH_MS = 10 * 60 * 1000;
+// The Worker reads GitHub's public release list, keeps only what the page shows (version, date, a short summary of the
+// notes, and each file's name, size, checksum and direct GitHub download address) and caches that at the edge. The
+// packages themselves never pass through this site: every download address must be exactly
+// https://github.com/nwverse/persona/releases/download/<tag>/<name>, and the browser goes there directly.
+//
+// Within FRESH_MS the cached copy is served as is; after that GitHub is asked again, and when it cannot be reached the
+// old copy is served, marked stale, for up to KEEP_SECONDS. With no copy at all the answer is 503.
+
+export const REPOSITORY = "nwverse/persona";
+export const RELEASES_API = `https://api.github.com/repos/${REPOSITORY}/releases?per_page=100`;
+export const DOWNLOAD_ORIGIN = `https://github.com/${REPOSITORY}/releases/download/`;
+export const FRESH_MS = 10 * 60 * 1000;
 const KEEP_SECONDS = 30 * 24 * 3600;
-const FETCH_TIMEOUT_MS = 8000;
-const TAG = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
-const ASSET_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const CACHE_KEY = "https://persona-site.cache/releases/data.json?v=2";
 
-const string = (value, max = 200) => typeof value === "string" ? value.trim().slice(0, max) : "";
+const TAG = /^v(\d{1,6})\.(\d{1,6})\.(\d{1,6})(?:-([0-9A-Za-z][0-9A-Za-z.-]{0,40}))?$/;
+const FILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/;
+const DIGEST = /^sha256:([0-9a-f]{64})$/;
+const MAX_HIGHLIGHTS = 4;
 
-// A short readable excerpt, not another copy of GitHub's complete generated release notes. Pick a few feature / fix
-// titles, omit contributor handles and generated links, and render only as text. Full notes stay one click away.
-export function releaseExcerpt(body) {
-  if (typeof body !== "string") return "";
-  const features = [], fixes = [];
-  for (const line of body.replace(/\r/g, "").split("\n")) {
-    const match = /^[-*+]\s+(feat|fix|perf|refactor)(?:\([^)]+\))?!?:\s+(.+)$/i.exec(line.trim());
-    if (!match) continue;
-    const title = match[2].replace(/\s+by\s+@\S+.*$/i, "").replace(/https?:\/\/\S+/g, "").replace(/\s*\(#\d+\)/g, "").replace(/\s+#\d+\b/g, "").trim();
-    if (!title) continue;
-    const bucket = /^feat$/i.test(match[1]) ? features : fixes;
-    if (bucket.length < (bucket === features ? 3 : 2)) bucket.push(title);
-  }
-  const lines = [...features.map((title) => `新功能 · ${title}`), ...fixes.map((title) => `修复 · ${title}`)];
-  const text = lines.join("\n");
-  return text.length > 480 ? text.slice(0, 477).trimEnd() + "…" : text;
+// ---------- versions ----------
+
+export function parseTag(tag) {
+  const m = typeof tag === "string" ? TAG.exec(tag) : null;
+  if (!m) return null;
+  return { major: +m[1], minor: +m[2], patch: +m[3], pre: m[4] || "" };
 }
 
-function parseTag(tag) {
-  const match = TAG.exec(tag);
-  return match ? { core: match.slice(1, 4).map(Number), pre: match[4]?.split(".") || [] } : null;
-}
-
-// Semver 2.0 precedence: numeric identifiers compare numerically and precede alphanumeric prerelease identifiers.
-export function compareVersions(a, b) {
-  const left = parseTag(a), right = parseTag(b);
-  if (!left || !right) return 0;
-  for (let i = 0; i < 3; i++) if (left.core[i] !== right.core[i]) return left.core[i] - right.core[i];
-  if (!left.pre.length || !right.pre.length) return right.pre.length - left.pre.length;
-  for (let i = 0; i < Math.max(left.pre.length, right.pre.length); i++) {
-    const x = left.pre[i], y = right.pre[i];
-    if (x === undefined || y === undefined) return left.pre.length - right.pre.length;
-    if (x === y) continue;
-    const nx = /^\d+$/.test(x), ny = /^\d+$/.test(y);
-    if (nx && ny) return Number(x) - Number(y);
-    if (nx !== ny) return nx ? -1 : 1;
-    return x < y ? -1 : 1;
+// compareTags: semver order; a prerelease sorts before its release (v1.0.0-rc.1 < v1.0.0).
+export function compareTags(a, b) {
+  const x = parseTag(a), y = parseTag(b);
+  for (const k of ["major", "minor", "patch"]) if (x[k] !== y[k]) return x[k] - y[k];
+  if (x.pre === y.pre) return 0;
+  if (!x.pre) return 1;
+  if (!y.pre) return -1;
+  const p = x.pre.split("."), q = y.pre.split(".");
+  for (let i = 0; i < Math.max(p.length, q.length); i++) {
+    if (p[i] === undefined) return -1;
+    if (q[i] === undefined) return 1;
+    const n = /^\d+$/.test(p[i]), m = /^\d+$/.test(q[i]);
+    if (n && m && +p[i] !== +q[i]) return +p[i] - +q[i];
+    if (n !== m) return n ? -1 : 1;
+    if (p[i] !== q[i]) return p[i] < q[i] ? -1 : 1;
   }
   return 0;
 }
 
-function asset(raw, tag) {
-  const name = string(raw?.name, 160);
-  const url = string(raw?.browser_download_url, 1000);
-  const expected = `${DOWNLOAD_ROOT}${encodeURIComponent(tag)}/`;
-  if (!name || !ASSET_NAME.test(name) || !url.startsWith(expected) || url.includes("\n")) return null;
-  try {
-    // Never pass a GitHub API-supplied URL on without checking its canonical host, path and credentials.
-    const parsed = new URL(url);
-    if (parsed.origin !== "https://github.com" || parsed.username || parsed.password || parsed.search || parsed.hash) return null;
-    if (parsed.pathname !== `/nwverse/persona/releases/download/${tag}/${name}`) return null;
-  } catch {
-    return null;
+// ---------- files ----------
+
+const OS = { darwin: "macos", linux: "linux", windows: "windows" };
+const COMPONENTS = ["personad", "persona-hub", "persona-manager", "persona-node", "persona-link"];
+const CHECKSUMS = new Set(["SHA256SUMS", "latest.json", "android.json", "BUILD.json", "ARTIFACTS.md", "VERSION"]);
+
+// classifyAsset says what a release file is, from its name alone:
+//   app        Persona-<v>-android.apk                     { platform: "android" }
+//   computer   Persona-<v>-<os>-<arch>.tar.gz / .zip       { platform: "macos" | "linux" | "windows", arch }
+//   web        Persona-<v>-web.tar.gz                      { platform: "web" }
+//   component  <component>-<os>-<arch>[.exe].gz / .zip     { component, platform, arch }
+//   checksum   SHA256SUMS, latest.json, android.json …
+//   installer  install.sh (not offered on the page)
+//   other      anything else (still offered, as a plain file)
+export function classifyAsset(name, version) {
+  const v = version.replace(/[.+]/g, "\\$&");
+  let m;
+  if (name === `Persona-${version}-android.apk`) return { kind: "app", platform: "android" };
+  if (name === `Persona-${version}-web.tar.gz`) return { kind: "web", platform: "web" };
+  if ((m = new RegExp(`^Persona-${v}-(darwin|linux|windows)-(amd64|arm64)\\.(tar\\.gz|zip)$`).exec(name))) {
+    return { kind: "computer", platform: OS[m[1]], arch: m[2] };
   }
+  if ((m = /^([a-z-]+)-(darwin|linux|windows)-(amd64|arm64)(?:\.exe)?\.(gz|zip)$/.exec(name)) && COMPONENTS.includes(m[1])) {
+    return { kind: "component", component: m[1], platform: OS[m[2]], arch: m[3] };
+  }
+  if (CHECKSUMS.has(name)) return { kind: "checksum" };
+  // The installer fetches its files from this site's /dl/, not from GitHub; the page does not offer it.
+  if (name === "install.sh") return { kind: "installer" };
+  return { kind: "other" };
+}
+
+function slimAsset(a, tag, version) {
+  if (!a || typeof a !== "object" || a.state !== undefined && a.state !== "uploaded") return null;
+  const { name, size } = a;
+  if (typeof name !== "string" || !FILE_NAME.test(name)) return null;
+  if (!Number.isSafeInteger(size) || size < 0) return null;
+  const url = DOWNLOAD_ORIGIN + encodeURIComponent(tag) + "/" + encodeURIComponent(name);
+  if (a.browser_download_url !== url) return null; // only GitHub's own address for this repository, tag and file
+  const out = { name, size, url, ...classifyAsset(name, version) };
+  const d = typeof a.digest === "string" ? DIGEST.exec(a.digest) : null;
+  if (d) out.sha256 = d[1];
+  return out;
+}
+
+// ---------- notes ----------
+
+// summarizeNotes turns GitHub's generated notes ("* feat(web): … by @someone in https://…") into counts and a few
+// feature titles, one per area where it can. Handles, links and PR numbers are left out; the full notes stay on GitHub.
+export function summarizeNotes(body) {
+  const counts = { features: 0, fixes: 0, other: 0 };
+  const features = [], fixes = [];
+  if (typeof body !== "string") return { counts, highlights: [] };
+  for (const raw of body.slice(0, 400_000).split(/\r?\n/)) {
+    if (/^#{1,6}\s*New Contributors/i.test(raw) || /^\*\*Full Changelog\*\*/.test(raw)) break;
+    const item = /^\s*[*-]\s+(.+)$/.exec(raw);
+    if (!item) continue;
+    let text = item[1]
+      .replace(/\s+by\s+@[\w-]+(?:\[bot\])?\s+in\s+\S+\s*$/, "")
+      .replace(/https?:\/\/\S+/g, "")
+      .replace(/@[\w-]+/g, "")
+      .replace(/\s*\(#\d+\)/g, "")
+      .replace(/[<>`*_]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    const cc = /^([A-Za-z]+)(?:\(([^)]{1,40})\))?!?:\s*(.+)$/.exec(text);
+    const type = cc ? cc[1].toLowerCase() : "";
+    const scope = cc && cc[2] ? cc[2].split(/[,\s/]+/)[0].toLowerCase() : "";
+    if (cc) text = cc[3];
+    if (!text) continue;
+    if (text.length > 140) text = text.slice(0, 139).trimEnd() + "…";
+    text = text[0].toUpperCase() + text.slice(1);
+    if (type === "feat") { counts.features++; features.push({ scope, title: text }); }
+    else if (type === "fix") { counts.fixes++; fixes.push({ scope, title: text }); }
+    else counts.other++;
+  }
+  return { counts, highlights: pick(features.length ? features : fixes) };
+}
+
+// Areas people use come first in the highlights; build, test and release plumbing never appears there.
+const VISIBLE_AREAS = new Set(["assistant", "ios", "apple", "watch", "watchos", "vision", "carplay", "android", "web", "chat",
+  "inbox", "tasks", "todos", "kb", "knowledge", "voice", "recording", "mail", "extensions", "agents", "health", "link"]);
+const PLUMBING = new Set(["release", "releases", "ci", "test", "tests", "build", "deps", "scripts", "mock", "docs", "lint",
+  "tokens", "dev", "tooling", "privacy", "hooks", "workflow", "i18n", "site"]);
+
+// pick: up to MAX_HIGHLIGHTS items, the first of each area people use, then the first of other areas, then the rest.
+function pick(items) {
+  const seen = new Set(), visible = [], other = [], rest = [];
+  for (const it of items) {
+    if (PLUMBING.has(it.scope)) continue;
+    if (it.scope && !seen.has(it.scope)) {
+      seen.add(it.scope);
+      (VISIBLE_AREAS.has(it.scope) ? visible : other).push(it);
+    } else rest.push(it);
+  }
+  return visible.concat(other, rest).slice(0, MAX_HIGHLIGHTS).map(({ scope, title }) => (scope ? { scope, title } : { title }));
+}
+
+// ---------- releases ----------
+
+function slimRelease(r) {
+  if (!r || typeof r !== "object" || r.draft !== false) return null;
+  const tag = r.tag_name;
+  if (!parseTag(tag)) return null; // media and other non-product releases (promo-v1 …)
+  const published = typeof r.published_at === "string" ? Date.parse(r.published_at) : NaN;
+  if (!Number.isFinite(published)) return null;
+  const page = `https://github.com/${REPOSITORY}/releases/tag/${encodeURIComponent(tag)}`;
+  if (r.html_url !== page) return null;
+  const version = tag.slice(1);
+  const assets = (Array.isArray(r.assets) ? r.assets : []).map((a) => slimAsset(a, tag, version)).filter(Boolean);
   return {
-    name,
-    url,
-    size: Number.isSafeInteger(raw.size) && raw.size >= 0 ? raw.size : null,
-    kind: name === "SHA256SUMS" ? "checksums" :
-      name.endsWith(".apk") ? "android" :
-      /^Persona-.*-(?:darwin|linux|windows)-(?:amd64|arm64)\.(?:tar\.gz|zip)$/.test(name) ? "desktop" : "other",
+    tag,
+    version,
+    prerelease: r.prerelease === true || parseTag(tag).pre !== "",
+    published_at: new Date(published).toISOString(),
+    url: page,
+    ...summarizeNotes(r.body),
+    assets,
   };
 }
 
-export function slimReleases(raw) {
-  if (!Array.isArray(raw)) throw new Error("release list is not an array");
+// slimReleases: GitHub's list → the page's data. Newest published first; latest is the highest stable version.
+export function slimReleases(list, fetchedAt = new Date()) {
+  if (!Array.isArray(list)) throw new Error("GitHub did not return a release list");
+  const seen = new Set();
   const releases = [];
-  const tags = new Set();
-  for (const item of raw) {
-    if (!item || item.draft !== false) continue;
-    const tag = string(item.tag_name, 100);
-    if (!parseTag(tag) || tags.has(tag) || item.prerelease !== parseTag(tag).pre.length > 0) continue;
-    const published = string(item.published_at, 40);
-    if (!published || !Number.isFinite(Date.parse(published))) continue;
-    const assets = (Array.isArray(item.assets) ? item.assets : []).map((a) => asset(a, tag)).filter(Boolean);
-    // A release without packages is still useful as a version-history entry and has its GitHub notes link.
-    releases.push({
-      tag,
-      name: string(item.name, 120) || tag,
-      url: `${RELEASES_PAGE}/tag/${encodeURIComponent(tag)}`,
-      published_at: published,
-      prerelease: item.prerelease,
-      summary: releaseExcerpt(item.body),
-      assets,
-    });
-    tags.add(tag);
+  for (const r of list) {
+    const s = slimRelease(r);
+    if (s && !seen.has(s.tag)) { seen.add(s.tag); releases.push(s); }
   }
-  releases.sort((a, b) => Date.parse(b.published_at) - Date.parse(a.published_at) || compareVersions(b.tag, a.tag));
-  const stable = releases.filter((r) => !r.prerelease).sort((a, b) => compareVersions(b.tag, a.tag));
-  return { latest: stable[0]?.tag || null, releases };
+  releases.sort((a, b) => Date.parse(b.published_at) - Date.parse(a.published_at) || compareTags(b.tag, a.tag));
+  const stable = releases.filter((r) => !r.prerelease).sort((a, b) => compareTags(b.tag, a.tag));
+  return {
+    repository: REPOSITORY,
+    fetched_at: fetchedAt.toISOString(),
+    stale: false,
+    latest: stable.length ? stable[0].tag : null,
+    releases,
+  };
 }
+
+// ---------- serving ----------
 
 function edgeCache() {
   return typeof caches !== "undefined" && caches.default ? caches.default : null;
@@ -117,41 +196,36 @@ function edgeCache() {
 async function cached(cache) {
   if (!cache) return null;
   try {
-    const response = await cache.match(CACHE_KEY);
-    return response ? await response.json() : null;
+    const hit = await cache.match(CACHE_KEY);
+    return hit ? await hit.json() : null;
   } catch {
     return null;
   }
 }
 
-async function fetchFresh(env) {
-  const response = await fetch(RELEASES_URL, {
-    headers: { accept: "application/vnd.github+json", "user-agent": "persona-site", "x-github-api-version": "2022-11-28" },
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+async function upstream() {
+  const res = await fetch(RELEASES_API, {
+    headers: { accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28", "user-agent": "persona-site" },
   });
-  if (!response.ok) throw new Error(`releases: HTTP ${response.status}`);
-  // A malformed payload is not cached as though it were an empty release history.
-  const data = { ...slimReleases(await response.json()), fetched_at: new Date().toISOString() };
-  if (!data.latest) throw new Error("no published stable releases");
-  return data;
+  if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
+  return slimReleases(await res.json());
 }
 
-export async function releasesData(env, ctx) {
+async function load(ctx) {
   const cache = edgeCache();
   const old = await cached(cache);
   if (old && Date.now() - Date.parse(old.fetched_at) < FRESH_MS) return old;
   try {
-    const data = await fetchFresh(env);
+    const data = await upstream();
     if (cache) {
       const put = cache.put(CACHE_KEY, new Response(JSON.stringify(data), {
         headers: { "content-type": "application/json", "cache-control": `public, max-age=${KEEP_SECONDS}` },
-      }));
+      })).catch(() => {});
       ctx?.waitUntil ? ctx.waitUntil(put) : await put;
     }
     return data;
-  } catch (error) {
-    if (old) return { ...old, stale: true };
-    console.error("release list:", error?.message || error);
+  } catch {
+    if (old && Date.now() - Date.parse(old.fetched_at) < KEEP_SECONDS * 1000) return { ...old, stale: true };
     return null;
   }
 }
@@ -160,8 +234,15 @@ export async function serveReleases(request, env, ctx) {
   if (request.method !== "GET" && request.method !== "HEAD") {
     return new Response("method not allowed", { status: 405, headers: { allow: "GET, HEAD" } });
   }
-  const data = await releasesData(env, ctx);
-  if (!data) return Response.json({ error: "release list unavailable", releases_url: RELEASES_PAGE }, { status: 503, headers: { "cache-control": "no-store" } });
-  const response = Response.json(data, { headers: { "cache-control": data.stale ? "public, max-age=60" : "public, max-age=300" } });
-  return request.method === "HEAD" ? new Response(null, { headers: response.headers }) : response;
+  const data = await load(ctx);
+  if (!data) {
+    return Response.json({ error: "release list unavailable", releases_page: `https://github.com/${REPOSITORY}/releases` },
+      { status: 503, headers: { "cache-control": "no-store" } });
+  }
+  const headers = {
+    "cache-control": data.stale ? "public, max-age=60" : "public, max-age=300",
+    "x-content-type-options": "nosniff",
+  };
+  if (request.method === "HEAD") return new Response(null, { headers: { ...headers, "content-type": "application/json" } });
+  return Response.json(data, { headers });
 }

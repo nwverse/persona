@@ -1,6 +1,6 @@
 // One conversation: an agent in herdr on one of your computers, or a Persona assistant conversation.
 import { useAssistantTitle, useManagerOffline } from "../ManagerParts";
-import { LinkManager } from "../../lib/manager-choice";
+import { LinkManager, useShownManager } from "../../lib/manager-choice";
 import { alsoOpenText } from "../../lib/engines";
 import { lazy, memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, errorText, pastHub, sessionPath } from "../../lib/api";
@@ -34,7 +34,8 @@ import { echoed, taggedSeen } from "../../lib/echo";
 import { acceptOutgoing, forgetOutgoing, inSendOrder, keepFailed, keepOutgoing, noteWritten, outboxKey, placeFailed, restoreOutbox, retryOutbox, SENT_GRACE_MS, settleOutbox } from "../../lib/outbox";
 import { apiOp } from "../../lib/ops";
 import { beginMessageSend, observeMessageItems, settleMessageEcho, stopMessageFeedback, useMessageFeedback } from "../../lib/message-send";
-import { conversationKey, pickedLauncher, pickedModel } from "../../lib/assistant-chat";
+import { conversationKey, pickedLauncher, pickedModel, usePickedLauncher } from "../../lib/assistant-chat";
+import { splitSkillDraft } from "../../lib/skill-mentions";
 import { unlinkAgentFromTodo } from "../../lib/todos";
 import { t as tr } from "../../i18n";
 import { lastEditablePrompt, promptsOf, rewindBlock, rewindDone, rewindSession, rewindTarget, type RewindRestore } from "../../lib/rewind";
@@ -567,7 +568,13 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     [draftKey, title, canCompose, canFork, canRewind, rewindCode, rewindLive, mid, sid, assistant, persona.name, forwardFrom, picker],
   );
   // the assistant works on any computer, so its @ menu offers workspaces too
-  const mention = useMemo(() => ({ cwd: session?.cwd, self: draftKey, files: () => chatFiles(items.current), workspaces: Boolean(assistant) }), [session?.cwd, draftKey, assistant]);
+  const shownManager = useShownManager();
+  const skillLauncher = usePickedLauncher(conversationKey(mid, sid));
+  const assistantLauncher = useStore((s) => s.assistant?.launcher);
+  const skillEnvironment = JSON.stringify([session?.launcher, session?.model_pick, assistantLauncher]);
+  const mention = useMemo(() => ({ cwd: session?.cwd, self: draftKey, files: () => chatFiles(items.current), workspaces: Boolean(assistant),
+    skills: assistant ? { manager: session?.manager ?? shownManager, session: sid, launcher: skillLauncher, environment: skillEnvironment } : undefined,
+  }), [session?.cwd, session?.manager, draftKey, assistant, shownManager, sid, skillLauncher, skillEnvironment]);
 
   // a sent message stays as a "sending" bubble until the transcript has it (lib/echo.ts): an item the hub tied to it
   // (any kind, a notice too), or else a latest user message with its words; one that answered one answers no other
@@ -1063,6 +1070,10 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       return false;
     }
     if (assistant && !out.images.length && out.text.trim() && getFeedState().routes[sid]) {
+      if (splitSkillDraft(out.text).skills.length) {
+        toast(t("chat-chatview.skills_route"), "error");
+        return false;
+      }
       try {
         // in turn: the route is used up by the first message that takes it, and the next one must see that
         if (await inSendOrder(outboxKey(mid, sid), () => sendRouted(sid, out.text))) return true;
@@ -1669,7 +1680,11 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const wait = useMemo(() => (outgoing || awaiting ? null : backgroundWaitLine(session)), [outgoing, awaiting, session]);
   // ✓ Done only for a turn that finished: one waiting on you, stopped or cut off by an error keeps its last words
   const done = turnDone(state, session, lastLine, tr.items);
-  const running = session ? <RunningStatusBar mid={mid} sid={sid} working={state === "working" || awaiting} done={done} startedAt={runStart} clock={barClock.current} plain={assistant} step={step} background={background} wait={wait} subtasks={subtasks && !outgoing && !awaiting} /> : null;
+  // In a Persona conversation the live work line in the message stream already says the turn is at work (its "Working…"
+  // header, spinner and clock), so the dock does not repeat it while that line is on screen (#6230). The bar stays for
+  // background workflows, background waits and subagents (lastLive is false then; the stream only shows their quiet
+  // fold rows), and for Agent chats, whose dock keeps the full cindy status bar.
+  const running = session && !(assistant && lastLive) ? <RunningStatusBar mid={mid} sid={sid} working={state === "working" || awaiting} done={done} startedAt={runStart} clock={barClock.current} plain={assistant} step={step} background={background} wait={wait} subtasks={subtasks && !outgoing && !awaiting} /> : null;
   // at the top of the composer's card, as cindy's pending queue (#5327); a phone on its side keeps it to one line beside
   // the run's status. The same element while nothing in it changes: the composer is memoized.
   const hasQueue = queued.length > 0;
@@ -2580,4 +2595,3 @@ function headerSlot(centered: boolean, side: "start" | "end"): string {
   if (!centered) return "contents";
   return cx(HEADER_SLOT, side === "start" ? HEADER_SLOT_START : HEADER_SLOT_END, "lg:contents");
 }
-

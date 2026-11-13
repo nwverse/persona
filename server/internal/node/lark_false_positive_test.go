@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/proto"
@@ -115,21 +116,23 @@ func TestLarkLiteralCommandVariable(t *testing.T) {
 func TestLarkLiteralGetWithShellVariables(t *testing.T) {
 	for _, tc := range []struct {
 		name, command string
+		calls         int
 	}{
-		{"single", `ex GET "/documents/read?url=https://example.test/docx/a"`},
-		{"for loop", `for x in a b; do ex GET "/documents/read?url=$x" > /tmp/o_$x.json; done`},
-		{"while loop", `x=a; while [ "$x" = a ]; do ex GET "/documents/read?url=$x" > /tmp/o_$x.json; x=b; done`},
-		{"incident", `for x in "docx a b" "wiki c d"; do set -- $x; ex GET "/documents/read?url=https://example.larkoffice.com/$2/$1" > /tmp/d_$3.json; python3 -I x.py; echo "$3 $(jq -r '.data.title' /tmp/d_$3.json | tr '\n' ' ') $(wc -c < /tmp/d_$3.json)"; done`},
-		{"output substitutions", `ex GET /health; echo "$(jq -r '.data.title' /tmp/o.json | tr '\n' ' ') $(wc -c < /tmp/o.json)"`},
+		{"single", `ex GET "/documents/read?url=https://example.test/docx/a"`, 1},
+		{"for loop", `for x in a b; do ex GET "/documents/read?url=$x" > /tmp/o_$x.json; done`, 2},
+		{"while loop", `x=a; while [ "$x" = a ]; do ex GET "/documents/read?url=$x" > /tmp/o_$x.json; x=b; done`, 1},
+		{"incident", `for x in "docx a b" "wiki c d"; do set -- $x; ex GET "/documents/read?url=https://example.larkoffice.com/$2/$1" > /tmp/d_$3.json; python3 -I x.py; echo "$3 $(jq -r '.data.title' /tmp/d_$3.json | tr '\n' ' ') $(wc -c < /tmp/d_$3.json)"; done`, 1},
+		{"output substitutions", `ex GET /health; echo "$(jq -r '.data.title' /tmp/o.json | tr '\n' ' ') $(wc -c < /tmp/o.json)"`, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			v := classifyLark(tc.command, olGate(""), t.TempDir(), nil)
-			if v.deny != "" || v.unparsed || v.unknown || v.unsure || len(v.calls) != 1 {
+			if v.deny != "" || v.unparsed || v.unknown || v.unsure || len(v.calls) != tc.calls {
 				t.Fatalf("verdict = %+v", v)
 			}
-			call := v.calls[0]
-			if call.Method != "GET" || larkDecision(olCfg(), call) != "allow" || !larkBypassSafe(call) {
-				t.Fatalf("call = %+v, default decision = %q, bypass safe = %v", call, larkDecision(olCfg(), call), larkBypassSafe(call))
+			for _, call := range v.calls {
+				if call.Method != "GET" || larkDecision(olCfg(), call) != "allow" || !larkBypassSafe(call) {
+					t.Fatalf("call = %+v, default decision = %q, bypass safe = %v", call, larkDecision(olCfg(), call), larkBypassSafe(call))
+				}
 			}
 			assertAssistantBypassClassification(t, tc.command, 0)
 		})
@@ -208,6 +211,118 @@ func TestLarkHeredocUnsafeTargets(t *testing.T) {
 				t.Skip("platform fixture unavailable")
 			}
 			assertAssistantBypassClassification(t, tc.command, 1)
+		})
+	}
+}
+
+func TestLarkLiteralForLoops(t *testing.T) {
+	gates := olGate("")
+	alias := gates[0]
+	alias.Command = "ol"
+	gates = append(gates, alias)
+	for _, tc := range []struct {
+		name, command string
+		cards         int
+	}{
+		{"message threads", `for id in 1111 2222 3333 4444; do echo "== $id"; timeout 60 ol GET "/messages/$id/thread" | jq -c '.items[]?' | head -20; done`, 0},
+		{"meeting insights", `for h in 1111 2222 3333 4444; do timeout 60 ol GET "/meetings/$h/insights" > /tmp/ins_$h.json 2>&1; head -c 100 /tmp/ins_$h.json; done`, 0},
+		{"binary versions", `for b in ~/.persona/bin/personad ~/.persona/bin/jarvisd; do [ -x "$b" ] && { echo "== $b"; timeout 10 "$b" version 2>&1 | head -3; }; done`, 0},
+		{"quoted list and braced route", `for id in '1111' "2222"; do ex GET "/messages/${id}/thread"; done`, 0},
+		{"unquoted scalar route", `for id in 1111 2222; do ex GET /messages/$id/thread; done`, 0},
+		{"ordinary command names", `for b in pwd ls; do "$b"; done`, 0},
+		{"absolute binary", `for b in /opt/tools/personad /usr/local/bin/personad; do timeout 10 ${b} version; done`, 0},
+		{"literal nested loops", `for id in 1111 2222; do for kind in thread replies; do ex GET "/messages/$id/$kind"; done; done`, 0},
+		{"quoted space in route", `for id in 'item one' 'item two'; do ex GET "/messages/$id/thread"; done`, 0},
+		{"deletion route", `for action in delete; do ex GET "/documents/$action"; done`, 1},
+		{"later value is deletion", `for action in read delete; do ex GET "/documents/$action"; done`, 1},
+		{"unquoted argument injection", `for route in '/health -X DELETE'; do ex GET $route; done`, 1},
+		{"empty unquoted command", `for b in ''; do $b ex DELETE /documents; done`, 1},
+		{"parameter list", `for id in $IDS; do ex GET "/messages/$id/thread"; done`, 1},
+		{"command substitution list", `for id in $(cat /tmp/ids); do ex GET "/messages/$id/thread"; done`, 1},
+		{"arithmetic list", `for id in $((1+1)); do ex GET "/messages/$id/thread"; done`, 1},
+		{"glob list", `for id in /tmp/*; do ex GET "/messages/$id/thread"; done`, 1},
+		{"quoted glob list", `for id in '*'; do ex GET "/messages/$id/thread"; done`, 1},
+		{"brace list", `for id in {1111,2222}; do ex GET "/messages/$id/thread"; done`, 1},
+		{"implicit list", `for id; do ex GET "/messages/$id/thread"; done`, 1},
+		{"assignment in body", `for action in read; do action=delete; ex GET "/documents/$action"; done`, 1},
+		{"read in body", `for action in read; do read action; ex GET "/documents/$action"; done`, 1},
+		{"getopts in body", `for action in read; do getopts a action -a; ex GET "/documents/$action"; done`, 1},
+		{"printf variable in body", `for action in read; do printf -v action delete; ex GET "/documents/$action"; done`, 1},
+		{"wrapped printf variable", `for action in read; do builtin printf -v action delete; ex GET "/documents/$action"; done`, 1},
+		{"assignment after call", `for action in read; do ex GET "/documents/$action"; action=delete; done`, 1},
+		{"dynamic outer loop", `for x in $IDS; do for action in read; do ex GET "/documents/$action"; done; done`, 1},
+		{"dynamic inner loop", `for action in read; do for action in $ACTIONS; do ex GET "/documents/$action"; done; done`, 1},
+		{"IFS before loop", `IFS=/; for b in /opt/tools/personad; do $b version; done`, 1},
+		{"PATH before loop", `PATH=/tmp/tools; for id in 1111; do ex GET "/messages/$id/thread"; done`, 1},
+		{"IFS in body", `for b in /opt/tools/personad; do IFS=/; $b version; done`, 1},
+		{"PATH in body", `for id in 1111; do PATH=/tmp/tools; ex GET "/messages/$id/thread"; done`, 1},
+		{"IFS loop binding", `for IFS in /; do for b in /opt/tools/personad; do $b version; done; done`, 1},
+		{"PATH loop binding", `for PATH in /tmp/tools; do for id in 1111; do ex GET "/messages/$id/thread"; done; done`, 1},
+		{"environment wrapper", `for b in /opt/tools/personad; do env PATH=/tmp/tools timeout 10 "$b" version; done`, 1},
+		{"CLI command binding", `for b in lark-cli; do "$b" docs +fetch; done`, 1},
+		{"gate command binding", `for b in ol; do "$b" GET /health; done`, 1},
+		{"shell command binding", `for b in sh; do "$b" -c 'echo ok'; done`, 1},
+		{"eval command binding", `for b in eval; do "$b" 'echo ok'; done`, 1},
+		{"source command binding", `for b in source; do "$b" /tmp/task.sh; done`, 1},
+		{"dot command binding", `for b in .; do "$b" /tmp/task.sh; done`, 1},
+		{"wrapper command binding", `for b in timeout; do "$b" 10 pwd; done`, 1},
+		{"later command is shell", `for b in /opt/tools/personad sh; do "$b" version; done`, 1},
+		{"arithmetic changes variable", `for action in read; do echo "$((action=1))"; ex GET "/documents/$action"; done`, 1},
+		{"parameter assigns variable", `for action in read; do echo "${action:=delete}"; ex GET "/documents/$action"; done`, 1},
+		{"nested loop shadows binding", `for action in read; do for action in delete; do echo "$action"; done; ex GET "/documents/$action"; done`, 1},
+		{"read changes command", `for b in /opt/tools/personad; do read b; "$b" version; done`, 1},
+		{"getopts changes command", `for b in /opt/tools/personad; do getopts a b -a; "$b" version; done`, 1},
+		{"printf changes command", `for b in /opt/tools/personad; do printf -v b sh; "$b" version; done`, 1},
+		{"function changes binding", `change() { action=delete; }; for action in read; do change; ex GET "/documents/$action"; done`, 1},
+		{"existing literal CLI write policy", `for id in 1111; do lark-cli docs +create; done`, 0},
+		{"existing literal gate write policy", `for id in 1111; do ex POST /documents '{}'; done`, 0},
+		{"quote removal", `for id in i'tem' "i"tem; do ex GET "/messages/$id/thread"; done`, 0},
+		{"escaped literal", `for id in item\ one; do ex GET "/messages/$id/thread"; done`, 0},
+		{"glob beside bound route", `for id in 1111; do ex GET /messages/$id/*; done`, 1},
+		{"brace beside bound route", `for id in 1111; do ex GET /messages/$id/{thread,replies}; done`, 1},
+		{"conditional binary", `for b in ~/.persona/bin/personad; do if [ -x "$b" ]; then "$b" version; else echo missing; fi; done`, 0},
+		{"conditional mutation", `for action in read; do if true; then action=delete; fi; ex GET "/documents/$action"; done`, 1},
+		{"computed shell variable", `for RANDOM in 1111; do ex GET "/messages/$RANDOM/thread"; done`, 1},
+		{"bounded list", `for id in ` + strings.Repeat("1111 ", 257) + `; do ex GET "/messages/$id/thread"; done`, 1},
+		{"bounded Cartesian product", `for id in ` + strings.Repeat("1111 ", 17) + `; do for kind in ` + strings.Repeat("thread ", 17) + `; do ex GET "/messages/$id/$kind"; done; done`, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) { assertAssistantBypassClassification(t, tc.command, tc.cards, gates...) })
+	}
+}
+
+func TestLarkLiteralForLoopRoutes(t *testing.T) {
+	for _, tc := range []struct {
+		name, command string
+		paths         []string
+		unknown       bool
+	}{
+		{"each message", `for id in 1111 2222; do ex GET "/messages/$id/thread"; done`, []string{"/messages/1111/thread", "/messages/2222/thread"}, false},
+		{"each nested value", `for id in 1111 2222; do for kind in thread replies; do ex GET "/messages/$id/$kind"; done; done`, []string{"/messages/1111/thread", "/messages/1111/replies", "/messages/2222/thread", "/messages/2222/replies"}, false},
+		{"deletion remains visible", `for action in read delete; do ex GET "/documents/$action"; done`, []string{"/documents/read", "/documents/delete"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := classifyLark(tc.command, olGate(""), t.TempDir(), nil)
+			if len(v.calls) != len(tc.paths) || v.unknown != tc.unknown || v.deny != "" || v.unparsed || v.unsure {
+				t.Fatalf("verdict = %+v", v)
+			}
+			for i, path := range tc.paths {
+				if v.calls[i].Path != path {
+					t.Fatalf("call %d = %+v, want route %q", i, v.calls[i], path)
+				}
+			}
+		})
+	}
+}
+
+func TestLarkLiteralForLoopCommandBoundaries(t *testing.T) {
+	for name := range commandWrappers {
+		t.Run(name, func(t *testing.T) {
+			assertAssistantBypassClassification(t, `for b in `+name+`; do "$b" version; done`, 1)
+		})
+	}
+	for name := range commandShells {
+		t.Run(name, func(t *testing.T) {
+			assertAssistantBypassClassification(t, `for b in /bin/`+name+`; do "$b" version; done`, 1)
 		})
 	}
 }

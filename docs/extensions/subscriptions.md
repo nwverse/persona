@@ -36,8 +36,11 @@ A built-in connector of this kind can also implement `connector.ReadJSON` (found
 | `github` | `checks` | `checks`: the check runs, a failed Actions job's log end as `body` | the run's id |
 | `imessage` | `chats` | `chats`: one item per chat's latest message | the chat's id and that message's time; `thread` is the chat |
 | `imessage` | `read`, `search` | `messages`, `hits` | the message's id; `thread` is the chat |
+| `imessage` | `inbox_things` | `things`: the Inbox's rows ready-made, for a `things` recipe | each row's `thread` (the chat) and `last` (its newest message's time) |
 | `mail` | `accounts` | `accounts` | the account's id |
 | `mail` | `search` | `messages` | the Message-ID, else `account:mailbox:uid` |
+
+iMessage declares a catalog of its own (`connector.Catalog`, #6317): the three tools above as the derived catalog had them (same names, descriptions and schemas, so existing subscriptions keep theirs), and `inbox_things`, which answers the rows its `Collect` has, computed by the same function (`rows` in `connector/imessage/persona.go`). `inbox_things` is a catalog tool only, not one of the assistant's. `connector/imessage/inbox_things_test.go` compares the rows field by field: `Collect`'s with the tool's, and with what iMessage's default things subscription hands the Inbox once its feed is switched (P5a).
 
 `mail` `read` stays text: one message has no list to follow. The answers are pinned in each connector's `testdata/readjson`, and `server/internal/subscriptions/builtin_test.go` dry-runs them item by item. A snapshot subscription already made on one of these tools keeps working; its state is now the JSON.
 
