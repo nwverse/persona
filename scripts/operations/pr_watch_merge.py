@@ -44,10 +44,14 @@ def merge_lock(root):
     return handle
 
 
-def merge(repo, number, root, privacy=None, timeout=300):
+def merge(repo, number, root, privacy=None, timeout=300, expected_head=None, expected_base=None):
     """Do not read or merge PR metadata outside one exact-head decision."""
     repo = repository(repo)
     pr = pr_snapshot(repo, number)
+    if expected_head is not None and pr["headRefOid"] != expected_head:
+        raise WatchError("the PR head differs from the reviewed head; not merged")
+    if expected_base is not None and pr["baseRefOid"] != expected_base:
+        raise WatchError("the PR base differs from the reviewed base; not merged")
     if pr["state"] != "OPEN" or pr["isDraft"]:
         raise WatchError("PR is not open and non-draft")
     if pr["mergeable"] != "MERGEABLE" or pr.get("mergeStateStatus") not in ("CLEAN", "HAS_HOOKS", "UNSTABLE"):
