@@ -159,7 +159,7 @@
  "web/src/views/chat/RunningSpeedCard.tsx": 4,
  "web/src/views/chat/RunningStatusBar.tsx": 2,
  "web/src/views/chat/SegmentView.tsx": 7,
- "web/src/views/chat/SessionDialogs.tsx": 18,
+ "web/src/views/chat/SessionDialogs.tsx": 16,
  "web/src/views/chat/SlashPalette.tsx": 6,
  "web/src/views/chat/StepDetail.tsx": 4,
  "web/src/views/chat/Steps.tsx": 11,
