@@ -62,7 +62,8 @@ extension TodoCalendarMode {
 
 /// The to-dos as a calendar (#2029, docs/assistant/todos.md "Calendar"): a day, a week or a month of those with a due
 /// date, drawn as the list draws them (state, overdue, done, priority, reminder). Tapping one opens it, tapping the
-/// empty axis makes a new one due there; those without a due date are counted under it, a tap from the list.
+/// empty axis makes a new one due there; those without a due date are counted under it, a tap from the list. On iOS a
+/// to-do is moved by dragging it to another time or day (#2045, `TodoCalendarDrag.swift`).
 struct TodoCalendarView: View {
     @Environment(\.tabIsActive) private var inFront
     @Environment(\.locale) private var locale
@@ -80,6 +81,14 @@ struct TodoCalendarView: View {
 
     @StoredValue("todos.calendar.showDone") private var showDone = true
     @State private var adding: TodoCalendarSlot?
+    /// A to-do whose due date is set from its "Change Due Date…" (#2045).
+    @State private var rescheduling: TodoItem?
+    /// A to-do is being dragged: a sideways move carries it, it doesn't turn the page.
+    @State private var carrying = false
+    #if DEBUG
+    /// The `-openRescheduleTitled` sheet came up (then it isn't asked for again).
+    @State private var debugRescheduleShown = false
+    #endif
 
     private let calendar = TodoCalendar.userCalendar
 
@@ -95,7 +104,7 @@ struct TodoCalendarView: View {
                         Rectangle().fill(Theme.CalendarGrid.line).frame(height: pixel)
                     }
                     #if os(iOS)
-                    .simultaneousGesture(paging)
+                    .simultaneousGesture(paging, including: carrying ? .subviews : .all)
                     #endif
                 undatedBar
             }
@@ -103,6 +112,38 @@ struct TodoCalendarView: View {
         .sheet(item: $adding) { slot in
             TodoQuickAddSheet(slot: slot)
         }
+        .sheet(item: $rescheduling) { todo in
+            TodoRescheduleSheet(todo: todo)
+                #if DEBUG
+                .onAppear {
+                    debugRescheduleShown = true
+                    CalendarDragTrace.shared.note("sheet shown") // i18n-ignore: DEBUG trace
+                }
+                .onDisappear { CalendarDragTrace.shared.note("sheet gone") } // i18n-ignore: DEBUG trace
+                #endif
+        }
+        #if DEBUG
+        // `-openRescheduleTitled <text>`: the first to-do whose title has it opens its "Change Due Date…" (the UI test
+        // of the way without dragging, screenshots). A sheet asked for during the page's push or the switch to the
+        // calendar can be dropped: it is asked for again until it is up. Each way out is in the drag trace.
+        .task(id: todos.count) {
+            guard let match = UserDefaults.standard.string(forKey: "openRescheduleTitled") else { return }
+            let trace = CalendarDragTrace.shared
+            guard !debugRescheduleShown else { return trace.note("sheet: shown before") } // i18n-ignore: DEBUG trace
+            guard let todo = todos.first(where: { $0.title.contains(match) }) else {
+                return trace.note("sheet: no to-do of \(todos.count)") // i18n-ignore: DEBUG trace
+            }
+            for attempt in 1...10 {
+                try? await Task.sleep(for: .milliseconds(800))
+                if Task.isCancelled { return trace.note("sheet: stopped at \(attempt)") } // i18n-ignore: DEBUG trace
+                guard !debugRescheduleShown else { return }
+                trace.note("sheet asked \(attempt)") // i18n-ignore: DEBUG trace
+                rescheduling = nil
+                try? await Task.sleep(for: .milliseconds(100))
+                rescheduling = todo
+            }
+        }
+        #endif
     }
 
     // MARK: What is shown
@@ -124,17 +165,20 @@ struct TodoCalendarView: View {
                     .padding(.top, Theme.Space.s)
                 TodoCalendarTimeline(
                     days: [calendar.startOfDay(for: anchor)], entries: TodoCalendar.on(anchor, entries, calendar: calendar),
-                    narrow: false, showsDayHeader: false, open: openEntry, pickDay: { go(to: $0) }, add: { adding = $0 })
+                    narrow: false, showsDayHeader: false, open: openEntry, pickDay: { go(to: $0) }, add: { adding = $0 },
+                    moves: moves)
             }
             .id(TodoCalendar.range(.week, anchor: anchor, calendar: calendar).start)
         case .week:
             TodoCalendarTimeline(
                 days: TodoCalendar.days(.week, anchor: anchor, calendar: calendar), entries: entries,
-                narrow: !wide, showsDayHeader: true, open: openEntry, pickDay: { show(.day, $0) }, add: { adding = $0 })
+                narrow: !wide, showsDayHeader: true, open: openEntry, pickDay: { show(.day, $0) }, add: { adding = $0 },
+                moves: moves)
                 .padding(.top, Theme.Space.s)
                 .id(TodoCalendar.range(.week, anchor: anchor, calendar: calendar).start)
         case .month:
-            TodoCalendarMonth(anchor: anchor, entries: entries, wide: wide, open: openEntry, pickDay: { show(.day, $0) })
+            TodoCalendarMonth(anchor: anchor, entries: entries, wide: wide, open: openEntry, pickDay: { show(.day, $0) },
+                              moves: moves)
                 .padding(.top, Theme.Space.s)
                 .id(TodoCalendar.range(.month, anchor: anchor, calendar: calendar).start)
         }
@@ -144,6 +188,26 @@ struct TodoCalendarView: View {
         switch entry.source {
         case .todo(let id): open(id)
         }
+    }
+
+    // MARK: Moving one (#2045)
+
+    /// What the grids do with a to-do moved on them: iOS and iPadOS only (the Mac app is frozen).
+    private var moves: CalendarMoves? {
+        #if os(iOS)
+        return CalendarMoves(
+            drop: { entry, drop in
+                guard case .todo(let id) = entry.source, TodoCalendar.moves(entry, to: drop, calendar: calendar) else { return }
+                TodoCalendarMove.save(id, to: TodoCalendar.due(drop, calendar: calendar))
+            },
+            reschedule: { entry in
+                guard case .todo(let id) = entry.source else { return }
+                rescheduling = TodoStore.shared.todo(id: id)
+            },
+            carrying: { carrying = $0 })
+        #else
+        return nil
+        #endif
     }
 
     // MARK: Moving around
@@ -235,6 +299,7 @@ struct TodoCalendarView: View {
                 Rectangle().fill(Theme.CalendarGrid.line).frame(height: pixel)
             }
             .accessibilityIdentifier("todo.calendar.undated")
+            .debugDragTrace()
         }
     }
 }

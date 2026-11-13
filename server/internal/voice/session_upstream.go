@@ -111,7 +111,7 @@ func (c *conversation) connect(woken bool) error {
 	// not: a request the user made just before the drop still counts.
 	if words := agentWords(snap); words != c.snapWords {
 		if !first {
-			c.gate.told(c.connectedAt)
+			c.gate.told(c.connectedAt, agentReconnect)
 		}
 		c.snapWords = words
 	}
@@ -393,7 +393,7 @@ func (c *conversation) handle(gen int, e event) {
 		spoke := c.spokeAt(time.Now()) // by the user's words before these
 		if strings.TrimSpace(e.text) != "" {
 			c.gate.user = time.Now()
-			c.userAt = c.gate.user
+			c.gate.caption, c.userAt = c.gate.user, c.gate.user
 		}
 		c.userLineDone(c.userText(e.text, e.replace, e.final, spoke)) // a line the service ends itself (codex)
 	case evAssistant:
@@ -480,7 +480,7 @@ func (c *conversation) handle(gen int, e event) {
 		if s := c.unacked[e.eventID]; s != nil {
 			delete(c.unacked, e.eventID)
 			if s.agent {
-				c.gate.told(time.Now()) // the model has read them only now
+				c.gate.told(time.Now(), agentAcked) // the model has read them only now
 			}
 		}
 	case evError:

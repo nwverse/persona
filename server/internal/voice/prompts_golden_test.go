@@ -181,18 +181,19 @@ func TestGoldenVoiceTurnPrompts(t *testing.T) {
 			}
 		}
 		for name, ref := range map[string]prompts.VoiceRefused{
-			"unprompted":       {Code: "unprompted", Task: x.task},
-			"unprompted_agent": {Code: "unprompted", Task: x.task, Agent: true},
-			"empty":            {Code: "empty"},
-			"unknown":          {Code: "unknown", Task: x.task},
-			"failed":           {Code: "failed", Task: x.task, Reason: i18n.T(l, "apierr-apierr.no_machine")}, // the hub's no_machine (docs/assistant/onboarding.md 5.2)
-			"failed_bare":      {Code: "failed", Task: x.task},
-			"unreachable":      {Code: "unreachable", Task: x.task},
-			"on_screen":        {Code: "on_screen", Task: "批准", To: "Claude Code"},
-			"dialog_open":      {Code: "dialog_open", Task: x.task, To: "Claude Code"},
-			"dialog_open_plan": {Code: "dialog_open", Task: x.task, To: "Claude Code", Plan: true},
-			"input_draft":      {Code: "input_draft", Task: x.task, To: "Codex"},
-			"failed_agent":     {Code: "failed", Task: x.task, To: "Claude Code", Reason: i18n.T(l, "apierr-apierr.no_machine")},
+			"unprompted":        {Code: "unprompted", Task: x.task},
+			"unprompted_resend": {Code: "unprompted", Task: x.task, To: "Claude Code", Resend: true},
+			"unprompted_agent":  {Code: "unprompted", Task: x.task, Agent: true},
+			"empty":             {Code: "empty"},
+			"unknown":           {Code: "unknown", Task: x.task},
+			"failed":            {Code: "failed", Task: x.task, Reason: i18n.T(l, "apierr-apierr.no_machine")}, // the hub's no_machine (docs/assistant/onboarding.md 5.2)
+			"failed_bare":       {Code: "failed", Task: x.task},
+			"unreachable":       {Code: "unreachable", Task: x.task},
+			"on_screen":         {Code: "on_screen", Task: "批准", To: "Claude Code"},
+			"dialog_open":       {Code: "dialog_open", Task: x.task, To: "Claude Code"},
+			"dialog_open_plan":  {Code: "dialog_open", Task: x.task, To: "Claude Code", Plan: true},
+			"input_draft":       {Code: "input_draft", Task: x.task, To: "Codex"},
+			"failed_agent":      {Code: "failed", Task: x.task, To: "Claude Code", Reason: i18n.T(l, "apierr-apierr.no_machine")},
 		} {
 			ref.Lang = lang
 			golden(t, "refused."+name+"."+lang, prompts.RenderVoiceRefused(ref))

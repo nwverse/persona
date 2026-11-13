@@ -463,6 +463,16 @@ For every component: use the design-system one, not a lookalike. Counts are appr
   Persona's place in the message actions; the card over the composer (`ForwardBar`) and in the bubble (`ForwardBlock`)
   are the quote bar's and quote card's shapes (`views/chat/Quote.tsx`) with the `forward` icon, and Forward to is a
   `Dialog` (a bottom sheet on phones) with palette-style rows; no Share as Image row, as the web has no share card.
+- Forwarding several at once (#3838): the entry is a row at the top of Forward To, "Select Messages…" (「多选…」), never
+  a bar item next to Select Text, and the message bar keeps its width. Selecting in a chat is the Inbox Select's pattern:
+  a round mark on each message's leading edge (filled accent when picked), a tap anywhere on the message toggles it, the
+  composer gives way to a bar with Cancel, "N Selected" and Forward N (disabled at 0), and Cancel leaves the chat as it
+  was. Several forwards of one chat are one row over the composer (a line each, one ×) and one card in the bubble (each
+  message's author, time and two lines, each opening it; past three, "N More"). Web (#3838): "Select messages…" is the
+  first row of Forward to; while selecting, each message with a Forward has a checkbox (`ui/CheckMark`) in its first
+  place, a click anywhere on it toggles it and nothing inside it answers (no hover bar or menus), and the bar in the
+  composer's place reads Cancel, "N selected" and Forward N; Esc cancels too. The row over the composer is
+  `ForwardGroupBar` and the bubble's card `ForwardGroupBlock` (`views/chat/ForwardGroup.tsx`), past three "N more".
 - Share as Image (iOS `MessageShareSheet`): a full-screen page with the message as a card (who said it, where and when, the
   words with code blocks that wrap and have no Copy bar, a quiet Persona mark, on a pale blue-to-lilac gradient), Light /
   Dark at the top, and Share (the picture), Save, Copy and Share Text along the bottom; the card is 390 pt wide, wider for
@@ -960,6 +970,16 @@ The watch widget extension doesn't build `Theme`, so complications take their fo
 - VoiceOver reads the title, the running time as its value and what a tap does as its hint. `-openWatchItem allday-complication` previews every family in every state.
 - **Record** (#5493, `MeetingRecordingComplication`; circular, corner, rectangular, inline, the Smart Stack): static, the recording mark in the system's red and **Record**, the word of every start ("One Record entry (#5243)"); the rectangular face adds "Meeting" under it (what a tap records; a longer line was cut short in en and ja). A tap opens the app straight into a meeting recording (`persona://record?meeting=1`), or marks the meeting while all-day recording runs. Its kind stays `persona.watch.meeting-recording`. `-openWatchItem record-complication` previews every family.
 
+### 3.14 Home Screen and Lock Screen widgets
+
+The widget extension doesn't build `Theme`: Persona's widgets take their colors, type, sizes and marks from `HomeWidgetTokens` (`apple/Shared/Design/HomeWidgetTokens.swift`), whose symbols mirror `Theme.Icon` with an `// icon:` note, as the watch's complications do. Heroes, rings and faces are fixed sizes (the system sets a widget's size); every line of words is a text style. Every widget in `docs/apple/home-widgets.md`.
+
+- **One widget, one job, one hero**: a number, a ring, a chart or a button, as the system's own widgets (Calendar, Reminders, Fitness, Batteries). A plain surface, no card inside a card; a small widget never holds a list.
+- **One color per widget**, on its name at the top left and its hero; the agent states keep `StatusPalette`'s.
+- **The persona is an accent**: a small face at the top right whose mood says how that widget's subject is, the empty states, and the state before pairing. It never takes the hero's place.
+- **Every rendering mode**: in tinted, clear and Lock Screen modes every colored part goes in the accent group (`homeTone`, `homeAccent()`); a mark on a filled disc is knocked out of it; Mochi becomes a line drawing (`MochiGlyph`).
+- **Counts** are the app's own (Needs You per session, section 4.8; the Inbox's Needs You; the Machines page's windows); inbox and health content is `privacySensitive`. A to-do ticked on a widget shows done at once and says so in red when the hub refuses it.
+
 ## 4. Interaction patterns
 
 ### 4.1 Navigation hierarchy (super rule 3)
@@ -1007,6 +1027,8 @@ before common choices. It introduces no visual style, color palette, model defau
 | Link card drag | to 0.6 it stops blocking the chat; further down it closes |
 | Terminal cover drag | its bar follows the finger; past 140 pt or a fast flick it closes. The bar, with a 44 pt Close, is there in every state; with no terminal the whole area drags (#4328). Android the same (140 dp, a flick whose half second of glide passes 420 dp; `TerminalCover`, #4339 C7), its bar under a handle, with Back closing it too |
 | Tap on a saved place's map | moves the place there (#4248); search and Use Current Location do the same without the gesture |
+| Hold a to-do on the calendar | after 0.35 s held still it follows the finger (a pointer: once it moves) to another time, day or All Day row; saved on release with Undo in the toast; "Change Due Date…" for VoiceOver (`docs/assistant/todos.md`, "Calendar") |
+| Long press / trailing swipe on an extension's row or tile | its extra actions (`.extensionRowActions`, UI version 6): the menu has them all, usual ones first and destructive ones red and last; the swipe has those marked `swipe`, the destructive one at the edge, never run by a full swipe; one with `confirm` asks in an alert with Cancel; VoiceOver has them as the row's actions |
 
 Every gesture-only action needs a plain alternative for VoiceOver and Switch Control (see the audit).
 
@@ -1035,7 +1057,7 @@ not enable Stop or promise cancellation of the pending HTTP request. Keep existi
 labels and the authoritative Working/Needs you/queued state words. Verify dark/light in the existing styles and measure
 send-to-feedback separately from send-to-input delivery; a transport receipt's queue timestamp is not a client paint.
 
-`Haptics` (`apple/Persona/App/AppModel.swift`): `tap` (light impact), `success`, `error`, `attention` (warning). 443 call sites on 11-11 (tap 243, success 129, error 57, attention 14); no-op on visionOS; generators are created per call. One direct UIKit use remains (`apple/Persona/Views/Chat/ChatEdgeScrub.swift`). Android has the same four kinds (`android/core/designsystem/src/main/kotlin/persona/core/designsystem/Haptics.kt`: tap is a context click, success confirm, attention a gesture threshold, error reject; the system's touch-feedback setting decides whether they play).
+`Haptics` (`apple/Persona/App/AppModel.swift`): `tap` (light impact), `selection` (a tick), `success`, `error`, `attention` (warning). 443 call sites on 11-11 (tap 243, success 129, error 57, attention 14); no-op on visionOS; generators are created per call. One direct UIKit use remains (`apple/Persona/Views/Chat/ChatEdgeScrub.swift`). Android has the same four kinds (`android/core/designsystem/src/main/kotlin/persona/core/designsystem/Haptics.kt`: tap is a context click, success confirm, attention a gesture threshold, error reject; the system's touch-feedback setting decides whether they play).
 
 Which action gives which haptic, on both (#4209; the rule iOS follows):
 
@@ -1043,6 +1065,7 @@ Which action gives which haptic, on both (#4209; the rule iOS follows):
 | --- | --- |
 | Copy | success, with a "Copied" notice (Android: every copy goes through `rememberCopy()`) |
 | Send, Stop, switching pages, opening the avatar menu | tap |
+| Carrying something to a new place: a to-do held on the calendar (#2045) | tap on the pick-up; selection at each new quarter hour or day it would land on |
 | Pressing Approve, Deny or a choice | tap on the press; success when the answer went through |
 | Archive a conversation or an Agent | tap, then its "Archived" notice (iOS `archiveConversation`; marking a to-do done plays none) |
 | Save, an answer or approval that went through | success |
@@ -1961,6 +1984,19 @@ what was decided, and the transcript stays one tap away (principle 2) instead of
   the default and the largest text size, a cited photo) and `MeetingRecordingUITests` (to-dos, Regenerate, the date
   style).
 - Platforms: visionOS keeps the minutes' sections above the transcript; the web and Android have no Summary yet.
+
+## File page (#5827)
+
+Who it serves: people working with their computers' files from the phone or the browser (an Agent's Files tab, a computer's Files). Where it lives and what it does: docs/apple/ios.md "File page", docs/web/web.md "Side panels".
+
+- **Path bar**: Back, Forward and Up as the page's circle buttons (`.themedButton()` clipped to a circle on iOS, `IconButton` on the web), then the path from the home (`Theme.Icon.home`) or `/`, every folder a button, the current one on `Theme.Fill.chip` (web `bg-field`), separated by `Theme.Icon.pathSeparator`. The session's folder carries a compact accent `Chip` "Session"; a folder outside the home ends with a compact `Chip` "Read Only" (`Theme.Icon.locked`). Why not the breadcrumb alone: the page now leaves the session's folder, so the path is the whole one and the history is a browser's.
+- **Find field** under the path bar, beside the page's tool buttons: a capsule of `Theme.Fill.chip` at `Theme.Size.wellS` (the buttons' height) with the search mark and a clear button; the web's `SearchField` `sm`. Results replace the list while there are words in it.
+- **Info**: a sheet with medium and large detents on iOS (a grouped list of `LabeledContent` rows, `.themedRow()`), a `Dialog` on the web, both with Copy Path; permissions in plain words before the code (`rw-r--r-- · 644`), the code in `Theme.Font.code`.
+- **＋ menu** (#5828): the page's add button (`Theme.Icon.add`; web `plus`) opens New Folder (`Theme.Icon.newFolder`) and New Text File (`Theme.Icon.newFile`), then the uploads, each section apart; a name is asked in an alert on iOS (as Rename) and a `Dialog` on the web, the name before the extension selected.
+- **Permissions** (#5831): a grid of system switches (iOS) or checkboxes (web), a row per owner / group / everyone else and a column per read / write / run, each switch labeled "who: what" for VoiceOver; Save is the confirmation action and asks in an alert or `Dialog` that names the change in words and codes (section 4.4, rung 2: not undoable from here).
+- **Selection bar** (#5830): while selecting, five equal cells on a `.surface` card under the list, each a `ThemedIcon` over its word in `Theme.Font.label` (one line, scaling down to 80%), Trash in the danger color; disabled cells at 40%. The count sits where the find field was. Duplicate is `Theme.Icon.duplicate`, Compress `Theme.Icon.fileArchive`.
+- **Editor** (#5829): full screen on iOS with Cancel and Save in the bar (Save the confirmation action), the title the file's name and "Edited" under it once changed; the keyboard bar's keys are the system's plain buttons with `Theme.Icon` symbols (`indent` is new). The web edits in place of the viewer with Cancel and a primary Save. The conflict asks in an alert (iOS) or a `Dialog` (web): Save as Copy first, Overwrite Anyway destructive and confirmed again.
+- **Symlinks**: `Theme.Icon.symlink` on the icon's corner (accent), `Theme.Icon.error` in `Theme.danger` for a broken one, whose second line is the danger color too.
 
 ## Starting from what you already have (#5193)
 
