@@ -2,6 +2,7 @@ package persona.feature.inbox
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.ui.test.*
+import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.navigation3.runtime.NavKey
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertTrue
