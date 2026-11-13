@@ -174,7 +174,7 @@ export function ExtensionUI(props: Parameters<typeof LegacyExtensionUI>[0]) {
   );
 }
 export function LegacyExtensionUI({
-  extension, ui, context, embedded, compact, bare, title, onUnsupported, onMissing, onFailed, revision, onOpenSource, pages, history: withHistory, state: firstState, onWide, navigation, active = true, manager,
+  extension, ui, context, embedded, compact, bare, title, onUnsupported, onMissing, onFailed, revision, onOpenSource, pages, history: withHistory, state: firstState, onWide, onDepth, navigation, active = true, manager,
 }: {
   extension: string; ui: string; context?: UIContext; embedded?: boolean; compact?: boolean; bare?: boolean; title?: string;
   /** Whose extension it is (another manager's inbox item or computer, docs/assistant/managers.md "Clients"); none: the default's. */
@@ -186,6 +186,8 @@ export function LegacyExtensionUI({
   active?: boolean;
   /** The view drawn needs a wide page (UI version 4: split, code, diffs) or not. */
   onWide?: (wide: boolean) => void;
+  /** How many pages deep its stack is, whenever that changes (Inbox Sources keeps its List / Relationships switch on the first). */
+  onDepth?: (depth: number) => void;
 }) {
   const [stack, setStack] = useState<UIPage[]>(() => [{ ui, ...(firstState ? { state: firstState } : {}) }]);
   const linkManager = useLinkManager();
@@ -210,6 +212,7 @@ export function LegacyExtensionUI({
   const mode = pages ?? (compact || embedded ? "open" : "stack");
   const depth = stack.length;
   const pageKey = `${depth}\n${top.ui}`;
+  useEffect(() => onDepth?.(depth), [depth, onDepth]);
 
   // the first page follows the props (a different extension or page opened in the same place)
   useEffect(() => {
@@ -715,8 +718,8 @@ function LauncherSection({ place, launcher, machine }: { place: UIPlace; launche
 }
 
 /** Sends the subscription pages' Set Up with … text to the assistant's main conversation (Ask Persona), loading the
- *  outbox only then; a conversation that can't start says so. */
-function askAssistant(text: string) {
+ *  outbox only then; a conversation that can't start says so. Inbox Sources' relationship view sends the same. */
+export function askAssistant(text: string) {
   void import("../../lib/outbox")
     .then((m) => m.askPersona(text))
     .catch((e: unknown) => toast(t("settings-extensionview.action_failed", { error: errorText(e) }), "error"));

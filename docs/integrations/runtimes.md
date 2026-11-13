@@ -49,10 +49,13 @@ Optional (for each one present, the SDK declares the capability in `runtime.hell
 | `cursor(sessionId)` | The current `to_seq`, or `{to_seq, history}` (with history, a rewrite with the same item count can still be detected; if omitted, the `to_seq` and `history` of a `turns: 1` page are used) |
 | `image(params)` / `item(params)` | Raw image data / the full text of a truncated item |
 | `send({session_id, text, images, client_msg_id})` | Sending a message from the phone. **Dedup by `client_msg_id`**: the App resends on reconnect |
-| `interrupt` / `rename` / `close` / `start({cwd, prompt})` | Interrupt, rename, close, create from the phone (with `start` and a configured `launcher`, the new-session form gains a launcher field) |
+| `interrupt` / `rename` / `close` / `start({cwd, prompt})` | Interrupt, rename, close, create from the phone (with `start` and a configured `launcher`, the new-session form gains a launcher field). The apps offer Rename and Close on its rows from `capabilities.rename` / `capabilities.close`, which carry `caps.rename` (not on a sub-Agent's row) and `caps.close` (#6294) |
 | `hasLocalClient()` | Whether this runtime's own UI is open (decides who gets permission requests first, see below) |
 | `unlistedTranscripts()` | The Claude session ids of sessions of its own that `listSessions()` no longer lists (archived in the runtime), or nothing while it cannot say yet; no capability is declared. See "Runtimes that run Claude Code" below |
 | `modes({session_id, permission_mode, effort, model})` | Switching permission mode / reasoning effort from the phone (`caps.modes`; optional model changes require `createRuntime` option `modelSwitch: true`, advertised as `caps.model`; values are Persona's: `default` / `acceptEdits` / `plan` / `auto` / `bypassPermissions`, `low` … `max`). The apps show the mode chips on its rows whose agent is `claude` or the runtime's own, never Paseo's catch-all `paseo` (`capabilities.modes`, `docs/protocol/protocol.md` "Codex sources and capabilities") |
+| `rewind({session_id, prompt, occurrence, prompts_after, restore})` | Rewinding a conversation to before one of the user's messages (`caps.rewind`): find the message by its text, its occurrence counting from the end and how many of the user's came after it, and refuse (`rewind_mismatch`) rather than cut elsewhere. Its rows may narrow it per session in their own `capabilities` (`rewind: false`), and only a row's `rewind_code: true` lets `restore: "code_and_conversation"` through (`docs/protocol/protocol.md` "Codex sources and capabilities") |
+| `models({launcher, refresh})` / `check({launcher, cwd, prompt})` | The launcher's models as the runtime has them now (`caps.models`, the pickers' refresh) / Settings › Models "Test" run through the runtime with its own login (`caps.check`): one real prompt in the node's empty check directory, answered as `{ok, model, answer, error}` |
+| `seen({session_id})` | The user saw the session in Persona (`caps.seen`, #6299): a runtime that keeps an unread mark of its own clears it, so the session is not unread in its own app too. The manager tells the node only while the runtime lists the session as `done` (unread), best effort |
 | `archive({session_id})` / `unarchive({session_id})` | The runtime's own reversible archive (`caps.archive`, declared only when both exist): when the user archives a session in Persona, it is archived in the runtime too, and restored with it. Archive an idle session without stopping or closing anything (Persona refuses busy sessions first) and keep it restorable; both must be idempotent (already archived / restored is success). A runtime whose archive also stops the session, or that has no way back, leaves them out: the archive is then Persona's alone (`docs/protocol/protocol.md`, "Agent session archives") |
 | `watchChanged(id, watching, {transcript})` | The phone starts / stops watching a session (when a new node connects or the runtime stops, all stop): for runtimes that only follow a session while someone is watching (Paseo subscribes to the timeline per session) |
 
@@ -329,6 +332,20 @@ end to end in `integrations/dsh/e2e/assistant.mjs`.
 
 ### Antigravity CLI
 
+The session's `last_text` preview contains assistant response text after the latest explicit user input. A new user
+input clears the previous reply preview, including input with no visible text. Thinking and tool records leave it empty
+until the assistant writes response text. This keeps user-authored questions out of awaiting-reply detection while
+preserving genuine assistant questions. User messages and tool records remain available in the conversation items.
+
+Native model errors can be omitted from the JSONL export even when ACP reports a completed prompt. When an idle
+summary has unexported steps, the companion reads at most the final eight native steps with `GetCascadeTrajectorySteps`.
+The result is cached against the summary and exported branch. Discovery opens the native service through read-only
+session listing. An omitted terminal error uses the shared assistant-text `API Error:` representation for the existing error card
+and populates the session's `turn_error`
+fields, including a subscription reset timestamp supplied in native quota metadata. New input and rewinds invalidate
+that result. Rejected ACP prompts also publish their failure through the session's error state.
+The history token includes the error format so connected clients refresh items cached before this representation.
+
 The implemented integration is for the **Antigravity CLI (`agy`)**, not the Antigravity desktop app. With the node running,
 start `node integrations/antigravity/companion.mjs` from the repository root. The companion connects to the node's runtime
 socket, lists CLI transcripts, and uses `agy acp` for terminal-less session creation, sending and interruption. It can also
@@ -359,6 +376,13 @@ empty boundary. A tool call ends the current text message, so the next message r
 Each prompt clears its live text on completion, including when another prompt is queued.
 
 Session inventory, watch cursors, item pages and live item pushes read `transcript_full.jsonl` when available.
+Antigravity declares `caps.rewind` for idle Agent conversations. The selected message, duplicate occurrence from the
+end, and following user-input count are checked against `GetCascadeTrajectory`. The owned ACP process's private log
+identifies its loopback native service. `RevertToCascadeStep` receives `conversationOnly: true` and the preceding step
+index, including `-1` for an empty conversation. Native refusal propagates to the caller. The bridge uses the current
+native summary and replacement step indices to discard the abandoned export tail, then publishes a changed history
+token. This survives companion restarts without modifying native transcript files.
+
 The compact `transcript.jsonl` export can contain native `<truncated N bytes>` placeholders and can be ahead of
 the complete export. Use one source for sequences and content so a watch cannot advance past unread complete items.
 Older histories fall back to the compact export when the complete file is unavailable. Persona applies the SDK's

@@ -1,5 +1,25 @@
 # Lessons: testing and validation
 
+- Fixture teardown is part of a test's elapsed time (#5730). A scripted terminal whose shell is ready immediately
+  does not need a fixed startup pause. When a test has finished its assertions, cancel background prompt checks
+  owned by that fixture and join them before restoring package settings or closing sockets. Delivery/recovery tests
+  must still await the check before their assertions; cancellation at teardown must not substitute for those checks.
+  Keep normal detached delivery and production wait limits unchanged, and measure serial and partitioned commands
+  separately when evaluating the gain.
+
+- A transport fixture that already reads every reply should wake its request waiter from that reader (#5730).
+  Register by request ID before sending, retain JSON-RPC errors, remove waiters on cancellation/EOF/write failure,
+  and keep duplicate or late replies from blocking the reader. Polling an already available approval response
+  added about 23 seconds to the complete shell-name security matrix. Keep every classification assertion and
+  verify the transport with real pipes and held approvals; virtual time can expose an unnecessary polling tick.
+
+- A counter of a shared resource (lists, calls, reads) must not include what a fixture's own background passes do
+  (#6121). `TestIdlePassesReadWhatRuns` counted `closeDoneTaskAgents`'s machine lists, but `liveLoop`'s signal-driven
+  pass (a 100 ms coalescing window) listed the same machine from the fixture's earlier calls, so the count was 0 or 1
+  depending on the race (32 failures in 200 runs). Settle the counter before the measurement: wait until no list has
+  happened for a quiet window longer than the background pass's coalescing delay, then count only what the call under
+  test adds. Never fix this class with a plain `time.Sleep` before the call — that only moves the race.
+
 - A test that calls an entry point which sets the process environment must `t.Setenv` that variable first, so the
   test puts it back (#4581). `nodeclient.RunHook` with `--persona-home <dir>` sets `PERSONA_HOME`; one test left it
   pointing at its removed `t.TempDir()`, and every later `internal/node` test put `node.sock` there. On macOS that path
@@ -11,6 +31,12 @@
   or removing their temporary files (#3345). Waiting only for `pane.send_input` leaves a background start polling a
   dead host for three minutes, with its diagnostics appearing under a later test. Expected start failures use the
   node's logger, so tests can capture diagnostics without changing production logging.
+
+- An async status fixture must carry the operation job that the real status endpoint reports (#5363). `iphoneMac`
+  returned a job from `iphone.pair` but never from `iphone.status`, so a later refresh could erase the just-started
+  job; `go test -count=1000 -run '^TestIPhoneJobs$' ./internal/extmgr` reproduced it in about a second. Keep the
+  fixture's status/job state consistent with `node/iphoneStatus`, and assert the post-pair status directly rather than
+  adding a wait or changing production synchronization.
 
 - Bulk Postgres fixtures need physical isolation, not just row deletion (#3743). Deleting 500 feed rows left a larger
   unsent B-tree than the sent index; a controlled statistics refresh then changed a later index-choice assertion even
@@ -996,3 +1022,33 @@ To check that a failure is this, move `dev.json` aside in the app's data contain
 - `testhome` now resolves `GOENV`, `GOPATH`, `GOMODCACHE` and `GOCACHE` with the real home before swapping it and pins
   them. Anything else that reads the home directory for its own config (git, ssh, a CLI's login) has the same problem
   under testhome: pin what the child needs, or give the test its own config.
+
+## A throw-away HOME also hides Docker's CLI plugins (2026-11-13, #6131)
+
+- The Compose config checks run `docker compose` under a temporary `HOME`, so Docker reads an empty config directory and
+  finds no `docker-compose` plugin where Docker Desktop and Colima register it (`cliPluginsExtraDirs` in the user's
+  `~/.docker/config.json`). The checks skipped only on the text `is not a docker command`; Docker 29 prints
+  `unknown shorthand flag: 'f' in -f` for the same missing plugin, so they failed instead, on `main` too.
+- Don't detect a missing tool by one wording of its error: ask it directly in the test's own environment
+  (`scripts/test/compose_cli.py` runs `docker compose version`) and skip with how to enable the check
+  (`PERSONA_TEST_DOCKER_CONFIG`, `docs/operations/hub-update.md`).
+
+## Swift 6.2 `swift test` copies `.xcstrings` without compiling `.lproj` (2026-11-13, #6258)
+
+- Under Xcode 26.0 (Swift 6.2), `xcrun swift test` copies `Localizable.xcstrings` into `Bundle.module` as-is
+  (`Copying Localizable.xcstrings`) without generating `.lproj` directories, whereas newer toolchains and `xcodebuild`
+  (`scripts/app/mac-link.sh`) compile it at build time.
+- SwiftPM tests that point a bundle override at `<language>.lproj`
+  (`apple/PersonaLink/Tests/PersonaLinkTests/LinkTextTests.swift`) fall back to compiling `Localizable.xcstrings` on
+  demand with `/usr/bin/xcrun xcstringstool compile`, and cover that path with a synthetic uncompiled `.bundle` test so
+  newer local Xcode versions still exercise it.
+
+## A throw-away HOME also hides the login keychain from codesign (2026-11-13, #6368)
+
+- `codesign -s <certificate>` looks for the identity in the keychains of `$HOME`: under the temporary `HOME` the
+  nodeupdate tests set in `TestMain`, a certificate that signs fine from the same shell says `no identity found`. The
+  real-certificate test (`TestRealCertificateSigning`) sets `HOME` back to the user's home (`os/user`) for itself.
+- And the keychain must be open to the process: run from a `Background` session (an ssh login, a terminal an Agent
+  drives) codesign fails with `errSecInternalComponent`. Run such a test where the resident node runs, in the login
+  session: a one-shot job in `gui/$(id -u)` (`launchctl bootstrap`, then `bootout`); `launchctl managername` says `Aqua`
+  there.

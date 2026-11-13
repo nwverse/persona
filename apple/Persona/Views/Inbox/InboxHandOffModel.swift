@@ -87,10 +87,14 @@ final class InboxHandOffModel {
     private(set) var error: String?
     /// Where the last send went, and to which target: what `open()` opens.
     private(set) var sent: (target: Target, key: SessionKey)?
+    /// A send went from a sheet that is closing: `closed()` opens where it went.
+    @ObservationIgnored private(set) var opensWhenClosed = false
     /// The ask waiting out the Undo window (`queue`).
     private(set) var queued: String?
     /// The last ask sent or tried, for Retry.
     private(set) var lastAsk: String?
+    /// New Agent… is reading the item for New Agent's page (`newAgent`).
+    private(set) var preparing = false
 
     @ObservationIgnored private var timer: Task<Void, Never>?
 
@@ -208,6 +212,45 @@ final class InboxHandOffModel {
             .prefix(limit).map { $0 }
     }
 
+    /// What New Agent… (#5933) opens New Agent's page with: the item as the card over the first message and as the
+    /// context block ahead of it (the text an Agent target gets), the ask as the first message, the item's title as the
+    /// name, and only the computers of the item's hub. Nothing is sent: Start on that page is the confirmation.
+    struct NewAgentPrefill: Identifiable {
+        let id = UUID()
+        var card: ContextRef
+        var prompt: String
+        var nameHint: String
+        var group: String
+        /// Also Mark as Done for the Agent it starts.
+        var markDone: Bool
+        var contextBlock: String { card.xml }
+    }
+
+    /// Reads the item for New Agent's page with `ask` as the first message; nil when it couldn't be read (`error` says
+    /// why, with no Retry: nothing went). Also Mark as Done is the user's choice, else on, as for every Agent target.
+    func newAgent(ask: String, group: String) async -> NewAgentPrefill? {
+        guard !sending, !preparing else { return nil }
+        preparing = true
+        error = nil
+        lastAsk = nil
+        defer { preparing = false }
+        do {
+            let it = try await deps.load(itemID)
+            return NewAgentPrefill(card: InboxHandOffSheet.contextRef(it), prompt: ask, nameHint: it.title, group: group,
+                                   markDone: doneChosen ? markDone : true)
+        } catch {
+            self.error = error.isOffline ? String(localized: "Can't reach the hub")
+                : error.isTimeout ? String(localized: "The request timed out. Try again later.") : error.shown
+            return nil
+        }
+    }
+
+    /// New Agent's page started an Agent with the item (#5933): `open()` goes there, and the item is filed when asked.
+    func started(_ key: SessionKey, markDone: Bool) {
+        sent = (.agent(key), key)
+        if markDone { deps.markDone() }
+    }
+
     func setMarkDone(_ on: Bool) {
         markDone = on
         doneChosen = true
@@ -217,6 +260,21 @@ final class InboxHandOffModel {
     func open() {
         guard let sent else { return }
         deps.open(sent.target, sent.key)
+    }
+
+    /// Goes where the last send went once the sheet that sent it has closed (`closed()`), not while it is still up. On the
+    /// Mac, opening moves the window to another section and hides the page that presents the sheet, which then never
+    /// closed (#5921).
+    func openWhenClosed() {
+        opensWhenClosed = sent != nil
+    }
+
+    /// The sheet has closed: opens where the last send went if `openWhenClosed()` asked for it, once. A sheet closed
+    /// without a send (Cancel, Esc, a failed send) opens nothing.
+    func closed() {
+        guard opensWhenClosed else { return }
+        opensWhenClosed = false
+        open()
     }
 
     /// Sends `ask` after `window`, unless `undo()` comes first. Leaving the page does not stop it: the task keeps the

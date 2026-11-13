@@ -102,7 +102,7 @@ describe("background rounds in the main conversation", () => {
 
 describe("Needs you by supervisor", () => {
   const todo = (id: string, origin?: string): Todo => ({ id, title: id, origin, created_at: "2026-11-10T09:00:00Z", updated_at: "2026-11-10T09:00:00Z" });
-  const task = (id: string, origin?: string): NeedsYouItem => ({ kind: "task", key: `task:${id}`, todo: todo(id, origin), status: "needs_you", asks: [] });
+  const task = (id: string, origin?: string): NeedsYouItem => ({ kind: "task", key: `task:${id}`, todo: todo(id, origin), status: "needs_you", asks: [], countsOpen: true });
   const plan: NeedsYouItem = { kind: "plan", key: "plan:p1", plan: { id: "p1", conversation: "main", state: "open", created_at: "2026-11-10T09:00:00Z", tasks: [] } as never };
 
   it("groups rows under the conversation that supervises them, this one first, rows and count unchanged", () => {
