@@ -143,7 +143,7 @@ func (s *Service) deleteConversation(ctx context.Context, machine, id string) er
 	if _, ok, err := s.deletedConversation(ctx, machine, id); err != nil {
 		return err
 	} else if ok {
-		return nil
+		return s.finishDeletedConversation(ctx, machine, id)
 	}
 	cfg := s.settings(ctx)
 	if cfg.Main == id || s.isBackground(ctx, id) {
@@ -202,9 +202,7 @@ func (s *Service) deleteConversation(ctx context.Context, machine, id string) er
 	}
 	b.rows = next
 	b.mu.Unlock()
-	s.sessionsChanged(machine)
-	s.publish(ctx)
-	return nil
+	return s.finishDeletedConversation(ctx, machine, id)
 }
 
 func (s *Service) conversationDeleteRoutes() {

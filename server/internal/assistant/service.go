@@ -145,6 +145,7 @@ type Service struct {
 	supervise  superviseBook   // supervise_signals.go
 	preempt    preemptBook     // owner_preempt.go
 	tbriefs    taskBriefBook   // task_brief.go
+	search     searchIndex     // search_index.go
 
 	deletedConversations conversationDeleteBook // conversation_delete.go
 	conversationWrites   sync.RWMutex
@@ -294,6 +295,7 @@ func New(o Options) *Service {
 	s.companionRoutes()
 	s.kbInit(o.KB)
 	s.kbRoutes()
+	s.searchRoutes()
 	s.inboxRoutes()
 	s.modelConfigRoutes()
 	s.modelProfileRoutes()

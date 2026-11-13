@@ -134,7 +134,7 @@ func NewBusHub(o BusOptions) *BusHub {
 					assistantwire.CapabilityAgentSessionArchiveClose, assistantwire.CapabilityAgentNaming, assistantwire.CapabilityMachinesOwn,
 					assistantwire.CapabilityMeetingAttendance, assistantwire.CapabilityMeetingConversation, assistantwire.CapabilityMeetingPhotos, assistantwire.CapabilityMeetingLiveView,
 					assistantwire.CapabilityMeetingHighlights, assistantwire.CapabilityMeetingEcho, assistantwire.CapabilityMeetingTranscription,
-					assistantwire.CapabilityRecordingDay,
+					assistantwire.CapabilityRecordingDay, assistantwire.CapabilityAssistantSearch,
 					devicewire.SharingCapability}}
 		},
 		OnHello: b.onHello,

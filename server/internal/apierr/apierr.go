@@ -76,6 +76,8 @@ func Body(status int, code string, err error) map[string]any {
 	}
 	body := map[string]any{"error": err.Error(), "code": code}
 	switch code {
+	case "search_changed":
+		body["retryable"] = true
 	case "conversation_deleted", "conversation_protected", "conversation_busy":
 		body["retryable"], body["delivered"] = false, "none"
 	case "invalid_token", "forbidden", "bad_request", "not_found", "method_not_allowed", "gone":

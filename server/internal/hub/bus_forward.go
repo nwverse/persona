@@ -205,6 +205,9 @@ func (h *Hub) relayHTTP(w http.ResponseWriter, r *http.Request, id string, send,
 		writeErr(w, http.StatusBadGateway, err)
 		return
 	}
+	if h.writeAssistantSearchReply(w, r, id, res) {
+		return
+	}
 	if path, ok := strings.CutPrefix(r.URL.Path, "/api/v1/assistant/conversations/"); ok {
 		sid, child, _ := strings.Cut(path, "/")
 		if sid != "" && (r.Method != http.MethodDelete || child != "") {

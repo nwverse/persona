@@ -97,6 +97,9 @@ GO_ADJACENT_CONSTANTS = re.compile(r"(?<=applink[.]feishu[.]cn)/client/chat/" + 
 # wireguard-go's handshake identifier (device/noise-protocol.go): an upstream author string, not an account.
 WIREGUARD_IDENTIFIER = re.compile(r"(?<![A-Za-z0-9._%+-])WireGuard v1 zx2c4 Jason@zx2c4[.]com(?![.][A-Za-z])")
 WIREGUARD_MODULES = frozenset({"github.com/tailscale/wireguard-go", "golang.zx2c4.com/wireguard"})
+# Go rodata also joins the unrelated title_mail field identifier with the
+# domain constant @gmail.com. Only that exact join is not an email address.
+GO_ADJACENT_MAIL_FIELD = re.compile(r'(?<![A-Za-z0-9._%+-])title_mail@gmail[.]com(?![A-Za-z0-9._%+-])')
 RFC1918_NETWORKS = tuple(ipaddress.ip_network((address, prefix)) for address, prefix in (
     (0x0A000000, 8), (0xAC100000, 12), (0xC0A80000, 16),
 ))
@@ -169,6 +172,7 @@ def generic_text(text, dependencies, original_text=None):
     if WIREGUARD_MODULES & set(dependencies):
         text = WIREGUARD_IDENTIFIER.sub("", text)
     text = pc.EMAIL.sub(lambda m: "" if binary_noise_email(m.group(1)) else m.group(0), text)
+    text = GO_ADJACENT_MAIL_FIELD.sub("", text)
     if "golang.org/x/crypto" in dependencies:
         text = GO_SSH_IDENTIFIERS.sub("", text)
     if "github.com/tailscale/web-client-prebuilt" in dependencies:

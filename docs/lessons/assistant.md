@@ -416,6 +416,8 @@ returns needs a second path for what it no longer returns: here past-window item
 looked up by UID once a round (`inbox.mail_flags`), bounded, with a failed lookup changing nothing. Tests of such a round
 must wait for the background triage pass (`waitTriage`) before setting a tier by hand, or the fallback tier overwrites it.
 
+- Literal `for` lists need per-value classification (#6266). Straight-line assignment tracking cannot resolve a loop's route segments or executable, and accepting GET alone misses action routes such as `/documents/delete`. Bind only literal lists in a completely inspected shell tree, retain quoting and reject unquoted values that could split or glob. A later assignment, state-changing builtin, executable-environment change or nonliteral nested list invalidates the entire attempt; never keep a partially expanded prefix. Resolve command positions before unwrapping so a variable cannot become a gate, CLI, shell or wrapper. Bound nested expansion and classify every resulting call through the existing read and hard-boundary rules. Both Claude and Codex adapter tests must count actual fake-hub approval cards; classification fixtures must never execute the supplied commands.
+
 ## Deleting a chat is more than removing its list row (#6172)
 
 Keep the tombstone in the owning manager and carry an identity-only row through the existing fleet transport. Persisted
@@ -424,7 +426,7 @@ List filtering alone leaves direct transcript requests, WebSocket replay, alread
 resume paths reachable. Check every referenced identity on a start, including `resume_session_id` alongside a new id,
 and discard a read that finishes after deletion. A fleet notification is not an applied acknowledgement: apply the manager's successful deletion to the hub before returning HTTP 200. Fence the final HTTP header commit per session, suppress late broadcasts at enqueue, and redact retained replay entries; do not claim to retract bytes already committed before the acknowledgement. A pending main-chat handoff also contains old turns: suppress it when
 its source is deleted. Task origins and previously saved knowledge remain separate records; deletion must not stop the
-Agents those tasks started. Tests use synthetic conversations, references and node events, never a live user's history.
+Agents those tasks started. Tests use synthetic conversations, references and node events, never a live user's history. Search indexes also mirror the transcript: purge the rows and cursor, fence late index writes, and recheck search output. An aggregate reply serialized before deletion must be refused at header commit rather than forwarded with stale snippets or guessed progress counts.
 
 ## Clear a "tell it later" record only after the tell went (#6306)
 
