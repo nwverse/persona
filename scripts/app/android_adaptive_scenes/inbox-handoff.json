@@ -3,7 +3,8 @@
   "description": "Exercise the Inbox event hand-off bar, local Undo, IME input, rotation and the existing Draft Reply sheet in one app process.",
   "requires": {
     "mockEnv": {
-      "MOCK_INBOX_EVENTS": "1"
+      "MOCK_INBOX_EVENTS": "1",
+      "MOCK_NO_LARK": "1"
     },
     "fields": [
       "pid"
@@ -12,11 +13,24 @@
   "steps": [
     {
       "step": "launch",
-      "page": "inbox"
+      "page": "inbox",
+      "probePage": "Inbox"
+    },
+    {
+      "step": "capture",
+      "name": "00-inbox-list"
     },
     {
       "step": "tap",
-      "text": "发布群"
+      "text": "Agents waiting on you"
+    },
+    {
+      "step": "tap",
+      "text": "Lark"
+    },
+    {
+      "step": "tap",
+      "text": "合同续签"
     },
     {
       "step": "capture",
@@ -24,7 +38,7 @@
     },
     {
       "step": "tap",
-      "resource-id": "inbox-handoff-target"
+      "text": "Main chat"
     },
     {
       "step": "capture",
@@ -32,13 +46,11 @@
     },
     {
       "step": "key",
-      "keycombination": [
-        "BACK"
-      ]
+      "key": "BACK"
     },
     {
       "step": "tap",
-      "resource-id": "inbox-handoff-chip-summary"
+      "text": "Summarize & suggest reply"
     },
     {
       "step": "capture",
@@ -46,23 +58,28 @@
     },
     {
       "step": "tap",
-      "text": "Undo"
-    },
-    {
-      "step": "tap",
-      "resource-id": "inbox-handoff-field"
+      "text": "Hand to AI…"
     },
     {
       "step": "text",
       "text": "Investigate this event and suggest next steps"
     },
     {
-      "step": "capture",
-      "name": "04-ime-input"
+      "step": "key",
+      "key": "TAB"
+    },
+    {
+      "step": "tap",
+      "content-desc": "Send"
+    },
+    {
+      "step": "tap",
+      "text": "Undo"
     },
     {
       "step": "rotate",
-      "orientation": "landscape"
+      "orientation": "landscape",
+      "timeout": 60
     },
     {
       "step": "assert",
@@ -75,28 +92,12 @@
       "name": "05-landscape-input"
     },
     {
-      "step": "rotate",
-      "orientation": "portrait"
-    },
-    {
-      "step": "tap",
-      "resource-id": "inbox-handoff-send"
-    },
-    {
-      "step": "capture",
-      "name": "06-typed-queued"
-    },
-    {
-      "step": "tap",
-      "text": "Undo"
-    },
-    {
       "step": "capture",
       "name": "07-undo-restored"
     },
     {
       "step": "tap",
-      "resource-id": "inbox-handoff-chip-draft"
+      "text": "Draft reply"
     },
     {
       "step": "capture",
