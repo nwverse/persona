@@ -315,6 +315,7 @@ export interface StoragePermission {
 export interface Contributes {
   connectors?: ConnectorItem[];
   voice?: NamedItem[];
+  transcription?: NamedItem[];
   computer?: NamedItem[];
   browser?: NamedItem[];
   iphone?: NamedItem[];
@@ -623,7 +624,7 @@ export interface ConnectorItem {
 }
 
 /**
- * A contribution with only an id and a name: voice, computer, browser.
+ * A contribution with only an id and a name: voice, transcription, computer, browser.
  */
 export interface NamedItem {
   id: string;
@@ -3230,8 +3231,12 @@ export interface ConnectorCatalogCallParams {
   args?: unknown;
 }
 
-export type ConnectorSubscriptionMode = "items" | "snapshot" | (string & {});
-export const CONNECTOR_SUBSCRIPTION_MODES = ["items", "snapshot"] as const;
+/**
+ * items: new items, each kept once; snapshot: the answer as one state, kept when it changes; things: the answer lists
+ * Inbox rows ready-made (ConnectorInboxThing), kept and handed to the Inbox as they are.
+ */
+export type ConnectorSubscriptionMode = "items" | "snapshot" | "things" | (string & {});
+export const CONNECTOR_SUBSCRIPTION_MODES = ["items", "snapshot", "things"] as const;
 
 export type ConnectorSubscriptionGroup = "source" | "thread" | (string & {});
 export const CONNECTOR_SUBSCRIPTION_GROUPS = ["source", "thread"] as const;
@@ -3241,6 +3246,8 @@ export const CONNECTOR_SUBSCRIPTION_KINDS = ["sub_mail", "sub_message", "sub_not
 
 /**
  * Paths relative to one item. Only $, .field and [index] are supported; no expressions or recursive descent.
+ * sender_id, chat and chat_name name who and where for mutes and policies (the Inbox row's sender and chat tags),
+ * seen its read state, and reply_to where a reply goes; none of them is part of an item's content.
  */
 export interface ConnectorSubscriptionFields {
   id?: string;
@@ -3251,10 +3258,29 @@ export interface ConnectorSubscriptionFields {
   body?: string;
   link?: string;
   due_date?: string;
+  /** The sender's stable id; without it the sender tag is the lowercased display name. */
+  sender_id?: string;
+  /** The conversation's stable id: the row gets a chat tag. */
+  chat?: string;
+  /** The conversation's name, the chat tag's name. */
+  chat_name?: string;
+  /**
+   * Whether the item was already seen in the source: true, a non-zero number, or true, 1, yes, read or seen in any
+   * case. The Inbox row is read when its newest item is; seen only ever turns on.
+   */
+  seen?: string;
+  /**
+   * Where a reply goes and who sees it, in a line for people. With it, an item with an id can be replied to through
+   * the connector's inbox reply, with its thread (else its id) and its id as last.
+   */
+  reply_to?: string;
 }
 
 /**
- * A pull recipe, not a schedule. args is an object (default {}); strings may contain {{since}} or {{since_date}}.
+ * A pull recipe, not a schedule. In things mode the rows bring their own threads and kinds: group_by is thread, kind
+ * is a row's when it has none, and fields and pagination are not used. args is an object (default {}); strings may
+ * contain {{since}} or {{since_date}}. cursor_arg and next_cursor_path opt into cursor pagination; page_arg and
+ * optional next_page_path opt into page pagination (without next_page_path, a full requested page continues).
  * items_path defaults to $; fields are relative to one item. Text results require snapshot mode. Runtime
  * argument/schema and mapped-value validation belongs to the subscription runner.
  */
@@ -3262,6 +3288,10 @@ export interface ConnectorSubscriptionRecipe {
   mode: ConnectorSubscriptionMode;
   tool: string;
   args?: unknown;
+  cursor_arg?: string;
+  next_cursor_path?: string;
+  page_arg?: string;
+  next_page_path?: string;
   items_path?: string;
   fields?: ConnectorSubscriptionFields;
   kind: ConnectorSubscriptionKind;
@@ -4751,6 +4781,60 @@ export interface KBDetail {
   recap?: unknown;
   /** A topic's knowledge points (docs/assistant/knowledge.md "Topics"). */
   points?: KBTopicPoint[];
+  /**
+   * A person's profiles by writer ("user", "ext:<id>"), as written; summary shows them too
+   * (docs/assistant/knowledge.md "Person profiles").
+   */
+  profiles?: Record<string, KBProfileRecord>;
+}
+
+export interface KBProfileRecord {
+  profile: KBPersonProfile;
+  at: string;
+}
+
+/**
+ * One writer's profile of a person, its four parts kept apart. Every item says where it comes from; at most 30 items
+ * a part, and 8000 bytes as summary.md shows it.
+ */
+export interface KBPersonProfile {
+  /** Their role, what they are in charge of, how they relate to the user. */
+  facts?: KBProfileItem[];
+  /** The user's own words about them, quoted. */
+  views?: KBProfileItem[];
+  /** Inferred, never stated: each needs its basis. Shown as only a hint. */
+  inferences?: KBProfileItem[];
+  /** Promises and to-dos between the user and them, either way. */
+  commitments?: KBProfileCommitment[];
+}
+
+export interface KBProfileItem {
+  text: string;
+  /** Inferences only (required there): what it rests on. */
+  basis?: string;
+  /**
+   * Where it comes from: a knowledge-base path (chats/<id>/messages/<day>.md, recordings/<id>), a URL, or "user" for
+   * the user's own word.
+   */
+  sources: string[];
+}
+
+export interface KBProfileCommitment {
+  text: string;
+  /** user: the user owes it to them; them: they owe it to the user. */
+  owes: string;
+  /** YYYY-MM-DD, when there is one. */
+  due?: string;
+  done?: boolean;
+  sources: string[];
+}
+
+/**
+ * A field an update carried that its kind does not use: not applied, and why.
+ */
+export interface KBIgnoredField {
+  field: string;
+  reason: string;
 }
 
 /**
@@ -4804,6 +4888,17 @@ export interface KBRecordingSegment {
    * absent on other recordings.
    */
   n?: number;
+  /**
+   * Whose text the segment is in a meeting transcribed on the hub (docs/assistant/meeting-minutes.md "The transcript
+   * of record"): hub or device; absent means device.
+   */
+  source?: string;
+  /**
+   * The line is Persona's own answer as the meeting's microphone heard it (docs/assistant/meeting-minutes.md
+   * "Persona's echo"): kept in the transcript but not what the meeting said, so leave it out of anything read as the
+   * meeting's words; absent (false) on every other line.
+   */
+  echo?: boolean;
 }
 
 /**
@@ -4908,6 +5003,12 @@ export interface KBUpdateParams {
   projects?: string[];
   /** Refused (conflict) when the user or another extension holds anything on the project folded away; no before. */
   merge_into?: string;
+  /**
+   * People only: this extension's own profile of the person, replacing the one it wrote before (one with no items
+   * removes it). Nobody else's profile, nor pinned or note, is touched; before.profile is the one replaced. A profile
+   * breaking a rule is invalid_params and nothing is written.
+   */
+  profile?: KBPersonProfile;
   /** Kept as the provenance of the fields this write holds. */
   evidence?: KBEvidence[];
   /** Fields this extension holds, handed back to the built-in pipeline; unlocking pinned clears it. */
@@ -4917,10 +5018,15 @@ export interface KBUpdateParams {
 export interface KBUpdateResult {
   id: string;
   /**
-   * The previous value of each field written (null when unset; summary is the old text), for the extension's own
-   * undo.
+   * The previous value of each field written (null when unset; summary is the old text, profile this extension's own
+   * profile before), for the extension's own undo.
    */
   before?: Record<string, unknown>;
+  /**
+   * Fields the update carried that its kind does not use (a person's summary and log, for one): not applied, each
+   * with why.
+   */
+  ignored?: KBIgnoredField[];
 }
 
 /**

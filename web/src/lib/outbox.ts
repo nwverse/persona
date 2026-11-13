@@ -4,6 +4,7 @@
 // where it was sent (placeFailed). The conversation's own composer keeps its local sending bubbles (ChatView); one of
 // those that fails comes here (keepFailed), so its words stay in the chat and not in the box, as in the apps (#1122).
 import { t } from "../i18n";
+import { toast } from "../ui/atoms";
 import { api, ApiError, errorText, sessionPath } from "./api";
 import { pickedLauncher, pickedModel, conversationKey } from "./assistant-chat";
 import { showLauncherNote, startConversation } from "./assistant-start";
@@ -311,7 +312,7 @@ async function deliver(mid: string, sid: string, e: OutboxEntry, clearDraft?: st
   const key = outboxKey(mid, sid);
   try {
     // stays sending through a gap (a hub restart); the client_msg_id is the op id
-    const r = await inSendOrder(key, () => apiOp<{ launcher_note?: string } | undefined>(`${sessionPath(mid, sid)}/messages`, {
+    const r = await inSendOrder(key, () => apiOp<{ launcher_note?: string; waits_on_computer?: boolean } | undefined>(`${sessionPath(mid, sid)}/messages`, {
       ...flight.request,
       method: "POST",
       opId: e.id,
@@ -321,6 +322,8 @@ async function deliver(mid: string, sid: string, e: OutboxEntry, clearDraft?: st
     flight.finish("delivered");
     update(key, e.id, { state: "sent", acceptedAt: Date.now(), error: undefined, clearable: undefined });
     showLauncherNote(`${mid}/${sid}`, r?.launcher_note);
+    // An outside-terminal Claude took it behind a question only the computer can answer (#5890).
+    if (r?.waits_on_computer) toast(t("lib-outbox.waits_on_computer"), "info");
     return true;
   } catch (err) {
     if (!flight.current() || flight.echoed()) return true;

@@ -4,6 +4,9 @@ import OSLog
 import PersonaKit
 import PhotosUI
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 #if DEBUG
 import notify
 #endif
@@ -18,6 +21,7 @@ enum ChatStyle {
 struct ChatView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dynamicTypeSize) private var typeSize
     /// The session on screen; the sibling strip can switch it to another agent in the same space.
     @State private var key: SessionKey
     var style: ChatStyle = .dev
@@ -79,12 +83,18 @@ struct ChatView: View {
     /// The row is the title bar's: the chat is in the main window's split, with room beside the search field.
     private var macInTitleBar: Bool { macWide && split?.ownWindow != true }
     @State private var pane: SessionPane = .chat
+    /// A file the Files pane shows in its folder (the preview's Show in Files Page, #5827).
+    @State private var filesReveal: String?
     @State private var git: GitStatus?
     @State private var menu = MessageMenu()
     /// What Forward To picked (#3807): done once its sheet has gone, as a navigation made while it goes is dropped.
     @State private var forwardPicked: ForwardOutcome?
     /// A forward on its way to a new Agent: New Chat with it over the first message.
     @State private var forwardNewAgent: ForwardNewAgent?
+    #if os(iOS)
+    /// Select Messages (#3838): the messages picked to forward together, while selecting.
+    @State private var pick = MessagePick()
+    #endif
     #if os(iOS)
     /// Full Page in this chat's system screenshot (#1609).
     @State private var fullPage = ChatFullPage()
@@ -229,6 +239,7 @@ struct ChatView: View {
 
     /// A subagent of this session being looked at instead of the main agent (read-only, same message UI).
     @State private var viewing: Subagent?
+    @State private var takeoverCoordinator = CodexTakeoverCoordinator()
     /// This view's claim on its subscriptions and on `visibleSession` (another view of the same chat has its own).
     @State private var owner = UUID()
 
@@ -317,6 +328,10 @@ struct ChatView: View {
             .overlay { if liftHost == nil { MessageLiftLayer(menu: menu) } }
             .onAppear { liftHost?.menu = menu }
             .onDisappear { if liftHost?.menu === menu { liftHost?.menu = nil } }
+            .codexTakeoverDialogs(coordinator: takeoverCoordinator) { adopted in
+                model.adopt(adopted)
+                switchTo(adopted.key)
+            }
     }
 
     @ViewBuilder private var chatPage: some View {
@@ -655,8 +670,8 @@ struct ChatView: View {
             guard let r, r.key == key, r.window == nil || r.window == macWindow else { return }
             switch r.kind {
             case .inspector: showInfo.toggle()
-            case .rename: if session?.canTerminal == true { renaming = session }
-            case .close: if session?.status.isLive == true && session?.canTerminal == true { closing = session }
+            case .rename: if session?.canRename == true { renaming = session }
+            case .close: if session?.status.isLive == true && session?.canClose == true { closing = session }
             case .delete: if session?.canDelete == true { deleting = session }
             case .clear: break // the composer's
             case .terminal:
@@ -756,7 +771,14 @@ struct ChatView: View {
         .confirmDeleteSession($deleting)
         // Deleted here or from the list beside it: the chat goes (AppModel.deletedSession).
         .onChange(of: model.deletedSession) { _, gone in if let gone { closedAgent(gone, order: []) } }
-        .sheet(item: $file) { ref in FileViewer(ref: ref, key: key) }
+        .sheet(item: $file) { ref in
+            FileViewer(ref: ref, key: key)
+                .environment(\.showInFiles, (session?.cwd ?? "").isEmpty ? nil : { target in
+                    file = nil
+                    filesReveal = target
+                    withAnimation(Theme.Motion.standard) { pane = .files }
+                })
+        }
         .sheet(item: $openedKnowledge) { entry in NavigationStack { KnowledgeDetailView(entry: entry) } }
         .sheet(isPresented: $planOpen) { PlanSheet(plan: latestPlan) }
         #if DEBUG
@@ -1460,7 +1482,7 @@ struct ChatView: View {
                     }
                     .font(Theme.Font.caption)
                     .foregroundStyle(.secondary)
-                    .padding(.leading, WorkCardSlice.contentLeading)
+                    .padding(.leading, WorkCardSlice.contentLeading(typeSize))
                     .padding(.trailing, WorkCardSlice.inset)
                     .padding(.vertical, Theme.Space.m)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1919,9 +1941,12 @@ struct ChatView: View {
 
     /// Messages sent from here that the transcript does not have yet, minus those Claude holds in its queue (the queue
     /// strip shows them).
-    private var shownPending: [PendingMessage] {
-        let queued = session?.queued ?? []
-        return (store.arriving + store.pending).filter { p in !queued.contains { PendingMessage.same($0, p.text) } }
+    private var shownPending: [PendingMessage] { pendingPlacement.chat }
+
+    /// What was sent from here and is not in the transcript yet, split between the chat and the queue strip (#1461).
+    private var pendingPlacement: (strip: [PendingMessage], chat: [PendingMessage]) {
+        QueuePlacement.split(store.arriving + store.pending, working: session?.status.isActive == true, queued: session?.queued ?? [],
+                             stripShown: (style == .dev || session?.assistant == true))
     }
 
     /// The wait between a send and the hub's working (`ChatAwaitingTurn`); not for a subagent being viewed.
@@ -1980,7 +2005,7 @@ struct ChatView: View {
                 GitPane(machineID: key.machineID, group: key.group, cwd: session?.cwd ?? "", status: $git, review: openReview).padding(.top, headerRoom)
                     .transition(.move(edge: .trailing))
             } else if pane == .files {
-                FilesPane(machineID: key.machineID, group: key.group, cwd: session?.cwd ?? "", git: git, key: key).padding(.top, headerRoom)
+                FilesPane(machineID: key.machineID, group: key.group, cwd: session?.cwd ?? "", git: git, key: key, reveal: $filesReveal).padding(.top, headerRoom)
                     .transition(.move(edge: .trailing))
             }
         }
@@ -1997,7 +2022,7 @@ struct ChatView: View {
         case .git: GitPane(machineID: key.machineID, group: key.group, cwd: session?.cwd ?? "", status: $git, review: openReview).padding(.top, headerRoom)
             .transition(.move(edge: .trailing))
         case .files: FilesPane(machineID: key.machineID, group: key.group, cwd: session?.cwd ?? "", git: git, key: key,
-                                     reloadGit: { await loadGit() }).padding(.top, headerRoom)
+                                     reloadGit: { await loadGit() }, reveal: $filesReveal).padding(.top, headerRoom)
             .transition(.move(edge: .trailing))
         }
         #endif
@@ -2090,7 +2115,7 @@ struct ChatView: View {
             // and a half of it, cut at its top (#3703, the open iPhone Duo on its side with the keyboard up). Priority on
             // the region alone did not do it. Not the classic composer's island, which takes what it is offered until it
             // has measured itself.
-            ChatRegion(name: "ChatFooter.body") { VStack(spacing: 0) { footer } }
+            ChatRegion(name: "ChatFooter.body") { VStack(spacing: 0) { pickOrFooter } }
                 .layoutPriority(usesShellComposer ? 1 : 0)
                 // What the footer takes of the page: the pending cards grow into the rest while the keyboard is up.
                 // Exact, like the cards' own height inside it (`PendingCards.shown`): the cards take one from the other for
@@ -2509,6 +2534,8 @@ struct ChatView: View {
             // Needs You / In Progress in the dock's capsules, each opening its tray (#3393), on every device.
             AssistantActionBar(conversation: conversation, key: key, computer: computerActivity)
             RouteChip(conversation: conversation)
+            // Items handed to the main conversation that are still open: "Wrap up" asks it for the final write-back (#5932).
+            if model.assistantMain == key { WrapUpChips(key: key) }
         }
     }
 
@@ -2566,16 +2593,17 @@ struct ChatView: View {
                 }
                 // The last card was answered: one low-key entry to the next conversation that needs you (#4348).
                 if let next = nextNeedsYouSession {
-                    NextNeedsYouStrip(title: next.assistant ? (next.title.isEmpty ? model.persona.name : next.title) : next.displayTitle) {
+                    NextNeedsYouStrip(title: next.assistant ? (next.title.isEmpty ? model.assistantShownName : next.title) : next.displayTitle) {
                         openNext(next)
                     }
                 }
-                if let queued = session?.queued, !queued.isEmpty,
-                   style == .dev || session?.assistant == true {
-                    QueueStrip(key: key, queued: queued, own: session?.ownQueuedCount ?? queued.count,
+                let queued = session?.queued ?? []
+                let sending = pendingPlacement.strip
+                if !queued.isEmpty || !sending.isEmpty, style == .dev || session?.assistant == true {
+                    QueueStrip(key: key, queued: queued, own: session?.ownQueuedCount ?? queued.count, sending: sending,
                                photoMarks: model.chat(key).queuePhotoMarks,
                                steers: session?.steersQueue == true || (session?.assistant == true && session?.canSend == true),
-                               persona: session?.assistant == true ? model.persona.name : nil)
+                               persona: session?.assistant == true ? model.assistantShownName : nil)
                 }
                 // The newest plan while its line is out of view (#5602): which step of how many; tap, the whole plan.
                 // Folded while a card asks something (#2970): it sat over the card's buttons.
@@ -2591,13 +2619,46 @@ struct ChatView: View {
                         .padding(.leading, Theme.Space.xs)
                 }
                 if let s = session, s.isStopped {
-                    // read-only: its terminal page has the shell it left and Resume (#4754), which Resume here opens (#5521)
-                    StoppedAgentBar(openTerminal: openTerminal, resume: resumeHere)
+                    #if os(iOS)
+                    StoppedAgentBar(session: s, coordinator: takeoverCoordinator, openTerminal: openTerminal, resume: resumeHere) { adopted in
+                        model.adopt(adopted)
+                        switchTo(adopted.key)
+                    } // Resume here opens the terminal page and resumes there (#5521)
+                    #else
+                    StoppedAgentBar(openTerminal: openTerminal) // read-only: its terminal page has the shell and Resume (#4754)
+                    #endif
+                } else if session?.isTerminalOnly == true {
+                    // No reader for its conversation here: the terminal is the view, one tap instead of title › ⋯ › Terminal (#6170).
+                    TerminalOnlyBar(openTerminal: openTerminal)
                 } else if let s = session, !s.canSend, let reason = s.sourceSubtitle {
+                    #if os(iOS)
+                    if UIDevice.current.userInterfaceIdiom == .phone {
+                        ViewThatFits(in: .horizontal) {
+                            HStack(alignment: .center, spacing: Theme.Space.s) {
+                                Text(reason).foregroundStyle(.secondary).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+                                CodexTakeoverControl(session: s, coordinator: takeoverCoordinator) { adopted in
+                                    model.adopt(adopted)
+                                    switchTo(adopted.key)
+                                }
+                            }
+                            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                                Text(reason).foregroundStyle(.secondary)
+                                CodexTakeoverControl(session: s, coordinator: takeoverCoordinator) { adopted in
+                                    model.adopt(adopted)
+                                    switchTo(adopted.key)
+                                }
+                            }
+                        }
+                        .font(Theme.Font.caption).frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        Text(reason).font(Theme.Font.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    #else
                     Text(reason).font(Theme.Font.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+                    #endif
                 }
                 if session?.isStopped != true { // a stopped Agent takes no messages: its line above says so (#4754)
-                    Composer(key: key, status: status, placeholder: style == .assistant ? String(localized: "Ask \(model.persona.name)…") : String(localized: "Message \(session?.agentLabel ?? "Claude") [Chat View c6f021]"),
+                    Composer(key: key, status: status, placeholder: style == .assistant ? String(localized: "Ask \(model.assistantShownName)…") : String(localized: "Message \(session?.agentLabel ?? "Claude") [Chat View c6f021]"),
                              covered: link != nil, onCleared: { switchTo($0) }, onFocus: { composerTyping = $0 }, pickMode: { requestMode($0) })
                         // The shell's expanding field stays in the page's layout graph; so does BeautifulUI's prompt bar,
                         // whose menus hang above it: an island's hosting view takes no touches outside its bounds.
@@ -2712,7 +2773,7 @@ struct ChatView: View {
                     .onChange(of: phase) { _, phase in store.traceSendFeedback(phase) }
                     #endif
             } else if frozen == nil, startingTurn(pending) {
-                TypingIndicator(text: String(localized: "\(style == .assistant ? model.persona.name : (session?.agentLabel ?? "Claude")) is getting ready…"))
+                TypingIndicator(text: String(localized: "\(style == .assistant ? model.assistantShownName : (session?.agentLabel ?? "Claude")) is getting ready…"))
                     .flippedBack()
                     .id("starting-turn")
             }
@@ -2724,7 +2785,12 @@ struct ChatView: View {
                 ChatLines.placeFrozen(lines, pending.filter { f.pending.contains(ChatLines.frozenKey($0)) }, at: f.failedAt)
             }
                 ?? ChatLines.placeFailed(lines, pending, writtenAt: store.writtenAt)
-            ForEach(placed.rest.reversed()) { msg in pendingBubble(msg) }
+            ForEach(placed.rest.reversed()) { msg in
+                pendingBubble(msg)
+                    #if os(iOS)
+                    .allowsHitTesting(!pick.on)
+                    #endif
+            }
             // The first message of a conversation, not in the transcript yet: its day over it, as the new-conversation
             // page drew it (`FirstMessagePending`) and the transcript's lines will (#1911).
             if style == .assistant, lines.isEmpty, !pending.isEmpty { DayLine(date: .now).flippedBack() }
@@ -2738,6 +2804,9 @@ struct ChatView: View {
                 Group {
                     if let openRecap, openRecap.line == line.id { recapInFlow(openRecap) } else { lineView(line) }
                 }
+                    #if os(iOS)
+                    .pickable(Self.pickBar(line), mark: Self.pickMark(line), pick: pick, selecting: pick.on, refused: pickRefused)
+                    #endif
                     .background { if quoteFlash?.line == line.id { QuoteFlash().id(quoteFlash?.id) } }
                     .flippedBack()
                     .debugLineY(line.id, scratch)
@@ -2746,7 +2815,12 @@ struct ChatView: View {
                     .onAppear { if prefetch.contains(line.id) { prefetchOlder() } }
                     .zIndex(menu.selected != nil && line.holds(menu.selected) ? 1 : 0)
                 // Upside down: drawn after the line is drawn above it, where it was written.
-                ForEach((placed.before[line.id] ?? []).reversed()) { msg in pendingBubble(msg) }
+                ForEach((placed.before[line.id] ?? []).reversed()) { msg in
+                    pendingBubble(msg)
+                        #if os(iOS)
+                        .allowsHitTesting(!pick.on) // not sent yet: never picked, and quiet while selecting
+                        #endif
+                }
             }
             switch ChatLines.placeholder(lines: lines, hasTranscript: !rows.isEmpty,
                                          hasPending: !pending.isEmpty || !store.pending.isEmpty || !store.arriving.isEmpty,
@@ -2977,7 +3051,8 @@ struct ChatView: View {
         #if os(iOS)
         .sheet(item: $menu.forwarding, onDismiss: forwardDone) { d in ForwardSheet(draft: d) { forwardPicked = $0 } }
         .sheet(item: $forwardNewAgent) { f in
-            NewChatView(contextBlock: f.ref.xml, forwarded: f.ref, forwardedImages: f.images, onlyGroup: key.group) { s in
+            NewChatView(contextBlock: f.refs.map(\.xml).joined(separator: "\n"), forwarded: f.refs, forwardedImages: f.images,
+                        onlyGroup: key.group) { s in
                 forwardNewAgent = nil
                 model.open(s.key)
             }
@@ -3313,7 +3388,8 @@ struct ChatView: View {
             if status.isActive, session?.canInterrupt == true {
                 Button { Task { await model.interrupt(key) } } label: { Label("Interrupt [Composer Buttons f9d193]", systemImage: Theme.Icon.interrupt) }
             }
-            if style == .dev, let s = session, s.canTerminal {
+            // By `capabilities.rename` where the node says (a runtime's session, #6294), else a terminal's.
+            if style == .dev, let s = session, s.canRename {
                 Button { renaming = s } label: { Label("Rename… [Assistant Sidebar ec4cd0]", systemImage: Theme.Icon.edit) }
             }
             if style == .dev {
@@ -3333,7 +3409,7 @@ struct ChatView: View {
                 if host == nil, let space = s.spaceKey, let openSpace {
                     Button { openSpace(space) } label: { Label("All Agents in Space", systemImage: Theme.Icon.space) }
                 }
-                if s.status.isLive && s.canTerminal {
+                if s.status.isLive && s.canClose { // `capabilities.close` where the node says (#6294), else a terminal's
                     Button(role: .destructive) { closing = s } label: {
                         Label("Stop and Close Agent…", systemImage: Theme.Icon.end).lineLimit(1)
                     }
@@ -4407,6 +4483,7 @@ struct ChatView: View {
         menu.rewindBlock = { [model, key] in
             model.rewinding.contains(key) ? String(localized: "Rewinding") : Rewind.block(model.session(key))
         }
+        menu.rewindOffer = { [model, key] in Rewind.offer(model.session(key)) }
         menu.agent = { [model, key] in model.session(key)?.agentLabel ?? "Claude" }
         menu.source = { [model, key] in
             let s = model.session(key)
@@ -4416,7 +4493,9 @@ struct ChatView: View {
         // Forward (#3807): the pressed message as a forward, to the picker.
         menu.forward = { [model, key, weak menu = menu] bar in
             guard let menu else { return }
-            menu.forwarding = Self.forwardDraft(bar, key: key, model: model, menu: menu)
+            var draft = Self.forwardDraft(bar, key: key, model: model, menu: menu)
+            draft.selects = true
+            menu.forwarding = draft
         }
         #endif
     }
@@ -4464,10 +4543,67 @@ struct ChatView: View {
         forwardPicked = nil
         switch picked {
         case .share(let m): menu.sharing = m
-        case .newAgent(let ref, let images): forwardNewAgent = ForwardNewAgent(ref: ref, images: images)
-        case .target(let ref, let images, let target): model.forward(ref, images: images, to: target, group: key.group)
+        case .select(let id):
+            #if os(iOS)
+            Keyboard.dismiss()
+            withAnimation(Theme.Motion.standard) { pick.start(id) }
+            #else
+            _ = id
+            #endif
+        case .newAgent(let refs, let images): forwardNewAgent = ForwardNewAgent(refs: refs, images: images)
+        case .target(let refs, let images, let target): model.forward(refs, images: images, to: target, group: key.group)
+        }
+        #if os(iOS)
+        // Forwarded: selecting is over. Forward To cancelled (nothing picked) comes back to the selection as it was.
+        if case .select = picked {} else if pick.on { pick.end() }
+        #endif
+    }
+
+    #if os(iOS)
+    /// The message a line stands for while selecting (#3838); nil for lines that are not messages. A long answer's parts
+    /// (#4970) are each a line of the one answer.
+    private static func pickBar(_ line: ChatLine) -> MessageBarInfo? {
+        switch line.content {
+        case .row(let r): r.pickBar
+        case .answerPart(let item, _, _, _): MessageBarInfo(id: item.id, text: item.text ?? "", isUser: false, date: item.ts, pending: false)
+        default: nil
         }
     }
+
+    /// Whether a line shows its message's mark: all but an answer's later parts, which pick with it.
+    private static func pickMark(_ line: ChatLine) -> Bool {
+        if case .answerPart(_, _, let index, _) = line.content { return index == 0 }
+        return true
+    }
+
+    /// The footer, or while selecting the bar with Cancel and Forward (N) in its place. The composer's words, quotes and
+    /// pictures are the model's, so it comes back as it was.
+    @ViewBuilder private var pickOrFooter: some View {
+        if pick.on {
+            PickBar(pick: pick, cancel: { withAnimation(Theme.Motion.standard) { pick.end() } }, forward: forwardPicks)
+        } else {
+            footer
+        }
+    }
+
+    private func pickRefused() {
+        Haptics.error()
+        model.toast = Toast(String(localized: "Up to \(ForwardMessage.most) messages at a time"), style: .error)
+    }
+
+    /// Forward (N): the picked messages in the chat's order, to Forward To. Selecting ends once a target is picked
+    /// (`forwardDone`); Cancel there comes back to the selection.
+    private func forwardPicks() {
+        let shown = Dictionary(currentLines().compactMap { Self.pickBar($0) }.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let bars = model.chat(key).items.compactMap { pick.ids.contains($0.id) ? shown[$0.id] : nil }
+        guard !bars.isEmpty else { return }
+        let drafts = bars.map { Self.forwardDraft($0, key: key, model: model, menu: menu) }
+        menu.forwarding = ForwardDraft(pieces: drafts.flatMap(\.pieces), loadImage: drafts[0].loadImage,
+                                       share: drafts.count == 1 ? drafts[0].share : nil)
+    }
+    #else
+    private var pickOrFooter: some View { footer }
+    #endif
 
     private func closedAgent(_ closed: SessionKey, order: [SessionKey]) {
         guard closed == key else { return }
@@ -4626,8 +4762,8 @@ struct StartingNote: View {
 }
 
 /// Why a session waits for the user, in its host's words (a botmux attention), with its Feishu topic one tap away.
-/// Under it, the AskUserQuestion it waits on, read-only (#5889): a dialog only its computer can answer still says here
-/// what it asks.
+/// Under it, the AskUserQuestion it waits on, read-only (#5889), when no card can answer it: a dialog only its computer
+/// can answer still says here what it asks.
 struct AttentionNote: View {
     var reason: String
     var link: URL?
@@ -4636,7 +4772,10 @@ struct AttentionNote: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        let questions = key.flatMap { AskUserAnswers.pending(model.chat($0).items) } ?? []
+        // A question a card can answer is listed there, not here too (#5937).
+        let questions = key.flatMap {
+            model.interactions(for: $0).isEmpty ? AskUserAnswers.pending(model.chat($0).items) : nil
+        } ?? []
         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
             ThemedIcon(Theme.Icon.needsYou).font(Theme.Font.labelStrong).foregroundStyle(StatusPalette.needsYou.text)
             VStack(alignment: .leading, spacing: Theme.Space.s) {
@@ -4962,8 +5101,10 @@ struct Composer: View, Equatable {
     /// The launcher's list behind this session's model menus once read (#3754); nil: the fixed aliases.
     private var runningModels: [AgentModel]? { RunningModelLists.shared.models(key, model.session(key)) }
 
+    /// A session whose node takes the model (#6294, `capabilities.model`) picks from its launcher's list once read.
     private var canPickModel: Bool {
         guard let s = model.session(key) else { return false }
+        if s.capabilities?.model != nil { return SessionModes.offersModels(s, list: runningModels) }
         return s.canSend && s.canTerminal && s.paneID != nil && !s.isCodex && !s.isTraex && !s.assistant
     }
 
@@ -5154,7 +5295,7 @@ struct Composer: View, Equatable {
             }
             if isMain {
                 // The main conversation: what it still needs, or a refused send (docs/assistant/onboarding.md 4.4, 5.2).
-                ReadinessHomeCard(route: $failureRoute)
+                ReadinessHomeCard(key: key, route: $failureRoute)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             } else if model.session(key)?.assistant == true, let f = model.readiness.failure {
                 CodedFailureCard(failure: f, route: $failureRoute)
@@ -5213,7 +5354,7 @@ struct Composer: View, Equatable {
             } else if usesShellComposer {
                 // The shell's composer (docs/apple/ios.md「New shell」), whatever the style: the assistant's and an agent's (#1091).
                 ShellComposerBar(placeholder: status.isActive ? String(localized: "Add a note (queued)")
-                                     : (suggestion ?? (shellChat ? String(localized: "Ask \(model.persona.name)") : placeholder ?? String(localized: "Message Claude"))),
+                                     : (suggestion ?? (shellChat ? String(localized: "Ask \(model.assistantShownName)") : placeholder ?? String(localized: "Message Claude"))),
                                  text: textBinding, selection: $selection, focused: $focused, canSend: canSend,
                                  hasAttachments: hasAttachments,
                                  stop: status.isActive && model.session(key)?.canInterrupt == true ? { Task { await model.interrupt(key) } } : nil,
@@ -5271,6 +5412,8 @@ struct Composer: View, Equatable {
                                    switch PromptItems.modelPick(id, running: model.session(key)?.model, list: runningModels) {
                                    case .typeID: typingModel = true // #1644: through …/modes
                                    case .keep: break
+                                   // a session whose node takes the model (#6294): through …/modes, never as a message
+                                   case .send where model.session(key)?.picksModelByModes == true: Task { await model.setModes(key, model: id) }
                                    case .send(let text): model.sendNow(key, text: text, images: []) // photos and quotes stay for the message
                                    }
                                },
@@ -5503,8 +5646,7 @@ struct Composer: View, Equatable {
         #endif
     }
 
-    /// The iPhone's 「+」 opens the panel (iPad and the Mac keep the menu). The keyboard goes down first and the panel
-    /// follows a moment later, the two moving together (Telegram's).
+    /// The iPhone's 「+」 opens the panel (iPad and the Mac keep the menu); the keyboard goes down as the sheet comes up.
     private var attachOpener: ((CGRect) -> Void)? {
         #if os(iOS)
         attachPanel.opener(focused: $focused)
@@ -5591,10 +5733,12 @@ struct Composer: View, Equatable {
         // after them (the web's order), videos as <persona-file> after the text. Comments alone need no words.
         let alone = t.isEmpty && images.isEmpty && files.isEmpty && !comments.isEmpty
         // A forward with no note (#3807) says so, rather than pointing at "the context".
-        let lone = ctx.contains(where: \.isForward) ? String(localized: "Please look at the forwarded message above.") : String(localized: "See the context above.")
+        let forwards = ctx.filter(\.isForward).count
+        let lone = forwards > 1 ? String(localized: "Please look at the forwarded messages above.")
+            : forwards == 1 ? String(localized: "Please look at the forwarded message above.") : String(localized: "See the context above.")
         let typed = alone ? "" : t.isEmpty ? (images.isEmpty ? (files.isEmpty ? lone : String(localized: "Please look at the image [Assistant View a3e0a0]")) : String(localized: "Please look at the image [Assistant View 5ad878]")) : t
         let body = MessageComments.message(comments, text: AttachedFile.message(typed, files: files))
-        let message = ctx.isEmpty ? body : ctx.map(\.xml).joined(separator: "\n") + "\n\n" + body
+        let message = ContextRef.message(ctx, body: body)
         // Routed to a task ("Tell “xx”"): straight to its agent, not to Persona (docs/assistant/unified-entry.md「指向谁」).
         // Not with videos: they are on this conversation's machine, the task's agent may be on another.
         if images.isEmpty, files.isEmpty, key.group == (model.hub?.group ?? ""), TasksStore.shared.sendRouted(key.sessionID, text: message) {
@@ -5855,17 +5999,27 @@ struct TerminalCover: View {
 /// its terminal page shows the shell it left and offers Resume, the one way it runs again. Resume Session here opens that
 /// page and resumes it there (#5521), as the web's line does; the words go above the two buttons, which stay on one line.
 private struct StoppedAgentBar: View {
+#if os(iOS)
     @Environment(\.dynamicTypeSize) private var typeSize
+    var session: Session
+    var coordinator: CodexTakeoverCoordinator
+#endif
     var openTerminal: () -> Void
-    /// Nil keeps the line as it was (the frozen Mac app).
+#if os(iOS)
     var resume: (() -> Void)?
+    var onSession: (Session) -> Void
+#endif
 
     var body: some View {
         Group {
-            if let resume {
-                VStack(alignment: .leading, spacing: Theme.Space.s) {
+#if os(iOS)
+            VStack(alignment: .leading, spacing: Theme.Space.s) {
+                HStack(spacing: Theme.Space.s) {
                     note
-                    // At the accessibility sizes the two go one above the other: side by side they would be cut short.
+                    CodexTakeoverControl(session: session, coordinator: coordinator, onSession: onSession)
+                }
+                if let resume {
+                    // At accessibility sizes, stack the actions so neither label is cut short.
                     let buttons = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: Theme.Space.s))
                         : AnyLayout(HStackLayout(spacing: Theme.Space.s))
                     buttons {
@@ -5876,10 +6030,16 @@ private struct StoppedAgentBar: View {
                         .themedButton(prominent: true)
                         .accessibilityIdentifier("chat.stopped.resume")
                     }
+                } else {
+                    HStack { Spacer(minLength: 0); terminal }
                 }
-            } else {
-                HStack(spacing: Theme.Space.s) { note; terminal }
             }
+#else
+            HStack(spacing: Theme.Space.s) {
+                note
+                terminal
+            }
+#endif
         }
         .accessibilityElement(children: .contain)
     }
@@ -5896,6 +6056,26 @@ private struct StoppedAgentBar: View {
         }
         .themedButton()
         .accessibilityIdentifier("chat.stopped.terminal")
+    }
+}
+
+/// The line over the composer of an Agent whose chat Persona cannot draw (`Session.isTerminalOnly`, #6170): what it is and
+/// the terminal, which is its view.
+private struct TerminalOnlyBar: View {
+    var openTerminal: () -> Void
+
+    var body: some View {
+        HStack(spacing: Theme.Space.s) {
+            Text("Persona can't show it as a chat. Its terminal shows what it is doing.")
+                .font(Theme.Font.caption).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button(action: openTerminal) {
+                Label("Terminal", systemImage: Theme.Icon.terminal).font(Theme.Font.labelStrong).lineLimit(1)
+            }
+            .themedButton(prominent: true)
+            .accessibilityIdentifier("chat.terminalOnly.terminal")
+        }
+        .accessibilityElement(children: .contain)
     }
 }
 
@@ -5924,6 +6104,10 @@ struct QueueStrip: View {
     var queued: [String]
     /// The user's own messages come first; relayed ones are only shown and copied.
     var own: Int
+    /// Messages sent from this phone while the agent worked that Claude has not reported queued yet (#1461): drawn
+    /// after the queued ones as sending, waiting for the network or failed, with the actions each state has.
+    var sending: [PendingMessage] = []
+    private var total: Int { queued.count + sending.count }
     /// Local photo counts derived by `ChatStore` for the own rows; Agent attachment marks come from `QueuedDraft`.
     var photoMarks: [Int] = []
     var steers = false
@@ -5946,7 +6130,7 @@ struct QueueStrip: View {
             .scrollBounceBehavior(.basedOnSize)
             // Its rows' own height until one is measured, not what it is offered: the footer is laid out first (#3703).
             .fixedSize(horizontal: false, vertical: rowHeight == 0)
-            .frame(height: rowHeight > 0 ? rowHeight * min(CGFloat(queued.count), Self.visibleRows) : nil)
+            .frame(height: rowHeight > 0 ? rowHeight * min(CGFloat(total), Self.visibleRows) : nil)
             .padding(.top, Theme.Space.sm)
         } label: {
             Group {
@@ -5991,7 +6175,7 @@ struct QueueStrip: View {
     }
 
     private var tray: some View { ThemedIcon("tray.and.arrow.down").accessibilityHidden(true) }
-    private var title: Text { Text("\(queued.count) queued · \(agent) will handle them in order [Queue Strip]") }
+    private var title: Text { Text("\(total) queued · \(agent) will handle them in order [Queue Strip]") }
 
     /// Send Now when a Claude in a terminal has the user's own messages queued, or the spinner while the queue is being
     /// handed over.
@@ -6006,6 +6190,66 @@ struct QueueStrip: View {
             .foregroundStyle(Theme.accent)
             .accessibilityIdentifier("queue-send-now")
         }
+    }
+
+    /// A message of this phone's not yet reported queued (#1461): its words, and what became of the send.
+    private func sendingRow(_ msg: PendingMessage, number: Int) -> some View {
+        let draft = QueuedDraft(msg.text, photoCount: msg.images.count)
+        return Menu {
+            switch msg.state {
+            case .failed:
+                Button { model.retry(key, msg) } label: { Label("Resend", systemImage: Theme.Icon.retry) }
+            case .waiting:
+                Button { model.retry(key, msg) } label: { Label("Retry Now [Message Views f40f4f]", systemImage: Theme.Icon.retry) }
+            case .sending, .sent:
+                EmptyView()
+            }
+            Button { UIPasteboard.general.string = draft.text.isEmpty ? msg.text : draft.text } label: { Label("Copy [Readiness Views d37380]", systemImage: Theme.Icon.copy) }
+            if msg.onlyHere {
+                if msg.state == .waiting {
+                    Button(role: .destructive) { model.discard(key, msg) } label: { Label("Don't Send", systemImage: Theme.Icon.delete) }
+                } else {
+                    Button(role: .destructive) { model.discard(key, msg) } label: { Label("Delete", systemImage: Theme.Icon.delete) }
+                }
+            }
+        } label: {
+            HStack(alignment: .top, spacing: Theme.Space.s) {
+                Text("\(number)")
+                    .font(Theme.Font.labelHeavy.monospacedDigit())
+                    .foregroundStyle(Theme.accent)
+                    .scaledFrame(width: Theme.Size.badge, height: Theme.Size.badge)
+                    .background(Theme.accent.opacity(0.14), in: .circle)
+                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                    QueuedWords(draft: draft)
+                    if !msg.images.isEmpty {
+                        HStack(spacing: Theme.Space.xs) {
+                            ThemedIcon(Theme.Icon.photo)
+                            Text("\(msg.images.count) images")
+                        }
+                        .font(Theme.Font.caption).foregroundStyle(.secondary)
+                    }
+                    switch msg.state {
+                    case .sending:
+                        Text("Sending… [Queue Strip]").font(Theme.Font.caption).foregroundStyle(.secondary)
+                    case .waiting:
+                        Text("Sends when connected").font(Theme.Font.caption).foregroundStyle(.secondary)
+                    case .failed:
+                        Text("Not sent. Tap to resend [Queue Strip]").font(Theme.Font.caption).foregroundStyle(Theme.danger)
+                    case .sent:
+                        EmptyView()
+                    }
+                }
+                Spacer(minLength: 0)
+                ThemedIcon(msg.state == .failed ? Theme.Icon.errorFilled : Theme.Icon.more).font(Theme.Font.label)
+                    .foregroundStyle(msg.state == .failed ? Theme.danger : .secondary).padding(.top, Theme.Space.xs)
+            }
+            .padding(.horizontal, Theme.Space.m)
+            .padding(.vertical, Theme.Space.s)
+            .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
+            .opacity(msg.state == .failed || msg.state == .waiting ? 0.8 : 1)
+        }
+        .accessibilityLabel(Text("Item \(number): \(QueuedWords.spoken(draft))"))
+        .accessibilityIdentifier("queue-sending-item")
     }
 
     private var rows: some View {
@@ -6063,9 +6307,12 @@ struct QueueStrip: View {
                 .accessibilityHint(i < own ? Text("Edit, copy or delete") : Text("Copy [Readiness Views d37380]"))
                 .accessibilityValue(photos > 0 ? Text("\(photos) images") : Text(""))
             }
+            ForEach(Array(sending.enumerated()), id: \.element.id) { j, msg in
+                sendingRow(msg, number: queued.count + j + 1)
+            }
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
-            if !queued.isEmpty { rowHeight = h / CGFloat(queued.count) }
+            if total > 0 { rowHeight = h / CGFloat(total) }
         }
     }
 
@@ -6533,6 +6780,7 @@ nonisolated indirect enum WorkItem: Identifiable, Equatable, Sendable {
 struct WorkStepView: View, Equatable {
     nonisolated let item: WorkItem
     nonisolated let first: Bool
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.item == rhs.item && lhs.first == rhs.first
@@ -6558,19 +6806,19 @@ struct WorkStepView: View, Equatable {
                 ThinkingRow(item: t, compact: true) // a row like the tools', with their insets
             case .step(.thought(let t)):
                 Group { if t.kind == .notice { NoticeRow(item: t) } else { ThinkingRow(item: t, compact: !WorkCardSlice.timeline) } }
-                    .padding(.leading, WorkCardSlice.contentLeading)
+                    .padding(.leading, WorkCardSlice.contentLeading(typeSize))
                     .padding(.trailing, WorkCardSlice.inset)
                     .padding(.vertical, WorkCardSlice.timeline ? Theme.Space.s : Theme.Space.m)
             case .step(.folded(let f)):
                 FoldedWorkRow(fold: f)
-                    .padding(.leading, WorkCardSlice.contentLeading)
+                    .padding(.leading, WorkCardSlice.contentLeading(typeSize))
                     .padding(.trailing, WorkCardSlice.inset)
                     .padding(.vertical, WorkCardSlice.timeline ? Theme.Space.s : Theme.Space.m)
             case .text(let i):
                 // The agent's words between its steps: on the timeline in the quieter type, so they read as part of
                 // the process and not as its answer.
                 AssistantText(item: i, quiet: WorkCardSlice.timeline)
-                    .padding(.leading, WorkCardSlice.contentLeading)
+                    .padding(.leading, WorkCardSlice.contentLeading(typeSize))
                     .padding(.trailing, WorkCardSlice.inset)
                     .padding(.vertical, WorkCardSlice.timeline ? Theme.Space.s : Theme.Space.m)
             }
@@ -6663,20 +6911,32 @@ struct WorkStepView: View, Equatable {
 struct WorkCardSlice: View {
     var top: Bool
     var bottom: Bool
+    @Environment(\.dynamicTypeSize) private var typeSize
     /// Half the list's spacing (`LazyVStack(spacing: Theme.Space.l)`): the slices meet in the middle of each gap. It was
     /// 7 from when the spacing was 14; at 16 every seam showed a 2 pt gap (white lines across the card, the rail broken).
     static let bridge: CGFloat = Theme.Space.l / 2
     static let radius = Theme.Radius.card
-    /// The rows' side padding inside the card.
-    static let inset: CGFloat = 12
-    /// Where a tool row's words start (inset + 24 pt icon + 10): separators start there.
-    static let textColumn: CGFloat = 46
-    /// The timeline's rail runs through the middle of the tools' icons.
-    static let railX: CGFloat = inset + Theme.Size.icon / 2
+    /// Side padding inside a card. The timeline's icon column uses `iconLeading` instead.
+    static let inset: CGFloat = Theme.Space.m
+    /// Where the timeline's icons start. Flush with the assistant reply bubble, which begins at the list's content
+    /// margin. A card keeps `inset` inside its ring, so that style does not move.
+    static var iconLeading: CGFloat { timeline ? Theme.Space.flush : inset }
+    /// The card's text column, unchanged: inset + icon + 10. The hairline between card steps starts there.
+    /// The separator only draws for cards, so it reads this directly instead of a text size.
+    static let cardTextColumn: CGFloat = 46
+    /// The icon's width at this text size, the same scale `scaledFrame` gives the step icons.
+    static func iconWidth(_ typeSize: DynamicTypeSize) -> CGFloat { Theme.Size.icon * Theme.sizeScale(typeSize) }
+    /// Where a tool row's words start. On the timeline that is the scaled icon plus the header's gap, so the title,
+    /// the opened detail and Collapse share one edge. A card keeps `cardTextColumn`.
+    static func textColumn(_ typeSize: DynamicTypeSize) -> CGFloat {
+        timeline ? iconLeading + iconWidth(typeSize) + Theme.Space.m : cardTextColumn
+    }
+    /// The rail's x, through the middle of the tools' icons.
+    static func railX(_ typeSize: DynamicTypeSize) -> CGFloat { iconLeading + iconWidth(typeSize) / 2 }
 
     static var timeline: Bool { StyleSpec.current.workList == .timeline }
     /// Where a step's own content starts: the card's inset, or (timeline) right of the rail, where the tools' words are.
-    static var contentLeading: CGFloat { timeline ? textColumn : inset }
+    static func contentLeading(_ typeSize: DynamicTypeSize) -> CGFloat { timeline ? textColumn(typeSize) : inset }
 
     var body: some View {
         if Self.timeline { rail } else { card }
@@ -6689,7 +6949,7 @@ struct WorkCardSlice: View {
             Rectangle()
                 .fill(Color(uiColor: .separator))
                 .frame(width: Theme.Size.lineMedium, height: bottom ? g.size.height / 2 + (top ? 0 : Self.bridge) : g.size.height + (top ? 0 : Self.bridge) + Self.bridge)
-                .offset(x: Self.railX - Theme.Size.lineMedium / 2, y: top ? Theme.Space.m : -Self.bridge)
+                .offset(x: Self.railX(typeSize) - Theme.Size.lineMedium / 2, y: top ? Theme.Space.m : -Self.bridge)
         }
         .allowsHitTesting(false)
     }
@@ -6714,7 +6974,7 @@ struct WorkCardSlice: View {
     @ViewBuilder static var separator: some View {
         if !timeline {
             Rectangle().fill(beautiful ? Theme.cardStroke : Color(uiColor: .separator)).frame(height: beautiful ? Theme.Size.line : Theme.Size.hairline)
-                .padding(.leading, textColumn)
+                .padding(.leading, cardTextColumn)
                 .offset(y: -bridge)
                 .allowsHitTesting(false)
         }
@@ -6726,6 +6986,7 @@ struct WorkCardSlice: View {
 struct WorkEndView: View, Equatable {
     @Environment(\.openFile) private var openFile
     @Environment(\.chatPin) private var pin
+    @Environment(\.dynamicTypeSize) private var typeSize
     nonisolated let count: Int
     nonisolated let files: [ChangedFile]
     /// What the chat's pin knows the chips by: "+N files" opens the rest under them, the chips staying where they are (#3757).
@@ -6759,7 +7020,7 @@ struct WorkEndView: View, Equatable {
                 }
                 .font(Theme.Font.caption)
                 .foregroundStyle(.secondary)
-                .padding(.leading, WorkCardSlice.contentLeading)
+                .padding(.leading, WorkCardSlice.contentLeading(typeSize))
                 .padding(.trailing, WorkCardSlice.inset)
                 .padding(.vertical, Theme.Space.m)
                 .frame(maxWidth: .infinity, alignment: .leading)

@@ -39,6 +39,8 @@ import persona.core.domain.sort.*
 import persona.core.domain.answer.firstBySession
 import persona.core.domain.answer.rowLine
 import persona.core.domain.answer.askingLine
+import persona.core.domain.showsStarCard
+import persona.core.domain.showsStarPill
 import persona.core.navigation.*
 import kotlinx.coroutines.delay
 import java.time.Instant
@@ -108,10 +110,16 @@ internal fun AgentsScreen(
     val sessionsByKey = remember(page.sessions) { page.sessions.associateBy { it.key } }
     // By To-do only when the hub has to-dos, as iOS offers it (`DevGrouping.offered(supportsTodos:)`, #4338 A5).
     val todosSupported by (model.tasks?.todosSupported ?: kotlinx.coroutines.flow.MutableStateFlow(false)).collectAsStateWithLifecycle()
-    val groupings = offeredGroupings(todosSupported)
+    // "By pinned" only from a hub with the direction tree (#4352), or while it is the one chosen.
+    val groupings = offeredGroupings(todosSupported, page.directionsAvailable || page.preferences.grouping == AgentGrouping.Direction)
     // A fallback for when no app feedback is provided (previews, tests): the page's own toast, as the root's.
     val toast = persona.core.designsystem.rememberToastState()
     val feedback = persona.core.designsystem.LocalAppFeedback.current
+    // The GitHub star prompts (#5761): the pill under the first-run empty state, the card in the notice slot. None
+    // without the app's store (previews, tests).
+    val starPrompt = LocalStarPrompt.current
+    val starState = starPrompt?.state?.collectAsStateWithLifecycle()?.value
+    val context = androidx.compose.ui.platform.LocalContext.current
     var menu by remember { mutableStateOf(false) }
     // The grouping pill's Group By picker (iOS's), groupings only (#4338 A4).
     var groupingMenu by remember { mutableStateOf(false) }
@@ -417,6 +425,14 @@ internal fun AgentsScreen(
                     )
                 }
             }
+            // The star card waits while a session needs the user or a card waits, so it never pushes a waiting one down (#5761).
+            if (starPrompt != null && starState != null && page.loaded && waitingRows.isEmpty() && pending.isEmpty() && page.settings.query.isEmpty() &&
+                page.preferences.range != AgentRange.History && showsStarCard(starState, now.toEpochMilli())) {
+                item("star-card") {
+                    StarPromptCard(onStar = { starPrompt.star(context) }, onLater = starPrompt::later,
+                        modifier = Modifier.padding(bottom = Tokens.Space.xs))
+                }
+            }
             if (connection != ConnectionState.Online) item("connection") { ConnectionNotice(connection, ::connectionSettings) }
             if (model.herdr != null && page.preferences.range != AgentRange.History) {
                 items(page.machines.filter { it.herdrStopped(herdrStates[it.id]) && groups.stateFor(it.id, connection) == ConnectionState.Online &&
@@ -471,6 +487,9 @@ internal fun AgentsScreen(
                     onAction = model::refresh,
                 ) else AgentsListPlaceholder()
             }
+            // No session yet with a computer to start one on: the empty state's New session (and the star pill under it).
+            val firstRun = page.allCount == 0 && page.settings.query.isEmpty() &&
+                !(page.machines.isEmpty() && page.settings.machineFilter.isEmpty())
             if (page.loaded && page.list.groups.isEmpty()) item("empty") {
                 // Three cases, as iOS: a search with no result (no New session, which read as if the agents were gone), no
                 // sessions at all, and a quick filter with nothing left (Show all).
@@ -487,7 +506,7 @@ internal fun AgentsScreen(
                         stringResource(R.string.agents_empty_no_computer_title), stringResource(R.string.agents_empty_no_computer_hint),
                         icon = PhIcons.Desktop,
                         action = { JButton(stringResource(ReadinessActionId.AddComputer.label), { navigator.navigate(persona.core.navigation.AddComputerRoute()) }) })
-                    page.allCount == 0 -> JEmptyState(
+                    firstRun -> JEmptyState(
                         stringResource(if (page.settings.machineFilter.isEmpty()) R.string.agents_empty_first_title else R.string.agents_empty_machine_title),
                         stringResource(R.string.agents_empty_first_hint), icon = PhIcons.Robot,
                         action = { JButton(stringResource(R.string.agents_action_new_session), { newSession() }) })
@@ -497,6 +516,9 @@ internal fun AgentsScreen(
                         icon = PhIcons.CheckCircle,
                         action = { JButton(stringResource(R.string.agents_empty_show_all), { model.filter(AgentQuickFilter.All) }, kind = JButtonKind.Secondary) })
                 }
+            }
+            if (starPrompt != null && starState != null && page.loaded && page.list.groups.isEmpty() && firstRun && showsStarPill(starState)) {
+                item("star-pill") { StarPill(onStar = { starPrompt.star(context) }, onHide = starPrompt::hidePill) }
             }
             if (page.pagination.hasPrevious) item("sessions-previous", contentType = "pagination") {
                 JTextButton(stringResource(R.string.agents_page_previous), model::loadPrevious)
@@ -576,6 +598,18 @@ internal fun AgentsScreen(
                                 counts = listOf(todoState.countTone to group.rows.count { !it.isNestedSubtask }),
                                 onAction = { navigator.navigate(persona.core.navigation.TodoDetailRoute(todoId)) },
                                 actionLabel = stringResource(R.string.agents_view_todo))
+                        } else if (group.id.startsWith(DirectionTaskPrefix)) {
+                            // "By direction": a to-do of the hub's tree under its direction (#4352); the arrow opens it.
+                            val todoId = group.id.removePrefix(DirectionTaskPrefix).substringAfter('/')
+                            AgentSpaceHeader(groupTitle, group.folded, { model.fold(group) }, depth = entry.depth, first = entry.first,
+                                counts = group.headingCounts, icon = PersonaIcons.todo, kind = stringResource(R.string.agents_kind_todo),
+                                menu = { HeadingAction(PersonaIcons.forward, stringResource(R.string.agents_view_todo),
+                                    { navigator.navigate(persona.core.navigation.TodoDetailRoute(todoId)) }) })
+                        } else if (group.id.startsWith(DirectionGroupPrefix)) {
+                            val todoCount = page.list.groups.count { it.under == group.id }
+                            AgentTreeHeader(groupTitle, group.folded, { model.fold(group) }, first = entry.first,
+                                icon = PersonaIcons.pinned, counts = group.headingCounts,
+                                detail = pluralStringResource(R.plurals.agents_count_todos, todoCount, todoCount))
                         } else AgentTreeHeader(groupTitle, group.folded, { model.fold(group) }, first = entry.first,
                             icon = PhIcons.PushPin.takeIf { group.id == "pinned" } ?: PersonaIcons.backgroundWaiting.takeIf { group.id == "state/background" },
                             counts = group.stateSectionCounts ?: group.todoLooseCounts ?: group.sectionCounts, waitsInBackground = group.id == "state/background",
@@ -1038,9 +1072,12 @@ internal fun AgentTabEntryRow(
     )
 }
 
-/** Swiping a row left closes the agent (iOS): only a live agent in a terminal pane, while nothing else is being saved. */
+/**
+ * Swiping a row left closes the agent (iOS): only a live agent that closes from here (in a terminal pane, or a runtime's
+ * session whose node says so, #6294), while nothing else is being saved.
+ */
 internal fun closeSwipe(row: AgentSession, busy: Boolean, close: () -> Unit): (() -> Unit)? =
-    close.takeIf { row.session.isLive && row.session.canTerminal && !row.session.assistant && !busy }
+    close.takeIf { row.session.isLive && row.session.canClose && !row.session.assistant && !busy }
 
 /**
  * The session actions are shared by the home list and the space page. A [nested] row, drawn under its parent's
@@ -1075,8 +1112,9 @@ internal fun AgentSessionMenuItems(
             add(JAction(stringResource(R.string.agents_action_link_todo), PhIcons.ListChecks, enabled = !busy, onClick = onLinkTodo))
         }
         onAttach?.let { add(JAction(stringResource(R.string.agents_action_attach), PhIcons.PlugsConnected, enabled = !busy, onClick = it)) }
-        // Renaming changes the terminal tab and Claude's /rename; a session without a terminal has neither.
-        if (session.canTerminal) add(JAction(stringResource(R.string.agents_action_rename), PhIcons.NotePencil, enabled = !busy, onClick = onRename))
+        // Renaming changes the terminal tab and Claude's /rename; a session without a terminal renames where its node says it
+        // can (a runtime's title, #6294).
+        if (session.canRename) add(JAction(stringResource(R.string.agents_action_rename), PhIcons.NotePencil, enabled = !busy, onClick = onRename))
         if (session.loop != null && session.canSend) add(JAction(stringResource(R.string.agents_action_stop_loop), enabled = !busy, onClick = onStopLoop))
         add(JAction(stringResource(R.string.agents_action_handoff), onClick = onHandoff))
         if (row.state == AgentState.Unread) add(JAction(stringResource(R.string.agents_action_mark_read), PhIcons.Check, onClick = onRead))
@@ -1084,7 +1122,8 @@ internal fun AgentSessionMenuItems(
         session.resumeCommand()?.let { command -> add(JAction(stringResource(R.string.agents_action_copy_resume), onClick = { copy(command, null) })) }
         add(JAction(stringResource(R.string.agents_action_copy_directory), enabled = session.cwd.isNotBlank(), onClick = { copy(session.cwd, null) }))
         add(JAction(stringResource(R.string.agents_action_open_session), onClick = onOpen))
-        if (session.isLive && session.canTerminal) add(JAction(stringResource(R.string.agents_action_close_agent), destructive = true, enabled = !busy, onClick = onClose))
+        // Its pane quits, or a runtime's session ends where its node says it can (#6294).
+        if (session.isLive && session.canClose) add(JAction(stringResource(R.string.agents_action_close_agent), destructive = true, enabled = !busy, onClick = onClose))
         if (session.canDelete && onDelete != null) add(JAction(stringResource(R.string.agents_action_delete_chat), destructive = true, enabled = !busy, onClick = onDelete))
     }
 }
@@ -1115,6 +1154,7 @@ private val AgentGrouping.icon: PhIcon get() = when (this) {
     AgentGrouping.MachineSpace, AgentGrouping.Space -> PersonaIcons.space
     AgentGrouping.Todo -> PersonaIcons.todo
     AgentGrouping.Machine -> PersonaIcons.machine
+    AgentGrouping.Direction -> PersonaIcons.pinned
     // iOS draws two state dots (circle.grid.2x1), which no generated glyph shows; a board of columns stands in.
     AgentGrouping.State -> PhIcons.Kanban
 }
@@ -1123,6 +1163,7 @@ private val AgentGrouping.label: String @Composable get() = stringResource(when 
     AgentGrouping.Repo -> R.string.agents_grouping_repo
     AgentGrouping.State -> R.string.agents_grouping_state
     AgentGrouping.Todo -> R.string.agents_grouping_todo
+    AgentGrouping.Direction -> R.string.agents_grouping_direction
     // iOS calls this grouping (computer, space, tab, agent) By Project (#4338 A5); the stored value stays MachineSpace.
     else -> R.string.agents_grouping_project
 })

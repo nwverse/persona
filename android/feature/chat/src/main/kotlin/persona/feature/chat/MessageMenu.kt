@@ -92,10 +92,11 @@ internal fun Modifier.messageMenu(target: MessageTarget?): Modifier {
 
 /**
  * "Rewind to here" on your messages (#2436): [block] is why the session cannot right now (shown on the disabled row), null
- * when it can; [run] asks the node to go back to before the message.
+ * when it can; [code] offers "Code and conversation" too (false where the node puts no files back, `Rewind.restoresCode`);
+ * [run] asks the node to go back to before the message.
  */
 @Immutable
-internal data class RewindMenu(val block: String?, val run: (MessageTarget, RewindRestore) -> Unit)
+internal data class RewindMenu(val block: String?, val code: Boolean = true, val run: (MessageTarget, RewindRestore) -> Unit)
 
 /**
  * The long-press menu as an action sheet (docs/android/android-design.md 2.3 rule 7): "Copy", "Select" (the message as text to
@@ -148,11 +149,13 @@ internal fun MessageMenuSheet(
             MessageAction.Delete -> onDelete?.invoke(target)
         }
     }, onDismiss = menu::close)
-    // "Rewind chat only" / "Rewind code and chat" (web's submenu); the second asks again: it puts files back too.
+    // "Rewind chat only" / "Rewind code and chat" (web's submenu); the second asks again: it puts files back too. Where the
+    // node says it puts no files back (`rewind_code` false: a runtime's session, a Codex thread) only the first.
     rewinding?.let { at ->
-        JActionSheet(listOf(
+        JActionSheet(listOfNotNull(
             JAction(stringResource(R.string.chat_rewind_conversation), PhIcons.ArrowUUpLeft) { rewind?.run?.invoke(at, RewindRestore.Conversation) },
-            JAction(stringResource(R.string.chat_rewind_code_and_conversation), PhIcons.ArrowUUpLeft, destructive = true) { confirmCode = at },
+            JAction(stringResource(R.string.chat_rewind_code_and_conversation), PhIcons.ArrowUUpLeft, destructive = true) { confirmCode = at }
+                .takeIf { rewind?.code != false },
         ), onDismiss = { rewinding = null }, title = stringResource(R.string.chat_rewind_title))
     }
     confirmCode?.let { at ->

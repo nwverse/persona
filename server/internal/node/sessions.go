@@ -328,6 +328,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		return nil
 	}
 	out = out[:j]
+	linkSideSessions(out, n.offlineParents()) // the desktop app's side sessions under the sessions that started them (#5935)
 	sortNewestFirst(out)
 	return out
 }
@@ -387,6 +388,7 @@ func (n *Node) decorateIn(s *proto.Session, pass *codexListPass) {
 		s.Title = filepath.Base(s.Cwd)
 	}
 	s.BypassAvailable = n.hooks.canBypass(s.SessionID) // modes.go claudeCanBypass
+	n.modeRestartRow(s) // mode_restart.go
 	n.ultracodeRow(s, pass)
 }
 

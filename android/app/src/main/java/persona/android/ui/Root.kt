@@ -136,6 +136,8 @@ private fun PersonaRootContent(
     val link = MainActivity.pendingPairLink.value
     // One toast slot for the window, as iOS: the newest notice replaces the one showing; the host plays its haptic.
     LaunchedEffect(shell) { shell.feedback.notices.collect { toast.show(it) } }
+    // The GitHub star toast owed since first setup finished (#5761): here, so leaving the checklist for the shell keeps it.
+    persona.feature.settings.StarPromptWelcome(toast::show)
     CompositionLocalProvider(LocalAppFeedback provides shell.feedback) {
         Surface(Modifier.fillMaxSize()) {
             Box(Modifier.fillMaxSize()) {
@@ -568,6 +570,11 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                         }
                     },
                     onRetired = { key -> sidebar.retired = sidebar.retired + key },
+                    onOpenTodo = { id -> sidebarDestination(TodoDetailRoute(id)) },
+                    onOpenAgent = { key ->
+                        sidebar.opened.value = false
+                        selected = openResolved(ResolvedRoute(AppTab.Agents, ChatRoute(key.machineId, key.sessionId, ConversationKind.Agent)))
+                    },
                     // The current assistant at the sidebar's head; its roster opens under it.
                     switcher = { head, trailing, fallback ->
                         persona.feature.settings.AssistantSwitcher(services.managers.takeUnless { services.demo }, waiting,
@@ -624,8 +631,8 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                                         if (assistantRoot && currentRegular.value) sidebarColumnShown.value = !sidebarColumnShown.value
                                         else sidebar.opened.value = true
                                     })
-                                    // Something waits at another assistant: the switcher's badges say where.
-                                    if (currentOthersWaiting.value) JStatusDot(Status.NeedsYou, Modifier.align(Alignment.TopEnd).padding(Tokens.Space.xs))
+                                    // Something waits at another assistant: the switcher's badges say where. Still, as iOS's `AssistantWaitingDot`.
+                                    if (currentOthersWaiting.value) JStatusDot(Status.NeedsYou, Modifier.align(Alignment.TopEnd).padding(Tokens.Space.xs), breathes = false)
                                 }
                             }) else null) {
                         if (primary) Box(Modifier.fillMaxSize()) {
@@ -690,7 +697,8 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
             session.terminal?.let { terminalEntries(navigator, it, { key -> sessions.firstOrNull { s -> s.key == key }?.displayTitle },
                 panes = shell.terminalPanes.takeIf { session.demo == null }, sessions = session.sessions,
                 routed = shell::groupTerminal,
-                resumer = SessionTerminalResumer({ session.sessions.sessions.value }, { session.agentsWiring.state.value.creation })) }
+                resumer = SessionTerminalResumer({ session.sessions.sessions.value }, { session.agentsWiring.state.value.creation },
+                    { session.sessions.machines.value })) }
                 ?: run {
                     entry<TerminalRoute> { UnavailablePage(stringResource(R.string.app_demo_no_terminal), navigator) }
                     entry<persona.core.navigation.TerminalPanesRoute> { UnavailablePage(stringResource(R.string.app_demo_no_terminal), navigator) }

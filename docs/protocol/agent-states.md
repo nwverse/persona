@@ -88,6 +88,24 @@ Deciding "Needs you" / "done" and pushing are the hub's existing logic (based on
 - **Unrecognized agents** (`gemini`, `amp`…): used to be dropped entirely; now listed as a terminal-only row (`docs/integrations/opencode.md` ("Terminal rows for other agents")). The state is herdr's, so when it's stuck in a confirm box the phone shows "Needs you",
   but there's no card to answer (the hub doesn't parse screens of TUIs it doesn't know); answer it on the terminal page.
 
+### Claude in a Tern block
+
+Tern reports no agent state: every agent it lists is `unknown` (`node/hosttern.go`). For a Claude, node takes the status Claude Code keeps in its own
+`sessions/<pid>.json` instead (the file of the block's `claude` process, the one that names its session; `ternClaudeStatus` in `server/internal/node/agent_status.go`),
+before the hook and transcript rules below:
+
+- `busy` → `working`.
+- `waiting` (a question, permission or other dialog of its own has the keyboard) → `blocked`: Needs you, and the manager makes its screen card as for herdr's `blocked`.
+- `idle` → `done` once the session has a transcript (`idle` before its first message). Tern has nothing like herdr's "seen in the terminal", so a finished
+  turn is Unread until it is opened in an app, and its finished push follows the usual rules.
+- `shell` (Claude Code 2.1.31x and later: the turn is over while a background command or Monitor still runs) is read like `idle`: `done` once
+  there is a transcript, and the row then shows Working (background) from the transcript's background tasks.
+- No status to go by (no pid found for the block yet, an older Claude Code, a file that already names another session after `/clear`): the rules below,
+  as for herdr's `unknown`; a resting Claude's screen is read for a dialog as in a herdr pane.
+
+Why (#6312): Claude Code 2.1.321 marks itself `waiting` the moment its question shows, but Persona listed such a Claude as Working for 45 seconds (its transcript's
+latest write), then as Unknown, which the overview does not show: it never needed the user and got no card. A finished turn stayed Unknown too.
+
 ### Hook turn signals
 
 herdr's state is often wrong (`done` while still working, #2069), and the title glyph and the transcript's latest write are only inference. Claude sessions Persona starts carry Persona's hooks; sessions the user starts themselves, once `claude_global_hooks` is on, get global report-only hooks (`../integrations/claude-integration.md` ("Global report-only hooks"))
@@ -107,7 +125,7 @@ Global events carry `report_only`, and the hub doesn't take them as meaning the 
 Decisions (when herdr says `done` / `idle` / `unknown`; `blocked` and `working` follow herdr):
 
 - **A dialog is open in the terminal** (#2553, `node/dialogstatus.go`): for a Claude still `done` / `idle` / `unknown` after the checks above (excluding botmux, those in Claude's agents list, and ones where Persona itself is operating a picker)
-  in a herdr pane, node reads its screen in the background every 5 seconds (the list doesn't wait for the read). If the bottom is a dialog (`screen.Choosing`) it's recorded as `blocked`, `attention_reason` is the dialog's first line, and the "last said" in the App list and the assistant's `agents_list` shows that line.
+  in a herdr or Tern pane, node reads its screen in the background every 5 seconds (the list doesn't wait for the read). If the bottom is a dialog (`screen.Choosing`) it's recorded as `blocked`, `attention_reason` is the dialog's first line, and the "last said" in the App list and the assistant's `agents_list` shows that line.
   Why: Claude Code 2.1.309's auto mode billing notice blocked 3 Agents for several minutes; herdr reported done and Persona showed Unread.
 - **An allow Claude did not take** (#3752, `node/allowwatch.go`): whatever herdr says, `working` included. Once node hands a PermissionRequest
   hook an allow (a terminal Agent's, not the assistant's), it reads the pane 1.5 s later; a dialog still at the bottom (`screen.DialogHead`) lists
@@ -160,6 +178,7 @@ They count as background work just like background commands: the Agent is Workin
 
 - **Where it's read from**: the Workflow tool result in the transcript, "Workflow launched in background. Task ID: … Run ID: wf_…" (`turn_duration`'s `pendingWorkflowCount` also says some are running),
   and Monitor's "Monitor started (task …, expires in 30m …)". The end is the notification for the same task id (with `<status>`) or `TaskStop`. node's background scan reads the whole transcript, so nothing is missed by only reading the tail.
+  The result alone starts a run: that scan skips lines over 64 KiB, and a call with its script inline is as long as the script (#6003).
 - **Progress is on disk**: `<session>/subagents/workflows/<run>/journal.jsonl` (one `started` line per agent, with label and phase; `result` means it came back), and in the same directory `agent-<id>.jsonl` / `.meta.json` (each agent's conversation, read as a sub-Agent).
   When done it writes `<session>/workflows/<run>.json` (status, error, duration); the `meta` of the script `<session>/workflows/scripts/<name>-<run>.js` has the name and phases.
 - **Session field** `workflows` (`docs/protocol/protocol.md`): name, status, current phase, finished / started counts, duration, the sub-agent list and each one's last line. While running it's also put into `background` (kind `workflow`), so old clients and old hubs can still tell "there's background work".
@@ -170,6 +189,7 @@ They count as background work just like background commands: the Agent is Workin
   A retried agent counts once (#2323): Claude Code's workflow view can retry a stalled agent, which starts the same `agent()` call again under a new agent id (the journal line's `key` names the call; two identical calls in one script get different keys). The attempt it replaced never gets a `result` or `failed` line, only `[Request interrupted by user]` at the end of its transcript, so node drops it from the counts, `phase_stats` and `agents` and keeps only its `tokens` / `calls`. Without this the phase stayed current with one agent too many (`2/3`) until the run ended. A retry of an agent that had already returned replaces it the same way. Journals without `key` (older Claude Code) are read as before.
   Each agent also carries `model`, `latest_tool: {id, name, summary}`, `ended_at`, `tokens` and `calls`. `tokens` is the latest assistant usage's `input_tokens + output_tokens + cache_read_input_tokens + cache_creation_input_tokens`, not the sum of earlier usage records; Claude Code's own error replies (`<synthetic>`, all-zero usage), usage without input (a gateway's on a turn's other replies, `{"input_tokens":0,"output_tokens":1}`) and a gateway's whole-turn sum don't replace it (#5511, the same rule as a session's context tokens). `calls` counts tool calls. Run-level `tokens` sums those latest snapshots and is not cumulative token consumption either. `latest_tool.summary` comes in the request's language (node writes Chinese, the hub rewrites it). Clients keep their existing display when these fields are absent.
 - **End notifications and timing** (#3433): `Dynamic workflow "…" completed / failed / was stopped` is parsed as `Item.task.kind: workflow`, preserving the notification's `tool_use_id` and `task_id` so clients can find the initiating call or run. Its one-line text is the hub's, in the reader's language like the other task notes ("Background workflow finished · …", #5511); iOS / Mac's `ChatCache` went to `chats-v10` with it, so copies cached with the Chinese text are dropped. A Live Activity item with `background_working` uses the earliest known `started_at` among running workflows for `since`; without one, it falls back to the turn's start time, then the session's update time. `detail` remains a one-line progress summary.
+- **Summary rows** (#5888, #5950): a `summary=1` row (for example iOS Agents › Recent) has no `workflows`. Clients take its `workflow_progress` as the running run (name, phase with `phase_count`, counts, time) and `running_workflows > 0` alone as background work, so the row's workflow line and "Working (Background)" read the same in every grouping (iOS `Session.runningWorkflows` / `isBackgroundWorking`, web `runningWorkflows`, Android `Session.runningWorkflows` / `AgentSession.isBackgroundWorking`). They key on the summary marker (`waiting` present), not on `workflows` being absent: a client keeps an older complete row's `workflows` under a summary (iOS `preservingDetails`, Android `keepingDetails`, the web store's merge), and the summary's own counts win over that kept array, as in "Summary rows" in `docs/protocol/protocol.md` (#3588). A chat whose row a summary last updated reads its running run the same way; its header cards (`workflows`) wait for the complete row. A summary names only the newest run, so its line has no "and N more".
 - **Fallback**: with no notification and no status file, 30 minutes without any write counts as `stalled` (its claude is gone) and no longer as running; a Monitor past `expires_at` doesn't count; finished ones stop being listed after a day.
 - The assistant's live snapshot and `agents_list` spell out running workflows ("this turn stopped to wait for results, it isn't done"), so it won't nudge or close these Agents.
 List order (the same for all three groupings): Needs you → Unread → Awaiting reply → Working → Waiting → Muted → Seen; within a state, by last update time (`docs/apple/ios.md`).
