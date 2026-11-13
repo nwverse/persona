@@ -3966,6 +3966,16 @@ struct ChatView: View {
     @ViewBuilder private var headerBack: some View {
         if hidesBack {
             Color.clear.dynamicTypeSize(...DynamicTypeSize.xxLarge).scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
+        } else if backShowsList && split?.drawer == true {
+            // The Sidebar layout on a phone (#6332): the chat is the drawer's pick, not a page to go back from. The
+            // persona's face opens the drawer, as on the conversation, with how many Agents need the user.
+            #if os(iOS)
+            ShellPersonaButton(id: "sidebar-drawer-button") { back() }
+                .dynamicTypeSize(...DynamicTypeSize.xxLarge)
+                .overlay(alignment: .topTrailing) { SidebarWaitingBadge() }
+            #else
+            headerBackButton
+            #endif
         } else {
             headerBackButton
         }
