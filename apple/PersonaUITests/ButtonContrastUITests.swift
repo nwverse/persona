@@ -2,9 +2,9 @@ import UIKit
 import XCTest
 
 /// Secondary `.themedButton()`s on every surface (#6157). `-showButtonContrast YES` (ButtonContrastLab.swift) draws one in
-/// the accent and one in `Theme.danger` on each kind of fill a secondary button sits on in the app: two screens of
-/// places, then a sheet at half and at full height. This test does it in every
-/// style, with three theme colors, in light and dark.
+/// the accent, one tinted `Theme.danger` and one with the destructive role on each kind of fill a secondary button sits on
+/// in the app: two screens of places, then a sheet at half and at full height. This test does it in every style, with
+/// three theme colors, in light and dark.
 /// - Each label is measured against the button's own fill in the screenshot, as #6157's `contrast.swift` does: the fill
 ///   is the most common color, the label the 2 % of pixels farthest from it. The glass fill is the system's, not a token
 ///   `StyleSpecTests` could check.
@@ -17,7 +17,7 @@ import XCTest
 final class ButtonContrastUITests: XCTestCase {
     private var env: [String: String] { ProcessInfo.processInfo.environment }
     private static let floor = 3.0
-    private static let tints = ["accent", "danger"]
+    private static let tints = ["accent", "danger", "destructive"]
     private static let firstPlaces = ["page", "grouped", "card", "themeCard", "surface"]
     private static let secondPlaces = ["list", "well", "wash", "bar", "black"]
     private static let sheetPlaces = ["sheet", "sheetSurface", "sheetCard", "sheetThemeCard", "sheetList"]
@@ -59,6 +59,9 @@ final class ButtonContrastUITests: XCTestCase {
                     XCTAssertTrue(app.buttons["contrast.list.accent"].waitForExistence(timeout: 10), "\(name): no second screen")
                     sleep(1)
                     measure(app, places: Self.secondPlaces, shot: "\(name)-more", into: &rows, low: &low)
+                    // The sheet over the first screen, as over a page.
+                    app.buttons["contrast.next"].tap()
+                    XCTAssertTrue(app.buttons["contrast.page.accent"].waitForExistence(timeout: 10), "\(name): no first screen")
 
                     opener.tap()
                     XCTAssertTrue(app.buttons["contrast.sheet.accent"].waitForExistence(timeout: 10), "\(name): no sheet")

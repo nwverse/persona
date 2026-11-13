@@ -17,11 +17,13 @@ import SwiftUI
 ///   - `bar`: the `.bar` material.
 ///   - `black`: black and dark whatever the look, as the screen viewer and the image editor are.
 /// - In a sheet, after `contrast.openSheet`: the sheet itself, a panel, `.card()`, `Theme.card` and a list row in it
-///   (Settings is a sheet). It starts at half height and goes to full height with `contrast.expand`.
+///   (Settings is a sheet), under a title as real sheets have: at half height the sheet's rim shows what is behind it.
+///   It starts at half height and goes to full height with `contrast.expand`.
 ///
-/// Each place has two buttons: one in the accent and one in `Theme.danger`, the two tints call sites give a secondary
-/// button. They are drawn over the app in the saved style, color and look (`-ui.style`, `-ui.color`, `-ui.scheme`), with
-/// RootView's tint and type (`rootLook`), and each one's identifier is `contrast.<place>.<accent|danger>`.
+/// Each place has three buttons, the three colors call sites give a secondary button: the accent, `.tint(Theme.danger)`
+/// and the destructive role. They are drawn over the app in the saved style, color and look (`-ui.style`, `-ui.color`,
+/// `-ui.scheme`), with RootView's tint and type (`rootLook`), and each one's identifier is
+/// `contrast.<place>.<accent|danger|destructive>`.
 struct ButtonContrastOverlay: View {
     @State private var shown = UserDefaults.standard.bool(forKey: "showButtonContrast")
     @State private var second = false
@@ -68,6 +70,7 @@ private struct ButtonContrastSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.m) {
+            Text(verbatim: "sheet").font(Theme.Font.heading).scaledFrame(minHeight: Theme.Size.tapTarget)
             ButtonContrastRow(place: "sheet")
             ButtonContrastRow(place: "sheetSurface").surface(in: ButtonContrastOverlay.box)
             ButtonContrastRow(place: "sheetCard").card()
@@ -105,19 +108,23 @@ private struct ButtonContrastList: View {
     }
 }
 
-/// One place: a secondary button in the accent and one in `Theme.danger`, with words of the length real ones have.
+/// One place: a secondary button in the accent, one tinted `Theme.danger` and one with the destructive role (the system's
+/// red), with words of the length real ones have.
 private struct ButtonContrastRow: View {
     var place: String
 
     var body: some View {
         HStack(spacing: Theme.Space.m) {
-            Button {} label: { Text("Open Settings") }
+            Button {} label: { Text("Open Settings").lineLimit(1) }
                 .themedButton()
                 .accessibilityIdentifier("contrast.\(place).accent")
-            Button {} label: { Text("Delete") }
+            Button {} label: { Text("Delete").lineLimit(1) }
                 .themedButton()
                 .tint(Theme.danger)
                 .accessibilityIdentifier("contrast.\(place).danger")
+            Button(role: .destructive) {} label: { Text("Delete").lineLimit(1) }
+                .themedButton()
+                .accessibilityIdentifier("contrast.\(place).destructive")
         }
         .padding(Theme.Space.s)
         .frame(maxWidth: .infinity, alignment: .leading)
