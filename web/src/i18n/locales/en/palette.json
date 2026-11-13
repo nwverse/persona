@@ -36,5 +36,7 @@
   "group_recent": "Recently opened",
   "previous": "Previous",
   "previous_chat": "Go back to the previous conversation",
-  "place_terminals": "Open terminals"
+  "place_terminals": "Open terminals",
+  "filter_agents_list": "Filter the Agents list by “{query}”",
+  "agent_conditions": "Agent conditions"
 }

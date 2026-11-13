@@ -18,6 +18,7 @@ import {
   type AgentDimensionFilters,
   type EvalContext,
 } from "./agent-chatlist-filter";
+import { agentSearchHit, hasSearchOperators } from "./agent-search";
 import type { Machine, Session } from "./types";
 
 const NOW = Date.parse("2026-11-09T12:00:00Z");
@@ -270,5 +271,40 @@ describe("plain search never adds hidden filters", () => {
     expect(compileSearchAsCode("error handling", { ...DEFAULT_DIMENSION_FILTERS, searchAsCode: true }, buildAgentFacets([s], machines, ctx.pins)).source).toBe("provider");
     registerSearchAsCodeProvider(null);
     expect(applyDimensionFilters([s], { ...DEFAULT_DIMENSION_FILTERS, query: "error handling", searchAsCode: true }, ctx).plan.code).toContain("s.hasErrors");
+  });
+});
+
+// ⌘K's match for an Agent (#6589): the list's operators narrow, then the name, the project or computer, what is inside.
+describe("agentSearchHit", () => {
+  const s = mkSession("a", { title: "Parser rewrite", machine_id: "mac", cwd: "/workspace/orca", repo_root: "/workspace/orca", branch: "fix-timeouts", last_text: "Retry after the socket closed" });
+  const ctx: EvalContext = { ...baseCtx, pins: { spaces: [], sessions: [] } };
+  const hit = (q: string) => agentSearchHit(s, q, ctx);
+
+  it("ranks the name, then the project or computer, then what is inside", () => {
+    expect(hit("parser").score).toBe(100);
+    expect(hit("rewrite").score).toBe(80);
+    expect(hit("orca").score).toBe(60);
+    expect(hit("studio parser").score).toBe(60);
+    expect(hit("socket").score).toBe(40);
+    expect(hit("socket").snippet?.match).toBe("socket");
+    expect(hit("fix-timeouts").score).toBe(40);
+    expect(hit("orca nowhere").score).toBe(0);
+  });
+
+  it("narrows with the operators, which alone match at 30, and nothing typed matches at 1", () => {
+    expect(hit("machine:studio").score).toBe(30);
+    expect(hit("machine:cloud").score).toBe(0);
+    expect(hit("project:orca socket").score).toBe(40);
+    expect(hit("model:opus parser").score).toBe(100);
+    expect(hit("is:pinned parser").score).toBe(0);
+    expect(hit("").score).toBe(1);
+  });
+
+  it("tells a query with operators from plain words", () => {
+    expect(hasSearchOperators("machine:mac")).toBe(true);
+    expect(hasSearchOperators("parser is:error")).toBe(true);
+    expect(hasSearchOperators("error handling")).toBe(false);
+    expect(hasSearchOperators("state:bogus")).toBe(false);
+    expect(hasSearchOperators("")).toBe(false);
   });
 });

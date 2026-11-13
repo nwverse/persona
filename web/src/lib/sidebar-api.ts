@@ -7,6 +7,12 @@ import { AGENT_GROUPINGS, agentGrouping, type AgentGrouping } from "./agent-grou
 
 export const GROUPING_KEY = "persona.agentGrouping";
 
+/** Whether the Agents block draws the complete list (`LegacyAgentsBlock`), not the hub's paged one: pins, a saved grouping
+ *  (an explicitly chosen default too) and several assistants' scopes are what the paged API cannot express. */
+export function completeAgentList(bounded: boolean, pins: { sessions: string[]; spaces: string[] }, grouping: string | null, several: boolean): boolean {
+  return !bounded || pins.sessions.length > 0 || pins.spaces.length > 0 || AGENT_GROUPINGS.some((g) => g.key === grouping) || several;
+}
+
 // ── fold all / open all ──────────────────────────────────
 
 const foldListeners = new Map<(folded: boolean) => void, string | undefined>();

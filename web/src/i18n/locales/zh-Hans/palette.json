@@ -36,5 +36,7 @@
   "group_recent": "最近打开",
   "previous": "上一个",
   "previous_chat": "回到上一个对话",
-  "place_terminals": "打开终端列表"
+  "place_terminals": "打开终端列表",
+  "filter_agents_list": "在 Agents 列表中筛选「{query}」",
+  "agent_conditions": "Agent 条件"
 }

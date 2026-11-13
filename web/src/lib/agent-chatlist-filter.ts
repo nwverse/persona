@@ -325,7 +325,8 @@ export function matchesSearchScope(s: Session, terms: readonly string[], scope: 
   return terms.every((term) => joined.includes(term.toLowerCase()));
 }
 
-function scopeHaystacks(s: Session, scope: SearchScope, ctx: EvalContext): { role: EvidenceSnippet["role"]; text: string }[] {
+/** The texts a scope reads, each with whose words they are (⌘K's match reads Full text's too, lib/agent-search.ts). */
+export function scopeHaystacks(s: Session, scope: SearchScope, ctx: EvalContext): { role: EvidenceSnippet["role"]; text: string }[] {
   const title = sessionTitle(s);
   const userAsk = [s.asks, s.goal?.objective, s.todo?.title].filter(Boolean).join(" · ");
   const assistantProse = [proseOnlyText(s.last_text), proseOnlyText(s.work?.line)].filter(Boolean).join(" · ");
