@@ -175,6 +175,20 @@ func inboxAgentStopDisplayTime(it *InboxItem, sess proto.Session, now time.Time)
 	return at
 }
 
+// inboxAgentSession separates an unreachable node (unknown, so only the bounded timeout applies) from a reachable
+// node saying the session does not exist (a stopped/lost Agent). Service.session deliberately collapses those cases.
+func (s *Service) inboxAgentSession(ctx context.Context, machine, sid string) (sess proto.Session, found, reachable bool) {
+	var res struct {
+		Session proto.Session `json:"session"`
+		OK      bool          `json:"ok"`
+	}
+	if err := s.call(ctx, machine, DeviceSessionGet, map[string]any{"session_id": sid}, &res); err != nil {
+		return proto.Session{}, false, false
+	}
+	res.Session.MachineID = machine
+	return res.Session, res.OK, true
+}
+
 // inboxLatestAgentLink is the sub-session HandlingAgent currently waits on.
 func inboxLatestAgentLink(it *InboxItem) *InboxChainLink {
 	for i := len(it.Chain) - 1; i >= 0; i-- {

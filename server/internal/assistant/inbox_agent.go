@@ -496,23 +496,22 @@ func (s *Service) sweepInboxAgents(ctx context.Context, cfg InboxAgentConfig, no
 		case s.isWorkMachine(a.MachineID):
 			reason = i18n.T(s.lang(ctx), "assistant-start.work_machine")
 		case state == HandlingAgent:
-			if link == nil {
-				continue // no session whose state can prove the Agent stopped
+			if link != nil {
+				sess, found, reachable := s.inboxAgentSession(ctx, link.MachineID, link.SessionID)
+				if reachable && found {
+					if !s.recordInboxAgentStops(ctx, sess) { // also repairs a stop report lost in a restart
+						continue // known unsettled work (or an undone stop): wait for the next pass, never time it out now
+					}
+					b.mu.Lock()
+					stillAgent := it.Agent != nil && it.Agent.SessionID == a.SessionID && it.Handling != nil && it.Handling.State == HandlingAgent
+					b.mu.Unlock()
+					if !stillAgent {
+						continue // the stop returned the item to its processing conversation
+					}
+				}
 			}
-			sess, ok := s.session(ctx, link.MachineID, link.SessionID)
-			if !ok {
-				continue // an offline or missing machine is unknown, not proof that the Agent stopped
-			}
-			sess.MachineID = link.MachineID
-			if !s.recordInboxAgentStops(ctx, sess) { // also repairs a stop report lost in a restart
-				continue // still working, starting, queued or running background work: wait, never time it out
-			}
-			b.mu.Lock()
-			stillAgent := it.Agent != nil && it.Agent.SessionID == a.SessionID && it.Handling != nil && it.Handling.State == HandlingAgent
-			b.mu.Unlock()
-			if !stillAgent {
-				continue // the stop returned the item to its processing conversation
-			}
+			// Only a session known to be unsettled waits past this bound. A link evicted by the chain cap, a session the
+			// node definitively says is gone, or an unreachable node keeps the old four-timeout fallback instead of hanging.
 			if a.StartedAt != nil && now.Sub(*a.StartedAt) > 4*agentTimeout(cfg) {
 				reason = i18n.T(s.lang(ctx), "assistant-inbox_agent.timeout")
 			}

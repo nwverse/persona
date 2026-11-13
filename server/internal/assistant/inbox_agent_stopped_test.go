@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -60,6 +61,27 @@ func inboxAgentStoppedSnapshot(t *testing.T, h *inboxHub, it *InboxItem) InboxIt
 		t.Fatal(err)
 	}
 	return snapshot
+}
+
+// inboxAgentStopFailStore rejects only the next row carrying a new stop. A buggy timeout that follows gets a working
+// store, so the rollback test can tell "no timeout was attempted" from "the timeout write failed too".
+type inboxAgentStopFailStore struct {
+	*inboxMemStore
+	mu       sync.Mutex
+	failStop bool
+}
+
+func (s *inboxAgentStopFailStore) PutInboxItem(ctx context.Context, id string, data []byte, updatedAt time.Time, doneAt *time.Time) error {
+	s.mu.Lock()
+	fail := s.failStop && strings.Contains(string(data), `"kind":"agent_stopped"`)
+	if fail {
+		s.failStop = false
+	}
+	s.mu.Unlock()
+	if fail {
+		return errMuteStoreDown
+	}
+	return s.inboxMemStore.PutInboxItem(ctx, id, data, updatedAt, doneAt)
 }
 
 func TestInboxAgentStoppedRecordsAndWakesOnce(t *testing.T) {
@@ -249,30 +271,53 @@ func TestInboxAgentStoppedWithTwinOffOnlyRecords(t *testing.T) {
 	}
 }
 
-func TestInboxAgentSweepWaitsForTheLinkedSession(t *testing.T) {
+func TestInboxAgentSweepSessionStates(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		missing bool
-		status  string
+		name      string
+		missing   bool
+		reachable bool
+		wantFail  bool
 	}{
-		{"working", false, proto.StatusWorking},
-		{"unknown while offline", true, proto.StatusIdle},
+		{"working waits past the old deadline", false, true, false},
+		{"unreachable uses the bounded timeout", true, false, true},
+		{"definitively missing uses the bounded timeout", true, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, it, sess := newInboxAgentStoppedHub(t)
 			started := time.Now().Add(-2 * time.Hour)
 			it.Agent.StartedAt = &started
-			sess.Status = tc.status
+			sess.Status = proto.StatusWorking
 			if tc.missing {
-				h.f.setSessions("box")
+				if tc.reachable {
+					h.f.setSessions("box")
+				} else {
+					h.f.mu.Lock()
+					delete(h.f.sessions, "box")
+					h.f.mu.Unlock()
+				}
 			} else {
 				h.f.setSessions("box", sess)
 			}
 			h.sweepInboxAgents(context.Background(), InboxAgentConfig{Enabled: true}, time.Now())
-			if it.Handling.State != HandlingAgent || it.Agent.State == AgentFailed || inboxAgentStoppedCount(it) != 0 {
-				t.Fatalf("sweep settled without a stopped session: handling %+v, agent %+v, chain %+v", it.Handling, it.Agent, it.Chain)
+			if tc.wantFail {
+				if it.Handling.State != HandlingFailed || it.Agent.State != AgentFailed || inboxAgentStoppedCount(it) != 0 {
+					t.Fatalf("missing session did not get the bounded timeout: handling %+v, agent %+v, chain %+v", it.Handling, it.Agent, it.Chain)
+				}
+			} else if it.Handling.State != HandlingAgent || it.Agent.State == AgentFailed || inboxAgentStoppedCount(it) != 0 {
+				t.Fatalf("sweep settled a working session: handling %+v, agent %+v, chain %+v", it.Handling, it.Agent, it.Chain)
 			}
 		})
+	}
+}
+
+func TestInboxAgentSweepEvictedLinkUsesTheBoundedTimeout(t *testing.T) {
+	h, it, _ := newInboxAgentStoppedHub(t)
+	started := time.Now().Add(-2 * time.Hour)
+	it.Agent.StartedAt = &started
+	it.Chain = nil // the old Agent link was evicted by the chain cap
+	h.sweepInboxAgents(context.Background(), InboxAgentConfig{Enabled: true}, time.Now())
+	if it.Handling.State != HandlingFailed || it.Agent.State != AgentFailed {
+		t.Fatalf("an evicted link left the item stuck: handling %+v, agent %+v", it.Handling, it.Agent)
 	}
 }
 
@@ -292,12 +337,14 @@ func TestInboxAgentSweepRetriesAnUndoneStop(t *testing.T) {
 	h, it, sess := newInboxAgentStoppedHub(t)
 	started := time.Now().Add(-2 * time.Hour)
 	it.Agent.StartedAt = &started
-	h.st.writeFails(true)
+	store := &inboxAgentStopFailStore{inboxMemStore: h.st, failStop: true}
+	previousStore := h.Service.store
+	h.Service.store = func() Store { return store }
+	t.Cleanup(func() { h.Service.store = previousStore })
 	h.sweepInboxAgents(context.Background(), InboxAgentConfig{Enabled: true}, time.Now())
 	if it.Handling.State != HandlingAgent || it.Agent.State == AgentFailed || inboxAgentStoppedCount(it) != 0 || len(h.f.sentToAgents()) != 0 {
 		t.Fatalf("an undone stop became a timeout: handling %+v, agent %+v, chain %+v", it.Handling, it.Agent, it.Chain)
 	}
-	h.st.writeFails(false)
 	h.sweepInboxAgents(context.Background(), InboxAgentConfig{Enabled: true}, time.Now())
 	snapshot := inboxAgentStoppedSnapshot(t, h, it)
 	if got := inboxAgentStoppedCount(&snapshot); got != 1 || snapshot.Handling.State != HandlingLooking {
