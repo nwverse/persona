@@ -48,7 +48,10 @@ final class FormDatePickerTests: XCTestCase {
             let picker = app.descendants(matching: .any)[id].firstMatch
             bringIntoView(picker)
             XCTAssertTrue(picker.exists, "\(language) \(size): \(id)")
-            row(picker, "\(id.split(separator: ".").last!)-\(language)-\(size)")
+            let what = id.split(separator: ".").last!
+            row(picker, "\(what)-\(language)-\(size)")
+            // Below the first screen at the accessibility sizes: the screen there too, with the picker's label.
+            if size.hasPrefix("AX") { shot("page-\(what)-\(language)-\(size)") }
             if check { fits(picker, "\(language) \(size) \(id)") }
         }
     }
