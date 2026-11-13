@@ -53,6 +53,15 @@ data class MessageItemMeta(
     val accent: Boolean = false,
 )
 
+@Composable
+private fun MessageItemState(meta: MessageItemMeta) {
+    val palette = PersonaTheme.palette
+    if (meta.accent) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+        JIcon(PhIcons.Sparkle, null, size = Tokens.Space.m, tint = palette.accent, decorative = true)
+        Text(meta.state.orEmpty(), style = PersonaTheme.type.caption, color = palette.ink2, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip)
+    } else JStateLabel(meta.state.orEmpty(), meta.status, problem = meta.problem, overflow = TextOverflow.Clip)
+}
+
 /**
  * An inbox item. Items that need a reply ([status] NeedsYou) are cards of their own in glass and strips with
  * an amber holder on the board; the rest are rows of a group. [extra] holds the draft and its actions. [avatar] is the
@@ -158,6 +167,7 @@ fun MessageItem(
                     }
                 }
                 if (followed) Spacer(Modifier.height(Tokens.Space.xs))
+                val stateInSummary = meta?.let { it.text.isBlank() && it.state != null } == true
                 preview?.let {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         if (followed) {
@@ -167,24 +177,21 @@ fun MessageItem(
                             JSpinner(Modifier.size(12.dp), stroke = 1.6.dp)
                             Spacer(Modifier.width(6.dp.dense))
                         }
-                        Text(it, style = type.callout, color = if (!followed && status == Status.Working && style != AppStyle.Brief) palette.working.text
+                        Text(it, if (stateInSummary) Modifier.weight(1f) else Modifier, style = type.callout,
+                            color = if (!followed && status == Status.Working && style != AppStyle.Brief) palette.working.text
                             else if (followed) palette.ink else palette.ink2, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        if (stateInSummary) meta?.let { line -> MessageItemState(line) }
                     }
                 }
                 meta?.let { line ->
-                    if (line.text.isNotBlank() || line.state != null) {
+                    if (line.text.isNotBlank() || preview == null && line.state != null) {
                         if (preview != null) Spacer(Modifier.height(Tokens.Space.xs))
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
                             if (line.text.isNotBlank()) Text(line.text, Modifier.weight(1f),
                                 style = if (preview == null) type.callout else type.caption, color = palette.ink2,
                                 maxLines = if (preview == null && line.state == null) 2 else 1, overflow = TextOverflow.Ellipsis)
                             else Spacer(Modifier.weight(1f))
-                            line.state?.let {
-                                if (line.accent) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-                                    JIcon(PhIcons.Sparkle, null, size = Tokens.Space.m, tint = palette.accent, decorative = true)
-                                    Text(it, style = type.caption, color = palette.ink2, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip)
-                                } else JStateLabel(it, line.status, problem = line.problem, overflow = TextOverflow.Clip)
-                            }
+                            line.state?.let { MessageItemState(line) }
                         }
                     }
                 }

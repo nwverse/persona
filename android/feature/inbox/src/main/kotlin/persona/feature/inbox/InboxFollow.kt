@@ -131,10 +131,10 @@ internal fun inboxLegacyRowMeta(record: InboxRecord, res: Resources, translatedP
 }
 
 private fun repeatsSummary(record: InboxRecord): Boolean {
+    if (record.source != "assistant") return false
     val summary = record.item.summary?.trim().orEmpty()
     val preview = record.item.preview.trim()
-    if (summary.isEmpty()) return false
-    return preview == summary || record.source == "assistant" && preview.startsWith(summary)
+    return summary.isNotEmpty() && (preview == summary || preview.startsWith(summary))
 }
 
 /** Every row's third line, including an older hub. Empty only when it would repeat the summary above it. */

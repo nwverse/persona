@@ -121,7 +121,7 @@ class InboxFollowTest {
         assertEquals("Alex: Can we move it?", inboxRowThirdLine(connector.copy(connector = InboxConnectorRef("opaque-id")), res))
         val assistant = InboxRecord(item.copy(summary = "Summary", preview = "Summary and more"), source = "assistant")
         assertEquals("", inboxRowThirdLine(assistant, res))
-        assertEquals("", inboxRowThirdLine(group.copy(item = item.copy(summary = item.preview)), res))
+        assertEquals("Alex: Can we move it?", inboxRowThirdLine(group.copy(item = item.copy(summary = item.preview)), res))
     }
 
     @Test fun doneWordsOnlyAppearOnADoneItemAndKeepTheirTone() {

@@ -220,5 +220,12 @@ class InboxGroupNameRowTest {
         rule.onNodeWithText(group, useUnmergedTree = true).assertDoesNotExist()
         rule.onNodeWithText(sender, useUnmergedTree = true).assertDoesNotExist()
         rule.onNodeWithText(metaText, useUnmergedTree = true).assertDoesNotExist()
+
+        // A repeated summary leaves no empty third row: its state shares the summary row instead.
+        rule.runOnIdle { shown = followed.copy(item = followed.item.copy(preview = "AI summary"), source = "assistant") }
+        val summaryRow = rule.onNodeWithText("AI summary", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        val inlineState = rule.onNodeWithText("等你确认回复", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        assertTrue("The state must share the summary row rather than occupy a blank meta row: $inlineState / $summaryRow",
+            inlineState.top < summaryRow.bottom)
     }
 }

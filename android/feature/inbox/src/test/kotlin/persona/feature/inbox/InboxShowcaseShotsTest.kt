@@ -17,7 +17,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.onAllNodes
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.dp
 import androidx.navigation3.runtime.NavKey
@@ -123,6 +122,7 @@ class InboxShowcaseShotsTest {
         for (appearance in AppStyle.entries) for (night in listOf(false, true)) {
             style = appearance; dark = night; run++
             rule.waitForIdle()
+            // This timestamp is sc-1's updated_at; every other row still renders its own updated_at.
             for (words in listOf(
                 "春季订单的报价", "订单群 · 张三：好的，我看一下新的", "张三发现税率错了，正在等他确认更正后的报价",
                 "等张三确认新报价", "问更正后的报价行不行", "周五午饭", "李四：周五还约吗？", "等你确认回复",
