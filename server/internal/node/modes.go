@@ -97,6 +97,23 @@ func validModes(mode, effort string) error {
 	return nil
 }
 
+// validModesFor validates a start's mode / effort against the launcher it runs on: a Codex start takes Codex's own
+// effort list (ultra included, proto.CodexEffortLevels), everything else keeps Claude Code's. Permission modes stay
+// Claude's for both.
+func validModesFor(launcher, mode, effort string) error {
+	if mode != "" && !slices.Contains(permissionModes, mode) {
+		return fmt.Errorf("unknown permission mode %q", mode)
+	}
+	levels := effortLevels
+	if launcherAgentType(launcher) == "codex" {
+		levels = append([]string{effortAuto}, proto.CodexEffortLevels...)
+	}
+	if effort != "" && !slices.Contains(levels, effort) {
+		return fmt.Errorf("unknown effort level %q", effort)
+	}
+	return nil
+}
+
 // modeFlags are the claude flags starting a session with a mode / effort (values already validated).
 func modeFlags(mode, effort string) string {
 	var b strings.Builder
@@ -203,6 +220,9 @@ func (n *Node) modesOf(id string) (mode, effort string) {
 // setModes changes a running session's permission mode and / or effort level ("" leaves one as it is).
 func (n *Node) setModes(ctx context.Context, id, mode, effort string) error {
 	if !n.isAssistantSession(id) {
+		if err := n.switchingRefusal(id); err != nil { // a launcher switch, maybe on the last connection's Node
+			return err
+		}
 		// A Codex thread on its app-server takes Codex's efforts, checked against its model (codex_effort.go).
 		if c, t, ok := n.codexEffortThread(id); ok {
 			if mode != "" {

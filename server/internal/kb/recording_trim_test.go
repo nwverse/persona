@@ -185,8 +185,9 @@ func TestRecordingTrimmedReadAndRefused(t *testing.T) {
 		t.Fatalf("confirming a to-do: %+v %v", m, err)
 	}
 
-	// Retrieval remains tested with the privacy gate on; production keeps it off until #3862 phase 1.
+	// Earlier meetings come back as material once marked not private, a trimmed one too.
 	e.EarlierMeetingsInAnswers = true
+	markPrivate(t, e, recID, false)
 	later := "44444444-4444-4444-8444-444444444444"
 	putRecording(t, e, later, attendedUpload(1, now, AttendanceListener), now)
 	material, err := e.MeetingMaterial(later, "What did the design review decide?")
@@ -244,17 +245,26 @@ func TestRecordingTrimKeepsNoLiveLog(t *testing.T) {
 	if _, _, err := e.LiveAppend(recID, 0, []LiveSegment{{Start: 1, End: 2, Text: "secret live line"}}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := e.TopicsSet(recID, []LiveTopic{{Title: "Pricing", State: TopicCurrent}}, start); err != nil { // they go with it too
+		t.Fatal(err)
+	}
+	if r, _ := e.Store.Recording(recID); r == nil {
+		t.Fatal("no recording")
+	} else if _, err := e.HighlightsSet(recID, []HighlightSaid{{Text: "The cap stays.", SaidAt: LiveClock(*r, 1, goldenZone)}}, goldenZone, start); err != nil {
+		t.Fatal(err) // and the highlights
+	}
 	putMeetingMinutes(t, e, recID, Minutes{Version: 1, Revision: 1, Title: "Design review", Markdown: "# Design review"})
 	ask := func(l *Live) {
 		l.Asks = append(l.Asks, LiveAsk{ID: "q1", Question: "What was decided?", State: "pending"})
 	}
 	kept := func(when string) {
 		t.Helper()
-		if names := recordingFileNames(t, e, recID); !slices.Equal(names, trimKept) {
+		if names := recordingFileNames(t, e, recID); !slices.Equal(names, trimKeptNoMeeting) {
 			t.Fatalf("%s: a trimmed recording keeps %v", when, names)
 		}
 		l, r, err := e.LiveRead(recID)
-		if err != nil || !r.Trimmed() || r.Attendance != "" || len(l.Segments) != 0 || len(l.Asks) != 0 {
+		if err != nil || !r.Trimmed() || r.Attendance != "" || len(l.Segments) != 0 || len(l.Asks) != 0 || len(l.Topics) != 0 ||
+			len(l.Highlights) != 0 || l.HighlightsRev != 0 {
 			t.Fatalf("%s: live %+v, recording %+v, %v", when, l, r, err)
 		}
 	}
@@ -324,7 +334,7 @@ func TestRecordingTrimFinishedWithinWindow(t *testing.T) {
 	if n := e.PruneRecordings(now); n != 0 {
 		t.Fatalf("pruned %d", n)
 	}
-	if names := recordingFileNames(t, e, recID); !slices.Equal(names, trimKept) {
+	if names := recordingFileNames(t, e, recID); !slices.Equal(names, trimKeptNoMeeting) {
 		t.Fatalf("a trim cut short keeps %v", names)
 	}
 	d, err := e.Get(KindRecording, recID, 12000)
@@ -368,7 +378,7 @@ func TestRecordingMinutesKeptForever(t *testing.T) {
 				if n := e.PruneRecordings(sweep); n != 0 {
 					t.Fatalf("forever pruned %d", n)
 				}
-				if files := recordingFileNames(t, e, recID); !slices.Equal(files, trimKept) {
+				if files := recordingFileNames(t, e, recID); !slices.Equal(files, trimKeptNoMeeting) {
 					t.Fatalf("forever kept %v", files)
 				}
 			}
@@ -386,3 +396,6 @@ func TestRecordingMinutesKeptForever(t *testing.T) {
 		})
 	}
 }
+
+// trimKeptNoMeeting are the files a trimmed recording without a meeting.json keeps.
+var trimKeptNoMeeting = []string{"meta.json", "minutes.json", "minutes.md"}

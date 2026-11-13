@@ -20,6 +20,7 @@ import (
 )
 
 type Hub struct {
+	passwordLogin passwordLoginState
 	// errs: the hub's own error reports on their way to the managers (error_reports.go).
 	errs hubErrors
 
@@ -76,11 +77,16 @@ type Hub struct {
 
 	inboxForms   inboxForms   // the inbox lists' items as localized lately (inbox_forms.go)
 	inboxAnswers inboxAnswers // the merged inbox answer, reused while no manager's inbox moved (inbox_answers.go)
+	// handoffRecorded: the refused approvals of hand-off cards recorded lately (secret_handoff.go).
+	handoffRecorded handoffRecorded
 
 	// sessionsSent: each machine's last session list sent to the apps, as encoded (broadcastSessions).
 	sessionsMu   sync.Mutex
 	sessionsSent map[string][]sentSession
 	listCache    runtimeList // opt-in indexed transport rows; initialized by the first paginated reader
+	// origins: what repository each listed directory holds, as its computer said when a catalog asked
+	// (sessions_catalog.go); has its own lock.
+	origins placeOrigins
 
 	mu      sync.Mutex
 	clients map[*client]struct{}
@@ -122,8 +128,9 @@ type Hub struct {
 	owners    ownerCache    // the default manager, kept a moment (ownership.go)
 	others    managerStates // the other managers' (manager_state.go)
 	moving    moves         // who carries what changing (ownership_moves.go)
-	// userLocale: the user's language, an i18n.Lang (locale.go)
+	// userLocale: the user's language, an i18n.Lang; langs: each device's language that decides it (locale.go)
 	userLocale   atomic.Value
+	langs        userLangs
 	apps         clientApps   // the apps' versions as they last said (client_apps.go)
 	deleted      deletedBook  // conversations taken out of the apps' lists (deleted_sessions.go)
 	secret       secretState  // secretkey.go
@@ -244,6 +251,7 @@ func runHub(ctx context.Context, b update.Build, cfg *Config, budget *shutdownBu
 	h.live = newLiveActivities(h)
 	h.upd = newUpdater(h)
 	h.upd.confirmed = !updating // an update under way is confirmed by this process (its watchdog waits for that)
+	h.upd.logSource()
 	database, err := db.Open(ctx, cfg.DatabaseURL, db.HubSet)
 	if err != nil {
 		return err
@@ -301,6 +309,7 @@ func runHub(ctx context.Context, b update.Build, cfg *Config, budget *shutdownBu
 	go h.fullKeepalive(ctx)
 	go h.live.run(ctx)
 	h.sayMovedSections()
+	h.sayRetiredKeys()
 	// The assistant, its own process on the bus (assistant_process.go); it carries the machines, so the hub's stop
 	// waits for it as it waited for the node connections.
 	h.nodeWorkers.Add(1)

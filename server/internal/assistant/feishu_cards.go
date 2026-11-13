@@ -61,6 +61,9 @@ func (s *Service) feishuCardWanted(ctx context.Context, ix proto.Interaction) bo
 	if !ready || !f.Cards {
 		return false
 	}
+	if ix.Private {
+		return false // a Just me turn's card: never on Lark (meeting_justme.go)
+	}
 	// "All cards" does not take a health conversation's: only one the chat drives itself (health.go).
 	if drives := s.botDrives(ctx, ix.MachineID, ix.SessionID); !drives && (!f.AllCards || s.ixInHealth(ctx, ix)) {
 		return false
@@ -149,6 +152,14 @@ func (s *Service) postInteractionCard(ctx context.Context, ix proto.Interaction)
 		fallback = "🖥 " + i18n.T(s.botLang(ctx), "assistant-feishu_cards.screen_summary")
 	}
 	card := s.interactionCard(ctx, ix)
+	if s.interactionEnded(ix.ID) {
+		// Answered while its card was being made (a program that answers cards at once): nobody needs to look at it,
+		// so nothing is posted and the claim goes (#5430). One that ends during the post is closed after it, below.
+		b.mu.Lock()
+		s.keepBotCardLocked(ix.ID, nil)
+		b.mu.Unlock()
+		return
+	}
 	// A card for a topic is a reply to its run's message and belongs under it: if that message is gone it would be a
 	// stray card in the group (the hub would send it into the chat), and the owner may not see it there. It goes to the
 	// owner instead, as with a chat that refused it.

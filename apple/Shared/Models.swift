@@ -470,13 +470,33 @@ nonisolated struct Launcher: Codable, Identifiable, Hashable, Sendable {
     /// How its last check or start went on the computer the list is for (`GET …/machines/{id}/launchers`,
     /// docs/server/launcher-health.md); nil: never checked, a failure too old to count, or an older hub.
     var health: LauncherHealth? = nil
+    /// A Codex launcher the computer also starts with no first message (docs/integrations/codex.md「Starting without a
+    /// first message」); nil from an older computer, whose Codex starts need one.
+    var promptOptional: Bool? = nil
+    /// Where the computer has it: zshrc, path, persona, a runtime's id, `claude_desktop` (`claudeDesktopSource`) or
+    /// `codex_app` (`codexAppSource`).
+    var source: String? = nil
+    /// A Codex launcher the computer starts in a shell pane the user picked (Run Agent Here) and keeps that pane when the
+    /// start fails (#5504); nil from an older computer, where Run Agent Here offers Claude Code only.
+    var runHere: Bool? = nil
     var id: String { name }
+    /// The launcher that starts the session in Claude's desktop app (docs/integrations/claude-integration.md「New sessions
+    /// in the desktop app」): with no folder it runs in the app's scratch folder, and a new folder is made for it.
+    var startsInDesktopApp: Bool { source == Self.claudeDesktopSource || source == Self.codexAppSource }
+    static let claudeDesktopSource = "claude_desktop"
+    /// The launcher that starts the chat in the Codex App (#5726, docs/integrations/codex.md):
+    /// a Codex launcher (`agent` codex) whose chat with no folder goes among the App's chats in no project.
+    static let codexAppSource = "codex_app"
     /// A Codex start sends its first message with it and waits for the thread Codex makes.
     var isCodex: Bool { agent == "codex" }
+    /// Starting it needs a first message: a Codex on a computer that cannot open it without one.
+    var needsFirstMessage: Bool { isCodex && promptOptional != true }
 
     enum CodingKeys: String, CodingKey {
-        case name, model, agent, assistant, health
+        case name, model, agent, assistant, health, source
         case baseURL = "base_url"
+        case promptOptional = "prompt_optional"
+        case runHere = "run_here"
     }
 }
 
@@ -490,6 +510,9 @@ nonisolated extension Launcher {
         agent = try c.decodeIfPresent(String.self, forKey: .agent)
         assistant = try c.decodeIfPresent(Bool.self, forKey: .assistant)
         health = (try? c.decodeIfPresent(LauncherHealth.self, forKey: .health)) ?? nil
+        promptOptional = try c.decodeIfPresent(Bool.self, forKey: .promptOptional)
+        source = try c.decodeIfPresent(String.self, forKey: .source)
+        runHere = try c.decodeIfPresent(Bool.self, forKey: .runHere)
     }
 }
 
@@ -637,8 +660,21 @@ nonisolated struct SessionCapabilities: Codable, Hashable, Sendable {
     var terminal = false
     var attach = false
     var modes: Bool?
+    /// The node's word on closing, renaming, switching the model and rewinding (#6294; docs/protocol/protocol.md "Codex
+    /// sources and capabilities"): a runtime's session has no terminal, yet does these where its runtime can. Nil from an
+    /// older node, or a value this app cannot read: the app keeps its terminal rules (`Session.canClose`, `canRename`,
+    /// `switchesModel`, `Rewind.block`).
+    var close: Bool?
+    var rename: Bool?
+    var model: Bool?
+    var rewind: Bool?
+    /// Rewind Code and Chat as well (`rewind_code`).
+    var rewindCode: Bool?
 
-    enum CodingKeys: String, CodingKey { case read, send, interrupt, approve, terminal, attach, modes }
+    enum CodingKeys: String, CodingKey {
+        case read, send, interrupt, approve, terminal, attach, modes, close, rename, model, rewind
+        case rewindCode = "rewind_code"
+    }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -649,7 +685,26 @@ nonisolated struct SessionCapabilities: Codable, Hashable, Sendable {
         terminal = try c.decodeIfPresent(Bool.self, forKey: .terminal) ?? false
         attach = try c.decodeIfPresent(Bool.self, forKey: .attach) ?? false
         modes = try c.decodeIfPresent(Bool.self, forKey: .modes)
+        close = try? c.decodeIfPresent(Bool.self, forKey: .close)
+        rename = try? c.decodeIfPresent(Bool.self, forKey: .rename)
+        model = try? c.decodeIfPresent(Bool.self, forKey: .model)
+        rewind = try? c.decodeIfPresent(Bool.self, forKey: .rewind)
+        rewindCode = try? c.decodeIfPresent(Bool.self, forKey: .rewindCode)
     }
+}
+
+/// Resume in Terminal (#5521, docs/integrations/engines.md "Agents run in a terminal"): what the chat's ⋯ offers for an Agent
+/// that isn't running, the one rule its ⋯, its stopped line and its terminal page go by (web `terminalResume`,
+/// lib/agent-resume.ts). `Session.terminalResume(on:)` decides.
+nonisolated enum TerminalResume: Equatable, Sendable {
+    /// A stopped Agent: the node marks one so only where a terminal engine can host the resume.
+    case available
+    /// Not running, on a computer that enables no terminal engine (the empty engine set, #3302): offered disabled, saying so.
+    case noEngine
+    /// Not offered: it runs (in Persona's terminal or in one of its own: a second claude would write the same transcript),
+    /// it starts, an assistant conversation, a desktop app's session (a message reopens it there, #4300), another source,
+    /// or a row from an older node, which does not say.
+    case hidden
 }
 
 nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
@@ -669,6 +724,13 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     var sourceThreadID: String? = nil
     var sourceInstanceID: String? = nil
     var parentThreadID: String? = nil
+    /// A Codex subagent (`thread_spawn`, docs/integrations/codex.md), or a runtime's session another one started (a Paseo
+    /// agent another agent created, #4494): `is_subagent`, the session that started it (`parent_session_id`) and the
+    /// conversation at the top of its tree (`root_session_id`). The Agents list folds it under that session, as the Codex
+    /// App and Android do (`Session.isSubtask`, `CodexTasks`). Nil from older nodes.
+    var isSubagent: Bool? = nil
+    var parentSessionID: String? = nil
+    var rootSessionID: String? = nil
     var readOnlyReason: String? = nil
     var capabilities: SessionCapabilities? = nil
     var attached: Bool? = nil
@@ -688,6 +750,10 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// Claude Code's permission mode and effort level right now (`SessionModes`); nil while unknown and for Codex
     /// (a Codex thread the hub drives through its app-server has an effort, never a mode).
     var permissionMode: String? = nil
+    /// This Claude Code can be switched to bypassPermissions (Allow Everything) while it runs: its claude was started with
+    /// a flag that puts that mode in its shift+tab cycle (`bypass_available`, #1379, read off the process by the node).
+    /// False while unknown and from older hubs; then Allow Everything is only a start's choice.
+    var bypassAvailable: Bool = false
     var effort: String? = nil
     /// The levels `effort` may be set to when they are not Claude Code's (`SessionModes.effortOptions`): a Codex thread
     /// the hub drives through its app-server, where only the effort changes (node/codex_effort.go). Nil elsewhere.
@@ -740,6 +806,13 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// When the hub saw it enter its current state (`state_since`).
     var stateSince: Date? = nil
     var queued: [String]?
+    /// The last this many queued messages came from other conversations and arrive when this turn ends (#4342).
+    var queuedRelayed: Int? = nil
+    /// The user's own messages come first; only these can be edited, reordered, deleted or sent now.
+    var ownQueuedCount: Int {
+        let count = queued?.count ?? 0
+        return count - min(max(queuedRelayed ?? 0, 0), count)
+    }
     /// Shells / subagents Claude left running in the background.
     var background: [BackgroundTask]?
     /// Bounded list summaries supply scalars instead of chat-only arrays. Nil means a complete/legacy row.
@@ -789,6 +862,10 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     var suggestion: String?
     /// Persona is still opening its tab and starting claude: messages sent now go in once it is ready.
     var starting: Bool? = nil
+    /// A Codex opened with no first message: it runs in its terminal with no thread yet, so this row's id is the
+    /// computer's. Its first message (text only) goes in here or in the terminal; then the row goes and the thread's comes
+    /// in the same pane (docs/integrations/codex.md「Starting without a first message」).
+    var awaitingFirstMessage: Bool? = nil
     /// Starting it failed (shown in the chat; sends get the same error).
     var startError: String? = nil
     /// The node refused the start with a code (launcher_missing / claude_missing in the new tab's shell, #1642): then
@@ -812,6 +889,10 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     var turnError: String? = nil
     var turnErrorKind: String? = nil
     var turnErrorCode: String? = nil
+    /// A subscription usage limit's reset time, and whether the CLI goes on by itself after it (`turn_error_resets_at`,
+    /// `turn_error_resumes`; docs/assistant/agent-work.md "Usage limits"). Nil from older hubs and for other errors.
+    var turnErrorResetsAt: Date? = nil
+    var turnErrorResumes: Bool? = nil
     /// Where it lives outside Persona (a botmux session's Feishu topic): Open in Lark.
     var externalURL: String? = nil
     /// The channels messages came into it from, newest first ("wechat", "feishu"; docs/extensions/channels.md「Source markers」): the
@@ -834,6 +915,10 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// on the CLI instead (「找不到 Node.js 22+」). Both nil otherwise.
     var runtime: String? = nil
     var runtimeFallback: String? = nil
+    /// After an upstream refusal Claude Code moved the session to a fallback model, still in use (#4489): the card above
+    /// the composer. And going back to the configured model, while that is pending. Nil from older hubs.
+    var modelFallback: ModelRefusal? = nil
+    var modelRestore: ModelRestore? = nil
     /// The manager it belongs to (docs/protocol/protocol.md "Per-manager routing"); nil from hubs with one manager and
     /// older ones. Requests the hub routes by the manager they name (its answered questions) name it.
     var manager: String? = nil
@@ -885,10 +970,46 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
 
     var hasSource: Bool { !(sourceKind ?? "").isEmpty }
     var canRead: Bool { !hasSource || capabilities?.read == true }
-    var canSend: Bool { !hasSource || capabilities?.send == true }
-    var canInterrupt: Bool { !hasSource || capabilities?.interrupt == true }
-    var canApprove: Bool { !hasSource || capabilities?.approve == true }
-    var canTerminal: Bool { !hasSource || capabilities?.terminal == true }
+    // An Agent's own row with capabilities is one the node says what it can do (a stopped Agent: read and terminal only,
+    // #4754); without them it can do everything, as before.
+    var canSend: Bool { capabilities.map(\.send) ?? !hasSource }
+    var canInterrupt: Bool { capabilities.map(\.interrupt) ?? !hasSource }
+    var canApprove: Bool { capabilities.map(\.approve) ?? !hasSource }
+    var canTerminal: Bool { capabilities.map(\.terminal) ?? !hasSource }
+    /// Close it (#6294, the web's `sessionCan(s, "close")`): the node's `capabilities.close` where it says (a runtime's
+    /// session closes without a terminal), else a terminal's, as before (an older node).
+    var canClose: Bool { capabilities?.close ?? canTerminal }
+    /// Rename it: the node's `capabilities.rename` where it says, else a terminal's (its tab and Claude's /rename).
+    var canRename: Bool { capabilities?.rename ?? canTerminal }
+    /// Its model can be switched while it runs (#3119; the web's `canSwitchModel`): where the node says so
+    /// (`capabilities.model`: a runtime's session takes a pick through POST …/modes, #6294), else Claude Code in a
+    /// terminal pane, which takes `/model`. Never an assistant conversation (its own chip) or one that cannot send.
+    var switchesModel: Bool {
+        guard !assistant, canSend else { return false }
+        if let said = capabilities?.model { return said }
+        return canTerminal && paneID != nil && isClaude && !isTraex
+    }
+    /// A model pick goes through POST …/modes rather than a typed `/model` (#6294): the node said it takes one. Such a
+    /// session's menus offer its launcher's list only, never Claude Code's fixed aliases.
+    var picksModelByModes: Bool { capabilities?.model == true }
+    /// Rewind Code and Chat is offered as well (the web's `rewind_code ?? !rewind`): the node's `rewind_code` where it
+    /// declares rewind (#6294); a Claude terminal, which declares nothing, keeps both choices.
+    var rewindsCode: Bool { capabilities?.rewindCode ?? (capabilities?.rewind != true) }
+    /// An Agent of a terminal engine the node has no reader for (#6170): a CLI such as Kiro or gemini, or a pi / omp /
+    /// opencode without Persona's extension. The node says so with `read_only_reason` on the row (node sessions.go
+    /// `otherAgent`, pi.go, opencode.go); a pi or opencode with its extension has none and keeps its chat. Its terminal is the
+    /// useful view, so the chat offers it at once.
+    var isTerminalOnly: Bool {
+        !assistant && !hasSource && canTerminal && !isClaude && !isCodex && !isTraex && !isStopped && !(readOnlyReason ?? "").isEmpty
+    }
+    /// A stopped Agent (#4754): its conversation and terminal stay, it takes no messages; Resume on its terminal page runs
+    /// it again (node stopped.go). A Codex thread nothing has open is marked the same way (node codex_registry.go, #5521),
+    /// though its row keeps its Codex history source.
+    var isStopped: Bool {
+        // "interrupted" (cut off by a restart) reads as unknown here; only the node's stopped rows carry capabilities.
+        guard !assistant, let c = capabilities, !c.send, status == .offline || status == .unknown else { return false }
+        return !hasSource || (sourceKind == "codex_history" && c.terminal)
+    }
     var canAttach: Bool { hasSource && capabilities?.attach == true && attached != true }
     /// Delete Chat (docs/protocol/protocol.md `DELETE /sessions`) only for one that is not running: offline, finished (seen or not) or unknown,
     /// not still starting, and not the assistant's (those archive). What the hub hides once deleted (`stillDeleted`).
@@ -956,6 +1077,14 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         if isClaude { return "Claude" }
         return agentLabelHint ?? agent ?? "Claude"
     }
+    /// Resume in Terminal (#5521): whether the chat's ⋯ offers to bring it back in a terminal on its computer
+    /// (`TerminalResume`); `machine` is its computer.
+    func terminalResume(on machine: Machine?) -> TerminalResume {
+        guard !assistant, starting != true, status == .offline || status == .unknown else { return .hidden }
+        let agentRow = (!hasSource || sourceKind == "codex_history") && (isClaude || isCodex || isTraex)
+        if agentRow && agentSurface != "desktop" && machine?.engineHosts?.isEmpty == true { return .noEngine }
+        return isStopped ? .available : .hidden
+    }
     /// How to pick the conversation up again on the computer (offered only with a terminal, canTerminal: a runtime's
     /// sessions are picked up in the runtime's own UI).
     var resumeCommand: String { isCodex ? "codex resume" : isTraex ? "traex resume" : "claude --resume" }
@@ -967,16 +1096,18 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
+        case queuedRelayed = "queued_relayed"
         case listWaiting = "waiting", listBackgroundCount = "background_count", listRunningSubagents = "running_subagents", listRunningWorkflows = "running_workflows"
         case listBackgroundTasksCount = "background_tasks_count", listWorkflowProgress = "workflow_progress"
         case title, cwd, status, launcher, model, agent, effort, efforts, capabilities, attached
         case canFork = "can_fork"
         case sourceKind = "source_kind", sourceThreadID = "source_thread_id", sourceInstanceID = "source_instance_id",
              parentThreadID = "parent_thread_id", readOnlyReason = "read_only_reason"
+        case isSubagent = "is_subagent", parentSessionID = "parent_session_id", rootSessionID = "root_session_id"
         case codexRoute = "codex_route", codexRouteNote = "codex_route_note"
         case agentLabelHint = "agent_label"
         case agentSurface = "agent_surface"
-        case permissionMode = "permission_mode"
+        case permissionMode = "permission_mode", bypassAvailable = "bypass_available"
         case contextTokens = "context_tokens", contextWindow = "context_window"
         case ultracode, ultracodeNote = "ultracode_note", ultracodePending = "ultracode_pending", ultracodeLostAt = "ultracode_lost_at"
         case repoRoot = "repo_root", worktree, branch
@@ -986,10 +1117,10 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
              spaceKind = "space_kind", spaceID = "space_id", spaceName = "space_name", spaceIndex = "space_index", parentSpaceID = "parent_space_id",
              slotID = "slot_id", slotName = "slot_name", slotIndex = "slot_index", paneIndex = "pane_index", seenAt = "seen_at", stateSince = "state_since", queued, background, loop, goal, subagents, workflows, ports,
              updatedAt = "updated_at", lastText = "last_text", asks, awaitsReply = "awaits_reply", backgroundWaiting = "background_waiting", backgroundWorking = "background_working", activity, activityAt = "activity_at", pendingInteractions = "pending_interactions", rev, suggestion,
-             starting, startError = "start_error", startErrorCode = "start_error_code", startErrorArgs = "start_error_args", todo, quiet, hubGroup = "app_hub_group",
+             starting, awaitingFirstMessage = "awaiting_first_message", startError = "start_error", startErrorCode = "start_error_code", startErrorArgs = "start_error_args", todo, quiet, hubGroup = "app_hub_group",
              attentionReason = "attention_reason", failureReason = "failure_reason",
-             turnError = "turn_error", turnErrorKind = "turn_error_kind", turnErrorCode = "turn_error_code", externalURL = "external_url", channels, origin, openedBy = "opened_by", compaction, work,
-             runtime, runtimeFallback = "runtime_fallback", manager
+             turnError = "turn_error", turnErrorKind = "turn_error_kind", turnErrorCode = "turn_error_code", turnErrorResetsAt = "turn_error_resets_at", turnErrorResumes = "turn_error_resumes", externalURL = "external_url", channels, origin, openedBy = "opened_by", compaction, work,
+             runtime, runtimeFallback = "runtime_fallback", manager, modelFallback = "model_fallback", modelRestore = "model_restore"
     }
 
     init(from decoder: Decoder) throws {
@@ -998,6 +1129,8 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         sessionID = try c.decode(String.self, forKey: .sessionID)
         runtime = try c.decodeIfPresent(String.self, forKey: .runtime)
         runtimeFallback = try c.decodeIfPresent(String.self, forKey: .runtimeFallback)
+        modelFallback = try c.decodeIfPresent(ModelRefusal.self, forKey: .modelFallback)
+        modelRestore = try c.decodeIfPresent(ModelRestore.self, forKey: .modelRestore)
         manager = try c.decodeIfPresent(String.self, forKey: .manager)
         title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
         cwd = try c.decodeIfPresent(String.self, forKey: .cwd) ?? ""
@@ -1011,6 +1144,9 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         sourceThreadID = try c.decodeIfPresent(String.self, forKey: .sourceThreadID)
         sourceInstanceID = try c.decodeIfPresent(String.self, forKey: .sourceInstanceID)
         parentThreadID = try c.decodeIfPresent(String.self, forKey: .parentThreadID)
+        isSubagent = try c.decodeIfPresent(Bool.self, forKey: .isSubagent)
+        parentSessionID = try c.decodeIfPresent(String.self, forKey: .parentSessionID)
+        rootSessionID = try c.decodeIfPresent(String.self, forKey: .rootSessionID)
         readOnlyReason = try c.decodeIfPresent(String.self, forKey: .readOnlyReason)
         capabilities = try c.decodeIfPresent(SessionCapabilities.self, forKey: .capabilities)
         attached = try c.decodeIfPresent(Bool.self, forKey: .attached)
@@ -1022,6 +1158,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         launcher = try c.decodeIfPresent(String.self, forKey: .launcher)
         model = try c.decodeIfPresent(String.self, forKey: .model)
         permissionMode = try c.decodeIfPresent(String.self, forKey: .permissionMode)
+        bypassAvailable = (try? c.decodeIfPresent(Bool.self, forKey: .bypassAvailable)).flatMap { $0 } ?? false
         effort = try c.decodeIfPresent(String.self, forKey: .effort)
         efforts = try c.decodeIfPresent([String].self, forKey: .efforts)
         contextTokens = try? c.decodeIfPresent(Int.self, forKey: .contextTokens) // an odd one never drops the session
@@ -1052,6 +1189,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         seenAt = try c.decodeIfPresent(Date.self, forKey: .seenAt)
         stateSince = try c.decodeIfPresent(Date.self, forKey: .stateSince)
         queued = try c.decodeIfPresent([String].self, forKey: .queued)
+        queuedRelayed = try c.decodeIfPresent(Int.self, forKey: .queuedRelayed)
         background = try c.decodeIfPresent([BackgroundTask].self, forKey: .background)
         listWaiting = try c.decodeIfPresent(Bool.self, forKey: .listWaiting)
         listBackgroundCount = try c.decodeIfPresent(Int.self, forKey: .listBackgroundCount)
@@ -1078,6 +1216,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         rev = try c.decodeIfPresent(Int64.self, forKey: .rev)
         suggestion = try c.decodeIfPresent(String.self, forKey: .suggestion)
         starting = try c.decodeIfPresent(Bool.self, forKey: .starting)
+        awaitingFirstMessage = try c.decodeIfPresent(Bool.self, forKey: .awaitingFirstMessage)
         startError = try c.decodeIfPresent(String.self, forKey: .startError)
         startErrorCode = try? c.decodeIfPresent(String.self, forKey: .startErrorCode)
         startErrorArgs = try? c.decodeIfPresent([String: String].self, forKey: .startErrorArgs)
@@ -1088,6 +1227,8 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         turnError = try c.decodeIfPresent(String.self, forKey: .turnError)
         turnErrorKind = try c.decodeIfPresent(String.self, forKey: .turnErrorKind)
         turnErrorCode = try c.decodeIfPresent(String.self, forKey: .turnErrorCode)
+        turnErrorResetsAt = try? c.decodeIfPresent(Date.self, forKey: .turnErrorResetsAt)
+        turnErrorResumes = try? c.decodeIfPresent(Bool.self, forKey: .turnErrorResumes)
         externalURL = try c.decodeIfPresent(String.self, forKey: .externalURL)
         channels = try c.decodeIfPresent([String].self, forKey: .channels)
         origin = try c.decodeIfPresent(String.self, forKey: .origin)
@@ -1111,6 +1252,8 @@ nonisolated struct WorkState: Codable, Hashable, Sendable {
     var then: String? = nil
     /// When the hub acts next on its own: Continue (transient) or a wake (external, agent).
     var wakeAt: Date? = nil
+    /// When a usage limit resets (`resets_at`), for a wait on one.
+    var resetsAt: Date? = nil
     var attempts: Int? = nil
     var max: Int? = nil
     /// The agent it waits for.
@@ -1118,7 +1261,7 @@ nonisolated struct WorkState: Codable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case phase, on, line, wait, then, attempts, max, agent
-        case wakeAt = "wake_at"
+        case wakeAt = "wake_at", resetsAt = "resets_at"
     }
 
     /// The hub waits it out: it wakes it (`wake_at`), or it wakes itself (its background tasks, a /loop). Waiting in the
@@ -1449,6 +1592,7 @@ extension Session {
     /// waits for once the hub triaged its turn (`workLine`), else the last words; Awaiting Reply's question first unless
     /// it is muted (`replyLine`).
     func listPreview(muted: Bool) -> String? {
+        if awaitingFirstMessage == true, state != .needsYou { return String(localized: "Waiting for its first message") } // a Codex opened with no first message
         if state == .needsYou, let r = attentionReason, !r.isEmpty { return r } // a stale reason (offline, seen) stays out
         if state != .working, let r = failureReason, !r.isEmpty { return Session.failureText(r) }
         if let r = replyLine(muted: muted) { return r }
@@ -1781,6 +1925,36 @@ nonisolated struct TaskNote: Codable, Hashable, Sendable {
     var failed: Bool { status == "failed" || (exitCode ?? 0) != 0 }
 }
 
+/// What a tool call came to (`outcome` on a tool_result, docs/protocol/protocol.md "Tool outcomes"), read by the node from
+/// the runtime's own record so the app need not guess from the text. Only what the app draws is kept; every field is
+/// optional, and a value of an unexpected type is left unread rather than dropping the item it came with.
+nonisolated struct ToolOutcome: Codable, Hashable, Sendable {
+    /// ok, failed, no_match, denied, blocked, interrupted, timed_out, background; or one a later node adds.
+    var status: String?
+    var exitCode: Int?
+    /// The output's last lines, sent only when the page cut the result's text.
+    var tail: String?
+
+    enum CodingKeys: String, CodingKey { case status, tail; case exitCode = "exit_code" }
+
+    init(status: String? = nil, exitCode: Int? = nil, tail: String? = nil) {
+        self.status = status
+        self.exitCode = exitCode
+        self.tail = tail
+    }
+
+    init(from decoder: Decoder) {
+        let c = try? decoder.container(keyedBy: CodingKeys.self)
+        status = (try? c?.decodeIfPresent(String.self, forKey: .status)) ?? nil
+        exitCode = (try? c?.decodeIfPresent(Int.self, forKey: .exitCode)) ?? nil
+        tail = (try? c?.decodeIfPresent(String.self, forKey: .tail)) ?? nil
+    }
+
+    /// The call did not run, or was stopped partway: denied (by the user, a rule or a hook), blocked (refused before it
+    /// ran), interrupted. Nothing it ran failed, so it is not drawn in red.
+    var stopped: Bool { ["denied", "blocked", "interrupted"].contains(status) }
+}
+
 nonisolated struct Item: Codable, Identifiable, Hashable, Sendable {
     var id: String
     var seq: Int
@@ -1821,9 +1995,14 @@ nonisolated struct Item: Codable, Identifiable, Hashable, Sendable {
     var supervisionUser: Bool? = nil
     /// Additive display provenance; kept as JSON so future kinds and malformed optional fields remain readable.
     var source: JSONValue? = nil
+    /// kind == .toolResult: what the call came to. Nil from older nodes.
+    var outcome: ToolOutcome? = nil
+    /// kind == .notice: an upstream refusal, drawn as a line of its own after the exchange (#4489, `RefusalNotice`).
+    var modelRefusal: ModelRefusal? = nil
 
     enum CodingKeys: String, CodingKey {
-        case id, seq, ts, role, kind, text, image, queued, from, wake, fold, task, compact, injected, supervisionUser, source
+        case id, seq, ts, role, kind, text, image, queued, from, wake, fold, task, compact, injected, supervisionUser, source, outcome
+        case modelRefusal = "model_refusal"
         case toolUseID = "tool_use_id", toolName = "tool_name", toolInput = "tool_input", isError = "is_error", fullSize = "full_size",
              clientMsgID = "client_msg_id"
     }
@@ -1906,8 +2085,8 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     var fields: [InteractionField]?
     /// Something to fill in before it can be allowed: every quick Allow (lists, menus, Siri, the watch) is off. The
     /// password card counts even without its field, so no path allows it without a password, and so does an MCP form or
-    /// link, answered only on its card.
-    var requiresInput: Bool { !(fields ?? []).isEmpty || isSecretRun || kind == .elicitation }
+    /// link, answered only on its card, and a hand-off card, approved on its card alone.
+    var requiresInput: Bool { !(fields ?? []).isEmpty || isSecretRun || isSecretHandoff || kind == .elicitation }
     /// Who asks when it is not Claude Code: "codex" / "traex" (a card read off a Codex TUI, docs/integrations/codex.md「Questions and approvals」).
     var agent: String?
     /// Why the agent asks for this permission, in its words.
@@ -1946,6 +2125,9 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     var delegating: Bool?
     /// What the assistant filled in when it left the question to the user.
     var delegate: Delegate?
+    /// A standing rule the hub suggests on a question a supervisor passed up (#4929, #5802); the card comes again
+    /// without it once it was answered. Absent on every other card and from a hub before it.
+    var suggestion: RuleSuggestion?
     /// The manager that reported it (docs/protocol/protocol.md "Per-manager routing"). Once it is no longer pending
     /// the hub routes by the manager a request names, so Change Answer names this one.
     var manager: String?
@@ -1972,6 +2154,7 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case id, kind, questions, plan, summary, screen, cwd, dialog, secret, fields, agent, reason, delegating, delegate, manager
+        case suggestion
         case machineID = "machine_id", sessionID = "session_id", sessionTitle = "session_title", taskTitle = "task_title",
              createdAt = "created_at", expiresAt = "expires_at", toolName = "tool_name", toolUseID = "tool_use_id",
              toolInput = "tool_input", alwaysLabel = "always_label", alwaysKeys = "always_keys", alwaysHonored = "always_honored",
@@ -2147,6 +2330,11 @@ nonisolated struct MuteWhileDesktopPut: Encodable, Sendable {
 /// The Live Activity's persona alone, for the prefs PUT (it merges): FleetState.look.
 nonisolated struct FleetLookPut: Encodable, Sendable {
     var look: FleetLook
+}
+
+/// Whether this device has Persona's Home Screen widgets, alone (the PUT merges): the hub wakes it for them (#5721).
+nonisolated struct WidgetsPut: Encodable, Sendable {
+    var widgets: Bool
 }
 
 /// The managers whose pushes this device doesn't want, alone (APIClient.setMutedManagers): a write of the whole prefs
@@ -2457,6 +2645,22 @@ nonisolated struct ScreenDialog: Codable, Hashable, Sendable {
     var steps: [Step]?
     var review: Bool?
     var incomplete: Bool?
+    /// A permission prompt for a shell command (#5266): the command, the agent's words for it (`description`), the boxed
+    /// warning as Claude Code words it and what it is about (`risk`: "delete"), the countdown as on screen, what it does
+    /// when it runs out (`deadline_action`: "deny" / "allow") and when, by the hub's clock. A hub before it sends none.
+    var command: String?
+    var commandDescription: String?
+    var warning: String?
+    var risk: String?
+    var deadline: String?
+    var deadlineAction: String?
+    var deadlineAt: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case header, question, detail, options, rev, multi, submit, steps, review, incomplete
+        case command, commandDescription = "description", warning, risk, deadline
+        case deadlineAction = "deadline_action", deadlineAt = "deadline_at"
+    }
 
     var parsed: ScreenParser.Dialog {
         var d = ScreenParser.Dialog(
@@ -2471,6 +2675,8 @@ nonisolated struct ScreenDialog: Codable, Hashable, Sendable {
         d.submit = submit
         d.review = review ?? false
         d.incomplete = incomplete ?? false
+        d.commandAsk = CommandAsk(command: command, description: commandDescription, warning: warning, risk: risk,
+                                  deadline: deadline, deadlineAction: deadlineAction, deadlineAt: deadlineAt)
         return d
     }
 }

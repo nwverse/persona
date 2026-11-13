@@ -18,6 +18,20 @@ import (
 // maxFileBytes caps what the phone can pull in one request: a bigger text file comes in pages (`offset`, `next`).
 const maxFileBytes = 2 << 20
 
+type fileReadHandle interface {
+	io.Reader
+	io.ReaderAt
+	io.Closer
+	Stat() (os.FileInfo, error)
+	Fd() uintptr
+}
+
+type fileReadDependencies struct {
+	size    func(os.FileInfo) int64
+	open    func(string) (fileReadHandle, error)
+	isSysfs func(fileReadHandle) (bool, error)
+}
+
 // FileContent is a file read for the phone's file viewer (paths mentioned in a conversation).
 type FileContent struct {
 	Path      string   `json:"path"`
@@ -59,6 +73,14 @@ func (n *Node) resolvePath(path, cwd string) string {
 // whole up to the cap (they are not paged), or with stream only described: the client fetches them from
 // file/download by Range, however big.
 func (n *Node) readFile(path, cwd string, offset int64, stream bool) (*FileContent, error) {
+	open := func(path string) (fileReadHandle, error) { return os.Open(path) }
+	isSysfs := fileReadIsSysfs
+	if n.fileReadDeps != nil && n.fileReadDeps.open != nil {
+		open = n.fileReadDeps.open
+	}
+	if n.fileReadDeps != nil && n.fileReadDeps.isSysfs != nil {
+		isSysfs = n.fileReadDeps.isSysfs
+	}
 	asked := strings.TrimSpace(path)
 	if asked == "" {
 		return nil, fmt.Errorf("empty path")
@@ -71,7 +93,11 @@ func (n *Node) readFile(path, cwd string, offset int64, stream bool) (*FileConte
 	if err != nil {
 		return nil, explainDenied(path, n.home, err)
 	}
-	fc := &FileContent{Path: path, Name: filepath.Base(path), Size: st.Size()}
+	size := st.Size()
+	if n.fileReadDeps != nil && n.fileReadDeps.size != nil {
+		size = n.fileReadDeps.size(st)
+	}
+	fc := &FileContent{Path: path, Name: filepath.Base(path), Size: size}
 	if st.IsDir() {
 		fc.IsDir = true
 		ents, err := os.ReadDir(real)
@@ -93,20 +119,54 @@ func (n *Node) readFile(path, cwd string, offset int64, stream bool) (*FileConte
 	}
 	// A regular file whose size is 0 can still have content: Linux's /proc and /sys make theirs up as they are read
 	// (#4172). Such a file is read to its end, a page at a time like any other; its size says nothing about the offset.
-	madeUp := st.Size() == 0 && st.Mode().IsRegular()
-	if offset < 0 || (!madeUp && offset > st.Size()) {
-		return nil, fmt.Errorf("offset %d is outside the file (%d bytes)", offset, st.Size())
+	madeUp := size == 0 && st.Mode().IsRegular()
+	if offset < 0 || (!madeUp && offset > size) {
+		return nil, fmt.Errorf("offset %d is outside the file (%d bytes)", offset, size)
 	}
-	f, err := os.Open(real)
+	f, err := open(real)
 	if err != nil {
 		return nil, explainDenied(path, n.home, err)
 	}
 	defer f.Close()
+	opened, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !sameFileRead(st, opened) {
+		return nil, errFileChanged
+	}
+	// Validate both the opened object and the checked path. A rename, symlink replacement or truncation between
+	// the path check and the read must not make this page (or its stream revision) describe a different file.
+	validate := func() error {
+		after, err := f.Stat()
+		if err != nil {
+			return err
+		}
+		if !sameFileRead(st, after) {
+			return errFileChanged
+		}
+		_, current, err := n.statSafe(path)
+		if err != nil {
+			return explainDenied(path, n.home, err)
+		}
+		if !sameFileRead(st, current) {
+			return errFileChanged
+		}
+		return nil
+	}
 	fc.Offset = offset
 	if stream {
 		fc.Revision = fileRevision(st)
 		if offset == 0 && st.Mode().IsRegular() {
-			if m := fileMime(path, readHead(f)); streamedMime(m) {
+			head := make([]byte, sniffBytes)
+			nr, err := f.ReadAt(head, 0)
+			if err != nil && !errors.Is(err, io.EOF) {
+				return nil, err
+			}
+			if m := fileMime(path, head[:nr]); streamedMime(m) {
+				if err := validate(); err != nil {
+					return nil, err
+				}
 				fc.Mime, fc.Stream = m, true
 				return fc, nil
 			}
@@ -114,6 +174,7 @@ func (n *Node) readFile(path, cwd string, offset int64, stream bool) (*FileConte
 	}
 	var buf []byte
 	var more bool
+	var shortSysfs bool
 	if madeUp {
 		// One byte past the page says whether there is more; a device (size 0, not regular) is never read: /dev/zero
 		// does not end.
@@ -121,17 +182,65 @@ func (n *Node) readFile(path, cwd string, offset int64, stream bool) (*FileConte
 		if offset == 0 {
 			r = io.LimitReader(f, maxFileBytes+1) // a plain read from the start, which every such file allows
 		}
-		buf, _ = io.ReadAll(r)
+		buf, err = io.ReadAll(r)
+		if err != nil {
+			return nil, err
+		}
 		if more = len(buf) > maxFileBytes; more {
 			buf = buf[:maxFileBytes]
 		} else {
 			fc.Size = offset + int64(len(buf)) // as far as it goes: what the viewer shows as its size
 		}
 	} else {
-		buf = make([]byte, min(st.Size()-offset, maxFileBytes))
-		nr, _ := f.ReadAt(buf, offset)
+		buf = make([]byte, min(size-offset, maxFileBytes))
+		want := len(buf)
+		nr, readErr := f.ReadAt(buf, offset)
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return nil, readErr
+		}
 		buf = buf[:nr]
-		more = st.Size() > offset+int64(nr)
+		if nr < want {
+			if !errors.Is(readErr, io.EOF) {
+				return nil, io.ErrUnexpectedEOF
+			}
+			if !st.Mode().IsRegular() {
+				return nil, io.ErrUnexpectedEOF
+			}
+			virtual, err := isSysfs(f)
+			if err != nil {
+				return nil, err
+			}
+			if !virtual {
+				if err := validate(); err != nil {
+					return nil, err
+				}
+				return nil, io.ErrUnexpectedEOF
+			}
+			if nr == 0 && offset > 0 {
+				if err := checkFileEnd(f, offset); err != nil {
+					return nil, err
+				}
+			}
+			fc.Size = offset + int64(nr)
+			shortSysfs = true
+		} else {
+			more = size > offset+int64(nr)
+			// A sysfs offset at the reported size may already be beyond the actual end.
+			if len(buf) == 0 && offset > 0 && st.Mode().IsRegular() {
+				virtual, err := isSysfs(f)
+				if err != nil {
+					return nil, err
+				}
+				if virtual {
+					if err := checkFileEnd(f, offset); err != nil {
+						return nil, err
+					}
+				}
+			}
+		}
+	}
+	if err := validate(); err != nil {
+		return nil, err
 	}
 	fc.Mime = fileMime(path, buf[:min(len(buf), sniffBytes)])
 	// Text is valid UTF-8 (a page may cut the last character) with no NUL bytes.
@@ -155,12 +264,34 @@ func (n *Node) readFile(path, cwd string, offset int64, stream bool) (*FileConte
 		return nil, fmt.Errorf("binary files are read whole, not from an offset")
 	}
 	if stream {
+		if shortSysfs {
+			// The download endpoint still uses the stat size and revision in its stream descriptor.
+			fc.Size = size
+		}
 		fc.Stream = true
 		return fc, nil
 	}
 	fc.Truncated = more
 	fc.Data = base64.StdEncoding.EncodeToString(buf)
 	return fc, nil
+}
+
+func sameFileRead(a, b os.FileInfo) bool {
+	return os.SameFile(a, b) && a.Mode() == b.Mode() && a.Size() == b.Size() && a.ModTime().Equal(b.ModTime())
+}
+
+// A zero-byte read does not distinguish the end from an offset past it. Check the preceding byte, without reading
+// the whole file or assuming that the reported size is the true size.
+func checkFileEnd(f fileReadHandle, offset int64) error {
+	var last [1]byte
+	n, err := f.ReadAt(last[:], offset-1)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("offset %d is outside the file", offset)
+	}
+	return nil
 }
 
 // maxStatPaths bounds one fs.stat: a page of conversation mentions a few dozen paths at most.
@@ -170,8 +301,24 @@ const maxStatPaths = 200
 // the folder from personad; opening it explains what to do) or missing (also: not resolvable, iCloud Drive).
 type PathStat struct {
 	Path string `json:"path"` // as asked
-	Kind string `json:"kind"`
+	Kind string `json:"kind"` // with detail also "link": a symlink whose target is not there (LinkBroken)
 	Size int64  `json:"size,omitempty"`
+
+	// With detail (the Info sheet, files_info.go): permission bits as chmod takes them, owner and group names (numbers
+	// when unknown), the times the system keeps, a folder's item count, and for a symlink what it says, the real path
+	// it leads to and whether that is missing. Absent where the platform has no such thing.
+	Mode       *int       `json:"mode,omitempty"`
+	Owner      string     `json:"owner,omitempty"`
+	Group      string     `json:"group,omitempty"`
+	ModTime    *time.Time `json:"mtime,omitempty"`
+	ChangeTime *time.Time `json:"ctime,omitempty"`
+	BirthTime  *time.Time `json:"birthtime,omitempty"`
+	Items      *int       `json:"items,omitempty"`
+	ItemsMore  bool       `json:"items_more,omitempty"`
+	Symlink    bool       `json:"symlink,omitempty"`
+	LinkTarget string     `json:"link_target,omitempty"`
+	LinkReal   string     `json:"link_real,omitempty"`
+	LinkBroken bool       `json:"link_broken,omitempty"`
 }
 
 // statTimeout bounds one fs.stat: a path on a mount that does not answer (a network share, a sleeping disk) is
@@ -184,8 +331,8 @@ const statWorkers = 8
 var statOne = (*Node).statPath
 
 // statPaths answers fs.stat: the phone links only the paths that are there (a path in a message may be another
-// machine's, or gone). Secrets and iCloud Drive count as missing (pathguard.go).
-func (n *Node) statPaths(paths []string, cwd string) []PathStat {
+// machine's, or gone). Secrets and iCloud Drive count as missing (pathguard.go). detail: the Info sheet's fields too.
+func (n *Node) statPaths(paths []string, cwd string, detail ...bool) []PathStat {
 	if len(paths) > maxStatPaths {
 		paths = paths[:maxStatPaths]
 	}
@@ -202,6 +349,9 @@ func (n *Node) statPaths(paths []string, cwd string) []PathStat {
 	slots := make(chan struct{}, statWorkers)
 	// Read once: a stat past the deadline keeps running after this returns, and must not read the variables again.
 	stat, timeout := statOne, statTimeout
+	if len(detail) > 0 && detail[0] {
+		stat = (*Node).statDetail
+	}
 	for i, asked := range paths {
 		go func() {
 			slots <- struct{}{}
@@ -301,6 +451,11 @@ type DirEntry struct {
 	ModTime time.Time `json:"mtime"`
 	// Ignored: Git ignores it (the tree dims it); never set outside a repository or without git (fsignore.go).
 	Ignored bool `json:"ignored,omitempty"`
+	// LinkTarget: what a symlink says (its text, as readlink gives it); LinkBroken: what it points to is not there, or
+	// a loop of links. A link is never followed for the listing beyond telling a folder from a file; Size and ModTime
+	// are its target's when that can be read, otherwise the link's own (#5827).
+	LinkTarget string `json:"link_target,omitempty"`
+	LinkBroken bool   `json:"link_broken,omitempty"`
 }
 
 const maxDirEntries = 2000
@@ -355,6 +510,14 @@ func (n *Node) listDir(path, cwd string) (map[string]any, error) {
 		if info, err := all[i].e.Info(); err == nil {
 			list[i].Size, list[i].ModTime = info.Size(), info.ModTime()
 		}
+		if list[i].Symlink {
+			if target, err := os.Readlink(filepath.Join(real, list[i].Name)); err == nil {
+				list[i].LinkTarget = target
+			}
+			if t := all[i].target; t != nil {
+				list[i].Size, list[i].ModTime = t.Size(), t.ModTime()
+			}
+		}
 	}
 	markIgnored(real, list)
 	return map[string]any{"path": path, "entries": list, "truncated": len(ents) > maxDirEntries}, nil
@@ -363,8 +526,9 @@ func (n *Node) listDir(path, cwd string) (map[string]any, error) {
 // treeEntry is a folder entry as the file tree shows it, before its size and time are read.
 type treeEntry struct {
 	DirEntry
-	key string // lowercased name, computed once rather than in every comparison
-	e   os.DirEntry
+	key    string // lowercased name, computed once rather than in every comparison
+	e      os.DirEntry
+	target os.FileInfo // a link's target, when it could be read
 }
 
 // treeOrder sorts the entries of the folder real the way the file tree shows them: directories first, then files, each
@@ -375,12 +539,17 @@ func (n *Node) treeOrder(real string, ents []os.DirEntry) []treeEntry {
 	all := make([]treeEntry, len(ents))
 	for i, e := range ents {
 		d := DirEntry{Name: e.Name(), Dir: e.IsDir(), Symlink: e.Type()&os.ModeSymlink != 0}
+		var target os.FileInfo
 		if d.Symlink {
-			if _, st, err := n.statSafe(filepath.Join(real, d.Name)); err == nil {
-				d.Dir = st.IsDir()
+			_, st, err := n.statSafe(filepath.Join(real, d.Name))
+			switch {
+			case err == nil:
+				d.Dir, target = st.IsDir(), st
+			case errors.Is(err, fs.ErrNotExist) || errors.Is(err, errTooManyLinks):
+				d.LinkBroken = true
 			}
 		}
-		all[i] = treeEntry{DirEntry: d, key: strings.ToLower(d.Name), e: e}
+		all[i] = treeEntry{DirEntry: d, key: strings.ToLower(d.Name), e: e, target: target}
 	}
 	slices.SortFunc(all, func(a, b treeEntry) int {
 		if a.Dir != b.Dir {

@@ -52,7 +52,7 @@ function countsQuery(filters: ListFilters): string {
   return params.toString();
 }
 
-function scrollParent(el: HTMLElement | null): HTMLElement | null {
+export function scrollParent(el: HTMLElement | null): HTMLElement | null {
   for (let p = el?.parentElement; p; p = p.parentElement) {
     if (/auto|scroll/.test(getComputedStyle(p).overflowY)) return p;
   }
@@ -79,7 +79,10 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   }), [q, state, dimension, value, machine, provider]);
   const filtered = Object.keys(filters).length > 0;
   const summaryMode = root.isSummary();
-  const list = useMemo(() => filtered ? new SessionList<T>(path, identity, compare, undefined, removeIdentity, { summary: summaryMode }) : root, [filtered, path, identity, compare, removeIdentity, summaryMode, root, filters]);
+  // a hub that folds child sessions (#5120): every read and count of this list leaves them out, as the root's do
+  const rootsMode = root.isRoots();
+  const countsPath = rootsMode ? `${path}?roots=1&` : `${path}?`;
+  const list = useMemo(() => filtered ? new SessionList<T>(path, identity, compare, undefined, removeIdentity, { summary: summaryMode, roots: rootsMode, pageCounts: () => root.usesPageCounts() }) : root, [filtered, path, identity, compare, removeIdentity, summaryMode, rootsMode, root, filters]);
   const page = useSyncExternalStore(list.subscribe, list.getSnapshot, list.getSnapshot);
   const [facets, setFacets] = useState<ListCounts | null>(null);
   const [facetError, setFacetError] = useState("");
@@ -117,14 +120,14 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
     const controller = new AbortController();
     const read = () => {
       const request = ++sequence;
-      void api<ListCounts>(`${path}?${facetQuery}`, { signal: controller.signal }).then((counts) => {
+      void api<ListCounts>(`${countsPath}${facetQuery}`, { signal: controller.signal }).then((counts) => {
         if (live && request === sequence && counts.state && counts.group && counts.project && counts.machine) { setFacets(counts); setFacetError(""); }
       }, (e) => { if (live && request === sequence) setFacetError(errorText(e)); });
     };
     read();
     const off = onHubEvent(event, read);
     return () => { live = false; controller.abort(); off(); };
-  }, [path, event, facetScoped, facetsFromList, facetQuery]);
+  }, [countsPath, event, facetScoped, facetsFromList, facetQuery]);
   useEffect(() => {
     // Keep the last counts while a refresh or a new scope is loading, including a root rebaseline.
     if (scopeQuery !== "counts=1") return;
@@ -144,14 +147,14 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
     const abort = new AbortController();
     const read = () => {
       const request = ++sequence;
-      void api<ListCounts>(`${path}?${scopeQuery}`, { signal: abort.signal }).then((counts) => {
+      void api<ListCounts>(`${countsPath}${scopeQuery}`, { signal: abort.signal }).then((counts) => {
         if (request === sequence && counts.state) { setScopeCounts(counts); setScopeError(""); }
       }, (e) => { if (request === sequence) setScopeError(errorText(e)); });
     };
     read();
     const off = onHubEvent(event, read);
     return () => { sequence++; abort.abort(); off(); };
-  }, [scopeQuery, scopeFromFacets, path, event]);
+  }, [scopeQuery, scopeFromFacets, countsPath, event]);
   useEffect(() => {
     if (filtered) void list.setFilters(filters).catch(() => {});
     else if (!list.getSnapshot().loaded) void list.load().catch(() => {});
@@ -343,9 +346,26 @@ function EarlierHeader({ count, needs, window, folded, onToggle }: { count: numb
   );
 }
 
-/** A pill that names what is chosen and opens the choices in the design system's menu (no native select). */
+/** An element's width, followed while it is on screen: the sidebar it sits in can be dragged wider or narrower. */
+function useWidth(el: HTMLElement | null): number {
+  const [width, setWidth] = useState(0);
+  useLayoutEffect(() => {
+    if (!el) return;
+    const measure = () => setWidth(Math.round(el.getBoundingClientRect().width));
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [el]);
+  return width;
+}
+
+/** A pill that names what is chosen and opens the choices in the design system's menu (no native select). The menu is
+ *  as wide as its pill, like a select's list, and never narrower than a menu is anywhere else. */
 function PickChip({ label, header = label, value, shown, items, onChoose, grow = false }: { label: string; header?: string; value: string; shown: string; items: { key: string; label: string; hint?: string; detail?: string }[]; onChoose: (key: string) => void; grow?: boolean }) {
   const menu = useMenu();
+  const width = Math.max(useWidth(menu.anchor), SESSION_LIST_METRICS.pickMenuMin);
   const rows: MenuItem[] = items.map((it, i) => ({ ...it, radio: true, checked: it.key === value, divider: i === 1, onSelect: () => onChoose(it.key) }));
   return <>
     <button type="button" aria-label={label} aria-haspopup="menu" aria-expanded={Boolean(menu.anchor)} title={shown} onClick={menu.open}
@@ -353,6 +373,6 @@ function PickChip({ label, header = label, value, shown, items, onChoose, grow =
       <span className="min-w-0 flex-1 truncate text-left">{shown}</span>
       <Icon name="chevron" size={11} className="shrink-0 text-ink-3" />
     </button>
-    {menu.anchor && <Menu items={rows} anchor={menu.anchor} onClose={menu.close} header={header} width={260} />}
+    {menu.anchor && <Menu items={rows} anchor={menu.anchor} onClose={menu.close} header={header} width={width} />}
   </>;
 }

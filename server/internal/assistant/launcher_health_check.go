@@ -259,29 +259,32 @@ func (s *Service) runHealthRecheck(ctx context.Context, machine, launcher string
 	}
 }
 
+// launcherUnusableNow is launcherUnusable after one on-the-spot probe of a failing record, for a start about to
+// move or be refused because of it: the record can lag behind a fix, so a pass clears it and the start stays on the
+// asked machine (#2018). Two records cannot be settled by a probe: a subscription usage limit (the request would be
+// refused too) and a launcher the terminal's shell cannot run (the probe's login shell runs it fine); only a real
+// start clears those.
+func (s *Service) launcherUnusableNow(ctx context.Context, machine, launcher string) (LauncherHealth, bool) {
+	r, bad := s.launcherUnusable(ctx, machine, launcher)
+	if !bad || r.Kind == errKindUsageLimit || r.Kind == errKindNotInTerminal {
+		return r, bad
+	}
+	if res, got, checked := s.recheckLauncherNow(ctx, machine, launcher); checked && got && res.ok {
+		return LauncherHealth{}, false
+	}
+	// The shared follow-up may have finished between the first read and the throttled claim. Decide from its
+	// published result, not the stale failure that led us here.
+	return s.launcherUnusable(ctx, machine, launcher)
+}
+
 // healthDetour is where a start with launcher on machine m goes instead: another machine when its last check failed
 // there and another has it healthy (moved), with a line saying so for whoever started it; no other: m, and the line
 // says it may fail. A usage limit with a known reset says when that is, and a saturated account pool (capacity.go)
 // adds the fleet-wide "no schedulable account" fact and its nearest recovery when the data is fresh.
 func (s *Service) healthDetour(ctx context.Context, m Device, launcher string, suitable ...func(Device) bool) (Device, string, bool) {
-	r, bad := s.launcherUnusable(ctx, m.ID, launcher)
+	r, bad := s.launcherUnusableNow(ctx, m.ID, launcher)
 	if !bad {
 		return m, "", false
-	}
-	// The record can lag behind a fix: probe the machine once on the spot before moving the start elsewhere. A pass
-	// clears the record and the start stays on the asked machine (#2018). Two records cannot be settled by a probe:
-	// a subscription usage limit (the request would be refused too) and a launcher the terminal's shell cannot run
-	// (the probe's login shell runs it fine); only a real start clears those.
-	if r.Kind != errKindUsageLimit && r.Kind != errKindNotInTerminal {
-		if res, got, checked := s.recheckLauncherNow(ctx, m.ID, launcher); checked && got && res.ok {
-			return m, "", false
-		}
-		// The shared follow-up may have finished between the first read and the throttled claim. Route from its
-		// published result, not the stale failure that led us here.
-		r, bad = s.launcherUnusable(ctx, m.ID, launcher)
-		if !bad {
-			return m, "", false
-		}
 	}
 	alt, moved := s.healthyMachine(ctx, launcher, m.ID, suitable...)
 	// The pool is provider-level: resolve it once from the failed machine. Missing or stale data gives no note, and
@@ -324,7 +327,9 @@ func (s *Service) healthLines(ctx context.Context, machine string) string {
 // launcherWithHealth is a launcher of the "New Agent" picker with how its last check went on that machine.
 type launcherWithHealth struct {
 	ConfiguredLauncher
-	Health *launcherHealthView `json:"health,omitempty"`
+	// DisplayName is a Persona-managed provider's name shown, any language (launcher_auto_name); "" shows Name.
+	DisplayName string              `json:"display_name,omitempty"`
+	Health      *launcherHealthView `json:"health,omitempty"`
 }
 
 type launcherHealthView struct {
@@ -335,15 +340,28 @@ type launcherHealthView struct {
 	ResetsAt  *time.Time `json:"resets_at,omitempty"` // a usage limit's reset: unusable until then
 }
 
-// withHealth puts machine's health records on its launchers (none: never checked).
-func (s *Service) withHealth(ctx context.Context, machine string, list []ConfiguredLauncher) []launcherWithHealth {
+// withHealth puts machine's health records on its launchers (none: never checked) and leaves out the ones that do not
+// work now. The launcher pickers list only what a start can use: a launcher whose latest check failed (failing,
+// repairing or blocked within healthStale, a usage limit until its reset) is hidden until a check passes again. A
+// launcher never checked stays: no result is not a failure, and launcher health is off unless the manager turns it on.
+//
+// Two stay listed with their record: a not_in_terminal launcher (its checks pass, only a real start clears it, and
+// hiding it would leave no way to make that start) and keep, the launcher the configuration runs with no pick. That one
+// will be used by the next start, so the form must be able to say why it may fail (clients mark the Default row and its
+// line); hiding it would fail the start with no warning at all.
+func (s *Service) withHealth(ctx context.Context, machine string, list []ConfiguredLauncher, keep string) []launcherWithHealth {
 	out := make([]launcherWithHealth, 0, len(list))
 	for _, l := range list {
 		v := launcherWithHealth{ConfiguredLauncher: l}
-		if r, ok := s.launcherHealth(ctx, machine, l.Name); ok && (r.State == healthOK || r.unusable()) { // not a failure too old to count
-			v.Health = &launcherHealthView{State: r.State, Kind: r.Kind, Error: r.Error, CheckedAt: r.CheckedAt}
-			if reset, limited := r.limitReset(); limited {
-				v.Health.ResetsAt = &reset
+		if r, ok := s.launcherHealth(ctx, machine, l.Name); ok {
+			if r.unusable() && r.Kind != errKindNotInTerminal && l.Name != keep {
+				continue
+			}
+			if r.State == healthOK || r.unusable() { // not a failure too old to count
+				v.Health = &launcherHealthView{State: r.State, Kind: r.Kind, Error: r.Error, CheckedAt: r.CheckedAt}
+				if reset, limited := r.limitReset(); limited {
+					v.Health.ResetsAt = &reset
+				}
 			}
 		}
 		out = append(out, v)

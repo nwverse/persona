@@ -88,14 +88,14 @@ class HubPairingClient private constructor(
         }
     }
 
-    suspend fun pair(token: String, deviceName: String, progress: (PairingProgress) -> Unit): PairedHub {
+    suspend fun pair(token: String, deviceName: String, deviceId: String? = null, progress: (PairingProgress) -> Unit): PairedHub {
         check(connection == null) { "Pairing requires a new client" }
         val route = probe(progress)
         progress(PairingProgress(PairingStage.VerifyIdentity, candidates = candidates))
         val hubId = route.health.hubId ?: expectedHubId ?: legacyHubId(address)
         require(hubId.matches(Regex("[A-Za-z0-9_-]{1,128}")))
         progress(PairingProgress(PairingStage.ExchangeCredentials))
-        val exchanged = try {
+        val exchanged = if (deviceId != null) buildJsonObject { put("token", token); put("id", deviceId) } else try {
             json("/api/v1/auth/tokens", token, buildJsonObject { put("name", deviceName); put("kind", "phone") })
         } catch (error: HubFailure) {
             if (error.status == 404) null else throw error
@@ -141,17 +141,20 @@ class HubPairingClient private constructor(
         })
     }
 
-    suspend fun checkUpdate(token: String): AppUpdate? {
+    suspend fun checkUpdate(token: String): AppUpdate? = (lookupUpdate(token) as? AppUpdateLookup.Published)?.update
+
+    suspend fun lookupUpdate(token: String): AppUpdateLookup {
         val metadata = try { json("/api/v1/app/android/latest", token) }
-        catch (error: HubFailure) { if (error.status == 404 || error.status == 204) return null else throw error }
+        catch (error: HubFailure) { if (error.status == 404 || error.status == 204) return AppUpdateLookup.NotPublished else throw error }
         val checksum = metadata.text("sha256")?.takeIf { it.matches(Regex("[A-Fa-f0-9]{64}")) }
             ?: throw HubFailure(HubError.Protocol)
-        return AppUpdate(
+        return AppUpdateLookup.Published(AppUpdate(
             metadata.getValue("version_code").jsonPrimitive.long,
             metadata.getValue("version_name").jsonPrimitive.content,
             metadata.text("download_url")?.takeIf { it.isNotBlank() } ?: "/api/v1/app/android/apk",
             checksum, metadata.text("notes") ?: metadata.text("release_notes").orEmpty(),
-        )
+            metadata.text("package_name"), metadata.text("certificate_sha256"),
+        ))
     }
 
     suspend fun download(token: String, update: AppUpdate, destination: OutputStream) = withContext(Dispatchers.IO) {

@@ -36,8 +36,9 @@ const codexDesktopTimeout = 60 * time.Second
 var codexDesktopLoadWait = 30 * time.Second
 
 var codexDesktopVersions = map[string]int{
-	"thread-owner-discovery":     1,
-	"thread-follower-start-turn": 2,
+	"thread-owner-discovery":         1,
+	"thread-follower-start-turn":     2,
+	"thread-follower-interrupt-turn": 4,
 }
 
 var errCodexDesktopNotLoaded = errors.New("Codex App 没能打开这个对话：在电脑的 Codex App 里打开它一次再发")
@@ -184,6 +185,29 @@ func (n *Node) sendCodexDesktop(ctx context.Context, src codexSource, text strin
 	return nil
 }
 
+// interruptCodexDesktop stops the turn running in a thread the Codex App owns, as the App's own stop button does
+// (thread-follower-interrupt-turn, mode "user-stop": the turn and the subagents it started). A thread no App window has
+// loaded runs no turn there, and it is not opened to be stopped.
+func (n *Node) interruptCodexDesktop(ctx context.Context, src codexSource) error {
+	ctx, cancel := context.WithTimeout(ctx, codexDesktopTimeout)
+	defer cancel()
+	c, err := dialCodexDesktop(ctx, src.home)
+	if err != nil {
+		return refusal("codex_read_only", "连不上电脑上的 Codex App："+err.Error(), nil)
+	}
+	defer c.close()
+	owner, err := c.owner(src.thread)
+	if err != nil {
+		return refusal("codex_read_only", "没有可停止的已观察轮次", nil)
+	}
+	stop := map[string]any{"conversationId": src.thread, "mode": "user-stop"}
+	if _, err := c.request("thread-follower-interrupt-turn", stop, owner.HandledByClient); err != nil {
+		return err
+	}
+	n.notifyCodex()
+	return nil
+}
+
 // The Codex App's threads are listed like its sidebar: grouped by its projects, newest first, and those of the last
 // few days with a state like herdr's — working while a turn runs; after it, done ("Unread") while the App's sidebar
 // still marks the thread unread, idle once it was looked at in the App (or, as for any agent, in Persona).
@@ -198,6 +222,12 @@ type codexAppState struct {
 	assigned    map[string]string // thread → project id
 	projects    map[string]codexAppProject
 	sidebar     []string // the threads of both lists that are valid ids, sorted: what codexAppThreads looks up
+
+	order []string // the App's projects in its sidebar's order (project-order)
+
+	namesOnce sync.Once
+	names     map[string]string // a project's folder (real path) → the App's name for it; see folderName
+	places    map[string]int    // a project's folder (real path) → its place in order, from 1; see folderPlace
 }
 
 type codexAppProject struct {
@@ -238,11 +268,12 @@ func loadCodexAppState(home string) *codexAppState {
 			ProjectID string `json:"projectId"`
 		} `json:"thread-project-assignments"`
 		Projects map[string]codexAppProject `json:"local-projects"`
+		Order    []string                   `json:"project-order"`
 	}
 	if json.Unmarshal(b, &raw) != nil {
 		return nil
 	}
-	s := &codexAppState{unread: map[string]bool{}, projectless: map[string]bool{}, assigned: map[string]string{}, projects: raw.Projects}
+	s := &codexAppState{unread: map[string]bool{}, projectless: map[string]bool{}, assigned: map[string]string{}, projects: raw.Projects, order: raw.Order}
 	for _, hosts := range raw.ReadState.UnreadByIdentity {
 		for host, ids := range hosts {
 			if len(host) < 6 || host[:6] != "local:" {
@@ -307,6 +338,69 @@ func pathWithin(dir, root string) bool {
 	return dir == root || strings.HasPrefix(dir, root+string(filepath.Separator))
 }
 
+// folderName: the App's name for the project whose folder is root (a real path, as codexProjectRoot gives a
+// repository's root); "" when no project of the App has that folder. The App's sidebar shows a project by the name it
+// keeps, which need not be the folder's: a project the user renamed, a ChatGPT project the App keeps in
+// <CODEX_HOME>/.chatgpt-projects/g-p-<id>. A folder has one name whichever chat asks: of two projects with the same
+// folder, the name that sorts first.
+func (a *codexAppState) folderName(root string) string {
+	if a == nil || root == "" {
+		return ""
+	}
+	a.folders()
+	return a.names[folderKey(root)]
+}
+
+// folderPlace: where the App's sidebar lists the project whose folder is root (as for folderName), from 1 down its
+// project-order; 0 when no project with that folder is in the order (the order lists the projects the App's own
+// sidebar shows; a ChatGPT project is not among them). Of two projects with the same folder, the first in the order.
+func (a *codexAppState) folderPlace(root string) int {
+	if a == nil || root == "" {
+		return 0
+	}
+	a.folders()
+	return a.places[folderKey(root)]
+}
+
+// folders reads the projects' folders once: real paths, as codexProjectRoot gives a repository's root.
+func (a *codexAppState) folders() {
+	a.namesOnce.Do(func() {
+		a.names, a.places = map[string]string{}, map[string]int{}
+		place := map[string]int{}
+		for i, id := range a.order {
+			if _, ok := place[id]; !ok {
+				place[id] = i + 1
+			}
+		}
+		for id, p := range a.projects {
+			name := strings.TrimSpace(p.Name)
+			for _, r := range p.RootPaths {
+				if !filepath.IsAbs(r) {
+					continue
+				}
+				k := folderKey(realPath(filepath.Clean(r)))
+				if old, ok := a.names[k]; name != "" && (!ok || name < old) {
+					a.names[k] = name
+				}
+				if i := place[id]; i > 0 && (a.places[k] == 0 || i < a.places[k]) {
+					a.places[k] = i
+				}
+			}
+		}
+	})
+}
+
+// folderKey: Windows paths do not tell case apart (see pathWithin).
+func folderKey(p string) string {
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(p)
+	}
+	return p
+}
+
+// inNoProject: the App keeps chat thread in no project (its sidebar's chats outside every project).
+func (a *codexAppState) inNoProject(thread string) bool { return a != nil && a.projectless[thread] }
+
 // listed: the thread is one of the App's sidebar chats (put in a project, or a chat without one). Other tools that
 // run the App's own codex binary write "Codex Desktop" rollouts too; the App does not list those.
 func (a *codexAppState) listed(thread string) bool {
@@ -329,6 +423,10 @@ func (n *Node) placeCodexDesktop(s *proto.Session, src codexSource, group string
 	s.Status = n.codexDesktopTurn(src.path)
 	if s.Status == proto.StatusDone && (subagent || app == nil || !app.unread[src.thread]) {
 		s.Status = proto.StatusIdle // looked at in the App
+	}
+	if s.Status == proto.StatusWorking && !subagent && s.Capabilities != nil {
+		// Stopped from the phone as with the App's stop button (interruptCodexDesktop); a subagent stops with its chat.
+		s.Capabilities.Interrupt = true
 	}
 }
 
@@ -399,13 +497,22 @@ var codexTurnMarks sync.Map
 // source "exec" (their subagents keep the originator). Only the App's threads go through its IPC bus.
 type codexOrigin struct {
 	desktop bool
+	// persona: a chat Persona started in the App (originator codexAppClient, codexapp_new.go), which the App lists
+	// without a record in its state; desktop too, so its subagents are the App's as well.
+	persona bool
 	cli     bool
 	// exec: a one-shot run a program started (`codex exec`, an SDK, the App's background runs) or a subagent of one:
 	// nobody's conversation, not listed in Agents (programRun).
-	exec   bool
-	sub    bool
-	root   string // session_id identifies the shared root on newer Codex versions
-	parent string // the thread that spawned this subagent
+	exec bool
+	sub  bool
+	// guardian: an approval review, a subagent of source {"subagent": {"other": "guardian"}} that Codex runs on a tool
+	// call before the call runs. Its rollout holds only the review's request and assessment: not listed (#5486).
+	guardian bool
+	root     string // session_id identifies the shared root on newer Codex versions
+	parent   string // the thread that spawned this subagent
+	// started holds when the thread began, the session_meta line's time (Session.StartedAt), made once for every row
+	// of the thread: a hierarchy is never written once set, so the rows share it. Nil when the line has no time.
+	started *proto.SessionHierarchy
 }
 
 var codexOrigins sync.Map // path → codexOrigin (the first line never changes)
@@ -424,8 +531,9 @@ func readCodexOrigin(path string) codexOrigin {
 		return codexOrigin{}
 	}
 	var m struct {
-		Type    string `json:"type"`
-		Payload struct {
+		Timestamp string `json:"timestamp"`
+		Type      string `json:"type"`
+		Payload   struct {
 			Originator   string          `json:"originator"`
 			Parent       string          `json:"parent_thread_id"`
 			SessionID    string          `json:"session_id"`
@@ -436,7 +544,11 @@ func readCodexOrigin(path string) codexOrigin {
 	if json.Unmarshal(line, &m) != nil || m.Type != "session_meta" {
 		return codexOrigin{} // not written yet: read again next time
 	}
-	o := codexOrigin{desktop: m.Payload.Originator == "Codex Desktop" || m.Payload.Originator == "codex_work_desktop", cli: m.Payload.Originator == "codex-tui" || m.Payload.Originator == "codex_cli_rs"}
+	o := codexOrigin{desktop: m.Payload.Originator == "Codex Desktop" || m.Payload.Originator == "codex_work_desktop" || m.Payload.Originator == codexAppClient,
+		persona: m.Payload.Originator == codexAppClient, cli: m.Payload.Originator == "codex-tui" || m.Payload.Originator == "codex_cli_rs"}
+	if at, err := time.Parse(time.RFC3339Nano, m.Timestamp); err == nil && !at.IsZero() {
+		o.started = &proto.SessionHierarchy{StartedAt: at.UTC()}
+	}
 	var source string
 	if json.Unmarshal(m.Payload.Source, &source) != nil {
 		source = "" // an object: a subagent
@@ -447,10 +559,12 @@ func readCodexOrigin(path string) codexOrigin {
 			ThreadSpawn struct {
 				Parent string `json:"parent_thread_id"`
 			} `json:"thread_spawn"`
+			Other string `json:"other"`
 		} `json:"subagent"`
 	}
 	if json.Unmarshal(m.Payload.Source, &spawn) == nil {
 		o.parent = spawn.Subagent.ThreadSpawn.Parent
+		o.guardian = spawn.Subagent.Other == "guardian"
 	}
 	o.parent = firstNonEmpty(m.Payload.Parent, o.parent)
 	var fields map[string]json.RawMessage
@@ -478,7 +592,7 @@ func codexDesktopChatIn(src codexSource, pass *codexListPass) bool {
 		return ok
 	}
 	o := readCodexOrigin(src.path)
-	return o.desktop && o.parent == "" && loadCodexAppState(src.home).listed(src.thread)
+	return o.desktop && o.parent == "" && (o.persona || loadCodexAppState(src.home).listed(src.thread))
 }
 
 // owner: the App window that owns the thread.

@@ -141,7 +141,7 @@ const worktreeTimeout = 2 * time.Minute
 
 // timeoutOf is how long a call may take: a worktree checkout is slow, everything else is one quick request.
 func timeoutOf(method string) time.Duration {
-	if method == "worktree.create" {
+	if method == "worktree.create" || method == "worktree.remove" || method == "workspace.close" {
 		return worktreeTimeout
 	}
 	return rpcTimeout
@@ -567,12 +567,30 @@ type WorktreeCreated struct {
 
 // WorktreeCreate has herdr make a Git worktree checkout at path (an absolute path) from the repository of a workspace
 // and open it as a workspace grouped under that one, without moving the computer's focus. An existing local branch is
-// checked out; any other name becomes a new branch from the workspace's HEAD. herdr never forces anything: a branch
+// checked out; any other name becomes a new branch from base when given, else from the workspace's HEAD. herdr never forces anything: a branch
 // checked out elsewhere, or a path git refuses, is an error.
-func (c *Client) WorktreeCreate(ctx context.Context, workspace, branch, path string) (*WorktreeCreated, error) {
+func (c *Client) WorktreeCreate(ctx context.Context, workspace, branch, path string, base ...string) (*WorktreeCreated, error) {
+	params := map[string]any{"workspace_id": workspace, "branch": branch, "path": path, "focus": false}
+	args := []string{"worktree", "create", "--workspace", workspace, "--branch", branch, "--path", path}
+	if len(base) > 0 && base[0] != "" {
+		params["base"] = base[0]
+		args = append(args, "--base", base[0])
+	}
 	var res WorktreeCreated
-	err := c.call(ctx, "worktree.create", map[string]any{"workspace_id": workspace, "branch": branch, "path": path, "focus": false}, &res,
-		"worktree", "create", "--workspace", workspace, "--branch", branch, "--path", path, "--no-focus")
+	err := c.call(ctx, "worktree.create", params, &res, append(args, "--no-focus")...)
+	return &res, err
+}
+
+// WorktreeCreateFromCwd is WorktreeCreate from a main checkout that has no open workspace.
+func (c *Client) WorktreeCreateFromCwd(ctx context.Context, cwd, branch, path string, base ...string) (*WorktreeCreated, error) {
+	params := map[string]any{"cwd": cwd, "branch": branch, "path": path, "focus": false}
+	args := []string{"worktree", "create", "--cwd", cwd, "--branch", branch, "--path", path}
+	if len(base) > 0 && base[0] != "" {
+		params["base"] = base[0]
+		args = append(args, "--base", base[0])
+	}
+	var res WorktreeCreated
+	err := c.call(ctx, "worktree.create", params, &res, append(args, "--no-focus")...)
 	return &res, err
 }
 
@@ -590,6 +608,18 @@ func (c *Client) TabRename(ctx context.Context, tab, label string) error {
 func (c *Client) WorkspaceRename(ctx context.Context, workspace, label string) error {
 	return c.call(ctx, "workspace.rename", map[string]any{"workspace_id": workspace, "label": label}, nil,
 		"workspace", "rename", workspace, label)
+}
+
+func (c *Client) WorkspaceClose(ctx context.Context, workspace string) error {
+	return c.call(ctx, "workspace.close", map[string]any{"workspace_id": workspace}, nil, "workspace", "close", workspace)
+}
+
+func (c *Client) WorktreeRemove(ctx context.Context, workspace string, force bool) error {
+	args := []string{"worktree", "remove", "--workspace", workspace}
+	if force {
+		args = append(args, "--force")
+	}
+	return c.call(ctx, "worktree.remove", map[string]any{"workspace_id": workspace, "force": force}, nil, args...)
 }
 
 func (c *Client) TabClose(ctx context.Context, tab string) error {
@@ -807,21 +837,35 @@ func (c *Client) PaneReportMetadata(ctx context.Context, paneID, source string, 
 }
 
 // PaneReportResume tells herdr how to resume the pane's agent after a server restart: argv replaces herdr's
-// built-in resume command (`claude --resume <id>`) for this pane while source holds it. herdr only takes resume_argv
-// from the reporter holding the pane, so a pane.report_agent comes first (herdr's own screen detection still decides
-// the pane's state). herdr types argv into the restored pane's shell, quoting elements that need it; no element may
-// contain an apostrophe. Older herdr ignores resume_argv.
+// built-in resume command (`claude --resume <id>`) for this pane. When herdr already detects the agent process in
+// the pane (Claude, Codex, pi…), pane.report_agent_session accepts resume_argv without claiming lifecycle authority,
+// so herdr's own screen and OSC detection continues to decide agent_status; pane.clear_agent_authority drops any stale
+// authority an older node left for source without clearing another integration's (such as herdr:pi). Only when herdr
+// rejects the session report with resume_not_accepted (an agent process herdr does not detect natively, such as a
+// compatible CLI) does it claim the pane with pane.report_agent first. herdr types argv into the restored pane's
+// shell, quoting elements that need it; no element may contain an apostrophe. Older herdr ignores resume_argv.
 func (c *Client) PaneReportResume(ctx context.Context, pane, source, agent, sessionID string, argv []string) error {
 	seq := ReportSeq()
-	if err := c.rpc(ctx, "pane.report_agent", map[string]any{
-		"pane_id": pane, "source": source, "agent": agent, "state": "idle", "seq": seq,
-	}, nil); err != nil {
-		return err
-	}
-	return c.rpc(ctx, "pane.report_agent_session", map[string]any{
+	_ = c.rpc(ctx, "pane.clear_agent_authority", map[string]any{
+		"pane_id": pane, "source": source, "seq": seq,
+	}, nil)
+	err := c.rpc(ctx, "pane.report_agent_session", map[string]any{
 		"pane_id": pane, "source": source, "agent": agent, "seq": seq + 1,
 		"agent_session_id": sessionID, "resume_argv": argv,
 	}, nil)
+	var he *Error
+	if errors.As(err, &he) && he.Code == "resume_not_accepted" {
+		if rerr := c.rpc(ctx, "pane.report_agent", map[string]any{
+			"pane_id": pane, "source": source, "agent": agent, "state": "idle", "seq": seq + 2,
+		}, nil); rerr != nil {
+			return rerr
+		}
+		return c.rpc(ctx, "pane.report_agent_session", map[string]any{
+			"pane_id": pane, "source": source, "agent": agent, "seq": seq + 3,
+			"agent_session_id": sessionID, "resume_argv": argv,
+		}, nil)
+	}
+	return err
 }
 
 // ReportSeq orders a reporter's reports (herdr drops one older than the last it took); tests fix it.
