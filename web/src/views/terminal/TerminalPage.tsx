@@ -46,6 +46,8 @@ export function TerminalPage({ route, onToggleSidebar, onNewAgent, detail, onWor
   const allMachines = useStore((s) => s.machines);
   const sessions = useStore((s) => s.sessions);
   const panesOn = useStore((s) => s.features.includes("terminal_panes"));
+  // New terminal on a computer with no workspace yet (#6362): a hub that checks the node can (else 409 node_outdated)
+  const newSpaceOn = useStore((s) => s.features.includes("pane_new_space"));
   const legacyList = useStore((s) => s.loaded && !s.features.includes(SESSIONS_LIST_FEATURE) && !s.features.includes("sessions_dimensions"));
   const addressed = route?.mid ?? detail?.selected?.mid;
   // A bookmarked terminal or session may name another assistant's computer. Only the current one's are listed.
@@ -116,7 +118,7 @@ export function TerminalPage({ route, onToggleSidebar, onNewAgent, detail, onWor
     if (sameTerminal(item, shown)) navigate(browse);
   };
   // in a workspace, or (no workspace yet) the node opens one in the home folder
-  const openShell = async (mid: string, at: { kind: string; workspace_id: string } | { kind: string; cwd: "~" }) => {
+  const openShell = async (mid: string, at: { kind: string; workspace_id: string } | { kind: string; cwd: "~"; new_space: true }) => {
     try {
       const r = await api<{ terminal: string }>(`/machines/${enc(mid)}/panes`, { method: "POST", json: at });
       void reload([mid]);
@@ -175,7 +177,7 @@ export function TerminalPage({ route, onToggleSidebar, onNewAgent, detail, onWor
                   closing={finished.previewing === m.id}
                   onCloseFinished={() => void finished.start(m.id)}
                   onOpenShell={(sp) => void openShell(m.id, { kind: sp.host, workspace_id: sp.id })}
-                  onNewShell={(kind) => void openShell(m.id, { kind, cwd: "~" })}
+                  onNewShell={newSpaceOn ? (kind) => void openShell(m.id, { kind, cwd: "~", new_space: true }) : undefined}
                   onRetry={() => void refresh()}
                   open={(node, at, header, toggle) => setMenu((prev) => (toggle && at.anchor && prev?.at.anchor === at.anchor ? null : { node, at, header }))}
                 />
@@ -282,8 +284,9 @@ function MachineBlock({
   closing: boolean;
   onCloseFinished: () => void;
   onOpenShell: (space: TermSpace) => void;
-  /** A terminal on a computer with no workspace yet, in the engine `kind` (the node opens one in the home folder). */
-  onNewShell: (kind: string) => void;
+  /** A terminal on a computer with no workspace yet, in the engine `kind` (the node opens one in the home folder);
+   *  absent where the hub lacks `pane_new_space`. */
+  onNewShell?: (kind: string) => void;
   onRetry: () => void;
 } & Menus) {
   const mid = machine.id;
@@ -291,8 +294,8 @@ function MachineBlock({
   const hide = named && folded;
   const name = machine.name;
   const empty = Boolean(machine.online && listing?.data && !listing.error && spaces.length === 0);
-  const homeKind = empty ? homeShellHost(listing?.data) : undefined;
-  const newShell = homeKind ? () => onNewShell(homeKind) : undefined;
+  const homeKind = empty && onNewShell ? homeShellHost(listing?.data) : undefined;
+  const newShell = homeKind && onNewShell ? () => onNewShell(homeKind) : undefined;
   const node = machineNode(machine, { fold: { folded, toggle }, onRefresh: onRetry, onOpenShell: newShell });
   return (
     <div className="mt-2">

@@ -2210,7 +2210,7 @@ nonisolated struct InteractionField: Codable, Hashable, Sendable, Identifiable {
     var id: String { key }
 }
 
-nonisolated struct Resolution: Codable, Sendable {
+nonisolated struct Resolution: Codable, Sendable, Equatable {
     var answers: [String: String]?
     var approve: Bool?
     var mode: String?

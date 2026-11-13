@@ -16,7 +16,8 @@ import (
 // nodes' session lists, else every searchIdle) and reads them one at a time: a working one at most every
 // searchWorkingEvery, a new one (the backfill) newest first with a pause between pages. A transcript that was
 // rewritten (its history token changed) is read again from the start; a conversation gone from the list for
-// searchGoneAfter leaves the index.
+// searchGoneAfter leaves the index. An index emptied under it (`assistant search-reindex`, db.ResetSearch) is read
+// again from the start too: each sweep first looks whether the resets' count moved since its cursors were read.
 
 // searchStore is what the index keeps in the database; a store without it has no index (search answers titles only).
 type searchStore interface {
@@ -24,6 +25,8 @@ type searchStore interface {
 	PutSearchItems(ctx context.Context, machine, session, history string, afterSeq int, items []db.SearchItemRow, reset bool) error
 	DropSearchConversation(ctx context.Context, machine, session string) error
 	SearchAssistantItems(ctx context.Context, machines, sessions, words []string, perConversation int) ([]db.SearchHitRow, error)
+	SearchReset(ctx context.Context) (int64, error)
+	PurgeSearch(ctx context.Context) error
 }
 
 var _ searchStore = (*db.DB)(nil)
@@ -56,6 +59,7 @@ type searchPage struct {
 type searchIndex struct {
 	mu      sync.Mutex
 	loaded  bool
+	reset   int64 // the resets' count its cursors are from (db.SearchReset)
 	cursors map[searchKey]searchCursor
 	readRev map[searchKey]int64     // each conversation's searchVersion when it was last read through
 	readAt  map[searchKey]time.Time // when it was last read
@@ -129,26 +133,44 @@ func (s *Service) searchLoop(ctx context.Context) {
 	}
 }
 
-// searchLoad reads the cursors once; false while the database cannot be read.
+// searchLoad reads the cursors once, and after that the resets' count at each sweep: when the index was reset under
+// it, it lets go of what it holds and reads every conversation again from the start. False while the database cannot
+// be read.
 func (s *Service) searchLoad(ctx context.Context, st searchStore) bool {
+	// The count before the cursors: a reset between the two is seen at the next sweep.
+	reset, err := st.SearchReset(ctx)
+	if err != nil {
+		s.logf("assistant: search index: read the resets: %v", err)
+		return false
+	}
 	s.search.mu.Lock()
-	loaded := s.search.loaded
+	loaded, was := s.search.loaded, s.search.reset
 	s.search.mu.Unlock()
-	if loaded {
+	if loaded && reset == was {
 		return true
 	}
-	rows, err := st.SearchCursors(ctx)
+	if loaded {
+		// What it wrote since the reset went on from cursors from before it: that goes too, or those conversations
+		// would keep a cursor past messages the index no longer has.
+		if err := st.PurgeSearch(ctx); err != nil {
+			s.logf("assistant: search index: empty it after a reset: %v", err)
+			return false
+		}
+		s.logf("assistant: search index: emptied (search-reindex): reading every conversation again")
+	}
+	rows, err := st.SearchCursors(ctx) // none after a reset
 	if err != nil {
 		s.logf("assistant: search index: read cursors: %v", err)
 		return false
 	}
 	s.search.mu.Lock()
 	defer s.search.mu.Unlock()
+	s.search.cursors, s.search.readRev, s.search.readAt, s.search.retry, s.search.gone = nil, nil, nil, nil, nil
 	s.search.init()
 	for _, r := range rows {
 		s.search.cursors[searchKey{r.MachineID, r.SessionID}] = searchCursor{history: r.History, afterSeq: r.AfterSeq}
 	}
-	s.search.loaded = true
+	s.search.loaded, s.search.reset = true, reset
 	return true
 }
 
