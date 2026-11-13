@@ -435,9 +435,7 @@ struct ShellDestinations: ViewModifier {
                 .navigationDestination(for: MachineDetailRoute.self) { r in MachineDetailView(ref: r.ref).modifier(ShellPlaceSidebarButton()) }
                 .navigationDestination(for: TerminalsRoute.self) { r in TerminalsView(only: r.machine).modifier(ShellPlaceSidebarButton()) }
                 .navigationDestination(for: SessionKey.self) { key in ChatView(key: key).id(key) }
-                .navigationDestination(for: InboxChatRoute.self) { r in
-                    ChatView(key: r.key, itemManager: r.manager).id(r.key).modifier(ShellPlaceSidebarButton())
-                }
+                .navigationDestination(for: InboxChatRoute.self) { r in ChatView(key: r.key, itemManager: r.manager).id(r.key) }
                 .environment(\.feishuOpen) { path.append($0) }
         } else {
             content

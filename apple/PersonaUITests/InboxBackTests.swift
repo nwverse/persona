@@ -203,23 +203,28 @@ final class InboxBackTests: XCTestCase {
         assertDetail("phone-handoff-back")
     }
 
-    @MainActor func testPhoneInboxChatIsRestoredWithItsPlace() throws {
+    @MainActor func testPhoneChatBackAndInboxPlaceRestoration() throws {
         openDetail("place-detail")
         try requirePhone()
         openChat(revealChainRow("开了子会话"), "place-chat")
+        swipeBack()
+        assertDetail("place-back-to-detail")
 
+        // ChatView has no place-sidebar button yet. Exercise the drawer's save/restore from the inbox list instead.
+        app.terminate()
+        launch(["-tab", "mail"])
+        try requirePhone()
+        let inbox = app.navigationBars["收件箱"].firstMatch
+        XCTAssertTrue(inbox.waitForExistence(timeout: 20), "the inbox list did not reopen")
         openPlaceDrawer()
         pickPlace("sidebar-知识库", title: "知识库")
         shot("place-knowledge")
         openPlaceDrawer()
         pickPlace("sidebar-inbox")
-
-        let composer = app.descendants(matching: .any)["shell-composer-field"].firstMatch
-        XCTAssertTrue(composer.waitForExistence(timeout: 15), "the inbox did not restore its pushed chat")
-        assertPushed("place-restored-chat")
-        shot("place-restored-chat")
-        swipeBack()
-        assertDetail("place-back-to-detail")
+        XCTAssertTrue(inbox.waitForExistence(timeout: 15), "the inbox place was not restored")
+        XCTAssertTrue(app.buttons["inbox.agentRow"].firstMatch.waitForExistence(timeout: 5),
+                      "the restored inbox is not its list")
+        shot("place-restored-inbox")
     }
 
     @MainActor func testNewChatAgentRowSwipesBackToNewChat() throws {

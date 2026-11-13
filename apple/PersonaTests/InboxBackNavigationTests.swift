@@ -116,6 +116,19 @@ struct InboxBackNavigationTests {
         }
     }
 
+    @Test func inboxPlaceRestoresItsPathIncludingThePushedChat() throws {
+        var places = ShellPlaces()
+        _ = places.enter(.inbox, from: NavigationPath())
+        var path = NavigationPath([ShellRoute.inbox])
+        path.append(try item(manager: "m2"))
+        path.append(InboxChatRoute(key: Self.other, manager: "m2"))
+
+        _ = places.enter(.knowledge, from: path)
+        #expect(places.current == .knowledge && places.keeps(.inbox))
+        let restored = places.enter(.inbox, from: NavigationPath([ShellRoute.knowledge]))
+        #expect(restored == path, "the inbox's saved path must include its item and InboxChatRoute")
+    }
+
     @Test func newAgentCompletionPushesTheAgentRecordedByStarted() throws {
         try keepingDefaults {
             let app = AppModel(), item = try item(manager: "m2")
