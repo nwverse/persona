@@ -150,15 +150,18 @@ func (s *Service) NodeRequest(ctx context.Context, machine, method string, param
 		return map[string]any{"tools": s.sessionMCPTools(ctx, machine, p.SessionID, p.Assistant, p.Guest)}, true, nil
 	case "mcp.call":
 		var p struct {
-			Name      string          `json:"name"`
-			Args      json.RawMessage `json:"args"`
-			SessionID string          `json:"session_id"`
-			Assistant bool            `json:"assistant"`
-			Guest     bool            `json:"guest"`
+			Name        string          `json:"name"`
+			Args        json.RawMessage `json:"args"`
+			SessionID   string          `json:"session_id"`
+			Assistant   bool            `json:"assistant"`
+			Guest       bool            `json:"guest"`
+			WaitUpdates bool            `json:"wait_updates"`
+			CallID      string          `json:"call_id"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, true, err
 		}
+		ctx = s.mcpWaitContext(ctx, machine, p.CallID, p.WaitUpdates)
 		if res, refused := s.guestRefuses(ctx, machine, p.SessionID, p.Name, p.Guest); refused {
 			return res, true, nil
 		}

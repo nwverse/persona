@@ -6,28 +6,61 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// waitingNode is a node whose tool calls wait until release is closed (the phone not answering), or until their
-// caller hangs up.
-func waitingNode(t *testing.T) (release func()) {
+type manualProgressTicker struct {
+	ch      chan time.Time
+	stopped chan struct{}
+	once    sync.Once
+}
+
+func newManualProgressTicker() *manualProgressTicker {
+	return &manualProgressTicker{ch: make(chan time.Time, 32), stopped: make(chan struct{})}
+}
+
+func (t *manualProgressTicker) ticks() <-chan time.Time { return t.ch }
+func (t *manualProgressTicker) Stop()                   { t.once.Do(func() { close(t.stopped) }) }
+func (t *manualProgressTicker) beat()                   { t.ch <- time.Time{} }
+
+// waitingCall is a node whose tool call waits until release, or until its caller hangs up. Its ticker is advanced by
+// the test, so no assertion depends on a wall-clock sleep.
+type waitingCall struct {
+	tick    *manualProgressTicker
+	state   atomic.Pointer[mcpWaitState]
+	release chan struct{}
+	once    sync.Once
+}
+
+func waitingNode(t *testing.T) *waitingCall {
 	t.Helper()
-	oldDial, oldEvery := dialNode, progressEvery
-	t.Cleanup(func() { dialNode, progressEvery = oldDial, oldEvery })
-	progressEvery = 2 * time.Millisecond
-	ch := make(chan struct{})
+	call := &waitingCall{tick: newManualProgressTicker(), release: make(chan struct{})}
+	oldDial, oldTicker := dialNode, newProgressTicker
+	newProgressTicker = func(time.Duration) progressTicker { return call.tick }
 	dialNode = func(ctx context.Context, _ any) ([]byte, error) {
+		call.state.Store(mcpWaitFrom(ctx))
 		select {
-		case <-ch:
+		case <-call.release:
 			return []byte(`{"content":[{"type":"text","text":"saved"}]}`), nil
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
 	}
-	var once sync.Once
-	return func() { once.Do(func() { close(ch) }) }
+	t.Cleanup(func() { dialNode, newProgressTicker = oldDial, oldTicker })
+	t.Cleanup(call.stop)
+	return call
+}
+
+func (c *waitingCall) stop() { c.once.Do(func() { close(c.release) }) }
+func (c *waitingCall) ready() bool {
+	return c.state.Load() != nil
+}
+func (c *waitingCall) set(kind proto.MCPWaitKind) {
+	c.state.Load().set(kind)
 }
 
 // serve runs Serve on a pipe: send writes a line to it, out is what it wrote, end closes its input and waits.
@@ -38,12 +71,16 @@ func serve(t *testing.T) (send func(string), out *syncBuf, end func()) {
 	done := make(chan error, 1)
 	go func() { done <- Serve(context.Background(), "test", in, out) }()
 	send = func(s string) { _, _ = io.WriteString(w, s+"\n") }
+	var once sync.Once
 	end = func() {
-		_ = w.Close()
-		if err := <-done; err != nil {
-			t.Fatal(err)
-		}
+		once.Do(func() {
+			_ = w.Close()
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
+	t.Cleanup(end)
 	return send, out, end
 }
 
@@ -84,17 +121,56 @@ func progressCount(t *testing.T, out *syncBuf) int {
 	return n
 }
 
-// A tool call that waits on the user longer than the client's idle limit (a phone approval, ask_user) says it is
-// alive with notifications/progress under the token the client gave, growing each time, and stops once it answers
-// (#1498: without them Claude Code aborted the call after 30 minutes and the hub's own timeout reply was lost).
+func progressMessages(t *testing.T, out *syncBuf) []string {
+	var messages []string
+	for _, l := range lines(t, out.String()) {
+		if l.Method == "notifications/progress" {
+			messages = append(messages, l.Params.Message)
+		}
+	}
+	return messages
+}
+
+func checkProgressParams(t *testing.T, out *syncBuf) {
+	t.Helper()
+	allowed := map[string]bool{
+		"Waiting for your approval": true,
+		"Waiting for your answer":   true,
+		"Waiting for the computer":  true,
+		"Still waiting":             true,
+	}
+	for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+		var raw struct {
+			Method string                     `json:"method"`
+			Params map[string]json.RawMessage `json:"params"`
+		}
+		if err := json.Unmarshal([]byte(line), &raw); err != nil || raw.Method != "notifications/progress" {
+			continue
+		}
+		if len(raw.Params) != 3 || raw.Params["progressToken"] == nil || raw.Params["progress"] == nil || raw.Params["message"] == nil {
+			t.Fatalf("progress params must be exactly progressToken, progress and message: %s", line)
+		}
+		var message string
+		if err := json.Unmarshal(raw.Params["message"], &message); err != nil || !allowed[message] {
+			t.Fatalf("progress message is not one of the four fixed strings: %s", line)
+		}
+	}
+}
+
+// A tool call that waits longer than the client's idle limit stays alive under the token the client gave, with a
+// growing counter and no progress after its final answer (#1498). Without a live update the fixed fallback is used.
 func TestServeSendsProgressWhileACallWaits(t *testing.T) {
-	release := waitingNode(t)
+	call := waitingNode(t)
 	send, out, end := serve(t)
 	send(`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"phone_reminders_create","arguments":{},"_meta":{"progressToken":"tok-7"}}}`)
+	for range 3 {
+		call.tick.beat()
+	}
 	waitFor(t, "three progress lines", func() bool { return progressCount(t, out) >= 3 })
-	release()
+	call.stop()
 	waitFor(t, "the answer", func() bool { return strings.Contains(out.String(), `"id":7`) })
-	time.Sleep(20 * progressEvery) // a beat that was due must not come after the answer
+	<-call.tick.stopped
+	call.tick.beat() // a beat that was due must not come after the answer
 	end()
 
 	all := lines(t, out.String())
@@ -110,18 +186,57 @@ func TestServeSendsProgressWhileACallWaits(t *testing.T) {
 		if l.Params.Progress <= prev {
 			t.Fatalf("progress %v after %v: it must grow", l.Params.Progress, prev)
 		}
+		if l.Params.Message != "Still waiting" {
+			t.Fatalf("progress message %q, want the fixed fallback %q", l.Params.Message, "Still waiting")
+		}
 		prev = l.Params.Progress
+	}
+	checkProgressParams(t, out)
+}
+
+// Each live enum changes only the fixed message on the next beat. Approval moving on to execution is visible as
+// computer, and an unrecognized value conservatively returns to the fallback without echoing that value.
+func TestServeProgressMessagesFollowWaitKind(t *testing.T) {
+	call := waitingNode(t)
+	send, out, end := serve(t)
+	send(`{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"ask_user","arguments":{},"_meta":{"progressToken":"tok-8"}}}`)
+	waitFor(t, "the node call", call.ready)
+	steps := []struct {
+		kind proto.MCPWaitKind
+		want string
+	}{
+		{proto.MCPWaitApproval, "Waiting for your approval"},
+		{proto.MCPWaitAnswer, "Waiting for your answer"},
+		{proto.MCPWaitComputer, "Waiting for the computer"},
+		{proto.MCPWaitKind("a future value with text that must not be echoed"), "Still waiting"},
+	}
+	for i, step := range steps {
+		call.set(step.kind)
+		call.tick.beat()
+		waitFor(t, step.want, func() bool {
+			got := progressMessages(t, out)
+			return len(got) == i+1 && got[i] == step.want
+		})
+	}
+	call.stop()
+	waitFor(t, "the answer", func() bool { return strings.Contains(out.String(), `"id":8`) })
+	end()
+	checkProgressParams(t, out)
+	if strings.Contains(out.String(), "future value") {
+		t.Fatalf("an unknown enum value was echoed: %s", out.String())
 	}
 }
 
 // A call without a token gets no progress (MCP: progress only for a token the client asked with), and neither does
 // any other request.
 func TestServeSendsNoProgressWithoutAToken(t *testing.T) {
-	release := waitingNode(t)
+	call := waitingNode(t)
 	send, out, end := serve(t)
 	send(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ask_user","arguments":{}}}`)
-	time.Sleep(25 * progressEvery)
-	release()
+	for range 3 {
+		call.tick.beat()
+	}
+	call.stop()
 	waitFor(t, "the answer", func() bool { return strings.Contains(out.String(), `"id":1`) })
 	end()
 	if n := progressCount(t, out); n != 0 {
@@ -131,16 +246,17 @@ func TestServeSendsNoProgressWithoutAToken(t *testing.T) {
 
 // A call the client cancels stops its progress with its answer: nothing more is written for it.
 func TestServeStopsProgressWhenACallIsCancelled(t *testing.T) {
-	waitingNode(t)
+	call := waitingNode(t)
 	send, out, end := serve(t)
 	send(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"ask_user","arguments":{},"_meta":{"progressToken":42}}}`)
+	call.tick.beat()
 	waitFor(t, "progress", func() bool { return progressCount(t, out) >= 1 })
 	send(`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":3,"reason":"interrupted"}}`)
 	send(`{"jsonrpc":"2.0","id":4,"method":"ping"}`)
 	waitFor(t, "ping", func() bool { return strings.Contains(out.String(), `"id":4`) })
-	time.Sleep(10 * progressEvery)
+	<-call.tick.stopped
 	n := progressCount(t, out)
-	time.Sleep(20 * progressEvery)
+	call.tick.beat()
 	end()
 	if m := progressCount(t, out); m != n {
 		t.Fatalf("progress went on after the cancel: %d, then %d", n, m)

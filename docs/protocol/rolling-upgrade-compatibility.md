@@ -86,6 +86,21 @@ Registration and historical recognition are separate: transcript readers, task c
 continue accepting `mcp__persona__*` and `mcp__jarvis__*` forever. Extension namespaces and their permission rules are
 unchanged. Guest allow lists remain restricted to their configured tools; namespace selection grants no extra tools.
 
+### MCP progress wait kinds
+
+`mcp_wait_v1` is additive and does not raise the node protocol floor. Only an MCP process that has a progress token
+sends `wait_updates:true`; only a node whose authenticated hub announced the feature generates a `call_id` and forwards
+the opt-in. An old MCP process sends neither field, and an old node or hub returns one final local-socket line as
+before. An old manager ignores the optional fields and publishes no updates, so the terminal keeps `Still waiting`.
+A new node never sends an interim line to a client that did not opt in.
+
+Live updates use the existing `devices.notify` event `mcp.wait {call_id, kind}` and local interim lines
+`{"wait_kind":kind}`. Managers that accept phone-confirmation relays declare `mcp_wait_v1` in `manager.hello`; the hub
+checks the current connection before each such relay. No peer is required to understand a new event: absent updates
+mean `unknown`, and every receiver normalizes an unrecognized enum to `unknown`. The four terminal messages are a
+presentation mapping only; `unknown | approval | answer | computer` is the entire wire state. Nothing is persisted,
+and removing the pending call before its final socket write prevents late updates after the answer.
+
 ## 配置、目录、服务与升级渠道
 
 | 标识 | 旧名 | 新名 | 新实现读旧安装 | 与旧实现共存／回退 |

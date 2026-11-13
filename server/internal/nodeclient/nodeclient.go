@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // SocketPath is where hook and mcp subprocesses reach the node.
@@ -58,6 +59,9 @@ type Request struct {
 	CodexThreadID string `json:"codex_thread_id,omitempty"`
 	Assistant     bool   `json:"assistant,omitempty"` // the caller is the assistant's MCP server
 	Guest         bool   `json:"guest,omitempty"`     // a guest conversation's MCP server (assistant_guest.go)
+	// WaitUpdates explicitly opts this MCP call into interim {"wait_kind":...} lines before its final response.
+	// Older clients omit it and keep the single-response protocol.
+	WaitUpdates bool `json:"wait_updates,omitempty"`
 	// Attempt is the hook process's own id, the same on each reconnect; Resume marks those reconnects.
 	Attempt string `json:"attempt,omitempty"`
 	Resume  bool   `json:"resume,omitempty"`
@@ -77,6 +81,19 @@ type Request struct {
 
 // Dialer sends one request line to the node's socket and returns its answer line (Dial).
 type Dialer func(ctx context.Context, req any) ([]byte, error)
+
+type mcpWaitContextKey struct{}
+
+// WithMCPWait installs the receiver for an explicitly opted-in call's interim wait_kind lines. A nil receiver simply
+// consumes those lines; an older client never opts in and keeps reading exactly one final line.
+func WithMCPWait(ctx context.Context, receive func(proto.MCPWaitKind)) context.Context {
+	return context.WithValue(ctx, mcpWaitContextKey{}, receive)
+}
+
+func mcpWaitReceiver(ctx context.Context) func(proto.MCPWaitKind) {
+	receive, _ := ctx.Value(mcpWaitContextKey{}).(func(proto.MCPWaitKind))
+	return receive
+}
 
 // Dial sends one request to the local node and returns the raw response line. It fails with ErrNoNode when no node
 // listens.
@@ -112,9 +129,27 @@ func dial(ctx context.Context, path string, req any, hangUpOnCancel bool) ([]byt
 	if _, err := c.Write(append(b, '\n')); err != nil {
 		return nil, err
 	}
-	line, err := bufio.NewReader(c).ReadBytes('\n')
-	if err != nil {
-		return nil, fmt.Errorf("node closed connection: %w", err)
+	reader := bufio.NewReader(c)
+	var line []byte
+	for {
+		line, err = reader.ReadBytes('\n')
+		if err != nil {
+			return nil, fmt.Errorf("node closed connection: %w", err)
+		}
+		var envelope map[string]json.RawMessage
+		if json.Unmarshal(line, &envelope) == nil {
+			if raw, ok := envelope["wait_kind"]; ok {
+				var kind proto.MCPWaitKind
+				if json.Unmarshal(raw, &kind) != nil {
+					kind = proto.MCPWaitUnknown
+				}
+				if receive := mcpWaitReceiver(ctx); receive != nil {
+					receive(proto.NormalizeMCPWaitKind(kind))
+				}
+				continue
+			}
+		}
+		break
 	}
 	var away struct {
 		Away bool `json:"away"`

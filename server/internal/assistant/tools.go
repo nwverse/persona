@@ -807,6 +807,8 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 // ask puts ix on the phone (the snapshot's interactions: the hub shows it like any agent's card, pushes it and
 // expires it) and waits for the answer (Action); when ctx ends first the question is withdrawn.
 func (s *Service) ask(ctx context.Context, ix proto.Interaction) (proto.Resolution, error) {
+	resume := pushMCPWait(ctx, proto.MCPWaitAnswer)
+	defer resume()
 	ix = s.ownCard(ctx, ix)
 	q := &question{ix: ix, answer: make(chan proto.Resolution, 1)}
 	s.questions.mu.Lock()

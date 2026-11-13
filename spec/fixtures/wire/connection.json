@@ -122,6 +122,7 @@
         "sessions_hierarchy",
         "sessions_catalog",
         "machine_rename",
+        "mcp_wait_v1",
         "assistant_views",
         "assistant_html_bridge"
       ],
@@ -259,6 +260,7 @@
           "sessions_hierarchy",
           "sessions_catalog",
           "machine_rename",
+          "mcp_wait_v1",
           "assistant_views",
           "assistant_html_bridge"
         ],
@@ -387,6 +389,7 @@
         "sessions_hierarchy",
         "sessions_catalog",
         "machine_rename",
+        "mcp_wait_v1",
         "assistant_views",
         "assistant_html_bridge"
       ],
@@ -513,6 +516,7 @@
           "sessions_hierarchy",
           "sessions_catalog",
           "machine_rename",
+          "mcp_wait_v1",
           "assistant_views",
           "assistant_html_bridge"
         ],

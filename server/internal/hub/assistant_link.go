@@ -265,7 +265,7 @@ func (l assistantLink) appCallFrom(ctx context.Context, from string, p assistant
 	if out, ok, err := h.extAppCall(ctx, from, p); ok { // what the manager's extensions ask of the hub (extensions_link.go)
 		return out, err
 	}
-	if out, ok, err := h.fleetAppCall(ctx, p); ok { // what the hub still runs for the nodes (fleet_link.go)
+	if out, ok, err := h.fleetAppCall(ctx, from, p); ok { // what the hub still runs for the nodes (fleet_link.go)
 		return out, err
 	}
 	if p.Method == assistantwire.AppTool {

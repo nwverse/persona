@@ -11,15 +11,18 @@ func TestHubFeaturesConfiguration(t *testing.T) {
 	if n.hubSupportsPersonaContracts() {
 		t.Fatal("a node without a hub announcement must keep legacy aliases")
 	}
+	if n.hubMCPWait.Load() {
+		t.Fatal("a node without a hub announcement must keep single-response MCP calls")
+	}
 	for _, tt := range []struct {
 		name   string
 		params map[string]any
 		want   bool
 	}{
-		{"current hub", map[string]any{"machine_id": "computer", "hub_features": []string{nodeproto.PersonaContracts}}, true},
+		{"current hub", map[string]any{"machine_id": "computer", "hub_features": []string{nodeproto.PersonaContracts, nodeproto.MCPWait}}, true},
 		{"partial configuration", map[string]any{"keep_sessions": []string{}}, true},
 		{"old hub after reconnect", map[string]any{"machine_id": "computer", "hub_features": []string{}}, false},
-		{"current hub again", map[string]any{"hub_features": []string{nodeproto.PersonaContracts}}, true},
+		{"current hub again", map[string]any{"hub_features": []string{nodeproto.PersonaContracts, nodeproto.MCPWait}}, true},
 		{"old manager handover", map[string]any{"machine_id": "computer"}, false},
 		{"unknown feature", map[string]any{"hub_features": []string{"future_contracts"}}, false},
 	} {
@@ -29,6 +32,9 @@ func TestHubFeaturesConfiguration(t *testing.T) {
 			}
 			if got := n.hubSupportsPersonaContracts(); got != tt.want {
 				t.Fatalf("hubSupportsPersonaContracts = %v, want %v", got, tt.want)
+			}
+			if got := n.hubMCPWait.Load(); got != tt.want {
+				t.Fatalf("hubMCPWait = %v, want %v", got, tt.want)
 			}
 		})
 	}

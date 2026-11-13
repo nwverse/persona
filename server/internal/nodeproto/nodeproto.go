@@ -19,6 +19,10 @@ const (
 // change the node protocol floor or become a required capability.
 const PersonaContracts = "persona_contracts_v1"
 
+// MCPWait is the optional hub feature that lets a token-bearing local MCP call receive enum-only wait updates.
+// A node connected to a hub without it never emits interim local-socket lines.
+const MCPWait = "mcp_wait_v1"
+
 // ManagerUpdateInventory is the optional read-only local update.inventory
 // contract. A legacy peer remains compatible, but cannot produce idle evidence.
 const ManagerUpdateInventory = "manager_update_inventory_v1"
