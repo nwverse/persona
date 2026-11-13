@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiError } from "../../lib/api";
 import type { InboxItem } from "../../lib/inbox";
 
-const calls = vi.hoisted(() => ({ requests: [] as { path: string; init?: { method?: string; json?: unknown; headers?: Record<string, string> } }[], fail: false }));
+const calls = vi.hoisted(() => ({ requests: [] as { path: string; init?: { method?: string; json?: unknown; headers?: Record<string, string> } }[], fail: null as unknown }));
 vi.mock("../../lib/api", async (orig) => ({
   ...(await orig<typeof import("../../lib/api")>()),
   api: (path: string, init?: { method?: string; json?: unknown; headers?: Record<string, string> }) => {
     calls.requests.push({ path, init });
-    return calls.fail ? Promise.reject(new Error("offline")) : Promise.resolve({});
+    return calls.fail ? Promise.reject(calls.fail) : Promise.resolve({});
   },
 }));
 vi.mock("../../ui/atoms", async (orig) => ({ ...(await orig<typeof import("../../ui/atoms")>()), toast: vi.fn() }));
@@ -20,7 +21,7 @@ const item = (id: string, title: string, over: Partial<InboxItem> = {}): InboxIt
 
 beforeEach(() => {
   calls.requests = [];
-  calls.fail = false;
+  calls.fail = null;
   vi.mocked(toast).mockClear();
 });
 
@@ -57,8 +58,23 @@ describe("线索的父子关系请求", () => {
     }
   });
 
+  it("shows the localized cycle explanation for the exact link conflict", async () => {
+    const error = "that parent would make a cycle";
+    calls.fail = new ApiError(409, error, { code: "conflict", error });
+
+    await expect(linkInboxParent({ id: "child" }, item("parent", "发布准备"))).resolves.toBe(false);
+    expect(toast).toHaveBeenCalledExactlyOnceWith("连不上：那件事已经在这件事下面了。", "error");
+  });
+
+  it("keeps the existing error text for another link conflict", async () => {
+    calls.fail = new ApiError(409, "another conflict", { code: "conflict", error: "another conflict" });
+
+    await expect(linkInboxParent({ id: "child" }, item("parent", "发布准备"))).resolves.toBe(false);
+    expect(toast).toHaveBeenCalledExactlyOnceWith("another conflict", "error");
+  });
+
   it.each(["detach", "link"] as const)("uses the existing error toast on %s failure and does not claim success", async (action) => {
-    calls.fail = true;
+    calls.fail = new Error("offline");
     const ok = action === "detach"
       ? await detachInboxParent({ id: "child" })
       : await linkInboxParent({ id: "child" }, item("parent", "发布准备"));
