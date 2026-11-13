@@ -63691,6 +63691,29 @@
       },
       "extractionState" : "manual"
     },
+    "Hand to Agent [To-do Page Button]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hand to Agent"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "エージェントへ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "交给 Agent"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Hand to Persona" : {
       "localizations" : {
         "en" : {

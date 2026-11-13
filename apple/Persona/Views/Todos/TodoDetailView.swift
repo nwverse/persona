@@ -508,8 +508,8 @@ struct TodoDetailView: View {
     }
 
     /// How large the bottom buttons' words get (#6151). Stacked across the page at the accessibility sizes, Hand to
-    /// Agent in English and in Japanese still doesn't fit on one line at the largest; at this size every language's
-    /// label fits whole on a 375 pt-wide iPhone. A long press shows the label larger (the Large Content Viewer).
+    /// Agent in English still doesn't fit on one line at the largest; at this size every language's label fits whole
+    /// on a 375 pt-wide iPhone. A long press shows the label larger (the Large Content Viewer).
     static let actionTypeSize: DynamicTypeSize = .accessibility1
 
     private func bottomBar(_ todo: TodoItem) -> some View {
@@ -540,7 +540,8 @@ struct TodoDetailView: View {
             } label: {
                 HStack(spacing: Theme.Space.xs) {
                     ThemedIcon(Theme.Icon.handToAI)
-                    Text("Hand to Agent").lineLimit(1).minimumScaleFactor(0.8)
+                    // Its own string (#6151): the sheet's title keeps the longer Japanese, which the half-width button cut off.
+                    Text("Hand to Agent [To-do Page Button]").lineLimit(1).minimumScaleFactor(0.8)
                 }
                 .font(Theme.Font.heading)
                 .scaledFrame(maxWidth: .infinity, minHeight: Theme.Size.wellS)
