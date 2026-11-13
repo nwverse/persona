@@ -19,9 +19,17 @@ export const DEVICES = [
     caveat: "程序还没有签名。Windows 提示有风险时，点「更多信息 › 仍要运行」。", arches: ["amd64", "arm64"] },
   { id: "linux", short: "Linux", name: "Linux", sub: "x86-64 和 ARM64",
     what: "适合长期开着的机器当 hub，也可以连上 hub 跑 Agent。", arches: ["amd64", "arm64"] },
-  { id: "web", short: "网页版", name: "网页版", sub: "已经在你的 hub 上",
-    what: "不用安装：浏览器打开 hub 的地址就能用，电脑上还可以装成应用。只有自己托管网页时才需要下载。", arches: [""] },
+  { id: "web", short: "网页版", name: "网页版", sub: "不用安装，打开就能用",
+    what: "网页版就在你的 hub 上，用浏览器打开就行：", guide: true },
 ];
+
+// How to reach the web app: it is served by the hub, so there is nothing to download (docs/operations/getting-started.md).
+export const WEB_GUIDE = [
+  { title: "打开 hub 的地址", text: "装 hub 时终端里打出的管理页地址，去掉末尾的 /admin 就是，比如", code: "http://<局域网地址>:18660" },
+  { title: "用手机扫码登录", text: "在已连上的手机里打开「设置 › 设备 › 连接新设备」，选「浏览器」，扫网页上的二维码。" },
+  { title: "装成应用（可选）", text: "Chrome、Edge 点地址栏里的「安装」；Safari 选「文件 › 添加到程序坞」。" },
+];
+export const GETTING_STARTED = "https://github.com/nwverse/persona/blob/main/docs/operations/getting-started.md";
 
 const ARCH = {
   macos: { arm64: "Apple 芯片", amd64: "Intel 芯片" },

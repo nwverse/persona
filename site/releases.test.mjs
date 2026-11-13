@@ -283,4 +283,11 @@ test("the home page offers every device's download, through the same model and n
   assert.doesNotMatch(section, /\/dl\//);
   assert.match(home, /import \{[^}]*downloadFor[^}]*\} from "\/releases\/model\.js"/);
   assert.match(home, /<a href="#download">下载<\/a>/);
+  // the top bar's version is the release the download page shows, not the hub update channel's build
+  assert.doesNotMatch(home, /\/dl\/VERSION/);
+  assert.match(home, /<a class="ver" id="ver" href="\/releases\/" hidden>/);
+  // the web app has a guide, not a download
+  const webTile = /<div class="dl-tile" data-id="web">[\s\S]*?<\/div><\/div>\s*$/m.exec(section)[0];
+  assert.doesNotMatch(webTile, /网页包|去下载|download/);
+  assert.match(webTile, /扫码登录/);
 });

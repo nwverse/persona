@@ -35,13 +35,14 @@ own `site/public/style.css`.
   finds a system copy or takes `--serif-font`.
 - **Motion** only starts with JavaScript; without it every section is visible and static, and with reduced motion
   the page shows its finished state (the switches on, the underline drawn, no moving packets).
-- **The version in the top bar** is `/dl/VERSION`, written by `scripts/release/publish.sh`; the badge stays hidden
-  when the file is missing. It links to `/releases/`, whose latest stable GitHub release may appear before this
-  separately published hub version.
+- **The version in the top bar** is the latest stable GitHub release from `/releases/data.json` ("最新 v0.4.0"), the
+  same one the download page leads with, and links there; it stays hidden until the data arrives. It used to show
+  `/dl/VERSION` (the hub update channel's build, e.g. `personad v0.1.17-177-…`), which could be far behind the
+  release it linked to and named a program visitors don't know.
 - **Download section** (`#download`, the top bar's 下载): one tile per device with the latest stable files straight
   from GitHub, filled from `/releases/data.json` with the releases page's own `model.js` (same file choice, same
   fallback to an older release while one is uploading, same address check). Without the data each tile links to its
-  card on `/releases/`; the visitor's device is marked.
+  card on `/releases/`; the visitor's device is marked, and the web app tile says how to open it instead.
 - **Light only.** The previous page also had a dark variant; this one follows the app icon's paper in both schemes.
 
 ## Legal pages and support
@@ -101,7 +102,9 @@ are on in one click, and still reach every other device, component and earlier v
 
 - **Layout**: a "ticket" for the latest stable version (the version large in the brand face, its date, feature and fix
   counts) with the download for the visitor's device; one card per device (iPhone and Apple
-  Watch through TestFlight, Android, Mac, Windows, Linux, the web bundle); components and checksum files behind a
+  Watch through TestFlight, Android, Mac, Windows, Linux, and the web app, which has no download: its card and tab give
+  the three steps to open it from the hub, sign in with a connected phone and install it as an app, `WEB_GUIDE` in
+  `model.js`, matching `docs/operations/getting-started.md`); components and checksum files behind a
   disclosure; and the version history, newest first, each version expandable to its highlights and packages with a link
   to its full notes on GitHub. Same palette, type, top bar and footer as the home page; light and dark, with every color
   a variable at the top of its CSS (the extensions page's night set).

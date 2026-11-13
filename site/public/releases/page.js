@@ -2,7 +2,7 @@
 // text node; links are only GitHub's own download and release addresses (model.js isDirectDownload). The packages are
 // downloaded from GitHub directly: nothing here goes through this site.
 import {
-  DEVICES, COMPONENTS, GITHUB_RELEASES, TESTFLIGHT,
+  DEVICES, COMPONENTS, GETTING_STARTED, GITHUB_RELEASES, TESTFLIGHT, WEB_GUIDE,
   archLabel, areaLabel, compareVersions, countsLine, detectPlatform, downloadFor, formatAge, formatDate, formatSize,
   hasPackages, isDirectDownload, latestRelease,
 } from "./model.js";
@@ -58,9 +58,13 @@ function fileChip(asset, label) {
 
 function assetLabel(a) {
   if (a.kind === "app") return "Android";
-  if (a.kind === "web") return "网页包";
   if (a.kind === "computer" || a.kind === "component") return `${PLATFORM_NAME[a.platform]} · ${archLabel(a.platform, a.arch)}`;
   return a.name;
+}
+
+function webGuide(cls) {
+  return el("ol", { class: cls }, WEB_GUIDE.map((step) => el("li", {}, el("b", { text: step.title }),
+    el("span", {}, document.createTextNode(step.text), step.code ? el("code", { text: step.code }) : null))));
 }
 
 // ---------- the ticket ----------
@@ -123,19 +127,23 @@ function drawDownload(data, dev, arch) {
     $("tk-title").textContent = "在 iPhone 上装 Persona";
     actions.append(primaryButton({ href: TESTFLIGHT, text: "打开 TestFlight", external: true }));
     $("tk-meta").textContent = "TestFlight 公开测试 · 需要 iOS 26 · 手表版随 iPhone 版一起提供";
+  } else if (dev.guide) {
+    $("tk-title").textContent = "打开网页版";
+    actions.append(webGuide("tk-guide"));
+    $("tk-meta").textContent = "网页版由你的 hub 提供，不用下载安装。";
   } else {
-    $("tk-title").textContent = dev.id === "web" ? "下载网页版" : `下载 ${dev.name} 版`;
+    $("tk-title").textContent = `下载 ${dev.name} 版`;
     const arches = dev.arches.slice().sort((a, b) => (a === arch ? -1 : b === arch ? 1 : 0));
     const found = arches.map((x) => ({ arch: x, d: downloadFor(data, dev.id, x) })).filter((x) => x.d);
     found.forEach(({ arch: x, d }, i) => {
-      const text = dev.id === "android" ? "下载 APK" : dev.id === "web" ? "下载网页包" : archLabel(dev.id, x);
+      const text = dev.id === "android" ? "下载 APK" : archLabel(dev.id, x);
       actions.append(primaryButton({ href: d.asset.url, text, size: formatSize(d.asset.size), cls: i === 0 ? "btn btn-cheek" : "btn btn-paper" }));
     });
     if (found.length) {
       const first = found[0].d;
       const hint = dev.id === "macos" ? "不确定是哪种芯片？点屏幕左上角的苹果菜单 › 关于本机。"
         : dev.id === "windows" ? "不确定选哪个，选 x64。" : dev.id === "linux" ? "不确定选哪个，选 x86-64。"
-          : dev.id === "web" ? "hub 已经自带网页版，浏览器打开 hub 的地址就能用；只有自己托管网页时才需要这个包。" : "";
+ : "";
       $("tk-meta").textContent = `${first.asset.name} · 从 GitHub 直接下载${hint ? "\n" : ""}${hint}`;
       if (!first.current) {
         notices.append(notice("amber", document.createTextNode(
@@ -175,7 +183,7 @@ function drawDevices(data, det) {
   const grid = $("devices-grid");
   grid.replaceChildren(...DEVICES.map((dev) => {
     const you = det.platform === dev.id;
-    const card = el("article", { class: you ? "dev you" : "dev", id: `dev-${dev.id}` },
+    const card = el("article", { class: ["dev", you ? "you" : "", dev.guide ? "guide" : ""].filter(Boolean).join(" "), id: `dev-${dev.id}` },
       you ? el("span", { class: "chip you-chip", text: "你的设备" }) : null,
       el("div", { class: "dev-head" }, el("span", { class: "dev-ico" }, icon(dev.id)),
         el("div", {}, el("h3", { text: dev.name }), el("p", { text: dev.sub }))),
@@ -185,6 +193,10 @@ function drawDevices(data, det) {
     if (dev.store) {
       box.append(el("a", { class: you ? "dl primary" : "dl", href: TESTFLIGHT, target: "_blank", rel: "noopener" },
         el("span", { class: "l" }, icon("out"), el("span", { text: "打开 TestFlight" })), el("span", { class: "r", text: "Apple" })));
+    } else if (dev.guide) {
+      card.append(webGuide("dev-guide"));
+      box.append(el("a", { class: "dl", href: GETTING_STARTED, target: "_blank", rel: "noopener" },
+        el("span", { class: "l" }, icon("out"), el("span", { text: "完整的安装指南" })), el("span", { class: "r", text: "GitHub" })));
     } else if (!data) {
       box.append(el("a", { class: "dl", href: GITHUB_RELEASES + "/latest", target: "_blank", rel: "noopener" },
         el("span", { class: "l" }, icon("out"), el("span", { text: "在 GitHub 上下载" })), el("span", { class: "r", text: "GitHub" })));
@@ -192,13 +204,13 @@ function drawDevices(data, det) {
       const arches = you ? dev.arches.slice().sort((a, b) => (a === det.arch ? -1 : b === det.arch ? 1 : 0)) : dev.arches;
       arches.forEach((arch, i) => {
         const d = downloadFor(data, dev.id, arch);
-        const label = dev.id === "android" ? "下载 APK" : dev.id === "web" ? "下载网页包" : archLabel(dev.id, arch);
+        const label = dev.id === "android" ? "下载 APK" : archLabel(dev.id, arch);
         if (!d) {
           box.append(el("span", { class: "dl off" }, el("span", { class: "l", text: label }), el("span", { class: "r", text: "暂无" })));
           return;
         }
         const side = formatSize(d.asset.size) + (d.current ? "" : ` · ${d.tag}`);
-        box.append(el("a", { class: you && i === 0 && dev.id !== "web" ? "dl primary" : "dl", href: d.asset.url, title: d.asset.name },
+        box.append(el("a", { class: you && i === 0 ? "dl primary" : "dl", href: d.asset.url, title: d.asset.name },
           el("span", { class: "l" }, icon("down"), el("span", { text: label })), el("span", { class: "r", text: side })));
       });
     }
@@ -262,8 +274,8 @@ function historyItem(r, data) {
       return el("li", {}, el("span", {}, area ? el("span", { class: "area", text: area + "　" }) : null, document.createTextNode(h.title)));
     })));
   }
-  const main = r.assets.filter((a) => (a.kind === "app" || a.kind === "computer" || a.kind === "web") && isDirectDownload(a));
-  const order = { app: 0, computer: 1, web: 2 };
+  const main = r.assets.filter((a) => (a.kind === "app" || a.kind === "computer") && isDirectDownload(a));
+  const order = { app: 0, computer: 1 };
   main.sort((a, b) => order[a.kind] - order[b.kind] || String(a.platform).localeCompare(String(b.platform)) || String(b.arch).localeCompare(String(a.arch)));
   if (main.length) body.append(el("div", { class: "rel-files" }, main.map((a) => fileChip(a, assetLabel(a)))));
   else if (pending) body.append(notice("amber", document.createTextNode("这个版本的安装包还在上传，传完会出现在这里。")));

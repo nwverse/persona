@@ -211,6 +211,21 @@ section.block{padding:76px 0;border-top:2px solid var(--sky-line)}
 .dl.off{border-style:dashed;border-color:var(--sky-line);color:var(--mist);pointer-events:none}
 .dev-sub-link{margin-top:12px;font-size:14px}
 
+/* the web app's steps: numbered, in the ticket and on its card */
+.tk-guide,.dev-guide{counter-reset:step;margin:0;padding:0;list-style:none;display:grid;gap:14px}
+.tk-guide{width:100%}
+.tk-guide li,.dev-guide li{position:relative;padding-left:40px;counter-increment:step}
+.tk-guide li::before,.dev-guide li::before{content:counter(step);position:absolute;left:0;top:1px;display:grid;place-items:center;width:26px;height:26px;
+  border:2px solid var(--ink);border-radius:50%;background:var(--paper);font:600 13px/1 var(--mono)}
+.tk-guide li:first-child::before,.dev-guide li:first-child::before{background:var(--cheek);color:var(--on-color)}
+.tk-guide b,.dev-guide b{display:block;font-size:15.5px;line-height:1.5}
+.tk-guide span,.dev-guide span{display:block;font-size:14px;line-height:1.65;color:var(--body);overflow-wrap:anywhere}
+.tk-guide code,.dev-guide code{display:inline-block;margin:2px 0 0;padding:1px 7px;border-radius:6px;background:var(--sky-tint);color:var(--ink);font-size:.92em;white-space:nowrap}
+.dev.guide .dev-what{flex:none}
+.dev-guide{flex:1;margin-top:14px;gap:12px}
+.dev-guide b{font-size:14.5px}
+.dev-guide span{font-size:13.5px}
+
 /* ---------- components (disclosure) ---------- */
 .parts{background:var(--paper);border:var(--stroke);border-radius:var(--r);box-shadow:var(--lift)}
 .parts > summary{position:relative;display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 14px;list-style:none;cursor:pointer;padding:22px 64px 22px 26px;border-radius:20px}
