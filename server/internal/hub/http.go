@@ -33,6 +33,17 @@ import (
 	"github.com/nwverse/persona/server/internal/sessionlist"
 )
 
+// nodeOutdated recognizes the prefix also returned by an old manager that lacks
+// devicewire.MethodCall, even when that manager sets CodeUnknownMethod.
+func (h *Hub) nodeOutdated(w http.ResponseWriter, r *http.Request, err error, key string, args i18n.Args) bool {
+	var re *rpc.Error
+	if key == "" || !errors.As(err, &re) || !strings.HasPrefix(re.Message, "unknown method") {
+		return false
+	}
+	writeErrCode(routeLanguageWriter{ResponseWriter: w, language: h.requestLang(r)}, http.StatusConflict, proto.CodeNodeOutdated, i18n.Err(key, args))
+	return true
+}
+
 func (h *Hub) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", h.health)

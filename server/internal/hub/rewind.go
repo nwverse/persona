@@ -7,9 +7,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"github.com/nwverse/persona/server/internal/proto"
-	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // POST /api/v1/sessions/{mid}/{sid}/rewind (#2436): go back in a Claude session to before one of its messages — the node
@@ -74,9 +71,7 @@ func (h *Hub) rewindSession(w http.ResponseWriter, r *http.Request, m *Machine) 
 	defer cancel()
 	var out json.RawMessage
 	if err := m.call(ctx, "session.rewind", params, &out); err != nil {
-		var re *rpc.Error
-		if errors.As(err, &re) && strings.HasPrefix(re.Message, "unknown method") {
-			writeCode(w, http.StatusConflict, proto.CodeNodeOutdated, "这台机器上的 personad 太旧，还不会回退会话，需要重新部署", nil)
+		if h.nodeOutdated(w, r, err, "hub-rewind.outdated", nil) {
 			return
 		}
 		callErr(w, err)

@@ -5,12 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strings"
 	"time"
-
-	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/proto"
-	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // POST /api/v1/sessions/{mid}/{sid}/restore-model (#2528): "back to the configured model" for a session Claude Code
@@ -40,9 +35,7 @@ func (h *Hub) restoreSessionModel(w http.ResponseWriter, r *http.Request, m *Mac
 	defer cancel()
 	var out json.RawMessage
 	if err := m.call(ctx, "session.restore_model", map[string]any{"session_id": sid}, &out); err != nil {
-		var re *rpc.Error
-		if errors.As(err, &re) && strings.HasPrefix(re.Message, "unknown method") {
-			writeErrCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.Err("hub-restoremodel.outdated"))
+		if h.nodeOutdated(w, r, err, "hub-restoremodel.outdated", nil) {
 			return
 		}
 		callErr(w, err)

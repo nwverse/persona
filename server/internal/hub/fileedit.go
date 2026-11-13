@@ -137,14 +137,13 @@ func (h *Hub) fileEdit(op string) http.HandlerFunc {
 		defer cancel()
 		var out json.RawMessage
 		if err := m.call(ctx, "file."+op, q, &out); err != nil {
+			key := "hub-fileedit.outdated"
+			if op != "rename" && op != "move" && op != "trash" && op != "restore" {
+				key = "hub-fileedit.outdated_feature" // mkdir, write, zip, copy, chmod (#5828-#5831)
+			}
 			var re *rpc.Error
 			switch {
-			case errors.As(err, &re) && re.Code == "" && strings.HasPrefix(re.Message, "unknown method"):
-				key := "hub-fileedit.outdated"
-				if op != "rename" && op != "move" && op != "trash" && op != "restore" {
-					key = "hub-fileedit.outdated_feature" // mkdir, write, zip, copy, chmod (#5828-#5831)
-				}
-				writeCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.T(h.requestLang(r), key, i18n.Args{"name": m.cfg.Name}), nil)
+			case h.nodeOutdated(w, r, err, key, i18n.Args{"name": m.cfg.Name}):
 			case errors.As(err, &re) && re.Code == proto.CodeNotFound:
 				writeCode(w, http.StatusNotFound, proto.CodeNotFound, re.Message, nil)
 			default:

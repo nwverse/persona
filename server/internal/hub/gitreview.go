@@ -8,9 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
-	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // gitReview relays GET /api/v1/machines/{mid}/git/review?cwd=&scope=&base=&path=… to the node's git.review: every
@@ -28,9 +26,7 @@ func (h *Hub) gitReview(w http.ResponseWriter, r *http.Request, m *Machine) {
 	defer cancel()
 	var out json.RawMessage
 	if err := m.call(ctx, "git.review", p, &out); err != nil {
-		var re *rpc.Error
-		if errors.As(err, &re) && strings.HasPrefix(re.Message, "unknown method") {
-			writeCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.T(h.requestLang(r), "hub-gitreview.outdated"), nil)
+		if h.nodeOutdated(w, r, err, "hub-gitreview.outdated", nil) {
 			return
 		}
 		callErr(w, err)

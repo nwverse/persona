@@ -49,9 +49,7 @@ func (h *Hub) sessionModes(w http.ResponseWriter, r *http.Request, m *Machine) {
 		defer cancel()
 		var out json.RawMessage
 		if err := m.call(ctx, "session.speed", map[string]any{"session_id": r.PathValue("sid"), "service_tier": tier}, &out); err != nil {
-			var re *rpc.Error
-			if errors.As(err, &re) && strings.HasPrefix(re.Message, "unknown method") {
-				writeCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.T(h.requestLang(r), "rpc-errors.node_outdated"), nil)
+			if h.nodeOutdated(w, r, err, "rpc-errors.node_outdated", nil) {
 				return
 			}
 			callErr(w, err)
@@ -107,9 +105,7 @@ func (h *Hub) sessionModes(w http.ResponseWriter, r *http.Request, m *Machine) {
 	}
 	if len(ultra) > 1 {
 		if err := m.call(ctx, "session.ultracode", ultra, &out); err != nil {
-			var re *rpc.Error
-			if errors.As(err, &re) && strings.HasPrefix(re.Message, "unknown method") {
-				writeCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.T(h.requestLang(r), "hub-ultracode.node_outdated"), nil)
+			if h.nodeOutdated(w, r, err, "hub-ultracode.node_outdated", nil) {
 				return
 			}
 			callErr(w, err)
