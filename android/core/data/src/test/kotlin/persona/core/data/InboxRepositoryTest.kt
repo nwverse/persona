@@ -566,7 +566,7 @@ class InboxRepositoryTest {
                 ))
             }
             val repository = repository(transport, directory, owner, FakeHub())
-            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } } }
+            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }
             repository.refresh()
             val avatar = repository.snapshot.value.records.single().avatar!!
             assertEquals("hub/generation:https://cdn.example.com/avatar/bot.jpg", avatar.cacheKey)
@@ -648,7 +648,7 @@ class InboxRepositoryTest {
             }
             val repository = repository(transport, directory, owner, FakeHub())
             // The pairing's first emission clears the list; refresh after it, not before.
-            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } } }
+            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }
             repository.refresh()
             val avatars = repository.snapshot.value.records.associate { it.item.id to it.avatar }
             assertEquals("hub/generation:/api/v1/lark/media/key?size=144", avatars["lark:chat:1"]?.cacheKey)
@@ -754,7 +754,7 @@ class InboxRepositoryTest {
             AssistantManagerChoice.choose("hub", null, "assistant")
             val transport = FakeTransport().apply { items = JsonArray(listOf(item("a", null), item("b", "m-3"), item("c", "assistant"))) }
             val repository = repository(transport, directory, owner, FakeHub())
-            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } } }
+            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }
             repository.refresh()
             // another manager's item has an app id of its own (InboxItemKey); the hub's id is kept for its requests
             assertEquals(mapOf("a" to null, InboxItemKey.of("b", "m-3") to "m-3", "c" to "assistant"),
@@ -787,7 +787,7 @@ class InboxRepositoryTest {
                 onBulk = { asked, _ -> buildJsonObject { put("changed", JsonArray(asked.map { item(it.id, null, done = true) })) } }
             }
             val repository = repository(transport, directory, owner, FakeHub())
-            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } } }
+            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }
             repository.refresh()
             transport.items = JsonArray(listOf("a", "b", "c", "d").map { item(it, null, done = true) })
 
@@ -830,7 +830,7 @@ class InboxRepositoryTest {
                 onBulk = { asked, done -> buildJsonObject { put("changed", JsonArray(asked.map { item(it.id, done) })) } }
             }
             val repository = repository(transport, directory, owner, FakeHub())
-            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } } }
+            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }
             repository.refresh()
             val theirs = repository.doneHistory("m-3", null).records.single()
             val mine = repository.doneHistory(null, null).records.single()
@@ -868,7 +868,7 @@ class InboxRepositoryTest {
                 }
             }
             val repository = repository(transport, directory, owner, FakeHub())
-            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } } }
+            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }
             repository.refresh()
             transport.onInbox = { throw IOException("offline") } // what bulk() itself made of it stays shown
 
@@ -908,7 +908,7 @@ class InboxRepositoryTest {
                 onSetDone = { id, done -> buildJsonObject { put("item", item(id, null, "theirs", done)) } }
             }
             val repository = repository(transport, directory, owner, FakeHub())
-            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } } }
+            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }
             repository.refresh()
             val records = repository.snapshot.value.records
             assertEquals(2, records.map { it.item.id }.toSet().size)
@@ -950,7 +950,7 @@ class InboxRepositoryTest {
             AssistantManagerChoice.choose("hub", null, "assistant")
             val transport = FakeTransport()
             val repository = repository(transport, directory, owner, FakeHub())
-            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } } }
+            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }
             assertEquals("p1", repository.momentsPost("p1", "m-2").id)
             repository.momentsComments("p1", "m-2")
             repository.momentsPost("p1", "assistant")
@@ -981,7 +981,7 @@ class InboxRepositoryTest {
                 onReply = { named += currentCoroutineContext()[RequestManager]?.id; buildJsonObject { put("message_id", "om_1") } }
             }
             val repository = repository(transport, directory, owner, FakeHub())
-            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } } }
+            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }
             repository.refresh()
             repository.reply(ReplyTarget.Lark("f1"), ReplyRequest("你好", "c1"))
             repository.reply(ReplyTarget.Lark("f2"), ReplyRequest("你好", "c2"))
@@ -1016,7 +1016,7 @@ class InboxRepositoryTest {
                 }
             }
             val repository = repository(transport, directory, owner, FakeHub())
-            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } } }
+            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }
             repository.refresh()
             assertEquals(2, repository.snapshot.value.records.count { it.feedId == "f1" })
             repository.acceptLarkWindow("f1", listOf(row("m1", 10, "hi")), null)
@@ -1093,7 +1093,7 @@ class InboxRepositoryTest {
                 } }
             }
             val repository = repository(transport, directory, owner, FakeHub())
-            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } } }
+            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }
             repository.refresh()
             val listed = repository.snapshot.value.records.associate { it.item.id to it.item.version }
             assertEquals(mapOf("a" to "va", "b" to "vb", "c" to "vc"), listed)
@@ -1178,7 +1178,7 @@ class InboxRepositoryTest {
                     override suspend fun resolve(id: String, resolution: Resolution) = Unit
                 }, owner, hubConnection = FakeHub(),
             ) { _, _ -> error("unused") }
-            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } } }
+            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }
             repository.refresh()
             val listed = repository.snapshot.value.records.single()
             assertEquals("action", listed.item.status)
@@ -1221,7 +1221,7 @@ class InboxRepositoryTest {
             }
             val transport = FakeTransport().apply { items = JsonArray(listOf(item("a", "o/r"), item("b", "o/r"), item("c", "o/other"), chat)) }
             val repository = repository(transport, directory, owner, FakeHub())
-            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } } }
+            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }
             repository.refresh()
             fun done() = repository.snapshot.value.records.filter { it.item.isDone }.map { it.item.id }.toSet()
             val records = repository.snapshot.value.records.associateBy { it.item.id }
@@ -1265,7 +1265,7 @@ class InboxRepositoryTest {
                 items = JsonArray(listOf(item("a", "o/r"), item("b", "o/r", status = "working"), item("c", "o/other"), item("d", "o/r", manager = "m-3")))
             }
             val repository = repository(transport, directory, owner, FakeHub())
-            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } } }
+            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }
             repository.refresh()
             fun sections() = repository.snapshot.value.records.associate { it.hubItemId to "${it.item.tier}/${it.item.status}/${it.item.urgent}" }
             val before = sections()
@@ -1362,7 +1362,7 @@ class InboxRepositoryTest {
             val hub = FakeHub()
             val repository = repository(transport, directory, owner, hub, refreshWindowMillis = window)
             // The pairing's first emission clears the list; refresh after it, not before.
-            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } } }
+            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }
             repository.refresh()
             assertEquals(1, repository.snapshot.value.records.size)
             val loading = java.util.Collections.synchronizedList(mutableListOf<Boolean>())
@@ -1414,7 +1414,7 @@ class InboxRepositoryTest {
             }
             val hub = FakeHub()
             val repository = repository(transport, directory, owner, hub, refreshWindowMillis = 100)
-            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } } }
+            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }
             repository.refresh()
             val seen = java.util.Collections.synchronizedList(mutableListOf<InboxSnapshot>())
             owner.launch { repository.snapshot.collect { seen += it } }
