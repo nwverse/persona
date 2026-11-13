@@ -154,8 +154,7 @@ function HubUpdates() {
         </>}
         {status.source === "web-dev" && <>
           <SettingsHint>{t("settings-hubsettings.dev_scope")}</SettingsHint>
-          <Row label={t("settings-hubsettings.branch")} wrapValue>{status.development?.resolved_branch || status.development?.branch}</Row>
-          {status.development?.mapped_master && <SettingsHint caution>{t("settings-hubsettings.master_mapping")}</SettingsHint>}
+          <Row label={t("settings-hubsettings.branch")} wrapValue>{status.development?.branch}</Row>
           <Row label={t("settings-hubsettings.current_commit")} mono wrapValue>{status.development?.current_commit?.slice(0, 12) || t("settings-hubsettings.unknown")}</Row>
           {status.latest?.commit && <Row label={t("settings-hubsettings.target_commit")} mono wrapValue>{status.latest.commit.slice(0, 12)}</Row>}
         </>}

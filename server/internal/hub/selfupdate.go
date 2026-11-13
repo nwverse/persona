@@ -688,19 +688,9 @@ func (u *updater) viewIn(l i18n.Lang) updateView {
 		AutoUpdateNodes: u.nodesEnabledLocked(), UpdateURL: source.url, UpdateFrom: source.from, UpdateProxy: proxyShown(source.proxy)}
 	v.Source = "release"
 	v.Backup = u.settings.DevelopmentBackup
-	v.Development = &developmentView{Branch: "master", CurrentCommit: u.h.build.Commit}
-	if cfg := u.developmentConfig(); cfg != nil {
-		v.Development = &developmentView{Configured: cfg.Repository != "", Branch: cfg.Branch, CurrentCommit: u.h.build.Commit}
-		if v.Development.Branch == "" {
-			v.Development.Branch = "master"
-		}
-	}
+	v.Development = &developmentView{Configured: u.developmentConfig() != nil, Branch: "main", CurrentCommit: u.h.build.Commit}
 	if u.developmentLocked() {
 		v.Source, v.CanUpdate, v.Auto, v.AutoNotice = "web-dev", u.developmentAvailable(), u.settings.DevelopmentAuto, false
-		if u.release != nil && u.release.Development != nil && v.Development != nil {
-			v.Development.ResolvedBranch = u.release.Development.Branch
-			v.Development.MappedMaster = u.release.Development.MappedMaster
-		}
 	}
 	if v.Busy == nil {
 		v.Busy = []busyItem{}

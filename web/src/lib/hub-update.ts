@@ -14,7 +14,7 @@ export interface BusyItem {
 
 export interface HubUpdateStatus {
   source?: "release" | "web-dev";
-  development?: { configured: boolean; branch: string; resolved_branch?: string; mapped_master: boolean; current_commit?: string };
+  development?: { configured: boolean; branch: string; current_commit?: string };
   backup?: { id: string; retained: number; pruned: string[] | null };
   version: string;
   build: number;

@@ -17,11 +17,9 @@ import (
 )
 
 type developmentView struct {
-	Configured     bool   `json:"configured"`
-	Branch         string `json:"branch"`
-	ResolvedBranch string `json:"resolved_branch,omitempty"`
-	MappedMaster   bool   `json:"mapped_master"`
-	CurrentCommit  string `json:"current_commit,omitempty"`
+	Configured    bool   `json:"configured"`
+	Branch        string `json:"branch"`
+	CurrentCommit string `json:"current_commit,omitempty"`
 }
 
 func (u *updater) developmentConfig() *update.DevelopmentConfig {
@@ -33,7 +31,7 @@ func (u *updater) developmentConfig() *update.DevelopmentConfig {
 
 func (u *updater) developmentAvailable() bool {
 	c := u.developmentConfig()
-	return c != nil && c.Repository != "" && len(c.Backup.Quiesce) > 0 && len(c.Backup.Resume) > 0 && u.h.build.Channel != update.Docker && runtime.GOOS != "windows"
+	return c != nil && len(c.Backup.Quiesce) > 0 && len(c.Backup.Resume) > 0 && u.h.build.Channel != update.Docker && runtime.GOOS != "windows"
 }
 
 func (u *updater) developmentLocked() bool { return u.settings.Source == "web-dev" }

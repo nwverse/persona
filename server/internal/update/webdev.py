@@ -21,6 +21,7 @@ import tempfile
 from urllib.parse import urlsplit, urlunsplit
 
 OWNER = "persona-web-development-backup-v1"
+REPOSITORY = "https://github.com/nwverse/persona.git"
 NAME = re.compile(r"snapshot-[0-9]{20}-[a-f0-9]{12}")
 PLATFORMS = {"linux-amd64", "linux-arm64", "darwin-amd64", "darwin-arm64", "windows-amd64"}
 
@@ -68,38 +69,12 @@ def sync_dir(path):
         os.close(fd)
 
 
-def resolve(config):
-    repository = config["repository"]
-    url = urlsplit(repository)
-    if url.scheme not in ("https", "ssh", "file") or url.password or url.query or url.fragment:
-        raise ValueError("repository must be a credential-free HTTPS, SSH or file URL")
-    if url.scheme == "file" and (url.netloc or not url.path.startswith("/")):
-        raise ValueError("local repository must have an absolute file URL")
-    branch = config.get("branch") or "master"
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9/_.-]*", branch) or ".." in branch:
-        raise ValueError("invalid source branch")
-    refs = run(["git", "ls-remote", "--symref", repository, "HEAD", "refs/heads/" + branch], output=True)
-    heads, default = {}, ""
-    for line in refs.splitlines():
-        value, ref = line.split("\t", 1)
-        if value.startswith("ref: refs/heads/") and ref == "HEAD":
-            default = value.removeprefix("ref: refs/heads/")
-        elif re.fullmatch(r"[a-f0-9]{40}", value):
-            heads[ref] = value
-    mapped = False
-    if "refs/heads/" + branch not in heads:
-        # Only the historical master name maps, and only to the advertised default.
-        # An explicitly selected other missing branch is always an error.
-        if branch != "master" or not default or not config.get("map_master_to_default", False):
-            raise ValueError("source branch is absent; configure an explicit branch or master mapping")
-        branch, mapped = default, True
-        refs = run(["git", "ls-remote", repository, "refs/heads/" + branch], output=True)
-        value, ref = refs.strip().split("\t")
-        heads[ref] = value
-    commit = heads["refs/heads/" + branch]
-    if not re.fullmatch(r"[a-f0-9]{40}", commit):
-        raise ValueError("remote did not return a full commit")
-    return {"branch": branch, "commit": commit, "mapped_master": mapped}
+def resolve():
+    refs = run(["git", "ls-remote", REPOSITORY, "refs/heads/main"], output=True)
+    match = re.fullmatch(r"([a-f0-9]{40})\trefs/heads/main\n?", refs)
+    if not match:
+        raise ValueError("project main branch did not return a full commit")
+    return {"branch": "main", "commit": match[1]}
 
 
 def build(request):
@@ -109,7 +84,7 @@ def build(request):
     artifacts.mkdir()
     selected = request["candidate"]
     run(["git", "init", "--quiet", str(source)])
-    run(["git", "-C", str(source), "remote", "add", "origin", config["repository"]])
+    run(["git", "-C", str(source), "remote", "add", "origin", REPOSITORY])
     # Fetch the captured object, never a moving branch head; detached checkout only.
     run(["git", "-C", str(source), "fetch", "--no-tags", "origin", selected["commit"]])
     run(["git", "-C", str(source), "checkout", "--detach", selected["commit"]])
@@ -348,7 +323,7 @@ def main():
     os.environ["GIT_TERMINAL_PROMPT"] = "0"
     signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(InterruptedError()))
     operation = request["operation"]
-    result = {"resolve": lambda r: resolve(r["config"]), "build": build, "backup": snapshot}[operation](request)
+    result = {"resolve": lambda r: resolve(), "build": build, "backup": snapshot}[operation](request)
     write_json(Path(request["result"]), result)
 
 

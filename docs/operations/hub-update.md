@@ -16,17 +16,15 @@ off until explicitly enabled and is turned off whenever the source changes. An u
 accepted keeps its fixed candidate; source changes are refused until it ends. Repeated triggers
 join that attempt. A rolled-back development commit is never automatically tried again.
 
+Development updates always use `https://github.com/nwverse/persona.git`, branch `main`.
 Configure `update.development` in the installation's private `hub.json`, then start the Hub
-through its original installation channel. The Web settings cannot supply a repository,
-shell command, credential or arbitrary path:
+through its original installation channel. The Web settings cannot supply a shell command,
+credential or arbitrary path:
 
 ```json
 {
   "update": {
     "development": {
-      "repository": "https://github.com/nwverse/persona.git",
-      "branch": "master",
-      "map_master_to_default": true,
       "node_platforms": ["linux-amd64", "linux-arm64", "darwin-amd64", "darwin-arm64"],
       "backup": {
         "quiesce": ["/absolute/path/to/pause-persona-writers"],
@@ -50,16 +48,14 @@ use no-op hooks on real data. Missing coordination disables installation and aut
 
 The host needs Git, Python 3.11+, Node matching `web/package.json`, Go matching `server/go.mod`,
 and compatible `pg_dump`/`pg_restore` tools with access to every included database. Git uses the
-installation user's existing HTTPS/SSH credential mechanism, with interactive prompts disabled;
-do not put passwords in the repository URL. The Git remote is trusted to execute build code.
+installation user's existing HTTPS credential mechanism, with interactive prompts disabled.
+Updates execute build code from this project's repository.
 Docker Hubs and Windows Hubs retain their original update paths.
 
-`master` is the default requested branch. It is never silently renamed. When and only when
-`map_master_to_default` is true and `master` is absent, the helper checks the remote's advertised
-default branch and resolves its full commit. The checked remote for this implementation advertised
-`main` and had no `master`. An explicitly selected other missing branch fails. Settings shows the
-actual branch, the mapping, and installed/target commits. A detached private checkout fetches that
-exact object even if the remote advances while building.
+The helper resolves the full commit of `refs/heads/main`; a missing `main` branch is an error.
+Settings shows `main` and the installed/target commits. A detached private checkout fetches that
+exact object even if the remote advances while building. There are no repository/branch overrides
+or default-branch mappings.
 
 The compile gate runs `npm ci` and `npm run build:development` for Web, builds the Agent SDK bridge as a
 runtime asset, generates runtime packages, then runs tagged `go build` for `personad` on each

@@ -37,7 +37,7 @@ class DevelopmentFixtures(unittest.TestCase):
     def git(self, *args):
         return subprocess.check_output(["git", "-C", str(self.repo), *args], text=True, stderr=subprocess.DEVNULL).strip()
 
-    def test_master_mapping_and_fixed_compile_candidate(self):
+    def test_project_main_and_fixed_compile_candidate(self):
         self.repo = self.root / "remote"
         self.repo.mkdir()
         self.git("init", "-b", "main")
@@ -49,14 +49,12 @@ class DevelopmentFixtures(unittest.TestCase):
             file.write_text(content)
         self.git("add", ".")
         self.git("commit", "-m", "First fixture")
-        config = {"repository": self.repo.as_uri(), "map_master_to_default": True, "node_platforms": ["linux-amd64", "darwin-arm64"]}
-        selected = webdev.resolve(config)
+        repository = patch.object(webdev, "REPOSITORY", self.repo.as_uri())
+        repository.start()
+        self.addCleanup(repository.stop)
+        config = {"node_platforms": ["linux-amd64", "darwin-arm64"]}
+        selected = webdev.resolve()
         self.assertEqual(selected["branch"], "main")
-        self.assertTrue(selected["mapped_master"])
-        with self.assertRaises(ValueError):
-            webdev.resolve(dict(config, map_master_to_default=False))
-        with self.assertRaises(ValueError):
-            webdev.resolve(dict(config, branch="missing"))
         (self.repo / "newer").write_text("remote advanced after checking")
         self.git("add", ".")
         self.git("commit", "-m", "Second fixture")
@@ -82,6 +80,9 @@ if pathlib.Path(sys.argv[0]).name == 'go' and args[0] == 'build':
         self.assertEqual(len(list(Path(built["artifacts"]).glob("*.gz"))), 4)
         commands = [json.loads(line) for line in trace.read_text().splitlines()]
         self.assertFalse(any("test" in args or "vet" in args for _, args in commands))
+        self.git("branch", "-m", "other")
+        with self.assertRaisesRegex(ValueError, "project main branch"):
+            webdev.resolve()
 
     def history_fixture(self):
         runtime = self.root / "runtime"

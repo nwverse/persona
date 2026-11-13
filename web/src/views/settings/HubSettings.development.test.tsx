@@ -34,7 +34,7 @@ async function mount(state = "available") {
   status = {
     version: "web-dev-old", build: 202611130000, channel: "release", source: "web-dev", can_update: true,
     state, busy: [], auto: false, auto_notice: false, confirmed: true, auto_update_nodes: false,
-    development: { configured: true, branch: "master", resolved_branch: "main", mapped_master: true, current_commit: "a".repeat(40) },
+    development: { configured: true, branch: "main", current_commit: "a".repeat(40) },
     latest: { version: "web-dev-new", build: 202611130001, newer: true, bad: false, commit: "b".repeat(40), branch: "main" },
     backup: { id: "snapshot-fixture", retained: 3, pruned: ["snapshot-old"] }
   };
@@ -44,7 +44,7 @@ async function mount(state = "available") {
 
 it("shows actual source/commits and verified retention, and switches only after the save", async () => {
   await mount();
-  expect(host.textContent).toContain("verified default branch");
+  expect(host.textContent).toContain("main");
   expect(host.textContent).toContain("a".repeat(12));
   expect(host.textContent).toContain("b".repeat(12));
   expect(host.textContent).toContain("3 / 3");

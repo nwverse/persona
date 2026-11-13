@@ -16,13 +16,10 @@ import (
 )
 
 // DevelopmentConfig is trusted installation configuration, never supplied by an
-// HTTP request. Selecting the channel does not authorize another repository/hook.
+// HTTP request. The source is always this project's main branch.
 type DevelopmentConfig struct {
-	Repository         string                  `json:"repository"`
-	Branch             string                  `json:"branch,omitempty"`
-	MapMasterToDefault bool                    `json:"map_master_to_default,omitempty"`
-	NodePlatforms      []string                `json:"node_platforms,omitempty"`
-	Backup             DevelopmentBackupConfig `json:"backup"`
+	NodePlatforms []string                `json:"node_platforms,omitempty"`
+	Backup        DevelopmentBackupConfig `json:"backup"`
 }
 
 type DevelopmentBackupConfig struct {
@@ -33,9 +30,8 @@ type DevelopmentBackupConfig struct {
 }
 
 type DevelopmentCandidate struct {
-	Branch       string `json:"branch"`
-	Commit       string `json:"commit"`
-	MappedMaster bool   `json:"mapped_master"`
+	Branch string `json:"branch"`
+	Commit string `json:"commit"`
 }
 
 type DevelopmentBackup struct {
@@ -88,8 +84,8 @@ var developmentHelper string
 // DevelopmentRequest runs one bounded phase in an owned private directory. Raw
 // subprocess output stays in log, since tools/hooks may print private details.
 func DevelopmentRequest(ctx context.Context, config *DevelopmentConfig, dir, operation string, input map[string]any, result any) error {
-	if config == nil || config.Repository == "" {
-		return errors.New("development update source is not configured")
+	if config == nil {
+		return errors.New("development updates are not configured")
 	}
 	if runtime.GOOS == "windows" {
 		return errors.New("development builds require a Linux or macOS Hub")

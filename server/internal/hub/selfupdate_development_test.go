@@ -17,12 +17,15 @@ import (
 
 func TestDevelopmentSettingsOptInAndActiveChannelGuard(t *testing.T) {
 	u, _, _ := updaterWithStoredSettings(t)
-	u.h.cfg.Update.Development = &update.DevelopmentConfig{Repository: "file:///fixture"}
+	u.h.cfg.Update.Development = &update.DevelopmentConfig{}
 	if w := nodePolicyRequest(t, u, http.MethodPut, `{"source":"web-dev"}`); w.Code != 200 {
 		t.Fatal(w.Body.String())
 	}
 	if u.view().Auto || u.wantsAuto() {
 		t.Fatal("inherited release automatic updates")
+	}
+	if v := u.view(); !v.Development.Configured || v.Development.Branch != "main" {
+		t.Fatalf("unexpected development source: %+v", v.Development)
 	}
 	u.running = true
 	if w := nodePolicyRequest(t, u, http.MethodPut, `{"source":"release"}`); w.Code != 409 {
@@ -68,7 +71,7 @@ func TestDevelopmentUsesSharedInstallAndPreservesRecovery(t *testing.T) {
 			u.settings.Source = "web-dev"
 			u.loaded = true
 			u.h.build.Commit = strings.Repeat("a", 40)
-			cfg := &update.DevelopmentConfig{Repository: "file:///fixture", Backup: update.DevelopmentBackupConfig{Quiesce: []string{"fixture-pause"}, Resume: []string{"fixture-resume"}}}
+			cfg := &update.DevelopmentConfig{Backup: update.DevelopmentBackupConfig{Quiesce: []string{"fixture-pause"}, Resume: []string{"fixture-resume"}}}
 			u.h.cfg.Update.Development = cfg
 			web := filepath.Join(h.cfg.dir, "web")
 			os.MkdirAll(web, 0700)
@@ -82,7 +85,7 @@ func TestDevelopmentUsesSharedInstallAndPreservesRecovery(t *testing.T) {
 				var response any
 				switch operation {
 				case "resolve":
-					response = update.DevelopmentCandidate{Branch: "main", Commit: strings.Repeat("b", 40), MappedMaster: true}
+					response = update.DevelopmentCandidate{Branch: "main", Commit: strings.Repeat("b", 40)}
 				case "build":
 					artifacts := t.TempDir()
 					script := []byte(fmt.Sprintf("#!/bin/sh\necho %s\necho 'channel release, build %d'\n", input["version"], input["build"]))
