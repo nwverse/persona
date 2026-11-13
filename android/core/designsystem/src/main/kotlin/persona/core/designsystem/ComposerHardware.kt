@@ -23,6 +23,8 @@ data class ComposerHardwareActions(
     val send: (() -> Unit)? = null,
     /** Collapse for sending without the Esc path's focus restoration. */
     val collapseForSend: ((onCollapse: () -> Unit) -> Unit)? = null,
+    /** Collapse for Escape and restore the small field's focused state. */
+    val collapseForEscape: ((onCollapse: () -> Unit) -> Unit)? = null,
 )
 
 val LocalComposerHardware = staticCompositionLocalOf<ComposerHardwareActions?> { null }

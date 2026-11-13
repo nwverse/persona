@@ -6,6 +6,7 @@ import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
@@ -113,7 +114,7 @@ class LargeWindowComposerTest {
     @Test fun readOnlyComposerDoesNotSend() {
         var sent = 0
         show(ChatComposerState(), enabled = false) { sent++ }
-        rule.onNode(hasSetTextAction()).performKeyInput {
+        rule.onRoot().performKeyInput {
             withKeyDown(Key.CtrlLeft) { pressKey(Key.Enter) }
         }
         assertEquals(0, sent)
@@ -125,11 +126,14 @@ class LargeWindowComposerTest {
         }
         var sent = 0
         show(state) { sent++ }
+        // Clicking to focus commits the composition; restore it before the shortcut under test.
+        state.value = TextFieldValue("中文", TextRange(2), TextRange(0, 2))
+        rule.waitForIdle()
         rule.onNode(hasSetTextAction() and isFocused()).performKeyInput {
             withKeyDown(Key.CtrlLeft) { pressKey(Key.Enter) }
         }
         assertEquals(0, sent)
-        state.value = TextFieldValue(state.value.text, state.value.selection)
+        state.value = TextFieldValue("中文", TextRange(2))
         rule.waitForIdle()
         rule.onNode(hasSetTextAction() and isFocused()).performKeyInput {
             withKeyDown(Key.CtrlLeft) { pressKey(Key.Enter) }
@@ -143,10 +147,12 @@ class LargeWindowComposerTest {
         val state = ChatComposerState().apply { value = TextFieldValue(long, TextRange(12)) }
         var sent = 0
         show(state) { sent++ }
+        state.value = state.value.copy(selection = TextRange(12))
+        rule.waitForIdle()
         val focusBeforeSend = state.focusRequest
         rule.onNodeWithTag("composer-expand").performClick()
         rule.onNodeWithTag("composer-expanded").assertIsDisplayed()
-        rule.onNode(hasSetTextAction() and isFocused()).performKeyInput {
+        rule.onNodeWithTag("composer-expanded-input").performKeyInput {
             withKeyDown(Key.CtrlLeft) { pressKey(Key.Enter) }
         }
         rule.onNodeWithTag("composer-expanded").assertDoesNotExist()
@@ -158,7 +164,7 @@ class LargeWindowComposerTest {
 
         val focusBeforeEscape = state.focusRequest
         rule.onNodeWithTag("composer-expand").performClick()
-        rule.onNode(hasSetTextAction() and isFocused()).performKeyInput { pressKey(Key.Escape) }
+        rule.onNodeWithTag("composer-expanded-input").performKeyInput { pressKey(Key.Escape) }
         rule.onNodeWithTag("composer-expanded").assertDoesNotExist()
         assertEquals(1, sent)
         assertEquals(long, state.value.text)

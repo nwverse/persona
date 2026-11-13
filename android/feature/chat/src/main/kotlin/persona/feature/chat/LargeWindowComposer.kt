@@ -99,10 +99,18 @@ fun LargeWindowComposer(
             val focusRequest = state.focusRequest
             collapse()
             state.focusRequest = focusRequest
+            state.focused = false
         }
     }
-    val hardware = remember(sendEnabled, collapseForSend) {
-        ComposerHardwareActions(send = if (sendEnabled) sendAction else null, collapseForSend = collapseForSend)
+    val collapseForEscape = remember(state) {
+        { collapse: () -> Unit ->
+            collapse()
+            state.focused = true
+        }
+    }
+    val hardware = remember(sendEnabled, collapseForSend, collapseForEscape) {
+        ComposerHardwareActions(send = if (sendEnabled) sendAction else null,
+            collapseForSend = collapseForSend, collapseForEscape = collapseForEscape)
     }
 
     val context = LocalContext.current

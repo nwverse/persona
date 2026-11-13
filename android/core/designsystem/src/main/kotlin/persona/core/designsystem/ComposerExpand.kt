@@ -84,7 +84,10 @@ fun ExpandedComposer(
         if (value.composition != null) return@onPreviewKeyEvent false
         when {
             event.key == Key.Escape -> {
-                if (event.type == KeyEventType.KeyDown && event.nativeKeyEvent.repeatCount == 0) onCollapse()
+                if (event.type == KeyEventType.KeyDown && event.nativeKeyEvent.repeatCount == 0) {
+                    val collapse = hardware.collapseForEscape
+                    if (collapse != null) collapse(onCollapse) else onCollapse()
+                }
                 true
             }
             (event.key == Key.Enter || event.key == Key.NumPadEnter) && (event.isCtrlPressed || event.isMetaPressed) -> {
@@ -104,7 +107,7 @@ fun ExpandedComposer(
                 ComposerExpandButton(expanded = true, onClick = onCollapse)
             }
             BasicTextField(
-                value, onValueChange, Modifier.then(hardwareModifier).weight(1f).fillMaxWidth().padding(horizontal = 20.dp.dense).focusRequester(focus).hardwareShortcutTextInput(),
+                value, onValueChange, Modifier.then(hardwareModifier).weight(1f).fillMaxWidth().padding(horizontal = 20.dp.dense).focusRequester(focus).hardwareShortcutTextInput().testTag("composer-expanded-input"),
                 enabled = enabled, textStyle = PersonaTheme.type.body.copy(color = palette.ink), cursorBrush = SolidColor(palette.ink),
                 decorationBox = { field ->
                     Box {

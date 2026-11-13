@@ -7,6 +7,7 @@ import androidx.core.content.FileProvider
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.After
+import org.junit.Before
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -27,6 +28,10 @@ import java.io.RandomAccessFile
 class ComposerDropImportTest {
     private val context = ApplicationProvider.getApplicationContext<Context>()
     private val created = mutableListOf<File>()
+
+    @Before fun setUpProvider() {
+        useChatFileProvider(context)
+    }
 
     @After fun cleanCopies() {
         created.forEach(File::delete)

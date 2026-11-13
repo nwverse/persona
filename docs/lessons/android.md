@@ -708,3 +708,7 @@ Moving a `movableContentOf` between a bottom-sheet dialog and a separate centere
 ## Bound attachment errors so Retry stays reachable
 
 A file attachment's unbounded error text can make its row taller than the preview's 140 dp scrolling area, leaving the vertically centered Retry button clipped at large text sizes. Cap file errors at two lines with ellipsis, matching the photo error rule, and verify Retry with English, Simplified Chinese and Japanese resource environments. Changing only `LocalConfiguration` in a running Robolectric composition does not reliably switch those resources; use separate qualifiers for each language.
+
+## Keep expanded-composer send and Escape focus states separate
+
+A movable small composer field can remain composed and focused behind the expanded editor, so `onFocusChanged` may not fire again when the editor closes. Preserving `focusRequest` alone therefore leaves `state.focused` stale after a hardware send, while the following Escape cannot restore it through another callback. Use separate collapse actions: sending preserves the request count and clears the focused state; Escape follows the ordinary focus request and restores it. Target key injection at the expanded input's own tag when both nodes report focus.

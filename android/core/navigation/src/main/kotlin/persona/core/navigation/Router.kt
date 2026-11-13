@@ -28,6 +28,8 @@ class ResolvedRoute(
     val pairingLink: String? = null,
     val focusComposer: Boolean = false,
     val card: RequestRef? = null,
+    /** An explicit secondary parent when a management entry has no stack to infer it from. */
+    val parent: NavKey? = null,
 )
 
 /** The launcher's "Ask Persona": the Persona tab with the cursor in its composer, cold start or not. */
@@ -181,6 +183,7 @@ fun ResolvedRoute.restore(stacks: Map<AppTab, MutableList<NavKey>>, newTodo: New
             stack[existing] = key
         }
     }
+    if (parent != null && !stack.contains(parent)) stack.add(stack.lastIndex, parent)
     // Keep the serialized Sent key compatible, but make its parent explicit for links and history restores.
     restoreSecondaryParents(stack)
     // The list kept from an earlier use keeps its state too: its sheet opens on this request, each time.
