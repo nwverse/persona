@@ -60,6 +60,27 @@ any time needs a default test that does it at that time, under `-race`. And the 
 microseconds and another in most of a millisecond. Count the system calls of a test that walks directories
 (`strace -f -c -e trace=%file,%desc`) instead of trusting its seconds on the machine it was written on.
 
+## A stat and a read are two moments, and a path is not a file (2026-11-14, #1273)
+
+The search index's update looked at every file (`stat`), then read the ones it had to, and kept each file's keys
+under the mtime and size the look had seen, checking only that the bytes read were of that size. Review found what
+lies between: the file is replaced by other text of the same size after the look, the update reads that, and the first
+text comes back under its own mtime later (moved back, or restored by a sync or backup tool). The index then held the
+second text's keys under the first one's mtime and size, the entry matched the file exactly, and searches passed over
+it for words it holds, in every later run and every new process. Nobody had set an mtime or made two versions with one
+mtime and size: the index had invented the pair itself, and on a first build the window was the whole run. What an
+entry says has to be true when it is written: these bytes had this mtime and size. So the file is opened once, asked
+through the handle before the first byte and after the last, read through the same handle, and kept only when both
+answers are the look's. Each of the three parts is needed, and each has a test that fails without it: without the
+first look a file written back in place after the read passes; without the second, one written in place before it;
+and a second `stat` of the path, instead of the handle, is answered by whatever file is there by then. A test of
+this needs a hook at the moment, not a sleep (`searchIndex.hook`). The same review found two more of the kind
+"decided once, true for ever": a flag set after the state it described had been replaced (a read-only store marked
+broken with nothing left to compare, for good; set such a flag under the lock and only if the state is still the one
+it is about), and an error class matched by type (`*json.SyntaxError`, `*json.UnmarshalTypeError`) that missed a
+third kind of decode error, so every run failed the same way and nothing was ever rebuilt (say "this file is not
+valid" where it is decoded, and match that).
+
 ## A new file in the knowledge base is searched unless `searchable` says otherwise (2026-11-13, #5991)
 
 Search reads every `.md` and `.json` file of the data dir it is not told to skip, profile files before any message

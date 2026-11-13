@@ -978,15 +978,21 @@ be opened, so results, their order and the limits are the scan's.
 
 **An index that is missing, half built, behind or damaged costs time and nothing else.** A file added, changed or renamed since the index read it has
 no entry with its path, mtime and size, and is read; a deleted one is not there to `stat`. A segment, key block or list that fails its checksum, a
-manifest that does not parse or names a missing file, an index written with other Unicode tables (the keys are taken from `fold`'s output, so the
-manifest records `unicode.Version` and `norm.Version`) or in another format: the search goes on without the index (one log line), and the next
-update starts it again from the files. A segment file that is not the one a search read its file table from ("A name is never used twice" below)
-is not read either: the search asks the index as it is on disk now. `rm -r <data dir>/.search` is always safe, also while the manager runs, searches
-or updates the index (`TestSearchesWhileTheIndexIsUpdatedAndRemoved`, which every `-race` run of the package includes).
+manifest that was read and is not one (it does not decode, whatever the decoder minds: not JSON, a value of another type, a time that is not a
+time; or it names a file under a name the index gives none of its files), a manifest that names a missing file, an index written with other
+Unicode tables (the keys are taken from `fold`'s output, so the manifest records `unicode.Version` and `norm.Version`) or in another format: the
+search goes on without the index (one log line), and the next update starts it again from the files. Only a manifest that cannot be read at all
+(the disk, a permission) is tried again as it is. A failed check is held against the index it was made of and no other: by the time a search or
+an update reports it, another index may be in use (built again, or read again from disk), and that one is asked instead. A segment file that is
+not the one a search read its file table from ("A name is never used twice" below) is not read either: the search asks the index as it is on
+disk now. `rm -r <data dir>/.search` is always safe, also while the manager runs, searches or updates the index
+(`TestSearchesWhileTheIndexIsUpdatedAndRemoved`, which every `-race` run of the package includes).
 
 Tests: `kb/search_index_query_test.go` compares `Find`, `Search`, `SearchKind` and `Matches` with the scan over generated archives (Chinese and
 English mixed) and random queries, at several limits, with the index absent, half built, built, behind (files changed, added, renamed and deleted
-since), up to date and damaged in each of its parts; `kb/search_index_test.go` covers the update itself. A search opens every entry's files
+since), up to date and damaged in each of its parts; `kb/search_index_test.go` covers the update itself, with a hook at the moments where
+another process or search can act and no test could time it (after an update's look at the files, around its read of one, between a search's
+failed check and its report), and flips every bit of the manifest. A search opens every entry's files
 whatever the index says, and on some machines a file open costs most of a millisecond, so every run of the package does a light comparison: small
 archives, the scan's answers worked out once for each state of an archive, each query at one limit and on one of the two engines by turns, and
 the tests that flip every byte of a segment and of a log do it in memory. `PERSONA_KB_DIFF_DEPTH=2` does the whole grid (larger archives, every
@@ -1064,16 +1070,28 @@ from the files again: that would be state, which belongs in Postgres.
 
 **Updates** (`Engine.UpdateSearchIndex`, the manager's **index** lane). A run `stat`s every file and reads those that are new or changed, once
 their mtime is 10 seconds old (`indexSettle`; a file still being appended to is read by searches, as before) and if they are no larger than 4 MB
-(`indexMaxFile`; larger files are always read). A few changed files go to the log; more than 4,096 (a first build, an import) are written
+(`indexMaxFile`; larger files are always read). The look and the read are two moments, and in a first build the look at every file lies between
+them. An entry says that the bytes which had this mtime and size have these keys, so a run keeps a file's keys only when that is what it saw: it
+opens the file, asks the open file for its mtime and size, reads through the same handle and asks it again, and both answers have to be the ones
+the look got. A file that is another one by then (replaced, even by text of the same size, and even if the first is back under its own mtime
+later) or that changes while it is read is left out of that run and counted as waiting: searches read it, and the next run looks again. Asking
+the path a second time would not do, since by then it can name the first file again while the bytes read were the other's; nothing else in the
+index pairs a `stat` with bytes read at another moment (the log, a merge and a purge carry entries as they were written and read no file of the
+archive). A few changed files go to the log; more than 4,096 (a first build, an import) are written
 as segments of at most 2 million keys, each published as it is finished, so a run that is cut short loses one batch and searches use what is
 done. More than 8 segments are merged into one, streaming. The lane runs at most once a minute while it only follows the files (a run looks at
 every file, and live messages kick a round every few seconds), and at once for a first build, an index that failed a check or a deletion (below).
 A run that fails (a full disk, a directory the manager may not write) is not tried again at the next kick, since every try looks at all the files
-and reads a batch first: the next waits 15 seconds, then twice as long after each failure in a row, up to 5 minutes (`kbIndexRetry`,
-`kbIndexRetryMax`). The log has the failure once, however often it comes back, and a line when updating works again; searches read the files
-meanwhile. A run told to stop (the manager ends) returns within a moment while it looks at the files or merges, and after the batch in hand while
-it reads them. A read-only knowledge base (`kb.read_only`) never writes the index: it uses the one the writing process keeps, and looks every
-30 seconds whether there is a newer one.
+and reads a batch first: the next run is no sooner than 15 seconds later, then twice as long after each failure in a row, up to 5 minutes
+(`kbIndexRetry`, `kbIndexRetryMax`). Nothing starts it when the wait is over: it starts at the first round after that (a kick, or the loop's
+tick every two minutes), which is what the log line says. The log has a failure once while the runs fail the same way, and a line when updating
+works again; searches read the files meanwhile. Failures are told apart by the operation, the kind of index file (its name without the number,
+id or temporary ending that is new at every try) and the system's error, so `permission denied` when the directory is made and
+`permission denied` when the manifest is written are two failures, and the second is logged after the first was put right. A run told to stop
+(the manager ends) returns within a moment while it looks at the files or merges, and after the batch in hand while it reads them. A read-only
+knowledge base (`kb.read_only`) never writes the index: it uses the one the writing process keeps, and looks every 30 seconds whether the
+manifest is still the one it read. That look does not depend on what the store holds: one that holds no index (none was there, or the one it
+read failed a check) reads what is on disk at its next look, so a read-only process never stays without an index while a whole one is there.
 
 **One writer, and what two would cost.** The process that holds the data directory's lock writes the index, one run at a time; a search in that
 process that has to read the index from disk again (it was removed) does not touch what a run under way works with. The lock is let go when the
@@ -1095,15 +1113,18 @@ waits for it (`needs_search_index`).
 purpose (a source forgotten, with its topics; retention pruning days, Moments posts or recordings; a recording, one of its photos or a project
 deleted) the next index run, within one round, writes the index again without it; entries of files that went another way are dropped within
 10 minutes (`indexPurgeEvery`), and the older versions of files that changed within 24 hours (`indexMergeEvery`) or as soon as they are a quarter
-of the index. The index holds no text,
+of the index. Both are counted from the last merge, whose time is in the manifest; a time that is yet to come (the clock was set back, or the
+manifest's time is not the one written) counts as long ago, not as a reason to wait for it. The index holds no text,
 only keys of two or three characters next to paths, mtimes and sizes; it is in the data directory, so it has the same owner and modes and goes when the
 directory goes, and the history import's backups leave it out.
 
 **Limits.** A file's content is known by its mtime and size, as in the content cache, but the index outlives the process. A file whose text
 changed while both stayed the same is searched by what it said before, and there are three ways to get there, none of them something Persona
-does (nothing in it sets a file's mtime):
+does (nothing in it sets a file's mtime) and none of them the index's own doing (it keeps a file's keys only under the mtime and size the open
+file had before and after it was read, "Updates" above):
 
-- the file is rewritten to the same size and its mtime set back to what it was (`os.Chtimes`, `touch -d`);
+- the file is rewritten to the same size and its mtime set back to what it was (`os.Chtimes`, `touch -d`), which is also the one thing an
+  update's two looks at the open file cannot see when all of it happens within that file's read;
 - a copy that keeps times puts other text of the same size under the mtime the index read (`cp -p`, `rsync -t`, `touch -r`): two versions of a
   file with the same mtime and size, one of them indexed and the other copied over it;
 - the clock is set back by more than the 10 seconds an update waits for a file to settle, on a filesystem that keeps mtimes to the second, and the
