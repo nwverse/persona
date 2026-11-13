@@ -147,7 +147,8 @@ fun JSectionHeader(
             .heightIn(min = if (leading != null) 48.dp else 0.dp)
             .semantics { heading(); fold?.let { stateDescription = it.state } },
     ) { constraints ->
-        fun titleGroup(wrap: Boolean): @Composable () -> Unit = {
+        @Composable
+        fun titleGroup(wrap: Boolean) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     title,
