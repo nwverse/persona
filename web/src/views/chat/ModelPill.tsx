@@ -4,8 +4,9 @@
 // it (ui/model-panel/ModelPanel.tsx), and so does `/model` Enter in the composer. The composer card is a container: under
 // 600 px the pill is 148 px wide, under 520 px its text and marks are a step smaller, under 420 px it keeps only the
 // provider's tile and the chevron (64 px). An agent that can switch neither its model nor its effort gets the same
-// words as a label, not a button. A Persona chat (and the new-chat page) has `AssistantModelPill` (#5033): the same pill
-// over what the assistant's computer can run Persona chats on, its panel saying whether the chat follows the default.
+// words as a label, except Codex: its panel explains why. A Persona chat (and the new-chat page) has `AssistantModelPill`
+// (#5033): the same pill over what the assistant's computer can run Persona chats on, its panel saying whether the chat
+// follows the default.
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import { t } from "../../i18n";
 import { agentName } from "../../lib/agent-kind";
@@ -14,7 +15,7 @@ import { effortTitle } from "../../lib/session-actions";
 import { dropPick, launcherOffered, usePickedEffort, usePickedLauncher, usePickedModel } from "../../lib/assistant-chat";
 import { ASSISTANT_MODEL_PICK_FEATURE, assistantPickKey, assistantPillView, assistantSetup, type AssistantChat } from "../../lib/assistant-models";
 import {
-  assistantLaunchers, ENGINE_SWITCH_FEATURE, engineSwitchable, modelList, pendingView, pillView, readAssistantLaunchers, readForPanel, readModels, sessionSwitches, useModelLists, type PillSetup,
+  assistantLaunchers, modelList, pendingView, pillView, readAssistantLaunchers, readForPanel, readModels, sessionSwitches, useModelLists, type PillSetup,
 } from "../../lib/session-models";
 import { hubHas, useStore } from "../../lib/store";
 import { CODEX_ULTRA, ultracodeOn } from "../../lib/ultracode";
@@ -156,15 +157,15 @@ export function ModelPill({
 }
 
 /** An Agent's pill: what the session runs, and its panel. Loads the session's own model list once, for the name its list
- *  gives the model and to say when that list can't be read. It opens where the model or the effort can change, or the
- *  engine (a Codex Agent in a terminal on a hub that moves it to Claude Code, #5054). */
+ *  gives the model and to say when that list can't be read. It opens where the model or effort can change, and for Codex
+ *  to explain unsupported effort controls (including a terminal Agent that may switch engines, #5054). */
 export const AgentModelPill = memo(function AgentModelPill({ session }: { session: Session }) {
   useModelLists();
   const mid = session.machine_id;
   const own = sessionLauncher(session);
   const switches = sessionSwitches(session);
-  const engineSwitch = useStore((s) => hubHas(s.features, ENGINE_SWITCH_FEATURE)) && engineSwitchable(session);
-  const opens = switches.model || switches.effort || engineSwitch || session.agent === "codex";
+  const view = pillView(session, modelList(mid, own));
+  const opens = switches.model || switches.effort || view.engine === "codex";
   useEffect(() => {
     if (opens) void readModels(mid, own, { first: true });
   }, [opens, mid, own]);
@@ -189,7 +190,6 @@ export const AgentModelPill = memo(function AgentModelPill({ session }: { sessio
     if (target && target !== own) void readModels(mid, target);
   }, [target, own, mid]);
 
-  const view = pillView(session, modelList(mid, own));
   const pending = pendingView(session, (name) => modelList(mid, name));
   if (!opens && !view.model) return null;
   const workflow = ultracodeOn(session) ? {} : view.engine === "codex" && session.effort === CODEX_ULTRA ? { label: t("ultracode.codex_ultra_title"), title: t("ultracode.codex_ultra_title") } : undefined;

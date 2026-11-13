@@ -303,4 +303,17 @@ describe("Switch Agent?", () => {
     expect(provider("cx").models?.find((m) => m.id === "gpt-5.5")?.effortUnavailable).toBe(t("chat-modelpanel.effort_terminal"));
     expect(modes()).toEqual([]);
   });
+
+  it.each([
+    { name: "CLI alias", session: { agent: "codex-cli" }, reason: "effort_terminal" },
+    { name: "history without an agent ID", session: { agent: undefined, source_kind: "codex_history", capabilities: { send: false } }, reason: "effort_read_only" },
+  ])("a Codex $name keeps the actual effort and an explanation without engine switching", async ({ session, reason }) => {
+    Object.assign(getState(), { features: [] });
+    await show(terminalCodex({ ...session, effort: "max" }));
+    expect(pill()).not.toBeNull();
+    await open();
+    expect(panel.props!.state.current?.effort).toBe("max");
+    expect(provider("cx").models?.find((m) => m.id === "gpt-5.5")?.effortUnavailable).toBe(t(`chat-modelpanel.${reason}`));
+    expect(modes()).toEqual([]);
+  });
 });
