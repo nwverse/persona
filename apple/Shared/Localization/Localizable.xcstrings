@@ -91,6 +91,30 @@
         }
       }
     },
+    "Highlights [Meeting]" : {
+      "comment" : "The meeting page's top card: the room's highlights of the meeting so far (#3862 phase 2b)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Highlights"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要点"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要点"
+          }
+        }
+      }
+    },
     "On no to-do; often started from Lark, the phone or elsewhere. Touch and hold one › Link to To-do… to file it." : {
       "localizations" : {
         "en" : {
@@ -546,6 +570,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "Persona には何も聞こえませんでした。話している間は「話す」を押し続けてください。"
+          }
+        }
+      }
+    },
+    "Persona is listening. Highlights come after a few minutes." : {
+      "comment" : "The meeting page's Highlights card before the room's first highlights, while Persona attends the meeting (#3862 phase 2b)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona is listening. Highlights come after a few minutes."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 正在听，几分钟后会出现要点。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona が聞いています。数分後に要点が表示されます。"
           }
         }
       }
