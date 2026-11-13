@@ -23,6 +23,7 @@ import { Button, cx, Shimmer, Spinner, toast } from "../../ui/atoms";
 import { BrandMark } from "../../ui/BrandMark";
 import { Icon, type IconName } from "../../ui/icons";
 import { useFoldScroll } from "../chat/fold-scroll";
+import { useInboxView } from "../../lib/inbox-view-memory";
 import { InboxLine } from "./InboxLine";
 import { Glyph, Spark, Tag } from "./InboxParts";
 
@@ -372,7 +373,16 @@ function ChainIcon({ item, e }: { item: InboxItem; e: ChainEntry }) {
 
 /** The handling chain: folded to the three newest entries, "Show all (N)" shows them all, oldest first. */
 export function Chain({ item, onSource }: { item: InboxItem; onSource: (at: SourceAt) => void }) {
-  const [open, setOpen] = useState(false);
+  const view = useInboxView();
+  const key = itemKey(item);
+  const revision = view.revision;
+  const [open, setOpen] = useState(() => view.chainOpen(key));
+  const [seen, setSeen] = useState({ key, revision });
+  if (seen.key !== key || seen.revision !== revision) {
+    setSeen({ key, revision });
+    setOpen(view.chainOpen(key));
+  }
+  useEffect(() => view.setChainOpen(key, open), [view, key, open]);
   const conversation = useConversation();
   const sessions = useStore((s) => s.sessions);
   const all = item.chain ?? [];
