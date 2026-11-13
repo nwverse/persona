@@ -74,7 +74,8 @@ type deployProbe struct {
 	cache map[string]deployCached // by PR URL + hub commit
 	seen  map[string]prSeen       // by todo id: when sweepPRs last checked an open to-do's PR (memory only)
 	// githubDown: GitHub failed to answer until then (a hub that cannot reach it waits on no timeouts meanwhile).
-	githubDown time.Time
+	githubDown    time.Time
+	githubFailure error
 
 	// listPaths are where the deployed-commits file is looked for (nil: deployedFiles; tests set their own), files
 	// the ones read (deployed_commits.go).
@@ -159,6 +160,12 @@ func (s *Service) checkDeployed(ctx context.Context, pr string) deployResult {
 	if hub == "" {
 		return deployResult{State: deployUnverified}
 	}
+	// A repaired receipt is stronger than a cached outage, including during a GitHub pause.
+	if l := s.deployedListFor(hub); l != nil && strings.EqualFold(l.repo, repo) {
+		if sha, ok := l.prs[number]; ok {
+			return deployResult{State: deployIn, Hub: hub, Merge: sha}
+		}
+	}
 	key := pr + "\x00" + hub
 	p := &s.deploy
 	p.mu.Lock()
@@ -202,15 +209,25 @@ func (s *Service) compareGitHub(ctx context.Context, repo string, number int, hu
 	p := &s.deploy
 	p.mu.Lock()
 	down := time.Now().Before(p.githubDown)
+	reason, resume := p.githubFailure, p.githubDown
 	p.mu.Unlock()
 	if down {
-		return deployResult{State: deployUnknown, Hub: hub, Err: errors.New("GitHub did not answer a moment ago")}
+		return deployResult{State: deployUnknown, Hub: hub, Err: fmt.Errorf("GitHub verification paused until %s; original failure: %v", resume.UTC().Format(time.RFC3339), reason)}
 	}
 	r := s.compareGitHubNow(ctx, repo, number, hub)
 	if r.State == deployUnknown {
+		var response *githubReadError
+		if errors.As(r.Err, &response) && response.kind == "permission" {
+			// Authorization failures are not evidence that GitHub is down for other PRs.
+			s.logf("deploy verification unavailable: %v; no global pause for permission errors", r.Err)
+			return r
+		}
 		p.mu.Lock()
 		p.githubDown = time.Now().Add(githubPause)
+		p.githubFailure = r.Err
+		resume := p.githubDown
 		p.mu.Unlock()
+		s.logf("deploy verification unavailable: %v; paused until %s", r.Err, resume.UTC().Format(time.RFC3339))
 	}
 	return r
 }
@@ -539,14 +556,15 @@ func (g githubForge) get(ctx context.Context, path string, out any) error {
 	}
 	resp, err := g.client.Do(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("GitHub network error: %s", githubDiagnostic(err.Error()))
 	}
 	defer resp.Body.Close()
 	switch {
 	case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusUnprocessableEntity:
-		return errForgeNotFound // compare answers 404 (or 422) for a commit the repository does not have
+		// Preserve diagnostics while keeping the compare endpoint's missing-commit semantics.
+		return fmt.Errorf("%w: %w", errForgeNotFound, githubResponseError(resp))
 	case resp.StatusCode != http.StatusOK:
-		return fmt.Errorf("GitHub answered %d", resp.StatusCode)
+		return githubResponseError(resp)
 	}
 	return json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(out)
 }

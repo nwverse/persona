@@ -115,8 +115,28 @@ the deployed commit first, then its ancestors newest first, as `git log --max-co
 prints them. It is believed only when its first commit is the one the running hub reports, and only for PRs of its
 repository. A PR is found by its merge's subject (a squash merge's `… (#N)`, a merge commit's `Merge pull request #N …`):
 found, it is deployed, with no network. Not found, GitHub is asked; when GitHub cannot answer (no route, a failure
-pauses it for 10 minutes), it is "not in the running hub" (held, "等部署"), and the open to-dos' sweep leaves such a
+pauses transient checks for 10 minutes), verification is unavailable, and the open to-dos' sweep leaves such a
 to-do as it is (its PR may still be open). The file is checked first, GitHub only when the file cannot say.
+
+Every manual development deployment must regenerate this receipt from the exact source commit used to build the
+candidate, not from a moving branch name or an unrelated checkout:
+
+```sh
+python3 scripts/deploy/deployed_commits.py --commit <built-commit> --out <state-directory>/deployed-commits.txt
+```
+
+Run this from the build checkout, under the deployment lock, before switching the hub, and preserve the old receipt
+with the rollback binary. The writer atomically replaces the file. After switching, compare its first non-comment
+commit with `/api/v1/health`'s commit and check that the expected PR subjects (or proven `# pr:` heads) are present.
+Do not hand-write PR entries: the generator verifies ancestry, including explicitly named `--pr` entries.
+The standard deploy script generates and installs the receipt next to the binary; manual local switches must do
+the equivalent. A stale receipt is ignored, not accepted as evidence of a different build.
+
+An unavailable verification service does not mean unfinished work. Keep the task's state and retry verification
+after recovery rather than requesting another merge/deployment, parking, or cancelling it solely for that reason.
+Direct GitHub failures retain only a sanitized message and allowlisted status/rate-limit/request-ID metadata.
+Permission errors do not pause other PRs. A transient pause reports its original failure and UTC recovery time;
+it does not claim a fresh request was made. There are no automatic request retries.
 
 **Deployed before the upstream merge** (#4867): a hub built from a local branch can run a PR that is still open. The PR has
 no merge commit, and GitHub's compare does not know a local commit. So the file names such a PR by a commit of its own,
