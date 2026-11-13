@@ -159,13 +159,15 @@ class Watcher:
         try:
             for repo, config in self.repositories.items():
                 raw = gh_json(["pr", "list", "--repo", repo, "--state", "open", "--json",
-                               "number,headRefOid,isDraft,baseRefName", "--limit", "200"])
+                               "number,headRefOid,isDraft,baseRefName,mergeable", "--limit", "200"])
                 if not isinstance(raw, list):
                     raise WatchError("PR discovery did not return an array")
                 for item in raw:
                     if not isinstance(item, dict) or not isinstance(item.get("number"), int):
                         raise WatchError("invalid PR discovery entry")
                     if item.get("isDraft") or item.get("baseRefName") != config["base"]:
+                        continue
+                    if item.get("mergeable") == "CONFLICTING":
                         continue
                     if not isinstance(item.get("headRefOid"), str) or not SHA.fullmatch(item["headRefOid"]):
                         raise WatchError("PR discovery entry has no valid head SHA")
@@ -312,6 +314,8 @@ class Watcher:
 
     def mergeable(self, pr):
         if pr["state"] != "OPEN" or pr["isDraft"]:
+            return False
+        if pr["mergeable"] == "CONFLICTING":
             return False
         if pr["mergeable"] == "UNKNOWN":
             # Let the next round observe a definite state; never interpret an
