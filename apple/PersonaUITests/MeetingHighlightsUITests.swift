@@ -425,7 +425,7 @@ final class MeetingHighlightsUITests: XCTestCase {
         }
     }
 
-    /// Persona off from the page menu's role picker (`meeting-role`, 关 in zh-Hans): its choices are in the menu, or under
+    /// Persona off from the page menu's role picker (`meeting-role`, 「关」 in zh-Hans): its choices are in the menu, or under
     /// the picker when the system shows it as a submenu.
     @MainActor private func turnPersonaOff(_ app: XCUIApplication, _ look: String) {
         let menu = element(app, "meeting-page-menu")
