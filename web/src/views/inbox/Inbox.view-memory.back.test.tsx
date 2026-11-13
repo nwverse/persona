@@ -146,6 +146,31 @@ describe("E3 review: an entry keeps its own snapshot", () => {
     expect(listScroll().scrollTop).toBe(240);
   });
 
+  it("leaving the Inbox from the list itself and coming back by Back restores the list", async () => {
+    const fyi = () => host.querySelector<HTMLButtonElement>('[data-section="fyi"] > div > button[aria-expanded]')!;
+    await setSearch("chat");
+    await act(async () => fyi().click());
+    expect(fyi().getAttribute("aria-expanded")).toBe("false");
+    await leaveForChat();
+    await back();
+    expect(search().value).toBe("chat");
+    expect(fyi().getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("Forward to an item after Back from it shows the item's own snapshot again", async () => {
+    await openItem("a1");
+    await act(async () => chainToggle().click());
+    await leaveForChat();
+    await back("a1");
+    expect(chainRows()).toHaveLength(2);
+    await act(async () => popped(() => history.forward()));
+    await show();
+    expect(location.pathname).toBe("/persona/c1");
+    await act(async () => popped(() => history.back()));
+    await show("a1");
+    expect(chainRows()).toHaveLength(2);
+  });
+
   it("a remount on the same entry that no Back or Forward reached starts clean", async () => {
     // Not a return: the page mounts again on the entry it was already on (a test case, a remount). The snapshot the
     // previous mount left must not come back by itself, or a fresh visit would show an old search or fold.
