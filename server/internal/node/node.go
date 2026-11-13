@@ -756,8 +756,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		case "session.keys", "session.screen", "session.screen.before", "terminal.watch", "session.close", "session.queue.edit", "session.queue.send_now", "session.rename", "assistant.send":
 			return nil, refusal("codex_read_only", "这个会话没有终端或启动器控制能力，请在原 app-server 中操作", nil)
 		case "session.modes":
-			// Its effort, on the app-server running it (codex_effort.go); nothing else.
+			// Its effort, on the app-server running it (codex_effort.go), or in the Codex App window that has it
+			// (codex_desktop_effort.go); nothing else.
 			if _, _, driven := n.codexEffortThread(p.SessionID); !driven {
+				if src, found := n.codexSource(p.SessionID); found && codexDesktopChat(src) {
+					return ok(n.codexDesktopModes(ctx, p.SessionID, src, p.Model, p.PermissionMode, p.Effort))
+				}
 				return nil, refusal("codex_read_only", "这个会话没有终端或启动器控制能力，请在原 app-server 中操作", nil)
 			}
 			if p.Model != "" {

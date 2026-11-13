@@ -230,9 +230,13 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * browser started share one on-demand import of the rule, lib/star-prompt-load.ts, which a failed load only skips, and
  * the sidebar's milestone line is a lazy component; the rule, the pill, the line and their strings stay off the first
  * screen). And 128 B for recent main changes (#6346: ja 474,617 B on main at 2010e8229f, 63 B over the old budget,
- * with 65 B of room).
+ * with 65 B of room). And 377 B for opening a Persona chat at a message, with main's own growth (#6283: main at
+ * 0821d1acca measured ja 474,717 B, 35 B over the old budget; this change takes it to 475,028 B, +311 B: the `?at=` of a
+ * search hit's address and the chat's landing on it, which pages back for one further up, waiting while the chat still
+ * fills the screen, and its one line when the message is not reached; the search itself stays in ⌘K's on-intent load
+ * and All chats' page; 31 B of room so the next main does not tip it).
  */
-export const FIRST_SCREEN_BUDGET = 474_682;
+export const FIRST_SCREEN_BUDGET = 475_059;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
@@ -402,9 +406,13 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
  * And 35 B of minifier drift (2026-11-13): #5534 left no room, and by bdbfabd69 the idle tier sent 43,969 B with none
  * of its pages (ComposerPanel, QueuePanel, SlashPalette, ImageEditor, ViewBody, ExtensionChart, Palette) changed since,
  * only the code they share with other chunks (#5760); 31 B of room so the next main does not tip it.
+ * And 475 B for finding a Persona chat by what was said in it in ⌘K (#6283, 2026-11-13: 43,846 B on main at 39b5b57403,
+ * 44,444 B after, +598 B, of which 154 B fit the room main had: the merge of the manager's results into the palette's
+ * rows and the matched sentence as a row's second line; the search itself, lib/assistant-search.ts, loads on the first
+ * query typed, off the idle tier; 31 B of room so the next main does not tip it).
  * Every other lazy page loads on intent, not at idle; raise it on purpose, in the change that needs it.
  */
-export const IDLE_TIER_BUDGET = 44_000;
+export const IDLE_TIER_BUDGET = 44_475;
 
 const gzip = promisify(gzipCompress);
 
