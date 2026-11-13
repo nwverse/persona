@@ -151,6 +151,22 @@ class InboxFollowTest {
         }
     }
 
+    @Test fun sharedFollowTimeFixturesMatchInEveryLanguage() {
+        val root = System.getProperty("persona.repo.root")?.let(::File) ?: generateSequence(File(".").canonicalFile) { it.parentFile }
+            .first { File(it, ".git").exists() && File(it, "android").isDirectory }
+        val file = File(root, "spec/fixtures/inbox/time.json")
+        if (!file.exists()) return // The shared fixture arrives with #7203; this test exercises it as soon as it is present.
+        val fixture = Json.parseToJsonElement(file.readText()).jsonObject
+        for (case in fixture.getValue("cases").jsonArray.map { it.jsonObject }) for (language in languages) {
+            val name = case.getValue("name").jsonPrimitive.content
+            val input = case.getValue("input").jsonObject
+            val expected = case.getValue("expected").jsonObject.getValue(language.wire).jsonPrimitive.content
+            val actual = inboxFollowTime(input.getValue("at").jsonPrimitive.content, language.resources, language.locale,
+                Instant.parse(input.getValue("now").jsonPrimitive.content), zone)
+            assertEquals("$name/${language.wire}", expected, actual)
+        }
+    }
+
     @Test fun legacyThirdLinesKeepEachSourcesOwnShape() {
         val res = languages.first().resources
         val item = InboxItem("x", kind = "group", sender = "Alex", preview = "Can we move it?")

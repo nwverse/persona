@@ -112,5 +112,9 @@ class InboxEventDetailTest {
             event = tierOnly.event.copy(status = null, doneBy = "user"))
         repository.snapshot.value = InboxSnapshot(records = listOf(done))
         rule.onAllNodesWithText("Done", useUnmergedTree = true).assertCountEquals(1)
+        rule.onNodeWithText("Processing chat ›").assertExists()
+        val doneWithoutConversation = done.copy(event = done.event.copy(chain = emptyList()))
+        repository.snapshot.value = InboxSnapshot(records = listOf(doneWithoutConversation))
+        rule.onNodeWithText("Processing chat ›", useUnmergedTree = true).assertDoesNotExist()
     }
 }
