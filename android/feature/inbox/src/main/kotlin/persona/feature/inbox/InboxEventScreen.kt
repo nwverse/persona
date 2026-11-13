@@ -157,6 +157,12 @@ internal fun EventStateLine(mark: EventMark, modifier: Modifier = Modifier) {
         is EventMark.Failed -> JInlineStatus(mark.reason?.let { stringResource(R.string.inbox_handling_failed_reason, it) }
             ?: stringResource(R.string.inbox_handling_failed), modifier, tone = InlineTone.Failed)
         is EventMark.Suggests -> Unit
+        is EventMark.Now -> JInlineStatus(mark.text, modifier, tone = when {
+            mark.problem -> InlineTone.Failed
+            mark.status == Status.Working -> InlineTone.Busy
+            mark.status == Status.NeedsYou -> InlineTone.Caution
+            else -> InlineTone.Done
+        })
     }
 }
 
@@ -173,6 +179,10 @@ internal fun EventRowMark(mark: EventMark) {
         is EventMark.Working -> JStateLabel(stringResource(mark.word), Status.Working)
         EventMark.Preparing -> JStateLabel(stringResource(R.string.inbox_handling_preparing), Status.Working)
         is EventMark.Failed -> JStateLabel(stringResource(R.string.inbox_handling_failed), Status.NeedsYou, problem = true)
+        is EventMark.Now -> if (mark.accent) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+            JIcon(PhIcons.Sparkle, null, size = Tokens.Space.m, tint = palette.accent, decorative = true)
+            Text(mark.text, style = PersonaTheme.type.caption, color = palette.ink2, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
+        } else JStateLabel(mark.text, mark.status, problem = mark.problem)
     }
 }
 

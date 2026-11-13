@@ -27,6 +27,14 @@ internal fun InboxItemRow(record: InboxRecord, repository: InboxRepository, navi
     val translated = rememberItemTranslation(record)
     var menu by remember { mutableStateOf(false) }
     val res = LocalResources.current
+    val nowText = inboxNowForRow(record, res, currentLocale)
+    val metaText = inboxRowMeta(record, res)
+    val oldPreview = item.summary?.takeIf { it.isNotBlank() } ?: translated?.preview?.ifBlank { null }
+        ?: record.doc?.let { listOf(docTypeName(res, it.type), item.preview).filter { s -> s.isNotBlank() }.joinToString(" · ") } ?: item.preview
+    val oldMark = if (!done) eventMark(record) else null
+    val nowMark = nowText?.let {
+        EventMark.Now(it, inboxNowStatus(record.event.now), problem = record.event.now == "failed", accent = oldMark is EventMark.Suggests)
+    }
     val doneLabel = stringResource(if (done) R.string.inbox_move_back else R.string.inbox_done)
     val handOffLabel = stringResource(R.string.inbox_hand_to_ai)
     if (menu) JActionSheet(title = item.title, onDismiss = { menu = false }, actions = buildList {
@@ -49,8 +57,11 @@ internal fun InboxItemRow(record: InboxRecord, repository: InboxRepository, navi
                 else stringResource(if (record.feedId != null || record.source == "lark") R.string.inbox_source_lark else R.string.inbox_source_mail),
             group = record.groupName.takeIf { groupEvent },
             time = item.updatedAt?.let { displayTime(it, currentLocale) },
-            preview = item.summary?.takeIf { it.isNotBlank() } ?: translated?.preview?.ifBlank { null }
-                ?: record.doc?.let { listOf(docTypeName(res, it.type), item.preview).filter { s -> s.isNotBlank() }.joinToString(" · ") } ?: item.preview,
+            // With where, this is only the AI summary; the meta line carries who and the latest words below it.
+            preview = if (metaText != null) item.summary?.takeIf { it.isNotBlank() } else oldPreview,
+            meta = metaText?.let {
+                MessageItemMeta(it, nowText, inboxNowStatus(record.event.now), problem = record.event.now == "failed", accent = oldMark is EventMark.Suggests)
+            },
             status = when { done -> null; item.isWorking || record.agent?.state in setOf("running", "queued") -> Status.Working
                 item.section == InboxTier.Action.wire -> Status.NeedsYou; else -> null },
             // The hub names its own sources Lark and Mail; the row already shows those as its source.
@@ -64,7 +75,8 @@ internal fun InboxItemRow(record: InboxRecord, repository: InboxRepository, navi
             onLongClick = { selection?.longClick { menu = true } ?: run { menu = true } }, extra = {
                 record.localDelivery?.pendingStatus()?.let { PendingBadge(it) }
                     ?: record.localStatus?.let { InboxLocalStatus(it) }
-                if (!done) eventMark(record)?.let { EventRowMark(it) }
+                // Meta already carries the shared state at its trailing side; otherwise it replaces the old mark in place.
+                if (metaText == null) (nowMark ?: oldMark)?.let { EventRowMark(it) }
                 if (!done) AgentDraftCard(record, composers, navigator, repository = repository)
             })
     }

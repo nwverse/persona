@@ -8,6 +8,7 @@ import persona.core.contracts.InboxChainEntry
 import persona.core.contracts.InboxHandling
 import persona.core.contracts.InboxSuggestion
 import persona.core.designsystem.LocalizedFormats
+import persona.core.designsystem.Status
 import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PhIcons
 import persona.core.navigation.ChatRoute
@@ -46,6 +47,8 @@ internal sealed interface EventMark {
     data class Suggests(@StringRes val kind: Int, val line: String) : EventMark
     /** The manager failed or timed out: back in Needs you without a suggestion. */
     data class Failed(val reason: String?) : EventMark
+    /** The shared `now` words; an unknown key never reaches this variant and keeps the old mark. */
+    data class Now(val text: String, val status: Status, val problem: Boolean = false, val accent: Boolean = false) : EventMark
 }
 
 internal fun eventMark(record: InboxRecord): EventMark? {
