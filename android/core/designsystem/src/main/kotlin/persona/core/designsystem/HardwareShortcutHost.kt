@@ -45,7 +45,7 @@ private fun HardwareShortcutController.handle(event: KeyEvent, owner: Any? = nul
  * stay in place when the window changes; compact windows only remove the key modifier and controller.
  */
 @Composable
-fun HardwareShortcutHost(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+fun HardwareShortcutHost(modifier: Modifier = Modifier, requestFocusWhenLarge: Boolean = true, content: @Composable () -> Unit) {
     val large = LocalLargeWindowInput.current
     val controller = remember { HardwareShortcutController() }
     val focus = remember { FocusRequester() }
@@ -54,7 +54,7 @@ fun HardwareShortcutHost(modifier: Modifier = Modifier, content: @Composable () 
     LaunchedEffect(large) {
         if (large) {
             // Fill an empty focus tree so Ctrl+/ has a receiver, but never take an existing child or dialog focus.
-            if (!currentFocusWithin) runCatching { focus.requestFocus() }
+            if (requestFocusWhenLarge && !currentFocusWithin) runCatching { focus.requestFocus() }
         } else controller.closeHelp()
     }
     val keys = if (large) Modifier.onKeyEvent { controller.handle(it, focus) }.focusable() else Modifier

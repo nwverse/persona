@@ -57,7 +57,7 @@ data class JAction(
     val onClick: () -> Unit,
 )
 
-/** A bottom sheet in the style's shape and surface. Sheets sit above a scrim, so they are always opaque. */
+/** A bottom sheet in the style's shape and surface. Ordinary sheets are opaque; adaptive Settings may clear the full-window container. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun JSheet(
@@ -73,6 +73,8 @@ fun JSheet(
     scrollable: Boolean = false,
     contentPadding: androidx.compose.ui.unit.Dp? = null,
     bottomPadding: androidx.compose.ui.unit.Dp? = null,
+    /** Leave the window-sized container transparent so a page-sized Settings card can supply the only opaque surface. */
+    clearContainer: Boolean = false,
     showDragHandle: Boolean = true,
     content: @Composable ColumnScope.() -> Unit,
 ) {
@@ -81,7 +83,11 @@ fun JSheet(
     val blocked by androidx.compose.runtime.rememberUpdatedState(onBlockedDismiss)
     // Brief's surface is its card grey, the fill of its text fields and chips: on a grey sheet they vanish (no border
     // either), so its sheets are paper like its pages.
-    val container = if (PersonaTheme.style == AppStyle.Brief) palette.background else palette.surfaceOpaque
+    val container = when {
+        clearContainer -> palette.surfaceOpaque.copy(alpha = 0f)
+        PersonaTheme.style == AppStyle.Brief -> palette.background
+        else -> palette.surfaceOpaque
+    }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = skipPartiallyExpanded, confirmValueChange = {
         (it != SheetValue.Hidden || canDismiss).also { ok -> if (!ok) blocked?.invoke() }
     })

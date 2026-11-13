@@ -27,7 +27,7 @@ fun JSettingsSheet(onDismiss: () -> Unit, content: @Composable () -> Unit) {
     val settingsState = rememberSaveableStateHolder()
     val currentContent by rememberUpdatedState(content)
     val currentGrouped by rememberUpdatedState(grouped)
-    // The same content instance moves between presentations, including non-saveable state and running effects.
+    // One sheet, frame and content invocation stay mounted; only presentation geometry changes.
     val settingsContent = remember {
         movableContentOf {
             settingsState.SaveableStateProvider("settings-sheet-content") {
@@ -38,10 +38,17 @@ fun JSettingsSheet(onDismiss: () -> Unit, content: @Composable () -> Unit) {
             }
         }
     }
-    when (settingsPresentation(LocalLargeWindowInput.current)) {
-        SettingsPresentation.FullWindow -> JSheet(onDismiss, Modifier.fillMaxSize(), contentPadding = 0.dp, bottomPadding = 0.dp, showDragHandle = false) {
-            settingsContent()
+    val presentation = settingsPresentation(LocalLargeWindowInput.current)
+    HardwareShortcutHost(Modifier.fillMaxSize(), requestFocusWhenLarge = false) {
+        JSheet(
+            onDismiss,
+            Modifier.fillMaxSize(),
+            contentPadding = 0.dp,
+            bottomPadding = 0.dp,
+            clearContainer = presentation == SettingsPresentation.PageSized,
+            showDragHandle = false,
+        ) {
+            JSettingsPresentationFrame(presentation, onDismiss) { settingsContent() }
         }
-        SettingsPresentation.PageSized -> JPageSizedSettingsSheet(onDismiss, settingsContent)
     }
 }
