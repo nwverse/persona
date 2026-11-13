@@ -991,8 +991,9 @@ private struct HomeComputerLine: View {
     var machine: HomeSnapshot.Machine
     var body: some View {
         let state = computerState(machine)
-        HStack(spacing: HomeWidgetTokens.gap * 1.5) {
+        HStack(spacing: HomeWidgetTokens.gap) {
             HomeComputerRing(machine: machine, side: HomeWidgetTokens.ringMedium, named: false)
+            // The words take the rest of the row; beside a `Spacer` they would get only half of it and cut the name.
             VStack(alignment: .leading, spacing: 0) {
                 Text(verbatim: machine.name).font(HomeWidgetTokens.headline).lineLimit(1).minimumScaleFactor(HomeWidgetTokens.nameMinScale)
                     .homeInk(machine.online ? .primary : .tertiary)
@@ -1004,7 +1005,7 @@ private struct HomeComputerLine: View {
                     Text("Load \(load)% [Home Widgets]").font(HomeWidgetTokens.caption).lineLimit(1).homeInk(.tertiary)
                 }
             }
-            Spacer(minLength: 0)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }

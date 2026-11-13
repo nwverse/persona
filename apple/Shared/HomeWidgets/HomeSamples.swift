@@ -25,8 +25,8 @@ enum HomeSamples {
     static func busy(zh: Bool = false, package: Bool = false, now: Date = HomeSamples.now) -> HomeSnapshot {
         func t(_ en: String, _ cn: String) -> String { zh ? cn : en }
         // At the gallery's 13:20 the day's events keep their times; at any other moment (the app's sample, written
-        // for Home Screen shots) they come the same while after it.
-        let shift = now.timeIntervalSince(HomeSamples.now)
+        // for Home Screen shots) they move by whole hours, so they still read as round times and still come after now.
+        let shift = (now.timeIntervalSince(HomeSamples.now) / 3600).rounded() * 3600
         func at(_ hour: Int, _ minute: Int) -> Double {
             var c = Calendar.current.dateComponents([.year, .month, .day], from: HomeSamples.now)
             c.hour = hour; c.minute = minute
