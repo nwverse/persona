@@ -1,6 +1,72 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "About %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "About “%@”"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关于「%@」"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%@」について"
+          }
+        }
+      }
+    },
+    "Agents you opened yourself in the terminal, on no to-do. Touch and hold one › Link to To-do… to file it." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agents you opened yourself in the terminal, on no to-do. Touch and hold one › Link to To-do… to file it."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你自己在终端里开的、没挂在待办上的 Agent。长按一行 › 关联到待办… 可以归过去。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ターミナルで自分で開いた、どのToDoにも関連付けられていないエージェントです。行を長押し ›「ToDoに関連付け…」で関連付けられます。"
+          }
+        }
+      }
+    },
+    "On no to-do; often started from Lark, the phone or elsewhere. Touch and hold one › Link to To-do… to file it." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On no to-do; often started from Lark, the phone or elsewhere. Touch and hold one › Link to To-do… to file it."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没挂在任何待办上，常是从飞书、手机或别的入口开的。长按一行 › 关联到待办… 可以归过去。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "どのToDoにも関連付けられていないエージェントです。多くはLarkやスマートフォンなど、ほかの場所から開始されたものです。行を長押し ›「ToDoに関連付け…」で関連付けられます。"
+          }
+        }
+      }
+    },
     "Among the Codex App's chats in no project" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -66,6 +132,75 @@
           "stringUnit": {
             "state": "translated",
             "value": "音声はこの iPhone に残ります。ただし「話す」を押している間は例外で、そのときに話された内容は音声サービスに送られます。テキストはナレッジに同期されて %1$lld 日間保存されます。"
+          }
+        }
+      }
+    },
+    "Back to Configured Model" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Back to Configured Model"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "設定済みのモデルに戻す"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回到配置的模型"
+          }
+        }
+      }
+    },
+    "Continue in a new session" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Continue in a new session"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新しいセッションで続ける"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "另开新会话继续"
+          }
+        }
+      }
+    },
+    "Continue in a new session?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Continue in a new session?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新しいセッションで続けますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要在新会话中继续吗？"
           }
         }
       }
@@ -254,6 +389,29 @@
         }
       }
     },
+    "Session note" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Session note"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "セッションについて"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会话提示"
+          }
+        }
+      }
+    },
     "Starts in the Codex App. With no folder it goes where the App keeps chats in no project; a new folder is made when it starts." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -296,6 +454,52 @@
           "stringUnit": {
             "state": "translated",
             "value": "Personaで会議の録音を始め、カレンダーで進行中の予定の名前を付けます。音声はこの iPhone に残ります。ただし「話す」を押している間は例外で、そのときに話された内容は音声サービスに送られます。文字起こしはナレッジに入ります。"
+          }
+        }
+      }
+    },
+    "Take over" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Take over"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "引き継ぐ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "接管"
+          }
+        }
+      }
+    },
+    "Take over this Codex session?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Take over this Codex session?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この Codex セッションを引き継ぎますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "接管此 Codex 会话？"
           }
         }
       }
@@ -388,6 +592,75 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Claude アプリのサイドバーで 1 つのグループにまとまります"
+          }
+        }
+      }
+    },
+    "This conversation's context is sealed. Continue in a new session instead." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This conversation’s context is sealed. Continue in a new session instead."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この会話のコンテキストは封印されています。新しいセッションで続けてください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此对话的上下文已封存，请改在新会话中继续。"
+          }
+        }
+      }
+    },
+    "This session cannot be safely resumed. Continue in a new session instead." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This session cannot be safely resumed. Continue in a new session instead."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このセッションは安全に再開できません。新しいセッションで続けてください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此会话无法安全恢复，请改在新会话中继续。"
+          }
+        }
+      }
+    },
+    "This will end the turn currently running in the terminal." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This will end the turn currently running in the terminal."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ターミナルで実行中のこのターンを終了します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会结束终端里正在跑的这一轮"
           }
         }
       }
@@ -14804,6 +15077,41 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "%lld messages from other conversations are waiting [Queue Strip]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld message from another conversation is waiting [Queue Strip]"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld messages from other conversations are waiting [Queue Strip]"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "別の会話からのメッセージが %1$lld 件待機中 [Queue Strip]"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还有 %1$lld 条别的对话在排队 [Queue Strip]"
+          }
+        }
+      }
     },
     "%lld videos [Queue Strip]" : {
       "localizations" : {
@@ -33173,6 +33481,12 @@
     "Change the assistant's name" : {
       "extractionState" : "manual",
       "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Change the assistant's name"
+          }
+        },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
@@ -33190,6 +33504,12 @@
     "Edit name" : {
       "extractionState" : "manual",
       "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Edit name"
+          }
+        },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
@@ -33207,6 +33527,12 @@
     "Name saved" : {
       "extractionState" : "manual",
       "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Name saved"
+          }
+        },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
@@ -33224,6 +33550,12 @@
     "Name your assistant" : {
       "extractionState" : "manual",
       "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Name your assistant"
+          }
+        },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
@@ -95085,6 +95417,52 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "回到 App 时提示发送剪贴板"
+          }
+        }
+      }
+    },
+    "Import into To-dos": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import into To-dos"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ToDo に取り込む"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "导入到待办"
+          }
+        }
+      }
+    },
+    "Incomplete reminders in the lists you choose become to-dos, and later changes to their title, notes or due date follow. Nothing is written back to Reminders; completing or deleting a reminder leaves its to-do as it is. Imports happen while Persona is open.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Incomplete reminders in the lists you choose become to-dos, and later changes to their title, notes or due date follow. Nothing is written back to Reminders; completing or deleting a reminder leaves its to-do as it is. Imports happen while Persona is open."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "選んだリストの未完了のリマインダーが ToDo になり、その後のタイトル、メモ、期限の変更も反映されます。リマインダーには書き戻しません。リマインダーを完了または削除しても ToDo はそのままです。取り込みは Persona を開いている間に行われます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "所选列表中未完成的提醒事项会成为待办，之后它们的标题、备注或截止时间改动也会同步过来。不会写回提醒事项；完成或删除提醒事项不影响对应的待办。只在 Persona 打开时导入。"
           }
         }
       }

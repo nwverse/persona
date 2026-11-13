@@ -157,6 +157,14 @@ A task's brief (#3822, `docs/assistant/unified-entry.md`, "Briefs"): what was as
 `expect_minutes_now` in effect, `clock_at`, `due_at`, `overdue_at`, `result`) and `lineage`. A task from before briefs
 gets a reconstructed one lazily.
 
+### 7. todo_imports table
+To-dos imported from another app (#4009, "Imported from Reminders" below). Migration `0499` (manager side).
+- `source` (text, `CHECK` `'reminders'`) and `external_id` (text, nonempty): the item in that app; together the PK.
+- `todo_id` (text, NULL, FK → `todos(id)` ON DELETE SET NULL, unique while set): the to-do it became; `NULL` once that
+  to-do was deleted in Persona, which keeps the item from being imported again.
+- `fingerprint` (text): short hashes of the title, notes and due date last taken from the item, one per field.
+- `created_at`, `updated_at` (timestamptz).
+
 Link/release semantics:
 - When an Agent is linked to a new to-do and is active on another, the same transaction marks the original association `released` (records `released_at`); the old to-do shows it as "Previously involved".
 - If an Agent previously involved in this to-do is manually linked back, clear `released_at`/`dismissed_at`, and refresh `linked_at` and snapshot information.
@@ -172,6 +180,7 @@ Link/release semantics:
 | POST | `/api/v1/todos` | Create `{"title", "notes"?, "due_at"? \| "due_date"?, "remind_at"?, "priority"?, "project"?, "kind"?}` → `{"todo": Todo}`; `kind` `concern` records one of the owner's concerns ("Concerns"; without the hub's database 503), `todo` or none a to-do, anything else 400; nonempty `title` required (400); `due_at` / `remind_at` RFC 3339, `due_date` `YYYY-MM-DD`, `priority` `high` / `normal` / `low` / `""`, `project` a knowledge-base project's slug or name (stored as its slug), anything else (or both due fields, or no such project) 400; read-only role (watch) 403 |
 | PATCH | `/api/v1/todos/{id}` | Edit `{"title"?, "notes"?, "done"?, "due_at"? \| "due_date"?, "remind_at"?, "priority"?, "project"?}` → `{"todo": Todo}`; only supplied fields change, `null` (or `""`) clears a due date or reminder, `""` takes it out of its project; either due field replaces the other; a new `remind_at` is pushed again; user completion-state changes clear `done_by` / `done_reason`, and reopening records `reopened_at`; `"done": true` on a to-do whose agent never started (closed by the hub with `start_error`) is the owner closing it: `start_error` cleared, `done_at` now (#3713); `"done": true` on an open concern 409 (only its report closes it, "Concerns"); missing 404; read-only role 403 |
 | POST | `/api/v1/todos/retitle` | Give short titles to task to-dos previously named from the prompt's first line ("To-do titles") → `{"dry_run", "todos": [{"id", "old_title", "new_title"}]}`; `?dry_run=1` lists without changes; read-only role 403 |
+| POST | `/api/v1/todos/import/reminders` | Import reminders from the phone `{"items": [{"external_id", "title", "notes"?, "due_at"? \| "due_date"?}]}` → `{"created", "updated", "unchanged", "skipped"}` ("Imported from Reminders"); at most 1000 items; a missing `external_id`, an unreadable or doubled due date 400 (nothing of the batch taken); read-only role 403 |
 | POST | `/api/v1/todos/{id}/accept` | Verify a to-do from a briefing's Accept button `{"asked_at"}` (the `brief` feed item's `accept[].asked_at`, `docs/protocol/protocol.md`) → `{"ok":true}`; no `asked_at` 400; not the round that waits now (the to-do was reopened or asked again since), already verified or never asked 409; a decision whose recommendation could not reach the task's Agent 502, in the request's language with the reason (nothing taken or recorded, the button works again); the stored asks could not be read or the acceptance could not be saved 503 (nothing verified, the button works again); the ask may have no Lark card (the bot is not set up, or its task reports are off); read-only role 403 |
 | POST | `/api/v1/todos/{id}/done-check` | Run an "Automatic completion" judgment → `{"verdict", "reason", "would_close", "skip", "replies", "signals"}`, no database write ("Automatic completion"); `{"apply": true}` (Re-check) writes it and adds `applied`, `stage` (#4867); missing 404; read-only role 403 |
 | DELETE | `/api/v1/todos/{id}` | Delete to-do and associations → `{"ok": true}`; Agent sessions untouched; missing 404; read-only role 403 |
@@ -234,6 +243,13 @@ Automatic linking stops when a to-do is completed and resumes when reopened.
 For renames through hub (shared with pin/mute's rename API), hub tells assistant (`todos.space_renamed`), migrating the space name in `todo_spaces` and corresponding `via` in `todo_agents` together. Assistant writes database first, then memory and broadcasts `{"type":"todos"}`. If the new name is already linked to another to-do (unique-index conflict), this project's old to-do link is invalidated and cleaned up, with a log entry. No migration if assistant is disconnected (same as "Known limitations", item 1).
 
 ## Following spawned Agents
+
+For a supervised Agent's explicit handoff to a separate session, prefer `task_spawn` (or
+`personad tool task_spawn` from its terminal). The manager records the child on the caller's existing to-do with the
+same supervisor before returning; the Agent never reads a hub credential or chooses a to-do ID. See
+[Separate sessions within a supervised task](unified-entry.md#separate-sessions-within-a-supervised-task-5751).
+Native Codex sidecar ancestry and UI folding alone do not create a to-do link. A standalone runtime
+`create_thread` without parent metadata is not a supported supervised handoff.
 
 Child Agents spawned by a linked Agent automatically join the same to-do, tracking their parent hierarchy:
 1. **Parent marker**: an active Agent on an unfinished to-do has a `persona_todo_ref` marker on its herdr pane, value `<todo_id>@<machine_id>/<session_id>`.
@@ -563,6 +579,7 @@ Something the owner raises in the main conversation and wants an answer to is a 
   - `explain_first`: the decision stays as it is, no longer taken by default, and the supervisor re-issues it with a short background.
   - Counted: each is a work event `owner_cannot_answer` and `GET /api/v1/agents/work/stats` sums them per supervisor conversation (`docs/assistant/agent-work.md`, "Evaluation").
 - **Choosing an option**: `POST /api/v1/todos/{id}/accept {"asked_at", "option"}` with the recommended label is the plain OK; another option goes to the task's Agent as the owner's choice with what it leads to, is recorded in the to-do's decisions and ends the decision. The Lark card has a button per option and one per fixed answer. The `decide` push's `todo` also carries `options` (the labels, the recommended first) and `responses`, so an app can offer them from the notification; its body lists the background, the options and the cost of waiting.
+- **Answered in the chat** (#6470, `assistant/task_decided.go`): the owner often answers in their own words in the main chat instead of on the card. The main conversation, or the task's supervisor, records that answer with the assistant tool `task_decided` (`todo_id`, `option`: one of the waiting decision's labels, `said`: the owner's words, `told_agent`). Without `told_agent` the option is taken exactly as the accept route takes it (sent to the task's Agent, then recorded). With `told_agent: true` (the answer already went to the Agent with `agent_send`) nothing is sent again. Either way the decision ends as a card answer ends it: the ask is answered and leaves Needs you, its deadline default and daily raise stop, the supervision leaves `needs_user`, the to-do's decisions get a `manual` row with the conversation as its source and the owner's words as its reason, and an `owner_decided` event is written. An option that is none of the decision's, a conversation that is neither the main one nor the supervisor, and a decision no longer waiting are refused. Relaying the answer with `agent_send` alone used to leave the decision waiting.
 - **A decision is not replaced by "Please verify"**: while a decision waits, a turn of the task's Agent that says "deployed" (or a held deploy landing) no longer starts a "Please verify" round in its place; and a review that arrives while such a round is still being written keeps its decision, the round giving way. Before, either order left a `needs_user` task with no `ask`, passed by the supervising assistant as if it were a deployed task.
 - Not done here: iOS (it keeps showing the verdict line and OK); offering the options from the decision push on Android (its notification opens the conversation). A task that only waits is parked: "Parked tasks" below.
 
@@ -704,6 +721,26 @@ Not yet: manual editing/undo of conclusions (currently **Replace** in decisions)
 - The push's title is the to-do's, its body the due date (or "was due" once it has passed), the first line of the notes, and when it went out more than two minutes late (the manager was down), the time it was for.
 - A done to-do is not reminded; changing `remind_at` re-arms it; a mesh member on standby leaves it to the center, as with scheduled tasks.
 
+## Imported from Reminders
+
+#4009 (`assistant/todo_imports.go`). The iPhone can import the user's Reminders as to-dos, one way. The phone reads the
+lists the user picked (Settings › Phone data › Reminders) and sends their incomplete reminders to
+`POST /api/v1/todos/import/reminders`; the manager matches each by its `external_id` (`todo_imports`):
+
+- **New**: a reminder never seen becomes a to-do with its title, notes and due date (a moment, or a day for an all-day
+  reminder). One without a title is skipped.
+- **Changed**: only the fields that changed in Reminders since the last import are written, so a title the user changed
+  in Persona stays until the reminder's title changes too. A due date removed in Reminders is removed here.
+- **Left alone**: completing or deleting a reminder does nothing to its to-do, and nothing is ever written back to
+  Reminders. A to-do deleted in Persona stays deleted: its reminder is skipped from then on.
+- One batch at a time per manager; when two managers import the same new reminder, the second removes its copy.
+
+The import runs only while the app does (launch, return to the foreground, a change in the Reminders database while it
+is in front), since only the phone can read Reminders; it is not real time. There is no background refresh yet, which
+keeps it out of the battery budget (#1633). A batch the hub already took (same hash, same hub) is not sent again
+(`apple/Persona/PhoneTools/RemindersImport.swift`). A request takes at most 1000 reminders; the phone sends more in
+several requests, in a stable order, and counts the set as sent only once every request was taken.
+
 ## Calendar
 
 #2029. The to-dos page switches between the list and a calendar (List | Calendar at its top, kept per device; the calendar's Day | Week | Month too). The calendar shows the to-dos that have a due date, from the same list the page already has: `GET /api/v1/todos` returns them all, so switching needs no request and works offline from the cache.
@@ -782,7 +819,7 @@ A to-do it makes is the user's own (no `origin`): work for an agent still goes t
 
 ### 4. Agents view integration
 - Agents grouping supports **By To-do** (#1836; iOS / Mac defaults by repository when no grouping chosen, #2108): each unfinished to-do with active Agents is a separate section; header shows title/state and opens details. Unlinked manually started herdr Agents (`started_by_persona` false) have a separate expanded **Manually started** section (web: **Started in terminal**, #3057), before **Unassigned** (web: **Not linked to a to-do**; web #2608, iOS / Mac #2917: without spawn relationships or linked space no automatic rule recognizes them; link through **Link to To-do…** in row menu; spawned herdr Agents whose parent is not linked cannot be distinguished on any client and count here). Remaining unlinked Agents go in final **Unassigned** section (collapsed by default when to-dos exist, expanded if any Needs you). Web remembers each browser's grouping, keeping whatever was chosen (default By To-do if never chosen, #2812; By Machine before, #1990). When list contains multiple host types, non-herdr rows label their host.
-- Web **By To-do** is a three-level tree (#2526): project › to-do › Agent. Project comes from linked Agents' repository (same `repoOf` as By Repository, merged across computers; choose repository with most Agents if several); spawned Agents (`source = "spawned"`, `via` points to another Agent in same to-do) nest beneath parent, staying top-level if parent absent or cycle. Each node has state "Needs you / Working / Done", highest priority below it (Needs you > Working > Done, interrupted counts Needs you). Completed to-dos and done branches with last activity over 1 day ago default collapsed; Manually started/Unassigned last, grouped by project inside. Unfinished to-dos on left of To-dos page also group by project: their own knowledge-base project first ("Project"), else the repository, items with neither last under **Unsorted**. Android By To-do also uses project › to-do › Agent (#3156), without spawned indentation/one-day folding yet.
+- Web **By To-do** (#2526, #6458): the open to-dos with active Agents at the top level, each Agent under its to-do and a spawned Agent (`source = "spawned"`, `via` points to another Agent in same to-do) beneath its parent, staying under the to-do if the parent is absent or in a cycle. No repository layer: grouping by repository or folder belongs to By Repository and By Project (the old project › to-do › Agent tree took the repository most of a to-do's Agents worked in). A to-do's row says its state in the To-dos page's word (`todoStatusLabel`), so a to-do waiting on CI reads Waiting on both pages, never Done in one. Completed to-dos and done branches with last activity over 1 day ago default collapsed. Opened in the terminal, Not linked to a to-do and Recent (not running) follow at the same level as rows of the same kind, their Agents directly under them, each with its count, its most urgent Agent's state and an ⓘ saying what it holds (also its empty state). Unfinished to-dos on left of To-dos page still group by project: their own knowledge-base project first ("Project"), else the repository, items with neither last under **Unsorted**. Android By To-do is iOS's flat list (#4338).
 - Source label on every Agent row (#2526): botmux **Lark Group**, tapping opens a thread link in Lark when present; herdr **Terminal**; other hosts unlabelled. Quick filters add Lark Group/Terminal for just that type. iOS / Mac have labels/filters too; Android too (filters #3154, labels #3132, labels under time, #3043). The web draws it as an icon at the row's end instead of a word (`docs/web/web.md` "Detail conventions").
 - Other grouping modes add to-do-title labels to linked Agents.
 - By-project headers show linked to-do labels opening details; menu **Link to To-do…**, **Move to Another To-do…**, **Remove from To-do**; picker selects unfinished to-do or creates then links. Agent groups outside herdr workspaces (no workspace id) have no labels or these menu items.
@@ -795,7 +832,7 @@ A to-do it makes is the user's own (no `origin`): work for an agent still goes t
 
 ## Design trade-offs and reasons
 
-1. **Not another Lark Tasks or Reminders**: Persona to-dos drive and track Agent workflows, focusing on which Agents share one task and their progress, not complex subtasks, deadlines, priority trees, calendar reminders or multi-party collaboration.
+1. **Not another Lark Tasks or Reminders**: Persona to-dos drive and track Agent workflows, focusing on which Agents share one task and their progress, not complex subtasks, deadlines, priority trees, calendar reminders or multi-party collaboration. The Reminders import (#4009) keeps to that: one way, title, notes and due date only, so a to-do started in Reminders can be handed to an Agent without retyping it; lists, subtasks, sharing and completion stay in Reminders.
 2. **No stored state**: overall state derives entirely from linked Agents' live runtime states (questioning, working, finished unread, etc.). Agent state changes frequently; derivation avoids dual-write consistency problems and large synchronization overhead.
 3. **One active to-do**: `UNIQUE (machine_id, session_id) WHERE released_at IS NULL` ensures each Agent serves only one current to-do at a time. Assigning other work automatically marks the previous task "Previously involved", keeping context and execution goal clear.
 4. **Automatic completion only for chat-dispatched tasks, judged by model**: these have explicit requirements (dispatch prompt) and deliverables (Agent's final reply), so requiring individual user completion taps is a burden; manual to-dos often represent the user's own plans, whose completion hub cannot know. Stopped is not finished, so do not close by state alone; judgment model decides, leaving open when uncertain. Wrong auto-close (user thinks finished) costs much more than missed close (one extra tap), hence reversible, reasoned, and not reclosed by the same work after reopening.

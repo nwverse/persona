@@ -14,7 +14,7 @@ import { useLeftDraft } from "../lib/drafts";
 import { planInRow, planLabel, planLine } from "../lib/plan";
 import { answeredSession, answerPending, lastAnsweredAt } from "./assistant/answered-lookup";
 import type { AgentState, Session } from "../lib/types";
-import { cx, EASE, Kbd, Menu, useMenu, useNow, type MenuItem } from "../ui/atoms";
+import { cx, EASE, Kbd, Menu, sidebarFoldMotion, useMenu, useNow, type MenuItem } from "../ui/atoms";
 import { StatusMark } from "../ui/StatusMark";
 import { runningWorkflows, workflowLine, workflowShortLine } from "../lib/workflows";
 import { ultracodeMarkShown } from "../lib/ultracode";
@@ -112,14 +112,25 @@ export const PersonaRow = memo(function PersonaRow({ reg, hover, active, go, mai
 });
 
 /** A group's small title inside a sidebar section (Persona chats' 常驻): the same type
- *  as the section's own title, optionally with an icon before it and a ⋯ for the group's actions. */
-export function SubHeading({ label, icon, onMenu, menuLabel }: { label: string; icon?: IconName; onMenu?: (at: MenuAt) => void; menuLabel?: string }) {
+ *  as the section's own title, optionally with an icon before it and a ⋯ for the group's actions.
+ *  With `onToggle` it folds the group it heads (Persona chats' 最近, #6228): the title is a button with the same
+ *  chevron and `aria-expanded` as a section's, so the state is announced without extra words. */
+const SUB_HEADING_TYPE = "text-[11px] font-semibold text-ink-3";
+export function SubHeading({ label, icon, onMenu, menuLabel, folded, onToggle }: { label: string; icon?: IconName; onMenu?: (at: MenuAt) => void; menuLabel?: string; folded?: boolean; onToggle?: () => void }) {
   return (
     <div role="heading" aria-level={3} className="flex items-center gap-1 px-2 pt-0.5 pb-0.5" {...(onMenu ? contextMenuProps((at) => onMenu(at)) : {})}>
-      <span className="flex min-w-0 flex-1 items-center gap-1 truncate whitespace-nowrap text-[11px] font-semibold text-ink-3">
-        {icon && <Icon name={icon} size={10} stroke={2.2} className="shrink-0" />}
-        {label}
-      </span>
+      {onToggle ? (
+        <button type="button" aria-expanded={!folded} onClick={onToggle} className={`touch-hit flex min-w-0 flex-1 items-center gap-1 whitespace-nowrap rounded-[5px] text-left ${SUB_HEADING_TYPE} hover:text-ink-2`}>
+          {icon && <Icon name={icon} size={10} stroke={2.2} className="shrink-0" />}
+          <span className="min-w-0 truncate">{label}</span>
+          <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
+        </button>
+      ) : (
+        <span className={`flex min-w-0 flex-1 items-center gap-1 truncate whitespace-nowrap ${SUB_HEADING_TYPE}`}>
+          {icon && <Icon name={icon} size={10} stroke={2.2} className="shrink-0" />}
+          {label}
+        </span>
+      )}
       {onMenu && <button
         type="button"
         aria-label={menuLabel}
@@ -189,6 +200,9 @@ export const NavRow = memo(function NavRow({ k, reg, hover, active, to, go, icon
     </div>
   );
 }, sameProps);
+
+// The list's one-line notes (loading, no match), as each writes it.
+const NOTE = "px-2 py-1 text-[12px] text-ink-3";
 
 // two shapes as well as two colors, so they tell apart without color: a bare prompt (no frame) and a window with a title bar
 const SOURCE_ICON = { terminal: { name: "run", tone: "text-source-terminal" }, desktop: { name: "appWindow", tone: "text-source-desktop" } } as const;
@@ -347,14 +361,14 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
       {prefix && <span className={prefixClass}>{prefix}</span>}
       {/* a lead's name reads as a row, even with nothing second to say: the ⋯'s reserved slot must not take the title's place */}
       {keepTrailing && !ultra && !detail.length && !workflow && !line && !childLine && !plan ? (
-        <span className={cx("flex-1 truncate text-[13px]", titleMin, titleFirst, active ? "font-medium text-ink" : "text-ink-2")}>
+        <span className={cx("flex-1 truncate text-meta", titleMin, titleFirst, active ? "font-medium text-ink" : "text-ink-2")}>
           {label ?? sessionTitle(s)}
         </span>
       ) : null}
       {/* with the mark, the title sits in the column whether a second line shows or not: the same element through a
           workflow's start and end, so the mark does not fade in again */}
       {ultra || detail.length > 0 || workflow || line || childLine || plan ? (
-        <span className={cx("min-w-0 flex-1 flex-col", titleMin, titleFirst)}>
+        <span className={cx("flex min-w-0 flex-1 flex-col", titleMin, titleFirst)}>
           {ultra ? (
             <span className="flex min-w-0 items-center gap-1">
               <span className={cx("min-w-0 truncate text-[13px]", active ? "font-medium text-ink" : "text-ink-2", st === "unread" && !active && !usageLimitLabel(s) && "font-medium text-ink")}>
@@ -398,7 +412,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
           </span>}
         </span>
       ) : (
-        <span className={cx("flex-1 truncate text-[13px]", titleMin, titleFirst, active ? "font-medium text-ink" : st === "offline" ? "text-ink-3" : "text-ink-2", st === "unread" && !active && "font-medium text-ink")}>
+        <span className={cx("flex-1 truncate text-meta", titleMin, titleFirst, active ? "font-medium text-ink" : st === "offline" ? "text-ink-3" : "text-ink-2", st === "unread" && !active && "font-medium text-ink")}>
           {label ?? sessionTitle(s)}
         </span>
       )}
@@ -589,7 +603,7 @@ const LegacyPersonalAgents = memo(function LegacyPersonalAgents({ reg, hover, ac
         </>
       }
     >
-      {!loaded && <p className="px-2 py-1 text-[12px] text-ink-3">{t("sidebar.loading")}</p>}
+      {!loaded && <p className={NOTE}>{t("sidebar.loading")}</p>}
       {error && <div className="relative z-10 px-2 py-1">
         <p role="alert" className="text-[12px] break-words text-red">{t("sidebar.personal_failed", { reason: error })}</p>
         <button type="button" disabled={retrying} onClick={() => void retry()} className="touch-hit mt-1 rounded-control px-2 py-1 text-xs leading-normal whitespace-nowrap text-accent-ink hover:bg-hover disabled:cursor-wait disabled:opacity-50">
@@ -611,7 +625,7 @@ const LegacyPersonalAgents = memo(function LegacyPersonalAgents({ reg, hover, ac
           className="relative z-10 mx-1 mb-1 h-7 rounded-control bg-inset px-2 text-[12px] text-ink shadow-hairline outline-none placeholder:text-ink-3"
         />
       )}
-      {loaded && !error && !groups.length && <p className="px-2 py-1 text-[12px] text-ink-3">{t("sidebar.no_match")}</p>}
+      {loaded && !error && !groups.length && <p className={NOTE}>{t("sidebar.no_match")}</p>}
       {groups.map((g) => {
         const more = !q && !all[g.key] && g.key !== "pinned" && g.sessions.length > 5;
         const isOpen = (s: AgentSession) => activeKey === `a:${s.id}`;
