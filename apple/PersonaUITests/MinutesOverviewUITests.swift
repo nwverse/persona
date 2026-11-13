@@ -257,13 +257,18 @@ final class MinutesOverviewUITests: XCTestCase {
         app.descendants(matching: .any).matching(identifier: id).firstMatch
     }
 
-    /// Brings `element` on screen: toward it, slowly, while the list has it (a card partly in view has all its rows), else
-    /// down the page first, then back up if it was passed.
+    /// Brings `element` on screen and clear of the bars: toward it, by slow drags, while the list has it (a card partly in
+    /// view has all its rows), else down the page first, then back up if it was passed. An element under the status bar
+    /// or the navigation bar reads as hittable, but a tap there scrolls the page to the top or hits the bar instead.
     @MainActor private func reveal(_ element: XCUIElement, in app: XCUIApplication) {
+        let window = app.windows.firstMatch.frame
+        let band = (window.minY + window.height * 0.2)...(window.minY + window.height * 0.8)
+        let middle = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         var swipes = 0
-        while !(element.exists && element.isHittable), swipes < 24 {
+        while !(element.exists && element.isHittable && band.contains(element.frame.midY)), swipes < 24 {
             if element.exists {
-                if element.frame.midY < app.frame.midY { app.swipeDown(velocity: .slow) } else { app.swipeUp(velocity: .slow) }
+                let to = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: element.frame.midY < band.lowerBound ? 0.75 : 0.25))
+                middle.press(forDuration: 0.1, thenDragTo: to, withVelocity: .slow, thenHoldForDuration: 0.2)
             } else if swipes < 10 {
                 app.swipeUp()
             } else {
