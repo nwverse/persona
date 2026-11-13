@@ -91,33 +91,52 @@ keep their colors in both. Add a color as a variable with both values, never as 
 
 ## Releases page
 
-`/releases/` (`site/public/releases/index.html`, #6225) shows the latest stable published version, its public packages,
-and a chronological, expandable version history with release notes on GitHub. Its audience includes people installing
-Persona who do not know GitHub's release paths: common Android / macOS / Linux / Windows packages have plain system,
-architecture and size labels, while individual hub / manager / node / CLI artifacts sit under a disclosure. The page
-reuses the site's palette, type, navigation and footer and follows the system's light / dark scheme. Dynamic content
-is built with DOM text nodes rather than HTML interpolation, and the no-JavaScript and failure states link directly
-to the GitHub releases page. A cached copy is clearly marked when GitHub cannot be refreshed.
+`/releases/` (`site/public/releases/index.html`, redesigned in #6338) is the download page. It is for people installing
+Persona who may not know GitHub's release layout: they should see the latest version, get the file for the device they
+are on in one click, and still reach every other device, component and earlier version.
 
-- **Only published product versions**: `site/releases.mjs` accepts semver `v*` tags, rejects drafts, and excludes media
-  releases such as `promo-v1`. The latest stable release is the highest semantic version, not the most recently created
-  tag. The history is newest published first and identifies prereleases. The GitHub metadata endpoint, repository and
-  permitted download origin are fixed; no URL or token configuration is accepted.
-- **Metadata only**: `/releases/data.json` fetches the public GitHub API (at most 100 releases), validates every field,
-  and keeps only tag, publication time, release URL, a short feature / fix summary and asset name / size / download
-  URL. The summary takes at most three feature and two other change titles, strips contributor handles and links, and
-  renders as plain text; full release notes remain on GitHub. The edge cache is fresh for
-  10 minutes, then serves its previous copy for up to 30 days when GitHub is unavailable, marked `stale`. With no copy
-  the endpoint answers 503 and the page offers Retry and GitHub. Releases appear without a site rebuild; an already
-  open page refreshes only on reload or Retry.
-- **No package bandwidth on the website**: each asset URL must exactly match
-  `https://github.com/nwverse/persona/releases/download/<tag>/<name>`, and the browser follows it directly. There is
-  no `/releases/download/` or other proxy / redirect route for packages, and no release package goes through the Hong
-  Kong entry, Worker or R2. Only the small JSON metadata route is registered in `run_worker_first`. Existing `/dl/`
-  routes remain unchanged for hub / node updates; this page does not replace or redirect them.
-- **Tests**: `node --test site/worker.test.mjs site/releases.test.mjs` covers version filtering / ordering, hostile or
-  malformed asset URLs, caching, fallback, direct-download presentation and homepage / extension navigation. After
-  changing page headlines, regenerate the shared font with `python3 scripts/assets/make_site_assets.py serif`.
+- **Layout**: a "ticket" for the latest stable version (the version large in the brand face, its date, feature and fix
+  counts) with the download for the visitor's device; the release's highlights; one card per device (iPhone and Apple
+  Watch through TestFlight, Android, Mac, Windows, Linux, the web bundle); components and checksum files behind a
+  disclosure; and the version history, newest first, each version expandable to its highlights and packages with a link
+  to its full notes on GitHub. Same palette, type, top bar and footer as the home page; light and dark, with every color
+  a variable at the top of its CSS (the extensions page's night set).
+- **The visitor's device** (`site/public/releases/model.js`, `detectPlatform`) picks the ticket's primary button and the
+  highlighted card. Chromium's architecture hint corrects the guess; Safari reports Intel on Apple silicon, so a Mac
+  defaults to Apple silicon and both files are always shown. iPads asking for the desktop site count as iPhone.
+- **A release still uploading**: when the latest version has no file for a device, the page offers the newest stable
+  release that has one and says so ("v0.4.0's Mac package is still uploading…"). Prereleases are listed in the history
+  but never offered as a download.
+- **Highlights** come from GitHub's generated notes (`summarizeNotes` in `site/releases.mjs`): counts of `feat` / `fix`
+  items and up to four feature titles, one per area, areas people use first (assistant, iPhone, Android, web …) and
+  build, test and release plumbing never. Handles, links and PR numbers are removed; the titles stay in English, as
+  the page says.
+- **Text and links**: `page.js` builds everything from the data with text nodes; `innerHTML` is used only for its fixed
+  icon markup. A link is drawn only when its address passes `isDirectDownload` (exactly
+  `https://github.com/nwverse/persona/releases/download/<tag>/<name>`) or is the release's own GitHub page.
+- **States**: loading shows placeholders; without data the ticket offers Retry and GitHub, and the device cards link to
+  GitHub's latest release; a stale copy is marked with its age; without JavaScript a note links to GitHub.
+
+### Metadata and bandwidth
+
+- `/releases/data.json` (`site/releases.mjs`) reads the public GitHub API (at most 100 releases) and keeps only semver
+  `v*` tags that are published (no drafts, no media releases such as `promo-v1`), each with its tag, date, release page,
+  note summary and files: name, size, kind (`app`, `computer`, `web`, `component`, `checksum`, `installer`, `other`),
+  platform and architecture from the file name, and GitHub's SHA-256 digest when present. `latest` is the highest stable
+  version, not the newest tag. The repository, API address and download origin are fixed; no URL or token is configured.
+- **Cache**: the slim copy stays in the edge cache, fresh for 10 minutes; after that GitHub is asked again, and when it
+  cannot be reached the old copy is served marked `stale` for up to 30 days. With no copy the route answers 503 and
+  `no-store`. A new release appears without a site deployment.
+- **No package bandwidth on this site**: every download goes from the browser straight to `github.com`. A file whose
+  `browser_download_url` is not exactly GitHub's address for this repository, tag and name is dropped. Only
+  `/releases/data.json` is in `run_worker_first`; there is no download or redirect route under `/releases/`, and no
+  package passes through the Hong Kong entry, the Worker or R2. `install.sh` is not offered on this page: it fetches
+  from this site's `/dl/`, which stays for hub and node updates (`docs/operations/release.md`, "Publishing personad").
+- **Tests**: `node --test site/worker.test.mjs site/releases.test.mjs` covers version filtering and ordering, file
+  classification, hostile download addresses, note summaries, caching, stale fallback, the per-device fallback to an
+  older release, platform detection and the page's text-only drawing. After editing the page's `h1` / `h2` / `.hello`
+  text, run `python3 scripts/assets/make_site_assets.py serif`. The ticket's title is set by script, so it uses the sans
+  face, not the subset serif.
 
 ## Current routing (since 2026-11-04, #1134)
 

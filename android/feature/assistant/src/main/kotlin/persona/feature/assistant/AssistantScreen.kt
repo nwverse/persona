@@ -249,6 +249,8 @@ fun AssistantScreen(
     val context = androidx.compose.ui.platform.LocalContext.current
     var ending by remember { mutableStateOf<Session?>(null) }
     var endingBusy by remember { mutableStateOf(false) }
+    // The 设为常驻 / 取消常驻 menu asks before the hub call (#6214).
+    var leaderConfirm by remember { mutableStateOf<Session?>(null) }
     var ended by remember(pageManagement) { mutableStateOf(emptySet<SessionKey>()) }
     var archived by remember(pageManagement) { mutableStateOf(emptySet<SessionKey>()) }
     // Rename… and Archived (N) (iOS `AssistantSidebar`): titles given here and the archived conversations.
@@ -786,7 +788,10 @@ fun AssistantScreen(
             onInbox = { drawerOpen = false; onOpenInbox?.invoke() ?: navigator.navigate(InboxRoute) },
             onCopy = { copyId(it.key) },
             onArchive = if (pageManagement != null && !demo) ::archive else null,
-            onLeader = if (pageManagement != null && !demo) ::setLeader else null,
+            onLeader = if (pageManagement != null && !demo) ({ session ->
+                // Open the confirmation first; setLeader runs only on the second choice.
+                leaderConfirm = session
+            }) else null,
             onRename = if (pageManagement != null && !demo) ({ history.renaming = it }) else null,
             onDiagnostics = ::copyDiagnostics,
             archivedCount = history.shownArchived(openKeys).size, onArchived = { history.archivedOpen = true },
@@ -1132,6 +1137,19 @@ fun AssistantScreen(
                 }
             }, dismiss = stringResource(R.string.assistant_cancel) to { if (!endingBusy) ending = null })
     }
+    leaderConfirm?.let { session ->
+        val leader = session.sessionId in snapshot.leaders
+        val title = session.conversationTitle(words)
+        JDialog(onDismiss = { leaderConfirm = null },
+            title = stringResource(if (leader) R.string.assistant_end_leader_title else R.string.assistant_make_leader_title),
+            text = if (leader) stringResource(R.string.assistant_end_leader_text, title)
+                   else stringResource(R.string.assistant_make_leader_text),
+            confirm = stringResource(if (leader) R.string.assistant_end_leader else R.string.assistant_make_leader) to {
+                // setLeader owns the hub call, the refresh and the failure notice.
+                setLeader(session)
+                leaderConfirm = null
+            }, dismiss = stringResource(R.string.assistant_cancel) to { leaderConfirm = null })
+    }
     readinessHelp?.let { help ->
         ReadinessHelpDialog(help, readiness?.machine?.name, onDismiss = { readinessHelp = null }, onAction = { runReadinessAction(it) })
     }
@@ -1418,6 +1436,7 @@ internal fun AssistantDrawer(
                         onDiagnostics = onDiagnostics?.let { action -> { action(session) } },
                         leader = true, onLeader = onLeader?.let { action -> { action(session) } },
                         counts = leaderCountsLabel(groups.counts[session.sessionId], resources),
+                        working = (groups.counts[session.sessionId]?.working ?: 0) > 0,
                         named = groups.names[session.sessionId], disclosure = disclosure)
                 }
             }
@@ -1499,6 +1518,8 @@ private fun ConversationRow(
     counts: String? = null, named: String? = null, origin: String? = session.origin,
     /** A 常驻 lead's caret that folds its to-dos open (#4352, DirectionRows.kt), before its ⋯; null: none. */
     disclosure: (@Composable () -> Unit)? = null,
+    /** Any Agent under this lead is working, even if the conversation's own turn is idle (#6230): the row spins. */
+    working: Boolean = false,
 ) {
     var menu by remember { mutableStateOf(false) }
     // What opened an automatic chat takes precedence; a user's own chat keeps its latest message's channel mark (#5196).
@@ -1509,22 +1530,29 @@ private fun ConversationRow(
         ?: channel?.let { c -> { JChannelMark(c, size = MarkSize.Inline) } }
     // [named]: a direction's name, shown instead of its leader conversation's title
     val title = named ?: session.conversationTitle(conversationWords())
+    // One activity mark for the whole row (#6230): an own needs-you / unread / working turn still wins; otherwise a lead
+    // with work running under it spins.
+    val ownStatus = session.conversationStatus()
+    val leadActive = working && ownStatus != Status.NeedsYou && ownStatus != Status.Unread && ownStatus != Status.Working
     // A hub title's day and kind ("1101 | Fix | ") in the quiet ink, so the topic is what the eye finds (iOS `titleText`); Glass.
     val dated = if (PersonaTheme.style == AppStyle.Glass) ConversationTitle.parse(title) else null
     val resources = androidx.compose.ui.platform.LocalResources.current
     val swipe = onArchive?.let { SwipeAction(stringResource(R.string.assistant_archive), PersonaIcons.archive, Status.Working, it) }
     if (LocalHomeDrawer.current) JSwipeActions(modifier, end = swipe) {
-        JSidebarHistoryRow(dated?.topic ?: title, session.conversationStatus(), selected, onOpen, { menu = true },
+        JSidebarHistoryRow(dated?.topic ?: title, ownStatus, selected, onOpen, { menu = true },
             stringResource(R.string.assistant_conversation_actions), hint = counts,
-            titleAccessory = accessory, titleLead = dated?.head, trailingAccessory = disclosure)
+            titleAccessory = accessory, titleLead = dated?.head, trailingAccessory = disclosure, working = leadActive)
     } else JSwipeActions(modifier, end = swipe) { JGroupItem(position) {
         // The time goes on the line under the title, with the state: beside the title it left the title two or three
         // characters in the wide window's 300dp list (2026-11-02), and a narrow drawer cut it short too.
         JRow(dated?.topic ?: title, onClick = onOpen, onLongClick = { menu = true },
             titleAccessory = accessory, titleLead = dated?.head,
             subtitle = session.lastText?.takeIf { it.isNotBlank() },
-            leading = { JIcon(if (selected) PhIcons.CheckCircle else PhIcons.ChatCircle, null,
-                selected = selected, tint = if (selected) PersonaTheme.palette.accent else PersonaTheme.palette.ink2) },
+            leading = {
+                if (leadActive) JSpinner(Modifier.size(20.dp), color = PersonaTheme.palette.accent, stroke = 1.8.dp)
+                else JIcon(if (selected) PhIcons.CheckCircle else PhIcons.ChatCircle, null,
+                    selected = selected, tint = if (selected) PersonaTheme.palette.accent else PersonaTheme.palette.ink2)
+            },
             trailing = {
                 disclosure?.invoke()
                 JIconButton(PhIcons.DotsThree, stringResource(R.string.assistant_conversation_actions), { menu = true })
@@ -1532,7 +1560,7 @@ private fun ConversationRow(
         // Under the title, not the icon: a fixed 16dp put it under the icon in glass and board and past it in brief.
         Row(Modifier.padding(start = rowTitleStart, end = rowPadding, bottom = 10.dp.dense),
             horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
-            StatusLabel(session.conversationStatus())
+            StatusLabel(ownStatus)
             counts?.let { Text(it, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3, maxLines = 1) }
             historyTime(session.updated, resources)?.let { time ->
                 Text(time, Modifier.weight(1f), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3,

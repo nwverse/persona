@@ -92,6 +92,7 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 	s.fleetKeepPrevious(machine, list)
 	s.roundsSeen(list) // whose round each conversation is on (owner_preempt.go)
 	s.sessionsChanged(machine)
+	s.searchWake() // the chat search index reads what changed (search_index.go)
 	// Messages from other conversations, for those no longer running; the todos' links and herdr marks.
 	var connected time.Time
 	if s.devs != nil {
