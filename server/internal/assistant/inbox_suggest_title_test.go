@@ -113,8 +113,9 @@ func TestInboxSuggestRecapAloneWritesTitle(t *testing.T) {
 	}
 }
 
-// A mail, a document and a company-feed item keep the title their source gave them (the subject, the document, the
-// post); the summary is still written, and the tool says why the title was left.
+// An item whose title is the source's own keeps it (a mail's subject, a document, a post, a pull request or issue, a
+// connector thread not grouped into a chat event); the summary is still written, and the tool says why the title was
+// left. A chat event is one the hub's grouping made (Group) or a chat's own (Lark); a connector thread alone is not.
 func TestInboxSuggestKeepsSourceTitles(t *testing.T) {
 	for name, tc := range map[string]struct {
 		kind string
@@ -125,7 +126,7 @@ func TestInboxSuggestKeepsSourceTitles(t *testing.T) {
 		"moment":  {KindMoment, func(it *InboxItem) { it.Moment = &InboxMoment{PostID: "p1", Notice: "comment"} }},
 		"github":  {"review_requested", func(it *InboxItem) { it.Connector = &InboxConnector{Thread: "example-org/example-repo#12"} }},
 		"release": {"release", func(it *InboxItem) { it.Connector = &InboxConnector{Thread: "example-org/example-repo@v1"} }},
-		// GitHub's @me rows carry the chat kinds too, but their title is the pull request's or issue's: the source keeps it.
+		// GitHub's @me rows carry the chat kinds too, but their title is the pull request's or issue's.
 		"github mention": {KindMention, func(it *InboxItem) {
 			it.Connector = &InboxConnector{Thread: "example-org/example-repo#12"}
 			it.Source = "github"
@@ -134,12 +135,21 @@ func TestInboxSuggestKeepsSourceTitles(t *testing.T) {
 			it.Connector = &InboxConnector{Thread: "example-org/example-repo#12"}
 			it.Source = "github"
 		}},
+		// A chat kind on a connector's thread the hub did not group into an event: not a chat event, its title stays.
+		"imessage dm": {KindDM, func(it *InboxItem) {
+			it.Connector = &InboxConnector{Thread: "imessage-0123456789ab"}
+			it.Source = "imessage"
+		}},
+		"subscription": {"sub_notice", func(it *InboxItem) {
+			it.Connector = &InboxConnector{Thread: "sub:sub_x:t1"}
+			it.Source = "sub_x"
+		}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			h, _, it := handledHub(t)
 			h.inbox.mu.Lock()
 			it.Kind, it.Title, it.Source = tc.kind, "来源自己的标题", "example"
-			it.Lark = nil
+			it.Lark, it.Group = nil, nil
 			tc.set(it)
 			h.inbox.mu.Unlock()
 			out, err := suggestTool(t, h, `{"kind":"reply","text":"好的","title":"助手想写的新标题","summary":"等对方回复"}`)
@@ -147,10 +157,13 @@ func TestInboxSuggestKeepsSourceTitles(t *testing.T) {
 				t.Fatal(err)
 			}
 			h.inbox.mu.Lock()
-			title, summary := it.Title, it.Summary
+			title, summary, by := it.Title, it.Summary, it.TitleBy
 			h.inbox.mu.Unlock()
 			if title != "来源自己的标题" {
 				t.Fatalf("title %q: the source's own title was overwritten", title)
+			}
+			if by == TitleByAssistant && summary == "" {
+				t.Fatalf("title_by %q yet no summary was written", by)
 			}
 			if summary != "等对方回复" {
 				t.Fatalf("summary %q: the summary was not written", summary)
@@ -162,21 +175,23 @@ func TestInboxSuggestKeepsSourceTitles(t *testing.T) {
 	}
 }
 
-// A chat item of a connector (a direct message from another source) is named like one of the hub's own: the kind
-// decides, except where the source's own row is what the title is (GitHub, above).
-func TestInboxSuggestNamesConnectorChat(t *testing.T) {
+// A grouped chat event (one the hub grouped, its Connector beside its Group) is a chat event to name: the assistant's
+// title stands, whatever the source is.
+func TestInboxSuggestNamesGroupedChat(t *testing.T) {
 	h, _, it := handledHub(t)
 	h.inbox.mu.Lock()
-	it.Kind, it.Source, it.Title, it.Lark = KindDM, "imessage", "张三", nil
-	it.Connector = &InboxConnector{Thread: "imessage-0123456789ab"}
+	it.Kind, it.Source, it.Title = KindGroup, "example", "示例群"
+	it.Lark = nil
+	it.Connector = &InboxConnector{Thread: "example-thread"}
+	it.Group = &InboxGroup{Connector: "example", Thread: "example-thread"}
 	h.inbox.mu.Unlock()
-	if _, err := suggestTool(t, h, `{"kind":"reply","text":"好的","title":"等张三定时间","summary":"等张三答复"}`); err != nil {
+	if _, err := suggestTool(t, h, `{"kind":"reply","text":"好的","title":"发布改到周三","summary":"等对方确认时间"}`); err != nil {
 		t.Fatal(err)
 	}
 	h.inbox.mu.Lock()
 	defer h.inbox.mu.Unlock()
-	if it.Title != "等张三定时间" || it.TitleBy != TitleByAssistant {
-		t.Fatalf("title %q, title_by %q", it.Title, it.TitleBy)
+	if it.Title != "发布改到周三" || it.TitleBy != TitleByAssistant || it.Summary != "等对方确认时间" {
+		t.Fatalf("title %q, title_by %q, summary %q", it.Title, it.TitleBy, it.Summary)
 	}
 }
 
