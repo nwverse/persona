@@ -455,13 +455,20 @@ func TestRuntimeWorktreeCreateHasOneDeadline(t *testing.T) {
 	old := runtimeWorktreeDeadline
 	runtimeWorktreeDeadline = 600 * time.Millisecond
 	t.Cleanup(func() { runtimeWorktreeDeadline = old })
+	// The create is held until the test ends: only the deadline ends the call. Should the node not give up, the runtime
+	// answers after 3 s, so that the test fails rather than hangs.
+	held := make(chan struct{})
+	t.Cleanup(func() { close(held) })
 	r.rt.answer = func(method string, _ json.RawMessage) (any, error) {
 		switch method {
 		case "workspace.prepare":
-			time.Sleep(400 * time.Millisecond)
+			time.Sleep(400 * time.Millisecond) // sleep-ok: a slow runtime's prepare spends part of the create's one deadline
 			return map[string]any{"checkouts": r.trees}, nil
 		case "workspace.create":
-			time.Sleep(3 * time.Second)
+			select {
+			case <-held:
+			case <-time.After(3 * time.Second):
+			}
 		}
 		return map[string]any{"ok": true}, nil
 	}

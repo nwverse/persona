@@ -114,6 +114,7 @@ type Node struct {
 
 	mu      sync.Mutex
 	titleMu sync.Mutex // orders the custom-title lines renames write (rename.go retitle)
+	deltaMu sync.Mutex // orders the session.delta sends (emitDelta, flushPartial)
 	state   *stateFile
 	files   map[string]*transcript.File // session id -> parsed transcript
 	paths   map[string]string           // session id -> transcript path
@@ -289,6 +290,12 @@ type Node struct {
 	assistantLife typingLocks
 	restores      restoreMarks // "back to the configured model" asked, until newer model evidence (model_restore.go)
 	hookFlights   hookFlights  // hook calls in progress by session: their process waits on them (model_restore.go)
+
+	// screens: live-screen hardware video channel (#3954). Login binding per `pair` and the busy count (screen.go).
+	// screenStart is the capture/encode helper seam (Persona Screen.app) filled by the PoC on a real Mac; while it is
+	// nil, screen.dial returns video_unavailable, so a node without the helper keeps today's RFB-only behaviour.
+	screens     *screenLogins
+	screenStart func(ctx context.Context, id, pair string, keepAwake bool, done func()) error
 }
 
 func New(version string) (*Node, error) {
@@ -338,6 +345,7 @@ func New(version string) (*Node, error) {
 		hooks:    &hookTurns{},
 		codices:  newCodexRegistry(),
 		runtimes: newRuntimeRegistry(),
+		screens:  newScreenLogins(),
 	}
 	n.sessionScope = scope
 	if n.uid, err = LoadMachineUID(dir); err != nil {
@@ -757,7 +765,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return ok(err)
 		}
 	}
-	if n.externalCodex(p.SessionID) {
+	// A session a connected runtime lists is the runtime's, also when its thread is in this machine's own Codex inventory
+	// (a Codex CLI process the runtime hosts): its calls go on to the runtime below.
+	if h, _, _ := n.runtimes.belongs(p.SessionID); h == nil && n.externalCodex(p.SessionID) {
 		switch method {
 		case "session.keys", "session.screen", "session.screen.before", "terminal.watch", "session.close", "session.queue.edit", "session.queue.send_now", "session.rename", "assistant.send":
 			return nil, refusal("codex_read_only", "这个会话没有终端或启动器控制能力，请在原 app-server 中操作", nil)
@@ -1707,6 +1717,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.readFile(p.Path, p.Cwd, p.Offset, p.Stream)
 	case "port.dial":
 		return n.portDial(ctx, params)
+	case "screen.dial": // live-screen video channel (#3954): start the capture helper for a signed-in pair (screen.go)
+		return n.screenDial(ctx, params)
 	case "port.probe":
 		return n.portProbeRPC(ctx, params)
 	case "preview.servers": // a session folder's dev servers, from its .claude/launch.json (preview_launch.go)
