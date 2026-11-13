@@ -305,6 +305,20 @@ class MeetingTranscriptionMockTests(Transcription, unittest.TestCase):
         self.assertEqual([s.get("echo", False) for s in segs], [True] * 47 + [False])
         self.end(ws, 192)
 
+    def test_a_whole_timeline_fits_the_start_frame(self):
+        rid = self.recording()
+        said = "答" * 1333 + "a"  # 4000 bytes; i18n-ignore: synthetic speech
+        timeline = {"roles": [{"at": i * 30, "attendance": ("listener", "participant")[i % 2]} for i in range(100)],
+                    "speaking": [{"start": i * 10, "end": i * 10 + 5, "text": said} for i in range(1000)]}
+        start = json.dumps({"type": "start", "at": 0, "timeline": timeline}, ensure_ascii=False).encode()
+        self.assertGreater(len(start), 4_000_000)
+        ws = self.socket(rid, begin=False)
+        ws.send(start, op=1)
+        self.assertIsNotNone(ws("ready", wait=10))
+        got = self.observed(rid)["timeline"]
+        self.assertEqual((len(got["roles"]), len(got["speaking"]), got["speaking"][-1]), (100, 1000, {"start": 9990, "end": 9995, "text": said}))
+        self.end(ws, 0)
+
     def test_a_heard_ask_flushes_the_hub_and_waits_for_fallback_material(self):
         rid = self.recording()
         self.wait(lambda: self.live(rid).get("room", {}).get("state") == "ready", "the room")
@@ -407,10 +421,11 @@ class MeetingTranscriptionMockTests(Transcription, unittest.TestCase):
         self.call("DELETE", f"/api/v1/recordings/{missing}")
         self.assertEqual(self.socket(missing, begin=False)("error")["code"], "recording_deleted")
         self.call("POST", "/mock/meeting_attendance", {"kb_read_only": False})
-        for payload, op, begin in [(b"\0\0", 2, False), (b"{", 1, True), (b"x", 2, True), (bytes(65538), 2, True), (b" " * (256 * 1024 + 1), 1, True)]:
+        for payload, op, begin, claim in [(b"\0\0", 2, False, None), (b"{", 1, True, None), (b"x", 2, True, None), (bytes(65538), 2, True, None),
+                                          (b"", 1, True, 4608 * 1024 + 1)]:  # a text frame over 4.5 MiB: refused from its header
             rid = self.recording()
             ws = self.socket(rid, begin=begin)
-            ws.send(payload, op=op)
+            ws.send(payload, op=op, claim=claim)
             self.assertEqual(ws("error")["code"], "bad_frame")
         rid = self.recording()
         ws = self.socket(rid)

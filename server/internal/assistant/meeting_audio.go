@@ -40,10 +40,12 @@ const (
 
 // Limits of the audio socket and the gap uploads.
 const (
-	maxAudioFrame   = 64 << 10  // a binary frame: whole samples
-	maxAudioText    = 256 << 10 // a text frame (a whole timeline fits)
-	audioReadMost   = 1 << 20   // what the socket reads of one frame at all (more closes it)
-	maxAudioBody    = 10 << 20  // PUT …/audio
+	maxAudioFrame = 64 << 10 // a binary frame: whole samples
+	// A text frame: a whole timeline fits, kb.MaxTimelineSpans spans each with up to 4000 bytes of answer (sent as
+	// UTF-8: about 4 MB) and kb.MaxTimelineRoles role changes, with room for the JSON around them.
+	maxAudioText    = 4608 << 10
+	audioReadMost   = 5 << 20  // what the socket reads of one frame at all (more closes it)
+	maxAudioBody    = 10 << 20 // PUT …/audio
 	audioSilentMost = 60 * time.Second
 	audioSendQueue  = 1024
 )

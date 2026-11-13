@@ -106,10 +106,11 @@ def websocket(self, path="/api/v1/ws", headers=None, status=101):
                 return None
             if f.get("type") == kind and where(f):
                 return f
-    def send(value, op=None):
+    def send(value, op=None, claim=None):
+        """Sends value as one frame; claim: the length its header says instead (a frame over a limit, unsent)."""
         payload = value if isinstance(value, bytes) else json.dumps(value).encode()
         op = op if op is not None else 2 if isinstance(value, bytes) else 1
-        n = len(payload)
+        n = len(payload) if claim is None else claim
         mask = os.urandom(4)
         head = bytes([0x80 | op]) + (bytes([0x80 | n]) if n < 126 else b"\xfe" + n.to_bytes(2, "big") if n < 65536 else b"\xff" + n.to_bytes(8, "big"))
         sock.sendall(head + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(payload)))

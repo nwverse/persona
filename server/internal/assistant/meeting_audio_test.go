@@ -225,6 +225,39 @@ func TestAudioSocketPositions(t *testing.T) {
 	}
 }
 
+// A start frame with a whole timeline at the contract's limits (kb.MaxTimelineRoles role changes, kb.MaxTimelineSpans
+// spans with 4000 bytes of answer each, about 4 MB) is taken: ready, and the timeline joins meeting.json's.
+func TestAudioSocketStartTakesAWholeTimeline(t *testing.T) {
+	h := newHubFixture(t)
+	h.hubUpload(meetingRec, 1, nil)
+	roles := make([]map[string]any, 0, kb.MaxTimelineRoles)
+	for i := range kb.MaxTimelineRoles {
+		roles = append(roles, map[string]any{"at": float64(i * 30), "attendance": []string{"listener", "participant"}[i%2]})
+	}
+	said := strings.Repeat("答", 1333) + "a" // 4000 bytes, i18n-ignore: synthetic speech
+	spans := make([]map[string]any, 0, kb.MaxTimelineSpans)
+	for i := range kb.MaxTimelineSpans {
+		spans = append(spans, map[string]any{"start": float64(i * 10), "end": float64(i*10 + 5), "text": said})
+	}
+	tl := map[string]any{"roles": roles, "speaking": spans}
+	if raw, _ := json.Marshal(map[string]any{"type": "start", "at": 0, "timeline": tl}); len(raw) < 4_000_000 {
+		t.Fatalf("the start frame is %d bytes, not a whole timeline at the limits", len(raw))
+	}
+	p, ready := h.open(meetingRec, 0, tl)
+	if ready["from"] != 0.0 || len(p.of("error")) > 0 {
+		t.Fatalf("ready %v, errors %v", ready, p.of("error"))
+	}
+	var m kb.Meeting
+	waitFor(t, "the timeline in meeting.json", func() bool { // joined after ready
+		m, _, _ = h.engine().MeetingRead(meetingRec)
+		return m.Transcription != nil && m.Transcription.Timeline != nil
+	})
+	if got := m.Transcription.Timeline; len(got.Roles) != kb.MaxTimelineRoles || len(got.Speaking) != kb.MaxTimelineSpans ||
+		got.Speaking[999] != (kb.SpokenSpan{Start: 9990, End: 9995, Text: said}) {
+		t.Fatalf("the timeline has %d roles and %d spans", len(got.Roles), len(got.Speaking))
+	}
+}
+
 // A new socket replaces the one before (replaced); end is acknowledged at end.at and closes 1000, with the
 // recording's end stored.
 func TestAudioSocketReplacedAndEnd(t *testing.T) {
