@@ -12094,7 +12094,7 @@ def auto_named(b):
 def machine_launchers(mid=""):
     """GET /api/v1/machines/{mid}/launchers's launchers: claude, sonnetcc and codex ("Create from the phone"; not on the
     Mac Studio under MOCK_NEW_AGENT_PANEL), under MOCK_PROVIDERS the managed providers Agents can start, each with its
-    display name, and under MOCK_DESKTOP_APPS the MacBook's claude-desktop."""
+    display name, and under MOCK_DESKTOP_APPS the MacBook's claude-desktop and codex-app."""
     out = [{"name": "claude", "model": "opus"}, {"name": "sonnetcc", "model": "sonnet"}, codex_launcher()]
     if os.environ.get("MOCK_MODEL_PANEL_USAGE"):
         out += [{"name": "cc_main", "model": "opus"}, {"name": "cc_team", "model": "example-pro"}]
@@ -12111,6 +12111,8 @@ def machine_launchers(mid=""):
         # The MacBook's Claude desktop app keeps Claude Code sessions: its launcher starts one there (#5480,
         # docs/integrations/claude-integration.md "New sessions in the desktop app").
         out.append({"name": "claude-desktop", "model": "", "source": "claude_desktop", "agent": "claude", "agent_type": "claude"})
+        # Its Codex App runs: its launcher starts a chat there (#5726, docs/integrations/codex.md).
+        out.append({"name": "codex-app", "model": "", "source": "codex_app", "agent": "codex", "agent_type": "codex"})
     return launcher_health_list(out)
 
 
@@ -15956,6 +15958,7 @@ if os.environ.get("MOCK_FILES"):
     FILES[ROOT + "/server/handlers.go"] = long_go()
     FILES[ROOT + "/README.md"] = long_markdown()
     FILES[ROOT + "/logs/api.log"] = log()
+    FILES[ROOT + "/data/chart.png"] = _bar_png(360, 150)  # a picture opened as a file (#1331)
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import mock_office
     FILES[ROOT + "/data/observations.csv"] = mock_office.csv_text(100_000)  # 5 MB: the table viewer's paging

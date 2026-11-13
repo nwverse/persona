@@ -1,6 +1,52 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Among the Codex App's chats in no project" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Among the Codex App's chats in no project"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 Codex App 的“无项目”对话里"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex App のプロジェクトなしのチャットに入ります"
+          }
+        }
+      }
+    },
+    "Starts in the Codex App. With no folder it goes where the App keeps chats in no project; a new folder is made when it starts." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Starts in the Codex App. With no folder it goes where the App keeps chats in no project; a new folder is made when it starts."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 Codex App 里新开对话。不选文件夹时放在 App 存放“无项目”对话的位置；新建的文件夹会在对话开始时创建。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex App でチャットを開始します。フォルダを選ばない場合は、App がプロジェクトなしのチャットを置く場所に入ります。新しいフォルダはチャット開始時に作成されます。"
+          }
+        }
+      }
+    },
     "Temporary Session" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -180616,6 +180662,98 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "这条不是你说的，没有发出去"
+          }
+        }
+      }
+    },
+    "Pin Confirmation Title [Leader Actions 6214]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pin this chat?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "常駐にしますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "设为常驻？"
+          }
+        }
+      }
+    },
+    "Unpin Confirmation Title [Leader Actions 6214]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unpin this chat?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "常駐をやめますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消常驻？"
+          }
+        }
+      }
+    },
+    "Pin Confirmation Message [Leader Actions 6214]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The chat moves to Pinned and no longer appears in Recent."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このチャットは常駐に移り、「最近」には出なくなります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个对话会移到常驻区，不再出现在「最近」。"
+          }
+        }
+      }
+    },
+    "Unpin Confirmation Message %@ [Leader Actions 6214]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@” returns to Recent. Its open tasks go back to the main chat's supervision; nothing is closed or deleted."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%@」は「最近」に戻ります。進行中のタスクはメインチャットの監督に戻り、終了や削除はされません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%@」会回到「最近」；还在办的任务交还主对话督办，不会关闭或删除。"
           }
         }
       }
