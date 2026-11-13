@@ -451,7 +451,7 @@ bound to that item (`handling` on the item; chat source `inbox`, `origin_ref` = 
 | --- | --- | --- |
 | 1 Triage | `inbox.triage` (small model) | Triage above, also returning `urgent` |
 | 2 Promote | Code | Triaged Needs you items with triaged content and latest message within `max_age_hours` (default 24) queue a handling chat; `handling.state = looking` (Working; urgent stays Needs you). The task comes from the triage summary and reason |
-| 2′ Link task | `inbox.judge` (small model, only when tasks are active) | Use only its `task_id`: which task the item concerns ([unified-entry.md](unified-entry.md), "Message cards link to tasks"). Its `handle` no longer decides whether to process the item |
+| 2′ Link task | `inbox.judge` (small model, only when tasks are active) | Use only its `task_id`, and only with `evidence` quoted from that task: which task the item concerns, among the tasks the item's repository or thread allows (#6424; [unified-entry.md](unified-entry.md), "Message cards link to tasks"). Before it, the deterministic pass links a GitHub item to the one open task naming its number in its repository: a link, `owner/repo#N`, a bare `#N` in a task of that repository, a PR the task's Agents named earlier, or the PR that says it closes the issue (#6507). Its `handle` no longer decides whether to process the item |
 | 3 Handle | `inbox.agent` (a launcher: Agents' unless set apart, see below) | Headless claude in the assistant directory; investigate, then submit a suggestion and recap through MCP `inbox_suggest` |
 
 - **The twin's model (#4232)**: by default the handling chat runs on **Agents** (`agent.new`): its provider / launcher, model and effort, including later changes there. Because the twin is a high-volume, short-lived job, it can be set apart under **Settings › Model configuration › AI twin runs** to run on a cheaper or faster launcher, model or effort without changing new Agents; **Follow Agents** clears that again. Only new handling chats use a change; running ones keep what they started on. The setting is stored as `model_config.overrides.v1.inbox.agent`; the retired `model_config.inbox.agent` record and the old `inbox.agent.launcher` are never read. It does not touch the twin's switch, its rules or which computer it runs on (`inbox.agent.machine`), and the model does not decide what the twin may do (`docs/assistant/model-config.md`, "AI twin override").
@@ -714,6 +714,32 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   letters and digits only, so spacing, width and punctuation do not hide a repeat). On a hit it writes the draft once more, told not to
   copy the background; if that one repeats a sentence too, there is no draft: `422 draft_withheld` with a localized message asking the
   user to write the reply themselves. Details: `docs/extensions/extensions.md` "Assistant content from the data directory".
+
+- **Recheck task link (maintenance)**: authenticated `POST /api/v1/inbox/{id}/task-link/recheck` reuses `inbox.judge`
+  with all current open tasks, including for an old open event with an existing processing conversation or draft.
+  Judge candidates do not inherit the assistant briefing's item limit or age window; closed/cancelled tasks are excluded.
+  Each candidate includes up to 1200 characters of its original request as subject context. The judge compares the
+  actual requested work, not names or messages merely quoted as examples in another task's notes.
+  An existing event also supplies up to 1600 characters of its investigation recap, marked as possibly stale subject
+  context rather than an instruction or confirmed reply; the current message takes precedence.
+  Eligible events require the AI twin to be enabled and preserve existing links. Bot/app broadcasts are excluded
+  before either exact-link routing or the model judge. Legacy Lark private chats with an explicit user sender
+  identity remain eligible, even if their old kind says `bot`; quoted notification text does not make a human a bot.
+  For an excluded event the maintenance action needs no model or enabled twin: it answers `excluded`, or `cleared`
+  after removing a stale task association through normal rollback-aware writes (`method: "policy"`). It preserves
+  the draft, suggestion, processing conversation and completion state, and publishes no task card or supervisor signal.
+  Other results are `{status, method?, item}`: `linked`
+  or `unmatched` (with `method: "judge"` when the model ran), or `existing`; `409` distinguishes `disabled`, `closed`,
+  `changed` and `task_closed`. Model failures answer `502`, storage failures `503`, and a missing event `404`.
+  A changed message or a task closed during judgment invalidates the result. A new link is persisted through normal
+  Inbox writes before raising the existing supervisor signal; a saved reply draft also gets its task message card.
+  This action never starts processing, sends a reply, changes a suggestion or files an event/task. It does not
+  periodically rejudge old events: an operator explicitly requests each bounded recheck. Normal initial escalation
+  still judges only events without a processing session; refresh alone does not rejudge an existing draft.
+- **Linked work (Web)**: the detail header shows the linked task and its current task-lineage Agents, each as an
+  in-app link. These are the business task's workers, not the Inbox draft-processing conversation. Older hubs without
+  lineage use unreleased workers; a task still starting never substitutes a previous lineage worker. The shared
+  task list supplies live titles and manager ownership, with the task ID as a fallback before it is loaded.
   Do not invent unknown facts or leave 【】 placeholders for the user; omit unknown details. Include `assistant.notes` as About the user. Edit directly in the sheet or enter "Have AI revise: …" to rewrite.
   Send uses `POST /api/v1/inbox/{id}/reply {text}`: the manager asks hub to post in the original Lark chat through its plugin, or reply by mail (Re: subject, In-Reply-To / References,
   quote first 40 lines, using the receiving account), then mark done (`done_by=replied`). Phone and Watch use the same API.
@@ -732,6 +758,18 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   found by asking it; with none yet, the message starts it), which then opens; **Persona (new chat)** starts a new conversation with the item's manager (iOS / Mac switch to the
   Persona tab); an Agent (latest 8) receives it in its session (navigate there). Only live, writable Agents on online computers are offered. Marked done by default once the message got there, except for the main chat (below).
   Apple sends an Agent hand-off as one pending outbox message: a wait for the connection keeps the same message and operation id through the outbox's retries, not a new send; the item is filed only at the terminal sent state, and a refusal keeps the sheet open with its reason (#1846). The filing intent and whether it was initiated are restored with the outbox, so delivery after an app relaunch still files the item once.
+  **New Agent…** (#5933; iOS / iPadOS bar and sheet, the Mac through the same sheet, web; Android later) is the first row of the Agents, shown even when none is running,
+  for giving the item to a fresh Agent in another folder. It reads the item and opens the existing New Agent page prefilled:
+  - **Context:** the item as a card over the first message, sent ahead of it: the same `<persona-context>` an Agent target gets.
+  - **First message:** the typed ask or the chosen preset (the first preset when nothing was typed), editable there.
+  - **Name and computers (Apple):** the item's title as the name hint; only the computers of the item's hub.
+  - **The rest:** computer, folder, runtime and model are chosen there as for any new Agent, from that page's own last choices.
+  - **Confirmation:** nothing is sent before Start there, so there is no Undo toast. Cancel comes back to the item with the ask kept: the bar's field or the sheet / dialog as
+    it was.
+  - **After start:** the Agent opens (on the Mac once the sheet has closed, as for the other targets), and the item's source remembers that Agent, never "New Agent…" (the bar's `inbox.handOffTarget` too), so the next item from it starts there
+    while it can take messages. "Also mark as done" follows the Agent targets' default (on) unless the user set the box: the item is filed once the Agent started (web: once its
+    first message went).
+  - **Hub and manager:** unchanged; the page's start (`POST /api/v1/sessions`) and first message are New Agent's own.
   **Write-back to the item** (#1194, web, iOS, Mac and Android): the main-chat target calls `POST /api/v1/inbox/{id}/handoff` `{text, client_id}` on the item's manager (`assistant/inbox_handoff.go`),
   which sends the text after a block naming the item (`prompts/inbox/handoff.md`) to its main conversation through `session.send_once` (the client id is the message id, so the same
   request again sends nothing more), or starts the main conversation with it, and answers `{item, session}`; a work machine is refused, and a failed send records nothing (`apierr.Call`'s status, as for a new conversation).
@@ -761,8 +799,8 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   Not covered: later messages on the item are not forwarded to the main conversation (it reads the source with its tools when asked), and filing the item is not told there.
   **The iPhone's event page** (#2055, `Persona/Views/Inbox/InboxHandOffBar.swift`) has no sheet: a bar pinned to the bottom, like iMessage's, at most two rows high and riding up
   with the keyboard (the page gets its height as a bottom inset). The top row scrolls sideways through one-tap chips: the three presets (Summarize & Suggest Reply, Look Into It,
-  Handle It) and Draft Reply / View Draft, which opens AI Draft Reply's sheet. Under them: a target capsule (a system menu: Main Chat, New Chat, the latest 3 Agents, More… with
-  the next ones), a one-line "Hand to AI…" field and Send. A chip or a send goes without a confirmation, held for 5 s behind a toast at the bottom (`InboxHandOffModel.undoWindow`):
+  Handle It) and Draft Reply / View Draft, which opens AI Draft Reply's sheet. Under them: a target capsule (a system menu: Main Chat, New Chat, then New Agent…, the latest 3
+  Agents and More… with the next ones), a one-line "Hand to AI…" field and Send. A chip or a send goes without a confirmation, held for 5 s behind a toast at the bottom (`InboxHandOffModel.undoWindow`):
   Undo takes it back (a typed ask goes back into the field), View sends it at once and opens the conversation; left alone it goes and the toast says where, with View. Sending
   never leaves the page. The last target is remembered (`inbox.handOffTarget`); an Agent no longer listed falls back to Main Chat. "Also mark as done" keeps the targets' defaults.
   The Mac and the iPhone's source pages (whose own reply composer sits at the bottom) keep the sheet, which opens the conversation after sending.

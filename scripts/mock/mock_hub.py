@@ -44,7 +44,7 @@ def features():
     # Match proto.Features, retaining the existing terminal fixture switches.
     return ["error_codes", "client_hello", "heartbeat", "app_ping", "client_msg_id", "send_refusals",
             "screen_dialog", "resumable_interactions", "secret_prompts", "request_id", "file_upload",
-            "tls", "endpoints", "connectors", "lark_attachments", "file_stream", "file_thumb", "git_blob", "task_push",
+            "tls", "endpoints", "connectors", "lark_attachments", "file_stream", "file_thumb", "git_blob", "task_push", "task_inbox",
             "machine_rename"] + ([] if os.environ.get("MOCK_MANAGERS") == "0" else ["sessions_manager"]) + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") else []) + (["git_review"] if os.environ.get("MOCK_REVIEW") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
                 ["terminal_control", "terminal_scroll", "terminal_click", "terminal_mouse"] if TERMINAL_CONTROL else []) + (
                 ["terminal_panes", "pane_new_space"] if os.environ.get("MOCK_TERMINAL_PANES") else []) + (["herdr_client"] + ([] if os.environ.get("MOCK_TERMINAL_FULL_NOFOCUS") else ["herdr_focus"]) if TERMINAL_FULL else []) + (
@@ -432,6 +432,10 @@ SYSTEMS = {
             "kernel": "6.1.0-26-arm64", "arch": "arm64", "model": "Raspberry Pi 5 Model B Rev 1.0", "cpu": "", "cores": 4,
             "memory": 8 * GB},
 }
+MACHINE_CONCERN_LEVELS = {}
+if os.environ.get("MOCK_MACHINE_CONCERNS") == "1":
+    from machine_concerns import install_machines
+    MACHINE_CONCERN_LEVELS.update(install_machines(MACHINES, SYSTEMS))
 if not os.environ.get("MOCK_MACHINES"):  # that mode has its own offline machine (MachinePagesTests counts them)
     MACHINES.append({"id": "nas", "name": "NAS", "kind": "ssh", "icon": "server", "ssh_host": "nas", "online": False,
                      "error": "ssh: connect to host nas port 22: Operation timed out", "hostname": "nas", "os": "linux",
@@ -478,13 +482,22 @@ def metric_at(mid, t):
     if mid == "server" and t > T0 - 25 * 60:  # a build running since 25 minutes before the mock started
         cpu = 92 + 6 * h  # always over the 90 % "critical" line
     cpu = max(0.5, min(99.5, cpu))
+    concern_level = MACHINE_CONCERN_LEVELS.get(mid)
+    if concern_level == "critical":
+        cpu = 95.0
+    elif concern_level == "warning":
+        cpu = 80.0
     mem_frac = {"server": 0.62, "macbook": 0.55, "studio": 0.31, "nas": 0.42}[template] + 0.05 * day + 0.04 * wave
     if mid == "server" and t > T0 - 25 * 60:
         mem_frac = 0.88 + 0.02 * h
+    if concern_level == "critical":
+        mem_frac = 0.95
     rx = max(0.0, {"server": 2.4e6, "macbook": 4.5e5, "studio": 1.2e6, "nas": 3e5}[template] * (1 + 0.6 * wave + 0.5 * h))
     tx = rx * {"server": 0.35, "macbook": 0.2, "studio": 0.6, "nas": 1.4}[template] * (0.7 + 0.6 * h)
     load = sys_["cores"] * cpu / 100 * (0.9 + 0.3 * h)
     disk_frac = {"server": 0.64, "macbook": 0.71, "studio": 0.38, "nas": 0.93}[template]
+    if concern_level == "critical":
+        disk_frac = 0.95
     return {"cpu": round(cpu, 1), "load": round(load, 2), "mem": round(mem_frac * sys_["memory"]),
             "swap": round({"server": 0.0, "macbook": 1.2, "studio": 0.0, "nas": 0.4}[template] * GB),
             "rx": round(rx, 1), "tx": round(tx, 1), "disk": round(disk_frac * {"nas": 4000, "studio": 2000}.get(mid, 1000) * GB)}
@@ -765,6 +778,35 @@ if os.environ.get("MOCK_BYPASS_AVAILABLE") == "1":
     for _s in SESSIONS:
         if _s["session_id"] == WIDGET: _s["bypass_available"] = True
 
+# Full access by a restart (#6476, node/mode_restart.go): Allow All picked for a terminal Claude Code whose process has
+# no bypass flag (bypass_available false) is not refused. Its row says a restart waits (bypass_pending) and keeps the
+# mode it runs in; once its turn is over (here: MOCK_BYPASS_RESTART_SECONDS, default 6, after an idle pick; a working
+# agent waits until it is idle) the "restart" comes up in it, with bypass_available. Any other mode drops it.
+BYPASS_RESTART_SECONDS = float(os.environ.get("MOCK_BYPASS_RESTART_SECONDS") or 6)
+
+
+def bypass_restart(s, mode):
+    """True when s takes mode by a restart (queued here); a pick of another mode drops one that waits."""
+    if mode != "bypassPermissions":
+        if mode: s.pop("bypass_pending", None)
+        return False
+    if s.get("assistant") or s.get("agent") not in (None, "claude") or not s.get("pane_id") or s.get("bypass_available") \
+            or s.get("permission_mode") == "bypassPermissions":
+        return False
+    s["bypass_pending"] = True
+
+    def restarted():
+        if not s.get("bypass_pending"): return  # dropped meanwhile
+        if s.get("state") in ("working", "needs_you"):
+            threading.Timer(BYPASS_RESTART_SECONDS, restarted).start()  # waits for the turn to end
+            return
+        s.pop("bypass_pending", None)
+        s.update(permission_mode="bypassPermissions", bypass_available=True, updated_at=ago(minutes=0))
+        push_machine(s["machine_id"])
+    threading.Timer(BYPASS_RESTART_SECONDS, restarted).start()
+    return True
+
+
 # MOCK_STALE_DONE=1 (#2069): the widget session as the hub listed it while herdr said done through a turn the phone
 # started (status done, state idle, its activity still moving): the Agents list before the node's fix.
 if os.environ.get("MOCK_STALE_DONE") == "1":
@@ -1005,6 +1047,9 @@ if MOCK_MACHINES:
                              "/Users/me/code/" + proj, status, state, proj, 4 + i % 4, "t%d" % (i // 4 + 1), i // 4 + 1,
                              i * 7, "第 %d 个 Agent 的最新一句话，长一点好看看会不会被截断或者挤到别的地方去。" % (i + 1),
                              pending=1 if state == "needs_you" else 0))
+if os.environ.get("MOCK_MACHINE_CONCERNS") == "1":
+    from machine_concerns import install_sessions
+    install_sessions(SESSIONS, sess)
 # MOCK_AGENTS=1: a long Agents list (AgentsListTests): ~120 agents, one big space with 35 finished-unread, a quiet
 # space, idle ones to fold. Sessions marked seen (WS "seen" or POST …/seen) turn idle; GET /mock/seen lists them.
 # MOCK_QUIET=1: a quiet space (two seen agents, nothing running) under "Idle spaces", for screenshots of its card
@@ -1466,6 +1511,19 @@ if os.environ.get("MOCK_OVERVIEW_DENSE"):
                          "The governance query CLI is read-only. Next I'll check which of its commands the migration needs.",
                          source_kind="runtime", agent_label="claude", state_since=ago(minutes=2),
                          capabilities={"read": True, "send": True, "interrupt": True, "approve": True, "terminal": True, "attach": False}))
+
+# MOCK_SIDE_SESSIONS=1 (#5935): two sessions the Claude desktop app started from the PR review, newer than it: a /btw
+# question that waits for the user and a side chat. They name the review in parent_agent_id, as the node sets it, and the
+# Agents list draws them under it.
+if os.environ.get("MOCK_SIDE_SESSIONS") == "1":
+    _desktop = dict(space_kind="", space_id="", space_name="", space_index=0, slot_id="", slot_name="", slot_index=0, pane_id="",
+                    tab_id="", workspace_id="", started_by_persona=False, parent_agent_id=REVIEW)
+    SESSIONS += [
+        sess("macbook", "a1f3c2d4-0000-4000-8000-0000000059a1", "btw: 这个 PR 现在能合吗", "/Users/me/code/weather", "blocked",
+             "needs_you", "", 0, "", 0, 4, "想先确认一下：两条命名建议要不要等改完再合？", pending=1, **_desktop),
+        sess("macbook", "a1f3c2d4-0000-4000-8000-0000000059a2", "Side chat", "/Users/me/code/weather", "idle", "idle", "", 0, "", 0,
+             9, "两条命名建议都改成英文会更统一。", seen_at=ago(minutes=8), **_desktop),
+    ]
 
 # MOCK_SESSIONS_MANY=<n> (#4410): n more idle sessions, enough to page an Agents list several pages deep with
 # MOCK_SESSIONS_LIST=1. GET /mock/sessions/touch moves the newest of them to now: the list's revision changes and every
@@ -2058,7 +2116,7 @@ ROUTINE_FIELDS = ("title", "prompt", "time", "weekdays", "enabled")
 SCHEDULE = [
     {"id": "morning", "title": "早报", "prompt": "给我今天的早报，一屏以内，结论先行。", "repeat": "daily", "time": "09:00",
      "weekdays": WEEKDAYS, "enabled": True, "last_run": prev_at("09:00", WEEKDAYS, late=timedelta(minutes=3)),
-     "last_session_id": ASK2, "last_status": "ok",
+     "last_session_id": ASK2, "last_status": "ok", "inbox": "every",
      "run_machine_id": "server", "run_session_id": ASK2, "run_launcher": "claude",  # its own conversation ("Morning briefing · Wednesday")
      "next_run": next_at("09:00", WEEKDAYS)},
     {"id": "fu_patrol", "title": "Agent 巡检", "prompt": "看看各台电脑上的 Agent：哪些在等我、哪些卡住了，有要我处理的就列出来；都正常就回一句。",
@@ -2071,7 +2129,7 @@ SCHEDULE = [
     {"id": "rt_patrol", "title": "项目巡检", "prompt": "看看各台电脑上的 Agent 和昨晚的 CI，有卡住的就告诉我。", "repeat": "daily",
      "time": "22:00", "weekdays": [], "enabled": True, "created_by": "assistant", "last_run": prev_at("22:00", []),
      "last_session_id": ASK4, "last_status": "ok", "next_run": next_at("22:00", []),
-     "push": "asked"},  # "Notify after a run": only what a run sends (#2396, #2676); the apps mark it on the row
+     "push": "asked", "inbox": "worthy"},  # "Notify after a run": only what a run sends (#2396, #2676); the apps mark it on the row
     {"id": "evening", "title": "晚间回顾", "prompt": "今天的晚间回顾。", "repeat": "daily", "time": "21:30", "weekdays": WEEKDAYS,
      "enabled": False, "last_run": prev_at("21:30", WEEKDAYS, back=1, late=timedelta(minutes=45)), "last_status": "skipped",
      "last_error": "Persona 停机，错过了时间"},
@@ -2088,7 +2146,7 @@ SCHEDULE = [
      "prompt": "周五发周报前，把这周的数据再核对一遍，有对不上的列出来。", "enabled": True, "created_by": "assistant",
      "machine_id": "macbook", "created_at": ago(hours=5)},
 ]
-TASK_FIELDS = ("title", "prompt", "repeat", "at", "time", "weekdays", "every_minutes", "cron", "enabled", "launcher", "permission_mode", "effort", "push")
+TASK_FIELDS = ("title", "prompt", "repeat", "at", "time", "weekdays", "every_minutes", "cron", "enabled", "launcher", "permission_mode", "effort", "push", "inbox")
 
 # MOCK_CRON=1 (#4399, docs/assistant/assistant.md "Scheduled tasks"): the hub runs cron tasks (feature task_cron) and has
 # one, every 30 minutes in work hours on weekdays. GET /api/v1/assistant/tasks/cron answers the web editor's examples as
@@ -2162,6 +2220,7 @@ def save_task(old, new):
     # "Notify after a run" (#2396): left out of an edit it stays; "asked" runs in the task's own conversation; "" is the default.
     if t.get("push") == "asked": t.pop("session_id", None)
     if not t.get("push"): t.pop("push", None)
+    if not t.get("inbox"): t.pop("inbox", None)
     # End time: left out it stays, null clears it, and a one-off never has one (the hub's until).
     if t.get("repeat") == "once" or ("until" in new and not new.get("until")):
         t.pop("until", None)
@@ -2947,7 +3006,7 @@ RULE_SUGGESTIONS = {
     "rs_mock_delegate": {
         "id": "rs_mock_delegate", "kind": "delegate",
         # The hub's own words (server/internal/i18n/locales/en/assistant-rule_suggest.json "delegate"), Settings and all.
-        "text": "You took the recommendation 3 times. Let Persona answer agents' own-call questions for you? You can turn this on in Settings.",
+        "text": "You took the recommendation 3 times. Let Persona answer agents' own-call questions for you?",
         "scope": {}, "creates": "", "setting": "agents.delegate", "count": 3},
 } if os.environ.get("MOCK_RULE_SUGGESTIONS") == "1" else {}
 RULE_SUGGESTIONS_ANSWERED = set()  # answered with Always or Not now
@@ -9453,6 +9512,12 @@ def terminal_frames(cols=96, rows=24, ticks=40):
 # another program holds the terminal — busy until the app subscribes with takeover.
 TERMINAL_CONTROL = bool(os.environ.get("MOCK_TERMINAL_CONTROL"))
 TERMINAL_INPUT = []
+# GET /mock/terminal_node?state=stalled|gone|back[&machine=<id>] (with MOCK_TERMINAL_STREAM, #6327): a computer's node as a
+# deploy replaces it. stalled: its terminals' subscribes go unanswered (the takeover went with the old connection: no
+# frame, no terminal_control); gone: the computer is offline, the subscriptions left unanswered end with the hub's
+# words and new ones fail at once, as the hub's connectionEnded and errOffline do; back: online again, subscribes
+# answered as before. machine: macbook unless named.
+TERMINAL_NODE = {"state": "", "machine": "macbook", "stalled": []}
 
 
 def cell_width(ch):
@@ -10225,16 +10290,16 @@ if os.environ.get("MOCK_ASSISTANT_INBOX"):
     _ASSISTANT_BASE = os.environ.get("MOCK_PUBLIC_URL", "http://127.0.0.1:%d" % PORT).rstrip("/")  # the hub's public_url
     INBOX[1:1] = [
         {"id": "assistant:s1", "source": "assistant", "kind": "assistant_post", "account": "assistant", "account_name": "Assistant",
-         "title": "Morning briefing", "sender": "Assistant", "preview": "Three meetings today; the design review moved to 15:00",
+         "title": "Morning briefing", "preview": "Three meetings today; the design review moved to 15:00",
          "count": 1, "started_at": ago(minutes=30), "updated_at": ago(minutes=30), "tier": "fyi",
          "summary": "Three meetings today; the design review moved to 15:00", "reason": "Your morning briefing task puts every run here", "read": False,
-         "context": "Morning briefing\nThree meetings today; the design review moved to 15:00.",
+         "context": "Morning briefing\nThree meetings today; the design review moved to 15:00",
          "connector": {"thread": "assistant:macbook/" + BLOG, "label": "Assistant", "url": _ASSISTANT_BASE + "/s/macbook/" + BLOG}},
         {"id": "assistant:s2", "source": "assistant", "kind": "assistant_post", "account": "assistant", "account_name": "Assistant",
-         "title": "Price drop: the standing desk you watch", "sender": "Assistant", "preview": "Now 20% off until Sunday",
+         "title": "Price drop: the standing desk you watch", "preview": "The desk you asked me to watch is 20% off until Sunday",
          "count": 1, "started_at": ago(hours=3), "updated_at": ago(hours=3), "tier": "action",
          "summary": "The desk you asked me to watch is 20% off until Sunday", "reason": "You asked to be told about price drops", "read": False,
-         "context": "Price drop\nNow 20% off until Sunday.",
+         "context": "Price drop: the standing desk you watch\nThe desk you asked me to watch is 20% off until Sunday",
          "connector": {"thread": "assistant:macbook/" + TESTS, "label": "Assistant", "url": _ASSISTANT_BASE + "/s/macbook/" + TESTS}},
     ]
 
@@ -22152,6 +22217,7 @@ MOCK_HELP = [
     "MOCK_KB_SELECTION=missing|future|fail  Settings › Knowledge selection: a hub from before it (404) / a document with a field clients don't know / a save the hub refuses (503)",
     "MOCK_SESSIONS_LIST=1  Paged Agents, counts and exact lookup; list-mode sockets send hints instead of full lists (#6362)",
     "MOCK_SESSIONS_MANY=<n>  n more idle sessions to page through; GET /mock/sessions/touch expires the old cursors (#4410)",
+    "MOCK_SIDE_SESSIONS=1  Two Claude desktop side sessions under the PR review (parent_agent_id, #5935), one waiting for you",
     "MOCK_SESSIONS_CATALOG=1  With MOCK_SESSIONS_LIST=1: catalog=1, place= and space= on the paged list, a Windows PC, one repository on two computers and a plain notes folder on two",
     "MOCK_MANUAL_HERDR=1  没挂待办的 herdr Agent 算手动开的（started_by_persona 为假），Agents「按待办」里出「手动开的」一段（#2917）",
     "MOCK_ORCA_CHILDREN=1  MacBook 上一个 Orca 工作区带三个子工作区（其中一个还有子项，parent_space_id，#2073）",
@@ -22961,6 +23027,23 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/queue": return self.send_json(queue_messages(q.get("text", [None])[0], "clear" in q, int(q.get("photos", ["0"])[0] or 0)))
         if p == "/mock/queue_edits": return self.send_json({"edits": QUEUE_EDITS})
         if p == "/mock/terminal_input": return self.send_json({"input": TERMINAL_INPUT})
+        if p == "/mock/terminal_node":
+            state, mid = q.get("state", [""])[0], q.get("machine", [TERMINAL_NODE["machine"]])[0]
+            if state not in ("stalled", "gone", "back"):
+                return self.send_json({"error": "state is stalled, gone or back"}, 400)
+            TERMINAL_NODE.update(state="" if state == "back" else state, machine=mid)
+            m = next((x for x in MACHINES if x["id"] == mid), None)
+            if m and state in ("gone", "back"):
+                m["online"] = state == "back"
+                for send, _ in list(LIVE):
+                    try: send({"type": "machines", "machines": out_machines()})
+                    except Exception: pass
+            if state == "gone":  # what waited on the old connection ends now, after the machines say it is offline
+                for send, smid, sid in TERMINAL_NODE["stalled"]:
+                    try: send({"type": "terminal", "machine_id": smid, "session_id": sid, "error": "rpc: connection closed"})
+                    except Exception: pass
+                TERMINAL_NODE["stalled"] = []
+            return self.send_json({"state": state, "machine": mid})
         if p == "/mock/herdr_client": return self.send_json({"log": FULL_LOG})
         if p == "/mock/herdr_focus":
             # ?pane=w1:p2[&session=<id>&source=client|persona|other&mine=1|0&view=<id>]: herdr's focus moved, as the hub tells the views
@@ -25153,7 +25236,11 @@ class H(BaseHTTPRequestHandler):
             body = json.loads(self.last_body or b"{}")
             for s in SESSIONS + ASSISTANT:  # the stored sessions: all_sessions() hands out copies
                 if s["session_id"] == p.split("/")[5]:
-                    s.update({k: v for k, v in body.items() if k in ("permission_mode", "effort", "model") and v})
+                    applied = body
+                    if bypass_restart(s, body.get("permission_mode")):
+                        applied = {k: v for k, v in body.items() if k != "permission_mode"}
+                        push_machine(s["machine_id"])
+                    s.update({k: v for k, v in applied.items() if k in ("permission_mode", "effort", "model") and v})
                     MODES_LOG.append({"session_id": s["session_id"], **{k: v for k, v in body.items() if k in ("permission_mode", "effort", "model")}})
             return self.send_json({"ok": True})
         self.send_json({"ok": True})
@@ -25483,6 +25570,14 @@ class H(BaseHTTPRequestHandler):
                     # Nothing runs it (#4328): the stream ends with the node's words (node/send.go paneFor), watched or driven.
                     send({"type": "terminal", "machine_id": msg.get("machine_id"), "session_id": msg.get("session_id"),
                           "error": "session %s is not running" % msg.get("session_id")})
+                    continue
+                if msg.get("type") == "terminal_subscribe" and TERMINAL_STREAM and TERMINAL_NODE["state"] and msg.get("machine_id") == TERMINAL_NODE["machine"]:
+                    mid, sid = msg.get("machine_id"), msg.get("session_id")
+                    drive.clear()
+                    if TERMINAL_NODE["state"] == "gone":  # the hub answers at once: the computer's node is not connected
+                        send({"type": "terminal", "machine_id": mid, "session_id": sid, "error": "%s: offline" % mid})
+                    else:  # stalled: nothing comes back
+                        TERMINAL_NODE["stalled"].append((send, mid, sid))
                     continue
                 if msg.get("type") == "terminal_subscribe" and TERMINAL_STREAM and TERMINAL_CONTROL and msg.get("control"):
                     sid, mid, ctl = msg.get("session_id"), msg.get("machine_id"), msg["control"]

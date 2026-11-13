@@ -48,6 +48,7 @@ import { Button, copyText, cx, Dialog, IconButton, Loading, Menu, toast, useMenu
 import { StatusMark } from "../../ui/StatusMark";
 import { Icon } from "../../ui/icons";
 import { StoppedAgentLine } from "./StoppedAgentLine";
+const TakeoverAction = lazy(() => import("./TakeoverAction"));
 import { scrollBehavior } from "../../ui/stream/motion";
 import { segmentChanges, shiftAbove } from "./offscreen";
 import { glide } from "./glide";
@@ -95,6 +96,7 @@ import { useEarlierStretches } from "./useEarlierStretches";
 import { useFoldSearch } from "./useFoldSearch";
 import { ArchiveCloseDialog, CloseAgentDialog, DeleteSessionDialog, RenameDialog, RenameSpaceDialog, renameTitle, SessionInfoDialog } from "./SessionDialogs";
 import { PermissionPicker, usePlanMode } from "./PermissionPicker";
+import { permissionsCommand } from "../../lib/permissions-command";
 import { archiveItems } from "../AgentMenus";
 import { ChatSidebarButton } from "../ShellSwitch";
 import { appArchiveDeps, deleteInsteadOfArchive, restoreAgent, useArchived } from "../../lib/agent-archives";
@@ -1742,10 +1744,10 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const lastRole = lastItem?.role;
   const lastKind = lastItem?.kind;
   const faceLast = useMemo(() => (lastRole && lastKind ? { role: lastRole, kind: lastKind } : undefined), [lastRole, lastKind]);
-  // the main conversation's /clear (#5095, lib/main-clear.ts): Persona's other conversations take no commands
+  // the main conversation's /clear (#5095, lib/main-clear.ts) and every Persona conversation's /permissions (#6476)
   // /workflows opens this page's side panel: a chat drawn inside a panel (the Team panel's worker) does not offer it (#5421)
   const commands = useMemo(
-    () => (assistant ? (clears ? mainCommands() : []) : agentCommands(AGENT_COMMANDS, session).filter((c) => !(embedded && c.text === WORKFLOWS_COMMAND))),
+    () => (assistant ? [...(clears ? mainCommands() : []), ...(session ? [permissionsCommand()] : [])] : agentCommands(AGENT_COMMANDS, session).filter((c) => !(embedded && c.text === WORKFLOWS_COMMAND))),
     [assistant, clears, session, embedded],
   );
   // the permission picker after the + (#5324), where the mode can be switched: a Persona conversation whatever its state
@@ -2363,6 +2365,7 @@ export const Header = memo(function Header({
     }));
   const { items: assistantItems, dialogs: assistantDialogs } = useAssistantMenu(assistant ? session : undefined);
   const feishu = externalLink(session);
+  const linkedTodo = session?.todo ?? session?.completed_todo;
 
   const own: MenuItem[] = session
     ? [
@@ -2370,21 +2373,22 @@ export const Header = memo(function Header({
         ...(others.length > 0 ? [spaceAgentsItem(others, () => tabs.openAt(menu.anchor))] : []),
         ...assistantItems,
         ...(!assistant && !main ? [{ key: "share", label: t("chat-chatview.share"), icon: "link" as const, onSelect: () => setSharingOpen(true) }] : []),
-        ...(session.todo
+        ...(linkedTodo
           ? [
               {
                 key: "todo-detail",
-                label: t("chat-chatview.todo_label", { title: session.todo.title }),
+                label: t(session.todo ? "chat-chatview.todo_label" : "chat-chatview.todo_completed_label", { title: linkedTodo.title }),
                 icon: "todo" as const,
-                onSelect: () => navigate(`/todos?id=${encodeURIComponent(session.todo!.id)}`),
+                onSelect: () => navigate(`/todos?id=${encodeURIComponent(linkedTodo.id)}`),
               },
+              ...(session.todo ? [
               {
                 key: "unlink-todo",
                 label: t("chat-chatview.unlink_todo"),
                 icon: "x" as const,
                 onSelect: async () => {
                   try {
-                    await unlinkAgentFromTodo(session.todo!.id, session.machine_id, session.session_id);
+                    await unlinkAgentFromTodo(linkedTodo.id, session.machine_id, session.session_id);
                     await refreshTodos();
                     await refresh();
                     toast(t("chat-chatview.todo_unlinked"), "ok");
@@ -2399,6 +2403,7 @@ export const Header = memo(function Header({
                 icon: "todo" as const,
                 onSelect: () => setLinkTodoOpen(true),
               },
+              ] : []),
             ]
           : !assistant
             ? [
@@ -2514,6 +2519,8 @@ export const Header = memo(function Header({
       {/* wide screens have New chat at the top of the sidebar; a phone's sidebar is a drawer */}
       {assistant && !chrome && session?.space !== "health" && <IconButton icon="compose" label={t("chat-chatview.new_chat")} onClick={() => navigate({ name: "persona-new" })} className="lg:hidden" />}
       {!chrome && actions}
+      {!assistant && session && (session.agent === "codex" || session.source_kind === "codex_history" || session.source_kind === "codex_app_server") &&
+        <Suspense fallback={null}><TakeoverAction key={`${session.machine_id}:${session.session_id}`} session={session} /></Suspense>}
       {Boolean(topCenter) && more("end")}
       {chrome && <IconButton icon="x" label={t("sidepanel.close")} onClick={chrome.onClose} />}
       </div>

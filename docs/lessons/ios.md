@@ -2,6 +2,17 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## An edit menu needs the selection's rect, not just a point (#6005)
+
+- If `UIEditMenuInteraction.presentEditMenu(with:)` gets only a `sourcePoint` and its delegate has no
+  `editMenuInteraction(_:targetRectFor:)`, the system doesn't know how tall the selection is or where its handles are.
+  In the lifted message it put the menu just under the selection's top edge, covering the selected word and its end
+  handle, so the handle couldn't be dragged. Return the selection's rect, clipped to what shows and padded for each
+  handle's knob (the start handle's above the first line, the end handle's below the last). The system then places
+  the menu above that rect, or below it when there is no room.
+- To check this in a UI test, a DEBUG value reports the selected lines and the handle views
+  (`UITextSelectionHandleView`) in window coordinates. Compare them with the frame of the edit menu's items.
+
 ## Selecting the words of a long lifted answer (#5291)
 
 - A `LazyVStack` opened at item N in a scroll view still lays out items 0 and 1 first, then walks the items between
@@ -33,6 +44,24 @@ Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in
   exactly as large as its words inside a SwiftUI view, a touch on the knob lands outside it and the handle can't be
   dragged. Make the text view reach past the words (`Theme.Lift.handleReach`), with a matching
   `textContainerInset` that keeps the words where they are.
+
+## A lazy grid never makes what it does not show (#4073)
+
+- `LazyVGrid` and `LazyVStack` make an item only once it comes near the visible part of their scroll view. A preference,
+  `GeometryReader` or `onGeometryChange` on an item that never comes into view never reports, so "not measured yet"
+  lasts for good.
+- The new conversation's welcome reports where its first suggestion cards end (`WelcomeFold`), and the shell caps
+  Needs You over the composer below that (`NeedsRoom`). At the largest accessibility text sizes the greeting and the
+  paragraph filled the page and the cards stayed below it. The grid never made them, and Needs You showed every row it
+  had (three and "N more") over the welcome.
+- A few items that must be measured wherever they are go in a non-lazy layout (`Grid`, `VStack`). The shell's four
+  cards are a `Grid` now. The main chat's welcome measures nothing and keeps its `LazyVGrid`.
+- Reproduce with `-UIPreferredContentSizeCategoryName UICTContentSizeCategoryAccessibilityXXXL` on an ordinary iPhone
+  simulator; no iPhone Duo is needed.
+- An XCUITest query builds the app's accessibility tree, and that makes a lazy grid make its items off the page too. A
+  test that first waited for Needs You saw one row without the fix: the query had made the cards, and their fold capped
+  it. `testNeedsYouAtTheLargestTextSize` lets the page settle without asking for anything, and counts the rows at its
+  first look.
 
 ## Tab selection and targeted opens are different navigation intents (#5641)
 
@@ -1695,6 +1724,31 @@ no initial Working row so the message shifted by one row, and pending local remo
 - `ApprovalCard.maxHeight` is opt-in and includes its fixed footer, so the BeautifulUI panel gets the same behavior without changing the library's other approval and plan callers. `rejectsDraggedPicks` is separately opt-in, so terminal, plan and permission cards keep their original gesture handling. `ScreenReviewFooter` separates the multi-question review's actions from its scrolling rows in the same way. The regression drives the real main-chat `ask_user` card in both styles, color schemes and the largest accessibility text on a standard phone, plus default-text small-phone coverage, after a deliberate pick has enabled Submit, then checks the actual resolution.
 - A multi-select drag guard cannot cover the single-select auto-send path: a 12 pt flick can still activate a Button. `DeliberateTap` marks a drag from 10 pt until 250 ms after it ends, and the option action checks that state; a short-drag regression must assert both no selection and no resolution while deliberate taps keep working.
 - Negative footer padding is visual overflow even when the accessibility frame still fits. A capped `ApprovalCard` keeps the host's horizontal and top alignment but has no bottom bleed, so its measured cap contains the whole button. Its footer pills also opt into `growsWithText`: a fixed 27 pt background does not grow when the label does at accessibility XXXL. The UI regression keeps actions above the outer area's 8 pt bottom fade, and screenshot pixel checks must confirm the visible capsule, not only `isHittable` and a successful resolution.
+
+## A lone question card past half the page (2026-11-13, #6277)
+
+- A cap that may grow past half the page uses only values the card does not move: the page's height, the header as it
+  stands open (`fixedHeader`) and what the footer holds besides the cards (`footerRest`). A DEBUG log of `PendingCards`'
+  body on iPhone 17 Pro showed a burst while launching, then no evaluation for about 9 s on the still page.
+- **What the footer holds besides the cards must not depend on the cards either.** The first version still froze the
+  app at 100% CPU when the composer was tapped. The field taking the focus grew the composer by its second row before
+  the keyboard came up. `footerRest` rose and the cap fell below the card. Measured one layout late, the card was over
+  the new cap, so the area switched to scrolling and showed "1 pending". That count is in `footerRest`, so the cap fell
+  again. The card then fitted itself, the count went and the cap rose: a 5 ms cycle between two states
+  (cap 477.98 / 454.31, `footerRest` 129.02 / 152.69, the difference being the count and its spacing). On `main` the
+  ring is open: outside the keyboard the cap is the fixed half page, and with the keyboard up the area is always laid
+  out as scrolling and the count is left off a lone card. Fix: a lone question that may grow is always laid out as
+  fitting (its form fits itself to `cardArea`), so `over` never comes from its late measure. Find such a ring by logging
+  the cap's inputs in `body` and looking for two lines that alternate.
+- Measured against the open header, the conversation keeps `cardThreadRoom` only while that header is open; once an
+  Agents header settles to its slim bar (40 pt, the open one is 90 pt with one row) the conversation keeps 50 pt more.
+- With a taller card the conversation overflows and the Agents header folds to its slim bar. XCUITest reports that bar's
+  back button as the 8 x 13 pt chevron and not hittable: a known limit of these tests, so
+  `PendingCardsTests.testLoneQuestionShowsEveryOption` checks it on screen and taps it by its coordinate. It is not a
+  way around the button itself: the slim bar's back is a plain button without `.contentShape(.rect)` (`ChatView`'s
+  `compactChrome`), so its real touch area may be little more than the chevron. That is on `main` and not fixed here.
+- `-ui.scheme light|dark` makes the app icon follow the appearance, and SpringBoard's "You have changed the icon"
+  alert covers the screenshot and takes taps: dismiss it through `com.apple.springboard` after launch.
 
 ## A view that places itself over the whole screen gets no keyboard avoidance (2026-11-10, #3004)
 

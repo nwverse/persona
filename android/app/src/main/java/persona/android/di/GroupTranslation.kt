@@ -276,6 +276,7 @@ internal fun AssistantManagement.inGroup(names: GroupNames): AssistantManagement
         override suspend fun endDirection(session: SessionKey) = source.endDirection(names.raw(session))
         override suspend fun newMainConversation(carrySummary: Boolean, expect: String?) =
             source.newMainConversation(carrySummary, expect)
+        override suspend fun clearMainConversation(expect: String?) = source.clearMainConversation(expect)
         private fun ScheduledTask.local() =
             copy(machineId = machineId?.takeIf { it.isNotBlank() }?.let(names::machineId),
                 runMachineId = runMachineId?.takeIf { it.isNotBlank() }?.let(names::machineId))
