@@ -79,8 +79,9 @@ final class InboxHandOffModel {
     var target: Target = .main {
         didSet { if !doneChosen { markDone = Self.marksDone(target) } }
     }
-    /// Also Mark as Done: off for the main chat, which may still write back to the item and file it there; on for the
-    /// others, which never do. Switching targets follows that until the user sets it.
+    /// Also Mark as Done is off for every target: handing a matter to a conversation or Agent starts work rather than
+    /// finishing it, and an Agent's stop is reported back to this item. Switching targets keeps that default until the
+    /// user explicitly chooses otherwise.
     private(set) var markDone = false
     private(set) var sending = false
     /// Why the last send failed.
@@ -193,7 +194,7 @@ final class InboxHandOffModel {
             markDone: { InboxStore.shared.setDone(item, true, haptic: false) }))
     }
 
-    static func marksDone(_ target: Target) -> Bool { target != .main }
+    static func marksDone(_: Target) -> Bool { false }
 
     /// Whether a hand-off can go to this Agent now: one that takes messages, still live, on a computer that is online.
     static func takes(_ session: Session, online: (MachineRef) -> Bool) -> Bool {
@@ -227,7 +228,7 @@ final class InboxHandOffModel {
     }
 
     /// Reads the item for New Agent's page with `ask` as the first message; nil when it couldn't be read (`error` says
-    /// why, with no Retry: nothing went). Also Mark as Done is the user's choice, else on, as for every Agent target.
+    /// why, with no Retry: nothing went). Also Mark as Done is the user's choice, else off, as for every target.
     func newAgent(ask: String, group: String) async -> NewAgentPrefill? {
         guard !sending, !preparing else { return nil }
         preparing = true
@@ -237,7 +238,7 @@ final class InboxHandOffModel {
         do {
             let it = try await deps.load(itemID)
             return NewAgentPrefill(card: InboxHandOffSheet.contextRef(it), prompt: ask, nameHint: it.title, group: group,
-                                   markDone: doneChosen ? markDone : true)
+                                   markDone: doneChosen ? markDone : false)
         } catch {
             self.error = error.isOffline ? String(localized: "Can't reach the hub")
                 : error.isTimeout ? String(localized: "The request timed out. Try again later.") : error.shown
