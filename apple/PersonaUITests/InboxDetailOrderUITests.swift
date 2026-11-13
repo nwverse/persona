@@ -32,9 +32,8 @@ final class InboxDetailOrderUITests: XCTestCase {
 
     @MainActor func testConversationPushesAndReturnsToDetail() throws {
         let app = try openShowcase()
+        assertConversationBelow("等张三确认新报价", in: app)
         let conversation = app.buttons["inbox.now.conversation"].firstMatch
-        XCTAssertTrue(conversation.waitForExistence(timeout: 15),
-                      "the processing conversation button is missing:\n\(app.debugDescription)")
         conversation.tap()
 
         let composer = app.descendants(matching: .any)["shell-composer-field"].firstMatch
@@ -50,14 +49,31 @@ final class InboxDetailOrderUITests: XCTestCase {
                       "the processing conversation button is missing after Back:\n\(app.debugDescription)")
     }
 
-    @MainActor private func openShowcase() throws -> XCUIApplication {
+    @MainActor func testConversationStaysBelowStateWithoutInstruction() throws {
+        let app = try openShowcase("sc-2")
+        assertConversationBelow("等你确认回复", in: app)
+    }
+
+    @MainActor private func assertConversationBelow(_ words: String, in app: XCUIApplication) {
+        let state = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", words)).firstMatch
+        let conversation = app.buttons["inbox.now.conversation"].firstMatch
+        XCTAssertTrue(state.waitForExistence(timeout: 15), "the state sentence is missing:\n\(app.debugDescription)")
+        XCTAssertTrue(conversation.waitForExistence(timeout: 15),
+                      "the processing conversation button is missing:\n\(app.debugDescription)")
+        XCTAssertGreaterThanOrEqual(conversation.frame.minY, state.frame.maxY,
+                                    "Conversation must be below the state; state=\(state.frame), conversation=\(conversation.frame)")
+        XCTAssertEqual(conversation.frame.minX, state.frame.minX, accuracy: 1,
+                       "Conversation must align with the state words; state=\(state.frame), conversation=\(conversation.frame)")
+    }
+
+    @MainActor private func openShowcase(_ item: String = "sc-1") throws -> XCUIApplication {
         guard let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] else {
             throw XCTSkip("needs scripts/mock/mock_hub.py with MOCK_INBOX_SHOWCASE=1 (PERSONA_MOCK_HUB)")
         }
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", pair, "-tab", "mail", "-inbox.kind", "", "-inbox.source", "", "-inbox.grouping", "",
-                               "-openInboxItem", "sc-1"]
+                               "-openInboxItem", item]
         app.launchPinned()
         acceptIconAlert()
         XCTAssertTrue(app.descendants(matching: .any)["inbox.viewSource"].firstMatch.waitForExistence(timeout: 20),

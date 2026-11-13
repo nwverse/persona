@@ -173,7 +173,6 @@ struct InboxEventBlocks: View {
             VStack(alignment: .leading, spacing: Theme.Space.xs) {
                 HStack(alignment: failed ? .top : .center, spacing: Theme.Space.s) {
                     status
-                    if let key = handlingConversationKey { conversation(key) }
                     Spacer(minLength: 0)
                     instructionButton
                 }
@@ -184,11 +183,6 @@ struct InboxEventBlocks: View {
                         .font(Theme.Font.caption).foregroundStyle(Theme.danger)
                         .accessibilityIdentifier("inbox.instruction.error")
                 }
-            }
-        } else if let key = handlingConversationKey {
-            HStack(alignment: .top, spacing: Theme.Space.s) {
-                status
-                conversation(key)
             }
         } else {
             status
@@ -231,31 +225,109 @@ struct InboxEventBlocks: View {
     /// The shared current-state sentence when the hub supplies a key; otherwise the old processing / done line.
     @ViewBuilder private var status: some View {
         if let words = InboxNow.text(for: item) {
-            HStack(alignment: .top, spacing: Theme.Space.sm) {
-                InboxNowSymbol(symbol: nowSymbol)
-                Text(words)
-                    .font(Theme.Font.secondary)
-                    .lineHeight(.secondary)
-                    .foregroundStyle(nowSymbol == .failed ? AnyShapeStyle(Theme.danger) : AnyShapeStyle(.secondary))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            if let key = handlingConversationKey {
+                statusWithConversation(key: key) {
+                    InboxNowSymbol(symbol: nowSymbol)
+                } content: {
+                    Text(words)
+                        .font(Theme.Font.secondary)
+                        .lineHeight(.secondary)
+                        .foregroundStyle(nowSymbol == .failed ? AnyShapeStyle(Theme.danger) : AnyShapeStyle(.secondary))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("inbox.now")
+            } else {
+                HStack(alignment: .top, spacing: Theme.Space.sm) {
+                    InboxNowSymbol(symbol: nowSymbol)
+                    Text(words)
+                        .font(Theme.Font.secondary)
+                        .lineHeight(.secondary)
+                        .foregroundStyle(nowSymbol == .failed ? AnyShapeStyle(Theme.danger) : AnyShapeStyle(.secondary))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("inbox.now")
             }
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("inbox.now")
         } else if let filed = InboxEventText.doneBy(item) {
-            Label(filed, systemImage: Theme.Icon.done).font(Theme.Font.secondaryStrong).foregroundStyle(Theme.positive).lineLimit(1)
+            if let key = handlingConversationKey {
+                statusWithConversation(key: key) {
+                    ThemedIcon(Theme.Icon.done).font(Theme.Font.secondaryStrong).foregroundStyle(Theme.positive)
+                } content: {
+                    Text(filed).font(Theme.Font.secondaryStrong).foregroundStyle(Theme.positive).lineLimit(1)
+                }
+            } else {
+                Label(filed, systemImage: Theme.Icon.done).font(Theme.Font.secondaryStrong).foregroundStyle(Theme.positive).lineLimit(1)
+            }
         } else if !item.isDone, let mark = InboxEventText.mark(item) {
             switch mark {
-            case .suggestion: EmptyView() // the card says it
+            case .suggestion:
+                if let key = handlingConversationKey { conversation(key) } // the card says the state
             case .failed(let words):
-                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                    Label(words, systemImage: Theme.Icon.error).font(Theme.Font.secondaryStrong).foregroundStyle(Theme.danger).lineLimit(1)
-                    if let why = item.handling?.error, !why.isEmpty {
-                        Text(why).font(Theme.Font.caption).foregroundStyle(.secondary)
+                if let key = handlingConversationKey {
+                    statusWithConversation(key: key) {
+                        ThemedIcon(Theme.Icon.error).font(Theme.Font.secondaryStrong).foregroundStyle(Theme.danger)
+                    } content: {
+                        Text(words).font(Theme.Font.secondaryStrong).foregroundStyle(Theme.danger).lineLimit(1)
+                        if let why = item.handling?.error, !why.isEmpty {
+                            Text(why).font(Theme.Font.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                        Label(words, systemImage: Theme.Icon.error).font(Theme.Font.secondaryStrong).foregroundStyle(Theme.danger).lineLimit(1)
+                        if let why = item.handling?.error, !why.isEmpty {
+                            Text(why).font(Theme.Font.caption).foregroundStyle(.secondary)
+                        }
                     }
                 }
             default:
+                if let key = handlingConversationKey {
+                    markWithConversation(mark, key: key)
+                } else {
+                    InboxEventMarkLine(mark: mark)
+                }
+            }
+        }
+    }
+
+    /// The conversation sits under the words, aligned with the text rather than the state symbol.
+    @ViewBuilder private func statusWithConversation<Leading: View, Content: View>(
+        key: SessionKey,
+        @ViewBuilder leading: () -> Leading,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        HStack(alignment: .top, spacing: Theme.Space.sm) {
+            leading()
+            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                content()
+                conversation(key)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// The older processing mark keeps its icon and words together when no conversation is present.
+    @ViewBuilder private func markWithConversation(_ mark: InboxEventText.Mark, key: SessionKey) -> some View {
+        switch mark {
+        case .preparing:
+            statusWithConversation(key: key) {
+                InboxSpinner()
+            } content: {
+                Text("AI is preparing a suggestion").font(Theme.Font.labelStrong).foregroundStyle(Theme.ai).lineLimit(1)
+            }
+        case .working(let word):
+            statusWithConversation(key: key) {
+                ThemedIcon(Theme.Icon.inProgress).font(Theme.Font.label).foregroundStyle(.secondary)
+            } content: {
+                Text(word).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
+            }
+        default:
+            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                 InboxEventMarkLine(mark: mark)
+                conversation(key)
             }
         }
     }
