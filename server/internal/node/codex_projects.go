@@ -1,17 +1,14 @@
 package node
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
 )
 
-// Codex's project methods change metadata only; they do not load a thread or start
-// a turn. Call them only for an explicit project operation. The app-server owns
-// its database format and idempotency, so Persona never edits that database or the
-// desktop app's global-state JSON itself.
+// Native project metadata is read to place new desktop chats in an existing
+// project. Persona does not write the desktop project's database or sidebar state.
 type codexDesktopProject struct {
 	ID       string                    `json:"id"`
 	Name     string                    `json:"name"`
@@ -22,9 +19,6 @@ type codexDesktopProject struct {
 type codexDesktopProjectRoot struct {
 	Path string `json:"path"`
 }
-
-// A separate seam for project tests: they must never start the user's Codex.
-var runCodexProjectServer = withCodexAppServer
 
 // listCodexDesktopProjects reads every page in the app-server's position order.
 // A broken/repeated cursor is an error rather than an infinite startup loop.
@@ -91,95 +85,6 @@ func codexDesktopProjectIDForDir(projects []codexDesktopProject, cwd string) str
 		}
 	}
 	return best.ID
-}
-
-// createCodexDesktopProject binds an existing directory to a new native project.
-// The caller must persist and reuse idempotencyKey when retrying the same action;
-// generating a fresh key after a lost response could create a second project.
-func (n *Node) createCodexDesktopProject(ctx context.Context, name, cwd, idempotencyKey string) (string, error) {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return "", errors.New("项目名称不能为空")
-	}
-	if strings.TrimSpace(idempotencyKey) == "" {
-		return "", errors.New("新建 Codex 项目需要稳定的请求标识")
-	}
-	workspace, err := n.resolveWorkspace(cwd)
-	if err != nil {
-		return "", err
-	}
-	cli, err := codexAppCLI()
-	if err != nil {
-		return "", fmt.Errorf("没找到 Codex，不能新建项目：%w", err)
-	}
-	var response struct {
-		Project codexDesktopProject `json:"project"`
-	}
-	err = runCodexProjectServer(ctx, cli, n.codexHome(), workspace.Cwd, func(call codexAppCall) error {
-		return call("project/create", map[string]any{
-			"name": name, "roots": []codexDesktopProjectRoot{{Path: workspace.Cwd}}, "idempotencyKey": idempotencyKey,
-		}, &response)
-	})
-	if err != nil {
-		return "", err // no automatic retry after an ambiguous write
-	}
-	if strings.TrimSpace(response.Project.ID) == "" {
-		return "", errors.New("project/create: response has no project id")
-	}
-	return response.Project.ID, nil
-}
-
-// updateCodexDesktopProject changes an existing project's name and/or directory
-// bindings. A nil roots slice leaves its roots unchanged; an empty slice clears
-// them. Unmentioned metadata is preserved by the app-server.
-func (n *Node) updateCodexDesktopProject(ctx context.Context, projectID, name string, roots []string) error {
-	if strings.TrimSpace(projectID) == "" {
-		return errors.New("Codex 项目标识不能为空")
-	}
-	params := map[string]any{"projectId": projectID}
-	name = strings.TrimSpace(name)
-	if name != "" {
-		params["name"] = name
-	}
-	cwd := n.home
-	if roots != nil {
-		resolved := make([]codexDesktopProjectRoot, 0, len(roots))
-		seen := map[string]bool{}
-		for _, root := range roots {
-			workspace, err := n.resolveWorkspace(root)
-			if err != nil {
-				return err
-			}
-			key := folderKey(workspace.Cwd)
-			if !seen[key] {
-				seen[key] = true
-				resolved = append(resolved, codexDesktopProjectRoot{Path: workspace.Cwd})
-			}
-		}
-		params["roots"] = resolved
-		if len(resolved) > 0 {
-			cwd = resolved[0].Path
-		}
-	}
-	if len(params) == 1 {
-		return errors.New("没有要更新的 Codex 项目名称或目录")
-	}
-	cli, err := codexAppCLI()
-	if err != nil {
-		return fmt.Errorf("没找到 Codex，不能更新项目：%w", err)
-	}
-	var response struct {
-		Project codexDesktopProject `json:"project"`
-	}
-	if err := runCodexProjectServer(ctx, cli, n.codexHome(), cwd, func(call codexAppCall) error {
-		return call("project/update", params, &response)
-	}); err != nil {
-		return err
-	}
-	if response.Project.ID != projectID {
-		return errors.New("project/update: response names a different project")
-	}
-	return nil
 }
 
 // readCodexProjectSelection is a read-only snapshot seam for selection tests.

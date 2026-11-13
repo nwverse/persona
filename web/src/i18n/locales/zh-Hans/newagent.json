@@ -51,10 +51,8 @@
   "carry_dropped": "{computer} 上用不了 {name}，已换回这台电脑的默认设置。",
   "preset_picked": "预设 {name} · {what}",
   "typed_now": "这次手输的模型 ID",
-  "temporary_folder": "临时会话",
-  "desktop_folder_hint": "选择下方目录、填写新目录，或使用临时会话。",
-  "desktop_folder_placeholder": "留空则创建临时会话",
   "desktop_settings_hint": "模型和权限设置跟随桌面应用。",
   "desktop_unavailable": "这台电脑上的 {app} 桌面启动器不可用。请另选启动器后继续。",
-  "desktop_project_detached": "本次会话不再关联原先选择的桌面项目。"
+  "desktop_project_detached": "本次会话不再关联原先选择的桌面项目。",
+  "temporary_session": "临时会话"
 }

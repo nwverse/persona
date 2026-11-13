@@ -44,6 +44,41 @@ app's Settings (principles 2 and 3).
 - **StandBy**: the system removes the background and scales a small widget up. Every widget reads on black, and at
   night the system draws it in red.
 
+## Lock Screen
+
+Every widget but Record comes in the Lock Screen's three families; Record in the circle and the rectangle (one action).
+
+- **Circular**: the hero alone. Agents: how many need you (the face when none). Today: the weekday and the day. To-dos,
+  Inbox: the count under the widget's mark. Usage: the fullest window as a gauge. Computers: online of all. Health: a
+  gauge of the steps against the average. Record: the button.
+- **Rectangular**: the widget's line in its accent ("2 need you", the next event, "6 to-dos today", "3 of 4 online")
+  and one or two lines under it (the agent waiting longest, the event after, two to-dos, the windows, two computers,
+  last night's sleep, the newest message). Agents keeps the face beside it, Record its button.
+- **Inline**, beside the clock: one line after the widget's mark.
+
+The system draws them in one color (`vibrant`): every part is in the accent group or a level of the primary color.
+Before pairing a Lock Screen widget shows its mark and "Open Persona to connect"; when the snapshot is an hour old its
+content steps back, as on the Home Screen. Inbox and Health stay `privacySensitive`.
+
+## Edit Widget
+
+Three widgets have choices, on the widget itself (touch and hold, Edit Widget); nothing about the widgets is in the
+app's Settings (principles 2 and 3). Every choice starts at a default that works on a fresh install.
+
+| Widget | Choice | Default | The others |
+| --- | --- | --- | --- |
+| Agents | Show | All Agents | Agents on Your Computers (the coding agents), Persona's Tasks |
+| Agents, Computers | Computer | Any Computer | each computer in the snapshot |
+| Usage | Account | The Fullest | each subscription account in the snapshot (up to 8) |
+
+- The lists come from the snapshot the app last wrote (`HomeChoices`), so Edit Widget never calls the hub and names
+  everything as the widgets do. The choices are `HomeWidgetEdit` intents whose entities (`HomeComputerEntity`,
+  `HomeAccountEntity`) keep the computer's or the account's id; the empty id is the default.
+- A narrowed widget counts only what it shows: the Agents counts, the corner's mood and the Smart Stack's score are its
+  rows' (the rows past the snapshot's cap count only with no choice). Usage's tokens stay every computer's. A computer
+  or an account that is gone leaves the widget's empty state until another is chosen.
+- A widget placed before Edit Widget existed keeps its kind and takes the defaults.
+
 ## The persona, as an accent
 
 The persona never takes the hero's place. It appears in three places:
@@ -80,7 +115,7 @@ The same definition as the app, from the same code (principle 4):
 | To-dos | the count | the To-dos page's Today filter: due today, plus open overdue ones | `TodoStore`, `TodoListLogic` |
 | Usage | a window's percent, reset time | `GET /api/v1/usage/windows`, the Machines page's numbers | `UsageWindowsStore` |
 | Usage | tokens today, by the hour | the island's Tokens Today; the hours from `GET /api/v1/usage`'s `hourly` (#5721) | `FleetState.stats`, the usage summary |
-| Usage | money spent today | only what a gateway reports (`LauncherQuota.Usage.costUSD`); never estimated from prices | launcher quotas |
+| Usage | money spent today | only what a gateway reports: the `cost_usd` of the quota report's usage entries whose `period` is `day`, over the launchers with a gateway, a key two launchers share counted once (`HomeUsage.spentToday`). Never estimated from prices, never an entry known only by its label. With no gateway saying, the widget shows no money | launcher quotas (`GET /api/v1/launchers/{name}/quota`) |
 | Computers | online, load | `Machine.online`; load from `FleetState.stats.loads` | `AppModel.machines` |
 | Health | steps, sleep, resting heart rate | Health's own numbers, with the user's permission | `HealthTool.daily` / `.summary` |
 | Inbox | Need You, Unread | open items the triage marks as yours (`InboxStore.actionCount`); the Inbox badge's number | `InboxStore` |
@@ -121,6 +156,13 @@ Widgets/faces/<id>_<rev>/    the chosen package's pictures, one per state, at th
 - **Waking the app** (#5721): from the foreground the app tells the hub whether any of the widgets is on a screen
   (`widgets` in its device prefs, `HomeWidgetWriter.tellHub`); the hub's silent `persona_wake: "widgets"` push then
   connects it for 25 seconds, and it writes before it lets go.
+- **What the app reads itself** (`HomeWidgetData`): today's calendar events (EventKit, off the main actor, only with
+  the access Persona already has), Health's numbers (`HealthTool.daily`: steps for 8 days, sleep, resting heart rate,
+  active energy), the subscription windows (`UsageWindowsStore`), today's tokens by the hour (`GET /api/v1/usage`'s
+  `hourly`) and today's money at the gateways (each gateway launcher's quota, at most every 15 minutes, never sooner when
+  the hub wakes the app; a money read on another day is not shown). Each is read only while a widget that shows it is on a screen (`WidgetCenter`'s configurations, from the
+  foreground), at most every 10, 15 and 5 minutes, and again when the hub wakes the app; a read that fails (Health is
+  locked with the phone) keeps the last.
 - **Off the main thread** (P1): the file is written on a background task, protected until first unlock as
   `FleetLookStore`'s; only encoding the few kilobytes runs on the main actor, at most every 5 seconds.
 - **Stale**: the timeline adds an entry at `HomeSnapshot.staleAfter` (an hour after the write). From then on the
@@ -128,14 +170,14 @@ Widgets/faces/<id>_<rev>/    the chosen package's pictures, one per state, at th
 
 ## Taps
 
-A widget opens its page (`persona://widget/<kind>`): the Agents list, To-dos, Machines, Recordings, Health, Inbox,
-and the calendar for Today. Agents opens the most urgent agent's chat (`persona://open?machine=…&session=…`, the Live
+A widget opens its page (`persona://widget/<kind>`): the Agents list, To-dos, Machines, Recordings, Health, Inbox;
+Today opens To-dos too (Persona has no calendar page of its own), and Usage opens Machines, where the windows are. Agents opens the most urgent agent's chat (`persona://open?machine=…&session=…`, the Live
 Activity's link). Each row of the large Agents widget opens its own agent. The Record button runs the Record control's
 intent without opening the app, and the recording's Live Activity confirms it at once.
 
 ## Smart Stack
 
-Each entry carries a `TimelineEntryRelevance`: highest when something needs you (agents, messages, an overdue to-do)
+Each entry carries a `TimelineEntryRelevance` (`HomeRelevance`), scored on what the widget shows after its Edit Widget choices: highest when something needs you (agents, messages, an overdue to-do)
 or a recording is running, high when a meeting starts within 15 minutes, low otherwise.
 
 ## Screenshots
@@ -144,7 +186,8 @@ The gallery draws every widget at its Home Screen sizes in light and dark with m
 `-showHomeWidgets YES` in a Debug build. A view outside a widget gets no container background, family, margins or tint
 from the system, so the gallery supplies stand-ins for them. For the Home Screen itself, `-showHomeWidgetSample YES`
 writes the same made-up snapshot instead of the app's, so the widgets added to a simulator's Home Screen show it
-without a hub; those shots, on each PR, are the proof (both DEBUG launch arguments, in `release.sh`'s list).
+without a hub (`-showHomeWidgetSample ticked`: two to-dos just ticked, one on its way and one the hub refused); those
+shots, on each PR, are the proof (both DEBUG launch arguments, in `release.sh`'s list).
 
 ## Phases
 
@@ -153,6 +196,12 @@ without a hub; those shots, on each PR, are the proof (both DEBUG launch argumen
    Screen), the gallery, `HomeWidgetTests` (Needs You replayed from `spec/fixtures/needs-you/cases.json` against the
    Agents badge, rows past the cap, the file read back only in its shape, which kinds reload, writes only on change,
    moods).
-2. **The rest of the Home Screen**: Today, To-dos (with ticking off), Usage, Computers, Health.
-3. **Lock Screen, settings and the Smart Stack**: the accessory families, Edit Widget (entities for computers and
-   accounts read from the snapshot), relevance, background refresh, and the hub's push (#5721, its own PR).
+2. **The rest of the Home Screen**: Today, To-dos (with ticking off, `CompleteTodoIntent`, `HomeWidgetActions`), Usage,
+   Computers, Health; their data (`HomeWidgetData`, `HomeToday`, `HomeTodos`, `HomeUsage`); taps to the To-dos,
+   Machines and Health pages.
+3. **Lock Screen, Edit Widget and the Smart Stack**: the accessory families (with the states before pairing and when
+   stale), Edit Widget (`HomeWidgetEdit`, entities for computers and accounts read from the snapshot), relevance
+   (`HomeRelevance`) with its tests. The hub's push (#5721) and the app's refresh on it came with part 2.
+4. **The gateways' money for Usage**: an optional `period` on a quota report's usage entries (`day`, `week`, `month`;
+   `server/internal/quota`), and the widget's money as the sum of the `day` entries' `cost_usd` over the gateway
+   launchers (`HomeUsage.spentToday`), read at most every 15 minutes.

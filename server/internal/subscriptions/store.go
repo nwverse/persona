@@ -35,6 +35,8 @@ type Store interface {
 	CommitRun(ctx context.Context, c RunCommit) error
 	// HeldItems are the subscription's held items q picks, in the order they were stored (#2039).
 	HeldItems(ctx context.Context, id string, q ItemQuery) ([]Held, error)
+	// HeldItem is the subscription's held item uid (the newest stored, if several); nil when it holds none (#6198).
+	HeldItem(ctx context.Context, id, uid string) (*Held, error)
 	// PruneItems removes the subscription's held items stored before before (their dedup keys stay).
 	PruneItems(ctx context.Context, id string, before time.Time) error
 }
@@ -240,6 +242,17 @@ func (m *MemStore) HeldItems(_ context.Context, id string, q ItemQuery) ([]Held,
 	return slices.Clone(out), nil
 }
 
+func (m *MemStore) HeldItem(_ context.Context, id, uid string) (*Held, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := len(m.items) - 1; i >= 0; i-- {
+		if h := m.items[i]; h.SubscriptionID == id && h.UID == uid {
+			return &h, nil
+		}
+	}
+	return nil, nil
+}
+
 func (m *MemStore) PruneItems(_ context.Context, id string, before time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -274,11 +287,15 @@ func applyRun(cur *Subscription, c RunCommit, withState bool) {
 	cur.SnapshotHash, cur.Runs = out.SnapshotHash, out.Runs
 	if SameRecipe(cur.Recipe, out.Recipe) {
 		cur.SinceAt, cur.Continuation = out.SinceAt, cloneContinuation(out.Continuation)
+		if !on(*cur) && cur.Continuation != nil && !cur.Continuation.Manual {
+			cur.Continuation = nil // turned off while this page ran: the position went with it (#6310)
+		}
 	}
 	cur.LastRunAt, cur.LastOKAt, cur.LastNewCount = out.LastRunAt, out.LastOKAt, out.LastNewCount
 	cur.WeakDedup, cur.Shape, cur.NextRunAt = out.WeakDedup, out.Shape, out.NextRunAt
 	cur.SourceName, cur.Icon, cur.Service, cur.SourceMin, cur.MaxCallsPerHour = out.SourceName, out.Icon, out.Service, out.SourceMin, out.MaxCallsPerHour
-	if sameTime(cur.InboxFrom, out.InboxFrom) { // the catch-up mark of the Inbox turned on as the run saw it, not of another
+	// The catch-up mark of the Inbox turned on (or switched to it, #6265) as the run saw it, not of another.
+	if sameTime(cur.InboxFrom, out.InboxFrom) && sameTime(cur.Migrated, out.Migrated) {
 		cur.InboxCatchup = out.InboxCatchup
 		if out.InboxGroup == groupOf(cur.Recipe) { // the rows' grouping, while the recipe still groups that way
 			cur.InboxGroup, cur.InboxGroupFrom = out.InboxGroup, out.InboxGroupFrom

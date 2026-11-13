@@ -12,6 +12,13 @@ const session = { session_id: "native-session", title: "Sample", cwd: "C:\\Proje
 const input = { machineId: "desktop", cwd: session.cwd, launcher: "claude-desktop", text: "Check this project", attachments: [] };
 const response = (body: unknown, status = 200) => ({ ok: status < 400, status, text: async () => JSON.stringify(body) });
 
+// Module loading is asynchronous even when fake time has not advanced.
+async function advanceDelivery(ms: number) {
+  await vi.advanceTimersByTimeAsync(0);
+  await vi.dynamicImportSettled();
+  await vi.advanceTimersByTimeAsync(ms);
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   vi.stubGlobal("localStorage", { getItem: () => "test" });
@@ -26,7 +33,7 @@ describe("desktop creation and recovery", () => {
     const fetcher = vi.fn().mockResolvedValueOnce(response({ session: { ...session, machine_id: "desktop" } }));
     vi.stubGlobal("fetch", fetcher);
     launchAgent({ ...input, launcher, text: "" });
-    await vi.advanceTimersByTimeAsync(0);
+    await advanceDelivery(0);
     expect(JSON.parse(fetcher.mock.calls[0][1].body)).toMatchObject({ launcher, async: false });
   });
 
@@ -34,7 +41,7 @@ describe("desktop creation and recovery", () => {
     const fetcher = vi.fn().mockResolvedValueOnce(response({ session: { ...session, machine_id: "desktop", agent: "codex" } }));
     vi.stubGlobal("fetch", fetcher);
     launchAgent({ ...input, launcher: "codex-app", inlinePrompt: true, desktopProjectId: "codex-project:home:second" });
-    await vi.advanceTimersByTimeAsync(0);
+    await advanceDelivery(0);
     expect(JSON.parse(fetcher.mock.calls[0][1].body)).toMatchObject({ desktop_project_id: "codex-project:home:second", prompt: input.text });
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
@@ -43,7 +50,7 @@ describe("desktop creation and recovery", () => {
     const fetcher = vi.fn().mockResolvedValueOnce(response({ session: { ...session, machine_id: "desktop" } }));
     vi.stubGlobal("fetch", fetcher);
     launchAgent({ ...input, text: "", desktopProjectId: "claude-environment:account:saved" });
-    await vi.advanceTimersByTimeAsync(0);
+    await advanceDelivery(0);
     expect(JSON.parse(fetcher.mock.calls[0][1].body)).toMatchObject({ desktop_project_id: "claude-environment:account:saved", launcher: "claude-desktop", cwd: session.cwd });
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
@@ -53,7 +60,7 @@ describe("desktop creation and recovery", () => {
       .mockResolvedValueOnce(response({}));
     vi.stubGlobal("fetch", fetcher);
     const id = launchAgent(input);
-    await vi.advanceTimersByTimeAsync(0);
+    await advanceDelivery(0);
     const recovered = { ...session, machine_id: "desktop" };
     expect(getState().launches[id]).toMatchObject({ phase: "failed", session: recovered, uncertain: delivery === "unknown" });
     expect(upsertSession).toHaveBeenCalledWith(recovered);
@@ -70,10 +77,10 @@ describe("desktop creation and recovery", () => {
       .mockImplementationOnce(() => new Promise((resolve) => { finishSetup = resolve; }));
     vi.stubGlobal("fetch", fetcher);
     const id = launchAgent({ ...input, text: "" });
-    await vi.advanceTimersByTimeAsync(0);
+    await advanceDelivery(0);
     expect(getState().launches[id]).toMatchObject({ phase: "failed", desktopSetupIncomplete: true });
     const recovery = deliverLaunch(id);
-    await vi.advanceTimersByTimeAsync(0);
+    await advanceDelivery(0);
     expect(getState().launches[id].phase).toBe("creating");
     expect(JSON.parse(fetcher.mock.calls[1][1].body)).toMatchObject({ launcher: "claude-desktop", resume_session_id: session.session_id, prompt: "", async: false });
     expect(fetcher.mock.calls[1][0]).toBe("/api/v1/sessions");

@@ -42,14 +42,14 @@ func TestWorkspaceProjectCreatesOnlyRequestedDirectory(t *testing.T) {
 func TestWorkspaceProjectAlreadyBoundHasNoEffects(t *testing.T) {
 	home := t.TempDir()
 	n := &Node{home: home, state: newState()}
-	calls := fakeCodexProjectServer(t, n, func(string, any, any) error {
-		t.Fatal("already bound directory reached native project API")
-		return nil
-	})
+	assertUnchanged := watchWorkspaceNativeProjectEffects(t, n)
 	for _, existing := range []bool{false, true} {
 		dir := filepath.Join(home, "Project with spaces")
 		if existing {
 			if err := os.Mkdir(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "keep.txt"), []byte("untouched"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -57,18 +57,20 @@ func TestWorkspaceProjectAlreadyBoundHasNoEffects(t *testing.T) {
 		if runtime.GOOS == "windows" {
 			bound = strings.ToUpper(dir)
 		}
-		_, err := n.createWorkspaceProjectWithBindings(context.Background(), dir, "Renamed project", "codex_app", "different-key", true, []string{bound})
-		if err == nil || !strings.Contains(err.Error(), "already bound") {
-			t.Fatalf("existing=%v: error=%v", existing, err)
+		w, err := n.createWorkspaceProjectWithBindings(context.Background(), dir, "Renamed project", "codex_app", "different-key", true, []string{bound})
+		if err == nil || !strings.Contains(err.Error(), "already bound") || !reflect.DeepEqual(w, proto.Workspace{}) {
+			t.Fatalf("existing=%v: workspace=%+v error=%v", existing, w, err)
 		}
-		if !existing {
+		if existing {
+			if b, err := os.ReadFile(filepath.Join(dir, "keep.txt")); err != nil || string(b) != "untouched" {
+				t.Fatalf("existing file changed: %q %v", b, err)
+			}
+		} else {
 			if _, err := os.Stat(dir); !os.IsNotExist(err) {
 				t.Fatalf("duplicate request created a directory: %v", err)
 			}
 		}
-	}
-	if *calls != 0 {
-		t.Fatalf("duplicate request started %d native API processes", *calls)
+		assertUnchanged()
 	}
 }
 
@@ -139,10 +141,7 @@ func TestWorkspaceNativeProjectSyncRefusesBeforeEffects(t *testing.T) {
 		t.Run(app, func(t *testing.T) {
 			home := t.TempDir()
 			n := &Node{home: home, state: newState()}
-			calls := fakeCodexProjectServer(t, n, func(string, any, any) error {
-				t.Fatal("unsupported sidebar sync reached the native project API")
-				return nil
-			})
+			assertUnchanged := watchWorkspaceNativeProjectEffects(t, n)
 			for _, existing := range []bool{false, true} {
 				for _, createDirectory := range []bool{false, true} {
 					dir := filepath.Join(home, fmt.Sprintf("project-%t-%t", existing, createDirectory))
@@ -173,10 +172,8 @@ func TestWorkspaceNativeProjectSyncRefusesBeforeEffects(t *testing.T) {
 					} else if _, err := os.Stat(dir); !os.IsNotExist(err) {
 						t.Fatalf("unsupported creation made a directory: %v", err)
 					}
+					assertUnchanged()
 				}
-			}
-			if *calls != 0 {
-				t.Fatalf("started %d native API processes", *calls)
 			}
 		})
 	}
@@ -187,14 +184,14 @@ func TestWorkspaceNativeProjectDuplicatePrecedesSyncRefusal(t *testing.T) {
 		t.Run(app, func(t *testing.T) {
 			home := t.TempDir()
 			n := &Node{home: home, state: newState()}
-			calls := fakeCodexProjectServer(t, n, func(string, any, any) error {
-				t.Fatal("duplicate binding reached the native project API")
-				return nil
-			})
+			assertUnchanged := watchWorkspaceNativeProjectEffects(t, n)
 			for _, existing := range []bool{false, true} {
 				dir := filepath.Join(home, fmt.Sprintf("bound-%t", existing))
 				if existing {
 					if err := os.Mkdir(dir, 0o755); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(dir, "keep.txt"), []byte("untouched"), 0o600); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -202,15 +199,55 @@ func TestWorkspaceNativeProjectDuplicatePrecedesSyncRefusal(t *testing.T) {
 				if err == nil || !strings.Contains(err.Error(), "already bound") || !reflect.DeepEqual(w, proto.Workspace{}) {
 					t.Fatalf("duplicate = %+v %v", w, err)
 				}
-				if !existing {
+				if existing {
+					if b, err := os.ReadFile(filepath.Join(dir, "keep.txt")); err != nil || string(b) != "untouched" {
+						t.Fatalf("existing file changed: %q %v", b, err)
+					}
+				} else {
 					if _, err := os.Stat(dir); !os.IsNotExist(err) {
 						t.Fatalf("duplicate request made a directory: %v", err)
 					}
 				}
-			}
-			if *calls != 0 {
-				t.Fatalf("started %d native API processes", *calls)
+				assertUnchanged()
 			}
 		})
+	}
+}
+
+func watchWorkspaceNativeProjectEffects(t *testing.T, n *Node) func() {
+	t.Helper()
+	nativeHome := n.codexHome()
+	if err := os.Mkdir(nativeHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	metadata := map[string]string{
+		".codex-global-state.json": `{"project-name":"keep existing sidebar"}`,
+		"state_5.sqlite":           "untouched native metadata fixture",
+	}
+	for name, contents := range metadata {
+		if err := os.WriteFile(filepath.Join(nativeHome, name), []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	oldCLI := codexAppCLI
+	codexAppCLI = func() (string, error) {
+		t.Fatal("refused workspace request reached native CLI discovery")
+		return "", nil
+	}
+	t.Cleanup(func() { codexAppCLI = oldCLI })
+	return func() {
+		t.Helper()
+		entries, err := os.ReadDir(nativeHome)
+		if err != nil || len(entries) != len(metadata) {
+			t.Fatalf("native metadata directory changed: %v %v", entries, err)
+		}
+		for name, contents := range metadata {
+			if b, err := os.ReadFile(filepath.Join(nativeHome, name)); err != nil || string(b) != contents {
+				t.Fatalf("native metadata %q changed: %q %v", name, b, err)
+			}
+		}
+		if len(n.state.Sessions) != 0 {
+			t.Fatalf("refused project request created session state: %+v", n.state.Sessions)
+		}
 	}
 }

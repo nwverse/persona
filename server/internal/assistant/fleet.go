@@ -114,18 +114,19 @@ type fleetBook struct {
 
 // fleetReport is what the session lists are decorated with from the assistant's snapshot.
 type fleetReport struct {
-	mu       sync.RWMutex
-	got      bool
-	sessions map[string]SessionView // by session id
-	work     map[[2]string]proto.WorkState
-	workOn   bool
-	links    map[[2]string]TodoLink
-	quiet    map[[2]string]bool
-	marks    map[[2]string][]string  // conversation → the channels its messages came from, newest first
-	turns    map[[2]string]time.Time // conversation → when a channel's turn in it was answered (zero: followed now)
-	inbox    map[string]bool         // the inbox agents' conversations
-	tasks    []TaskView              // the scheduled tasks (nil: not read yet)
-	profile  *Profile                // its settings as the hub's features need them (nil: not read yet)
+	mu        sync.RWMutex
+	got       bool
+	sessions  map[string]SessionView // by session id
+	work      map[[2]string]proto.WorkState
+	workOn    bool
+	links     map[[2]string]TodoLink
+	completed map[[2]string]TodoLink
+	quiet     map[[2]string]bool
+	marks     map[[2]string][]string  // conversation → the channels its messages came from, newest first
+	turns     map[[2]string]time.Time // conversation → when a channel's turn in it was answered (zero: followed now)
+	inbox     map[string]bool         // the inbox agents' conversations
+	tasks     []TaskView              // the scheduled tasks (nil: not read yet)
+	profile   *Profile                // its settings as the hub's features need them (nil: not read yet)
 }
 
 // fleetStore is what of the store the fleet keeps (db.DB); a store without it keeps nothing.
@@ -369,11 +370,13 @@ func sessionTurnErrorCode(c proto.Session) string {
 	return code
 }
 
-// signedOut: conversation c's last turn ended "Not logged in". The node says so only in the turn's words (TurnError,
-// Claude Code's own reply): the lists work the code out of them (sessionTurnErrorCode), while session.get answers the
-// node's session as it is, with no code.
+// signedOut: conversation c's last turn ended "Not logged in". The node says so only in the turn's words: TurnError while
+// the conversation's process runs, and only its last words (LastText, Claude Code's own reply) once it is listed from
+// its transcript with no process, as a task's conversation between runs is (scanOffline). The lists work the error and
+// its code out of those (latestTurnError, sessionTurnErrorCode); session.get answers the node's session as it is.
 func signedOut(c proto.Session) bool {
-	return c.TurnErrorCode == proto.TurnErrorNotLoggedIn || sessionTurnErrorCode(c) == proto.TurnErrorNotLoggedIn
+	text, _ := latestTurnError(c)
+	return c.TurnErrorCode == proto.TurnErrorNotLoggedIn || turnErrorCode(text) == proto.TurnErrorNotLoggedIn
 }
 
 // userTurnError: a turn error with code is the user's to fix; a rate limit passes (or is the user's when the

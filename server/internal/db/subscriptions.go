@@ -169,9 +169,15 @@ func (d *DB) CommitSubscriptionRun(ctx context.Context, id string, merge func(da
 			return err
 		}
 	}
-	for _, it := range items {
-		if _, err := tx.Exec(ctx, `INSERT INTO subscription_items (subscription_id, uid, data, created_at) VALUES ($1, $2, $3, $4)`,
-			id, it.UID, it.Data, now); err != nil {
+	if len(items) > 0 {
+		// One statement for the run's items: ORDER BY the array position keeps seq in the run's order.
+		uids, datas := make([]string, len(items)), make([]string, len(items))
+		for i, it := range items {
+			uids[i], datas[i] = it.UID, string(it.Data)
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO subscription_items (subscription_id, uid, data, created_at)
+			SELECT $1, u, d::json, $4 FROM unnest($2::text[], $3::text[]) WITH ORDINALITY AS t(u, d, n) ORDER BY n`,
+			id, uids, datas, now); err != nil {
 			return err
 		}
 	}
@@ -228,6 +234,21 @@ func (d *DB) SubscriptionItems(ctx context.Context, id string, q SubscriptionIte
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// SubscriptionItem is subscription id's held item uid, the newest stored if several are; nil when it holds none (a
+// reply to its row looks up the item it answers, #6198).
+func (d *DB) SubscriptionItem(ctx context.Context, id, uid string) (*SubscriptionItemRow, error) {
+	var r SubscriptionItemRow
+	err := d.pool.QueryRow(ctx, `SELECT seq, uid, data, created_at FROM subscription_items WHERE subscription_id = $1 AND uid = $2
+		ORDER BY seq DESC LIMIT 1`, id, uid).Scan(&r.Seq, &r.UID, &r.Data, &r.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
 }
 
 // PruneSubscriptionItems removes subscription id's held items stored before before: the destinations are past them.

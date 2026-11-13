@@ -79,12 +79,12 @@ var codexProjectCatalogs = struct {
 }{byHome: map[string]*codexProjectCatalog{}}
 
 type codexLegacyProjectState struct {
-	Projects    map[string]codexAppProject       `json:"local-projects"`
-	Order       []string                         `json:"project-order"`
-	Mapped      map[string]map[string]string     `json:"app-server-project-id-by-legacy-project-id-by-host"`
-	Migration   map[string]codexProjectMigration `json:"app-server-projects-migration-by-host"`
-	Assignments map[string]json.RawMessage       `json:"thread-project-assignments"`
-	Projectless []string                         `json:"projectless-thread-ids"`
+	Projects    map[string]codexAppProject   `json:"local-projects"`
+	Order       []string                     `json:"project-order"`
+	Mapped      map[string]map[string]string `json:"app-server-project-id-by-legacy-project-id-by-host"`
+	Migration   map[string]json.RawMessage   `json:"app-server-projects-migration-by-host"`
+	Assignments map[string]json.RawMessage   `json:"thread-project-assignments"`
+	Projectless []string                     `json:"projectless-thread-ids"`
 }
 
 type codexProjectMigration struct {
@@ -174,11 +174,14 @@ func readCodexDesktopProjectSnapshot(home, state, db string) (codexProjectSnapsh
 	// membership migration can override the legacy record, and pending or previously unknown chats stay untouched.
 	authoritative, foundMigration := false, false
 	pending := map[string]bool{}
-	for host, migration := range raw.Migration {
+	for host, marker := range raw.Migration {
 		if !codexProjectHomeMatches(host, home) {
 			continue
 		}
-		complete := migration.ThreadAssignmentsMigrated && migration.ThreadAssignmentsReadMigrated
+		// Older clients used numeric markers, and unrelated hosts may still do so.
+		// Only a complete, understood marker for this home can remove a legacy assignment.
+		var migration codexProjectMigration
+		complete := json.Unmarshal(marker, &migration) == nil && migration.ThreadAssignmentsMigrated && migration.ThreadAssignmentsReadMigrated
 		if !foundMigration {
 			authoritative = complete
 			foundMigration = true
@@ -222,16 +225,56 @@ func readCodexNativeProjects(ctx context.Context, db string) (map[string]codexAp
 	if err != nil {
 		return nil, nil, false, err
 	}
-	q := `SELECT p.id, p.name, r.path FROM projects p LEFT JOIN project_roots r ON r.project_id = p.id ` +
-		`ORDER BY p.position, p.id, r.position, r.path`
-	out, err := codexProjectQuery(ctx, sqlite, db, q)
+	// Both root and path have shipped as the root column, and older catalogs have
+	// no saved positions. Inspect capabilities before choosing the read query so
+	// a missing source is distinct from a broken or temporarily unreadable one.
+	out, err := codexProjectQuery(ctx, sqlite, db,
+		`SELECT 'projects' AS tableName, name FROM pragma_table_info('projects') UNION ALL `+
+			`SELECT 'project_roots' AS tableName, name FROM pragma_table_info('project_roots')`)
 	if err != nil {
-		var exit *exec.ExitError
-		if errors.As(err, &exit) {
-			if strings.Contains(string(exit.Stderr), "no such table: projects") {
-				return nil, nil, false, nil
-			}
+		return nil, nil, false, fmt.Errorf("read Codex project schema: %w", err)
+	}
+	var columns []struct {
+		TableName string `json:"tableName"`
+		Name      string `json:"name"`
+	}
+	if len(bytes.TrimSpace(out)) != 0 {
+		if err := json.Unmarshal(out, &columns); err != nil {
+			return nil, nil, false, fmt.Errorf("decode Codex project schema: %w", err)
 		}
+	}
+	projectColumns, rootColumns := map[string]bool{}, map[string]bool{}
+	for _, column := range columns {
+		switch column.TableName {
+		case "projects":
+			projectColumns[column.Name] = true
+		case "project_roots":
+			rootColumns[column.Name] = true
+		}
+	}
+	if len(projectColumns) == 0 {
+		return nil, nil, false, nil
+	}
+	rootColumn := "path"
+	if !rootColumns[rootColumn] {
+		rootColumn = "root"
+	}
+	if !projectColumns["id"] || !projectColumns["name"] || !rootColumns["project_id"] || !rootColumns[rootColumn] {
+		return nil, nil, false, errors.New("read Codex projects: unsupported project catalog schema")
+	}
+	orderBy := []string{}
+	if projectColumns["position"] {
+		orderBy = append(orderBy, "p.position")
+	}
+	orderBy = append(orderBy, "p.id")
+	if rootColumns["position"] {
+		orderBy = append(orderBy, "r.position")
+	}
+	orderBy = append(orderBy, "r."+rootColumn)
+	q := `SELECT p.id, p.name, r.` + rootColumn + ` AS path FROM projects p LEFT JOIN project_roots r ON r.project_id = p.id ` +
+		`ORDER BY ` + strings.Join(orderBy, ", ")
+	out, err = codexProjectQuery(ctx, sqlite, db, q)
+	if err != nil {
 		return nil, nil, false, fmt.Errorf("read Codex projects: %w", err)
 	}
 	var rows []struct {

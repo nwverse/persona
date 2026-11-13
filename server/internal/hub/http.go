@@ -364,7 +364,7 @@ func logRequests(h *Hub, next http.Handler) http.Handler {
 		sw := &statusWriter{ResponseWriter: w, status: 200, lang: lang}
 		next.ServeHTTP(sw, r)
 		// Auth and ingress refusals are logged by securityError (masked, rate limited), WebSocket ones included.
-		if !sw.securityFailure && (sw.status >= 400 || (!longLived(r.URL.Path) && time.Since(start) > 2*time.Second)) {
+		if !sw.securityFailure && (sw.status >= 400 || (!longLived(r) && time.Since(start) > 2*time.Second)) {
 			path := loggedPath(r.URL.Path)
 			if client.Platform != "" {
 				h.logf("[%s] %s %s -> %d (%s) client=%q", id, r.Method, path, sw.status, time.Since(start).Round(time.Millisecond), client.Platform+"/"+client.Version)
@@ -394,11 +394,13 @@ func loggedPath(p string) string {
 	return p
 }
 
-// longLived requests (WebSockets, a plugin's sockets and streams, a forwarded port's connections: ports.go) are not
-// slow requests however long they last.
-func longLived(path string) bool {
+// longLived requests (WebSockets, a plugin's sockets and streams, a meeting's audio socket, a forwarded port's
+// connections: ports.go) are not slow requests however long they last.
+func longLived(r *http.Request) bool {
+	path := r.URL.Path
 	return path == "/api/v1/ws" || path == link.Path || path == link.StreamPath || path == bus.Path ||
-		strings.HasPrefix(path, "/api/v1/plugins/") || strings.HasPrefix(path, "/api/v1/extensions/") || strings.HasSuffix(path, "/connect")
+		strings.HasPrefix(path, "/api/v1/plugins/") || strings.HasPrefix(path, "/api/v1/extensions/") || strings.HasSuffix(path, "/connect") ||
+		isAssistantSocket(r)
 }
 
 // requestID keeps a client's id if it is a short token (it lands in logs), else makes one.
@@ -818,6 +820,7 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	inferredAgentType := p.AgentType == ""
 	if p.AgentType == "" {
 		for _, launcher := range m.cfg.Launchers {
 			if launcher.Name == p.Launcher {
@@ -847,7 +850,8 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		// Finish an accepted start even if its HTTP response is lost; client_ops records the outcome.
 		parent = context.WithoutCancel(parent)
 	}
-	ctx, cancel := context.WithTimeout(parent, startBudgetForLauncher(async && !p.WorkSession, p.Launcher))
+	started := time.Now()
+	ctx, cancel := context.WithDeadline(parent, started.Add(startBudgetForLauncher(async && !p.WorkSession, p.Launcher)))
 	defer cancel()
 	var res struct {
 		Session      proto.Session `json:"session"`
@@ -863,6 +867,7 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 	// The manager says what it runs on (Models › Agents, a model picked for this start) and names its tab
 	// (agents_link.go).
 	note, err := h.agentStartParams(ctx, m, params, name)
+	cancel()
 	if err != nil {
 		var refused *startRefused
 		if errors.As(err, &refused) {
@@ -871,6 +876,42 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		}
 		callErr(w, err) // 503 assistant_offline without the manager (the machine is its to reach), else 502
 		return
+	}
+	// Defaults and fallback launchers are resolved by the manager. Use what will actually run for both the node's
+	// acknowledgement mode and the total start budget, without retaining the shorter resolution deadline.
+	launcher, _ := params["launcher"].(string)
+	agentType, _ := params["agent_type"].(string)
+	if inferredAgentType && launcher != p.Launcher && agentType == p.AgentType {
+		agentType = "" // a fallback must not inherit the originally requested launcher's inferred type
+		delete(params, "agent_type")
+	}
+	if agentType == "" {
+		for _, configured := range m.cfg.Launchers {
+			if configured.Name == launcher && configured.AgentType != "" {
+				agentType = configured.AgentType
+				params["agent_type"] = agentType
+				break
+			}
+		}
+	}
+	askedAsync, _ := params["async"].(bool)
+	async = startsAsync(askedAsync, p.ResumeSessionID, agentType) && !desktopStartLauncher(launcher)
+	params["async"] = async
+	ctx, cancel = context.WithDeadline(parent, started.Add(startBudgetForLauncher(async && !p.WorkSession, launcher)))
+	defer cancel()
+	if tabName, _ := params["tab_name"].(string); !async && name == "" && nameFrom != "" && strings.TrimSpace(tabName) == "" && p.ResumeSessionID == "" {
+		// An initially async start did not ask the manager for a name. It now waits for creation, so name it first.
+		var named struct {
+			Name string `json:"name"`
+		}
+		nameCtx, nameCancel := context.WithTimeout(ctx, 15*time.Second)
+		err := h.asstOf(h.machineOwner(m.cfg.ID)).call(nameCtx, assistantwire.MethodAgentTabName, map[string]any{"prompt": nameFrom}, &named)
+		nameCancel()
+		if err != nil {
+			h.logf("tab name: %v", err)
+		} else if named.Name != "" {
+			params["tab_name"] = named.Name
+		}
 	}
 	method := "session.start"
 	if p.WorkSession {

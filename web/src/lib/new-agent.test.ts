@@ -19,11 +19,18 @@ function response(body: unknown, status = 200) {
   return { ok: status < 400, status, text: async () => JSON.stringify(body) };
 }
 
+// Module loading is asynchronous even when fake time has not advanced.
+async function advanceDelivery(ms: number) {
+  await vi.advanceTimersByTimeAsync(0);
+  await vi.dynamicImportSettled();
+  await vi.advanceTimersByTimeAsync(ms);
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   vi.stubGlobal("localStorage", { getItem: () => "test" });
   vi.stubGlobal("location", { pathname: "/other" });
-  vi.stubGlobal("URL", { createObjectURL: vi.fn(() => "blob:preview"), revokeObjectURL: vi.fn() });
+  vi.stubGlobal("URL", Object.assign(class extends URL {}, { createObjectURL: vi.fn(() => "blob:preview"), revokeObjectURL: vi.fn() }));
   getState().launches = {};
   vi.clearAllMocks();
 });
@@ -38,13 +45,13 @@ describe("本地优先启动", () => {
     expect(navigate).toHaveBeenCalledWith({ name: "session", mid: "desktop", sid: id });
     expect(fetcher).not.toHaveBeenCalled();
     expect(getState().launches[id].text).toBe(input.text);
-    vi.advanceTimersByTime(0);
+    await advanceDelivery(0);
     expect(JSON.parse(fetcher.mock.calls[0][1].body)).toEqual({ machine_id: "desktop", cwd: input.cwd, async: true, name_hint: input.text });
     const job = deliverLaunch(id);
     await job;
     expect(fetcher).toHaveBeenCalledTimes(1);
     resolveCreate(response({ session }));
-    await vi.advanceTimersByTimeAsync(0);
+    await advanceDelivery(0);
     expect(upsertSession).toHaveBeenCalledWith(session);
     expect(fetcher.mock.calls[1][0]).toBe("/api/v1/sessions/desktop/remote-id/messages");
     expect(JSON.parse(fetcher.mock.calls[1][1].body)).toEqual({ text: input.text, images: [], client_msg_id: getState().launches[id].messageId });
@@ -58,7 +65,7 @@ describe("本地优先启动", () => {
     const fetcher = vi.fn().mockResolvedValueOnce(response({ session })).mockResolvedValueOnce(response({ path: "/uploads/my report.txt" })).mockResolvedValueOnce(response({}));
     vi.stubGlobal("fetch", fetcher);
     const id = launchAgent({ ...input, attachments: [image, file] });
-    await vi.advanceTimersByTimeAsync(0);
+    await advanceDelivery(0);
     expect(getState().launches[id].phase).toBe("ready");
     expect(fetcher.mock.calls[1][0]).toBe("/api/v1/machines/desktop/files?name=report.txt");
     expect(JSON.parse(fetcher.mock.calls[2][1].body)).toEqual({ text: "看一下附件\n'/uploads/my report.txt'", images: [{ mime: "image/png", data: "AQID" }], client_msg_id: getState().launches[id].messageId });
@@ -70,7 +77,7 @@ describe("本地优先启动", () => {
     const fetcher = vi.fn().mockResolvedValueOnce(response({ session })).mockResolvedValueOnce(response({ code: "input_draft", error: "draft", delivered: "none", clearable: "existing" }, 409)).mockResolvedValueOnce(response({}));
     vi.stubGlobal("fetch", fetcher);
     const id = launchAgent({ ...input, attachments: [image] });
-    await vi.advanceTimersByTimeAsync(0);
+    await advanceDelivery(0);
     expect(getState().launches[id]).toMatchObject({ phase: "failed", session, clearable: "existing", uncertain: false });
     expect(getState().launches[id].attachments).toEqual([image]);
     expect(URL.revokeObjectURL).not.toHaveBeenCalled();
@@ -84,7 +91,7 @@ describe("本地优先启动", () => {
   it("never navigates away from another conversation when startup finishes", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(response({ session })).mockResolvedValueOnce(response({})));
     const id = launchAgent(input);
-    await vi.advanceTimersByTimeAsync(0);
+    await advanceDelivery(0);
     expect(getState().launches[id].phase).toBe("ready");
     expect(navigate).toHaveBeenCalledTimes(1);
   });
@@ -93,7 +100,7 @@ describe("本地优先启动", () => {
     const fetcher = vi.fn().mockRejectedValueOnce(new TypeError("network")).mockResolvedValueOnce(response({ session })).mockRejectedValueOnce(new TypeError("network")).mockResolvedValueOnce(response({}));
     vi.stubGlobal("fetch", fetcher);
     const id = launchAgent(input);
-    await vi.advanceTimersByTimeAsync(2000);
+    await advanceDelivery(2000);
     expect(getState().launches[id]).toMatchObject({ phase: "ready", uncertain: false });
     const ops = fetcher.mock.calls.map((c) => c[1].headers.get("X-Persona-Op-Id"));
     expect(fetcher).toHaveBeenCalledTimes(4);
@@ -107,7 +114,7 @@ describe("本地优先启动", () => {
     vi.stubGlobal("fetch", fetcher);
     const id = launchAgent(input);
     const startOpId = getState().launches[id].startOpId;
-    await vi.advanceTimersByTimeAsync(OP_RETRY_MS + 5000);
+    await advanceDelivery(OP_RETRY_MS + 5000);
     expect(getState().launches[id]).toMatchObject({ phase: "failed", uncertain: false, repeatOnly: true, startOpId });
   });
 
@@ -116,7 +123,7 @@ describe("本地优先启动", () => {
     vi.stubGlobal("fetch", fetcher);
     const id = launchAgent(input);
     const startOpId = getState().launches[id].startOpId;
-    await vi.advanceTimersByTimeAsync(0);
+    await advanceDelivery(0);
     expect(fetcher).toHaveBeenCalledTimes(2);
     expect(getState().launches[id]).toMatchObject({ phase: "failed", uncertain: true });
     expect(getState().launches[id].startOpId).not.toBe(startOpId);
@@ -125,7 +132,7 @@ describe("本地优先启动", () => {
   it("clears optimistic images only after matching transcript content arrives", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(response({ session })).mockResolvedValueOnce(response({})));
     const id = launchAgent({ ...input, attachments: [pickAttachment(new File(["image"], "figure.png", { type: "image/png" }))] });
-    await vi.advanceTimersByTimeAsync(0);
+    await advanceDelivery(0);
     acknowledgeLaunch("desktop", "remote-id", { text: input.text, images: [] });
     expect(getState().launches[id].outgoing).toBeDefined();
     acknowledgeLaunch("desktop", "remote-id", { text: input.text, images: [{}] });
@@ -135,7 +142,7 @@ describe("本地优先启动", () => {
   it("clears the first message when the hub ties an item to its id, and not for a tie to another message", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(response({ session })).mockResolvedValueOnce(response({})));
     const id = launchAgent(input);
-    await vi.advanceTimersByTimeAsync(0);
+    await advanceDelivery(0);
     acknowledgeLaunch("desktop", "remote-id", { id: "u1", client_msg_id: "someone-else", text: input.text, images: [] });
     expect(getState().launches[id].outgoing).toBeDefined();
     acknowledgeLaunch("desktop", "remote-id", { id: "u2", client_msg_id: getState().launches[id].messageId, text: "改过的字", images: [] });
@@ -146,7 +153,7 @@ describe("本地优先启动", () => {
     const fetcher = vi.fn().mockResolvedValueOnce(response({ session }));
     vi.stubGlobal("fetch", fetcher);
     const id = launchAgent({ ...input, text: "" });
-    await vi.advanceTimersByTimeAsync(0);
+    await advanceDelivery(0);
     expect(getState().launches[id].phase).toBe("ready");
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
@@ -155,7 +162,7 @@ describe("本地优先启动", () => {
     const fetcher = vi.fn().mockResolvedValueOnce(response({ error: "needs prompt", code: "codex_needs_prompt" }, 409)).mockResolvedValueOnce(response({ session: { ...session, agent: "codex" } }));
     vi.stubGlobal("fetch", fetcher);
     const id = launchAgent(input);
-    await vi.advanceTimersByTimeAsync(0);
+    await advanceDelivery(0);
     expect(getState().launches[id].phase).toBe("ready");
     expect(fetcher).toHaveBeenCalledTimes(2);
     expect(JSON.parse(fetcher.mock.calls[1][1].body)).toMatchObject({ prompt: input.text });
@@ -167,7 +174,7 @@ describe("本地优先启动", () => {
     vi.stubGlobal("fetch", fetcher);
     vi.stubGlobal("location", { pathname: "/other" });
     const id = launchAgent({ ...input, launcher: "codex", text: "" });
-    await vi.advanceTimersByTimeAsync(0);
+    await advanceDelivery(0);
     expect(getState().launches[id]).toMatchObject({ phase: "ready", session: waiting });
     expect(fetcher).toHaveBeenCalledTimes(2);
     const body = JSON.parse(fetcher.mock.calls[1][1].body);
@@ -182,7 +189,7 @@ describe("本地优先启动", () => {
       .mockResolvedValueOnce(response({ error: "needs prompt", code: "codex_needs_prompt" }, 409));
     vi.stubGlobal("fetch", fetcher);
     const id = launchAgent({ ...input, launcher: "codex", text: "" });
-    await vi.advanceTimersByTimeAsync(0);
+    await advanceDelivery(0);
     expect(getState().launches[id]).toMatchObject({ phase: "failed" });
     expect(getState().launches[id].error).toContain("需要第一条消息");
     expect(fetcher).toHaveBeenCalledTimes(2);
@@ -192,13 +199,13 @@ describe("本地优先启动", () => {
     const fetcher = vi.fn().mockResolvedValueOnce(response({ session })).mockResolvedValueOnce(response({}));
     vi.stubGlobal("fetch", fetcher);
     launchAgent({ ...input, launcher: "claude", model: "opus", effort: "high" });
-    await vi.advanceTimersByTimeAsync(0);
+    await advanceDelivery(0);
     expect(JSON.parse(fetcher.mock.calls[0][1].body)).toMatchObject({ launcher: "claude", model: "opus", effort: "high" });
 
     const codex = vi.fn().mockResolvedValueOnce(response({ error: "needs prompt", code: "codex_needs_prompt" }, 409)).mockResolvedValueOnce(response({ session: { ...session, agent: "codex" } }));
     vi.stubGlobal("fetch", codex);
     launchAgent({ ...input, launcher: "codex", model: "gpt-5.5-mini", effort: "high" });
-    await vi.advanceTimersByTimeAsync(0);
+    await advanceDelivery(0);
     const body = JSON.parse(codex.mock.calls[1][1].body);
     expect(body).toMatchObject({ launcher: "codex", model: "gpt-5.5-mini", prompt: input.text });
     expect(body).not.toHaveProperty("effort");
@@ -210,7 +217,7 @@ describe("本地优先启动", () => {
       .mockResolvedValueOnce(response({ session }));
     vi.stubGlobal("fetch", fetcher);
     const id = launchAgent({ ...input, workspaceId: "empty-nested", host: "orca", launcher: "custom-codex", model: "typed-model", effort: "high" });
-    await vi.advanceTimersByTimeAsync(2000);
+    await advanceDelivery(2000);
     expect(getState().launches[id]).toMatchObject({ phase: "ready", workspaceId: "empty-nested", host: "orca" });
     expect(fetcher).toHaveBeenCalledTimes(3);
     const bodies = fetcher.mock.calls.map((c) => JSON.parse(c[1].body));
@@ -229,13 +236,13 @@ describe("本地优先启动", () => {
     const fetcher = vi.fn().mockResolvedValueOnce(response({ session })).mockResolvedValueOnce(response({}));
     vi.stubGlobal("fetch", fetcher);
     launchAgent({ ...input, launcher: "claude", permissionMode: "plan" });
-    await vi.advanceTimersByTimeAsync(0);
+    await advanceDelivery(0);
     expect(JSON.parse(fetcher.mock.calls[0][1].body)).toMatchObject({ launcher: "claude", permission_mode: "plan" });
 
     const plain = vi.fn().mockResolvedValueOnce(response({ session })).mockResolvedValueOnce(response({}));
     vi.stubGlobal("fetch", plain);
     launchAgent({ ...input, launcher: "claude" });
-    await vi.advanceTimersByTimeAsync(0);
+    await advanceDelivery(0);
     expect(JSON.parse(plain.mock.calls[0][1].body)).not.toHaveProperty("permission_mode");
   });
 
@@ -243,21 +250,21 @@ describe("本地优先启动", () => {
     const on = vi.fn().mockResolvedValueOnce(response({ session })).mockResolvedValueOnce(response({}));
     vi.stubGlobal("fetch", on);
     launchAgent({ ...input, launcher: "claude", ultracode: true });
-    await vi.advanceTimersByTimeAsync(0);
+    await advanceDelivery(0);
     expect(JSON.parse(on.mock.calls[0][1].body)).toMatchObject({ launcher: "claude", ultracode: true });
 
     for (const ultracode of [false, undefined]) {
       const off = vi.fn().mockResolvedValueOnce(response({ session })).mockResolvedValueOnce(response({}));
       vi.stubGlobal("fetch", off);
       launchAgent({ ...input, launcher: "claude", ultracode });
-      await vi.advanceTimersByTimeAsync(0);
+      await advanceDelivery(0);
       expect(JSON.parse(off.mock.calls[0][1].body)).not.toHaveProperty("ultracode");
     }
 
     const codex = vi.fn().mockResolvedValueOnce(response({ error: "needs prompt", code: "codex_needs_prompt" }, 409)).mockResolvedValueOnce(response({ session: { ...session, agent: "codex" } }));
     vi.stubGlobal("fetch", codex);
     launchAgent({ ...input, launcher: "codex", ultracode: true });
-    await vi.advanceTimersByTimeAsync(0);
+    await advanceDelivery(0);
     expect(JSON.parse(codex.mock.calls[1][1].body)).not.toHaveProperty("ultracode");
   });
 
@@ -269,13 +276,13 @@ describe("本地优先启动", () => {
         .mockResolvedValueOnce(response({}));
       vi.stubGlobal("fetch", fetcher);
       const id = launchAgent({ ...input, launcher: "claude", ultracode: true });
-      await vi.advanceTimersByTimeAsync(0);
+      await advanceDelivery(0);
       const failed = getState().launches[id];
       expect(failed.phase).toBe("failed");
       expect(failed.ultracode).toBeUndefined();
       expect(failed.error).toBe("没能带 ultracode 开始：这台电脑的 Claude Code 太旧，不能开 ultracode。重试会不带 ultracode");
       await deliverLaunch(id);
-      await vi.advanceTimersByTimeAsync(0);
+      await advanceDelivery(0);
       expect(JSON.parse(fetcher.mock.calls[1][1].body)).not.toHaveProperty("ultracode");
       expect(getState().launches[id].phase).toBe("ready");
     }
@@ -283,7 +290,7 @@ describe("本地优先启动", () => {
     const other = vi.fn().mockResolvedValueOnce(response({ error: "busy" }, 503)).mockResolvedValueOnce(response({ session })).mockResolvedValueOnce(response({}));
     vi.stubGlobal("fetch", other);
     const id = launchAgent({ ...input, launcher: "claude", ultracode: true });
-    await vi.advanceTimersByTimeAsync(0);
+    await advanceDelivery(0);
     expect(getState().launches[id].ultracode).toBe(true);
   });
 
@@ -291,7 +298,7 @@ describe("本地优先启动", () => {
     const fetcher = vi.fn().mockResolvedValue(response({ error: "needs prompt", code: "codex_needs_prompt" }, 409));
     vi.stubGlobal("fetch", fetcher);
     const id = launchAgent({ ...input, attachments: [pickAttachment(new File(["image"], "figure.png", { type: "image/png" }))] });
-    await vi.advanceTimersByTimeAsync(0);
+    await advanceDelivery(0);
     expect(getState().launches[id]).toMatchObject({ phase: "failed", uncertain: false });
     expect(getState().launches[id].error).toContain("第一条消息不能带附件");
     expect(fetcher).toHaveBeenCalledTimes(1);
@@ -346,7 +353,7 @@ describe("work-session delivery", () => {
     vi.stubGlobal("fetch", fetcher);
     const id = launchAgent(work);
     vi.stubGlobal("location", { pathname: `/s/desktop/${id}` });
-    await vi.advanceTimersByTimeAsync(2000);
+    await advanceDelivery(2000);
     expect(fetcher.mock.calls.map((c) => [c[0], JSON.parse(c[1].body)])).toEqual([
       ["/api/v1/sessions", { ...target, async: true, name_hint: work.text }],
       ["/api/v1/sessions", { ...target, prompt: work.text }],
@@ -360,7 +367,7 @@ describe("work-session delivery", () => {
     const fetcher = vi.fn().mockResolvedValueOnce(response({ state: "unknown" }, 202));
     vi.stubGlobal("fetch", fetcher);
     const id = launchAgent({ ...work, inlinePrompt: true });
-    await vi.advanceTimersByTimeAsync(0);
+    await advanceDelivery(0);
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(JSON.parse(fetcher.mock.calls[0][1].body)).toEqual({ ...target, prompt: work.text });
     expect(getState().launches[id]).toMatchObject({ phase: "failed", uncertain: true, repeatOnly: true, model: work.model });

@@ -62,6 +62,24 @@ func init() {
 				map[string]any{"id": "project-test", "name": "Example", "roots": []any{map[string]any{"path": record.Cwd}}},
 				map[string]any{"id": "project-chosen", "name": "Chosen", "position": 10, "roots": []any{map[string]any{"path": record.Cwd}}},
 			}, "nextCursor": nil}
+		case "model/list":
+			params, _ := call["params"].(map[string]any)
+			if mode != "codex-models" || params["includeHidden"] != true {
+				os.Exit(6)
+			}
+			switch params["cursor"] {
+			case nil:
+				result = map[string]any{"data": []any{map[string]any{
+					"model": "gpt-x", "hidden": true, "defaultReasoningEffort": "low",
+					"supportedReasoningEfforts": []any{map[string]any{"reasoningEffort": "low"}, map[string]any{"reasoningEffort": "ultra"}},
+				}}, "nextCursor": "models-next"}
+			case "models-next":
+				result = map[string]any{"data": []any{map[string]any{
+					"model": "gpt-plain", "supportedReasoningEfforts": []any{},
+				}}, "nextCursor": nil}
+			default:
+				os.Exit(7)
+			}
 		case "thread/start":
 			if mode == "codex-lost" {
 				os.Exit(0)
@@ -226,5 +244,56 @@ func TestWindowsCodexCreationResponseLossIsUncertain(t *testing.T) {
 	thread, err := startCodexAppChat(context.Background(), cli, t.TempDir(), t.TempDir(), "title")
 	if thread != "" || !maybeDelivered(err) {
 		t.Fatalf("lost creation response allowed an automatic retry: %s, %v", thread, err)
+	}
+}
+
+// The native Windows child exercises the same real stdio client as the Unix shell fixture, including pagination.
+func TestWindowsReadCodexAppModelsAsksTheAppsCodex(t *testing.T) {
+	cli, seen := windowsDesktopSeedCLI(t, "codex-models")
+	oldCLI := codexAppCLI
+	codexAppCLI = func() (string, error) { return cli, nil }
+	t.Cleanup(func() { codexAppCLI = oldCLI })
+	home := t.TempDir()
+	t.Setenv("Codex_Home", `C:\old-profile`)
+	models, err := readCodexAppModels(context.Background(), home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := models["gpt-x"]; !reflect.DeepEqual(m.levels, []string{"low", "ultra"}) || m.def != "low" {
+		t.Fatalf("hidden model's efforts = %+v", models)
+	}
+	if m, found := models["gpt-plain"]; !found || len(m.levels) != 0 || m.def != "" || len(models) != 2 {
+		t.Fatalf("the second model page was not read: %+v", models)
+	}
+	record := readWindowsDesktopSeed(t, seen)
+	if !reflect.DeepEqual(record.Args, []string{"app-server"}) || record.Env["CODEX_HOME"] != home || !strings.EqualFold(record.Cwd, os.TempDir()) {
+		t.Fatalf("model client environment or arguments changed: %+v", record)
+	}
+	var methods []string
+	pages := 0
+	for _, call := range record.Calls {
+		method := call["method"].(string)
+		methods = append(methods, method)
+		params, _ := call["params"].(map[string]any)
+		switch method {
+		case "initialize":
+			client, _ := params["clientInfo"].(map[string]any)
+			capabilities, _ := params["capabilities"].(map[string]any)
+			if client["name"] != codexAppClient || capabilities["experimentalApi"] != true {
+				t.Fatalf("model client initialization changed: %v", params)
+			}
+		case "model/list":
+			want := map[string]any{"includeHidden": true}
+			if pages > 0 {
+				want["cursor"] = "models-next"
+			}
+			if !reflect.DeepEqual(params, want) {
+				t.Fatalf("model page %d params = %v, want %v", pages, params, want)
+			}
+			pages++
+		}
+	}
+	if !reflect.DeepEqual(methods, []string{"initialize", "initialized", "model/list", "model/list"}) {
+		t.Fatalf("unexpected model requests: %v", methods)
 	}
 }

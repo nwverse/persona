@@ -92,6 +92,7 @@ func TestClaudeDesktopInboxProbeDoesNotConnectWindows(t *testing.T) {
 // Exercise the Windows directory discovery, app opener and authenticated pipe as one send to the original session.
 func TestSendThroughClaudeDesktopWindows(t *testing.T) {
 	n, home := testNode(t)
+	n.metas, n.bgScans = map[string]quickMeta{}, map[string]*bgScan{}
 	noPaneEnv(t)
 	shortPeerWait(t, 3*time.Second)
 	const id = "eeeeeeee-0000-4000-8000-000000000031"

@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,7 +32,9 @@ func projectState(t *testing.T, home string, state any) string {
 func projectSQL(t *testing.T, home, sql string) string {
 	t.Helper()
 	p := filepath.Join(home, "state_5.sqlite")
-	cmd := exec.Command(sqlite3WithJSON(t), p, sql)
+	cmd := exec.Command(sqlite3WithJSON(t), p)
+	// Read SQL as UTF-8 bytes; Windows sqlite builds may decode command-line SQL with the active code page.
+	cmd.Stdin = strings.NewReader(sql)
 	hideCodexSQLiteWindow(cmd)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("sqlite3: %v: %s", err, out)
@@ -137,6 +140,53 @@ func TestCodexDesktopProjectsOldSchemaKeepsLegacy(t *testing.T) {
 	p, order, err := codexDesktopProjects(home)
 	if err != nil || len(p) != 1 || p["legacy"].Name != "Still here" || !reflect.DeepEqual(order, []string{"legacy"}) {
 		t.Fatalf("old schema = %v, %v, %v", p, order, err)
+	}
+}
+
+func TestCodexNativeProjectsRootSchemasAndOptionalPositions(t *testing.T) {
+	for _, rootColumn := range []string{"root", "path"} {
+		for _, positions := range []struct {
+			name          string
+			project, root bool
+		}{
+			{name: "unordered"},
+			{name: "project order", project: true},
+			{name: "root order", root: true},
+			{name: "both orders", project: true, root: true},
+		} {
+			t.Run(rootColumn+"/"+positions.name, func(t *testing.T) {
+				home := t.TempDir()
+				firstRoot, lastRoot := filepath.Join(home, "A root"), filepath.Join(home, "Z 中文")
+				quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
+				projectColumn, rootPositionColumn := "", ""
+				projectA, projectB, rootA, rootB := "", "", "", ""
+				if positions.project {
+					projectColumn, projectA, projectB = ", position INTEGER", ", 2", ", 1"
+				}
+				if positions.root {
+					rootPositionColumn, rootA, rootB = ", position INTEGER", ", 1", ", 0"
+				}
+				db := projectSQL(t, home, fmt.Sprintf(
+					`CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT%s);
+CREATE TABLE project_roots (project_id TEXT, %s TEXT%s);
+INSERT INTO projects VALUES ('a', 'Empty project'%s), ('b', 'Several roots'%s);
+INSERT INTO project_roots VALUES ('b', %s%s), ('b', %s%s);`,
+					projectColumn, rootColumn, rootPositionColumn, projectA, projectB,
+					quote(lastRoot), rootB, quote(firstRoot), rootA))
+				projects, order, supported, err := readCodexNativeProjects(context.Background(), db)
+				wantOrder, wantRoots := []string{"a", "b"}, []string{firstRoot, lastRoot}
+				if positions.project {
+					wantOrder = []string{"b", "a"}
+				}
+				if positions.root {
+					wantRoots = []string{lastRoot, firstRoot}
+				}
+				if err != nil || !supported || len(projects) != 2 || !reflect.DeepEqual(order, wantOrder) ||
+					!reflect.DeepEqual(projects["b"].RootPaths, wantRoots) || projects["a"].Name != "Empty project" {
+					t.Fatalf("schema %s = %v, %v, supported %v, %v", rootColumn, projects, order, supported, err)
+				}
+			})
+		}
 	}
 }
 
@@ -361,6 +411,51 @@ func TestCodexDesktopProjectSnapshotProjectlessMigrationAuthority(t *testing.T) 
 			}
 			if !reflect.DeepEqual(snapshot.ThreadProjects, want) {
 				t.Fatalf("projectless authority = %v, want %v", snapshot.ThreadProjects, want)
+			}
+		})
+	}
+}
+
+func TestCodexDesktopProjectSnapshotLegacyMigrationMarkers(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		local    any
+		complete bool
+	}{
+		{name: "legacy numeric host"},
+		{name: "numeric current host", local: 1},
+		{name: "unknown current host format", local: []any{true}},
+		{name: "malformed current host fields", local: map[string]any{"threadAssignmentsMigrated": "yes"}},
+		{name: "complete current host ignores foreign markers", local: codexProjectMigration{
+			ThreadAssignmentsMigrated: true, ThreadAssignmentsReadMigrated: true,
+		}, complete: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			markers := map[string]any{
+				"local": 1, "remote:example": []any{1}, "local:" + t.TempDir(): "legacy",
+			}
+			if tc.local != nil {
+				markers["local:"+home] = tc.local
+			}
+			projectState(t, home, map[string]any{
+				"local-projects":                        map[string]any{"legacy": codexAppProject{Name: "Keep assignment"}},
+				"thread-project-assignments":            map[string]any{"old-null": map[string]string{"projectId": "legacy"}},
+				"app-server-projects-migration-by-host": markers,
+			})
+			projectSQL(t, home, nativeProjectSchema+nativeProjectThreadSchema+
+				`INSERT INTO projects VALUES ('native', 'Native project', 0);
+INSERT INTO threads VALUES ('old-null', NULL, 0), ('native-chat', 'native', 0);`)
+			snapshot, err := codexDesktopProjectSnapshot(home)
+			if err != nil || snapshot.Projects["legacy"].Name != "Keep assignment" || snapshot.Projects["native"].Name != "Native project" {
+				t.Fatalf("markers discarded project catalog = %+v, %v", snapshot, err)
+			}
+			want := map[string]string{"native-chat": "native"}
+			if tc.complete {
+				want["old-null"] = ""
+			}
+			if !reflect.DeepEqual(snapshot.ThreadProjects, want) {
+				t.Fatalf("marker authority = %v, want %v", snapshot.ThreadProjects, want)
 			}
 		})
 	}
