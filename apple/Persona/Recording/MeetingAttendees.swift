@@ -52,6 +52,7 @@ import Foundation
         MeetingAttendanceDefaults.remember(conversation: conversation,
                                            photos: conversation && features.contains(MeetingAttendanceDefaults.photosFeature),
                                            liveView: liveView,
+                                           highlights: liveView && features.contains(MeetingAttendanceDefaults.highlightsFeature),
                                            transcription: liveView && features.contains(MeetingAttendanceDefaults.transcriptionFeature))
         return conversation
     }
@@ -70,6 +71,14 @@ import Foundation
         let features = model.hubFeatures
         guard !features.isEmpty else { return UserDefaults.standard.bool(forKey: MeetingAttendanceDefaults.liveViewKey) }
         return features.contains(MeetingAttendanceDefaults.liveViewFeature)
+    }
+
+    /// …and the highlights (phase 2b: the page's top card), which come only with the live view.
+    static func highlights(_ model: AppModel) -> Bool {
+        guard liveView(model) else { return false }
+        let features = model.hubFeatures
+        guard !features.isEmpty else { return UserDefaults.standard.bool(forKey: MeetingAttendanceDefaults.highlightsKey) }
+        return features.contains(MeetingAttendanceDefaults.highlightsFeature)
     }
 
     /// …and hub transcription (phase 5), which comes only with the conversation and the live view: a meeting started now
@@ -210,7 +219,7 @@ import Foundation
     static func startAttendance(_ model: AppModel) -> RecordingAttendance {
         guard conversation(model) else { return defaultAttendance(model) }
         return .room(defaultRole(model), private: false, photos: photos(model), liveView: liveView(model),
-                     transcription: startTranscription(model))
+                     highlights: highlights(model), transcription: startTranscription(model))
     }
 
     /// A recording's attendance once it becomes a meeting again mid-recording, at `at` on its clock (a note turned into a

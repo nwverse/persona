@@ -163,7 +163,7 @@ knowledge base (2026-11-04, `assistant/kb_bus.go`): `kb.context {chat_id}` → `
 one-way `kb.kick {connector?, scope?}` (source changed: run a round after 5 seconds and read that connector's chats, or the items, at that round even before their poll, at most once a minute; a manager before #1562 sends `{}`: only the round), `kb.agent_turn {machine_id, session_id, cwd, title?, line}` (Agent turn completed, append to its cwd project's timeline; hub queues while assistant disconnected and delivers on reconnect),
 hub-observed events: `session.user_spoke`, `session.user_stopped` (user stopped an assistant chat in the App: Lark /agent chats stop their dispatched tasks too, #3308), `session.turn_started`, `session.turn_ended`, `sessions.changed` (a machine's session list drives inter-chat messages, automatic project / derived to-do links, herdr markers, Agent titles), `interaction.resolved` (user handled an Agent card; record in task chat, and linked Agent choice questions become decisions), `todos.space_renamed` (hub renamed a workspace), `interaction.raised` (quiet task Agent asks, #1731), `session.seen` (user viewed a session, for triage statistics), `manager.updated` (handshake answers changed); removed on 2026-11-04: `assistant.tasks`, `assistant.card_sent`, `assistant.cards_sent`, `inbox.message`, because Inbox moved into the assistant,
 and `manager.resync` (a request for a full snapshot; the assistant still answers it, but the hub no longer sends it).
-Inbox (`assistant/inbox_bus.go`): `inbox.collected` (hub hands over a source round: `{epoch, seq, round, sources:[{id, name, off?, extension?, migrated?, group?, meta?, meta_description?, settles?, kinds?, things, read_error?}], mail?: {accounts, failed?: [{id, email, read_error}]}, names}`; assistant synthesizes / triages items then answers; `epoch` identifies this hub run, `seq` the round, discard older already-used rounds; unreadable stored Inbox returns `inbox_unavailable`, retried next round), `inbox.item {id}` → `{item, ok}` (stored JSON for plugin detail slots), `inbox.forget {source}` → `{deleted}`, `inbox.repo_mutes {source, set?, add?, repos?}` → `{repos}` (GitHub settings "Muted repositories"); `inbox.mutes {source?}` → `{mutes}` and `inbox.unmute {id}` → `{}` (the Inbox Sources pages' Muted list, #5278); `inbox.triage_preview {source, name, kinds?, things}` → `{verdicts: [{tier?, summary?, reason?, urgent?, state?, why?}]}` (the pages' Try Triage with the Model: at most 3 things, each asked about once as a round's item would be, nothing kept). Snapshots add `inbox: {agents:[{machine_id, session_id}]}` for AI twin chats, suppressing hub completion push (`null` if unreadable, retain previous).
+Inbox (`assistant/inbox_bus.go`): `inbox.collected` (hub hands over a source round: `{epoch, seq, round, sources:[{id, name, off?, extension?, migrated?, group?, meta?, meta_description?, settles?, kinds?, things, read_error?}], mail?: {accounts, failed?: [{id, email, read_error}]}, names}`; assistant synthesizes / triages items then answers; `epoch` identifies this hub run, `seq` the round, discard older already-used rounds; unreadable stored Inbox returns `inbox_unavailable`, retried next round), `inbox.item {id}` → `{item, ok}` (stored JSON for plugin detail slots), `inbox.forget {source}` → `{deleted}`, `inbox.repo_mutes {source, set?, add?, repos?}` → `{repos}` (GitHub settings "Muted repositories"); `inbox.mutes {source?}` → `{mutes}` and `inbox.unmute {id}` → `{}` (the Inbox Sources pages' Muted list, #5278); `inbox.post {on?}` → `{on}` (the Assistant source's switch on those pages, #6430: whether the assistant may put its conversations into the Inbox; on unless turned off); `inbox.triage_preview {source, name, kinds?, things}` → `{verdicts: [{tier?, summary?, reason?, urgent?, state?, why?}]}` (the pages' Try Triage with the Model: at most 3 things, each asked about once as a round's item would be, nothing kept). Snapshots add `inbox: {agents:[{machine_id, session_id}]}` for AI twin chats, suppressing hub completion push (`null` if unreadable, retain previous).
 Hub errors cross the bus with codes (`no_device`, `machine_offline`, `node_closed`, `stale_snapshot`, `assistant_in_doubt` for interrupted partial Inbox replies), restored by the assistant to original errors with unchanged decisions. App routes, events, fields, and pushes are unchanged.
 
 **State** uses the assistant's `assistant.Store` (`assistant/store.go`): settings `assistant` (its own profile, below), model config `model_config.*`, `launchers.managed`, `launchers.hidden`, `launchers.zshrc` (`docs/assistant/model-config.md` ("Who owns models")), `assistant.main_handoff`, `assistant.titles`, `assistant.archived`, `assistant.model_picks`, `assistant.relay`, `assistant.tasks`, `assistant.runs`, `tasks.trust`, Inbox `inbox_mutes` (legacy `assistant.routines` / `assistant.followups` still migrate only on first read), channel `channels`, `channels.state`, `bots.feishu.state` (since 2026-11-04; `bots.feishu` credentials, pairing, and switches still belong to hub); tables `task_plans`, `assistant_feed`, `todos`, `todo_spaces`, `todo_agents`, `todo_decisions`, `inbox_items`.
@@ -419,7 +419,7 @@ With over ten Agents running, most mid-task questions concern internal choices t
 
 - **The card is the same card**: the same `question` interaction (`tool_name: ask_user`), push, Lark / channel cards, 2-hour expiry (`askUserWait`), `deadline` / `reversible` / `recommend` handling and duplicate-question check. The one difference is `resumable: true`, which the queue already knows from hook cards: nothing waits on it in memory, so it must outlive a manager restart and its node's connection.
 - **What the tool says** (`prompts/agents/question_asked_later.md`): the card is up, the answer comes later as a new message, end the turn without guessing or going ahead, and until when the card waits.
-- **How it ends**, each told once with `prompts/assistant/ask_later.md` (when it was asked, the questions, then the end):
+- **How it ends**, each told once with `prompts/assistant/ask_later.md` (when it was asked, the questions, then the end). The apps show that message as one line ("You answered: …", "The question timed out unanswered", "The question was closed without an answer"), never as the user's bubble (#6421; `docs/protocol/protocol.md`, "Messages injected by Persona"):
 
   | The card | The conversation is told |
   | --- | --- |
@@ -635,12 +635,12 @@ No native client feature or build is part of this Web-only change.
 
 ## Workspace mentions (2026-11-06, #5594)
 
-In the assistant's composer (web), `@` also lists **workspaces**: the discovered workspaces of `GET /api/v1/workspaces` (host spaces, current session folders and folders bound on the workspace board, on every computer; see [workspace-board.md](../web/workspace-board.md), "Workspaces and status"). The list is read each time the menu opens, works whether or not the board is turned on, shows one row per computer and folder, and leaves out host spaces without a folder. Agents' composers don't offer it: an Agent already works in one folder.
+In the assistant's composer (web, and the iPhone/iPad shell composer's `ComposerMentionMenu` on #2599), `@` also lists **workspaces**: the discovered workspaces of `GET /api/v1/workspaces` (host spaces, current session folders and folders bound on the workspace board, on every computer; see [workspace-board.md](../web/workspace-board.md), "Workspaces and status"). The list is read each time the menu opens, works whether or not the board is turned on, shows one row per computer and folder, and leaves out host spaces without a folder. Agents' composers don't offer it: an Agent already works in one folder. On iOS the rows follow the folder's entries and precede sessions, match by title, folder, computer or branch, put title prefixes first and available before unavailable, and cap at eight; Health, visionOS and the frozen native Mac don't offer them. A failed workspace read (including an old hub's 404 or a manager's 503) leaves the other rows unchanged.
 
 - **Picking one** adds a "Workspace" chip. On send it goes in front of the message like a session quote, as `<persona-context kind="workspace" title="…" url="" machine="<machine id>" cwd="<folder>" branch="…">` with a short human-readable body.
 - **The manager fills it in** (`assistant/workspace_mention.go`): in `SendParams` for messages to the assistant's conversations and in `POST /api/v1/assistant/conversations` for a new one's first message (guest conversations excepted), each workspace block among the context blocks at the start of the message is replaced by `prompts/assistant/workspace_mention.md`. That block says to use that machine / cwd for `task_plan` and `agent_start` and when answering unless the message says otherwise, and lists the computer (and whether it is offline), folder, branch, the knowledge-base projects for the folder (`ProjectsForWork`) and the latest 5 Agents working in it or below (`sessions.list`, waited on for at most 3 s; the assistant's own conversations left out).
 - Blocks further into the message (inside quoted text) are never taken for mentions, and a block naming a computer the hub doesn't know stays as the client wrote it. The transcript keeps the filled-in block, so the chat's context row shows what the assistant was given.
-- **Not yet**: iOS / Mac (`PromptComposer.swift`) and Android composers. They only need to list the same endpoint and write the same tag; the manager side already handles their messages.
+- **Not yet**: the native Mac, Android, and BeautifulUI's separate legacy iOS `PromptComposer` menu. They only need to list the same endpoint and write the same tag; the manager side already handles their messages.
 
 ## Pitfalls
 
@@ -801,7 +801,7 @@ Why archive and not delete or hide in place: the old conversation's id is what o
 `former` keeps the last 10 main conversations put away, by New main chat and Clear context alike: someone who clears often pushes older ones out sooner, and those are then ordinary archived conversations (still listed while their machine lists them, still found by id).
 Why no confirmation: nothing is lost (`docs/design/DESIGN_SYSTEM.md` 4.4, the reversible rung), and Cindy's `/clear` asks nothing either. "New main chat…" stays for carrying a summary over.
 
-iOS and Android do not offer it yet (#5100).
+Android offers it in the main chat's title menu and as `/clear` in its composer (#5100, `docs/android/android.md`); iOS does not yet.
 ## Scheduled tasks
 
 Previously two systems: routines (daily time) and follow-ups (one-shot wakeups from `schedule_followup`), in separate settings;
@@ -889,7 +889,11 @@ reported to hub); each had races swallowing user pushes: Claude processes queued
 failed Codex steer becoming start is claimed by another input's `turn/started`; old push callbacks read new-turn markers if hub misses intermediate Working.
 Correctness requires correlating every input / completion id in core node message paths. Per-chat decisions avoid those races and have a fixed answer.
 
-App `PUT /api/v1/assistant/tasks/{id}` omitting `push` or `facts` preserves it (old Apps); old `PUT /api/v1/assistant/routines` always preserves both.
+App `PUT /api/v1/assistant/tasks/{id}` omitting `push`, `inbox` or `facts` preserves it (old Apps); old `PUT /api/v1/assistant/routines` always preserves all.
+
+### Put it in the Inbox when done (#6430)
+
+Push says whether a run reaches the phone; `inbox` says whether it leaves a row in the Inbox, so a result is not missed behind a quiet unread dot. The two are independent. On the edit page (web `TaskEditor.tsx`, iPhone `AssistantTaskEditor`; shown when the hub has `task_inbox`) the setting is **When done, put it in the Inbox**: **Don't** (`""`, the default; a task from before keeps behaving as it did), **Only if worth a look** (`worthy`: the run puts a row there itself with `inbox_post` when it finds something worth the user's time, tier Needs you) and **Every time** (`every`: after each run that answered, the manager adds a row, tier FYI, titled by the task, saying what the run answered; `assistantTurnSettled` → `inboxPostEvery`). A run's start message says which one applies (`task_run`). `schedule_routine` / `schedule_followup` take `inbox` (`off` / `worthy` / `every`, left out keeps it) and their descriptions say to set it only when the user asked. `inbox_post` itself (`assistant/inbox_post.go`, `prompts/mcp/inbox/inbox_post.md`) is for the user's own request too ("tell me if there is anything worth a look"): its description allows it only on the user's explicit request or a task's setting, and `reason` (required) names which, shown on the row. A Just me meeting turn and a health conversation refuse it, like `notify_user`. The rows and their source: `docs/assistant/inbox.md` ("Assistant rows").
 `null`, non-string, unknown values return 400. `schedule_routine` / `schedule_followup` accept optional `push` (`every` / `asked`); omission defaults new tasks to every run,
 preserves existing values. `schedule_routine` with `id` / `push` can change only this field on any task. Web, iOS / Mac, Android editors include the switch (#2570, #2676: shown with hub `task_push` or an already-asked task; "Only when it notifies" hides "Continue original chat", list marks "Push only on notification"; tasks without prior `push` omit it on save for old hubs).
 
@@ -932,7 +936,15 @@ Legacy App `routines` / `followups` APIs still read / write this table (`docs/pr
 Many main-chat rounds are not started by the user: another Persona conversation hands work over with `conversation_send` /
 `conversation_new` (a supervisor message), a scheduled task or follow-up runs, and the hub's supervision wakes the chat.
 They used to fill the main chat and push the user's own exchanges out of sight. Since #4314 the apps fold the first two
-the way quiet supervision rounds already were (#1988, `docs/assistant/unified-entry.md` "Supervision"):
+the way quiet supervision rounds already were (#1988, `docs/assistant/unified-entry.md` "Supervision"). #6595 applies the
+same folding to the leader conversations (`AssistantInfo.leaders`, "Leader conversations" in
+`docs/assistant/unified-entry.md`): a leader's patrol, supervision and relayed (`conversation`) rounds, including its
+answers to them, fold by default with the same line, expand state and visibility rule as the main chat; the owner's own
+messages and the leader's answers to them, `ask_user` / `notify_user` rounds and `task_review` verdict cards stay open.
+It is the same `assistant.main_background_folded` switch (on unless turned off); an ordinary side conversation is
+unchanged. The hub's mid-turn interject note (`prompts/assistant/interject.md`,
+`<persona-context kind="context" title="插话">`) is model instructions and never renders as a quote in the owner's
+bubble on any client, while staying in the model's input:
 
 - **Which rounds**: in the main conversation, a round whose first input has the message source (`Item.source.kind`, else
   the `persona-context kind="message-source"` metadata or the hub's `injected` mark, read by each client's `sourceOf`)
@@ -1005,6 +1017,18 @@ other conversations) goes through one per-conversation queue (`assistant.relay`,
   A previous version reads the queue as before and drops the fields on its next save, after which those messages rank
   and wait as ordinary ones and no hold applies. A message queued before `queued_at` existed counts its 5 minutes from
   its own time (`at`).
+- **The owner's whole round comes first (#6394).** On top of the two-minute presence window stands the owner-turn
+  gate (`relayBook.ownerTurns`, in memory only). When the owner sends a message to a conversation, the gate arms for
+  it and every queued message waits for the whole of the round that starts for them, whatever its rank — including a
+  late `ask_user` answer that the five-minute decision cap would otherwise let through. The owner's own message never
+  enters this queue, and `interject_background` still moves a running background command out of its way
+  ("Interjecting while it answers"). A session list showing the conversation working confirms the round; one showing
+  it stopped (`idle`, `done` or `interrupted`) releases the gate, and the queue drains by rank again. Two safety
+  limits keep a gate from sticking when the lists say nothing: `ownerTurnStartWait` (one minute) when the round is
+  never seen working (a refused send, a conversation the list dropped), and `ownerTurnMax` (30 minutes) as a hard cap
+  for a round seen working but never seen stopped; the owner speaking again refreshes both. A restart loses the
+  in-memory gates, after which the persisted presence window alone holds as before. The owner's cards stay
+  unblocked: a gate holds the queue, never the owner's own answers (`relayMsg.Owner`).
 - **Not covered**: a meeting's feed (`meeting_feed.go`) is the live words of a meeting the owner had the conversation
   attend, so it is not held. Interrupting a round already running is F2 of the proposal.
 
@@ -1412,7 +1436,8 @@ The apps find an assistant chat by what was said in it through `GET /api/v1/assi
 - **Keeping up**: `searchLoop` (started with the service) sweeps when the computers' session lists change (`setSessions` wakes it) or every 30 s. A chat whose `rev` moved is read after its cursor (`session.items` with `after_seq`, unfolded, about 500 items a page); a working chat at most every 5 s. Chats never read are read newest first with a pause between pages, and the cursors let a restart go on from there; until then searches say `partial`. A new `history` token (the transcript replaced or rewritten) drops the chat's rows and reads it again from 0. A read that fails (the computer offline) waits a minute. A chat missing from the list for a day leaves the index (never while the list is empty: the computer may be offline).
 - **Searching**: a substring scan of the folded text (NFKC, lower case), every word in one message, at most 3 newest hits a chat (`db.SearchAssistantItems`), with a 2 s limit; titles are matched in memory. No `pg_trgm`: the proposal's measurements show two-character Chinese queries cannot use a trigram index, and a personal install's text scans in tens of milliseconds.
 - **Privacy**: full devices only (a read-only role gets 403), not an extension scope, not a tool the model can call; the query is never logged. The rows go with their chat; dropping the manager's database drops them.
-- **Not yet**: a command to rebuild or empty the index (#6340); the earlier stretches of a chat that moved between Claude Code and Codex are not indexed, only the session it runs in now.
+- **Reading it again** (#6340): `personad assistant search-reindex` (the built-in manager; `persona-manager assistant search-reindex`) or `personad manager search-reindex [--dir D]` (a manager made in the app, `--dir` left out when the computer has one) empties both tables in the database the manager runs on and counts the reset (`db.ResetSearch`, the manager setting `assistant_search.reset`). The built-in manager's database is its own once its data moved there, else the hub's (`builtinDatabaseNow`, as `builtinDatabase` decides at its start); another manager's is its `manager.json`'s, never the hub's. A running manager sees the count move at its next sweep (`searchLoad`): it empties what it wrote meanwhile from its old cursors, drops the cursors it held and reads every chat again from the start, so it need not be stopped; a stopped one reads them when it starts. A database without the index (a manager from before chat search) is left as it is. There is no separate `--purge`: the manager always fills the index again from the transcripts, so emptying it and rebuilding it are the same act.
+- **Not yet**: the earlier stretches of a chat that moved between Claude Code and Codex are not indexed, only the session it runs in now.
 
 ## Codex (2026-11-01, `codex app-server`)
 

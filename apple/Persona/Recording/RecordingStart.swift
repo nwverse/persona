@@ -14,13 +14,14 @@ enum RecordingStart: Equatable {
     /// `transcription`: the mode the meeting asks for (#3862 phase 5, `MeetingAttendees.startTranscription`: nil while
     /// the hub doesn't list `meeting_transcription`), only for a room meeting.
     static func make(_ kind: RecordingKindChoice, offered: Bool, conversation: Bool, photos: Bool, liveView: Bool = false,
-                     transcription: MeetingTranscriptionMode? = nil, role: MeetingAttendance, privateMark: Bool,
+                     highlights: Bool = false, transcription: MeetingTranscriptionMode? = nil, role: MeetingAttendance,
+                     privateMark: Bool,
                      attendee: @autoclosure () -> MeetingAttendees.Candidate?) -> RecordingStart {
         guard kind == .meeting else { return .note }
         guard offered else { return .meeting(nil) }
         // A room meeting whatever the role, off included: every upload carries `room` and the private mark.
         if conversation {
-            return .meeting(.room(role, private: privateMark, photos: photos, liveView: liveView,
+            return .meeting(.room(role, private: privateMark, photos: photos, liveView: liveView, highlights: highlights,
                                   transcription: liveView ? transcription : nil))
         }
         guard role.attends, let chosen = attendee() else { return .meeting(RecordingAttendance(role: .off)) }

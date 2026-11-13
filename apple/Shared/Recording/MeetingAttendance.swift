@@ -66,6 +66,9 @@ nonisolated struct RecordingAttendance: Codable, Hashable, Sendable {
     /// Started while the hub listed `meeting_live_view` (phase 2): the page shows the room's topics, the Live Activity the
     /// current topic and the latest line, and while Persona attends the recording writes 15-second segments.
     var liveView: Bool = false
+    /// Started while the hub listed `meeting_highlights` beside `meeting_live_view` (phase 2b): the page's top card shows
+    /// the room's highlights once it set any, and `GET …/live` reads them. Only ever with `liveView`.
+    var highlights: Bool = false
     /// The start sheet's Private meeting choice, sent as the upload's `private` (the hub takes it only while it has no mark).
     var privateMark: Bool? = nil
     /// The owner picked the main chat to attend this meeting (#3862): the only way it ever attends one. A meeting's words
@@ -104,14 +107,15 @@ nonisolated struct RecordingAttendance: Codable, Hashable, Sendable {
     }
 
     /// A room meeting's attendance as it starts: no attending session (the meeting's own room attends), whatever the role.
-    /// `transcription`: the mode asked for, when the hub lists `meeting_transcription` (phase 5); its role is the first
-    /// of `roles`.
+    /// `highlights` counts only beside `liveView`, as the hub lists it only beside `meeting_live_view`. `transcription`:
+    /// the mode asked for, when the hub lists `meeting_transcription` (phase 5); its role is the first of `roles`.
     static func room(_ role: MeetingAttendance, private privateMark: Bool, photos: Bool, liveView: Bool = false,
-                     transcription: MeetingTranscriptionMode? = nil, at: Double = 0) -> RecordingAttendance {
+                     highlights: Bool = false, transcription: MeetingTranscriptionMode? = nil, at: Double = 0) -> RecordingAttendance {
         var a = RecordingAttendance(role: role, at: at)
         a.room = true
         a.photos = photos
         a.liveView = liveView
+        a.highlights = liveView && highlights
         a.privateMark = privateMark
         a.transcription = transcription
         if transcription != nil { a.roles = [RecordingRoleChange(at: max(0, at), attendance: role)] }
@@ -120,7 +124,8 @@ nonisolated struct RecordingAttendance: Codable, Hashable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case role, session, sessionTitle, periods, live, liveSegments, spoken, stopped, room, photos, liveView, privateMark, mainPicked
+        case role, session, sessionTitle, periods, live, liveSegments, spoken, stopped, room, photos, liveView, highlights,
+             privateMark, mainPicked
         case transcription, roles, hubTime, hubRolledBack
     }
 
@@ -139,6 +144,8 @@ nonisolated struct RecordingAttendance: Codable, Hashable, Sendable {
         room = (try? c.decodeIfPresent(Bool.self, forKey: .room)) ?? false
         photos = (try? c.decodeIfPresent(Bool.self, forKey: .photos)) ?? false
         liveView = (try? c.decodeIfPresent(Bool.self, forKey: .liveView)) ?? false
+        // Written since phase 2b; a file from before has none, and its meeting shows no highlights.
+        highlights = (try? c.decodeIfPresent(Bool.self, forKey: .highlights)) ?? false
         privateMark = try? c.decodeIfPresent(Bool.self, forKey: .privateMark)
         // Written since #3862; a file from before has none: its main chat was never picked, so it goes as off.
         mainPicked = (try? c.decodeIfPresent(Bool.self, forKey: .mainPicked)) ?? false
@@ -312,6 +319,8 @@ nonisolated enum MeetingAttendanceDefaults {
     static let photosFeature = "meeting_photos"
     /// …and the live view (phase 2: topics, the latest line, 15-second segments); only ever with `meeting_conversation`.
     static let liveViewFeature = "meeting_live_view"
+    /// …and the highlights (phase 2b: the page's top card); only ever with `meeting_live_view`.
+    static let highlightsFeature = "meeting_highlights"
     /// Listed by a hub whose manager takes Persona's echo marked on an upload (#5905: `echo` on segments, `spoken`), with
     /// `meeting_attendance`: only then the upload carries echo lines, else it leaves them out.
     static let echoFeature = "meeting_echo"
@@ -329,6 +338,7 @@ nonisolated enum MeetingAttendanceDefaults {
     static let conversationKey = "recording.meeting.conversation"
     static let photosKey = "recording.meeting.photos"
     static let liveViewKey = "recording.meeting.liveView"
+    static let highlightsKey = "recording.meeting.highlights"
     static let transcriptionKey = "recording.meeting.transcription"
     /// The hub's `meeting_transcription_default` and `meeting_transcription_ready` as last read (`GET /api/v1/assistant`),
     /// for a one-tap start before the settings are in.
@@ -339,11 +349,13 @@ nonisolated enum MeetingAttendanceDefaults {
     static let wifiOnlyKey = "recording.meeting.transcriptionWiFiOnly"
 
     /// Keeps whether the hub lists them (a start without the app in front reads them).
-    static func remember(conversation: Bool, photos: Bool, liveView: Bool = false, transcription: Bool = false,
+    static func remember(conversation: Bool, photos: Bool, liveView: Bool = false, highlights: Bool = false,
+                         transcription: Bool = false,
                          _ store: UserDefaults = .standard) {
         if store.object(forKey: conversationKey) == nil || store.bool(forKey: conversationKey) != conversation { store.set(conversation, forKey: conversationKey) }
         if store.object(forKey: photosKey) == nil || store.bool(forKey: photosKey) != photos { store.set(photos, forKey: photosKey) }
         if store.object(forKey: liveViewKey) == nil || store.bool(forKey: liveViewKey) != liveView { store.set(liveView, forKey: liveViewKey) }
+        if store.object(forKey: highlightsKey) == nil || store.bool(forKey: highlightsKey) != highlights { store.set(highlights, forKey: highlightsKey) }
         if store.object(forKey: transcriptionKey) == nil || store.bool(forKey: transcriptionKey) != transcription {
             store.set(transcription, forKey: transcriptionKey)
         }
@@ -380,7 +392,8 @@ nonisolated enum MeetingAttendanceDefaults {
         let conversation = offered && features.contains(conversationFeature)
         let liveView = conversation && features.contains(liveViewFeature)
         remember(conversation: conversation, photos: conversation && features.contains(photosFeature),
-                 liveView: liveView, transcription: liveView && features.contains(transcriptionFeature), store)
+                 liveView: liveView, highlights: liveView && features.contains(highlightsFeature),
+                 transcription: liveView && features.contains(transcriptionFeature), store)
         let echo = offered && features.contains(echoFeature)
         if store.object(forKey: echoKey) == nil || store.bool(forKey: echoKey) != echo { store.set(echo, forKey: echoKey) }
     }
@@ -475,5 +488,42 @@ nonisolated extension MeetingTopic {
         state = (try? c.decodeIfPresent(String.self, forKey: .state)) ?? State.open.rawValue
         at = (try? c.decodeIfPresent(Double.self, forKey: .at)).flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
         note = try? c.decodeIfPresent(String.self, forKey: .note)
+    }
+}
+
+/// One of the meeting's highlights as the room set them (`highlights` of `GET …/live`, #3862 phase 2b;
+/// docs/assistant/meeting-minutes.md「Phase 2b: highlights」): `{"text", "at", "end"}`, a point the meeting came to and
+/// the minute of the transcript it was made in, from the start of that minute's first line (`at`) to the end of its last
+/// (`end`), in seconds from the recording's start.
+nonisolated struct MeetingHighlight: Codable, Hashable, Sendable {
+    var text: String
+    var at: Double
+    var end: Double
+
+    enum CodingKeys: String, CodingKey { case text, at, end }
+
+    init(text: String, at: Double, end: Double? = nil) {
+        self.text = text
+        self.at = at
+        self.end = end ?? at
+    }
+}
+
+nonisolated extension MeetingHighlight {
+    /// Leniently: a highlight without words, or without a time it can go back to (`at` absent, of another shape, not
+    /// finite or below 0), is no highlight (the list drops it); an `end` that isn't a finite time from `at` on is `at`.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let text = (try? c.decodeIfPresent(String.self, forKey: .text))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !text.isEmpty else {
+            throw DecodingError.dataCorruptedError(forKey: .text, in: c, debugDescription: "a highlight without words")
+        }
+        guard let at = try? c.decodeIfPresent(Double.self, forKey: .at), at.isFinite, at >= 0 else {
+            throw DecodingError.dataCorruptedError(forKey: .at, in: c, debugDescription: "a highlight without a time")
+        }
+        self.text = text
+        self.at = at
+        let end = try? c.decodeIfPresent(Double.self, forKey: .end)
+        self.end = end.flatMap { $0.isFinite && $0 >= at ? $0 : nil } ?? at
     }
 }

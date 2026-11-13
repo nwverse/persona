@@ -283,6 +283,95 @@ struct MeetingGlossaryPage: View {
     }
 }
 
+// MARK: The meeting page
+
+/// The notice that hub transcription fell back to this iPhone (#3862 phase 5): why, in words
+/// (`MeetingTranscriptionWords.fallback`), with the phone's mark in the caution color. Under the Live box's title, under
+/// the Highlights card's (phase 2b) and atop the meeting's transcript.
+struct MeetingTranscriptionFallbackNotice: View {
+    var words: String
+
+    var body: some View {
+        Label {
+            Text(words).fixedSize(horizontal: false, vertical: true)
+        } icon: {
+            ThemedIcon(Theme.Icon.phone).foregroundStyle(Theme.caution)
+        }
+        .font(Theme.Font.caption)
+        .foregroundStyle(.secondary)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("meeting-transcription-fallback")
+    }
+}
+
+/// The fallback notice for the meeting `id` while its hub transcription has fallen back (`MeetingTranscription.shown`),
+/// nothing otherwise: for what shows no line of the store itself (the Highlights card, the transcript page). A view of
+/// its own, so the store's changes (a caption a second in hub mode) redraw only it (P5).
+struct MeetingTranscriptionFallbackRow: View {
+    var id: UUID
+    @State private var transcription = MeetingTranscription.shared
+
+    var body: some View {
+        // Whether it fell back doesn't hang on the role (only which lines show does).
+        if transcription.shown(id, role: .off).fellBack {
+            MeetingTranscriptionFallbackNotice(words: MeetingTranscriptionWords.fallback(transcription.meeting(id)))
+        }
+    }
+}
+
+/// The hub's caption (#3862 phase 5): what is being said now, its time and its words in the secondary color, replaced by
+/// the next one; read as "Being said: …". In the Live box (cut at `lineLimit`) and under the meeting's transcript.
+///
+/// The interface stops at xxxLarge (docs/design/DESIGN_SYSTEM.md "Dynamic Type"), so it has one layout: no branch of its
+/// own for the accessibility sizes.
+struct MeetingCaptionRow: View {
+    var caption: MeetingInterim
+    var lineLimit: Int?
+
+    var body: some View {
+        let stamp = Text(RecordingFormat.clock(caption.start)).font(Theme.Font.caption.monospacedDigit()).foregroundStyle(.secondary)
+        let words = Text(caption.text).font(Theme.Font.body).foregroundStyle(.secondary).lineLimit(lineLimit)
+            .fixedSize(horizontal: false, vertical: lineLimit == nil)
+        HStack(alignment: .firstTextBaseline, spacing: Theme.Space.m) { stamp; words }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text("Being said: \(caption.text)"))
+    }
+}
+
+/// The hub's caption under the meeting's transcript (`MeetingTranscriptPage`) while the page shows it
+/// (`MeetingTranscription.shown`), nothing otherwise. A view of its own, so a caption redraws only it (P5).
+struct MeetingTranscriptCaption: View {
+    var id: UUID
+    var role: MeetingAttendance
+    @State private var transcription = MeetingTranscription.shared
+
+    var body: some View {
+        if transcription.shown(id, role: role).hubInterim, let caption = transcription.meeting(id).interim, !caption.text.isEmpty {
+            MeetingCaptionRow(caption: caption, lineLimit: nil)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityIdentifier("meeting-transcript-interim")
+        }
+    }
+}
+
+/// Hands the meeting's transcript page the hub's lines while it shows them (`MeetingTranscription.shown`), nil while it
+/// shows the phone's own. It draws nothing and is a view of its own, so the store's captions redraw only it, and the
+/// page's rows are built again only when the lines change (P4, P5).
+struct MeetingTranscriptHubFeed: View {
+    var id: UUID
+    var role: MeetingAttendance
+    @Binding var lines: [MeetingHubLine]?
+    @State private var transcription = MeetingTranscription.shared
+
+    var body: some View {
+        let shown = transcription.shown(id, role: role).hubLines ? transcription.meeting(id).lines : nil
+        Color.clear
+            .onChange(of: shown, initial: true) { _, new in
+                if lines != new { lines = new }
+            }
+    }
+}
+
 // MARK: The recording's page
 
 /// The recording page's last footer (#3862 phase 5): what left the phone and how long it is kept. A meeting whose audio

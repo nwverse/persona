@@ -11,8 +11,9 @@ import XCTest
 /// /mock/meeting_transcription`. Every test starts from a fresh mock (`POST /mock/recording_minutes`, the features on).
 /// The UI (stage 2): the start offers On the Hub only while the hub lists the flag and can transcribe, Settings › Meetings
 /// saves the default and the glossary on the hub, and the meeting page shows the hub's lines, then the phone's own with
-/// the fallback notice, as does the Lock Screen, and after Stop the recording's page says how it was transcribed. The app
-/// runs in zh-Hans: elements are found by their identifiers.
+/// the fallback notice, as does the Lock Screen, and after Stop the recording's page says how it was transcribed; with the
+/// highlights (phase 2b) the card holds no line, the hub's lines are on the Full Transcript page, and the notice is on
+/// both. The app runs in zh-Hans: elements are found by their identifiers.
 /// PERSONA_SHOTS=<dir> saves hub-transcription-<appearance>-<name>.png (PERSONA_SHOTS_APPEARANCE names the appearance).
 final class MeetingHubTranscriptionUITests: XCTestCase {
     private let live = "00000000-0000-0000-0000-000000000002"
@@ -263,6 +264,60 @@ final class MeetingHubTranscriptionUITests: XCTestCase {
                       "the recording's page doesn't say the hub's state: \(facts.label); the hub: \(String(describing: try? transcription(hub, live)))")
         sleep(1)
         try shot(app, "detail")
+    }
+
+    /// A hub-mode meeting started with the highlights too (#3862 phase 2b, `-showMeetingSample room-hub-highlights`): the
+    /// Highlights card holds no line and there is no Live box, so the hub's lines are on the Full Transcript page; an
+    /// upstream problem puts the fallback notice under the card's title, and the transcript shows the phone's own lines
+    /// under it.
+    @MainActor func testWithTheHighlightsTheHubsLinesAreOneTapAway() throws {
+        let hub = try mockHub()
+        try post(hub, "/mock/meeting_highlights", ["on": true])
+        let app = XCUIApplication()
+        app.launchArguments = ["-pairURL", pair(hub), "-tab", "assistant", "-openShellPage", "recordings", "-openChatsFresh", "YES",
+                               "-showMeetingSample", "room-hub-highlights"]
+        app.launchPinned()
+        let card = element(app, "meeting-highlights")
+        XCTAssertTrue(card.waitForExistence(timeout: 20), "no Highlights card:\n\(app.debugDescription)")
+        XCTAssertFalse(element(app, "meeting-live").exists, "a Live box beside the Highlights card")
+        let transcript = card.descendants(matching: .any).matching(identifier: "meeting-transcript").firstMatch
+        XCTAssertTrue(transcript.waitForExistence(timeout: 5), "no Full Transcript on the card:\n\(app.debugDescription)")
+
+        // Full Transcript: the hub's lines, no notice while the hub is up.
+        transcript.tap()
+        let hubLine = element(app, "recording-timeline-hub-line")
+        XCTAssertTrue(hubLine.waitForExistence(timeout: 60),
+                      "the hub's lines never showed on the transcript: \(String(describing: try? transcription(hub, live)))\n\(app.debugDescription)")
+        XCTAssertFalse(element(app, "meeting-transcription-fallback").exists, "a fallback notice while the hub is up")
+        sleep(2)
+        try shot(app, "highlights-transcript-hub")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(card.waitForExistence(timeout: 5), "Back didn't return:\n\(app.debugDescription)")
+
+        // The room's highlight on the card (at the minute of the hub's last line), and no line of the transcript there.
+        try post(hub, "/mock/meeting_highlights", ["id": live, "highlights": [["text": "导出上限这次保持不变。", "at": 100_000]]])
+        XCTAssertTrue(element(app, "meeting-highlight").waitForExistence(timeout: 20), "the room's highlight never showed:\n\(app.debugDescription)")
+        for id in ["meeting-live-hub-line", "meeting-live-line", "recording-timeline-hub-line", "recording-timeline-sentence"] {
+            XCTAssertFalse(element(app, id).exists, "a line of the transcript on the card (\(id))")
+        }
+        XCTAssertFalse(element(app, "meeting-transcription-fallback").exists, "a fallback notice while the hub is up")
+        sleep(1)
+        try shot(app, "highlights-card-hub")
+
+        // A problem upstream: the notice under the card's title, and the phone's own lines on the transcript under it.
+        try post(hub, "/mock/meeting_transcription", ["upstream": "failed"])
+        let notice = card.descendants(matching: .any).matching(identifier: "meeting-transcription-fallback").firstMatch
+        XCTAssertTrue(notice.waitForExistence(timeout: 30), "no fallback notice on the card: \(app.debugDescription)")
+        XCTAssertTrue(element(app, "meeting-highlight").exists, "the highlights went with the fallback")
+        sleep(1)
+        try shot(app, "highlights-card-fell-back")
+        transcript.tap()
+        XCTAssertTrue(element(app, "meeting-transcription-fallback").waitForExistence(timeout: 5),
+                      "no fallback notice on the transcript: \(app.debugDescription)")
+        XCTAssertTrue(element(app, "recording-timeline-sentence").waitForExistence(timeout: 5), "the phone's own lines: \(app.debugDescription)")
+        XCTAssertTrue(waitFor(10) { !hubLine.exists }, "the hub's lines stayed after the fallback")
+        sleep(1)
+        try shot(app, "highlights-transcript-fell-back")
     }
 
     // MARK: Helpers

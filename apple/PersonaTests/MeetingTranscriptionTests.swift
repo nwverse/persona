@@ -1325,6 +1325,27 @@ private actor SlowPut {
         #expect(Set([wifi, stopped, problem]).count == 3)
     }
 
+    /// With the Highlights card on top (phase 2b), the hub's lines are the Full Transcript's rows in place of the phone's:
+    /// in the live log's order, a placeholder skipped, each row's id its position, so a line the hub sends again keeps its
+    /// row; bookmarks and questions keep their places; and a highlight's minute lights the hub's lines in it.
+    @Test func theTranscriptShowsTheHubsLinesByPosition() throws {
+        let lines = [MeetingHubLine(n: 2, start: 790, end: 794, text: "Third", source: nil),
+                     MeetingHubLine(n: 0, start: 754, end: 758, text: "First", source: "hub"),
+                     MeetingHubLine(n: 1, start: 760, end: 764, text: "", source: "hub"),
+                     MeetingHubLine(n: 3, start: 800, end: 804, text: "Fourth", source: "device")]
+        let sentences = RecordingTimeline.sentences(hub: lines)
+        #expect(sentences.map(\.line) == [0, 2, 3], "by position, the placeholder left out")
+        let ask = UUID()
+        let items = RecordingTimeline.make(sentences: sentences, marks: [770], asks: [.init(id: ask, at: 799)],
+                                           transcribedUntil: 900, now: 900)
+        #expect(items.map(\.id) == [.line(0), .bookmark(0), .line(2), .exchange(ask), .line(3)])
+        let again = RecordingTimeline.make(sentences: RecordingTimeline.sentences(hub: lines + [MeetingHubLine(n: 4, start: 810, end: 812, text: "Fifth")]),
+                                           marks: [770], asks: [.init(id: ask, at: 799)], transcribedUntil: 900, now: 900)
+        #expect(Array(again.map(\.id).prefix(items.count)) == items.map(\.id), "a new line keeps the rows before it")
+        let focus = try #require(RecordingTimeline.focus(at: 790, end: 804, in: items))
+        #expect(focus.scroll == .line(2) && focus.lit == [.line(2), .line(3)], "the minute's hub lines lit")
+    }
+
     @Test func theRecordingPageSaysTheModeTheStateAndTheGaps() throws {
         #expect(Words.facts(nil, asked: .hub, gapUpload: .idle) == nil, "no mode decided: nothing")
         #expect(Words.facts(.init(mode: .device), asked: nil, gapUpload: .idle) == nil, "a meeting on the phone as always")

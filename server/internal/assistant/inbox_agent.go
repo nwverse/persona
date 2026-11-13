@@ -100,8 +100,8 @@ type InboxAgent struct {
 	// to its count, and the ones queued since are the newest. Pending is trimmed to the latest 20, so its length
 	// cannot tell how many came since.
 	told int
-	// signaled is the handling chain's newest received batch an inbox signal to the linked task's supervisor counted
-	// (in memory only, supervise_inbox.go): the next one counts the messages after it.
+	// signaled is the item's message count when an inbox signal to the linked task's supervisor last counted it
+	// (in memory only, supervise_inbox.go): the next one counts the messages since that count.
 	signaled int
 	// signaledOf is the newest message considered for a supervisor signal in this process. URL routing also runs
 	// while the twin is off, so Of (what its handling conversation took) is independent of this cursor.
@@ -176,8 +176,18 @@ func (s *Service) handPass(ctx context.Context) {
 	if tasks := s.activeTasks(ctx); len(tasks) > 0 { // which of the user's tasks a new one is about
 		for _, w := range escalated {
 			b.mu.Lock()
-			fresh := w.it.Agent != nil && w.it.Agent.SessionID == "" && w.it.Agent.TodoID == ""
+			a, todo := w.it.Agent, ""
+			fresh := a != nil && a.SessionID == "" && a.TodoID == ""
+			if a != nil {
+				todo = a.TodoID
+			}
 			b.mu.Unlock()
+			// A link to a task that was closed, with no one task carrying it on (superviseInbox would have moved it
+			// there), is no link: the judge picks again among the open ones.
+			if !fresh && todo != "" {
+				t, ok := s.todoNow(todo)
+				fresh = !ok || !taskOpen(t)
+			}
 			if fresh && s.linkTaskFor(ctx, w.it, tasks, w) {
 				linked[w.it] = true
 			}

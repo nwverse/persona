@@ -578,8 +578,22 @@ nonisolated struct APIClient: Sendable {
     // MARK: Endpoints
 
     struct MachinesResponse: Decodable { var machines: [Machine] }
-    /// A machine's launchers and what runs with none picked (`default`, #2455; nil from an older hub).
-    struct LaunchersResponse: Decodable, Sendable { var launchers: [Launcher]; var `default`: LauncherDefault? }
+    /// A machine's launchers and what runs with none picked (`default`, #2455; nil from an older hub). With
+    /// `purpose=assistant` (#5033) it also carries `unavailable`: launchers and providers that can't run the main chat.
+    struct LaunchersResponse: Decodable, Sendable {
+        var launchers: [Launcher]
+        var `default`: LauncherDefault?
+        var unavailable: [UnavailableLauncher]?
+    }
+
+    /// The body of PUT /api/v1/assistant/conversations/{id}/model (#5033): the pick kept for one conversation.
+    struct ConversationModelBody: Encodable, Sendable {
+        var launcher: String
+        var model: String?
+        var effort: String?
+        var machineID: String
+        enum CodingKeys: String, CodingKey { case launcher, model, effort, machineID = "machine_id" }
+    }
     nonisolated struct SessionsResponse: Decodable, Sendable { var sessions: [Session] }
     struct SessionResponse: Decodable { var session: Session }
     struct ItemsResponse: Decodable, Sendable {
@@ -747,8 +761,20 @@ nonisolated struct APIClient: Sendable {
     func stamp(_ list: [Interaction]) -> [Interaction] { group.isEmpty ? list : list.map { var i = $0; i.group = group; return i } }
     func stamp(_ s: Session) -> Session { var s = s; s.group = group; return s }
     func stamp(_ k: SessionKey) -> SessionKey { var k = k; k.group = group; return k }
-    func launcherList(machine: String) async throws -> LaunchersResponse {
-        try await get("/api/v1/machines/\(machine)/launchers", as: LaunchersResponse.self)
+    func launcherList(machine: String, purpose: String? = nil) async throws -> LaunchersResponse {
+        try await get("/api/v1/machines/\(machine)/launchers",
+                      query: purpose.map { ["purpose": $0] } ?? [:], as: LaunchersResponse.self)
+    }
+    /// Keeps a pick (launcher, optional model and effort) for one of the assistant's conversations (#5033): its next
+    /// messages run on it, on every device, until it is changed or follows the default again (`deleteConversationModel`).
+    func putConversationModel(machine: String, conversation: String, body: ConversationModelBody) async throws {
+        _ = try await request("PUT",
+                              "/api/v1/assistant/conversations/\(conversation.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? conversation)/model",
+                              body: body)
+    }
+    /// The conversation follows Model configuration › Main chat again (DELETE …/conversations/{id}/model, #5033).
+    func deleteConversationModel(machine: String, conversation: String) async throws {
+        try await delete("/api/v1/assistant/conversations/\(conversation.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? conversation)/model")
     }
     /// The models the launcher's agent lists in its /model menu (New Agent's model picker). The node starts the CLI to
     /// ask (a few seconds, kept 10 minutes); refresh asks it again.
@@ -860,6 +886,34 @@ nonisolated struct APIClient: Sendable {
         var body = req
         body.prompt = req.prompt.map { HubNaming.outbound($0, canonical: personaNaming) }
         return stamp(try await post("/api/v1/sessions", body: body, timeout: req.async == true ? 20 : 110, as: SessionResponse.self).session)
+    }
+
+    struct CodexTakeoverInfo: Decodable, Sendable {
+        var running: Bool
+        var canResume: Bool
+        var reason: String?
+        var token: String
+        var cwd: String
+        var transcriptPath: String
+        var continuationPrompt: String
+        enum CodingKeys: String, CodingKey {
+            case running, reason, token, cwd
+            case canResume = "can_resume", transcriptPath = "transcript_path", continuationPrompt = "continuation_prompt"
+        }
+    }
+
+    private func codexTakeoverPath(machine: String, session: String) -> String {
+        "/api/v1/machines/\(TodosLogic.pathComponent(machine))/codex/\(TodosLogic.pathComponent(session))/takeover"
+    }
+
+    func codexTakeoverInfo(machine: String, session: String) async throws -> CodexTakeoverInfo {
+        try await get(codexTakeoverPath(machine: machine, session: session))
+    }
+
+    func codexTakeover(machine: String, session: String, token: String, confirmStop: Bool) async throws -> Session {
+        struct Body: Encodable { var token: String; var confirmStop: Bool; enum CodingKeys: String, CodingKey { case token; case confirmStop = "confirm_stop" } }
+        return stamp(try await post(codexTakeoverPath(machine: machine, session: session), body: Body(token: token, confirmStop: confirmStop),
+                                   timeout: 110, as: SessionResponse.self).session)
     }
 
     private func sp(_ k: SessionKey) -> String { "/api/v1/sessions/\(k.machineID)/\(k.sessionID)" }
@@ -1465,6 +1519,10 @@ nonisolated struct APIClient: Sendable {
         /// "asked" only what a run sends with notify_user. Such a task always runs in its own conversation. Sent only when
         /// set: a hub keeps it when left out, and an older hub never gets it.
         var push: String?
+        /// When Done, Put It in the Inbox (hubs with the task_inbox feature, docs/assistant/assistant.md「Put it in the Inbox when done」): nil or ""
+        /// nothing, "worthy" a row only when a run finds something worth a look, "every" a row after every run. Independent of `push`.
+        /// Sent only when set: a hub keeps it when left out, and an older hub never gets it.
+        var inbox: String?
         var createdBy: String?    // "assistant": Persona set it up from a conversation
         var lastRun: Date?        // read-only, set by the hub
         var lastSessionID: String?
@@ -1472,7 +1530,7 @@ nonisolated struct APIClient: Sendable {
         var lastError: String?
         var nextRun: Date?
         enum CodingKeys: String, CodingKey {
-            case id, title, prompt, at, time, weekdays, enabled, launcher, effort, push
+            case id, title, prompt, at, time, weekdays, enabled, launcher, effort, push, inbox
             case repeats = "repeat", everyMinutes = "every_minutes", machineID = "machine_id", sessionID = "session_id"
             case permissionMode = "permission_mode", createdBy = "created_by"
             case lastRun = "last_run", lastSessionID = "last_session_id", nextRun = "next_run"
@@ -1485,6 +1543,9 @@ nonisolated struct APIClient: Sendable {
         static let pushAsked = "asked"
         /// The hub feature that says it takes `push`; without it the editor leaves the setting out.
         static let pushFeature = "task_push"
+        /// The hub feature that says it takes `inbox`; without it the editor leaves the setting out.
+        static let inboxFeature = "task_inbox"
+        static let inboxWorthy = "worthy", inboxEvery = "every"
         /// Where the next run goes when the task isn't continuing the conversation it came from.
         var ownConversation: SessionKey? {
             guard let m = runMachineID, let s = runSessionID else { return nil }
@@ -1515,6 +1576,7 @@ nonisolated struct APIClient: Sendable {
             launcher = text(.launcher); permissionMode = text(.permissionMode); effort = text(.effort)
             createdBy = text(.createdBy)
             push = text(.push)
+            inbox = text(.inbox)
             lastRun = date(.lastRun); lastSessionID = text(.lastSessionID); lastStatus = text(.lastStatus); lastError = text(.lastError)
             nextRun = date(.nextRun)
             runMachineID = text(.runMachineID); runSessionID = text(.runSessionID)
@@ -1528,6 +1590,7 @@ nonisolated struct APIClient: Sendable {
             try c.encode(enabled, forKey: .enabled); try c.encode(sessionID ?? "", forKey: .sessionID)
             try c.encode(permissionMode ?? "", forKey: .permissionMode)
             try c.encodeIfPresent(push, forKey: .push)
+            try c.encodeIfPresent(inbox, forKey: .inbox)
             if includesModelSettings {
                 try c.encode(launcher ?? "", forKey: .launcher)
                 try c.encode(effort ?? "", forKey: .effort)
