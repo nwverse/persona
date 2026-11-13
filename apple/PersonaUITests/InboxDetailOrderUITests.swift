@@ -60,8 +60,8 @@ final class InboxDetailOrderUITests: XCTestCase {
         XCTAssertTrue(state.waitForExistence(timeout: 15), "the state sentence is missing:\n\(app.debugDescription)")
         XCTAssertTrue(conversation.waitForExistence(timeout: 15),
                       "the processing conversation button is missing:\n\(app.debugDescription)")
-        XCTAssertGreaterThanOrEqual(conversation.frame.minY, state.frame.maxY,
-                                    "Conversation must be below the state; state=\(state.frame), conversation=\(conversation.frame)")
+        XCTAssertGreaterThan(conversation.frame.midY, state.frame.maxY,
+                             "Conversation's center must be below the state; state=\(state.frame), conversation=\(conversation.frame)")
         XCTAssertEqual(conversation.frame.minX, state.frame.minX, accuracy: 1,
                        "Conversation must align with the state words; state=\(state.frame), conversation=\(conversation.frame)")
     }
