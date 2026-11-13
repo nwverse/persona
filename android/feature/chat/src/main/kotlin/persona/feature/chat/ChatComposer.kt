@@ -297,7 +297,9 @@ fun ChatComposer(
     val dictate = dictation?.takeIf { enabled }
     // The main conversation's /clear (#5100): offered while it works too (the hub stops the turn), and it never asks first.
     val mainClear = LocalMainChatClear.current?.takeIf { enabled }
-    val suggestions = if (!enabled) emptyList() else if (assistantChat || mainClear != null) {
+    // Both the "/" list and the + sheet offer only what an Assistant conversation runs, never an Agent's quick messages.
+    val useMainCommands = assistantChat || mainClear != null
+    val suggestions = if (!enabled) emptyList() else if (useMainCommands) {
         SlashCommand.mainSuggestions(state.value.text, clear = mainClear != null, resources = resources)
     } else {
         SlashCommand.suggestions(state.value.text, canClear && !working, resources, model = onModel != null, loop = loop)
@@ -505,11 +507,12 @@ fun ChatComposer(
         add(JAction(stringResource(R.string.chat_composer_files), enabled = service != null) { launchPicker { files.launch(arrayOf("*/*")) } })
         // iOS's Mention a File or Session, after the attachments (`AttachMoreSection.common`): where the composer has an @ list.
         if (mentions != null) add(JAction(stringResource(R.string.chat_mention)) { menu = false; startMention() })
-        // Quick messages go out at once; /clear asks first, and only while nothing is running or being cleared.
+        // An Agent's quick messages go out at once and /clear asks first; the main sheet has only its in-place clear.
         extensionPrompts.forEach { prompt -> add(JAction(prompt.title) { menu = false; state.fillQuickPrompt(prompt) }) }
-        SlashCommand.all(resources).forEach { command -> add(JAction(command.title) { menu = false; onCommand(command.text) }) }
-        if (canClear && !working) add(JAction(SlashCommand.clearCommand(resources).title, destructive = true) { menu = false; confirmClear = true })
-        else if (mainClear != null) add(JAction(SlashCommand.clearCommand(resources).title) { menu = false; clearMain(mainClear) })
+        if (!useMainCommands) {
+            SlashCommand.all(resources).forEach { command -> add(JAction(command.title) { menu = false; onCommand(command.text) }) }
+            if (canClear && !working) add(JAction(SlashCommand.clearCommand(resources).title, destructive = true) { menu = false; confirmClear = true })
+        } else if (mainClear != null) add(JAction(SlashCommand.mainClearCommand(resources).title) { menu = false; clearMain(mainClear) })
     })
     if (confirmClear) JDialog(onDismiss = { confirmClear = false }, title = stringResource(R.string.chat_composer_clear_title),
         text = stringResource(R.string.chat_composer_clear_text, agentName),
