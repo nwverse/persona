@@ -179,20 +179,9 @@ func (c *Remote) Watch(ctx context.Context, changed func(connector.Scope)) error
 }
 
 func (c *Remote) look(ctx context.Context, changed func(connector.Scope)) {
-	var page ChatsPage
-	if err := c.read(ctx, "connector.chats", map[string]any{"id": ID, "limit": watchChats, "keep": KeepContacts}, &page); err != nil {
+	things, newest, err := c.rows(ctx)
+	if err != nil {
 		return
-	}
-	var newest time.Time
-	var things []connector.InboxThing
-	for _, chat := range page.Chats {
-		if chat.Last.After(newest) {
-			newest = chat.Last
-		}
-		if time.Since(chat.Last) > 7*24*time.Hour {
-			continue
-		}
-		things = append(things, c.thing(ctx, chat))
 	}
 	c.inboxMu.Lock()
 	moved := !newest.Equal(c.newest)
@@ -210,6 +199,27 @@ func (c *Remote) look(ctx context.Context, changed func(connector.Scope)) {
 	if !same {
 		changed(connector.ScopeInbox)
 	}
+}
+
+// rows are the inbox's things of the newest conversations, those of the last week, and when the newest one moved:
+// what the watch keeps for Collect, and what inbox_things answers a things subscription, one computation (#6317).
+func (c *Remote) rows(ctx context.Context) ([]connector.InboxThing, time.Time, error) {
+	var page ChatsPage
+	if err := c.read(ctx, "connector.chats", map[string]any{"id": ID, "limit": watchChats, "keep": KeepContacts}, &page); err != nil {
+		return nil, time.Time{}, err
+	}
+	var newest time.Time
+	var things []connector.InboxThing
+	for _, chat := range page.Chats {
+		if chat.Last.After(newest) {
+			newest = chat.Last
+		}
+		if time.Since(chat.Last) > 7*24*time.Hour {
+			continue
+		}
+		things = append(things, c.thing(ctx, chat))
+	}
+	return things, newest, nil
 }
 
 // thing is a conversation as the inbox sees it; an unread one carries its last messages for triage.
@@ -281,6 +291,51 @@ func (c *Remote) transcript(msgs []Message) string {
 }
 
 var readTools = []string{"imessage_chats", "imessage_read", "imessage_search"}
+
+// inboxThings is the catalog's tool a things subscription reads the Inbox's rows with (#6317): not one of the
+// assistant's tools (Tools), which read conversations.
+const inboxThings = "inbox_things"
+
+var _ connector.Catalog = (*Remote)(nil)
+
+// Catalog is connector.Catalog: the read tools as the derived catalog had them (the same names, descriptions and
+// schemas, so a subscription keeps its tool), and inbox_things. None while the switch is off.
+func (c *Remote) Catalog(context.Context) ([]connector.CatalogSource, error) {
+	src := connector.CatalogSource{ID: ID, Name: c.Name(), Tools: []connector.CatalogTool{}}
+	tools := c.Tools()
+	if len(tools) > 0 {
+		t := prompts.Tool("imessage_inbox_things")
+		tools = append(tools, proto.Tool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema})
+	}
+	for _, t := range tools {
+		src.Tools = append(src.Tools, connector.CatalogTool{Name: strings.TrimPrefix(t.Name, ID+"_"), Description: t.Description,
+			InputSchema: t.InputSchema, ReadOnly: true})
+	}
+	return []connector.CatalogSource{src}, nil
+}
+
+// CatalogCall is connector.Catalog: the read tools' JSON answers (CallJSON, as before), and inbox_things' rows.
+func (c *Remote) CatalogCall(ctx context.Context, q connector.CatalogQuery) (string, error) {
+	if q.Tool == inboxThings {
+		if !c.AI() {
+			return "", errors.New("「信息」没有交给 Persona（设置 › 连接器 › 信息）")
+		}
+		things, _, err := c.rows(ctx)
+		if err != nil {
+			return "", errors.New(c.explain(err))
+		}
+		if things == nil {
+			things = []connector.InboxThing{}
+		}
+		out, err := json.Marshal(map[string]any{"things": things})
+		return string(out), err
+	}
+	out, ok, err := c.CallJSON(ctx, ID+"_"+q.Tool, q.Args)
+	if !ok {
+		return "", fmt.Errorf("unknown tool %s", q.Tool)
+	}
+	return string(out), err
+}
 
 // Tools is connector.ReadTools: none while the switch is off.
 func (c *Remote) Tools() []proto.Tool {

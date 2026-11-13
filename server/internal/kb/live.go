@@ -67,6 +67,9 @@ type LiveSegment struct {
 	Start float64 `json:"start"`
 	End   float64 `json:"end"`
 	Text  string  `json:"text"`
+	// Source is whose sentence it is in hub mode (SourceHub, SourceDevice: filled from the phone's uploads); absent in
+	// device mode. Only the hub sets it.
+	Source string `json:"source,omitempty"`
 }
 
 // AskSource is an earlier meeting (kind recordings) or a project (kind projects) an answer drew on; When, Start and End
@@ -246,7 +249,8 @@ func (r Recording) AttendanceRole() string {
 
 // UnmarshalJSON reads an upload like the default does, except that a value of the wrong type for attendance or
 // attending_session does not fail it (the same request carries the transcript): normalizeAttendance turns attending
-// off for it. Nor does a malformed spoken (readSpoken).
+// off for it. Nor does one for room, private, transcription or timeline (readRoomAndPrivate, readTranscription), nor
+// a malformed spoken (readSpoken).
 func (u *RecordingUpload) UnmarshalJSON(data []byte) error {
 	type plain RecordingUpload
 	aux := struct {
@@ -255,6 +259,8 @@ func (u *RecordingUpload) UnmarshalJSON(data []byte) error {
 		AttendingSession json.RawMessage `json:"attending_session"`
 		Room             json.RawMessage `json:"room"`
 		Private          json.RawMessage `json:"private"`
+		Transcription    json.RawMessage `json:"transcription"`
+		Timeline         json.RawMessage `json:"timeline"`
 		Spoken           json.RawMessage `json:"spoken"`
 	}{plain: (*plain)(u)}
 	if err := json.Unmarshal(data, &aux); err != nil {
@@ -262,6 +268,7 @@ func (u *RecordingUpload) UnmarshalJSON(data []byte) error {
 	}
 	u.Spoken = readSpoken(aux.Spoken)
 	u.readRoomAndPrivate(aux.Room, aux.Private)
+	u.readTranscription(aux.Transcription, aux.Timeline)
 	u.Attendance, u.AttendingSession, u.badRole, u.badSession = "", nil, false, false
 	if raw := aux.Attendance; !jsonNull(raw) {
 		u.badRole = json.Unmarshal(raw, &u.Attendance) != nil
@@ -433,7 +440,8 @@ func cutBytes(s string, n int) string {
 // LiveAppend stores sentences of recording id's live log, segs[0] at position from: the positions held already are
 // skipped (a replay or a retry stores nothing twice) and the rest appended. Errors in the contract's order:
 // ErrRecordingDeleted, ErrNotFound (no upload yet), ErrReadOnly, ErrBadLive (a negative from, over MaxLiveRequest
-// sentences), ErrNotAttending (the stored upload has attendance off), a LiveGapError (from above the positions held),
+// sentences), ErrNotAttending (the stored upload has attendance off), ErrHubTranscribes (the hub transcribes it: its
+// live log is the hub's, LiveAppendHub), a LiveGapError (from above the positions held),
 // ErrLiveFull (the request would pass maxLivePositions or maxLiveBytes; nothing of it is stored). The Live returned is
 // the log after it, also with ErrLiveGap and ErrLiveFull. Engine.LiveChanged hears of every append.
 func (e *Engine) LiveAppend(rawID string, from int, segs []LiveSegment) (Live, Recording, error) {
@@ -467,6 +475,8 @@ func (e *Engine) liveAppend(id string, from int, segs []LiveSegment) (Live, Reco
 		return l, r, false, fmt.Errorf("%w: at most %d sentences a request", ErrBadLive, MaxLiveRequest)
 	case !r.Attending():
 		return l, r, false, ErrNotAttending
+	case r.HubTranscribed():
+		return l, r, false, ErrHubTranscribes
 	case from > len(l.Segments):
 		return l, r, false, LiveGapError{Next: len(l.Segments)}
 	}
@@ -497,6 +507,77 @@ func (e *Engine) liveAppend(id string, from int, segs []LiveSegment) (Live, Reco
 		return l, r, false, st.goneError(id)
 	}
 	return next, r, true, nil
+}
+
+// LiveAppendHub appends the hub's sentences at the end of recording rawID's live log: no from and no role check (the
+// caller applied the timeline), each Source SourceHub unless it is SourceDevice (the phone's text filling in), mended
+// as LiveAppend mends them. first is the position of segs[0] (the live log's length when segs is empty). Errors:
+// ErrRecordingDeleted, ErrNotFound, ErrReadOnly, ErrTranscriptExpired (trimmed), ErrNotHub (not transcribed on the
+// hub), ErrLiveFull (past maxLivePositions or maxLiveBytes; nothing of it is stored). LiveChanged and MeetingChanged
+// (PartLines) hear of an append.
+func (e *Engine) LiveAppendHub(rawID string, segs []LiveSegment) (first int, err error) {
+	id, ok := RecordingID(rawID)
+	if !ok {
+		return 0, ErrNotFound
+	}
+	first, stored, err := e.liveAppendHub(id, segs)
+	if stored {
+		if e.LiveChanged != nil {
+			e.LiveChanged(id)
+		}
+		e.meetingChanged(id, []string{PartLines})
+	}
+	return first, err
+}
+
+func (e *Engine) liveAppendHub(id string, segs []LiveSegment) (int, bool, error) {
+	st := e.Store
+	st.liveMu.Lock()
+	defer st.liveMu.Unlock()
+	l, r, err := st.liveState(id)
+	switch {
+	case err != nil:
+		return 0, false, err
+	case st.ReadOnly():
+		return len(l.Segments), false, ErrReadOnly
+	case r.Trimmed():
+		return len(l.Segments), false, ErrTranscriptExpired
+	case !r.HubTranscribed():
+		return len(l.Segments), false, ErrNotHub
+	}
+	first := len(l.Segments)
+	if len(segs) == 0 {
+		return first, false, nil
+	}
+	add, size := make([]LiveSegment, len(segs)), 0
+	for i, sg := range segs {
+		if sg.Source != SourceDevice {
+			sg.Source = SourceHub
+		}
+		add[i] = cleanLive(sg)
+		size += len(add[i].Text)
+	}
+	if len(l.Segments)+len(add) > maxLivePositions || l.Bytes+size > maxLiveBytes {
+		if !l.Full {
+			l.Full = true
+			if _, err := st.putLive(id, &l); err != nil {
+				e.logf("recording %s: live full: %v", id, err)
+			}
+		}
+		return first, false, ErrLiveFull
+	}
+	next := l
+	next.Segments = append(append(make([]LiveSegment, 0, len(l.Segments)+len(add)), l.Segments...), add...)
+	next.Bytes += size
+	if ok, err := st.putLive(id, &next); err != nil {
+		return first, false, err
+	} else if !ok {
+		if err := st.goneError(id); !errors.Is(err, ErrNotAttending) {
+			return first, false, err
+		}
+		return first, false, ErrTranscriptExpired // trimmed meanwhile
+	}
+	return first, true, nil
 }
 
 // goneError is why recording id takes no live log any more: deleted, trimmed (attending it is over) or never uploaded.

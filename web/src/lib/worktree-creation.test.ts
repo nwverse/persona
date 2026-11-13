@@ -4,7 +4,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { credentialOwner, setToken } from "./api";
 import { getState } from "./store";
 import { setRosterDefault } from "./manager-choice";
-import { creationSession, creationBody, createdWorkspace, openChildWorktree, type CreationDraft } from "./worktree-creation";
+import { creationSession, creationBody, createdWorkspace, openChildWorktree, unsupportedWorktreeParent, type CreationDraft } from "./worktree-creation";
 import { onOpenNewWorktree, type WorktreePrepare, type WorktreeRequest } from "./worktree";
 
 vi.mock("./workspace-catalog", () => ({ refreshWorkspaceCatalog: vi.fn().mockResolvedValue(undefined) }));
@@ -138,20 +138,25 @@ describe("capability and placement safety", () => {
     expect(() => creationBody({ ...draft(), automaticName: true }, legacy)).toThrow();
     expect(creationBody({ ...draft(), automaticName: true, parent: null }, { ...legacy, automatic_name: true, choose_parent: true })).toEqual({ workspace_id: "source", kind: "orca", auto_name: true, no_parent: true });
   });
-  it("takes the source named as the parent as the default where the host cannot choose one (a child worktree of a Paseo row)", () => {
-    const paseo = { ...request().target, host: "paseo", workspaceId: "wks_main" };
-    const legacy = { ...prepared, composer: undefined, automatic_name: true };
-    const self = { machineId: "computer", host: "paseo", workspaceId: "wks_main", cwd: "/projects/demo", owner: credentialOwner(), manager: "assistant" };
-    expect(creationBody({ ...draft(), source: paseo, parent: self, branch: "feature/child" }, legacy))
-      .toEqual({ workspace_id: "wks_main", kind: "paseo", branch: "feature/child", path: "/worktrees/feature-child" });
-    expect(creationBody({ ...draft(), source: paseo, parent: self, automaticName: true }, legacy)).toEqual({ workspace_id: "wks_main", kind: "paseo", auto_name: true });
-    expect(() => creationBody({ ...draft(), source: paseo, parent: { ...self, workspaceId: "wks_other" }, branch: "x" }, legacy)).toThrow();
-    expect(() => creationBody({ ...draft(), source: paseo, parent: null, branch: "x" }, legacy)).toThrow();
-  });
   it("exports a child opener with independent canonical parent/source and acknowledgment callback", () => {
     const listen = vi.fn(); const stop = onOpenNewWorktree(listen); const onCreated = vi.fn();
     openChildWorktree({ machineId: "computer", host: "orca", workspaceId: "parent", cwd: "/collections" }, { source: { machineId: "computer", host: "orca", workspaceId: "source", cwd: "/projects/demo" }, onCreated });
     expect(listen).toHaveBeenCalledWith(expect.objectContaining({ target: expect.objectContaining({ workspaceId: "source", owner: credentialOwner() }), parent: expect.objectContaining({ workspaceId: "parent", owner: credentialOwner() }), onCreated })); stop();
+  });
+  it("accepts a source-default parent with actual legacy herdr capabilities", async () => {
+    const source = { machineId: "computer", host: "herdr", workspaceId: "native-source", cwd: "/projects/demo", owner: credentialOwner(), manager: "assistant" };
+    const listen = vi.fn(); const stop = onOpenNewWorktree(listen);
+    openChildWorktree(source); stop();
+    const session = await creationSession(listen.mock.calls[0][0]);
+    session.update({ branch: "feature/child" });
+    const legacy = { root: "/projects/demo", repoName: "Demo", branch: "main", path: "/worktrees/demo", automatic_name: true };
+    const value = session.getSnapshot().draft;
+    expect(unsupportedWorktreeParent(value, legacy)).toBe(false);
+    expect(creationBody(value, legacy)).toEqual({ workspace_id: "native-source", kind: "herdr", branch: "feature/child", path: "/worktrees/demo/feature-child" });
+    expect(() => creationBody({ ...value, parent: null }, legacy)).toThrow();
+    expect(() => creationBody({ ...value, parent: { ...source, workspaceId: "other" } }, legacy)).toThrow();
+    await session.submit(legacy);
+    expect(JSON.parse(creates()[0][1].body)).not.toHaveProperty("parent_workspace_id");
   });
 });
 
