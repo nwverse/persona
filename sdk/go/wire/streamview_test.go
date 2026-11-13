@@ -89,3 +89,25 @@ func TestDecodeCheckedStreamViewJSONIsBoth(t *testing.T) {
 		t.Fatalf("accepted %d, refused %d", accepted, refused)
 	}
 }
+
+// For a view that holds to View, CheckValidatedViewJSON answers as
+// CheckViewJSON does, refusals and their messages included.
+func TestCheckValidatedViewJSONIsCheckViewJSON(t *testing.T) {
+	compared, refused := 0, 0
+	for i, raw := range streamViewInputs(t) {
+		if ValidateJSON("View", raw) != nil {
+			continue
+		}
+		compared++
+		got, want := CheckValidatedViewJSON(raw), CheckViewJSON(raw)
+		if (got == nil) != (want == nil) || got != nil && got.Error() != want.Error() {
+			t.Fatalf("input %d %.80s: %v, CheckViewJSON %v", i, raw, got, want)
+		}
+		if got != nil {
+			refused++
+		}
+	}
+	if compared < 10 || refused < 1 {
+		t.Fatalf("compared %d, refused %d", compared, refused)
+	}
+}
