@@ -525,12 +525,13 @@ func (j *trJob) caption(s *trSession, e tevent, pos, clock int64) {
 	j.send(extwire.TranscriptionFrame{Type: extwire.TFInterim, Start: secs(start), Text: extwire.F(string(rs[min(last.from, len(rs)):]))})
 }
 
-// captionOf is the caption a caption frame is of. The measured service writes a caption session's whole meeting as
-// one item, never final, the next sentence's text written over the last one's, so a caption is told apart by its
-// text: a frame of the caption being written that continues its text (trContinues: grown, its last words revised) is
-// of it; one that does not begins a new caption, and the one before it keeps its last text. A service that splits
-// its captions by sentence gives each its own item: a frame of another item is of an earlier caption of that item
-// still open (one written after the next began), else it begins a new caption. A final frame closes its caption; one
+// captionOf is the caption a caption frame that came when the session's audio was at pos is of. The measured service
+// writes a caption session's whole meeting as one item, never final, the next sentence's text written over the last
+// one's, so a caption is told apart by its text: a frame of the caption being written that revises it (trRevises:
+// one within trCaptionFresh of its first frame, or one that grew it, its first or last words maybe revised) is of
+// it; one that does not begins a new caption, and the one before it keeps its last text. A service that splits its
+// captions by sentence gives each its own item: a frame of another item is of an earlier caption of that item still
+// open (one written after the next began), else it begins a new caption. A final frame closes its caption; one
 // without text withdraws it. A new caption begins where the session's audio was when its first frame came
 // (captionStart); nil: a frame with no text that withdraws nothing.
 func (j *trJob) captionOf(s *trSession, e tevent, pos int64) *trItem {
@@ -538,7 +539,7 @@ func (j *trJob) captionOf(s *trSession, e tevent, pos int64) *trItem {
 		return nil
 	}
 	if cur := s.capCur; cur != nil && e.item == cur.id {
-		if !trHasText(e.text) || trContinues(cur.text, e.text) {
+		if !trHasText(e.text) || trRevises(cur.text, e.text, pos-cur.at <= trSamples(trCaptionFresh)) {
 			return cur
 		}
 		cur.closed = true // the next sentence, written over this one's text
@@ -553,7 +554,7 @@ func (j *trJob) captionOf(s *trSession, e tevent, pos int64) *trItem {
 		return nil
 	}
 	start := j.captionStart(s, pos)
-	it := &trItem{id: e.item, start: start, parts: []trPart{{window: j.windowAt(start)}}}
+	it := &trItem{id: e.item, start: start, at: pos, parts: []trPart{{window: j.windowAt(start)}}}
 	s.items = append(s.items, it)
 	s.capCur = it
 	return it

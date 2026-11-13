@@ -215,6 +215,7 @@ func (r *trReply) String() string {
 type trItem struct {
 	id     string // the service's item_id (on the measured service the same for every caption of a session)
 	start  int64  // recording samples (captionStart)
+	at     int64  // where the session's audio was when its first frame came
 	text   string
 	parts  []trPart // the windows its text is of, in order
 	closed bool     // final, or written over by the next sentence: no later frame of its item is of it

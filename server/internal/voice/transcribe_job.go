@@ -63,6 +63,7 @@ var (
 	trAssignSlack   = 300 * time.Millisecond
 	trInterimLag    = time.Second            // a caption session this far behind the audio sends no interim captions
 	trCaptionLag    = 500 * time.Millisecond // a caption's first frame comes about this long after its sentence began
+	trCaptionFresh  = time.Second            // a caption's frames this soon after its first one revise it (captionOf)
 	trBehindEvery   = time.Minute
 	// trReconnectWaits are the waits before the reconnects of a session in a row (maxReconnects of them).
 	trReconnectWaits = []time.Duration{0, 2 * time.Second, 4 * time.Second}

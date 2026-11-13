@@ -76,33 +76,54 @@ func levenshtein(a, b []rune) int {
 	return prev[len(b)]
 }
 
-// trCaptionRevise: a caption frame continues the caption before it when their beginnings are at most this share of
+// trCaptionRevise: a caption frame revises the caption before it when their beginnings are at most this share of
 // their length apart (normalized): the service revises a caption's last words as it grows ("andrea 那边" then
 // "android 那边的…" measured 0.38), while the next sentence written over it is about 1 away.
 const trCaptionRevise = 0.4
 
-// trContinues says whether caption text next continues prev, the caption's text before it: prev grown, its last
-// words maybe revised (or dropped), rather than the next sentence written over it (the measured service writes a
-// caption session's whole meeting as one item). Compared normalized (trNorm): next not under half as long as prev
-// (that is a new sentence, also one that begins as the last one did), and as much of prev as next has (all of it when
-// next is longer) within trCaptionRevise of a beginning of next. Text with no letters or digits continues anything.
-func trContinues(prev, next string) bool {
+// trRevises says whether caption text next revises prev, the text of the caption being written, rather than begin
+// the next sentence written over it (the measured service writes a caption session's whole meeting as one item).
+// fresh: next came within trCaptionFresh of the caption's first frame, and revises it whatever it says (the measured
+// service rewrote a caption's first words at once: "好人", then "how 人" at the same moment). Otherwise, compared
+// normalized (trNorm): next not under half as long as prev (that is a new sentence, also one that begins as the last
+// one did), and either as much of prev as next has (all of it when next is longer) within trCaptionRevise of a
+// beginning of next (grown, its last words maybe revised), or the second half of prev, two characters or more, within
+// trCaptionRevise of a stretch of next's beginning about as long as prev (its first words revised, the rest kept).
+// Text with no letters or digits revises anything.
+func trRevises(prev, next string, fresh bool) bool {
 	p, n := trNorm(prev), trNorm(next)
 	switch {
-	case len(p) == 0 || len(n) == 0:
+	case fresh || len(p) == 0 || len(n) == 0:
 		return true
 	case 2*len(n) < len(p):
 		return false
 	}
 	k := min(len(p), len(n))
-	return float64(prefixDistance(p[:k], n)) <= trCaptionRevise*float64(k)
+	if float64(prefixDistance(p[:k], n)) <= trCaptionRevise*float64(k) {
+		return true
+	}
+	tail := p[len(p)/2:]
+	if len(tail) < 2 {
+		return false
+	}
+	head := n[:min(len(n), len(p)+max(4, len(p)/2))]
+	return float64(infixDistance(tail, head)) <= trCaptionRevise*float64(len(tail))
 }
 
 // prefixDistance is the least edit distance between a and a beginning of b (any length, none included).
-func prefixDistance(a, b []rune) int {
+func prefixDistance(a, b []rune) int { return trAlign(a, b, false) }
+
+// infixDistance is the least edit distance between a and a stretch of b (anywhere, of any length).
+func infixDistance(a, b []rune) int { return trAlign(a, b, true) }
+
+// trAlign is the least edit distance between all of a and a part of b that ends anywhere and starts at b's beginning,
+// or anywhere when anyStart.
+func trAlign(a, b []rune, anyStart bool) int {
 	prev, cur := make([]int, len(b)+1), make([]int, len(b)+1)
 	for j := range prev {
-		prev[j] = j
+		if !anyStart {
+			prev[j] = j
+		}
 	}
 	for i := 1; i <= len(a); i++ {
 		cur[0] = i

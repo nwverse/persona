@@ -374,6 +374,33 @@ func TestTranscriptionCaptionsAsMeasured(t *testing.T) {
 	}
 }
 
+// A caption session that revises each caption's first word at once, as the measured service did: the revised
+// hypothesis is part of its caption, never a caption of its own. With both verbatim sessions inventing (dropped,
+// then replaced) the first windows send the captions' text, which is what was said, once.
+func TestTranscriptionCaptionRevisions(t *testing.T) {
+	for name, items := range map[string]bool{"one item": false, "an item per sentence": true} {
+		t.Run(name, func(t *testing.T) {
+			trFast(t)
+			_, srv, logs, _ := trLive(t, voicetest.Script{Sentences: trScript, CaptionItems: items, CaptionRevise: true,
+				Rogue: map[int]int{1: 0, 2: 0}})
+			tc := startTr(t, srv, liveStart())
+			tc.next(extwire.TFReady)
+			tc.stream(voicetest.PCM(voicetest.Script{Sentences: trScript}, trScriptLength), 20)
+			tc.send(extwire.TranscriptionFrame{Type: extwire.TFEnd})
+			frames := tc.done()
+			defer func() {
+				if t.Failed() {
+					t.Log(logs.String())
+				}
+			}()
+			sameTexts(t, frames, trScript)
+			if !strings.Contains(logs.String(), "sent the captions' text") {
+				t.Error("no window sent the captions' text: the test checks nothing")
+			}
+		})
+	}
+}
+
 // A verbatim session that invents replies is dropped for its windows (the other's text is sent) and replaced after
 // two of them; the fresh session is trusted again.
 func TestTranscriptionRogueSessionIsReplaced(t *testing.T) {

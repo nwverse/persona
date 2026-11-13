@@ -173,30 +173,39 @@ func TestSpreadSentences(t *testing.T) {
 	}
 }
 
-// Which caption frames continue the caption before them, on the measured service's frames of one item: the text grows
-// through a sentence (its last words revised now and then) and the next sentence's replaces it.
-func TestTrContinues(t *testing.T) {
+// Which caption frames revise the caption being written, on the measured service's frames of one item: the text grows
+// through a sentence (its last words revised now and then, its first words at once as it begins) and the next
+// sentence's replaces it. A frame within trCaptionFresh of the caption's first one (fresh) always revises it; later,
+// only one that grew it or rewrote its first words and kept the rest does.
+func TestTrRevises(t *testing.T) {
 	for _, tt := range []struct {
 		prev, next string
+		fresh      bool
 		want       bool
 	}{
-		{"", "好人", true},
-		{"how 人都", "how 人都到齐了我们开始今天的发布评审", true},
-		{"the back end merge a", "the back end merge a p an now returns the conflicting paragraphs so the client can", true},
-		{"crate can we also check", "great can we also check the memory usage", true},
-		{"andrea 那边", "android 那边的 built 昨天挂了是 graded cache 的", true},
-		{"同意", "同意 pricing the tears 我们下周一再单独开会讨论", true},
-		{"可以我让", "可以我让 bo 跑一下满血看看是不是满血的", true},
-		{"merge a p an now returns the conflicting", "merge api now returns", true},
-		{"how 人都到齐了我们开始今天的发布评审", "先说 ios 这边离线编辑基本做完了", false},
-		{"the back end merge a p an now returns the conflicting paragraphs so the client can", "help 这词还是", false},
-		{"好的 bill 负责在周五之前把 crash rate 的", "上次会议决定 excel cap", false},
-		{"that works for me alice can own the rollout plan and the release notes", "好的 bill 负责在周五之前把 crash rate 的", false},
-		{"上线了 search latency 比之前", "上线", false}, // a new sentence that begins as the last one did
-		{"同意", "同步一下", false},
+		{"", "好人", false, true},
+		{"好人", "how 人", true, true},
+		{"how 人都", "how 人都到齐了我们开始今天的发布评审", false, true},
+		{"the back end merge a", "the back end merge a p an now returns the conflicting paragraphs so the client can", false, true},
+		{"crate can we also check", "great can we also check the memory usage", false, true},
+		{"andrea 那边", "android 那边的 built 昨天挂了是 graded cache 的", false, true},
+		{"同意", "同意 pricing the tears 我们下周一再单独开会讨论", false, true},
+		{"可以我让", "可以我让 bo 跑一下满血看看是不是满血的", false, true},
+		{"merge a p an now returns the conflicting", "merge api now returns", false, true},
+		{"好人都", "how 人都到", false, true}, // its first word revised, the rest kept
+		{"好人都到齐了", "how 人都到齐了我们开始", false, true},
+		{"how 人都到齐了我们开始今天的发布评审", "先说 ios 这边离线编辑基本做完了", false, false},
+		{"the back end merge a p an now returns the conflicting paragraphs so the client can", "help 这词还是", false, false},
+		{"好的 bill 负责在周五之前把 crash rate 的", "上次会议决定 excel cap", false, false},
+		{"that works for me alice can own the rollout plan and the release notes", "好的 bill 负责在周五之前把 crash rate 的", false, false},
+		{"上线了 search latency 比之前", "上线", false, false}, // a new sentence that begins as the last one did
+		{"同意", "同步一下", false, false},
+		{"好人", "how 人", false, false}, // one character in common is too little to tell, later than at once
+		{"好的", "我的意思是", false, false},
+		{"好的", "我的意思是", true, true},
 	} {
-		if got := trContinues(tt.prev, tt.next); got != tt.want {
-			t.Errorf("%q then %q: %v, want %v", tt.prev, tt.next, got, tt.want)
+		if got := trRevises(tt.prev, tt.next, tt.fresh); got != tt.want {
+			t.Errorf("%q then %q (fresh %v): %v, want %v", tt.prev, tt.next, tt.fresh, got, tt.want)
 		}
 	}
 }

@@ -89,6 +89,9 @@ type Script struct {
 	// CaptionNoiseFast is the share of a caption's letters written wrong while the caption session gets its audio
 	// faster than one and a half times real time (captions break faster than real time); 0: no worse than CaptionNoise.
 	CaptionNoiseFast float64
+	// CaptionRevise: the caption session first writes each sentence's caption with its first word wrong and revises
+	// it at once, in the same item, as the measured service did ("好人", then "how 人" at the same moment).
+	CaptionRevise bool
 	// Level scales the audio's levels (0: 1): below about 0.15 a sentence is quieter than the adapter's speech
 	// detection hears, while the service still does (a phone on the table in a quiet room).
 	Level float64
@@ -538,7 +541,23 @@ func (c *conn) nextSentence(i int, at int64) {
 	case c.capItem == "":
 		c.capItem, c.capStart = fmt.Sprintf("item-%d", c.n), c.sessionMS(at)
 	}
+	if c.l.s.CaptionRevise {
+		c.sendCaption(c.capItem, c.capStart, misheard(c.text(i)), false)
+	}
 	c.partial = 0 // its first words go out at once
+}
+
+// misheard is a caption's first hypothesis of text's beginning: its first two letters with the first one wrong.
+func misheard(text string) string {
+	rs := []rune(text)
+	if len(rs) == 0 {
+		return ""
+	}
+	wrong := 'x'
+	if rs[0] == 'x' || rs[0] == 'X' {
+		wrong = 'y'
+	}
+	return string(append([]rune{wrong}, rs[1:min(2, len(rs))]...))
 }
 
 // sentenceCaption sends the caption session's caption of its sentence so far (whole: all of it, and final with
