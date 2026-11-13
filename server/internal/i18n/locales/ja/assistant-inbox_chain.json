@@ -50,5 +50,10 @@
   "handed_conversation": "「{title}」に渡しました",
   "handed_conversation_generic": "会話に渡しました",
   "waiting_who": "{who}待ち · {at}に再確認",
-  "waiting_reply": "返信待ち · {at}に再確認"
+  "waiting_reply": "返信待ち · {at}に再確認",
+  "check_due_next": "再確認の時間です：{next}",
+  "check_due": "再確認の時間です",
+  "check_follow_up_ask": "3回確認しても動きがありません。続けますか？",
+  "check_started_next": "予定どおり再確認：{next}",
+  "check_started": "予定どおり再確認"
 }
