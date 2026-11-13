@@ -35,6 +35,8 @@ type groupLark struct {
 	failNext  map[string]int // event (or "" for a new one) → appends to fail first
 	hold      chan struct{}  // when set, appends wait for it
 	count     int            // when set, the count its answers say (the hub does not read it for an event)
+	ruleTier  string         // when set, the rule tier its answers carry (else the chat's fyi)
+	tier      string         // when set, the tier its answers carry (a rule tier the item takes, as a migrated thing does)
 }
 
 func (*groupLark) ID() string   { return "lark" }
@@ -92,8 +94,8 @@ func (g *groupLark) GroupAppend(_ context.Context, a connector.GroupAppend) (con
 		g.batch = nil
 	}
 	return connector.InboxThing{ID: id, Thread: a.Thread, Kind: KindGroup, Title: "示例兜底标题 " + id, Sender: "丙", Preview: "示例预览",
-		Context: "示例群：" + strings.Join(meta.Messages, "、"), At: time.Now().Add(-time.Minute), Last: last, Meta: raw,
-		Extra: &connector.ThingExtra{Source: "lark", Account: "feishu", AccountName: "飞书", Count: cmp.Or(g.count, len(meta.Messages)), RuleTier: TierFYI,
+		Context: "示例群：" + strings.Join(meta.Messages, "、"), At: time.Now().Add(-time.Minute), Last: last, Meta: raw, Tier: connector.Tier(g.tier),
+		Extra: &connector.ThingExtra{Source: "lark", Account: "feishu", AccountName: "飞书", Count: cmp.Or(g.count, len(meta.Messages)), RuleTier: cmp.Or(g.ruleTier, TierFYI),
 			Lark: rawJSON(InboxLark{AccountID: 1, FeedID: "F1", IsGroup: true, StartPosition: first})}}, nil
 }
 func (g *groupLark) GroupFallback(_ context.Context, f connector.GroupFallback) (connector.GroupFallbackResult, error) {
@@ -373,6 +375,53 @@ func TestInboxGroupFallbackKeepsPolicyTier(t *testing.T) {
 	if k := chainKinds(it); k[len(k)-1] != ChainTriaged {
 		t.Fatalf("the policy's tier was not recorded: %v", k)
 	}
+}
+
+// An event a processing conversation is working on keeps its summary, tier, reason and urgency when new messages
+// join it, whatever tier the rule carried by this batch says: the conversation decides, and a provisional rule tier
+// is not recorded as a retriage. Both ways an event's messages are written (the connector keeps the meta, or the hub
+// composes it).
+func TestInboxGroupHandledEventKeepsItsTriage(t *testing.T) {
+	t.Run("meta", func(t *testing.T) {
+		g := &groupLark{batch: groupBatch(), placed: map[string]bool{}, ruleTier: TierNoise, tier: TierNoise, fallback: connector.GroupFallbackResult{
+			Assign: []connector.GroupAssign{{Message: "m1060", Event: "lark:F1:1051"}, {Message: "m1061", Event: "lark:F1:1051"}}}}
+		h, _ := groupHub(t, g, nil)
+		it := h.inbox.items["lark:F1:1051"]
+		it.Urgent = true
+		it.Handling = &InboxHandling{Owner: HandlingOwner, State: HandlingWaiting}
+		h.collectInbox(context.Background(), roundPoll)
+		h.waitGrouping()
+
+		if it.Title != "示例 A 方案评审" || it.Summary != "等你定时间" || it.Tier != TierAction || it.Reason != "示例" ||
+			it.TriagedBy != "model" || !it.Urgent || it.Count != 3 || it.Last != "1061" || it.TriagedAt != it.Last {
+			t.Fatalf("handled event %+v", it)
+		}
+		if k := chainKinds(it); slices.Contains(k, ChainTriaged) {
+			t.Fatalf("the batch's rule tier was recorded as a retriage: %v", k)
+		}
+	})
+	t.Run("no meta", func(t *testing.T) {
+		batch := chatBatch()
+		batch.Tier, batch.Why = connector.TierNoise, "示例来源规则：这是噪音"
+		g := &groupChat{batch: batch, fallback: connector.GroupFallbackResult{
+			Assign: []connector.GroupAssign{{Message: "m2", Event: "examplechat:chat:C1#m1"}, {Message: "m3", Event: "examplechat:chat:C1#m1"}}}}
+		model, client := newGroupModel(t, chatAnswer)
+		model.down = true
+		h := chatHub(t, g, client)
+		it := h.inbox.items["examplechat:chat:C1#m1"]
+		it.Summary, it.Reason = "示例总结：等你定时间", "示例理由：等你定时间"
+		it.Handling = &InboxHandling{Owner: HandlingOwner, State: HandlingWaiting}
+		h.collectInbox(context.Background(), roundPoll)
+		h.waitGrouping()
+
+		if it.Title != "示例 A 方案评审" || it.Summary != "示例总结：等你定时间" || it.Tier != TierAction ||
+			it.Reason != "示例理由：等你定时间" || it.TriagedBy != "model" || it.Count != 3 || it.Last != "3" || it.TriagedAt != it.Last {
+			t.Fatalf("handled event %+v", it)
+		}
+		if k := chainKinds(it); slices.Contains(k, ChainTriaged) {
+			t.Fatalf("the batch's rule tier was recorded as a retriage: %v", k)
+		}
+	})
 }
 
 // The model down (or none set up): the fallback groups it. A model that only ever wants tools stops after four.
