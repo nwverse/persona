@@ -663,8 +663,7 @@ private struct RenameTerminalAlert: ViewModifier {
     func body(content: Content) -> some View {
         content
             .alert("Rename Terminal", isPresented: Binding(get: { target != nil }, set: { if !$0 { target = nil } }), presenting: target) { t in
-                // As New Folder's name in Files: a name is taken as typed, and with autocorrection on the keyboard's
-                // pending suggestion took the first tap on Save on iPhone (docs/lessons/ios.md).
+                // As New Folder's name in Files: a terminal's name is taken as typed, never corrected or capitalized.
                 TextField(String(localized: "Terminal name"), text: $name)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()

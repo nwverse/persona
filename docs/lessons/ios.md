@@ -2465,6 +2465,7 @@ that opens the package (`scripts/test/isolation-lint`) leaves a `.build` folder 
   Save disabled for the starting name, but the alert drew it in the same blue as Cancel: a button that looks ready and
   does nothing. Check in the action instead (an empty or unchanged name saves nothing, as Rename Space and Rename Agent
   do), and limit the length with `.onChange` on the field's text.
-- UI tests: right after typing into an alert's field, a tap on its button can be lost while the alert settles (every
-  time on an iPhone simulator here; once in `FilesActionsTests`). Tap again while the alert stays up, then check what
-  reached the mock; a single tap reads as an app bug that isn't there.
+- UI tests: a tap on an alert's button 0.75 s after `typeText` into its field was lost on every save on an iPhone
+  simulator (iOS 27) and on some on an iPad one; a second tap a few seconds later always went through. Turning
+  autocorrection off did not change it. `FilesActionsTests`, which takes a screenshot between typing and tapping, saw it
+  once. Tap again while the alert stays up, then check what reached the mock; a single tap reads as an app bug.
