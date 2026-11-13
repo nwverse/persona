@@ -496,7 +496,8 @@ conversation the item was handed to ("Item actions", Hand to AI), rejecting othe
 - Old `inbox_draft` (reply only) remains supported, equivalent to `kind: reply`, for chats started before the tool list changed.
 - `item` (an item id) is needed from a conversation the item was handed to (`assistant/inbox_handoff.go`); from the item's own handling chat it changes nothing. A tool error refuses an unknown item,
   one not handed to this conversation (only a conversation in its `handoffs` may write back) and one the user already filed ("answer in the chat instead"; a filed item is not reopened);
-  nothing changes then. Without `item` the tool works as before. A suggestion from a hand-off records where it came from (`suggestion.conversation`), its chain entry links that
+  nothing changes then. The item's own handling chat is likewise refused when it submits a kind after the item was filed: nothing changes, while a recap-only call still updates the recap.
+  Without `item` the tool works as before. A suggestion from a hand-off records where it came from (`suggestion.conversation`), its chain entry links that
   conversation, and the item's `agent` / `handling` stay as they were (no message card, no old-App draft).
 - **Task-related items**: for linked tasks (2′), prompts include task progress; a reply suggestion inserts a message card into the chat that started the task (`message`, retaining sent state after sending).
   When the linked task is supervised and the assistant's `inbox_signals` is on (off by default, #4293), each pass that takes new messages from other people into the item also tells the task's supervisor:
