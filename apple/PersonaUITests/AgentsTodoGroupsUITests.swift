@@ -1,8 +1,8 @@
 import XCTest
 
 /// By To-do's groups of Agents on no to-do (#6458): Started Manually and Unassigned start folded below the to-dos, say
-/// what they hold (their header's spoken words, and behind an ⓘ: shown here with -showInfoTip), and an open, empty group
-/// says it in its place. Against the mock hub:
+/// what they hold (their header's spoken words, and behind an ⓘ a tap opens), and an open, empty group says it in its
+/// place. Against the mock hub:
 ///   `PORT=<port> MOCK_MANUAL_HERDR=1 python3 scripts/mock/mock_hub.py` (TEST_RUNNER_PERSONA_TODO_GROUPS_HUB), and
 ///   `PORT=<port> python3 scripts/mock/mock_hub.py` (TEST_RUNNER_PERSONA_TODO_GROUPS_EMPTY_HUB: nothing opened by hand).
 /// TEST_RUNNER_PERSONA_SHOTS=<dir> saves the screens (TEST_RUNNER_PERSONA_STYLE names them, e.g. light / dark;
@@ -35,11 +35,11 @@ final class AgentsTodoGroupsUITests: XCTestCase {
         super.tearDown()
     }
 
-    private func launch(_ hub: String, extra: [String] = []) {
+    private func launch(_ hub: String) {
         app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", pair, "-app.tab", "chats", "-dev.openChat", "", "-tab", "dev", "-dev.grouping", "todo",
-                               "-openAgentsFresh", "YES"] + extra
+                               "-openAgentsFresh", "YES"]
         if let scheme = env["PERSONA_SCHEME"] { app.launchArguments += ["-ui.scheme", scheme] }
         addUIInterruptionMonitor(withDescription: "notifications") { alert in
             for label in ["允许", "Allow", "好", "OK"] where alert.buttons[label].exists {
@@ -91,10 +91,10 @@ final class AgentsTodoGroupsUITests: XCTestCase {
         XCTAssertTrue(unassigned.exists, "Unassigned is listed")
         save("todo-groups")
 
-        // the ⓘ's words, in a popover
-        app.terminate()
-        launch(hub, extra: ["-showInfoTip", Self.manual[0]])
+        // the ⓘ's words, in a popover. The header speaks as one element (its words included), so the ⓘ is tapped where it
+        // sits: just after the title, in zh-Hans at the default text size (a tap elsewhere on the header folds it).
         reveal(Self.manual)
+        manual.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 94, dy: manual.frame.height / 2)).tap()
         let words = app.staticTexts.matching(identifier: "infoTip.text").firstMatch
         XCTAssertTrue(words.waitForExistence(timeout: 10), "the ⓘ's popover")
         XCTAssertTrue(words.label.contains("终端") || words.label.contains("terminal"))
@@ -115,6 +115,8 @@ final class AgentsTodoGroupsUITests: XCTestCase {
         XCTAssertTrue(manual.waitForExistence(timeout: 20), "Started Manually is listed while empty")
         manual.tap()
         let empty = app.staticTexts.matching(identifier: "agents.groupEmpty").firstMatch
+        // the header may sit at the screen's foot: its row opens below it
+        if !empty.waitForExistence(timeout: 2) { app.swipeUp(velocity: .slow) }
         XCTAssertTrue(empty.waitForExistence(timeout: 5), "an open, empty group says what it would hold")
         XCTAssertTrue(empty.label.contains("终端") || empty.label.contains("terminal"))
         save("todo-groups-empty")
