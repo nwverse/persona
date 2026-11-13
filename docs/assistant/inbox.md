@@ -487,7 +487,7 @@ The manager refreshes `where` from the connector's `chat` tag (else its `repo` t
 | `queued` | Queued for the AI twin | In progress (urgent: Needs you) | Queued for the AI |
 | `looking` | A processing conversation is looking | In progress (urgent: Needs you) | AI is looking |
 | `agent_working` | An Agent it started is working | In progress | Agent working |
-| `waiting` | Waiting on the other side | In progress | Waiting for {who} · look again {time}: {next} (parts left out when empty; no `who`: Waiting for a reply) |
+| `waiting` | Waiting on the other side | In progress | Waiting for {who} · look again {time}: {next} (parts left out when empty; no `who`: Waiting for a reply; `{time}` as `spec/fixtures/inbox/time.json` writes it) |
 | `follow_up_ask` | Three looks in a row found nothing new | Needs you | Checked 3 times with no news. Keep following? |
 | `check_due` | The time to look again came while the AI twin was off | Needs you | Time to look again: {next} |
 | `failed` | The AI could not finish | Needs you | AI couldn't finish: {reason} |
