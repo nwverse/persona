@@ -103,7 +103,11 @@ class MainActivity : ComponentActivity() {
         }
         val app = application as PersonaApp
         lifecycleScope.launch { shell.restoreDemo() }
-        persona.android.platform.GlassFrameMonitor.attach(this) { !shell.automation }
+        persona.android.platform.GlassFrameMonitor.attach(
+            this,
+            deviceLevel = { app.appearance.deviceLevel(app.appearance.glass.value) },
+            enabled = { !shell.automation },
+        )
         managerRoster.start()
         setContent {
             val scheme by app.appearance.scheme.collectAsStateWithLifecycle()

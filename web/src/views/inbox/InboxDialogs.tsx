@@ -259,7 +259,7 @@ export function HandOffDialog({ item, onClose }: { item: InboxItem; onClose: () 
       const full = await api<InboxItem>(itemPath(item.id), { headers: itemRequest(item) });
       const file = doneChosen.current ? markDone : true;
       openNewAgent({
-        forward: handOffContext({ ...item, ...full }),
+        forwards: [handOffContext({ ...item, ...full })],
         prompt: ask.trim() || HANDOFF_PRESETS[0],
         onStarted: (s) => {
           if (memoryKey) rememberHandOff(memoryKey, agentTarget(s.machine_id, s.session_id));

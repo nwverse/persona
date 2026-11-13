@@ -3,7 +3,7 @@
 // engine come with it; views/NewAgentModel.tsx), where the profile's presets (#2225), the thinking effort and Claude Code's
 // ultracode switch (#3428: off each time, never remembered) also are. On top, the recent setups (#2134): a tap fills every
 // field with one that started an agent before, and never starts.
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { hubLabel } from "../lib/mesh";
 import { api, ApiError, credentialOwner, enc, errorText, getToken, isAbort, subscribeCredentialOwner } from "../lib/api";
 import { defaultManager, useKnownDefault } from "../lib/manager-choice";
@@ -12,6 +12,7 @@ import type { DraftImage } from "../lib/drafts";
 import { withContexts } from "../lib/context-xml";
 import type { ContextRef } from "../lib/links";
 import { ForwardBar } from "./chat/ForwardBar";
+import { lazyPage } from "../lib/lazy-page";
 import { browserStartKeys, launchAgent, presetPrompt, type NewAgentPreset } from "../lib/new-agent";
 import { whenStarted } from "../lib/new-agent-started";
 import type { WorkspaceTarget } from "../lib/workspace-target";
@@ -47,6 +48,9 @@ import { LauncherBlockedHelp } from "./LauncherBlockedHelp";
 import { launcherTitle, namedLauncher, namesFromProviders, providerIdNote, providerLabel, providerTitle, type Named } from "../lib/provider-names";
 import { WorkSessionForm } from "./WorkSessionForm";
 import { NewAgentModel, useModelList } from "./NewAgentModel";
+
+// several forwarded at once (#3838): their bar, from the group's chunk, which Forward to has loaded by then
+const ForwardGroupBar = lazyPage(() => import("./chat/ForwardGroup").then((m) => m.ForwardGroupBar));
 
 /** A forwarded picture (lib/drafts.ts DraftImage, base64) as a file for the first message's tray. */
 function draftImageFile(img: DraftImage): File {
@@ -119,8 +123,9 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   const [prompt, setPrompt] = useState(() => localStorage.getItem("draft:new-agent") ?? "");
   const keys = useMemo(browserStartKeys, []);
   const [attachments, setAttachments] = useState<LocalAttachment[]>([]);
-  // a message forwarded to a new Agent (#3899, lib/forward.ts): its card over the first message, which carries it in front
-  const [forward, setForward] = useState<ContextRef | null>(null);
+  // messages forwarded to a new Agent (#3899, #3838, lib/forward.ts): their card over the first message, which carries
+  // them in front
+  const [forwards, setForwards] = useState<ContextRef[]>([]);
   const [dragging, setDragging] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const submitted = useRef(false);
@@ -168,7 +173,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
 
   useEffect(() => {
     if (!open) {
-      setForward(null); // a forward goes with the sheet it came in, not into the next one
+      setForwards([]); // a forward goes with the sheet it came in, not into the next one
       shownMid.current = "";
       touched.current = false;
       carrying.current = null;
@@ -223,7 +228,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
       promptRevision.current++;
       setPrompt((draft) => presetPrompt(preset.prompt, draft));
     }
-    if (preset.forward) setForward(preset.forward);
+    if (preset.forwards?.length) setForwards(preset.forwards);
     if (preset.images?.length) {
       const picked: LocalAttachment[] = [];
       for (const img of preset.images) {
@@ -478,7 +483,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     const revision = promptRevision.current;
     // who opened New agent for something of its own hears the Agent started (Inbox's "New agent…", #5933)
     const onStarted = preset?.onStarted;
-    const sent = forward ? withContexts([forward], prompt, attachments.some((a) => a.mime.startsWith("image/"))) : prompt.trim();
+    const sent = forwards.length ? withContexts(forwards, prompt, attachments.some((a) => a.mime.startsWith("image/"))) : prompt.trim();
     const snapshot = { text: sent, attachments: [...attachments] };
     const current = () => preparation.current === controller && !controller.signal.aborted && owner === credentialOwner()
       && getState().machines.some((m) => m.id === mid && m.online)
@@ -512,7 +517,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
       attachmentsRef.current = attachmentsRef.current.filter((a) => !ids.has(a.id));
       setAttachments(attachmentsRef.current);
       if (promptRevision.current === revision) setPrompt("");
-      setForward(null);
+      setForwards([]);
       dismiss();
     };
     // in a worktree of its own (#6115): made first; a failure says why here, and nothing starts
@@ -750,7 +755,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
               onDrop={(e) => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }}>
               {/* an Inbox item handed to a new Agent (#5933) shows as forwarded from where it came ("Lark · <title>"); shown
                   only: it goes as the <persona-context> an Agent target gets */}
-              {forward && <div className="px-2 pt-2" data-new-agent-forward><ForwardBar forward={forward.kind === "context" ? { ...forward, attrs: { author: forward.title } } : forward} onRemove={() => setForward(null)} /></div>}
+              {forwards.length > 0 && <div className="px-2 pt-2" data-new-agent-forward>{forwards.length > 1 ? <Suspense fallback={null}><ForwardGroupBar forwards={forwards} onRemove={() => setForwards([])} /></Suspense> : <ForwardBar forward={forwards[0].kind === "context" ? { ...forwards[0], attrs: { author: forwards[0].title } } : forwards[0]} onRemove={() => setForwards([])} />}</div>}
               {attachments.length > 0 && <div className="px-3 pt-2"><AttachmentTray attachments={attachments} onRemove={(id) => {
                 releaseAttachments(attachments.filter((a) => a.id === id));
                 setAttachments((current) => current.filter((a) => a.id !== id));

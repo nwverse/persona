@@ -367,7 +367,7 @@ struct InboxHandOffSheet: View {
                 lastGone = r.gone
             }
             .sheet(item: $newAgent) { p in
-                NewChatView(initialPrompt: p.prompt, contextBlock: p.contextBlock, forwarded: p.card, forwardedIcon: Theme.Icon.inbox,
+                NewChatView(initialPrompt: p.prompt, contextBlock: p.contextBlock, forwarded: [p.card], forwardedIcon: Theme.Icon.inbox,
                             nameHint: p.nameHint, onlyGroup: p.group) { s in
                     newAgent = nil
                     started(s.key, prefill: p)

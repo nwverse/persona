@@ -1037,8 +1037,9 @@ export function createPaseoBridge(deps = {}, options = {}) {
 
   /**
    * A new session (the form, or the machine's engine starting one): a new agent of the provider the launcher names
-   * (a launcher of the login shell's that Paseo does not have: its default provider), with the form's model, mode and
-   * effort, and its first message. Its id is chosen here (paseo-<agent id>) and kept on the agent as a label.
+   * (a launcher of the login shell's that Paseo does not have: its default provider). A replacement uses its own
+   * model and effort defaults; the mode and first message still apply. Its id is chosen here (paseo-<agent id>)
+   * and kept on the agent as a label.
    */
   async function start(params) {
     if (params.resume) return takeOver(params)
@@ -1061,10 +1062,13 @@ export function createPaseoBridge(deps = {}, options = {}) {
     }
     const root = roots[provider] ?? provider
     const config = { provider, cwd }
-    if (typeof params.model === 'string' && params.model) config.model = params.model
+    // Model ids and effort belong to the requested launcher, including when a tier resolved them upstream. Only
+    // Paseo knows the actual replacement, so leave both unset here and let that provider apply its own defaults.
+    const replacedLauncher = params.launcher && provider !== params.launcher
+    if (!replacedLauncher && typeof params.model === 'string' && params.model) config.model = params.model
     const modeId = paseoMode(root, params.permission_mode)
     if (modeId) config.modeId = modeId
-    if (EFFORTS.includes(params.effort)) {
+    if (!replacedLauncher && EFFORTS.includes(params.effort)) {
       const opts = thinkingOptions({ provider, model: config.model })
       if (!opts.length || opts.includes(params.effort)) config.thinkingOptionId = params.effort
     }

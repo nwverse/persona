@@ -323,7 +323,8 @@ nonisolated struct APIClient: Sendable {
         config.authorize(&req)
         req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
         clientMetadata.apply(to: &req)
-        let requestID = String(UUID().uuidString.prefix(8)).lowercased()
+        // The caller's own id when it names one (a page that shows it, to match the hub's log), else a new one.
+        let requestID = headers["X-Client-Request-Id"] ?? String(UUID().uuidString.prefix(8)).lowercased()
         req.setValue(requestID, forHTTPHeaderField: "X-Client-Request-Id")
         for (name, value) in headers { req.setValue(value, forHTTPHeaderField: name) }
         if let body {
@@ -1043,18 +1044,21 @@ nonisolated struct APIClient: Sendable {
         var command: String?
         /// One line that installs and pairs; only when the hub knows the site it was published from.
         var install: Install?
+        /// The manager the computer belongs to now (`add.manager`); nil from a hub before the field.
+        var manager: String?
         enum CodingKeys: String, CodingKey {
-            case token, machine, name, trust, added, command, install, expiresAt = "expires_at", pairLink = "pair_url"
+            case token, machine, name, trust, added, command, install, manager, expiresAt = "expires_at", pairLink = "pair_url"
         }
     }
 
     /// Adds a computer, waiting to be confirmed (`add`): `name` may be Chinese (40 characters at most), `os` is
-    /// mac / linux / windows (which instructions the app shows), `icon` laptop / desktop / server.
-    func computerCode(addNamed name: String, os: String, icon: String) async throws -> ComputerCode {
-        struct Add: Encodable { var name: String; var os: String; var icon: String }
+    /// mac / linux / windows (which instructions the app shows), `icon` laptop / desktop / server. `manager` is the assistant
+    /// the computer is for (its real id, the default's too); nil leaves it to the hub, as a hub before `add.manager` does.
+    func computerCode(addNamed name: String, os: String, icon: String, manager: String? = nil) async throws -> ComputerCode {
+        struct Add: Encodable { var name: String; var os: String; var icon: String; var manager: String? }
         struct Body: Encodable { var add: Add }
         return try JSON.decoder.decode(ComputerCode.self, from: try await request("POST", "/api/v1/auth/pair-codes",
-                                                                                  body: Body(add: Add(name: name, os: os, icon: icon))))
+                                                                                  body: Body(add: Add(name: name, os: os, icon: icon, manager: manager))))
     }
 
     /// A new code for a computer still waiting to be confirmed (`machine`); a confirmed one is 409 `not_pending`.
@@ -1256,36 +1260,6 @@ nonisolated struct APIClient: Sendable {
         var name: String?
         var ended: Bool?
     }
-    /// The direction tree (#4352, `GET /api/v1/assistant/directions/tree`): every current direction with the open tasks
-    /// it supervises, then the secretary group. Clients read the names, the counts and the order here; no client works
-    /// out the grouping itself.
-    struct DirectionsTree: Decodable, Sendable, Equatable {
-        var directions: [TreeDirection]
-    }
-    /// One direction of the tree, or its secretary group (`secretary`: the main conversation's, not a direction the
-    /// sidebar lists).
-    struct TreeDirection: Decodable, Sendable, Equatable {
-        var id: String
-        var name: String?
-        var secretary: Bool?
-        var counts: DirectionCounts?
-    }
-    /// How many of a direction's listed tasks are in each state (#4352): its row reads the first two as
-    /// "N working · N need you".
-    struct DirectionCounts: Codable, Sendable, Equatable {
-        var working: Int
-        var needsYou: Int
-        enum CodingKeys: String, CodingKey { case working, needsYou = "needs_you" }
-        init(working: Int = 0, needsYou: Int = 0) {
-            self.working = working
-            self.needsYou = needsYou
-        }
-        init(from decoder: Decoder) throws {
-            let c = try decoder.container(keyedBy: CodingKeys.self)
-            working = try c.decodeIfPresent(Int.self, forKey: .working) ?? 0
-            needsYou = try c.decodeIfPresent(Int.self, forKey: .needsYou) ?? 0
-        }
-    }
     /// Makes a conversation a direction (#4331, `POST /api/v1/assistant/directions/{id}/make`): its work is led from
     /// there from now on.
     func makeDirection(_ id: String) async throws {
@@ -1308,27 +1282,15 @@ nonisolated struct APIClient: Sendable {
         }
         return out
     }
-    /// The direction tree (#4352): a hub older than it answers 404, and the caller keeps what `leaders()` gave it.
-    func directionsTree() async throws -> DirectionsTree {
-        try await get("/api/v1/assistant/directions/tree", as: DirectionsTree.self)
-    }
-    /// The tree's current directions, its secretary group left out, in its order.
-    static func directions(_ tree: DirectionsTree) -> [TreeDirection] {
-        tree.directions.filter { $0.secretary != true && !$0.id.isEmpty }
-    }
-    /// The directions' names from the tree, by leader conversation id.
-    static func directionNames(_ tree: DirectionsTree) -> [String: String] {
-        var out: [String: String] = [:]
-        for d in directions(tree) {
-            if let name = d.name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty { out[d.id] = name }
+    /// The direction tree (#4352, docs/protocol/protocol.md, `DirectionTree`): the directions with their open to-dos
+    /// and Agents, the secretary group last. nil from a hub before it (404): the caller keeps what `leaders()` gave it,
+    /// the sidebar keeps its flat rows and the lists offer no grouping by it.
+    func directionsTree() async throws -> DirectionTree? {
+        do {
+            return try await getDecodedOffMain("/api/v1/assistant/directions/tree", as: DirectionTree.self)
+        } catch let e as APIError where e.status == 404 {
+            return nil
         }
-        return out
-    }
-    /// The directions' counts from the tree, by leader conversation id.
-    static func directionCounts(_ tree: DirectionsTree) -> [String: DirectionCounts] {
-        var out: [String: DirectionCounts] = [:]
-        for d in directions(tree) { if let counts = d.counts { out[d.id] = counts } }
-        return out
     }
     /// `st` with its conversations stamped with the manager this client named: the hub relays another manager's answer as
     /// it came, without the `manager` its own lists put on each session. Nothing named: the default's, left as they came.
@@ -1888,6 +1850,20 @@ nonisolated struct APIClient: Sendable {
     /// The persona this device's Live Activity draws, alone (the PUT merges): the hub echoes it in the device's pushes.
     func setFleetLook(device: String, _ look: FleetLook) async throws {
         _ = try await request("PUT", "/api/v1/devices/\(device)/prefs", body: FleetLookPut(look: look))
+    }
+    /// Today's tokens by the hour (`GET /api/v1/usage`'s `hourly`, #5721): 24 numbers from midnight; empty from an older
+    /// hub, which has no such field.
+    func usageHourly() async throws -> [Int] {
+        struct Body: Decodable {
+            struct Usage: Decodable { var hourly: [Int]? }
+            var usage: Usage
+        }
+        return try await get("/api/v1/usage", as: Body.self).usage.hourly ?? []
+    }
+    /// Whether this device has the Home Screen widgets, alone: while its app is not open, the hub wakes it to write them
+    /// again when the agents' counts change (#5721). An older hub keeps the field and does nothing with it.
+    func setHasWidgets(device: String, _ has: Bool) async throws {
+        _ = try await request("PUT", "/api/v1/devices/\(device)/prefs", body: WidgetsPut(widgets: has))
     }
     func setNotifyPrefs(device: String, _ prefs: NotifyPrefs) async throws -> NotifyPrefs {
         try JSON.decoder.decode(NotifyPrefs.self, from: try await request("PUT", "/api/v1/devices/\(device)/prefs", body: prefs))

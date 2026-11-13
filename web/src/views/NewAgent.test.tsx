@@ -102,7 +102,7 @@ describe("NewAgent with no computer", () => {
 describe("NewAgent with an Inbox item (#5933)", () => {
   it("shows the item's card, forwarded from where it came, over the first message, and the ask in the box", async () => {
     const forward = { id: "inbox:lark:f1:1", kind: "context" as const, title: "Lark · Example", url: "", text: "Example: is it merged?" };
-    act(() => root.render(<NewAgent open onClose={() => {}} preset={{ forward, prompt: "Look into it" }} key="inbox" />));
+    act(() => root.render(<NewAgent open onClose={() => {}} preset={{ forwards: [forward], prompt: "Look into it" }} key="inbox" />));
     await flush();
     const card = document.body.querySelector("[data-new-agent-forward]");
     expect(card?.textContent).toContain("Lark · Example");

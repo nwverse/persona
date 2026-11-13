@@ -91,10 +91,10 @@ describe("Hand to AI: New agent…", () => {
     act(() => root.render(<HandOffDialog item={item} onClose={onClose} />));
     ask("Look into the background");
     const preset = await open();
-    expect(preset.forward).toEqual(handOffContext(full));
+    expect(preset.forwards).toEqual([handOffContext(full)]);
     expect(preset.prompt).toBe("Look into the background");
     // New agent sends the card's block, then the ask: the text an agent target gets from here.
-    const ref = preset.forward!;
+    const ref = preset.forwards![0];
     expect(`${contextXML(ref)}\n\n${preset.prompt}`).toBe(handOffMessage(full, "Look into the background"));
     expect(calls.some(sent)).toBe(false);
     expect(calls.some(filed)).toBe(false);
