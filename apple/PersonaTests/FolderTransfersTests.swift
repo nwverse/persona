@@ -137,6 +137,26 @@ struct FolderTransfersTests {
         #expect(transfers.items.isEmpty && made.isEmpty)
     }
 
+    @Test func remoteCopyWithoutOperationLookupDoesNotOfferFalseCancel() async throws {
+        let hub = FakeHub()
+        hub.onAsync("POST", "/api/v1/machines/m1/files/copy") { _ in
+            for _ in 0..<500 {
+                if Task.isCancelled { throw CancellationError() }
+                try? await Task.sleep(for: .milliseconds(20))
+            }
+            return Data(#"{"copied":[]}"#.utf8)
+        }
+        let model = AppModel()
+        model.apiForTests = hub.client
+        let transfers = FolderTransfers()
+        defer { for item in transfers.items { transfers.cancel(item.id) } }
+        transfers.duplicate(["~/a.txt"], cwd: "~", machine: MachineRef(group: "", id: "m1"), model: model) { _ in }
+        try await Task.sleep(for: .milliseconds(1250))
+        let item = try #require(transfers.items.first)
+        #expect(!item.showsProgress && transfers.visibleItems.isEmpty)
+        #expect(hub.requests.contains { $0.path.contains("/files/operations/") })
+    }
+
     @Test func remoteCopyDoesNotWaitForAnUpload() async throws {
         let hub = FakeHub()
         var uploadCancelled = false

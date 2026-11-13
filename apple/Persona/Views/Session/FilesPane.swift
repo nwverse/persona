@@ -40,7 +40,7 @@ struct FilesPane: View {
     /// The item to mark after opening a folder (a found file, Show in Files Page, a link's real location).
     @State private var highlight: String?
     @AppStorage("files.showHidden") private var showHidden = false
-    @State private var transfers = FolderTransfers()
+    @State private var transfers: FolderTransfers
     @State private var pickingFiles = false
     @State private var pickingPhotos = false
     @State private var photoPicks: [PhotosPickerItem] = []
@@ -56,6 +56,19 @@ struct FilesPane: View {
     @State private var query = ""
     @FocusState private var findFocused: Bool
     @State private var finder = FilesFinder()
+
+    init(machineID: String, group: String = "", cwd: String, git: GitStatus? = nil, key: SessionKey? = nil,
+         reloadGit: (() async -> Void)? = nil, reveal: Binding<String?> = .constant(nil), transfers: FolderTransfers? = nil) {
+        self.machineID = machineID
+        self.group = group
+        self.cwd = cwd
+        self.git = git
+        self.key = key
+        self.reloadGit = reloadGit
+        self.reveal = reveal
+        _transfers = State(initialValue: transfers ?? FolderTransfers())
+    }
+
     /// New Folder / New Text File waiting for a name (#5828).
     @State private var naming: NewItem?
     @State private var newItemName = ""
@@ -268,7 +281,7 @@ struct FilesPane: View {
                 }
             }
         }
-        .onDisappear { transfers.stop() }
+        .onTabVisibility(appear: { transfers.resumePolling() }, disappear: { transfers.stop() })
         #if DEBUG
         .task { // `-showFilesDrop YES`: the folder looks as it does with files dragged over it (iPad), for screenshots
             if UserDefaults.standard.bool(forKey: "showFilesDrop") { dropping = true }

@@ -121,6 +121,29 @@ final class FolderEditTests: XCTestCase {
         remoteProgress("dark", copying: false, largestText: true)
     }
 
+    func testRemoteCopyProgressResumesAfterEarlyReturn() {
+        openHome()
+        app.staticTexts["notes.txt"].press(forDuration: 1.2)
+        let action = app.buttons["创建副本"]
+        XCTAssertTrue(action.waitForExistence(timeout: 5), "no Duplicate in the row menu")
+        action.tap()
+
+        // Leave before the first one-second poll can make the row visible. Returning must resume the POST's polling
+        // even though there is no transfers bar whose onAppear could do it.
+        let back = app.navigationBars.buttons.firstMatch
+        XCTAssertTrue(back.waitForExistence(timeout: 5), "no way back to the machine")
+        back.tap()
+        XCTAssertTrue(app.buttons["machine.files"].waitForExistence(timeout: 10), "the machine page did not return")
+        sleep(2)
+        openHome()
+
+        let cancel = app.buttons["取消复制 notes.txt"]
+        XCTAssertTrue(cancel.waitForExistence(timeout: 8), "the running copy did not regain progress and Cancel")
+        cancel.tap()
+        XCTAssertTrue(cancel.waitForNonExistence(timeout: 5), "the cancelled operation stayed in the transfer bar")
+        XCTAssertFalse(app.staticTexts["notes 2.txt"].waitForExistence(timeout: 2), "the cancelled copy left its output")
+    }
+
     /// MOCK_FILE_OP_DELAY keeps the original POST open: the bar appears after one second and Cancel leaves no output.
     private func remoteProgress(_ scheme: String, copying: Bool, largestText: Bool = false) {
         app.terminate()

@@ -10,7 +10,7 @@ import UniformTypeIdentifiers
 final class FolderTransfers {
     static let limit: Int64 = 2 << 30
 
-    struct Item: Identifiable {
+    struct Item: Identifiable, Equatable {
         enum Kind { case upload, download, copy, compress }
         let id = UUID()
         var kind: Kind
@@ -22,12 +22,34 @@ final class FolderTransfers {
         var zipping = false // several items (or a folder) zipped on the computer before the download (#5828)
         var filesDone = 0
         var filesTotal = 0
-        var showsProgress = true // a remote copy / zip appears only after one second
+        var showsProgress = true // remote copy / zip: one second plus a successful operation read
+        var status = ""
     }
 
-    /// The rows the transfer bar shows, derived when items change rather than in the view's body; a quick remote operation never appears.
+    /// Rows and their display text are derived only when an item changes, not in the view's body.
     private(set) var visibleItems: [Item] = []
-    private func syncVisible() { visibleItems = items.filter(\.showsProgress) }
+    private func syncVisible() {
+        visibleItems = items.filter(\.showsProgress).map { item in
+            var item = item
+            item.status = Self.status(item)
+            return item
+        }
+    }
+
+    private static func status(_ item: Item) -> String {
+        if item.asking { return String(localized: "Already exists, waiting for you") }
+        if item.waiting { return String(localized: "Waiting [File Attach 26c8cf]") }
+        if item.zipping { return String(localized: "Zipping on the computer…") }
+        switch item.kind {
+        case .copy, .compress:
+            let files = item.filesTotal > 0 ? String(localized: "\(item.filesDone) / \(item.filesTotal) items · ") : ""
+            let bytes = item.size > 0 ? "\(item.done.storageText) / \(item.size.storageText)" : ""
+            if !files.isEmpty || !bytes.isEmpty { return files + bytes }
+            return item.kind == .copy ? String(localized: "Copying on the computer…") : String(localized: "Compressing on the computer…")
+        case .upload, .download:
+            return "\(item.done.storageText) / \(item.size.storageText)"
+        }
+    }
 
     /// A name already in the folder, waiting for the user's answer.
     struct Conflict: Identifiable {
@@ -213,7 +235,7 @@ final class FolderTransfers {
         return try await request(operationID)
     }
 
-    /// Restarts only polling after the bar was hidden; the original POST never stopped.
+    /// Restarts only polling when the file page returns to the front; the original POST never stopped.
     func resumePolling() {
         for id in pollRequests.keys { startPolling(id) }
     }
@@ -224,10 +246,11 @@ final class FolderTransfers {
             let delay = max(0, 1 - Date().timeIntervalSince(poll.started))
             try? await Task.sleep(for: .seconds(delay))
             guard !Task.isCancelled else { return }
-            self?.update(id) { $0.showsProgress = true }
+            // A successful read proves this chain can report and cancel the operation; old chains keep the old no-row UI.
             while !Task.isCancelled {
                 if let operation = try? await poll.api.fileOperation(machine: poll.machine, id: poll.operationID) {
                     self?.update(id) {
+                        $0.showsProgress = true
                         $0.done = operation.bytesDone
                         $0.size = operation.bytesTotal
                         $0.filesDone = operation.filesDone
@@ -248,7 +271,7 @@ final class FolderTransfers {
     }
 
     /// When the browser goes away: a question nobody will answer is a no, downloads nobody will save stop. Uploads and
-    /// remote copy / zip POSTs go on; only their progress polling pauses until the bar appears again.
+    /// remote copy / zip POSTs go on; only their progress polling pauses until the file page is in front again.
     func stop() {
         answer(.cancel)
         for task in pollTasks.values { task.cancel() }
@@ -390,10 +413,12 @@ final class FolderTransfers {
     }
 
     private func update(_ id: UUID, _ change: (inout Item) -> Void) {
-        if let i = items.firstIndex(where: { $0.id == id }) {
-            change(&items[i])
-            syncVisible()
-        }
+        guard let i = items.firstIndex(where: { $0.id == id }) else { return }
+        var next = items[i]
+        change(&next)
+        guard next != items[i] else { return }
+        items[i] = next
+        syncVisible()
     }
 
     /// What to tell the user when a file did not make it into the folder; nil when they cancelled it.
@@ -421,12 +446,11 @@ struct FolderTransfersBar: View {
     var body: some View {
         VStack(spacing: Theme.Space.sm) {
             ForEach(transfers.visibleItems) { item in
-                AttachmentRow(symbol: symbol(item), name: item.name, status: status(item),
+                AttachmentRow(symbol: symbol(item), name: item.name, status: item.status,
                               progress: item.asking || item.zipping ? nil : item.size > 0 ? Double(min(item.done, item.size)) / Double(item.size) : 0,
                               removeLabel: removeLabel(item)) { transfers.cancel(item.id) }
             }
         }
-        .onAppear { transfers.resumePolling() }
     }
 
     private func symbol(_ item: FolderTransfers.Item) -> String {
@@ -435,21 +459,6 @@ struct FolderTransfersBar: View {
         case .download: Theme.Icon.save
         case .copy: Theme.Icon.copy
         case .compress: Theme.Icon.archive
-        }
-    }
-
-    private func status(_ item: FolderTransfers.Item) -> String {
-        if item.asking { return String(localized: "Already exists, waiting for you") }
-        if item.waiting { return String(localized: "Waiting [File Attach 26c8cf]") }
-        if item.zipping { return String(localized: "Zipping on the computer…") }
-        switch item.kind {
-        case .copy, .compress:
-            let files = item.filesTotal > 0 ? String(localized: "\(item.filesDone) / \(item.filesTotal) items · ") : ""
-            let bytes = item.size > 0 ? "\(item.done.storageText) / \(item.size.storageText)" : ""
-            if !files.isEmpty || !bytes.isEmpty { return files + bytes }
-            return item.kind == .copy ? String(localized: "Copying on the computer…") : String(localized: "Compressing on the computer…")
-        case .upload, .download:
-            return "\(item.done.storageText) / \(item.size.storageText)"
         }
     }
 
