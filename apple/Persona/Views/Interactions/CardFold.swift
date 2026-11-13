@@ -39,8 +39,9 @@ struct CardForm<Words: View, Answers: View>: View {
     }
 }
 
-/// The child of `CardBodyStack` that gives up room when the words are taller than their cap: a `CardFold`.
-struct CardBodyGives: LayoutValueKey {
+/// The child of `CardBodyStack` that gives up room when the words are taller than their cap: a `CardFold`. Not on the
+/// main actor: the layout reads it off its subviews.
+nonisolated struct CardBodyGives: LayoutValueKey {
     static let defaultValue = false
 }
 

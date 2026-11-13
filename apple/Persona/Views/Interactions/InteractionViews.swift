@@ -835,7 +835,7 @@ struct PlanForm: View {
         } answers: {
             answers
         }
-        .sheet(isPresented: $showFull) { PlanSheet(plan: interaction.plan ?? "") { showFull = false } }
+        .sheet(isPresented: $showFull) { PlanTextSheet(plan: interaction.plan ?? "") { showFull = false } }
     }
 
     @ViewBuilder private var answers: some View {
@@ -872,7 +872,7 @@ struct PlanForm: View {
 }
 
 /// A plan whole, from its card's Show Full Text or its header's button: it scrolls here.
-struct PlanSheet: View {
+struct PlanTextSheet: View {
     var plan: String
     var done: () -> Void
 
@@ -1930,7 +1930,7 @@ struct BUIPlanForm: View {
             // Its first lines, Show Full Text for the rest (#6605): it scrolled in a box of its own inside the card's scroll.
             CardPlan(plan: interaction.plan ?? "", lines: Self.planLines) { showFull = true }
         }
-        .sheet(isPresented: $showFull) { PlanSheet(plan: interaction.plan ?? "") { showFull = false } }
+        .sheet(isPresented: $showFull) { PlanTextSheet(plan: interaction.plan ?? "") { showFull = false } }
     }
 
     /// The plan's lines over the card's two choices and its field: fewer than the default style's, whose buttons are smaller.

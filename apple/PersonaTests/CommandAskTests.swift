@@ -93,7 +93,8 @@ struct CommandAskTests {
     /// A terminal's Yes / No (or a command's Allow / Deny) stay under the card's scroll area, in view; a question's
     /// options with descriptions, many options or ticks scroll with the question (#6605).
     @Test func shortChoicesStayInView() throws {
-        #expect(ScreenForm.pinsChoices(try dialog(Self.hubJSON)))
+        let hub = try dialog(Self.hubJSON)
+        #expect(ScreenForm.pinsChoices(hub))
         func options(_ list: [(String, String?)], multi: Bool = false) -> ScreenParser.Dialog {
             var d = ScreenParser.Dialog(header: nil, question: "Do you want to proceed?", detail: nil,
                                         options: list.enumerated().map { i, o in
