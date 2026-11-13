@@ -1344,6 +1344,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		if n.isAssistantSession(p.SessionID) {
 			return ok(n.assistantInterrupt(p.SessionID))
 		}
+		if _, live := n.agent(p.SessionID); !live {
+			// A claude outside Persona's panes (the desktop app's, another terminal's): through its inbox (claudebg.go).
+			if handled, err := n.interruptOutside(ctx, p.SessionID); handled {
+				return ok(err)
+			}
+		}
 		return ok(n.keys(ctx, p.SessionID, []string{"esc"}, ""))
 	case "session.screen.before":
 		var a struct {
