@@ -65,19 +65,14 @@ func (s *Service) inboxAgentStopState(sess proto.Session) (settled, failed bool,
 
 // recordInboxAgentStops records sess's current stop once on every open item that links it. Each item has its own
 // marker and notification: two matters may deliberately share an Agent. A save that is undone does not wake anyone.
-// False means it stopped being settled between the caller's check and this one.
+// False means it stopped being settled, or a write was undone; sweep must wait for the next pass rather than turn an
+// unrecorded stop into a timeout. Task supervision notices are independent and never replace the Inbox wake.
 func (s *Service) recordInboxAgentStops(ctx context.Context, sess proto.Session) bool {
 	settled, failed, detail := s.inboxAgentStopState(sess)
 	if !settled {
 		return false
 	}
 	enabled := s.inboxConfig(ctx).Agent.Enabled
-	task, hasTask := s.taskOf(ctx, sess.MachineID, sess.SessionID)
-	reporting := false
-	if hasTask && task.Supervision == nil && task.Quiet {
-		_, reporting = s.reporterOf(ctx, task.Origin)
-	}
-
 	b := &s.inbox
 	now := time.Now().UTC()
 	var writes []*inboxWrite
@@ -104,16 +99,9 @@ func (s *Service) recordInboxAgentStops(ctx context.Context, sess proto.Session)
 				// Set Looking before tell: otherwise tell would save Agent in Back and a recap-only turn would restore it.
 				b.setHandling(it, HandlingLooking, "", now)
 			}
-			if hasTask && inboxTaskStopNotifiesProcessing(task, reporting, a.SessionID) {
-				// The task's own stop notice is already going into this conversation. Do not queue a second notice or Wake;
-				// the external notice is what starts its turn, so the sweep's clock starts at this stop.
-				t := now
-				a.StartedAt = &t
-			} else {
-				b.tell(it, inboxNote{Name: prompts.NoteAgentStopped, Text: detail, Failed: failed,
-					Machine: sess.MachineID, Session: sess.SessionID}, true, now)
-				wake[w] = true
-			}
+			b.tell(it, inboxNote{Name: prompts.NoteAgentStopped, Text: detail, Failed: failed,
+				Machine: sess.MachineID, Session: sess.SessionID}, true, now)
+			wake[w] = true
 		}
 		b.settle(w)
 		writes = append(writes, w)
@@ -121,12 +109,17 @@ func (s *Service) recordInboxAgentStops(ctx context.Context, sess proto.Session)
 	b.mu.Unlock()
 
 	s.saveWrites(ctx, writes, "an Agent's stop")
+	saved := true
 	for _, w := range writes {
-		if wake[w] && !w.undone {
+		if w.undone {
+			saved = false
+			continue
+		}
+		if wake[w] {
 			s.tellSoon(ctx, w.it)
 		}
 	}
-	return true
+	return saved
 }
 
 // inboxItemLinksAgent: an agent entry, not merely a handling or agent_stopped entry, links machine/session.
@@ -180,18 +173,6 @@ func inboxAgentStopDisplayTime(it *InboxItem, sess proto.Session, now time.Time)
 		at = it.Chain[n-1].At.UTC()
 	}
 	return at
-}
-
-// inboxTaskStopNotifiesProcessing: the processing conversation itself is the recipient of the task's immediate stop
-// notice. A main conversation supervising it, with only a later taskEndedNotice after review, does not count.
-func inboxTaskStopNotifiesProcessing(t Todo, reporting bool, processing string) bool {
-	if t.Origin == "" || t.Origin != processing {
-		return false
-	}
-	if t.Supervision != nil {
-		return t.Supervision.Supervisor == t.Origin
-	}
-	return t.Quiet && reporting
 }
 
 // inboxLatestAgentLink is the sub-session HandlingAgent currently waits on.

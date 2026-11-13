@@ -47,19 +47,35 @@ func latestInboxAgentStop(t *testing.T, it *InboxItem) InboxChainEntry {
 	return InboxChainEntry{}
 }
 
+func inboxAgentStoppedSnapshot(t *testing.T, h *inboxHub, it *InboxItem) InboxItem {
+	t.Helper()
+	h.inbox.mu.Lock()
+	raw, err := json.Marshal(it)
+	h.inbox.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshot InboxItem
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
+}
+
 func TestInboxAgentStoppedRecordsAndWakesOnce(t *testing.T) {
 	h, it, sess := newInboxAgentStoppedHub(t)
 	h.inboxAgentTurnSettled(context.Background(), "box", "s-sub")
 
-	e := latestInboxAgentStop(t, it)
+	snapshot := inboxAgentStoppedSnapshot(t, h, it)
+	e := latestInboxAgentStop(t, &snapshot)
 	if e.Via != ViaAgent || e.Link == nil || e.Link.MachineID != "box" || e.Link.SessionID != "s-sub" ||
 		e.Text != "Agent 停了" || e.Detail != sess.LastText || e.TurnAt == nil || !e.TurnAt.Equal(sess.UpdatedAt) {
 		t.Fatalf("stop entry: %+v", e)
 	}
-	if it.Handling.State != HandlingLooking || it.Agent.StartedAt == nil {
-		t.Fatalf("handling did not return to the conversation: %+v %+v", it.Handling, it.Agent)
+	if snapshot.Handling.State != HandlingLooking || snapshot.Agent.StartedAt == nil {
+		t.Fatalf("handling did not return to the conversation: %+v %+v", snapshot.Handling, snapshot.Agent)
 	}
-	for i, entry := range it.listed().Chain {
+	for i, entry := range snapshot.listed().Chain {
 		if entry.TurnAt != nil {
 			t.Fatalf("listed chain %d exposes node bookkeeping: %+v", i, entry)
 		}
@@ -85,7 +101,8 @@ func TestInboxAgentStoppedFailureIncludesError(t *testing.T) {
 	h.f.setSessions("box", sess)
 	h.inboxAgentTurnSettled(context.Background(), "box", "s-sub")
 
-	e := latestInboxAgentStop(t, it)
+	snapshot := inboxAgentStoppedSnapshot(t, h, it)
+	e := latestInboxAgentStop(t, &snapshot)
 	if e.Text != "Agent 失败了" || e.Detail != "API Error: example failed with another line" {
 		t.Fatalf("failure entry: %+v", e)
 	}
@@ -125,7 +142,8 @@ func TestInboxAgentStoppedWaitsForMoreWork(t *testing.T) {
 func TestInboxAgentStoppedAfterWorkingAgain(t *testing.T) {
 	h, it, sess := newInboxAgentStoppedHub(t)
 	h.inboxAgentTurnSettled(context.Background(), "box", "s-sub")
-	first := latestInboxAgentStop(t, it)
+	snapshot := inboxAgentStoppedSnapshot(t, h, it)
+	first := latestInboxAgentStop(t, &snapshot)
 
 	sess.Status = proto.StatusWorking
 	sess.UpdatedAt = first.TurnAt.Add(time.Second)
@@ -164,20 +182,16 @@ func TestInboxAgentStopDedupUsesOnlyNodeTime(t *testing.T) {
 	if _, duplicate := inboxAgentStopDuplicate(it, sess); !duplicate {
 		t.Fatal("a zero node timestamp did not deduplicate the same stop")
 	}
+	if got := inboxAgentStopDisplayTime(it, sess, turn.Add(time.Hour)); !got.Equal(turn.Add(2 * time.Hour)) {
+		t.Fatalf("display time went behind the existing chain or followed the zero node time: %s", got)
+	}
 }
 
 func TestInboxAgentStoppedDeduplicatesAfterItemReload(t *testing.T) {
 	h, it, sess := newInboxAgentStoppedHub(t)
 	h.inboxAgentTurnSettled(context.Background(), "box", "s-sub")
 	toldConv(t, h, sess.LastText)
-	raw, err := json.Marshal(it)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var restored InboxItem
-	if err := json.Unmarshal(raw, &restored); err != nil {
-		t.Fatal(err)
-	}
+	restored := inboxAgentStoppedSnapshot(t, h, it)
 	h.inbox.mu.Lock()
 	h.inbox.items[restored.ID] = &restored
 	h.inbox.mu.Unlock()
@@ -235,40 +249,6 @@ func TestInboxAgentStoppedWithTwinOffOnlyRecords(t *testing.T) {
 	}
 }
 
-func TestInboxAgentStoppedTaskNoticeDeduplication(t *testing.T) {
-	for _, tc := range []struct {
-		name       string
-		supervisor string
-		done       bool
-		wantWake   bool
-	}{
-		{"the processing conversation supervises", "s1", false, false},
-		{"the main conversation supervises", "main", false, true},
-		{"the task already ended", "s1", true, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			h, it, sess := newInboxAgentStoppedHub(t)
-			todo := Todo{ID: "todo-stop", Origin: "s1", Quiet: true,
-				Supervision: &Supervision{Supervisor: tc.supervisor},
-				Agents:      []TodoAgent{{MachineID: "box", SessionID: "s-sub"}}}
-			if tc.done {
-				now := time.Now()
-				todo.DoneAt = &now
-			}
-			putTodo(h.Service, todo)
-			h.inboxAgentTurnSettled(context.Background(), "box", "s-sub")
-			if got := inboxAgentStoppedCount(it); got != 1 || it.Handling.State != HandlingLooking || it.Agent.StartedAt == nil {
-				t.Fatalf("task stop: stops %d, handling %+v, agent %+v", got, it.Handling, it.Agent)
-			}
-			if tc.wantWake {
-				toldConv(t, h, sess.LastText)
-			} else if it.Agent.Wake || len(it.Agent.Pending) != 0 || len(h.f.sentToAgents()) != 0 {
-				t.Fatalf("duplicate task notice: agent %+v, sent %v", it.Agent, h.f.sentToAgents())
-			}
-		})
-	}
-}
-
 func TestInboxAgentSweepWaitsForTheLinkedSession(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -301,8 +281,27 @@ func TestInboxAgentSweepRepairsAMissedStop(t *testing.T) {
 	started := time.Now().Add(-2 * time.Hour)
 	it.Agent.StartedAt = &started
 	h.sweepInboxAgents(context.Background(), InboxAgentConfig{Enabled: true}, time.Now())
-	if got := inboxAgentStoppedCount(it); got != 1 || it.Handling.State != HandlingLooking {
-		t.Fatalf("sweep did not repair the stop: stops %d, handling %+v", got, it.Handling)
+	snapshot := inboxAgentStoppedSnapshot(t, h, it)
+	if got := inboxAgentStoppedCount(&snapshot); got != 1 || snapshot.Handling.State != HandlingLooking {
+		t.Fatalf("sweep did not repair the stop: stops %d, handling %+v", got, snapshot.Handling)
+	}
+	toldConv(t, h, sess.LastText)
+}
+
+func TestInboxAgentSweepRetriesAnUndoneStop(t *testing.T) {
+	h, it, sess := newInboxAgentStoppedHub(t)
+	started := time.Now().Add(-2 * time.Hour)
+	it.Agent.StartedAt = &started
+	h.st.writeFails(true)
+	h.sweepInboxAgents(context.Background(), InboxAgentConfig{Enabled: true}, time.Now())
+	if it.Handling.State != HandlingAgent || it.Agent.State == AgentFailed || inboxAgentStoppedCount(it) != 0 || len(h.f.sentToAgents()) != 0 {
+		t.Fatalf("an undone stop became a timeout: handling %+v, agent %+v, chain %+v", it.Handling, it.Agent, it.Chain)
+	}
+	h.st.writeFails(false)
+	h.sweepInboxAgents(context.Background(), InboxAgentConfig{Enabled: true}, time.Now())
+	snapshot := inboxAgentStoppedSnapshot(t, h, it)
+	if got := inboxAgentStoppedCount(&snapshot); got != 1 || snapshot.Handling.State != HandlingLooking {
+		t.Fatalf("the next sweep did not retry the stop: stops %d, handling %+v", got, snapshot.Handling)
 	}
 	toldConv(t, h, sess.LastText)
 }

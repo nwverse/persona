@@ -486,13 +486,16 @@ func (s *Service) sweepInboxAgents(ctx context.Context, cfg InboxAgentConfig, no
 		if it.Handling != nil {
 			state = it.Handling.State
 		}
+		var link *InboxChainLink
+		if state == HandlingAgent {
+			link = inboxLatestAgentLink(it)
+		}
 		b.mu.Unlock()
 		reason := ""
 		switch {
 		case s.isWorkMachine(a.MachineID):
 			reason = i18n.T(s.lang(ctx), "assistant-start.work_machine")
 		case state == HandlingAgent:
-			link := inboxLatestAgentLink(it)
 			if link == nil {
 				continue // no session whose state can prove the Agent stopped
 			}
