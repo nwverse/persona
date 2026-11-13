@@ -70,6 +70,7 @@ func isAssistantOf(s proto.Session, dir, owner string) bool {
 func (h *Hub) assistantRoutes(api *http.ServeMux) {
 	api.HandleFunc("GET /api/v1/skills", h.serveSkills)
 	h.assistantRoutesRelayed(api)
+	h.assistantSocketRoutesRelayed(api)
 }
 
 // assistantSpace is the space of an assistant conversation working in cwd: "health" for the health space's

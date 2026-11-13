@@ -1,6 +1,236 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Among the Codex App's chats in no project" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Among the Codex App's chats in no project"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 Codex App 的“无项目”对话里"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex App のプロジェクトなしのチャットに入ります"
+          }
+        }
+      }
+    },
+    "Starts in the Codex App. With no folder it goes where the App keeps chats in no project; a new folder is made when it starts." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Starts in the Codex App. With no folder it goes where the App keeps chats in no project; a new folder is made when it starts."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 Codex App 里新开对话。不选文件夹时放在 App 存放“无项目”对话的位置；新建的文件夹会在对话开始时创建。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex App でチャットを開始します。フォルダを選ばない場合は、App がプロジェクトなしのチャットを置く場所に入ります。新しいフォルダはチャット開始時に作成されます。"
+          }
+        }
+      }
+    },
+    "Temporary Session" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Temporary Session"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "临时会话"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一時セッション"
+          }
+        }
+      }
+    },
+    "Grouped together in the Claude app's sidebar" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grouped together in the Claude app's sidebar"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 Claude 桌面版侧边栏里归为一组"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude アプリのサイドバーで 1 つのグループにまとまります"
+          }
+        }
+      }
+    },
+    "Use a Temporary Session" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Use a Temporary Session"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "改用临时会话"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一時セッションにする"
+          }
+        }
+      }
+    },
+    "Starts in Claude's desktop app. With no folder it goes to one temporary folder beside the app's projects; a new folder is made when it starts." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Starts in Claude's desktop app. With no folder it goes to one temporary folder beside the app's projects; a new folder is made when it starts."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 Claude 桌面版里新建会话。不选文件夹时放进桌面版项目旁边统一的临时会话文件夹；新建的文件夹会在会话开始时创建。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude デスクトップアプリでセッションを開始します。フォルダを選ばない場合は、アプリのプロジェクトの隣にある共通の一時フォルダに入ります。新しいフォルダはセッション開始時に作成されます。"
+          }
+        }
+      }
+    },
+    "New Folder…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New Folder…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新建文件夹…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新規フォルダ…"
+          }
+        }
+      }
+    },
+    "New Folder" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New Folder"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新建文件夹"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新規フォルダ"
+          }
+        }
+      }
+    },
+    "Folder Name" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Folder Name"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件夹名称"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "フォルダ名"
+          }
+        }
+      }
+    },
+    "Made in “%@” when the session starts." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Made in “%1$@” when the session starts."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会话开始时在“%1$@”里创建。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "セッション開始時に「%1$@」内に作成されます。"
+          }
+        }
+      }
+    },
     "All [Source Relationships]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -162,6 +392,52 @@
         }
       }
     },
+    "In Mouse Mode, pinch to zoom in and out; when zoomed in, dragging with two fingers moves the view instead of scrolling. In either mode, “…” › Zoom In zooms in around the pointer and Zoom to Fit shows the whole screen again. In Trackpad Mode two fingers only scroll, and a zoomed view follows the pointer." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In Mouse Mode, pinch to zoom in and out; when zoomed in, dragging with two fingers moves the view instead of scrolling. In either mode, “…” › Zoom In zooms in around the pointer and Zoom to Fit shows the whole screen again. In Trackpad Mode two fingers only scroll, and a zoomed view follows the pointer."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "マウスモードではピンチで拡大・縮小します。拡大中は、2本指のドラッグでスクロールではなく画面を移動します。どちらのモードでも「…」›「拡大」でポインタを中心に拡大し、「画面に合わせる」で画面全体の表示に戻ります。トラックパッドモードでは2本指はスクロールだけで、拡大中の画面はポインタに合わせて動きます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "鼠标模式下双指开合放大、缩小；放大以后，两指拖动是移动画面，不再滚动。两种模式都可以用「…」›「放大」以指针为中心放大，「还原」回到整个屏幕。触控板模式下两指只滚动，放大后画面跟着指针走。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Landscape" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Landscape"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "横向き"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "横屏"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "May bring the same things as “%@”. If they do, turn one of them off." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -277,6 +553,52 @@
         }
       }
     },
+    "Rotate to Landscape" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rotate to Landscape"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "横向きにする"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "转为横屏"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Rotate to Portrait" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rotate to Portrait"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "縦向きにする"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "转为竖屏"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Set Up with %@" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -345,6 +667,29 @@
           }
         }
       }
+    },
+    "Tap the rotate button next to the clipboard to turn the screen sideways for a larger view, and tap it again to turn it back upright. Once tapped, the screen keeps that orientation until you close it." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tap the rotate button next to the clipboard to turn the screen sideways for a larger view, and tap it again to turn it back upright. Once tapped, the screen keeps that orientation until you close it."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "クリップボードの横にある回転ボタンをタップすると横向きになり、大きく表示されます。もう一度タップすると縦向きに戻ります。タップした後は、閉じるまでその向きのままです。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "点剪贴板旁边的转屏按钮，画面转成横屏、显示更大；再点一下转回竖屏。点过以后，画面保持这个方向，直到关掉。"
+          }
+        }
+      },
+      "extractionState" : "manual"
     },
     "This File Is Empty" : {
       "extractionState" : "manual",
@@ -705,6 +1050,28 @@
         }
       }
     },
+    "Clear %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clear %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "清除%@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ をクリア"
+          }
+        }
+      }
+    },
     "Close [Candle]": {
       "localizations": {
         "en": {
@@ -723,6 +1090,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "終値"
+          }
+        }
+      }
+    },
+    "Couldn't Load This Picture": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't Load This Picture"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法加载这张图片"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この画像を読み込めません"
           }
         }
       }
@@ -1272,6 +1661,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "一致する設定がありません"
+          }
+        }
+      }
+    },
+    "Not Set": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not Set"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未设置"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未設定"
           }
         }
       }
@@ -4050,6 +4461,52 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "你的位置"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Zoom In" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zoom In"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拡大"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "放大"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Zoom to Fit" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zoom to Fit"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "画面に合わせる"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还原"
           }
         }
       },
@@ -27745,19 +28202,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Background round"
+            "value" : "Reported from the background"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "后台轮次"
+            "value" : "后台回报"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "バックグラウンドのラウンド"
+            "value" : "バックグラウンドからの報告"
           }
         }
       }
@@ -87663,29 +88120,6 @@
       },
       "extractionState" : "manual"
     },
-    "This Agent has no chat here" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "This Agent has no chat here"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "このエージェントのチャットはここでは表示できません"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "这个 Agent 在这里没有对话"
-          }
-        }
-      },
-      "extractionState" : "manual"
-    },
     "Persona can't show it as a chat. Its terminal shows what it is doing." : {
       "localizations" : {
         "en" : {
@@ -103773,29 +104207,6 @@
       },
       "extractionState" : "manual"
     },
-    "Pinch to zoom in and out. When zoomed in, dragging with two fingers moves the view instead of scrolling." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Pinch to zoom in and out. When zoomed in, dragging with two fingers moves the view instead of scrolling."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ピンチで拡大・縮小します。拡大中は、2本指のドラッグでスクロールではなく画面を移動します。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "双指开合放大、缩小。放大以后，两指拖动是移动画面，不再滚动。"
-          }
-        }
-      },
-      "extractionState" : "manual"
-    },
     "Pinch: change text size" : {
       "localizations" : {
         "en" : {
@@ -116166,19 +116577,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Running in the background"
+            "value" : "Working in the background…"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "后台运行中"
+            "value" : "后台处理中…"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "バックグラウンドで実行中"
+            "value" : "バックグラウンドで作業中…"
           }
         }
       }
@@ -131405,19 +131816,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Supervision record"
+            "value" : "Handled in the background"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "督办记录"
+            "value" : "已在后台处理"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "監督記録"
+            "value" : "バックグラウンドで処理済み"
           }
         }
       }
@@ -131428,19 +131839,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Supervision record · running"
+            "value" : "Handling in the background…"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "督办记录 · 处理中"
+            "value" : "正在后台处理…"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "監督記録 · 処理中"
+            "value" : "バックグラウンドで処理中…"
           }
         }
       }
@@ -178578,29 +178989,6 @@
         }
       }
     },
-    "New Folder" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "New Folder"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "新規フォルダ"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "新建文件夹"
-          }
-        }
-      }
-    },
     "New Text File" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -180411,6 +180799,98 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "这条不是你说的，没有发出去"
+          }
+        }
+      }
+    },
+    "Pin Confirmation Title [Leader Actions 6214]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pin this chat?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "常駐にしますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "设为常驻？"
+          }
+        }
+      }
+    },
+    "Unpin Confirmation Title [Leader Actions 6214]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unpin this chat?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "常駐をやめますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消常驻？"
+          }
+        }
+      }
+    },
+    "Pin Confirmation Message [Leader Actions 6214]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The chat moves to Pinned and no longer appears in Recent."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このチャットは常駐に移り、「最近」には出なくなります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个对话会移到常驻区，不再出现在「最近」。"
+          }
+        }
+      }
+    },
+    "Unpin Confirmation Message %@ [Leader Actions 6214]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@” returns to Recent. Its open tasks go back to the main chat's supervision; nothing is closed or deleted."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%@」は「最近」に戻ります。進行中のタスクはメインチャットの監督に戻り、終了や削除はされません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%@」会回到「最近」；还在办的任务交还主对话督办，不会关闭或删除。"
           }
         }
       }

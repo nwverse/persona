@@ -24,13 +24,18 @@ def start(env):
     base = f"http://127.0.0.1:{port}"
     for _ in range(100):
         if process.poll() is not None:
+            log.close()
             raise RuntimeError("mock hub exited before startup")
         try:
-            with urlopen(base + "/api/v1/health", timeout=1):
+            request = Request(base + "/api/v1/health", headers={"Authorization": "Bearer " + env.get("MOCK_DEVICE_TOKEN", "")})
+            with urlopen(request, timeout=1):
                 break
         except (URLError, TimeoutError):
             time.sleep(0.1)
     else:
+        process.kill()
+        process.wait(timeout=5)
+        log.close()
         raise RuntimeError("mock hub startup timed out")
 
     def stop():
@@ -104,7 +109,9 @@ class MeetingAttendanceMockTests(Hub, unittest.TestCase):
         latest = self.upload(rid)[1]  # omitted: attending turns off
         self.assertEqual(latest["attendance"], "off")
         # Stale, as the hub answers: the upload's own revision, the stored role.
-        self.assertEqual(self.upload(rid, revision=1, attendance="listener")[1], {"id": rid, "revision": 1, "status": "stale", "attendance": "off"})
+        want = {"id": rid, "revision": 1, "status": "stale", "attendance": "off"}
+        if "meeting_transcription" in self.call("GET", "/api/v1/health")[1]["features"]: want["transcription"] = "device"
+        self.assertEqual(self.upload(rid, revision=1, attendance="listener")[1], want)
         self.upload(rid, complete=True, ended_at="2026-11-10T15:00:00+08:00")
         self.assertNotIn("minutes_state", self.call("GET", f"/api/v1/kb/recordings/{rid}")[1]["detail"]["meta"])
 
@@ -158,6 +165,8 @@ class MeetingAttendanceMockTests(Hub, unittest.TestCase):
                                 ({"attendance": "off", "attending_session": {"machine_id": "macbook"}}, None), ({"attendance": "participant"}, None)]:
             with self.subTest(fields=fields):
                 want = {"id": rid, "revision": 1, "status": "stale", "attendance": "listener", **({"attendance_problem": problem} if problem else {})}
+                if fields.get("kind", "meeting") == "meeting" and "meeting_transcription" in self.call("GET", "/api/v1/health")[1]["features"]:
+                    want["transcription"] = "device"
                 self.assertEqual(self.upload(rid, revision=1, **fields), (200, want))
         self.assertEqual(self.call("GET", f"/api/v1/kb/recordings/{rid}")[1]["detail"]["meta"]["attendance"], "listener")
 

@@ -49,7 +49,7 @@ export interface Action extends Pick<MenuItem, "hint" | "disabled" | "danger" | 
   onSelect: () => void | Promise<unknown>;
 }
 
-function useActions(text: string, isUser: boolean, ts: string | undefined, task: QuotedTask | undefined, select: () => void, forward?: ForwardPick): Action[] {
+function useActions(text: string, isUser: boolean, ts: string | undefined, task: QuotedTask | undefined, select: () => void, forward?: ForwardPick, editText?: string): Action[] {
   const chat = useChatActions();
   if (!text.trim()) return [];
   const out: Action[] = [{ key: "copy", label: t("chat-messageactions.copy"), icon: "copy", onSelect: () => void copyText(text) }];
@@ -58,7 +58,7 @@ function useActions(text: string, isUser: boolean, ts: string | undefined, task:
     out.push({ key: "quote", label: t("chat-messageactions.quote"), icon: "quote", onSelect: () => void sendDraft(chat.draftKey, { type: "quote", text, from: isUser ? t("chat-messageactions.me") : chat.speaker, ts, task }) });
   }
   out.push(...messageContextActions(text, chat, forward));
-  if (chat?.canCompose && isUser) out.push({ key: "edit", label: t("chat-messageactions.edit"), icon: "pencil", onSelect: () => void sendDraft(chat.draftKey, { type: "replace", text }) });
+  if (chat?.canCompose && isUser) out.push({ key: "edit", label: t("chat-messageactions.edit"), icon: "pencil", onSelect: () => void sendDraft(chat.draftKey, { type: "replace", text: editText ?? text }) });
   return out;
 }
 
@@ -132,6 +132,7 @@ function useWhileOpen(live: Rewind["block"] | undefined, open: boolean, closed: 
  *  (#5285): a last reply's in its bar (ReplyBar `pinned`) and the touch row, your own bubble's under it (UserBubble). */
 export function MessageActions({
   text,
+  editText,
   isUser,
   ts,
   side,
@@ -149,6 +150,8 @@ export function MessageActions({
   className,
 }: {
   text: string;
+  /** Explicit selections kept when editing or rewinding; Copy, Quote and Forward use visible words only. */
+  editText?: string;
   isUser?: boolean;
   ts?: string;
   side?: boolean;
@@ -175,7 +178,7 @@ export function MessageActions({
   const latest = useIsLatestMessage(ts);
   const forwarded = itemId ?? messageId;
   const pick: ForwardPick | undefined = forwarded ? { itemId: forwarded, text, isUser: Boolean(isUser), ts, images, photos } : undefined;
-  const actions = useActions(text, Boolean(isUser), ts, task, () => setSelecting(true), pick);
+  const actions = useActions(text, Boolean(isUser), ts, task, () => setSelecting(true), pick, editText);
   const chat = useChatActions();
   // the chat picks messages to forward (#3838): the checkbox over this one, when it is one to forward
   const picker = chat?.forward ? chat.pick : undefined;
@@ -187,7 +190,7 @@ export function MessageActions({
   const rewindBlock = useWhileOpen(rewind?.block, Boolean(anchor || moreAnchor), "");
   const extras = [
     ...moreActions(itemId, chat?.fork, chat?.assistant),
-    ...rewindActions(messageId, text, rewind && { block: rewindBlock, code: rewind.code, run: rewind.run }),
+    ...rewindActions(messageId, editText ?? text, rewind && { block: rewindBlock, code: rewind.code, run: rewind.run }),
     ...deleteActions(onDelete),
   ];
   const contextActions = side ? actions.filter((a) => a.key === "forward" || a.key === "context") : [];

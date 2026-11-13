@@ -72,6 +72,10 @@ type Service struct {
 	ext ExtensionTools
 	// refs is the provider extensions' values for launcher keys that are references (launcher_secrets.go); nil: none.
 	refs launcherSecrets
+	// trans reaches the transcription contributions (meeting_transcribe_ext.go): the extensions' when they offer it
+	// (SetExtensions); nil: none (tests).
+	trans              transcribers
+	transcriptionReady transcriptionReadiness
 	// humanSent: the messages a person's own app sent, as the hub vouched (secret_handoff.go).
 	humanSent humanSends
 
@@ -140,6 +144,7 @@ type Service struct {
 	supervise  superviseBook   // supervise_signals.go
 	preempt    preemptBook     // owner_preempt.go
 	tbriefs    taskBriefBook   // task_brief.go
+	search     searchIndex     // search_index.go
 
 	modelPicks modelPickBook // model_pick.go
 	// noBackground: there is no background supervisor whatever the setting says, so the main conversation gets its
@@ -229,6 +234,11 @@ type Service struct {
 	// meeting.answer model in tests (nil: the configured one).
 	asks         meetingAsks
 	meetingModel kb.Model
+	// hubTr is the meetings transcribed on the hub (meeting_transcribe.go); sockets makes socketMux, ServeSocket's
+	// (meeting_audio.go).
+	hubTr     hubRuns
+	sockets   sync.Once
+	socketMux *http.ServeMux
 }
 
 var _ Handler = (*Service)(nil)
@@ -264,6 +274,7 @@ func New(o Options) *Service {
 	s.readinessRoutes()
 	s.availabilityRoutes()
 	s.startRoutes()
+	s.skillRoutes()
 	s.workoutRoutes()
 	s.scheduleRoutes()
 	s.placeRoutes()
@@ -279,6 +290,7 @@ func New(o Options) *Service {
 	s.companionRoutes()
 	s.kbInit(o.KB)
 	s.kbRoutes()
+	s.searchRoutes()
 	s.inboxRoutes()
 	s.modelConfigRoutes()
 	s.modelProfileRoutes()
@@ -588,9 +600,13 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 	snap.Partial = snap.Partial || !ok
 	origins, ok := s.conversationOrigins()
 	snap.Partial = snap.Partial || !ok
+	cfg := s.settings(ctx)
 	for id, o := range origins {
 		v := view(id, o.machine)
 		v.Origin, v.OriginRef, v.OpenedBy = o.origin, o.ref, o.ext
+		// Inbox processing belongs to its item, not Recent. Keep the transcript reachable through the item and
+		// archived history, including after an instruction or a restart, without changing its saved origin.
+		v.Archived = o.origin == OriginInbox && id != cfg.Main
 	}
 	for id, machine := range archived {
 		view(id, machine).Archived = true
@@ -614,7 +630,6 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 	snap.Partial = snap.Partial || snap.Profile == nil
 	snap.Channels = s.channelsReport()
 	snap.Partial = snap.Partial || snap.Channels == nil
-	cfg := s.settings(ctx)
 	here := cfg.MachineID
 	queued, ok := s.queuedRelays()
 	snap.Partial = snap.Partial || !ok

@@ -1,5 +1,10 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- Inbox handling chats are implementation details, not user-created conversations (#5723). `Untitled` suppresses
+  automatic naming but does not hide a chat, and `titleFixed` still gives it the item's subject. Apply default
+  archiving in the common session snapshot, not only after starting or finishing: restored chats and follow-up
+  instructions must stay hidden too. Preserve item-chain links and the main conversation.
+
 - Count repeated conditional instructions at the runtime-send boundary, not just in a prompt golden (#5665).
   Two adjacent decision blocks repeated the same handling rules, but the newer one also required recording the choice.
   Remove the older copy, retain the newer obligations, and check both decision gating and the actual synthetic
@@ -410,3 +415,14 @@ by newer mail, left its item open for good: nothing else files an open item, so 
 returns needs a second path for what it no longer returns: here past-window items are filed without asking, and the rest are
 looked up by UID once a round (`inbox.mail_flags`), bounded, with a failed lookup changing nothing. Tests of such a round
 must wait for the background triage pass (`waitTriage`) before setting a tier by hand, or the fallback tier overwrites it.
+
+- Literal `for` lists need per-value classification (#6266). Straight-line assignment tracking cannot resolve a loop's route segments or executable, and accepting GET alone misses action routes such as `/documents/delete`. Bind only literal lists in a completely inspected shell tree, retain quoting and reject unquoted values that could split or glob. A later assignment, state-changing builtin, executable-environment change or nonliteral nested list invalidates the entire attempt; never keep a partially expanded prefix. Resolve command positions before unwrapping so a variable cannot become a gate, CLI, shell or wrapper. Bound nested expansion and classify every resulting call through the existing read and hard-boundary rules. Both Claude and Codex adapter tests must count actual fake-hub approval cards; classification fixtures must never execute the supplied commands.
+
+## Clear a "tell it later" record only after the tell went (#6306)
+
+After a node restart, `recoverAssistantTasks` cleared the record of a conversation's lost background tasks (written to
+the hub) before sending the message about them. When that one send failed (the launcher not up yet, the 1-minute
+deadline), the record was gone and no later connection told the conversation: an assistant that promised to report on CI
+waited forever. A record that exists only so something is said later is cleared after the saying succeeded, and only if it
+still holds what was said (the woken conversation may already have re-armed new tasks). Being told twice after a send
+that timed out but was delivered is the cheaper failure.

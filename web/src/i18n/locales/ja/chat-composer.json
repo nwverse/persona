@@ -1,4 +1,5 @@
 {
+  "skills_changed": "実行環境が変わりました。下書きは保持されています。選択したスキルを削除して選び直してください。",
   "cmd_continue_word": "/続行",
   "cmd_continue_desc": "続けてもらう",
   "cmd_continue_text": "続けて",
