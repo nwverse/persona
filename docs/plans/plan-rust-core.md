@@ -297,12 +297,22 @@ Phase 1 (#6871) lands in several PRs.
   - The new `core` CI lane runs these checks.
   - Size, for orientation only: the stripped x86_64 release library is 678 KB (322 KB gzipped). The go / no-go numbers
     come from the device ABIs.
+- **Apple binding and iOS-reference replay.**
+  - `apple/Packages/PersonaCore` holds the generated Swift codecs, the C adapter and the XCFramework builder. Only the
+    iOS app and `PersonaTests` link it; no binary is committed. The iOS production `ChatStore` is unchanged apart from
+    restoring the existing `supervision_user` Codable key, and no screen changes.
+  - The shared continuity corpus now has 38 cases (94 steps), including immediate fill, a complete repeated-item
+    `ListOp.Update`, the `from_seq == covered + 1` boundary, opened-fold retention and supervision promotion.
+    Real-C XCTest and a native-Store XCTest replay the same JSON and effects/patches; macOS `swift test` exercises the
+    same C binding under Swift 6 strict concurrency. Local verification used Xcode 27.2, so Xcode 26.0 is not verified.
 - **Still to come.**
-  - iOS: the `PersonaCore` package and its XCTest replay.
+  - iOS: the PersonaCore package and real-C XCTest have landed; physical-device performance, launch, memory and
+    download-size evidence remains open.
   - HarmonyOS: the NAPI module and the on-device replay.
   - Android: device libraries, 16 KB page alignment and per-ABI size measurements.
-  - Continuity: compare the initial port with the iOS reference, add the missing boundary fixture and correct any
-    differences before calling the slice three-platform consistent.
+  - Continuity: the Apple branch checked the port against the native Store and added the missing boundary and state
+    fixtures; the remaining clients must replay that updated corpus through their bindings before calling the slice
+    three-platform consistent. The wire addition `ListOp.Update` requires every patch consumer to handle it.
   - The go / no-go measurements, with the iOS baseline named for every comparative measurement.
   - License notices, with the first build that ships the library in an app.
 
