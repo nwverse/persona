@@ -1178,7 +1178,12 @@ struct FullOutputSheet: View {
         NavigationStack {
             Group {
                 if let text {
+                    #if os(macOS)
                     MonoTextView(text: MonoText.plain(text, color: .label, size: 12))
+                    #else
+                    // Every line read whole: long ones wrap (#6605); cut at the edge they did not say they scrolled.
+                    MonoTextView(text: MonoText.plain(text, color: .label, size: 12), wraps: true)
+                    #endif
                 } else if let error {
                     ContentUnavailableView("Couldn't Load", systemImage: Theme.Icon.error, description: Text(error))
                 } else {

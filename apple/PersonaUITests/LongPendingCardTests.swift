@@ -16,6 +16,10 @@ final class LongPendingCardTests: XCTestCase {
     private static let orders = "server/a1f3c2d4-0000-4000-8000-000000000004"
     private static let release = "macbook/a1f3c2d4-0000-4000-8000-000000000008"
     private static let largest = ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryXXXL"]
+    /// The most room between the fold's Show All and the first answer: the form's spacing (12) and a little.
+    private static let mostGapUnderFold: CGFloat = 24
+    /// The mock's chat with no card of its own here: the DEBUG sample permission (a three-line xcodebuild) goes on it.
+    private static let widget = "macbook/a1f3c2d4-0000-4000-8000-000000000001"
 
     override func setUpWithError() throws {
         continueAfterFailure = true // every card and look checked and shot, whichever fails
@@ -79,6 +83,15 @@ final class LongPendingCardTests: XCTestCase {
                 XCTAssertTrue(button.exists && button.isHittable && area.contains(button.frame),
                               "\(label) is not in view (\(button.exists ? "\(button.frame)" : "missing") in \(cards.frame), \(name), \(look))")
             }
+            // The answers sit right under the fold: the form's own spacing between them, not a strip of empty room left
+            // by a scroll area taller than the lines it shows.
+            let first = cards.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", answers[0])).firstMatch
+            if toggle.exists, first.exists {
+                let frames = "toggle \(toggle.frame), \(answers[0]) \(first.frame), scroll areas \(cards.scrollViews.allElementsBoundByIndex.map { $0.frame })"
+                add(XCTAttachment(string: "\(name) \(look): \(frames)"))
+                XCTAssertLessThanOrEqual(first.frame.minY - toggle.frame.maxY, Self.mostGapUnderFold,
+                                         "empty room under the fold (\(frames), \(name), \(look))")
+            }
             // The card ends above the composer.
             let field = app.descendants(matching: .any)
                 .matching(NSPredicate(format: "placeholderValue BEGINSWITH %@ OR placeholderValue BEGINSWITH %@", "给", "补充说明")).firstMatch
@@ -100,6 +113,20 @@ final class LongPendingCardTests: XCTestCase {
 
     func testLongPlanFolds() {
         checkLone(Self.orders, name: "plan", fold: "card-plan", answers: ["批准并自动执行", "打回"])
+    }
+
+    /// A short command is drawn whole, as before #6605: no fold, no Show All, light and dark and at xxxLarge (#6605: a
+    /// three-line command was cut to two with Show All for one line).
+    func testShortCommandIsWhole() {
+        for (look, extra) in looks() {
+            launch(Self.widget, ["-showSamplePermission", "YES"] + extra)
+            let command = app.descendants(matching: .any)["permission-command"].firstMatch
+            XCTAssertTrue(command.waitForExistence(timeout: 15), "the command (\(look))")
+            sleep(2)
+            shot("short-\(look)")
+            XCTAssertFalse(app.buttons["permission-command.expand"].exists, "a short command folds (\(look))")
+            app.terminate()
+        }
     }
 
     /// Show All N Lines opens the whole command in a sheet: its last line there, Copy All, Done back to the card.

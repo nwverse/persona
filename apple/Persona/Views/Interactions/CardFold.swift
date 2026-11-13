@@ -129,7 +129,7 @@ struct CardFold<Words: View>: View {
     }
 
     private var clip: some View {
-        FoldClip(cut: cut, line: line, floor: line * CGFloat(Self.fewestLines)) {
+        FoldClip(cut: cut, line: line, floor: line * CGFloat(Self.fewestLines), more: more) {
             sized(words())
                 .fixedSize(horizontal: false, vertical: true)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { full = $0 }
@@ -168,12 +168,13 @@ private struct FoldClip: Layout {
     var cut: CGFloat
     var line: CGFloat
     var floor: CGFloat
+    var more: Bool
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         guard let words = subviews.first else { return .zero }
         let size = words.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil))
         return CGSize(width: proposal.width ?? size.width,
-                      height: CardFoldCut.height(full: size.height, cut: cut, line: line, floor: floor, offered: proposal.height))
+                      height: CardFoldCut.height(full: size.height, cut: cut, line: line, floor: floor, offered: proposal.height, more: more))
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
@@ -182,13 +183,19 @@ private struct FoldClip: Layout {
 }
 
 /// How tall a `CardFold`'s words show: `full` tall, at most `cut` (its lines); offered less, the whole lines (`line`
-/// each) that fit, never under `floor` (its fewest lines) unless the words are shorter. Not measured yet: whole.
+/// each) that fit, never under `floor` (its fewest lines) unless the words are shorter. A fold that would hide fewer
+/// than `leastHidden` lines shows the words whole instead (#6605: a three-line command cut to two with Show All for one
+/// line was more trouble than the line), unless they are only the start of the text (`more`). Not measured yet: whole.
 nonisolated enum CardFoldCut {
-    static func height(full: CGFloat, cut: CGFloat, line: CGFloat, floor: CGFloat, offered: CGFloat?) -> CGFloat {
+    static let leastHidden = 3
+
+    static func height(full: CGFloat, cut: CGFloat, line: CGFloat, floor: CGFloat, offered: CGFloat?, more: Bool = false) -> CGFloat {
         guard cut > 0, line > 0 else { return full }
-        let most = min(full, cut)
-        guard let offered, offered < most else { return most }
-        return max((offered / line).rounded(.down) * line, min(full, floor))
+        var shown = min(full, cut)
+        if let offered, offered < shown { shown = max((offered / line).rounded(.down) * line, min(full, floor)) }
+        // Hidden lines, from heights that carry a little rounding: under `leastHidden` and a half less, none at all.
+        if !more, full - shown < (CGFloat(leastHidden) - 0.5) * line { return full }
+        return shown
     }
 }
 
@@ -211,10 +218,12 @@ struct CardCode: View {
 
     var body: some View {
         let all = ToolTextMemo.codeLines(text)
-        // Only its start is laid out: a command can be thousands of lines, and the card shows a few of them.
-        let start = all.count > lines + 2 ? all.prefix(lines + 2).joined(separator: "\n") : text
-        CardFold(lines: lines, box: box, more: start.count < text.count,
-                 title: String(localized: "Show All \(all.count) Lines [Tool Views 3aed77]"), id: id, open: { showsAll = true }) {
+        // Only its start is laid out: a command can be thousands of lines, and the card shows a few of them. Past
+        // `lines` and `leastHidden` more it folds whatever their width; up to that the words measured decide.
+        let start = all.count > lines + CardFoldCut.leastHidden ? all.prefix(lines + CardFoldCut.leastHidden).joined(separator: "\n") : text
+        // A count of lines only where there are more lines than it shows; one long line wrapped says Show All Lines.
+        let toggle = all.count > lines ? String(localized: "Show All \(all.count) Lines [Tool Views 3aed77]") : String(localized: "Show All Lines")
+        CardFold(lines: lines, box: box, more: start.count < text.count, title: toggle, id: id, open: { showsAll = true }) {
             Text(start)
                 .font(Theme.Font.code)
                 .foregroundStyle(secondary ? .secondary : .primary)

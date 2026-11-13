@@ -88,6 +88,12 @@ struct CommandAskTests {
         #expect(CardFoldCut.height(full: 20, cut: cut, line: line, floor: floor, offered: 10) == 20)
         // Not measured yet: whole.
         #expect(CardFoldCut.height(full: 900, cut: 0, line: 0, floor: 0, offered: 70) == 900)
+        // Hiding fewer than three lines is no fold: a three-line command offered two, and ten lines under an eight-line
+        // cut, are whole; eleven fold to eight. Only the start of a text (`more`) folds however short.
+        #expect(CardFoldCut.height(full: line * 3, cut: cut, line: line, floor: floor, offered: line * 2 + 4) == line * 3)
+        #expect(CardFoldCut.height(full: line * 10, cut: cut, line: line, floor: floor, offered: nil) == line * 10)
+        #expect(CardFoldCut.height(full: line * 11, cut: cut, line: line, floor: floor, offered: nil) == cut)
+        #expect(CardFoldCut.height(full: line * 10, cut: cut, line: line, floor: floor, offered: nil, more: true) == cut)
     }
 
     /// A terminal's Yes / No (or a command's Allow / Deny) stay under the card's scroll area, in view; a question's
