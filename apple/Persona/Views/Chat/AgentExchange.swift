@@ -120,7 +120,9 @@ struct FoldToggle: View {
             .font(Theme.Font.captionStrong)
             .foregroundStyle(tint ?? Theme.accent)
             .frame(maxWidth: showMore ? .infinity : nil, alignment: .leading)
-            .contentShape(Rectangle().inset(by: showMore ? -Theme.Space.m : 0))
+            // A bubble's Show More: the caption line and 16 pt around it, at least `Theme.Size.tapTarget` tall, with
+            // nothing laid out around it (what the bubble looks like stays as it is).
+            .contentShape(Rectangle().inset(by: showMore ? -Theme.Space.l : 0))
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier(prefix + (open ? ".collapse" : ".expand"))

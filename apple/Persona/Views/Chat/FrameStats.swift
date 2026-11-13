@@ -172,7 +172,7 @@ import UIKit
             context["viewport_height_pt"] = Double(list.bounds.height)
             context["content_height_pt"] = Double(list.contentSize.height)
             // A chat is told a finger is on its list, as for `-showPagePerf`: otherwise it keeps to its newest end and
-            // the list does not move (#4970).
+            // the list does not move.
             PagePerf.touch(list, true)
             list.setContentOffset(CGPoint(x: list.contentOffset.x, y: -list.adjustedContentInset.top), animated: false)
             try? await Task.sleep(for: .milliseconds(500))
