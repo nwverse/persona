@@ -12,6 +12,9 @@ export const SESSIONS_CATALOG_FEATURE = "sessions_catalog";
 /** The hub lists and counts sessions by open to-do (`todo=<id>` / `todo=none`, docs/protocol/protocol.md "Sessions by
  *  to-do", #6662). */
 export const SESSIONS_TODO_FEATURE = "sessions_todo";
+/** The hub selects the sidebar's quick filters on the paged list: `waiting=0|1` and `exclude_pane_source=<origin>`
+ *  (docs/protocol/protocol.md "Quick filters", #6662). */
+export const SESSIONS_QUICK_FILTERS_FEATURE = "sessions_quick_filters";
 
 export type GroupDimension = "machine" | "project" | "group" | "state" | "todo";
 

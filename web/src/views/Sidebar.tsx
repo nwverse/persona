@@ -57,11 +57,11 @@ import { clipsOverflow, glideBox, glideStyle, sameBox, type GlideBox, type Span 
 import { AGENTS_FOLD, onGrouping } from "../lib/sidebar-api";
 import { jumpHint, useBindings } from "../lib/shortcuts";
 import { markAllSeenLabel, stateCount } from "../lib/state-labels";
-import { PagedSessionList } from "./agents/PagedSessionList";
+import { PagedSessionList, type PagedQuickFilters } from "./agents/PagedSessionList";
 import { SESSION_LIST_STYLE } from "../ui/list-metrics";
 import { runtimeActiveAt, runtimeIdentity, runtimeNeedsYou, runtimeOrder, runtimeParentIdentity, runtimePlace, runtimeRemoval, runtimeSessions } from "../lib/runtime-list";
-import { SESSIONS_CATALOG_FEATURE, SESSIONS_TODO_FEATURE, type GroupDimension, type TodoNames } from "../lib/session-groups";
-import { SESSIONS_LIST_FEATURE } from "../lib/session-list";
+import { SESSIONS_CATALOG_FEATURE, SESSIONS_QUICK_FILTERS_FEATURE, SESSIONS_TODO_FEATURE, type GroupDimension, type TodoNames } from "../lib/session-groups";
+import { SESSIONS_LIST_FEATURE, type ListFilters } from "../lib/session-list";
 import { NoComputers, useAddComputer } from "./machines/AddComputerEntry";
 import { BADGE_CLASS, DOT_CLASS, type GoFn, GroupCount, holdsRow, morePagesMenu, type NavPage, type NodeMenuFn, type RegFn, rowKey, type RowMenuFn, Section, SidebarGroup, GroupFoldButton, useActiveKey, useGo, useNavPages } from "./SidebarParts";
 import { NavRow, PersonalAgents, PersonaRow, SessionRow, SubHeading } from "./SidebarRows";
@@ -579,6 +579,17 @@ function useGroupings() {
   return useMemo(() => AGENT_GROUPINGS.filter((g) => g.key !== "todo" || todosSupported !== false), [todosSupported]);
 }
 
+/** What each quick filter selects on the paged list (`sessions_quick_filters`, #6662), as the complete list matches them
+ *  (lib/agent-filter.ts): Working without the ones that only wait in the background, which have their own chip. */
+const QUICK_SELECT: Record<AgentFilter, ListFilters> = {
+  all: {}, needs: { state: "needs_you" }, unread: { state: "unread" }, working: { state: "working", waiting: "0" },
+  bg_waiting: { state: "working", waiting: "1" }, feishu: { pane_source: "feishu" }, terminal: { pane_source: "terminal" },
+};
+/** The botmux sessions hidden: every read leaves out their origin (a botmux session is a Lark group's). */
+const HIDE_BOTMUX: ListFilters = { exclude_pane_source: "feishu" };
+const SHOW_ALL: ListFilters = {};
+const NO_COUNTS: FilterCounts = { needs: 0, unread: 0, working: 0, bg_waiting: 0, feishu: 0, terminal: 0 };
+
 /** The paged list's section kind for each grouping it draws (#6662): By project is the space (`group`). */
 const PAGED_DIMENSION: Record<Exclude<AgentGrouping, "repo">, GroupDimension> = { todo: "todo", machine: "machine", space: "group", state: "state" };
 
@@ -605,12 +616,40 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, add = true,
     const titles = new Map(open.map((td) => [td.id, td.title]));
     return { order: open.map((td) => td.id), title: (id) => titles.get(id) };
   }, [todos]);
+  // The complete list's quick filters and botmux switch, kept where it keeps them, so a pin or an unpin keeps the chip
+  // too; on a hub that cannot select them (no sessions_quick_filters), the paged list's own state chips.
+  const quickFilters = useStore((s) => s.features.includes(SESSIONS_QUICK_FILTERS_FEATURE));
+  const [filter, setFilter] = useState(() => agentFilter(storedValue("persona.agentFilter")));
+  const [botmuxHidden, setBotmuxHidden] = useState(() => botmuxAndFilter(filter, localStorage.getItem(BOTMUX_HIDDEN_KEY) === "1", "filter").hidden);
+  const saveBotmuxHidden = useCallback((next: boolean) => {
+    localStorage.setItem(BOTMUX_HIDDEN_KEY, next ? "1" : "0");
+    setBotmuxHidden(next);
+  }, []);
+  const chooseFilter = useCallback((f: AgentFilter) => {
+    if (botmuxAndFilter(f, botmuxHidden, "filter").hidden !== botmuxHidden) saveBotmuxHidden(false);
+    storeValue("persona.agentFilter", f);
+    setFilter(f);
+    hover(null);
+  }, [botmuxHidden, hover, saveBotmuxHidden]);
+  const toggleBotmux = useCallback(() => {
+    const next = botmuxAndFilter(filter, !botmuxHidden, "botmux");
+    saveBotmuxHidden(next.hidden);
+    if (next.filter !== filter) chooseFilter(next.filter);
+    hover(null);
+  }, [filter, botmuxHidden, saveBotmuxHidden, chooseFilter, hover]);
+  const quick = useMemo((): PagedQuickFilters | undefined => quickFilters ? {
+    select: QUICK_SELECT[filter],
+    exclude: botmuxHidden ? HIDE_BOTMUX : SHOW_ALL,
+    // the switch shows while there are Lark sessions to hide, or they are hidden
+    bar: (counts) => <FilterBar selection={filter} counts={counts ?? NO_COUNTS} onChoose={chooseFilter} botmux={(counts?.feishu ?? 0) > 0 || botmuxHidden ? { hidden: botmuxHidden, onToggle: toggleBotmux } : undefined} />,
+  } : undefined, [quickFilters, filter, botmuxHidden, chooseFilter, toggleBotmux]);
   const pagedGrouping = useMemo(() => ({
     dimension: PAGED_DIMENSION[grouping],
     label: AGENT_GROUPINGS.find((g) => g.key === grouping)?.label ?? "",
     todos: todoNames,
+    quick,
     bar: <GroupingBar groupings={groupings} selection={grouping} onChoose={chooseGrouping} />,
-  }), [grouping, todoNames, groupings, chooseGrouping]);
+  }), [grouping, todoNames, groupings, chooseGrouping, quick]);
   return <>
     <div className={SESSION_LIST_STYLE.heading}><span className={AGENTS_TITLE}>Agents</span>{archives && <SectionAdd icon="archive" label={t("agentmenus.archived_agents")} to={{ name: "agent-archives" }} go={go} />}{add && <SectionAdd label={t("sidebar.new_agent")} onClick={onNewAgent} />}</div>
     <HubNoticeLine />

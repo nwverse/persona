@@ -261,7 +261,10 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  */
 // #6575: verified runtime checkout display membership adds 79 B to the first screen on main at 2e57ac117
 // (ja 478,119 B to 478,198 B). Carry that measured feature allowance onto the current main budget.
-export const FIRST_SCREEN_BUDGET = 478_775;
+// #6662: the paged Agents list under the complete list's grouping bar and quick filters (By to-do / By status
+// sections, the to-do names, the quick filters' hub keys) adds 266 B to the ja first screen on main at 37991b8c2
+// (478,525 B to 478,791 B); main's 250 B of room stay.
+export const FIRST_SCREEN_BUDGET = 479_041;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;

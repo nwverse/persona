@@ -64,3 +64,43 @@ func TestRuntimeSessionsByTodo(t *testing.T) {
 		t.Error("sessions_todo must be advertised by the hub")
 	}
 }
+
+// The sidebar's quick filters on the paged list (#6662): state=working with waiting=1 the sessions only waiting in the
+// background, waiting=0 the others; exclude_pane_source leaves one origin out (the hidden botmux sessions).
+func TestRuntimeSessionsQuickFilters(t *testing.T) {
+	h := newTestHub(t)
+	catalogMachine(h, "mac", nil,
+		proto.Session{SessionID: "w1", State: "working", PaneID: "w1:p1"},
+		proto.Session{SessionID: "w2", State: "working", BackgroundWaiting: true, PaneID: "w2:p1"},
+		proto.Session{SessionID: "lark", State: "idle", PaneID: "botmux:x"},
+	)
+	ids := func(query string) []string {
+		t.Helper()
+		var out []string
+		for _, s := range runtimePage(t, h, "summary=1&"+query).Sessions {
+			out = append(out, s.SessionID)
+		}
+		slices.Sort(out)
+		return out
+	}
+	for query, want := range map[string][]string{
+		"state=working&waiting=0":    {"w1"},
+		"state=working&waiting=1":    {"w2"},
+		"exclude_pane_source=feishu": {"w1", "w2"},
+		"pane_source=feishu":         {"lark"},
+	} {
+		if got := ids(query); !slices.Equal(got, want) {
+			t.Errorf("%s: %v, want %v", query, got, want)
+		}
+	}
+	for _, bad := range []string{"waiting=yes", "exclude_pane_source=", "exclude_pane_source=elsewhere"} {
+		w := httptest.NewRecorder()
+		h.listSessions(w, httptest.NewRequest("GET", "/api/v1/sessions?"+bad, nil))
+		if w.Code != 400 || !strings.Contains(w.Body.String(), "invalid_query") {
+			t.Errorf("%s: %d %s", bad, w.Code, w.Body)
+		}
+	}
+	if !slices.Contains(h.features(), featureSessionsQuickFilters) || slices.Contains(proto.Features, featureSessionsQuickFilters) {
+		t.Error("sessions_quick_filters must be advertised by the hub")
+	}
+}

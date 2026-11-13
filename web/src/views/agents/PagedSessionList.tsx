@@ -10,6 +10,7 @@ import { SESSION_LIST_METRICS, SESSION_LIST_STYLE } from "../../ui/list-metrics"
 import { SearchField } from "../../ui/SearchField";
 import { STATE_LABEL } from "../../lib/state-labels";
 import type { AgentState } from "../../lib/types";
+import type { FilterCounts } from "../../lib/agent-filter";
 import { Button, cx, Menu, sidebarFoldMotion, useMenu, useNow, type MenuItem } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { SegmentedTrack } from "../../ui/Segmented";
@@ -63,7 +64,16 @@ export interface PagedSessionListProps<T> {
   grouping?: PagedGrouping;
 }
 
-export interface PagedGrouping { dimension: GroupDimension; bar: ReactNode; label: string; todos?: TodoNames }
+export interface PagedGrouping { dimension: GroupDimension; bar: ReactNode; label: string; todos?: TodoNames; quick?: PagedQuickFilters }
+
+/** The complete list's quick filters on the paged list (`sessions_quick_filters`, #6662), in place of its state chips:
+ *  what the chosen chip selects, what every read leaves out (hidden botmux), and the chips, drawn from the counts of
+ *  the list without the chip (one read for every chip's number). The caller keeps the choice, the complete list's. */
+export interface PagedQuickFilters { select: ListFilters; exclude: ListFilters; bar: (counts: FilterCounts | undefined) => ReactNode }
+
+const NONE: ListFilters = {};
+/** The keys a chip selects by: the scope its numbers are counted in leaves them out. */
+const CHIP_KEYS = ["state", "waiting", "pane_source"] as const;
 
 // The chosen "Active within" window, kept per list on this browser.
 const windowKey = (personal: boolean) => personal ? "persona.personalActiveWindow" : "persona.agentActiveWindow";
@@ -112,11 +122,17 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   const pickedFilters = useRef<ListFilters>({});
   if (!sameValue(pickedFilters.current, picked?.filters ?? {})) pickedFilters.current = picked?.filters ?? {};
   const groupFilters = pickedFilters.current;
+  // the chosen chip: the complete list's quick filter where the caller has them, else a state
+  const quick = grouping?.quick;
+  const stateChip = useMemo((): ListFilters => (state ? { state } : NONE), [state]);
+  const chip = quick ? quick.select : stateChip;
+  const exclude = quick?.exclude ?? NONE;
   const filters: ListFilters = useMemo(() => ({
-    ...(q ? { q } : {}), ...(state ? { state } : {}), ...(provider ? { provider } : {}),
+    ...(q ? { q } : {}), ...chip, ...(provider ? { provider } : {}),
     ...groupFilters,
     ...(spaceMachine ? { machine_id: spaceMachine } : {}),
-  }), [q, state, groupFilters, spaceMachine, provider]);
+    ...exclude,
+  }), [q, chip, groupFilters, spaceMachine, provider, exclude]);
   const filtered = Object.keys(filters).length > 0;
   // a dimension with no group picked: the list is drawn as its groups, and the one flat list is not read; in the
   // sidebar's groupings a search lists its matches flat
@@ -133,12 +149,12 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   const [scopeError, setScopeError] = useState("");
   const scopeQuery = useMemo(() => {
     const scope = { ...filters };
-    delete scope.state;
+    for (const key of CHIP_KEYS) delete scope[key];
     return countsQuery(scope);
   }, [filters]);
   const rootPage = useSyncExternalStore(root.subscribe, root.getSnapshot, root.getSnapshot);
   // Counts without state keep other state tabs reachable; machine scopes disambiguate computer-local groups.
-  const facetFilters = useMemo(() => ({ ...(q ? { q } : {}), ...(provider ? { provider } : {}), ...(spaceMachine ? { machine_id: spaceMachine } : {}) }), [q, provider, spaceMachine]);
+  const facetFilters = useMemo(() => ({ ...(q ? { q } : {}), ...(provider ? { provider } : {}), ...(spaceMachine ? { machine_id: spaceMachine } : {}), ...exclude }), [q, provider, spaceMachine, exclude]);
   // Unscoped counts are the root's own: follow them. Scoped counts are read on their own, now and once per hint; they
   // do not follow the root's counts, which land for that same hint (a second read of the same counts every time).
   const facetScoped = Object.keys(facetFilters).length > 0;
@@ -210,7 +226,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
 
   // The groups of the chosen dimension, for the value pill and the sections: everything that narrows the list but the
   // group itself. Their counts follow the state tab, so a group's number is the number of rows it lists.
-  const groupScope: ListFilters = useMemo(() => ({ ...facetFilters, ...(state ? { state } : {}) }), [facetFilters, state]);
+  const groupScope: ListFilters = useMemo(() => ({ ...facetFilters, ...chip }), [facetFilters, chip]);
   const scopeNeeds = scopeCounts?.state?.needs_you;
   const grouped = useSessionGroups({ dimension, catalog: cataloged, countsPath, scope: groupScope, facets, facetQuery, waiting: sections ? scopeNeeds : 0, event, todos: grouping?.todos });
   const allGroups = grouped.groups;
@@ -239,7 +255,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   const clock = useNow(60_000, Boolean(activeAt && win));
   const start = activeAt ? windowStart(win, clock) : null;
   // the Needs you chip's number for this scope: the server's, by the same rule as the chip
-  const needsYouTotal = state ? (state === "needs_you" ? page.total : 0) : scopeCounts?.state?.needs_you;
+  const needsYouTotal = chip.state ? (chip.state === "needs_you" ? page.total : 0) : chip.pane_source ? page.counts?.state?.needs_you : scopeCounts?.state?.needs_you;
   const split = groupActiveAt && start !== null
     ? splitByActivity(rows, groupActiveAt, start, { total: page.total, hasMore: page.hasMore, needsYou: needsYou ?? (() => false), needsYouTotal })
     : null;
@@ -299,6 +315,12 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   }, [list, getScrollElement, sections, hasMore, page.loading, page.error, margin, totalSize]);
 
   const stateTotals = scopeCounts?.state ?? {};
+  // the quick filters' numbers, as the complete list counts them: Working without the ones waiting in the background
+  const quickCounts = useMemo((): FilterCounts | undefined => {
+    if (!scopeCounts) return undefined;
+    const by = scopeCounts.state ?? {}, waiting = scopeCounts.background_waiting ?? 0, origin = scopeCounts.pane_source ?? {};
+    return { needs: by.needs_you ?? 0, unread: by.unread ?? 0, working: Math.max(0, (by.working ?? 0) - waiting), bg_waiting: waiting, feishu: origin.feishu ?? 0, terminal: origin.terminal ?? 0 };
+  }, [scopeCounts]);
   // the most used groups first: the menu lists a bounded number of them, and the picked one whatever its place
   const groups = useMemo(() => {
     const listed = (allGroups ?? []).slice(0, SESSION_LIST_METRICS.groupOptions);
@@ -356,7 +378,8 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   return (
     <div data-paged-sessions={personal ? "personal" : "runtime"} data-loaded-sessions={page.rows.length} data-has-more={page.hasMore}>
       <div className="space-y-2 px-1 py-2">
-        {grouping ? <>{grouping.bar}{stateChips}{searchField}</> : <>{searchField}
+        {/* the caller's bar and chips where the complete list has them: its padding, not this list's as well */}
+        {grouping ? <><div className="-mx-1">{grouping.bar}{quick ? quick.bar(quickCounts) : stateChips}</div>{searchField}</> : <>{searchField}
         <SegmentedTrack role="radiogroup" label={t("paged-agents.group_by")} className="flex gap-0.5 rounded-full p-0.5" thumbClassName="rounded-full bg-surface shadow-btn">
           {dimensions.map((d) => {
             const on = d.key === dimension;

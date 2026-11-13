@@ -29,10 +29,12 @@ class FakeSocket {
   push(msg: Record<string, unknown>) { this.onmessage?.({ data: JSON.stringify(msg) }); }
 }
 const at = (minute: number) => `2026-01-01T00:${String(minute).padStart(2, "0")}:00Z`;
-const row = (id: string, minute: number, todo?: { id: string; title: string }, state: Session["state"] = "idle"): Session =>
-  ({ machine_id: "mac", session_id: id, title: id, cwd: "/code/app", status: state === "working" ? "working" : "idle", state, updated_at: at(minute), ...(todo ? { todo } : {}) }) as Session;
+const row = (id: string, minute: number, todo?: { id: string; title: string }, state: Session["state"] = "idle", extra: Partial<Session> = {}): Session =>
+  ({ machine_id: "mac", session_id: id, title: id, cwd: "/code/app", status: state === "working" ? "working" : "idle", state, updated_at: at(minute), pane_id: `w${minute}:p1`, ...(todo ? { todo } : {}), ...extra }) as Session;
 const SHIP = { id: "todo_ship", title: "Ship 1.3" }, REVIEW = { id: "todo_review", title: "Submit for review" };
-const ROWS = [row("Widget tests", 9, SHIP, "working"), row("Release notes", 8, REVIEW), row("Screenshots", 7, REVIEW), row("Sort downloads", 6)];
+const ROWS = [row("Widget tests", 9, SHIP, "working"), row("Release notes", 8, REVIEW), row("Screenshots", 7, REVIEW), row("Sort downloads", 6),
+  row("Waiting on CI", 5, undefined, "working", { background_waiting: true }), row("Weekly numbers", 4, undefined, "needs_you", { pane_id: "botmux:x" })];
+const origin = (r: Session) => (r.pane_id?.startsWith("botmux:") ? "feishu" : "terminal");
 const TODOS: Todo[] = [
   { id: SHIP.id, title: SHIP.title, created_at: at(1), updated_at: at(9), agents: [] },
   { id: REVIEW.id, title: REVIEW.title, created_at: at(2), updated_at: at(8), agents: [] },
@@ -46,12 +48,13 @@ async function render(features: string[]) {
     const url = new URL(input, "http://hub.example.com");
     const q = url.searchParams;
     if (url.pathname.endsWith("/sessions")) {
-      const todo = q.get("todo");
-      const rows = ROWS.filter((r) => !todo || (todo === "none" ? !r.todo : r.todo?.id === todo));
+      const todo = q.get("todo"), state = q.get("state"), waiting = q.get("waiting"), only = q.get("pane_source"), not = q.get("exclude_pane_source");
+      const rows = ROWS.filter((r) => (!todo || (todo === "none" ? !r.todo : r.todo?.id === todo)) && (!state || r.state === state) &&
+        (!waiting || Boolean(r.background_waiting) === (waiting === "1")) && (!only || origin(r) === only) && (!not || origin(r) !== not));
       if (q.has("counts")) {
-        const byTodo: Record<string, number> = {};
-        for (const r of rows) byTodo[r.todo?.id ?? ""] = (byTodo[r.todo?.id ?? ""] ?? 0) + 1;
-        return json({ total: rows.length, state: { idle: rows.length }, machine: { mac: rows.length }, group: {}, project: {}, todo: byTodo, revision: "r1" });
+        const count = (key: (r: Session) => string) => rows.reduce<Record<string, number>>((m, r) => ({ ...m, [key(r)]: (m[key(r)] ?? 0) + 1 }), {});
+        return json({ total: rows.length, state: count((r) => r.state!), machine: { mac: rows.length }, group: {}, project: {}, todo: count((r) => r.todo?.id ?? ""),
+          pane_source: count(origin), background_waiting: rows.filter((r) => r.background_waiting).length, revision: "r1" });
       }
       return json({ sessions: q.has("since") ? [] : rows, remove: [], has_more: false, revision: "r1", total: rows.length });
     }
@@ -119,5 +122,37 @@ describe("the sidebar's paged Agents by to-do", () => {
     expect(segments()).toEqual(["待办", "机器", "仓库", "项目", "状态"]);
     expect(paths(fetch).some((u) => u.searchParams.get("summary") === "0" || !u.search)).toBe(true);
     expect(host.textContent).toContain("Ship 1.3");
+  });
+
+  it("shows the complete list's quick filters where the hub selects them, and reads each chip as the complete list matches it", async () => {
+    localStorage.setItem("persona.agentFilter", "working");
+    const fetch = await render(["sessions_list", "sessions_lookup", "sessions_todo", "sessions_quick_filters"]);
+    const chips = () => [...host.querySelectorAll<HTMLButtonElement>('[role="radiogroup"][aria-label="快速筛选"] button')];
+    expect(chips().map((b) => b.getAttribute("aria-label"))).toEqual(["全部", "需要你 1", "工作中 1", "后台等待中 1", "飞书群 1", "终端 5"]);
+    // the choice the complete list keeps: Working, without the one waiting in the background
+    expect(chips().find((b) => b.getAttribute("aria-checked") === "true")!.textContent).toMatch(/^工作中/);
+    const reads = () => paths(fetch).map((u) => u.searchParams);
+    expect(reads().some((q) => q.get("state") === "working" && q.get("waiting") === "0")).toBe(true);
+    await act(async () => chips().find((b) => b.textContent!.startsWith("飞书群"))!.click());
+    await flush();
+    expect(localStorage.getItem("persona.agentFilter")).toBe("feishu");
+    expect(reads().some((q) => q.get("pane_source") === "feishu" && !q.has("state"))).toBe(true);
+    // hiding botmux leaves its origin out of every read and goes back to All
+    const botmux = host.querySelector<HTMLButtonElement>('button[aria-pressed]')!;
+    expect(botmux.textContent).toContain("botmux");
+    fetch.mockClear();
+    await act(async () => botmux.click());
+    await flush();
+    expect(localStorage.getItem("persona.agentFilter")).toBe("all");
+    expect(reads().length).toBeGreaterThan(0);
+    expect(reads().every((q) => q.get("exclude_pane_source") === "feishu")).toBe(true);
+    expect(chips().map((b) => b.getAttribute("aria-label"))).not.toContain("飞书群 1");
+  });
+
+  it("keeps the paged list's own state chips on a hub that cannot select the quick filters", async () => {
+    await render(["sessions_list", "sessions_lookup", "sessions_todo"]);
+    const chips = [...host.querySelectorAll('[role="radiogroup"][aria-label="快速筛选"] button')].map((b) => b.textContent);
+    expect(chips).toContain("全部");
+    expect(chips.some((c) => c!.startsWith("已看"))).toBe(true);
   });
 });

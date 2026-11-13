@@ -115,6 +115,8 @@ func (f filters) matches(r *record) bool {
 		(f.Group == "" || f.Group == v.Group) &&
 		(f.Source == "" || f.Source == v.Source) &&
 		(f.PaneSource == "" || f.PaneSource == v.PaneSource) &&
+		(f.ExcludePaneSource == "" || f.ExcludePaneSource != v.PaneSource) &&
+		(f.Waiting == "" || (f.Waiting == "1") == waitingOf(v, f.Roots)) &&
 		(f.Manager == "" || f.Manager == r.owner) &&
 		(f.Provider == "" || f.Provider == v.Provider) &&
 		(f.Todo == "" || f.Todo == v.Todo || f.Todo == TodoNone && v.Todo == "") &&
@@ -169,6 +171,12 @@ func stateOf(v Item, roots bool) string {
 	return v.State
 }
 
+// waitingOf is whether v only waits in the background, as it is filtered and counted: by its folded state for
+// Options.Roots (Fold.BackgroundWaiting), its own when it folds none.
+func waitingOf(v Item, roots bool) bool {
+	return v.BackgroundWaiting && (!roots || v.Fold == nil || v.Fold.BackgroundWaiting)
+}
+
 func addCount(c *Counts, v Item, roots bool, delta int) {
 	c.Total += delta
 	if v.PaneSource != "" {
@@ -177,7 +185,7 @@ func addCount(c *Counts, v Item, roots bool, delta int) {
 			delete(c.PaneSource, v.PaneSource)
 		}
 	}
-	if v.BackgroundWaiting && (!roots || v.Fold == nil || v.Fold.BackgroundWaiting) {
+	if waitingOf(v, roots) {
 		c.BackgroundWaiting += delta
 	}
 	for _, pair := range []struct {

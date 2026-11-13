@@ -1,5 +1,5 @@
 // The sidebar's Agents groupings on a paging hub (#6662, docs/web/web.md "Paging hubs"): one bar, 待办 / 机器 / 仓库 /
-// 项目 / 状态, whether the list is paged or complete. By to-do is paged as a section per open to-do, open, then 没挂待办的
+// 项目 / 状态, and the same quick filters under it, whether the list is paged or complete. By to-do is paged as a section per open to-do, open, then 没挂待办的
 // folded; By machine and By state stay paged; By repository and a pin take the complete list, under the same bar.
 // Checked against the fake hub's own answers, with light and dark screenshots.
 //
@@ -54,6 +54,8 @@ if (!before && !counts.todo) {
   process.exit(1);
 }
 const SEGMENTS = ["待办", "机器", "仓库", "项目", "状态"];
+// the complete list's quick filters (lib/agent-filter.ts), the paged list's chips too on a hub with sessions_quick_filters
+const QUICK = ["全部", "需要你", "完成未看", "工作中", "后台等待中", "飞书群", "终端"];
 
 const browser = await chromium.launch({ channel, headless: true });
 try {
@@ -72,6 +74,7 @@ try {
     }, theme);
     const paged = page.locator("[data-paged-sessions='runtime']").first();
     const bar = page.locator('aside [role="radiogroup"][aria-label="Agent 分组"]').first();
+    const chipNames = async () => (await page.locator('aside [role="radiogroup"][aria-label="快速筛选"]').first().locator('[role="radio"]').evaluateAll((els) => els.map((el) => el.getAttribute("aria-label") ?? ""))).map((label) => label.replace(/ \d+$/, ""));
     // the Agents part of the sidebar: from its grouping control (or the paged list's) down
     const shot = async (name) => {
       await page.mouse.move(900, 900);
@@ -106,6 +109,8 @@ try {
     await paged.waitFor({ timeout: 20_000 });
     check((await bar.locator('[role="radio"]').allInnerTexts()).join(" / ") === SEGMENTS.join(" / "), `${theme}: the bar offers ${SEGMENTS.join(" / ")}`);
     check((await bar.locator('[aria-checked="true"]').innerText()) === "待办", `${theme}: By to-do is the default`);
+    const pagedChips = await chipNames();
+    check(pagedChips[0] === "全部" && pagedChips.every((name) => QUICK.includes(name)), `${theme}: the paged list's chips are the complete list's quick filters`, pagedChips.join(" / "));
     const sections = () => paged.locator("[data-session-group]").evaluateAll((els) => els.map((el) => ({
       name: el.querySelector("button[aria-expanded]")?.querySelector("span")?.textContent ?? el.querySelector("button[aria-expanded]")?.textContent ?? "",
       open: el.getAttribute("data-group-open") === "true",
@@ -125,6 +130,8 @@ try {
     await bar.waitFor({ timeout: 20_000 });
     check(!(await paged.count()), `${theme}: a pin takes the complete list`);
     check((await bar.locator('[role="radio"]').allInnerTexts()).join(" / ") === SEGMENTS.join(" / ") && (await bar.locator('[aria-checked="true"]').innerText()) === "待办", `${theme}: the same bar, still By to-do`);
+    const completeChips = await chipNames();
+    check(completeChips.every((name) => QUICK.includes(name)) && pagedChips.every((name) => completeChips.includes(name)), `${theme}: the same quick filters`, completeChips.join(" / "));
     await shot("pinned");
     await setPins({ spaces: [], sessions: [] });
     await load();

@@ -46,6 +46,10 @@ const (
 	// "Sessions by to-do" (#6662). An older hub ignores the key and lists every session, so an app sends it only to a
 	// hub that says this.
 	featureSessionsTodo = "sessions_todo"
+	// featureSessionsQuickFilters: a paged GET /api/v1/sessions takes waiting=0|1 (working rows that only wait in the
+	// background, or the others) and exclude_pane_source=<origin> (all but that origin's rows): the web sidebar's quick
+	// filters on the paged list, docs/protocol/protocol.md "Quick filters" (#6662). An older hub ignores both keys.
+	featureSessionsQuickFilters = "sessions_quick_filters"
 )
 
 // runtimeList is a transport cache of the manager's already-decorated rows. It

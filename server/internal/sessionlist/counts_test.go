@@ -2,6 +2,7 @@ package sessionlist
 
 import (
 	"fmt"
+	"net/url"
 	"testing"
 )
 
@@ -127,5 +128,42 @@ func TestTodoFilterAndCounts(t *testing.T) {
 	first := mustQuery(t, &index, Options{Todo: "todo_b", Limit: 1})
 	if _, err := index.Query(Options{Todo: "todo_a", Cursor: first.NextCursor}); err == nil {
 		t.Fatal("a cursor taken with another to-do")
+	}
+}
+
+// The sidebar's quick filters on the paged list (#6662): waiting=1 the rows that only wait in the background, waiting=0
+// the others, by their folded state with Roots; exclude_pane_source leaves one origin out, of the rows and the counts.
+func TestWaitingAndExcludedOrigin(t *testing.T) {
+	var index Index
+	items := make([]Item, 4)
+	for n := range items {
+		items[n] = testItem(fmt.Sprintf("row-%d", n), n)
+	}
+	items[1].BackgroundWaiting = true
+	items[2].PaneSource, items[3].PaneSource = "feishu", "terminal"
+	index.Replace("demo", items)
+	total := func(o Options) int {
+		t.Helper()
+		page := mustQuery(t, &index, o)
+		return page.Total
+	}
+	if total(Options{State: "working", Waiting: "1"}) != 1 || total(Options{State: "working", Waiting: "0"}) != 3 {
+		t.Fatal("waiting split the working rows wrongly")
+	}
+	counts, err := index.Counts(Options{ExcludePaneSource: "feishu"})
+	if err != nil || counts.Total != 3 || counts.PaneSource["feishu"] != 0 || counts.PaneSource["terminal"] != 1 {
+		t.Fatalf("excluded origin: %+v %v", counts, err)
+	}
+	// a parent folding a working child is not waiting by its folded state
+	items[1].Fold = &Fold{State: "working", BackgroundWaiting: false}
+	items[1].Full = testPayload{ID: items[1].ID, Title: "Its child works"}
+	index.Replace("demo", items)
+	if total(Options{Roots: true, Waiting: "1"}) != 0 || total(Options{Waiting: "1"}) != 1 {
+		t.Fatal("waiting did not follow the folded state with roots")
+	}
+	for _, v := range []url.Values{{"waiting": {"2"}}, {"exclude_pane_source": {""}}, {"exclude_pane_source": {"elsewhere"}}} {
+		if _, err := Parse(v); err == nil {
+			t.Fatalf("accepted %v", v)
+		}
 	}
 }

@@ -102,6 +102,12 @@ type Options struct {
 	// Todo (todo=<id>) selects the items on that to-do; TodoNone (todo=none) the items on none. Both bind a cursor as
 	// the other filters do (#6662).
 	Todo string
+	// Waiting (waiting=1) selects the items that only wait in the background (BackgroundWaiting, by their folded state
+	// with Roots), waiting=0 the others: with state=working, the sidebar's "Waiting in the background" and "Working"
+	// quick filters. ExcludePaneSource (exclude_pane_source=<origin>) leaves out the items of that origin (the
+	// sidebar's hidden botmux sessions). Both bind a cursor as the other filters do (#6662).
+	Waiting           string
+	ExcludePaneSource string
 }
 
 // TodoNone is the todo value that selects the items on no to-do: no to-do id is spelled so ("todo_<hex>").
@@ -170,7 +176,7 @@ type journalEntry struct {
 }
 
 type filters struct {
-	ID, State, Machine, Project, Group, Source, Provider, Q, PaneSource, Manager, Under, Todo string
+	ID, State, Machine, Project, Group, Source, Provider, Q, PaneSource, Manager, Under, Todo, Waiting, ExcludePaneSource string
 	// Places and Spaces are Options' as placesKey spells them: filters stay comparable.
 	Places, Spaces   string
 	Roots, NoPrivate bool
