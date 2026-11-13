@@ -1,5 +1,20 @@
 # Lessons: web UI and interactions
 
+## Removing a client-only prompt includes its hooks and fixture documentation (#6570)
+
+The star toast was browser-local, but readiness refresh and successful Agent creation loaded its rule lazily.
+Remove those producers as well as the rendered prompt and all language namespaces; do not reset real setup or
+conversation state to retire an unused local-storage value. Keep shared fixtures while another client consumes
+them, and update their README's test paths. A readiness regression should wait for dynamic imports to settle:
+a synchronous negative assertion can miss the delayed toast that caused the report.
+
+## Pending cards need exact session metadata outside the loaded page (#6432)
+
+A task row can render from `taskRows` even when `getSession` has no row for its Agent. On a paging hub, hydrate every
+pending card's missing session, not only `folded_under` children, before checking approval capabilities. Keep missing
+and explicitly read-only sessions disabled. Test a root Agent outside the list window, and type without submitting.
+An expanded Needs you title opens the asking Agent; keep folding on its separate chevron, never on that title.
+
 ## A grey text selection over sidebar rows reads as a stuck highlight (#6458)
 
 The theme paints `::selection` with `--accent-tint`, a neutral grey in the default theme close to the hover fill. A

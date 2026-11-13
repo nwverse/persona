@@ -6117,6 +6117,8 @@ struct QueueStrip: View {
     @State private var busy = false
     @State private var expanded = false
     @State private var confirmSend = false
+    /// Messages from other conversations collapse into one line until the owner opens them (#6394).
+    @State private var relayedExpanded = false
     /// One row's height with its spacing, as drawn (it follows the text size and the rows' line counts).
     @State private var rowHeight: CGFloat = 0
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -6130,7 +6132,7 @@ struct QueueStrip: View {
             .scrollBounceBehavior(.basedOnSize)
             // Its rows' own height until one is measured, not what it is offered: the footer is laid out first (#3703).
             .fixedSize(horizontal: false, vertical: rowHeight == 0)
-            .frame(height: rowHeight > 0 ? rowHeight * min(CGFloat(total), Self.visibleRows) : nil)
+            .frame(height: rowHeight > 0 ? rowHeight * min(CGFloat(drawnCount), Self.visibleRows) : nil)
             .padding(.top, Theme.Space.sm)
         } label: {
             Group {
@@ -6252,68 +6254,135 @@ struct QueueStrip: View {
         .accessibilityIdentifier("queue-sending-item")
     }
 
+    /// Messages other conversations sent in, behind the owner's own in the queue (#4342).
+    private var relayedCount: Int { max(queued.count - own, 0) }
+    /// How many rows the opened strip actually draws, for measuring one row's height (a folded relayed block is one line).
+    private var drawnCount: Int {
+        own + sending.count + (relayedCount > 0 ? (relayedExpanded ? relayedCount : 1) : 0)
+    }
+
     private var rows: some View {
         VStack(alignment: .leading, spacing: Theme.Space.sm) {
-            ForEach(Array(queued.enumerated()), id: \.offset) { i, q in
-                let photos = i < own && photoMarks.indices.contains(i) ? photoMarks[i] : 0
-                let draft = QueuedDraft(q, photoCount: photos)
-                Menu {
-                    if i < own {
-                        Button { act(i, delete: false) } label: { Label("Take Back to Edit", systemImage: Theme.Icon.edit) }
-                        if steers, own > 1 {
-                            Button { move(i, by: -1) } label: { Label("Move Up [Queue Strip]", systemImage: Theme.Icon.queueUp) }
-                                .disabled(i == 0)
-                                .accessibilityIdentifier("queue-move-up")
-                            Button { move(i, by: 1) } label: { Label("Move Down [Queue Strip]", systemImage: Theme.Icon.queueDown) }
-                                .disabled(i == own - 1)
-                                .accessibilityIdentifier("queue-move-down")
-                        }
-                    }
-                    Button { UIPasteboard.general.string = draft.text.isEmpty ? q : draft.text } label: { Label("Copy [Readiness Views d37380]", systemImage: Theme.Icon.copy) }
-                    if i < own {
-                        Button(role: .destructive) { act(i, delete: true) } label: { Label("Delete", systemImage: Theme.Icon.delete) }
-                    }
+            ForEach(0..<own, id: \.self) { i in
+                ownRow(i)
+            }
+            if relayedCount > 0 {
+                Button {
+                    withAnimation(Theme.Motion.state) { relayedExpanded.toggle() }
                 } label: {
-                    HStack(alignment: .top, spacing: Theme.Space.s) {
-                        Text("\(i + 1)")
-                            .font(Theme.Font.labelHeavy.monospacedDigit())
-                            .foregroundStyle(Theme.accent)
-                            .scaledFrame(width: Theme.Size.badge, height: Theme.Size.badge)
-                            .background(Theme.accent.opacity(0.14), in: .circle)
-                        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                            QueuedWords(draft: draft)
-                            if photos > 0 {
-                                HStack(spacing: Theme.Space.xs) {
-                                    ThemedIcon(Theme.Icon.photo)
-                                    Text("\(photos) images")
-                                }
-                                .font(Theme.Font.caption).foregroundStyle(.secondary)
-                            }
-                            if i >= own {
-                                Text("Arrives when this turn ends [Queue Strip]")
-                                    .font(Theme.Font.caption).foregroundStyle(.secondary)
-                            }
-                        }
+                    HStack(spacing: Theme.Space.s) {
+                        ThemedIcon(Theme.Icon.sendNow).font(Theme.Font.label).foregroundStyle(.secondary)
+                        Text("\(relayedCount) messages from other conversations are waiting [Queue Strip]")
+                            .font(Theme.Font.secondary)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
                         Spacer(minLength: 0)
-                        ThemedIcon(Theme.Icon.more).font(Theme.Font.label).foregroundStyle(.secondary).padding(.top, Theme.Space.xs)
+                        ThemedIcon(Theme.Icon.expand)
+                            .font(Theme.Font.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .rotationEffect(.degrees(relayedExpanded ? 180 : 0))
                     }
                     .padding(.horizontal, Theme.Space.m)
                     .padding(.vertical, Theme.Space.s)
-                    .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
+                    .contentShape(.rect)
                 }
-                .disabled(busy)
-                .accessibilityLabel(i < own ? Text("Item \(i + 1): \(QueuedWords.spoken(draft))") : Text("Item \(i + 1): \(QueuedWords.spoken(draft)), arrives when this turn ends [Queue Strip]"))
-                .accessibilityIdentifier("queue-item")
-                .accessibilityHint(i < own ? Text("Edit, copy or delete") : Text("Copy [Readiness Views d37380]"))
-                .accessibilityValue(photos > 0 ? Text("\(photos) images") : Text(""))
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("queue-relayed-summary")
+                .accessibilityLabel(Text("\(relayedCount) messages from other conversations are waiting [Queue Strip]"))
+                if relayedExpanded {
+                    ForEach(own..<queued.count, id: \.self) { i in
+                        relayedRow(i)
+                    }
+                }
             }
             ForEach(Array(sending.enumerated()), id: \.element.id) { j, msg in
                 sendingRow(msg, number: queued.count + j + 1)
             }
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
-            if total > 0 { rowHeight = h / CGFloat(total) }
+            if drawnCount > 0 { rowHeight = h / CGFloat(drawnCount) }
         }
+    }
+
+    /// One of the owner's own queued messages: edit, reorder, copy or delete.
+    @ViewBuilder
+    private func ownRow(_ i: Int) -> some View {
+        let q = queued[i]
+        let photos = photoMarks.indices.contains(i) ? photoMarks[i] : 0
+        let draft = QueuedDraft(q, photoCount: photos)
+        Menu {
+            Button { act(i, delete: false) } label: { Label("Take Back to Edit", systemImage: Theme.Icon.edit) }
+            if steers, own > 1 {
+                Button { move(i, by: -1) } label: { Label("Move Up [Queue Strip]", systemImage: Theme.Icon.queueUp) }
+                    .disabled(i == 0)
+                    .accessibilityIdentifier("queue-move-up")
+                Button { move(i, by: 1) } label: { Label("Move Down [Queue Strip]", systemImage: Theme.Icon.queueDown) }
+                    .disabled(i == own - 1)
+                    .accessibilityIdentifier("queue-move-down")
+            }
+            Button { UIPasteboard.general.string = draft.text.isEmpty ? q : draft.text } label: { Label("Copy [Readiness Views d37380]", systemImage: Theme.Icon.copy) }
+            Button(role: .destructive) { act(i, delete: true) } label: { Label("Delete", systemImage: Theme.Icon.delete) }
+        } label: {
+            HStack(alignment: .top, spacing: Theme.Space.s) {
+                Text("\(i + 1)")
+                    .font(Theme.Font.labelHeavy.monospacedDigit())
+                    .foregroundStyle(Theme.accent)
+                    .scaledFrame(width: Theme.Size.badge, height: Theme.Size.badge)
+                    .background(Theme.accent.opacity(0.14), in: .circle)
+                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                    QueuedWords(draft: draft)
+                    if photos > 0 {
+                        HStack(spacing: Theme.Space.xs) {
+                            ThemedIcon(Theme.Icon.photo)
+                            Text("\(photos) images")
+                        }
+                        .font(Theme.Font.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 0)
+                ThemedIcon(Theme.Icon.more).font(Theme.Font.label).foregroundStyle(.secondary).padding(.top, Theme.Space.xs)
+            }
+            .padding(.horizontal, Theme.Space.m)
+            .padding(.vertical, Theme.Space.s)
+            .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
+        }
+        .disabled(busy)
+        .accessibilityLabel(Text("Item \(i + 1): \(QueuedWords.spoken(draft))"))
+        .accessibilityIdentifier("queue-item")
+        .accessibilityHint(Text("Edit, copy or delete"))
+        .accessibilityValue(photos > 0 ? Text("\(photos) images") : Text(""))
+    }
+
+    /// One message relayed from another conversation: shown only, the only action is copy (#4342).
+    @ViewBuilder
+    private func relayedRow(_ i: Int) -> some View {
+        let q = queued[i]
+        let draft = QueuedDraft(q)
+        Menu {
+            Button { UIPasteboard.general.string = draft.text.isEmpty ? q : draft.text } label: { Label("Copy [Readiness Views d37380]", systemImage: Theme.Icon.copy) }
+        } label: {
+            HStack(alignment: .top, spacing: Theme.Space.s) {
+                Text("\(i + 1)")
+                    .font(Theme.Font.labelHeavy.monospacedDigit())
+                    .foregroundStyle(Theme.accent)
+                    .scaledFrame(width: Theme.Size.badge, height: Theme.Size.badge)
+                    .background(Theme.accent.opacity(0.14), in: .circle)
+                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                    QueuedWords(draft: draft)
+                    Text("Arrives when this turn ends [Queue Strip]")
+                        .font(Theme.Font.caption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                ThemedIcon(Theme.Icon.more).font(Theme.Font.label).foregroundStyle(.secondary).padding(.top, Theme.Space.xs)
+            }
+            .padding(.horizontal, Theme.Space.m)
+            .padding(.vertical, Theme.Space.s)
+            .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
+        }
+        .disabled(busy)
+        .accessibilityLabel(Text("Item \(i + 1): \(QueuedWords.spoken(draft)), arrives when this turn ends [Queue Strip]"))
+        .accessibilityIdentifier("queue-item")
+        .accessibilityHint(Text("Copy [Readiness Views d37380]"))
     }
 
     private func act(_ i: Int, delete: Bool) {
