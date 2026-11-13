@@ -339,10 +339,16 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
       {showState && !s.assistant && <SessionMark s={s} size={14} />}
       <span className="flex size-3.5 shrink-0 items-center justify-center">{showState || st === "working" || leadActive ? <StatusMark state={leadActive ? "working" : usageLimitLabel(s) && st === "unread" ? "idle" : st} awaiting={awaiting} waiting={backgroundWaiting(s)} /> : <Icon name={icon} size={12} className="text-ink-3" />}</span>
       {prefix && <span className={prefixClass}>{prefix}</span>}
+      {/* a lead's name reads as a row, even with nothing second to say: the ⋯'s reserved slot must not take the title's place */}
+      {keepTrailing && !ultra && !detail.length && !workflow && !line && !childLine && !plan ? (
+        <span className={cx("flex-1 truncate text-[13px]", titleMin, titleFirst, active ? "font-medium text-ink" : "text-ink-2")}>
+          {label ?? sessionTitle(s)}
+        </span>
+      ) : null}
       {/* with the mark, the title sits in the column whether a second line shows or not: the same element through a
           workflow's start and end, so the mark does not fade in again */}
       {ultra || detail.length > 0 || workflow || line || childLine || plan ? (
-        <span className={cx("flex flex-1 flex-col", titleMin, titleFirst)}>
+        <span className={cx("min-w-0 flex-1 flex-col", titleMin, titleFirst)}>
           {ultra ? (
             <span className="flex min-w-0 items-center gap-1">
               <span className={cx("min-w-0 truncate text-[13px]", active ? "font-medium text-ink" : "text-ink-2", st === "unread" && !active && !usageLimitLabel(s) && "font-medium text-ink")}>

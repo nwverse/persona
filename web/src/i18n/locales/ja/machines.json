@@ -8,8 +8,6 @@
   "offline": "オフライン",
   "reconnect": "再接続",
   "memory": "メモリ",
-  "disk": "ディスク",
-  "disk_free": "空き{size}",
   "waiting_node": "このコンピューターの再接続を待っています",
   "unreachable": "このコンピューターに接続できません",
   "agents_other": "エージェント{count}件",
