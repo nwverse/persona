@@ -1,7 +1,6 @@
 package hub
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -67,19 +66,12 @@ func (h *Hub) rewindSession(w http.ResponseWriter, r *http.Request, m *Machine) 
 	if body.PromptsAfter != nil {
 		params["prompts_after"] = *body.PromptsAfter
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), rewindTimeout)
-	defer cancel()
-	var out json.RawMessage
-	if err := m.call(ctx, "session.rewind", params, &out); err != nil {
-		if h.nodeOutdated(w, r, err, "hub-rewind.outdated", nil) {
-			return
-		}
-		callErr(w, err)
+	out, ok := h.callNode(w, r, m, "session.rewind", params, rewindTimeout, "hub-rewind.outdated", nil)
+	if !ok {
 		return
 	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	if len(out) == 0 {
 		out = json.RawMessage(`{}`)
 	}
-	_, _ = w.Write(out)
+	writeRawJSON(w, out)
 }

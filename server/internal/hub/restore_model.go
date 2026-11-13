@@ -1,7 +1,6 @@
 package hub
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -31,19 +30,12 @@ func (h *Hub) restoreSessionModel(w http.ResponseWriter, r *http.Request, m *Mac
 		writeErr(w, http.StatusBadRequest, errors.New("a terminal opened by pane is not a session"))
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), restoreModelTimeout)
-	defer cancel()
-	var out json.RawMessage
-	if err := m.call(ctx, "session.restore_model", map[string]any{"session_id": sid}, &out); err != nil {
-		if h.nodeOutdated(w, r, err, "hub-restoremodel.outdated", nil) {
-			return
-		}
-		callErr(w, err)
+	out, ok := h.callNode(w, r, m, "session.restore_model", map[string]any{"session_id": sid}, restoreModelTimeout, "hub-restoremodel.outdated", nil)
+	if !ok {
 		return
 	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	if len(out) == 0 {
 		out = json.RawMessage(`{}`)
 	}
-	_, _ = w.Write(out)
+	writeRawJSON(w, out)
 }

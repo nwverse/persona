@@ -1,8 +1,6 @@
 package hub
 
 import (
-	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -133,26 +131,22 @@ func (h *Hub) fileEdit(op string) http.HandlerFunc {
 		if op == "zip" || op == "copy" {
 			wait = 10 * time.Minute // up to 2 GB of files
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), wait)
-		defer cancel()
-		var out json.RawMessage
-		if err := m.call(ctx, "file."+op, q, &out); err != nil {
-			key := "hub-fileedit.outdated"
-			if op != "rename" && op != "move" && op != "trash" && op != "restore" {
-				key = "hub-fileedit.outdated_feature" // mkdir, write, zip, copy, chmod (#5828-#5831)
-			}
+		key := "hub-fileedit.outdated"
+		if op != "rename" && op != "move" && op != "trash" && op != "restore" {
+			key = "hub-fileedit.outdated_feature" // mkdir, write, zip, copy, chmod (#5828-#5831)
+		}
+		out, ok := h.callNode(w, r, m, "file."+op, q, wait, key, i18n.Args{"name": m.cfg.Name}, func(err error) bool {
 			var re *rpc.Error
-			switch {
-			case h.nodeOutdated(w, r, err, key, i18n.Args{"name": m.cfg.Name}):
-			case errors.As(err, &re) && re.Code == proto.CodeNotFound:
+			if errors.As(err, &re) && re.Code == proto.CodeNotFound {
 				writeCode(w, http.StatusNotFound, proto.CodeNotFound, re.Message, nil)
-			default:
-				callErr(w, err)
+				return true
 			}
+			return false
+		})
+		if !ok {
 			return
 		}
 		h.logf("[%s] files %s from the phone", m.cfg.ID, op)
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		_, _ = w.Write(out)
+		writeRawJSON(w, out)
 	})
 }

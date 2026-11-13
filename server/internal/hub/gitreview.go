@@ -1,8 +1,6 @@
 package hub
 
 import (
-	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -22,16 +20,9 @@ func (h *Hub) gitReview(w http.ResponseWriter, r *http.Request, m *Machine) {
 		writeErr(w, http.StatusBadRequest, errors.New("cwd is required"))
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 75*time.Second)
-	defer cancel()
-	var out json.RawMessage
-	if err := m.call(ctx, "git.review", p, &out); err != nil {
-		if h.nodeOutdated(w, r, err, "hub-gitreview.outdated", nil) {
-			return
-		}
-		callErr(w, err)
+	out, ok := h.callNode(w, r, m, "git.review", p, 75*time.Second, "hub-gitreview.outdated", nil)
+	if !ok {
 		return
 	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	_, _ = w.Write(out)
+	writeRawJSON(w, out)
 }

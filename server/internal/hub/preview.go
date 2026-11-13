@@ -61,15 +61,11 @@ func (h *Hub) previewServers(w http.ResponseWriter, r *http.Request, m *Machine)
 	if !h.previewable(w, r, m) {
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-	defer cancel()
-	var out json.RawMessage
-	if err := m.call(ctx, "preview.servers", map[string]any{"cwd": cwd}, &out); err != nil {
-		callErr(w, err)
+	out, ok := h.callNode(w, r, m, "preview.servers", map[string]any{"cwd": cwd}, 15*time.Second, "", nil)
+	if !ok {
 		return
 	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	_, _ = w.Write(out)
+	writeRawJSON(w, out)
 }
 
 // previewStart is POST …/preview/start {cwd, name, workspace, kind}: run a launch.json entry in a new terminal tab of
@@ -96,15 +92,11 @@ func (h *Hub) previewStart(w http.ResponseWriter, r *http.Request, m *Machine) {
 	if !h.previewable(w, r, m) {
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-	var out json.RawMessage
-	if err := m.call(ctx, "preview.start", body, &out); err != nil {
-		callErr(w, err)
+	out, ok := h.callNode(w, r, m, "preview.start", body, 30*time.Second, "", nil)
+	if !ok {
 		return
 	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	_, _ = w.Write(out)
+	writeRawJSON(w, out)
 }
 
 // previewConnect is GET …/preview/connect?port=&path=&w=&h=&dpr=&mobile=: a WebSocket to a preview of the port.
