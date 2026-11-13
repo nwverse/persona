@@ -290,6 +290,11 @@ keeps one outage from filling the chat:
 
 ### Routing
 
+- On the web, **Answer in chat** on a task decision also addresses its original `asked_at` round. The existing
+  routing chip says the next message answers that decision and is saved on the task; cancel the chip to discuss
+  without deciding. The route sends the owner's exact words, records their task decision, and ends that round
+  only after delivery and persistence succeed. A stale round or failed delivery leaves the decision pending.
+  Ordinary chat messages and ordinary task routing do not implicitly answer a decision.
 - By default, messages go to Persona, which decides whether to answer, start a task, or forward to an existing task with `agent_send`. A follow-up that only asks about work a task has already done (how far it got, its conclusion, a PR link, why it stopped) is answered from the snapshot and `agent_read`, not sent to the agent: a send queues behind its turn or resumes a closed agent, and the user waits for that extra turn (#2124). The snapshot's line for tasks and the `agent_read` tool description say the same, so the assistant is not pointed at `agent_send` there. When the input contains text, a gray label above it says "Persona decides who handles this."
 - To speak directly to a task, type `@` for a list (tasks, computers, projects, people) and select a task, or tap Message on its card. A purple routing label appears above the input,
   "To ‘xx’ ×." The App sends directly to that Agent, bypassing Persona. The chat bubble carries the same label (`routed` chat-activity entry).

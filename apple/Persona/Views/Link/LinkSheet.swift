@@ -219,6 +219,11 @@ struct LinkSheet: View {
                         }
                         .font(Theme.Font.label)
                         .foregroundStyle(Theme.accent)
+                        // A caption line hit like a row, the header keeping its height (#6577), and over the title above
+                        // it too: the header has only `Space.s` under it, and the page below takes its own taps.
+                        .padding(.top, Theme.Space.l)
+                        .tapTargetOutset()
+                        .padding(.top, -Theme.Space.l)
                     }
                     .buttonStyle(.plain)
                     .accessibilityHint(String(localized: "Lists this session's dev servers"))

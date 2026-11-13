@@ -225,11 +225,9 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * shares with the stopped line's Resume, Codex threads counted as stopped Agents, and a stable Terminal handler so the
  * header still draws only when it changes). And 31 B because #5579 and #5860 landed together (#5879): #5579 was measured
  * on main at 9223f7f92 (+228 B) and #5860 merged before it, on whose main at bae989cf42 (ja 474,213 B) it costs +262 B;
- * ja 474,475 B on main at 624f81dde, with 0 B of room. And 79 B for the GitHub star prompts (#5761: ja 474,554 B against
- * 474,421 B on main at 47c38a3466, +133 B, of which 54 B fit the room main had: the readiness answer and an Agent this
- * browser started share one on-demand import of the rule, lib/star-prompt-load.ts, which a failed load only skips, and
- * the sidebar's milestone line is a lazy component; the rule, the pill, the line and their strings stay off the first
- * screen). And 128 B for recent main changes (#6346: ja 474,617 B on main at 2010e8229f, 63 B over the old budget,
+ * ja 474,475 B on main at 624f81dde, with 0 B of room. And 79 B for the former GitHub star prompts (#5761: ja 474,554 B
+ * against 474,421 B on main at 47c38a3466, +133 B, of which 54 B fit the room main had); #6570 removes those prompts
+ * and their readiness/launch hooks without raising the budget. And 128 B for recent main changes (#6346: ja 474,617 B on main at 2010e8229f, 63 B over the old budget,
  * themselves, views/agents/GroupedSessions.tsx, load when a Browse by is chosen, which took 407 B back off; the same
  * code measured +1,396 B and +1,510 B on the two mains before, docs/lessons/web.md; the 30 B of room main had stay).
  * +100 B for the scheduled tasks list's "Inbox: …" marks and the assistant's own Inbox row (#6430): the Japanese first
@@ -253,8 +251,17 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * And 162 B for restoring expanded Needs you title navigation and hydrating off-page question sessions (#6432:
  * main at f0c995f923 measured ja 477,957 B; sharing the header's label and chevron takes this fix to 478,119 B,
  * +162 B, keeping main's 11 B of room). Keep only this feature's measured allowance on top of main's changes.
+ * And 172 B for the Agents fold-all button that acts on the list under the controls, and a to-do's first five decisions
+ * (#6447: ja 478,291 B against 478,119 B on main at 2e57ac117: the button's rule (fold the groups to their headings,
+ * open a list folded under its title, no button where there is nothing to fold to), its two icons (corners in for
+ * Collapse all, out for Expand all) and its name as the tooltip, less the two list-menu items it replaces and the
+ * Recent row's ⓘ words, and the decisions' words in the to-dos' catalog; main's 11 B of room stay).
+ * And 394 B for the existing round-aware task-decision route and completed-task ownership (#5929),
+ * retaining that feature allocation when merging the latest main.
  */
-export const FIRST_SCREEN_BUDGET = 478_130;
+// #6575: verified runtime checkout display membership adds 79 B to the first screen on main at 2e57ac117
+// (ja 478,119 B to 478,198 B). Carry that measured feature allowance onto the current main budget.
+export const FIRST_SCREEN_BUDGET = 478_775;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
@@ -428,13 +435,17 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
  * rows and the matched sentence as a row's second line; the search itself, lib/assistant-search.ts, loads on the first
  * query typed, off the idle tier; 31 B of room so the next main does not tip it). And 108 B for the same main
  * with the lead row-title restoration (#6400: 44,583 B after merging it, +108 B, of which 0 B fit the old room).
+ * The foldable sidebar Recent (#6228) adds nothing to this tier: the fold stays on the first screen. Later mains then
+ * drifted past 44,583 through shared-chunk minifier growth alone (#6512/#6521/#6528 changed no idle page's own source):
+ * on main at d65cad3b4 the idle pages send 44,718 B, 135 B over this ceiling with only the queue panel still idle.
+ * And moving the queue panel off the idle tier (#6571, 2026-11-13): QueueStrip renders QueuePanel only while a message
+ * is queued (ChatView hasQueue), so preloading it at idle on every cold start never served a first open; it now loads
+ * on intent like the other lazy pages. That takes the tier to 40,467 B measured on this machine, 4,116 B under the
+ * ceiling, so the budget is held here at 44,583 B — not raised to cover the drift, which the move removes instead.
  * Every other lazy page loads on intent, not at idle; raise it on purpose, in the change that needs it.
- * The foldable sidebar Recent (#6228) adds nothing to this tier: the fold stays on the first screen. On main at
- * eaa68818e the idle pages send 44,608 B (25 B over the 44,583 B ceiling from the intervening #6458 / #5935 growth), and
- * this branch measures 44,585 B — 23 B less than main, two over the old ceiling; the ceiling moves to 44,608 B so it
- * covers main, 0 B of room for this branch's measured 44,585 B.
  */
-export const IDLE_TIER_BUDGET = 44_608;
+// Preserve the 7 B feature allowance while retaining main's queue-panel idle reduction.
+export const IDLE_TIER_BUDGET = 44_590;
 
 const gzip = promisify(gzipCompress);
 
