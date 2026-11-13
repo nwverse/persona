@@ -10233,7 +10233,15 @@ def node_action(h, p, body):
     elif area == "tabs" and verb == "close":
         CLOSED_TABS.add(body.get("tab_id"))
     elif area == "tabs" and verb == "rename":
-        TAB_NAMES[body.get("tab_id")] = body.get("label")
+        # A name that is a refusal's word is refused as the hub relays it (#6996; as "taken" refuses a worktree): "offline"
+        # (503 node_unreachable), "unsupported" (an engine without rename) and "closed" (the tab gone), the node's words as 502
+        label = str(body.get("label", ""))
+        if label == "offline":
+            return h.send_json({"error": "machine %s is offline" % mid, "code": "node_unreachable", "retryable": True, "delivered": "none"}, 503)
+        if label in ("unsupported", "closed"):
+            words = "unsupported: orca cannot do this" if label == "unsupported" else "tab %s is not running" % body.get("tab_id")
+            return h.send_json({"error": words, "code": "internal"}, 502)
+        TAB_NAMES[body.get("tab_id")] = label
     elif area == "panes" and verb == "split":
         n = len(SPLIT_PANES.setdefault(mid, [])) + 20
         src = body.get("pane", "w1:p2")
@@ -24044,6 +24052,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"close": ARCHIVE_CLOSE["mode"], "archived": [x["session_id"] for x in ARCHIVED_AGENTS]})
         if p == "/mock/reset":  # MachinePagesTests: each test starts from the same machines
             BOTMUX_ON.clear()
+            TAB_NAMES.clear()  # TerminalsRenameUITests: the tabs' own names again
             wire_reset()
             SEND_FAIL["on"] = False  # a FailedSendPlacementTests run that died before turning it off
             COOKIES_FAILED[0] = False  # MOCK_COOKIES_FAIL: the next read fails again
