@@ -272,6 +272,8 @@ struct AttachSheet<More: View>: View {
         .padding(.top, Theme.Space.l)
         .padding(.bottom, Theme.Space.xs)
         .frame(maxWidth: .infinity)
+        // Chrome, like the shell's top bars: at the accessibility sizes the centered title ran into All Photos.
+        .dynamicTypeSize(...Theme.Shell.topBarLargestTypeSize)
     }
 
     // MARK: Pages
@@ -325,7 +327,9 @@ struct AttachSheet<More: View>: View {
     @ViewBuilder private func bar(width: CGFloat) -> some View {
         ZStack(alignment: .bottom) {
             if picked.isEmpty {
+                // A fixed pill: its labels stop growing where the shell's top bars do.
                 AttachTabBar(tabs: tabs, selected: tab, width: AttachLayout.barWidth(tabs: tabs.count, width: width), pick: pick)
+                    .dynamicTypeSize(...Theme.Shell.topBarLargestTypeSize)
                     .transition(.opacity)
             } else {
                 captionBar
