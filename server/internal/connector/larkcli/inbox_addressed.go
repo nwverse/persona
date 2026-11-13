@@ -1,6 +1,7 @@
 package larkcli
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 
@@ -19,6 +20,31 @@ func mentionsIdentity(message adapter.Message, id string) bool {
 		}
 	}
 	return false
+}
+
+func mentionsBot(message adapter.Message, auth adapter.AuthStatus) bool {
+	return mentionsIdentity(message, auth.AppID) || mentionsIdentity(message, auth.BotOpenID)
+}
+
+func (c *Connector) inboxAuth(ctx context.Context) (adapter.AuthStatus, error) {
+	auth, err := c.runner.AuthStatus(ctx)
+	if err != nil || !auth.LoggedIn || auth.AppID == "" {
+		return auth, err
+	}
+	c.inboxMu.Lock()
+	if c.inboxBotAppID == auth.AppID {
+		auth.BotOpenID = c.inboxBotOpenID
+	}
+	c.inboxMu.Unlock()
+	if auth.BotOpenID == "" {
+		if id, err := c.runner.BotOpenID(ctx); err == nil {
+			auth.BotOpenID = id
+			c.inboxMu.Lock()
+			c.inboxBotAppID, c.inboxBotOpenID = auth.AppID, id
+			c.inboxMu.Unlock()
+		}
+	}
+	return auth, nil
 }
 
 // Role labels are source data, including the localized labels rendered by Lark.

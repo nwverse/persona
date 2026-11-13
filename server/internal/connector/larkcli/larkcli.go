@@ -47,6 +47,8 @@ type Connector struct {
 	inboxPoll         time.Duration
 	inboxPageLimit    int
 	inboxDirectOffset int
+	inboxBotAppID     string
+	inboxBotOpenID    string
 
 	mu      sync.Mutex
 	pending *adapter.LoginProcess

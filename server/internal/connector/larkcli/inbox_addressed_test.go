@@ -13,7 +13,7 @@ import (
 )
 
 func TestGroupMessagesAddressedMessages(t *testing.T) {
-	auth := adapter.AuthStatus{OpenID: "ou_example_owner", AppID: "cli_example_bot", UserName: "Example Owner"}
+	auth := adapter.AuthStatus{OpenID: "ou_example_owner", AppID: "cli_example_bot", BotOpenID: "ou_example_persona_bot", UserName: "Example Owner"}
 	tests := []struct {
 		name      string
 		message   adapter.Message
@@ -32,6 +32,18 @@ func TestGroupMessagesAddressedMessages(t *testing.T) {
 			name: "peer exact bot mention is actionable",
 			message: addressedMessage("om_peer_request", "ou_example_peer", "Example Peer", `"Can you help?"`, "",
 				[]adapter.Mention{{ID: "cli_example_bot", Name: "Example Bot"}}),
+			wantKind: "mention", wantTier: connector.TierAction, wantMent: true, wantGroup: true,
+		},
+		{
+			name: "owner exact bot open ID is handoff",
+			message: addressedMessage("om_owner_open_id_request", "ou_example_owner", "Example Owner", `"Please review this"`, "omt_example_topic",
+				[]adapter.Mention{{ID: "ou_example_persona_bot"}}),
+			wantKind: "bot_handoff", wantTier: connector.TierFYI, wantGroup: true,
+		},
+		{
+			name: "peer exact bot open ID is actionable",
+			message: addressedMessage("om_peer_open_id_request", "ou_example_peer", "Example Peer", `"Can you help?"`, "",
+				[]adapter.Mention{{ID: "ou_example_persona_bot"}}),
 			wantKind: "mention", wantTier: connector.TierAction, wantMent: true, wantGroup: true,
 		},
 		{
@@ -106,7 +118,7 @@ func TestGroupMessagesAddressedMessages(t *testing.T) {
 			if group.addressed != tt.wantMent || group.mentioned != tt.wantMent || group.handoff != (tt.wantKind == "bot_handoff") {
 				t.Fatalf("group classification = addressed:%v mentioned:%v handoff:%v", group.addressed, group.mentioned, group.handoff)
 			}
-			thing := c.thingForGroup(context.Background(), group, auth.OpenID)
+			thing := c.thingForGroup(context.Background(), group, auth)
 			if thing.Kind != tt.wantKind || thing.Tier != tt.wantTier {
 				t.Fatalf("thing kind/tier = %q/%q, want %q/%q", thing.Kind, thing.Tier, tt.wantKind, tt.wantTier)
 			}
@@ -114,7 +126,7 @@ func TestGroupMessagesAddressedMessages(t *testing.T) {
 				if thing.Done != "" {
 					t.Fatalf("handoff marked replied: %q", thing.Done)
 				}
-				if thing.Last != tt.message.MessageID || thing.Thread != "larkcli:chat:oc_example_chat:thread:omt_example_topic:handoff:om_owner_request" {
+				if thing.Last != tt.message.MessageID || thing.Thread != "larkcli:chat:oc_example_chat:thread:omt_example_topic:handoff:"+tt.message.MessageID {
 					t.Fatalf("handoff source/thread lost: last=%q thread=%q", thing.Last, thing.Thread)
 				}
 				if thing.Context == "" || thing.Preview == "" {
@@ -153,6 +165,69 @@ func TestInboxAddressedPollDeduplicatesAndKeepsAlertContext(t *testing.T) {
 	}
 	if moved, err := c.pollChat(context.Background()); err != nil || moved {
 		t.Fatalf("duplicate poll moved=%v err=%v", moved, err)
+	}
+}
+
+func TestInboxAddressedCardAndOwnerHandoffStayOpen(t *testing.T) {
+	card := addressedMessage("om_example_root", "cli_example_monitor", "Example Monitor",
+		`"<card>On-call: Example User\nAn isolated test alert</card>"`, "omt_example_topic", nil)
+	card.MsgType, card.CreateTime, card.MessagePosition = "interactive", "2030-01-01T00:00:00Z", "21"
+	request := addressedMessage("om_example_request", "ou_example_user", "Example User",
+		`"@Example Bot check this alert"`, "omt_example_topic", []adapter.Mention{{ID: "cli_example"}})
+	request.CreateTime, request.MessagePosition = "2030-01-01T00:02:00Z", "-3"
+	historical := request
+	historical.Mentions = []adapter.Mention{{ID: "ou_example_persona_bot"}}
+	c := addressedTestConnector(t, []adapter.Message{card, request}, []adapter.Message{card, historical})
+	if moved, err := c.pollChat(context.Background()); err != nil || !moved {
+		t.Fatalf("poll moved=%v err=%v", moved, err)
+	}
+	items, err := c.Collect(context.Background())
+	if err != nil || len(items) != 2 {
+		t.Fatalf("collected=%+v err=%v", items, err)
+	}
+	for _, item := range items {
+		if item.Done != "" {
+			t.Fatalf("handing off an alert did not answer it: %+v", item)
+		}
+		switch item.Last {
+		case card.MessageID:
+			if item.Kind != "mention" || item.Tier != connector.TierAction {
+				t.Fatalf("alert is not actionable: %+v", item)
+			}
+		case request.MessageID:
+			if item.Kind != "bot_handoff" || item.Tier != connector.TierFYI {
+				t.Fatalf("owner request is not a handoff: %+v", item)
+			}
+		default:
+			t.Fatalf("unexpected message admitted: %+v", item)
+		}
+	}
+}
+
+func TestInboxAddressedHandoffFetchesRootOmittedByThreadList(t *testing.T) {
+	root := addressedMessage("om_example_root", "cli_example_monitor", "Example Monitor",
+		`"<card>On-call: Example User\nRoot alert details</card>"`, "omt_example_topic", nil)
+	root.MsgType, root.CreateTime = "interactive", "2029-12-31T23:59:00Z"
+	request := addressedMessage("om_example_request", "ou_example_user", "Example User",
+		`"@Example Bot check this alert"`, "omt_example_topic", []adapter.Mention{{ID: "cli_example"}})
+	request.CreateTime = "2030-01-01T00:00:00Z"
+	c := addressedTestConnector(t, []adapter.Message{request}, []adapter.Message{request})
+	path := filepath.Join(t.TempDir(), "root.json")
+	raw, err := json.Marshal(map[string]any{"ok": true, "data": adapter.MessagePage{Messages: []adapter.Message{root}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LARKCLI_FAKE_ROOT", path)
+	if moved, err := c.pollChat(context.Background()); err != nil || !moved {
+		t.Fatalf("poll moved=%v err=%v", moved, err)
+	}
+	items, err := c.Collect(context.Background())
+	if err != nil || len(items) != 1 || items[0].Kind != "bot_handoff" ||
+		!strings.Contains(items[0].Context, "Root alert details") || !strings.Contains(items[0].Context, "check this alert") {
+		t.Fatalf("handoff lost the root omitted by thread list: %+v err=%v", items, err)
 	}
 }
 
@@ -219,7 +294,7 @@ func TestGroupMessagesConfirmedTopicReply(t *testing.T) {
 	if len(group) != 1 {
 		t.Fatalf("groups = %d, want one topic group: %+v", len(group), group)
 	}
-	thing := c.thingForGroup(context.Background(), group[0], auth.OpenID)
+	thing := c.thingForGroup(context.Background(), group[0], auth)
 	if thing.Done != connector.DoneReplied || thing.Last != request.MessageID {
 		t.Fatalf("confirmed reply not reflected on original request: %+v", thing)
 	}

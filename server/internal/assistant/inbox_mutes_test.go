@@ -102,7 +102,7 @@ func TestMuteFromAnItem(t *testing.T) {
 	h2.inboxReady(ctx)
 	h2.inbox.items["d"] = mailItem("d", "shop@example.com", "示例商城")
 	h2.inbox.mu.Lock()
-	h2.inbox.applyMutes(time.Now()) // as each collection does
+	h2.inbox.applyMutes(time.Now(), nil) // as each collection does
 	h2.inbox.mu.Unlock()
 	if h2.inbox.items["d"].open() {
 		t.Fatal("a later mail of a muted sender stayed open")

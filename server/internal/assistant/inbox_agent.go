@@ -255,7 +255,7 @@ func inboxAgentReleaseState(it *InboxItem) (active, pending bool) {
 // startInboxAgents starts a processing conversation for the queued events that have none (newest first, while fewer
 // than the configured number are looking): one the event's id finds (a start the manager restarted during) is taken
 // back instead; one that comes after a lost conversation carries the recap and the chain.
-func (s *Service) startInboxAgents(ctx context.Context, cfg InboxAgentConfig) {
+func (s *Service) startInboxAgents(ctx context.Context, cfg InboxAgentConfig, only ...string) {
 	b := &s.inbox
 	linked := map[string]*prompts.InboxTask{} // read before the inbox lock (todos and sessions)
 	for _, t := range s.activeTasks(ctx) {
@@ -277,6 +277,9 @@ func (s *Service) startInboxAgents(ctx context.Context, cfg InboxAgentConfig) {
 		case it.Agent.SessionID != "" && (it.Handling == nil && it.Agent.State == AgentRunning || it.Handling != nil && it.Handling.State == HandlingLooking):
 			running++
 		case it.Agent.State == AgentQueued && it.Agent.SessionID == "" && it.open():
+			if len(only) > 0 && !slices.Contains(only, it.ID) {
+				continue
+			}
 			// Recheck before backoff, capacity or adoption: a saved rule also covers work already queued.
 			if b.policyTwin(it) == TwinNever {
 				if w := b.releaseInboxAgent(it, HandlingDone, i18n.T(b.userLang(), "assistant-inbox_agent.never"), now); w != nil {

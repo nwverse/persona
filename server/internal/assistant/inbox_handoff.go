@@ -157,7 +157,7 @@ func handoffOp(it *InboxItem, op string) *InboxHandoff {
 
 // The connector already checked the sender and exact bot identity. Keep the
 // ordinary saved item and handoff ledger, but never make its receipt Needs You.
-func (s *Service) handoffLarkMentions(ctx context.Context) {
+func (s *Service) handoffLarkMentions(ctx context.Context, only ...string) {
 	b := &s.inbox
 	if !b.botHandoff.TryLock() {
 		return
@@ -166,16 +166,19 @@ func (s *Service) handoffLarkMentions(ctx context.Context) {
 		defer b.botHandoff.Unlock()
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 110*time.Second)
 		defer cancel()
-		s.forwardLarkMentions(ctx)
+		s.forwardLarkMentions(ctx, only...)
 	}()
 }
 
-func (s *Service) forwardLarkMentions(ctx context.Context) {
+func (s *Service) forwardLarkMentions(ctx context.Context, only ...string) {
 	b := &s.inbox
 	type pending struct{ id, text, op string }
 	var todo []pending
 	b.mu.Lock()
 	for _, it := range b.items {
+		if len(only) > 0 && !slices.Contains(only, it.ID) {
+			continue
+		}
 		if it.Source != "larkcli" || it.Kind != "bot_handoff" || !it.open() || it.Context == "" {
 			continue
 		}

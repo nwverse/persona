@@ -85,8 +85,8 @@ const (
 
 // The manager asks the extension manager about the inbox's sources (AppInbox).
 const (
-	// InboxCollect: {round} → {}: collect now (a pull to refresh): the extension manager reads the sources and hands
-	// them over (MethodInboxCollected) before it answers.
+	// InboxCollect: InboxCollectRequest → {}: collect now (a pull to refresh), or replay only explicit Lark messages.
+	// The extension manager hands the result over (MethodInboxCollected) before it answers.
 	InboxCollect = "inbox.collect"
 	// InboxKick: {} → {}: a round soon (the triage got through a round with more to sort).
 	InboxKick = "inbox.kick"
@@ -114,6 +114,22 @@ const (
 	// append_id again (the answer lost on the way) is answered from what the connector said, not sent again.
 	InboxGroupAppend = "inbox.group_append"
 )
+
+// InboxCollectRequest keeps an explicit Lark recovery separate from a full
+// refresh: a malformed or failed replay must never fall back to reading history.
+type InboxCollectRequest struct {
+	Round      string           `json:"round,omitempty"`
+	LarkReplay *InboxLarkReplay `json:"lark_replay,omitempty"`
+}
+
+// InboxLarkReplay selects source records, not client-supplied message bodies.
+// Search is bounded to one chat, one hour and ten exact message IDs.
+type InboxLarkReplay struct {
+	ChatID     string   `json:"chat_id"`
+	Start      string   `json:"start"`
+	End        string   `json:"end"`
+	MessageIDs []string `json:"message_ids"`
+}
 
 // TranslateLanguages are the languages translated into (BCP 47, as the apps' language detection names them; a
 // device's translation targets are among them), with their names for the model.
@@ -154,6 +170,9 @@ const (
 // comes with the next round that goes, merged in (a thread, an event, a mail as last read; what left a source's window
 // meanwhile stays, within bounds).
 type InboxRound struct {
+	// Replay is an exact-message recovery, not a full source inventory or a
+	// request to sweep unrelated Inbox state and background work.
+	Replay bool `json:"replay,omitempty"`
 	// Epoch names the extension manager's run and Seq orders its rounds in it: one older than a round applied is not
 	// applied.
 	Epoch   string        `json:"epoch,omitempty"`

@@ -33,6 +33,13 @@ When mainline hides the send button for an empty composer, attachment drafts sti
   only `ou_` user IDs. Compare the bound app ID in unfiltered results; neither its name nor group membership proves
   it was addressed. Responsibility cards may contain only labeled names, even in a raw message read, so structured
   `at`/`person` checks alone do not cover them.
+- An owner's bot handoff is not a reply to the incoming source request. Check both grouping and the later
+  history-based settlement pass; otherwise an on-call card followed by a bot handoff silently becomes done.
+  Exact-ID recovery must leave the live cursor and deduplication state alone, and must not promote unselected
+  context into activity. Test the card and handoff together, including source positions used by topic replies.
+- A thread list can omit its root and identify bot mentions by open ID while search uses app ID. Do not assume a
+  synthetic thread fixture containing the root proves real handoff context. Resolve the bot's open ID from its
+  binding and the root's ID from the source reply, then read that root explicitly as the user.
 
 - An all-account mail search must fail when any account fails, even if another supplies results; otherwise older HTTP, tool and subscription clients accept an incomplete page as complete. Keep cancellation distinct, and do not put upstream error details or credentials into the aggregate error (#4462). Verify the actual callers with two independent loopback IMAP servers, including retry after repair and a healthy empty result.
 

@@ -87,10 +87,13 @@ func (h *Manager) inboxAppCall(ctx context.Context, p assistantwire.AppCall) (js
 	var err error
 	switch p.AppID + " " + p.Method {
 	case assistantwire.AppInbox + " " + assistantwire.InboxCollect:
-		var a struct {
-			Round string `json:"round"`
-		}
+		var a assistantwire.InboxCollectRequest
 		if err = json.Unmarshal(p.Params, &a); err == nil {
+			if a.LarkReplay != nil {
+				err = h.replayLarkInbox(ctx, *a.LarkReplay)
+				out = map[string]any{}
+				break
+			}
 			round := roundFull
 			switch a.Round {
 			case assistantwire.RoundPoll:

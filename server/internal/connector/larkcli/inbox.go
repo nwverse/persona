@@ -63,6 +63,7 @@ type inboxGroup struct {
 	mentioned bool
 	addressed bool
 	handoff   bool
+	pinned    bool
 	messages  []adapter.Message
 	latest    adapter.Message
 	replied   bool
@@ -128,7 +129,7 @@ func (c *Connector) Poll(ctx context.Context) (bool, error) {
 // pollChat performs the bounded chat Inbox round. Source selection is handled
 // by Poll so the document poller and chat poller share one primary-source rule.
 func (c *Connector) pollChat(ctx context.Context) (bool, error) {
-	auth, err := c.runner.AuthStatus(ctx)
+	auth, err := c.inboxAuth(ctx)
 	if err != nil {
 		return false, err
 	}
@@ -238,7 +239,7 @@ func (c *Connector) pollChat(ctx context.Context) (bool, error) {
 	groups := c.groupMessages(newMessages, auth, topicsBefore)
 	changed := false
 	for _, group := range groups {
-		thing := c.thingForGroup(ctx, group, auth.OpenID)
+		thing := c.thingForGroup(ctx, group, auth)
 		if thing.Thread == "" {
 			continue
 		}
@@ -638,7 +639,7 @@ func (c *Connector) groupMessages(messages []adapter.Message, auth adapter.AuthS
 			continue
 		}
 		if message.Sender.ID == me {
-			if mentionsIdentity(message, auth.AppID) {
+			if mentionsBot(message, auth) {
 				out = append(out, &inboxGroup{key: key, chatID: message.ChatID, threadID: topicID(message),
 					chatName: message.ChatName, messages: []adapter.Message{message}, latest: message, handoff: true})
 				current = nil
@@ -653,7 +654,7 @@ func (c *Connector) groupMessages(messages []adapter.Message, auth adapter.AuthS
 			continue
 		}
 		keep := false
-		addressed := mentionsIdentity(message, auth.AppID) || cardAddressesOwner(message, auth)
+		addressed := mentionsBot(message, auth) || cardAddressesOwner(message, auth)
 		mentioned := messageMentions(message, me) || addressed
 		if mentioned {
 			if topic := topicID(message); topic != "" {
@@ -690,14 +691,20 @@ func (c *Connector) groupMessages(messages []adapter.Message, auth adapter.AuthS
 	return out
 }
 
-func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me string) connector.InboxThing {
+func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, auth adapter.AuthStatus) connector.InboxThing {
 	if group == nil || len(group.messages) == 0 {
 		return connector.InboxThing{}
 	}
+	me := auth.OpenID
 	latest := group.latest
 	contextMessages := append([]adapter.Message(nil), group.messages...)
+	if group.handoff && group.threadID != "" {
+		if root, err := c.runner.ThreadRoot(ctx, latest); err == nil && root.MessageID != "" {
+			contextMessages = mergeMessages([]adapter.Message{root}, contextMessages)
+		}
+	}
 	if page, err := c.runner.ListMessages(ctx, group.chatID, group.threadID, "", 40); err == nil && len(page.Messages) > 0 {
-		contextMessages = mergeMessages(page.Messages, group.messages)
+		contextMessages = mergeMessages(page.Messages, contextMessages)
 	}
 	// History can already contain a follow-up which search has not indexed. Only
 	// eligible incoming activity in this chat/topic can supersede the search hit.
@@ -705,8 +712,8 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 	_, allChat := c.inboxAllChats[group.chatID]
 	c.inboxMu.Unlock()
 	for _, message := range contextMessages {
-		if group.handoff {
-			break // the owner's explicit request, not a later peer message, is the handoff
+		if group.handoff || group.pinned {
+			break // explicit handoffs and recoveries keep the selected source activity
 		}
 		if message.Deleted || messageKey(message) != group.key || message.Sender.ID == me || !after(message, latest) {
 			continue
@@ -726,7 +733,12 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 		if group.handoff {
 			break
 		}
-		if !message.Deleted && messageKey(message) == group.key && message.Sender.ID == me && after(message, latest) {
+		// Asking the connected bot for help is a handoff, not an answer to the source request.
+		if !message.Deleted && messageKey(message) == group.key && message.Sender.ID == me &&
+			!mentionsBot(message, auth) && after(message, latest) {
+			if auth.AppID != "" && auth.BotOpenID == "" && len(message.Mentions) > 0 {
+				continue // unresolved bot identity must not silently file a possible handoff
+			}
 			group.replied = true
 		}
 	}
@@ -816,7 +828,7 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 }
 
 // replyTo says where a reply to the item goes and who sees it (connectorwire.InboxThing.ReplyTo): Reply sends as the
-// user to the chat, or into the topic the message is in. name is the chat's name; without one (only an opaque id is
+// connected bot to the chat, or into the topic the message is in. name is the chat's name; without one (only an opaque id is
 // known), the sentence names no chat.
 func replyTo(lang i18n.Lang, name string, topic bool) string {
 	switch {

@@ -75,7 +75,8 @@ func (s *Service) settleConnector(ctx context.Context, id string) []*InboxItem {
 // moves until it is done; a move after that starts a new item; a thing that is over closes its open item.
 func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThing, now time.Time) []*InboxItem {
 	var changed, renamed []*InboxItem
-	if name != "" {
+	scoped := b.batch != nil && b.batch.only != nil
+	if name != "" && !scoped {
 		// A connector renamed (a new localized name, say) renames its items too, not only the ones that move next.
 		for _, it := range b.items {
 			if it.Source == id && it.Connector != nil && it.AccountName != name {
@@ -93,6 +94,9 @@ func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThin
 	})
 	for _, t := range things {
 		open, done := index.openFor(t.Thread)
+		if scoped && open != nil && open.Last != t.Last && !t.At.After(open.UpdatedAt) {
+			continue // recovery cannot replace or retier another, newer or unordered move
+		}
 		if t.Done != "" {
 			if open != nil && b.settleThing(open, t, now) {
 				changed = append(changed, open)

@@ -14,7 +14,9 @@ const MinimumVersion = "1.0.72"
 // GrantedScopes and MissingScopes are best-effort because older CLI releases did
 // not include both fields.
 type AuthStatus struct {
-	AppID            string    `json:"app_id,omitempty"`
+	AppID string `json:"app_id,omitempty"`
+	// BotOpenID is resolved separately from the bound app's public bot info.
+	BotOpenID        string    `json:"bot_open_id,omitempty"`
 	Brand            string    `json:"brand,omitempty"`
 	LoggedIn         bool      `json:"logged_in"`
 	Expired          bool      `json:"expired"`
