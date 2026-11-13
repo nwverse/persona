@@ -7,11 +7,12 @@ import XCTest
 /// UICTContentSizeCategoryXXXL, launches at that text size).
 final class AgentFollowUpUITests: XCTestCase {
     private var hub: String!
-    private static let defaults: [String: Any] = [
+    /// The hub's defaults, as a fresh mock hub has them.
+    private static func defaults() -> [String: Any] { [
         "start_requested_tasks": true, "task_workspace_preference": "prefer-existing", "main_supervises_own_tasks": false,
         "agent_tasks": false, "idle_close_hours": 12, "archive_closed_days": 3,
         "agent_auto_naming": true, "agent_auto_naming_max": 1, "agent_auto_naming_interval_hours": 0,
-    ]
+    ] }
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -39,7 +40,7 @@ final class AgentFollowUpUITests: XCTestCase {
     }
 
     @MainActor private func assistant() async throws -> [String: Any] { try await request("GET") }
-    @MainActor private func reset() async throws { _ = try await request("PUT", Self.defaults) }
+    @MainActor private func reset() async throws { _ = try await request("PUT", Self.defaults()) }
 
     /// Waits until the mock holds `value` for `key`.
     @MainActor private func hubHas(_ key: String, _ value: Int, file: StaticString = #filePath, line: UInt = #line) async throws {
