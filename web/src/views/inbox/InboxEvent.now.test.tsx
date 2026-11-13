@@ -17,6 +17,20 @@ describe("EventMark and the manager's now key", () => {
     expect(mark({ ...old, now: "a_future_state" })).toBe(mark(old));
   });
 
+  for (const [now, state, word] of [
+    ["queued", "looking", "排队中，等 AI 看"],
+    ["looking", "looking", "AI 正在看"],
+    ["agent_working", "agent", "Agent 在做"],
+    ["waiting", "waiting", "等对方回复"],
+    ["failed", "failed", "AI 处理失败"],
+    ["follow_up_ask", "done", "看过 3 次还没动静，还要跟吗？"],
+    ["check_due", "done", "到了再看的时间"],
+  ] as const) {
+    it(`shows ${now} on a row that already has an event mark`, () => {
+      expect(mark(item({ now, handling: { owner: "manager", state } }))).toContain(word);
+    });
+  }
+
   it("uses the composed waiting words when the key is known", () => {
     const html = mark(item({
       now: "waiting",
