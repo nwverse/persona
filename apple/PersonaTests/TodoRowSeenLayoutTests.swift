@@ -4,7 +4,8 @@ import Testing
 
 /// Got It on a Just Finished to-do row sits at the end of the status line, under the time (#6578), not on a line of its
 /// own: the row is exactly as tall as the same row without it, on a phone's width and a narrow one, at the default, a
-/// large and an accessibility text size, light and dark.
+/// large and an accessibility text size, light and dark. Where the words and Got It can't share the line (the largest
+/// text size on a narrow row), Got It takes a line under them instead of squeezing them.
 @MainActor struct TodoRowSeenLayoutTests {
     private static let todo = TodoItem(id: "seen-layout", title: "Write the release notes", doneAt: Date(), createdAt: Date(),
                                        updatedAt: Date())
@@ -32,5 +33,20 @@ import Testing
                     "\(width) pt wide at \(text), \(look): \(with.size.height) pt with Got It, \(without.size.height) pt without")
             #expect(with.pixels != without.pixels, "Got It is not drawn (\(width) pt, \(text), \(look))")
         }
+    }
+
+    /// At the largest text size on a 320 pt row the row grows by Got It's own line and nothing else: the status words keep
+    /// theirs, unsqueezed.
+    @Test func gotItGoesUnderTheWordsWhereTheyCantShareTheLine() throws {
+        let with = try render(seen: true, width: 320, text: .accessibility5, look: .light)
+        let without = try render(seen: false, width: 320, text: .accessibility5, look: .light)
+        let chip = Chip(text: String(localized: "Got It [To-do Seen]"), symbol: Theme.Icon.seen, look: .tint(Theme.accent), compact: true)
+            .padding(.vertical, -Chip.compactInset)
+            .environment(\.dynamicTypeSize, .accessibility5)
+        let renderer = ImageRenderer(content: chip)
+        renderer.scale = 2
+        let line = CGFloat(try #require(renderer.cgImage).height) / renderer.scale
+        #expect(abs(with.size.height - (without.size.height + line + Theme.Space.xs)) <= 0.5,
+                "\(with.size.height) pt with Got It, \(without.size.height) pt without, its line \(line) pt")
     }
 }

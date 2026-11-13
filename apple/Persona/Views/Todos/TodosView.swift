@@ -597,21 +597,26 @@ struct TodoRow: View {
                     }
                 }
 
-                HStack(spacing: Theme.Space.sm) {
-                    StatusDot(state: urgent?.status ?? (status == .done ? .idle : .unknown), size: Theme.Size.dotS)
-                    Text(todo.statusLabel(status))
-                        .font(Theme.Font.labelStrong)
-                        .foregroundStyle(todo.shownState(status).todoTone.text)
-                    if !activeAgents.isEmpty {
-                        Text("· \(activeAgents.count) agents")
-                            .font(Theme.Font.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                if let onSeen {
+                    // Got It ends the status line, under the time (#6578); where the words and it don't fit on one line
+                    // (the largest text sizes) it goes under them, still at the right, rather than squeezing them
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: Theme.Space.sm) {
+                            statusWords(status: status, urgent: urgent, activeAgents: activeAgents)
+                            Spacer(minLength: Theme.Space.xs)
+                            seenButton(onSeen)
+                        }
+                        VStack(alignment: .trailing, spacing: Theme.Space.xs) {
+                            HStack(spacing: Theme.Space.sm) {
+                                statusWords(status: status, urgent: urgent, activeAgents: activeAgents)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            seenButton(onSeen)
+                        }
                     }
-                    if !todo.isDone { ReviewChip(todo: todo, compact: true) }
-                    if let onSeen {
-                        Spacer(minLength: Theme.Space.xs)
-                        seenButton(onSeen)
+                } else {
+                    HStack(spacing: Theme.Space.sm) {
+                        statusWords(status: status, urgent: urgent, activeAgents: activeAgents)
                     }
                 }
 
@@ -695,6 +700,21 @@ struct TodoRow: View {
             }
             .padding(.vertical, Theme.Space.xs)
         }
+    }
+
+    /// The status line's words: the state, its agents, the review.
+    @ViewBuilder private func statusWords(status: TaskState, urgent: TodoMostUrgent?, activeAgents: [TodoItem.Agent]) -> some View {
+        StatusDot(state: urgent?.status ?? (status == .done ? .idle : .unknown), size: Theme.Size.dotS)
+        Text(todo.statusLabel(status))
+            .font(Theme.Font.labelStrong)
+            .foregroundStyle(todo.shownState(status).todoTone.text)
+        if !activeAgents.isEmpty {
+            Text("· \(activeAgents.count) agents")
+                .font(Theme.Font.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        if !todo.isDone { ReviewChip(todo: todo, compact: true) }
     }
 
     /// Got It (#5707) at the end of the status line, under the time (#6578): a compact accent chip, as the minutes' time
