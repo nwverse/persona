@@ -116563,25 +116563,25 @@
         }
       }
     },
-    "Rounds that another conversation, a scheduled task or a follow-up started in the main chat show as one line you can open. Rounds that ask or tell you something stay shown." : {
+    "Rounds that another conversation, a scheduled task or a follow-up started in the main chat or a leader conversation show as one line you can open. Rounds that ask or tell you something stay shown." : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Rounds that another conversation, a scheduled task or a follow-up started in the main chat show as one line you can open. Rounds that ask or tell you something stay shown."
+            "value" : "Rounds that another conversation, a scheduled task or a follow-up started in the main chat or a leader conversation show as one line you can open. Rounds that ask or tell you something stay shown."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "主对话里由别的对话、定时任务或跟进发起的轮次折成一行，点开能看全部；问过你或通知过你的轮次照常显示。"
+            "value" : "主对话和主管对话里，由别的对话、定时任务或跟进发起的轮次折成一行，点开能看全部；问过你或通知过你的轮次照常显示。"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "メインチャットで別の会話・定期タスク・フォローアップが始めたラウンドを1行にまとめ、開くと全体を表示します。質問や通知をしたラウンドはそのまま表示します。"
+            "value" : "メインチャットとリーダー会話で、別の会話・定期タスク・フォローアップが始めたラウンドを1行にまとめ、開くと全体を表示します。質問や通知をしたラウンドはそのまま表示します。"
           }
         }
       }
