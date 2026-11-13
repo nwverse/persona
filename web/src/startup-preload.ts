@@ -245,8 +245,8 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * retaining that feature allocation when merging the latest main.
  * Task delivery tracking (#5732) adds cancellation counts and reasons, delivery and owner-wait labels, bidirectional
  * lineage, and matching triage and navigation. On c59e910bea, main measured en 475,240 / ja 478,937 / zh-Hans
- * 476,227 B and the merged tree en 475,365 / ja 479,068 / zh-Hans 476,354 B (+125/+131/+127 B). Main itself is
- * already 162 B over this budget, so the merge leaves the cap unchanged rather than hiding that baseline failure.
+ * 476,227 B and the merged tree en 475,365 / ja 479,068 / zh-Hans 476,354 B (+125/+131/+127 B). After #6799 raised
+ * main's cap to 478,968 B, carrying the measured 131 B increment preserves its 31 B of room at 479,099 B.
  */
 // #6575: verified runtime checkout display membership adds 79 B to the first screen on main at 2e57ac117
 // (ja 478,119 B to 478,198 B). Carry that measured feature allowance onto the current main budget.
@@ -255,7 +255,7 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // #6753's stopped-Agent dismissal adds 131 B to each language (ja 478,888 B, en 475,191 B, zh-Hans 476,178 B).
 // #6759's Agent skills selection adds 49 B more to ja (478,937 B; en 475,240 B, zh-Hans 476,227 B).
 // The 31 B room covers the hub's small build-environment difference.
-export const FIRST_SCREEN_BUDGET = 478_968;
+export const FIRST_SCREEN_BUDGET = 479_099;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
