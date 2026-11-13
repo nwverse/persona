@@ -76,8 +76,11 @@ class InboxRowMetaWidthReviewTest {
         return layouts.single()
     }
 
-    @Test fun theStateStaysWholeAndTheLineBesideItGivesWay() {
-        // The shared showcase's first row at phone width: a waiting state with a who and a next step, where and a sender.
+    @Test fun theThirdLineStaysWholeAndTheStateSitsUnderIt() {
+        // F-7 (the lead's ruling): the state is its own line under the third line, in every width, as the web's
+        // EventMark is. The shared showcase's first row at phone width is the case that used to lose the third line.
+        val state = "Waiting for 张三确认新报价 · look again Jan 2, 9:00 AM: 问更正后的报价行不行"
+        val thirdLine = "订单群 · 张三：好的，我看一下新的"
         var style by mutableStateOf(AppStyle.Glass)
         val showcase = InboxRecord(
             InboxItem("sc-1", kind = "group", title = "春季订单的报价", sender = "张三", preview = "好的，我看一下新的",
@@ -101,15 +104,19 @@ class InboxRowMetaWidthReviewTest {
             }
         }
         rule.waitForIdle()
-        // The state is whole: no ellipsis, its last glyph inside its own width.
-        val state = layoutOf("张三确认新报价", "the shared state")
-        val stateText = state.layoutInput.text.text
-        assertFalse("the state word must not be cut: $stateText", state.hasVisualOverflow)
-        assertTrue("the state word must end inside its width",
-            state.getBoundingBox(stateText.lastIndex).right <= state.size.width)
-        // And the third line is still there: a state may never take the whole line (F-7: the third line gives way).
+        // The third line is whole: no ellipsis, every glyph inside its width.
         val line = layoutOf("订单群", "the third line")
-        assertTrue("the third line must keep visible width beside the state (was ${line.size})", line.size.width > 0)
+        assertFalse("the third line must not be cut: ${line.layoutInput.text.text}", line.hasVisualOverflow)
+        // The state is whole too, on its own line under it.
+        val label = layoutOf("张三确认新报价", "the state")
+        val stateText = label.layoutInput.text.text
+        assertFalse("the state must not be cut: $stateText", label.hasVisualOverflow)
+        assertTrue("the state must end inside its width",
+            label.getBoundingBox(stateText.lastIndex).right <= label.size.width)
+        // Under, not beside: its top is at or below the third line's bottom.
+        val lineNode = rule.onAllNodesWithText("订单群", substring = true, useUnmergedTree = true).fetchSemanticsNodes().single()
+        val stateNode = rule.onAllNodesWithText("张三确认新报价", substring = true, useUnmergedTree = true).fetchSemanticsNodes().single()
+        assertTrue("the state sits under the third line", stateNode.boundsInRoot.top >= lineNode.boundsInRoot.bottom - 1f)
     }
 }
 
