@@ -21,6 +21,7 @@ public enum PersonaCoreError: Error, Equatable {
     case closed
     case dispatchFailed
     case flushTimedOut
+    case invalidPatch
     case callbackFailed(String)
 }
 
@@ -96,9 +97,7 @@ public final class PersonaCoreClient: @unchecked Sendable {
                 persona_core_drain(handle, buffer.baseAddress, buffer.count)
             }
             defer { persona_core_bytes_free(bytes) }
-            guard let data = bytes.data else {
-                return ChatPatch(version: 0, covered: 0, history: nil, hasMore: nil, loadedOnce: false, ops: [])
-            }
+            guard let data = bytes.data else { throw PersonaCoreError.invalidPatch }
             return try ChatPatch.bincodeDeserialize(input: Array(UnsafeBufferPointer(start: data, count: bytes.length)))
         }
     }
