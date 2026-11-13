@@ -108,7 +108,7 @@ func reproduces(from *Tree, d *Delta, to *Tree, snapshot []byte) error {
 		return nil
 	}
 	result.view = nil // check fills it in
-	if err := result.check(); err != nil {
+	if err := result.check(nil); err != nil {
 		return rejected(err)
 	}
 	if !bytes.Equal(result.viewJSON(), to.viewJSON()) {
