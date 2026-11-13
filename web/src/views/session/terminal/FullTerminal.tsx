@@ -8,6 +8,7 @@ import { t } from "../../../i18n";
 import { shouldRefocus, terminalMenu, type TerminalMenuKey } from "../../../lib/terminal-details";
 import { FIND_CLOSED, findReducer, isFindShortcut, queryFromSelection } from "../../../lib/terminal-search";
 import { STATUS_LABEL, canReconnect, type FullStatus } from "../../../lib/terminal-mode";
+import { schemeScope, useTerminalAppearance } from "../../../lib/terminal-appearance";
 import { Button, cx, IconButton, Loading, Menu, type MenuItem } from "../../../ui/atoms";
 import { Icon } from "../../../ui/icons";
 import { FindBar } from "./FindBar";
@@ -85,6 +86,8 @@ export function FullTerminal({
   const [editing, setEditing] = useState(false);
   const [find, dispatchFind] = useReducer(findReducer, FIND_CLOSED);
   const [menu, setMenu] = useState<{ x: number; y: number; selection: boolean } | null>(null);
+  // the terminal's own light / dark (Terminal settings › Appearance): its screen takes that scheme's tokens
+  const scheme = schemeScope(useTerminalAppearance());
   const delayAtMount = useRef(delay);
   const sidAtMount = useRef(sid);
   const token = useRef({}).current;
@@ -225,7 +228,12 @@ export function FullTerminal({
     >
       {slot && on && createPortal(actions, slot)}
       <div className="relative flex min-h-0 flex-1 flex-col">
-        <div ref={viewport} onContextMenu={onContextMenu} className={cx("relative min-h-0 flex-1 overflow-hidden p-2", v?.dropping && "ring-2 ring-inset ring-accent")}>
+        <div
+          ref={viewport}
+          onContextMenu={onContextMenu}
+          data-terminal-scheme={scheme}
+          className={cx("relative min-h-0 flex-1 overflow-hidden p-2", scheme && "bg-page", v?.dropping && "ring-2 ring-inset ring-accent")}
+        >
           <div ref={host} className="h-full w-full font-mono" />
         </div>
         {feed && v && find.open && (

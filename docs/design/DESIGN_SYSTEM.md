@@ -1493,6 +1493,7 @@ your permission" (section 5, "Notifications"); moving them to the card's words i
 - Intentionally dark: watch, Live Activity island, image editor, VNC screen, image viewer chrome. Code colors are the same in both modes.
 - Add a view-level `colorScheme` read only for drawn content that a dynamic color cannot express.
 - Web: class on the root, set before first paint, plus a `color-scheme` meta.
+- Web terminal: Terminal settings › Appearance (Match page by default, Light, Dark) gives the terminal's screen one scheme's page tokens with `[data-terminal-scheme]`, theme color and extension theme included, never a palette of its own (`docs/integrations/terminal.md` "Appearance").
 
 ### 6.2 Dynamic Type
 
