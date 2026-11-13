@@ -369,6 +369,13 @@ func sessionTurnErrorCode(c proto.Session) string {
 	return code
 }
 
+// signedOut: conversation c's last turn ended "Not logged in". The node says so only in the turn's words (TurnError,
+// Claude Code's own reply): the lists work the code out of them (sessionTurnErrorCode), while session.get answers the
+// node's session as it is, with no code.
+func signedOut(c proto.Session) bool {
+	return c.TurnErrorCode == proto.TurnErrorNotLoggedIn || sessionTurnErrorCode(c) == proto.TurnErrorNotLoggedIn
+}
+
 // userTurnError: a turn error with code is the user's to fix; a rate limit passes (or is the user's when the
 // agent's record says so).
 func userTurnError(code string) bool {
