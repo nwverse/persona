@@ -66,6 +66,15 @@ before the fix and 448 KB after.
   exactly as large as its words inside a SwiftUI view, a touch on the knob lands outside it and the handle can't be
   dragged. Make the text view reach past the words (`Theme.Lift.handleReach`), with a matching
   `textContainerInset` that keeps the words where they are.
+- A UIKit copy of MarkdownUI's text must use MarkdownUI's sizes, not the text style's. MarkdownUI scales its size like
+  `@ScaledMetric` relative to body and rounds it to a whole point: 22 pt at xxxLarge, where
+  `UIFont.preferredFont(forTextStyle: .body)` is 23, and 48 at AX5, where body is 53. Its list markers take at least
+  1.5 em, plus the `Label`'s 8 pt gap. At the default size both match, so only a large text size shows the copy
+  wrapping onto more lines than the chat (#6552, `ReplyText.Look.replySize`, `ReplyMetrics.markerRoom`). Compare the
+  line counts in `-showLiftLines` at xxxLarge and AX5.
+- The place between characters nearest a press can be after the pressed character. Looking the word up forward from
+  there takes the next word, and Chinese has no space to stop it. Look it up on the side the press is on
+  (`LiftUITextView.place(nearest:)`, #6552).
 
 ## A lazy grid never makes what it does not show (#4073)
 
