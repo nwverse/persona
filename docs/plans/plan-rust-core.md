@@ -318,11 +318,13 @@ Phase 1 (#6871) lands in several PRs.
     and drain+decode+apply p99 3,414.419 µs (p50 126.169 / 761.306 µs): both still fail. Earlier raw runs reached
     16,400.210 / 8,534.626 µs, illustrating the environment's large variation rather than an improvement to accept.
     Separate opt-in attribution and low-overhead controls are not substitute benchmark results. The final attribution
-    found no actual `try_lock` contention and no overlapping GC events in the top 1% of either operation. Caller
-    scheduler switches occurred in 11 / 11 dispatch and 9 / 11 frame samples; worker TID was measured independently.
-    Real patch lock acquisition without `/proc` reads totaled 30,274 ns across the 11 top-1% frame samples, versus
-    53,047,659 ns including those reads; work while holding that lock was separately 3,321,555 ns, Kotlin decode
-    75,033,476 ns and apply 10,582,298 ns. Thus these measurements do not isolate a production lock or codec defect.
+    (nonce `9198f0c2c237463caedafa69c014f4c6`) uses a named tail of 11 samples: the p99 sample at sorted index 989
+    and the 10 samples slower than it. This is not the 10 samples above p99; the report never calls that set "top 1%".
+    It found no actual `try_lock` contention and no overlapping GC events in those 11 samples. Caller scheduler
+    switches occurred in 11 / 11 dispatch and 9 / 11 frame samples; worker TID was measured independently. Real patch
+    lock acquisition without `/proc` reads totaled 30,274 ns across those 11 frame samples, versus 53,047,659 ns
+    including those reads; work while holding that lock was separately 3,321,555 ns, Kotlin decode 75,033,476 ns and
+    apply 10,582,298 ns. Thus these measurements do not isolate a production lock or codec defect.
     A low-overhead control with the original two-loop order still failed both budgets (dispatch 2,112.881 µs,
     frame 3,989.433 µs); its lock/JNI-free CPU loop had a 1,012.698 µs maximum despite 0.662 µs p50 (an earlier control
     reached 10,099.827 µs). This supports instrumentation and software-emulator scheduling as important contributors,

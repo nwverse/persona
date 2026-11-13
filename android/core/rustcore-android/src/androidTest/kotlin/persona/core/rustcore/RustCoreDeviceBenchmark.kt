@@ -46,7 +46,8 @@ class RustCoreDeviceBenchmark {
                 if (index >= WARM_UP) dispatch[index - WARM_UP] = dispatchNanos
             }
             // Each frame has a real patch, not an empty drain after the first duplicate item. The fresh snapshot
-            // replaces one bounded item; flush and snapshot encoding are deliberately outside the frame span.
+            // replaces one bounded item; flush and OpenChat's snapshot encoding are deliberately outside the frame
+            // span. core.drain still includes Rust patch bincode encoding and JNI byte-array creation.
             val snapshot = ChatSnapshot(
                 """[{"id":"benchmark-item","kind":"text","text":"benchmark","seq":1}]""",
                 "history", 1, null, true,
