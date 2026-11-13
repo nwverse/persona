@@ -495,9 +495,10 @@ struct TodoDetailView: View {
         #endif
     }
 
-    /// A fact in the status line at the accessibility sizes: its "·" before it, so the two wrap together.
+    /// A fact in the status line at the accessibility sizes: its "·" before it, so the two wrap together, on the fact's
+    /// first line when the fact itself takes two.
     private func statusFact(_ fact: Text, id: String) -> some View {
-        HStack(spacing: Theme.Space.sm) {
+        HStack(alignment: .firstTextBaseline, spacing: Theme.Space.sm) {
             Text("·")
                 .foregroundStyle(.secondary)
             fact
