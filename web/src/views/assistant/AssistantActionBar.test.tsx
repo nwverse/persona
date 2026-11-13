@@ -264,7 +264,8 @@ describe("Assistant Needs you / In progress trays", () => {
     await act(async () => putTodo(todo));
     await act(async () => { entry("needs").click(); await import("./TaskDecision"); });
     await openRows();
-    expect(host.querySelectorAll('[data-brief-row="accept"]')).toHaveLength(1);
+    // A lazy card can commit after its module import resolves.
+    await expect.poll(() => host.querySelectorAll('[data-brief-row="accept"]')).toHaveLength(1);
     expect(host.textContent).not.toContain(t("assistant-tasks.review_needs_user"));
     const first = [...host.querySelectorAll("button")].find((button) => button.textContent?.trim() === t("assistant-brief.take"))!;
     const nextRound = "2026-11-10T08:20:00Z";
@@ -274,6 +275,10 @@ describe("Assistant Needs you / In progress trays", () => {
       putTodo(todo);
     });
     await openRows(); // the next round asks folded again
+    await expect.poll(() => {
+      const button = [...host.querySelectorAll("button")].find((b) => b.textContent?.trim() === t("assistant-brief.take"));
+      return button !== undefined && button !== first;
+    }).toBe(true);
     const second = [...host.querySelectorAll("button")].find((button) => button.textContent?.trim() === t("assistant-brief.take"))!;
     expect(second).not.toBe(first);
     await act(async () => second.click());
@@ -322,7 +327,7 @@ describe("Assistant Needs you / In progress trays", () => {
     });
     expect(host.querySelector('[data-testid="message-card"]')).toBeNull(); // folded until opened
     await openRows();
-    expect(host.querySelector('[data-testid="message-card"]')).not.toBeNull();
+    await expect.poll(() => host.querySelector('[data-testid="message-card"]')).not.toBeNull();
     expect(host.textContent).toContain(t("assistant-tasks.review_needs_user"));
     const draftCard = host.querySelector('[data-testid="message-card"]')!;
     const actions = [...draftCard.querySelectorAll("button")];
