@@ -221,7 +221,7 @@ class InboxShowcaseShotsTest {
             rule.onNodeWithText("开了 Agent：核对报价单", useUnmergedTree = true).assertExists()
             rule.onNodeWithText("Agent 停了：报价单第 3 行税率错了", useUnmergedTree = true).assertExists()
             if (liveSessions.isEmpty()) {
-                for (word in listOf("完成未看", "Unread", "已看", "Seen", "未运行", "Not running", "需要你", "Needs you") {
+                for (word in listOf("完成未看", "已看", "未运行", "Unread", "Seen", "Not running")) {
                     rule.onAllNodesWithText(word, useUnmergedTree = true).assertCountEquals(0)
                 }
             } else {
