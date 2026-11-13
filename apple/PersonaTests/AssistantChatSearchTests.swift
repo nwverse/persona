@@ -73,7 +73,7 @@ struct AssistantChatSearchTests {
         #expect(AssistantSearchMerge.lead(for: .accessibility5) == AssistantSearchMerge.lead(for: .xxxLarge))
         let early = AssistantSearchAnswer.Hit(itemID: "z", seq: 1, role: "user", snippet: "我想去青石巷 BlueLane 看看", ranges: [[7, 15]])
         let big = AssistantSearchMerge.snippet(early, lead: AssistantSearchMerge.lead(for: .xxxLarge))
-        #expect(String(big.characters) == "…石巷 BlueLane 看看")
+        #expect(String(big.characters) == "…巷 BlueLane 看看") // the space before the match counts as one of the two
         #expect(big.runs.filter { $0.inlinePresentationIntent == .stronglyEmphasized }.map { String(big[$0.range].characters) } == ["BlueLane"])
     }
 
