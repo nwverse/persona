@@ -195,7 +195,12 @@ class NewAgentAttachmentsShotsTest {
         takePhoto(camera)
         assertEquals(listOf("TakePicture"), camera.launched)
         assertTrue(model.state.value.attachments.isEmpty())
-        assertTrue(captures.listFiles().isNullOrEmpty())
+        // A busy worker can deliver the camera's cancellation after takePhoto returns. Wait for its cleanup just as the
+        // removal test above does; a capture that is never deleted still fails this assertion.
+        rule.waitUntil(30_000) {
+            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+            captures.listFiles().isNullOrEmpty()
+        }
     }
 
     @Test fun aCodexLauncherHasNoAddRowAndSaysWhyAttachmentsHoldTheStart() {
