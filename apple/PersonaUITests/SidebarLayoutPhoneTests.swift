@@ -99,14 +99,15 @@ final class SidebarLayoutPhoneTests: XCTestCase {
         XCTAssertTrue(element("sidebar-drawer-button").exists, "the chat has a back instead of the face")
     }
 
-    /// Screenshots for review (#6332): light and dark, the default and the largest text size: the conversation, the drawer
+    /// Screenshots for review (#6332): light and dark, the default text size and xxxLarge (where the interface stops growing,
+    /// #6448): the conversation, the drawer
     /// at its top, the drawer at the Agents' Needs You (its foot's jump), an Agent's chat.
     @MainActor func testShots() throws {
         guard ProcessInfo.processInfo.environment["PERSONA_SHOTS"] != nil else { throw XCTSkip("screenshots only") }
         for look in ["light", "dark"] {
-            for size in ["default", "largest"] {
+            for size in ["default", "xxxlarge"] {
                 var extra = ["-ui.scheme", look]
-                if size == "largest" { extra += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] }
+                if size == "xxxlarge" { extra += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryXXXL"] }
                 launch(["-tab", "assistant"] + extra)
                 XCTAssertTrue(element("assistant-sidebar-button").waitForExistence(timeout: 20), "\(look) \(size): no bar")
                 settle()

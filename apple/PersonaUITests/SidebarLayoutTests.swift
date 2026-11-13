@@ -115,18 +115,18 @@ final class SidebarLayoutTests: XCTestCase {
         XCTAssertTrue(more.isHittable, "the inbox went away:\n\(app.debugDescription)")
     }
 
-    /// Screenshots for review (TEST_RUNNER_PERSONA_SHOTS, #6332): light and dark, the default and the largest text size,
-    /// landscape and portrait: the column at its top, then the Agents' Needs You reached from the foot's jump with an
+    /// Screenshots for review (TEST_RUNNER_PERSONA_SHOTS, #6332): light and dark, the default text size and xxxLarge (the
+    /// interface stops growing there, #6448), landscape and portrait: the column at its top, then the Agents' Needs You reached from the foot's jump with an
     /// Agent open beside it; and the Navigation setting. XCUITest saves landscape screenshots turned; turn them back.
     @MainActor func testShots() throws {
         guard ProcessInfo.processInfo.environment["PERSONA_SHOTS"] != nil else { throw XCTSkip("screenshots only") }
         for look in ["light", "dark"] {
-            for size in ["default", "largest"] {
+            for size in ["default", "xxxlarge"] {
                 for (turn, orientation) in [("landscape", UIDeviceOrientation.landscapeLeft), ("portrait", .portrait)] {
                     XCUIDevice.shared.orientation = orientation
                     var extra = ["-tab", "assistant", "-ui.scheme", look]
-                    if size == "largest" {
-                        extra += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+                    if size == "xxxlarge" {
+                        extra += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryXXXL"]
                     }
                     launch(extra)
                     XCTAssertTrue(element("sidebar-main").waitForExistence(timeout: 20), "\(look) \(size): no sidebar")
