@@ -2313,3 +2313,13 @@ the same frame as Core Location. Converting to GCJ-02, as older posts advise, mo
 a Mac (macOS 14, region China): Tiananmen Gate searched by name came back at (39.90919, 116.39746) and sat on the gate in
 a snapshot, the same point shifted to GCJ-02 (39.91059, 116.40371) landed in an alley 550 m east, and a walking route
 drawn from MapKit's own points followed the streets. Check on a phone in the mainland before adding any conversion.
+
+## A sidebar place has more than one way in (2026-11-13, #6599)
+
+The drawer's places (Inbox, Machines, Knowledge…) keep their stacks through `AssistantView.show` (`ShellPlaces`,
+`docs/design/sidebar-navigation.md`). The iPhone shell's rows all reach `show`, but the iPad's sidebar column wires its own
+closures in `AssistantView.sidebar(column:)`, and Knowledge, Scheduled Tasks, Profile and Health there still set the old
+`show…` flags: Machines was never left, so choosing it again counted as choosing the place in front and popped it. A new
+way into a place goes through `show`, and a UI test walks it on the iPad too (`testAPlaceKeepsItsStackBesideTheIPadColumn`).
+Against a mock hub XCUITest calls the shell's switch not hittable under the status window, which takes no touches: tap it
+with `ShellFinger` and check the probe, never `isHittable` (`DrawerSwipeTests` failed on `main` for this).
