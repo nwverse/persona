@@ -50,13 +50,9 @@ final class WorkLineUnderFoldUITests: XCTestCase {
         app.buttons.matching(identifier: "work-head").matching(which).firstMatch
     }
 
-    /// Where the element is on screen: rows of the flipped chat list may report flipped frames (`MessageLiftUITests`).
-    @MainActor private func onScreen(_ e: XCUIElement) -> CGRect {
-        let window = app.windows.firstMatch.frame
-        var f = e.frame
-        if !window.contains(CGPoint(x: f.midX, y: f.midY)) { f.origin.y = window.height - f.maxY }
-        return f
-    }
+    /// Where the element is on screen. Its frame as XCUITest gives it: a row the lazy list made just above the screen is
+    /// above it (a negative y), not a flipped frame to mirror back, and mirroring it sent the drags the wrong way.
+    @MainActor private func onScreen(_ e: XCUIElement) -> CGRect { e.frame }
 
     /// Brings the work line on screen, clear of the top bar and the composer: a flick toward older lines while the list
     /// has not made it yet, then slow drags (held at the end: a plain drag flings the upside-down list well past it,
