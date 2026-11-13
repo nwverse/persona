@@ -205,6 +205,7 @@ type Service struct {
 	agentArchives agentArchiveBook
 	orphans       orphanBook      // tasks_orphan.go: the open to-dos nobody works on
 	agentNative   agentNativeBook // the tools' own archives (agent_archive_native.go)
+	switchQ       switchQueue     // agents_switch's switches waiting for their agents' turns to end (agents_switch.go)
 	fleet         fleetBook       // what comes from the nodes (fleet.go)
 	nextSug       nextSuggestBook // suggest_next.go: the hub-made next-message suggestions
 	askUp         escalationBook  // cards that reached the user through an escalation (ask_route.go), under fleet.mu
@@ -746,6 +747,7 @@ func (s *Service) SessionsChanged(ctx context.Context, d DeviceSessions) {
 	s.todosSessionsChanged(ctx, d)
 	s.taskStageSessions(ctx, d)
 	s.nativeArchivesListed(d.MachineID) // agent_archive_native.go
+	s.switchQueueListed(d.MachineID)    // a queued launcher switch whose turn ended (agents_switch.go)
 	s.followStarts(ctx, d)              // the app's starts, for launcher health (launcher_health_starts.go)
 	s.directionTreeSessions(d)          // an Agent of the direction tree may have moved (direction_tree.go)
 	s.agentNamesChanged(d)

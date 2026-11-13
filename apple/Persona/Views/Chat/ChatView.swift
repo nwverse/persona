@@ -1933,9 +1933,12 @@ struct ChatView: View {
 
     /// Messages sent from here that the transcript does not have yet, minus those Claude holds in its queue (the queue
     /// strip shows them).
-    private var shownPending: [PendingMessage] {
-        let queued = session?.queued ?? []
-        return (store.arriving + store.pending).filter { p in !queued.contains { PendingMessage.same($0, p.text) } }
+    private var shownPending: [PendingMessage] { pendingPlacement.chat }
+
+    /// What was sent from here and is not in the transcript yet, split between the chat and the queue strip (#1461).
+    private var pendingPlacement: (strip: [PendingMessage], chat: [PendingMessage]) {
+        QueuePlacement.split(store.arriving + store.pending, working: session?.status.isActive == true, queued: session?.queued ?? [],
+                             stripShown: (style == .dev || session?.assistant == true))
     }
 
     /// The wait between a send and the hub's working (`ChatAwaitingTurn`); not for a subagent being viewed.
@@ -2586,9 +2589,10 @@ struct ChatView: View {
                         openNext(next)
                     }
                 }
-                if let queued = session?.queued, !queued.isEmpty,
-                   style == .dev || session?.assistant == true {
-                    QueueStrip(key: key, queued: queued, own: session?.ownQueuedCount ?? queued.count,
+                let queued = session?.queued ?? []
+                let sending = pendingPlacement.strip
+                if !queued.isEmpty || !sending.isEmpty, style == .dev || session?.assistant == true {
+                    QueueStrip(key: key, queued: queued, own: session?.ownQueuedCount ?? queued.count, sending: sending,
                                photoMarks: model.chat(key).queuePhotoMarks,
                                steers: session?.steersQueue == true || (session?.assistant == true && session?.canSend == true),
                                persona: session?.assistant == true ? model.persona.name : nil)
@@ -6024,6 +6028,10 @@ struct QueueStrip: View {
     var queued: [String]
     /// The user's own messages come first; relayed ones are only shown and copied.
     var own: Int
+    /// Messages sent from this phone while the agent worked that Claude has not reported queued yet (#1461): drawn
+    /// after the queued ones as sending, waiting for the network or failed, with the actions each state has.
+    var sending: [PendingMessage] = []
+    private var total: Int { queued.count + sending.count }
     /// Local photo counts derived by `ChatStore` for the own rows; Agent attachment marks come from `QueuedDraft`.
     var photoMarks: [Int] = []
     var steers = false
@@ -6046,7 +6054,7 @@ struct QueueStrip: View {
             .scrollBounceBehavior(.basedOnSize)
             // Its rows' own height until one is measured, not what it is offered: the footer is laid out first (#3703).
             .fixedSize(horizontal: false, vertical: rowHeight == 0)
-            .frame(height: rowHeight > 0 ? rowHeight * min(CGFloat(queued.count), Self.visibleRows) : nil)
+            .frame(height: rowHeight > 0 ? rowHeight * min(CGFloat(total), Self.visibleRows) : nil)
             .padding(.top, Theme.Space.sm)
         } label: {
             Group {
@@ -6091,7 +6099,7 @@ struct QueueStrip: View {
     }
 
     private var tray: some View { ThemedIcon("tray.and.arrow.down").accessibilityHidden(true) }
-    private var title: Text { Text("\(queued.count) queued · \(agent) will handle them in order [Queue Strip]") }
+    private var title: Text { Text("\(total) queued · \(agent) will handle them in order [Queue Strip]") }
 
     /// Send Now when a Claude in a terminal has the user's own messages queued, or the spinner while the queue is being
     /// handed over.
@@ -6106,6 +6114,66 @@ struct QueueStrip: View {
             .foregroundStyle(Theme.accent)
             .accessibilityIdentifier("queue-send-now")
         }
+    }
+
+    /// A message of this phone's not yet reported queued (#1461): its words, and what became of the send.
+    private func sendingRow(_ msg: PendingMessage, number: Int) -> some View {
+        let draft = QueuedDraft(msg.text, photoCount: msg.images.count)
+        return Menu {
+            switch msg.state {
+            case .failed:
+                Button { model.retry(key, msg) } label: { Label("Resend", systemImage: Theme.Icon.retry) }
+            case .waiting:
+                Button { model.retry(key, msg) } label: { Label("Retry Now [Message Views f40f4f]", systemImage: Theme.Icon.retry) }
+            case .sending, .sent:
+                EmptyView()
+            }
+            Button { UIPasteboard.general.string = draft.text.isEmpty ? msg.text : draft.text } label: { Label("Copy [Readiness Views d37380]", systemImage: Theme.Icon.copy) }
+            if msg.onlyHere {
+                if msg.state == .waiting {
+                    Button(role: .destructive) { model.discard(key, msg) } label: { Label("Don't Send", systemImage: Theme.Icon.delete) }
+                } else {
+                    Button(role: .destructive) { model.discard(key, msg) } label: { Label("Delete", systemImage: Theme.Icon.delete) }
+                }
+            }
+        } label: {
+            HStack(alignment: .top, spacing: Theme.Space.s) {
+                Text("\(number)")
+                    .font(Theme.Font.labelHeavy.monospacedDigit())
+                    .foregroundStyle(Theme.accent)
+                    .scaledFrame(width: Theme.Size.badge, height: Theme.Size.badge)
+                    .background(Theme.accent.opacity(0.14), in: .circle)
+                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                    QueuedWords(draft: draft)
+                    if !msg.images.isEmpty {
+                        HStack(spacing: Theme.Space.xs) {
+                            ThemedIcon(Theme.Icon.photo)
+                            Text("\(msg.images.count) images")
+                        }
+                        .font(Theme.Font.caption).foregroundStyle(.secondary)
+                    }
+                    switch msg.state {
+                    case .sending:
+                        Text("Sending… [Queue Strip]").font(Theme.Font.caption).foregroundStyle(.secondary)
+                    case .waiting:
+                        Text("Sends when connected").font(Theme.Font.caption).foregroundStyle(.secondary)
+                    case .failed:
+                        Text("Not sent. Tap to resend [Queue Strip]").font(Theme.Font.caption).foregroundStyle(Theme.danger)
+                    case .sent:
+                        EmptyView()
+                    }
+                }
+                Spacer(minLength: 0)
+                ThemedIcon(msg.state == .failed ? Theme.Icon.errorFilled : Theme.Icon.more).font(Theme.Font.label)
+                    .foregroundStyle(msg.state == .failed ? Theme.danger : .secondary).padding(.top, Theme.Space.xs)
+            }
+            .padding(.horizontal, Theme.Space.m)
+            .padding(.vertical, Theme.Space.s)
+            .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
+            .opacity(msg.state == .failed || msg.state == .waiting ? 0.8 : 1)
+        }
+        .accessibilityLabel(Text("Item \(number): \(QueuedWords.spoken(draft))"))
+        .accessibilityIdentifier("queue-sending-item")
     }
 
     private var rows: some View {
@@ -6163,9 +6231,12 @@ struct QueueStrip: View {
                 .accessibilityHint(i < own ? Text("Edit, copy or delete") : Text("Copy [Readiness Views d37380]"))
                 .accessibilityValue(photos > 0 ? Text("\(photos) images") : Text(""))
             }
+            ForEach(Array(sending.enumerated()), id: \.element.id) { j, msg in
+                sendingRow(msg, number: queued.count + j + 1)
+            }
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
-            if !queued.isEmpty { rowHeight = h / CGFloat(queued.count) }
+            if total > 0 { rowHeight = h / CGFloat(total) }
         }
     }
 
