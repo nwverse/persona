@@ -756,10 +756,12 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
 - DEBUG: `-tab mail` (Inbox), `-openInboxFirst YES` (first unhandled item), `-openInboxItem <id>` (specific item), `-showInboxAction draft|handoff` (then that sheet),
   `-showInboxSuggestionEdit YES` (suggestion editor on iPhone event page).
 - **Plugin-rendered details** (#1681; `docs/extensions/extensions.md`, "Inbox items"): for items from a plugin connector (`source` = connector) contributing `inbox_item`,
-  keep the header (title, source, Done, ✦ summary, AI Draft Reply / Hand to AI), replacing the body with the plugin's item View (Lark renders event meta: people, time span, continuation, message chain, reply, View in chat).
-  View in chat returns `persona://inbox/<item id>/source`; the App opens its original source page (Lark at the item's first message).
-  Hub passes `{id, title, summary, tier, reason, done, meta, extra}`; meta unchanged, unparsed. Sources without a slot, old hubs without it, read-only devices, and rendering failures keep the original body.
-  Web implemented (`docs/web/web.md`, "Settings," "UI slots"); iOS / Android in separate PRs.
+  the plugin's item View is the slot's source body. Hub passes `{id, title, summary, tier, reason, done, meta, extra}`; meta unchanged, unparsed.
+  On iOS and visionOS, View original and source chain entries whose existing source precedence reaches a native chat open `LarkChatView` directly,
+  at the chain link's position or the conversation's own focus; they skip the plugin's intermediate item View and its Back-to-event strip.
+  Document, connector and Moments content keeps its pages ahead of a native chat when an item carries both; mail and the empty fallback keep their slot behavior too.
+  Sources without a slot, old hubs, read-only devices and rendering failures keep the original body. The Mac detail root is unchanged; its position links use the same source page.
+  For plugin pages still shown, View in chat returns `persona://inbox/<item id>/source`; the App opens its original source page.
 
 ## Item actions (`Persona/Views/Inbox/InboxActions.swift`)
 
