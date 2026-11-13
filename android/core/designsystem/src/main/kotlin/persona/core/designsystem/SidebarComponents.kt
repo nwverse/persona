@@ -35,12 +35,13 @@ fun JSidebarHistoryRow(
     titleAccessory: (@Composable () -> Unit)? = null,
     /** Drawn before the ⋯ (a 常驻 lead's caret that folds its to-dos open, #4352); null: nothing. */
     trailingAccessory: (@Composable () -> Unit)? = null,
-    /** A lead whose Agents work while its own conversation is idle spins the working mark anyway (#6230). */
+    /** A lead row that spins: its own turn runs or a live Agent under it works (#6230, #6490, #6626). */
     working: Boolean = false,
 ) {
     JRow(title, onClick = onClick, onLongClick = onMenu, selected = selected, chevron = false, subtitle = hint,
         titleAccessory = titleAccessory, titleLead = titleLead, trailing = {
-            // A Needs You dot is still, as iOS's `RowStateMark` in a dense list; a lead with work under it spins (#6230), as there.
+            // A Needs You dot is still, as iOS's `RowStateMark` in a dense list; the row spins on its own turn or a
+            // lead's live Agent (#6230, #6490), as iOS does.
             if (status == Status.NeedsYou || status == Status.Working || status == Status.Unread || working) JStatusDot(status, spinning = working && status != Status.NeedsYou && status != Status.Unread, breathes = false)
             trailingAccessory?.invoke()
             JIconButton(PhIcons.DotsThree, menuLabel, onMenu)

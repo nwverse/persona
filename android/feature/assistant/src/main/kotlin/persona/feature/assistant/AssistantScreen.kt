@@ -1496,8 +1496,8 @@ internal fun AssistantDrawer(
                         onRename = onRename?.let { action -> { action(session) } },
                         onDiagnostics = onDiagnostics?.let { action -> { action(session) } },
                         leader = true, onLeader = onLeader?.let { action -> { action(session) } },
-                        counts = leaderCountsLabel(groups.counts[session.sessionId], resources),
-                        working = (groups.counts[session.sessionId]?.working ?: 0) > 0,
+                        counts = leaderNeedsYouLabel(groups.counts[session.sessionId], resources),
+                        working = groups.tree?.direction(session.sessionId)?.working == true,
                         named = groups.names[session.sessionId], disclosure = disclosure)
                 }
             }
@@ -1574,7 +1574,7 @@ internal fun AssistantDrawer(
  * One conversation of the history (iOS `AssistantSidebar.row`). A swipe left archives it ([onArchive]; not the main one).
  * Its menu (⋯, or a long press) shows what it last said and when, over iOS's items: Pin / Unpin ([onLeader]), Rename…
  * ([onRename]), Archive, Copy session ID, Copy diagnostics ([onDiagnostics]) and End… while it runs ([onEnd]). [counts]
- * is what the leader has open (#4331).
+ * is the lead row's needs-you line (#4331, #6626); the busy half is the spinner driven by [working].
  */
 @Composable
 private fun ConversationRow(
@@ -1597,10 +1597,11 @@ private fun ConversationRow(
         ?: channel?.let { c -> { JChannelMark(c, size = MarkSize.Inline) } }
     // [named]: a direction's name, shown instead of its leader conversation's title
     val title = named ?: session.conversationTitle(conversationWords())
-    // One activity mark for the whole row (#6230): an own needs-you / unread / working turn still wins; otherwise a lead
-    // with work running under it spins.
+    // One spin rule for the whole row (#6230, #6490, #6626): the conversation's own running turn, or a live Agent
+    // under the lead while the row itself does not need the user. A needs-you / unread state always keeps its dot.
     val ownStatus = session.conversationStatus()
-    val leadActive = working && ownStatus != Status.NeedsYou && ownStatus != Status.Unread && ownStatus != Status.Working
+    val spins = ownStatus == Status.Working ||
+        (working && ownStatus != Status.NeedsYou && ownStatus != Status.Unread)
     // A hub title's day and kind ("1101 | Fix | ") in the quiet ink, so the topic is what the eye finds (iOS `titleText`); Glass.
     val dated = if (PersonaTheme.style == AppStyle.Glass) ConversationTitle.parse(title) else null
     val resources = androidx.compose.ui.platform.LocalResources.current
@@ -1608,7 +1609,7 @@ private fun ConversationRow(
     if (LocalHomeDrawer.current) JSwipeActions(modifier, end = swipe) {
         JSidebarHistoryRow(dated?.topic ?: title, ownStatus, selected, onOpen, { menu = true },
             stringResource(R.string.assistant_conversation_actions), hint = counts,
-            titleAccessory = accessory, titleLead = dated?.head, trailingAccessory = disclosure, working = leadActive)
+            titleAccessory = accessory, titleLead = dated?.head, trailingAccessory = disclosure, working = spins)
     } else JSwipeActions(modifier, end = swipe) { JGroupItem(position) {
         // The time goes on the line under the title, with the state: beside the title it left the title two or three
         // characters in the wide window's 300dp list (2026-11-02), and a narrow drawer cut it short too.
@@ -1616,7 +1617,7 @@ private fun ConversationRow(
             titleAccessory = accessory, titleLead = dated?.head,
             subtitle = session.lastText?.takeIf { it.isNotBlank() },
             leading = {
-                if (leadActive) JSpinner(Modifier.size(Tokens.Size.iconXS), color = PersonaTheme.palette.accent, stroke = SpinnerTokens.compactStroke)
+                if (spins) JSpinner(Modifier.size(Tokens.Size.iconXS), color = PersonaTheme.palette.accent, stroke = SpinnerTokens.compactStroke)
                 else JIcon(if (selected) PhIcons.CheckCircle else PhIcons.ChatCircle, null,
                     selected = selected, tint = if (selected) PersonaTheme.palette.accent else PersonaTheme.palette.ink2)
             },

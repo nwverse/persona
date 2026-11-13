@@ -22,12 +22,13 @@ interface TreeDirection {
   id: string;
   name?: string;
   secretary?: boolean;
+  working?: boolean;
   counts?: Partial<LeaderCounts>;
 }
 
 /** The tree's directions as leaders: the secretary group left out. */
 export function treeLeaders(tree: { directions?: TreeDirection[] } | undefined): LeaderInfo[] {
-  return (tree?.directions ?? []).filter((d) => d.id && !d.secretary).map((d) => ({ id: d.id, name: d.name, counts: { working: d.counts?.working ?? 0, needs_you: d.counts?.needs_you ?? 0 } }));
+  return (tree?.directions ?? []).filter((d) => d.id && !d.secretary).map((d) => ({ id: d.id, name: d.name, working: d.working === true, counts: { working: d.counts?.working ?? 0, needs_you: d.counts?.needs_you ?? 0 } }));
 }
 
 export interface LeaderInfo {
@@ -36,6 +37,8 @@ export interface LeaderInfo {
   name?: string;
   project?: string;
   ended?: boolean;
+  /** A live Agent session runs under this direction (#6626); the leader conversation's own turn is not included. */
+  working?: boolean;
   counts?: LeaderCounts;
 }
 
@@ -75,6 +78,12 @@ export function countsLabel(c: LeaderCounts | undefined, t: (key: string, o: { c
   return [c.working > 0 ? t("sidebar.leader_working", { count: c.working }) : "", c.needs_you > 0 ? t("sidebar.leader_needs_you", { count: c.needs_you }) : ""].filter(Boolean).join(" · ");
 }
 
+/** The lead row's one attention phrase (#6626): only "等你 N". The busy half is the spinner, so no working count is
+ *  spelled out on the row; "" when nothing waits on the owner. */
+export function needsYouLabel(c: LeaderCounts | undefined, t: (key: string, o: { count: number }) => string): string {
+  return c && c.needs_you > 0 ? t("sidebar.leader_needs_you", { count: c.needs_you }) : "";
+}
+
 /** The counts of every leader added up (the folded section's tally). */
 export function totalCounts(counts: ReadonlyMap<string, LeaderCounts>, ids: readonly string[]): LeaderCounts {
   const out = { working: 0, needs_you: 0 };
@@ -91,12 +100,15 @@ export function totalCounts(counts: ReadonlyMap<string, LeaderCounts>, ids: read
 const listeners = new Set<() => void>();
 let names: Map<string, string> = new Map();
 let counts: Map<string, LeaderCounts> = new Map();
+/** The leader ids whose tree reports a live Agent session running (#6626), the one source of the rows' spin. */
+let workingLeaders: Set<string> = new Set();
 let askedFor = "";
 let asked = 0;
 
 function set(list: readonly LeaderInfo[] | undefined) {
   names = directionNames(list);
   counts = leaderCounts(list);
+  workingLeaders = new Set((list ?? []).filter((l) => l.id && !l.ended && l.working).map((l) => l.id));
   listeners.forEach((l) => l());
 }
 
@@ -142,6 +154,7 @@ export function resetDirectionNames() {
   asked++;
   names = new Map();
   counts = new Map();
+  workingLeaders = new Set();
   toldIds = null;
   resetDirectionTree();
 }
@@ -164,6 +177,13 @@ const countsSnapshot = () => counts;
 /** The current leaders' counts (read with useDirectionNames, which asks for them). */
 export function useLeaderCounts(): ReadonlyMap<string, LeaderCounts> {
   return useSyncExternalStore(subscribe, countsSnapshot, countsSnapshot);
+}
+
+const workingSnapshot = () => workingLeaders;
+
+/** The leader ids with a live Agent session running (#6626). Empty on a hub without the tree's working flag. */
+export function useLeaderWorking(): ReadonlySet<string> {
+  return useSyncExternalStore(subscribe, workingSnapshot, workingSnapshot);
 }
 
 /** Reads the tree (on every hello, `since` the socket opened: a read sent since then serves; with `changed`, on

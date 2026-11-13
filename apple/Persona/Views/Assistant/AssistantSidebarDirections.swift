@@ -1,14 +1,16 @@
 import SwiftUI
 
 // The sidebar's Pinned group (the leader directions), opened up (#4352, docs/apple/sidebar.md "Pinned directions"):
-// each lead's row (#4331's, with its "N working · N need you") gets a chevron that folds open its to-dos, each with
-// its state; a to-do folds open to its Agents, an Agent to its sub-Agents. All of it is the hub's direction tree
-// (`AppModel.directionTree`, the one the counts come from too). Kept apart from AssistantSidebar.swift, which only
-// places these rows. The secretary group has no row here: the main conversation's row stands for it.
+// each lead's row gets a chevron that folds open its to-dos, each with its state; a to-do folds open to its Agents,
+// an Agent to its sub-Agents. All of it is the hub's direction tree (`AppModel.directionTree`, the one the counts
+// come from too). Kept apart from AssistantSidebar.swift, which only places these rows. The secretary group has no
+// row here: the main conversation's row stands for it. The lead row's busy signal is the spinner alone (#6626); the
+// full "N working · N need you" counts live in this chevron's VoiceOver label and on the To-dos / Chats headers.
 
-/// One direction under Pinned: `head` (the leader conversation's own row, counts included) with a chevron on the
-/// right, and while open the rows of its to-dos. Folded at first; this device remembers it per direction. Without a
-/// tree (an older hub, another manager's page, or before it is read) only `head`, as the sidebar drew it before.
+/// One direction under Pinned: `head` (the leader conversation's own row, spinner and needs-you line included) with a
+/// chevron on the right, and while open the rows of its to-dos. Folded at first; this device remembers it per
+/// direction. Without a tree (an older hub, another manager's page, or before it is read) only `head`, as the sidebar
+/// drew it before.
 struct AssistantSidebarDirection<Head: View>: View {
     @Environment(AppModel.self) private var model
     var direction: DirectionTree.Direction?

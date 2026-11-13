@@ -28,6 +28,8 @@ class DirectionTreeParseTest {
         val lead = tree.directions.first()
         assertEquals("Product", lead.name)
         assertFalse(lead.secretary)
+        // the live-session working flag (#6626) is absent on this older-shaped payload, so it reads false
+        assertFalse(lead.working)
         assertEquals(DirectionCounts(working = 2, needsYou = 1, stuck = 0, review = 3), lead.counts)
         assertEquals(DirectionTaskState.NeedsYou, lead.tasks[0].state)
         assertEquals(DirectionTaskState.Working, lead.tasks[1].state)
@@ -49,6 +51,14 @@ class DirectionTreeParseTest {
         assertEquals(2, lead.counts.planned)
         assertEquals(DirectionTaskState.Planned, lead.tasks[1].state)
         assertEquals(persona.core.contracts.CoreText.Key.DirectionPlanned, lead.tasks[1].state.label)
+    }
+
+    @Test fun theLiveWorkingFlagIsReadAndOnlyAnExplicitTrueCounts() {
+        val tree = directionTreeOf(json("""{"directions": [
+            {"id": "busy", "name": "Busy", "working": true, "counts": {"working": 0, "needs_you": 1}, "tasks": []},
+            {"id": "quiet", "name": "Quiet", "working": false, "counts": {"working": 0}, "tasks": []}
+        ]}"""))!!
+        assertEquals(listOf(true, false), tree.directions.map { it.working })
     }
 
     @Test fun anOlderHubsEmptyAnswerIsNoTree() {

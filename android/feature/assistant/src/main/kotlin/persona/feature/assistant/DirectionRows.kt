@@ -37,10 +37,11 @@ import persona.core.domain.tasks.directionFoldKey
 import persona.core.domain.tasks.directionTaskFoldKey
 
 // A 常驻 lead's rows from the hub's direction tree (#4352, docs/android/android.md): the lead row itself stays the
-// drawer's (AssistantScreen.kt's ConversationRow, its look and its 「在做 N · 等你 N」 from the same tree) and only gains a
-// caret. Folded (the default, kept on this phone per lead) nothing else changes; open, its to-dos follow it, each with
-// its state word and, at the row's end like the lead's, a caret folding it open to its Agents, an Agent with Agents under it folding open to those. A to-do opens
-// its card, an Agent its session. The secretary group (书记官) has no row here: the main conversation's row is it.
+// drawer's (AssistantScreen.kt's ConversationRow, its look from the same tree — the spinner for a live Agent and the
+// 「等你 N」 attention line, #6626) and only gains a caret. Folded (the default, kept on this phone per lead) nothing
+// else changes; open, its to-dos follow it, each with its state word and, at the row's end like the lead's, a caret
+// folding it open to its Agents, an Agent with Agents under it folding open to those. A to-do opens its card, an Agent
+// its session. The secretary group (书记官) has no row here: the main conversation's row is it.
 
 /**
  * Which tree rows are open, kept on this phone (every row starts folded). One copy for the whole app, so every lead's

@@ -225,15 +225,17 @@ class AssistantDrawerShotsTest {
         rule.onAllNodesWithText("工作中").assertCountEquals(1)
     }
 
-    // #6230: one spinning activity mark. A lead whose own conversation is idle while the Agents under it work spins in
-    // every style; a lead with nothing running keeps its quiet row.
+    // #6230 + #6626: one spinning activity mark from the hub tree's live-session flag. A lead whose own conversation is
+    // idle while the Agents under it run spins in every style, with no "在做 N" text on the row.
     @Test fun anIdleLeadWithAgentsWorkingSpins() {
         var style by mutableStateOf(AppStyle.Glass)
         val idleLead = Session(machineId = "hub", sessionId = "l9", title = "1110 | 探索 | 基建", status = "idle",
             updatedAt = minutesAgo(8), lastText = "等待下一轮。")
         val groups = ConversationGroups(main, listOf(idleLead), recent,
             names = mapOf("l9" to "基建"),
-            counts = mapOf("l9" to LeaderCounts(working = 2, needsYou = 0)))
+            counts = mapOf("l9" to LeaderCounts(working = 2, needsYou = 0)),
+            tree = DirectionTree(listOf(Direction("l9", "基建", working = true,
+                counts = DirectionCounts(working = 2)))))
         rule.setContent {
             PersonaTheme(darkTheme = false, reduceMotion = true, style = style) {
                 Box(Modifier.testTag("shot").width(400.dp).height(900.dp).background(PersonaTheme.palette.background)) {
@@ -242,7 +244,7 @@ class AssistantDrawerShotsTest {
                 }
             }
         }
-        rule.onNodeWithText("在做 2").assertExists()
+        rule.onAllNodesWithText("在做 2").assertCountEquals(0)
         for (s in AppStyle.entries) {
             style = s
             androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
@@ -252,8 +254,49 @@ class AssistantDrawerShotsTest {
         }
     }
 
-    // #4331: the leaders, "常驻", under their names, each saying what it has open, in every style, light and dark; every
-    // other chat waits under one All chats row.
+    // #6626: a fully idle lead (no live Agent, no own turn) shows no spinner, whatever the task counts say.
+    @Test fun anIdleLeadWithNoLiveAgentDoesNotSpin() {
+        val idleLead = Session(machineId = "hub", sessionId = "l8", title = "1110 | 探索 | 文档", status = "idle",
+            updatedAt = minutesAgo(8), lastText = "等待下一轮。")
+        // a task triaged working on an unreachable machine keeps a task count, but the hub's live flag is false
+        val groups = ConversationGroups(main, listOf(idleLead), recent,
+            names = mapOf("l8" to "文档"),
+            counts = mapOf("l8" to LeaderCounts(working = 1, needsYou = 0)),
+            tree = DirectionTree(listOf(Direction("l8", "文档", working = false,
+                counts = DirectionCounts(working = 1)))))
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
+                Box(Modifier.testTag("shot").width(400.dp).height(900.dp).background(PersonaTheme.palette.background)) {
+                    AssistantDrawer("", {}, groups, active = null, hasMain = true, onEnd = null, onMain = {}, onOpen = {},
+                        onInfo = {}, onNew = {}, onSettings = {})
+                }
+            }
+        }
+        rule.onAllNodesWithContentDescription("加载中").assertCountEquals(0)
+        rule.onAllNodesWithText("在做 1").assertCountEquals(0)
+    }
+
+    // #6490 + #6626: a leader running its own turn spins even with no child Agent, matching iOS's RowStateMark.
+    @Test fun aLeadRunningItsOwnTurnSpins() {
+        val ownWorking = Session(machineId = "hub", sessionId = "l7", title = "1110 | 探索 | 发布", status = "working",
+            updatedAt = minutesAgo(2), lastText = "正在整理发布清单。")
+        val groups = ConversationGroups(main, listOf(ownWorking), recent,
+            names = mapOf("l7" to "发布"),
+            counts = mapOf("l7" to LeaderCounts()),
+            tree = DirectionTree(listOf(Direction("l7", "发布", working = false))))
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
+                Box(Modifier.testTag("shot").width(400.dp).height(900.dp).background(PersonaTheme.palette.background)) {
+                    AssistantDrawer("", {}, groups, active = null, hasMain = true, onEnd = null, onMain = {}, onOpen = {},
+                        onInfo = {}, onNew = {}, onSettings = {})
+                }
+            }
+        }
+        rule.onNodeWithContentDescription("加载中").assertExists()
+    }
+
+    // #4331 + #6626: the leaders, "常驻", under their names; each row keeps its needs-you line but no working text,
+    // in every style, light and dark; every other chat waits under one All chats row.
     @Test fun drawsTheLeadersWithTheirCounts() {
         var style by mutableStateOf(AppStyle.Glass)
         var dark by mutableStateOf(false)
@@ -262,7 +305,10 @@ class AssistantDrawerShotsTest {
         val leadB = Session(machineId = "hub", sessionId = "l2", title = "1110 | 探索 | 支付", status = "idle", updatedAt = minutesAgo(20))
         val groups = ConversationGroups(main, listOf(leadA, leadB), recent,
             names = mapOf("l1" to "增长", "l2" to "支付"),
-            counts = mapOf("l1" to LeaderCounts(working = 2, needsYou = 1), "l2" to LeaderCounts(needsYou = 3)))
+            counts = mapOf("l1" to LeaderCounts(working = 2, needsYou = 1), "l2" to LeaderCounts(needsYou = 3)),
+            tree = DirectionTree(listOf(
+                Direction("l1", "增长", working = true, counts = DirectionCounts(working = 2, needsYou = 1)),
+                Direction("l2", "支付", working = false, counts = DirectionCounts(needsYou = 3)))))
         rule.setContent {
             PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
                 Box(Modifier.testTag("shot").width(400.dp).height(900.dp).background(PersonaTheme.palette.background)) {
@@ -273,7 +319,9 @@ class AssistantDrawerShotsTest {
         }
         rule.onNodeWithText("常驻").assertExists()
         rule.onNodeWithText("增长").assertExists()
-        rule.onNodeWithText("在做 2 · 等你 1").assertExists()
+        // #6626: the working count is no longer text on a lead row; only the needs-you lines remain
+        rule.onAllNodesWithText("在做 2").assertCountEquals(0)
+        rule.onNodeWithText("等你 1").assertExists()
         rule.onNodeWithText("等你 3").assertExists()
         for (s in AppStyle.entries) for (d in listOf(false, true)) {
             style = s; dark = d

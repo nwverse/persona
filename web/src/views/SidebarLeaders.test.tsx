@@ -51,7 +51,7 @@ beforeEach(() => {
   leaders = ["lead-a", "lead-b"];
   posts = [];
   named = { leaders: [
-    { id: "lead-a", title: "1110 | explore | Growth", name: "Product", counts: { working: 2, needs_you: 1 } },
+    { id: "lead-a", title: "1110 | explore | Growth", name: "Product", working: true, counts: { working: 2, needs_you: 1 } },
     { id: "lead-b", title: "Payments", name: "Infrastructure", counts: { working: 0, needs_you: 0 } },
     { id: "old", title: "Old", name: "Ended one", ended: true },
   ] };
@@ -63,8 +63,8 @@ beforeEach(() => {
     }
     if ((path === "/api/v1/assistant/leaders" || path === "/api/v1/assistant/directions/tree") && named === undefined) return Promise.resolve(new Response("{}", { status: 404 }));
     if (path === "/api/v1/assistant/directions/tree") {
-      const list = (named as { leaders: { id: string; name?: string; ended?: boolean; counts?: unknown }[] }).leaders.filter((l) => !l.ended);
-      return Promise.resolve(new Response(JSON.stringify({ directions: [...list.map((l) => ({ id: l.id, name: l.name, counts: { stuck: 0, review: 0, ...(l.counts as object) }, tasks: [] })), { id: "main", name: "", secretary: true, counts: { working: 9, needs_you: 9, stuck: 0, review: 0 }, tasks: [] }] }), { headers: { "Content-Type": "application/json" } }));
+      const list = (named as { leaders: { id: string; name?: string; working?: boolean; ended?: boolean; counts?: unknown }[] }).leaders.filter((l) => !l.ended);
+      return Promise.resolve(new Response(JSON.stringify({ directions: [...list.map((l) => ({ id: l.id, name: l.name, working: l.working === true, counts: { stuck: 0, review: 0, ...(l.counts as object) }, tasks: [] })), { id: "main", name: "", secretary: true, working: false, counts: { working: 9, needs_you: 9, stuck: 0, review: 0 }, tasks: [] }] }), { headers: { "Content-Type": "application/json" } }));
     }
     const body = path === "/api/v1/assistant" ? { machine_id: "hub", main: "main", leaders, conversations } : path === "/api/v1/assistant/leaders" ? named : path === "/api/v1/machines" ? { machines: [{ id: "hub", name: "Hub", online: true }] } : {};
     return Promise.resolve(new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } }));
@@ -108,7 +108,10 @@ describe("the leader conversations in the sidebar", () => {
     expect(t("sidebar.directions")).toBe("常驻");
     expect(t("sidebar.recent_chats")).toBe("最近");
     expect(row("lead-a").textContent).toContain("Product");
-    expect(row("lead-a").textContent).toContain("在做 2 · 等你 1");
+    // One busy expression only (#6626): the row keeps the "等你 1" attention count but no longer spells "在做 N" —
+    // the busy half is the spinner asserted in the test below.
+    expect(row("lead-a").textContent).toContain("等你 1");
+    expect(row("lead-a").textContent).not.toContain("在做");
     expect(row("lead-b").textContent).toContain("Infrastructure");
     expect(row("lead-b").textContent).not.toContain("在做");
     // 常驻 is marked only by its heading and counts (#6214): a lead with nothing running draws the ordinary chat icon,
@@ -123,15 +126,27 @@ describe("the leader conversations in the sidebar", () => {
     expect(headings().join()).not.toMatch(/置顶|其他对话|方向/);
   });
 
-  it("spin the one working mark while any Agent under them runs, even when their own conversation is idle (#6230)", async () => {
+  it("spin the one working mark while any Agent under them runs, even when their own conversation is idle (#6230, #6626)", async () => {
     await renderSidebar();
-    // lead-a's own session is idle but two of its Agents work: the row carries the working arc and the "在做 2" count
+    // lead-a's own session is idle but the hub tree reports a live Agent running: the row carries the working arc and
+    // no "在做 N" text; lead-b has nothing running, so no arc.
     const leadA = row("lead-a");
-    expect(leadA.textContent).toContain("在做 2");
+    expect(leadA.textContent).not.toContain("在做");
     expect(leadA.querySelector('[data-shape="arc"][data-state="working"]')).not.toBeNull();
     // lead-b has nothing running: no working arc, the quiet pin stays
     const leadB = row("lead-b");
     expect(leadB.querySelector('[data-shape="arc"]')).toBeNull();
+  });
+
+  it("stay idle without the tree's working flag even when an older hub still sends a working task count (#6626)", async () => {
+    // counts.working is task triage; only the hub's live-session working flag may spin the row
+    named = { leaders: [
+      { id: "lead-a", title: "1110 | explore | Growth", name: "Product", counts: { working: 2, needs_you: 0 } },
+      { id: "lead-b", title: "Payments", name: "Infrastructure", counts: { working: 0, needs_you: 0 } },
+    ] };
+    await renderSidebar();
+    expect(row("lead-a").querySelector('[data-shape="arc"]')).toBeNull();
+    expect(row("lead-b").querySelector('[data-shape="arc"]')).toBeNull();
   });
 
   it("show their titles on a hub without the leaders list", async () => {
@@ -287,17 +302,19 @@ describe("the leader conversations in the sidebar", () => {
     named = { leaders: [
       { id: "lead-a", name: "Product", counts: { working: 0, needs_you: 3 } },
       { id: "lead-b", name: "Infrastructure", counts: { working: 0, needs_you: 0 } },
-      { id: "mine", name: "Docs sync", counts: { working: 1, needs_you: 0 } },
+      { id: "mine", name: "Docs sync", working: true, counts: { working: 1, needs_you: 0 } },
     ] };
     push({ type: "directions" });
     await flush();
     expect(rowIds()).toEqual(["lead-a", "lead-b", "mine", "newest"]);
     expect(row("mine").textContent).toContain("Docs sync");
-    expect(row("mine").textContent).toContain("在做 1");
+    // the working count is no longer text on the row; the live-session flag draws the arc instead
+    expect(row("mine").textContent).not.toContain("在做");
+    expect(row("mine").querySelector('[data-shape="arc"][data-state="working"]')).not.toBeNull();
     expect(row("lead-a").textContent).toContain("等你 3");
     // the secretary group's counts are never a lead's
     expect(host.querySelector("[data-sidebar-rows]")!.textContent).not.toContain("在做 9");
-    named = { leaders: [{ id: "mine", name: "Docs sync", counts: { working: 1, needs_you: 0 } }] };
+    named = { leaders: [{ id: "mine", name: "Docs sync", working: true, counts: { working: 1, needs_you: 0 } }] };
     push({ type: "directions" });
     await flush();
     // the ended ones leave 常驻 and are back among 最近 by their time

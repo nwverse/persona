@@ -300,8 +300,10 @@ final class AppModel {
     @ObservationIgnored private var directionTreeAsk = 0
     @ObservationIgnored private var directionTreeLanded = 0
     /// How much work each direction holds, by leader conversation id: the tree's `counts` (the secretary group left
-    /// out), for the sidebar's "N working · N need you" under each name. Empty from a hub without the tree.
+    /// out), for the sidebar's needs-you line under each name. Empty from a hub without the tree.
     var directionCounts: [String: DirectionTree.Counts] { directionTree?.leaderCounts ?? [:] }
+    /// The leader ids with a live Agent session running (#6626): the one signal that spins a sidebar lead row.
+    var directionWorking: Set<String> { directionTree?.workingLeaderIDs ?? [] }
     @ObservationIgnored private var assistantRetryInFlight: Task<Void, Never>?
     /// The assistant conversation shown in the Chat tab (persisted across launches).
     ///

@@ -51,6 +51,11 @@ export interface Direction {
   name: string;
   secretary?: boolean;
   counts: DirectionCounts;
+  /** True while at least one Agent session listed under the direction is running its own turn (#6626): a live
+   *  session-state signal from the hub, unlike counts.working, which counts open tasks triaged as working. Absent
+   *  from an older hub; normalizeTree makes it false. The leader conversation's own turn is not part of it — the
+   *  row ORs its own session state in. */
+  working?: boolean;
   tasks?: DirectionTask[];
 }
 
@@ -70,6 +75,7 @@ export function normalizeTree(raw: unknown): DirectionTree {
         id: d.id,
         name: typeof d.name === "string" ? d.name : "",
         ...(d.secretary ? { secretary: true } : {}),
+        working: d.working === true,
         counts: normalizeCounts(d.counts),
         tasks: (Array.isArray(d.tasks) ? d.tasks : [])
           .filter((td): td is DirectionTask => !!td && typeof td.id === "string")

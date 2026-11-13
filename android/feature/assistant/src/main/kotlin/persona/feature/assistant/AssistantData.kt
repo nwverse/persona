@@ -127,13 +127,12 @@ internal fun conversationGroups(
     )
 }
 
-/** A leader's open tasks 「在做 1 · 等你 2」 (#4331): only the parts that are not zero, null when both are. */
-internal fun leaderCountsLabel(counts: LeaderCounts?, resources: android.content.res.Resources): String? {
+/** A leader row's one attention phrase (#6626): only 「等你 N」, null when nothing waits on the owner. The busy half is
+ *  the spinner, so no working count is spelled out on the row; the full working + needs-you counts stay on the To-dos
+ *  screen's direction headers (`JDirectionCounts`) and in the fold-out's per-task state words. */
+internal fun leaderNeedsYouLabel(counts: LeaderCounts?, resources: android.content.res.Resources): String? {
     counts ?: return null
-    return listOfNotNull(
-        counts.working.takeIf { it > 0 }?.let { resources.getString(R.string.assistant_leader_working, it) },
-        counts.needsYou.takeIf { it > 0 }?.let { resources.getString(R.string.assistant_leader_needs_you, it) },
-    ).takeIf { it.isNotEmpty() }?.joinToString(" · ")
+    return counts.needsYou.takeIf { it > 0 }?.let { resources.getString(R.string.assistant_leader_needs_you, it) }
 }
 
 @StringRes

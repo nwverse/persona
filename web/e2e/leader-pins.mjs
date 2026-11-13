@@ -1,6 +1,7 @@
 // End-to-end check of the leader conversations in the sidebar (#3623, #4331, #4873, #6214, docs/web/web.md "Persona chats"): with
 // the hub's `assistant.leaders` set, a fresh browser shows Persona chats as the leaders, the 常驻 group, in the hub's order
-// under each one's name from GET /api/v1/assistant/leaders with what it has open (在做 N · 等你 N), then 最近, the newest
+// under each one's name from GET /api/v1/assistant/leaders with its needs-you line (等你 N) and the one spinner driven
+// by the tree's live working flag (#6626; the 在做 N count is no longer row text), then 最近, the newest
 // 5 other chats (a fresh browser's default, #5146 / #6228) whoever opened them except the scheduled tasks' own chats, the hub's
 // own with their origin's mark (#5195); every other chat is under 全部对话; the 最近 heading folds its rows and keeps that
 // (#6228); New chat is the compose icon on the section's title; a lead's menu has 取消常驻 (no 置顶 anywhere) which asks a second time
@@ -104,8 +105,11 @@ async function rowsBecome(page, want, ms = 5000) {
 }
 
 const browser = await chromium.launch(executable ? { executablePath: executable } : { channel: "chrome" });
-const counted = new Map(((await hub("/assistant/directions/tree")).directions ?? []).filter((d) => !d.secretary).map((d) => [d.id, d.counts]));
-const label = (c) => [c?.working ? `在做 ${c.working}` : "", c?.needs_you ? `等你 ${c.needs_you}` : ""].filter(Boolean).join(" · ");
+const tree = (await hub("/assistant/directions/tree")).directions ?? [];
+const counted = new Map(tree.filter((d) => !d.secretary).map((d) => [d.id, d.counts]));
+// #6626: the live-session flag is the one thing that spins a lead row; the task count no longer appears as text.
+const liveWorking = new Set(tree.filter((d) => !d.secretary && d.working === true).map((d) => d.id));
+const needsYouLabel = (c) => (c?.needs_you ? `等你 ${c.needs_you}` : "");
 try {
   for (const theme of ["light", "dark"]) {
     for (const width of [1280, 390]) {
@@ -114,9 +118,15 @@ try {
       const ids = await rowIds(page);
       if (JSON.stringify(ids) !== JSON.stringify(expectedRows(assistant))) fail(`${where}: Persona chats are not the leaders in the hub's order then the newest 5 of the rest: ${ids.join(",")}`);
       for (const id of leaders) {
-        const text = await page.locator(`aside a[href^="/persona/${id}"]`).first().textContent();
+        const row = page.locator(`aside a[href^="/persona/${id}"]`).first();
+        const text = await row.textContent();
         if (!names.get(id) || !text.includes(names.get(id))) fail(`${where}: leader ${id} does not show its name ${names.get(id)}: ${text}`);
-        if (label(counted.get(id)) && !text.includes(label(counted.get(id)))) fail(`${where}: leader ${id} does not say ${label(counted.get(id))}: ${text}`);
+        // #6626: one busy expression — the working count is never text on the row, only the needs-you line survives
+        if (text.includes("在做")) fail(`${where}: leader ${id} still spells a working count: ${text}`);
+        const wantNeedsYou = needsYouLabel(counted.get(id));
+        if (wantNeedsYou && !text.includes(wantNeedsYou)) fail(`${where}: leader ${id} does not say ${wantNeedsYou}: ${text}`);
+        const spins = await row.locator('[data-shape="arc"][data-state="working"]').count();
+        if ((spins > 0) !== liveWorking.has(id)) fail(`${where}: leader ${id} spin ${spins > 0} != hub working flag ${liveWorking.has(id)}`);
       }
       const hs = await headings(page);
       if (JSON.stringify(hs) !== JSON.stringify(["常驻", "最近"])) fail(`${where}: group titles are ${hs.join(" | ")}`);
@@ -126,7 +136,7 @@ try {
       const marks = await page.$$eval('aside a[href^="/persona/"]', (as) => as.map((a) => [a.getAttribute("href").slice("/persona/".length).split("?")[0], a.querySelector("[data-origin-mark]")?.getAttribute("data-origin-mark") ?? ""]));
       const marked = marks.filter(([id, m]) => m && recent.includes(id)).map(([id]) => id);
       if (JSON.stringify(marked) !== JSON.stringify(recent.filter((id) => markedIds.includes(id)))) fail(`${where}: the rows with an origin mark are ${marked.join(",")}, not the hub's own in 最近`);
-      ok(`${where}: Persona chats are 常驻 (${leaders.map((id) => `${names.get(id)}${label(counted.get(id)) ? " " + label(counted.get(id)) : ""}`).join(" / ")}), 最近 (${recent.length}, ${marked.length} with their origin's mark) then 全部对话; New chat is the title's icon`);
+      ok(`${where}: Persona chats are 常驻 (${leaders.map((id) => `${names.get(id)}${needsYouLabel(counted.get(id)) ? " " + needsYouLabel(counted.get(id)) : ""}`).join(" / ")}; spinner follows the hub working flag), 最近 (${recent.length}, ${marked.length} with their origin's mark) then 全部对话; New chat is the title's icon`);
       // #6228: the 最近 heading folds its rows, keeps the state in this browser, and opens again
       const fold = page.locator('aside [role="heading"] button[aria-expanded]', { hasText: "最近" }).first();
       if (!(await fold.count())) fail(`${where}: no foldable 最近 heading`);

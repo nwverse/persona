@@ -154,13 +154,18 @@ nonisolated struct DirectionTree: Codable, Hashable, Sendable {
         var name: String
         var secretary: Bool
         var counts: Counts
+        /// True while at least one Agent session listed under the direction runs its own turn (#6626): a live
+        /// session-state signal from the hub, unlike `counts.working`, which counts open to-dos triaged as working.
+        /// False from an older hub that omits the field; the leader conversation's own turn is not part of it.
+        var working: Bool
         var tasks: [TaskNode]
 
-        init(id: String, name: String = "", secretary: Bool = false, counts: Counts = Counts(), tasks: [TaskNode] = []) {
+        init(id: String, name: String = "", secretary: Bool = false, counts: Counts = Counts(), working: Bool = false, tasks: [TaskNode] = []) {
             self.id = id
             self.name = name
             self.secretary = secretary
             self.counts = counts
+            self.working = working
             self.tasks = tasks
         }
 
@@ -170,10 +175,11 @@ nonisolated struct DirectionTree: Codable, Hashable, Sendable {
             name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
             secretary = try c.decodeIfPresent(Bool.self, forKey: .secretary) ?? false
             counts = try c.decodeIfPresent(Counts.self, forKey: .counts) ?? Counts()
+            working = try c.decodeIfPresent(Bool.self, forKey: .working) ?? false
             tasks = try c.decodeIfPresent([TaskNode].self, forKey: .tasks) ?? []
         }
 
-        private enum CodingKeys: String, CodingKey { case id, name, secretary, counts, tasks }
+        private enum CodingKeys: String, CodingKey { case id, name, secretary, counts, working, tasks }
 
         /// What a header calls it: its name, Secretary for the secretary group (`fallback` for a leader the hub gave no
         /// name).
@@ -208,6 +214,14 @@ nonisolated extension DirectionTree {
     var leaderCounts: [String: Counts] {
         var out: [String: Counts] = [:]
         for d in leaders { out[d.id] = d.counts }
+        return out
+    }
+
+    /// The leader conversation ids whose tree reports a live Agent session running (#6626), the one source of the
+    /// sidebar rows' spin. The leader conversation's own turn is not included; the row ORs its own session state in.
+    var workingLeaderIDs: Set<String> {
+        var out: Set<String> = []
+        for d in leaders where d.working { out.insert(d.id) }
         return out
     }
 

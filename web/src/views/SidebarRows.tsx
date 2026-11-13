@@ -245,8 +245,8 @@ function SecondLine({ line, draft }: { line: { lead?: string; text: string; tone
 
 // `prefix`: a word before the title (a tab's name, a pane's agent), in `prefixClass`
 type SessionRowProps = { menuLabel?: string; /** The mark at the start when the state is not shown (a Persona conversation's; pinned: the pin). */ icon?: IconName; s: Session; k: string; reg: RegFn; hover: (k: string | null) => void; active: boolean; to: Route; go: GoFn; tab?: boolean; label?: string; prefix?: string; prefixClass?: string; hint?: string; /** The hint is whole, never cut (a lead's counts). */ hintFull?: boolean; host?: string; showState?: boolean; showTodoTag?: boolean; onMenu?: RowMenuFn; endRoom?: boolean; /** A lead row whose own conversation is idle while the Agents under it work: draw the working arc anyway (#6230). An own needs-you / unread state still takes precedence. */ workingMark?: boolean;
-  /** 常驻 rows (#6214): the "在做 N · 等你 N" counts never fade on hover and the ⋯ sits in a reserved end slot instead
-   * of covering them, so hovering removes no information. */
+  /** 常驻 rows (#6214): the "等你 N" attention phrase and the spinning arc never fade on hover and the ⋯ sits in a
+   * reserved end slot instead of covering them, so hovering removes no information (#6626 dropped the "在做 N" text). */
   keepTrailing?: boolean };
 
 // Every sessions push re-renders the sidebar and the Agents list, while lib/sessions-delta.ts keeps the object of each

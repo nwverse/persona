@@ -165,13 +165,13 @@ class AssistantTest {
         assertEquals(listOf(kept), result.others)
     }
 
-    // #4331: a leader's row says what it has open, only the parts that are not zero.
-    @Test fun leaderCountsSayWhatIsOpen() {
-        assertEquals("在做 1 · 等你 2", leaderCountsLabel(LeaderCounts(working = 1, needsYou = 2), resources))
-        assertEquals("在做 3", leaderCountsLabel(LeaderCounts(working = 3), resources))
-        assertEquals("等你 1", leaderCountsLabel(LeaderCounts(needsYou = 1), resources))
-        assertNull("nothing open: no line", leaderCountsLabel(LeaderCounts(), resources))
-        assertNull(leaderCountsLabel(null, resources))
+    // #6626: the lead row spells out only its needs-you count; the busy half is the spinner.
+    @Test fun leaderNeedsYouLabelSaysOnlyTheAttentionHalf() {
+        assertEquals("等你 2", leaderNeedsYouLabel(LeaderCounts(working = 1, needsYou = 2), resources))
+        assertEquals("等你 1", leaderNeedsYouLabel(LeaderCounts(needsYou = 1), resources))
+        assertNull("working alone never becomes a row text", leaderNeedsYouLabel(LeaderCounts(working = 3), resources))
+        assertNull("nothing open: no line", leaderNeedsYouLabel(LeaderCounts(), resources))
+        assertNull(leaderNeedsYouLabel(null, resources))
     }
 
     @Test fun theHistoryRowMenu() {

@@ -8,22 +8,23 @@ import { DIRECTION_STATE_TONE, directionStateName, type DirectionCounts, type Di
 import { cx } from "../ui/atoms";
 import { StatusMark } from "../ui/StatusMark";
 
-/** "在做 N · 等你 N" from the hub's counts as the sidebar's 常驻 rows say it (only the parts above zero, nothing when both
- *  are zero); "等你 N" in the needs-you tone. A direction with any task running carries the same working arc as a
- *  conversation running its own turn (#6230): one spinning mark, so "something under this row is running" reads the same
- *  whether the leader conversation itself thinks or its Agents work. */
-export const DirectionCountsText = memo(function DirectionCountsText({ counts, className }: { counts: DirectionCounts; className?: string }) {
+/** A direction's busy and attention marks on the To-dos page and the Agents page (#6626): one busy expression only —
+ *  the same spinning arc a conversation row draws while a live Agent runs; the working count is never spelled out.
+ *  The "等你 N" attention count stays as words. The full "在做 N · 等你 N" phrase still titles the element and is spoken
+ *  to screen readers, so the numbers remain reachable without a second visible expression. `working` is the hub tree's
+ *  live-session flag; absent on an older hub, fall back to the task count so the mark never regresses. */
+export const DirectionCountsText = memo(function DirectionCountsText({ counts, working, className }: { counts: DirectionCounts; working?: boolean; className?: string }) {
   const label = countsLabel(counts, t);
-  if (!label) return null;
-  const working = counts.working > 0 ? t("sidebar.leader_working", { count: counts.working }) : "";
+  const busy = working ?? (counts.working > 0);
   const needsYou = counts.needs_you > 0 ? t("sidebar.leader_needs_you", { count: counts.needs_you }) : "";
+  // The live-session flag alone must still draw the arc even when no count is non-zero: the guard is the mark, not the
+  // words. Nothing to say and nothing spinning is the only empty case.
+  if (!label && !busy) return null;
   return (
     <span title={label} data-direction-counts className={cx("flex shrink-0 items-center gap-1 whitespace-nowrap text-[11px] text-ink-3 tabular-nums", className)}>
-      <span className="sr-only">{label}</span>
+      {label && <span className="sr-only">{label}</span>}
       <span aria-hidden className="flex items-center gap-1">
-        {working && <StatusMark state="working" size="sm" label={false} />}
-        {working}
-        {working && needsYou && " · "}
+        {busy && <StatusMark state="working" size="sm" label={false} />}
         {needsYou && <span className="font-semibold text-attention">{needsYou}</span>}
       </span>
     </span>

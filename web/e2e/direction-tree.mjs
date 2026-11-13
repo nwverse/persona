@@ -81,8 +81,16 @@ try {
     const { ctx, page } = await open(browser, theme, width);
     await row(page, first.id).waitFor({ state: "visible", timeout: 10000 }).catch(() => fail(`${where}: no 常驻 row for ${first.name}`));
     for (const d of leaders) {
-      const text = await row(page, d.id).textContent();
-      if (!text.includes(d.name) || !text.includes(countsText(d.counts))) fail(`${where}: ${d.name} row says ${text}`);
+      const lead = row(page, d.id);
+      const text = await lead.textContent();
+      // #6626: the name and (when present) the needs-you line stay; the working count is no longer text, one spinner
+      // follows the hub tree's live working flag instead.
+      if (!text.includes(d.name)) fail(`${where}: ${d.name} row says ${text}`);
+      // the removed busy expression is "在做 N" (a count); a task's bare state word "在做" inside the fold stays
+      if (/在做\s*\d/.test(text)) fail(`${where}: ${d.name} still spells a working count: ${text}`);
+      if (d.counts.needs_you > 0 && !text.includes(`等你 ${d.counts.needs_you}`)) fail(`${where}: ${d.name} loses its needs-you line: ${text}`);
+      const spins = await lead.locator('[data-shape="arc"][data-state="working"]').count();
+      if ((spins > 0) !== (d.working === true)) fail(`${where}: ${d.name} spin ${spins > 0} != hub working flag ${d.working === true}`);
     }
     if (await page.locator('aside [data-direction="secretary"]').count()) fail(`${where}: the sidebar has a 书记官 row`);
     if ((await disclosure(page, first.id).getAttribute("aria-expanded")) !== "false") fail(`${where}: a 常驻 row does not start folded`);
@@ -158,11 +166,20 @@ try {
     if ((await choice.getAttribute("aria-checked")) !== "true") fail(`${where}: the Agents page is not grouped by 常驻`);
     await page.locator("main [data-direction-counts]").first().waitFor({ state: "visible", timeout: 5000 }).catch(() => fail(`${where}: no direction section on the Agents page`));
     await page.waitForTimeout(400); // the sections finish opening
-    // a direction shows when the Agents list holds one of its tasks' agents: each shown one with its counts and a task
+    // a direction shows when the Agents list holds one of its tasks' agents: each shown one with its task; the busy
+    // count is no longer visible text (#6626) — only the needs-you line and the spinner driven by the working flag
     const text = await page.locator("main").innerText();
-    const shown = leaders.filter((d) => text.includes(countsText(d.counts)) && d.tasks.some((t) => t.agents.length > 0 && text.includes(t.title)));
-    if (!shown.length) fail(`${where}: no direction with its counts and a task on the Agents page`);
-    ok(`${where}: the Agents page groups by 常驻 (${shown.map((d) => d.name).join(", ")}) with their counts and tasks`);
+    const shown = leaders.filter((d) => d.tasks.some((t) => t.agents.length > 0 && text.includes(t.title)));
+    if (!shown.length) fail(`${where}: no direction with a task on the Agents page`);
+    // the visible (aria-hidden) part of each direction mark never spells a working count; the full phrase stays in
+    // its sr-only label and title for assistive tech
+    const visibleCounts = await page.locator("main [data-direction-counts] [aria-hidden='true']").allInnerTexts();
+    if (visibleCounts.some((s) => /在做\s*\d/.test(s))) fail(`${where}: a visible direction mark still spells a working count: ${visibleCounts.join(" | ")}`);
+    const arcCount = await page.locator("main [data-direction-counts] [data-shape='arc'][data-state='working']").count();
+    if (arcCount !== shown.filter((d) => d.working === true).length) {
+      fail(`${where}: ${arcCount} spinners != ${shown.filter((d) => d.working === true).length} live-working directions`);
+    }
+    ok(`${where}: the Agents page groups by 常驻 (${shown.map((d) => d.name).join(", ")}) with their tasks; spinner follows the working flag`);
     if (shots) await page.screenshot({ path: join(shots, `web-direction-agents-${width > 600 ? "wide" : "narrow"}-${theme}.png`) });
     await ctx.close();
   }

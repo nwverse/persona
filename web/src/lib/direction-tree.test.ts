@@ -51,6 +51,10 @@ describe("direction tree", () => {
     expect(tree.directions).toHaveLength(1);
     expect(tree.directions[0].counts).toEqual(counts(2));
     expect(tree.directions[0].tasks).toEqual([{ id: "x", title: "X", state: "working", agents: [] }]);
+    // the hub's live-session working flag (#6626): only an explicit true passes, anything else normalizes to false
+    expect(normalizeTree({ directions: [{ id: "w", working: true, counts: {} }] }).directions[0].working).toBe(true);
+    expect(normalizeTree({ directions: [{ id: "q", counts: {} }] }).directions[0].working).toBe(false);
+    expect(normalizeTree({ directions: [{ id: "z", working: "yes", counts: {} }] }).directions[0].working).toBe(false);
     expect(normalizeTree(null)).toEqual({ directions: [] });
     // a count that is not a finite number is 0, never drawn as "null"
     expect(normalizeTree({ directions: [{ id: "b", counts: { working: null, needs_you: "3", stuck: Infinity, review: 1 } }] }).directions[0].counts).toEqual(counts(0, 0, 0, 1));
@@ -89,7 +93,7 @@ describe("direction tree", () => {
     const tree = buildDirectionAgentTree(TREE, all, [{ id: "m", online: true } as Machine], undefined, Date.parse("2026-11-11T00:00:00Z"));
     expect(tree.projects.map((p) => p.key)).toEqual(["direction-agents:lead-a"]);
     const [a] = tree.projects;
-    expect(a.direction).toEqual({ counts: counts(1, 1), secretary: false });
+    expect(a.direction).toEqual({ counts: counts(1, 1), secretary: false, working: false });
     expect(a.todos.map((td) => [td.todoId, td.taskState, td.state])).toEqual([["t1", "needs_you", "needs_you"], ["t2", "working", "working"]]);
     // s2 nests under s1; the agent the list lacks gives its place to its child
     expect(a.todos[0].agents.map((n) => [n.session.session_id, n.children.map((c) => c.session.session_id)])).toEqual([["s1", ["s2"]]]);
@@ -116,7 +120,7 @@ describe("direction tree", () => {
     expect(tree.projects.map((p) => p.key)).toEqual(["direction-agents:lead-a", "direction-agents:main"]);
     const secretary = tree.projects.at(-1)!;
     expect(secretary.name).toBe("书记官");
-    expect(secretary.direction).toEqual({ counts: counts(1), secretary: true });
+    expect(secretary.direction).toEqual({ counts: counts(1), secretary: true, working: false });
     expect(secretary.todos.map((td) => td.todoId)).toEqual(["t3"]);
     expect(secretary.todos[0].agents.map((n) => n.session.session_id)).toEqual(["s4"]);
     // a listed agent the tree does not hold stays in the loose groups

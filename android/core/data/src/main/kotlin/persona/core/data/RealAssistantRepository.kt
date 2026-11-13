@@ -414,7 +414,8 @@ private fun directionOf(data: JsonObject): Direction? {
     fun count(key: String) = counts?.number(key)?.toInt()?.coerceAtLeast(0) ?: 0
     return Direction(id, data.string("name").trim(), secretary,
         DirectionCounts(count("working"), count("needs_you"), count("stuck"), count("review"), count("planned")),
-        data.array("tasks").mapNotNull { task ->
+        working = data.flag("working"),
+        tasks = data.array("tasks").mapNotNull { task ->
             (task as? JsonObject)?.let { t ->
                 t.string("id").takeIf { it.isNotEmpty() }?.let { taskId ->
                     DirectionTask(taskId, t.string("title"), DirectionTaskState.of(t.string("state")),

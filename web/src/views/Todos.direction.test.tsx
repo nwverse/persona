@@ -38,9 +38,9 @@ const todo = (id: string, title: string, extra: Partial<Todo> = {}): Todo => ({ 
 const counts = (working = 0, needs_you = 0) => ({ working, needs_you, stuck: 0, review: 0 });
 const TREE: DirectionTree = {
   directions: [
-    { id: "lead-b", name: "Infrastructure", counts: counts(1, 0), tasks: [{ id: "t-infra", title: "Infra", state: "working" }, { id: "t-done", title: "Shipped", state: "working" }] },
+    { id: "lead-b", name: "Infrastructure", working: true, counts: counts(1, 0), tasks: [{ id: "t-infra", title: "Infra", state: "working" }, { id: "t-done", title: "Shipped", state: "working" }] },
     { id: "lead-empty", name: "Nothing yet", counts: counts(), tasks: [] },
-    { id: "lead-a", name: "Product", counts: counts(1, 1), tasks: [{ id: "t-ask", title: "Ask", state: "needs_you" }, { id: "t-card", title: "Card", state: "working" }] },
+    { id: "lead-a", name: "Product", working: false, counts: counts(1, 1), tasks: [{ id: "t-ask", title: "Ask", state: "needs_you" }, { id: "t-card", title: "Card", state: "working" }] },
     { id: "main", name: "", secretary: true, counts: counts(1, 0), tasks: [{ id: "t-own", title: "Own", state: "working" }] },
   ],
 };
@@ -83,12 +83,18 @@ describe("To-dos grouped by 常驻", () => {
     const [infra, product, secretary] = sections();
     expect(infra.querySelector("button")!.textContent).toContain("Infrastructure");
     expect(secretary.querySelector("button")!.textContent).toContain(t("lib-todo-tree.secretary"));
-    // the hub's counts on the title, and its rows in the tree's order (needs you first), not the page's own
+    // the hub's counts on the title, and its rows in the tree's order (needs you first), not the page's own.
+    // The full phrase stays in the screen-reader/title text (#6626) while the visible line no longer spells "在做 N".
     expect(product.querySelector("button")!.textContent).toContain(countsLabel({ working: 1, needs_you: 1 }, t));
+    const productCounts = product.querySelector("[data-direction-counts]")!;
+    const productVisible = productCounts.querySelector('[aria-hidden="true"]')!;
+    expect(productVisible.textContent).not.toContain("在做");
+    expect(productVisible.textContent).toContain("等你 1");
     // the sidebar's shape: only the parts above zero
     expect(infra.querySelector("[data-direction-counts]")!.getAttribute("title")).toBe(t("sidebar.leader_working", { count: 1 }));
-    // a direction with a task running carries the same working arc as a conversation running its own turn (#6230)
+    // the spin follows the hub's live-session flag: lead-b runs a live Agent, lead-a's tasks are only triaged working
     expect(infra.querySelector("[data-direction-counts] [data-shape=\"arc\"][data-state=\"working\"]")).not.toBeNull();
+    expect(product.querySelector("[data-direction-counts] [data-shape=\"arc\"]")).toBeNull();
     const text = product.textContent ?? "";
     expect(text.indexOf("Ask")).toBeGreaterThan(-1);
     expect(text.indexOf("Ask")).toBeLessThan(text.indexOf("Card"));

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { countsLabel, directionLabel, directionNames, leaderCounts, totalCounts } from "./direction-names";
+import { countsLabel, directionLabel, directionNames, leaderCounts, needsYouLabel, totalCounts } from "./direction-names";
 
 describe("direction names", () => {
   it("keep the current leaders' names by id, leaving out ended ones and blank names", () => {
@@ -31,6 +31,12 @@ describe("a lead's counts (#4331)", () => {
     expect(countsLabel({ working: 0, needs_you: 3 }, tt)).toBe("等你 3");
     expect(countsLabel({ working: 0, needs_you: 0 }, tt)).toBe("");
     expect(countsLabel(undefined, tt)).toBe("");
+  });
+  it("spell out only the needs-you part on the lead row, never the working count (#6626)", () => {
+    expect(needsYouLabel({ working: 2, needs_you: 1 }, tt)).toBe("等你 1");
+    expect(needsYouLabel({ working: 2, needs_you: 0 }, tt)).toBe("");
+    expect(needsYouLabel({ working: 0, needs_you: 0 }, tt)).toBe("");
+    expect(needsYouLabel(undefined, tt)).toBe("");
   });
   it("add up for the folded section", () => {
     const c = new Map([["a", { working: 2, needs_you: 1 }], ["b", { working: 1, needs_you: 0 }]]);

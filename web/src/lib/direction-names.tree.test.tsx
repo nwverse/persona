@@ -4,21 +4,21 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readDirectionTree, resetDirectionNames, useDirectionNames, useLeaderCounts } from "./direction-names";
+import { readDirectionTree, resetDirectionNames, useDirectionNames, useLeaderCounts, useLeaderWorking } from "./direction-names";
 import { useDirectionTree } from "./direction-tree";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const tree = (working: number) => ({
+const tree = (working: number, live = true) => ({
   directions: [
-    { id: "lead-a", name: "Product", counts: { working, needs_you: 1, stuck: 0, review: 0 }, tasks: [] },
-    { id: "main", name: "", secretary: true, counts: { working: 9, needs_you: 9, stuck: 0, review: 0 }, tasks: [] },
+    { id: "lead-a", name: "Product", working: live, counts: { working, needs_you: 1, stuck: 0, review: 0 }, tasks: [] },
+    { id: "main", name: "", secretary: true, working: false, counts: { working: 9, needs_you: 9, stuck: 0, review: 0 }, tasks: [] },
   ],
 });
 
-let seen: { names?: ReadonlyMap<string, string>; counts?: ReadonlyMap<string, { working: number; needs_you: number }>; tree?: unknown } = {};
+let seen: { names?: ReadonlyMap<string, string>; counts?: ReadonlyMap<string, { working: number; needs_you: number }>; workingLeaders?: ReadonlySet<string>; tree?: unknown } = {};
 function Probe() {
-  seen = { names: useDirectionNames("lead-a\u0000Growth"), counts: useLeaderCounts(), tree: useDirectionTree() };
+  seen = { names: useDirectionNames("lead-a\u0000Growth"), counts: useLeaderCounts(), workingLeaders: useLeaderWorking(), tree: useDirectionTree() };
   return null;
 }
 
@@ -40,12 +40,17 @@ describe("the 常驻 names and counts", () => {
     expect(seen.names?.get("lead-a")).toBe("Product");
     expect(seen.counts?.get("lead-a")).toEqual({ working: 2, needs_you: 1 });
     expect(seen.counts?.has("main")).toBe(false);
+    // The live-session spin flag (#6626) rides the same tree; the secretary group is never a leader.
+    expect(seen.workingLeaders?.has("lead-a")).toBe(true);
+    expect(seen.workingLeaders?.has("main")).toBe(false);
     expect((seen.tree as { directions: unknown[] }).directions).toHaveLength(2);
     // a directions push: one more GET, and the counts follow
     working = 0;
     await act(async () => { await readDirectionTree(true); });
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(seen.counts?.get("lead-a")).toEqual({ working: 0, needs_you: 1 });
+    // the task count dropping to zero does not by itself clear the live-session flag
+    expect(seen.workingLeaders?.has("lead-a")).toBe(true);
     act(() => root.unmount());
   });
 
@@ -58,6 +63,7 @@ describe("the 常驻 names and counts", () => {
     await vi.waitFor(() => expect(seen.names?.get("lead-a")).toBe("Old name"));
     expect(seen.tree).toBeNull();
     expect(seen.counts?.size).toBe(0);
+    expect(seen.workingLeaders?.size).toBe(0);
     act(() => root.unmount());
   });
 });

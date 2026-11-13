@@ -22,7 +22,7 @@ import { firstAndCurrent } from "../lib/persona-nav";
 import { recentConversations } from "../lib/conversation-origins";
 import { isBackgroundSupervisor } from "../lib/background-supervisor";
 import { setRecentMore, useRecentCount, useRecentMore } from "../lib/sidebar-recent";
-import { countsLabel, directionLabel, totalCounts, useDirectionNames, useLeaderCounts } from "../lib/direction-names";
+import { countsLabel, directionLabel, needsYouLabel, totalCounts, useDirectionNames, useLeaderCounts, useLeaderWorking } from "../lib/direction-names";
 import { groupsByDirection, useDirectionTree } from "../lib/direction-tree";
 import { buildDirectionAgentTree } from "../lib/direction-agent-tree";
 import { SidebarDirectionRow } from "./SidebarDirections";
@@ -286,6 +286,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
   const recentLess = recentMore > 0 && ownChats.length > recentCount;
   const directionNames = useDirectionNames(directions.map((c) => `${c.session_id}\u0000${c.title ?? ""}`).join("\u0001"));
   const counts = useLeaderCounts();
+  const workingLeaders = useLeaderWorking();
   const leaderTotal = totalCounts(counts, leaders);
   // the main row sits above the pages, so"Persona chats"waits for the assistant (a hub without it has none)
   const chats = !!assistant;
@@ -304,9 +305,11 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
   const go = useGo(onNavigate);
 
   // A lead's row is an ordinary conversation row under the 常驻 heading (#6214): no pin glyph of its own, so it never
-  // reads as a button. Its "在做 N · 等你 N" counts stay on hover and the ⋯ has its own reserved end slot (keepTrailing).
+  // reads as a button. One busy expression only (#6626): the row spins while a live Agent runs under the direction
+  // (the hub tree's working flag) or its own turn runs; the old "在做 N" row text is gone. The "等你 N" attention count
+  // stays as words — the working numbers remain reachable in the fold-out, the To-dos page and the folded tally.
   const directionRow = (c: Session) => (
-    <SessionRow key={c.session_id} s={c} k={`j:${c.session_id}`} reg={reg} hover={hover} active={activeKey === `j:${c.session_id}`} to={conversationPage(c.session_id, c.machine_id, c.manager)} go={go} label={directionLabel(directionNames, c.session_id, conversationTitle(c))} hint={countsLabel(counts.get(c.session_id), t) || undefined} hintFull showState={false} workingMark={(counts.get(c.session_id)?.working ?? 0) > 0} keepTrailing onMenu={onConvMenu} menuLabel={t("conversation-menu.actions")} />
+    <SessionRow key={c.session_id} s={c} k={`j:${c.session_id}`} reg={reg} hover={hover} active={activeKey === `j:${c.session_id}`} to={conversationPage(c.session_id, c.machine_id, c.manager)} go={go} label={directionLabel(directionNames, c.session_id, conversationTitle(c))} hint={needsYouLabel(counts.get(c.session_id), t) || undefined} hintFull showState={false} workingMark={workingLeaders.has(c.session_id)} keepTrailing onMenu={onConvMenu} menuLabel={t("conversation-menu.actions")} />
   );
 
   const recentRow = (c: Session) => (

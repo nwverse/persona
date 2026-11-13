@@ -48,9 +48,10 @@ fun JDirectionStateLabel(state: DirectionTaskState, modifier: Modifier = Modifie
 }
 
 /**
- * A direction's counts as the drawer's 常驻 row says them (`counts.working`, `counts.needs_you` of the hub's tree, the
- * words of leaderCountsLabel): only the parts above zero, "2 working · 1 need you", nothing at all when both are zero.
- * Quiet caption text; the Needs you part takes the needs-you colour.
+ * A direction's counts as the To-dos screen's heading says them (`counts.working`, `counts.needs_you` of the hub's
+ * tree): only the parts above zero, "2 working · 1 need you", nothing at all when both are zero. The sidebar lead row
+ * no longer shows this text (#6626) — it keeps the spinner and the needs-you line alone; this stays for the page
+ * headers. Quiet caption text; the Needs you part takes the needs-you colour.
  */
 @Composable
 fun JDirectionCounts(counts: DirectionCounts, modifier: Modifier = Modifier) {

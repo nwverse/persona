@@ -2900,7 +2900,11 @@ def mock_direction_tree():
         tasks.sort(key=lambda x: x["_at"], reverse=True)
         tasks.sort(key=lambda x: _DIRECTION_STATE_ORDER[x["state"]])
         counts = {k: sum(1 for x in tasks if x["state"] == k) for k in _DIRECTION_STATE_ORDER}
-        return {"id": did, "name": name, **extra, "counts": counts,
+        # The hub's live-session flag (#6626): any Agent node under the direction (children included) is "working".
+        def _agent_running(nodes):
+            return any(n.get("state") == "working" or _agent_running(n.get("children") or []) for n in nodes)
+        working = any(_agent_running(x.get("agents") or []) for x in tasks)
+        return {"id": did, "name": name, "working": working, **extra, "counts": counts,
                 "tasks": [{k: v for k, v in x.items() if k != "_at"} for x in tasks]}
 
     out = [direction(lid, MOCK_DIRECTION_NAMES.get(lid, ""), groups[lid]) for lid in MOCK_LEADERS]

@@ -169,6 +169,15 @@ func TestDirectionTreeTaskStatesAndCounts(t *testing.T) {
 	if a.Counts != (treeCounts{NeedsYou: 3, Review: 1, Stuck: 1, Working: 3}) {
 		t.Fatalf("counts: %+v", a.Counts)
 	}
+	// Working is the live session signal (#6626), not the task count: lead A's s-run / s-run2 sessions run, so it is
+	// busy even though three of its tasks are waiting on the owner; lead B holds no task and stays idle.
+	dirs := e.tree().Directions
+	if !dirs[0].Working {
+		t.Fatalf("lead A runs Agent sessions, Working must be true: %+v", dirs[0])
+	}
+	if dirs[1].Working {
+		t.Fatalf("lead B has nothing running, Working must be false: %+v", dirs[1])
+	}
 	// Listed needs_you, review, stuck, working.
 	var order []int
 	for _, tk := range a.Tasks {
@@ -182,6 +191,79 @@ func TestDirectionTreeTaskStatesAndCounts(t *testing.T) {
 			t.Fatalf("an asking task's agent: %+v", tk.Agents)
 		}
 	}
+}
+
+// The direction's Working flag follows live Agent sessions, not the task triage (#6626): a task waiting on the owner
+// still spins the row while its Agent runs, and a task on an unreachable machine never invents a running session.
+func TestDirectionTreeWorkingFlagFollowsLiveSessions(t *testing.T) {
+	e := treeEnv(t)
+	e.f.setSessions("mac",
+		proto.Session{MachineID: "mac", SessionID: "s-run", State: proto.StateWorking},
+		proto.Session{MachineID: "mac", SessionID: "s-idle", State: proto.StateIdle})
+	// Triaged needs_you (an open owner decision) while the Agent session itself is running: the task is not counted
+	// among the working tasks, but the direction must still report a live Agent.
+	askWhileRunning := e.task("Asks while the Agent runs", func(t *Todo) {
+		t.Supervision = &Supervision{Supervisor: "conv_lead_a", State: reviewNeedsUser}
+		t.Agents = []TodoAgent{{MachineID: "mac", SessionID: "s-run", Title: "s-run"}}
+	})
+	// Only an unreachable machine: the triage falls back to working, but no live session exists, so no spin.
+	e.task("On a machine that does not answer", func(t *Todo) {
+		t.Supervision = &Supervision{Supervisor: "conv_lead_b"}
+		t.Agents = []TodoAgent{{MachineID: "gone", SessionID: "s-x"}}
+	})
+	dirs := e.tree().Directions
+	var leadA, leadB treeDirection
+	for _, d := range dirs {
+		switch d.ID {
+		case "conv_lead_a":
+			leadA = d
+		case "conv_lead_b":
+			leadB = d
+		}
+	}
+	if task := findTask(leadA, askWhileRunning); task.State != treeNeedsYou {
+		t.Fatalf("the asking task is triaged needs_you, got %q", task.State)
+	}
+	if leadA.Counts.Working != 0 || !leadA.Working {
+		t.Fatalf("a needs_you task with a running Agent: counts %+v, Working=%v, want Working true", leadA.Counts, leadA.Working)
+	}
+	if leadB.Working {
+		t.Fatalf("an unreachable machine has no live session, Working must be false: %+v", leadB)
+	}
+}
+
+// The Working flag's recursive branch (#6626): a parent Agent whose own turn is idle still spins the direction while a
+// nested in-session sub-agent runs, and goes quiet again once every node including children is idle.
+func TestDirectionTreeWorkingFlagSeesANestedRunningChildOfAnIdleParent(t *testing.T) {
+	e := treeEnv(t)
+	e.f.setSessions("mac",
+		proto.Session{MachineID: "mac", SessionID: "s-p", State: proto.StateIdle, Title: "Parent",
+			Subagents: []proto.Subagent{
+				{ID: "a1", SessionID: "s-p@a1", Description: "Search the code", Running: true},
+				{ID: "a2", SessionID: "s-p@a2", Description: "Finished", Running: false},
+			}})
+	e.task("Idle parent, busy sub-agent", func(t *Todo) {
+		t.Supervision = &Supervision{Supervisor: "conv_lead_a"}
+		t.Agents = []TodoAgent{{MachineID: "mac", SessionID: "s-p", Agent: "claude"}}
+	})
+	lead := e.tree().Directions[0]
+	if !lead.Working {
+		t.Fatalf("a running sub-agent under an idle parent must spin the direction: %+v", lead.Tasks[0].Agents)
+	}
+	// once the sub-agent stops too, no live node remains and the direction is quiet
+	e.f.setSessions("mac", proto.Session{MachineID: "mac", SessionID: "s-p", State: proto.StateIdle, Title: "Parent"})
+	if e.tree().Directions[0].Working {
+		t.Fatalf("every node idle, including children: Working must be false")
+	}
+}
+
+func findTask(d treeDirection, id string) treeTask {
+	for _, tk := range d.Tasks {
+		if tk.ID == id {
+			return tk
+		}
+	}
+	return treeTask{}
 }
 
 func TestDirectionTreeLeavesOutWhatIsNotOpen(t *testing.T) {
@@ -326,10 +408,10 @@ func TestDirectionTreeRouteShape(t *testing.T) {
 		slices.Sort(out)
 		return out
 	}
-	if k := keys(got.Directions[0]); !slices.Equal(k, []string{"counts", "id", "name", "tasks"}) {
+	if k := keys(got.Directions[0]); !slices.Equal(k, []string{"counts", "id", "name", "tasks", "working"}) {
 		t.Fatalf("a direction's fields: %v", k)
 	}
-	if k := keys(got.Directions[2]); !slices.Equal(k, []string{"counts", "id", "name", "secretary", "tasks"}) ||
+	if k := keys(got.Directions[2]); !slices.Equal(k, []string{"counts", "id", "name", "secretary", "tasks", "working"}) ||
 		string(got.Directions[2]["secretary"]) != "true" || string(got.Directions[2]["name"]) != `""` {
 		t.Fatalf("the secretary's fields: %v %s", k, got.Directions[2]["secretary"])
 	}

@@ -1473,12 +1473,15 @@ struct AssistantSidebar: View {
         let kept = isMain || builtIn
         let title = isMain ? mainDisplayName : named ?? (s.title.isEmpty || s.title == "Claude Code" ? String(localized: "New Chat [Quick Actions ea4b29]") : s.title)
         let preview = s.lastText.map { Fmt.plain($0).replacingOccurrences(of: "\n", with: " ") } ?? ""
-        let counts: String? = model.assistantLeaders.contains(s.sessionID)
-            ? model.directionCounts[s.sessionID].flatMap { DirectionCountsText.label(working: $0.working, needsYou: $0.needsYou) }
+        let isLeader = model.assistantLeaders.contains(s.sessionID)
+        // One attention phrase on the row (#6626): only "N need you". "N working" is no longer spelled out — the
+        // full counts stay in the fold chevron's VoiceOver label and on the To-dos / Chats headers.
+        let needsYou: String? = isLeader
+            ? model.directionCounts[s.sessionID].flatMap { DirectionCountsText.needsYouLabel(needsYou: $0.needsYou) }
             : nil
-        // One activity mark for the whole row (#6230): it spins whether this conversation runs its own turn or only the
-        // Agents under it work; the row's own needs-you / unread dot still takes precedence.
-        let leadWorking = model.assistantLeaders.contains(s.sessionID) && ((model.directionCounts[s.sessionID]?.working ?? 0) > 0)
+        // One activity mark for the whole row (#6230, #6626): it spins on the hub tree's live Agent signal, or when
+        // this conversation runs its own turn; the row's own needs-you / unread dot still takes precedence.
+        let leadWorking = isLeader && model.directionWorking.contains(s.sessionID)
         // What opened it when Persona did (#5195): the rule All Chats' filters use, so its mark and its filter agree.
         let source = isMain ? nil : AutoConversations.source(of: s, tasks: taskChats.known(on: model.api))
         return Button { open(s.key) } label: {
@@ -1495,9 +1498,9 @@ struct AssistantSidebar: View {
                 titleText(title, named: !isMain)
                 ConversationSourceMark(source: source, channels: s.channels) // what opened it, or its latest message's channel
                 Spacer(minLength: Theme.Space.xs)
-                // A direction's work at this moment ("N working · N need you"), never a zero part (#4331).
-                if let counts {
-                    Text(counts).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
+                // The direction's attention count ("N need you", #6626); the working half is the spinner only.
+                if let needsYou {
+                    Text(needsYou).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
                 }
                 RowStateMark(state: s.state, working: leadWorking)
             }
@@ -1515,7 +1518,7 @@ struct AssistantSidebar: View {
         .buttonStyle(.plain)
         .tag(s.key)
         .macListRow(selected: selected, in: Rectangle(), drawsShade: false) // the row draws its own (`selectedFill`)
-        .accessibilityLabel([title, counts, isMain && s.title != title ? s.title : nil, source?.markLabel, stateWord(s), preview.isEmpty ? nil : preview]
+        .accessibilityLabel([title, needsYou, isMain && s.title != title ? s.title : nil, source?.markLabel, stateWord(s), preview.isEmpty ? nil : preview]
             .compactMap { $0 }.joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label")))
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier(isMain ? "sidebar-main" : "sidebar-conversation")

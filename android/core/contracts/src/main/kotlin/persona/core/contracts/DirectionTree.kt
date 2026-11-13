@@ -34,6 +34,12 @@ data class Direction(
     val name: String = "",
     val secretary: Boolean = false,
     val counts: DirectionCounts = DirectionCounts(),
+    /**
+     * True while at least one Agent session listed under the direction runs its own turn (#6626): a live
+     * session-state signal from the hub, unlike [DirectionCounts.working], which counts open to-dos triaged as
+     * working. False from an older hub that omits the field. The leader conversation's own turn is not part of it.
+     */
+    val working: Boolean = false,
     val tasks: List<DirectionTask> = emptyList(),
 ) {
     /**

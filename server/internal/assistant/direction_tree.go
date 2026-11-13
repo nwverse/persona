@@ -64,7 +64,12 @@ type treeDirection struct {
 	Name      string     `json:"name"`
 	Secretary bool       `json:"secretary,omitempty"`
 	Counts    treeCounts `json:"counts"`
-	Tasks     []treeTask `json:"tasks"`
+	// Working is true when at least one Agent session listed under the direction (a task's Agents, sub-Agents
+	// included) is running its own turn. It is a live session-state signal, unlike Counts.Working, which counts
+	// open to-dos whose triage state resolves to working. The leader conversation's own turn is not part of the
+	// tree: the clients OR it with this field from the session rows.
+	Working bool       `json:"working"`
+	Tasks   []treeTask `json:"tasks"`
 }
 
 // treeCounts are how many of a direction's listed tasks are in each state.
@@ -465,7 +470,13 @@ func (tb *treeBuild) tree(names map[string]string) directionTree {
 		}
 		state := tb.state(t)
 		g.Counts.add(state)
-		g.Tasks = append(g.Tasks, treeTask{ID: t.ID, Title: t.Title, State: state, Agents: tb.agents(t.ID, map[[2]string]bool{}),
+		agents := tb.agents(t.ID, map[[2]string]bool{})
+		// A running Agent under the task makes the whole direction busy even when the task's triage state is
+		// needs_you / review / stuck (#6626): the clients' one spin rule reads this live signal, not the task count.
+		if agentRunning(agents) {
+			g.Working = true
+		}
+		g.Tasks = append(g.Tasks, treeTask{ID: t.ID, Title: t.Title, State: state, Agents: agents,
 			last: tb.placed[id].Last})
 	}
 	for _, g := range append(slicesOf(groups, tb.leads), sec) {
@@ -535,6 +546,17 @@ func (tb *treeBuild) agents(id string, seen map[[2]string]bool) []treeAgent {
 		}
 	}
 	return out
+}
+
+// agentRunning reports whether one of the nodes, or an Agent under it, is a session running its own turn. A node
+// whose session the hub could not find carries an empty state and therefore never counts.
+func agentRunning(nodes []treeAgent) bool {
+	for _, n := range nodes {
+		if n.State == proto.StateWorking || agentRunning(n.Children) {
+			return true
+		}
+	}
+	return false
 }
 
 // sessionNode is the node of session machine/id: its title and state as the apps get them (title the to-do's own

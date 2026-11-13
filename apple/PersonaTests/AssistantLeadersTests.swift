@@ -9,9 +9,9 @@ struct AssistantLeadersTests {
     @Test func theTreeCarriesTheNamesAndCounts() throws {
         let raw = #"""
         {"directions":[
-            {"id":"lead-a","name":"Product","counts":{"working":3,"needs_you":1,"stuck":0,"review":2},"tasks":[]},
+            {"id":"lead-a","name":"Product","working":true,"counts":{"working":3,"needs_you":1,"stuck":0,"review":2},"tasks":[]},
             {"id":"lead-b","name":"Infra","counts":{"working":0,"needs_you":0,"stuck":0,"review":0},"tasks":[]},
-            {"id":"main","name":"","secretary":true,"counts":{"working":7,"needs_you":7},"tasks":[]}]}
+            {"id":"main","name":"","secretary":true,"working":true,"counts":{"working":7,"needs_you":7},"tasks":[]}]}
         """#
         // The one model the app holds (`AppModel.directionTree`, #4352): the lead rows read their counts from it.
         let tree = try JSON.decoder.decode(DirectionTree.self, from: Data(raw.utf8))
@@ -21,6 +21,18 @@ struct AssistantLeadersTests {
             "lead-a": [3, 1],
             "lead-b": [0, 0],
         ])
+        // The live-session spin flag (#6626): lead-a is busy; the secretary group is never a leader.
+        #expect(tree.workingLeaderIDs == ["lead-a"])
+    }
+
+    /// An older hub without the `working` field decodes it as false, never crashing the row (#6626).
+    @Test func aMissingWorkingFlagDecodesFalse() throws {
+        let raw = #"""
+        {"directions":[{"id":"lead-a","name":"Product","counts":{"working":1,"needs_you":0},"tasks":[]}]}
+        """#
+        let tree = try JSON.decoder.decode(DirectionTree.self, from: Data(raw.utf8))
+        #expect(tree.leaders.first?.working == false)
+        #expect(tree.workingLeaderIDs.isEmpty)
     }
 
     /// The row reads "N working · N need you", only the non-zero parts, and nothing while both are zero.
@@ -36,6 +48,14 @@ struct AssistantLeadersTests {
         #expect(both?.contains("3") == true)
         #expect(both?.contains("1") == true)
         #expect(both?.contains("·") == true)
+    }
+
+    /// The lead row spells out only the needs-you part (#6626); the busy half is the spinner.
+    @Test func needsYouLabelNeverMentionsWorking() {
+        #expect(DirectionCountsText.needsYouLabel(needsYou: 0) == nil)
+        let one = DirectionCountsText.needsYouLabel(needsYou: 2)
+        #expect(one?.contains("2") == true)
+        #expect(one?.lowercased().contains("working") == false)
     }
 
     /// The hub's push names no directions: the clients read the tree again on it (and on every (re)connect).

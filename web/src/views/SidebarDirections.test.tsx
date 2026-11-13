@@ -27,6 +27,9 @@ const TREE: DirectionTree = {
     {
       id: "lead-a",
       name: "Product",
+      // the needs_you task's sub-agent s2 is live: the hub's working flag is what spins the row (#6626), even though
+      // no task is triaged working by a live top-level session
+      working: true,
       counts: counts(1, 1),
       tasks: [
         { id: "t-ask", title: "Pick the icon", state: "needs_you", agents: [{ machine_id: "mac", session_id: "s1", title: "Icon work", state: "needs_you", children: [{ machine_id: "mac", session_id: "s2", title: "Sub agent", state: "working" }] }] },
@@ -91,7 +94,11 @@ describe("the 常驻 rows' disclosure", () => {
     expect(rows).toEqual(["lead-a", "lead-b"]);
     const lead = direction("lead-a")!;
     expect(lead.querySelector('a[href="/persona/lead-a"]')!.textContent).toContain("Product");
-    expect(lead.querySelector('a[href="/persona/lead-a"]')!.textContent).toContain("在做 1 · 等你 1");
+    // One busy expression (#6626): the working arc from the hub's live-session flag, and only the "等你 1" words
+    const leadRow = lead.querySelector('a[href="/persona/lead-a"]')!;
+    expect(leadRow.textContent).toContain("等你 1");
+    expect(leadRow.textContent).not.toContain("在做");
+    expect(leadRow.querySelector('[data-shape="arc"][data-state="working"]')).not.toBeNull();
     expect(host.textContent).not.toContain("书记官");
     expect(disclosure("lead-a").getAttribute("aria-expanded")).toBe("false");
     // #6214: the fold says the action in words, and flips to "collapse" once open
