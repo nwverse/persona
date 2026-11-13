@@ -17,7 +17,7 @@
   "bulk_done_required": "请提供处理状态和内容列表。",
   "bulk_action": "请选择归档、忽略或重新打开。",
   "todo_read_only": "此设备不能修改待办",
-  "merge_few": "请至少选两行再合并",
+  "merge_too_few_rows": "请至少选两行再合并",
   "merge_none": "没有可合并的内容：这些行已不存在或已合并",
   "merge_failed": "合并没能保存，未做任何改动",
   "todo_targets": "请选择要加到待办的行",

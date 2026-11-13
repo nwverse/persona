@@ -38,7 +38,7 @@ const (
 	groupNewMax       = 3                  // new events the prompt suggests for one batch; also sizes the output budget
 	groupOpenMax      = 10                 // open events the events tool lists, independently of done events
 	groupDoneMax      = 6                  // recent done events the events tool lists, independently of open events
-	groupDoneFor      = 3 * 24 * time.Hour // how long a done event is still listed
+	groupDoneFor      = 3 * 24 * time.Hour // how long a done event is still listed; keep whole days so DoneDays matches
 	groupDoneCountMax = 50                 // 50 is a starting value with no supporting measurements; done events at this count are not candidates
 	groupConcurrency  = 4                  // batches related at once (the others wait for the next round)
 	groupAttempts     = 3                  // tries of one event's append
@@ -212,7 +212,8 @@ func (s *Service) noteGroupWhy(id, why string) {
 
 // groupEvents are the events of a conversation as the events tool answers: at most groupOpenMax open ones, then at
 // most groupDoneMax done ones within groupDoneFor that are not noise and have fewer than groupDoneCountMax messages.
-// Each group is newest first and has its own quota; query keeps those whose title, summary or meta has it before either cap.
+// Each group is newest first and has its own quota; query keeps those whose title, summary or meta has it before either
+// cap. Hidden members of merged rows are never candidates.
 func (s *Service) groupEvents(connectorID, thread, query string) []groupEvent {
 	b := &s.inbox
 	b.mu.Lock()
@@ -221,9 +222,11 @@ func (s *Service) groupEvents(connectorID, thread, query string) []groupEvent {
 	q := strings.ToLower(strings.TrimSpace(query))
 	var open, done []*InboxItem
 	for _, it := range b.items {
-		isOpen := it.open()
-		if it.Group == nil || it.Group.Connector != connectorID || !sameConversation(it.Group.Thread, thread) ||
-			!isOpen && (it.DoneAt.Before(cutoff) || it.Tier == TierNoise || it.Count >= groupDoneCountMax) {
+		if it.Group == nil || it.Group.Connector != connectorID || !sameConversation(it.Group.Thread, thread) || it.MergedInto != "" {
+			continue
+		}
+		isOpen := it.DoneAt == nil // merged members, the other way open() is false, are skipped above
+		if !isOpen && (it.DoneAt.Before(cutoff) || it.Tier == TierNoise || it.Count >= groupDoneCountMax) {
 			continue
 		}
 		if q != "" && !strings.Contains(strings.ToLower(it.Title+"\n"+it.Summary+"\n"+string(it.Meta)), q) {
@@ -236,7 +239,7 @@ func (s *Service) groupEvents(connectorID, thread, query string) []groupEvent {
 		}
 	}
 	newestFirst := func(list []*InboxItem) {
-		sort.Slice(list, func(i, j int) bool { return list[i].UpdatedAt.After(list[j].UpdatedAt) })
+		sort.Slice(list, func(i, j int) bool { return newerItem(list[i], list[j]) })
 	}
 	newestFirst(open)
 	newestFirst(done)
@@ -244,7 +247,7 @@ func (s *Service) groupEvents(connectorID, thread, query string) []groupEvent {
 	appendEvents := func(list []*InboxItem, limit int) {
 		for _, it := range list[:min(len(list), limit)] {
 			out = append(out, groupEvent{ID: it.ID, Title: it.Title, Summary: it.Summary, Tier: it.Tier, Version: inboxVersion(it),
-				Done: !it.open(), Meta: it.Meta})
+				Done: it.DoneAt != nil, Meta: it.Meta})
 		}
 	}
 	appendEvents(open, groupOpenMax)
@@ -696,7 +699,7 @@ func (s *Service) putEvent(c assistantwire.InboxSource, thread string, e planned
 	if it != nil && it.Last == thing.Last {
 		return nil
 	}
-	wasDone := it != nil && !it.open()
+	wasDone := it != nil && it.DoneAt != nil
 	var prev inboxSeen
 	if it != nil {
 		prev = seenOf(it)
