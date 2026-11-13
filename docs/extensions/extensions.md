@@ -2979,6 +2979,8 @@ Views, components, actions, responses, placements and context all use schema-gen
   only when it is the hub's image route for the page's own extension (`ExtensionViewModel.isHubPicture`), through the page with the device's credentials and `w` about as many pixels as it
   is drawn; when a hub picture fails (its token may have run out) the page is drawn again, at most once a minute. Not loaded: the plain fill; failed: the alt text over a broken-picture mark.
   Mock: `showcase` pages get a `path` beside every `ref` and the route answers a made-up picture of its shape (`missing`: 404). Unit tests `ExtensionMediaTests`; screenshots of `showcase › image`.
+  A section whose every component this app leaves out (one it doesn't know) is not drawn, rather than its title alone over
+  nothing; a section sent with no components keeps its title (`ExtensionParts.of`).
 - UI version 5's code review (#827, "UI version 5: code review"), drawn in parts (pages send 4 until all of version 6 is drawn too, so the hub strips these fields for iOS meanwhile).
   Reading (`ExtensionCodeReview.swift`, the code page): the words that changed in a removed and added pair on a stronger fill (PersonaKit's `LineDiff` word comparison, worked out once per hunk);
   generated files and lockfiles (by the extension's `generated` or the web's path list), changes over 400 lines and viewed files start folded with a line saying why and **Show**; a generated

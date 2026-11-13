@@ -1,5 +1,10 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- Inbox handling chats are implementation details, not user-created conversations (#5723). `Untitled` suppresses
+  automatic naming but does not hide a chat, and `titleFixed` still gives it the item's subject. Apply default
+  archiving in the common session snapshot, not only after starting or finishing: restored chats and follow-up
+  instructions must stay hidden too. Preserve item-chain links and the main conversation.
+
 - Count repeated conditional instructions at the runtime-send boundary, not just in a prompt golden (#5665).
   Two adjacent decision blocks repeated the same handling rules, but the newer one also required recording the choice.
   Remove the older copy, retain the newer obligations, and check both decision gating and the actual synthetic
