@@ -21,7 +21,8 @@ import java.nio.file.Files
 class InboxHandOffRecordTest {
     /**
      * The hub holds the recording open: the hand-off still answers the Agent's key, so the sheet closes and its
-     * conversation opens. The recording is what finishes later, and its item replaces the listed one.
+     * conversation opens. The recording itself finishes later and tells the item's manager about the item and the
+     * session; the listed row is left as it is (its page picks the chain up at the next refresh).
      */
     @Test fun aHangingRecordingDoesNotHoldTheAcceptedHandOff() = runTest {
         val directory = Files.createTempDirectory("inbox-handoff-record-hang").toFile()
@@ -31,7 +32,9 @@ class InboxHandOffRecordTest {
             })
             val recording = CompletableDeferred<JsonObject>()
             val started = CompletableDeferred<Unit>()
-            transport.onRecord = { _, _, _, _ ->
+            val record = mutableListOf<List<Any?>>()
+            transport.onRecord = { item, session, title, client ->
+                record += listOf(item, session, title, client)
                 started.complete(Unit)
                 recording.await()
             }
@@ -51,13 +54,17 @@ class InboxHandOffRecordTest {
             assertEquals(listOf(Triple(key, "Handle this", "op-1")), agents.sent)
             runCurrent()
             assertTrue("the recording should have started", started.isCompleted)
+            assertEquals(listOf<List<Any?>>(listOf("item", key, "Example agent", "op-1")), record)
 
             recording.complete(buildJsonObject {
                 put("item", buildJsonObject { put("id", "item"); put("kind", "mail"); put("title", "Recorded") })
             })
-            withTimeout(5_000) { repository.snapshot.first { it.records.single().item.title == "Recorded" } }
+            advanceUntilIdle()
+            // The answer does not replace the listed row: the next inbox refresh carries the item's update.
+            assertEquals("Example", repository.snapshot.value.records.single().item.title)
         } finally {
-            directory.deleteRecursively()
+            // The directory stays: a background recording may still be writing the reply journal when the test ends,
+            // and deleting it under that write fails the test with its NoSuchFileException instead of an assertion.
         }
     }
 
@@ -88,16 +95,17 @@ class InboxHandOffRecordTest {
             assertEquals(4, transport.records)
             assertEquals(agents.sent.map { it.third }, listOf("op-0", "op-1", "op-2", "op-3"))
         } finally {
-            directory.deleteRecursively()
+            // The directory stays: a background recording may still be writing the reply journal when the test ends,
+            // and deleting it under that write fails the test with its NoSuchFileException instead of an assertion.
         }
     }
 
     /**
-     * The recording answers with the item as the hub had it before the user marked it done in the meantime: that
-     * answer must not put the item back into the list as open (it would show Needs you again, and a later Done would
-     * send the stale version).
+     * The recording answers with the item as the hub had it before the user marked it done in the meantime. That
+     * answer is not applied to the list at all, so the row stays done: nothing reopens it, and a later Done sends
+     * no stale version.
      */
-    @Test fun aRecordingAnsweredFromBeforeTheUsersDoneKeepsTheItemDone() = runTest {
+    @Test fun aRecordingAnswerNeverReopensADoneItem() = runTest {
         val directory = Files.createTempDirectory("inbox-handoff-record-done").toFile()
         try {
             val transport = RecordTransport(buildJsonArray {
@@ -120,7 +128,6 @@ class InboxHandOffRecordTest {
             repository.snapshot.first { it.contentSource != null }
             repository.refresh()
             val id = repository.snapshot.value.records.single().item.id
-            val key = SessionKey("laptop", "agent")
             withTimeout(1_000) {
                 repository.handOff(InboxHandOffRequest(id, "Handle this", "laptop", "agent", "op-1", targetTitle = "Example agent"))
             }
@@ -134,11 +141,12 @@ class InboxHandOffRecordTest {
             recording.complete(buildJsonObject {
                 put("item", buildJsonObject { put("id", "item"); put("kind", "mail"); put("title", "Recorded") })
             })
-            withTimeout(5_000) { repository.snapshot.first { it.records.single().item.title == "Recorded" } }
-            assertNotNull("a stale recording answer must not reopen a done item",
+            advanceUntilIdle()
+            assertNotNull("a recording answer must not reopen a done item",
                 repository.snapshot.value.records.single().item.doneAt)
         } finally {
-            directory.deleteRecursively()
+            // The directory stays: a background recording may still be writing the reply journal when the test ends,
+            // and deleting it under that write fails the test with its NoSuchFileException instead of an assertion.
         }
     }
 
@@ -158,7 +166,8 @@ class InboxHandOffRecordTest {
             assertEquals(0, transport.records)
             assertTrue(agents.sent.isEmpty())
         } finally {
-            directory.deleteRecursively()
+            // The directory stays: a background recording may still be writing the reply journal when the test ends,
+            // and deleting it under that write fails the test with its NoSuchFileException instead of an assertion.
         }
     }
 
