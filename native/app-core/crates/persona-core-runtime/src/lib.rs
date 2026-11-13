@@ -83,21 +83,17 @@ impl Runtime {
         false
     }
 
-    /// The chat's encoded `wire::ChatPatch` since the last drain: the latest state and the list changes. Taking it
-    /// is a swap under a lock; the worker already built it.
+    /// The chat's encoded `wire::ChatPatch` since the last successful drain. Encoding and removal are committed in
+    /// that order: a failed encode leaves the pending operations and wake available for the next drain.
     pub fn drain(&self, chat: &str) -> Vec<u8> {
-        let patch = {
-            let mut patches = lock(&self.shared.patches);
-            patches.woken.remove(chat);
-            match patches.chats.get_mut(chat) {
-                Some(patch) => {
-                    let ops = std::mem::take(&mut patch.ops);
-                    ChatPatch { ops, ..patch.clone() }
-                }
-                None => ChatPatch::default(),
-            }
-        };
-        wire::encode(&patch)
+        let mut patches = lock(&self.shared.patches);
+        let patch = patches.chats.get(chat).cloned().unwrap_or_default();
+        let encoded = wire::encode(&patch);
+        if let Some(patch) = patches.chats.get_mut(chat) {
+            patch.ops.clear();
+        }
+        patches.woken.remove(chat);
+        encoded
     }
 
     /// Waits until every queued action is applied, up to `timeout`. For tests and shutdown; never on a main thread.
@@ -454,6 +450,7 @@ mod tests {
         let old = items(r#"[{"id":"1#0","seq":1,"text":"old"},{"id":"2#0","seq":2}]"#);
         let new = items(r#"[{"id":"1#0","seq":1,"text":"new"},{"id":"2#0","seq":2}]"#);
         assert_eq!(diff(&old, &new), vec![update(0, &new[0])]);
+        assert_eq!(replay(&old, &diff(&old, &new)), vec!["1#0", "2#0"]);
     }
 
     #[test]
