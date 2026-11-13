@@ -1,3 +1,6 @@
+import { NewTodoRepositoryBindings, TodoRepositoryBindings, useRepositoryRequestContext } from "../ui/TaskRepositoryBindingsEditor";
+import { createTodoWithRepositories, type CreateRepositoryBindings } from "../lib/task-repositories";
+import { defaultManager, useShownManager } from "../lib/manager-choice";
 // Beautiful UI Todos View: left list (sorted by status & created_at), right detail, handover dialog.
 import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { api, credentialOwner, enc, errorText, subscribeCredentialOwner } from "../lib/api";
@@ -165,6 +168,7 @@ export function TodosView({
   onToggleSidebar?: () => void;
 }) {
   const owner = useSyncExternalStore(subscribeCredentialOwner, credentialOwner, credentialOwner);
+  const repositoryManager = useShownManager();
   // with several assistants, the current one's to-dos (docs/assistant/managers.md "Clients"); a link to another assistant's
   // to-do still opens it, without switching
   const everyTodo = useStore((s) => s.todos);
@@ -852,6 +856,9 @@ export function TodosView({
 
       {/* Dialogs */}
       <NewTodoDialog
+        key={`${owner}:${repositoryManager}:${newOpen}`}
+        manager={repositoryManager}
+        owner={owner}
         open={newOpen}
         slot={newSlot}
         onClose={() => {
@@ -2001,6 +2008,8 @@ function TodoDetail({
         </div>
       </div>
 
+      <TodoRepositoryBindings key={`${owner}:${todo.manager ?? defaultManager()}:${todo.id}`} manager={todo.manager ?? defaultManager()} owner={owner} todoId={todo.id} />
+
       <ThreadSection todo={todo} />
 
       <DecisionsSection todo={todo} lookup={lookup} />
@@ -2592,16 +2601,22 @@ function DecisionDialog({
 
 function NewTodoDialog({
   open,
+  manager,
+  owner,
   slot,
   onClose,
   onCreated,
 }: {
   open: boolean;
+  manager: string;
+  owner: string;
   /** Made on the calendar (#2029): due there, a moment or a whole day; the calendar stays in front once it is saved. */
   slot?: CalendarSlot;
   onClose: () => void;
   onCreated: (id: string) => void;
 }) {
+  const repositoryContext = useRepositoryRequestContext(manager, owner);
+  const [repositoryBindings, setRepositoryBindings] = useState<CreateRepositoryBindings>();
   const [title, setTitle] = useState("");
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
@@ -2633,10 +2648,13 @@ function NewTodoDialog({
 
   const submit = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (!title.trim()) return;
+    if (!title.trim() || busy || !repositoryContext.isCurrent()) return;
     setBusy(true);
     try {
-      const todo = await createTodo(title, notes, due());
+      const todo = repositoryBindings
+        ? await createTodoWithRepositories(repositoryContext, title, notes, due(), repositoryBindings)
+        : await createTodo(title, notes, due());
+      if (!repositoryContext.isCurrent()) return;
       await refreshTodos();
       await refresh();
       toast(t("todos.created"), "ok");
@@ -2645,14 +2663,14 @@ function NewTodoDialog({
       onCreated(todo.id);
       navigate(`/todos?id=${encodeURIComponent(todo.id)}`);
     } catch (err) {
-      toast(t("todos.create_failed", { error: errorText(err) }), "error");
+      if (repositoryContext.isCurrent()) toast(t("todos.create_failed", { error: errorText(err) }), "error");
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <Dialog open={open} onClose={onClose} title={t("todos.new_todo")}>
+    <Dialog open={open} onClose={() => { if (!busy) onClose(); }} title={t("todos.new_todo")}>
       <form onSubmit={submit} className="flex flex-col gap-3.5">
         <div>
           <label className="mb-1 block text-[12px] font-medium text-ink-2">{t("todos.title_label")}</label>
@@ -2706,8 +2724,10 @@ function NewTodoDialog({
           />
         </div>
 
+        <NewTodoRepositoryBindings context={repositoryContext} value={repositoryBindings} onChange={setRepositoryBindings} pending={busy} />
+
         <div className="mt-2 flex justify-end gap-2">
-          <Button tone="secondary" onClick={onClose}>
+          <Button tone="secondary" disabled={busy} onClick={onClose}>
             {t("common.cancel")}
           </Button>
           <Button tone="accent" type="submit" disabled={!title.trim() || busy} busy={busy}>

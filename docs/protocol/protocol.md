@@ -4509,3 +4509,14 @@ Session rows may include `service_tier` (acknowledged native value, omitted whil
 A standalone `service_tier` request to the session modes endpoint calls `session.speed {session_id, service_tier}`.
 Only writable Codex app-server threads with advertised tiers support this request. Native errors are returned, and
 older nodes return `node_outdated`. Speed changes apply to subsequent turns independently of reasoning effort.
+
+### Optional Todo repository metadata
+
+The manager relays `GET /api/v1/todos/{id}/repositories` with `todos.read`, and
+`PUT /api/v1/todos/{id}/repositories` plus
+`PUT /api/v1/todos/{id}/repositories/{repo_id}/links` with `todos.write`.
+Routing uses the Todo owner, including explicit-manager conflicts, just like
+existing Todo detail routes. `POST /api/v1/todos` accepts optional atomic
+`repository_bindings`; omitted fields preserve all legacy creation behavior.
+The full request, revision and source-snapshot contract is in
+`docs/assistant/todos.md` ("Repository associations").
