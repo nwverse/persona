@@ -168,6 +168,13 @@ final class FolderEditTests: XCTestCase {
         shot("save-picker-after-background")
         XCTAssertTrue(upload.exists, "the browser went away")
         XCTAssertFalse(upload.isHittable, "going to the background closed Save to Files and dropped the download")
+
+        // Save into On My iPhone (the picker's Save, top right). On My iPhone must not hold a notes.txt already, or the
+        // picker asks to replace it: the run script removes it first and checks afterwards that the file arrived.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.876, dy: 0.126)).tap()
+        let saved = expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: upload)
+        wait(for: [saved], timeout: 20)
+        shot("save-picker-saved")
     }
 
     /// MOCK_FILE_OP_DELAY keeps the original POST open: the bar appears after one second and Cancel leaves no output.

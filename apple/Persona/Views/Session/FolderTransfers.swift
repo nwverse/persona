@@ -57,8 +57,8 @@ final class FolderTransfers {
     struct Conflict: Identifiable {
         let id = UUID()
         var name: String
-        /// The transfer (`Item.id`) that asked.
-        var item: UUID
+        /// The transfer that asked.
+        var item: Item.ID
     }
 
     enum Choice { case replace, keep, cancel }
@@ -283,7 +283,7 @@ final class FolderTransfers {
         pollTasks.removeValue(forKey: id)?.cancel()
         pollRequests[id] = nil
         tasks.removeValue(forKey: id)?.cancel()
-        answerQuestions(of: id) // a cancelled transfer waiting on its question is a no; other transfers' questions stay
+        for question in conflicts where question.item == id { answer(.cancel, to: question.id) } // only its own
         items.removeAll { $0.id == id }
         syncVisible()
     }
@@ -292,7 +292,7 @@ final class FolderTransfers {
     /// no, downloads nobody will save stop. Uploads and remote copy / zip POSTs go on; only their progress polling
     /// pauses until the file page is in front again.
     func stop() {
-        answerQuestions()
+        for question in conflicts { answer(.cancel, to: question.id) }
         pausePolling()
         for item in items where item.kind == .download { cancel(item.id) }
         if let saving { MachineFileDownload.remove(saving) }
@@ -422,7 +422,7 @@ final class FolderTransfers {
     }
 
     /// Waits for the answer to transfer `item`'s question, queued behind any question already asked.
-    private func ask(_ name: String, for item: UUID) async -> Choice {
+    private func ask(_ name: String, for item: Item.ID) async -> Choice {
         guard !Task.isCancelled else { return .cancel } // its row is gone: nobody will be asked
         return await withCheckedContinuation { (c: CheckedContinuation<Choice, Never>) in
             let question = Conflict(name: name, item: item)
@@ -431,7 +431,7 @@ final class FolderTransfers {
         }
     }
 
-    /// The answer to the "already exists" question the alert shows.
+    /// The answer to the question in front (tests; the alert answers the one it shows by id).
     func answer(_ choice: Choice) {
         if let conflict { answer(choice, to: conflict.id) }
     }
@@ -440,11 +440,6 @@ final class FolderTransfers {
     func answer(_ choice: Choice, to id: Conflict.ID) {
         conflicts.removeAll { $0.id == id }
         answers.removeValue(forKey: id)?.resume(returning: choice)
-    }
-
-    /// Cancel for every waiting question (nil), or only those of one transfer.
-    private func answerQuestions(of item: UUID? = nil) {
-        for question in conflicts where item == nil || question.item == item { answer(.cancel, to: question.id) }
     }
 
     private func update(_ id: UUID, _ change: (inout Item) -> Void) {

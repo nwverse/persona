@@ -954,33 +954,47 @@ struct FilesPane: View {
 }
 
 /// The "already exists" alert for the transfers' first question, one question at a time. Its buttons answer the question
-/// it shows, never the next one in line; the next one opens the alert again after `Theme.Motion.alertHandoff`, once the
-/// alert before it has closed (UIKit presents one at a time).
+/// it shows, never the next one in line. After the first, each opening waits `Theme.Motion.alertHandoff` (UIKit presents
+/// one at a time), and a question whose alert UIKit dropped (another alert, sheet or picker was up) is asked again.
 private struct FolderTransferQuestion: View {
     let transfers: FolderTransfers
-    /// The question the alert is open for.
-    @State private var shown: FolderTransfers.Conflict?
+    /// The question the alert is open (or opening) for.
+    @State private var shown: FolderTransfers.Conflict.ID?
+    /// Its name, kept after it closes so the title does not go blank on the way out (lessons/ios.md, #1830).
+    @State private var name = ""
+    /// This view has opened the alert before: the next opening waits for that one to have closed.
+    @State private var opened = false
+    /// Bumped when the alert closed with its question still waiting, to ask again.
+    @State private var retry = 0
+
+    private struct Opening: Hashable {
+        var question: FolderTransfers.Conflict.ID?
+        var retry: Int
+    }
 
     var body: some View {
-        let question = shown.flatMap { transfers.conflict?.id == $0.id ? $0 : nil }
+        let question = transfers.conflict.flatMap { $0.id == shown ? $0 : nil }
         // An alert, not a confirmation dialog: from a list that one is a popover with no Cancel (lessons/ios.md, #1830).
-        // Closing it answers nothing: SwiftUI also writes false when UIKit drops a presentation, and that must not turn
+        // Closing it never answers: SwiftUI also writes false when UIKit drops a presentation, and that must not turn
         // into Cancel. Every answer is a button, the row's Cancel, or leaving the page.
         Color.clear
             .allowsHitTesting(false)
-            .task(id: transfers.conflict?.id) {
-                guard let next = transfers.conflict else {
-                    shown = nil
-                    return
-                }
-                if shown != nil { // the alert before it is closing
+            .task(id: Opening(question: transfers.conflict?.id, retry: retry)) {
+                guard let next = transfers.conflict else { return }
+                if opened {
                     try? await Task.sleep(for: Theme.Motion.alertHandoff)
                     guard !Task.isCancelled, transfers.conflict?.id == next.id else { return }
                 }
-                shown = next
+                opened = true
+                name = next.name
+                shown = next.id
             }
-            .alert(String(localized: "“\(shown?.name ?? "")” already exists"),
-                   isPresented: Binding(get: { question != nil }, set: { _ in })) {
+            .alert(String(localized: "“\(name)” already exists"),
+                   isPresented: Binding(get: { question != nil }, set: { presented in
+                       guard !presented, let id = shown, transfers.conflict?.id == id else { return }
+                       shown = nil
+                       retry += 1
+                   })) {
                 if let question {
                     Button("Replace") { transfers.answer(.replace, to: question.id) }
                     Button("Keep Both") { transfers.answer(.keep, to: question.id) }

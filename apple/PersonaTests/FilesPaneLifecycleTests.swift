@@ -7,7 +7,8 @@ import UIKit
 /// FilesPane on a real window (#6113 review): Control Center, a call or the app switcher only pause progress polling;
 /// a download, a file waiting in Save to Files and an "already exists" question stay for the user. Leaving the page
 /// still ends them. Questions from two transfers are shown one after the other.
-@MainActor
+/// Serialized: each test puts a key window over the scene and presents from it (lessons/testing.md, #2025).
+@Suite(.serialized) @MainActor
 struct FilesPaneLifecycleTests {
     @Observable @MainActor final class Host {
         var active = true

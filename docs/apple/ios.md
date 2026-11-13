@@ -1261,6 +1261,7 @@ iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and
   | A number changes | `.contentTransition(.numericText)` |
   | The finger lets go of a drawer / of something it dragged aside | `drawer(velocity:)` (no bounce) / `springBack` |
   | Moving with the keyboard | `keyboard` (the system's spring) |
+  | An alert follows another (queued "already exists" questions) | `alertHandoff`: a 1 s wait before it asks; UIKit drops a presentation made while the one before is closing (#6113) |
   | The composer and the 「+」 panel | their `composer…` / `hold…` / `attach…` tokens, measured from Telegram |
   | The meeting recording's level meter (`RecordingLevelMeter`) | `recordingLevelFrame`: a 1/30 s clock; fixed-height bars scaled vertically (`Theme.Size.recordingMeter…`); one still frame with Reduce Motion, Low Power Mode or off screen |
   | A timeline row arrives in the live recording sheet | `reveal` with a small rise (`Theme.Recording.arrivalOffset`); opacity only with Reduce Motion |
