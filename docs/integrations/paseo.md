@@ -122,7 +122,7 @@ run with `ELECTRON_RUN_AS_NODE=1`. A plain `node` always runs the bridge without
     bridge brings those up to date itself and the rows say the new name at once. Delete worktree is offered on a worktree row and goes as for
     herdr and Orca: a preview of what goes (its uncommitted changes, its branch), a confirmation bound to it (and to the Agents in the
     workspace, which are archived with it), then Paseo archives the workspace (`archive_workspace_request`), which removes a worktree it made
-    from the disk, forced, and keeps its branch; "Also delete the branch" uses Git's safe delete afterwards. Only a worktree Paseo made
+    from the disk, forced, and keeps its branch; "Also delete the local branch if merged" uses Git's safe delete afterwards. Only a worktree Paseo made
     is deleted: a main checkout, a folder and a worktree made outside Paseo are refused at the preview (Paseo would only archive those).
 - **Agents created by another Agent** (#4494): with Paseo's `create_agent` an Agent starts others (an orchestrator and its reviewers). Paseo marks them with the label
   `paseo.parent-agent-id`, shows them under their creator, notifies nobody when they finish (their creator is told what they did) and archives them with their creator. In Persona:
