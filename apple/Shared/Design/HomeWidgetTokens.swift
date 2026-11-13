@@ -67,6 +67,8 @@ nonisolated enum HomeWidgetTokens {
     static let day = Font.system(size: 44, weight: .regular)
     /// How far a hero may shrink to fit ("1.2M", "12,480").
     static let heroMinScale: CGFloat = 0.5
+    /// How far a name in a row may shrink before it is cut short ("MacBook Air" beside a large ring).
+    static let nameMinScale: CGFloat = 0.8
     /// The line under a hero, and the first line of a row.
     static let headline = Font.system(.subheadline, weight: .semibold)
     /// A row's or a hero's second line.

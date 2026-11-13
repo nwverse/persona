@@ -36,8 +36,9 @@ const codexDesktopTimeout = 60 * time.Second
 var codexDesktopLoadWait = 30 * time.Second
 
 var codexDesktopVersions = map[string]int{
-	"thread-owner-discovery":     1,
-	"thread-follower-start-turn": 2,
+	"thread-owner-discovery":         1,
+	"thread-follower-start-turn":     2,
+	"thread-follower-interrupt-turn": 4,
 }
 
 var errCodexDesktopNotLoaded = errors.New("Codex App 没能打开这个对话：在电脑的 Codex App 里打开它一次再发")
@@ -179,6 +180,29 @@ func (n *Node) sendCodexDesktop(ctx context.Context, src codexSource, text strin
 	if _, err := c.request("thread-follower-start-turn", turn, owner.HandledByClient); err != nil {
 		// The owner took the request: whether the turn started is not known.
 		return uncertain(err)
+	}
+	n.notifyCodex()
+	return nil
+}
+
+// interruptCodexDesktop stops the turn running in a thread the Codex App owns, as the App's own stop button does
+// (thread-follower-interrupt-turn, mode "user-stop": the turn and the subagents it started). A thread no App window has
+// loaded runs no turn there, and it is not opened to be stopped.
+func (n *Node) interruptCodexDesktop(ctx context.Context, src codexSource) error {
+	ctx, cancel := context.WithTimeout(ctx, codexDesktopTimeout)
+	defer cancel()
+	c, err := dialCodexDesktop(ctx, src.home)
+	if err != nil {
+		return refusal("codex_read_only", "连不上电脑上的 Codex App："+err.Error(), nil)
+	}
+	defer c.close()
+	owner, err := c.owner(src.thread)
+	if err != nil {
+		return refusal("codex_read_only", "没有可停止的已观察轮次", nil)
+	}
+	stop := map[string]any{"conversationId": src.thread, "mode": "user-stop"}
+	if _, err := c.request("thread-follower-interrupt-turn", stop, owner.HandledByClient); err != nil {
+		return err
 	}
 	n.notifyCodex()
 	return nil
@@ -400,6 +424,10 @@ func (n *Node) placeCodexDesktop(s *proto.Session, src codexSource, group string
 	if s.Status == proto.StatusDone && (subagent || app == nil || !app.unread[src.thread]) {
 		s.Status = proto.StatusIdle // looked at in the App
 	}
+	if s.Status == proto.StatusWorking && !subagent && s.Capabilities != nil {
+		// Stopped from the phone as with the App's stop button (interruptCodexDesktop); a subagent stops with its chat.
+		s.Capabilities.Interrupt = true
+	}
 }
 
 // slotCodexDesktop numbers each project's threads newest first (thread ids are time-ordered), as the App lists them.
@@ -469,6 +497,9 @@ var codexTurnMarks sync.Map
 // source "exec" (their subagents keep the originator). Only the App's threads go through its IPC bus.
 type codexOrigin struct {
 	desktop bool
+	// persona: a chat Persona started in the App (originator codexAppClient, codexapp_new.go), which the App lists
+	// without a record in its state; desktop too, so its subagents are the App's as well.
+	persona bool
 	cli     bool
 	// exec: a one-shot run a program started (`codex exec`, an SDK, the App's background runs) or a subagent of one:
 	// nobody's conversation, not listed in Agents (programRun).
@@ -513,7 +544,8 @@ func readCodexOrigin(path string) codexOrigin {
 	if json.Unmarshal(line, &m) != nil || m.Type != "session_meta" {
 		return codexOrigin{} // not written yet: read again next time
 	}
-	o := codexOrigin{desktop: m.Payload.Originator == "Codex Desktop" || m.Payload.Originator == "codex_work_desktop", cli: m.Payload.Originator == "codex-tui" || m.Payload.Originator == "codex_cli_rs"}
+	o := codexOrigin{desktop: m.Payload.Originator == "Codex Desktop" || m.Payload.Originator == "codex_work_desktop" || m.Payload.Originator == codexAppClient,
+		persona: m.Payload.Originator == codexAppClient, cli: m.Payload.Originator == "codex-tui" || m.Payload.Originator == "codex_cli_rs"}
 	if at, err := time.Parse(time.RFC3339Nano, m.Timestamp); err == nil && !at.IsZero() {
 		o.started = &proto.SessionHierarchy{StartedAt: at.UTC()}
 	}
@@ -560,7 +592,7 @@ func codexDesktopChatIn(src codexSource, pass *codexListPass) bool {
 		return ok
 	}
 	o := readCodexOrigin(src.path)
-	return o.desktop && o.parent == "" && loadCodexAppState(src.home).listed(src.thread)
+	return o.desktop && o.parent == "" && (o.persona || loadCodexAppState(src.home).listed(src.thread))
 }
 
 // owner: the App window that owns the thread.

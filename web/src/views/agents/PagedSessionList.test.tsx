@@ -230,4 +230,26 @@ describe("paged grouping controls", () => {
     expect(vi.mocked(api).mock.calls.some(([path]) => new URL(path as string, "https://example.com").searchParams.get("project") === "/work/beta")).toBe(true);
     expect(host.querySelector<HTMLButtonElement>(`button[aria-label="${t("paged-agents.group_filter")}"]`)!.textContent).toBe("beta");
   });
+
+  it("opens a value menu as wide as its pill, and never narrower than a menu is elsewhere", async () => {
+    rootCounts.mockResolvedValue({ ...counts(), project: { "/work/alpha": 2 } });
+    await show();
+    const project = [...host.querySelectorAll<HTMLButtonElement>(`[aria-label="${t("paged-agents.group_by")}"] [role="radio"]`)]
+      .find((b) => b.textContent === t("paged-agents.project"))!;
+    await act(async () => project.click());
+    const pick = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("paged-agents.group_filter")}"]`)!;
+    const measured = (width: number) => ({ width, height: 24, left: 8, right: 8 + width, top: 100, bottom: 124, x: 8, y: 100, toJSON: () => ({}) }) as DOMRect;
+    const menuWidth = () => document.querySelector<HTMLElement>('[role="menu"]')!.style.width;
+
+    // the sidebar as the user dragged it: the menu takes the pill's width
+    pick.getBoundingClientRect = () => measured(372);
+    await act(async () => pick.click());
+    expect(menuWidth()).toBe("372px");
+    await act(async () => pick.click());
+
+    // a pill narrower than any menu keeps the menu readable
+    pick.getBoundingClientRect = () => measured(96);
+    await act(async () => pick.click());
+    expect(menuWidth()).toBe(`${SESSION_LIST_METRICS.pickMenuMin}px`);
+  });
 });

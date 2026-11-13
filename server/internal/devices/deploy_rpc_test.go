@@ -36,6 +36,7 @@ type updatingNode struct {
 	busySession bool
 	sessionErr  error
 	background  bool
+	sessions    []proto.Session // when set, what sessions.list answers
 	installErr  error
 	stayOld     bool
 	target      string // the build it confirms ("" the fixture hub's, new-build)
@@ -49,6 +50,9 @@ func (n *updatingNode) handle(_ context.Context, method string, params json.RawM
 	case "sessions.list":
 		if n.sessionErr != nil {
 			return nil, n.sessionErr
+		}
+		if n.sessions != nil {
+			return map[string]any{"sessions": n.sessions}, nil
 		}
 		if n.background {
 			return map[string]any{"sessions": []proto.Session{{SessionID: "background", Status: proto.StatusIdle, Background: []proto.BackgroundTask{{ID: "task", Kind: "shell"}}}}}, nil
@@ -469,5 +473,41 @@ func TestLinkedDeployDoesNotRepeatRolledBackInstall(t *testing.T) {
 	defer n.mu.Unlock()
 	if n.begin != 0 {
 		t.Fatal("automatically installed a possibly rolled-back build again")
+	}
+}
+
+// A node with node_update_idle is updated while terminal Agents work in the background, since its restart leaves them
+// running, and waited for while a conversation it runs headless answers.
+func TestLinkedDeployWaitsOnlyForWhatTheRestartCuts(t *testing.T) {
+	terminal := proto.Session{SessionID: "terminal", Status: proto.StatusWorking, State: proto.StateWorking, Host: proto.EngineHerdr,
+		Background: []proto.BackgroundTask{{ID: "workflow", Kind: "workflow"}}, Subagents: []proto.Subagent{{Running: true}}}
+	headless := proto.Session{SessionID: "chat", Assistant: true, Status: proto.StatusWorking, State: proto.StateWorking}
+	for _, tc := range []struct {
+		name     string
+		sessions []proto.Session
+		update   bool
+	}{
+		{"terminal agents at work", []proto.Session{terminal, {SessionID: "outside", Status: proto.StatusWorking, Background: []proto.BackgroundTask{{ID: "server"}}}}, true},
+		{"headless conversation answering", []proto.Session{terminal, headless}, false},
+		{"launch starting", []proto.Session{{SessionID: "new", Host: proto.EngineHerdr, Starting: true}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, m, n, bin := linkedDeployFixture(t, kindLink)
+			m.info.Protocol = nodeproto.Version
+			m.info.Capabilities = []string{nodeproto.Sessions, nodeproto.NodeUpdate, nodeproto.NodeUpdateIdle}
+			n.sessions = tc.sessions
+			record := nodeDeployRecord{Target: "new-build", State: "queued"}
+			ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+			defer cancel()
+			err := m.performRPCDeployment(ctx, bin, &record)
+			n.mu.Lock()
+			defer n.mu.Unlock()
+			if tc.update && (err != nil || n.confirms != 1) {
+				t.Fatalf("not updated: err=%v confirms=%d", err, n.confirms)
+			}
+			if !tc.update && (!errors.Is(err, context.DeadlineExceeded) || n.begin != 0) {
+				t.Fatalf("updated while busy: err=%v begin=%d", err, n.begin)
+			}
+		})
 	}
 }

@@ -308,7 +308,7 @@ Each block lists: Severity, Platform, Location, Violates, Problem, Evidence, Fix
 - **Violates**: [Typography][typo]: minimize truncation; stack at large sizes.
 - **Problem**: about 95 `minimumScaleFactor` uses. The stage bar draws six stage names at 0.7 in one sixth of the width each; the checklist sentence is one line at 0.8. Scaling happens only on overflow (likely at large sizes or long translations), where it can pass below 11pt. Shrinking a numeric cell (`UsageCharts.swift`) is fine.
 - **Evidence**: `.lineLimit(1).minimumScaleFactor(0.7)` on `Theme.Font.caption`.
-- **Fix**: let sentences wrap; show only the current stage (or stack) when `isAccessibilitySize`; limit shrink to about 0.85.
+- **Fix**: let sentences wrap; show only the current stage (or stack) when `isAccessibilitySize`; limit shrink to about 0.85 (the stage bar is done, #5892: at the accessibility sizes its dots have no names and one line names the current step and its place).
 
 #### HIG-028 Fixed-size text below 11pt ignores Dynamic Type
 - **Severity**: P2. **Platform**: iOS.
@@ -446,11 +446,11 @@ Each block lists: Severity, Platform, Location, Violates, Problem, Evidence, Fix
 - **Evidence**: `reduceMotion ? Theme.Motion.state : Theme.Motion.composerSwap` changes only the curve.
 - **Fix**: use `.opacity` in both branches when reduced; skip the press scale; gate the pulse with `isActive: listening && !reduceMotion`.
 
-#### HIG-045 Message lift menu and attach bar animate scale and blur without a fallback
+#### HIG-045 Message lift menu animates scale and blur without a fallback
 - **Severity**: P2. **Platform**: iOS.
-- **Location**: `apple/Persona/Views/Chat/MessageLift.swift:94`, `apple/Persona/Views/Chat/MessageLift.swift:119`, `apple/Persona/Views/Chat/MessageLift.swift:160`, `apple/Persona/Views/Chat/MessageMenu.swift:305`, `apple/Persona/Views/Chat/MessageMenu.swift:393`, `apple/Persona/Views/Chat/AttachSheet.swift:360`, `apple/Persona/Views/Chat/AttachSheet.swift:481`.
+- **Location**: `apple/Persona/Views/Chat/MessageLift.swift:94`, `apple/Persona/Views/Chat/MessageLift.swift:119`, `apple/Persona/Views/Chat/MessageLift.swift:160`, `apple/Persona/Views/Chat/MessageMenu.swift:305`, `apple/Persona/Views/Chat/MessageMenu.swift:393`.
 - **Violates**: [Accessibility][a11y] (Reduce Motion); [Motion][motion].
-- **Problem**: long-press blurs the page, the bar scales in from 0.85 and the drag-back spring bounces. `reduceMotion` is declared at `MessageLift.swift:119` but never read. The attach bar-away state scales and blurs by 10.
+- **Problem**: long-press blurs the page, the bar scales in from 0.85 and the drag-back spring bounces. `reduceMotion` is declared at `MessageLift.swift:119` but never read. (The attach panel's bar now cross-fades, without scale or blur, and none with Reduce Motion: #4312.)
 - **Evidence**: `.transition(.scale(scale: 0.85, anchor: p.below ? .top : .bottom).combined(with: .opacity))`.
 - **Fix**: use the declared flag: opacity transition, bounce-0 spring, no blur or scale when reduced.
 

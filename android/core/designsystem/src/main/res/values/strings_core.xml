@@ -132,6 +132,15 @@
     </plurals>
     <string name="designsystem_core_list_separator">, </string>
     <string name="designsystem_core_repo_other">Other</string>
+    <string name="designsystem_core_direction_doing">Working</string>
+    <string name="designsystem_core_direction_needs_you">Needs you</string>
+    <string name="designsystem_core_direction_stuck">Stuck</string>
+    <string name="designsystem_core_direction_review">To verify</string>
+    <string name="designsystem_core_direction_planned">Not started</string>
+    <string name="designsystem_core_direction_secretary">Secretary</string>
+    <string name="designsystem_core_direction_untitled">Chat</string>
+    <string name="designsystem_core_direction_count_working">%1$d working</string>
+    <string name="designsystem_core_direction_count_needs_you">%1$d need you</string>
     <string name="designsystem_core_inbox_action">Needs you</string>
     <string name="designsystem_core_inbox_fyi">FYI</string>
     <string name="designsystem_core_inbox_noise">Folded</string>

@@ -216,7 +216,8 @@ extension Theme {
         static let avatar = "person.crop.artframe"
         /// Settings › Appearance › Avatar › New from Photo: make an avatar from an image of your own (#2405).
         static let newAvatar = "photo.badge.plus"
-        /// Zoom in and out of a picture with a slider beside it (the avatar crop on the Mac).
+        /// Zoom in and out of a picture: with a slider beside it (the avatar crop on the Mac), and VNC's ⋯ › Zoom In and
+        /// Zoom to Fit (#6196).
         static let zoomIn = "plus.magnifyingglass"
         static let zoomOut = "minus.magnifyingglass"
         /// Settings › Appearance › Interface Style.
@@ -403,6 +404,8 @@ extension Theme {
         static let pathSeparator = "chevron.compact.right"
         /// A folder that is a git repository (the new chat's directory browser).
         static let gitRepository = "folder.badge.gearshape"
+        /// A temporary session: one in Claude's desktop app's scratch folder (New Agent, #5480).
+        static let temporarySession = "tray"
         static let photo = "photo"
         static let photos = "photo.on.rectangle"
         static let camera = "camera"
@@ -435,6 +438,10 @@ extension Theme {
         static let trackpad = "rectangle.and.hand.point.up.left"
         /// Center Pointer: the pointer back to the middle.
         static let pointerCenter = "scope"
+        /// The live screen's rotate button on an iPhone (#6196): the page on its side, and back upright. Each shows where
+        /// the tap turns it.
+        static let rotateToLandscape = "rectangle.landscape.rotate"
+        static let rotateToPortrait = "rectangle.portrait.rotate"
         /// The Mac's clipboard and the phone's, both ways.
         static let clipboard = "clipboard"
         /// Send Clipboard: the phone's clipboard to a computer (#3064).
@@ -533,6 +540,8 @@ extension Theme {
         static let pluginMinus = notChecked
         /// A commit (UI version 4's code hosting).
         static let pluginCommit = "circle.and.line.horizontal"
+        /// A picture that could not be loaded (an extension's `image`, its alt text beside it).
+        static let brokenImage = "photo.badge.exclamationmark"
         /// Asking for a GitHub star for Persona (#5761): the empty Agents pill, the milestone card, the onboarding toast.
         static let gitHubStar = pluginStar
         static let phone = "iphone"
@@ -700,6 +709,8 @@ extension Theme {
         static let meeting = "person.2.wave.2"
         /// Persona stops attending the meeting being recorded (#2981: the recording Live Activity's Turn Off).
         static let attendanceOff = "waveform.slash"
+        /// Talk to Persona in the meeting (#3862 phase 4): held on the meeting page, a talk window from the Live Activity.
+        static let talk = "mic.circle"
         /// The calendar event a meeting recording is named after (docs/apple/recording.md).
         static let calendarEvent = "calendar.day.timeline.left"
         /// A meeting's minutes (#2710): a key point, a decision, a question left open (action items are `todo`).

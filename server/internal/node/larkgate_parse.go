@@ -9,6 +9,7 @@ import (
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/shellcmd"
+	"github.com/nwverse/persona/server/internal/textfmt"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -58,6 +59,21 @@ func classifyLarkDepth(cmd string, gates []proto.CommandGate, cwd string, risk l
 	}
 	if strings.Contains(cmd, ".lark-cli/") || strings.HasSuffix(cmd, ".lark-cli") {
 		v.deny = "不要读或改 lark-cli 的配置和凭据（~/.lark-cli）：飞书用 lark-cli 命令，它自己带登录。"
+		return v
+	}
+	if commands, ok := literalLarkLoopCommands(cmd, gates); ok {
+		v.unknown, v.other = false, true
+		for _, command := range commands {
+			child := classifyLarkDepth(command, gates, cwd, risk, depth+1)
+			merge(child)
+			v.unsure = v.unsure || child.unsure
+			v.unparsed = v.unparsed || child.unparsed
+			// Loop expansion proves reads only. Writes (including GET deletion
+			// routes) keep the whole-command approval and proxy restrictions.
+			for _, call := range child.calls {
+				v.unknown = v.unknown || !larkRead(call) || !larkBypassSafe(call)
+			}
+		}
 		return v
 	}
 	cmd = normalizeLarkCommand(cmd, cwd)
@@ -631,10 +647,7 @@ func readBodyFile(p, cwd string) string {
 	if err != nil {
 		return "（读不到 " + p + "）"
 	}
-	if len(b) > 4000 {
-		b = append(b[:4000], "…"...)
-	}
-	return string(b)
+	return textfmt.Clip(string(b), 4000)
 }
 
 var httpMethod = lazyre.New(`^(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)$`)
