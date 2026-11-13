@@ -379,14 +379,6 @@ export function fromLine(it: InboxItem, preview?: string): string {
   return t("lib-inbox.sender_line", { sender: it.sender, text: it.preview });
 }
 
-/** The row's third line and the detail header's small line: where, then who said the newest line and what.
- *  A direct chat names the person once. Without `where` (an older hub, mail), today's line stays unchanged. */
-export function rowMeta(it: InboxItem): string {
-  if (!it.where) return fromLine(it);
-  const latest = it.sender ? t("lib-inbox.sender_line", { sender: it.sender, text: it.preview }) : it.preview;
-  return it.sender === it.where ? latest : [it.where, latest].filter(Boolean).join(" · ");
-}
-
 /** The row's text under the summary says what the summary already says (the assistant's own rows: its text is the summary), so it is not drawn twice. */
 export function repeatsSummary(it: InboxItem): boolean {
   const summary = it.summary?.trim();

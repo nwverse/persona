@@ -13,7 +13,6 @@
   "check_due": "Time to look again",
   "failed": "AI couldn't finish: {reason}",
   "failed_plain": "AI couldn't handle it",
-  "needs_you": "Needs you",
   "fyi": "FYI",
   "folded": "Folded",
   "done_replied": "You replied",

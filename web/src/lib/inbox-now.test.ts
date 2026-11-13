@@ -2,8 +2,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { initI18n } from "../i18n";
-import { fromLine, matches, rowMeta, type InboxFilter, type InboxItem } from "./inbox";
-import { nowText } from "./inbox-now";
+import { fromLine, matches, type InboxFilter, type InboxItem } from "./inbox";
+import { nowText, rowMeta } from "./inbox-now";
 
 const LANGS = ["en", "zh-Hans", "ja"] as const;
 type Lang = (typeof LANGS)[number];

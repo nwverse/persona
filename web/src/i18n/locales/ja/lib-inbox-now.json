@@ -13,7 +13,6 @@
   "check_due": "再確認の時間です",
   "failed": "AIが処理を終えられませんでした：{reason}",
   "failed_plain": "AIの処理に失敗",
-  "needs_you": "要対応",
   "fyi": "参考",
   "folded": "折りたたみ済み",
   "done_replied": "返信済み",
