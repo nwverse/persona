@@ -10655,7 +10655,7 @@ def inbox_done_days(query):
 def inbox_for(query):
     """The list as the hub gives it: connectors' items only with ?sources=all."""
     if MOCK_INBOX_SHOWCASE:
-        return copy.deepcopy(INBOX_SHOWCASE)
+        return copy.deepcopy(INBOX)
     all_sources = (query.get("sources") or [""])[0] == "all"
     return [dict({k: v for k, v in x.items() if k != "context"}, version=inbox_version(x)) for x in INBOX if all_sources or "connector" not in x]
 
@@ -11707,13 +11707,11 @@ if MOCK_INBOX_EVENTS:
 # fixture's items exactly as written, including their timestamps; clients fix their clocks to the fixture's
 # now_clock themselves. This takes precedence over MOCK_INBOX_EVENTS and leaves every other switch unchanged.
 MOCK_INBOX_SHOWCASE = os.environ.get("MOCK_INBOX_SHOWCASE") == "1"
-INBOX_SHOWCASE = []
 if MOCK_INBOX_SHOWCASE:
     _showcase_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
                                   "spec", "fixtures", "inbox", "showcase.json")
     with open(_showcase_path, encoding="utf-8") as _f:
-        INBOX_SHOWCASE = json.load(_f)["items"]
-    INBOX[:] = copy.deepcopy(INBOX_SHOWCASE)
+        INBOX[:] = json.load(_f)["items"]
 
 
 # MOCK_HANDOFF_CARD=1 (with MOCK_TASKS=1): an item handed to the main conversation that wrote back (#5932,
@@ -23380,7 +23378,7 @@ class H(BaseHTTPRequestHandler):
         if p.startswith("/api/v1/inbox/"):
             iid = p[len("/api/v1/inbox/"):]
             if MOCK_INBOX_SHOWCASE:
-                x = next((x for x in INBOX_SHOWCASE if x["id"] == iid), None)
+                x = next((x for x in INBOX if x["id"] == iid), None)
                 if x is not None: return self.send_json(x)
             for x in INBOX + INBOX_HISTORY:  # an item done long ago: the history's (#2200)
                 if x["id"] == iid: return self.send_json(dict(x, context=x.get("context") or x["preview"]))

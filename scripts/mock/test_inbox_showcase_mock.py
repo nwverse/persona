@@ -57,8 +57,11 @@ class MockHub:
         self.log.close()
         self.home.cleanup()
 
-    def request(self, path):
-        request = Request(self.base + path, headers={"Authorization": "Bearer mock"})
+    def request(self, path, body=None):
+        request = Request(self.base + path,
+                          data=None if body is None else json.dumps(body).encode(),
+                          method="GET" if body is None else "POST",
+                          headers={"Authorization": "Bearer mock", "Content-Type": "application/json"})
         with urlopen(request, timeout=3) as response:
             return json.load(response)
 
@@ -98,6 +101,15 @@ class InboxShowcaseMockTests(unittest.TestCase):
         hub = self.serve(MOCK_INBOX_SHOWCASE="1", MOCK_INBOX_EVENTS="legacy")
         self.assertEqual(hub.request("/api/v1/inbox")["items"], self.items)
         self.assertEqual(hub.request("/api/v1/inbox/sc-1"), self.items[0])
+
+    def test_item_writes_remain_visible_in_the_list_and_detail(self):
+        hub = self.serve(MOCK_INBOX_SHOWCASE="1")
+        changed = hub.request("/api/v1/inbox/sc-4/done", {"done": True})
+        listed = next(item for item in hub.request("/api/v1/inbox")["items"] if item["id"] == "sc-4")
+        detail = hub.request("/api/v1/inbox/sc-4")
+        for item in (listed, detail):
+            self.assertEqual(item["done_at"], changed["done_at"])
+            self.assertEqual(item["done_by"], "user")
 
     def test_the_default_inbox_is_unchanged_without_the_flag(self):
         hub = self.serve()
