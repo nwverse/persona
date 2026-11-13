@@ -47,10 +47,34 @@ func inboxTemplateArg(l Lang, key, name, value string) string {
 	case name == "tier" && (key == "assistant-inbox_chain.triaged" || key == "assistant-inbox_chain.triaged_urgent" || key == detail):
 		return knownInboxLabels(l, value, "assistant-inbox_chain.tier_action", "assistant-inbox_chain.tier_fyi", "assistant-inbox_chain.tier_noise")
 	case name == "reason" && key == detail:
-		return knownInboxLabels(l, value, "assistant-inbox.by_rules")
+		value = knownInboxLabels(l, value, "assistant-inbox.by_rules")
+		return knownInboxPolicyReason(l, value)
 	default:
 		return value
 	}
+}
+
+var inboxPolicyTemplates = sync.OnceValue(func() *templateIndex {
+	return indexTemplates(makeCatalogTemplates(func(key string) bool { return key == "assistant-inbox.by_policy" }))
+})
+
+// knownInboxPolicyReason translates the fixed shell of "Your rule: {name}" when the whole reason matches it in any
+// supported language. The rule's name is user data and stays verbatim, even when it is itself a known label.
+func knownInboxPolicyReason(l Lang, value string) string {
+	forms := inboxPolicyTemplates()
+	for _, n := range forms.candidates(value) {
+		form := &forms.forms[n]
+		match := form.match(value)
+		if match == nil {
+			continue
+		}
+		args := Args{}
+		for i, name := range form.names {
+			args[name] = match[i+1]
+		}
+		return T(l, form.key, args)
+	}
+	return value
 }
 
 // knownInboxLabels finds value by its exact catalog text in any supported language. Unknown or user-written words stay

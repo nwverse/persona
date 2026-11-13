@@ -41,8 +41,8 @@ func TestInboxTextCatalogRoundTrip(t *testing.T) {
 	}
 }
 
-// Every chain template round-trips between all three languages. Only a triage's own tier and the rule-based reason are
-// labels; another placeholder whose value happens to be a tier word (a sender, title, wait target, and so on) is data.
+// Every chain template round-trips between all three languages. Only a triage's own tier and its rule-based reasons
+// are labels; another placeholder whose value happens to be a tier word (a sender, title, wait target, and so on) is data.
 func TestInboxTextChainCatalogRoundTrip(t *testing.T) {
 	const (
 		triaged       = "assistant-inbox_chain.triaged"
@@ -104,6 +104,23 @@ func TestInboxTextStoredSentReplyRoundTrip(t *testing.T) {
 		for _, to := range Langs {
 			if got, want := InboxText(to, stored[from]), stored[to]; got != want {
 				t.Errorf("%s -> %s stored sent reply: %q, want %q", from, to, got, want)
+			}
+		}
+	}
+}
+
+func TestInboxTextTriagedTranslatesPolicyReason(t *testing.T) {
+	const detail = "assistant-inbox_chain.triaged_detail"
+	for _, from := range Langs {
+		for _, to := range Langs {
+			for _, name := range []string{"Release notices", "已折叠"} { // i18n-ignore: a rule name is opaque even when it is a label
+				reason := T(from, "assistant-inbox.by_policy", Args{"name": name})
+				args := Args{"tier": T(from, "assistant-inbox_chain.tier_action"), "reason": reason}
+				wantArgs := Args{"tier": T(to, "assistant-inbox_chain.tier_action"),
+					"reason": T(to, "assistant-inbox.by_policy", Args{"name": name})}
+				if got, want := InboxText(to, T(from, detail, args)), T(to, detail, wantArgs); got != want {
+					t.Errorf("%s -> %s policy reason %q: %q, want %q", from, to, name, got, want)
+				}
 			}
 		}
 	}
