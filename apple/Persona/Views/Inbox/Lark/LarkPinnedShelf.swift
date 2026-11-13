@@ -76,6 +76,7 @@ struct LarkPinnedShelf: View {
     let reader = ReaderAnchor()
     weak var list: UIScrollView?
     var shelfHeight: CGFloat = 0
+    var filtersHeight: CGFloat = 0
     var compensateCollapse = false
 
     func resetShelf() {

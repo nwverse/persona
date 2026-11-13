@@ -8,6 +8,10 @@
 
 **Explicit #392 exception**: off-by-default Show Messages on Home in Lark settings adds Messages for browsing all direct / group chats. Shared accounts / chat pages / outbox / sync with Inbox, no second implementation; other Lark pages stay out. [Lark capability consolidation](lark-migration.md).
 
+**iOS Messages filters (#6553)**: All is initially selected and keeps the pinned shelf. Unread shows only unread or manually marked-unread chats, including matching pinned chats as ordinary rows. Switching never reports a chat as read. The account-bound gateway uses its `unread` scope (and its normal muted/done/boxed exclusions); generic messaging sources, whose contract has no scope parameter, filter each ordinary page by unread count or the manual flag and retain its cursor. A read-only page is not an empty unread list: the visible footer continues through up to eight older pages before offering a button to continue. Search stays within the selected list. Filters reset their rows, cursor and pending requests on a switch; only All uses the existing hub/account-specific disk cache. Custom labels are outside this change.
+
+Verification: `LarkUnreadTests` covers scope/cursor isolation, late replies, manual unread, retry, account changes and read events. `LarkUnreadUITests` uses `MOCK_LARK=1 MOCK_LARK_UNREAD=1`; add `MOCK_MESSAGING=1` for generic page filtering. For its bounded-scan assertion, also set mock `MOCK_LARK_UNREAD_PAGES=9` and runner `TEST_RUNNER_PERSONA_EXPECT_UNREAD_CONTINUE=1`. `MOCK_LARK_LIST=180` supplies a paginated list for the existing optimized `PerfInboxTests/testFeishuMessagesListScroll` measurement.
+
 Three optional hub integrations: Lark gateway (third-party user-authenticated web client through private extension), official `lark-cli` (`docs/plans/plan-lark-cli.md`), and a private Lark Agent extension. This document covers gateway; its deployment / variables / commands in extension instructions.
 
 ## What stays

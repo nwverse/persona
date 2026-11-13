@@ -61,7 +61,8 @@ private struct LarkConversationsPage: View {
     private var display: LarkMessageDisplay { model.hub?.larkDisplay.policy ?? .hidden }
 
     private var filtered: [LarkConversation] {
-        LarkConversationsModel.listed(store.conversations, pinned: store.pinned, query: query, more: store.nextCursor != nil)
+        LarkConversationsModel.listed(store.conversations, pinned: store.filter == .all ? store.pinned : [],
+                                     query: query, more: store.nextCursor != nil)
     }
 
     var body: some View {
@@ -74,7 +75,22 @@ private struct LarkConversationsPage: View {
                         .listRowSeparator(.hidden)
                         .themedRow()
                 }
-                if query.isEmpty, !store.pinned.isEmpty {
+                HStack(spacing: Theme.Space.s) {
+                    FilterChip(title: String(localized: "lark.filter.all"), on: store.filter == .all) { select(.all, proxy: proxy) }
+                        .tapTargetOutset()
+                        .accessibilityIdentifier("feishu-filter-all")
+                    FilterChip(title: String(localized: "lark.filter.unread"), on: store.filter == .unread) { select(.unread, proxy: proxy) }
+                        .tapTargetOutset()
+                        .accessibilityIdentifier("feishu-filter-unread")
+                }
+                .id("feishu-filters")
+                .onGeometryChange(for: CGFloat.self) { $0.size.height.rounded(.up) } action: {
+                    scroll.filtersHeight = $0 + Theme.Space.s * 2
+                }
+                .listRowInsets(EdgeInsets(top: Theme.Space.s, leading: Theme.Space.page, bottom: Theme.Space.s, trailing: Theme.Space.page))
+                .listRowSeparator(.hidden)
+                .themedRow()
+                if store.filter == .all, query.isEmpty, !store.pinned.isEmpty {
                     LarkPinnedShelf(conversations: store.pinned, interaction: $pins, expandable: $canExpandPins) { path.append($0) }
                         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { scroll.shelfChanged($0) }
                         .background(LarkConversationScroll.Finder(scroll: scroll))
@@ -82,7 +98,7 @@ private struct LarkConversationsPage: View {
                         .listRowSeparator(.hidden)
                         .themedRow()
                 }
-                if store.conversations.isEmpty {
+                if store.conversations.isEmpty, store.nextCursor == nil {
                     empty
                         .listRowSeparator(.hidden)
                 } else {
@@ -95,7 +111,7 @@ private struct LarkConversationsPage: View {
                         }
                         .listRowSeparator(.hidden)
                     }
-                    let prefetch = query.isEmpty ? rows.dropLast(Self.prefetchRows).last?.id : nil
+                    let prefetch = query.isEmpty && store.filter == .all ? rows.dropLast(Self.prefetchRows).last?.id : nil
                     ForEach(rows) { conversation in
                         NavigationLink(value: conversation) { LarkConversationRow(conversation: conversation, display: display) }
                             .accessibilityIdentifier("feishu-chat-" + conversation.id)
@@ -119,8 +135,11 @@ private struct LarkConversationsPage: View {
                         Group {
                             if store.pageFailed {
                                 Button("Retry [Lark Conversations View 8924c7]") { Task { await store.more() } }.lineLimit(1)
-                            } else if !query.isEmpty, searchPages >= Self.searchPageLimit {
-                                Button("Search Older Chats") { searchPages = 0; Task { await loadAtEnd() } }.lineLimit(1)
+                            } else if scansPages, searchPages >= Self.searchPageLimit {
+                                Button(store.filter == .unread ? String(localized: "lark.filter.continue") : String(localized: "Search Older Chats")) {
+                                    searchPages = 0; endVisible = true; Task { await loadAtEnd() }
+                                }.lineLimit(1)
+                                .accessibilityIdentifier("feishu-filter-continue")
                             } else {
                                 VStack(spacing: Theme.Space.xs) {
                                     ProgressView()
@@ -163,11 +182,11 @@ private struct LarkConversationsPage: View {
                 if phase != .idle { scroll.reader.cancel() }
                 store.holdScrolling(phase != .idle)
                 if (phase == .tracking || phase == .interacting) && old != .tracking && old != .interacting {
-                    pins.beginDrag(scrollOffset: offset, shelfPassed: shelfPassed(offset), canExpand: canExpandPins && query.isEmpty)
+                    pins.beginDrag(scrollOffset: offset, shelfPassed: shelfPassed(offset), canExpand: store.filter == .all && canExpandPins && query.isEmpty)
                 }
                 if old == .interacting && phase != .interacting && phase != .tracking {
                     updatePins(offset)
-                    withAnimation(Theme.Motion.expand) { _ = pins.endDrag(canExpand: canExpandPins && query.isEmpty) }
+                    withAnimation(Theme.Motion.expand) { _ = pins.endDrag(canExpand: store.filter == .all && canExpandPins && query.isEmpty) }
                 } else if old == .tracking && phase != .interacting { pins.cancelDrag() }
             }
             .themedPage()
@@ -230,16 +249,20 @@ private struct LarkConversationsPage: View {
     }
 
     /// A search with too little to show is still reading on through older pages.
+    private var scansPages: Bool { !query.isEmpty || store.filter == .unread }
+
     private var searchingOn: Bool {
         store.nextCursor != nil && !store.pageFailed && searchPages < Self.searchPageLimit
     }
 
     /// Pages while the end of the list is on screen; a search counts its pages and stops at `searchPageLimit`.
     private func loadAtEnd() async {
-        while endVisible, let cursor = store.nextCursor, !store.pageFailed, !Task.isCancelled {
-            let searching = !query.isEmpty
+        let selected = store.filter
+        while active, path.isEmpty, selected == store.filter, endVisible, let cursor = store.nextCursor, !store.pageFailed, !Task.isCancelled {
+            let searching = scansPages
             if searching, searchPages >= Self.searchPageLimit { return }
             await store.more()
+            guard selected == store.filter else { return }
             // Nothing new on screen yet (another request had it, or the page waits for the list to rest): the cursor's
             // change asks again.
             if store.nextCursor == cursor { return }
@@ -247,8 +270,20 @@ private struct LarkConversationsPage: View {
         }
     }
 
+    private func select(_ filter: LarkConversationsModel.Filter, proxy: ScrollViewProxy) {
+        guard filter != store.filter else { return }
+        searchPages = 0
+        endVisible = false
+        pins = LarkPinnedInteraction()
+        scroll.resetShelf()
+        Task {
+            await store.select(filter)
+            proxy.scrollTo("feishu-filters", anchor: .top)
+        }
+    }
+
     private func shelfPassed(_ offset: Double) -> Bool {
-        scroll.shelfHeight > 0 && offset >= Double(scroll.shelfHeight) - LarkPinnedInteraction.topTolerance
+        scroll.shelfHeight > 0 && offset >= Double(scroll.filtersHeight + scroll.shelfHeight) - LarkPinnedInteraction.topTolerance
     }
 
     private func updatePins(_ offset: Double) {
@@ -264,10 +299,11 @@ private struct LarkConversationsPage: View {
             notice(String(localized: "Lark isn't connected yet"), detail: String(localized: "Connect a Lark account on the hub and your chats will show up here."), action: String(localized: "Connection Settings")) { openConnectionSettings() }
         } else if store.needsUpgrade {
             notice(String(localized: "Hub update needed"), detail: String(localized: "After updating, pinned chats show up and your current Lark account syncs."), action: String(localized: "Check Again [Lark Chat View c25fb8]")) { Task { await store.refresh() } }
-        } else if store.failed {
+        } else if store.failed || store.pageFailed {
             notice(String(localized: "Couldn't load chats"), detail: String(localized: "Check the Lark connection and try again later."), action: String(localized: "Retry [Components b8784c]")) { Task { await store.refresh() } }
         } else {
-            Text("No chats yet").font(Theme.Font.body).foregroundStyle(.secondary)
+            Text(store.filter == .unread ? String(localized: "lark.filter.empty") : String(localized: "No chats yet"))
+                .font(Theme.Font.body).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity).padding(.vertical, Theme.Space.xxl)
         }
     }
