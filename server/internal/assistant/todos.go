@@ -198,6 +198,11 @@ type todoBook struct {
 	reporting map[string]bool
 	runMu     sync.Mutex // one report step at a time (sourceReportNow)
 
+	// importing is held across a batch of imported reminders, and imports are their links when there is no store
+	// (todo_imports.go).
+	importing sync.Mutex
+	imports   map[[2]string]db.TodoImport
+
 	// remindWake wakes remindLoop when the todos change (todo_plan.go).
 	remindOnce sync.Once
 	remindWake chan struct{}
@@ -752,6 +757,7 @@ func (s *Service) todoRoutes() {
 	s.todoThreadRoutes()
 	s.todoSeenRoutes()
 	s.todoRetitleRoute()
+	s.todoImportRoutes()
 	// GET /api/v1/todos: list all todos (newest created_at first), agents sorted (active first, then released); a todo
 	// waiting for the owner carries its ask (todo_ask.go), an open one nobody works on why (tasks_orphan.go)
 	s.handle("GET /api/v1/todos", func(w http.ResponseWriter, r *http.Request) {

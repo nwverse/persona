@@ -95066,6 +95066,52 @@
         }
       }
     },
+    "Import into To-dos": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import into To-dos"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ToDo に取り込む"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "导入到待办"
+          }
+        }
+      }
+    },
+    "Incomplete reminders in the lists you choose become to-dos, and later changes to their title, notes or due date follow. Nothing is written back to Reminders; completing or deleting a reminder leaves its to-do as it is. Imports happen while Persona is open.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Incomplete reminders in the lists you choose become to-dos, and later changes to their title, notes or due date follow. Nothing is written back to Reminders; completing or deleting a reminder leaves its to-do as it is. Imports happen while Persona is open."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "選んだリストの未完了のリマインダーが ToDo になり、その後のタイトル、メモ、期限の変更も反映されます。リマインダーには書き戻しません。リマインダーを完了または削除しても ToDo はそのままです。取り込みは Persona を開いている間に行われます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "所选列表中未完成的提醒事项会成为待办，之后它们的标题、备注或截止时间改动也会同步过来。不会写回提醒事项；完成或删除提醒事项不影响对应的待办。只在 Persona 打开时导入。"
+          }
+        }
+      }
+    },
     "Official Accounts" : {
       "extractionState" : "manual",
       "localizations" : {
