@@ -405,6 +405,9 @@ func (m *Machine) open(ctx context.Context, via string) (*nodePipe, error) {
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	cmd := m.command(ctx)
+	if via == "ssh" {
+		stopSSHTreeOnCancel(cmd)
+	}
 	// Bound pipe draining if a node descendant inherits stdout or stderr.
 	cmd.WaitDelay = shutdownStepTimeout
 	stdin, err := cmd.StdinPipe()
