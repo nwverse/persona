@@ -1,5 +1,16 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- A presence window is not an owner-turn guarantee (#6394). The two-minute `ownerPresentFor` hold and the
+  five-minute `relayDecisionMax` cap let queued relayed/decision messages start new rounds behind the owner's back
+  once the window expires, even while the owner is still waiting on their own round. Keep the ranked queue and the
+  presence window, but add an in-memory per-conversation gate armed when the owner speaks (`relayBook.ownerTurns`)
+  that holds every rank until a session list shows the round stopped. Give it two safety releases — a short
+  `ownerTurnStartWait` when the round is never seen working (refused send, dropped conversation) and a hard
+  `ownerTurnMax` once seen working but never stopped — and make an expired gate return immediately rather than fall
+  back onto the presence window, or the cap is not authoritative. The gate is memory-only on purpose: a restart
+  degrades to the persisted presence window. Update the time-window tests by shortening the new limits in lockstep
+  with the presence timers instead of waiting real minutes.
+
 - Inbox handling chats are implementation details, not user-created conversations (#5723). `Untitled` suppresses
   automatic naming but does not hide a chat, and `titleFixed` still gives it the item's subject. Apply default
   archiving in the common session snapshot, not only after starting or finishing: restored chats and follow-up
@@ -159,6 +170,7 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
 - Session `last_text` is node preview, whitespace collapsed /200 characters (`node/sessions.go` snippet), not renderable Markdown (2026-11-04,#1508). Completion-card summaries became one-line lists / headings with truncated ** / backticks and web plaintext symbols. Full completion cards read `lastTurn` via `session.items`, `clipMarkdown` by lines without splitting markup. One/two-line progress / pushes strip Markdown (`textfmt.PlainMarkdown` / `textfmt.PushText` in `server/internal/textfmt`, web `lib/plain-markdown.ts`).
 - Hub feed append-only does not mean later Sent status can stay client-memory (2026-11-04,#1519). GitHub comment sent, refresh reverted card to Draft / Send, nearly duplicate. Persist body.sent_at, rebroadcast same ID, replace body by ID; incremental fetch includes later updates. Same investigation found prompt `查不到的用【】标出来` (“mark unknowns in brackets”), sending literal `【预计今晚 / 几点前】` (“[expected tonight / by what time]”). One-tap drafts must not leave blanks for user completion.
 - MCP `tools/list` failure must not return empty list (2026-11-04,#504). Personad mcp declares `listChanged: false`; Claude lists once per chat. Temporary node failure / startup order returned empty, permanently removing Persona tools without connectivity indication. Retry 15 seconds then JSON-RPC error, visible `/mcp` / logs. Node `{"tools":[],"error":…}` is failure too; only valid empty means no tools.
+- Nor may one part of the list failing drop that part (2026-11-13, #6422). The manager's `mcpTools` asked the hub for the phone's tools, logged a failure and listed the rest, so a conversation that started while the hub restarted had no `phone_*` for its whole life and the model told the user the phone couldn't set a reminder. Ask again briefly, then list what the hub last gave (`phoneTools`, `server/internal/assistant/fleet_tools.go`); each call is still the phone's to refuse.
 - Separate assistant process (2026-11-04,#1446, `docs/assistant/assistant.md` “Process”) can be unavailable to every hub inquiry. Startup connector registration asked each assistant tool name before connection,10 seconds each,60-second test. Startup / registration read last `assistantToolsNow`; wait only when node requests tools for assistant chat. Assistant schedule loop waits first handshake machine / timezone reply before running due tasks, or starts with empty config and fails all.
 - Bus events synchronously invoke read-loop callbacks (`internal/rpc`); slow handler stalls connection. Assistant queues in order, handles `session.turn_ended` separately (model query / waiting task Agent stop). To wait in tests, call assistant after event on same connection, then await empty queue (`BusHub.Settle`).
 - Hub default `os.Executable() assistant` launches test binary in tests, rerunning entire suite. Tests replace `assistantCommand` in init; subprocess tests detect env in `TestMain` and act as assistant.
@@ -426,3 +438,11 @@ deadline), the record was gone and no later connection told the conversation: an
 waited forever. A record that exists only so something is said later is cleared after the saying succeeded, and only if it
 still holds what was said (the woken conversation may already have re-armed new tasks). Being told twice after a send
 that timed out but was delivered is the cheaper failure.
+
+## A "which of these is it" model picks one even when none is (#6424)
+
+The Inbox judge was asked which open task an item belonged to and answered with an id the code only checked was among
+the candidates. Given seven unrelated tasks, it linked a GitHub bug report to a broad task whose notes shared a few
+words with it, and the link stuck. A selection model needs two guards: narrow the candidates by something exact first
+(the repository, the thread), skipping the call when none is left, and accept an answer only with evidence the code can
+check, such as a verbatim quote from the chosen candidate.

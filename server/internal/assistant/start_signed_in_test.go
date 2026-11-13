@@ -229,3 +229,26 @@ func TestATaskConversationSignedOutElsewhereIsReplaced(t *testing.T) {
 		}
 	})
 }
+
+// The implicit signed-in profile is Claude Code's: a hub-started conversation whose launcher ends up Codex (asked for,
+// or fallen back to) must not carry it, or the node refuses the start before creating anything (#6467).
+func TestHubStartedCodexConversationOmitsConfigDir(t *testing.T) {
+	for _, tc := range []struct {
+		launcher string
+		profile  bool
+	}{{"codex", false}, {"", true}, {"claude", true}} {
+		f := newFakeHub().withMachine()
+		f.settings = &Settings{MachineID: "server"}
+		s := newTestService(t, f)
+		if _, err := s.startSignedIn(context.Background(), StartParams{Text: "hello", Origin: OriginSpawned, Launcher: tc.launcher}); err != nil {
+			t.Fatalf("launcher %q: %v", tc.launcher, err)
+		}
+		if len(f.sends) != 1 {
+			t.Fatalf("launcher %q: %d starts", tc.launcher, len(f.sends))
+		}
+		got, set := f.sends[0]["config_dir"]
+		if tc.profile && got != meetingProfile || !tc.profile && set {
+			t.Fatalf("launcher %q: config_dir = %v (set=%v)", tc.launcher, got, set)
+		}
+	}
+}

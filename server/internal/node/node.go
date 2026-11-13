@@ -51,6 +51,8 @@ type Node struct {
 	questions questionCalls
 	// closeoutBriefs: what the manager said to tell each starting session of the closeout's form (closeout_start.go).
 	closeoutBriefs closeoutBriefs
+	// desktopSeen: when someone was found attending a session in Claude's desktop app (claudedesktop_unread.go).
+	desktopSeen desktopSeenStore
 
 	// bootAt: when this node started. A session whose record says it was started in a pane before this ran in the
 	// previous herdr server, so the restart is what ended it (interrupted.go).
@@ -163,6 +165,7 @@ type Node struct {
 	live      liveReplies                // the replies Claude is showing, from its MessageDisplay hook (livereply.go)
 	bgWait    bgWatch                    // whether background commands only wait (bgwait.go)
 	codices   *codexRegistry
+	takeovers codexTakeovers
 	usageWin  usageWindowsState // subscription rate-limit windows (usagewindows.go, #2432)
 	machineID string
 	sends     sentLog         // recent client_msg_ids (sendsafe.go)
@@ -617,6 +620,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "clipboard.set":
 		return clipboardSet(ctx, params)
 	}
+	if method == codexTakeoverPrepare || method == codexTakeoverCommit {
+		return n.codexTakeoverCall(ctx, method, params)
+	}
 	var p struct {
 		Path             string        `json:"path"`
 		Paths            []string      `json:"paths"`
@@ -756,8 +762,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		case "session.keys", "session.screen", "session.screen.before", "terminal.watch", "session.close", "session.queue.edit", "session.queue.send_now", "session.rename", "assistant.send":
 			return nil, refusal("codex_read_only", "这个会话没有终端或启动器控制能力，请在原 app-server 中操作", nil)
 		case "session.modes":
-			// Its effort, on the app-server running it (codex_effort.go); nothing else.
+			// Its effort, on the app-server running it (codex_effort.go), or in the Codex App window that has it
+			// (codex_desktop_effort.go); nothing else.
 			if _, _, driven := n.codexEffortThread(p.SessionID); !driven {
+				if src, found := n.codexSource(p.SessionID); found && codexDesktopChat(src) {
+					return ok(n.codexDesktopModes(ctx, p.SessionID, src, p.Model, p.PermissionMode, p.Effort))
+				}
 				return nil, refusal("codex_read_only", "这个会话没有终端或启动器控制能力，请在原 app-server 中操作", nil)
 			}
 			if p.Model != "" {
