@@ -43,7 +43,7 @@ export default function InfoTipPanel({ id, anchor, text, onClose }: { id: string
       id={id}
       role="tooltip"
       style={{ left: place?.left ?? -9999, top: place?.top ?? -9999, maxWidth: TIP_W }}
-      className="fixed z-[75] w-max rounded-[10px] border border-tooltip-border bg-tooltip-bg px-3 py-2 text-[12px] leading-[1.5] text-tooltip-fg shadow-overlay"
+      className="fixed z-[75] w-max rounded-[10px] border border-tooltip-border bg-tooltip-bg px-3 py-2 text-label leading-[1.5] text-tooltip-fg shadow-overlay"
     >
       {text}
     </div>,

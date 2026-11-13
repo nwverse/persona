@@ -88,11 +88,16 @@ export function TodoTreeView({ tree, machines, activeKey, sections, after, ...p 
   );
 }
 
+/** A section's title in the trees: its mark and its name ("By pinned"'s directions, and the groups beside them). */
+function SectionTitle({ icon, name }: { icon: IconName; name: string }) {
+  return <span className="flex min-w-0 items-center gap-1.5"><Icon name={icon} size={12} stroke={2} className="shrink-0 text-ink-3" /><span className="truncate normal-case tracking-normal text-[11.5px] text-ink-2">{name}</span></span>;
+}
+
 const TreeProjectSection = memo(function TreeProjectSection({ k, name, state, folded: initial, sessions, todos, direction, ...p }: { k: string; name: string; state: TreeState; folded: boolean; sessions: Session[]; todos: TreeTodo[]; direction?: TreeProject["direction"] } & TreeRowProps) {
   const [folded, toggle] = useFolded(k, initial, { follow: true, holds: holdsRow(sessions, p.activeKey) });
   return (
     <Section
-      title={<span className="flex min-w-0 items-center gap-1.5"><Icon name={direction ? (direction.secretary ? "person" : "target") : "folder"} size={12} stroke={2} className="shrink-0 text-ink-3" /><span className="truncate normal-case tracking-normal text-[11.5px] text-ink-2">{name}</span></span>}
+      title={<SectionTitle icon={direction ? (direction.secretary ? "person" : "target") : "folder"} name={name} />}
       folded={folded}
       onToggle={toggle}
       // a pinned direction (#4352) says its two counts instead of one state word
@@ -127,7 +132,7 @@ function BranchEnd({ n, state, label }: { n: number; state?: TreeState; label?: 
  */
 export function TreeBranch({ branch, top, folded, onToggle, toggleLabel, icon, title, info, end, empty, children }: { branch: string; top?: boolean; folded: boolean; /** None: nothing to unfold, the title stays in the column. */ onToggle?: () => void; toggleLabel: string; icon?: IconName; title: React.ReactNode; info?: React.ReactNode; end: React.ReactNode; empty?: string; children?: React.ReactNode }) {
   const row = (
-    <div data-tree-branch-row className="relative z-10 flex w-full min-w-0 select-none items-center gap-1.5 rounded-control py-1 pl-2 pr-2 text-[12px] text-ink-2 hover:bg-hover">
+    <div data-tree-branch-row className="relative z-10 flex w-full min-w-0 select-none items-center gap-1.5 rounded-control py-1 pl-2 pr-2 text-label text-ink-2 hover:bg-hover">
       {onToggle ? (
         <button type="button" aria-expanded={!folded} aria-label={toggleLabel} onClick={onToggle} className="touch-hit flex shrink-0 items-center">
           <BranchChevron folded={folded} />
@@ -144,7 +149,7 @@ export function TreeBranch({ branch, top, folded, onToggle, toggleLabel, icon, t
   const body = (
     <Collapse open={!folded} sidebarFold>
       <div data-tree-branch-list className="flex flex-col gap-px pl-3" inert={folded || undefined}>
-        {children ?? (empty ? <p className="select-none px-2 py-1 text-[12px] leading-[1.45] text-ink-3">{empty}</p> : null)}
+        {children ?? (empty ? <EmptyHint text={empty} /> : null)}
       </div>
     </Collapse>
   );
@@ -153,6 +158,11 @@ export function TreeBranch({ branch, top, folded, onToggle, toggleLabel, icon, t
       {top ? <SidebarGroup heading={row}>{body}</SidebarGroup> : <>{row}{body}</>}
     </div>
   );
+}
+
+/** What an open group with nothing in it says: what it would hold (#6458). */
+function EmptyHint({ text }: { text: string }) {
+  return <p className="select-none px-2 py-1 text-label leading-[1.45] text-ink-3">{text}</p>;
 }
 
 /** A group's title: it folds the group, as its chevron does. */
@@ -170,12 +180,12 @@ export function GroupBranch({ branch, name, hint, icon, n, state, folded, onTogg
   if (section) {
     return (
       <Section
-        title={<span className="flex min-w-0 items-center gap-1.5"><Icon name={icon} size={12} stroke={2} className="shrink-0 text-ink-3" /><span className="truncate normal-case tracking-normal text-[11.5px] text-ink-2">{name}</span></span>}
+        title={<SectionTitle icon={icon} name={name} />}
         folded={folded}
         onToggle={onToggle}
         right={<span className="flex shrink-0 items-center gap-1.5">{info}<BranchEnd n={n} state={said} /></span>}
       >
-        {body ?? <p className="select-none px-2 py-1 text-[12px] leading-[1.45] text-ink-3">{hint}</p>}
+        {body ?? <EmptyHint text={hint} />}
       </Section>
     );
   }
