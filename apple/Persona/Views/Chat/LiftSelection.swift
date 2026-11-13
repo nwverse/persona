@@ -736,6 +736,9 @@ final class LiftUITextView: UITextView, UITextViewDelegate, UIEditMenuInteractio
     /// The word under a point in the window; where there is none (a space, a mark), the character there.
     private func word(at point: CGPoint) -> UITextRange? {
         guard let pos = closestPosition(to: convert(point, from: nil)) else { return nil }
+        #if DEBUG
+        publishPress(point, pos) // TEMP #6552
+        #endif
         for direction in [UITextStorageDirection.forward, .backward] {
             if let w = tokenizer.rangeEnclosingPosition(pos, with: .word, inDirection: UITextDirection(rawValue: direction.rawValue)) {
                 return w
@@ -920,6 +923,40 @@ extension LiftUITextView {
             let s = lines.isEmpty ? "" : "lines=\(code(lines))/handles=\(code(handles))/shown=\(code([shown]))"
             if LiftLines.shared.picked != s { LiftLines.shared.picked = s }
         }
+    }
+}
+
+extension LiftUITextView {
+    /// TEMP #6552: where a press that starts a selection landed (`LiftLines.press`): the press in the window and in the
+    /// text view, the text view's frame in the window, its parts and their characters, the segments it snapped to (part,
+    /// box, rows), the character picked, and its lines within 400 pt of the press (first character, part, top and height
+    /// in the window, hidden, first characters).
+    func publishPress(_ point: CGPoint, _ pos: UITextPosition) {
+        guard LiftLines.on else { return }
+        func f(_ x: CGFloat) -> String { String(format: "%.1f", x) }
+        func clean(_ s: String) -> String { String(s.prefix(8)).replacingOccurrences(of: "|", with: "!").replacingOccurrences(of: "~", with: "-").replacingOccurrences(of: "\n", with: "/") }
+        let p = convert(point, from: nil), frame = convert(bounds, to: nil)
+        let at = offset(from: beginningOfDocument, to: pos)
+        let text = storage.string as NSString
+        var out = ["w=\(f(point.x)),\(f(point.y));v=\(f(p.x)),\(f(p.y));frame=\(f(frame.minX)),\(f(frame.minY)),\(f(frame.width)),\(f(frame.height))"
+            + ";inset=\(f(textContainerInset.top));at=\(at);len=\(storage.length);held=\(wordsHeld),\(snapHeld)"
+            + ";parts=\(parts.map(String.init).joined(separator: ","))"
+            + ";ranges=\(partRanges.sorted { $0.key < $1.key }.map { "\($0.key):\($0.value.location)+\($0.value.length)" }.joined(separator: ","))"
+            + ";picked=\(at < text.length ? clean(text.substring(from: at)) : "end")"]
+        for s in segments {
+            out.append("seg=\(s.part.map(String.init) ?? "all");box=\(s.box.map { "\(f($0.lowerBound))-\(f($0.upperBound))" } ?? "none")"
+                + ";rows=\(s.rows.count);first=\(s.rows.first.map(f) ?? "-");last=\(s.rows.last.map(f) ?? "-");texts=\(s.texts.count)")
+        }
+        let origin = convert(CGPoint(x: textContainerInset.left, y: textContainerInset.top), to: nil)
+        layout.enumerateLineFragments(forGlyphRange: layout.glyphRange(for: textContainer)) { rect, _, _, glyphs, _ in
+            guard abs(rect.minY + self.textContainerInset.top - p.y) < 400 else { return }
+            let chars = self.layout.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+            let part = self.storage.attribute(.replyPart, at: chars.location, effectiveRange: nil) as? Int ?? -1
+            out.append("line=\(chars.location)+\(chars.length);part=\(part);y=\(f(origin.y + rect.minY));h=\(f(rect.height))"
+                + ";hidden=\(self.snapper.hidden.contains(glyphs.location) ? 1 : 0);t=\(clean(text.substring(with: chars)))")
+        }
+        let s = out.joined(separator: " ~ ")
+        if LiftLines.shared.press != s { LiftLines.shared.press = s }
     }
 }
 
