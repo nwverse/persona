@@ -40,6 +40,16 @@ class InboxTimelineTest {
             val name = case.getValue("name").jsonPrimitive.content
             val chain = inboxEventFields(case.getValue("input").jsonObject.getValue("item").jsonObject).chain
             val expected = case.getValue("expected").jsonObject
+            val sessions = case.getValue("input").jsonObject["sessions"]?.jsonArray?.map { AgentSession.fromJson(it.jsonObject) }.orEmpty()
+            val liveStates = expected["live_state"]?.jsonArray?.associate {
+                it.jsonObject.getValue("id").jsonPrimitive.content to it.jsonObject.getValue("session_state").jsonPrimitive.content
+            }.orEmpty()
+            for (entry in chain) {
+                assertEquals("$name/${entry.id}/live_state", liveStates.containsKey(entry.id), showsAgentState(chain, entry, sessions))
+                liveStates[entry.id]?.let { state ->
+                    assertEquals("$name/${entry.id}/session_state", state, chainAgentSession(entry, sessions)?.state?.wire)
+                }
+            }
             assertEquals("$name/folded", expected.getValue("folded").jsonArray.map { it.jsonPrimitive.content }, shownChain(chain, false).map { it.id })
             assertEquals("$name/expanded", expected.getValue("expanded").jsonArray.map { it.jsonPrimitive.content }, shownChain(chain, true).map { it.id })
             for (step in expected.getValue("steps").jsonArray.map { it.jsonObject }) {
