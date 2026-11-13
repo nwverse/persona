@@ -3561,6 +3561,7 @@ nonisolated struct AgentsListShown: Encodable, Equatable {
             var x = s
             x.rev = nil
             x.suggestion = nil
+            x.suggestionRisky = false
             x.ports = nil
             x.queued = nil
             x.permissionMode = nil

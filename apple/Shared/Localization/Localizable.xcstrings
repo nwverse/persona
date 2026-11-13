@@ -17040,6 +17040,29 @@
       },
       "extractionState" : "manual"
     },
+    "After a reply in a chat you have open, a small model suggests what you might send next, above the empty message box. Claude Code in a terminal keeps its own suggestions. Uses one extra model call per reply; the model is set under Model configuration › Next-message suggestions." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "After a reply in a chat you have open, a small model suggests what you might send next, above the empty message box. Claude Code in a terminal keeps its own suggestions. Uses one extra model call per reply; the model is set under Model configuration › Next-message suggestions."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開いているチャットで返信のたびに、小さなモデルが次に送りそうなメッセージを空の入力欄の上に提案します。ターミナルの Claude Code は自身の提案を使い続けます。返信ごとにモデル呼び出しが1回増えます。使うモデルは「モデル設定 › 次のメッセージの候補」で設定します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在你打开的对话里，每次回复后由小模型在空输入框上方建议你可能要发的下一句。终端里的 Claude Code 仍用它自己的建议。每次回复多一次模型调用；所用模型在「模型配置 › 下一句建议」里设置。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "After an upstream refusal, this conversation answers with %@." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -61287,6 +61310,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已填写，点保存"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Fills the input box." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fills the input box."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "入力欄に挿入します"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "填入输入框"
           }
         }
       },
@@ -139205,6 +139251,29 @@
           }
         }
       }
+    },
+    "Suggest the Next Message" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Suggest the Next Message"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "次のメッセージを提案"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "建议下一句"
+          }
+        }
+      },
+      "extractionState" : "manual"
     },
     "Suggested Agent task" : {
       "localizations" : {

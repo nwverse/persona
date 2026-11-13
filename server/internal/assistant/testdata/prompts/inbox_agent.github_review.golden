@@ -25,4 +25,5 @@ GitHub 链接：https://github.com/example-org/example-repo/pull/12（github_rea
   - kind conclusion：你已经处理完了，text 是结论；outcome 写 fyi（示例用户知道就行）或 done（看完发现不用管）。
   要示例用户拿主意的（比如「先问张三再回客户」），把 handback 设成 true：示例用户确认后会作为指示交回给你去做。
   note 是一两句你查到了什么、依据在哪、还缺什么，给示例用户核对用。和别的会话、别的来源里的事有关的，把那件事的 id 写进 related。
+  球在对方那边、这一轮没有要示例用户确认的东西时，不带 kind、text 等建议字段，只带 recap 和 follow（title、summary 仍按上面的要求写）：follow 写等谁（who，空着就是等对方回复）、下一步（next）、多久后再看（check_in，或 check_at 的具体时间）。
 - 交了就结束这一轮，不用再总结。之后这件事有新消息、示例用户确认或驳回时会发到这里：只需要更新总结时调 inbox_suggest 只给 recap。
