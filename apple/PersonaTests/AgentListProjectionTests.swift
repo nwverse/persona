@@ -451,4 +451,57 @@ import Testing
         settings.searchScope = .title
         #expect(AgentListProjection.build(input([tree, other], settings: settings)).base.isEmpty)
     }
+
+    /// The list menu's Filter (#6589): every harness, project and model the agents have, the assistant's chats left out,
+    /// a model by its short name; a kept choice whose agents are gone stays listed so it can be cleared.
+    @Test func theFilterOffersEveryHarnessProjectAndModel() throws {
+        var claude = try session("claude", cwd: "/code/orca")
+        claude.agent = "claude"
+        claude.model = "claude-opus-5-5"
+        claude.repoRoot = "/code/orca"
+        var codex = try session("codex", cwd: "/code/persona")
+        codex.agent = "codex"
+        codex.model = "gpt-5"
+        codex.repoRoot = "/code/persona"
+        var chat = try session("chat", cwd: "/code/assistant")
+        chat.assistant = true
+        chat.model = "claude-haiku-5-5"
+        let facets = AgentListProjection.build(input([claude, codex, chat])).facets
+        #expect(facets.harnesses.map(\.id) == ["claude", "codex"])
+        #expect(facets.models.map(\.name) == ["gpt-5", "opus 5.5"])
+        #expect(facets.models.map(\.id) == ["gpt-5", "claude-opus-5-5"])
+        #expect(facets.projects.map(\.id) == ["orca", "persona"])
+        #expect(AgentFacetChoices.with("gone", in: facets.harnesses).last?.id == "gone")
+        #expect(AgentFacetChoices.with("codex", in: facets.harnesses) == facets.harnesses)
+        #expect(AgentFacetChoices.modelName("claude-sonnet-5-5-20261101[1m]") == "sonnet 5.5 1M")
+        #expect(AgentFacetChoices.modelName("o3") == "o3")
+    }
+
+    /// Each of the Filter's choices narrows the list as the search's operator does, and they stack.
+    @Test func theFilterNarrowsTheList() throws {
+        var claude = try session("claude", cwd: "/code/orca")
+        claude.agent = "claude"
+        claude.model = "claude-opus-5-5"
+        claude.repoRoot = "/code/orca"
+        var codex = try session("codex", cwd: "/code/persona")
+        codex.agent = "codex"
+        codex.model = "gpt-5"
+        codex.repoRoot = "/code/persona"
+        let both = [claude, codex]
+        func shown(_ change: (inout AgentListProjection.Settings) -> Void) -> [String] {
+            var settings = AgentListProjection.Settings()
+            change(&settings)
+            return AgentListProjection.build(input(both, settings: settings)).base.map(\.sessionID).sorted()
+        }
+        #expect(shown { _ in } == ["claude", "codex"])
+        #expect(shown { $0.harness = "codex" } == ["codex"])
+        #expect(shown { $0.model = "claude-opus-5-5" } == ["claude"])
+        #expect(shown { $0.project = "orca" } == ["claude"])
+        #expect(shown { $0.harness = "codex"; $0.model = "claude-opus-5-5" } == [])
+        #expect(shown {
+            $0.pinnedOnly = true
+            $0.preferences[""] = .init(pins: Pins(), mutes: Pins())
+            $0.preferences[""]!.pins.sessions = ["fixture-box/codex"]
+        } == ["codex"])
+    }
 }

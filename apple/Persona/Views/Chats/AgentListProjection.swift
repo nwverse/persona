@@ -61,6 +61,64 @@ nonisolated struct AgentParsedQuery: Equatable, Sendable {
     }
 }
 
+/// What the list menu's Filter offers (#6589), as the web's title-row Filter does: every harness, project and model the
+/// agents have. Without counts: the menu is built again only when a value comes or goes, not on every push (the open
+/// menu jumped back to its top under the finger when it followed the list, `AgentsMenus.swift`).
+nonisolated struct AgentFacetChoices: Equatable, Sendable {
+    struct Choice: Equatable, Sendable, Identifiable {
+        /// What the filter keeps (`dev.harnessFilter` …), matched as the search's `harness:` / `project:` / `model:` are.
+        var id: String
+        var name: String
+    }
+
+    var harnesses: [Choice] = []
+    var projects: [Choice] = []
+    var models: [Choice] = []
+
+    init() {}
+
+    init(_ sessions: [Session]) {
+        var harness: [String: String] = [:], project: [String: String] = [:], model: [String: String] = [:]
+        for s in sessions where !s.assistant {
+            if harness[s.harnessID] == nil { harness[s.harnessID] = s.agentLabel }
+            if !s.projectName.isEmpty { project[s.projectName] = s.projectName }
+            let raw = (s.model ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !raw.isEmpty, model[raw] == nil { model[raw] = Self.modelName(raw) }
+        }
+        func sorted(_ d: [String: String]) -> [Choice] {
+            d.map { Choice(id: $0.key, name: $0.value) }.sorted { a, b in
+                let order = a.name.localizedStandardCompare(b.name)
+                return order == .orderedSame ? a.id < b.id : order == .orderedAscending
+            }
+        }
+        harnesses = sorted(harness)
+        projects = sorted(project)
+        models = sorted(model)
+    }
+
+    /// `choices` with `selected` among them, so a kept filter whose agents are gone still shows (and clears) in its menu.
+    static func with(_ selected: String, in choices: [Choice]) -> [Choice] {
+        selected.isEmpty || choices.contains { $0.id == selected } ? choices : choices + [Choice(id: selected, name: selected)]
+    }
+
+    /// The name a menu or chip says for `id`.
+    static func name(_ id: String, in choices: [Choice]) -> String { choices.first { $0.id == id }?.name ?? id }
+
+    /// A model's short name, as the web's `modelShort` writes it: "claude-opus-5-5" is "opus 5.5", "…[1m]" adds "1M";
+    /// any other id as it is.
+    static func modelName(_ raw: String) -> String {
+        let id = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let m = claudeModel.firstMatch(in: id, range: NSRange(id.startIndex..., in: id)),
+              let family = Range(m.range(at: 1), in: id) else { return id }
+        let version = Range(m.range(at: 2), in: id).map { id[$0].split(separator: "-").joined(separator: ".") } ?? ""
+        let wide = m.range(at: 3).location != NSNotFound
+        return [id[family].lowercased(), version, wide ? "1M" : ""].filter { !$0.isEmpty }.joined(separator: " ")
+    }
+
+    private static let claudeModel = try! NSRegularExpression(pattern: #"^claude-([a-z]+)((?:-\d{1,2})*)(?:-\d{8})?(\[1m\])?$"#,
+                                                               options: [.caseInsensitive])
+}
+
 nonisolated struct AgentSearchPlan: Equatable, Sendable {
     var code: String
     var parsed: AgentParsedQuery
@@ -308,6 +366,8 @@ nonisolated struct AgentListProjection: Sendable {
     var apps: [AppGroup] = []
     var menuSections: [String] = []
     var searchPlan = AgentSearchPlan(code: "session.where(s => true)", parsed: .init())
+    /// What the list menu's Filter offers: every agent the hub filter shows, before any filter narrows them (#6589).
+    var facets = AgentFacetChoices()
     /// Searching can match an Agent-free worktree even when no session matches the query.
     var hasSearchResults: Bool { !base.isEmpty || !tree.isEmpty }
 
@@ -320,6 +380,7 @@ nonisolated struct AgentListProjection: Sendable {
         let parsed = plan.parsed
         result.sessionsByKey = Dictionary(input.sessions.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
         result.machinesByRef = Dictionary(input.machines.map { ($0.ref, $0) }, uniquingKeysWith: { a, _ in a })
+        result.facets = AgentFacetChoices(settings.multiHub ? input.sessions.filter { HubFilter.matches(settings.hub, $0.group) } : input.sessions)
         // Subtasks go under the session that started them, as in the Codex App and on Android: the list and its counts
         // are the others'. A working one hangs under its parent only while the list draws a row above it (`runs`): the
         // groupings that list what runs draw the pinned and live agents; Recently Used and By App draw every one.
