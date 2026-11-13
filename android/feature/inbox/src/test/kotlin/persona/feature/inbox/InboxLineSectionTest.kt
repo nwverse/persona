@@ -111,8 +111,18 @@ class InboxLineSectionTest {
         val repository = FakeRepository(InboxLineage(InboxParentRef("inbox", "current"), current,
             listOf(InboxLineAncestor(InboxParentRef("todo", "todo-1")))))
         show(repository, current)
+        rule.onNodeWithText("待办 待办").assertDoesNotExist()
         rule.onNodeWithText("待办", substring = true).performClick()
         assertEquals(TodoDetailRoute("todo-1"), opened.last())
+    }
+
+    @Test fun anUntitledSessionSaysItsKindOnlyOnce() {
+        val current = record("current", "Current")
+        val repository = FakeRepository(InboxLineage(InboxParentRef("inbox", "current"), current,
+            listOf(InboxLineAncestor(InboxParentRef("session", "m1/missing")))))
+        show(repository, current)
+        rule.onNodeWithText("Agent 会话").assertExists()
+        rule.onNodeWithText("Agent 会话 Agent 会话").assertDoesNotExist()
     }
 
     @Test fun aSessionRowUsesItsLiveTitleAndTheItemSource() {

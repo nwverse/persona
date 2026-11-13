@@ -16,6 +16,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.unit.dp
 import androidx.navigation3.runtime.NavKey
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -48,6 +49,34 @@ class InboxLineSectionShotsTest {
 
     @Config(qualifiers = "zh-w400dp-h900dp-xhdpi")
     @Test fun drawsAtTwoX() = draw("xhdpi")
+
+    @Test fun drawsTheEventPageWithLineageInEveryStyle() {
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        var run by mutableIntStateOf(0)
+        val current = record("current", "Current")
+        val repository = Repository(InboxLineage(InboxParentRef("inbox", "current"), current,
+            listOf(InboxLineAncestor(InboxParentRef("inbox", "parent"), record("parent", "报价要等客户确认")),
+                InboxLineAncestor(InboxParentRef("todo", "todo-1"))),
+            listOf(record("child", "客户确认了报价"))))
+        rule.setContent {
+            PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                key(run) {
+                    Box(Modifier.testTag("shot").width(400.dp).height(1400.dp).background(PersonaTheme.palette.background)) {
+                        InboxEventScreen(repository, InboxEventRoute("current"), navigator)
+                    }
+                }
+            }
+        }
+        for (s in AppStyle.entries) for (d in listOf(false, true)) {
+            style = s; dark = d; run++
+            rule.waitForIdle()
+            rule.onNodeWithText("线索").assertExists()
+            val name = "inbox-event-line-${s.name.lowercase()}-${if (d) "dark" else "light"}"
+            val bitmap = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
+            File(out(), "$name.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        }
+    }
 
     private fun draw(density: String) {
         var style by mutableStateOf(AppStyle.Glass)
@@ -86,7 +115,7 @@ class InboxLineSectionShotsTest {
 
     private class Repository(private val line: InboxLineage) : InboxRepository {
         override val entries = MutableStateFlow(emptyList<InboxEntry>())
-        override val snapshot = MutableStateFlow(InboxSnapshot())
+        override val snapshot = MutableStateFlow(InboxSnapshot(records = listOfNotNull(line.item)))
         override suspend fun refresh() = Unit
         override suspend fun inboxLine(item: InboxRecord): InboxLineage = line
         override fun conversation(feedId: String, startPosition: Long?) = flowOf(LarkConversation())

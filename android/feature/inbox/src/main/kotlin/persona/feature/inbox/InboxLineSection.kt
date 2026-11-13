@@ -60,15 +60,17 @@ internal fun InboxLineSection(repository: InboxRepository, record: InboxRecord, 
         JSectionHeader(stringResource(R.string.inbox_line_title))
         rows.forEachIndexed { index, row ->
             val session = if (row.parent.kind == "session") snapshot.sessions.firstOrNull { it.session.key.path == row.parent.id } else null
-            val title = row.item?.item?.title?.takeIf { it.isNotBlank() } ?: when (row.parent.kind) {
+            val liveTitle = row.item?.item?.title?.takeIf { it.isNotBlank() }
+                ?: session?.session?.displayTitle?.takeIf { it.isNotBlank() }
+            val title = liveTitle ?: when (row.parent.kind) {
                 "inbox" -> stringResource(R.string.inbox_line_gone)
-                "session" -> session?.session?.displayTitle?.takeIf { it.isNotBlank() } ?: stringResource(R.string.inbox_line_kind_session)
-                else -> stringResource(R.string.inbox_line_kind_todo)
+                else -> "" // As on the web: no invented title, just the one kind word in titleLead.
             }
+            val kind = inboxLineKind(row)
             val status = row.item?.let { inboxLineStatus(it) } ?: session?.stateLabel?.text()
             val unlink = row.unlink
             JGroupItem(GroupPosition.of(index, rows.size)) {
-                JRow(title = title, titleLead = "${inboxLineKind(row)} ", subtitle = status, leadingIcon = when (row.parent.kind) {
+                JRow(title = title, titleLead = if (title.isEmpty()) kind else "$kind ", subtitle = status, leadingIcon = when (row.parent.kind) {
                     "todo" -> PhIcons.ListChecks
                     "session" -> PhIcons.Robot
                     else -> PhIcons.Tray
