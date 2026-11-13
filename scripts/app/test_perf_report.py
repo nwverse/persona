@@ -111,12 +111,13 @@ class LaunchExporter(FakeExporter):
             return super().__call__(command, **kwargs)
         rows = []
         for ident, values in self.rows.items():
-            metrics = [] if values is None else [{
-                "displayName": "App Launch Duration (ApplicationLaunch)",
-                "identifier": "com.apple.dt.XCTMetric_ApplicationLaunch-ApplicationLaunch.duration",
-                "unitOfMeasurement": self.unit, "measurements": values}]
-            rows.append({"testIdentifier": ident, "testRuns": [{
-                "device": {"deviceName": "Example Simulator"}, "testPlanConfiguration": "Example", "metrics": metrics}]})
+            runs = [] if values is None else (values if values and isinstance(values[0], list) else [values])
+            test_runs = [{"device": {"deviceName": f"Example Simulator {index}"}, "testPlanConfiguration": "Example",
+                          "metrics": [{"displayName": "App Launch Duration (ApplicationLaunch)",
+                                       "identifier": "com.apple.dt.XCTMetric_ApplicationLaunch-ApplicationLaunch.duration",
+                                       "unitOfMeasurement": self.unit, "measurements": measurements}]}
+                         for index, measurements in enumerate(runs, 1)]
+            rows.append({"testIdentifier": ident, "testRuns": test_runs})
         if self.with_glide:
             rows.append({"testIdentifier": TEST, "testRuns": self.metric_runs})
         return subprocess.CompletedProcess(command, 0, json.dumps(rows), "")
@@ -494,6 +495,32 @@ class LaunchReportTests(unittest.TestCase):
                 result = self.collect(LaunchExporter({COLD: values}), expected_iterations=3)
                 self.assertFalse(result["complete"])
                 self.assertFalse(result["tests"][COLD]["acceptance_eligible"])
+
+    def test_launch_counts_are_checked_per_test_run(self):
+        complete = self.collect(LaunchExporter({COLD: [[100, 140, 180], [200, 240, 280]]}), expected_iterations=3)
+        self.assertTrue(complete["complete"])
+        self.assertEqual(complete["tests"][COLD]["launch"]["values"], [100, 140, 180, 200, 240, 280])
+        self.assertEqual(complete["tests"][COLD]["launch"]["median"], 190)
+        incomplete = self.collect(LaunchExporter({COLD: [[100, 140, 180], [200, 240]]}), expected_iterations=3)
+        self.assertFalse(incomplete["complete"])
+        self.assertIn("launch run 2 count: expected 3, got 2",
+                      " ".join(incomplete["tests"][COLD]["probe"]["issues"]))
+
+    def test_launch_requires_a_verifiable_iteration_count(self):
+        one = LaunchExporter({COLD: [100]})
+        unknown = self.collect(one)
+        self.assertFalse(unknown["complete"])
+        self.assertIn("expected_iterations unknown", " ".join(unknown["tests"][COLD]["probe"]["issues"]))
+        self.assertTrue(self.collect(one, expected_iterations=1)["complete"])
+        out = self.root / "main-output"
+        original_collect = reporter.collect
+        def collect(root, expected=None):
+            return original_collect(root, expected, runner=one)
+        with mock.patch.object(reporter, "collect", side_effect=collect), mock.patch.dict(os.environ, {}, clear=True), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            code = reporter.main([str(self.root), "--output-dir", str(out)])
+        self.assertEqual(code, 1)
+        self.assertFalse(json.loads((out / "report.json").read_text())["complete"])
 
     def test_combined_final_acceptance_still_uses_the_glide(self):
         fake = LaunchExporter({COLD: [100, 140]}, with_glide=True)

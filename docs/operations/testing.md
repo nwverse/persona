@@ -1289,9 +1289,14 @@ iOS shell and regular-width card inputs retain their original tree: single-line�
 `PerfTestCase.swift` 统一 `launchPinned()`、配对、模拟器系统提示处理、原始 frame 附件及各测量入口。需要 mock 的性能测试在普通 UI 测试中跳过；跳过不算测量成功。当前清单覆盖本轮盘点的主要场景，不等于 App 的每个设置叶子页都已有独立性能测量。
 
 The `launch` lane uses `XCTApplicationLaunchMetric(waitUntilResponsive: false)` and never passes `-showFrameProbe`. Cold
-resets the pairing and snapshot on every launch; warm seeds the pairing and large snapshot, backgrounds the app to flush it,
-then measures with the saved pairing and no repeated `adopt()`. XCTest discards its own warm-up: cold means fresh pairing
-and snapshot state with warm OS caches, not a post-reboot device launch. Use a fresh `PERF_OUT` for each run; `PERF_ITERATIONS` is the retained
+resets the pairing and deletes the development snapshot before every launch; the host-side test runner uses the assigned
+simulator's data container (`PERSONA_PERF_SIM` / `PERSONA_PERF_BUNDLE`, supplied by the runner) as a pre-launch deletion
+barrier rather than changing the app's asynchronous cleanup. Warm starts from fresh pairing state, waits for at least 360
+long-Assistant items and 120 Agents with screen probes enabled only in the unmeasured seed, then backgrounds the app and
+requires a complete `dev.json` with at least one machine and 120 sessions before measuring. It measures with the saved
+pairing and no repeated `adopt()`. XCTest discards its own warm-up: cold means fresh pairing/snapshot state with warm OS
+caches, not a post-reboot device launch. Other persisted launch inputs (transcripts, drafts, outbox and personas) are left
+as they are; this measurement lane does not change their loading. Use a fresh `PERF_OUT` for each run; `PERF_ITERATIONS` is the retained
 sample count, and `PERF_ONLY=PerfLaunchTests/testColdLaunch` or `…/testWarmLaunch` selects one case.
 
 Every frame-probe measured run also has `main_thread_blocks`: the DEBUG watchdog's count, longest duration and five longest sampled

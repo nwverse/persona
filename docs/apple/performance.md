@@ -422,10 +422,14 @@ Start from a reproduction, measure the base, change one thing, measure again.
    `scripts/app/perf_report.py`.
 
    `scripts/app/perf-test.sh launch` instead runs `PerfLaunchTests` with `XCTApplicationLaunchMetric` and no frame probe.
-   Cold launches reset the saved pairing and snapshot before each fresh process; warm launches use a pairing and large
-   snapshot saved by an unmeasured seed. XCTest discards its own warm-up, so these are fresh pairing/snapshot-state and
-   restored-snapshot process launches with warm OS caches, not a rebooted-device cold series. The report keeps every retained value and shows
-   cold / warm median, range and spread in milliseconds. The 400 ms recent-iPhone budget is not a simulator failure gate.
+   Cold launches reset the saved pairing and delete the development snapshot before each fresh process; the host-side test
+   runner performs that deletion in its assigned simulator's container, without changing app-side cleanup. Warm launches
+   first verify the large mock data and the durable snapshot from an unmeasured seed; screen probes run only in that seed,
+   never in a measured launch. The measured warm launches use the saved pairing. XCTest discards its own warm-up, so these
+   are fresh pairing/snapshot-state and restored-snapshot process launches with warm OS caches, not a rebooted-device cold
+   series. Other persisted launch inputs (transcripts, drafts, outbox and personas) stay untouched; the lane measures their
+   existing loading rather than changing it. The report keeps every retained value and shows cold / warm median, range and
+   spread in milliseconds. The 400 ms recent-iPhone budget is not a simulator failure gate.
 7. **In the field.** TestFlight builds report hangs, launch time and memory to Xcode Organizer. MetricKit is not wired yet
    (#4265).
 

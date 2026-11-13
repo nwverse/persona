@@ -80,7 +80,7 @@ if [ "${PERF_SKIP_BUILD:-0}" != 1 ]; then
   build_rc=$?
   if [ $build_rc -ne 0 ]; then
     grep -E "error:" "$OUT/build.log" | head -20 >&2
-    if [ $build_rc -eq 124 ]; then verdict "timeout build (log $OUT/build.log)"
+    if [ $build_rc -eq 124 ] || [ $build_rc -eq 125 ]; then verdict "timeout build (log $OUT/build.log)"
     else verdict "failed build (log $OUT/build.log)"; fi
     exit 1
   fi
@@ -153,6 +153,9 @@ for s in "${SUITES[@]}"; do
     "$@"' _ "$UDID" \
     env TEST_RUNNER_PERSONA_PERF_HUB="http://127.0.0.1:$port" \
       TEST_RUNNER_PERSONA_PERF_ITERATIONS="$ITER" \
+      TEST_RUNNER_PERSONA_PERF_SIM="$UDID" \
+      TEST_RUNNER_PERSONA_PERF_BUNDLE="$PERSONA_BUNDLE_ID" \
+      TEST_RUNNER_PERSONA_PERF_SIM_HOME="$HOME" \
     "${SLOT[@]}" timeout 5400 xcodebuild test-without-building -project apple/Persona.xcodeproj -scheme Persona \
       -destination "id=$UDID" -derivedDataPath "$DD" -parallel-testing-enabled NO \
       -resultBundlePath "$OUT/$s.xcresult" "${only[@]}" >"$OUT/test-$s.log" 2>&1
@@ -161,7 +164,7 @@ for s in "${SUITES[@]}"; do
   stop_mock
   grep -E "Test Case .*(passed|failed|skipped)" "$OUT/test-$s.log" | sed 's/^/  /' >&2
   [ $rc -eq 0 ] || {
-    if [ $rc -eq 124 ] || [ $rc -eq 75 ]; then TIMED_OUT=1; FAILED+=("$s:timeout")
+    if [ $rc -eq 124 ] || [ $rc -eq 125 ] || [ $rc -eq 75 ]; then TIMED_OUT=1; FAILED+=("$s:timeout")
     else FAILED+=("$s"); fi
   }
 done

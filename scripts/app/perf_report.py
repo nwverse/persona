@@ -392,8 +392,16 @@ def launch_measurement(entry, expected_iterations=None):
             if not values or not all(finite(value) and value > 0 for value in values):
                 issues.append("launch metric has no finite positive measurements")
                 values = []
-            elif expected_iterations is not None and len(values) != expected_iterations:
-                issues.append(f"incomplete launch run count: expected {expected_iterations}, got {len(values)}")
+            elif expected_iterations is None:
+                issues.append("expected_iterations unknown; launch run completeness cannot be verified")
+            else:
+                runs = metric.get("runs", [])
+                if not runs:
+                    issues.append("launch metric has no per-run measurements")
+                for index, run in enumerate(runs, 1):
+                    count = len(run["raw_metric"]["measurements"])
+                    if count != expected_iterations:
+                        issues.append(f"incomplete launch run {index} count: expected {expected_iterations}, got {count}")
             values = [value * factor for value in values]
     if values:
         summary = {"unit": "ms", "values": values, "median": statistics.median(values),
