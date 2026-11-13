@@ -94,6 +94,7 @@ struct InboxConnectorTextView: View {
                     if reread != nil { retryButton }
                 }
             }
+            if !item.onlyTitleAndSummary(context) {
             Section("Content") {
                 if let context {
                     // Nothing collected: the item's preview, as the web shows it, rather than a spinner that never ends.
@@ -104,6 +105,7 @@ struct InboxConnectorTextView: View {
                 } else {
                     ProgressView().frame(maxWidth: .infinity)
                 }
+            }
             }
         }
         .themedPage()

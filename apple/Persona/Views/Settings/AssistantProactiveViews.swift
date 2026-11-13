@@ -113,11 +113,21 @@ enum AssistantScheduleText {
         r.pushesOnlyAsked ? String(localized: "Pushes only when it alerts you") : nil
     }
 
-    /// The capsule row's rule line: the rule, then the push mark (on the line rather than as a second pill, which
-    /// squeezes the title on a phone). The plain row puts the mark on a line of its own, since its rule line is one line.
+    /// The mark for a task that puts rows in the Inbox (#6430): beside the push mark, so the list shows which ones do; nil for Don't.
+    static func inboxMark(_ r: APIClient.ScheduledTask) -> String? {
+        switch r.inbox {
+        case APIClient.ScheduledTask.inboxWorthy: String(localized: "Inbox: if worth a look")
+        case APIClient.ScheduledTask.inboxEvery: String(localized: "Inbox: every time")
+        default: nil
+        }
+    }
+
+    /// The capsule row's rule line: the rule, then the push mark and the Inbox mark (on the line rather than as pills,
+    /// which squeeze the title on a phone). The plain row puts the marks on lines of their own, since its rule line is one line.
     static func ruleLine(_ r: APIClient.ScheduledTask) -> String {
         let rule = rule(r)
-        return r.pushesOnlyAsked ? String(localized: "\(rule) · Pushes only when it alerts you") : rule
+        let pushed = r.pushesOnlyAsked ? String(localized: "\(rule) · Pushes only when it alerts you") : rule
+        return [pushed, inboxMark(r)].compactMap { $0 }.joined(separator: " · ")
     }
 
     /// What it runs with when that isn't the default, in a few words: "claude-fast · Auto-Edit · Thinking Low"; `danger`
@@ -427,6 +437,13 @@ struct AssistantTaskRow: View {
                 }
                 if let mark = AssistantScheduleText.pushMark(t) {
                     Label(mark, systemImage: Theme.Icon.notifications)
+                        .labelStyle(AssistantCompactLabel())
+                        .font(Theme.Font.label)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                if let mark = AssistantScheduleText.inboxMark(t) {
+                    Label(mark, systemImage: Theme.Icon.inbox)
                         .labelStyle(AssistantCompactLabel())
                         .font(Theme.Font.label)
                         .foregroundStyle(.secondary)
