@@ -1,18 +1,11 @@
 # Lessons: web UI and interactions
 
-## A conversation link is not an answer to a task decision (#5929)
+## Pending cards need exact session metadata outside the loaded page (#6432)
 
-Carry the task and its original decision round when offering Answer in chat. An ordinary chat message, an Agent
-question's answer in the task's ledger, and a pending needs-user closeout are distinct: a decision record alone
-does not settle that closeout. Reuse explicit task routing, show what the next message will answer, reject stale
-rounds, and refresh the pending card only after delivery and recording. A parked review likewise takes precedence
-over stopped/seen turn signals: seeing a turn cannot complete the task.
-
-Keep completed session ownership separate from active task membership. Filling active `session.todo` with a closed
-task would make older consumers treat history as current work. The optional `completed_todo` display reference keeps
-the Web menu useful without changing active links, supervision, counts or quiet rules.
-Put its completion marker before the variable-length title: end truncation can hide a suffix even when a DOM-text
-test finds it. Regress the order in every translation and inspect the actual long-title menu.
+A task row can render from `taskRows` even when `getSession` has no row for its Agent. On a paging hub, hydrate every
+pending card's missing session, not only `folded_under` children, before checking approval capabilities. Keep missing
+and explicitly read-only sessions disabled. Test a root Agent outside the list window, and type without submitting.
+An expanded Needs you title opens the asking Agent; keep folding on its separate chevron, never on that title.
 
 ## A grey text selection over sidebar rows reads as a stuck highlight (#6458)
 
@@ -1178,3 +1171,17 @@ for old items. Parse a textual card envelope only inside one source message, and
 keep incomplete or unknown card shapes readable. Capability errors need their own
 code; a 409 without `Threads` is different from a temporary failure or lost access.
 A failed page refresh must not erase a loaded page or its pending reply draft.
+
+## A conversation link is not an answer to a task decision (#5929)
+
+Carry the task and its original decision round when offering Answer in chat. An ordinary chat message, an Agent
+question's answer in the task's ledger, and a pending needs-user closeout are distinct: a decision record alone
+does not settle that closeout. Reuse explicit task routing, show what the next message will answer, reject stale
+rounds, and refresh the pending card only after delivery and recording. A parked review likewise takes precedence
+over stopped/seen turn signals: seeing a turn cannot complete the task.
+
+Keep completed session ownership separate from active task membership. Filling active `session.todo` with a closed
+task would make older consumers treat history as current work. The optional `completed_todo` display reference keeps
+the Web menu useful without changing active links, supervision, counts or quiet rules.
+Put its completion marker before the variable-length title: end truncation can hide a suffix even when a DOM-text
+test finds it. Regress the order in every translation and inspect the actual long-title menu.
