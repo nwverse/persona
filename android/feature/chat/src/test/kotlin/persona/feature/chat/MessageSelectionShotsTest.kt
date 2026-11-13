@@ -13,14 +13,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -37,6 +40,7 @@ import java.io.File
  * A message while "Select" has its words selected where they are (#4210 T5), in every style, light and dark: the reply is
  * highlighted from its first word to its last, code block and list among them; the messages round it are as they are.
  * Robolectric draws neither the handles nor the system's menu (they are windows of their own), so only the highlight shows.
+ * Glass again at the largest text size (`select-large-*`).
  * PNGs in `build/message-selection-shots/` (`-Dpersona.shots=<dir>`).
  */
 @RunWith(AndroidJUnit4::class)
@@ -55,27 +59,30 @@ class MessageSelectionShotsTest {
     @Test fun shotsInEveryStyle() {
         var style by mutableStateOf(AppStyle.Glass)
         var dark by mutableStateOf(false)
+        var fontScale by mutableStateOf(1f)
         val menu = MessageMenuState().apply { quote = {}; quoteWords = { _, _ -> } }
         rule.setContent {
-            PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
-                val actions = remember {
-                    ChatRowActions(SessionKey("box", "s1"), { "" }, null, photos = null, pictures = { emptyList() },
-                        openImages = { _, _ -> }, menu = menu, retryLineId = null, onRetry = {})
-                }
-                CompositionLocalProvider(LocalChatRowActions provides actions) {
-                    Column(Modifier.testTag("shot").width(400.dp).background(PersonaTheme.palette.background).padding(Tokens.Space.l),
-                        verticalArrangement = Arrangement.spacedBy(Tokens.Space.l)) {
-                        MergedUserBubble(listOf(Item("u1", role = "user", kind = "text", text = ask)))
-                        MessageContent(Item("a1", role = "assistant", kind = "text", text = reply), user = false)
-                        MessageContent(Item("a2", role = "assistant", kind = "text", text = next), user = false)
+            CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale)) {
+                PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                    val actions = remember {
+                        ChatRowActions(SessionKey("box", "s1"), { "" }, null, photos = null, pictures = { emptyList() },
+                            openImages = { _, _ -> }, menu = menu, retryLineId = null, onRetry = {})
+                    }
+                    CompositionLocalProvider(LocalChatRowActions provides actions) {
+                        Column(Modifier.testTag("shot").width(400.dp).background(PersonaTheme.palette.background).padding(Tokens.Space.l),
+                            verticalArrangement = Arrangement.spacedBy(Tokens.Space.l)) {
+                            MergedUserBubble(listOf(Item("u1", role = "user", kind = "text", text = ask)))
+                            MessageContent(Item("a1", role = "assistant", kind = "text", text = reply), user = false)
+                            MessageContent(Item("a2", role = "assistant", kind = "text", text = next), user = false)
+                        }
                     }
                 }
             }
         }
         // Compose idleness does not wait for the Markdown cache's background parser.
         rule.waitUntil(10_000) { rule.onAllNodesWithText("复制").fetchSemanticsNodes().size == 1 }
-        fun shoot(name: String) {
-            for (s in AppStyle.entries) for (d in listOf(false, true)) {
+        fun shoot(name: String, styles: List<AppStyle> = AppStyle.entries) {
+            for (s in styles) for (d in listOf(false, true)) {
                 style = s; dark = d
                 rule.waitForIdle()
                 Thread.sleep(200)
@@ -93,5 +100,12 @@ class MessageSelectionShotsTest {
         assertEquals("a1", menu.selecting?.id)
         shoot("select")
         assertEquals("the selection survives a change of look", "a1", menu.selecting?.id)
+        // The largest text size: the words wrap further, and the highlight follows them.
+        val height = rule.onNodeWithTag("shot").fetchSemanticsNode().size.height
+        fontScale = 2f
+        rule.waitForIdle()
+        assertTrue("text at the largest size is taller", rule.onNodeWithTag("shot").fetchSemanticsNode().size.height > height)
+        shoot("select-large", listOf(AppStyle.Glass))
+        assertEquals("the selection survives a change of text size", "a1", menu.selecting?.id)
     }
 }
