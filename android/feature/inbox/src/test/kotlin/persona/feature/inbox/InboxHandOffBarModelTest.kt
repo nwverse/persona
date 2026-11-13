@@ -179,6 +179,19 @@ class InboxHandOffBarModelTest {
         assertFalse(restored.state.value.markDone)
     }
 
+    @Test fun aFinishedItemOpenedFromHistoryStillHandsOff() = runTest {
+        val repository = HandOffBarTestRepository(agentCount = 1)
+        repository.historyRecord = repository.record
+        repository.snapshot.value = repository.snapshot.value.copy(records = emptyList())
+        val model = model(repository, backgroundScope)
+        model.selectTarget(model.liveTargets().single())
+        model.queue("Ask", typed = false)
+        advanceTimeBy(INBOX_HAND_OFF_UNDO_MILLIS)
+        runCurrent()
+        assertEquals(1, repository.handOffRequests.size)
+        assertTrue(model.state.value.phase is HandOffBarPhase.Sent)
+    }
+
     @Test fun markDoneSuccessAndFailureNeverRepeatAnAcceptedHandOff() = runTest {
         val successRepository = HandOffBarTestRepository()
         val success = model(successRepository, backgroundScope)

@@ -134,6 +134,8 @@ internal class HandOffBarTestRepository(
     ))
     override val connectionState = flowOf(ConnectionState.Online)
     override val handOffMemory = MutableStateFlow(emptyList<HandOffMemoryEntry>())
+    var historyRecord: InboxRecord? = null
+    override suspend fun item(itemId: String): InboxRecord? = snapshot.value.records.inboxRecord(itemId) ?: historyRecord?.takeIf { it.item.id == itemId }
     val handOffRequests = mutableListOf<InboxHandOffRequest>()
     val drafts = mutableMapOf<ReplyTarget, ReplyDraft>()
     var result: SessionKey? = SessionKey("hub", "main")
