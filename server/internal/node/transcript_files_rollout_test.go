@@ -86,7 +86,7 @@ func TestSessionListOfParkedRolloutRowsReadsProjectsOnce(t *testing.T) {
 	for i := range 200 {
 		id := fmt.Sprintf("0e000000-0000-4000-8000-%012x", 0xe00+i)
 		writeMetaRollout(t, n.traexHome(), id, `{"id":"`+id+`","cwd":"/work/app","source":"cli"}`, time.Now())
-		n.agents[id] = host.Agent{Agent: traexAgent, PaneID: "botmux:" + id, AgentStatus: "offline"}
+		n.agents[id] = host.Agent{Agent: traexAgent, AgentStatus: "offline"}
 		ids = append(ids, id)
 	}
 	n.sessionList(context.Background(), false) // finds every path
