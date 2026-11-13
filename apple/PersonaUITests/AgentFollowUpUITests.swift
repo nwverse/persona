@@ -79,6 +79,18 @@ final class AgentFollowUpUITests: XCTestCase {
 
     private func element(_ app: XCUIApplication, _ id: String) -> XCUIElement { app.descendants(matching: .any)[id].firstMatch }
 
+    /// The page as a person reaches it: Settings › Assistant Profile › Agent Follow-Up. (`-openAssistantPage <page>`
+    /// opens a page under the Persona tab too, two copies of it; `assistant` opens the profile in Settings only.)
+    @MainActor private func openPage() -> XCUIApplication {
+        let app = launch("assistant")
+        let row = element(app, "assistant-agent-follow-up")
+        reveal(row, in: app)
+        XCTAssertTrue(row.waitForExistence(timeout: 20), "no Agent Follow-Up row:\n\(app.debugDescription)")
+        row.tap()
+        XCTAssertTrue(app.switches["followup-start-requested"].firstMatch.waitForExistence(timeout: 10), "no Agent Follow-Up page")
+        return app
+    }
+
     /// Scrolls until `e` is on screen and clear of the bars.
     @MainActor private func reveal(_ e: XCUIElement, in app: XCUIApplication) {
         let band = app.windows.firstMatch.frame.insetBy(dx: 0, dy: 120)
@@ -120,9 +132,8 @@ final class AgentFollowUpUITests: XCTestCase {
 
     @MainActor func testThePageShowsTheHubsDefaultsAndSavesAMenuChoice() async throws {
         try await prepare()
-        let app = launch("agentFollowUp")
+        let app = openPage()
         let start = app.switches["followup-start-requested"].firstMatch
-        XCTAssertTrue(start.waitForExistence(timeout: 20), "no Agent Follow-Up page:\n\(app.debugDescription)")
         XCTAssertEqual(start.value as? String, "1")
         XCTAssertEqual(app.switches["followup-agent-tasks"].firstMatch.value as? String, "0")
         try shot(app, "top")
@@ -137,8 +148,7 @@ final class AgentFollowUpUITests: XCTestCase {
 
     @MainActor func testSessionNamesUnlimitedAndRegularUpdates() async throws {
         try await prepare()
-        let app = launch("agentFollowUp")
-        XCTAssertTrue(app.switches["followup-start-requested"].firstMatch.waitForExistence(timeout: 20))
+        let app = openPage()
         try pick("followup-naming-max", ["不限", "Unlimited", "無制限"], in: app)
         try await hubHas("agent_auto_naming_max", 1000)
 

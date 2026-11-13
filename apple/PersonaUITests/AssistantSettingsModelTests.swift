@@ -78,7 +78,13 @@ final class AssistantSettingsModelTests: XCTestCase {
     @MainActor func testMainSupervisesOwnTasksSwitch() throws {
         let key = "main_supervises_own_tasks"
         try setFlag(key, false)
-        let app = launch(["-openAssistantPage", "agentFollowUp"])
+        // Settings › Assistant Profile › Agent Follow-Up, as a person goes there: `-openAssistantPage agentFollowUp`
+        // would open the page under the Persona tab as well, and the query could find that copy.
+        let app = launch(["-openAssistantPage", "assistant"])
+        let row = app.descendants(matching: .any)["assistant-agent-follow-up"].firstMatch
+        XCTAssertTrue(app.staticTexts["定时任务"].firstMatch.waitForExistence(timeout: 10))
+        for _ in 0..<6 where !(row.exists && row.isHittable) { app.swipeUp() }
+        row.tap()
         let toggle = app.switches["assistant-main-supervises-own-tasks"].firstMatch
         XCTAssertTrue(app.switches["followup-start-requested"].firstMatch.waitForExistence(timeout: 10))
         let viewport = app.windows.firstMatch.frame.insetBy(dx: 0, dy: 100)
