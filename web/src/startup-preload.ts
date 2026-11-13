@@ -262,7 +262,10 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // place in the first request, and dropping it when the manager, the hub or the model can no longer honor it, which
 // has to run while the model panel (loaded on intent) is closed. Its 675 B of code compressed to 180 B, 304 B and
 // 187 B against three states of main: the cost follows the code around it. The budget moves by this one's 187 B.
-export const FIRST_SCREEN_BUDGET = 479_381;
+// #7070: the model pill decides in an outer component whether a conversation gets one, so its hooks no longer follow
+// an early return: 25 B more in each language against main at 57110700a6 (ja 479,319 B to 479,344 B; en 475,610 B to
+// 475,635 B, zh-Hans 476,595 B to 476,620 B). The budget moves by the same 25 B.
+export const FIRST_SCREEN_BUDGET = 479_406;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;

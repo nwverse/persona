@@ -218,16 +218,22 @@ const AssistantModelPanel = lazyOverlay(() => import("./AssistantModelPanel").th
  *  new-conversation page, whose pick goes with the start. Persona chats switch whatever their state: the hub applies a
  *  pick from the next message. */
 export const AssistantModelPill = memo(function AssistantModelPill({ session }: { session?: Session }) {
+  const main = useStore((s) => s.assistant?.main);
+  // Only the main conversation has a per-conversation model pick (#6911): a leader, the background supervisor or
+  // another assistant conversation shows no pill and follows the default or what it started with. No session is the
+  // new-main-chat page, whose pick goes with the main conversation's start. Mounting the inner pill here, rather than
+  // returning from it below, keeps its hook count constant when the hub names another main conversation (#7070).
+  if (session && main !== session.session_id) return null;
+  return <AssistantModelPillInner session={session} />;
+});
+
+function AssistantModelPillInner({ session }: { session?: Session }) {
   const version = useModelLists();
   const assistant = useStore((s) => s.assistant);
   const kept = useStore((s) => hubHas(s.features, ASSISTANT_MODEL_PICK_FEATURE));
   const startServiceTier = useStore((s) => hubHas(s.features, ASSISTANT_START_SERVICE_TIER_FEATURE));
   const mid = session?.machine_id ?? assistant?.machine_id ?? "";
   const isMain = Boolean(session && assistant?.main === session.session_id);
-  // Only the main conversation has a per-conversation model pick (#6911): a leader, the background supervisor or
-  // another assistant conversation shows no pill and follows the default or what it started with. No session is the
-  // new-main-chat page, whose pick goes with the main conversation's start.
-  if (session && !isMain) return null;
   const chat: AssistantChat = { session, isMain, kept, config: assistant?.launcher };
   const key = assistantPickKey(chat);
   // this page's picks (an older hub, the new-conversation page) draw it again
@@ -293,4 +299,4 @@ export const AssistantModelPill = memo(function AssistantModelPill({ session }: 
       {shown && anchor && <AssistantModelPanel chat={chat} mid={mid} anchor={anchor} onClose={close} />}
     </>
   );
-});
+}

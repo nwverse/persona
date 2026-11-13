@@ -2634,10 +2634,9 @@ the video shows as a card above the input box (reading → compressing if needed
 Every batch of items (WebSocket `items` events, HTTP `/items` responses, the node's `session.items`) states its position in the transcript:
 
 - `history`: this transcript's identity (inode + crc32 of the first line + rewrite count; for a Claude session that has been rewound, add `.r<number of abandoned branches>`, see "Rewind to a message"). A change means the file was replaced / truncated and rewritten / had turns rewound; the App drops its local content and fetches again.
-- `to_seq`: the last line read in this batch (including lines with no item); `from_seq`: the line this batch continues after (only present for continuation batches: resends, live pushes, `after_seq`).
+- `to_seq`: the last line read in this batch (including lines with no item); `from_seq`: the line this batch continues after (only present for continuation batches: resends, live pushes, `after_seq`). The batch covers lines `from_seq + 1` through `to_seq`, so `from_seq` is the continuation cursor, not the first returned item's seq.
 - The App tracks `covered` (the last line it has received continuously from the start): when `from_seq <= covered`, advance `covered` to `to_seq`; when `from_seq > covered`, a batch was lost in between.
-  Fill the gap with `after_seq=covered`: web (`useTranscript`) and Android (`ContinuitySync`) first wait 1.5 seconds (the resend on subscribe may still be in flight);
-  iOS / Mac (`AppModel`) fetch at once (#4335), since `fill` re-reads `covered` before every page and the `filling` set collapses concurrent fills, so a late resend just de-duplicates.
+  Fill the gap with `after_seq=covered` at once, as iOS / Mac (`AppModel`) do (#4335); Android and HarmonyOS follow the same rule (#6871). A delayed resend just de-duplicates because `fill` re-reads `covered` before every page and the per-chat `filling` gate collapses concurrent fills. The web's `useTranscript` keeps its 1.5-second settling delay.
   After more than 8 pages, fetch the latest page instead. A reconnect subscription carries `since_seq=covered`.
   A catch-up read covers the gaps and `rev` moves heard when it was sent, not when it came back: one heard while it was on its way
   reads once more after it (web `RevWatch`, Android `ContinuitySync.behind`, #3601).
