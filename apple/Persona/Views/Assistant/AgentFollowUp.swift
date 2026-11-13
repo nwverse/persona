@@ -398,7 +398,7 @@ struct AgentFollowUpView: View {
         } footer: {
             if on && every != 0 && limit == 1 {
                 Text("Raise Name Changes per Session above 1 so regular updates can rename a session.")
-                    .foregroundStyle(Theme.caution)
+                    .foregroundStyle(Theme.cautionText)
             } else {
                 Text("On by default: only clearly unusable names are fixed, once per session, with your information sorting model. Names you set are never replaced. Regular updates come only after new output and count toward the limit.")
             }
