@@ -15055,6 +15055,41 @@
       },
       "extractionState" : "manual"
     },
+    "%lld messages from other conversations are waiting [Queue Strip]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld message from another conversation is waiting [Queue Strip]"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld messages from other conversations are waiting [Queue Strip]"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "別の会話からのメッセージが %1$lld 件待機中 [Queue Strip]"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还有 %1$lld 条别的对话在排队 [Queue Strip]"
+          }
+        }
+      }
+    },
     "%lld videos [Queue Strip]" : {
       "localizations" : {
         "en" : {

@@ -55,6 +55,27 @@ func TestInboxTaskLegacyHumanCanStillLink(t *testing.T) {
 	}
 }
 
+func TestInboxTaskHandledBroadcastDoesNotFollowContinuation(t *testing.T) {
+	s, _ := continuesService(t)
+	previous := supervisedTodo(t, s, "Old work")
+	next := supervisedTodo(t, s, "Continuing work")
+	closeTodo(t, s, previous.ID)
+	continuesTask(s, next.ID, previous.ID)
+	it := heldItem(s, previous.ID)
+	now := time.Now()
+	s.inbox.mu.Lock()
+	it.Kind, it.Connector, it.DoneAt = KindBot, taskNotification("cli_example"), &now
+	s.inbox.mu.Unlock()
+
+	s.linkInboxTaskURLs(context.Background())
+	if got := linkOf(s, it); got != previous.ID {
+		t.Fatalf("a handled broadcast moved onto active work: %q, want legacy link %q", got, previous.ID)
+	}
+	if signal, ok := pendingInbox(s, next.ID); ok {
+		t.Fatalf("a handled broadcast raised a signal for the continuing task: %+v", signal)
+	}
+}
+
 func TestInboxTaskRecheckClearsBulkLinkOnly(t *testing.T) {
 	h, todo, it := taskRecheckHub(t)
 	it.Kind, it.Connector, it.Agent.TodoID = KindBot, taskNotification("cli_example"), todo.ID
