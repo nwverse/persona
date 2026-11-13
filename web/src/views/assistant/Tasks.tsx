@@ -1194,6 +1194,17 @@ function NeedsYouRow({ item, open, onToggle }: { item: NeedsYouItem; open: boole
   );
 }
 
+/** The way to the task or Agent page from an opened Needs you row: its title is the fold toggle there, so the card carries this link at its end. */
+function OpenEntry({ title, onOpen }: { title: string; onOpen: () => void }) {
+  return (
+    <div className="flex justify-end px-1 pt-1">
+      <button type="button" data-needs-open-entry onClick={onOpen} title={t("assistant-brief.open_row", { title })} className="inline-flex min-h-8 items-center text-xs font-semibold text-accent hover:underline [@media(pointer:coarse)]:min-h-10">
+        {t("assistant-brief.open")}
+      </button>
+    </div>
+  );
+}
+
 /** The whole card of a Needs you row, or the one line it is. `nested`: inside its opened row, which carries the row's key. */
 function NeedsYouBody({ item, nested = false }: { item: NeedsYouItem; nested?: boolean }) {
   const rowKey = nested ? undefined : item.key;
@@ -1203,12 +1214,12 @@ function NeedsYouBody({ item, nested = false }: { item: NeedsYouItem; nested?: b
     const { session, asks } = item;
     const open = () => openAgent(session.machine_id, session.session_id);
     if (!asks.length) return <button type="button" data-needs-row={rowKey} onClick={open} className="flex items-center gap-2 rounded-control bg-field px-3 py-2 text-left text-sm"><StatusMark state="needs_you" /><span className="min-w-0 flex-1 truncate">{sessionTitle(session)}</span><span className="shrink-0 text-xs text-ink-2">{stateName("needs_you")}</span></button>;
-    return <div data-needs-row={rowKey}>{!nested && <button type="button" onClick={open} className="block max-w-full truncate px-1 text-left text-sm font-semibold hover:underline">{sessionTitle(session)}</button>}{asks.map((ix) => <InteractionCard key={ix.id} ix={ix} />)}</div>;
+    return <div data-needs-row={rowKey}>{!nested && <button type="button" onClick={open} className="block max-w-full truncate px-1 text-left text-sm font-semibold hover:underline">{sessionTitle(session)}</button>}{asks.map((ix) => <InteractionCard key={ix.id} ix={ix} />)}{nested && <OpenEntry title={sessionTitle(session)} onOpen={open} />}</div>;
   }
   const { todo, asks, status } = item;
   // Unfolded task rows carry the open flag themselves; a nested one's opened head already has it.
   const taskOpenAttr = !nested ? { "data-counts-open": item.countsOpen ? "true" : "false" } : {};
-  if (asks.length) return <div data-needs-row={rowKey} {...taskOpenAttr}>{!nested && <button type="button" onClick={() => openTask(todo.id)} className="block max-w-full truncate px-1 text-left text-sm font-semibold hover:underline">{todo.title}</button>}{asks.map((ix) => <InteractionCard key={ix.id} ix={ix} />)}</div>;
+  if (asks.length) return <div data-needs-row={rowKey} {...taskOpenAttr}>{!nested && <button type="button" onClick={() => openTask(todo.id)} className="block max-w-full truncate px-1 text-left text-sm font-semibold hover:underline">{todo.title}</button>}{asks.map((ix) => <InteractionCard key={ix.id} ix={ix} />)}{nested && <OpenEntry title={todo.title} onOpen={() => openTask(todo.id)} />}</div>;
   const ask = openAsk(todo);
   // Both structured decisions and older review-only decisions have the same deferral controls.
   if (isDecision(todo))
