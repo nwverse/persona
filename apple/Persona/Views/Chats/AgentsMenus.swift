@@ -64,7 +64,7 @@ struct AgentsListMenu: View {
     @StoredValue(HubFilter.key) private var hubFilter = ""
     @StoredValue("dev.grouping") private var grouping: DevGrouping = .standard
     /// The grouping the list shows: a stored By To-do is By Project on a hub without todos (`DevGrouping.resolved`).
-    private var shownGrouping: DevGrouping { DevGrouping.resolved(grouping, supportsTodos: TodoStore.shared.isSupported) }
+    private var shownGrouping: DevGrouping { DevGrouping.resolvedNow(grouping) }
     private var groupingChoice: Binding<DevGrouping> { Binding(get: { shownGrouping }, set: { grouping = $0 }) }
     @StoredValue("dev.sort") private var sort: AgentSort = .state
     #if os(iOS)
@@ -98,11 +98,11 @@ struct AgentsListMenu: View {
             let _ = PerfTrace.body("ListMenu.content")
             #endif
             Picker("Group By [Agents Menus 399ee6]", selection: groupingChoice) {
-                ForEach(DevGrouping.offered(supportsTodos: TodoStore.shared.isSupported)) { g in Label(g.title, systemImage: g.symbol).tag(g) }
+                ForEach(DevGrouping.offeredNow) { g in Label(g.title, systemImage: g.symbol).tag(g) }
             }
-            if shownGrouping != .state, shownGrouping != .recent, shownGrouping != .app {
+            if shownGrouping != .state, shownGrouping != .recent, shownGrouping != .app, shownGrouping != .direction {
                 // By Status is sectioned by state, and the rows in a section are by time already; Recently Used is by time
-                // only, as are By App's sections.
+                // only, as are By App's sections; By Pinned keeps the hub's order.
                 Picker("Sort", selection: $sort) {
                     ForEach(AgentSort.allCases) { o in Label(o.title, systemImage: o.symbol).tag(o) }
                 }
@@ -367,7 +367,7 @@ struct SpaceHeaderMenu: View, Equatable {
 struct AgentsGroupingMenu: View {
 
     @StoredValue("dev.grouping") private var grouping: DevGrouping = .standard
-    private var shown: DevGrouping { DevGrouping.resolved(grouping, supportsTodos: TodoStore.shared.isSupported) }
+    private var shown: DevGrouping { DevGrouping.resolvedNow(grouping) }
 
     var body: some View {
         Menu {
@@ -375,7 +375,7 @@ struct AgentsGroupingMenu: View {
                 Haptics.tap()
                 withAnimation(Theme.Motion.layout) { grouping = g }
             })) {
-                ForEach(DevGrouping.offered(supportsTodos: TodoStore.shared.isSupported)) { g in
+                ForEach(DevGrouping.offeredNow) { g in
                     Label(g.title, systemImage: g.symbol).tag(g)
                 }
             }

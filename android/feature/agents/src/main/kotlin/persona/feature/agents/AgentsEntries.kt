@@ -151,6 +151,9 @@ fun EntryProviderScope<NavKey>.agentsEntries(
         val sessions by dependencies.sessions().sessions.collectAsStateWithLifecycle()
         val todos by (tasksStore?.todos ?: flowOf(emptyList())).collectAsStateWithLifecycle(emptyList())
         val pending by dependencies.interactions().pending.collectAsStateWithLifecycle()
+        // The selected assistant's direction tree (#4352), for grouping the list by direction.
+        val assistantSnapshot = (wiring.operations ?: LocalAgentsOperations.current)?.assistant?.assistant
+        val directionTree = assistantSnapshot?.collectAsStateWithLifecycle()?.value?.directionTree
         // The current assistant's to-dos (docs/assistant/managers.md "Clients"): the hub's list is every manager's.
         val assistant = persona.core.designsystem.currentAssistant()
         TodosScreen(
@@ -162,6 +165,7 @@ fun EntryProviderScope<NavKey>.agentsEntries(
             onOpenTodo = { todoId -> navigator.navigate(TodoDetailRoute(todoId)) },
             newTodoRequests = newTodo,
             assistant = assistant,
+            directions = directionTree,
         )
     }
     entry<TodosRoute> { todosPage(null) }

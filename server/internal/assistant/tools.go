@@ -28,7 +28,7 @@ import (
 // toolNames are the tools only assistant conversations get; their descriptions and schemas are in prompts/mcp
 // (docs/assistant/prompts.md).
 var toolNames = []string{"ask_user", "notify_user", "supervision_finish", "schedule_followup", "schedule_routine", "delete_routine", "list_followups",
-	"cancel_followup", "list_places", "save_place", "machines_list", "agents_list", "agent_read", "agent_send", "agent_switch", "agent_interrupt", "agent_start", "agent_supervise", "agent_archive", "agent_unarchive", "interaction_answer", "ask_escalate", "inbox_suggest", "inbox_draft",
+	"cancel_followup", "list_places", "save_place", "machines_list", "agents_list", "agent_read", "agent_send", "agent_switch", "agents_switch", "agent_interrupt", "agent_start", "agent_supervise", "agent_archive", "agent_unarchive", "interaction_answer", "ask_escalate", "inbox_suggest", "inbox_draft",
 	"inbox_folders", "inbox_move", "kb_search", "kb_list", "kb_get", "kb_update", "kb_history_plan", "kb_history_status", "kb_history_stop", "kb_history_resume", "persona_settings", "secret_run",
 	"model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback",
 	"repositories_list", "repository_get", "view_show", "view_update", "view_get",
@@ -73,11 +73,18 @@ func (s *Service) Tool(ctx context.Context, call ToolCall) proto.ToolResult {
 		}
 	}
 	// A model's call says which conversation asked (task_brief.go callerOrigin); the hub's own runTool calls do not.
-	res, err := s.runTool(withToolCaller(ctx, call.MachineID, call.SessionID), call.MachineID, call.SessionID, call.Name, args)
-	if err != nil {
-		return proto.TextResult(err.Error(), true)
+	ctx = withToolCaller(ctx, call.MachineID, call.SessionID)
+	outward := s.outwardReader(ctx, call.MachineID, call.SessionID)
+	if outward {
+		ctx = withOutwardReader(ctx)
 	}
-	return proto.TextResult(res, false)
+	res, err := s.runTool(ctx, call.MachineID, call.SessionID, call.Name, args)
+	if err != nil {
+		return proto.TextResult(outwardText(outward, err.Error()), true)
+	}
+	// A conversation that writes to other people never reads the private parts of a profile, whichever tool would
+	// give them (outward_reader.go).
+	return proto.TextResult(outwardText(outward, res), false)
 }
 
 // appTool runs a tool that is app's (app.call app.tool).
@@ -339,6 +346,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		return fmt.Sprintf("Resumed %s on %s (same session, directory and launcher) and sent.", agentLabel(c), am.Name) + handed.said() + task.sent(sctx, s, a.Text), nil
 	case "agent_switch": // moves a running agent to another launcher and goes on with it (agent_switch.go, #5973)
 		return s.toolAgentSwitch(ctx, machine, self, args)
+	case "agents_switch": // moves many running agents to another launcher at once (agents_switch.go, #6008)
+		return s.toolAgentsSwitch(ctx, machine, self, args)
 	case "agent_interrupt":
 		return s.toolAgentInterrupt(ctx, machine, self, args) // agent_control.go
 	case "agent_supervise":
@@ -1083,6 +1092,9 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 		}
 		if c.Launcher != "" && c.SourceKind == "" && !c.Assistant { // what agent_switch moves it from (agent_switch.go)
 			fmt.Fprintf(&b, " · launcher=%s", c.Launcher)
+		}
+		if to := s.queuedSwitchOf(r.m.ID, c.SessionID); to != "" { // agents_switch queued it for the end of its turn
+			fmt.Fprintf(&b, " · switch_queued=%s", to)
 		}
 		if reset, ok := usageLimitReset(c); ok { // stopped on its subscription's usage limit (usage_limit.go)
 			fmt.Fprintf(&b, " · usage_limit resets_at=%s", reset.Format(time.RFC3339))

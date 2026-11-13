@@ -30,6 +30,13 @@ struct FilesPane: View {
     @State private var info: InfoTarget?
     /// The item whose permissions are open (#5831).
     @State private var permissions: InfoTarget?
+    /// A terminal opened in a folder (#5832), shown over the page.
+    @State private var terminal: OpenedTerminal?
+
+    private struct OpenedTerminal: Identifiable {
+        let key: SessionKey
+        var id: String { key.sessionID }
+    }
     /// The item to mark after opening a folder (a found file, Show in Files Page, a link's real location).
     @State private var highlight: String?
     @AppStorage("files.showHidden") private var showHidden = false
@@ -167,6 +174,11 @@ struct FilesPane: View {
                     show(target, dir: false)
                 }
         }
+        #if os(iOS)
+        .fullScreenCover(item: $terminal) { t in TerminalCover(key: t.key).presentationBackground(.clear) }
+        #else
+        .sheet(item: $terminal) { t in TerminalCover(key: t.key) }
+        #endif
         .sheet(item: $permissions) { t in
             FilePermissionsSheet(machine: machine, path: t.path, cwd: cwd) { _ in Task { await load() } }
                 .presentationDetents([.medium, .large])
@@ -470,6 +482,10 @@ struct FilesPane: View {
     private var moreMenu: some View {
         Menu {
             Section {
+                if hubHas("pane_cwd") {
+                    Button { openTerminal(in: shown) } label: { Label("Open Terminal Here", systemImage: Theme.Icon.terminal) }
+                        .accessibilityIdentifier("files.terminal")
+                }
                 Button { info = InfoTarget(path: shown, entry: nil) } label: { Label("Info [File Info]", systemImage: Theme.Icon.info) }
                 Button { copy(shown) } label: { Label("Copy Path", systemImage: Theme.Icon.copy) }
             }
@@ -630,6 +646,9 @@ struct FilesPane: View {
                 Button { transfers.downloadZip([full], name: e.name + ".zip", cwd: cwd, machine: machine, model: model) } label: {
                     Label("Download as Zip", systemImage: Theme.Icon.save)
                 }
+            }
+            if e.dir, e.linkBroken != true, hubHas("pane_cwd") {
+                Button { openTerminal(in: full) } label: { Label("Open Terminal Here", systemImage: Theme.Icon.terminal) }
             }
             Button { copy(full) } label: { Label("Copy Path", systemImage: Theme.Icon.copy) }
             Button { info = InfoTarget(path: full, entry: e) } label: { Label("Info [File Info]", systemImage: Theme.Icon.info) }
@@ -837,6 +856,25 @@ struct FilesPane: View {
             Task {
                 await load()
                 if let first = made.first { show(full(first), dir: false) }
+            }
+        }
+    }
+
+    /// A new terminal tab on the computer, in folder (#5832): in the session's workspace when there is one, else the
+    /// computer's first; shown over the page once it is there.
+    private func openTerminal(in folder: String) {
+        guard let api = model.api(group) else { return }
+        var body = ["cwd": folder]
+        if let key, let ws = model.session(key)?.workspaceID, !ws.isEmpty { body["workspace_id"] = ws }
+        Haptics.tap()
+        Task {
+            do {
+                let data = try await api.nodeAction(machine: machineID, "panes", body)
+                if let made = try? JSONDecoder().decode(NewShell.self, from: data), !made.terminal.isEmpty {
+                    terminal = OpenedTerminal(key: SessionKey(group: group, machineID: machineID, sessionID: made.terminal))
+                }
+            } catch {
+                NodeActions.shared.fail(String(localized: "Couldn't open a terminal"), error)
             }
         }
     }

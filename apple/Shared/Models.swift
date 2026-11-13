@@ -473,17 +473,27 @@ nonisolated struct Launcher: Codable, Identifiable, Hashable, Sendable {
     /// A Codex launcher the computer also starts with no first message (docs/integrations/codex.md「Starting without a
     /// first message」); nil from an older computer, whose Codex starts need one.
     var promptOptional: Bool? = nil
+    /// Where the computer has it: zshrc, path, persona, a runtime's id, `claude_desktop` (`claudeDesktopSource`) or
+    /// `codex_app` (`codexAppSource`).
+    var source: String? = nil
     /// A Codex launcher the computer starts in a shell pane the user picked (Run Agent Here) and keeps that pane when the
     /// start fails (#5504); nil from an older computer, where Run Agent Here offers Claude Code only.
     var runHere: Bool? = nil
     var id: String { name }
+    /// The launcher that starts the session in Claude's desktop app (docs/integrations/claude-integration.md「New sessions
+    /// in the desktop app」): with no folder it runs in the app's scratch folder, and a new folder is made for it.
+    var startsInDesktopApp: Bool { source == Self.claudeDesktopSource || source == Self.codexAppSource }
+    static let claudeDesktopSource = "claude_desktop"
+    /// The launcher that starts the chat in the Codex App (#5726, docs/integrations/codex.md):
+    /// a Codex launcher (`agent` codex) whose chat with no folder goes among the App's chats in no project.
+    static let codexAppSource = "codex_app"
     /// A Codex start sends its first message with it and waits for the thread Codex makes.
     var isCodex: Bool { agent == "codex" }
     /// Starting it needs a first message: a Codex on a computer that cannot open it without one.
     var needsFirstMessage: Bool { isCodex && promptOptional != true }
 
     enum CodingKeys: String, CodingKey {
-        case name, model, agent, assistant, health
+        case name, model, agent, assistant, health, source
         case baseURL = "base_url"
         case promptOptional = "prompt_optional"
         case runHere = "run_here"
@@ -501,6 +511,7 @@ nonisolated extension Launcher {
         assistant = try c.decodeIfPresent(Bool.self, forKey: .assistant)
         health = (try? c.decodeIfPresent(LauncherHealth.self, forKey: .health)) ?? nil
         promptOptional = try c.decodeIfPresent(Bool.self, forKey: .promptOptional)
+        source = try c.decodeIfPresent(String.self, forKey: .source)
         runHere = try c.decodeIfPresent(Bool.self, forKey: .runHere)
     }
 }
@@ -947,6 +958,13 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     var canInterrupt: Bool { capabilities.map(\.interrupt) ?? !hasSource }
     var canApprove: Bool { capabilities.map(\.approve) ?? !hasSource }
     var canTerminal: Bool { capabilities.map(\.terminal) ?? !hasSource }
+    /// An Agent of a terminal engine the node has no reader for (#6170): a CLI such as Kiro or gemini, or a pi / omp /
+    /// opencode without Persona's extension. The node says so with `read_only_reason` on the row (node sessions.go
+    /// `otherAgent`, pi.go, opencode.go); a pi or opencode with its extension has none and keeps its chat. Its terminal is the
+    /// useful view, so the chat offers it at once.
+    var isTerminalOnly: Bool {
+        !assistant && !hasSource && canTerminal && !isClaude && !isCodex && !isTraex && !isStopped && !(readOnlyReason ?? "").isEmpty
+    }
     /// A stopped Agent (#4754): its conversation and terminal stay, it takes no messages; Resume on its terminal page runs
     /// it again (node stopped.go). A Codex thread nothing has open is marked the same way (node codex_registry.go, #5521),
     /// though its row keeps its Codex history source.

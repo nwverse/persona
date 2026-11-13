@@ -27,11 +27,12 @@ final class HomeWidgetWriter {
     }
 
     #if DEBUG
-    /// `-showHomeWidgetSample YES`: write the gallery's made-up snapshot instead of the app's.
-    private var sample = false
+    /// `-showHomeWidgetSample YES`: write the gallery's made-up snapshot instead of the app's; `ticked`: the same with
+    /// two to-dos just ticked on the widget, one on its way and one the hub refused.
+    private var sample: String?
 
-    func showSample() {
-        sample = true
+    func showSample(_ which: String) {
+        sample = which
         flush()
     }
     #endif
@@ -52,10 +53,14 @@ final class HomeWidgetWriter {
     func tellHub() {
         guard let api = AppModel.shared.api, !api.config.isDemo else { return }
         let kinds = Set(HomeKind.allCases.map(\.widgetKind))
+        let byName = Dictionary(uniqueKeysWithValues: HomeKind.allCases.map { ($0.widgetKind, $0) })
         WidgetCenter.shared.getCurrentConfigurations { result in
             guard case .success(let infos) = result else { return }
             let has = infos.contains { kinds.contains($0.kind) }
+            let shown = Set(infos.compactMap { byName[$0.kind] })
             Task { @MainActor in
+                HomeWidgetData.shared.installed = shown
+                HomeWidgetData.shared.refresh()
                 let writer = HomeWidgetWriter.shared
                 guard writer.toldHub != has else { return }
                 do {
@@ -88,7 +93,12 @@ final class HomeWidgetWriter {
 
     private func write(now: Date = .now) {
         #if DEBUG
-        let made: HomeSnapshot? = sample ? HomeSamples.busy(zh: LanguageStore.shared.launched.hasPrefix("zh"), now: now) : source()
+        let zh = LanguageStore.shared.launched.hasPrefix("zh")
+        let made: HomeSnapshot? = switch sample {
+        case nil: source()
+        case "ticked": HomeSamples.ticked(zh: zh, now: now)
+        default: HomeSamples.busy(zh: zh, now: now)
+        }
         #else
         let made = source()
         #endif
@@ -169,7 +179,35 @@ extension AppModel {
         case .agents: selectedTab = .chats
         case .inbox: selectedTab = .mail
         case .record: MeetingRecorder.openRecordings()
-        default: break
+        case .today, .todos: showShellPage(.todos)
+        case .usage, .computers: showShellPage(.machines)
+        case .health: showShellPage(.health)
+        }
+    }
+
+    /// A page of the Persona page in front (the iPhone's shell, or the iPad's sidebar), as the recordings open: launched
+    /// by the widget, the app may have no shell yet, so it tries again for a few seconds.
+    func showShellPage(_ page: ShellPage) {
+        shellSettings = false
+        selectedTab = .assistant
+        func route() -> Bool {
+            if let shell = tabRouter as? ShellState {
+                shell.show(page)
+                shell.drawer.close()
+                return true
+            }
+            if let pad = tabRouter as? PadRouter {
+                pad.show(page)
+                return true
+            }
+            return false
+        }
+        guard !route() else { return }
+        Task {
+            for _ in 0..<10 {
+                try? await Task.sleep(for: .milliseconds(500))
+                if route() { return }
+            }
         }
     }
 
@@ -201,7 +239,88 @@ extension AppModel {
                          needsYou: rows.count { $0.state == .needsYou }, load: loads[m.id], icon: m.icon)
         }
         s.inbox = HomeInbox.build(InboxStore.shared)
+        let data = HomeWidgetData.shared
+        let now = Date()
+        s.today = HomeToday.build(calendar: data.events, hub: HomeToday.hubMeetings(TasksStore.shared, now: now), now: now)
+        s.todos = HomeTodos.build(TodoStore.shared.todos, ticks: HomeWidgetActions.ticks, now: now)
+        let stats = mergedFleet().stats
+        s.usage = HomeUsage.build(UsageWindows.live(UsageWindowsStore.shared.accounts, now: now), tokens: stats?.tokens ?? 0,
+                                  tpm: stats?.tpm ?? 0, hourly: data.hourly)
+        s.health = data.health
         return s
+    }
+}
+
+/// Today's events: the phone's calendar when Persona may read it, else the hub's meetings on today's card (Feishu's),
+/// else none, which the widget tells how to change.
+enum HomeToday {
+    static func build(calendar: [HomeSnapshot.Event]?, hub: [HomeSnapshot.Event]?, now: Date) -> HomeSnapshot.Today? {
+        if let calendar { return .init(events: calendar, source: .calendar) }
+        if let hub { return .init(events: hub, source: .hub) }
+        return .init(events: [], source: nil)
+    }
+
+    /// The meetings on today's card in any conversation's feed (`TodayBody.meetings`); nil when no card is today's.
+    static func hubMeetings(_ store: TasksStore, now: Date) -> [HomeSnapshot.Event]? {
+        let day = now.formatted(.iso8601.year().month().day())
+        guard let today = store.feeds.values.lazy.flatMap({ $0 }).compactMap(\.today).first(where: { $0.date == day }) else { return nil }
+        return (today.meetings ?? []).filter { $0.end > now }.sorted { $0.start < $1.start }.prefix(HomeSnapshot.Today.cap).map {
+            .init(title: $0.title, start: $0.start.timeIntervalSince1970, end: $0.end.timeIntervalSince1970)
+        }
+    }
+}
+
+/// Today's to-dos as the To-dos page's Today filter holds them (`TodoListLogic.matches`: due today, and open ones
+/// overdue), only the open ones: overdue first, then by when they are due, the high-priority ones before the rest.
+enum HomeTodos {
+    static let shown = 8
+
+    static func build(_ todos: [TodoItem], ticks: [String: HomeSnapshot.Tick], now: Date, calendar: Calendar = .current) -> HomeSnapshot.Todos {
+        let open = todos.filter { !$0.isDone && TodoListLogic.matches($0, .today, now: now, calendar: calendar) }
+        func key(_ t: TodoItem) -> (Int, Date, Int) {
+            (TodosLogic.isOverdue(t, now: now, calendar: calendar) ? 0 : 1,
+             TodoListLogic.due(t, calendar: calendar) ?? .distantFuture, t.priority == "high" ? 0 : 1)
+        }
+        let sorted = open.sorted { key($0) < key($1) }
+        return .init(items: sorted.prefix(shown).map { t in
+            .init(id: t.id, title: t.title, due: t.dueAt?.timeIntervalSince1970,
+                  overdue: TodosLogic.isOverdue(t, now: now, calendar: calendar), tick: ticks[t.id])
+        }, count: open.count, overdue: open.count { TodosLogic.isOverdue($0, now: now, calendar: calendar) })
+    }
+}
+
+/// The subscription windows as the Machines page lists them (live ones, the fullest first, stale ones marked), today's
+/// tokens and tokens a minute as the island's, and the hours.
+enum HomeUsage {
+    static let shown = 3
+
+    static func build(_ accounts: [UsageAccount], tokens: Int, tpm: Int, hourly: [Int]) -> HomeSnapshot.Usage? {
+        guard !accounts.isEmpty || tokens > 0 else { return nil }
+        return .init(accounts: accounts.prefix(shown).map { a in
+            .init(id: a.id, name: a.name, windows: a.windows.map {
+                .init(label: $0.label, minutes: $0.windowMinutes, percent: $0.usedPercent, resetsAt: $0.resetsAt?.timeIntervalSince1970)
+            }, stale: a.stale)
+        }, tokensToday: tokens, tpm: tpm, hourly: hourly)
+    }
+}
+
+/// Ticking a to-do off from a widget (`CompleteTodoIntent`, docs/apple/home-widgets.md「Ticking off a to-do」): shown
+/// done at once, then the hub is told; a refusal marks it failed, and the widget says so and offers the tap again.
+enum HomeWidgetActions {
+    /// To-dos ticked on a widget that the hub has not taken yet (`ticking`) or refused (`failed`).
+    static var ticks: [String: HomeSnapshot.Tick] = [:]
+
+    static func complete(todoID: String) async {
+        ticks[todoID] = .ticking
+        HomeWidgetWriter.shared.flush()
+        do {
+            _ = try await TodoStore.shared.update(id: todoID, done: true)
+            ticks[todoID] = nil
+        } catch {
+            ticks[todoID] = .failed
+            HomeSnapshotStore.log.error("ticking a to-do off from a widget: \(error.localizedDescription, privacy: .public)")
+        }
+        HomeWidgetWriter.shared.flush()
     }
 }
 
