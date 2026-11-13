@@ -21,7 +21,7 @@ struct InboxBackNavigationTests {
         let keys = ["assistant.current", "dev.openChat", "app.tab"]
         let saved = keys.map { (key: $0, value: UserDefaults.standard.object(forKey: $0)) }
         defer { for entry in saved { UserDefaults.standard.set(entry.value, forKey: entry.key) } }
-        body()
+        try body()
     }
 
     @Test func automaticMainSelectionKeepsPagesButUserSelectionsDoNot() {
