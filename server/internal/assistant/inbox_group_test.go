@@ -2094,3 +2094,42 @@ func TestInboxGroupDMFallbackNewHandledKeepsTier(t *testing.T) {
 		t.Fatalf("the rewrite opened another event: %v", h.inbox.items)
 	}
 }
+
+// The events tool's quotas never hide an open event: ten open events stay ten when many done ones are eligible too, and
+// the done side fills its own six slots from the newest eligible ones, not from slots the open side left over.
+func TestInboxGroupEventsOpenQuotaSurvivesManyDone(t *testing.T) {
+	h, _ := admitHub(t, nil)
+	now := time.Now()
+	for i := range 10 {
+		addGroupCandidate(h, fmt.Sprintf("open-%02d", i), "示例", now.Add(-time.Duration(i)*time.Minute), false)
+	}
+	for i := range 12 {
+		at := now.Add(-24*time.Hour - time.Duration(i)*time.Minute)
+		addGroupCandidate(h, fmt.Sprintf("done-%02d", i), "示例", at, true)
+	}
+	got := h.groupEvents("lark", "chat:F1", "")
+	want := make([]string, 0, groupOpenMax+groupDoneMax)
+	for i := range groupOpenMax {
+		want = append(want, fmt.Sprintf("open-%02d", i))
+	}
+	for i := range groupDoneMax {
+		want = append(want, fmt.Sprintf("done-%02d", i))
+	}
+	if ids := groupCandidateIDs(got); !slices.Equal(ids, want) {
+		t.Fatalf("candidates %v, want %v", ids, want)
+	}
+}
+
+// The prompt's numbers come from the constants: changing the constant changes the rendered prompt, and rendering zero
+// values (as a caller that forgets them would) shows the numbers unset rather than silently keeping the old sentence.
+func TestInboxGroupPromptNumbersBindToConstants(t *testing.T) {
+	text := prompts.RenderInboxGroup(prompts.InboxGroup{MaxCalls: groupCalls, NewMax: groupNewMax,
+		OpenMax: groupOpenMax, DoneMax: groupDoneMax, DoneDays: int(groupDoneFor / (24 * time.Hour))})
+	want := fmt.Sprintf("还开着的事（最多 %d 件）和 %d 天内处理过的事（最多 %d 件）", groupOpenMax, int(groupDoneFor/(24*time.Hour)), groupDoneMax)
+	if !strings.Contains(text, want) {
+		t.Fatalf("prompt lacks %q:\n%s", want, text)
+	}
+	if strings.Contains(text, "最多 10 件（id") {
+		t.Errorf("the old hard-coded sentence is still in the template:\n%s", text)
+	}
+}
