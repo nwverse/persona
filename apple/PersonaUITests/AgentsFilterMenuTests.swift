@@ -3,7 +3,9 @@ import XCTest
 /// The Agents list menu's Filter (#6589), as the web's title-row Filter: a submenu first in the menu behind the selected
 /// Agents switch, with Harness, Project, Model and Pinned Only (the machine stays further down); each one chosen is a
 /// chip over the list that clears it, and Reset clears them all once two are on. Against scripts/mock/mock_hub.py (PERSONA_MOCK_HUB).
-/// TEST_RUNNER_PERSONA_SHOTS=<dir> keeps each screen, TEST_RUNNER_PERSONA_SCHEMES picks the appearances (light and dark).
+/// TEST_RUNNER_PERSONA_SHOTS=<dir> keeps each screen, TEST_RUNNER_PERSONA_SCHEMES picks the appearances (light and dark),
+/// TEST_RUNNER_PERSONA_LAUNCH_ARGS adds launch arguments (a text size: -UIPreferredContentSizeCategoryName
+/// UICTContentSizeCategoryAccessibilityXXXL) and TEST_RUNNER_PERSONA_SHOT_SUFFIX names those screens apart.
 final class AgentsFilterMenuTests: XCTestCase {
     private let env = ProcessInfo.processInfo.environment
 
@@ -69,6 +71,7 @@ final class AgentsFilterMenuTests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-pairURL", pair, "-ui.scheme", scheme, "-app.tab", "chats", "-dev.openChat", "", "-tab", "dev",
                                "-openAgentsFresh", "YES"]
+            + (env["PERSONA_LAUNCH_ARGS"]?.split(separator: " ").map(String.init) ?? [])
         app.launchPinned()
         dismissSystemAlerts(wait: 4)
         see(app.buttons["agents.filter.all"], "the quick filters", timeout: 15)
@@ -107,7 +110,8 @@ final class AgentsFilterMenuTests: XCTestCase {
         a.lifetime = .keepAlways
         add(a)
         if let dir = env["PERSONA_SHOTS"] {
-            try? s.pngRepresentation.write(to: URL(fileURLWithPath: dir).appendingPathComponent("agents-filter-\(name).png"))
+            let suffix = env["PERSONA_SHOT_SUFFIX"].map { "-" + $0 } ?? ""
+            try? s.pngRepresentation.write(to: URL(fileURLWithPath: dir).appendingPathComponent("agents-filter-\(name)\(suffix).png"))
         }
     }
 }
