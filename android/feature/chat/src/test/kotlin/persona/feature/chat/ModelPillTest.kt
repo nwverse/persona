@@ -3,6 +3,7 @@ package persona.feature.chat
 import android.content.Context
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
@@ -155,34 +156,22 @@ class ModelPillTest {
         val hub = Hub()
         val first = JsonCodec.decodeFromString<Session>("""{"machine_id":"box","session_id":"c3","assistant":true,"agent":"claude","status":"idle",
             "launcher":"claude","model":"claude-haiku-5-5","effort":"high","rev":3}""")
+        val session = mutableStateOf(first)
         rule.setContent {
             CompositionLocalProvider(LocalHubFeatures provides setOf("assistant_model_pick")) {
                 PersonaTheme(reduceMotion = true, style = AppStyle.Glass) {
-                    Box { PersonaModelPill(first, "box", hub, ModelPillWidth.Wide, pagePick = null, onPagePick = {}, onNotice = {}) }
+                    Box { PersonaModelPill(session.value, "box", hub, ModelPillWidth.Wide, pagePick = null, onPagePick = {}, onNotice = {}) }
                 }
             }
         }
         rule.waitUntil(5_000) { hub.launcherListReads >= 1 }
         val afterMount = hub.launcherListReads
-        // the same revision re-renders nothing again (the page-life cache stands)
-        rule.setContent {
-            CompositionLocalProvider(LocalHubFeatures provides setOf("assistant_model_pick")) {
-                PersonaTheme(reduceMotion = true, style = AppStyle.Glass) {
-                    Box { PersonaModelPill(first, "box", hub, ModelPillWidth.Wide, pagePick = null, onPagePick = {}, onNotice = {}) }
-                }
-            }
-        }
+        // A title update recomposes the pill without invalidating the revision's model cache.
+        rule.runOnIdle { session.value = first.copy(title = "Updated title") }
         rule.waitForIdle()
         assertEquals(afterMount, hub.launcherListReads)
         // a hub push with a new revision forces a fresh read so the pill matches the effective model (#6542)
-        val pushed = first.copy(rev = 4)
-        rule.setContent {
-            CompositionLocalProvider(LocalHubFeatures provides setOf("assistant_model_pick")) {
-                PersonaTheme(reduceMotion = true, style = AppStyle.Glass) {
-                    Box { PersonaModelPill(pushed, "box", hub, ModelPillWidth.Wide, pagePick = null, onPagePick = {}, onNotice = {}) }
-                }
-            }
-        }
+        rule.runOnIdle { session.value = session.value.copy(rev = 4) }
         rule.waitUntil(5_000) { hub.launcherListReads > afterMount }
     }
 }
