@@ -5,7 +5,8 @@ import (
 	"testing"
 )
 
-// The owner's own messages travel in a batch's context as lines without an id. The grouping prompt has to name that
+// The owner's own messages travel in a batch's context as lines without a message id of their own. The grouping prompt
+// has to name that
 // marker exactly as the connector writes it, and say they are context only: not grouped, never in assign (an id outside
 // group.new invalidates the whole answer, server/internal/assistant/inbox_group.go checkGroupAnswer).
 func TestInboxGroupSelfLines(t *testing.T) {
@@ -34,7 +35,7 @@ func TestInboxGroupSelfLines(t *testing.T) {
 	if !strings.Contains(lower, "assign") {
 		t.Errorf("the marker's line does not say the lines must not go into assign: %q", para)
 	}
-	if !strings.Contains(para, "不归类") {
+	if !strings.Contains(para, "不要归类") {
 		t.Errorf("the marker's line does not say the lines are not grouped: %q", para)
 	}
 }
