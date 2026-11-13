@@ -93,6 +93,11 @@ class InboxOneRowTest {
         val singles = mutableListOf<Pair<String, Boolean>>()
         val reads = mutableListOf<String>()
         var history: List<InboxRecord> = emptyList()
+        val itemReads = mutableListOf<String>()
+        override suspend fun item(itemId: String): InboxRecord? {
+            itemReads += itemId
+            return snapshot.value.records.inboxRecord(itemId) ?: history.inboxRecord(itemId)
+        }
         override suspend fun markLatestRead(feedId: String): Boolean {
             reads += feedId
             snapshot.value = snapshot.value.copy(records = snapshot.value.records.map {
@@ -247,8 +252,8 @@ class InboxOneRowTest {
     }
 
     @Test fun aDoneHistoryItemOpensItsEventPageAsBefore() {
-        // The done history is merged into the list only; an item past it still opens its event page, which is where the
-        // pages it links to (source, chain) live. The page finding nothing is the next test's separate, existing gap.
+        // The done history is merged into the list only; its event route still opens, and the single-item lookup fills
+        // the page from that history when the live snapshot no longer carries the item.
         screen(historyInbox())
         row("Handled long ago").assertExists()
         row("Handled long ago").performClick()
@@ -256,14 +261,17 @@ class InboxOneRowTest {
         assertEquals(listOf<NavKey>(InboxEventRoute("old")), opened)
     }
 
-    @Test fun theEventPageOfAnItemPastTheSnapshotSaysItIsMissingAsBefore() {
-        // Documented existing behaviour, not this change's regression (docs: an item beyond the list's few days is not in
-        // the snapshot): the event page cannot find it and says so. Pinned so this change neither fixes nor worsens it.
+    @Test fun theEventPageOfAnItemPastTheSnapshotShowsItsContents() {
+        // The snapshot no longer carries the item, but the repository's single-item lookup returns its full history record.
+        val inbox = historyInbox()
         rule.setContent { PersonaTheme(reduceMotion = true) {
-            InboxEventScreen(historyInbox(), InboxEventRoute("old"), navigator)
+            InboxEventScreen(inbox, InboxEventRoute("old"), navigator)
         } }
         rule.waitForIdle()
-        rule.onNodeWithText(res.getString(R.string.inbox_item_missing)).assertExists()
+        rule.onNodeWithText("Handled long ago").assertExists()
+        rule.onNodeWithText("Hi").assertExists()
+        rule.onNodeWithText(res.getString(R.string.inbox_item_missing)).assertDoesNotExist()
+        assertEquals(listOf("old"), inbox.itemReads)
     }
 
     @Test fun anOlderHubWithoutEventsStillOpensTheSourcePage() {
