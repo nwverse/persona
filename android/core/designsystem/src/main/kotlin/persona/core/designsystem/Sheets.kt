@@ -86,18 +86,23 @@ fun JSheet(
         (it != SheetValue.Hidden || canDismiss).also { ok -> if (!ok) blocked?.invoke() }
     })
     val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val shortcutHelpOwner = androidx.compose.runtime.remember { Any() }
     ModalBottomSheet(
-        onDismissRequest = { if (canDismiss) onDismiss() }, modifier = modifier.hardwareShortcutDismiss {
-            if (canDismiss) onDismiss() else blocked?.invoke()
-        },
+        onDismissRequest = { if (canDismiss) onDismiss() }, modifier = modifier,
         sheetState = sheetState,
         shape = PersonaTheme.shapes.sheetShape, containerColor = container, contentColor = palette.ink,
         scrimColor = palette.scrim, tonalElevation = 0.dp,
         dragHandle = if (!showDragHandle) null else ({ Box(Modifier.padding(top = 10.dp.dense, bottom = 6.dp.dense).size(36.dp, 4.dp).clip(CircleShape).background(palette.ink3.copy(alpha = 0.5f))) }),
     ) {
         // Opaque over a scrim: glass inside the sheet must not sample (and show through) the page behind it.
-        androidx.compose.runtime.CompositionLocalProvider(LocalReadingInset provides 0.dp, LocalGlassSource provides null) {
-        Column(Modifier.fillMaxWidth().dismissKeyboardOnBlankTap()
+        androidx.compose.runtime.CompositionLocalProvider(
+            LocalReadingInset provides 0.dp,
+            LocalGlassSource provides null,
+            LocalHardwareShortcutHelpOwner provides shortcutHelpOwner,
+        ) {
+        Column(Modifier.fillMaxWidth().hardwareShortcutDismiss({
+            if (canDismiss) onDismiss() else blocked?.invoke()
+        }, shortcutHelpOwner).dismissKeyboardOnBlankTap()
             // Content that grows once the sheet is open ("Session info" after it loads) would stay where the opening left the
             // sheet, its rest below the screen and out of reach: settle the sheet again at its new height.
             .onSizeChanged {
@@ -112,6 +117,7 @@ fun JSheet(
         }
         }
     }
+    HardwareShortcutHelp(shortcutHelpOwner)
 }
 
 /**
@@ -231,9 +237,13 @@ fun JDialog(
     content: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
     val palette = PersonaTheme.palette
-    androidx.compose.runtime.CompositionLocalProvider(LocalReadingInset provides 0.dp) {
+    val shortcutHelpOwner = androidx.compose.runtime.remember { Any() }
+    androidx.compose.runtime.CompositionLocalProvider(
+        LocalReadingInset provides 0.dp,
+        LocalHardwareShortcutHelpOwner provides shortcutHelpOwner,
+    ) {
     AlertDialog(
-        onDismissRequest = onDismiss, modifier = Modifier.hardwareShortcutDismiss(onDismiss),
+        onDismissRequest = onDismiss, modifier = Modifier.hardwareShortcutDismiss(onDismiss, shortcutHelpOwner),
         containerColor = palette.surfaceOpaque, shape = PersonaTheme.shapes.panelShape, tonalElevation = 0.dp,
         title = { Text(title, style = PersonaTheme.type.title, color = palette.ink) },
         text = if (text == null && content == null) null else ({
@@ -249,6 +259,7 @@ fun JDialog(
         },
         dismissButton = dismiss?.let { (label, action) -> { JButton(label, action, kind = JButtonKind.Quiet, size = JButtonSize.Medium) } },
     )
+    HardwareShortcutHelp(shortcutHelpOwner)
     }
 }
 

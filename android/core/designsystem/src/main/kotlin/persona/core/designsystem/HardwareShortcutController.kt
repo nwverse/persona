@@ -19,6 +19,9 @@ internal class HardwareShortcutController {
     var helpVisible by mutableStateOf(false)
         private set
 
+    internal var helpOwner: Any? = null
+        private set
+
     internal val registrationCount: Int get() = registrations.size
 
     fun register(token: Any, onDismiss: () -> Unit): HardwareShortcutRegistration {
@@ -30,11 +33,14 @@ internal class HardwareShortcutController {
         registrations.removeAll { it === registration }
     }
 
-    fun dispatch(shortcut: HardwareShortcut, phase: HardwareKeyPhase, repeated: Boolean = false): Boolean {
+    fun dispatch(shortcut: HardwareShortcut, phase: HardwareKeyPhase, repeated: Boolean = false, owner: Any? = null): Boolean {
         if (phase == HardwareKeyPhase.Down && !repeated) {
             when (shortcut) {
                 HardwareShortcut.Escape -> registrations.lastOrNull()?.onDismiss?.invoke()
-                HardwareShortcut.Help -> helpVisible = true
+                HardwareShortcut.Help -> if (!helpVisible) {
+                    helpVisible = true
+                    helpOwner = owner
+                }
             }
         }
         // An empty stack is deliberately a no-op, and key-up / repeats never close another layer.
@@ -43,5 +49,6 @@ internal class HardwareShortcutController {
 
     fun closeHelp() {
         helpVisible = false
+        helpOwner = null
     }
 }

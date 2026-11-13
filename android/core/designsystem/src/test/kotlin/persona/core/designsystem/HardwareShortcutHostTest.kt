@@ -33,6 +33,8 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.pressKey
+import androidx.compose.ui.test.withKeyDown
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
@@ -55,7 +57,7 @@ class HardwareShortcutHostTest {
                 PersonaTheme(darkTheme = false, reduceMotion = true) {
                     HardwareShortcutHost(Modifier.fillMaxSize()) {
                         JSheet(onDismiss = { dismissed++ }) {
-                            BasicTextField("draft", {}, Modifier.testTag("sheet-field"))
+                            BasicTextField("draft", {}, Modifier.testTag("sheet-field").hardwareShortcutTextInput())
                         }
                     }
                 }
@@ -142,7 +144,7 @@ class HardwareShortcutHostTest {
                 PersonaTheme(darkTheme = false, reduceMotion = true) {
                     HardwareShortcutHost(Modifier.fillMaxSize()) {
                         JSheet(onDismiss = {}) {
-                            BasicTextField(draft, { draft = it }, Modifier.testTag("draft-field"))
+                            BasicTextField(draft, { draft = it }, Modifier.testTag("draft-field").hardwareShortcutTextInput())
                         }
                     }
                 }

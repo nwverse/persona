@@ -647,3 +647,7 @@ The composer decorator posts messages itself, so handling a successful response 
 ## Resolve horizontal window insets with layout direction
 
 Compose `WindowInsets.getLeft` and `getRight` require both `Density` and `LayoutDirection`; only the vertical getters take density alone. Pass `LocalLayoutDirection.current` instead of copying the vertical call shape. Test pointer or popup clamping with asymmetric physical insets in both directions: LTR and RTL resolve different left/right values, while the resulting bounds and menu origin remain physical window coordinates.
+
+## Route shortcut help through the focused input and its dialog
+
+Compose `FocusOwner` is internal even though `LocalFocusManager` may implement it at runtime; production code must use public focus-state APIs rather than casting to it. A text field can also consume Ctrl+/ before a parent's `onKeyEvent`, while changing the parent to `onPreviewKeyEvent` would steal keys from a terminal. Shared text inputs therefore handle only the help chord themselves and leave every other key on the ordinary path. When the input belongs to a sheet or dialog, propagate a stable help-owner token and render the help dialog from that layer; opening it only from the main shell puts it behind the sheet that received the shortcut. Test both an editor that consumes the chord and a terminal-style child that must retain it.

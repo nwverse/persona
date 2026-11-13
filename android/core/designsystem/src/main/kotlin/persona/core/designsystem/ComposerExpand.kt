@@ -104,7 +104,7 @@ fun ExpandedComposer(
                 ComposerExpandButton(expanded = true, onClick = onCollapse)
             }
             BasicTextField(
-                value, onValueChange, Modifier.then(hardwareModifier).weight(1f).fillMaxWidth().padding(horizontal = 20.dp.dense).focusRequester(focus),
+                value, onValueChange, Modifier.then(hardwareModifier).weight(1f).fillMaxWidth().padding(horizontal = 20.dp.dense).focusRequester(focus).hardwareShortcutTextInput(),
                 enabled = enabled, textStyle = PersonaTheme.type.body.copy(color = palette.ink), cursorBrush = SolidColor(palette.ink),
                 decorationBox = { field ->
                     Box {
