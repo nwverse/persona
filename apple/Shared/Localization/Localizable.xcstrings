@@ -27949,6 +27949,29 @@
       },
       "extractionState" : "manual"
     },
+    "Buttons and bars stop growing at the system's Extra Extra Extra Large size; messages and other reading text keep growing." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Buttons and bars stop growing at the system's Extra Extra Extra Large size; messages and other reading text keep growing."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ボタンやバーは、システムの「特大」サイズより大きくなりません。メッセージなどの読み物は、そのまま大きくなります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按钮和栏最大只放大到系统的「特大」；消息等阅读内容会继续放大。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Buttons, links, selections and your own bubbles use the theme color; Clay and Island use a light tint of it for the background. “Match Interface Style” uses each style's own colors." : {
       "localizations" : {
         "en" : {

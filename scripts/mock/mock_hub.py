@@ -3817,6 +3817,7 @@ def _manager_known(mid):
 def stamp_managers(path, obj):
     """The merged lists' `manager` on each item, as the hub adds it; the default manager's items too."""
     if not _stamps() or not isinstance(obj, dict): return obj
+    if MOCK_INBOX_SHOWCASE and path == "/api/v1/inbox": return obj
     dflt = MANAGERS["default"]
     if path in ("/api/v1/inbox", "/api/v1/inbox/done") and isinstance(obj.get("items"), list):
         obj = dict(obj, items=[dict(x, manager=inbox_owner(x.get("id"))) if isinstance(x, dict) else x for x in obj["items"]])
@@ -10653,6 +10654,8 @@ def inbox_done_days(query):
 
 def inbox_for(query):
     """The list as the hub gives it: connectors' items only with ?sources=all."""
+    if MOCK_INBOX_SHOWCASE:
+        return copy.deepcopy(INBOX)
     all_sources = (query.get("sources") or [""])[0] == "all"
     return [dict({k: v for k, v in x.items() if k != "context"}, version=inbox_version(x)) for x in INBOX if all_sources or "connector" not in x]
 
@@ -11750,6 +11753,18 @@ if MOCK_INBOX_EVENTS:
         }
         for _x in INBOX:
             if _x["id"] in _event_mutes: _x["mutes"] = _event_mutes[_x["id"]]
+
+
+# MOCK_INBOX_SHOWCASE=1: run `MOCK_INBOX_SHOWCASE=1 python3 scripts/mock/mock_hub.py` to serve the shared
+# side-by-side screenshot scenario from spec/fixtures/inbox/showcase.json. The list and item details keep the
+# fixture's items exactly as written, including their timestamps; clients fix their clocks to the fixture's
+# now_clock themselves. This takes precedence over MOCK_INBOX_EVENTS and leaves every other switch unchanged.
+MOCK_INBOX_SHOWCASE = os.environ.get("MOCK_INBOX_SHOWCASE") == "1"
+if MOCK_INBOX_SHOWCASE:
+    _showcase_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
+                                  "spec", "fixtures", "inbox", "showcase.json")
+    with open(_showcase_path, encoding="utf-8") as _f:
+        INBOX[:] = json.load(_f)["items"]
 
 
 # MOCK_HANDOFF_CARD=1 (with MOCK_TASKS=1): an item handed to the main conversation that wrote back (#5932,
@@ -23415,6 +23430,9 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(t) if t else self.send_json({"error": "no such inbox item"}, 404)
         if p.startswith("/api/v1/inbox/"):
             iid = p[len("/api/v1/inbox/"):]
+            if MOCK_INBOX_SHOWCASE:
+                x = next((x for x in INBOX if x["id"] == iid), None)
+                if x is not None: return self.send_json(x)
             for x in INBOX + INBOX_HISTORY:  # an item done long ago: the history's (#2200)
                 if x["id"] == iid: return self.send_json(dict(x, context=x.get("context") or x["preview"]))
         if mail_area(self, "GET", p, q): return
@@ -26098,6 +26116,7 @@ MOCK_HELP.append("MOCK_MOMENTS_FEED=<名字>  知识库的公司圈帖子带 fee
 MOCK_HELP.append("MOCK_NO_LARK=1  没装接飞书的扩展的 hub：features 里没有 lark / lark_moments / lark_attachments，/api/v1/lark/… 404，连接器里没有飞书")
 MOCK_HELP.append("MOCK_INBOX_TRIAGE=<状态>[:<条数>[:<来源名，逗号隔开>[:<原因>]]]  收件箱列表带 triage（新条目在等分拣，#1773）：unconfigured / paused / error / timeout / behind / ok；不设时没有 triage（老 hub）")
 MOCK_HELP.append("MOCK_INBOX_UNREAD=<来源名>[:<代码>[:<原因>]],…  收件箱 triage 的这些来源这一轮没读到（read_error / read_reason，#1849）：代码 timeout / rate_limited / failed；不写原因就没有 read_reason")
+MOCK_HELP.append("MOCK_INBOX_SHOWCASE=1  收件箱列表和单条详情使用 spec/fixtures/inbox/showcase.json 的 items（四端并排截图的同一场景，字段和时间保持夹具原值；客户端自己把时钟固定到 now_clock）；同时开 MOCK_INBOX_EVENTS 时以本开关为准")
 
 # ---------- area: commenting in the Feishu document reader (#1290) ----------
 # MOCK_DOC_COMMENTS=1: the plugin says `lark_doc_comments`; GET /api/v1/lark/raw/documents/comments has three made-up

@@ -333,8 +333,12 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			handed = s.handAttachments(ctx, machine, am.ID, atts, mentioned)
 			params["text"] = withAttachments(text, handed)
 		}
+		unsent := s.noteAgentSend(self, am.ID, c.SessionID) // more from its task's conversation reopens an accepted task (#6726)
 		if c.Status != proto.StatusOffline {
 			if err := s.call(ctx, am.ID, DeviceSessionSend, params, nil); err != nil {
+				if !startResultUnknown(err) { // it may still arrive and start the turn
+					unsent()
+				}
 				return "", task.sendFailed(ctx, s, err)
 			}
 			return fmt.Sprintf("Sent to %s on %s.", agentLabel(c), am.Name) + handed.said() + task.sent(ctx, s, a.Text), nil
@@ -345,6 +349,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
 		defer cancel()
 		if err := s.call(sctx, am.ID, DeviceSessionSend, params, nil); err != nil {
+			if !startResultUnknown(err) { // it may still arrive and start the turn
+				unsent()
+			}
 			return "", task.sendFailed(sctx, s, err)
 		}
 		return fmt.Sprintf("Resumed %s on %s (same session, directory and launcher) and sent.", agentLabel(c), am.Name) + handed.said() + task.sent(sctx, s, a.Text), nil
