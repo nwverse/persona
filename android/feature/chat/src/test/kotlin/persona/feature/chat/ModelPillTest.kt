@@ -11,6 +11,7 @@ import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.assertDoesNotExist
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.test.core.app.ApplicationProvider
@@ -128,7 +129,7 @@ class ModelPillTest {
 
     @Test fun aPersonaChatsPickIsKeptOnTheHubAndUndone() {
         val hub = Hub()
-        val chat = JsonCodec.decodeFromString<Session>("""{"machine_id":"box","session_id":"c2","assistant":true,"agent":"claude","status":"idle",
+        val chat = JsonCodec.decodeFromString<Session>("""{"machine_id":"box","session_id":"main","assistant":true,"agent":"claude","status":"idle",
             "launcher":"claude","model":"claude-opus-5-5","effort":"high","rev":3}""")
         rule.setContent {
             CompositionLocalProvider(LocalHubFeatures provides setOf("assistant_model_pick")) {
@@ -144,7 +145,7 @@ class ModelPillTest {
         assertTrue(rule.onAllNodes(hasText("Same as when this chat started", substring = true), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty())
         rule.onNode(hasDialogText("Sonnet 4.5"), useUnmergedTree = true).performClick()
         rule.waitUntil(5_000) { hub.asked.isNotEmpty() }
-        assertEquals(listOf("PUT c2 ModelPick(launcher=team, model=sonnet, effort=null)"), hub.asked)
+        assertEquals(listOf("PUT main ModelPick(launcher=team, model=sonnet, effort=null)"), hub.asked)
         // drawn at once: the pill says the pick before the hub's push
         rule.waitUntil(5_000) { rule.onAllNodes(hasText("Sonnet 4.5", substring = true), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
         rule.onNodeWithTag("model-pill").performClick()
@@ -152,12 +153,28 @@ class ModelPillTest {
         assertTrue(rule.onAllNodes(hasText("Picked for this chat · Team API · Sonnet 4.5"), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty())
         rule.onNode(hasDialogText("Undo pick"), useUnmergedTree = true).performClick()
         rule.waitUntil(5_000) { hub.asked.size == 2 }
-        assertEquals("DELETE c2", hub.asked.last())
+        assertEquals("DELETE main", hub.asked.last())
+    }
+
+    @Test fun aNonMainAssistantConversationDrawsNoPill() {
+        val hub = Hub()
+        val side = JsonCodec.decodeFromString<Session>("""{"machine_id":"box","session_id":"side","assistant":true,"agent":"claude","status":"idle",
+            "launcher":"claude","model":"claude-opus-5-5","effort":"high","rev":3}""")
+        rule.setContent {
+            CompositionLocalProvider(LocalHubFeatures provides setOf("assistant_model_pick")) {
+                PersonaTheme(reduceMotion = true, style = AppStyle.Glass) {
+                    Box { PersonaModelPill(side, "box", hub, ModelPillWidth.Wide, pagePick = null, onPagePick = { }, onNotice = {}) }
+                }
+            }
+        }
+        rule.waitUntil(5_000) { hub.launcherListReads >= 1 } // the config is read, but the picker is never drawn
+        rule.onNodeWithTag("model-pill").assertDoesNotExist()
+        assertTrue("nothing is written for a conversation without a pick", hub.asked.isEmpty())
     }
 
     @Test fun aHubPushThatBumpsTheRevisionReReadsTheEffectiveMainChatModel() {
         val hub = Hub()
-        val first = JsonCodec.decodeFromString<Session>("""{"machine_id":"box","session_id":"c3","assistant":true,"agent":"claude","status":"idle",
+        val first = JsonCodec.decodeFromString<Session>("""{"machine_id":"box","session_id":"main","assistant":true,"agent":"claude","status":"idle",
             "launcher":"claude","model":"claude-haiku-5-5","effort":"high","rev":3}""")
         var shown by mutableStateOf(first)
         rule.setContent {
