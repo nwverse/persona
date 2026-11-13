@@ -7,6 +7,7 @@ import kotlinx.serialization.Serializable
 import persona.core.contracts.InboxChainEntry
 import persona.core.contracts.InboxHandling
 import persona.core.contracts.InboxSuggestion
+import persona.core.contracts.SessionKey
 import persona.core.designsystem.LocalizedFormats
 import persona.core.designsystem.Status
 import persona.core.designsystem.icons.PhIcon
@@ -49,8 +50,20 @@ internal sealed interface EventMark {
     /** The manager failed or timed out: back in Needs you without a suggestion. */
     data class Failed(val reason: String?) : EventMark
     /** The shared `now` words; an unknown key never reaches this variant and keeps the old mark. */
-    data class Now(val text: String, val status: Status, val problem: Boolean = false, val accent: Boolean = false,
-        val key: String? = null) : EventMark
+    data class Now(val text: String, val status: Status, val problem: Boolean = false, val key: String? = null) : EventMark
+}
+
+/** The processing conversation, from the handling record or its handling-chain entry, when the hub gave both ids. */
+internal fun inboxProcessingSession(record: InboxRecord): SessionKey? {
+    record.event.handling?.let {
+        if (!it.machineId.isNullOrBlank() && !it.sessionId.isNullOrBlank()) return SessionKey(it.machineId!!, it.sessionId!!)
+    }
+    val entry = record.event.chain.lastOrNull {
+        it.kind == "handling" && it.link?.let { link ->
+            link.type == "session" && !link.machineId.isNullOrBlank() && !link.sessionId.isNullOrBlank()
+        } == true
+    } ?: return null
+    return SessionKey(entry.link!!.machineId!!, entry.link!!.sessionId!!)
 }
 
 internal fun eventMark(record: InboxRecord): EventMark? {

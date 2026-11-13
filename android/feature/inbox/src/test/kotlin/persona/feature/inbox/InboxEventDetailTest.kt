@@ -5,6 +5,7 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.navigation3.runtime.NavKey
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -21,7 +22,9 @@ import persona.core.designsystem.PersonaTheme
 import persona.core.domain.inbox.InboxItem
 import persona.core.domain.sort.AgentSession
 import persona.core.navigation.AppTab
+import persona.core.navigation.ChatRoute
 import persona.core.navigation.Navigator
+import persona.core.navigation.RouteSource
 
 /** The detail's header, current-state fallbacks and the timeline interaction, separate from the showcase captures. */
 @RunWith(AndroidJUnit4::class)
@@ -29,8 +32,9 @@ import persona.core.navigation.Navigator
 class InboxEventDetailTest {
     @get:Rule val rule = createComposeRule()
     private val repository = FakeInboxRepository()
+    private val opened = mutableListOf<NavKey>()
     private val navigator = object : Navigator {
-        override fun navigate(key: NavKey) = Unit
+        override fun navigate(key: NavKey) { opened += key }
         override fun back() = Unit
         override fun selectTab(tab: AppTab) = Unit
     }
@@ -41,7 +45,8 @@ class InboxEventDetailTest {
             suggestion = InboxSuggestion(version = 1, kind = "reply", text = "Friday works"), recap = "Processed it",
             chain = listOf(
                 InboxChainEntry("c1", at = "2026-01-01T11:02:00Z", kind = "received", text = "Received", via = "chat"),
-                InboxChainEntry("c2", at = "2026-01-01T11:03:00Z", kind = "handling", text = "Handling", via = "assistant"),
+                InboxChainEntry("c2", at = "2026-01-01T11:03:00Z", kind = "handling", text = "Handling", via = "assistant",
+                    link = InboxChainLink(type = "session", machineId = "m1", sessionId = "s-handling")),
                 InboxChainEntry("c3", at = "2026-01-01T11:04:00Z", kind = "agent", text = "Agent", via = "agent",
                     link = InboxChainLink(type = "session", machineId = "m1", sessionId = "s-agent")),
                 InboxChainEntry("c4", at = "2026-01-01T11:05:00Z", kind = "reported", text = "Reported", via = "agent"),
@@ -73,6 +78,9 @@ class InboxEventDetailTest {
         val recap = rule.onNodeWithText("Processed it", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
         val chain = rule.onNodeWithText("What happened", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
         assertTrue(meta.top < now.top && now.top < summary.top && summary.top < recap.top && recap.top < chain.top)
+        rule.onNodeWithText("AI summary", useUnmergedTree = true).assertDoesNotExist()
+        rule.onNodeWithText("Processing chat ›").performClick()
+        assertEquals(ChatRoute("m1", "s-handling", source = RouteSource.InboxItem("event")), opened.last())
         rule.onNodeWithText("Received", useUnmergedTree = true).assertDoesNotExist()
         rule.onNodeWithText("Reported", useUnmergedTree = true).assertExists()
         rule.onNodeWithText("Assistant says", useUnmergedTree = true).assertExists()

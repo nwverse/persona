@@ -29,4 +29,5 @@
     <string name="inbox_time_tomorrow">明天</string>
     <string name="inbox_time_yesterday">昨天</string>
     <string name="inbox_event_assistant_says">助手说</string>
+    <string name="inbox_event_processing_chat">处理对话 ›</string>
 </resources>

@@ -29,4 +29,5 @@
     <string name="inbox_time_tomorrow">明日</string>
     <string name="inbox_time_yesterday">昨日</string>
     <string name="inbox_event_assistant_says">アシスタントによると</string>
+    <string name="inbox_event_processing_chat">処理の会話 ›</string>
 </resources>

@@ -26,7 +26,6 @@ import persona.core.designsystem.JRow
 import persona.core.designsystem.JSectionHeader
 import persona.core.designsystem.JSourceMark
 import persona.core.designsystem.JTag
-import persona.core.designsystem.JTextButton
 import persona.core.designsystem.MarkSize
 import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.Tokens
@@ -96,17 +95,17 @@ internal fun LazyListScope.eventChain(
 ) {
     val chain = record.event.chain
     if (chain.isEmpty()) return
-    item("event-chain-header") { JSectionHeader(stringResource(R.string.inbox_event_chain), count = chain.size) }
     item("event-chain") {
         var expanded by rememberSaveable(record.item.id) { mutableStateOf(false) }
         val shown = shownChain(chain, expanded)
         Column {
+            JSectionHeader(stringResource(R.string.inbox_event_chain), count = chain.size,
+                trailing = if (chain.size > 3) stringResource(if (expanded) R.string.inbox_collapse else R.string.inbox_event_chain_all, chain.size) else null,
+                onClick = if (chain.size > 3) ({ expanded = !expanded }) else null,
+                open = if (chain.size > 3) expanded else null, trailingIsFoldAction = true)
             shown.forEachIndexed { index, entry ->
                 JGroupItem(GroupPosition.of(index, shown.size)) { ChainRow(entry, record, sessions, mutes, go) }
             }
-            if (chain.size > 3) JTextButton(
-                if (expanded) stringResource(R.string.inbox_collapse) else stringResource(R.string.inbox_event_chain_all, chain.size),
-                { expanded = !expanded }, Modifier.padding(top = Tokens.Space.xs))
         }
     }
 }

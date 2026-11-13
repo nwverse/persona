@@ -134,6 +134,14 @@ fun InboxEventScreen(repository: InboxRepository, route: InboxEventRoute, naviga
                 EventFallbackState(record, Modifier.padding(bottom = Tokens.Space.s))
             }
         }
+        record.item.summary?.takeIf { it.isNotBlank() }?.let { summary ->
+            item("event-summary") {
+                Row(Modifier.fillMaxWidth().padding(bottom = Tokens.Space.s), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+                    JIcon(PersonaIcons.ai, null, size = Tokens.Space.m, tint = PersonaTheme.palette.accent, decorative = true)
+                    Text(summary, style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink)
+                }
+            }
+        }
         // "Suggestion updated" stays over the new suggestion until the user answers again (the card is drawn anew for it).
         if (stale && !record.item.isDone) item("event-stale") {
             JNotice(stringResource(R.string.inbox_suggestion_stale), Modifier.padding(bottom = Tokens.Space.s), icon = PhIcons.ArrowsClockwise)
