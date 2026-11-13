@@ -47,6 +47,9 @@ type TodoRow struct {
 	Project string `json:"project"`
 	// Kind is "" for a to-do or a task, or KindConcern (#3561). Set when it is made, never changed.
 	Kind string `json:"kind"`
+	// SeenAt is when the owner last looked at it in Just finished (#5707): Got it, or opening it; nil when never, or
+	// after an Undo. Only SeeTodo writes it.
+	SeenAt *time.Time `json:"seen_at"`
 }
 
 // KindConcern is a todo for something the owner raised in the main conversation and wants an answer to (#3561,
@@ -100,12 +103,13 @@ type TodoAgentRow struct {
 }
 
 const todoColumns = `id, title, notes, done_at, created_at, updated_at, origin, plan_id, start_error, done_by, done_reason, reopened_at, quiet,
-	due_at, due_date, remind_at, reminded_at, priority, project, kind`
+	due_at, due_date, remind_at, reminded_at, priority, project, kind, seen_at`
 
 // todoDest is where a row of todoColumns is scanned to.
 func todoDest(r *TodoRow) []any {
 	return []any{&r.ID, &r.Title, &r.Notes, &r.DoneAt, &r.CreatedAt, &r.UpdatedAt, &r.Origin, &r.PlanID, &r.StartError, &r.DoneBy,
-		&r.DoneReason, &r.ReopenedAt, &r.Quiet, &r.DueAt, &r.DueDate, &r.RemindAt, &r.RemindedAt, &r.Priority, &r.Project, &r.Kind}
+		&r.DoneReason, &r.ReopenedAt, &r.Quiet, &r.DueAt, &r.DueDate, &r.RemindAt, &r.RemindedAt, &r.Priority, &r.Project, &r.Kind,
+		&r.SeenAt}
 }
 
 // ListTodos returns all todos ordered by created_at DESC.
@@ -204,11 +208,15 @@ type TodoEdit struct {
 	RemindAt     *time.Time
 	Priority     *string
 	Project      *string
+	// Origin: the conversation (or agent) the task belongs to now; a task whose supervisor was handed to another
+	// conversation moves with it (assistant/task_leader.go rehome).
+	Origin *string
 }
 
 // Apply makes the edit to cur at the moment at: done stamps done_at (once), not done reopens it (reopened_at, no
-// longer failed); a reminder at another moment is to be pushed again. The store and the store-less memory both
-// change a todo with it.
+// longer failed); done on a failed start, which the hub closed itself and which waits on the owner, is the owner closing
+// it: no longer failed, done now by them (#3713). A reminder at another moment is to be pushed again. The store and the
+// store-less memory both change a todo with it.
 func (e TodoEdit) Apply(cur *TodoRow, at time.Time) {
 	if e.Title != nil {
 		cur.Title = *e.Title
@@ -218,8 +226,9 @@ func (e TodoEdit) Apply(cur *TodoRow, at time.Time) {
 	}
 	if e.Done != nil {
 		if *e.Done {
-			if cur.DoneAt == nil {
+			if cur.DoneAt == nil || cur.StartError != "" {
 				cur.DoneAt = &at
+				cur.StartError = ""
 				cur.DoneBy, cur.DoneReason = "", ""
 			}
 		} else {
@@ -242,6 +251,9 @@ func (e TodoEdit) Apply(cur *TodoRow, at time.Time) {
 	}
 	if e.Project != nil {
 		cur.Project = *e.Project
+	}
+	if e.Origin != nil {
+		cur.Origin = *e.Origin
 	}
 	cur.UpdatedAt = at
 }
@@ -276,9 +288,9 @@ func (d *DB) EditTodo(ctx context.Context, id string, e TodoEdit, updatedAt time
 		e.Apply(&cur, updatedAt)
 		_, err = tx.Exec(ctx, `UPDATE todos SET title = $2, notes = $3, done_at = $4, updated_at = $5, start_error = $6,
 			done_by = $7, done_reason = $8, reopened_at = $9, due_at = $10, due_date = $11, remind_at = $12, reminded_at = $13,
-			priority = $14, project = $15 WHERE id = $1`,
+			priority = $14, project = $15, origin = $16 WHERE id = $1`,
 			cur.ID, cur.Title, cur.Notes, cur.DoneAt, cur.UpdatedAt, cur.StartError, cur.DoneBy, cur.DoneReason, cur.ReopenedAt,
-			cur.DueAt, cur.DueDate, cur.RemindAt, cur.RemindedAt, cur.Priority, cur.Project)
+			cur.DueAt, cur.DueDate, cur.RemindAt, cur.RemindedAt, cur.Priority, cur.Project, cur.Origin)
 		if err != nil {
 			return err
 		}
@@ -289,6 +301,21 @@ func (d *DB) EditTodo(ctx context.Context, id string, e TodoEdit, updatedAt time
 		return nil, err
 	}
 	return &updated, nil
+}
+
+// SeeTodo sets when the owner looked at todo id (#5707, docs/assistant/todo-status-sop.md "Seen"); nil clears it (Undo).
+// It is not an edit: updated_at stays, so being seen never counts as activity.
+func (d *DB) SeeTodo(ctx context.Context, id string, at *time.Time) (*TodoRow, error) {
+	var r TodoRow
+	err := d.pool.QueryRow(ctx, `UPDATE todos SET seen_at = $2 WHERE id = $1 RETURNING `+todoColumns, id, at).
+		Scan(todoDest(&r)...)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrTodoNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
 }
 
 // ClaimTodoReminder marks todo id reminded at now, but only while its reminder is still the one at remindAt, not yet

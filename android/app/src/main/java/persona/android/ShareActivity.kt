@@ -13,7 +13,18 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -31,6 +42,7 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.AndroidEntryPoint
 import dagger.hilt.android.lifecycle.HiltViewModel
 import persona.core.designsystem.PersonaTheme
+import persona.core.designsystem.dense
 import persona.core.designsystem.dismissKeyboardOnBlankTap
 import persona.core.contracts.SessionKey
 import persona.core.contracts.contextBody
@@ -75,12 +87,12 @@ class ShareActivity : ComponentActivity() {
                 ModalBottomSheet(onDismissRequest = { finish() }, sheetState = sheet) {
                     Column(
                         Modifier.fillMaxWidth().dismissKeyboardOnBlankTap().verticalScroll(rememberScrollState())
-                            .padding(horizontal = 24.dp).padding(bottom = 24.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                            .padding(horizontal = 24.dp.dense).padding(bottom = 24.dp.dense),
+                        verticalArrangement = Arrangement.spacedBy(12.dp.dense),
                     ) {
                         Text(stringResource(R.string.app_share_title), style = MaterialTheme.typography.titleLarge)
                         Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = MaterialTheme.shapes.medium) {
-                            Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                            Column(Modifier.fillMaxWidth().padding(16.dp.dense)) {
                                 Text(model.payload.title.ifBlank { stringResource(R.string.app_share_content) }, maxLines = 2, overflow = TextOverflow.Ellipsis)
                                 if (model.payload.text.isNotBlank()) {
                                     Text(model.payload.text, maxLines = 4, overflow = TextOverflow.Ellipsis,
@@ -185,9 +197,9 @@ internal fun ShareTargetList(
 @Composable
 private fun ShareTarget(title: String, subtitle: String, selected: Boolean, enabled: Boolean, select: () -> Unit) {
     Row(Modifier.fillMaxWidth().selectable(selected, enabled = enabled, role = Role.RadioButton, onClick = select)
-        .padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        .padding(vertical = 8.dp.dense), verticalAlignment = Alignment.CenterVertically) {
         RadioButton(selected, onClick = null, enabled = enabled)
-        Column(Modifier.padding(start = 12.dp).weight(1f)) {
+        Column(Modifier.padding(start = 12.dp.dense).weight(1f)) {
             Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(subtitle, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }

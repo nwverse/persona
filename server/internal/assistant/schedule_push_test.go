@@ -440,11 +440,9 @@ func TestQuietTaskWhenTheMainConversationIsUnknown(t *testing.T) {
 	}
 }
 
-// A quiet follow-up going on in the conversation it came from (a leader's patrol, #3673) holds that conversation's
-// pushes for its run: the run's normal finish is neither pushed nor mirrored, an error is, and the user speaking there
-// releases them. A run that comes while another turn is on there does not hold them (that turn's finish is pushed), a
-// task that pushes every run never does, and once the conversation is the main one the run goes to its own.
-func TestQuietFollowupHoldsTheConversationItCameFrom(t *testing.T) {
+// A quiet follow-up keeps its source conversation without holding all its pushes. Its actual input identifies a
+// quiet completion; a later user turn has no such mode. The main conversation remains excluded.
+func TestQuietFollowupUsesItsInputSource(t *testing.T) {
 	n := newFakeHub().withMachine()
 	h := newStorelessService(t, n)
 	ctx := context.Background()
@@ -460,11 +458,17 @@ func TestQuietFollowupHoldsTheConversationItCameFrom(t *testing.T) {
 	if _, err := runNow(t, h, "fu_p"); err != nil {
 		t.Fatal(err)
 	}
-	if p := n.lastSend(t); p["session_id"] != "lead1" || p[holdPushesParam] != true {
-		t.Fatalf("the run goes on in its conversation, holding its pushes: %v", p)
+	if p := n.lastSend(t); p["session_id"] != "lead1" || p[holdPushesParam] == true {
+		t.Fatalf("the run goes on in its conversation without a conversation-wide hold: %v", p)
 	}
-	if !h.supervising("lead1") || !h.quietTaskTurn(ctx, "server", "lead1") {
-		t.Fatal("the run's normal finish is not pushed or mirrored")
+	n.mu.Lock()
+	n.items = []proto.Item{
+		{Role: "user", Kind: proto.KindText, Text: "巡检一遍待办", Source: taskMessageSource(Task{SessionID: "lead1", Push: pushAsked})},
+		{Role: "assistant", Kind: proto.KindText, Text: "没有新情况。"},
+	}
+	n.mu.Unlock()
+	if h.supervising("lead1") || !h.quietTaskTurn(ctx, "server", "lead1") {
+		t.Fatal("the actual scheduled input, not the conversation, makes this answer quiet")
 	}
 	failed := idle
 	failed.TurnError = "overloaded"
@@ -474,8 +478,17 @@ func TestQuietFollowupHoldsTheConversationItCameFrom(t *testing.T) {
 	}
 	n.setSessions("server", idle)
 	h.UserSpoke(ctx, SessionRef{MachineID: "server", SessionID: "lead1"})
-	if h.supervising("lead1") || h.quietTaskTurn(ctx, "server", "lead1") {
-		t.Fatal("the user spoke there: its turns are pushed as ever")
+	if !h.quietTaskTurn(ctx, "server", "lead1") {
+		t.Fatal("receiving another input cannot change the patrol reply's origin")
+	}
+	n.mu.Lock()
+	n.items = []proto.Item{
+		{Role: "user", Kind: proto.KindText, Text: "Show me the details"},
+		{Role: "assistant", Kind: proto.KindText, Text: "Here are the details"},
+	}
+	n.mu.Unlock()
+	if h.quietTaskTurn(ctx, "server", "lead1") {
+		t.Fatal("the user's own subsequent turn is mirrored as ever")
 	}
 
 	busy := idle

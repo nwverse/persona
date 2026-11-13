@@ -160,6 +160,7 @@ func startEdge(t *testing.T, first string, tweak func(*Options)) *testEdge {
 		}
 	})
 	te.waitFor(first)
+	te.waitControl(first)
 	return te
 }
 
@@ -265,6 +266,47 @@ func TestSwitchToABinaryThatDoesNotStart(t *testing.T) {
 	}
 }
 
+// Failed switches in a row leave the serving slot reachable: a standby never takes its name, so it never takes (or
+// deletes, as it exits) its sockets. A switch after them still hands over.
+func TestFailedSwitchesInARowKeepTheServingSlot(t *testing.T) {
+	te := startEdge(t, "v1", func(o *Options) { o.HoldMax = 3 * time.Second })
+	slot := strings.Fields(te.waitFor("v1"))[1]
+	for i := 1; i <= 3; i++ {
+		if _, err := Switch(te.control, te.binary("bad-standby"), "", time.Minute, nil); err == nil {
+			t.Fatalf("switch %d to a binary that exits: no error", i)
+		}
+		if body, err := te.get("/"); err != nil || !strings.HasPrefix(body, "v1 "+slot+" ") {
+			t.Fatalf("after failed switch %d: GET / = %q %v, want slot %s's v1 to answer", i, body, err, slot)
+		}
+		if got := te.sockets(); len(got) != 1 || !strings.HasPrefix(got[0], "slot-"+slot+"-") {
+			t.Fatalf("after failed switch %d the sockets are %v, want slot %s's only", i, got, slot)
+		}
+	}
+	if _, err := Switch(te.control, te.binary("v2"), "", time.Minute, nil); err != nil {
+		t.Fatalf("switch after the failed ones: %v", err)
+	}
+	next := strings.Fields(te.waitFor("v2"))[1]
+	if next == slot {
+		t.Fatalf("v2 serves as slot %s, the name v1 had", next)
+	}
+	if got := te.sockets(); len(got) != 1 || !strings.HasPrefix(got[0], "slot-"+next+"-") {
+		t.Fatalf("after the switch the sockets are %v, want slot %s's only", got, next)
+	}
+}
+
+// sockets are the slots' socket files in the edge's run directory.
+func (te *testEdge) sockets() []string {
+	te.t.Helper()
+	paths, err := filepath.Glob(filepath.Join(te.dir, "run", "slot-*.sock"))
+	if err != nil {
+		te.t.Fatal(err)
+	}
+	for i := range paths {
+		paths[i] = filepath.Base(paths[i])
+	}
+	return paths
+}
+
 // One that fails while taking over is replaced by the binary to go back to.
 func TestSwitchFailingToTakeOverGoesBack(t *testing.T) {
 	te := startEdge(t, "v1", nil)
@@ -357,6 +399,8 @@ func TestSwitchesUnderLoad(t *testing.T) {
 	var failed, served atomic.Int32
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
+	stopWorkers := sync.OnceFunc(func() { close(stop); wg.Wait() })
+	t.Cleanup(stopWorkers)
 	for i := 0; i < 16; i++ {
 		wg.Add(1)
 		go func() {
@@ -385,8 +429,7 @@ func TestSwitchesUnderLoad(t *testing.T) {
 			t.Fatalf("switch %d: %v", i, err)
 		}
 	}
-	close(stop)
-	wg.Wait()
+	stopWorkers()
 	if failed.Load() != 0 || served.Load() == 0 {
 		t.Fatalf("%d failed, %d served across 6 switches", failed.Load(), served.Load())
 	}

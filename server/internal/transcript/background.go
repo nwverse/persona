@@ -111,6 +111,22 @@ func manualBackground(result string) []string {
 	return bgManualRe.FindStringSubmatch(result)
 }
 
+// LaunchedBackgroundID is the id of the background task a tool result says its call started (a backgrounded command,
+// an async agent, a workflow, a Monitor, a command moved or sent to the background), "" for any other result. The id is
+// read whole, so "bash_1" is not the id of a result that started "bash_12".
+func LaunchedBackgroundID(result string) string {
+	if mm := manualBackground(result); mm != nil {
+		return mm[1]
+	}
+	if mm := bgIDRe.FindStringSubmatch(result); mm != nil {
+		return mm[1]
+	}
+	if mm := bgMovedRe.FindStringSubmatch(result); mm != nil {
+		return mm[1]
+	}
+	return ""
+}
+
 // onceCron reports a cron expression pinned to one date ("33 17 21 10 *": day of month and month both fixed).
 func onceCron(expr string) bool {
 	f := strings.Fields(expr)
@@ -162,6 +178,12 @@ func (m *Meta) backgroundStarted(toolUseID, result string, isError bool, ts time
 	}
 	delete(m.fgBash, toolUseID)
 	t, ok := m.bgPending[toolUseID]
+	if !ok && !isError && workflowLaunch(result) {
+		// A workflow's launch whose call was not read: the node's background scan skips lines over 64 KiB
+		// (node/bgscan.go), and a call with its script inline is as long as the script (#6003). The result names the
+		// task, the run and the script file, whose meta block has the name and phases.
+		t, ok = proto.BackgroundTask{Kind: "workflow"}, true
+	}
 	if !ok {
 		if mv := bgMovedRe.FindStringSubmatch(result); mv != nil && !isError {
 			m.removeBackground(mv[1])
@@ -193,6 +215,15 @@ func (m *Meta) backgroundStarted(toolUseID, result string, isError bool, ts time
 	}
 	m.removeBackground(t.ID)
 	m.Background = append(m.Background, t)
+}
+
+// wfLaunched starts the Workflow tool's result.
+const wfLaunched = "Workflow launched in background. Task ID:"
+
+// workflowLaunch reports a Workflow tool's result: its first words, and the run it names. A result that only quotes
+// one (a command printing a transcript, a search) does not start with them.
+func workflowLaunch(result string) bool {
+	return strings.HasPrefix(result, wfLaunched) && (wfRunRe.MatchString(result) || wfDirRe.MatchString(result))
 }
 
 // workflowsKept: how many workflow runs a session's Meta remembers.

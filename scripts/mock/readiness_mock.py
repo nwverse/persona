@@ -31,6 +31,8 @@ SCENARIOS = {
     "pending": {"machine": "pending", "start": "machine_pending"},
     "no_claude": {"machine": "ok", "claude": "missing", "start": "claude_missing"},
     "not_logged_in": {"machine": "ok", "model": "not_logged_in"},
+    # The same signed-out launcher, with other launchers on the machine to switch the main chat to (#4355).
+    "not_logged_in_switch": {"machine": "ok", "model": "not_logged_in", "switch": True},
     "bad_key": {"machine": "ok", "model": "auth_failed"},
     "full": {"machine": "ok", "model": "ok", "answered": True},
     # full on the mock's usual data (the assistant on server, every page filled), for screenshots of a hub in use.
@@ -160,8 +162,15 @@ def readiness(sc, machine, lang, launcher="claude", dismissed=False, probe=None)
                            "model_route": ("connect_model", "test_assistant")}.get(
                 model_code, ("connect_model", ""))
             model = with_machine(step(lang, "model", "problem", model_code, name, launcher, action), mid)
+            if model_code == "rate_limited":
+                # The evidence occurrence stays stable across reads; checked_at still advances (iOS dismissal, #5658).
+                model["occurrence"] = sc.get("occurrence", "2026-11-06T09:00:00Z")
             if alt:
                 model["alt_actions"] = [{"id": alt}]
+            if model_code == "not_logged_in" and sc.get("switch"):
+                # The machine has other launchers: offer switching the main chat to one (#4355).
+                model["alt_actions"] = model.get("alt_actions", []) + [{"id": "main_chat_model"}]
+                model["detail"] = t(lang, "assistant-readiness.model_not_logged_in_switch_detail", machine=name)
         else:
             model = with_machine(step(lang, "model", "unknown", "model_unverified", name, launcher, "test_assistant"), mid)
         model_ok = model["state"] == "ok"

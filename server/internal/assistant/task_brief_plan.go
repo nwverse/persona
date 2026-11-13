@@ -1,0 +1,113 @@
+package assistant
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+)
+
+// ---- the brief of a task_plan task (#3822) ----
+
+// briefRequired refuses a plan's task that does not say what done is: a writable task needs done_when (one criterion
+// that can be checked, at least) and expect_minutes, a read-only one a goal and expect_minutes. A task that continues
+// another (continues) takes that task's brief instead and says why it takes over. The refusal names what is missing.
+func briefRequired(t *PlanTask) error {
+	if t.Continues != "" {
+		if t.ContinuesWhy == "" {
+			return errors.New("continues needs continues_why: one line on why the earlier task stopped and this one takes over")
+		}
+		return nil
+	}
+	var missing []string
+	if t.Readonly {
+		if t.Goal == "" {
+			missing = append(missing, "goal (what the owner gets from it, in one sentence)")
+		}
+	} else if len(t.DoneWhen) == 0 {
+		missing = append(missing, "done_when (at least one result that can be checked)")
+	}
+	if t.ExpectMinutes <= 0 {
+		missing = append(missing, "expect_minutes (about how long it should take)")
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	kind := "a writable task"
+	if t.Readonly {
+		kind = "a read-only task"
+	}
+	return fmt.Errorf("%s needs %s; nothing was planned. Add them and call task_plan again (a task that takes over from another "+
+		"gives continues and continues_why instead and keeps that task's brief)", kind, strings.Join(missing, " and "))
+}
+
+// planBriefs gives each task of a plan from conversation (on machine) its brief as it will be kept, for the card to
+// show before "Start": who asked is read off the conversation once (briefOrigin); a task that continues another takes
+// that task's brief, with its criteria and expected time as they stand.
+func (s *Service) planBriefs(ctx context.Context, machine, conversation string, tasks []PlanTask) error {
+	var origin *briefRecord
+	for i := range tasks {
+		t := &tasks[i]
+		if t.Continues != "" {
+			prev, ok := s.todoNow(t.Continues)
+			if !ok {
+				return fmt.Errorf("task %d: continues: no task %q", i+1, t.Continues)
+			}
+			if prev.Origin == "" {
+				return fmt.Errorf("task %d: continues: %s is the user's own to-do, not a task that was handed out", i+1, prev.ID)
+			}
+			brief, err := s.ensureTaskBrief(ctx, prev)
+			if err != nil {
+				return fmt.Errorf("task %d: continues: %v", i+1, err)
+			}
+			// Its own prompt stays its own; what done means is the brief's, as its scope changes left it.
+			t.DoneWhen, t.ExpectMinutes = brief.Criteria, brief.ExpectNow
+			t.Brief = &brief
+			continue
+		}
+		if origin == nil {
+			o := s.briefOrigin(ctx, machine, conversation)
+			origin = &o
+		}
+		rec := *origin
+		rec.ID, rec.CreatedAt = "brief_"+randomHex(8), time.Now().UTC()
+		rec.Goal, rec.DoneWhen, rec.ExpectMinutes, rec.OutOfBounds = firstNonEmpty(t.Goal, t.Title), t.DoneWhen, t.ExpectMinutes, t.OutOfBounds
+		if rec.StartedBy != briefByOwner {
+			rec.Reason = t.StartedWhy
+		}
+		v := (&taskBrief{rec: rec}).view()
+		t.Brief = &v
+	}
+	return nil
+}
+
+// briefStarted keeps the brief of plan p's task t now that it is to-do todo: the one its card showed, dated from the
+// start, or the brief of the task it continues. A plan saved before briefs has none on its tasks: it gets one from
+// what the task says, with nobody named as having asked.
+func (s *Service) briefStarted(ctx context.Context, p *TaskPlan, t *PlanTask, todo Todo) {
+	if _, ok := s.briefOfTodo(todo.ID); ok {
+		return // a to-do the task runs on (reuse_todo) that has its brief already
+	}
+	if t.Continues != "" {
+		prev, ok := s.todoNow(t.Continues)
+		if ok {
+			if brief, err := s.ensureTaskBrief(ctx, prev); err == nil {
+				if err := s.linkTaskBrief(ctx, brief.ID, todo.ID, prev.ID, t.ContinuesWhy); err != nil {
+					s.logf("task %s: brief of %s: %v", todo.ID, prev.ID, err)
+				}
+				return
+			}
+		}
+		s.logf("task %s: the task it continues (%s) is gone: it gets a brief of its own", todo.ID, t.Continues)
+	}
+	rec := briefRecord{StartedBy: briefByUnknown, Conversation: p.Conversation, Goal: firstNonEmpty(t.Goal, t.Title),
+		DoneWhen: t.DoneWhen, ExpectMinutes: t.ExpectMinutes, OutOfBounds: t.OutOfBounds}
+	if t.Brief != nil && !t.Brief.Reconstructed && t.Continues == "" {
+		rec = t.Brief.briefRecord
+	}
+	rec.CreatedAt = time.Now().UTC() // the clock starts when the work is handed out, not when it was proposed
+	if _, err := s.putTaskBrief(ctx, rec, todo.ID); err != nil {
+		s.logf("task %s: brief: %v", todo.ID, err)
+	}
+}

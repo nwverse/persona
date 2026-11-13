@@ -17,6 +17,11 @@ nonisolated struct ToolCall: Identifiable, Hashable, Sendable {
         return result == nil
     }
     var isError: Bool { agentStatus == "failed" || agentStatus == "error" || (result?.isError ?? false) }
+    /// What it came to, when the node said (`ToolOutcome`).
+    var outcome: ToolOutcome? { result?.outcome }
+    /// An error that is not the call being denied, refused or interrupted: what it ran failed. The red a row and its
+    /// chip turn; `isError` still says the model got an error back.
+    var failed: Bool { isError && !(outcome?.stopped ?? false) }
 }
 
 nonisolated extension ChatRow {
@@ -353,7 +358,11 @@ nonisolated enum ChatBlock: Identifiable, Hashable, Sendable {
                     reopenedAt = lastIndex
                     current = raw
                 }
-                if item.wake == true, current != nil {
+                if item.modelRefusal != nil {
+                    // An upstream refusal (#4489): a line of its own after the exchange, never folded into the work row.
+                    if current == nil { current = Turn(id: row.id) }
+                    current!.trailing.append(row)
+                } else if item.wake == true, current != nil {
                     // A background task woke the idle agent: still the same exchange (the answer is picked at close).
                     current!.wakes.append(item)
                     current!.process.append(row)
@@ -404,10 +413,12 @@ nonisolated extension Item {
         return Int(id[id.index(after: hash)...]) ?? 0
     }
 
-    /// Work a fold may stand for: tool calls, their results and images, thoughts, folds.
+    /// Work a fold may stand for: tool calls, their results and images, thoughts, narration text, folds.
     var isWork: Bool {
         switch kind {
         case .thinking, .toolUse, .toolResult, .fold: true
+        // Only a fold's range distinguishes narration from a final assistant answer.
+        case .text: role == "assistant"
         case .image: toolUseID != nil
         default: false
         }
@@ -473,9 +484,32 @@ final class ChatStore {
     var screenUpdatedAt: Date?
     var error: String?
     var isLoadingOlder = false
+    /// This client's latest send survives replacement of its pending bubble by transcript echo.
+    var sendFeedback: ChatSendFeedback?
     /// Messages sent from this phone that the transcript has not shown yet: drawn at the end right away, and a failed one
     /// before the first message written after it (`ChatLines.placeFailed`).
-    var pending: [PendingMessage] = []
+    var pending: [PendingMessage] = [] {
+        didSet {
+            rebuildQueuePhotoMarks()
+            restoreSendFeedbackIfNeeded()
+        }
+    }
+    /// The Persona queue's own messages, kept to derive their photo marks again when the outbox changes.
+    @ObservationIgnored private var ownQueue: [String] = []
+    /// Local photo counts for the own queue rows, derived once per queue/outbox change rather than in a view body (P4).
+    private(set) var queuePhotoMarks: [Int] = []
+
+    func updateQueuePhotoMarks(queued: [String]?, own: Int) {
+        ownQueue = Array((queued ?? []).prefix(max(0, own)))
+        rebuildQueuePhotoMarks()
+    }
+
+    private func rebuildQueuePhotoMarks() {
+        let marks = ownQueue.map { raw in
+            pending.first { PendingMessage.same($0.text, raw) }?.images.count ?? 0
+        }
+        if marks != queuePhotoMarks { queuePhotoMarks = marks }
+    }
     /// When this phone wrote the messages it sent whose copies have arrived, by their id (`Item.clientMsgID`, upper
     /// case): a failed message goes by the phone's own times, not by when the computer wrote a copy (a queued message
     /// is written when the agent takes it in, minutes later; its clock may differ) (#6023). This run's only.
@@ -519,7 +553,7 @@ final class ChatStore {
             // Refs again: a cache written before they named a chat's group of hubs (#1555) sent its pictures to the
             // current group's hub.
             items = Self.withImageRefs(cached.items, key)
-            ids = Set(cached.items.map(\.id))
+            ids = Set(items.map(\.id))
             hasMore = cached.hasMore
             history = cached.history
             covered = cached.covered ?? (cached.items.last?.seq ?? 0)
@@ -548,6 +582,7 @@ final class ChatStore {
     /// cache, several exchanges behind). Without a span (an older hub) batches are trusted, as before.
     @discardableResult
     func apply(_ new: [Item], span: ItemSpan, backlog: Bool = false, hasMore: Bool? = nil, moreAfter: Bool = false) -> Gap {
+        let new = new.publicRefusals()
         arrivedAt = .now
         defer { newestArrived() }
         if let h = span.history, let mine = history, h != mine {
@@ -599,9 +634,18 @@ final class ChatStore {
     }
 
     func merge(_ new: [Item], backlog: Bool = false, hasMore: Bool? = nil) {
+        let new = new.publicRefusals()
         if backlog || !new.isEmpty { error = nil } // data arrived: a stale "machine is offline" no longer applies
-        // Promotion is monotone, including when overlapping real work takes a promoted fold's place. Retain it on
-        // the replacement items before either kind of overlap removes evidence. Opened folds count too: a repeated
+        // A replayed disk cache can hold an id twice. Keep the newest copy before indexing, but only after collecting
+        // promotion evidence; ids is already a Set, so a count mismatch finds this without scanning every ordinary merge.
+        func newestCopies(_ list: [Item]) -> [Item] {
+            guard list.count > 1 else { return list }
+            var seen = Set<String>()
+            return Array(list.reversed().filter { seen.insert($0.id).inserted }.reversed())
+        }
+        let deduplicated = items.count != ids.count
+        // Promotion is monotone, including when deduplication or overlapping real work takes a promoted fold's place.
+        // Retain it on the replacement items before either kind of overlap removes evidence. Opened folds count too: a repeated
         // folded page can bring authoritative promotion while the UI keeps that work expanded.
         let evidence = (items + Array(opened.values) + new).filter { $0.supervisionUser == true || $0.fold?.supervisionUser == true }
         let promotedIDs = Set(evidence.filter { $0.supervisionUser == true }.map(\.id))
@@ -619,10 +663,14 @@ final class ChatStore {
                 return it
             }
         }
+        if deduplicated {
+            items = newestCopies(items)
+            ids = Set(items.map(\.id))
+        }
         let retained = retainingPromotion(items)
-        var changed = retained != items
+        var changed = deduplicated || retained != items
         if changed { items = retained; settled = nil }
-        let promoted = retainingPromotion(new)
+        let promoted = newestCopies(retainingPromotion(new))
         let batchWork = promoted.filter { $0.isWork && $0.kind != .fold }
         let fresh = promoted.filter { it in
             !stillOpen(it) && !(it.kind == .fold && batchWork.contains { it.folds($0) })
@@ -632,7 +680,7 @@ final class ChatStore {
         // Pages can repeat an id with new metadata or a completed receipt. The new copy wins, but never erases the
         // evidence above. Append-only pushes keep the fast path without building an index.
         let indices = fresh.contains { ids.contains($0.id) } ? Dictionary(uniqueKeysWithValues: items.enumerated().map { ($0.element.id, $0.offset) }) : [:]
-        var inOrder = true
+        var inOrder = !deduplicated // Keeping the last cached copies can move an older line behind a newer one.
         var added: [Item] = []
         for it in Self.withImageRefs(fresh, key) {
             if let i = indices[it.id] {
@@ -665,6 +713,7 @@ final class ChatStore {
             for it in added {
                 if let i = pending.firstIndex(where: { PendingMessage.arrived($0, as: it) }) {
                     let p = pending.remove(at: i)
+                    if sendFeedback?.id == p.id { sendFeedback?.echo(sequence: it.seq) }
                     if let at = p.createdAt {
                         if writtenAt.count >= 500 { writtenAt = writtenAt.filter { $0.value > at.addingTimeInterval(-86400) } }
                         writtenAt[p.id.uuidString] = at
@@ -673,6 +722,13 @@ final class ChatStore {
                 }
             }
             if pending.count != before { onArrived?() }
+        }
+        if var feedback = sendFeedback, feedback.phase != .finished {
+            for item in added {
+                feedback.echo(item)
+                if feedback.answered(by: item) { feedback.finish(feedback.id) }
+            }
+            if feedback != sendFeedback { sendFeedback = feedback }
         }
         // Streamed items arrive in order: only older pages / reconnect backlogs need the sort.
         if !inOrder { items = Self.ordered(items) }
@@ -988,8 +1044,10 @@ final class ChatStore {
         }
     }
 
-    /// Lazy images learn where to fetch their bytes from, and so do those a fold says its work looked at.
+    /// Lazy images learn where to fetch their bytes from, and so do those a fold says its work looked at. Every way
+    /// items come in (a page, a push, the disk cache, the background sync) passes here, so the view feedback goes too.
     nonisolated static func withImageRefs(_ items: [Item], _ key: SessionKey) -> [Item] {
+        let items = withoutViewFeedback(items)
         guard items.contains(where: { $0.image?.lazy == true || $0.fold?.images?.isEmpty == false }) else { return items }
         return items.map { it in
             var it = it
@@ -1007,6 +1065,7 @@ final class ChatStore {
 
     /// Starts over from the latest page: what came in between was too much to fetch, and a hole would never fill.
     func replace(with latest: [Item], hasMore: Bool, span: ItemSpan = ItemSpan()) {
+        let latest = latest.publicRefusals()
         arrivedAt = .now
         defer { newestArrived() }
         // Pushes that came in while the page was on its way, past what it holds, stay (the next push finds the hole
@@ -1023,6 +1082,23 @@ final class ChatStore {
         merge(keep)
         covered = span.to ?? lastSeq
         scheduleRebuild() // also when the page is empty
+    }
+
+    /// The node's `<persona-view-errors>` feedback after the assistant's snapshot (its last rich views failed their
+    /// check) is for the model, not the user's words: an older hub (#4315) gave it as a user item of its own, the line's
+    /// block before the message, or at the start of the message, and the bubble showed its raw tags. Taken out of user
+    /// text; an item left with nothing goes.
+    nonisolated static func withoutViewFeedback(_ items: [Item]) -> [Item] {
+        guard items.contains(where: { $0.role == "user" && $0.kind == .text && ($0.text ?? "").contains("<persona-view-errors") }) else { return items }
+        return items.compactMap { it in
+            guard it.role == "user", it.kind == .text, let text = it.text, text.contains("<persona-view-errors") else { return it }
+            let left = text.replacingOccurrences(of: #"<persona-view-errors\b[^>]*>[\s\S]*?</persona-view-errors>\s*"#,
+                                                 with: "", options: .regularExpression)
+            guard !left.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            var it = it
+            it.text = left
+            return it
+        }
     }
 
     /// Items in transcript order: by line, then by block within the line (ids end in "#<block>"; "#10" after "#2").
@@ -1275,6 +1351,9 @@ nonisolated enum ScreenParser {
         /// The tab that submits every answer ("Review your answers"); incomplete: a question has none yet.
         var review = false
         var incomplete = false
+        /// A permission prompt for a shell command, as the hub reads it (#5266): nil for any other dialog, and from a hub
+        /// before it.
+        var commandAsk: CommandAsk?
 
         init(header: String?, question: String, detail: String?, options: [Option]) {
             self.header = header
@@ -1440,10 +1519,15 @@ nonisolated enum ChatCache {
     /// v12: relayed and automated assistant input retains additive source metadata.
     /// v13: cached tails count user questions, not automatic supervision; discard the old shallow tails.
     /// v14: injected supervision levels and folded promotion are retained, including client evidence on replaced folds.
+    /// v16: tool results carry `outcome` (docs/protocol/protocol.md "Tool outcomes", #4303); older copies have none, and
+    /// their denied or interrupted calls would stay red.
+    /// v17: refusal notices carry `model_refusal` and their text is the refusal's words (#4489); an older hub made it the
+    /// record's whole line, which v16's copies would keep showing.
+    /// v18: Codex commentary is assistant text rather than thinking; older cached items would keep hiding mid-turn answers.
     /// Bump it whenever the item structure or the text the hub gives an item changes.
-    static let folder = "chats-v15"
+    static let folder = "chats-v18"
     /// The folder before, removed on the first launch with this one.
-    private static let previous = "chats-v14"
+    private static let previous = "chats-v17"
 
     /// Once per launch, before the first copy is read or written (a static let runs once, on whichever thread asks first).
     private static let dropOlder: Void = {
@@ -1578,8 +1662,19 @@ nonisolated struct PendingMessage: Identifiable, Hashable, Codable, Sendable {
     /// When its sends started coming back waiting while its group's link was up (AppModel.settleSend, `OutboxWait`);
     /// in memory only: a relaunch starts the run again.
     var stalledSince: Date?
+    /// How the app wrote it when the user did not type it (a card's button): sent with it, so it never counts as the
+    /// user's own words for a secret hand-off's Always rule.
+    var via: APIClient.MessageVia?
+    /// It was written while the agent worked (the composer's queue mode): the queue strip draws it, not the chat
+    /// (`QueuePlacement`, #1461). nil for one written while the agent was idle, and in outboxes saved before this.
+    var queuedMode: Bool?
 
-    private enum CodingKeys: String, CodingKey { case id, text, images, state, failure, inboxHandOff, createdAt, mayHaveArrived, refused }
+    private enum CodingKeys: String, CodingKey { case id, text, images, state, failure, inboxHandOff, createdAt, mayHaveArrived, refused, via, queuedMode }
+
+    /// Only on this phone as far as it knows: failed, or waiting for the network. Deleting it (its long press, its mark's
+    /// menu) drops the bubble and its outbox entry and sends nothing (#4626). One being sent may be arriving and a sent
+    /// one is the hub's: neither can be deleted.
+    var onlyHere: Bool { state == .failed || state == .waiting }
 
     /// Comparable form: what the transcript keeps of it — the phone's image note, pasted wrappers and Claude's
     /// "[Image #21]" placeholders removed, whitespace ignored, and a context or file block read under either

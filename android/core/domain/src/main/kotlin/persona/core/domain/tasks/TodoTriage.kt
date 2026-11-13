@@ -13,15 +13,18 @@ import persona.core.contracts.parseTime
 // last moved — never from what an agent says about itself. A port of the web's `web/src/lib/todo-triage.ts`; the rules are
 // the SOP's table, in its order, and the first that holds wins. A change to the rules changes every client.
 
-/** Where a to-do shows, in the page's order. The first four are open sections; the last three start folded. */
-enum class TriageSection { Waiting, Working, JustDone, Pr, Other, Shelved, Done;
+/**
+ * Where a to-do shows, in the page's order (#5707): what the owner has to act on, the unfinished work, what just finished,
+ * then the folded ones, Done last. A merged row is led by its member in the first of these.
+ */
+enum class TriageSection { Waiting, Working, Pr, Other, JustDone, Shelved, Done;
 
-    /** Starts folded. */
-    val folded: Boolean get() = this == Other || this == Shelved || this == Done
+    /** Starts folded: Shelved and Done; the rest start open, unfinished to-dos included. */
+    val folded: Boolean get() = this == Shelved || this == Done
 }
 
 /** Which SOP rule placed a to-do; the section follows from it. */
-enum class TriageRule { FailedStart, AgentAsks, OwnerDecides, AgentRunning, Closed, Accepted, Deployed, FinishedUnseen, PrOpen, Stale, Rest }
+enum class TriageRule { FailedStart, Superseded, AgentAsks, OwnerDecides, AgentRunning, Closed, Accepted, Deployed, FinishedUnseen, PrOpen, Seen, Stale, Rest }
 
 /** A to-do's section, the rule that placed it, and the last moment anything of it moved (ms, 0 when nothing says). */
 data class Triage(val section: TriageSection, val rule: TriageRule, val last: Long)
@@ -29,7 +32,7 @@ data class Triage(val section: TriageSection, val rule: TriageRule, val last: Lo
 /** No activity for this long, nothing of it running: shelved. */
 const val SHELVE_AFTER_MS: Long = 48 * 3_600_000L
 
-/** Finished this recently: "Just finished"; earlier, "Done". */
+/** Finished this recently, and not seen since: "Just finished"; earlier, "Done". Seeing it (#5707) files it at once. */
 const val JUST_DONE_MS: Long = 24 * 3_600_000L
 
 private fun ms(at: String?): Long = parseTime(at)?.toEpochMilli() ?: 0L
@@ -105,7 +108,8 @@ private fun Todo.shelvable(now: Long, zone: ZoneId): Boolean {
 /**
  * A to-do's section by the SOP's decision table, first match wins:
  *
- *  1. FailedStart    the task's agent never started                     → Waiting (retry or remove), Done after 48 h
+ *  1. FailedStart    the task's agent never started                     → Waiting (retry or remove), Done after 48 h;
+ *     Superseded     … and a related to-do (its row) really finished    → Just finished (24 h), then Done (#3713)
  *  2. AgentAsks      an agent asks (question, approval) or was cut off  → Waiting
  *  3. OwnerDecides   review says needs_user, or a decision / "cannot" ask → Waiting
  *  4. AgentRunning   an agent is working or starting                    → Working
@@ -114,35 +118,52 @@ private fun Todo.shelvable(now: Long, zone: ZoneId): Boolean {
  *  7. Deployed       its delivery is live                               → Just finished (24 h), then Done
  *  8. FinishedUnseen an agent finished unseen, awaits review, or a done ask → Just finished
  *  9. PrOpen         its PR is open, nothing running                    → PR to merge (however old)
+ *  9a. Seen          rule 8, seen since it last moved, no PR open       → Done
  * 10. Stale          a task with no activity for 48 h                   → Shelved
  * 11. Rest           anything else                                      → Other open
  */
-fun Todo.triage(lookup: (SessionKey) -> Session?, now: Long, restoredAt: Long = 0, zone: ZoneId = ZoneId.systemDefault()): Triage {
+fun Todo.triage(
+    lookup: (SessionKey) -> Session?,
+    now: Long,
+    restoredAt: Long = 0,
+    zone: ZoneId = ZoneId.systemDefault(),
+    superseded: Boolean = false,
+): Triage {
     val last = lastActivity(lookup, restoredAt)
     val status = triageStatus(lookup)
-    fun recent(at: Long) = now - at < JUST_DONE_MS
+    // seen: the owner looked at it (`seen_at`, #5707) at or after `at`; fresh: it got to Just finished at `at`, under a day
+    // ago, and is not seen since
+    val seenMs = ms(this.seenAt)
+    fun seen(at: Long) = seenMs > 0 && seenMs >= at
+    fun fresh(at: Long) = now - at < JUST_DONE_MS && !seen(at)
     val ask = openAsk
     fun at(section: TriageSection, rule: TriageRule) = Triage(section, rule, last)
     val review = reviewState
 
-    if (status == TriageStatus.Failed) return at(if (now - last < SHELVE_AFTER_MS) TriageSection.Waiting else TriageSection.Done, TriageRule.FailedStart)
+    if (status == TriageStatus.Failed) {
+        // the same piece of work finished in a related to-do ([supersededFailedStarts]): history, nothing to retry
+        if (superseded) return at(if (fresh(ms(doneAt).takeIf { it > 0 } ?: last)) TriageSection.JustDone else TriageSection.Done, TriageRule.Superseded)
+        return at(if (now - last < SHELVE_AFTER_MS) TriageSection.Waiting else TriageSection.Done, TriageRule.FailedStart)
+    }
     if (status == TriageStatus.NeedsYou || status == TriageStatus.Interrupted) return at(TriageSection.Waiting, TriageRule.AgentAsks)
     if (!isDone && (review == "needs_user" || ask?.outcome == "decide" || ask?.outcome == "cannot")) return at(TriageSection.Waiting, TriageRule.OwnerDecides)
     if (status == TriageStatus.Working) return at(TriageSection.Working, TriageRule.AgentRunning)
-    if (isDone) return at(if (recent(ms(doneAt))) TriageSection.JustDone else TriageSection.Done, TriageRule.Closed)
-    if (acceptanceStands) return at(if (recent(ms(supervision?.latestReview?.at))) TriageSection.JustDone else TriageSection.Done, TriageRule.Accepted)
-    if (delivery?.state == "live") return at(if (recent(ms(delivery?.at).takeIf { it > 0 } ?: last)) TriageSection.JustDone else TriageSection.Done, TriageRule.Deployed)
-    if (status == TriageStatus.Unread || review == "pending_review" || (ask != null && ask.outcome.isNullOrEmpty()) || ask?.outcome == "done") {
-        return at(TriageSection.JustDone, TriageRule.FinishedUnseen)
-    }
+    if (isDone) return at(if (fresh(ms(doneAt))) TriageSection.JustDone else TriageSection.Done, TriageRule.Closed)
+    if (acceptanceStands) return at(if (fresh(ms(supervision?.latestReview?.at))) TriageSection.JustDone else TriageSection.Done, TriageRule.Accepted)
+    if (delivery?.state == "live") return at(if (fresh(ms(delivery?.at).takeIf { it > 0 } ?: last)) TriageSection.JustDone else TriageSection.Done, TriageRule.Deployed)
+    val finished = status == TriageStatus.Unread || review == "pending_review" || (ask != null && ask.outcome.isNullOrEmpty()) || ask?.outcome == "done"
+    if (finished && !seen(last)) return at(TriageSection.JustDone, TriageRule.FinishedUnseen)
     if (hasOpenPR) return at(TriageSection.Pr, TriageRule.PrOpen)
+    // seen since it last moved, and no PR waits on the owner
+    if (finished) return at(TriageSection.Done, TriageRule.Seen)
     if (shelvable(now, zone) && now - last >= SHELVE_AFTER_MS) return at(TriageSection.Shelved, TriageRule.Stale)
     return at(TriageSection.Other, TriageRule.Rest)
 }
 
 /**
  * Whether a to-do counts toward the header's open count: not closed, not accepted or deployed, not shelved. A finished
- * turn nobody looked at yet (Just finished, still open) counts: only a review or the user closes a to-do.
+ * turn nobody looked at yet (Just finished, still open) counts: only a review or the user closes a to-do. One the owner
+ * has seen since (rule 9a, in Done) does not.
  */
 fun Todo.countsAsOpen(t: Triage): Boolean {
     // a failed start has done_at too (the hub ends it), yet while it waits on the owner it is theirs to retry: open
@@ -158,14 +179,22 @@ enum class TodoBucket { Open, Shelved, Closed }
  * The one rule the To-dos page's "Not done" and the assistant's Progress entry both count by (#3331), so the two numbers
  * agree: [countsAsOpen] on [triage]; a to-do not open is shelved when its section is Shelved, else closed.
  */
-fun Todo.bucket(lookup: (SessionKey) -> Session?, now: Long, restoredAt: Long = 0): TodoBucket {
-    val t = triage(lookup, now, restoredAt)
+fun Todo.bucket(lookup: (SessionKey) -> Session?, now: Long, restoredAt: Long = 0, superseded: Boolean = false): TodoBucket {
+    val t = triage(lookup, now, restoredAt, superseded = superseded)
     return when {
         countsAsOpen(t) -> TodoBucket.Open
         t.section == TriageSection.Shelved -> TodoBucket.Shelved
         else -> TodoBucket.Closed
     }
 }
+
+/**
+ * Whether a to-do's checkbox shows it open (the web's `checksAsOpen`): not closed, or a failed start still waiting on the
+ * owner (rule 1), which the hub closed itself and the page counts as open (#3713). Ticking an open one closes it (done:
+ * for a failed start the hub clears its start error, so it moves to Just finished); unticking a closed one reopens it.
+ */
+fun Todo.checksAsOpen(t: Triage?): Boolean =
+    !isDone || !startError.isNullOrEmpty() && t?.rule == TriageRule.FailedStart && t.section == TriageSection.Waiting
 
 /** An accepted task its hub reopened with more work, with nothing of it running or asking: it reads Accepted, not Follow up. */
 fun Todo.acceptedAtRest(lookup: (SessionKey) -> Session?): Boolean =
@@ -216,24 +245,35 @@ data class TriageResult(
     val finished: Int,
 ) {
     fun rows(section: TriageSection): List<TriageGroup> = sections[section].orEmpty()
+
+    /**
+     * This without the to-dos [ids] (another grouping shows them already, #4352): a row keeps its other members, led by
+     * the first one left and in that one's section; a row left with none goes. The header totals stay as they are.
+     */
+    fun without(ids: Set<String>): TriageResult {
+        if (ids.isEmpty()) return this
+        val groups = sections.values.flatten().mapNotNull { group ->
+            val members = group.members.filterNot { it.id in ids }
+            when {
+                members.isEmpty() -> null
+                members.size == group.members.size -> group
+                else -> group.copy(section = group.triage.getValue(members.first().id).section, lead = members.first(),
+                    members = members, triage = members.associate { it.id to group.triage.getValue(it.id) },
+                    last = members.maxOf { group.triage.getValue(it.id).last })
+            }
+        }
+        val kept = groups.flatMap { group -> group.members.map { group.triage.getValue(it.id).section } }
+        return copy(
+            sections = TriageSection.entries.associateWith { section ->
+                groups.filter { it.section == section }.sortedWith(compareByDescending<TriageGroup> { it.last }.thenBy { it.key })
+            },
+            todoCounts = TriageSection.entries.associateWith { section -> kept.count { it == section } },
+        )
+    }
 }
 
-/**
- * Every to-do placed in its section, related ones merged into one row (union of shared keys). Closed to-dos are not merged
- * into open ones' rows. A group takes its most urgent member's section; rows in a section go most recently active first.
- * [quiet] false leaves quiet tasks (#1731) out, as a badge does; the page lists them.
- */
-fun triageTodos(
-    todos: List<Todo>,
-    lookup: (SessionKey) -> Session?,
-    now: Long,
-    restored: Map<String, Long> = emptyMap(),
-    quiet: Boolean = true,
-    zone: ZoneId = ZoneId.systemDefault(),
-): TriageResult {
-    val list = if (quiet) todos else todos.filter { !it.quiet }
-    val placed = list.associate { it.id to it.triage(lookup, now, restored[it.id] ?: 0, zone) }
-
+/** The row each to-do is in: the root of its related to-dos (union of shared keys), open and closed kept apart. */
+fun relatedRoots(list: List<Todo>): Map<String, String> {
     val parent = HashMap<String, String>().apply { list.forEach { put(it.id, it.id) } }
     fun find(id: String): String {
         var r = id
@@ -250,8 +290,43 @@ fun triageTodos(
             if (other == null) owner[key] = td.id else parent[find(td.id)] = find(other)
         }
     }
+    return list.associate { it.id to find(it.id) }
+}
+
+/**
+ * Failed starts (rule 1) whose row has a to-do that really finished: closed without a start error (#3713). The work got
+ * done another way; the failed start goes to Just finished / Done and counts as closed, on the page and in the
+ * assistant's entries alike (the web's `supersededFailedStarts`).
+ */
+fun supersededFailedStarts(todos: List<Todo>): Set<String> {
+    val roots = relatedRoots(todos)
+    val finished = todos.filter { it.isDone && it.startError.isNullOrEmpty() }.mapTo(HashSet()) { roots.getValue(it.id) }
+    return todos.filter { !it.startError.isNullOrEmpty() && roots.getValue(it.id) in finished }.mapTo(HashSet()) { it.id }
+}
+
+/**
+ * Every to-do placed in its section, related ones merged into one row (union of shared keys). Closed to-dos are not merged
+ * into open ones' rows. A group takes its most urgent member's section (a superseded failed start never leads); rows in
+ * a section go most recently active first.
+ * [quiet] false leaves quiet tasks (#1731) out, as a badge does; the page lists them.
+ */
+fun triageTodos(
+    todos: List<Todo>,
+    lookup: (SessionKey) -> Session?,
+    now: Long,
+    restored: Map<String, Long> = emptyMap(),
+    quiet: Boolean = true,
+    zone: ZoneId = ZoneId.systemDefault(),
+    // a caller that narrows the list (search, a filter) passes the set decided on every to-do (#3713)
+    known: Set<String>? = null,
+): TriageResult {
+    val list = if (quiet) todos else todos.filter { !it.quiet }
+    val superseded = known ?: supersededFailedStarts(list)
+    val placed = list.associate { it.id to it.triage(lookup, now, restored[it.id] ?: 0, zone, superseded = it.id in superseded) }
+
+    val roots = relatedRoots(list)
     val byRoot = LinkedHashMap<String, MutableList<Todo>>()
-    for (td in list) byRoot.getOrPut(find(td.id)) { mutableListOf() }.add(td)
+    for (td in list) byRoot.getOrPut(roots.getValue(td.id)) { mutableListOf() }.add(td)
 
     val counts = TriageSection.entries.associateWith { 0 }.toMutableMap()
     var open = 0
@@ -267,6 +342,8 @@ fun triageTodos(
     for (group in byRoot.values) {
         val members = group.sortedWith(
             compareBy<Todo> { placed.getValue(it.id).section.ordinal }
+                // a superseded failed start never leads the row of the work that finished
+                .thenBy { placed.getValue(it.id).rule == TriageRule.Superseded }
                 .thenByDescending { placed.getValue(it.id).last }
                 .thenBy { it.id }
         )

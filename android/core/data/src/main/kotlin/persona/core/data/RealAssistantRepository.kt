@@ -2,10 +2,20 @@ package persona.core.data
 
 import persona.core.contracts.CoreText
 import persona.core.contracts.CoreText.Key
+import persona.core.contracts.Direction
+import persona.core.contracts.DirectionAgent
+import persona.core.contracts.DirectionCounts
+import persona.core.contracts.DirectionTask
+import persona.core.contracts.DirectionTaskState
+import persona.core.contracts.DirectionTree
+import persona.core.contracts.DirectionsEvent
+import persona.core.contracts.Hello
 import persona.core.contracts.JsonCodec
+import persona.core.contracts.ServerEvent
 import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.*
+import persona.core.domain.models.keepingDetails
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -23,6 +33,8 @@ class RealAssistantRepository(
     scope: CoroutineScope,
     private val snapshots: ListSnapshotStore? = null,
     private val preferences: HubPreferences? = null,
+    /** The hub's pushes: `{"type":"directions"}` (#4352) and a new hello read the direction tree again. */
+    events: Flow<ServerEvent> = emptyFlow(),
 ) : AssistantConversations {
     private val current = MutableStateFlow(AssistantSnapshot())
     override val assistant = current.asStateFlow()
@@ -61,7 +73,41 @@ class RealAssistantRepository(
         return AssistantSnapshot(
             if (machine.isNotEmpty() && main.isNotEmpty()) SessionKey(machine, main) else null,
             conversations, request.manager, request.owner,
+            leaders = leadersOf(data),
+            backgroundSupervisor = backgroundSupervisorOf(data),
         )
+    }
+
+    /**
+     * The direction tree (#4352), the one place the app reads and parses it: the drawer's 常驻 rows, To-dos and Agents
+     * all draw this. The hub answers it for the default manager alone; null where it cannot be read (an older hub answers
+     * 404), which changes nothing.
+     */
+    private suspend fun directionTree(request: Request): DirectionTree? {
+        if (request.manager != null) return null
+        return try {
+            directionTreeOf(request.transport.directionsTreeOf(request.manager))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * What the drawer shows: the tree's ids in the hub's order, names and the tree itself where it answers. A hub without
+     * the tree (an older one answers 404) keeps [held] and takes the leaders answer's names, which have no counts.
+     */
+    private suspend fun directionsOf(request: Request, held: LeaderInfo): LeaderInfo {
+        directionTree(request)?.let { return LeaderInfo(it.ids, it.names, it) }
+        val names = try {
+            directionNamesOf(request.transport.assistantLeadersOf(request.owner))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            return held
+        }
+        return LeaderInfo(held.ids, names.ifEmpty { held.names }, held.tree)
     }
 
     private fun noteConversation(id: String, request: Request) {
@@ -88,6 +134,22 @@ class RealAssistantRepository(
         if (preferences != null) scope.launch {
             preferences.preferences.collect { state ->
                 currentPins.value = state.pins.sessions.mapNotNull(::sessionPath).toSet()
+            }
+        }
+        // The direction tree changed (a direction made, ended or renamed, a to-do or an Agent: `directions`, #4352): the
+        // drawer, To-dos and Agents follow at once, whichever device did it, by reading the tree again; also on a new
+        // hello (the socket came back without the transport changing, so no refresh ran).
+        scope.launch {
+            events.filter { it === DirectionsEvent || it is Hello }.collect {
+                try {
+                    applyDirections()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Logger.getLogger(RealAssistantRepository::class.java.name).log(
+                        Level.WARNING, "Directions update failed", e,
+                    )
+                }
             }
         }
         scope.launch {
@@ -119,21 +181,67 @@ class RealAssistantRepository(
         }
         scope.launch {
             sessions.sessions.collect { updates ->
-                lock.withLock {
-                    val transport = connection.current.value ?: return@withLock
+                val reread = lock.withLock {
+                    val transport = connection.current.value ?: return@withLock null
                     val choice = AssistantManagerChoice.current.value
                     val request = Request(transport, choice)
-                    if (restoredScope != request.key || current.value.managerId != request.owner) return@withLock
-                    val owned = updates.filter { choice.owns(it.manager) }
+                    if (restoredScope != request.key || current.value.managerId != request.owner) return@withLock null
+                    // A health chat is the health space's (docs/assistant/health.md): never on the assistant's own list.
+                    val owned = updates.filter { choice.owns(it.manager) && !it.isHealth }
                     val byKey = owned.associateBy { it.key }
+                    val before = current.value
+                    // A summary row (paged lists) leaves the launcher, the permission mode, the compaction and the
+                    // other chat details out: they stay as the conversation had them (#5055); its model_pick is its own.
                     current.update { snapshot ->
-                        snapshot.copy(conversations = (snapshot.conversations.map { byKey[it.key] ?: it } +
+                        snapshot.copy(conversations = (snapshot.conversations.map { byKey[it.key]?.keepingDetails(it) ?: it } +
                             owned.filter { it.assistant == true }).distinctBy { it.key })
                     }
                     cached[request.key] = current.value
+                    request.takeIf { mayBeNewBackgroundSupervisor(before, owned) }
+                }
+                // The hub makes the background supervisor on first use (#4927), long after the page was read: which
+                // conversation it is comes from `GET /api/v1/assistant` alone, so a new one that may be it is asked about.
+                if (reread != null) launch {
+                    try {
+                        refresh(reread)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Logger.getLogger(RealAssistantRepository::class.java.name).log(
+                            Level.WARNING, "Assistant refresh for a new conversation failed; the list stands", e,
+                        )
+                    }
                 }
             }
         }
+    }
+
+    /**
+     * `directions` (#4352): no payload, so the tree is read again. It is the default manager's alone, and not while
+     * another manager's page is shown. An id no conversation on the page has (a direction made elsewhere, or one this
+     * list has not met) needs the conversations too, so the page refreshes.
+     */
+    private suspend fun applyDirections() {
+        val request = lock.withLock {
+            val transport = connection.current.value ?: return
+            val choice = AssistantManagerChoice.current.value
+            val request = Request(transport, choice)
+            if (request.manager != null) return
+            if (restoredScope != request.key || current.value.managerId != request.owner) return
+            request
+        }
+        val tree = directionTree(request) ?: return
+        val missing = lock.withLock {
+            if (!selected(request)) return
+            val snapshot = current.value
+            val main = snapshot.mainSession?.sessionId
+            val ids = tree.ids.filter { it.isNotEmpty() && it != main }
+            val known = snapshot.conversations.mapTo(HashSet()) { it.sessionId }
+            current.value = snapshot.copy(leaders = ids, directionNames = tree.names, directionTree = tree)
+            cached[request.key] = current.value
+            ids.any { it !in known }
+        }
+        if (missing) refresh(request)
     }
 
     override suspend fun refresh() = refresh(request())
@@ -146,11 +254,16 @@ class RealAssistantRepository(
         }
         // Network calls never hold the page/cache mutex: a slow manager cannot block switching away.
         val data = request.transport.assistantOf(request.owner)
+        // The tree is read on every refresh and after a reconnect: a direction's open tasks change without the
+        // leaders changing, and the tree is also where the order and names come from (#4352).
+        val fresh = decode(data, request)
+        val held = current.value.takeIf { it.managerId == request.owner }
+        val info = directionsOf(request, held?.let { LeaderInfo(it.leaders, it.directionNames, it.directionTree) } ?: LeaderInfo.EMPTY)
         val pins = if (preferences != null) preferences.preferences.value.pins.sessions.mapNotNull(::sessionPath).toSet()
             else request.transport.pins().array("sessions").mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.let(::sessionPath) }.toSet()
         lock.withLock {
             if (!selected(request) || version != refreshVersion) return
-            val snapshot = decode(data, request)
+            val snapshot = fresh.copy(leaders = info.ids ?: fresh.leaders, directionNames = info.names, directionTree = info.tree)
             cached[request.key] = snapshot
             current.value = snapshot
             currentPins.value = pins
@@ -160,7 +273,9 @@ class RealAssistantRepository(
 
     override suspend fun startConversation(): SessionKey = start(null)
 
-    override suspend fun startConversation(launcher: String): SessionKey = start(launcher)
+    override suspend fun startConversation(launcher: String): SessionKey = start(persona.core.contracts.ModelPick(launcher))
+
+    override suspend fun startConversation(pick: persona.core.contracts.ModelPick): SessionKey = start(pick)
 
     override suspend fun mainConversationOf(manager: String): SessionKey {
         val captured = request()
@@ -180,18 +295,35 @@ class RealAssistantRepository(
         }
     }
 
-    private suspend fun start(launcher: String?): SessionKey {
+    override suspend fun spaceConversations(space: String): List<Session> {
+        val transport = requireNotNull(connection.current.value) { CoreText.of(Key.PairHubFirst).shown }
+        val data = transport.assistantIn(space)
+        check(connection.current.value === transport) { CoreText.of(Key.ConnectionSwitched).shown }
+        return spaceConversationsOf(data, space)
+    }
+
+    override suspend fun startConversationIn(space: String): SessionKey {
+        val transport = requireNotNull(connection.current.value) { CoreText.of(Key.PairHubFirst).shown }
+        val result = transport.createConversationIn(space)
+        val session = JsonCodec.decodeFromJsonElement<Session>(result.getValue("session"))
+        check(connection.current.value === transport) { CoreText.of(Key.ConnectionSwitched).shown }
+        return session.key
+    }
+
+    private suspend fun start(pick: persona.core.contracts.ModelPick?): SessionKey {
         // Capture identity before waiting behind another creation.
         val request = request()
         return creationLock.withLock {
             val config = request.transport.assistantOf(request.owner)
             check(connection.current.value === request.transport) { CoreText.of(Key.ConnectionSwitched).shown }
-            create(request, config.string("main").isEmpty(), launcher, config)
+            create(request, config.string("main").isEmpty(), pick, config)
         }
     }
 
-    private suspend fun create(request: Request, isMain: Boolean, launcher: String?, config: JsonObject): SessionKey {
-        val result = request.transport.createConversationOf(request.owner, isMain, launcher)
+    private suspend fun create(request: Request, isMain: Boolean, pick: persona.core.contracts.ModelPick?, config: JsonObject): SessionKey {
+        // A model or an effort goes with the launcher only (the new-chat page's panel); a launcher alone as before.
+        val result = if (pick != null && (pick.model != null || pick.effort != null)) request.transport.createConversationOf(request.owner, isMain, pick)
+            else request.transport.createConversationOf(request.owner, isMain, pick?.launcher)
         val session = JsonCodec.decodeFromJsonElement<Session>(result.getValue("session"))
         check(connection.current.value === request.transport) { CoreText.of(Key.ConnectionSwitched).shown }
         noteConversation(session.sessionId, request)
@@ -210,11 +342,105 @@ class RealAssistantRepository(
                 put("machine_id", snapshot.mainSession?.machineId ?: session.machineId)
                 put("main", snapshot.mainSession?.sessionId.orEmpty())
                 put("conversations", JsonArray(snapshot.conversations.map { JsonCodec.encodeToJsonElement(it) }))
+                snapshot.backgroundSupervisor?.let { put("background_supervisor", it) }
             })
         }
         return session.key
     }
 
+}
+
+/**
+ * A space's chats from `GET /api/v1/assistant?space=` (docs/assistant/health.md): each named for [space] and its machine
+ * even where the hub leaves them out (the list's `machine_id`, as iOS does).
+ */
+internal fun spaceConversationsOf(data: JsonObject, space: String): List<Session> {
+    val machine = data.string("machine_id")
+    return data.array("conversations").map { JsonCodec.decodeFromJsonElement<Session>(it) }.map {
+        it.copy(space = it.space ?: space, machineId = it.machineId.ifEmpty { machine })
+    }
+}
+
+/** `assistant.leaders`: the leader conversations' ids in the hub's order, never the main one. */
+internal fun leadersOf(data: JsonObject): List<String> {
+    val main = data.string("main")
+    return data.array("leaders").mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.takeIf { id -> id.isNotEmpty() && id != main } }
+}
+
+/**
+ * `background_supervisor` of `GET /api/v1/assistant` (#4927): the built-in background supervisor's conversation id, null
+ * until the hub has made it and from a hub without it. Never the main conversation's.
+ */
+internal fun backgroundSupervisorOf(data: JsonObject): String? =
+    data.string("background_supervisor").takeIf { it.isNotEmpty() && it != data.string("main") }
+
+/**
+ * Whether [updates] bring a conversation that may be the hub's background supervisor and that [before] does not name as
+ * it: an assistant conversation the hub opened itself with no task behind it (`origin: "task"`, no `origin_ref`,
+ * docs/assistant/unified-entry.md "Background supervisor"), either new to the list or just retitled. The hub starts the
+ * conversation first, then records it as the background supervisor, then titles it, so the retitling is the update
+ * after which `GET /api/v1/assistant` is sure to name it.
+ */
+internal fun mayBeNewBackgroundSupervisor(before: AssistantSnapshot, updates: List<Session>): Boolean {
+    val listed = before.conversations.associateBy { it.key }
+    return updates.any {
+        it.assistant == true && it.sessionId != before.backgroundSupervisor &&
+            it.origin == "task" && it.originRef.isNullOrBlank() &&
+            listed[it.key].let { known -> known == null || known.title != it.title }
+    }
+}
+
+/** `GET /api/v1/assistant/leaders`'s names by leader conversation id: current directions with a name only. */
+internal fun directionNamesOf(data: JsonObject): Map<String, String> = data.array("leaders").mapNotNull { it as? JsonObject }
+    .filter { (it["ended"] as? JsonPrimitive)?.booleanOrNull != true }
+    .mapNotNull { l -> l.string("id").takeIf { it.isNotEmpty() }?.let { id -> l.string("name").trim().takeIf { it.isNotEmpty() }?.let { id to it } } }
+    .toMap()
+
+/**
+ * `GET /api/v1/assistant/directions/tree` (#4352) as the app keeps it; null without `directions` (an older hub's empty
+ * answer). Directions, tasks and agents without an id are left out, except the secretary group: its id is the main
+ * conversation's, which is empty on a hub that has none yet, and it must still carry its tasks.
+ */
+internal fun directionTreeOf(data: JsonObject): DirectionTree? {
+    val directions = data["directions"] as? JsonArray ?: return null
+    return DirectionTree(directions.mapNotNull { (it as? JsonObject)?.let(::directionOf) })
+}
+
+private fun directionOf(data: JsonObject): Direction? {
+    val secretary = data.flag("secretary")
+    val id = data.string("id")
+    if (id.isEmpty() && !secretary) return null
+    val counts = data.obj("counts")
+    fun count(key: String) = counts?.number(key)?.toInt()?.coerceAtLeast(0) ?: 0
+    return Direction(id, data.string("name").trim(), secretary,
+        DirectionCounts(count("working"), count("needs_you"), count("stuck"), count("review"), count("planned")),
+        data.array("tasks").mapNotNull { task ->
+            (task as? JsonObject)?.let { t ->
+                t.string("id").takeIf { it.isNotEmpty() }?.let { taskId ->
+                    DirectionTask(taskId, t.string("title"), DirectionTaskState.of(t.string("state")),
+                        t.array("agents").mapNotNull { (it as? JsonObject)?.let(::directionAgentOf) })
+                }
+            }
+        })
+}
+
+private fun directionAgentOf(data: JsonObject): DirectionAgent? {
+    val machine = data.string("machine_id")
+    val session = data.string("session_id")
+    if (machine.isEmpty() || session.isEmpty()) return null
+    return DirectionAgent(machine, session, data.string("title"), data.string("agent"), data.string("state"),
+        data.array("children").mapNotNull { (it as? JsonObject)?.let(::directionAgentOf) })
+}
+
+/**
+ * The directions to show: their ids in the hub's order (null: not read, keep the ones we have), their names and the tree
+ * they came from (`GET /api/v1/assistant/directions/tree`, or the leaders answer's names alone, which have no tree).
+ */
+private data class LeaderInfo(
+    val ids: List<String>? = null, val names: Map<String, String> = emptyMap(),
+    val tree: DirectionTree? = null,
+) {
+    companion object { val EMPTY = LeaderInfo() }
 }
 
 internal fun JsonObject.string(key: String): String = (this[key] as? JsonPrimitive)?.contentOrNull.orEmpty()

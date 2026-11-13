@@ -5,16 +5,17 @@
 package closeout
 
 import (
-	"regexp"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 var (
-	blockRe = regexp.MustCompile(`(?s)<closeout\b([^>]*)>(.*?)</closeout>`)
-	attrRe  = regexp.MustCompile(`([a-z_]+)\s*=\s*"([^"]*)"`)
+	blockRe = lazyre.New(`(?s)<closeout\b([^>]*)>(.*?)</closeout>`)
+	attrRe  = lazyre.New(`([a-z_]+)\s*=\s*"([^"]*)"`)
 )
 
 // Example is the form an agent is asked to write, as the prompts show it.
@@ -90,6 +91,30 @@ func Strip(reply string) string {
 func Has(reply string) bool {
 	_, _, ok := Parse(reply)
 	return ok
+}
+
+// WaitsOnNobody reports whether reply's closeout says the turn is finished and needs nobody: status done, with no
+// missing and no waiting line. An agent that needs someone says blocked or names what is missing, so a closing
+// question in such a reply is conversation or an offer, not a wait (docs/protocol/agent-states.md "Awaiting your
+// reply", #4110). False when the reply has no closeout.
+func WaitsOnNobody(reply string) bool {
+	if !strings.Contains(reply, "<closeout") { // most replies have none: no regexp run, nothing allocated
+		return false
+	}
+	c, _, ok := Parse(reply)
+	return ok && c.Status == proto.CloseoutDone && c.Missing == "" && c.Waiting == ""
+}
+
+// AskOf is what an agent's final reply asks the user: the question its last words put (transcript.AskOf), or "" when
+// they ask nothing or its closeout says the turn is done and needs nobody (WaitsOnNobody, #4110), the agent's own word
+// that its closing question is conversation or an offer, as triage already reads that closeout. A session's asks is
+// read with it, by the node and by the manager. It lives here, not in transcript, so the hub's program, which links
+// transcript, does not link this package (#4371).
+func AskOf(reply string) string {
+	if ask := transcript.AskOf(reply); ask != "" && !WaitsOnNobody(reply) {
+		return ask
+	}
+	return ""
 }
 
 // cutKey splits "key: value", taking a full-width colon as well and a leading list marker.

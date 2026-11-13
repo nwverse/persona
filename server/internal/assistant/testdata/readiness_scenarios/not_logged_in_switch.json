@@ -1,0 +1,203 @@
+{
+  "en": {
+    "checked_at": "",
+    "dismissed": false,
+    "launcher": "claude",
+    "machine": {
+      "id": "mbp",
+      "name": "小林的 MacBook"
+    },
+    "mode": "setup",
+    "next": "model",
+    "ready": false,
+    "steps": [
+      {
+        "id": "computer",
+        "machine": "mbp",
+        "state": "ok"
+      },
+      {
+        "id": "claude",
+        "state": "ok",
+        "version": "2.1.320"
+      },
+      {
+        "action": {
+          "id": "connect_model"
+        },
+        "alt_actions": [
+          {
+            "id": "login_claude"
+          },
+          {
+            "id": "main_chat_model"
+          }
+        ],
+        "code": "not_logged_in",
+        "detail": "Sign in on 小林的 MacBook, use an API key, or choose another app or setup to run the main chat on that computer in Settings › Model.",
+        "id": "model",
+        "launcher": "claude",
+        "machine": "mbp",
+        "state": "problem",
+        "title": "Claude Code isn't signed in"
+      },
+      {
+        "action": {
+          "id": "test_assistant"
+        },
+        "code": "not_logged_in",
+        "detail": "Sign in once on 小林的 MacBook, or use an API key instead.",
+        "id": "first_message",
+        "state": "problem",
+        "title": "Claude Code isn't signed in"
+      }
+    ],
+    "suggestions": [
+      {
+        "id": "what_can_you_do",
+        "local": true,
+        "title": "What can you do for me?"
+      },
+      {
+        "id": "how_to_connect_model",
+        "local": true,
+        "title": "How do I connect a model?"
+      }
+    ],
+    "version": 1
+  },
+  "ja": {
+    "checked_at": "",
+    "dismissed": false,
+    "launcher": "claude",
+    "machine": {
+      "id": "mbp",
+      "name": "小林的 MacBook"
+    },
+    "mode": "setup",
+    "next": "model",
+    "ready": false,
+    "steps": [
+      {
+        "id": "computer",
+        "machine": "mbp",
+        "state": "ok"
+      },
+      {
+        "id": "claude",
+        "state": "ok",
+        "version": "2.1.320"
+      },
+      {
+        "action": {
+          "id": "connect_model"
+        },
+        "alt_actions": [
+          {
+            "id": "login_claude"
+          },
+          {
+            "id": "main_chat_model"
+          }
+        ],
+        "code": "not_logged_in",
+        "detail": "小林的 MacBookでログインするか、APIキーを使うか、設定 › モデルでこのパソコンのメインチャットを実行する別のアプリや設定を選んでください。",
+        "id": "model",
+        "launcher": "claude",
+        "machine": "mbp",
+        "state": "problem",
+        "title": "Claude Code にログインしていません"
+      },
+      {
+        "action": {
+          "id": "test_assistant"
+        },
+        "code": "not_logged_in",
+        "detail": "小林的 MacBook で一度ログインするか、API キーを使ってください。",
+        "id": "first_message",
+        "state": "problem",
+        "title": "Claude Code にログインしていません"
+      }
+    ],
+    "suggestions": [
+      {
+        "id": "what_can_you_do",
+        "local": true,
+        "title": "何を手伝ってくれるの？"
+      },
+      {
+        "id": "how_to_connect_model",
+        "local": true,
+        "title": "モデルはどう接続するの？"
+      }
+    ],
+    "version": 1
+  },
+  "zh-Hans": {
+    "checked_at": "",
+    "dismissed": false,
+    "launcher": "claude",
+    "machine": {
+      "id": "mbp",
+      "name": "小林的 MacBook"
+    },
+    "mode": "setup",
+    "next": "model",
+    "ready": false,
+    "steps": [
+      {
+        "id": "computer",
+        "machine": "mbp",
+        "state": "ok"
+      },
+      {
+        "id": "claude",
+        "state": "ok",
+        "version": "2.1.320"
+      },
+      {
+        "action": {
+          "id": "connect_model"
+        },
+        "alt_actions": [
+          {
+            "id": "login_claude"
+          },
+          {
+            "id": "main_chat_model"
+          }
+        ],
+        "code": "not_logged_in",
+        "detail": "在 小林的 MacBook 上登录，改用 API Key，或在设置 › 模型中选择此电脑上运行主对话的其他应用或配置。",
+        "id": "model",
+        "launcher": "claude",
+        "machine": "mbp",
+        "state": "problem",
+        "title": "Claude Code 还没登录"
+      },
+      {
+        "action": {
+          "id": "test_assistant"
+        },
+        "code": "not_logged_in",
+        "detail": "在 小林的 MacBook 上登录一次，或者改用 API Key。",
+        "id": "first_message",
+        "state": "problem",
+        "title": "Claude Code 还没登录"
+      }
+    ],
+    "suggestions": [
+      {
+        "id": "what_can_you_do",
+        "local": true,
+        "title": "你能帮我做什么？"
+      },
+      {
+        "id": "how_to_connect_model",
+        "local": true,
+        "title": "怎么接模型？"
+      }
+    ],
+    "version": 1
+  }
+}

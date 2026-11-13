@@ -20,6 +20,7 @@ internal fun AssistantBackgroundRecords(
     onToggle: (String) -> Unit, onFold: (Item) -> Unit,
     folding: Set<String>, foldErrors: Map<String, String>, onFullText: (Item) -> Unit,
     onDismiss: () -> Unit,
+    hideTaskPrompts: Boolean = false,
 ) {
     JSheet(onDismiss = onDismiss, title = stringResource(R.string.chat_assistant_background_records)) {
         LazyColumn(contentPadding = PaddingValues(Tokens.Space.m), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
@@ -29,7 +30,7 @@ internal fun AssistantBackgroundRecords(
                     // Task events are immutable audit data here, never a second actionable task card.
                     CodeText(persona.core.contracts.JsonCodec.encodeToString(persona.core.contracts.FeedItem.serializer(), activity.item), "json")
                 } else ChatLineContent(line, session, loader, null, onToggle, onFold, folding, foldErrors,
-                    onFullText = onFullText)
+                    onFullText = onFullText, hideTaskPrompts = hideTaskPrompts)
                 if (line is ChatLine.Work && line.open) line.steps.forEachIndexed { index, step ->
                     ChatLineContent(ChatLine.Step(line.id, step, index == 0), session, loader, null,
                         onToggle, onFold, folding, foldErrors, onFullText = onFullText,

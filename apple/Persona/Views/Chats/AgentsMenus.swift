@@ -15,11 +15,16 @@ nonisolated struct MachineChoice: Equatable, Identifiable {
     /// With several groups, with the group's name (`Machine.title`).
     var name: String
     var symbol: String
+    /// Whose it is, for the menus that list the current assistant's computers (`AssistantScope`).
+    var group: String
+    var manager: String?
 
     @MainActor init(_ m: Machine) {
         id = m.ref.path
         name = m.title
         symbol = m.symbol
+        group = m.group
+        manager = m.manager
     }
 }
 
@@ -37,26 +42,29 @@ struct AgentsListMenu: View {
         /// Not `openMonitor` / `openMachines`: a stored property's name is in the Release binary, and those are DEBUG
         /// launch arguments the release check looks for (TestFlight 50 stopped on one).
         private var onMachines: () -> Void = {}
+        private var onTerminals: () -> Void = {}
 
         /// `sections`: the fold ids of what the list shows now.
         func update(sections: [String], foldAll: @escaping ([String]) -> Void, unfoldAll: @escaping () -> Void,
-                    onMachines: @escaping () -> Void) {
+                    onMachines: @escaping () -> Void, onTerminals: @escaping () -> Void = {}) {
             self.sections = sections
             self.foldAll = foldAll
             self.unfoldAll = unfoldAll
             self.onMachines = onMachines
+            self.onTerminals = onTerminals
         }
 
         func collapse() { foldAll(sections) }
         func expand() { unfoldAll() }
         func machinesPage() { onMachines() }
+        func terminalsPage() { onTerminals() }
     }
 
     @StoredValue("dev.machineFilter") private var machineFilter = ""
     @StoredValue(HubFilter.key) private var hubFilter = ""
     @StoredValue("dev.grouping") private var grouping: DevGrouping = .standard
     /// The grouping the list shows: a stored By To-do is By Project on a hub without todos (`DevGrouping.resolved`).
-    private var shownGrouping: DevGrouping { DevGrouping.resolved(grouping, supportsTodos: TodoStore.shared.isSupported) }
+    private var shownGrouping: DevGrouping { DevGrouping.resolvedNow(grouping) }
     private var groupingChoice: Binding<DevGrouping> { Binding(get: { shownGrouping }, set: { grouping = $0 }) }
     @StoredValue("dev.sort") private var sort: AgentSort = .state
     #if os(iOS)
@@ -70,8 +78,10 @@ struct AgentsListMenu: View {
     var inline = false
 
     var body: some View {
-        // Only the machines' names and icons: not their live state, which changes with every push.
-        let machines = model.machineChoices
+        // Only the machines' names and icons: not their live state, which changes with every push. The current
+        // assistant's, as the list is its agents.
+        let scope = model.assistantScope
+        let machines = model.machineChoices.filter { scope.has($0.manager, group: $0.group) }
         let chosen = machines.first { $0.id == machineFilter }
         let hub = model.isMultiHub ? HubFilter.group(hubFilter).map { model.groupName($0) } : nil
         if inline {
@@ -88,23 +98,19 @@ struct AgentsListMenu: View {
             let _ = PerfTrace.body("ListMenu.content")
             #endif
             Picker("Group By [Agents Menus 399ee6]", selection: groupingChoice) {
-                ForEach(DevGrouping.offered(supportsTodos: TodoStore.shared.isSupported)) { g in Label(g.title, systemImage: g.symbol).tag(g) }
+                ForEach(DevGrouping.offeredNow) { g in Label(g.title, systemImage: g.symbol).tag(g) }
             }
-            if shownGrouping != .state, shownGrouping != .recent {
-                // By Status is sectioned by state, and the rows in a section are by time already; Recently Used is by time only.
+            if shownGrouping != .state, shownGrouping != .recent, shownGrouping != .app, shownGrouping != .direction {
+                // By Status is sectioned by state, and the rows in a section are by time already; Recently Used is by time
+                // only, as are By App's sections; By Pinned keeps the hub's order.
                 Picker("Sort", selection: $sort) {
                     ForEach(AgentSort.allCases) { o in Label(o.title, systemImage: o.symbol).tag(o) }
                 }
             }
             #if os(iOS)
+            // Every grouping draws its agents this way, By Repository too (#3753).
             Picker("Display", selection: display.binding) {
-                Section {
-                    ForEach(AgentListDisplay.allCases) { d in Label(d.title, systemImage: d.symbol).tag(d) }
-                } header: {
-                    // By Repository draws its tree, one line per agent, whatever is picked here (#3182): said as the
-                    // section's title, not an item that does nothing (docs/lessons/ios.md).
-                    if shownGrouping == .repo { Text("By Repository keeps one line per agent") }
-                }
+                ForEach(AgentListDisplay.allCases) { d in Label(d.title, systemImage: d.symbol).tag(d) }
             }
             #else
             // The Mac and Apple Vision Pro keep their rows (#2530): cards or Compact List.
@@ -141,6 +147,10 @@ struct AgentsListMenu: View {
             Section {
                 Button { actions.machinesPage() } label: {
                     Label("Machines", systemImage: Theme.Icon.machines)
+                }
+                // Every terminal on the computers, plain ones too (#4754): watch, type, close.
+                Button { actions.terminalsPage() } label: {
+                    Label("Terminals", systemImage: Theme.Icon.terminal)
                 }
             }
     }
@@ -357,7 +367,7 @@ struct SpaceHeaderMenu: View, Equatable {
 struct AgentsGroupingMenu: View {
 
     @StoredValue("dev.grouping") private var grouping: DevGrouping = .standard
-    private var shown: DevGrouping { DevGrouping.resolved(grouping, supportsTodos: TodoStore.shared.isSupported) }
+    private var shown: DevGrouping { DevGrouping.resolvedNow(grouping) }
 
     var body: some View {
         Menu {
@@ -365,7 +375,7 @@ struct AgentsGroupingMenu: View {
                 Haptics.tap()
                 withAnimation(Theme.Motion.layout) { grouping = g }
             })) {
-                ForEach(DevGrouping.offered(supportsTodos: TodoStore.shared.isSupported)) { g in
+                ForEach(DevGrouping.offeredNow) { g in
                     Label(g.title, systemImage: g.symbol).tag(g)
                 }
             }

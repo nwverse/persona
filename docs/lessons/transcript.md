@@ -71,13 +71,14 @@ Use synthetic conversations for screenshots, not the user's real main conversati
 - User images take two paths: ordinary messages contain user image blocks; messages sent while Claude is working are "absorbed mid-turn" as `attachment/queued_command`, with images in the prompt's block array
   (before 2026-10-29, the parser took only text blocks, so bubbles showed no images). In App turns awakened by background tasks (`pickAnswerAcrossWakes`), keep the user's images together with their message in the original position, not in the work trace.
 - A long chat's slow first screen is not caused by the hub / node (cold read: 0.12 s), but by the page being too large: one long Codex session's last two turns contained 1412 entries and 1.08 MB, with just 6 reply entries; the rest were tools and thinking already collapsed in the UI.
-  The App requests `fold_work`. Pages read backward from the end replace each work segment with one `kind: fold` entry (counts and ranges only). Expanding a work row fetches it with `from_seq` / `through_seq`
+- Codex commentary is assistant text, not `Reasoning` (#5853). Keep an internal-only `Narration` marker so folding can handle completed narration without exposing a new wire kind or counting it as thinking. Only the latest page leaves the newest commentary visible until a final answer follows; a historical page may end before a final answer stored on the next page. Changing only the item kind let 110 commentary rows escape the fold and broke the long-session 40-item / 32 KB budget; cover real running pages, completed folds, expansion merging and golden output together.
+- The App requests `fold_work`. Pages read backward from the end replace each work segment with one `kind: fold` entry (counts and ranges only). Expanding a work row fetches it with `from_seq` / `through_seq`
   (`docs/protocol/protocol.md`, "Folded work"). `after_seq` catch-up and live pushes are not folded. Neither are tool_use entries still running or tool_result entries whose other half is outside the page, or they cannot be paired.
 - Claude Code writes `&gt;`, `&lt;`, and `&amp;` itself into the summary / event / result of background task notifications (`<task-notification>`); decode them during parsing. For background commands without a description,
   the summary is the whole command (a heredoc can span dozens of lines). Do not use the summary as notice text: the node parses it into `Item.task`, and the App renders a single tool-style row (`TaskNoteRow`).
   Monitor events carry only task-id; map them back to the call using the tool_result `Monitor started (task <id>` (`TaskIndex`).
-- The App merges its on-disk chat cache by item id. If the hub changes the contents of a type of item (for example, adding fields to notices), new pages do not overwrite old cached items. When the item structure changes,
-  bump the `ChatCache` directory version (`chats-v3`).
+- The App merges its on-disk chat cache by item id. If the hub changes the contents of a type of item (for example, adding fields to notices), new pages do not overwrite old cached items. When the item structure or the hub's kind / text for an existing item changes,
+  bump the `ChatCache` directory version (`ChatCache.folder`) so the old representation is dropped.
 - Backward pagination has a parsing budget, but must not return an empty page while earlier content remains. An empty page + `has_more: true` leaves the App with no seq to fetch next, making earlier history permanently inaccessible (large Codex rollouts can have tens of MB of lines that produce no entries between two turns).
 - Parsing `<persona-context>` must not assume all attributes are present or in a fixed order (2026-11-03, #876). iOS once recognized it only when all three of `kind`, `title`, and `url` were present. Lark /agent contexts had no `url`, so the tag went unrecognized, leaving the whole prompt and large blank areas in the bubble.
   Truncating user messages for pagination must also avoid cutting through tags: a cut in the middle leaves an unclosed `<persona-context`, which every client displays as body text (`lightContexts` in `transcript/contexts.go` trims only the body of each block).
@@ -221,3 +222,63 @@ A view that fetches once per id cannot recover when the store puts the same id b
   A Write that creates a file records no hunks; its lines are the content's.
 - One machine's transcripts (2026-11-10): 76k records, 4.4k of them strings and 554 arrays, none with a field of an
   unexpected type; parsing them before and after the change gave the same items in all 2,023 files.
+
+## A rollout line is told by its own top-level type (#3159)
+
+- `ParseLine` switches a file to the Codex parser for good on the first rollout line. A substring test for
+  `"type":"event_msg"` and `"payload"` also matched a Claude line whose tool input had that shape (an MCP call is
+  enough), and every later line of the session then parsed to nothing. `isCodexLine` keeps the substring test as a cheap
+  filter and then reads only the line's top-level keys (`rolloutHead`), without decoding the line.
+- Checked on one machine's transcripts (2026-11-10): 10,597 files and 1.9M lines gave the same answer before and after
+  for every line, rollout lines included.
+
+## A list hint is not a reason to read the whole list (2026-11-11, #3759)
+
+- A client that negotiates `sessions_list` gets no session rows over the socket, only a `sessions_list` hint for every
+  change to the list's revision: about one or two a second while agents work. Views that need every row (iOS grouping,
+  filters, search, pins or mutes, including the default By Repository; the web's pins, saved grouping and per-assistant
+  lists; Android always) fell back to the no-query `GET /api/v1/sessions` and read it again for each hint. On a hub with
+  269 sessions (373 KB a list) the hub's traffic counters showed an iOS app reading it 49 times a minute (15 MB) and a
+  web page 17 times a minute, while the socket carried 20–32 KB a minute.
+- The paged API already serves complete rows: `summary=0` pages make a baseline with a `revision`, and `since` returns
+  only changed and removed rows. Keep a complete copy that way (iOS `SessionListModel.complete`, web
+  `lib/complete-sessions.ts`) and read complete pages again only on first use, an expired revision (`409
+  revision_expired`: every hub restart), a changed hub or pull to refresh.
+- A hint carries the hub's revision; one the copy already holds (the hint on every connect, a burst's repeat) needs no read.
+- A loop that follows `next_cursor` stops on a cursor it has already seen: a web test fake that answered every page
+  with the same cursor kept the new baseline reading pages until the test runner ran out of memory.
+- A one-shot recovery budget must be refilled after a successful read: iOS allowed one `409` recovery per query for
+  the life of the list, so the second hub restart left a list with a stale checkpoint that failed every later read.
+- The hub's `traffic` journal lines count by route template, not query, so a complete list and a small delta look the
+  same there; divide `body_bytes` by `count` to tell them apart. On the mock, `GET /mock/sessions_reads` counts by kind
+  of read (`docs/operations/testing.md`, "Session list reads").
+
+## A directory behind a symbolic link is written two ways (2026-11-11, #4492)
+
+- On a computer whose home is on another mount (`/home/me` → `/data/home/me`; macOS's `/tmp` → `/private/tmp` is the
+  same case), the records of one repository's sessions do not agree on its path. Claude Code records the physical
+  directory as `cwd`, Codex the directory it was started in, and git the physical one, so a host that asks git for the
+  project (Paseo) names that. A linked worktree's `.git` file keeps the spelling `git worktree add` was run with.
+- The apps compare `repo_root` and `worktree` as strings: By Repository groups on `repo_root`, and `worktree ==
+  repo_root` is the main checkout. Read as written, one repository was two projects of the same name (91 sessions under
+  one and 56 under the other on a real hub), and a main checkout whose host named its project was a linked worktree of
+  itself.
+- Resolve the directory first and then walk up to `.git`, as git does (`physicalGitPlace` in `node/gitplace.go`):
+  walking up the path as written puts a link into a repository (`~/.config/nvim` → `~/dotfiles/nvim`) in no project,
+  and a link that leads out of one in the wrong project. Resolve what a host names too: only one side resolved is the
+  same split again. Leave `cwd` as recorded: it is what the session's own record says.
+- A test that makes a repository under `t.TempDir()` and compares paths needs the physical temporary directory
+  (`physicalTempDir`): macOS's is behind a link, so the test passes on Linux and fails on a Mac.
+
+## The background scan never sees a long line (2026-11-13, #6003)
+
+- The node's background scan (`node/bgscan.go`) parses only lines of at most 64 KiB that name a marker: request blobs
+  repeat the whole conversation, markers included, and are 100–500 KB each. Lines over its 256 KiB buffer come in
+  pieces and are skipped too. Anything the session list needs from that scan has to be readable from a short line.
+- A Workflow call carries its script inline (`input.script`), so the call is as long as the script: a 42 KB script
+  made a 94 KB call line. The call was skipped, never parked in `bgPending`, and its short result ("Workflow launched in
+  background. Task ID: …") then registered nothing, so a running workflow had no card. The result names the task, the
+  run (`Run ID`, `Transcript dir`) and the script file on its own, so `backgroundStarted` now starts the run from it
+  when the call was not read; it only takes a result that starts with those words and names a run.
+- Before blaming the line limit, measure the lines: in the same session the earlier runs' calls were 2–27 KB and listed
+  fine; the 69–115 KB lines near them were request blobs and attachments.

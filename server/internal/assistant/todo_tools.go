@@ -110,7 +110,7 @@ func (s *Service) toolTodoList(ctx context.Context, args json.RawMessage) (strin
 	s.todos.mu.RUnlock()
 	list = slices.DeleteFunc(list, func(t Todo) bool {
 		done := t.DoneAt != nil
-		if status == "open" && done || status == "done" && !done {
+		if status == "open" && done && t.StartError == "" || status == "done" && !done {
 			return true
 		}
 		by, hasDue := t.dueBy(loc)
@@ -167,6 +167,9 @@ func (s *Service) toolTodoGet(ctx context.Context, args json.RawMessage) (string
 		}
 		b.WriteString("\n")
 	}
+	if t.StartError != "" {
+		fmt.Fprintf(&b, "failed to start: %s\n", clip(oneLine(t.StartError), 200))
+	}
 	if t.RemindAt != nil && t.RemindedAt != nil {
 		fmt.Fprintf(&b, "reminder pushed %s\n", t.RemindedAt.In(loc).Format(toolTimeLayout))
 	}
@@ -184,6 +187,22 @@ func (s *Service) toolTodoGet(ctx context.Context, args json.RawMessage) (string
 	}
 	if strings.TrimSpace(t.Notes) != "" {
 		b.WriteString("notes:\n" + clip(strings.TrimSpace(t.Notes), 4000) + "\n")
+	}
+	if t.Supervision != nil {
+		b.WriteString("done_when (current reports, not a task acceptance):\n")
+		for i, c := range t.Supervision.Criteria {
+			fmt.Fprintf(&b, "%d. [%s] %s", i+1, c.State, c.Criterion)
+			if c.By != "" {
+				fmt.Fprintf(&b, " — %s", c.By)
+			}
+			if c.At != nil {
+				fmt.Fprintf(&b, " at %s", c.At.In(loc).Format(toolTimeLayout))
+			}
+			if c.Evidence != "" {
+				fmt.Fprintf(&b, "\n   %s", c.Evidence)
+			}
+			b.WriteString("\n")
+		}
 	}
 	if len(t.Agents) > 0 {
 		b.WriteString("agents:\n")
@@ -267,6 +286,14 @@ func (s *Service) toolTodoCreate(ctx context.Context, machine, self string, args
 	}
 	if ok, err := s.confirmOutbound(ctx, machine, self, "todo_create", title, args); err != nil || !ok {
 		return todoNotAllowed(err)
+	}
+	if s.isLeader(ctx, self) {
+		t, err := s.createDirectionTodo(ctx, self, title, strings.TrimSpace(a.Notes), plan)
+		if err != nil {
+			return "", fmt.Errorf("the to-do could not be saved, nothing changed: %w", err)
+		}
+		return "Created under your direction (you supervise it; to have an Agent do it, use task_plan with todo_id " + t.ID +
+			"): " + todoLine(t, now, loc), nil
 	}
 	t, err := s.createPlainTodo(ctx, title, strings.TrimSpace(a.Notes), plan)
 	if err != nil {
@@ -505,7 +532,9 @@ const toolTimeLayout = "2006-01-02 Mon 15:04"
 func todoLine(t Todo, now time.Time, loc *time.Location) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s %q [", t.ID, clip(oneLine(t.Title), 120))
-	if t.DoneAt != nil {
+	if t.StartError != "" {
+		b.WriteString("failed to start")
+	} else if t.DoneAt != nil {
 		b.WriteString("done")
 	} else {
 		b.WriteString("open")

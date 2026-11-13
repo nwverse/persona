@@ -24,6 +24,47 @@ final class ExtensionMarketTests: XCTestCase {
         return app
     }
 
+    /// Uses Fixtures/extension-artwork.json: download totals are synthetic, publisher images are public HTTPS URLs.
+    @MainActor func testArtworkCatalogOrdersByDownloads() throws {
+        guard env["PERSONA_ARTWORK_FIXTURE"] == "1" else { throw XCTSkip("needs the extension artwork fixture") }
+        let app = try launch(["-openExtensionMarket", "YES"])
+        let telegram = app.buttons["market-plugin-telegram"]
+        let github = app.buttons["market-plugin-github"]
+        let gitlab = app.buttons["market-plugin-gitlab"]
+        XCTAssertTrue(telegram.waitForExistence(timeout: 15))
+        XCTAssertTrue(github.exists && gitlab.exists)
+        XCTAssertLessThan(telegram.frame.minY, github.frame.minY)
+        XCTAssertLessThan(github.frame.minY, gitlab.frame.minY)
+        shot(app, "artwork-catalog")
+        github.tap()
+        let settings = app.buttons["market-open-plugin"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 10))
+        settings.tap()
+        XCTAssertTrue(app.staticTexts["GitHub"].firstMatch.waitForExistence(timeout: 10))
+        shot(app, "artwork-installed-detail")
+    }
+
+    @MainActor private func marketRequest(_ method: String, path: String, body: [String: Any]? = nil) throws {
+        guard let hub = env["PERSONA_EXTENSIONS_HUB"], let url = URL(string: hub + path) else { throw XCTSkip("needs the extensions mock") }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        if let body {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        }
+        let answered = expectation(description: "\(method) \(path)")
+        var status = 0
+        var failure: Error?
+        URLSession.shared.dataTask(with: request) { _, response, error in
+            status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            failure = error
+            answered.fulfill()
+        }.resume()
+        wait(for: [answered], timeout: 10)
+        XCTAssertNil(failure)
+        XCTAssertEqual(status, 200)
+    }
+
     @MainActor private func shot(_ app: XCUIApplication, _ name: String) {
         guard let dir = env["PERSONA_SHOTS"] else { return }
         let look = env["PERSONA_EXTENSIONS_APPEARANCE"] ?? "light"
@@ -142,6 +183,67 @@ final class ExtensionMarketTests: XCTestCase {
         shot(app, "auto-upgrade-confirm")
     }
 
+    /// The master switch off (#4747, as the web's #1828): the extension's Auto-upgrade switch keeps its saved value, on
+    /// and off, greyed out, and its footer says the setting applies again; with the master switch on it can be flipped.
+    /// Both switches are put back on after.
+    @MainActor func testMasterSwitchOffGreysOutTheExtensionsSwitch() throws {
+        let master = "/api/v1/plugins/-/upgrades", own = "/api/v1/plugins/example-gateway/-/auto-upgrade"
+        defer {
+            try? marketRequest("PUT", path: master, body: ["auto": true])
+            try? marketRequest("PUT", path: own, body: ["auto": true])
+        }
+        let paused = NSPredicate(format: "label CONTAINS %@", "重新打开后恢复")
+        try marketRequest("PUT", path: master, body: ["auto": false])
+        for saved in [true, false] {
+            try marketRequest("PUT", path: own, body: ["auto": saved])
+            let app = try launch(["-openExtension", "example-gateway"])
+            let toggle = app.switches["plugin-auto-upgrade"].firstMatch
+            scrollTo(toggle, in: app)
+            XCTAssertTrue(toggle.waitForExistence(timeout: 15), "no Auto-upgrade switch:\n\(app.debugDescription)")
+            // The master switch is read after the page opens: its footer says so once it is known.
+            XCTAssertTrue(app.staticTexts.matching(paused).firstMatch.waitForExistence(timeout: 10),
+                          "the footer does not say the setting comes back:\n\(app.debugDescription)")
+            XCTAssertEqual(toggle.value as? String, saved ? "1" : "0", "the saved value is not shown")
+            XCTAssertFalse(toggle.isEnabled, "the switch can be flipped while the master switch is off")
+            toggle.switches.firstMatch.tap()
+            sleep(1)
+            XCTAssertEqual(toggle.value as? String, saved ? "1" : "0", "a tap changed a greyed-out switch")
+            shot(app, "master-off-saved-\(saved ? "on" : "off")")
+            app.terminate()
+        }
+        try marketRequest("PUT", path: master, body: ["auto": true])
+        try marketRequest("PUT", path: own, body: ["auto": true])
+        let app = try launch(["-openExtension", "example-gateway"])
+        let toggle = app.switches["plugin-auto-upgrade"].firstMatch
+        scrollTo(toggle, in: app)
+        XCTAssertTrue(toggle.waitForExistence(timeout: 15), "no Auto-upgrade switch:\n\(app.debugDescription)")
+        let enabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isEnabled == true"), object: toggle)
+        XCTAssertEqual(XCTWaiter.wait(for: [enabled], timeout: 10), .completed, "the switch stays greyed out with the master switch on")
+        XCTAssertEqual(toggle.value as? String, "1", "the saved value is not shown")
+        XCTAssertFalse(app.staticTexts.matching(paused).firstMatch.exists, "the paused footer stays with the master switch on")
+        shot(app, "master-on")
+    }
+
+    @MainActor func testRemovedMarketKeepsPreferenceButPausesUpdates() throws {
+        try marketRequest("DELETE", path: "/api/v1/plugins/-/markets/3f2a9c1d0b")
+        defer {
+            try? marketRequest("POST", path: "/api/v1/plugins/-/markets", body: ["spec": "https://plugins.example.com/persona/persona-extensions.json"])
+        }
+        let app = try launch(["-openExtension", "example-gateway"])
+        let toggle = app.switches["plugin-auto-upgrade"].firstMatch
+        scrollTo(toggle, in: app)
+        XCTAssertTrue(toggle.waitForExistence(timeout: 15), "no Auto-upgrade switch:\n\(app.debugDescription)")
+        XCTAssertEqual(toggle.value as? String, "1", "the saved preference must not be rewritten to off")
+        XCTAssertFalse(toggle.isEnabled, "a paused preference must not be editable")
+        let check = app.buttons["extension-check-updates"].firstMatch
+        XCTAssertFalse(check.isEnabled, "there is no registered market to check")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "用同样的地址把市场加回来后恢复")).firstMatch.exists,
+                      "the Auto-upgrade footer does not explain recovery:\n\(app.debugDescription)")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "用同样的地址把市场加回来，才能检查新版本")).firstMatch.exists,
+                      "the update status does not explain why checking is paused:\n\(app.debugDescription)")
+        shot(app, "market-removed-extension")
+    }
+
     /// Review on a newer version that asks for more (#2988): the Update sheet rises over the extension's page in Settings
     /// and stays until the user answers it. TestFlight 220 closed Settings, sheet and all, half a second after the sheet
     /// rose, so Update could never be tapped. Cancel goes back to the page; Review opens it again, and Update installs it
@@ -198,6 +300,20 @@ final class ExtensionMarketTests: XCTestCase {
         XCTAssertTrue(all.waitForExistence(timeout: 15), "no switch for all:\n\(app.debugDescription)")
         XCTAssertEqual(all.value as? String, "1")
         shot(app, "markets-auto-upgrade")
+    }
+
+    @MainActor func testRemoveMarketConfirmationCountsAffectedExtensions() throws {
+        let app = try launch(["-openExtensionMarkets", "YES"])
+        let remove = app.buttons["market-remove-3f2a9c1d0b"].firstMatch
+        scrollTo(remove, in: app)
+        XCTAssertTrue(remove.waitForExistence(timeout: 15), "no market Delete button:\n\(app.debugDescription)")
+        remove.tap()
+        XCTAssertTrue(app.buttons["market-remove-confirm"].firstMatch.waitForExistence(timeout: 5))
+        let affected = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "从它装的 1 个扩展留着")).firstMatch
+        XCTAssertTrue(affected.waitForExistence(timeout: 5), "the confirmation does not count the affected install:\n\(app.debugDescription)")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "用同样的地址把市场加回来")).firstMatch.exists,
+                      "the confirmation does not explain how upgrades resume:\n\(app.debugDescription)")
+        shot(app, "remove-market-affected")
     }
 
     @MainActor func testManageMarkets() throws {

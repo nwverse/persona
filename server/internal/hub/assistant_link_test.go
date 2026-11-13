@@ -101,7 +101,7 @@ func turnEnded(t *testing.T, h *Hub, machine, id string) {
 // userRenamed is the user renaming a conversation in the app (assistant.rename, as renameSession asks).
 func userRenamed(t *testing.T, h *Hub, machine, id, title string) {
 	t.Helper()
-	if _, err := h.asst().Rename(context.Background(), machine, id, map[string]any{"title": title}); err != nil {
+	if _, err := h.asst().Rename(context.Background(), machine, id, map[string]any{"title": title}, ""); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -118,15 +118,17 @@ func newFakeCodex(t *testing.T, n *Node, cwd string) (*assistantProc, *codexConn
 
 // fakeHub answers the node's calls the way the hub would: the Feishu gate config, the snapshot, and the phone's answers.
 type fakeHub struct {
-	mu      sync.Mutex
-	asked   []proto.Interaction
-	answer  func(proto.Interaction) proto.Resolution
-	deltas  []string
-	model   map[string]any    // assistant.model's answer; nil: an older hub without it
-	queried map[string]string // the session id the node asked about, by method
-	context map[string]any    // assistant.context's answer; nil: just a snapshot
-	acks    []json.RawMessage // assistant.context calls that acked view errors
-	mcp     []map[string]any  // the mcp.tools / mcp.call params relayed ("method" says which)
+	mu        sync.Mutex
+	asked     []proto.Interaction
+	answer    func(proto.Interaction) proto.Resolution
+	deltas    []string
+	model     map[string]any        // assistant.model's answer; nil: an older hub without it
+	queried   map[string]string     // the session id the node asked about, by method
+	context   map[string]any        // assistant.context's answer; nil: just a snapshot
+	acks      []json.RawMessage     // assistant.context calls that acked view errors
+	mcp       []map[string]any      // the mcp.tools / mcp.call params relayed ("method" says which)
+	onModel   func()                // called as assistant.model is asked, before it answers (model_restore_test.go)
+	onContext func(context.Context) // optional isolated snapshot delay (assistant_send_latency_test.go)
 }
 
 func (h *fakeHub) interactions() []proto.Interaction {
@@ -140,7 +142,10 @@ func withFakeHub(t *testing.T, n *Node) *fakeHub {
 	ctx, cancel := context.WithCancel(context.Background())
 	n2hR, n2hW := io.Pipe()
 	h2nR, h2nW := io.Pipe()
-	n.peer = rpc.New("n", n2hW)
+	// The goroutine below serves this peer, not whatever n.peer holds when it runs: a test may put its own hub in
+	// front afterwards (TestCodexRemoteTurnBegunBeforeJoining), and reading the field there would race that write.
+	peer := rpc.New("n", n2hW)
+	n.peer = peer
 	hub := rpc.New("h", h2nW)
 	fh := &fakeHub{answer: func(proto.Interaction) proto.Resolution { yes := true; return proto.Resolution{Allow: &yes} }}
 	hub.OnRequest = func(ctx context.Context, method string, params json.RawMessage) (any, error) {
@@ -152,6 +157,12 @@ func withFakeHub(t *testing.T, n *Node) *fakeHub {
 				Ack json.RawMessage `json:"ack"`
 			}
 			_ = json.Unmarshal(params, &p)
+			fh.mu.Lock()
+			onContext := fh.onContext
+			fh.mu.Unlock()
+			if len(p.Ack) == 0 && onContext != nil {
+				onContext(ctx)
+			}
 			fh.mu.Lock()
 			defer fh.mu.Unlock()
 			if len(p.Ack) > 0 {
@@ -167,6 +178,12 @@ func withFakeHub(t *testing.T, n *Node) *fakeHub {
 				SessionID string `json:"session_id"`
 			}
 			_ = json.Unmarshal(params, &p)
+			fh.mu.Lock()
+			onModel := fh.onModel
+			fh.mu.Unlock()
+			if onModel != nil {
+				onModel()
+			}
 			fh.mu.Lock()
 			defer fh.mu.Unlock()
 			if fh.queried == nil {
@@ -214,7 +231,7 @@ func withFakeHub(t *testing.T, n *Node) *fakeHub {
 		fh.mu.Unlock()
 	}
 	go func() { _ = hub.Serve(ctx, n2hR) }()
-	go func() { _ = n.peer.Serve(ctx, h2nR) }()
+	go func() { _ = peer.Serve(ctx, h2nR) }()
 	t.Cleanup(func() { cancel(); _ = n2hW.Close(); _ = h2nW.Close() })
 	return fh
 }

@@ -27,11 +27,11 @@ type Hello struct {
 	// DoneDelayMS is how long a finished turn stays still before it counts as the end (hub.json notify): a task's
 	// agents are followed with the same patience as the hub's own pushes.
 	DoneDelayMS int64 `json:"done_delay_ms"`
-	// PersonaView is hub.json's assistant.persona_view: teach ```persona-view rather than ```persona-card (#1850).
+	// PersonaView and HTMLViews were the switches for the assistant's cards and their HTML bridge. The cards are always
+	// on now (#5509): a hub always sends both true, for a manager from before that still reads them; a manager no
+	// longer reads them, so an older hub's false (its switch off) changes nothing.
 	PersonaView bool `json:"persona_view,omitempty"`
-	// HTMLViews is hub.json's assistant.html_views (default on) while PersonaView is on: the HTML bridge
-	// (…/views/{key}/html-actions) answers. An older hub never sends it, so the bridge stays off there.
-	HTMLViews bool `json:"html_views,omitempty"`
+	HTMLViews   bool `json:"html_views,omitempty"`
 	// Agents is manager.json's agents section: the triage's limits and default switches (agents.go).
 	Agents AgentsConfig `json:"agents,omitzero"`
 	// KB is manager.json's kb section: the knowledge base the assistant keeps (kb.go).
@@ -53,6 +53,9 @@ type Hello struct {
 	// Notify is hub.json's notify: the finished push's timings; HookTimeoutMS, how long a hook's card waits by default,
 	// is manager.json's hook_timeout_minutes, over the hello (the interactions and the pushes are the manager's).
 	Notify NotifyTimings `json:"notify,omitzero"`
+	// SecretHandoffGate: the hub lets only a device that may approve a hand-off card say yes to one, and names it in
+	// HTTPRequest.HandoffApprover. An older hub never sends it; a manager then shows no hand-off card at all.
+	SecretHandoffGate bool `json:"secret_handoff_gate,omitempty"`
 }
 
 // NotifyTimings are hub.json's notify section, and manager.json's hook_timeout_minutes, in milliseconds (0: the
@@ -95,6 +98,12 @@ const (
 	DeviceAssistantSend = "assistant.send" // {session_id, text, resume_only?, permission_mode?, …model} → {session_id}
 	DeviceSessionSend   = "session.send"   // {session_id, text} → {}
 	DeviceSessionStart  = "session.start"  // {cwd, prompt, launcher?, model?, permission_mode?, tab_name?, workspace_id?} → {session}
+	// DeviceSessionModes: {session_id, launcher?, from?, model?, effort?, permission_mode?} → {}; a launcher other than
+	// the session's own is a switch to it, carried out by a session.send with apply_switch (docs/protocol/protocol.md).
+	DeviceSessionModes = "session.modes"
+	// DeviceSessionSwitch: {session_id} → {}, the switch session.modes just picked carried out now with no message
+	// (capability launcher_switch_idle, the assistant's batch switch).
+	DeviceSessionSwitch = "session.switch"
 	// DeviceWorktreePrepare / DeviceWorktreeCreate: "New worktree…" (docs/integrations/terminal.md), the workspace named by a directory
 	// in it: {cwd} → WorktreePrepare; {cwd, branch, path} → WorktreeCreateResult.
 	DeviceWorktreePrepare = "worktree.prepare"
@@ -238,6 +247,9 @@ type Notification struct {
 	// may stand in for the phone's push ("Phone Muted", docs/operations/link.md "Presence"). Older managers leave it
 	// out: the phone is pushed.
 	LinkCovered bool `json:"link_covered,omitempty"`
+	// RecordingID is the recording a NotifyPush push is about (a meeting's minutes, #3862 phase 6): the push carries it
+	// as `recording_id`, and apps that know it open the meeting's thread instead of the session. Older hubs drop it.
+	RecordingID string `json:"recording_id,omitempty"`
 }
 
 // NotifyTodo is the to-do a NotifyDecide push asks about: its id, when the decision now waiting was asked (what
@@ -246,6 +258,11 @@ type NotifyTodo struct {
 	ID        string    `json:"id"`
 	AskedAt   time.Time `json:"asked_at"`
 	Recommend string    `json:"recommend"`
+	// Options are the labels of the decision's options, the recommended first, and Responses the fixed answers it takes
+	// besides them (decide_yourself, not_what_i_asked, explain_first); the accept route takes either as `option` or
+	// `response`. Left out by a hub from before them.
+	Options   []string `json:"options,omitempty"`
+	Responses []string `json:"responses,omitempty"`
 }
 
 // NotifyPush is the kind of the assistant's pushes.
@@ -290,9 +307,9 @@ type Snapshot struct {
 type TaskView struct {
 	ID           string    `json:"id"`
 	Label        string    `json:"label"`  // its title, or what stands for one
-	Repeat       string    `json:"repeat"` // once / daily / interval
+	Repeat       string    `json:"repeat"` // once / daily / interval / cron
 	Enabled      bool      `json:"enabled"`
-	At           time.Time `json:"at,omitempty"` // once: when; interval: the next run
+	At           time.Time `json:"at,omitempty"` // once: when; interval, cron: the next run
 	EveryMinutes int       `json:"every_minutes,omitempty"`
 	MachineID    string    `json:"machine_id,omitempty"` // of the conversation it came from
 	RunMachineID string    `json:"run_machine_id,omitempty"`
@@ -366,6 +383,8 @@ type SessionView struct {
 	// Direction: the conversation is (or was) a leader, one direction of the owner's work (assistant/directions.go,
 	// #3484); nil for any other.
 	Direction *proto.Direction `json:"direction,omitempty"`
+	// ModelPick: what the user set the conversation to run on (assistant/model_pick.go, #5033); nil follows the default.
+	ModelPick *proto.ModelPick `json:"model_pick,omitempty"`
 }
 
 // ErrStaleSnapshot is manager.snapshot's stale_snapshot: a newer one came in first (two changes reported at once).

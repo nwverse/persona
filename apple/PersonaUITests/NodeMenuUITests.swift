@@ -138,8 +138,27 @@ final class NodeMenuUITests: XCTestCase {
         shot(app, "run-here-opened")
     }
 
-    /// New Worktree… (#3099): the path follows the branch, git's refusal is told in the sheet, and a made worktree is
-    /// where New Agent starts.
+    /// New Worktree… (#3099, #3586): an uncoded node refusal keeps git's actionable words instead of a generic HTTP 502.
+    @MainActor func testWorktreeRefusalKeepsGitsReason() throws {
+        let app = launch()
+        let more = app.buttons["weather 的更多操作"].firstMatch
+        XCTAssertTrue(reveal(app, more), "no ⋯ on the space")
+        more.tap()
+        let item = app.buttons["新建 worktree…"]
+        XCTAssertTrue(item.waitForExistence(timeout: 5), "no 新建 worktree… in the space's menu")
+        item.tap()
+        XCTAssertTrue(text(app, containing: "persona · 当前分支 main").waitForExistence(timeout: 10), "the repository was not read")
+        let branch = app.textFields["worktree.branch"]
+        branch.tap()
+        branch.typeText("feat/taken")
+        app.buttons["worktree.create"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["worktree.failure"].waitForExistence(timeout: 10), "git's refusal is not shown")
+        XCTAssertTrue(text(app, containing: "already used by worktree").exists)
+        app.swipeUp()
+        shot(app, "worktree-refused-reason")
+    }
+
+    /// A made worktree is where New Agent starts, and the path follows the branch until it is typed by hand.
     @MainActor func testSpaceMakesAWorktreeAndStartsAnAgentThere() throws {
         let app = launch()
         let more = app.buttons["weather 的更多操作"].firstMatch
@@ -152,19 +171,10 @@ final class NodeMenuUITests: XCTestCase {
         XCTAssertTrue(text(app, containing: "persona · 当前分支 main").waitForExistence(timeout: 10), "the repository was not read")
         let branch = app.textFields["worktree.branch"]
         branch.tap()
-        branch.typeText("feat/taken")
+        branch.typeText("feat/x")
         let path = app.textFields["worktree.path"]
-        XCTAssertEqual(path.value as? String, "/home/me/.herdr/worktrees/persona/feat-taken", "the path does not follow the branch")
+        XCTAssertEqual(path.value as? String, "/home/me/.herdr/worktrees/persona/feat-x", "the path does not follow the branch")
         shot(app, "worktree-form")
-        app.buttons["worktree.create"].tap()
-        XCTAssertTrue(app.descendants(matching: .any)["worktree.failure"].waitForExistence(timeout: 10), "git's refusal is not shown")
-        XCTAssertTrue(text(app, containing: "already used by worktree").exists)
-        shot(app, "worktree-refused")
-
-        branch.tap()
-        for _ in 0..<5 { branch.typeText(XCUIKeyboardKey.delete.rawValue) }
-        branch.typeText("x")
-        XCTAssertEqual(path.value as? String, "/home/me/.herdr/worktrees/persona/feat-x")
         app.buttons["worktree.create"].tap()
         XCTAssertTrue(text(app, containing: "persona · feat/x").waitForExistence(timeout: 10), "新建 Agent is not set to the new worktree")
         shot(app, "worktree-new-agent")

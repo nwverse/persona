@@ -14,10 +14,11 @@ struct ExtensionChartsTests {
         try JSONDecoder().decode(ExtensionView.self, from: Data(contentsOf: showcase.appending(path: name)))
     }
 
+    /// The same catalog entries as the app's (the tests run in Chinese): the numbers go in as the text they are drawn as.
     @Test func aSparkSaysWhereItWent() {
-        #expect(TrendLine.spoken([1, 3, 2, 5]) == String(localized: "Trending up, from 1 to 5, low 1, high 5"))
-        #expect(TrendLine.spoken([5, 4]) == String(localized: "Trending down, from 5 to 4, low 4, high 5"))
-        #expect(TrendLine.spoken([2, 2]) == String(localized: "Flat at 2, low 2, high 2"))
+        #expect(TrendLine.spoken([1, 3, 2, 5]) == String(localized: "Trending up, from \("1") to \("5"), low \("1"), high \("5")"))
+        #expect(TrendLine.spoken([5, 4]) == String(localized: "Trending down, from \("5") to \("4"), low \("4"), high \("5")"))
+        #expect(TrendLine.spoken([2, 2]) == String(localized: "Flat at \("2"), low \("2"), high \("2")"))
         #expect(TrendLine.spoken([.nan]) == "", "nothing to say")
     }
 

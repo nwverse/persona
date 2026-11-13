@@ -26,6 +26,9 @@ type Manifest struct {
 	Description     string `json:"description,omitempty"`
 	Publisher       string `json:"publisher,omitempty"`
 	Homepage        string `json:"homepage,omitempty"`
+	// Source-only square PNG artwork: 256–4096 pixels, at most 2 MiB. Catalog entry icon carries this path; strip it
+	// from packaged and runtime manifests for compatibility.
+	Icon string `json:"icon,omitempty"`
 	// What the market shows and searches (docs "Extension market"): at most 16, each 1 to 24 characters. Packages and
 	// indexes carry the manifest without them (hubs before tags refuse an unknown field); the index entry carries them
 	// instead.
@@ -56,6 +59,16 @@ type Manifest struct {
 	// "Command-line programs (tools)", #4507). Installing them is a permission. Hubs before them refuse the manifest.
 	Tools []ToolSpec `json:"tools,omitempty"`
 	Auth  *AuthSpec  `json:"auth,omitempty"`
+	// Configured host CLI integrations the program may use through a bounded, read-only typed RPC. IDs never name an
+	// executable; writes and arbitrary command lines are not part of this contract.
+	HostIntegrations []HostIntegrationSpec `json:"host_integrations,omitempty"`
+}
+
+// HostIntegrationSpec: A configured CLI integration, selected by a closed ID rather than by an extension-provided
+// executable.
+type HostIntegrationSpec struct {
+	ID      string `json:"id"`
+	Version string `json:"version"`
 }
 
 // ToolSpec: one command-line program. Exactly one of archive and npm.
@@ -255,6 +268,7 @@ type Contributes struct {
 	Voice           []NamedItem          `json:"voice,omitempty"`
 	Computer        []NamedItem          `json:"computer,omitempty"`
 	Browser         []NamedItem          `json:"browser,omitempty"`
+	Iphone          []NamedItem          `json:"iphone,omitempty"`
 	Quota           []QuotaItem          `json:"quota,omitempty"`
 	Providers       []ProviderItem       `json:"providers,omitempty"`
 	API             []APIItem            `json:"api,omitempty"`
@@ -274,6 +288,7 @@ type Contributes struct {
 	Tunnels         []TunnelItem         `json:"tunnels,omitempty"`
 	ErrorReports    []ErrorReportsItem   `json:"error_reports,omitempty"`
 	AuthRelay       []AuthRelayItem      `json:"auth_relay,omitempty"`
+	SecretProviders []SecretProviderItem `json:"secret_providers,omitempty"`
 	Messaging       []MessagingItem      `json:"messaging,omitempty"`
 	// Extra keys stay at this object's level on the wire; they cannot replace declared fields.
 	AdditionalProperties map[string]json.RawMessage `json:"-"`
@@ -285,7 +300,7 @@ func (v *Contributes) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	declared := map[string]json.RawMessage{}
-	for _, key := range []string{"connectors", "voice", "computer", "browser", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "messaging"} {
+	for _, key := range []string{"connectors", "voice", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging"} {
 		if value, ok := extra[key]; ok {
 			declared[key] = value
 			delete(extra, key)
@@ -317,7 +332,7 @@ func (v Contributes) MarshalJSON() ([]byte, error) {
 	}
 	for key, value := range v.AdditionalProperties {
 		switch key {
-		case "connectors", "voice", "computer", "browser", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "messaging":
+		case "connectors", "voice", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging":
 			continue
 		}
 		fields[key] = value
@@ -326,29 +341,53 @@ func (v Contributes) MarshalJSON() ([]byte, error) {
 }
 
 // SkillItem: A skill (docs "Declarative contributions"): a directory of the package with SKILL.md, put in with the
-// assistant's skills.
+// assistant's skills. With source data (docs "Assistant content from the data directory"): a directory of the
+// extension's data directory whose subdirectories with a SKILL.md are skills its program writes (Markdown files only,
+// 256 KB and 32 skills per extension).
 type SkillItem struct {
 	ID string `json:"id"`
-	// The directory, relative to the package.
-	Dir string `json:"dir"`
+	// The directory, relative to the package (or to the data directory with source data).
+	Dir    string `json:"dir"`
+	Source string `json:"source,omitempty"`
 }
+
+// ContentSource: where a skill's or a prompt's files are: package (the default) or data, the extension's data
+// directory, which its program writes and upgrades keep.
+const (
+	ContentSourcePackage = "package"
+	ContentSourceData    = "data"
+)
+
+// ContentSources are the values of ContentSource, in order.
+var ContentSources = []string{"package", "data"}
 
 // Values of PromptKind.
 const (
-	PromptKindInstructions = "instructions"
-	PromptKindQuick        = "quick"
+	PromptKindInstructions   = "instructions"
+	PromptKindQuick          = "quick"
+	PromptKindProjectContext = "project_context"
+	PromptKindInboxContext   = "inbox_context"
 )
 
 // PromptKinds are the values of PromptKind, in order.
-var PromptKinds = []string{"instructions", "quick"}
+var PromptKinds = []string{"instructions", "quick", "project_context", "inbox_context"}
 
-// PromptItem: A prompt: instructions (a .md of the package added to the assistant's CLAUDE.md) or quick (a template
-// the apps offer in the message box).
+// PromptItem: A prompt: instructions (a .md of the package, or with source data of the data directory, added to the
+// assistant's CLAUDE.md), quick (a template the apps offer in the message box), project_context (a directory of the
+// data directory whose <project slug>.md files go into a new Agent's project background) or inbox_context (a .md of
+// the data directory added to the Inbox's triage and draft prompts).
 type PromptItem struct {
-	ID   string `json:"id"`
-	Kind string `json:"kind"`
-	// instructions: the .md file.
+	ID     string `json:"id"`
+	Kind   string `json:"kind"`
+	Source string `json:"source,omitempty"`
+	// instructions: the .md file (with source data: at most 6 KB, adopted at most once a day); inbox_context: the .md
+	// file (1 KB used).
 	File string `json:"file,omitempty"`
+	// project_context: the directory of <project slug>.md files (1.5 KB of each used).
+	Dir string `json:"dir,omitempty"`
+	// inbox_context: a text file of sentences, one a line, a draft must not repeat word for word (64 KB used); only
+	// checked, never in a prompt.
+	NeverQuote string `json:"never_quote,omitempty"`
 	// quick: what the apps show.
 	Title string `json:"title,omitempty"`
 	// quick: what goes into the message box.
@@ -517,6 +556,18 @@ type AuthRelayItem struct {
 	Hosts []string `json:"hosts"`
 	// The pages' exact paths (a trailing / is ignored).
 	Paths []string `json:"paths"`
+}
+
+// SecretProviderItem: secret values it supplies for references of its schemes (op://vault/item/field): the manager
+// calls secrets.describe and secrets.resolve when a setting holds such a reference or the user approves handing one
+// to an Agent run. Needs the program to speak the protocol. A scheme another installed extension claims fails the
+// install.
+type SecretProviderItem struct {
+	ID string `json:"id"`
+	// Whose secrets these are, in a few words (1Password): the settings say From <name>.
+	Name string `json:"name"`
+	// The reference schemes it resolves, without :// (op).
+	Schemes []string `json:"schemes"`
 }
 
 // ErrorReportsItem: it is given the error and crash reports of the hub and the user's devices
@@ -1275,6 +1326,53 @@ type AuthRelayResult struct {
 	Reason string `json:"reason,omitempty"`
 }
 
+// SecretPurpose: what a secret value is resolved for: kind extension (an extension's secret, id its id), launcher (a
+// launcher's or model provider's key, id its name, machine the computer it goes to) or agent_run (handed to one Agent
+// run after the user approved it on the phone, id the variable's name, machine and session the Agent's).
+type SecretPurpose struct {
+	Kind    string `json:"kind"`
+	ID      string `json:"id"`
+	Machine string `json:"machine,omitempty"`
+	Session string `json:"session,omitempty"`
+}
+
+// SecretsDescribeParams: secrets.describe's parameters: a reference of one of the contribution's schemes.
+type SecretsDescribeParams struct {
+	Contribution string `json:"contribution"`
+	Reference    string `json:"reference"`
+}
+
+// SecretsDescribeResult: what secrets.describe answers: words for people (the item and field), never a value.
+type SecretsDescribeResult struct {
+	Title  string `json:"title"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// SecretsResolveParams: secrets.resolve's parameters: the reference and what it is resolved for. Only the manager
+// calls it.
+type SecretsResolveParams struct {
+	Contribution string        `json:"contribution"`
+	Reference    string        `json:"reference"`
+	Purpose      SecretPurpose `json:"purpose"`
+}
+
+// SecretsResolveResult: what secrets.resolve answers: the value, at most 16 KB. Errors: not_found, not_signed_in,
+// rate_limited (data.retry_after), refused.
+type SecretsResolveResult struct {
+	Value string `json:"value"`
+}
+
+// SecretsUsedEvent: secrets.used (an event to the provider, no answer): a reference it resolved was used, for the
+// usage record its own page shows. Never the value.
+type SecretsUsedEvent struct {
+	Contribution string        `json:"contribution"`
+	Reference    string        `json:"reference"`
+	Purpose      SecretPurpose `json:"purpose"`
+	At           time.Time     `json:"at"`
+	// settings (a reference saved in Settings), rule (an Always rule) or the approving device's id.
+	ApprovedBy string `json:"approved_by,omitempty"`
+}
+
 // ExtensionNotification: extension_notification in an extension's alert push: whose it is, the page a tap opens (ui
 // with state) and its buttons (category ext.<extension>.<hash of the action ids>, registered by the app as it meets
 // it).
@@ -1489,6 +1587,7 @@ const (
 	NavIconPause       = "pause"
 	NavIconStop        = "stop"
 	NavIconSpeaker     = "speaker"
+	NavIconMusic       = "music"
 	NavIconTv          = "tv"
 	NavIconPlug        = "plug"
 	NavIconBattery     = "battery"
@@ -1520,7 +1619,7 @@ const (
 )
 
 // NavIcons are the values of NavIcon, in order.
-var NavIcons = []string{"plugin", "chart", "gauge", "list", "bell", "doc", "calendar", "money", "extension", "person", "chat", "mail", "link", "folder", "star", "check", "warning", "clock", "tag", "search", "settings", "branch", "commit", "code", "pull_request", "merge", "file", "home", "sofa", "light", "power", "fan", "thermometer", "droplet", "lock", "unlock", "door", "window", "camera", "video", "play", "pause", "stop", "speaker", "tv", "plug", "battery", "bolt", "sun", "moon", "cloud", "rain", "snow", "wind", "leaf", "car", "location", "robot", "wifi", "shield", "trend_up", "trend_down", "wallet", "bank", "heart", "plus", "minus", "trash", "edit", "refresh", "share", "info"}
+var NavIcons = []string{"plugin", "chart", "gauge", "list", "bell", "doc", "calendar", "money", "extension", "person", "chat", "mail", "link", "folder", "star", "check", "warning", "clock", "tag", "search", "settings", "branch", "commit", "code", "pull_request", "merge", "file", "home", "sofa", "light", "power", "fan", "thermometer", "droplet", "lock", "unlock", "door", "window", "camera", "video", "play", "pause", "stop", "speaker", "music", "tv", "plug", "battery", "bolt", "sun", "moon", "cloud", "rain", "snow", "wind", "leaf", "car", "location", "robot", "wifi", "shield", "trend_up", "trend_down", "wallet", "bank", "heart", "plus", "minus", "trash", "edit", "refresh", "share", "info"}
 
 type View struct {
 	Title    string    `json:"title,omitempty"`
@@ -2988,7 +3087,9 @@ const (
 var ConnectorSubscriptionKinds = []string{"sub_mail", "sub_message", "sub_notice", "sub_deadline", "sub_event", "sub_update", "sub_digest"}
 
 // ConnectorSubscriptionFields: paths relative to one item. Only $, .field and [index] are supported; no expressions
-// or recursive descent.
+// or recursive descent. sender_id, chat and chat_name name who and where for mutes and policies (the Inbox row's
+// sender and chat tags), seen its read state, and reply_to where a reply goes; none of them is part of an item's
+// content.
 type ConnectorSubscriptionFields struct {
 	ID      string `json:"id,omitempty"`
 	Thread  string `json:"thread,omitempty"`
@@ -2998,19 +3099,37 @@ type ConnectorSubscriptionFields struct {
 	Body    string `json:"body,omitempty"`
 	Link    string `json:"link,omitempty"`
 	DueDate string `json:"due_date,omitempty"`
+	// The sender's stable id; without it the sender tag is the lowercased display name.
+	SenderID string `json:"sender_id,omitempty"`
+	// The conversation's stable id: the row gets a chat tag.
+	Chat string `json:"chat,omitempty"`
+	// The conversation's name, the chat tag's name.
+	ChatName string `json:"chat_name,omitempty"`
+	// Whether the item was already seen in the source: true, a non-zero number, or true, 1, yes, read or seen in any
+	// case. The Inbox row is read when its newest item is; seen only ever turns on.
+	Seen string `json:"seen,omitempty"`
+	// Where a reply goes and who sees it, in a line for people. With it, an item with an id can be replied to through
+	// the connector's inbox reply, with its thread (else its id) and its id as last.
+	ReplyTo string `json:"reply_to,omitempty"`
 }
 
 // ConnectorSubscriptionRecipe: A pull recipe, not a schedule. args is an object (default {}); strings may contain
-// {{since}} or {{since_date}}. items_path defaults to $; fields are relative to one item. Text results require
-// snapshot mode. Runtime argument/schema and mapped-value validation belongs to the subscription runner.
+// {{since}} or {{since_date}}. cursor_arg and next_cursor_path opt into cursor pagination; page_arg and optional
+// next_page_path opt into page pagination (without next_page_path, a full requested page continues). items_path
+// defaults to $; fields are relative to one item. Text results require snapshot mode. Runtime argument/schema and
+// mapped-value validation belongs to the subscription runner.
 type ConnectorSubscriptionRecipe struct {
-	Mode      string                       `json:"mode"`
-	Tool      string                       `json:"tool"`
-	Args      json.RawMessage              `json:"args,omitempty"`
-	ItemsPath string                       `json:"items_path,omitempty"`
-	Fields    *ConnectorSubscriptionFields `json:"fields,omitempty"`
-	Kind      string                       `json:"kind"`
-	GroupBy   string                       `json:"group_by"`
+	Mode           string                       `json:"mode"`
+	Tool           string                       `json:"tool"`
+	Args           json.RawMessage              `json:"args,omitempty"`
+	CursorArg      string                       `json:"cursor_arg,omitempty"`
+	NextCursorPath string                       `json:"next_cursor_path,omitempty"`
+	PageArg        string                       `json:"page_arg,omitempty"`
+	NextPagePath   string                       `json:"next_page_path,omitempty"`
+	ItemsPath      string                       `json:"items_path,omitempty"`
+	Fields         *ConnectorSubscriptionFields `json:"fields,omitempty"`
+	Kind           string                       `json:"kind"`
+	GroupBy        string                       `json:"group_by"`
 }
 
 // ConnectorErrorCode: error.code a program answers or gets besides the base ErrorCode: rate_limited (tools.call /
@@ -3206,9 +3325,13 @@ type ConnectorStatus struct {
 	// One sentence for people when state is not ok; never a secret.
 	Error string `json:"error,omitempty"`
 	// How to fix it, a step a sentence.
-	Guide     []string  `json:"guide,omitempty"`
-	LastSync  time.Time `json:"last_sync,omitzero"`
-	LastEvent time.Time `json:"last_event,omitzero"`
+	Guide []string `json:"guide,omitempty"`
+	// Optional HTTPS page the App may open for the fix; never a secret.
+	GuideURL string `json:"guide_url,omitempty"`
+	// Permissions the connector can identify as absent.
+	MissingScopes []string  `json:"missing_scopes,omitempty"`
+	LastSync      time.Time `json:"last_sync,omitzero"`
+	LastEvent     time.Time `json:"last_event,omitzero"`
 }
 
 // ConnectorTool: A read tool (tools.list) or a write (actions.list): its name starts with <connector id>_.
@@ -4249,10 +4372,11 @@ const (
 	KBKindMeetings   = "meetings"
 	KBKindEvents     = "events"
 	KBKindRecordings = "recordings"
+	KBKindTopics     = "topics"
 )
 
 // KBKinds are the values of KBKind, in order.
-var KBKinds = []string{"projects", "chats", "people", "docs", "meetings", "events", "recordings"}
+var KBKinds = []string{"projects", "chats", "people", "docs", "meetings", "events", "recordings", "topics"}
 
 // KBErrorCode: error.code of a knowledge-base call besides permission_denied (data {scope}, the one missing):
 // invalid_params, not_found, assistant_offline (the manager is away), kb_unavailable (not open yet), conflict
@@ -4374,7 +4498,8 @@ type KBDetail struct {
 	ID   string `json:"id"`
 	// Where it is on the manager's machine, for its own file tools.
 	Path string `json:"path"`
-	// The entity's own fields (meta.json).
+	// The entity's own fields (meta.json). For people, status is active, ignored or self; absent or empty means active.
+	// Status uses the same locked_fields and provenance as other corrected fields.
 	Meta     json.RawMessage      `json:"meta"`
 	Summary  string               `json:"summary,omitempty"`
 	Log      []string             `json:"log,omitempty"`
@@ -4384,6 +4509,78 @@ type KBDetail struct {
 	Segments []KBRecordingSegment `json:"segments,omitempty"`
 	// A recording's meeting minutes, once written (docs/assistant/meeting-minutes.md); kept as the hub sends them.
 	Minutes json.RawMessage `json:"minutes,omitempty"`
+	// An all-day recording's day recap, once written (docs/assistant/day-recap.md); kept as the hub sends them.
+	Recap json.RawMessage `json:"recap,omitempty"`
+	// A topic's knowledge points (docs/assistant/knowledge.md "Topics").
+	Points []KBTopicPoint `json:"points,omitempty"`
+	// A person's profiles by writer ("user", "ext:<id>"), as written; summary shows them too
+	// (docs/assistant/knowledge.md "Person profiles").
+	Profiles map[string]KBProfileRecord `json:"profiles,omitempty"`
+}
+
+type KBProfileRecord struct {
+	Profile KBPersonProfile `json:"profile"`
+	At      time.Time       `json:"at"`
+}
+
+// KBPersonProfile: one writer's profile of a person, its four parts kept apart. Every item says where it comes from;
+// at most 30 items a part, and 8000 bytes as summary.md shows it.
+type KBPersonProfile struct {
+	// Their role, what they are in charge of, how they relate to the user.
+	Facts []KBProfileItem `json:"facts,omitempty"`
+	// The user's own words about them, quoted.
+	Views []KBProfileItem `json:"views,omitempty"`
+	// Inferred, never stated: each needs its basis. Shown as only a hint.
+	Inferences []KBProfileItem `json:"inferences,omitempty"`
+	// Promises and to-dos between the user and them, either way.
+	Commitments []KBProfileCommitment `json:"commitments,omitempty"`
+}
+
+type KBProfileItem struct {
+	Text string `json:"text"`
+	// Inferences only (required there): what it rests on.
+	Basis string `json:"basis,omitempty"`
+	// Where it comes from: a knowledge-base path (chats/<id>/messages/<day>.md, recordings/<id>), a URL, or "user" for
+	// the user's own word.
+	Sources []string `json:"sources"`
+}
+
+type KBProfileCommitment struct {
+	Text string `json:"text"`
+	// user: the user owes it to them; them: they owe it to the user.
+	Owes string `json:"owes"`
+	// YYYY-MM-DD, when there is one.
+	Due     string   `json:"due,omitempty"`
+	Done    bool     `json:"done,omitempty"`
+	Sources []string `json:"sources"`
+}
+
+// KBIgnoredField: A field an update carried that its kind does not use: not applied, and why.
+type KBIgnoredField struct {
+	Field  string `json:"field"`
+	Reason string `json:"reason"`
+}
+
+// KBTopicPoint: one knowledge point of a topic, under up to two levels of subtopics (path).
+type KBTopicPoint struct {
+	ID   string   `json:"id"`
+	Path []string `json:"path,omitempty"`
+	Kind string   `json:"kind"`
+	Text string   `json:"text"`
+	// A decision's reason, a pitfall's cause.
+	Why     string          `json:"why,omitempty"`
+	Sources []KBTopicSource `json:"sources,omitempty"`
+	// YYYY-MM-DD: when it was last confirmed.
+	When string `json:"when,omitempty"`
+}
+
+// KBTopicSource: an entry a knowledge point came from.
+type KBTopicSource struct {
+	// projects or chats
+	Kind string `json:"kind"`
+	ID   string `json:"id"`
+	// YYYY-MM-DD
+	Day string `json:"day,omitempty"`
 }
 
 // KBMomentRef: A feed post linked to a project.
@@ -4402,6 +4599,13 @@ type KBRecordingSegment struct {
 	Start float64 `json:"start"`
 	End   float64 `json:"end"`
 	Text  string  `json:"text"`
+	// An all-day recording's line number: the segment's 1-based position in its uploads (docs/assistant/day-recap.md);
+	// absent on other recordings.
+	N int `json:"n,omitempty"`
+	// The line is Persona's own answer as the meeting's microphone heard it (docs/assistant/meeting-minutes.md
+	// "Persona's echo"): kept in the transcript but not what the meeting said, so leave it out of anything read as the
+	// meeting's words; absent (false) on every other line.
+	Echo bool `json:"echo,omitempty"`
 }
 
 // KBDayParams: kb.day: a chat's messages of one day in the knowledge base's time zone.
@@ -4471,12 +4675,14 @@ type KBUpdateParams struct {
 	Name           string   `json:"name,omitempty"`
 	// A project's: short or long.
 	ProjectKind string `json:"project_kind,omitempty"`
-	Status      string `json:"status,omitempty"`
-	Goal        string `json:"goal,omitempty"`
-	MyRole      string `json:"my_role,omitempty"`
-	Note        string `json:"note,omitempty"`
-	Importance  string `json:"importance,omitempty"`
-	Relevance   *int   `json:"relevance,omitempty"`
+	// People: active, ignored or self; other values are rejected by kb.update. Projects: active, paused, done or
+	// ignored. Omitted or empty keeps the current status; active restores a person.
+	Status     string `json:"status,omitempty"`
+	Goal       string `json:"goal,omitempty"`
+	MyRole     string `json:"my_role,omitempty"`
+	Note       string `json:"note,omitempty"`
+	Importance string `json:"importance,omitempty"`
+	Relevance  *int   `json:"relevance,omitempty"`
 	// Replaces the tags; an empty list clears them, none keeps them.
 	Tags    []string `json:"tags,omitzero"`
 	Summary string   `json:"summary,omitempty"`
@@ -4492,6 +4698,10 @@ type KBUpdateParams struct {
 	Projects []string `json:"projects,omitempty"`
 	// Refused (conflict) when the user or another extension holds anything on the project folded away; no before.
 	MergeInto string `json:"merge_into,omitempty"`
+	// People only: this extension's own profile of the person, replacing the one it wrote before (one with no items
+	// removes it). Nobody else's profile, nor pinned or note, is touched; before.profile is the one replaced. A profile
+	// breaking a rule is invalid_params and nothing is written.
+	Profile *KBPersonProfile `json:"profile,omitempty"`
 	// Kept as the provenance of the fields this write holds.
 	Evidence []KBEvidence `json:"evidence,omitempty"`
 	// Fields this extension holds, handed back to the built-in pipeline; unlocking pinned clears it.
@@ -4500,8 +4710,12 @@ type KBUpdateParams struct {
 
 type KBUpdateResult struct {
 	ID string `json:"id"`
-	// The previous value of each field written (null when unset; summary is the old text), for the extension's own undo.
+	// The previous value of each field written (null when unset; summary is the old text, profile this extension's own
+	// profile before), for the extension's own undo.
 	Before map[string]json.RawMessage `json:"before,omitempty"`
+	// Fields the update carried that its kind does not use (a person's summary and log, for one): not applied, each with
+	// why.
+	Ignored []KBIgnoredField `json:"ignored,omitempty"`
 }
 
 // KBOwnerParams: kb.owner takes nothing.
@@ -4721,10 +4935,10 @@ type ModelRefusal struct {
 	Usage      ModelUsage `json:"usage"`
 }
 
-// AssistantErrorCode: error.code of the assistant calls besides permission_denied (data {scope: "assistant.read"}):
-// invalid_params; not_found (assistant.messages: no such conversation in the assistant's own space);
-// assistant_offline (the manager is away: try again); machine_offline (the assistant's computer is not connected or
-// not set up: try again).
+// AssistantErrorCode: error.code of the assistant calls besides permission_denied (data {scope: "assistant.read"}, or
+// "assistant.memory.read" for assistant.memory): invalid_params; not_found (assistant.messages: no such conversation
+// in the assistant's own space); assistant_offline (the manager is away: try again); machine_offline (the assistant's
+// computer is not connected or not set up: try again).
 const (
 	AssistantErrorCodeInvalidParams    = "invalid_params"
 	AssistantErrorCodeNotFound         = "not_found"
@@ -4801,11 +5015,118 @@ const (
 // AssistantRoles are the values of AssistantRole, in order.
 var AssistantRoles = []string{"user", "assistant"}
 
+// AssistantMemoryParams: assistant.memory (assistant.memory.read): the assistant's memory entries of its own space
+// (never the health space's), by name. Read-only.
+type AssistantMemoryParams struct {
+	// Return each entry's text too: cut at 16 KB each, and left out once a page holds 512 KB of text (truncated says
+	// so).
+	IncludeContent bool `json:"include_content,omitempty"`
+}
+
+type AssistantMemoryEntry struct {
+	// The entry's file name.
+	Name string `json:"name"`
+	// The frontmatter's description; empty without one.
+	Description string `json:"description,omitempty"`
+	// The frontmatter's type (or metadata.type); empty without one.
+	Type string `json:"type,omitempty"`
+	// The file's size in bytes.
+	Size int `json:"size"`
+	// When the file was made, where the computer's file system keeps it.
+	Created  time.Time `json:"created,omitzero"`
+	Modified time.Time `json:"modified"`
+	// With include_content: the text, perhaps cut.
+	Content string `json:"content,omitempty"`
+	// content was cut or left out for its size.
+	Truncated bool `json:"truncated,omitempty"`
+}
+
+// AssistantMemoryResult: an assistant without memory (none written yet, or the feature off) has no entries.
+type AssistantMemoryResult struct {
+	Entries []AssistantMemoryEntry `json:"entries"`
+}
+
 // AssistantMessagesResult: next_seq is set while there is more to read (pass it as after_seq), even when this page
 // has no messages.
 type AssistantMessagesResult struct {
 	Messages []AssistantMessage `json:"messages"`
 	NextSeq  *int               `json:"next_seq,omitempty"`
+}
+
+// AssistantDataStatusParams: assistant.data_status takes no parameters.
+type AssistantDataStatusParams struct {
+}
+
+// AssistantDataState: what the assistant reads of the contribution: adopted (the content as it is now; skills: sent;
+// project and Inbox context: used whenever their prompt is built), pending (instructions: an older version, the new
+// one waits for next_adopt_at), kept (instructions: an older version, the new one cannot be used, see reason), none
+// (nothing: none written yet, none usable, or the extension or contribution is switched off).
+const (
+	AssistantDataStateAdopted = "adopted"
+	AssistantDataStatePending = "pending"
+	AssistantDataStateKept    = "kept"
+	AssistantDataStateNone    = "none"
+)
+
+// AssistantDataStates are the values of AssistantDataState, in order.
+var AssistantDataStates = []string{"adopted", "pending", "kept", "none"}
+
+// AssistantDataReason: why what the assistant reads is not the content as it is now: too_large (over its limit),
+// invalid (not UTF-8 text), not_regular (not a plain file inside the data directory: a directory, or a link out of
+// it), unreadable, rate_limited (a new version of instructions waits for its turn), disabled (the extension is
+// switched off or cannot run), switched_off (this contribution is switched off).
+const (
+	AssistantDataReasonTooLarge    = "too_large"
+	AssistantDataReasonInvalid     = "invalid"
+	AssistantDataReasonNotRegular  = "not_regular"
+	AssistantDataReasonUnreadable  = "unreadable"
+	AssistantDataReasonRateLimited = "rate_limited"
+	AssistantDataReasonDisabled    = "disabled"
+	AssistantDataReasonSwitchedOff = "switched_off"
+)
+
+// AssistantDataReasons are the values of AssistantDataReason, in order.
+var AssistantDataReasons = []string{"too_large", "invalid", "not_regular", "unreadable", "rate_limited", "disabled", "switched_off"}
+
+// AssistantDataItem: one data contribution of the extension.
+type AssistantDataItem struct {
+	// Its id, as the manifest has it.
+	Contribution string `json:"contribution"`
+	// instructions, skills, project_context or inbox_context.
+	Kind string `json:"kind"`
+	// Its file or directory, relative to the data directory.
+	Path string `json:"path"`
+	// The most it may weigh, in bytes.
+	Limit int `json:"limit"`
+	// What it weighs now (all files, for skills).
+	Bytes  int    `json:"bytes"`
+	State  string `json:"state"`
+	Reason string `json:"reason,omitempty"`
+	// The rest of a file's problem, for logs.
+	Detail string `json:"detail,omitempty"`
+	// The digest of the content as it is now (instructions: the cleaned text, the first 16 hex digits of its sha256;
+	// skills: of every skill's name and digest).
+	Hash string `json:"hash,omitempty"`
+	// instructions: the digest of the text the assistant reads (for a contribution or extension switched off: read
+	// last); empty when that is no text.
+	AdoptedHash string `json:"adopted_hash,omitempty"`
+	// instructions: when that text was adopted (RFC 3339).
+	AdoptedAt string `json:"adopted_at,omitempty"`
+	// instructions, state pending: the new version is adopted by then at the latest (RFC 3339); sooner when the hub's
+	// own instructions change or the user applies it.
+	NextAdoptAt string `json:"next_adopt_at,omitempty"`
+	// skills: the skills sent.
+	Skills []string `json:"skills,omitempty"`
+	// project_context: the projects (slugs) with a file in use.
+	Files []string `json:"files,omitempty"`
+	// project_context, inbox_context: some content is used cut at its limit (detail says which).
+	Truncated bool `json:"truncated,omitempty"`
+	// inbox_context: how many sentences drafts are checked against.
+	NeverQuote int `json:"never_quote,omitempty"`
+}
+
+type AssistantDataStatusResult struct {
+	Items []AssistantDataItem `json:"items"`
 }
 
 type StorageEmptyParams struct {
@@ -5644,6 +5965,7 @@ func (v requiredJSONView) MarshalJSON() ([]byte, error) {
 // newDef makes a value of each definition, for tests that read examples by definition name.
 var newDef = map[string]func() any{
 	"Manifest":                      func() any { return new(Manifest) },
+	"HostIntegrationSpec":           func() any { return new(HostIntegrationSpec) },
 	"ToolSpec":                      func() any { return new(ToolSpec) },
 	"ToolCheck":                     func() any { return new(ToolCheck) },
 	"ToolArchive":                   func() any { return new(ToolArchive) },
@@ -5678,6 +6000,7 @@ var newDef = map[string]func() any{
 	"LookItem":                      func() any { return new(LookItem) },
 	"TriageTemplateItem":            func() any { return new(TriageTemplateItem) },
 	"AuthRelayItem":                 func() any { return new(AuthRelayItem) },
+	"SecretProviderItem":            func() any { return new(SecretProviderItem) },
 	"ErrorReportsItem":              func() any { return new(ErrorReportsItem) },
 	"TunnelItem":                    func() any { return new(TunnelItem) },
 	"AgentFilterItem":               func() any { return new(AgentFilterItem) },
@@ -5741,6 +6064,12 @@ var newDef = map[string]func() any{
 	"ErrorReportsDeliver":           func() any { return new(ErrorReportsDeliver) },
 	"AuthRelayCompleteParams":       func() any { return new(AuthRelayCompleteParams) },
 	"AuthRelayResult":               func() any { return new(AuthRelayResult) },
+	"SecretPurpose":                 func() any { return new(SecretPurpose) },
+	"SecretsDescribeParams":         func() any { return new(SecretsDescribeParams) },
+	"SecretsDescribeResult":         func() any { return new(SecretsDescribeResult) },
+	"SecretsResolveParams":          func() any { return new(SecretsResolveParams) },
+	"SecretsResolveResult":          func() any { return new(SecretsResolveResult) },
+	"SecretsUsedEvent":              func() any { return new(SecretsUsedEvent) },
 	"ExtensionNotification":         func() any { return new(ExtensionNotification) },
 	"View":                          func() any { return new(View) },
 	"Section":                       func() any { return new(Section) },
@@ -5976,6 +6305,13 @@ var newDef = map[string]func() any{
 	"KBGetParams":                   func() any { return new(KBGetParams) },
 	"KBGetResult":                   func() any { return new(KBGetResult) },
 	"KBDetail":                      func() any { return new(KBDetail) },
+	"KBProfileRecord":               func() any { return new(KBProfileRecord) },
+	"KBPersonProfile":               func() any { return new(KBPersonProfile) },
+	"KBProfileItem":                 func() any { return new(KBProfileItem) },
+	"KBProfileCommitment":           func() any { return new(KBProfileCommitment) },
+	"KBIgnoredField":                func() any { return new(KBIgnoredField) },
+	"KBTopicPoint":                  func() any { return new(KBTopicPoint) },
+	"KBTopicSource":                 func() any { return new(KBTopicSource) },
 	"KBMomentRef":                   func() any { return new(KBMomentRef) },
 	"KBRecordingSegment":            func() any { return new(KBRecordingSegment) },
 	"KBDayParams":                   func() any { return new(KBDayParams) },
@@ -6008,7 +6344,13 @@ var newDef = map[string]func() any{
 	"AssistantConversationsResult":  func() any { return new(AssistantConversationsResult) },
 	"AssistantMessagesParams":       func() any { return new(AssistantMessagesParams) },
 	"AssistantMessage":              func() any { return new(AssistantMessage) },
+	"AssistantMemoryParams":         func() any { return new(AssistantMemoryParams) },
+	"AssistantMemoryEntry":          func() any { return new(AssistantMemoryEntry) },
+	"AssistantMemoryResult":         func() any { return new(AssistantMemoryResult) },
 	"AssistantMessagesResult":       func() any { return new(AssistantMessagesResult) },
+	"AssistantDataStatusParams":     func() any { return new(AssistantDataStatusParams) },
+	"AssistantDataItem":             func() any { return new(AssistantDataItem) },
+	"AssistantDataStatusResult":     func() any { return new(AssistantDataStatusResult) },
 	"StorageEmptyParams":            func() any { return new(StorageEmptyParams) },
 	"StorageRequestResult":          func() any { return new(StorageRequestResult) },
 	"StorageKeyParams":              func() any { return new(StorageKeyParams) },
@@ -6129,6 +6471,8 @@ var Calls = map[string]Call{
 	"model.complete":                 {Name: "model.complete", From: "program", Params: "ModelCompleteParams", Result: "ModelCompleteResult"},
 	"assistant.conversations":        {Name: "assistant.conversations", From: "program", Params: "AssistantConversationsParams", Result: "AssistantConversationsResult"},
 	"assistant.messages":             {Name: "assistant.messages", From: "program", Params: "AssistantMessagesParams", Result: "AssistantMessagesResult"},
+	"assistant.memory":               {Name: "assistant.memory", From: "program", Params: "AssistantMemoryParams", Result: "AssistantMemoryResult"},
+	"assistant.data_status":          {Name: "assistant.data_status", From: "program", Params: "AssistantDataStatusParams", Result: "AssistantDataStatusResult"},
 	"storage.request":                {Name: "storage.request", From: "program", Params: "StorageEmptyParams", Result: "StorageRequestResult"},
 	"storage.get":                    {Name: "storage.get", From: "program", Params: "StorageKeyParams", Result: "StorageEntry"},
 	"storage.list":                   {Name: "storage.list", From: "program", Params: "StorageListParams", Result: "StorageListResult"},

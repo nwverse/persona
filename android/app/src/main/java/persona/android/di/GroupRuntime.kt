@@ -69,6 +69,8 @@ class GroupRuntime internal constructor(
     val diagnostics = mutableDiagnostics.asStateFlow()
     private val reconciling = MutableStateFlow(false)
     private var reconciliationJob: Job? = null
+    /** Installed by this group's repositories before exposing its chat services. */
+    internal var adoptSession: (suspend (SessionKey, Session) -> Unit)? = null
     private val mutableEndpointSettings = MutableStateFlow<HubEndpointSettings?>(null)
     val endpointSettings = mutableEndpointSettings.asStateFlow()
     /** The compatibility handle the shell and platform services use while this group is selected. */
@@ -95,7 +97,8 @@ class GroupRuntime internal constructor(
         } ?: false
         val connection = OkHttpHubConnection(
             HubConnectionConfig(credentials.hubId.takeUnless { it.startsWith("legacy-") }, credentials.fp,
-                credentials.deviceToken, pairingEndpoints(credentials), settings.version, deviceId = credentials.deviceId,
+                credentials.deviceToken, pairingEndpoints(credentials), settings.version, systemOrigins = credentials.systemOrigins.toSet(),
+                deviceId = credentials.deviceId,
                 clientFeatures = setOf("lock_test", "extension_operations", "extension_auth", "managers"), build = settings.build, os = settings.os,
                 heartbeatPolicy = settings.heartbeatPolicy, members = members, center = isCenter, centerHubId = group.centerHubId,
                 tunnels = tunnels),
@@ -129,7 +132,11 @@ class GroupRuntime internal constructor(
         )
         live = connection
         connection.setForeground(foreground)
-        transport = HttpMessageTransport(storage, connection, scope) {
+        transport = HttpMessageTransport(storage, connection, scope, onSessionStarted = { previous, session ->
+            if (live === connection) {
+                adoptSession?.invoke(previous, session)
+            }
+        }) {
             if (live === connection) connection.revoke()
         }
         return transport
@@ -219,6 +226,7 @@ class GroupRuntime internal constructor(
         hub = null
         live?.close()
         live = null
+        adoptSession = null
         job.cancel()
         mutableTunnel.value = null
         mutableDiagnostics.value = ConnectionDiagnostics()

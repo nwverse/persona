@@ -18,7 +18,10 @@ struct TaskDetailSheet: View {
     @Environment(\.detailPushed) private var pushed
     private var store: TasksStore { .shared }
 
-    init(todoID: String) { self.todoID = todoID }
+    init(todoID: String, initialAgent: SessionKey? = nil) {
+        self.todoID = todoID
+        _picked = State(initialValue: initialAgent)
+    }
     init(agent: SessionKey) { agentKey = agent }
 
     /// What an agent no task stands for says about itself (in ⋯, and the header while it has no page).
@@ -44,11 +47,25 @@ struct TaskDetailSheet: View {
         .presentationDetents([.fraction(0.6), .large], selection: $detent)
         .presentationDragIndicator(.visible)
         .presentationBackgroundInteraction(.enabled(upThrough: .fraction(0.6)))
+        #if os(iOS)
+        // A sheet has no edge-back of its own: a rightward swipe from the leading edge closes it like ✕ (#5603). The
+        // gesture runs beside the page's own, so taps, scrolling and selection inside it are not taken.
+        .simultaneousGesture(DragGesture(minimumDistance: Theme.Size.edgeBackZone / 2).onEnded { drag in
+            if !pushed && Self.edgeSwipeCloses(start: drag.startLocation, translation: drag.translation) { dismiss() }
+        })
+        #endif
+    }
+
+    /// Whether a drag is the edge swipe that closes the sheet: it starts at the leading edge, goes mostly right.
+    static func edgeSwipeCloses(start: CGPoint, translation: CGSize) -> Bool {
+        start.x <= Theme.Size.edgeBackZone
+            && translation.width >= Theme.Size.edgeBackDistance
+            && translation.width > abs(translation.height) * 2
     }
 
     @ViewBuilder private func content(_ todo: TodoItem) -> some View {
         let sessions = store.sessions(todo)
-        let key = picked.flatMap { p in sessions.first { $0.key == p }?.key } ?? store.leadSession(todo)?.key
+        let key = DispatchedTasks.selectedAgent(picked, available: sessions.map(\.key), lead: store.leadSession(todo)?.key)
         let state = store.state(todo)
         // Top-aligned: when the agent's page asks for more than the sheet has (several tall cards waiting), what gives
         // is its bottom, never the header with its close.

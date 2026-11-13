@@ -68,6 +68,29 @@ func TestFitSnapshotLeavesASmallSnapshotAlone(t *testing.T) {
 	}
 }
 
+func TestSnapshotDoneAndMutedStayCounts(t *testing.T) {
+	s := prompts.Snapshot{Now: fitNow, Zone: "Asia/Shanghai",
+		Needs:    []prompts.SnapshotAgent{{Label: "等你批准发布", Machine: "build-1", Session: "need-1", Line: "可以合并吗"}},
+		Awaiting: []prompts.SnapshotAgent{{Label: "看过还没回复", Machine: "build-1", Session: "wait-1", Line: "选哪个方案"}},
+		Done:     []prompts.SnapshotAgent{{Label: "已经修完的登录问题", Machine: "build-2", Session: "done-1", Line: "测试通过"}},
+		Muted:    []prompts.SnapshotAgent{{Label: "已经屏蔽的巡检", Machine: "build-3", Session: "mute-1", Line: "没有新事"}}}
+	got := fitSnapshot(s)
+	for _, want := range []string{
+		"  - 做完的（24 小时内）：1 个，agents_list state=done 查",
+		"  - 已屏蔽（用户关了它们的通知，上面的数不算它们；别主动提，问到再说）：1 个，agents_list state=muted 查",
+		"等你批准发布", "看过还没回复", "可以合并吗", "选哪个方案",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{"已经修完的登录问题", "已经屏蔽的巡检", "done-1", "mute-1", "测试通过", "没有新事"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("done or muted details stayed in an under-budget snapshot (%q):\n%s", unwanted, got)
+		}
+	}
+}
+
 // Over the budget, sections are left out until it fits, and what waits for the user stays.
 func TestFitSnapshotStaysInBudget(t *testing.T) {
 	s := bigSnapshot(fitNow)
@@ -98,8 +121,8 @@ func TestFitSnapshotKeepsCountsOfWhatItLeavesOut(t *testing.T) {
 	got := fitSnapshot(bigSnapshot(fitNow))
 	for _, want := range []string{
 		"- Agents：需要你 6 个，完成未看 6 个，工作中 12 个",
-		"  - 做完的（24 小时内）：20 个，这份快照放不下",
-		"  - 已屏蔽（用户关了它们的通知，上面的数不算它们；别主动提，问到再说）：4 个，这份快照放不下",
+		"  - 做完的（24 小时内）：20 个，agents_list state=done 查",
+		"  - 已屏蔽（用户关了它们的通知，上面的数不算它们；别主动提，问到再说）：4 个，agents_list state=muted 查",
 		"- 已安排的跟进：11 个，这份快照放不下，没列出来，要看用 list_followups",
 		"- 知识库（kb_get 看详情）：这份快照放不下",
 		"- 飞书未读会话 2 个",
