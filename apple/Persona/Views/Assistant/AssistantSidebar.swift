@@ -121,6 +121,9 @@ import UIKit
         #if DEBUG && os(iOS)
         DrawerProbe.note("settle", ["from": Double(progress), "to": Double(target), "share": share])
         #endif
+        #if DEBUG
+        ShellTrace.shared.note("drawer \(target == 0 ? "close" : "open")")
+        #endif
         // The same spring for the tab bar and the sidebar (UIKit) as for the page (SwiftUI).
         settling = true
         UIView.animate(motion) {
@@ -795,6 +798,8 @@ struct AssistantSidebar: View {
     /// The chat whose Pin / Unpin confirmation is open (#6214): the menu asks before the hub call.
     @State private var leaderConfirm: Session?
     @State private var showArchived = false
+    /// The conversation picked in Archived, Auto conversations or Search: opened when its sheet has gone.
+    @State private var picked: SessionKey?
     @State private var autoList: AutoConversationsRoute?
     /// Whether Recent is folded, kept on this device (#6228): default open, the choice survives relaunches.
     @AppStorage("assistant.sidebar.recent.folded") private var recentFolded = false
@@ -901,23 +906,25 @@ struct AssistantSidebar: View {
                 Text(String(localized: "Pin Confirmation Message [Leader Actions 6214]"))
             }
         }
-        .sheet(item: $autoList) { route in
+        // Tasks over the drawer: a conversation picked in one opens once its sheet is gone, so the sheet's dismissal and
+        // the drawer's closing never run together (docs/design/sidebar-navigation.md).
+        .sheet(item: $autoList, onDismiss: openPicked) { route in
             AutoConversationsView(source: route.source) { key in
+                picked = key
                 autoList = nil
-                open(key)
             }
         }
-        .sheet(isPresented: $showArchived) {
+        .sheet(isPresented: $showArchived, onDismiss: openPicked) {
             ArchivedConversationsView { key in
+                picked = key
                 showArchived = false
-                open(key)
             }
         }
         #if os(iOS)
-        .fullScreenCover(isPresented: $fullSearch) {
+        .fullScreenCover(isPresented: $fullSearch, onDismiss: openPicked) {
             AssistantFullSearch { key in
+                picked = key
                 fullSearch = false
-                open(key)
             }
         }
         #endif
@@ -1019,6 +1026,15 @@ struct AssistantSidebar: View {
 
     /// Settings on the page `AppModel.settingsPath` names (the switcher's Manage Assistants…): the way this sidebar has
     /// to Settings, else the app's own.
+    private func openPicked() {
+        guard let key = picked else { return }
+        picked = nil
+        #if DEBUG
+        ShellTrace.shared.note("task dismissed, open")
+        #endif
+        open(key)
+    }
+
     private func showSettings() {
         if let openSettings { openSettings() } else { model.showSettings() }
     }

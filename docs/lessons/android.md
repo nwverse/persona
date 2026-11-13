@@ -1,5 +1,33 @@
 # Lessons: Android
 
+## Selecting a message's words in place: what `SelectionContainer` leaves to you (#4210 T5)
+
+`rememberSelectionState()` and `SelectionContainer(state, …)` are public in Compose Foundation 1.12: `selectAll()`, `clear()`
+and the read-only `selectedTexts` / `getSelectableTexts()` are all a select-in-place needs. Nothing starts from the word under a
+point (`select` takes a range of the container's text, and the Markdown renderer exposes no text layouts to find an offset by), so
+Select takes the whole message and a long press on a word picks that word. The words register as the container is laid out, so wait
+until `getSelectableTexts()` lists them (a frame or two) before `selectAll()`; a message with no words never lists any, and must not be
+left selecting.
+
+- A `SelectionContainer` inside another takes its text out of the outer one: a code block that opens its own was missing from a
+  select-all. A block joins by checking `LocalSelectionAbove` (`SelectableOnItsOwn`); buttons, title bars and cards are wrapped in
+  `DisableSelection`, or "Copy" and the language name are copied with the code.
+- A selection over rendered Markdown copies one selectable a line: a list item's marker is a text of its own ("•", newline, the item),
+  a table cell a line, and the thin spaces that pad inline code come out in a terminal as a character the shell takes for a word. Copy goes
+  through `LocalClipboard`, so a wrapper clipboard cleans what the container copies (`pickedWords`); Quote reads `selectedTexts` and cleans the same way.
+- Wrapping content in a container only while something is selected rebuilds it and loses what it remembers (an opened quote, an unfolded
+  code block). Keep it as one `movableContentOf` that moves between the two places, with a test that opens something first.
+- Don't end the selection the moment `selectedTexts` is empty: a long press on another word lets go of the old words before it picks
+  the new ones. Wait a few frames, counted with `withFrameNanos`; a `delay` inside a `LaunchedEffect` is not driven by `waitForIdle`
+  or `mainClock.advanceTimeBy` in these tests.
+- Robolectric: a long press that lands on a glyph starts the platform Magnifier, which throws (`Magnifier.dismiss`, no Surface); long press blank
+  space, or assert the long-click semantics instead. The handles are roots of their own (`onRoot()` finds three), so send keys to
+  `onAllNodes(isRoot()).onFirst()`. The floating menu is not drawn, but `LocalTextContextMenuToolbarProvider` takes `data()` of what it would show,
+  and a `TextContextMenuItem.onClick` can be run.
+- A tap outside the selected message ends the selection without taking the tap from what it hit: watch it from the page in
+  `PointerEventPass.Initial` with `awaitFirstDown(requireUnconsumed = false)` and consume nothing; a move past the touch slop is a scroll,
+  not a tap, so the chat can be scrolled while words are selected.
+
 ## Explicit home selection is not detail-stack restoration (#5638)
 
 Keeping visited tabs composed prevents loading flashes, but keeping their entire back stacks can make the Agents

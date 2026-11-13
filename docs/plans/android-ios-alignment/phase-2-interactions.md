@@ -1,6 +1,6 @@
 # Phase 2: interactions (#4210)
 
-Part of the [Android alignment plan](README.md) (#4194). Status: plan, 2026-11-11.
+Part of the [Android alignment plan](README.md) (#4194). Status: T6 done (11-12) and T1, T2, T3 and T5 (11-13); T4 left out for now and T7 waiting for the owner's answer to Q6 (see their sections).
 
 ## Requirements
 
@@ -100,6 +100,8 @@ Done (11-13): on Glass the composer's send and stop move as on iOS, in every cha
 
 Risks: offset arithmetic in a reversed list; a header that is off screen; steps streaming in while open; the saved reading position during a hold.
 
+Not done (11-13): left out of this round, decided on 2026-11-13. The design above stands for when it is picked up; until then the rows of an opened step or tool call still push its header up.
+
 ### T5. Selecting in place
 
 **Today.** iOS (`apple/Persona/Views/Chat/LiftSelection.swift`) redraws the lifted message in a text view, because its Markdown renderer can't select. Android's Select opens `FullTextReader.kt`, full screen, with the raw Markdown.
@@ -107,6 +109,8 @@ Risks: offset arithmetic in a reversed list; a header that is off screen; steps 
 **Change.** The Markdown renderer Android uses draws with Compose `Text`, so one message can be wrapped in a `SelectionContainer`. Select makes only that message selectable and turns off its long press, its swipe to quote and its inline-code copy until the selection ends. The Lark views already select in place with their own menu items (`android/feature/inbox/src/main/kotlin/persona/feature/inbox/LarkTextPicks.kt`), and a Quote item can reuse that.
 
 Risks: no selection across messages; a selection may be lost when the message scrolls away; Compose may have no public way to start with the word under the finger selected (to check); inline math images and scrolling code blocks.
+
+Done (11-13): in every style (what Select does is behaviour), choosing Select in a message's menu selects the words of that message where it is. `SelectableWords` (`MessageSelection.kt`) keeps the message's words in one `movableContentOf`, so an opened quote or an unfolded code block keeps its state, and moves them into a `SelectionContainer` with `selectAll()` once they have registered: the system's handles, its long press that picks a word and its floating menu (Copy, Select all, the platform's own items) work on them, and a Quote item is added to that menu (`appendTextContextMenuComponents`, as `LarkTextPicks.kt` does). Quote takes only the picked words, as iOS's `ContextRef.quote(part: "selection")` does: a composer card "Quoting selected text · agent" (`ChatLinkContext.part`, `part="selection"` in the XML, saver V3 that still restores V2 and older), kept once per message and words. While it selects, the message has no long press, swipe to quote or inline-code copy (`messageMenu` returns at once; `LocalSelectionAbove` makes `copyingCode` draw plain text); its code blocks are selected with it (a nested `SelectionContainer` would drop them from Select all: `SelectableOnItsOwn`), while their header and copy buttons, the streaming cursor, persona views and cards are `DisableSelection`. It ends as iOS's does when nothing is selected any more (a tap on the words, Copy, Quote) and, as Android's own text selection does, on a tap that starts outside the message (`endSelectionOnTapOutside` on the chat list: it only watches, so the tap goes on to what is under it, and a drag scrolls the list with the words still selected), on Back, and when the message has left the screen or the composition; choosing Select in another message moves the selection there. Copy goes through `pickedWords`: no thin spaces from the inline-code padding, no placeholders for formulas, a list item's marker back on its line. `FullTextReader` stays where else it opens (a long message's "View full text" and reader button, a code block's reader, thoughts, plans, a tool's raw input and output); Select no longer opens it. Tests `MessageSelectionTest` (19: selection on for that message only, long press, swipe and inline-code copy off and back, Copy, Quote and its part, tap outside, a drag, Back, scrolled away, unfolded state kept, your own bubble, a message with nothing to select, no reader, the part surviving a configuration change, the card's heading); shots `MessageSelectionShotsTest` (at rest and selecting, three styles, light and dark: at rest Brief and Board are pixel-identical to `main`, and selecting moves nothing but the highlight). Checked on an emulator: handles and floating menu, Quote, Copy to the clipboard, Back, a tap outside, a long press that picks a word, scrolling with the words selected. Left: starting with the word under the finger (Compose has no public way: `SelectionState` offers `selectAll`, `select(range)` and `extendSelectionByWord`, and the Markdown renderer exposes no text layouts to turn a point into an offset), so Select selects the whole message and a long press on a word picks that word, as iOS's second long press does; iOS's lift of the message over the dimmed chat, which an action sheet over the chat does not need; formulas are pictures and are left out of what is copied (the Markdown model cannot say their source from here); a table copies one cell per line; Robolectric draws neither the handles nor the system's menu, so the shots show the highlight only (the emulator shows both); TalkBack on a device is not checked.
 
 ### T6. Pending requests above the composer (if Q4 is yes)
 
@@ -130,12 +134,16 @@ Done (11-12), after Q4 was decided as follow iOS: in every style (the stack is b
 
 Risks: overriding density inside the theme instead would compound and could lose Android 14's non-linear font scaling; fixed-height layouts may clip; the switcher already scales with font size and must not scale twice; the floating capsule's window needs the override too.
 
+Not started (11-13): Q6 is still open with the owner (#4208), and T7 was left out of this round on 2026-11-13.
+
 ### Order of work
 
 1. T2 and T1: small, independent PRs.
 2. T3, after the motion tokens of phase 1.
 3. T4, then T5.
 4. T6 (Q4 was decided on 2026-11-12: follow iOS), then T7 after the owner answers Q6.
+
+On 2026-11-13 T2, T1, T3 and T5 were built in that order (#6606, #6633, #6665, #6669); T4 and T7 were not.
 
 ### Verification
 
