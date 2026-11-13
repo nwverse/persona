@@ -82,7 +82,7 @@ enum HomeWidgetConfiguration {
     }
 }
 
-/// The first widgets (#5664): Agents, Inbox and Record. Each kind is a type of its own: a `Widget` has no arguments.
+/// The widgets (#5664). Each kind is a type of its own: a `Widget` has no arguments.
 struct AgentsHomeWidget: Widget {
     var body: some WidgetConfiguration { HomeWidgetConfiguration.make(.agents) }
 }
@@ -93,4 +93,24 @@ struct InboxHomeWidget: Widget {
 
 struct RecordHomeWidget: Widget {
     var body: some WidgetConfiguration { HomeWidgetConfiguration.make(.record) }
+}
+
+struct TodayHomeWidget: Widget {
+    var body: some WidgetConfiguration { HomeWidgetConfiguration.make(.today) }
+}
+
+struct TodosHomeWidget: Widget {
+    var body: some WidgetConfiguration { HomeWidgetConfiguration.make(.todos) }
+}
+
+struct UsageHomeWidget: Widget {
+    var body: some WidgetConfiguration { HomeWidgetConfiguration.make(.usage) }
+}
+
+struct ComputersHomeWidget: Widget {
+    var body: some WidgetConfiguration { HomeWidgetConfiguration.make(.computers) }
+}
+
+struct HealthHomeWidget: Widget {
+    var body: some WidgetConfiguration { HomeWidgetConfiguration.make(.health) }
 }

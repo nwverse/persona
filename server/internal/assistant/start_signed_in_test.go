@@ -84,20 +84,28 @@ func signedOutSession(id string) proto.Session {
 		TurnError: "Not logged in · Please run /login", TurnErrorKind: proto.TurnErrorUser}
 }
 
+// The same conversation with no process, as the node lists it from its transcript (a task's conversation between runs,
+// any conversation after the node restarted): that reply is only its last words, with no turn error (scanOffline).
+func offlineSignedOutSession(id string) proto.Session {
+	return proto.Session{SessionID: id, MachineID: "server", Assistant: true, Status: proto.StatusOffline,
+		LastText: "Not logged in · Please run /login"}
+}
+
 // A background supervisor from before this manager that the node lists signed out, in Claude Code's words and with no
-// code, is gone as one with the code is (#6186).
+// code, is gone as one with the code is, also when it has no process and those words are only its last (#6186).
 func TestBackgroundSupervisorSignedOutInItsWordsIsReplaced(t *testing.T) {
-	s, f, _ := newBackgroundService(t)
-	ctx := context.Background()
-	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
-		signedOutSession("bg1"))
-	s.born = time.Now().Add(-time.Hour)
-	before := time.Now().Add(-2 * time.Hour).UTC()
-	setSettings(t, s, func(v *Settings) {
-		v.BackgroundSupervisor, v.BackgroundSupervisorMachineID, v.BackgroundSupervisorAt = "bg1", "server", &before
-	})
-	if s.backgroundThere(ctx, s.settings(ctx), "bg1") {
-		t.Fatal("a background supervisor the node lists signed out is still there")
+	for _, listed := range []proto.Session{signedOutSession("bg1"), offlineSignedOutSession("bg1")} {
+		s, f, _ := newBackgroundService(t)
+		ctx := context.Background()
+		f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}, listed)
+		s.born = time.Now().Add(-time.Hour)
+		before := time.Now().Add(-2 * time.Hour).UTC()
+		setSettings(t, s, func(v *Settings) {
+			v.BackgroundSupervisor, v.BackgroundSupervisorMachineID, v.BackgroundSupervisorAt = "bg1", "server", &before
+		})
+		if s.backgroundThere(ctx, s.settings(ctx), "bg1") {
+			t.Fatalf("a background supervisor the node lists signed out (%s) is still there", listed.Status)
+		}
 	}
 }
 
@@ -129,30 +137,37 @@ func TestATaskConversationSignedOutElsewhereIsReplaced(t *testing.T) {
 		return slices.Clone(*asked)
 	}
 
-	t.Run("in another profile", func(t *testing.T) {
-		s, f, first, asked := setup(t)
-		f.setSessions("server", signedOutSession(first.SessionID))
-		f.mu.Lock()
-		f.elsewhere = map[string]bool{first.SessionID: true}
-		f.mu.Unlock()
-		next, err := runNow(t, s, "p")
-		if err != nil {
-			t.Fatal(err)
-		}
-		sends := sendsOf(f, asked)
-		if len(sends) != 2 || sends[0]["session_id"] != first.SessionID || sends[0]["config_dir"] != meetingProfile {
-			t.Fatalf("the run asks to resume in %q first: %v", meetingProfile, sends)
-		}
-		if id, _ := sends[1]["session_id"].(string); id != "" || sends[1]["config_dir"] != meetingProfile {
-			t.Fatalf("refused, it starts a new conversation signed in: %v", sends[1])
-		}
-		if next.SessionID == "" || next.SessionID == first.SessionID {
-			t.Fatalf("the run went to %q", next.SessionID)
-		}
-		if task, _ := taskByID(s, "p"); task.RunSessionID != next.SessionID {
-			t.Fatalf("the task keeps the new conversation: %+v", task)
-		}
-	})
+	// Between runs the conversation usually has no process: the node lists it from its transcript, with the reply only as
+	// its last words.
+	for _, listed := range []struct {
+		name    string
+		session func(id string) proto.Session
+	}{{"in another profile", signedOutSession}, {"in another profile with no process", offlineSignedOutSession}} {
+		t.Run(listed.name, func(t *testing.T) {
+			s, f, first, asked := setup(t)
+			f.setSessions("server", listed.session(first.SessionID))
+			f.mu.Lock()
+			f.elsewhere = map[string]bool{first.SessionID: true}
+			f.mu.Unlock()
+			next, err := runNow(t, s, "p")
+			if err != nil {
+				t.Fatal(err)
+			}
+			sends := sendsOf(f, asked)
+			if len(sends) != 2 || sends[0]["session_id"] != first.SessionID || sends[0]["config_dir"] != meetingProfile {
+				t.Fatalf("the run asks to resume in %q first: %v", meetingProfile, sends)
+			}
+			if id, _ := sends[1]["session_id"].(string); id != "" || sends[1]["config_dir"] != meetingProfile {
+				t.Fatalf("refused, it starts a new conversation signed in: %v", sends[1])
+			}
+			if next.SessionID == "" || next.SessionID == first.SessionID {
+				t.Fatalf("the run went to %q", next.SessionID)
+			}
+			if task, _ := taskByID(s, "p"); task.RunSessionID != next.SessionID {
+				t.Fatalf("the task keeps the new conversation: %+v", task)
+			}
+		})
+	}
 
 	t.Run("in that profile", func(t *testing.T) {
 		s, f, first, asked := setup(t)

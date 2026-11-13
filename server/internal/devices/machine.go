@@ -546,6 +546,10 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_launcher_switch_now")}
 		}
 	}
+	if method == "session.switch" && !nodeHas(info, nodeproto.LauncherSwitchIdle) {
+		// An older node answers "unknown method", or would take it as another session call (the batch switch, #6008).
+		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_launcher_switch_now")}
+	}
 	if method == proto.MethodModelHTTP && !nodeHas(info, nodeproto.ModelHTTP) {
 		// An older node would answer "unknown method": an API connection that sends through it says to update it.
 		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_model_http")}

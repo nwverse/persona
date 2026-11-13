@@ -245,6 +245,7 @@ func recipeFormat() map[string]any {
 			"chat":      "the conversation's stable id: the row can then be muted by chat",
 			"chat_name": "the conversation's name, which the chat mute shows",
 			"seen":      "whether it was already seen in the source (true, a non-zero number, or true / yes / read / seen): the Inbox row is then read",
+			"reply_to":  "where a reply goes and who sees it, in a line for people: with it, an item with an id can be replied to through the connector",
 		},
 		"paths":      "relative to one item: $, .key (letters, digits, _ and -) and [index]; no wildcards, filters or expressions",
 		"items_path": "where the list of items is in the result ($ by default); leave it empty to have the dry run find the result's one top-level list",

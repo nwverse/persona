@@ -418,14 +418,61 @@ test("a new Codex session: bypassPermissions starts it with Paseo's full-access 
   assert.equal((await start('default')).modeId, undefined)
 })
 
+test('a resolved preset whose launcher Paseo lacks uses the replacement provider defaults', async (t) => {
+  const { fake, node } = await setup(t, {
+    providers: { ...PROVIDERS, codex: { enabled: false } },
+    entries: [...ENTRIES, { provider: 'codex', enabled: false, status: 'unavailable', models: [] }],
+  })
+  // The manager has already expanded task_plan/agent_start's tier before the node sends session.start. A managed
+  // launcher can pass its availability check even when the engine does not have a provider of the same name.
+  for (const params of [
+    { launcher: 'codex', shell_launcher: true },
+    { launcher: 'codex' },
+    { launcher: 'cc_gateway', shell_launcher: true },
+  ]) {
+    const res = await call(node, 'session.start', {
+      cwd: '/tmp', prompt: 'Check the project', model: 'preset-only-model', effort: 'high',
+      permission_mode: 'acceptEdits', workspace_id: 'wks_1', ...params,
+    })
+    const req = fake.requestsOf('agent.create.request').at(-1)
+    assert.deepEqual(req.config, { provider: 'my-claude', cwd: '/tmp', modeId: 'acceptEdits' })
+    assert.equal(req.initialPrompt, 'Check the project')
+    assert.equal(req.workspaceId, 'wks_1')
+    assert.equal(res.session.launcher, 'my-claude')
+    assert.notEqual(res.session.model, 'preset-only-model')
+  }
+})
+
+test('an unchanged or unspecified launcher keeps the requested model and effort', async (t) => {
+  const { fake, node } = await setup(t)
+  for (const params of [{ launcher: 'my-claude' }, { launcher: 'my-claude', shell_launcher: true }, {}, { launcher: '' }]) {
+    await call(node, 'session.start', { cwd: '/tmp', prompt: 'x', model: 'fable[1m]', effort: 'high', ...params })
+    assert.deepEqual(fake.requestsOf('agent.create.request').at(-1).config, {
+      provider: 'my-claude', cwd: '/tmp', model: 'fable[1m]', thinkingOptionId: 'high',
+    })
+  }
+})
+
+test('launcher fallback to a non-Claude provider also drops the replaced model and effort', async (t) => {
+  const { fake, node } = await setup(t, {
+    entries: ENTRIES.map((e) => e.provider === 'my-claude' ? { ...e, status: 'error' } : e),
+  })
+  await call(node, 'session.start', {
+    cwd: '/tmp', prompt: 'x', launcher: 'my-claude', model: 'fable[1m]', effort: 'high', permission_mode: 'bypassPermissions',
+  })
+  assert.deepEqual(fake.requestsOf('agent.create.request').at(-1).config, {
+    provider: 'my-codex', cwd: '/tmp', modeId: 'full-access',
+  })
+})
+
 test('a read-only (plan) start: Paseo\'s plan mode on a Claude provider, never a writable fallback (#3238)', async (t) => {
   const { fake, node } = await setup(t)
   const plan = (params) => call(node, 'session.start', { cwd: '/tmp', prompt: 'x', permission_mode: 'plan', ...params })
   await plan({ launcher: 'my-claude' })
   assert.equal(fake.requestsOf('agent.create.request').at(-1).config.modeId, 'plan')
   // A launcher Paseo does not have, or none: a Claude provider in plan mode, not just the default one.
-  await plan({ launcher: 'cc_gateway', shell_launcher: true })
-  assert.deepEqual([fake.requestsOf('agent.create.request').at(-1).config.provider, fake.requestsOf('agent.create.request').at(-1).config.modeId], ['my-claude', 'plan'])
+  await plan({ launcher: 'cc_gateway', shell_launcher: true, model: 'preset-only-model', effort: 'high' })
+  assert.deepEqual(fake.requestsOf('agent.create.request').at(-1).config, { provider: 'my-claude', cwd: '/tmp', modeId: 'plan' })
   const before = fake.requestsOf('agent.create.request').length
   for (const launcher of ['my-codex', 'grok']) {
     const err = await plan({ launcher }).catch((e) => e)
