@@ -452,7 +452,7 @@ An item stays one matter for as long as it goes on: a handled event takes the me
 | Field | Meaning | Listed |
 | --- | --- | --- |
 | `where` | Where the matter happens, for people: a group's name, the other person of a direct chat, a repository. Empty for mail | Yes |
-| `title_by` | Who wrote `title` and `summary`: `model` (grouping), `rules` (the connector's fallback), `assistant` (the processing conversation), `user`. Once `assistant` or `user` wrote them, grouping leaves both alone | No |
+| `title_by` | Who wrote `title` and `summary`: `model` (grouping), `rules` (the connector's fallback), `assistant` (the processing conversation's `inbox_suggest` `title` / `summary`), `user`. Once `assistant` or `user` wrote them, grouping leaves both alone | No |
 | `follow` | `{who, next, check_at, checks, due}`: who or what it waits on (the model's words), the next step, when to look at it again (RFC 3339; 24 hours when not given), how many times in a row a look found nothing new, and whether that time came with nobody to look (the AI twin off). Apps read only `who`, `next` and `check_at` | Yes |
 | `now` | The item's state key (table below), worked out from the item alone: no clock, no settings, so the list memo holds (`inbox_list_memo.go`) | Yes, never stored |
 
@@ -528,7 +528,7 @@ bound to that item (`handling` on the item; chat source `inbox`, `origin_ref` = 
 
 **Suggestion tool `inbox_suggest`** (`assistant/inbox_suggest.go`, description `prompts/mcp/inbox/inbox_suggest.md`; accepts the handling chat started for an item, and with `item` a
 conversation the item was handed to ("Item actions", Hand to AI), rejecting other chats):
-`{item?, kind, text, note?, handback?, outcome?, recap?, machine?, cwd?, related?, changes?}`.
+`{item?, kind, text, note?, handback?, outcome?, recap?, title?, summary?, machine?, cwd?, related?, changes?}`.
 
 | kind | Meaning | After confirmation |
 | --- | --- | --- |
@@ -537,7 +537,8 @@ conversation the item was handed to ("Item actions", Hand to AI), rejecting othe
 | `conclusion` | Conclusion: `outcome: fyi` (move to FYI with the conclusion; OK marks done) or `done` (review found no action needed; immediately done, `done_by=manager`) | OK marks done (`done_by=user`) |
 
 - `handback: true`: a suggestion requiring your judgment ("Ask a colleague before replying to the client"). Confirmation executes nothing; hand it back to the handling chat as instructions to act, with the normal chain recording.
-- `recap` alone, without `kind`, updates only the summary (for example after a send), up to 600 characters. `related` contains IDs of related Inbox items from other chats / sources, recorded on both sides.
+- `recap` without `kind` updates the recap (for example after a send), up to 600 characters. `related` contains IDs of related Inbox items from other chats / sources, recorded on both sides.
+- `title` names the matter (one line, clipped to 40 characters) and `summary` says where it stands and who is waited on for what (one line, clipped to 80); either may accompany a suggestion or a recap-only call. A non-blank accepted value sets `title_by=assistant`; blank values leave the item unchanged. Only chat events (a grouped event or a built-in chat) accept `title`, and only when they have no mail, document or company-feed block; a grouped event may still carry its connector block. Connector threads (including PRs / issues and iMessage), mail, documents and company-feed posts keep their own title: the tool ignores `title`, says why, and still writes `summary`.
 - Each submission increments `suggestion.version` and invalidates the old suggestion; producing a suggestion sets `handling.state = done`. Chain records "Manager suggests a reply / an Agent / advice awaiting your decision" (`handling`, linked to the handling chat); conclusions record `concluded`.
 - A mail reply suggestion also keeps its exact reply target internally (not in the listed suggestion). Opening mail marks it seen, and a later collection can consequently reduce a thread to an older unread UID; confirmation checks the bound target under the collection lock and returns `409 mail_reply_target_changed` instead of answering that different mail (#5471). A pre-upgrade mail suggestion has no bound target and is refused the same way rather than guessed; non-mail suggestions keep their legacy confirmation path. An FYI conclusion likewise remains open when its mail is read elsewhere: the item becomes `read`, but only **Got it** files it.
 - Old `inbox_draft` (reply only) remains supported, equivalent to `kind: reply`, for chats started before the tool list changed.
