@@ -39,6 +39,12 @@ data class AssistantSnapshot(
      * it is read): the drawer keeps its flat rows and no list groups by it.
      */
     val directionTree: DirectionTree? = null,
+    /**
+     * The built-in background supervisor's conversation id (`background_supervisor` of `GET /api/v1/assistant`, #4927,
+     * docs/assistant/unified-entry.md "Background supervisor"): listed, never a direction, never archived or ended from
+     * the app. Null until the hub has made it and from an older hub.
+     */
+    val backgroundSupervisor: String? = null,
 ) {
     /**
      * Each current leader's open tasks (the tree's `counts`, #4352), by conversation id: its row says 「在做 N · 等你 N」.

@@ -163,6 +163,12 @@ class HttpInboxAssistantTransport private constructor(
             after?.let { addQueryParameter("after", it) }
         }.build(),
     )
+    override suspend fun topics(feedId: String, before: String?) = json(
+        url("api", "v1", "lark", "conversations", feedId, "messages").newBuilder().apply {
+            addQueryParameter("topic", "1")
+            before?.let { addQueryParameter("before", it) }
+        }.build(),
+    )
     override suspend fun larkMessage(messageId: String): JsonObject {
         require(messageId.isNotBlank())
         return json(url("api", "v1", "lark", "messages", messageId))
@@ -189,6 +195,12 @@ class HttpInboxAssistantTransport private constructor(
     override suspend fun createConversationOf(manager: String?, main: Boolean, launcher: String?) =
         json(url("api", "v1", "assistant", "conversations").pinned(manager), buildJsonObject {
             put("prompt", ""); put("main", main); launcher?.let { put("launcher", it) }
+        })
+    override suspend fun createConversationOf(manager: String?, main: Boolean, pick: persona.core.contracts.ModelPick) =
+        json(url("api", "v1", "assistant", "conversations").pinned(manager), buildJsonObject {
+            put("prompt", ""); put("main", main); put("launcher", pick.launcher)
+            pick.model?.takeIf(String::isNotBlank)?.let { put("model", it) }
+            pick.effort?.takeIf(String::isNotBlank)?.let { put("effort", it) }
         })
     private fun HttpUrl.pinned(manager: String?) = newBuilder().addQueryParameter(ManagerQuery, manager.orEmpty()).build()
     override suspend fun pins() = json(url("api", "v1", "pins"))

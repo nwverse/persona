@@ -64,6 +64,11 @@ interface InboxAssistantTransport {
     suspend fun replyMail(itemId: String, text: String, clientId: String, target: MailReplyTarget): JsonObject =
         throw UnsupportedOperationException("Checked mail replies unavailable")
     suspend fun messages(feedId: String, around: Long? = null, before: String? = null, after: String? = null): JsonObject
+    /**
+     * A Feishu topic group's topics (`…/messages?topic=1`, #576 G134), newest page or [before] a cursor (backward paging
+     * only); a transport without the parameter reads the chat as it is.
+     */
+    suspend fun topics(feedId: String, before: String? = null): JsonObject = messages(feedId, before = before)
     /** One Feishu message (`GET /api/v1/lark/messages/{id}`, `{account?, message}`): the outbox confirms delivery with it. */
     suspend fun larkMessage(messageId: String): JsonObject = throw UnsupportedOperationException("Message lookup unavailable")
     suspend fun assistant(): JsonObject
@@ -102,6 +107,12 @@ interface InboxAssistantTransport {
     /** [createConversation] for one manager (null: the default), as [assistantOf]. */
     suspend fun createConversationOf(manager: String?, main: Boolean, launcher: String? = null): JsonObject =
         if (launcher == null) createConversation(main) else createConversation(main, launcher)
+    /**
+     * [createConversationOf] with the model and effort picked on the new-chat page (`POST /api/v1/assistant/conversations`
+     * `{launcher, model?, effort?}`), which a hub with `assistant_model_pick` keeps as the chat's `model_pick` (#5033).
+     */
+    suspend fun createConversationOf(manager: String?, main: Boolean, pick: persona.core.contracts.ModelPick): JsonObject =
+        createConversationOf(manager, main, pick.launcher)
     suspend fun pins(): JsonObject
     suspend fun mutes(): JsonObject
     suspend fun media(ref: String): ByteArray
@@ -184,6 +195,8 @@ interface AssistantConversations : AssistantRepository {
     suspend fun startConversation(): SessionKey
     /** A new conversation that runs on [launcher], for it alone (iOS StarterComposer's model menu): the default stays. */
     suspend fun startConversation(launcher: String): SessionKey = throw UnsupportedOperationException("Picking a launcher unavailable")
+    /** A new conversation on the setup picked for it on the new-chat page's model panel (#5055): its launcher, model and effort. */
+    suspend fun startConversation(pick: persona.core.contracts.ModelPick): SessionKey = startConversation(pick.launcher)
     /**
      * The chats of the assistant's [space] ([AssistantSpace]), read from the hub each time: they are never in [assistant]'s
      * list. Each carries [space] even from a hub that leaves it out of this list.

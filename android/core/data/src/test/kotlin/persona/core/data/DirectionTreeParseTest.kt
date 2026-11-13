@@ -38,6 +38,19 @@ class DirectionTreeParseTest {
         assertEquals("main", tree.secretary?.id)
     }
 
+    @Test fun aPlannedPieceReadsAsNotStartedAndItsCountIsKept() {
+        // #5860: a leader's piece no Agent has ever worked on is "planned"; an older hub omits the count, which reads 0.
+        val tree = directionTreeOf(json("""{"directions": [
+            {"id": "lead", "name": "Product", "counts": {"working": 1, "needs_you": 0, "stuck": 0, "review": 0, "planned": 2},
+             "tasks": [{"id": "t1", "title": "Ship", "state": "working"},
+                       {"id": "t2", "title": "Piece", "state": "planned"}]}
+        ]}"""))!!
+        val lead = tree.directions.single()
+        assertEquals(2, lead.counts.planned)
+        assertEquals(DirectionTaskState.Planned, lead.tasks[1].state)
+        assertEquals(persona.core.contracts.CoreText.Key.DirectionPlanned, lead.tasks[1].state.label)
+    }
+
     @Test fun anOlderHubsEmptyAnswerIsNoTree() {
         assertNull(directionTreeOf(json("{}")))
         assertEquals(0, directionTreeOf(json("""{"directions": []}"""))!!.directions.size)

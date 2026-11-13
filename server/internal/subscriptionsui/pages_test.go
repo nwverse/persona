@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/subscriptions"
@@ -30,25 +32,21 @@ type fake struct {
 	updateErr error
 	ran       []string
 	deleted   []string
-	generate  bool
+	pushed    []subscriptions.Actor // devices whose push source was added (#3848)
 	model     subscriptions.ModelInfo
-	// gen answers Generate; release (when set) holds it until closed.
-	gen       func(subscriptions.GenerateRequest) (subscriptions.Generated, error)
-	release   chan struct{}
-	genAsks   []subscriptions.GenerateRequest
 	deleteErr error
+	// previewed are the subscriptions whose preview was handed to PreviewThings.
+	previewed []subscriptions.Subscription
 }
 
-func (f *fake) Features() subscriptions.Features {
-	return subscriptions.Features{Deliver: true, Generate: f.generate}
-}
-
-func (f *fake) Generate(_ context.Context, in subscriptions.GenerateRequest, _ subscriptions.Actor) (subscriptions.Generated, error) {
-	f.genAsks = append(f.genAsks, in)
-	if f.release != nil {
-		<-f.release
+// PreviewThings makes one thing an item, its title kept, as the service would hand the Inbox.
+func (f *fake) PreviewThings(sub subscriptions.Subscription, items []subscriptions.Preview) subscriptions.TriagePreview {
+	f.previewed = append(f.previewed, sub)
+	tp := subscriptions.TriagePreview{Source: sub.ID, Name: sub.Label}
+	for _, it := range items {
+		tp.Things = append(tp.Things, connector.InboxThing{Title: it.Title})
 	}
-	return f.gen(in)
+	return tp
 }
 
 func (f *fake) ModelOf(_ context.Context, purpose string) subscriptions.ModelInfo {
@@ -58,11 +56,17 @@ func (f *fake) ModelOf(_ context.Context, purpose string) subscriptions.ModelInf
 	return f.model
 }
 
-func (f *fake) RecipeModel(context.Context) subscriptions.ModelInfo { return f.model }
-
 func (f *fake) List(_ context.Context, fl subscriptions.Filter) ([]subscriptions.Subscription, subscriptions.Features, error) {
 	var out []subscriptions.Subscription
-	for _, id := range []string{"sub_outlook", "sub_slack", "sub_github", "sub_broker", "sub_notion", "sub_new"} {
+	order := []string{"sub_outlook", "sub_slack", "sub_github", "sub_broker", "sub_notion", "sub_new"}
+	var more []string // made by a test (a push source): after these, by id
+	for id := range f.subs {
+		if !slices.Contains(order, id) {
+			more = append(more, id)
+		}
+	}
+	slices.Sort(more)
+	for _, id := range append(order, more...) {
 		s, ok := f.subs[id]
 		if !ok || fl.Extension != "" && s.Extension != fl.Extension || fl.Connector != "" && s.Connector != fl.Connector {
 			continue
@@ -108,6 +112,13 @@ func (f *fake) Create(_ context.Context, in subscriptions.CreateRequest, _ subsc
 		s.Recipe = f.cats[0].Sources[1].Recipes[0]
 	}
 	f.subs[s.ID] = s
+	for i := range f.cats { // its source's catalog lists it, as the service's does
+		for j := range f.cats[i].Sources {
+			if f.cats[i].Connector == in.Connector && f.cats[i].Sources[j].ID == in.Source {
+				f.cats[i].Sources[j].Subscriptions = append(f.cats[i].Sources[j].Subscriptions, s.ID)
+			}
+		}
+	}
 	return s, nil
 }
 
@@ -270,10 +281,17 @@ func TestList(t *testing.T) {
 	if got := keys(section(v, "on")); strings.Join(got, ",") != "s.sub_outlook,s.sub_broker" {
 		t.Errorf("on: %v", got)
 	}
-	if got := keys(section(v, "avail.apps")); strings.Join(got, ",") != "a.apps/calendar,a.apps/gmail" {
-		t.Errorf("available (no subscription, at least one subscribable tool): %v", got)
+	if item(v, "more") == nil || section(v, "avail.apps") != nil {
+		t.Errorf("Inbox Sources leads to the sources to subscribe to, not lists them: %v", keys(section(v, "more")))
 	}
-	if g := item(v, "a.apps/gmail"); g.Badge == nil || g.Badge.Tone != "caution" {
+	more := draw(t, f, env(i18n.En, true), state{P: pageMore})
+	if got := keys(section(v, "recommended")); strings.Join(got, ",") != "r.apps/calendar" {
+		t.Errorf("recommended (the extension's own recipe, no subscription): %v", got)
+	}
+	if got := keys(section(more, "avail.apps")); strings.Join(got, ",") != "a.apps/gmail" {
+		t.Errorf("available (no subscription, a subscribable tool, nothing recommended): %v", got)
+	}
+	if g := item(more, "a.apps/gmail"); g.Badge == nil || g.Badge.Tone != "caution" {
 		t.Errorf("a source Persona reads natively: %+v", g)
 	}
 	if s := item(v, "s.sub_github"); s.Badge == nil || s.Badge.Tone != "danger" || !strings.Contains(s.Subtitle, "10:52") {
@@ -290,6 +308,9 @@ func TestList(t *testing.T) {
 	v = draw(t, f, env(i18n.En, true), state{Ext: "apps"})
 	if item(v, "s.sub_github") != nil {
 		t.Error("an extension's list shows another connector's subscription")
+	}
+	if got := keys(section(v, "avail.apps")); strings.Join(got, ",") != "a.apps/gmail" || item(v, "r.apps/calendar") == nil {
+		t.Errorf("one extension's list keeps its sources to subscribe to on it: %v", got)
 	}
 }
 

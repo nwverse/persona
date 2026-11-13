@@ -69,6 +69,7 @@ type runtimeHello struct {
 		Interrupt bool `json:"interrupt"`
 		Rename    bool `json:"rename"`
 		Close     bool `json:"close"`
+		Rewind    bool `json:"rewind"`
 		// Assistant: its launcher may run the Persona assistant (assistant_runtime.go; docs/integrations/runtimes.md "Assistant").
 		Assistant bool `json:"assistant"`
 		// Execution reports the actual per-session execution environment via session.execution.
@@ -198,7 +199,7 @@ func runtimeWork(s *proto.Session) {
 		}
 		seen[a.ID] = true
 		a.SessionID = s.SessionID + "@" + a.ID
-		a.Description, a.LastText, a.Type = clip(a.Description), clip(a.LastText), clip(a.Type)
+		a.Description, a.LastText, a.Type, a.Model = clip(a.Description), clip(a.LastText), clip(a.Type), clip(a.Model)
 		subs = append(subs, a)
 	}
 	s.Subagents = subs

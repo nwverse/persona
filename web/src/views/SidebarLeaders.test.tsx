@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 // The leader conversations in the sidebar (#3623, #4331): Persona chats are the main one (its row above) and the hub's
-// `assistant.leaders` only, "常驻", in the hub's order under each one's name with what it has Working and Waiting on you
-// (the direction tree, GET /api/v1/assistant/directions/tree, #4352); every other chat is under 全部对话. The hub's
-// `directions` message makes an open sidebar read the tree again (a leader made or ended anywhere).
+// `assistant.leaders`, "常驻", in the hub's order under each one's name with what it has Working and Waiting on you
+// (the direction tree, GET /api/v1/assistant/directions/tree, #4352), then "最近", the newest of the user's other chats
+// (#4873; 15 by default, a setting, with Show more, #5146); every chat is under 全部对话. The hub's `directions` message makes an open sidebar read the tree
+// again (a leader made or ended anywhere).
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +13,7 @@ vi.hoisted(() => {
 });
 import { t } from "../i18n";
 import { resetDirectionNames } from "../lib/direction-names";
+import { setRecentCount } from "../lib/sidebar-recent";
 import { connect, refresh, reset } from "../lib/store";
 import type { Session } from "../lib/types";
 import { Sidebar } from "./Sidebar";
@@ -21,13 +23,14 @@ import { Sidebar } from "./Sidebar";
 const conversation = (session_id: string, title: string, updated_at: string): Session => ({
   machine_id: "hub", session_id, title, cwd: "/persona", status: "idle", state: "idle", assistant: true, origin: "user", updated_at,
 });
-const conversations = [
+const base = [
   conversation("main", "Persona", "2026-11-10T09:00:00Z"),
   conversation("newest", "Trip plan", "2026-11-10T08:00:00Z"),
   conversation("mine", "Release notes", "2026-11-01T00:00:00Z"),
   conversation("lead-b", "Payments", "2026-11-02T00:00:00Z"),
   conversation("lead-a", "Growth", "2026-11-03T00:00:00Z"),
 ];
+let conversations: Session[];
 let leaders: string[] | undefined;
 let named: unknown;
 let posts: string[] = [];
@@ -44,6 +47,7 @@ const row = (sid: string) => host.querySelector<HTMLAnchorElement>(`a[href="/per
 
 beforeEach(() => {
   localStorage.clear();
+  conversations = base;
   leaders = ["lead-a", "lead-b"];
   posts = [];
   named = { leaders: [
@@ -97,11 +101,12 @@ class FakeSocket {
 const push = (msg: unknown) => act(() => FakeSocket.last!.onmessage?.({ data: JSON.stringify(msg) }));
 
 describe("the leader conversations in the sidebar", () => {
-  it("are 常驻, in the hub's order, under their names with what they have open; the other chats are under 全部对话", async () => {
+  it("are 常驻, in the hub's order, under their names with what they have open; then 最近, then 全部对话", async () => {
     await renderSidebar();
-    expect(rowIds()).toEqual(["lead-a", "lead-b"]);
-    expect(headings()).toEqual([t("sidebar.directions")]);
+    expect(rowIds()).toEqual(["lead-a", "lead-b", "newest", "mine"]);
+    expect(headings()).toEqual([t("sidebar.directions"), t("sidebar.recent_chats")]);
     expect(t("sidebar.directions")).toBe("常驻");
+    expect(t("sidebar.recent_chats")).toBe("最近");
     expect(row("lead-a").textContent).toContain("Product");
     expect(row("lead-a").textContent).toContain("在做 2 · 等你 1");
     expect(row("lead-b").textContent).toContain("Infrastructure");
@@ -115,16 +120,85 @@ describe("the leader conversations in the sidebar", () => {
   it("show their titles on a hub without the leaders list", async () => {
     named = undefined;
     await renderSidebar();
-    expect(rowIds()).toEqual(["lead-a", "lead-b"]);
+    expect(rowIds()).toEqual(["lead-a", "lead-b", "newest", "mine"]);
     expect(row("lead-a").textContent).toContain("Growth");
   });
 
-  it("leave only 全部对话 when the hub has none", async () => {
+  it("leave 最近 and 全部对话 when the hub has none", async () => {
     leaders = undefined;
     await renderSidebar();
-    expect(rowIds()).toEqual([]);
-    expect(headings()).toEqual([]);
+    expect(rowIds()).toEqual(["newest", "lead-a", "lead-b", "mine"]);
+    expect(headings()).toEqual([t("sidebar.recent_chats")]);
     expect(host.querySelector('a[href="/history"]')).not.toBeNull();
+  });
+
+  it("leave 最近 out when every other chat is 常驻", async () => {
+    conversations = base.filter((c) => c.session_id === "main" || c.session_id.startsWith("lead-"));
+    await renderSidebar();
+    expect(rowIds()).toEqual(["lead-a", "lead-b"]);
+    expect(headings()).toEqual([t("sidebar.directions")]);
+  });
+
+  describe("最近 (#5146)", () => {
+    const pad = (d: number) => String(d).padStart(2, "0");
+    // 20 older chats of the user's own, c20 the newest of them
+    const older = Array.from({ length: 20 }, (_, i) => conversation(`c${pad(i + 1)}`, `Chat ${i + 1}`, `2026-10-${pad(i + 1)}T00:00:00Z`));
+    // every chat but the main one and the leaders, whoever opened it (#5195): the scheduled task's and the Inbox's lead
+    const own = ["task", "twin", "newest", "wx", "mine", ...older.map((c) => c.session_id).reverse()];
+    const button = (text: string) => [...host.querySelectorAll("button")].find((b) => b.textContent === text);
+    const showMore = () => Array.from({ length: 15 }, (_, i) => button(t("sidebar.show_more", { count: i + 1 }))).find(Boolean);
+    beforeEach(() => {
+      conversations = [
+        ...base,
+        { ...conversation("twin", "Inbox reply", "2026-11-10T08:30:00Z"), origin: "inbox" },
+        { ...conversation("task", "Morning brief", "2026-11-10T08:40:00Z"), origin: "task" },
+        { ...conversation("wx", "From a channel", "2026-11-09T00:00:00Z"), origin: "channel" },
+        ...older,
+      ];
+    });
+
+    it("lists the newest 15 other chats whoever opened them, the hub's own with their origin's mark (#5195)", async () => {
+      await renderSidebar();
+      expect(rowIds()).toEqual(["lead-a", "lead-b", ...own.slice(0, 15)]);
+      expect(host.querySelector('a[href="/history"]')!.textContent).toContain(String(conversations.length));
+      const mark = (id: string) => row(id).querySelector("[data-origin-mark]");
+      expect(mark("task")?.getAttribute("data-origin-mark")).toBe("task");
+      expect(mark("task")?.getAttribute("aria-label")).toBe(t("assistant-conversations.origin_task"));
+      expect(mark("twin")?.getAttribute("data-origin-mark")).toBe("inbox");
+      for (const id of ["newest", "wx", "mine"]) expect(mark(id), id).toBeNull();
+    });
+
+    it("shows 15 more for each Show more until none are left, Show less goes back, and a reload keeps what was open", async () => {
+      await renderSidebar();
+      expect(button(t("sidebar.show_less"))).toBeUndefined();
+      act(() => button(t("sidebar.show_more", { count: 10 }))!.click());
+      expect(rowIds()).toEqual(["lead-a", "lead-b", ...own]);
+      expect(button(t("sidebar.show_more", { count: 10 }))).toBeUndefined();
+      // a reload
+      act(() => root.unmount());
+      root = createRoot(host);
+      await renderSidebar();
+      expect(rowIds()).toEqual(["lead-a", "lead-b", ...own]);
+      act(() => button(t("sidebar.show_less"))!.click());
+      expect(rowIds()).toEqual(["lead-a", "lead-b", ...own.slice(0, 15)]);
+      expect(button(t("sidebar.show_less"))).toBeUndefined();
+    });
+
+    it("lists as many as the setting says, and Show more adds as many again", async () => {
+      setRecentCount(5);
+      await renderSidebar();
+      expect(rowIds()).toEqual(["lead-a", "lead-b", ...own.slice(0, 5)]);
+      act(() => button(t("sidebar.show_more", { count: 5 }))!.click());
+      expect(rowIds()).toEqual(["lead-a", "lead-b", ...own.slice(0, 10)]);
+    });
+
+    it("has no Show more when there are 15 or fewer", async () => {
+      conversations = [...base, ...older.slice(0, 13)];
+      await renderSidebar();
+      expect(rowIds()).toHaveLength(2 + 15);
+      expect(showMore()).toBeUndefined();
+      expect(button(t("sidebar.show_less"))).toBeUndefined();
+    });
   });
 
   it("have New chat as the compose icon on the section's title, not a row of its own", async () => {
@@ -156,7 +230,7 @@ describe("the leader conversations in the sidebar", () => {
     });
     push({ type: "hello", features: [] });
     await renderSidebar();
-    expect(rowIds()).toEqual(["lead-a", "lead-b"]);
+    expect(rowIds()).toEqual(["lead-a", "lead-b", "newest", "mine"]);
     // the secretary made "mine" a lead: the tree has it; no reload, no reconnect
     named = { leaders: [
       { id: "lead-a", name: "Product", counts: { working: 0, needs_you: 3 } },
@@ -165,7 +239,7 @@ describe("the leader conversations in the sidebar", () => {
     ] };
     push({ type: "directions" });
     await flush();
-    expect(rowIds()).toEqual(["lead-a", "lead-b", "mine"]);
+    expect(rowIds()).toEqual(["lead-a", "lead-b", "mine", "newest"]);
     expect(row("mine").textContent).toContain("Docs sync");
     expect(row("mine").textContent).toContain("在做 1");
     expect(row("lead-a").textContent).toContain("等你 3");
@@ -174,6 +248,7 @@ describe("the leader conversations in the sidebar", () => {
     named = { leaders: [{ id: "mine", name: "Docs sync", counts: { working: 1, needs_you: 0 } }] };
     push({ type: "directions" });
     await flush();
-    expect(rowIds()).toEqual(["mine"]);
+    // the ended ones leave 常驻 and are back among 最近 by their time
+    expect(rowIds()).toEqual(["mine", "newest", "lead-a", "lead-b"]);
   });
 });

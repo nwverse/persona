@@ -48,9 +48,10 @@ data class Direction(
 }
 
 /** How many of a direction's listed tasks are in each state (`counts`): the row shows [working] and [needsYou]. */
-data class DirectionCounts(val working: Int = 0, val needsYou: Int = 0, val stuck: Int = 0, val review: Int = 0)
+data class DirectionCounts(val working: Int = 0, val needsYou: Int = 0, val stuck: Int = 0, val review: Int = 0,
+    val planned: Int = 0)
 
-/** An open to-do of a direction, in the hub's order (needs you, to verify, stuck, working; newest activity first). */
+/** An open to-do of a direction, in the hub's order (needs you, to verify, stuck, working, not started; newest activity first). */
 data class DirectionTask(
     val id: String,
     val title: String = "",
@@ -66,7 +67,8 @@ enum class DirectionTaskState(val wire: String, val label: CoreText.Key) {
     NeedsYou("needs_you", CoreText.Key.DirectionNeedsYou),
     Review("review", CoreText.Key.DirectionReview),
     Stuck("stuck", CoreText.Key.DirectionStuck),
-    Working("working", CoreText.Key.DirectionDoing);
+    Working("working", CoreText.Key.DirectionDoing),
+    Planned("planned", CoreText.Key.DirectionPlanned);
 
     companion object {
         fun of(wire: String?): DirectionTaskState = entries.firstOrNull { it.wire == wire } ?: Working

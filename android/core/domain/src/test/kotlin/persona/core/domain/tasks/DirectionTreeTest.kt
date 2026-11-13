@@ -74,6 +74,7 @@ class DirectionTreeTest {
 
     @Test fun unknownStatesReadAsWorking() {
         assertEquals(DirectionTaskState.Stuck, DirectionTaskState.of("stuck"))
+        assertEquals(DirectionTaskState.Planned, DirectionTaskState.of("planned"))
         assertEquals(DirectionTaskState.Working, DirectionTaskState.of("later"))
         assertEquals(DirectionTaskState.Working, DirectionTaskState.of(null))
     }

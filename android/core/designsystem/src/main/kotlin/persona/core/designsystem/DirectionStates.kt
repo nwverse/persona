@@ -22,13 +22,16 @@ import persona.core.designsystem.icons.PersonaIcons
 
 // The direction tree's words and colours (#4352), one place for the drawer, the To-dos page and the Agents page: the
 // hub decides a task's state, these only say it. Needs you takes the needs-you colour, Working the working one, Stuck and
-// To verify the caution colour; the words always go with the colour (docs/design/DESIGN_SYSTEM.md §6.3).
+// To verify the caution colour, Not started the quiet idle grey (#5860); the words always go with the colour
+// (docs/design/DESIGN_SYSTEM.md §6.3).
 
 /** The colours of a task's [state]. */
 fun PersonaPalette.directionTone(state: DirectionTaskState): StatusColors = when (state) {
     DirectionTaskState.NeedsYou -> status(Status.NeedsYou)
     DirectionTaskState.Working -> status(Status.Working)
     DirectionTaskState.Stuck, DirectionTaskState.Review -> tone(Tone.Caution)
+    // Not started: the quiet idle grey, the web's text-ink-3 (#5860), so it never shouts beside the active states.
+    DirectionTaskState.Planned -> tone(Tone.Neutral)
 }
 
 /** A task's state word ("Needs you", "To verify", "Stuck", "Working") in the page's language. */

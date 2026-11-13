@@ -41,6 +41,14 @@ internal fun mergedSessions(stacks: GroupStacks): SessionsRepository = object : 
     override val sessions = stacks.merged(emptyList<Session>(), { s ->
         s.mapped(s.repositories.shownSessions) { list -> list.map(::session) }
     }) { it.flatten() }
+    override val adoptedSessions = stacks.merged(emptyList<Session>(), { s ->
+        s.mapped(s.repositories.sessions.adoptedSessions) { list -> list.map(::session) }
+    }) { it.flatten() }
+    override val startedThreads = stacks.merged(emptyMap<SessionKey, Session>(), { s ->
+        s.mapped(s.repositories.sessions.startedThreads) { entries ->
+            entries.map { (previous, thread) -> key(previous) to session(thread) }.toMap()
+        }
+    }) { maps -> maps.fold(emptyMap()) { acc, one -> acc + one } }
     override val listStatus = stacks.merged(SessionListStatus(), { stack ->
         combine(stack.repositories.sessions.listStatus, listNamespaces) { status, namespaces ->
             if (namespaces?.contains(stack.names.namespace) == false) SessionListStatus(loaded = true)
@@ -59,7 +67,7 @@ internal fun mergedSessions(stacks: GroupStacks): SessionsRepository = object : 
             total = statuses.sumOf { it.total },
             counts = SessionListCounts(total = statuses.sumOf { it.counts.total }, machine = totals({ it.machine }),
                 project = totals({ it.project }), group = totals({ it.group }), state = totals({ it.state }),
-                revision = statuses.joinToString("|") { it.counts.revision }),
+                revision = statuses.joinToString("|") { it.counts.revision }, backgroundWaiting = statuses.sumOf { it.counts.backgroundWaiting }),
             machineCounts = SessionListCounts(total = statuses.sumOf { it.machineCounts.total }, machine = totals({ it.machine }, true),
                 project = totals({ it.project }, true), group = totals({ it.group }, true), state = totals({ it.state }, true)),
         )
@@ -88,6 +96,9 @@ internal fun mergedSessions(stacks: GroupStacks): SessionsRepository = object : 
     override suspend fun adopt(session: Session) = stacks.use(GroupKeys.namespaceOf(session.machineId)) {
         it.repositories.sessions.adopt(it.names.rawSession(session))
     }
+    override suspend fun adoptThread(previous: SessionKey, session: Session) = stacks.use(GroupKeys.namespaceOf(previous.machineId)) {
+        it.repositories.sessions.adoptThread(it.names.raw(previous), it.names.rawSession(session))
+    }
     override suspend fun applyMachine(machine: Machine) = stacks.use(GroupKeys.namespaceOf(machine.id)) {
         it.repositories.sessions.applyMachine(if (it.names.plain) machine else machine.copy(id = GroupKeys.raw(machine.id)))
     }
@@ -112,6 +123,17 @@ internal fun mergedInteractions(stacks: GroupStacks): InteractionCenter = object
         stacks.use(GroupKeys.namespaceOf(id)) { it.repositories.interactions.resolveOutcome(GroupKeys.raw(id), resolution) }
     override suspend fun discardLocal(id: String) =
         stacks.use(GroupKeys.namespaceOf(id)) { it.repositories.interactions.discardLocal(GroupKeys.raw(id)) }
+    override val delegated = stacks.merged(emptyList<DelegatedAnswer>(), { s ->
+        s.mapped(s.repositories.interactions.delegated) { list -> list.map { it.copy(interaction = interaction(it.interaction)) } }
+    }) { lists -> lists.flatten().sortedBy { it.at } }
+    override val reanswered = stacks.merged(emptyMap<String, Map<String, String>>(), { s ->
+        s.mapped(s.repositories.interactions.reanswered) { changes -> changes.mapKeys { interactionId(it.key) } }
+    }) { maps -> maps.fold(emptyMap()) { all, one -> all + one } }
+    override fun dropDelegated(id: String) {
+        stacks.stacks.value.firstOrNull { it.namespace == GroupKeys.namespaceOf(id) }?.repositories?.interactions?.dropDelegated(GroupKeys.raw(id))
+    }
+    override suspend fun reanswer(id: String, answers: Map<String, String>, manager: String?) =
+        stacks.use(GroupKeys.namespaceOf(id)) { it.repositories.interactions.reanswer(GroupKeys.raw(id), answers, manager) }
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -197,6 +219,7 @@ internal fun mergedMachineManagement(
     override suspend fun setBrowser(machineId: String, enabled: Boolean) = routes.on(machineId) { it.setBrowser(machineId, enabled) }
     override suspend fun browserJob(machineId: String, action: String) = routes.on(machineId) { it.browserJob(machineId, action) }
     override suspend fun usageWindows() = groups.read(usage?.invoke().orEmpty())
+    override suspend fun usageWindows(machineId: String) = routes.on(machineId) { it.usageWindows() }
     override suspend fun moveToManager(machineId: String, manager: String) = routes.on(machineId) { it.moveToManager(machineId, manager) }
 }
 
@@ -289,7 +312,10 @@ internal class MergedShellServices(private val stacks: GroupStacks) {
         override suspend fun execute(session: Session, action: ChatAction) = of(session).execute(session, action)
         override suspend fun verify(session: Session, action: ChatAction) = of(session).verify(session, action)
         override suspend fun editQueue(session: Session, keep: List<Int>) = of(session).editQueue(session, keep)
+        override suspend fun sendQueuedNow(session: Session) = of(session).sendQueuedNow(session)
         override suspend fun info(session: Session) = of(session).info(session)
+        override suspend fun completeRow(session: Session) = of(session).completeRow(session)
+        override suspend fun interactionHistory(session: Session) = of(session).interactionHistory(session)
         override suspend fun restoreModel(session: Session) = of(session).restoreModel(session)
         override suspend fun fork(session: Session, atItemId: String) = of(session).fork(session, atItemId)
         override suspend fun rewind(session: Session, target: RewindTarget, restore: RewindRestore) = of(session).rewind(session, target, restore)

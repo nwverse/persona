@@ -111,7 +111,7 @@ func (c *conversation) connect(woken bool) error {
 	// not: a request the user made just before the drop still counts.
 	if words := agentWords(snap); words != c.snapWords {
 		if !first {
-			c.gate.told(c.connectedAt)
+			c.gate.told(c.connectedAt, agentReconnect)
 		}
 		c.snapWords = words
 	}
@@ -159,6 +159,12 @@ func (c *conversation) startSession(ctx context.Context, up upLink, w wire, p *P
 	in prompts.VoiceInstructions, tools []string) (int, error) {
 	in.Tools = c.toolMode(tools)
 	s := session{Model: model, Voice: voice, InputRate: p.inputRate(), Instructions: fitInstructions(in), Tools: toolDecls(tools)}
+	return startUpstream(ctx, up, w, p, s)
+}
+
+// startUpstream sends session s's start on up and waits for the service to start it: the rate of its audio. A failure
+// closes up; the service's refusal is a *sessionRefused. A call's sessions and a read-aloud's (speak.go) start alike.
+func startUpstream(ctx context.Context, up upLink, w wire, p *Provider, s session) (int, error) {
 	if err := writeJSON(ctx, up, w.start(s)); err != nil {
 		_ = up.CloseNow()
 		return 0, err
@@ -243,6 +249,12 @@ func fitInstructions(in prompts.VoiceInstructions) string {
 
 // dial opens the upstream socket: the service's WebSocket, or the fake dialect's stand-in.
 func (c *conversation) dial(ctx context.Context, p *Provider, w wire, model string) (upLink, error) {
+	return dialUpstream(ctx, p, w, model)
+}
+
+// dialUpstream opens provider p's socket for model, with its credential: the service's WebSocket, or the fake
+// dialect's stand-in.
+func dialUpstream(ctx context.Context, p *Provider, w wire, model string) (upLink, error) {
 	if p.Dialect == DialectFake {
 		return newFakeLink(), nil
 	}
@@ -381,7 +393,7 @@ func (c *conversation) handle(gen int, e event) {
 		spoke := c.spokeAt(time.Now()) // by the user's words before these
 		if strings.TrimSpace(e.text) != "" {
 			c.gate.user = time.Now()
-			c.userAt = c.gate.user
+			c.gate.caption, c.userAt = c.gate.user, c.gate.user
 		}
 		c.userLineDone(c.userText(e.text, e.replace, e.final, spoke)) // a line the service ends itself (codex)
 	case evAssistant:
@@ -468,7 +480,7 @@ func (c *conversation) handle(gen int, e event) {
 		if s := c.unacked[e.eventID]; s != nil {
 			delete(c.unacked, e.eventID)
 			if s.agent {
-				c.gate.told(time.Now()) // the model has read them only now
+				c.gate.told(time.Now(), agentAcked) // the model has read them only now
 			}
 		}
 	case evError:
