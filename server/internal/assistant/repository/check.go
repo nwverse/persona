@@ -137,15 +137,7 @@ func (c Checker) Check(ctx context.Context, id Identity) error {
 			if dial == nil {
 				dial = (&net.Dialer{Timeout: 3 * time.Second}).DialContext
 			}
-			var last error
-			for _, ip := range ips {
-				conn, err := dial(ctx, network, net.JoinHostPort(ip.IP.String(), port))
-				if err == nil {
-					return conn, nil
-				}
-				last = err
-			}
-			return nil, last
+			return dialPinned(ctx, network, port, ips, dial)
 		}
 		defer transport.CloseIdleConnections()
 		tr = transport
@@ -159,20 +151,12 @@ func (c Checker) Check(ctx context.Context, id Identity) error {
 	req.Header.Set("User-Agent", "Persona-repository-verification")
 	res, err := client.Do(req)
 	if err != nil {
-		var check *CheckError
-		if errors.As(err, &check) {
-			return check
-		}
-		if ctx.Err() != nil {
-			return &CheckError{"timeout"}
-		}
-		var timeout net.Error
-		if errors.As(err, &timeout) && timeout.Timeout() {
-			return &CheckError{"timeout"}
-		}
-		return &CheckError{"network"}
+		return checkFailure(ctx, err)
 	}
 	defer res.Body.Close()
+	if ctx.Err() != nil {
+		return checkFailure(ctx, ctx.Err())
+	}
 	if res.StatusCode == 429 || res.StatusCode == 403 && (res.Header.Get("X-RateLimit-Remaining") == "0" || res.Header.Get("Retry-After") != "") {
 		return &CheckError{"rate_limited"}
 	}
@@ -194,10 +178,7 @@ func (c Checker) Check(ctx context.Context, id Identity) error {
 	}
 	raw, err := io.ReadAll(io.LimitReader(res.Body, MaxBody+1))
 	if err != nil {
-		if ctx.Err() != nil {
-			return &CheckError{"timeout"}
-		}
-		return &CheckError{"network"}
+		return checkFailure(ctx, err)
 	}
 	if len(raw) > MaxBody {
 		return &CheckError{"inconclusive"}
@@ -220,5 +201,79 @@ func (c Checker) Check(ctx context.Context, id Identity) error {
 	if err != nil || remote != id || !strings.EqualFold(path, id.Path) {
 		return &CheckError{"inconclusive"}
 	}
+	if ctx.Err() != nil {
+		return checkFailure(ctx, ctx.Err())
+	}
 	return nil
+}
+
+func checkFailure(ctx context.Context, err error) error {
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return &CheckError{"canceled"}
+	}
+	var check *CheckError
+	if errors.As(err, &check) {
+		return check
+	}
+	var timeout net.Error
+	if ctx.Err() != nil || errors.As(err, &timeout) && timeout.Timeout() {
+		return &CheckError{"timeout"}
+	}
+	return &CheckError{"network"}
+}
+
+// Every address has already passed the destination policy. Stagger bounded
+// numeric dials so a black-holed address cannot consume the whole check. There
+// is no second DNS lookup, proxy, request retry or change to TLS verification.
+func dialPinned(parent context.Context, network, port string, ips []net.IPAddr, dial func(context.Context, string, string) (net.Conn, error)) (net.Conn, error) {
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	type result struct {
+		conn net.Conn
+		err  error
+	}
+	results := make(chan result)
+	next, active := 0, 0
+	start := func() {
+		target := net.JoinHostPort(ips[next].IP.String(), port)
+		next++
+		active++
+		go func() {
+			conn, err := dial(ctx, network, target)
+			select {
+			case results <- result{conn, err}:
+			case <-ctx.Done():
+				if conn != nil {
+					_ = conn.Close()
+				}
+			}
+		}()
+	}
+	start()
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case r := <-results:
+			active--
+			if r.err == nil && r.conn != nil {
+				return r.conn, nil
+			}
+			if r.conn != nil {
+				_ = r.conn.Close()
+			}
+			if next == len(ips) && active == 0 {
+				return nil, r.err
+			}
+			if next < len(ips) {
+				start()
+			}
+		case <-ticker.C:
+			if next < len(ips) && active < 4 {
+				start()
+			}
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 }
