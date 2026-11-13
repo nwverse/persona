@@ -101,6 +101,32 @@ func readCatalog(t *testing.T, h *Hub, query string) sessionCatalog {
 	return out
 }
 
+// awaitAsks waits until no ask of a directory's computer is out, by the channels the asks close: no polling.
+func awaitAsks(t *testing.T, h *Hub) {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for {
+		var out []chan struct{}
+		h.origins.mu.Lock()
+		for _, e := range h.origins.entries {
+			if e.asking != nil {
+				out = append(out, e.asking)
+			}
+		}
+		h.origins.mu.Unlock()
+		if len(out) == 0 {
+			return
+		}
+		for _, done := range out {
+			select {
+			case <-done:
+			case <-deadline:
+				t.Fatal("an ask never ended")
+			}
+		}
+	}
+}
+
 func project(c sessionCatalog, id string) *catalogProject {
 	for i := range c.Projects {
 		if c.Projects[i].ID == id {
@@ -359,19 +385,9 @@ func TestSessionCatalogIsPendingWhileAComputerAnswers(t *testing.T) {
 		t.Fatalf("second read: %+v, calls %v", second, node.calls())
 	}
 	close(hold)
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		got := readCatalog(t, h, "")
-		if !got.Pending && got.Projects[0].ID == "git:git.example.com/team/app" {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("never settled: %+v", got)
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	if len(node.calls()) != 1 {
-		t.Fatalf("asked %v", node.calls())
+	awaitAsks(t, h)
+	if got := readCatalog(t, h, ""); got.Pending || got.Projects[0].ID != "git:git.example.com/team/app" || len(node.calls()) != 1 {
+		t.Fatalf("once it answered: %+v, asked %v", got, node.calls())
 	}
 }
 
@@ -387,29 +403,17 @@ func TestPlaceOriginsAgeAndRetry(t *testing.T) {
 	m := catalogMachine(h, "mac", node,
 		proto.Session{SessionID: "a1", Cwd: "/code/app", RepoRoot: "/code/app"},
 		proto.Session{SessionID: "a2", Cwd: "/code/gone"})
+	// settled reads the catalog (which asks what is due), waits for the asks and reads what they left; the clock
+	// stands still meanwhile, so the second read asks nothing more. want: how many times the node was asked by then.
 	settled := func(want int) sessionCatalog {
 		t.Helper()
-		deadline := time.Now().Add(5 * time.Second)
-		for {
-			got := readCatalog(t, h, "")
-			if len(node.calls()) >= want && !got.Pending {
-				h.origins.mu.Lock()
-				out := 0
-				for _, e := range h.origins.entries {
-					if e.asking != nil {
-						out++
-					}
-				}
-				h.origins.mu.Unlock()
-				if out == 0 {
-					return readCatalog(t, h, "")
-				}
-			}
-			if time.Now().After(deadline) {
-				t.Fatalf("asked %v, want %d calls", node.calls(), want)
-			}
-			time.Sleep(2 * time.Millisecond)
+		readCatalog(t, h, "")
+		awaitAsks(t, h)
+		got := readCatalog(t, h, "")
+		if len(node.calls()) != want || got.Pending {
+			t.Fatalf("asked %v, want %d calls; pending %v", node.calls(), want, got.Pending)
 		}
+		return got
 	}
 	first := settled(2)
 	if project(first, "git:git.example.com/team/app") == nil || project(first, "dir:gone") == nil || len(node.calls()) != 2 {
