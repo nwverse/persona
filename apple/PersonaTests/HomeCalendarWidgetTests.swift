@@ -96,6 +96,8 @@ struct HomeCalendarWidgetTests {
         #expect(HomeCalendarState.shown(slot, configured: .week, at: now.addingTimeInterval(5 * 60), calendar: cal).day == at(2026, 11, 19, calendar: cal))
         #expect(HomeCalendarState.shown(slot, configured: .week, at: now.addingTimeInterval(11 * 60), calendar: cal).day == at(2026, 11, 18, calendar: cal))
         #expect(HomeCalendarState.pickEnds(slot, after: now) == now.addingTimeInterval(HomeCalendarState.pickLasts))
+        // Read at the moment of the pick, even when the stored time comes back a hair later than the clock.
+        #expect(HomeCalendarState.shown(slot, configured: .week, at: now.addingTimeInterval(-0.001), calendar: cal).day == at(2026, 11, 19, calendar: cal))
         #expect(HomeCalendarState.pickEnds(slot, after: now.addingTimeInterval(HomeCalendarState.pickLasts)) == nil)
 
         let late = at(2026, 11, 18, 23, 55, calendar: cal)

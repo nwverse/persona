@@ -144,11 +144,12 @@ nonisolated struct HomeCalendarState: Codable, Hashable, Sendable {
         return (view, day ?? calendar.startOfDay(for: date))
     }
 
-    /// The day picked within the last `pickLasts`, the same day as `date`.
+    /// The day picked within the last `pickLasts`, the same day as `date`. Read at the moment of the pick, the stored
+    /// time can come back a hair later than the clock (a `Date` through seconds since 1970), so only the end is checked.
     static func picked(_ slot: Slot?, at date: Date, calendar: Calendar = .current) -> String? {
         guard let day = slot?.day, let at = slot?.pickedAt else { return nil }
         let when = Date(timeIntervalSince1970: at)
-        guard date >= when, date.timeIntervalSince(when) < pickLasts, calendar.isDate(when, inSameDayAs: date) else { return nil }
+        guard date.timeIntervalSince(when) < pickLasts, calendar.isDate(when, inSameDayAs: date) else { return nil }
         return day
     }
 
