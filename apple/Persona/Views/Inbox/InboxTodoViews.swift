@@ -73,7 +73,7 @@ struct InboxTodoFields: View {
             Toggle("Due Date", isOn: Binding(get: { day != nil }, set: { day = $0 ? (day ?? .now) : nil }))
                 .font(Theme.Font.secondary)
             if let d = day {
-                DatePicker("Day", selection: Binding(get: { d }, set: { day = $0 }), displayedComponents: .date)
+                DatePicker("Due Day", selection: Binding(get: { d }, set: { day = $0 }), displayedComponents: .date)
                     .font(Theme.Font.secondary)
                 Toggle("All Day", isOn: $allDay)
                     .font(Theme.Font.secondary)

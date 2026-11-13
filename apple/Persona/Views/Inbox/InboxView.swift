@@ -525,7 +525,7 @@ struct InboxPage: View {
         ToolbarItemGroup(placement: .bottomBar) {
             // Merge: the picked rows become one row (undoable); Add to To-Dos asks the due time. Each ends selecting when it went
             // through. Merge needs two rows of one manager.
-            Button("Merge") {
+            Button("Merge Rows") {
                 store.merge(chosen) { withAnimation(Theme.Motion.standard) { self.picked = nil } }
             }
             .disabled(!InboxStore.canMerge(chosen))
