@@ -381,8 +381,8 @@ struct TodoQuickAddSheet: View {
                         .accessibilityIdentifier("todo.calendar.newTitle")
                 }
                 Section {
-                    DatePicker(String(localized: "Due"), selection: $due, displayedComponents: allDay ? [.date] : [.date, .hourAndMinute])
-                        .accessibilityIdentifier("todo.calendar.newDue")
+                    FormDatePicker("Due", selection: $due, displayedComponents: allDay ? [.date] : [.date, .hourAndMinute],
+                                   identifier: "todo.calendar.newDue")
                     Toggle(String(localized: "All Day"), isOn: $allDay)
                         .accessibilityIdentifier("todo.calendar.newAllDay")
                 } footer: {
@@ -410,7 +410,7 @@ struct TodoQuickAddSheet: View {
             .macSheet()
             #endif
         }
-        .presentationDetents([.medium])
+        .formSheetDetents([.medium])
         .onAppear { typing = true }
     }
 

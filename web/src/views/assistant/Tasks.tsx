@@ -1029,7 +1029,7 @@ function statusTone(state: string, toStart: boolean): string {
 }
 
 /** One slot, one row: live task/session state wins over historical feed metadata. */
-function ProgressTaskRow({ card, conversation, activity }: { card: TaskCardMetadata; conversation: string; activity?: BackgroundWork }) {
+function ProgressTaskRow({ card, conversation, activity, countsOpen }: { card: TaskCardMetadata; conversation: string; activity?: BackgroundWork; countsOpen: boolean }) {
   const todo = useTodo(card.todo_id);
   const task = useTaskNow(todo);
   const plans = useFeed((s) => s.plans);
@@ -1072,7 +1072,7 @@ function ProgressTaskRow({ card, conversation, activity }: { card: TaskCardMetad
     ? latestReview(todo?.supervision)?.note ?? todo?.done_reason ?? (receipt && field(receipt, "summary"))
     : limit ?? liveLine ?? parked ?? waits ?? nobody ?? stopped ?? progressLine(todo?.supervision) ?? ask ?? task?.lead?.plan?.current ?? progressOf(task?.lead)?.text ?? (report && field(report, "text"));
   return (
-    <button type="button" data-task-slot={card.id} disabled={!todo && !card.plan_id} onClick={() => card.todo_id ? openTask(card.todo_id) : window.dispatchEvent(new CustomEvent("persona:task-start", { detail: conversation }))} className="flex w-full min-w-0 items-center gap-3 px-3 py-2.5 text-left hover:bg-hover disabled:cursor-default">
+    <button type="button" data-task-slot={card.id} data-counts-open={countsOpen ? "true" : "false"} disabled={!todo && !card.plan_id} onClick={() => card.todo_id ? openTask(card.todo_id) : window.dispatchEvent(new CustomEvent("persona:task-start", { detail: conversation }))} className="flex w-full min-w-0 items-center gap-3 px-3 py-2.5 text-left hover:bg-hover disabled:cursor-default">
       <span data-task-mark={mark} className="flex w-4 shrink-0 justify-center"><TaskMark status={mark} size={8} /></span>
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-semibold" title={title}>{title}</div>
@@ -1163,11 +1163,15 @@ function NeedsYouRow({ item, open, onToggle }: { item: NeedsYouItem; open: boole
     opened.current = open;
   }, [open]);
   const folded = foldedRow(item);
+  // Whether the To-dos page counts this to-do as open (#3331): no attribute on rows that are no to-do. The chip badge
+  // is summed from this same flag, so the trays and the header tell one number.
+  const countsOpenAttr = item.kind === "task" ? { "data-counts-open": item.countsOpen ? "true" : "false" } : {};
   if (!folded) return <NeedsYouBody item={item} />;
   const head = (
     <button
       type="button"
       data-needs-row={open ? undefined : item.key}
+      {...countsOpenAttr}
       aria-expanded={open}
       onClick={onToggle}
       className={cx("flex w-full min-w-0 items-center gap-2 rounded-control px-3 py-2 text-left text-sm hover:bg-hover", open ? "" : "bg-field")}
@@ -1183,7 +1187,7 @@ function NeedsYouRow({ item, open, onToggle }: { item: NeedsYouItem; open: boole
   );
   if (!open) return head;
   return (
-    <div ref={ref} data-needs-row={item.key} data-needs-open className="flex flex-col gap-1">
+    <div ref={ref} data-needs-row={item.key} data-needs-open {...countsOpenAttr} className="flex flex-col gap-1">
       {head}
       <NeedsYouBody item={item} nested />
     </div>
@@ -1202,27 +1206,29 @@ function NeedsYouBody({ item, nested = false }: { item: NeedsYouItem; nested?: b
     return <div data-needs-row={rowKey}>{!nested && <button type="button" onClick={open} className="block max-w-full truncate px-1 text-left text-sm font-semibold hover:underline">{sessionTitle(session)}</button>}{asks.map((ix) => <InteractionCard key={ix.id} ix={ix} />)}</div>;
   }
   const { todo, asks, status } = item;
-  if (asks.length) return <div data-needs-row={rowKey}>{!nested && <button type="button" onClick={() => openTask(todo.id)} className="block max-w-full truncate px-1 text-left text-sm font-semibold hover:underline">{todo.title}</button>}{asks.map((ix) => <InteractionCard key={ix.id} ix={ix} />)}</div>;
+  // Unfolded task rows carry the open flag themselves; a nested one's opened head already has it.
+  const taskOpenAttr = !nested ? { "data-counts-open": item.countsOpen ? "true" : "false" } : {};
+  if (asks.length) return <div data-needs-row={rowKey} {...taskOpenAttr}>{!nested && <button type="button" onClick={() => openTask(todo.id)} className="block max-w-full truncate px-1 text-left text-sm font-semibold hover:underline">{todo.title}</button>}{asks.map((ix) => <InteractionCard key={ix.id} ix={ix} />)}</div>;
   const ask = openAsk(todo);
   // Both structured decisions and older review-only decisions have the same deferral controls.
   if (isDecision(todo))
     return (
-      <Suspense fallback={<div data-needs-row={rowKey} className="truncate rounded-control bg-field px-3 py-2.5 text-[12px] text-ink-2">{todo.title}</div>}>
+      <Suspense fallback={<div data-needs-row={rowKey} {...taskOpenAttr} className="truncate rounded-control bg-field px-3 py-2.5 text-[12px] text-ink-2">{todo.title}</div>}>
         <NeedsYouPart key={todo.id + (todo.supervision?.reviews?.at(-1)?.at || todo.decision_review?.review_at || ask?.asked_at)} rowKey={rowKey} hideTitle={nested} decision={todo} />
       </Suspense>
     );
-  if (ask) return <div data-needs-row={rowKey}><AcceptRow stacked hideTitle={nested} key={todo.id + ask.asked_at} row={{ id: todo.id, title: todo.title, waited_s: Math.max(0, (Date.now() - Date.parse(ask.asked_at)) / 1000), outcome: ask.outcome, verdict: ask.verdict, recommend: ask.recommend, asked_at: ask.asked_at }} /></div>;
-  if (status === "failed") return <FailedTaskRow rowKey={item.key} todo={todo} />;
-  return <button type="button" data-needs-row={rowKey} onClick={() => openTask(todo.id)} className="flex items-center gap-2 rounded-control bg-field px-3 py-2 text-left text-sm"><Icon name="hand" className="shrink-0 text-attention" /><span className="min-w-0 flex-1 truncate">{todo.title}</span><span className="shrink-0 text-xs text-ink-2">{waitsLabel(todo, status)}</span></button>;
+  if (ask) return <div data-needs-row={rowKey} {...taskOpenAttr}><AcceptRow stacked hideTitle={nested} key={todo.id + ask.asked_at} row={{ id: todo.id, title: todo.title, waited_s: Math.max(0, (Date.now() - Date.parse(ask.asked_at)) / 1000), outcome: ask.outcome, verdict: ask.verdict, recommend: ask.recommend, asked_at: ask.asked_at }} /></div>;
+  if (status === "failed") return <FailedTaskRow rowKey={item.key} todo={todo} countsOpenAttr={taskOpenAttr} />;
+  return <button type="button" data-needs-row={rowKey} {...taskOpenAttr} onClick={() => openTask(todo.id)} className="flex items-center gap-2 rounded-control bg-field px-3 py-2 text-left text-sm"><Icon name="hand" className="shrink-0 text-attention" /><span className="min-w-0 flex-1 truncate">{todo.title}</span><span className="shrink-0 text-xs text-ink-2">{waitsLabel(todo, status)}</span></button>;
 }
 
 /** A task whose Agent did not start, in Needs you: why, and Retry / Remove where it is (#5096: no panel to open for them;
  *  the title opens the to-do's page). */
-function FailedTaskRow({ rowKey, todo }: { rowKey: string; todo: Todo }) {
+function FailedTaskRow({ rowKey, todo, countsOpenAttr }: { rowKey: string; todo: Todo; countsOpenAttr: { "data-counts-open"?: string } }) {
   const retrying = useRetrying(todo.id);
   const why = useFeed((s) => whyNotStarted(todo, s.plans));
   return (
-    <div data-needs-row={rowKey} data-failed-task={todo.id} className="flex flex-col gap-1.5 rounded-control bg-danger-wash px-3 py-2 text-sm">
+    <div data-needs-row={rowKey} {...countsOpenAttr} data-failed-task={todo.id} className="flex flex-col gap-1.5 rounded-control bg-danger-wash px-3 py-2 text-sm">
       <div className="flex min-w-0 items-center gap-2">
         <Icon name="info" className="shrink-0 text-red" />
         <button type="button" onClick={() => openTask(todo.id)} className="min-w-0 flex-1 truncate text-left hover:underline">{todo.title}</button>
@@ -1329,7 +1335,12 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
     const row = conversations?.find((c) => c.session_id === id);
     return row ? conversationTitle(row) : t("assistant-tasks.needs_group_another");
   };
-  const counts: Record<AssistantTray, number> = { needs: ownAsks.length + entries.needsYou.length, running: entries.running.length };
+  // The badges count by the To-dos page's one rule (#3331): a to-do row adds one only while the page counts it open
+  // (lib/todo-triage countsAsOpen via each task row's countsOpen); rows stay visible whatever it says. Things that are
+  // no to-do — hand-opened Agents, plans waiting for Start, draft cards, the chat's own ask cards — still add one.
+  const badgeOf = (items: { kind: string; countsOpen?: boolean }[]) =>
+    items.reduce((n, item) => n + (item.kind === "task" ? (item.countsOpen ? 1 : 0) : 1), 0);
+  const counts: Record<AssistantTray, number> = { needs: ownAsks.length + badgeOf(entries.needsYou), running: badgeOf(entries.running) };
   // the card is in the chat already: close the tray onto it and bring it into view
   const openOwn = (id: string) => {
     setTray(null);
@@ -1357,7 +1368,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
           <div className="flex shrink-0 items-center gap-2 bg-surface px-3 py-2 text-sm"><h2 className="min-w-0 flex-1 truncate font-semibold">{labels[tray]}</h2><Button onClick={() => setBoard(true)}>{t("assistant-tasks.all")}</Button><IconButton icon={expanded ? "collapse" : "expand"} label={t(expanded ? "assistant-tasks.tray_restore" : "assistant-tasks.tray_expand")} onClick={() => setExpanded((v) => !v)} /><IconButton icon="x" label={t("ui-atoms.close")} onClick={() => setTray(null)} /></div>
           <div data-tray-list className="min-h-0 grow overflow-y-auto overscroll-contain">
           {tray === "running" && <div className="divide-y divide-line">
-            {entries.running.map((item) => item.kind === "task" ? <ProgressTaskRow key={item.key} card={item.card} conversation={conversation} activity={item.activity} /> : <RunningAgentRow key={item.key} session={item.session} activity={item.activity} />)}
+            {entries.running.map((item) => item.kind === "task" ? <ProgressTaskRow key={item.key} card={item.card} conversation={conversation} activity={item.activity} countsOpen={item.countsOpen} /> : <RunningAgentRow key={item.key} session={item.session} activity={item.activity} />)}
             {!entries.running.length && <p className="px-3 py-3 text-sm text-ink-2">{t("assistant-tasks.tray_empty_progress")}</p>}
             {entries.shelved.length > 0 && (
               <button type="button" data-progress-shelved aria-expanded={showShelved} onClick={() => setShowShelved((v) => !v)} title={t("assistant-tasks.tray_shelved_hint")} className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-ink-2 hover:bg-hover">
@@ -1365,7 +1376,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
                 <span className="whitespace-nowrap">{t("assistant-tasks.tray_shelved", { count: entries.shelved.length })}</span>
               </button>
             )}
-            {showShelved && entries.shelved.map((item) => item.kind === "task" && <ProgressTaskRow key={item.key} card={item.card} conversation={conversation} activity={item.activity} />)}
+            {showShelved && entries.shelved.map((item) => item.kind === "task" && <ProgressTaskRow key={item.key} card={item.card} conversation={conversation} activity={item.activity} countsOpen={item.countsOpen} />)}
           </div>}
           {tray === "needs" && <div className="flex flex-col gap-2 p-2">
             {asking.map((item) => <NeedsYouRow key={item.key} item={item} open={openRows.has(openKey(item))} onToggle={() => toggleRow(openKey(item))} />)}

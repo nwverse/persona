@@ -5,6 +5,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import persona.core.contracts.DirectionsEvent
@@ -59,11 +60,13 @@ class DirectionNamesTest {
             {"id": "b", "name": "", "counts": {"working": 0, "needs_you": 0, "stuck": 1, "review": 0}},
             {"id": "", "name": "Nobody"},
             {"id": "m", "name": "", "secretary": true, "counts": {"working": 9, "needs_you": 9, "stuck": 9, "review": 9}}
-        ]}"""))
+        ]}"""))!!
         assertEquals(listOf("a", "b"), tree.ids)
         assertEquals(mapOf("a" to "Growth"), tree.names)
-        assertEquals(mapOf("a" to LeaderCounts(working = 2, needsYou = 1), "b" to LeaderCounts()), tree.counts)
-        assertEquals(DirectionTree(), directionTreeOf(json("{}")))
+        // The lead rows' counts read the same tree the snapshot holds (one parse, #4352).
+        assertEquals(mapOf("a" to LeaderCounts(working = 2, needsYou = 1), "b" to LeaderCounts()),
+            AssistantSnapshot(directionTree = tree).leaderCounts)
+        assertNull("an answer without directions is no tree", directionTreeOf(json("{}")))
     }
 
     // The hub says only that the tree changed; the drawer reads it again (#4352).

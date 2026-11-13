@@ -117,6 +117,15 @@
     </plurals>
     <string name="designsystem_core_list_separator">，</string>
     <string name="designsystem_core_repo_other">其他</string>
+    <string name="designsystem_core_direction_doing">在做</string>
+    <string name="designsystem_core_direction_needs_you">等你</string>
+    <string name="designsystem_core_direction_stuck">卡住</string>
+    <string name="designsystem_core_direction_review">待验收</string>
+    <string name="designsystem_core_direction_planned">未开始</string>
+    <string name="designsystem_core_direction_secretary">书记官</string>
+    <string name="designsystem_core_direction_untitled">对话</string>
+    <string name="designsystem_core_direction_count_working">在做 %1$d</string>
+    <string name="designsystem_core_direction_count_needs_you">等你 %1$d</string>
     <string name="designsystem_core_inbox_action">需要你</string>
     <string name="designsystem_core_inbox_fyi">知悉即可</string>
     <string name="designsystem_core_inbox_noise">已折叠</string>

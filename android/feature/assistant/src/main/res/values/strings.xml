@@ -110,6 +110,8 @@
     <string name="assistant_end_leader">Unpin</string>
     <string name="assistant_leader_working">%1$d working</string>
     <string name="assistant_leader_needs_you">%1$d need you</string>
+    <string name="assistant_direction_todos_of">To-dos of %1$s</string>
+    <string name="assistant_direction_agents_of">Agents of %1$s</string>
     <string name="assistant_conversation_actions">Chat actions</string>
     <string name="assistant_demo_title">Demo mode</string>
     <string name="assistant_demo_notice">Content is only kept for this demo.</string>

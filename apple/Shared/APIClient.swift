@@ -323,7 +323,8 @@ nonisolated struct APIClient: Sendable {
         config.authorize(&req)
         req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
         clientMetadata.apply(to: &req)
-        let requestID = String(UUID().uuidString.prefix(8)).lowercased()
+        // The caller's own id when it names one (a page that shows it, to match the hub's log), else a new one.
+        let requestID = headers["X-Client-Request-Id"] ?? String(UUID().uuidString.prefix(8)).lowercased()
         req.setValue(requestID, forHTTPHeaderField: "X-Client-Request-Id")
         for (name, value) in headers { req.setValue(value, forHTTPHeaderField: name) }
         if let body {
@@ -1849,6 +1850,15 @@ nonisolated struct APIClient: Sendable {
     /// The persona this device's Live Activity draws, alone (the PUT merges): the hub echoes it in the device's pushes.
     func setFleetLook(device: String, _ look: FleetLook) async throws {
         _ = try await request("PUT", "/api/v1/devices/\(device)/prefs", body: FleetLookPut(look: look))
+    }
+    /// Today's tokens by the hour (`GET /api/v1/usage`'s `hourly`, #5721): 24 numbers from midnight; empty from an older
+    /// hub, which has no such field.
+    func usageHourly() async throws -> [Int] {
+        struct Body: Decodable {
+            struct Usage: Decodable { var hourly: [Int]? }
+            var usage: Usage
+        }
+        return try await get("/api/v1/usage", as: Body.self).usage.hourly ?? []
     }
     /// Whether this device has the Home Screen widgets, alone: while its app is not open, the hub wakes it to write them
     /// again when the agents' counts change (#5721). An older hub keeps the field and does nothing with it.

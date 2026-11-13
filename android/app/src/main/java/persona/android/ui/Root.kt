@@ -570,6 +570,11 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                         }
                     },
                     onRetired = { key -> sidebar.retired = sidebar.retired + key },
+                    onOpenTodo = { id -> sidebarDestination(TodoDetailRoute(id)) },
+                    onOpenAgent = { key ->
+                        sidebar.opened.value = false
+                        selected = openResolved(ResolvedRoute(AppTab.Agents, ChatRoute(key.machineId, key.sessionId, ConversationKind.Agent)))
+                    },
                     // The current assistant at the sidebar's head; its roster opens under it.
                     switcher = { head, trailing, fallback ->
                         persona.feature.settings.AssistantSwitcher(services.managers.takeUnless { services.demo }, waiting,
