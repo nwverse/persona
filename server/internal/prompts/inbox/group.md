@@ -34,4 +34,5 @@ urgent：急事才是 true：tier 是 action，而且有人正等着用户回、
   "events": [{"event": "同上", "title": "…", "summary": "…", "tier": "action|fyi|noise", "reason": "…", "urgent": false, "continues": "可省：接着哪件已处理的事"}]}
 
 每条新消息恰好归到一件事；assign 里用到的每件事在 events 里写一项（已有的事写动到之后的标题、总结和分级）；
+批里发送人写成「我（自己说的，不归类）」、不带 id 的行，是用户自己在会话里说的话，只作上下文：不要归类，也不要写进 assign。
 已有的事只能用查到的、还没处理完的。{{template "shared/user_rules" .}}
