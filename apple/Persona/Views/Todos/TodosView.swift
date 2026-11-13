@@ -609,6 +609,10 @@ struct TodoRow: View {
                             .lineLimit(1)
                     }
                     if !todo.isDone { ReviewChip(todo: todo, compact: true) }
+                    if let onSeen {
+                        Spacer(minLength: Theme.Space.xs)
+                        seenButton(onSeen)
+                    }
                 }
 
                 TodoPlanLine(todo: todo)
@@ -642,20 +646,6 @@ struct TodoRow: View {
                     .foregroundStyle(Theme.accent)
                     .buttonStyle(.borderless)
                     .accessibilityIdentifier("todos.restore")
-                }
-
-                if let onSeen {
-                    Button(action: onSeen) {
-                        Label("Got It [To-do Seen]", systemImage: Theme.Icon.seen)
-                            .lineLimit(1)
-                            .scaledFrame(minHeight: Theme.Size.tapTarget, alignment: .leading)
-                            .contentShape(.rect)
-                    }
-                    .font(Theme.Font.captionStrong)
-                    .foregroundStyle(Theme.accent)
-                    .buttonStyle(.borderless)
-                    .accessibilityLabel(Text("Got It: move \(todo.title) to Done"))
-                    .accessibilityIdentifier("todos.seen.\(todo.id)")
                 }
 
                 if failedOpen, let error = todo.startError {
@@ -705,6 +695,20 @@ struct TodoRow: View {
             }
             .padding(.vertical, Theme.Space.xs)
         }
+    }
+
+    /// Got It (#5707) at the end of the status line, under the time (#6578): a compact accent chip, as the minutes' time
+    /// chip, whose capsule hangs over the line so the row is as tall as without it, hit like a finger-sized row
+    /// (`tapTargetOutset`). A borderless button in the row: its tap stays its own and never opens the to-do.
+    private func seenButton(_ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Chip(text: String(localized: "Got It [To-do Seen]"), symbol: Theme.Icon.seen, look: .tint(Theme.accent), compact: true)
+                .padding(.vertical, -Chip.compactInset)
+                .tapTargetOutset()
+        }
+        .buttonStyle(.borderless)
+        .accessibilityLabel(Text("Got It: move \(todo.title) to Done"))
+        .accessibilityIdentifier("todos.seen.\(todo.id)")
     }
 
     private func mostUrgentSummary(urgent: TodoMostUrgent?) -> String? {
