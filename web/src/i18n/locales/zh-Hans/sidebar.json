@@ -34,6 +34,7 @@
   "launch_background": "后台启动中",
   "idle_spaces": "空闲的空间 {count}",
   "recent": "最近（未运行）",
+  "recent_hint": "已经停下、或所在电脑离线的 Agent，最近的在前。点开可以看它做过什么。",
   "show_less": "收起",
   "show_more": "再显示 {count} 个",
   "quick_filters": "快速筛选",

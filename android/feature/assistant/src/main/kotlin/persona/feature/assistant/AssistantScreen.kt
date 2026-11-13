@@ -1413,7 +1413,7 @@ internal fun AssistantDrawer(
                     chevron = true,
                     trailing = {
                         if (page.badge > 0) JBadge(page.badge)
-                        else if (page.dot) JStatusDot(Status.NeedsYou)
+                        else if (page.dot) JStatusDot(Status.NeedsYou, breathes = false)
                     })
             } }
             if (drawer) item { JDivider(Modifier.padding(vertical = Tokens.Space.s)) }
@@ -1496,7 +1496,7 @@ internal fun AssistantDrawer(
                 when {
                     settingsBadge != null -> JTag(settingsBadge, Modifier.align(Alignment.TopEnd))
                     settingsCount > 0 -> JBadge(settingsCount, Modifier.align(Alignment.TopEnd))
-                    settingsDot -> JStatusDot(Status.NeedsYou, Modifier.align(Alignment.TopEnd))
+                    settingsDot -> JStatusDot(Status.NeedsYou, Modifier.align(Alignment.TopEnd), breathes = false) // still, as iOS's `ExtensionSettingsBadge`
                 }
             }
         }

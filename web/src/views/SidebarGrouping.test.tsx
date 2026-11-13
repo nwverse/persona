@@ -109,7 +109,10 @@ describe("按待办 before the todos have loaded", () => {
     expect(agentsBlock().textContent).not.toContain("加载中…");
     expect(agentsBlock().textContent).toContain("天气 App 发 1.3 版");
     expect(agentsBlock().textContent).toContain("改发布脚本");
-    expect(agentsBlock().textContent).not.toContain("没挂待办的");
+    // the agent sits under its to-do; 没挂待办的 is listed (#6458) and holds none
+    expect(agentsBlock().querySelector('[data-tree-branch="todo:td1"]')?.textContent).toContain("改发布脚本");
+    expect(agentsBlock().querySelector('[data-tree-branch="todo:none"] [data-tree-branch-row]')?.textContent).toMatch(/^没挂待办的.*0 个 Agent$/);
+    expect(agentsBlock().querySelector('[data-tree-branch="todo:none"]')?.textContent).not.toContain("改发布脚本");
   });
 
   it("draws the todos as soon as GET /todos answers, while GET /sessions is still on its way", async () => {

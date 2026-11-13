@@ -89,6 +89,12 @@ export function placeWords(key: string): string {
   return [PLACE_WORDS[key], own[key]].filter(Boolean).join(" ");
 }
 
+// A result row's title, the line under it, and what its end says (a time, "Terminal"), as the Inbox, pane and
+// conversation rows write them.
+const ROW_TITLE = "block truncate text-[13px] font-medium text-ink";
+const ROW_DETAIL = "block truncate text-[11.5px] text-ink-3";
+const ROW_END = "shrink-0 text-[11px] text-ink-3";
+
 /** A group's heading above its first row ("Inbox", "Go to"). */
 function GroupHeading({ children }: { children: React.ReactNode }) {
   return <div className="px-2.5 pt-2 pb-1 text-[10.5px] font-medium tracking-[0.06em] text-ink-3 uppercase">{children}</div>;
@@ -388,7 +394,7 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME }: { ope
               const heading = c.section && c.section !== (shown[i - 1] as Extract<Row, { kind: "command" }> | undefined)?.cmd.section;
               return {
                 key: r.key,
-                heading: heading ? <div className="px-2.5 pt-2 pb-1 text-[10.5px] font-medium tracking-[0.06em] text-ink-3 uppercase">{c.section}</div> : null,
+                heading: heading ? <GroupHeading>{c.section}</GroupHeading> : null,
                 row: (
                   <button ref={ref} type="button" {...option} onMouseMove={() => setActive(i)} onClick={() => pick(r)} className={rowClass}>
                     <span className="flex size-5 shrink-0 items-center justify-center">{c.icon && <Icon name={c.icon} size={13} className={c.danger ? "text-red" : "text-ink-3"} />}</span>
@@ -418,10 +424,10 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME }: { ope
                   <>
                     <span className="flex size-5 shrink-0 items-center justify-center"><Icon name="inbox" size={13} className="text-ink-3" /></span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[13px] font-medium text-ink">{r.hit.item.title}</span>
-                      <span className="block truncate text-[11.5px] text-ink-3">{[r.hit.item.sender, r.hit.item.preview].filter(Boolean).join(t("palette.sender_separator"))}</span>
+                      <span className={ROW_TITLE}>{r.hit.item.title}</span>
+                      <span className={ROW_DETAIL}>{[r.hit.item.sender, r.hit.item.preview].filter(Boolean).join(t("palette.sender_separator"))}</span>
                     </span>
-                    <span className="shrink-0 text-[11px] text-ink-3">{ago(r.hit.item.updated_at)}</span>
+                    <span className={ROW_END}>{ago(r.hit.item.updated_at)}</span>
                   </>
                 ) : (
                   <>
@@ -458,10 +464,10 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME }: { ope
                   {h.state !== "shell" && h.agent && <AgentMark agent={h.agent} surface={h.surface} size={14} />}
                   <span className="flex size-5 shrink-0 items-center justify-center">{h.state === "shell" ? <Icon name="terminal" size={13} className="text-ink-3" /> : <StatusMark state={h.state} />}</span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[13px] font-medium text-ink">{h.title}</span>
-                    <span className="block truncate text-[11.5px] text-ink-3">{[h.trail, h.detail].filter(Boolean).join(" · ")}</span>
+                    <span className={ROW_TITLE}>{h.title}</span>
+                    <span className={ROW_DETAIL}>{[h.trail, h.detail].filter(Boolean).join(" · ")}</span>
                   </span>
-                  <span className="shrink-0 text-[11px] text-ink-3">{t("palette.terminal")}</span>
+                  <span className={ROW_END}>{t("palette.terminal")}</span>
                 </button>
                 ),
               };
@@ -482,14 +488,14 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME }: { ope
                     {r.previous && <span className="shrink-0 rounded-[5px] bg-field px-1.5 text-[10.5px] text-ink-3 shadow-hairline">{t("palette.previous")}</span>}
                   </span>
                   {h.said ? (
-                    <span className="block truncate text-[11.5px] text-ink-3" data-said>
+                    <span className={ROW_DETAIL} data-said>
                       {(found.marks?.(h.said.snippet, h.said.ranges) ?? [[h.said.snippet, false] as [string, boolean]]).map(([words, match], k) => (match ? <mark key={k} className="rounded-[3px] bg-accent-tint text-ink">{words}</mark> : <span key={k}>{words}</span>))}
                     </span>
                   ) : (
-                    <span className="block truncate text-[11.5px] text-ink-3">{[meta, shortPath(h.s.cwd)].filter(Boolean).join(" · ")}</span>
+                    <span className={ROW_DETAIL}>{[meta, shortPath(h.s.cwd)].filter(Boolean).join(" · ")}</span>
                   )}
                 </span>
-                <span className="shrink-0 text-[11px] text-ink-3">{st === "offline" || h.assistant ? ago(h.s.updated_at) : STATE_LABEL[st]}</span>
+                <span className={ROW_END}>{st === "offline" || h.assistant ? ago(h.s.updated_at) : STATE_LABEL[st]}</span>
               </button>
               ),
             };
