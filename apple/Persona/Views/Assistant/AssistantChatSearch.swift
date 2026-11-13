@@ -65,10 +65,18 @@ nonisolated enum AssistantSearchMerge {
     /// manager's snippet can start up to 40 characters before the match, which would cut the match itself off.
     static let lead = 8
 
+    /// `lead` at a text size: fewer as the text grows, so the match stays on the line (the sidebar's rows stop growing
+    /// at xxxLarge, #6813).
+    static func lead(for size: DynamicTypeSize) -> Int {
+        if size <= .large { return lead }
+        if size <= .xxLarge { return 5 }
+        return 2
+    }
+
     /// The snippet with its matches strongly emphasized (the ranges clipped to it, in order), starting `lead`
     /// characters before the first match.
-    static func snippet(_ hit: AssistantSearchAnswer.Hit) -> AttributedString {
-        let (shown, ranges) = led(hit.snippet, hit.ranges)
+    static func snippet(_ hit: AssistantSearchAnswer.Hit, lead: Int = lead) -> AttributedString {
+        let (shown, ranges) = led(hit.snippet, hit.ranges, lead: lead)
         var text = AttributedString(shown)
         let utf16 = shown.utf16
         for r in ranges where r.count == 2 {
@@ -82,7 +90,7 @@ nonisolated enum AssistantSearchMerge {
     }
 
     /// `s` from `lead` characters before its first match, "…" in front when cut, with the ranges (UTF-16) moved to match.
-    static func led(_ s: String, _ ranges: [[Int]]) -> (String, [[Int]]) {
+    static func led(_ s: String, _ ranges: [[Int]], lead: Int = lead) -> (String, [[Int]]) {
         let utf16 = s.utf16
         guard let first = ranges.filter({ $0.count == 2 }).map({ $0[0] }).min(), first > 0, first <= utf16.count,
               let at = String.Index(utf16.index(utf16.startIndex, offsetBy: first), within: s) else { return (s, ranges) }
@@ -91,6 +99,18 @@ nonisolated enum AssistantSearchMerge {
         let from = before.index(before.endIndex, offsetBy: -lead)
         let shift = utf16.distance(from: utf16.startIndex, to: from) - 1 // "…" is one UTF-16 unit
         return ("…" + s[from...], ranges.map { $0.count == 2 ? [$0[0] - shift, $0[1] - shift] : $0 })
+    }
+}
+
+/// A found row's second line (#6284): the sentence that matched, its match bold, from `AssistantSearchMerge.lead(for:)`
+/// characters before it at this text size. Its own view, so only it reads the text size.
+struct SearchSaidLine: View {
+    @Environment(\.dynamicTypeSize) private var size
+    let hit: AssistantSearchAnswer.Hit
+
+    var body: some View {
+        Text(AssistantSearchMerge.snippet(hit, lead: AssistantSearchMerge.lead(for: size)))
+            .font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(1)
     }
 }
 

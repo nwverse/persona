@@ -112,7 +112,7 @@ struct AssistantFullSearch: View {
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                     Text(title).font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
                     if let said {
-                        Text(AssistantSearchMerge.snippet(said)).font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(1)
+                        SearchSaidLine(hit: said)
                     } else if !preview.isEmpty {
                         Text(preview).font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(1)
                     }

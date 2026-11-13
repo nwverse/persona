@@ -67,6 +67,14 @@ struct AssistantChatSearchTests {
         // a match near the start is left as it is
         let near = AssistantSearchAnswer.Hit(itemID: "y", seq: 1, role: "user", snippet: "我想去 BlueLane", ranges: [[4, 12]])
         #expect(String(AssistantSearchMerge.snippet(near).characters) == "我想去 BlueLane")
+        // larger text keeps fewer characters before the match, so it stays on the one line
+        #expect(AssistantSearchMerge.lead(for: .large) == AssistantSearchMerge.lead)
+        #expect(AssistantSearchMerge.lead(for: .xxxLarge) < AssistantSearchMerge.lead(for: .xLarge))
+        #expect(AssistantSearchMerge.lead(for: .accessibility5) == AssistantSearchMerge.lead(for: .xxxLarge))
+        let early = AssistantSearchAnswer.Hit(itemID: "z", seq: 1, role: "user", snippet: "我想去青石巷 BlueLane 看看", ranges: [[7, 15]])
+        let big = AssistantSearchMerge.snippet(early, lead: AssistantSearchMerge.lead(for: .xxxLarge))
+        #expect(String(big.characters) == "…石巷 BlueLane 看看")
+        #expect(big.runs.filter { $0.inlinePresentationIntent == .stronglyEmphasized }.map { String(big[$0.range].characters) } == ["BlueLane"])
     }
 
     @Test func asksOnceTheKeysSettleAndNeverAgainOfAManagerWithoutIt() async throws {

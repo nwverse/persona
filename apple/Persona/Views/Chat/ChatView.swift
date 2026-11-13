@@ -1546,9 +1546,10 @@ struct ChatView: View {
             // The line right after the last input: the start of what the agent did and said for it.
             if let i = lines.lastIndex(where: \.isInput), i + 1 < lines.count { id = lines[i + 1].id }
         case .message(let item):
-            // A hub link's message: brought to the middle and lit up, as a quote's is; further up than what is
-            // loaded, older pages the same way as for a saved place; not found, the chat stays at the newest.
-            if jumpToQuoted(ContextRef(kind: "quote", title: "", url: "", text: "", msg: item)) {
+            // A hub link's or a search result's message (#6284): brought to the middle and lit up as a quote's is, a
+            // little longer, as the chat has just opened (`landingHold`); further up than what is loaded, older pages
+            // the same way as for a saved place; not found, the chat stays at the newest.
+            if jumpToQuoted(ContextRef(kind: "quote", title: "", url: "", text: "", msg: item), hold: Theme.Quote.landingHold) {
                 entry = nil
             } else if store.backlogBuilt {
                 if store.hasMore, scratch.entryPages < Self.entryPageLimit { searchOlderForEntry() } else { entry = nil }
@@ -2324,7 +2325,8 @@ struct ChatView: View {
     /// From a quote in a sent bubble to the message it quotes (#986): brought to the middle of the list and lit up
     /// for a moment. False when it is not in the loaded chat (an older page, another conversation): the block shows
     /// its whole text instead.
-    private func jumpToQuoted(_ ref: ContextRef) -> Bool {
+    /// `hold`: how long the message stays lit (`Theme.Quote.landingHold` where the chat opened at it).
+    private func jumpToQuoted(_ ref: ContextRef, hold: Duration = Theme.Quote.flashHold) -> Bool {
         if ref.isForward { return openForwarded(ref) }
         if openContextLink(ref) { return true }
         guard ref.kind == "quote", !ref.msg.isEmpty else { return false }
@@ -2356,7 +2358,7 @@ struct ChatView: View {
             try? await Task.sleep(for: .milliseconds(120)) // an opened work line's steps are laid out first
             withAnimation(Theme.Motion.standard) { position.scrollTo(id: target, anchor: .center) }
             try? await Task.sleep(for: .milliseconds(250))
-            quoteFlash = QuoteFlashMark(line: target)
+            quoteFlash = QuoteFlashMark(line: target, hold: hold)
         }
         return true
     }
@@ -2838,7 +2840,7 @@ struct ChatView: View {
                     #if os(iOS)
                     .pickable(Self.pickBar(line), mark: Self.pickMark(line), pick: pick, selecting: pick.on, refused: pickRefused)
                     #endif
-                    .background { if quoteFlash?.line == line.id { QuoteFlash().id(quoteFlash?.id) } }
+                    .background { if let flash = quoteFlash, flash.line == line.id { QuoteFlash(hold: flash.hold).id(flash.id) } }
                     .flippedBack()
                     .debugLineY(line.id, scratch)
                     .landingFrame(line.id == landing, scratch)

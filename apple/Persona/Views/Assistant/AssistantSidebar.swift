@@ -1736,8 +1736,7 @@ extension AssistantSidebar {
                 if let said {
                     VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                         titleText(title, named: !isMain)
-                        Text(AssistantSearchMerge.snippet(said))
-                            .font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(1)
+                        SearchSaidLine(hit: said)
                             .accessibilityIdentifier("sidebar-search-said")
                     }
                 } else {
