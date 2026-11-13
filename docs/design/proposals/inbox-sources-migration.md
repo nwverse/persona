@@ -135,7 +135,7 @@ Smallest gap first, so each step proves part of the design before the harder sou
 
 | Step | What | Needs |
 | --- | --- | --- |
-| P1 | Recipe fields: P1a `sender_id`, `chat`, `chat_name` (#6165); P1b `seen` and settling; P1c a failing pull shows as the source's read error at once | 3b |
+| P1 | Recipe fields: P1a `sender_id`, `chat`, `chat_name` (#6165); P1b `seen` (#6176); P1c a failing pull shows as the source's read error at once | 3b |
 | P2 | The `reply_to` field; reply through the subscription's connector; Draft and the twin check `CanReply` | 3b, 3c |
 | P3 | The twin's source info and knowledge-base chat for subscription items | 3d |
 | P4 | `changed` starts runs; extension-owned push sources | 3e |

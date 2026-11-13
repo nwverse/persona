@@ -109,6 +109,7 @@ func itemProblems(m mapped, f *wire.ConnectorSubscriptionFields) []FieldProblem 
 		{"sender_id", f.SenderID, m.item.SenderID != "", false},
 		{"chat", f.Chat, m.item.Chat != "", false},
 		{"chat_name", f.ChatName, m.item.ChatName != "", false},
+		{"seen", f.Seen, m.rawSeen != "", false},
 	} {
 		switch {
 		case c.path == "":
@@ -142,6 +143,7 @@ func emptyFieldWarnings(f *wire.ConnectorSubscriptionFields, items []mapped) []W
 		{"sender_id", f.SenderID, func(m mapped) bool { return m.item.SenderID != "" }},
 		{"chat", f.Chat, func(m mapped) bool { return m.item.Chat != "" }},
 		{"chat_name", f.ChatName, func(m mapped) bool { return m.item.ChatName != "" }},
+		{"seen", f.Seen, func(m mapped) bool { return m.rawSeen != "" }},
 	} {
 		if c.path == "" || slices.ContainsFunc(items, c.has) {
 			continue

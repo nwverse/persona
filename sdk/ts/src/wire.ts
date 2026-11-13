@@ -3241,8 +3241,8 @@ export const CONNECTOR_SUBSCRIPTION_KINDS = ["sub_mail", "sub_message", "sub_not
 
 /**
  * Paths relative to one item. Only $, .field and [index] are supported; no expressions or recursive descent.
- * sender_id, chat and chat_name name who and where for mutes and policies (the Inbox row's sender and chat tags);
- * they are not part of an item's content.
+ * sender_id, chat and chat_name name who and where for mutes and policies (the Inbox row's sender and chat tags), and
+ * seen its read state; none of them is part of an item's content.
  */
 export interface ConnectorSubscriptionFields {
   id?: string;
@@ -3259,6 +3259,11 @@ export interface ConnectorSubscriptionFields {
   chat?: string;
   /** The conversation's name, the chat tag's name. */
   chat_name?: string;
+  /**
+   * Whether the item was already seen in the source: true, a non-zero number, or true, 1, yes, read or seen in any
+   * case. The Inbox row is read when its newest item is; seen only ever turns on.
+   */
+  seen?: string;
 }
 
 /**

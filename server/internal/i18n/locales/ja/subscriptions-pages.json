@@ -113,6 +113,7 @@
   "field.link": "リンク",
   "field.sender": "差出人",
   "field.sender_id": "差出人 ID（ミュート用）",
+  "field.seen": "既読状態",
   "field.thread": "スレッド",
   "field.time": "日時",
   "field.title": "タイトル",

@@ -470,13 +470,14 @@ func TestSetup(t *testing.T) {
 	}
 }
 
-// The setup form has no pickers for who and where (#6165): saving it keeps the recipe's sender_id, chat and chat_name
-// while the subscription reads the same tool, and drops them for another tool, whose paths they would not fit.
+// The setup form has no pickers for who and where (#6165) or read state (#6176): saving it keeps the recipe's
+// sender_id, chat, chat_name and seen while the subscription reads the same tool, and drops them for another tool,
+// whose paths they would not fit.
 func TestSetupKeepsTheRecipesSenderAndChatIDs(t *testing.T) {
 	f := newFake()
 	sub := f.subs["sub_outlook"]
 	own := *sub.Recipe.Fields
-	own.SenderID, own.Chat, own.ChatName = "$.from.address", "$.conversationId", "$.topic"
+	own.SenderID, own.Chat, own.ChatName, own.Seen = "$.from.address", "$.conversationId", "$.topic", "$.isRead"
 	sub.Recipe.Fields = &own
 	f.subs["sub_outlook"] = sub
 	src := &f.cats[0].Sources[0]
@@ -484,11 +485,11 @@ func TestSetupKeepsTheRecipesSenderAndChatIDs(t *testing.T) {
 	form := map[string]string{"f.title": "$.subject", "f.sender": "$.from.name", "f.id": "$.id", "kind": "sub_mail", "group_by": "thread"}
 	handle(t, f, env(i18n.En, true), state{P: pageSetup, ID: "sub_outlook", C: "apps", S: "outlook", T: "search_messages", I: "$.value"}, "save", form)
 	got := f.patches["sub_outlook"][0].Recipe.Fields
-	if got.SenderID != own.SenderID || got.Chat != own.Chat || got.ChatName != own.ChatName || got.Title != "$.subject" {
+	if got.SenderID != own.SenderID || got.Chat != own.Chat || got.ChatName != own.ChatName || got.Seen != own.Seen || got.Title != "$.subject" {
 		t.Fatalf("saved fields: %+v", got)
 	}
 	handle(t, f, env(i18n.En, true), state{P: pageSetup, ID: "sub_outlook", C: "apps", S: "outlook", T: "list_flagged", I: "$.value"}, "save", form)
-	if got := f.patches["sub_outlook"][1].Recipe.Fields; got.SenderID != "" || got.Chat != "" || got.ChatName != "" {
+	if got := f.patches["sub_outlook"][1].Recipe.Fields; got.SenderID != "" || got.Chat != "" || got.ChatName != "" || got.Seen != "" {
 		t.Fatalf("another tool kept them: %+v", got)
 	}
 }

@@ -115,6 +115,7 @@
   "field.link": "Link",
   "field.sender": "Sender",
   "field.sender_id": "Sender ID (for muting)",
+  "field.seen": "Seen (read state)",
   "field.thread": "Thread",
   "field.time": "Time",
   "field.title": "Title",

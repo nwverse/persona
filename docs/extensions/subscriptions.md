@@ -64,7 +64,8 @@ A recipe is a description of one pull, independent of its schedule and enabled d
     "due_date": "$.due_date",
     "sender_id": "$.sender_id",
     "chat": "$.chat.id",
-    "chat_name": "$.chat.name"
+    "chat_name": "$.chat.name",
+    "seen": "$.read"
   },
   "kind": "sub_notice",
   "group_by": "thread"
@@ -73,7 +74,11 @@ A recipe is a description of one pull, independent of its schedule and enabled d
 
 Required fields are `mode`, `tool`, `kind`, and `group_by`. The tool must be a short name in this source. `args` defaults to `{}`; it is an object, and strings can contain the runner's `{{since}}` and `{{since_date}}` variables. `items_path` defaults to `$`. Field paths are relative to one item; all are optional at the protocol layer. Supported path syntax is `$`, `.field` (letters/underscore followed by letters, digits, underscore or hyphen), and `[index]`. Wildcards, filters, recursive descent and expressions are not supported.
 
-`sender_id`, `chat` and `chat_name` say who and where, for mutes and policies (#6165). They are not part of an item's content: they don't enter its content hash, so adding them to a recipe makes no item look changed. A row's `sender` tag matches by `sender_id` when the recipe maps it, kept as the source writes it, as a built-in's mutes match (a Lark sender id). Without it, the tag is the lowercased display name. With `chat` mapped, the row also gets a `chat` tag named by `chat_name` (the id when there is none), so its menu offers to mute the chat. The tags are the row's newest item's. The setup form has no pickers for these three: saving it keeps the recipe's own while the subscription reads the same tool.
+`sender_id`, `chat` and `chat_name` say who and where, for mutes and policies (#6165). They are not part of an item's content: they don't enter its content hash, so adding them to a recipe makes no item look changed. A row's `sender` tag matches by `sender_id` when the recipe maps it, kept as the source writes it, as a built-in's mutes match (a Lark sender id). Without it, the tag is the lowercased display name. With `chat` mapped, the row also gets a `chat` tag named by `chat_name` (the id when there is none), so its menu offers to mute the chat. The tags are the row's newest item's.
+
+`seen` is whether the item was already seen in the source (#6176). It is seen when its value is true, a non-zero number, or `true`, `1`, `yes`, `read` or `seen` in any case; anything else, or nothing, is unseen. An item pulled seen is held seen. When a later run reads an item it already holds as seen, it marks the held item seen in the same transaction as its other writes. Seen never turns off, as the Inbox's read state comes in from the source only. A row is read when its newest item is, a digest when all its items are, and the Inbox treats a read row as it treats a connector's thing read elsewhere (`docs/assistant/inbox.md` "Connector: GitHub (2026-11-02)"): it closes it unless it needs the user, and a read move never starts an item. Rows are sent again on every round for 8 days, so no separate settling is needed for read state. Like the identity fields, `seen` isn't part of the content hash.
+
+The setup form has no pickers for these four: saving it keeps the recipe's own while the subscription reads the same tool.
 
 An items recipe can opt into resumable pagination. Cursor pagination sets both `cursor_arg` (the top-level tool argument that takes the cursor) and `next_cursor_path` (where the result's next cursor is); a missing, null or empty cursor is terminal. Page pagination sets `page_arg` (a positive integer argument, default 1) and can set `next_page_path` to the result's next page number, or to a boolean that is true when another page exists. Without `next_page_path`, a full requested page continues and a short page is terminal. The two strategies cannot be combined. Every leased run reads one page and commits its new items, dedup keys and bounded continuation in one transaction. A continuation keeps the original window and is due immediately, still subject to the connector's call gap, budget and backoff. `since_at` and destination catch-up advance only after the terminal page. Repeated cursors/pages, invalid values and the 100-page safety cap pause the subscription in `needs_recipe` instead of skipping ahead. Recipes without these mappings keep their legacy one-page behavior.
 

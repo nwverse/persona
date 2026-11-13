@@ -183,7 +183,7 @@ func TestSubscriptionListGetAndSources(t *testing.T) {
 		t.Fatalf("sources of a connector: %s", b)
 	}
 	format := out["recipe_format"].(map[string]any)
-	if fmt.Sprint(format["fields"]) != "[id thread title sender time body link due_date sender_id chat chat_name]" || format["template_vars"].(map[string]any)["{{since_date}}"] == nil ||
+	if fmt.Sprint(format["fields"]) != "[id thread title sender time body link due_date sender_id chat chat_name seen]" || format["template_vars"].(map[string]any)["{{since_date}}"] == nil ||
 		fmt.Sprint(format["modes"].(map[string]any)["snapshot"]) == "" || len(format["group_by"].(map[string]any)) != 2 {
 		t.Fatalf("the recipe format: %v", format)
 	}
