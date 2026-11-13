@@ -3,7 +3,6 @@ package persona.feature.inbox
 import android.content.res.Resources
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
@@ -113,18 +112,18 @@ internal fun InboxSameMatterSheet(
     }
     val candidates = sameMatterCandidates(snapshot.records, record, tree?.children.orEmpty(), query)
     JSheet(onDismiss = onDismiss, title = stringResource(R.string.inbox_line_same), dismissible = !busy) {
-        Column(Modifier.fillMaxWidth().fillMaxHeight(0.92f).imePadding()) {
+        Column(Modifier.fillMaxWidth().imePadding()) {
             JSearchField(query, { query = it }, stringResource(R.string.inbox_line_search_placeholder), Modifier.fillMaxWidth())
             if (writeFailed) JNotice(stringResource(R.string.inbox_failed_retry), Modifier.padding(top = Tokens.Space.s))
             when {
-                loading -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) { JLoading() }
-                failed -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                loading -> Box(Modifier.weight(1f, fill = false).fillMaxWidth(), contentAlignment = Alignment.Center) { JLoading() }
+                failed -> Box(Modifier.weight(1f, fill = false).fillMaxWidth(), contentAlignment = Alignment.Center) {
                     JNotice(stringResource(R.string.inbox_refresh_failed), actionLabel = stringResource(R.string.inbox_retry), onAction = { attempt++ })
                 }
-                candidates.isEmpty() -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                candidates.isEmpty() -> Box(Modifier.weight(1f, fill = false).fillMaxWidth(), contentAlignment = Alignment.Center) {
                     Text(stringResource(R.string.inbox_line_empty), style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink3)
                 }
-                else -> LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
+                else -> LazyColumn(Modifier.weight(1f, fill = false).fillMaxWidth()) {
                     itemsIndexed(candidates, key = { _, candidate -> candidate.item.id }) { index, candidate ->
                         JGroupItem(GroupPosition.of(index, candidates.size)) {
                             JRow(candidate.item.title, subtitle = sameMatterMeta(candidate, res), enabled = !busy, onClick = {
