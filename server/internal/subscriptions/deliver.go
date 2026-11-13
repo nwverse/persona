@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kbwire"
@@ -48,10 +49,12 @@ type InboxSource struct {
 	Name   string            // its label
 	Kinds  map[string]string // what its kinds of items are, for the models
 	Things []connector.InboxThing
+	// ReadError says it is behind while its Inbox is on (readErrorOf): the short code a built-in's failed read has.
+	ReadError string
 }
 
-// InboxSources are the subscriptions as Inbox sources: one's items while its Inbox is on, a notice once it has failed
-// for a day, and the notice's end once it pulls again.
+// InboxSources are the subscriptions as Inbox sources: one's items while its Inbox is on, its read error while it is
+// behind (#6189), a notice once it has failed for a day, and the notice's end once it pulls again.
 func (s *Service) InboxSources(ctx context.Context) ([]InboxSource, error) {
 	all, err := s.o.Store.ListSubscriptions(ctx)
 	if err != nil {
@@ -68,9 +71,25 @@ func (s *Service) InboxSources(ctx context.Context) ([]InboxSource, error) {
 		d := s.deliverer(sub, now)
 		src.Things = append(src.Things, d.inboxThings(catchup, live)...)
 		src.Things = append(src.Things, d.failing())
+		if inboxFrom(sub) != nil {
+			src.ReadError = readErrorOf(sub.RunState)
+		}
 		out = append(out, src)
 	}
 	return out, nil
+}
+
+// readErrorOf is how a subscription in state says it is behind, as a built-in's failed read does (#6189): its last run
+// failed, or nothing is read until its recipe is fixed, or the connector asked it to wait. A connector that cannot be
+// called now is no failure (a built-in's is off), and the others read.
+func readErrorOf(state string) string {
+	switch state {
+	case StateFailing, StateNeedsRecipe:
+		return assistantwire.ReadFailed
+	case StateRateLimited:
+		return assistantwire.ReadRateLimited
+	}
+	return ""
 }
 
 func kindsOf(label string) map[string]string {
