@@ -201,6 +201,54 @@ final class PendingCardsTests: XCTestCase {
         shot("single-question-after-drag")
     }
 
+    /// An answer on its way (#6279): the card stays, greyed, with "Sending…" on the picked row until the hub has it; a
+    /// failed answer leaves the card with its pick, the error and Retry, which sends it again. Against
+    /// `MOCK_ASK_LONG=swipe MOCK_RESOLVE=slow` (the test switches the mock with /mock/resolve-mode).
+    ///   PORT=18798 MOCK_AGENTS=1 MOCK_ASK_LONG=swipe python3 scripts/mock/mock_hub.py &
+    ///   TEST_RUNNER_PERSONA_SENDING_HUB=http://127.0.0.1:18798 xcodebuild test … -only-testing:PersonaUITests/PendingCardsTests/testQuestionShowsSendingAndFailure
+    func testQuestionShowsSendingAndFailure() throws {
+        let hub = try XCTUnwrap(ProcessInfo.processInfo.environment["PERSONA_SENDING_HUB"])
+        func mode(_ m: String) { _ = try? Data(contentsOf: URL(string: hub + "/mock/resolve-mode?mode=\(m)")!) }
+        defer { mode("ok") }
+        // A stock simulator asks about notifications on the first launch: not allowing keeps the card in view.
+        addUIInterruptionMonitor(withDescription: "notifications") { alert in
+            let no = alert.buttons.matching(NSPredicate(format: "label IN %@", ["不允许", "Don’t Allow", "Don't Allow"])).firstMatch
+            if no.exists { no.tap(); return true }
+            return false
+        }
+        mode("slow")
+        launchMainQuestion(hubKey: "PERSONA_SENDING_HUB")
+        let question = app.staticTexts["短拖动也不要替我选"].firstMatch
+        if !question.waitForExistence(timeout: 8) { app.tap() } // lets the interruption monitor see a system alert
+        XCTAssertTrue(question.waitForExistence(timeout: 20), "no single-select question")
+        let first = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "选项 1")).firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 5), "no first option")
+        first.tap()
+        let sending = app.staticTexts.matching(NSPredicate(format: "label IN %@", ["正在发送…", "Sending…"])).firstMatch
+        XCTAssertTrue(sending.waitForExistence(timeout: 2), "no Sending… on the picked row:\n\(app.debugDescription)")
+        if !UITestStyle.isBeautiful { // BeautifulUI's card turns into its own "Sending…" line meanwhile
+            XCTAssertTrue(question.exists, "the card went while its answer was on the way")
+            XCTAssertFalse(first.isEnabled, "the options take a tap while sending")
+        }
+        shot("question-sending")
+        // The hub has it after a few seconds: the card goes.
+        XCTAssertTrue(sending.waitForNonExistence(timeout: 20) && question.waitForNonExistence(timeout: 5), "the card stayed after the hub had the answer")
+        app.terminate()
+
+        mode("fail")
+        launchMainQuestion(hubKey: "PERSONA_SENDING_HUB")
+        XCTAssertTrue(question.waitForExistence(timeout: 20), "no question after the relaunch")
+        first.tap()
+        let retry = app.buttons.matching(NSPredicate(format: "label IN %@", ["重试", "Retry"])).firstMatch
+        XCTAssertTrue(retry.waitForExistence(timeout: 10), "no Retry after a failed answer:\n\(app.debugDescription)")
+        XCTAssertTrue(question.exists, "the card went with its failed answer")
+        shot("question-failed")
+        mode("ok")
+        retry.tap()
+        XCTAssertTrue(question.waitForNonExistence(timeout: 15), "the card stayed after Retry")
+        app.terminate()
+    }
+
     func testLongReviewActionsAreVisibleWithoutScrolling() throws {
         let hub = try XCTUnwrap(ProcessInfo.processInfo.environment["PERSONA_REVIEW_HUB"])
         for scheme in ["light", "dark", "largest"] {
