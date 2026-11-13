@@ -68,7 +68,8 @@ struct TodoStageBar: View {
         }
     }
 
-    /// The line under the dots at the accessibility sizes: the current step and where it is among the six.
+    /// The line under the dots at the accessibility sizes: the current step and where it is among the six. Each
+    /// language's value has a no-break space before the "·", so a wrapped line keeps it at the end of the first line.
     nonisolated static func summary(_ stage: TodoStage) -> String {
         String(localized: "Step \(stage.stepNumber) of \(TodoStage.stepCount) · \(stage.label) [Todo Stage Bar]")
     }
