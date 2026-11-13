@@ -2,6 +2,9 @@ package persona.feature.inbox
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
@@ -67,8 +70,11 @@ class InboxSameMatterSheetTest {
         val tree = InboxLineage(InboxParentRef("inbox", "current"), current, children = listOf(child))
         val repository = FakeRepository(listOf(current, child, alpha, beta, done), tree)
         var dismisses = 0
+        var show by mutableStateOf(true)
         val linked = mutableListOf<InboxLineage?>()
-        rule.setContent { Sheet(repository, current, tree, { dismisses++ }, { linked += it }) }
+        rule.setContent {
+            if (show) Sheet(repository, current, tree, { dismisses++; show = false }, { linked += it })
+        }
         rule.onNodeWithText("Current").assertDoesNotExist()
         rule.onNodeWithText("Child").assertDoesNotExist()
         rule.onNodeWithText("Done").assertDoesNotExist()
