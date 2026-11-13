@@ -785,6 +785,7 @@ nonisolated struct ExtensionStoragePermission: Codable, Hashable, Sendable {
 nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
     var connectors: [ExtensionConnectorItem]?
     var voice: [ExtensionNamedItem]?
+    var transcription: [ExtensionNamedItem]?
     var computer: [ExtensionNamedItem]?
     var browser: [ExtensionNamedItem]?
     var iphone: [ExtensionNamedItem]?
@@ -812,9 +813,10 @@ nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
     /// Extra keys stay at this object's level on the wire; declared fields always win.
     var additionalProperties: [String: JSONValue]
 
-    init(connectors: [ExtensionConnectorItem]? = nil, voice: [ExtensionNamedItem]? = nil, computer: [ExtensionNamedItem]? = nil, browser: [ExtensionNamedItem]? = nil, iphone: [ExtensionNamedItem]? = nil, quota: [ExtensionQuotaItem]? = nil, providers: [ExtensionProviderItem]? = nil, api: [ExtensionAPIItem]? = nil, assistant: [ExtensionAssistantItem]? = nil, mcpServers: [ExtensionMCPServerItem]? = nil, ui: [ExtensionUIItem]? = nil, agentSources: [ExtensionAgentSourceItem]? = nil, channel: [ExtensionChannelItem]? = nil, events: [ExtensionEventsItem]? = nil, shortcuts: [ExtensionShortcutItem]? = nil, skills: [ExtensionSkillItem]? = nil, prompts: [ExtensionPromptItem]? = nil, themes: [ExtensionThemeItem]? = nil, looks: [ExtensionLookItem]? = nil, triageTemplates: [ExtensionTriageTemplateItem]? = nil, agentFilters: [ExtensionAgentFilterItem]? = nil, tunnels: [ExtensionTunnelItem]? = nil, errorReports: [ExtensionErrorReportsItem]? = nil, authRelay: [ExtensionAuthRelayItem]? = nil, secretProviders: [ExtensionSecretProviderItem]? = nil, messaging: [ExtensionMessagingItem]? = nil, additionalProperties: [String: JSONValue] = [:]) {
+    init(connectors: [ExtensionConnectorItem]? = nil, voice: [ExtensionNamedItem]? = nil, transcription: [ExtensionNamedItem]? = nil, computer: [ExtensionNamedItem]? = nil, browser: [ExtensionNamedItem]? = nil, iphone: [ExtensionNamedItem]? = nil, quota: [ExtensionQuotaItem]? = nil, providers: [ExtensionProviderItem]? = nil, api: [ExtensionAPIItem]? = nil, assistant: [ExtensionAssistantItem]? = nil, mcpServers: [ExtensionMCPServerItem]? = nil, ui: [ExtensionUIItem]? = nil, agentSources: [ExtensionAgentSourceItem]? = nil, channel: [ExtensionChannelItem]? = nil, events: [ExtensionEventsItem]? = nil, shortcuts: [ExtensionShortcutItem]? = nil, skills: [ExtensionSkillItem]? = nil, prompts: [ExtensionPromptItem]? = nil, themes: [ExtensionThemeItem]? = nil, looks: [ExtensionLookItem]? = nil, triageTemplates: [ExtensionTriageTemplateItem]? = nil, agentFilters: [ExtensionAgentFilterItem]? = nil, tunnels: [ExtensionTunnelItem]? = nil, errorReports: [ExtensionErrorReportsItem]? = nil, authRelay: [ExtensionAuthRelayItem]? = nil, secretProviders: [ExtensionSecretProviderItem]? = nil, messaging: [ExtensionMessagingItem]? = nil, additionalProperties: [String: JSONValue] = [:]) {
         self.connectors = connectors
         self.voice = voice
+        self.transcription = transcription
         self.computer = computer
         self.browser = browser
         self.iphone = iphone
@@ -845,6 +847,7 @@ nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
     enum CodingKeys: String, CodingKey {
         case connectors
         case voice
+        case transcription
         case computer
         case browser
         case iphone
@@ -875,6 +878,7 @@ nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
         let raw = try decoder.singleValueContainer().decode([String: JSONValue].self)
         self.connectors = ExtensionWireJSON.decode([ExtensionConnectorItem].self, from: raw["connectors"])
         self.voice = ExtensionWireJSON.decode([ExtensionNamedItem].self, from: raw["voice"])
+        self.transcription = ExtensionWireJSON.decode([ExtensionNamedItem].self, from: raw["transcription"])
         self.computer = ExtensionWireJSON.decode([ExtensionNamedItem].self, from: raw["computer"])
         self.browser = ExtensionWireJSON.decode([ExtensionNamedItem].self, from: raw["browser"])
         self.iphone = ExtensionWireJSON.decode([ExtensionNamedItem].self, from: raw["iphone"])
@@ -899,15 +903,16 @@ nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
         self.authRelay = ExtensionWireJSON.decode([ExtensionAuthRelayItem].self, from: raw["auth_relay"])
         self.secretProviders = ExtensionWireJSON.decode([ExtensionSecretProviderItem].self, from: raw["secret_providers"])
         self.messaging = ExtensionWireJSON.decode([ExtensionMessagingItem].self, from: raw["messaging"])
-        let known: Set<String> = ["connectors", "voice", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging"]
+        let known: Set<String> = ["connectors", "voice", "transcription", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging"]
         additionalProperties = raw.filter { !known.contains($0.key) }
     }
 
     func encode(to encoder: Encoder) throws {
-        let known: Set<String> = ["connectors", "voice", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging"]
+        let known: Set<String> = ["connectors", "voice", "transcription", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging"]
         var fields = additionalProperties.filter { !known.contains($0.key) }
         if let value = connectors { fields["connectors"] = try ExtensionWireJSON.encode(value) }
         if let value = voice { fields["voice"] = try ExtensionWireJSON.encode(value) }
+        if let value = transcription { fields["transcription"] = try ExtensionWireJSON.encode(value) }
         if let value = computer { fields["computer"] = try ExtensionWireJSON.encode(value) }
         if let value = browser { fields["browser"] = try ExtensionWireJSON.encode(value) }
         if let value = iphone { fields["iphone"] = try ExtensionWireJSON.encode(value) }
@@ -979,27 +984,39 @@ nonisolated enum ExtensionContentSource {
 nonisolated enum ExtensionPromptKind {
     static let instructions = "instructions"
     static let quick = "quick"
-    static let all = ["instructions", "quick"]
+    static let projectContext = "project_context"
+    static let inboxContext = "inbox_context"
+    static let all = ["instructions", "quick", "project_context", "inbox_context"]
 }
 
 /// A prompt: instructions (a .md of the package, or with source data of the data directory, added to the assistant's
-/// CLAUDE.md) or quick (a template the apps offer in the message box).
+/// CLAUDE.md), quick (a template the apps offer in the message box), project_context (a directory of the data
+/// directory whose <project slug>.md files go into a new Agent's project background) or inbox_context (a .md of the
+/// data directory added to the Inbox's triage and draft prompts).
 nonisolated struct ExtensionPromptItem: Codable, Hashable, Sendable {
     var id: String
     var kind: String
     var source: String?
-    /// instructions: the .md file (with source data: at most 6 KB, adopted at most once a day).
+    /// instructions: the .md file (with source data: at most 6 KB, adopted at most once a day); inbox_context: the
+    /// .md file (1 KB used).
     var file: String?
+    /// project_context: the directory of <project slug>.md files (1.5 KB of each used).
+    var dir: String?
+    /// inbox_context: a text file of sentences, one a line, a draft must not repeat word for word (64 KB used); only
+    /// checked, never in a prompt.
+    var neverQuote: String?
     /// quick: what the apps show.
     var title: String?
     /// quick: what goes into the message box.
     var text: String?
 
-    init(id: String = "", kind: String = "", source: String? = nil, file: String? = nil, title: String? = nil, text: String? = nil) {
+    init(id: String = "", kind: String = "", source: String? = nil, file: String? = nil, dir: String? = nil, neverQuote: String? = nil, title: String? = nil, text: String? = nil) {
         self.id = id
         self.kind = kind
         self.source = source
         self.file = file
+        self.dir = dir
+        self.neverQuote = neverQuote
         self.title = title
         self.text = text
     }
@@ -1009,6 +1026,8 @@ nonisolated struct ExtensionPromptItem: Codable, Hashable, Sendable {
         case kind
         case source
         case file
+        case dir
+        case neverQuote = "never_quote"
         case title
         case text
     }
@@ -1019,6 +1038,8 @@ nonisolated struct ExtensionPromptItem: Codable, Hashable, Sendable {
         self.kind = (try? c.decodeIfPresent(String.self, forKey: .kind)) ?? ""
         self.source = try? c.decodeIfPresent(String.self, forKey: .source)
         self.file = try? c.decodeIfPresent(String.self, forKey: .file)
+        self.dir = try? c.decodeIfPresent(String.self, forKey: .dir)
+        self.neverQuote = try? c.decodeIfPresent(String.self, forKey: .neverQuote)
         self.title = try? c.decodeIfPresent(String.self, forKey: .title)
         self.text = try? c.decodeIfPresent(String.self, forKey: .text)
     }
@@ -1620,7 +1641,7 @@ nonisolated struct ExtensionConnectorItem: Codable, Hashable, Sendable {
     }
 }
 
-/// A contribution with only an id and a name: voice, computer, browser.
+/// A contribution with only an id and a name: voice, transcription, computer, browser.
 nonisolated struct ExtensionNamedItem: Codable, Hashable, Sendable {
     var id: String
     var name: String?

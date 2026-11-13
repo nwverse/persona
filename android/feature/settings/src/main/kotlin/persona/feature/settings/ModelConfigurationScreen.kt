@@ -8,6 +8,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import android.content.res.Resources
 import persona.core.contracts.Machine
@@ -96,7 +97,7 @@ private fun ModelConfigurationDetails(models: ModelConfiguration?, onBack: () ->
             item("group-$group") { JSectionHeader(group, count = purposes.size) }
             itemsIndexed(purposes, key = { _, it -> "purpose-${it.id}" }) { index, purpose ->
                 JGroupItem(GroupPosition.of(index, purposes.size)) {
-                    JRow(purpose.displayName, subtitle = purposeSubtitle(res, purpose, requireNotNull(catalog)), subtitleLines = 3,
+                    JRow(purpose.displayName, subtitle = purposeSubtitle(res, purpose, requireNotNull(catalog)), subtitleLines = purposeSubtitleLines(purpose),
                         selected = detail == ModelPurposeRoute(purpose.id, owner), onClick = { onPurpose(purpose.id) })
                 }
             }
@@ -178,6 +179,10 @@ private fun ModelPurposeDetails(models: ModelConfiguration?, purposeId: String, 
     })) {
         item("manager") { ModelConfigurationOwner(owner) }
         if (purpose == null && state.busy) item("loading") { JLoading() }
+        // what the purpose is for, under its name (#5086); a task's, an extension's and an older hub's have none
+        purpose?.about?.let { about ->
+            item("about") { SettingsCaption(about, Modifier.padding(horizontal = rowPadding, vertical = Tokens.Space.s).testTag("model-purpose-about")) }
+        }
         if (purpose != null) {
             effective(res, purpose, state)
             form(res, purpose, state, onProvider = { choosingProvider = true }, onEdit = model::edit, onRestore = { save(true) },

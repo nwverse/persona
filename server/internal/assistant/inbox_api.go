@@ -36,6 +36,7 @@ func (s *Service) inboxRoutes() {
 	s.inboxSuggestionRoutes()
 	s.inboxHandoffRoutes()
 	s.inboxHistoryRoutes()
+	s.inboxTaskLinkRoutes()
 	s.translateRoutes()
 	// Items of connectors (GitHub…) only go to apps that draw them (?sources=all): an older app would show a PR as
 	// a mail and send a reply as one. triage says how many new items wait for the model, and why (inbox_admit.go).
@@ -118,6 +119,8 @@ func (s *Service) inboxRoutes() {
 			// Nothing the hub can call is set up for drafting: a coded answer the apps can explain, not a bare 502
 			// (an internal error's text never reaches the screen).
 			apierr.WriteCode(w, http.StatusServiceUnavailable, assistantwire.CodeModelUnavailable, i18n.Err("assistant-inbox.draft_no_model"))
+		case errors.Is(err, errDraftWithheld): // the drafts kept repeating what an extension marked never to quote
+			apierr.WriteCode(w, http.StatusUnprocessableEntity, "draft_withheld", err)
 		case err != nil:
 			apierr.Write(w, http.StatusBadGateway, err)
 		default:

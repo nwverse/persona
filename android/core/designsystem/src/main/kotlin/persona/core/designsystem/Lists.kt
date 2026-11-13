@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.ui.draw.rotate
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -164,7 +165,10 @@ object SectionHeaderTokens {
 /**
  * One item of a group. List groups ([separate] false) read as one container (a glass panel, ruled rows, a
  * bordered table); separate items are cards of their own (glass cards, wash cards, board strips).
- * [holder] gives board strips their coloured holder; other styles ignore it.
+ * [holder] gives board strips their coloured holder; other styles ignore it. [grouped]: the group is a card of iOS's
+ * grouped list on the black page (the computer's projects, #4338 A11): on Glass in dark it is the system's lighter gray
+ * ([PersonaPalette.surfaceOpaque], as [JSettingsSheet]'s grouped surfaces), where the translucent glass fill would leave it
+ * near-invisible beside its edge highlight. Light and the other styles draw as without it.
  */
 @Composable
 fun JGroupItem(
@@ -172,6 +176,7 @@ fun JGroupItem(
     modifier: Modifier = Modifier,
     separate: Boolean = false,
     holder: Status? = null,
+    grouped: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val palette = PersonaTheme.palette
@@ -189,7 +194,7 @@ fun JGroupItem(
     Column(modifier.fillMaxWidth().padding(bottom = gap)) {
         when (style) {
             AppStyle.Glass -> Column(
-                Modifier.fillMaxWidth().clip(shape).background(palette.surface)
+                Modifier.fillMaxWidth().clip(shape).background(if (grouped && palette.dark) palette.surfaceOpaque else palette.surface)
                     .then(if (separate) Modifier.border(1.dp, Brush.verticalGradient(listOf(palette.strokeTop, palette.strokeBottom)), shape) else Modifier)
                     .drawBehind {
                         if (!separate && position.first) drawLine(palette.strokeTop.copy(alpha = 0.6f), Offset(radius.toPx(), 0f), Offset(size.width - radius.toPx(), 0f), 1.dp.toPx())
@@ -538,6 +543,20 @@ fun JAvatar(
 }
 
 /**
+ * True inside a container that selects its whole content as one: the words of a message "Select" has selected in place
+ * (`MessageSelection.kt` in feature/chat). A block that would open a [SelectionContainer] of its own, a code block
+ * ([SelectableOnItsOwn]), joins that one, so a single selection runs across the message; and what a tap on text does
+ * (copying inline code) stands down.
+ */
+val LocalSelectionAbove = staticCompositionLocalOf { false }
+
+/** [content] selectable on its own, in a [SelectionContainer] of its own, unless a container above it covers it ([LocalSelectionAbove]). */
+@Composable
+fun SelectableOnItsOwn(content: @Composable () -> Unit) {
+    if (LocalSelectionAbove.current) content() else SelectionContainer { content() }
+}
+
+/**
  * Text the reader can long-press to select and copy (a link, an address shown to hand on), with no surface of its own;
  * [style] and [color] come from the theme like any [Text].
  */
@@ -576,7 +595,7 @@ fun JCodeBlock(
         .then(if (PersonaTheme.style == AppStyle.Brief) Modifier.border(1.dp, palette.line, shape) else Modifier)
     val inset = 14.dp.dense
     val text: @Composable (Modifier) -> Unit = { m ->
-        SelectionContainer {
+        SelectableOnItsOwn {
             Text(
                 code, style = if (small) PersonaTheme.type.codeSmall else PersonaTheme.type.code, color = palette.ink, maxLines = maxLines, overflow = TextOverflow.Ellipsis,
                 onTextLayout = onTextLayout, modifier = m.padding(inset),
@@ -585,7 +604,8 @@ fun JCodeBlock(
     }
     if (header == null) text(modifier.then(box))
     else Column(modifier.then(box)) {
-        header()
+        // the title bar is not code: a selection of the message leaves its language and Copy out
+        DisableSelection { header() }
         text(Modifier.fillMaxWidth())
     }
 }

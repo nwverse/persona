@@ -266,6 +266,7 @@ type StoragePermission struct {
 type Contributes struct {
 	Connectors      []ConnectorItem      `json:"connectors,omitempty"`
 	Voice           []NamedItem          `json:"voice,omitempty"`
+	Transcription   []NamedItem          `json:"transcription,omitempty"`
 	Computer        []NamedItem          `json:"computer,omitempty"`
 	Browser         []NamedItem          `json:"browser,omitempty"`
 	Iphone          []NamedItem          `json:"iphone,omitempty"`
@@ -300,7 +301,7 @@ func (v *Contributes) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	declared := map[string]json.RawMessage{}
-	for _, key := range []string{"connectors", "voice", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging"} {
+	for _, key := range []string{"connectors", "voice", "transcription", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging"} {
 		if value, ok := extra[key]; ok {
 			declared[key] = value
 			delete(extra, key)
@@ -332,7 +333,7 @@ func (v Contributes) MarshalJSON() ([]byte, error) {
 	}
 	for key, value := range v.AdditionalProperties {
 		switch key {
-		case "connectors", "voice", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging":
+		case "connectors", "voice", "transcription", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging":
 			continue
 		}
 		fields[key] = value
@@ -363,21 +364,31 @@ var ContentSources = []string{"package", "data"}
 
 // Values of PromptKind.
 const (
-	PromptKindInstructions = "instructions"
-	PromptKindQuick        = "quick"
+	PromptKindInstructions   = "instructions"
+	PromptKindQuick          = "quick"
+	PromptKindProjectContext = "project_context"
+	PromptKindInboxContext   = "inbox_context"
 )
 
 // PromptKinds are the values of PromptKind, in order.
-var PromptKinds = []string{"instructions", "quick"}
+var PromptKinds = []string{"instructions", "quick", "project_context", "inbox_context"}
 
 // PromptItem: A prompt: instructions (a .md of the package, or with source data of the data directory, added to the
-// assistant's CLAUDE.md) or quick (a template the apps offer in the message box).
+// assistant's CLAUDE.md), quick (a template the apps offer in the message box), project_context (a directory of the
+// data directory whose <project slug>.md files go into a new Agent's project background) or inbox_context (a .md of
+// the data directory added to the Inbox's triage and draft prompts).
 type PromptItem struct {
 	ID     string `json:"id"`
 	Kind   string `json:"kind"`
 	Source string `json:"source,omitempty"`
-	// instructions: the .md file (with source data: at most 6 KB, adopted at most once a day).
+	// instructions: the .md file (with source data: at most 6 KB, adopted at most once a day); inbox_context: the .md
+	// file (1 KB used).
 	File string `json:"file,omitempty"`
+	// project_context: the directory of <project slug>.md files (1.5 KB of each used).
+	Dir string `json:"dir,omitempty"`
+	// inbox_context: a text file of sentences, one a line, a draft must not repeat word for word (64 KB used); only
+	// checked, never in a prompt.
+	NeverQuote string `json:"never_quote,omitempty"`
 	// quick: what the apps show.
 	Title string `json:"title,omitempty"`
 	// quick: what goes into the message box.
@@ -618,7 +629,7 @@ type ConnectorItem struct {
 	SendsAsUser bool `json:"sends_as_user,omitempty"`
 }
 
-// NamedItem: A contribution with only an id and a name: voice, computer, browser.
+// NamedItem: A contribution with only an id and a name: voice, transcription, computer, browser.
 type NamedItem struct {
 	ID   string `json:"id"`
 	Name string `json:"name,omitempty"`
@@ -3044,14 +3055,17 @@ type ConnectorCatalogCallParams struct {
 	Args         json.RawMessage `json:"args,omitempty"`
 }
 
-// Values of ConnectorSubscriptionMode.
+// ConnectorSubscriptionMode: items: new items, each kept once; snapshot: the answer as one state, kept when it
+// changes; things: the answer lists Inbox rows ready-made (ConnectorInboxThing), kept and handed to the Inbox as they
+// are.
 const (
 	ConnectorSubscriptionModeItems    = "items"
 	ConnectorSubscriptionModeSnapshot = "snapshot"
+	ConnectorSubscriptionModeThings   = "things"
 )
 
 // ConnectorSubscriptionModes are the values of ConnectorSubscriptionMode, in order.
-var ConnectorSubscriptionModes = []string{"items", "snapshot"}
+var ConnectorSubscriptionModes = []string{"items", "snapshot", "things"}
 
 // Values of ConnectorSubscriptionGroup.
 const (
@@ -3077,7 +3091,9 @@ const (
 var ConnectorSubscriptionKinds = []string{"sub_mail", "sub_message", "sub_notice", "sub_deadline", "sub_event", "sub_update", "sub_digest"}
 
 // ConnectorSubscriptionFields: paths relative to one item. Only $, .field and [index] are supported; no expressions
-// or recursive descent.
+// or recursive descent. sender_id, chat and chat_name name who and where for mutes and policies (the Inbox row's
+// sender and chat tags), seen its read state, and reply_to where a reply goes; none of them is part of an item's
+// content.
 type ConnectorSubscriptionFields struct {
 	ID      string `json:"id,omitempty"`
 	Thread  string `json:"thread,omitempty"`
@@ -3087,19 +3103,38 @@ type ConnectorSubscriptionFields struct {
 	Body    string `json:"body,omitempty"`
 	Link    string `json:"link,omitempty"`
 	DueDate string `json:"due_date,omitempty"`
+	// The sender's stable id; without it the sender tag is the lowercased display name.
+	SenderID string `json:"sender_id,omitempty"`
+	// The conversation's stable id: the row gets a chat tag.
+	Chat string `json:"chat,omitempty"`
+	// The conversation's name, the chat tag's name.
+	ChatName string `json:"chat_name,omitempty"`
+	// Whether the item was already seen in the source: true, a non-zero number, or true, 1, yes, read or seen in any
+	// case. The Inbox row is read when its newest item is; seen only ever turns on.
+	Seen string `json:"seen,omitempty"`
+	// Where a reply goes and who sees it, in a line for people. With it, an item with an id can be replied to through
+	// the connector's inbox reply, with its thread (else its id) and its id as last.
+	ReplyTo string `json:"reply_to,omitempty"`
 }
 
-// ConnectorSubscriptionRecipe: A pull recipe, not a schedule. args is an object (default {}); strings may contain
-// {{since}} or {{since_date}}. items_path defaults to $; fields are relative to one item. Text results require
-// snapshot mode. Runtime argument/schema and mapped-value validation belongs to the subscription runner.
+// ConnectorSubscriptionRecipe: A pull recipe, not a schedule. In things mode the rows bring their own threads and
+// kinds: group_by is thread, kind is a row's when it has none, and fields and pagination are not used. args is an
+// object (default {}); strings may contain {{since}} or {{since_date}}. cursor_arg and next_cursor_path opt into
+// cursor pagination; page_arg and optional next_page_path opt into page pagination (without next_page_path, a full
+// requested page continues). items_path defaults to $; fields are relative to one item. Text results require snapshot
+// mode. Runtime argument/schema and mapped-value validation belongs to the subscription runner.
 type ConnectorSubscriptionRecipe struct {
-	Mode      string                       `json:"mode"`
-	Tool      string                       `json:"tool"`
-	Args      json.RawMessage              `json:"args,omitempty"`
-	ItemsPath string                       `json:"items_path,omitempty"`
-	Fields    *ConnectorSubscriptionFields `json:"fields,omitempty"`
-	Kind      string                       `json:"kind"`
-	GroupBy   string                       `json:"group_by"`
+	Mode           string                       `json:"mode"`
+	Tool           string                       `json:"tool"`
+	Args           json.RawMessage              `json:"args,omitempty"`
+	CursorArg      string                       `json:"cursor_arg,omitempty"`
+	NextCursorPath string                       `json:"next_cursor_path,omitempty"`
+	PageArg        string                       `json:"page_arg,omitempty"`
+	NextPagePath   string                       `json:"next_page_path,omitempty"`
+	ItemsPath      string                       `json:"items_path,omitempty"`
+	Fields         *ConnectorSubscriptionFields `json:"fields,omitempty"`
+	Kind           string                       `json:"kind"`
+	GroupBy        string                       `json:"group_by"`
 }
 
 // ConnectorErrorCode: error.code a program answers or gets besides the base ErrorCode: rate_limited (tools.call /
@@ -4483,6 +4518,52 @@ type KBDetail struct {
 	Recap json.RawMessage `json:"recap,omitempty"`
 	// A topic's knowledge points (docs/assistant/knowledge.md "Topics").
 	Points []KBTopicPoint `json:"points,omitempty"`
+	// A person's profiles by writer ("user", "ext:<id>"), as written; summary shows them too
+	// (docs/assistant/knowledge.md "Person profiles").
+	Profiles map[string]KBProfileRecord `json:"profiles,omitempty"`
+}
+
+type KBProfileRecord struct {
+	Profile KBPersonProfile `json:"profile"`
+	At      time.Time       `json:"at"`
+}
+
+// KBPersonProfile: one writer's profile of a person, its four parts kept apart. Every item says where it comes from;
+// at most 30 items a part, and 8000 bytes as summary.md shows it.
+type KBPersonProfile struct {
+	// Their role, what they are in charge of, how they relate to the user.
+	Facts []KBProfileItem `json:"facts,omitempty"`
+	// The user's own words about them, quoted.
+	Views []KBProfileItem `json:"views,omitempty"`
+	// Inferred, never stated: each needs its basis. Shown as only a hint.
+	Inferences []KBProfileItem `json:"inferences,omitempty"`
+	// Promises and to-dos between the user and them, either way.
+	Commitments []KBProfileCommitment `json:"commitments,omitempty"`
+}
+
+type KBProfileItem struct {
+	Text string `json:"text"`
+	// Inferences only (required there): what it rests on.
+	Basis string `json:"basis,omitempty"`
+	// Where it comes from: a knowledge-base path (chats/<id>/messages/<day>.md, recordings/<id>), a URL, or "user" for
+	// the user's own word.
+	Sources []string `json:"sources"`
+}
+
+type KBProfileCommitment struct {
+	Text string `json:"text"`
+	// user: the user owes it to them; them: they owe it to the user.
+	Owes string `json:"owes"`
+	// YYYY-MM-DD, when there is one.
+	Due     string   `json:"due,omitempty"`
+	Done    bool     `json:"done,omitempty"`
+	Sources []string `json:"sources"`
+}
+
+// KBIgnoredField: A field an update carried that its kind does not use: not applied, and why.
+type KBIgnoredField struct {
+	Field  string `json:"field"`
+	Reason string `json:"reason"`
 }
 
 // KBTopicPoint: one knowledge point of a topic, under up to two levels of subtopics (path).
@@ -4526,6 +4607,13 @@ type KBRecordingSegment struct {
 	// An all-day recording's line number: the segment's 1-based position in its uploads (docs/assistant/day-recap.md);
 	// absent on other recordings.
 	N int `json:"n,omitempty"`
+	// Whose text the segment is in a meeting transcribed on the hub (docs/assistant/meeting-minutes.md "The transcript
+	// of record"): hub or device; absent means device.
+	Source string `json:"source,omitempty"`
+	// The line is Persona's own answer as the meeting's microphone heard it (docs/assistant/meeting-minutes.md
+	// "Persona's echo"): kept in the transcript but not what the meeting said, so leave it out of anything read as the
+	// meeting's words; absent (false) on every other line.
+	Echo bool `json:"echo,omitempty"`
 }
 
 // KBDayParams: kb.day: a chat's messages of one day in the knowledge base's time zone.
@@ -4618,6 +4706,10 @@ type KBUpdateParams struct {
 	Projects []string `json:"projects,omitempty"`
 	// Refused (conflict) when the user or another extension holds anything on the project folded away; no before.
 	MergeInto string `json:"merge_into,omitempty"`
+	// People only: this extension's own profile of the person, replacing the one it wrote before (one with no items
+	// removes it). Nobody else's profile, nor pinned or note, is touched; before.profile is the one replaced. A profile
+	// breaking a rule is invalid_params and nothing is written.
+	Profile *KBPersonProfile `json:"profile,omitempty"`
 	// Kept as the provenance of the fields this write holds.
 	Evidence []KBEvidence `json:"evidence,omitempty"`
 	// Fields this extension holds, handed back to the built-in pipeline; unlocking pinned clears it.
@@ -4626,8 +4718,12 @@ type KBUpdateParams struct {
 
 type KBUpdateResult struct {
 	ID string `json:"id"`
-	// The previous value of each field written (null when unset; summary is the old text), for the extension's own undo.
+	// The previous value of each field written (null when unset; summary is the old text, profile this extension's own
+	// profile before), for the extension's own undo.
 	Before map[string]json.RawMessage `json:"before,omitempty"`
+	// Fields the update carried that its kind does not use (a person's summary and log, for one): not applied, each with
+	// why.
+	Ignored []KBIgnoredField `json:"ignored,omitempty"`
 }
 
 // KBOwnerParams: kb.owner takes nothing.
@@ -4969,10 +5065,10 @@ type AssistantMessagesResult struct {
 type AssistantDataStatusParams struct {
 }
 
-// AssistantDataState: what the assistant reads of the contribution: adopted (the content as it is now; skills: sent),
-// pending (instructions: an older version, the new one waits for next_adopt_at), kept (instructions: an older
-// version, the new one cannot be used, see reason), none (nothing: none written yet, none usable, or the extension or
-// contribution is switched off).
+// AssistantDataState: what the assistant reads of the contribution: adopted (the content as it is now; skills: sent;
+// project and Inbox context: used whenever their prompt is built), pending (instructions: an older version, the new
+// one waits for next_adopt_at), kept (instructions: an older version, the new one cannot be used, see reason), none
+// (nothing: none written yet, none usable, or the extension or contribution is switched off).
 const (
 	AssistantDataStateAdopted = "adopted"
 	AssistantDataStatePending = "pending"
@@ -5004,7 +5100,7 @@ var AssistantDataReasons = []string{"too_large", "invalid", "not_regular", "unre
 type AssistantDataItem struct {
 	// Its id, as the manifest has it.
 	Contribution string `json:"contribution"`
-	// instructions or skills.
+	// instructions, skills, project_context or inbox_context.
 	Kind string `json:"kind"`
 	// Its file or directory, relative to the data directory.
 	Path string `json:"path"`
@@ -5029,6 +5125,12 @@ type AssistantDataItem struct {
 	NextAdoptAt string `json:"next_adopt_at,omitempty"`
 	// skills: the skills sent.
 	Skills []string `json:"skills,omitempty"`
+	// project_context: the projects (slugs) with a file in use.
+	Files []string `json:"files,omitempty"`
+	// project_context, inbox_context: some content is used cut at its limit (detail says which).
+	Truncated bool `json:"truncated,omitempty"`
+	// inbox_context: how many sentences drafts are checked against.
+	NeverQuote int `json:"never_quote,omitempty"`
 }
 
 type AssistantDataStatusResult struct {
@@ -6211,6 +6313,11 @@ var newDef = map[string]func() any{
 	"KBGetParams":                   func() any { return new(KBGetParams) },
 	"KBGetResult":                   func() any { return new(KBGetResult) },
 	"KBDetail":                      func() any { return new(KBDetail) },
+	"KBProfileRecord":               func() any { return new(KBProfileRecord) },
+	"KBPersonProfile":               func() any { return new(KBPersonProfile) },
+	"KBProfileItem":                 func() any { return new(KBProfileItem) },
+	"KBProfileCommitment":           func() any { return new(KBProfileCommitment) },
+	"KBIgnoredField":                func() any { return new(KBIgnoredField) },
 	"KBTopicPoint":                  func() any { return new(KBTopicPoint) },
 	"KBTopicSource":                 func() any { return new(KBTopicSource) },
 	"KBMomentRef":                   func() any { return new(KBMomentRef) },

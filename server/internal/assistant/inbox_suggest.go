@@ -35,6 +35,8 @@ type errSuggestion struct{ msg string }
 
 func (e errSuggestion) Error() string { return e.msg }
 
+var errSuggestFiled = errSuggestion{"this inbox item is already filed, so the suggestion was not submitted and the user cannot see it; end this turn"}
+
 // check holds a suggestion to the rules before anything is kept.
 func (in *suggestIn) check() error {
 	in.Kind, in.Text, in.Outcome = strings.TrimSpace(in.Kind), strings.TrimSpace(in.Text), strings.TrimSpace(in.Outcome)
@@ -113,6 +115,10 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 			return "", nil, nil, errNotProcessing
 		}
 	}
+	if from == nil && in.Kind != "" && !it.open() {
+		b.mu.Unlock()
+		return "", nil, nil, errSuggestFiled
+	}
 	for _, ch := range in.Changes {
 		if it.Doc == nil || !docOffers(*it.Doc, ch) {
 			b.mu.Unlock()
@@ -128,6 +134,7 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 		relate(it, b.items[strings.TrimSpace(id)])
 	}
 	var card *MessageCard
+	var handed *handoffCard
 	stop := false
 	if from == nil && in.Kind == "" && it.open() && it.Handling != nil && it.Handling.State == HandlingLooking {
 		// Only the recap: this turn changes nothing else, the event goes back to where it was.
@@ -188,6 +195,7 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 		if in.Kind == SuggestReply && from == nil {
 			card = messageCardOf(it)
 		}
+		handed = handoffCardOf(it, g, in.Outcome)
 	}
 	id := it.ID
 	b.settle(w)
@@ -201,6 +209,9 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 	if card != nil {
 		s.messageCard(ctx, id, *card)
 	}
+	if handed != nil {
+		s.postHandoffCard(ctx, *from, id, *handed)
+	}
 	if stop {
 		s.tellSoon(ctx, it)
 	}
@@ -210,7 +221,7 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 // inboxDraft keeps the reply drafted in conversation sessionID (inbox_draft, the older name): suggest with kind reply.
 func (s *Service) inboxDraft(ctx context.Context, sessionID, text, note string, proposed []DocChange) (string, *DocChange, error) {
 	id, refused, err := s.suggest(ctx, sessionID, suggestIn{Kind: SuggestReply, Text: text, Note: note, Changes: proposed})
-	if err != nil && !errors.Is(err, errInboxNotPersisted) {
+	if err != nil && !errors.Is(err, errInboxNotPersisted) && !errors.Is(err, errSuggestFiled) {
 		return "", nil, nil
 	}
 	return id, refused, err
@@ -232,7 +243,7 @@ func (s *Service) toolInboxSuggest(ctx context.Context, self string, args json.R
 		return "The recap is updated.", nil
 	}
 	if from != nil {
-		return "The suggestion is in the user's inbox; nothing goes out until they confirm. What they do with it is told here; later messages on the item are not.", nil
+		return "The suggestion is in the user's inbox and shown in this chat as a card (no need to repeat it in full); nothing goes out until they confirm. What they do with it is told here; later messages on the item are not.", nil
 	}
 	return "The suggestion is in the user's inbox; nothing goes out until they confirm. End this turn: what comes next (their answer, new messages) is sent here.", nil
 }

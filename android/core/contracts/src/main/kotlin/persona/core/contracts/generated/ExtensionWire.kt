@@ -390,6 +390,7 @@ data class ExtensionStoragePermission(
 data class ExtensionContributes(
     val connectors: List<ExtensionConnectorItem>? = null,
     val voice: List<ExtensionNamedItem>? = null,
+    val transcription: List<ExtensionNamedItem>? = null,
     val computer: List<ExtensionNamedItem>? = null,
     val browser: List<ExtensionNamedItem>? = null,
     val iphone: List<ExtensionNamedItem>? = null,
@@ -422,6 +423,7 @@ data class ExtensionContributes(
 private data class ExtensionContributesKnown(
     val connectors: List<ExtensionConnectorItem>? = null,
     val voice: List<ExtensionNamedItem>? = null,
+    val transcription: List<ExtensionNamedItem>? = null,
     val computer: List<ExtensionNamedItem>? = null,
     val browser: List<ExtensionNamedItem>? = null,
     val iphone: List<ExtensionNamedItem>? = null,
@@ -450,7 +452,7 @@ private data class ExtensionContributesKnown(
 
 object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
     private val known = ExtensionContributesKnown.serializer()
-    private val keys = setOf<String>("connectors", "voice", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging")
+    private val keys = setOf<String>("connectors", "voice", "transcription", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging")
     override val descriptor: SerialDescriptor = known.descriptor
 
     override fun deserialize(decoder: Decoder): ExtensionContributes {
@@ -461,6 +463,7 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
         return ExtensionContributes(
             connectors = fields.connectors,
             voice = fields.voice,
+            transcription = fields.transcription,
             computer = fields.computer,
             browser = fields.browser,
             iphone = fields.iphone,
@@ -494,6 +497,7 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
         val fields = ExtensionContributesKnown(
             connectors = value.connectors,
             voice = value.voice,
+            transcription = value.transcription,
             computer = value.computer,
             browser = value.browser,
             iphone = value.iphone,
@@ -556,12 +560,16 @@ object ExtensionContentSource {
 object ExtensionPromptKind {
     const val INSTRUCTIONS = "instructions"
     const val QUICK = "quick"
-    val ALL = listOf("instructions", "quick")
+    const val PROJECT_CONTEXT = "project_context"
+    const val INBOX_CONTEXT = "inbox_context"
+    val ALL = listOf("instructions", "quick", "project_context", "inbox_context")
 }
 
 /**
  * A prompt: instructions (a .md of the package, or with source data of the data directory, added to the assistant's
- * CLAUDE.md) or quick (a template the apps offer in the message box).
+ * CLAUDE.md), quick (a template the apps offer in the message box), project_context (a directory of the data
+ * directory whose <project slug>.md files go into a new Agent's project background) or inbox_context (a .md of the
+ * data directory added to the Inbox's triage and draft prompts).
  */
 @Serializable
 data class ExtensionPromptItem(
@@ -569,9 +577,19 @@ data class ExtensionPromptItem(
     val kind: String = "",
     val source: String? = null,
     /**
-     * instructions: the .md file (with source data: at most 6 KB, adopted at most once a day).
+     * instructions: the .md file (with source data: at most 6 KB, adopted at most once a day); inbox_context: the .md
+     * file (1 KB used).
      */
     val file: String? = null,
+    /**
+     * project_context: the directory of <project slug>.md files (1.5 KB of each used).
+     */
+    val dir: String? = null,
+    /**
+     * inbox_context: a text file of sentences, one a line, a draft must not repeat word for word (64 KB used); only
+     * checked, never in a prompt.
+     */
+    @SerialName("never_quote") val neverQuote: String? = null,
     /**
      * quick: what the apps show.
      */
@@ -890,7 +908,7 @@ data class ExtensionConnectorItem(
 )
 
 /**
- * A contribution with only an id and a name: voice, computer, browser.
+ * A contribution with only an id and a name: voice, transcription, computer, browser.
  */
 @Serializable
 data class ExtensionNamedItem(

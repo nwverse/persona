@@ -69,6 +69,7 @@ class ChatComposerState(initial: ChatComposerDraft = ChatComposerDraft()) {
     /** What [message] says for videos sent without words or photos ("Please look at the video", iOS); kept like [photosOnlyText]. */
     var videosOnlyText: String = ""
     var value by mutableStateOf(TextFieldValue(initial.text, TextRange(initial.text.length)))
+    var draftLoaded by mutableStateOf(false)
     private var attachmentList by mutableStateOf(initial.attachments)
     /** Edited photos' sources, edits and history by attachment id (#4992): kept in memory beside the draft, never sent. */
     internal var photoEdits by mutableStateOf<Map<String, PhotoEdits>>(emptyMap())
@@ -130,6 +131,7 @@ class ChatComposerState(initial: ChatComposerDraft = ChatComposerDraft()) {
         value = TextFieldValue(draft.text, TextRange(draft.text.length))
         attachments = draft.attachments
         sessionVersion = draft.sessionVersion
+        draftLoaded = true
     }
 
     fun editMessage(text: String) {
@@ -178,6 +180,17 @@ class ChatComposerState(initial: ChatComposerDraft = ChatComposerDraft()) {
         attachments = attachments + restored.attachments.filter { item -> attachments.none { it.id == item.id } }
     }
 
+    /**
+     * Photos taken back with a queued message (the hub returns a Persona conversation's beside its queue, [restoredPhotos]),
+     * kept in the draft as the photos they were. All of them stay, as on iOS: a message went out with at most four, and the
+     * draft's four-place limit is the pickers', not the send's.
+     */
+    internal fun restorePhotos(photos: List<ComposerAttachment>) {
+        if (photos.isEmpty()) return
+        beginEdit()
+        attachments = attachments + photos
+    }
+
     companion object {
         val Saver = listSaver<ChatComposerState, String>(
             save = { state -> listOf(state.value.text, JsonCodec.encodeToString(state.draft.storedAttachments()),
@@ -195,8 +208,11 @@ class ChatComposerState(initial: ChatComposerDraft = ChatComposerDraft()) {
 }
 
 @Composable
-fun rememberChatComposerState(initial: ChatComposerDraft = ChatComposerDraft()): ChatComposerState =
-    rememberSaveable(saver = ChatComposerState.Saver) { ChatComposerState(initial) }
+fun rememberChatComposerState(initial: ChatComposerDraft = ChatComposerDraft()): ChatComposerState {
+    val state = rememberSaveable(saver = ChatComposerState.Saver) { ChatComposerState(initial) }
+    SideEffect { state.draftLoaded = true }
+    return state
+}
 
 internal fun quoteComposerPath(path: String): String =
     if (path.any { it.isWhitespace() || it in "'\"\\\$`;&|<>()[]{}*?!" }) "'${path.replace("'", "'\\''")}'" else path
@@ -211,6 +227,9 @@ private val composerPhotoStandIns = setOf(
     "画像を見てください", // i18n-ignore
     "動画を見てください", // i18n-ignore
 )
+
+/** How many photos a message carries as paths on the computer (its `<attached_images>` block): what a queued row says it carries. */
+internal fun composerPhotoCount(text: String): Int = composerImagePaths(text).size
 
 private fun composerImagePaths(text: String): List<String> =
     composerImageTags.findAll(text).flatMap { it.groupValues[1].lineSequence() }
