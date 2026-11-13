@@ -1842,6 +1842,16 @@ submenu retired. Fast is a toggle showing the current value, and its label expla
 waits for native acknowledgment and the session push; turning Fast off is the reversible choice. Settings > Agents >
 Codex uses the existing agent-settings row for the native default. No account or session is automatically switched to Fast.
 
+A new Persona conversation on the web reuses that same model flyout (#6240), inside Agents-facing customization rather
+than adding an everyday-facing setting. While the default manager is in use, the hub feature
+`assistant_start_service_tier` comes from that manager's hello, and a selected model whose native `service_tiers`
+advertise `priority` has its Fast toggle available before the first message; other models, managers and older hubs do not
+show it. The local Fast choice and reasoning effort are independent (principle 5), enabling Fast pins the displayed
+launcher, model and effort, and an untouched start preserves the native default (principle 1). The first request carries
+only an explicit choice, which must be natively acknowledged before the first turn; a refusal is recoverable and never
+silently means Standard (principles 3 and 7). A successful start, Follow default, a dropped pick or a manager change
+clears the one-off draft; a refused start retains it. New Agent has no start speed control.
+
 ## Hub connection password (#4474)
 
 The administrator's Devices page owns the connection-password switch and registration form. It is off until an
