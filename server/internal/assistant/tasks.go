@@ -694,8 +694,9 @@ func (s *Service) taskRoutes() {
 			return
 		}
 		var in struct {
-			TodoID string `json:"todo_id"`
-			Text   string `json:"text"`
+			TodoID  string `json:"todo_id"`
+			Text    string `json:"text"`
+			AskedAt string `json:"asked_at"`
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
@@ -705,7 +706,13 @@ func (s *Service) taskRoutes() {
 			apierr.Write(w, http.StatusBadRequest, errors.New("todo_id and text are required"))
 			return
 		}
-		it, err := s.routeToTask(r.Context(), r.PathValue("id"), in.TodoID, in.Text)
+		var it FeedItem
+		var err error
+		if in.AskedAt != "" {
+			it, err = s.routeDecisionAnswer(r.Context(), r.PathValue("id"), in.TodoID, in.AskedAt, in.Text)
+		} else {
+			it, err = s.routeToTask(r.Context(), r.PathValue("id"), in.TodoID, in.Text)
+		}
 		if err != nil {
 			apierr.Write(w, http.StatusConflict, err)
 			return

@@ -2365,6 +2365,7 @@ export const Header = memo(function Header({
     }));
   const { items: assistantItems, dialogs: assistantDialogs } = useAssistantMenu(assistant ? session : undefined);
   const feishu = externalLink(session);
+  const linkedTodo = session?.todo ?? session?.completed_todo;
 
   const own: MenuItem[] = session
     ? [
@@ -2372,21 +2373,22 @@ export const Header = memo(function Header({
         ...(others.length > 0 ? [spaceAgentsItem(others, () => tabs.openAt(menu.anchor))] : []),
         ...assistantItems,
         ...(!assistant && !main ? [{ key: "share", label: t("chat-chatview.share"), icon: "link" as const, onSelect: () => setSharingOpen(true) }] : []),
-        ...(session.todo
+        ...(linkedTodo
           ? [
               {
                 key: "todo-detail",
-                label: t("chat-chatview.todo_label", { title: session.todo.title }),
+                label: t(session.todo ? "chat-chatview.todo_label" : "chat-chatview.todo_completed_label", { title: linkedTodo.title }),
                 icon: "todo" as const,
-                onSelect: () => navigate(`/todos?id=${encodeURIComponent(session.todo!.id)}`),
+                onSelect: () => navigate(`/todos?id=${encodeURIComponent(linkedTodo.id)}`),
               },
+              ...(session.todo ? [
               {
                 key: "unlink-todo",
                 label: t("chat-chatview.unlink_todo"),
                 icon: "x" as const,
                 onSelect: async () => {
                   try {
-                    await unlinkAgentFromTodo(session.todo!.id, session.machine_id, session.session_id);
+                    await unlinkAgentFromTodo(linkedTodo.id, session.machine_id, session.session_id);
                     await refreshTodos();
                     await refresh();
                     toast(t("chat-chatview.todo_unlinked"), "ok");
@@ -2401,6 +2403,7 @@ export const Header = memo(function Header({
                 icon: "todo" as const,
                 onSelect: () => setLinkTodoOpen(true),
               },
+              ] : []),
             ]
           : !assistant
             ? [
