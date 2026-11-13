@@ -21,7 +21,7 @@ from pathlib import Path
 # python -I removes the script's directory from sys.path. These modules are the
 # trusted sibling implementation, not imports from an untrusted PR checkout.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from pr_watch_common import WatchError, atomic_json, bounded, checked, fingerprint, gh_json, pr_snapshot, repository, run, SHA
+from pr_watch_common import WatchError, atomic_json, bounded, checked, fingerprint, gh_json, pr_snapshot, repository, run, SHA, verification_env
 from pr_watch_merge import linked_issue, merge as generic_merge
 import pr_watch_merge
 from pr_watch_review import review as semantic_review
@@ -199,12 +199,15 @@ class Watcher:
 
     @contextmanager
     def merging(self, repo):
-        """Each repository's exact-head finish is serial and shares merge-pr.sh's lock."""
+        """Generic merges share the file lock; Persona delegates it to merge-pr.sh."""
         with self.merge_locks_guard:
             lock = self.merge_locks.setdefault(repo, threading.Lock())
         with lock:
-            with pr_watch_merge.merge_lock(self.repositories[repo]["checkout"]):
+            if repo == repository("nwverse/persona"):
                 yield
+            else:
+                with pr_watch_merge.merge_lock(self.repositories[repo]["checkout"]):
+                    yield
 
     def worktree(self, repo, number, pr):
         config = self.repositories[repo]
@@ -291,15 +294,17 @@ class Watcher:
             self.log("%s#%s passed; merge disabled" % (repo, number))
             return False
         if repo == repository("nwverse/persona"):
-            # The repository wrapper owns the shared merge lock and scans using
-            # this machine's private values, never the PR's copy of the script.
+            # merge-pr.sh owns the shared lock for this path. Acquiring it in
+            # another process while self.merging() holds it would deadlock.
             wrapper = str(Path(__file__).resolve().parents[2] / "scripts" / "hooks" / "merge-pr.sh")
-            result = run(["bash", wrapper, str(number)], cwd=root, timeout=600)
+            result = run(["bash", wrapper, "--expect-head", pr["headRefOid"],
+                          "--expect-base", pr["baseRefOid"], str(number)], cwd=root, timeout=600)
             if result.returncode:
                 raise WatchError("exact-head merge failed: " + bounded(result.stderr or result.stdout, 2000))
         else:
             privacy = config.get("privacy")
-            generic_merge(repo, number, root, privacy=privacy, timeout=600)
+            generic_merge(repo, number, root, privacy=privacy, timeout=600,
+                          expected_head=pr["headRefOid"], expected_base=pr["baseRefOid"])
         if pr_snapshot(repo, number)["state"] != "MERGED":
             raise WatchError("merge returned without a merged PR")
         self.log("%s#%s merged at %s" % (repo, number, pr["headRefOid"][:9]))
@@ -322,7 +327,11 @@ class Watcher:
         config = self.repositories[repo]
         key = (repo, number)
         self.phase(key, "reading PR")
-        pr = pr_snapshot(repo, number)
+        try:
+            pr = pr_snapshot(repo, number)
+        except WatchError as error:
+            self.log("%s#%s snapshot unavailable; no state or merge decision: %s" % (repo, number, bounded(error, 500)))
+            return
         if pr["baseRefName"] != config["base"] or pr["state"] != "OPEN" or pr["isDraft"]:
             return
         head = pr["headRefOid"]
@@ -333,9 +342,22 @@ class Watcher:
         if old.get("head") == head and old.get("retry_after", 0) > time.time():
             return
         if old.get("head") == head and old.get("outcome") in ("findings", "failed", "merged", "passed"):
-            return
+            if self.dry_run or old.get("review_posted") or old.get("outcome") == "merged":
+                return
+            # A dry run keeps semantic/test evidence but has no external side
+            # effects. A live run resumes publication and the merge gate.
+            if old.get("semantic") == "findings":
+                self.comment_findings(repo, number, pr, old.get("findings", []))
+                self.state.put(repo, number, head, evidence_key=evidence_key, review_posted=True)
+                return
+            if old.get("outcome") == "failed":
+                self.comment(repo, number, "Automated review at `%s` did not pass. Not merged.\n\n```text\n%s\n```" %
+                             (head[:9], bounded(old.get("failure", "verification failed"), 4500)))
+                self.state.put(repo, number, head, evidence_key=evidence_key, failure_posted=True)
+                return
         if not self.mergeable(pr):
             return
+        phase = "merge"
         if old.get("head") == head and old.get("outcome") == "merge_failed":
             if old.get("retry_after", 0) > time.time():
                 return
@@ -371,16 +393,16 @@ class Watcher:
                     self.phase(key, "posting actionable findings")
                     if not self.dry_run:
                         self.comment_findings(repo, number, pr, findings)
-                    current = self.state.put(repo, number, head, review_posted=True, outcome="findings")
+                    current = self.state.put(repo, number, head, evidence_key=evidence_key,
+                                             review_posted=not self.dry_run, outcome="findings")
                 self.log("%s#%s has %d semantic finding(s); not merged" % (repo, number, len(findings)))
                 return
             if current.get("verification") != "passed":
                 self.phase(key, "repository verification")
                 phase = "verification"
-                results = verify(repo, pr, str(worktree), config["verify"])
+                results = verify(repo, pr, str(worktree), config["verify"], environ=verification_env())
                 current = self.state.put(repo, number, head, verification="passed", checks=results)
             with self.merging(repo):
-                self.phase(key, "rechecking exact head")
                 self.phase(key, "rechecking exact head")
                 current_pr = pr_snapshot(repo, number)
                 if (current_pr["headRefOid"] != head or current_pr["baseRefOid"] != pr["baseRefOid"]
@@ -393,7 +415,8 @@ class Watcher:
                     self.phase(key, "posting successful review")
                     if not self.dry_run:
                         self.success_review(repo, number, current_pr, current.get("checks", []))
-                    current = self.state.put(repo, number, head, review_posted=True)
+                    current = self.state.put(repo, number, head, evidence_key=evidence_key,
+                                             review_posted=not self.dry_run)
                 self.finish_merge(config, current_pr, current)
         except WatchError as error:
             # A missing semantic answer never becomes approval. Verification
@@ -403,14 +426,14 @@ class Watcher:
             retry = (phase in ("preparing", "semantic", "merge") and attempts < 3
                      and old.get("verification") != "passed" and phase != "merge")
             outcome = "retry" if retry else ("merge_failed" if phase == "merge" else "failed")
-            self.state.put(repo, number, head, outcome=outcome,
+            self.state.put(repo, number, head, evidence_key=evidence_key, outcome=outcome,
                            review_attempts=attempts, retry_after=time.time() + min(300, 30 * (2 ** (attempts - 1))),
                            failure=str(error))
             if not retry and not old.get("failure_posted"):
                 if not self.dry_run:
                     self.comment(repo, number, "Automated review at `%s` could not complete. Not merged.\n\n```text\n%s\n```" %
                                  (head[:9], bounded(error, 4500)))
-                self.state.put(repo, number, head, failure_posted=True)
+                self.state.put(repo, number, head, evidence_key=evidence_key, failure_posted=True)
             self.log("%s#%s %s failed: %s" % (repo, number, phase, bounded(error, 700)))
         finally:
             self.remove_worktree(repo, worktree)

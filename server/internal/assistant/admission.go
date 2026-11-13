@@ -31,8 +31,11 @@ const admissionSettingsKey = "assistant.admission"
 // the tighter memory line and its own process cap; every other computer gets the generic line. All are overridable in
 // the setting, per machine, without naming any machine in code.
 const (
-	admissionLoadPerCore       = 4.0
-	admissionDirectionCap      = 3
+	admissionLoadPerCore = 4.0
+	// admissionDirectionCap is the code default every direction falls back to when neither direction_cap_by_direction
+	// nor direction_cap_by_project names it. The counts are taken per supervising conversation, so the default must fit
+	// the busiest charter direction (the main product line's charter is 8); narrower lines are configured per direction.
+	admissionDirectionCap      = 8
 	admissionMinMemoryBytes    = int64(2) * 1024 * 1024 * 1024        // 2 GiB
 	admissionHubMinMemory      = int64(2.5 * float64(1024*1024*1024)) // 2.5 GiB
 	admissionMaxClaudeProcs    = 20
@@ -49,7 +52,7 @@ type AdmissionSettings struct {
 	Enabled *bool `json:"enabled,omitempty"`
 	// LoadPerCore refuses when load1 exceeds cores times this (4 by default).
 	LoadPerCore *float64 `json:"load_per_core,omitempty"`
-	// DirectionCap is the most running execution Agents one direction may have (3 by default); DirectionCapByProject
+	// DirectionCap is the most running execution Agents one direction may have (8 by default); DirectionCapByProject
 	// overrides it for a knowledge-base project slug (the Persona product's line is configured to 8 there).
 	DirectionCap          *int           `json:"direction_cap,omitempty"`
 	DirectionCapByProject map[string]int `json:"direction_cap_by_project,omitempty"`

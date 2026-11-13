@@ -11,7 +11,7 @@ Every new, open, non-draft PR head goes through independent gates:
 1. Resolve the PR's current base and head. Fetch both into an isolated worktree and refuse a moved ref.
 2. Invoke `claude -p` with a fixed review prompt, a structured JSON schema, `--safe-mode`, and only `Read`. Safe mode disables project instructions, hooks, plugins and MCP; the reviewer reads the supplied diff and can inspect surrounding source without Bash, editing, delegation or GitHub credentials in its instructions. PR text and repository content are untrusted input.
 3. Require every finding to identify a changed head line. An invalid response, denied tool, timeout or unavailable reviewer is a failed review, never approval.
-4. Run the repository's configured verification on that head. Save the actual commands and results.
+4. Run the repository's configured verification on that head in a credential-free child environment. Save the actual commands and results. Only allowlisted locale, toolchain, proxy and cache paths are supplied; the maintainer's GitHub, webhook, model and cloud credentials never enter PR-controlled builds.
 5. On findings, submit one PR review with inline comments and concrete corrections. If GitHub rejects an anchor, retain the findings in one grouped review comment. On verification failure, post a concise failure summary. Do not merge either outcome.
 6. On success, post a factual summary naming the checks that actually ran. Reread the PR, require a linked issue, mergeability, the same base/head and no outstanding changes request, then squash-merge with `--match-head-commit`.
 7. Read back `MERGED`. A failed `gh` command after a remote merge is not blindly retried.
@@ -37,7 +37,7 @@ Each repository entry has:
 | `privacy` | Optional public-content scanner for a generic repository, not a path to another checkout's private configuration |
 | `notify_command` | Optional trusted argv adapter, called with repository, number, head and outcome |
 
-For this repository, `profile: persona` imports the PR's own `scripts/ci/paths.py` selector and runs the selected portable CI lanes. Apple changes require an explicit trusted macOS verification adapter. UI changes additionally require a visual-evidence adapter that checks the required dark/light screenshots and human inspection. This Linux host cannot silently skip those requirements. A trusted adapter may use `{worktree}`, `{base}`, `{head}` and `{number}` placeholders in its argv.
+For this repository, `profile: persona` uses the trusted watcher checkout's `scripts/ci/paths.py` selector (never importing the PR's Python) and runs the selected portable CI lanes. Apple changes require an explicit trusted macOS verification adapter. UI changes additionally require a visual-evidence adapter that checks the required dark/light screenshots and human inspection. This Linux host cannot silently skip those requirements. A trusted adapter may use `{worktree}`, `{base}`, `{head}` and `{number}` placeholders in its argv. The full diff must fit the semantic-review input bound; oversized PRs are not declared reviewed.
 
 For the extensions repository, `profile: extensions` calls its `scripts/check-layout.py modules` and selects affected independent Go modules, including SDK dependents. Shared scripts/schema/SDK changes run the complete CI script from that repository. No separate extension ID list is maintained here.
 
