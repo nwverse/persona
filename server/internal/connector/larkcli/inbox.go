@@ -733,11 +733,13 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 		label = i18n.T(lang, "hub-connectors.larkcli_mention")
 	}
 	title := firstNonEmpty(group.chatName, group.chatID)
+	name := group.chatName // the chat's name, never an opaque id: what ReplyTo may show
 	if latest.ChatType == "p2p" {
 		// Direct chats have no stable display name in some search results. The
 		// other sender is the conversation's name; use any sender name only as
 		// a fallback, and keep the opaque chat id as the final fallback.
 		title = p2pTitle(group, contextMessages, me)
+		name = p2pName(group, contextMessages, me)
 	}
 	tags := []connector.Tag{{Key: connector.TagChat, Value: latest.ChatID, Name: title}}
 	if senderTag, ok := latestSenderTag(contextMessages, me); ok {
@@ -753,7 +755,7 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 		Context:  contextText(contextMessages),
 		At:       messageTime(latest),
 		Last:     latest.MessageID,
-		ReplyTo:  latest.MessageID,
+		ReplyTo:  replyTo(lang, name, group.threadID != ""),
 		CanReply: latest.MessageID != "",
 		Rules:    c.rules(),
 		Tags:     tags,
@@ -781,7 +783,24 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 	return thing
 }
 
-func p2pTitle(group *inboxGroup, contextMessages []adapter.Message, me string) string {
+// replyTo says where a reply to the item goes and who sees it (connectorwire.InboxThing.ReplyTo): Reply sends as the
+// user to the chat, or into the topic the message is in. name is the chat's name; without one (only an opaque id is
+// known), the sentence names no chat.
+func replyTo(lang i18n.Lang, name string, topic bool) string {
+	switch {
+	case topic && name != "":
+		return i18n.T(lang, "hub-connectors.larkcli_reply_to_topic", i18n.Args{"chat": name})
+	case topic:
+		return i18n.T(lang, "hub-connectors.larkcli_reply_to_topic_unnamed")
+	case name != "":
+		return i18n.T(lang, "hub-connectors.larkcli_reply_to", i18n.Args{"chat": name})
+	}
+	return i18n.T(lang, "hub-connectors.larkcli_reply_to_unnamed")
+}
+
+// p2pName is a direct chat's name: the other sender, else the chat partner, else the chat's own name; "" when only
+// opaque ids are known.
+func p2pName(group *inboxGroup, contextMessages []adapter.Message, me string) string {
 	if group == nil {
 		return ""
 	}
@@ -800,9 +819,17 @@ func p2pTitle(group *inboxGroup, contextMessages []adapter.Message, me string) s
 			return partner.Name
 		}
 	}
-	if group.chatName != "" {
-		return group.chatName
+	return group.chatName
+}
+
+func p2pTitle(group *inboxGroup, contextMessages []adapter.Message, me string) string {
+	if group == nil {
+		return ""
 	}
+	if name := p2pName(group, contextMessages, me); name != "" {
+		return name
+	}
+	messages := append(append([]adapter.Message(nil), group.messages...), contextMessages...)
 	for i := len(messages) - 1; i >= 0; i-- {
 		partner := chatPartner(messages[i].ChatPartner)
 		if value := firstNonEmpty(partner.OpenID, partner.AppID, partner.ID); value != "" {

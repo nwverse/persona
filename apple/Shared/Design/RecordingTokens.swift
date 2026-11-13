@@ -18,6 +18,9 @@ nonisolated extension Theme.Size {
     static let recordingMeterBar: CGFloat = 3
     static let recordingMeterGap: CGFloat = 3
     static let recordingMeterHeight: CGFloat = 44
+    /// The widest a topic's chip on the meeting page gets (#3862 phase 2) at the default text size: a title of up to 80
+    /// characters is cut there, so the row shows the topics around the current one rather than one long title.
+    static let meetingTopicChip: CGFloat = 240
 }
 
 nonisolated extension Theme {
@@ -94,5 +97,9 @@ nonisolated extension Theme {
         /// stamped as its sentence begins. Few enough that the card stays a summary.
         static let contextBefore = 1
         static let contextAfter = 2
+        /// How much the meeting page's Talk grows while it is held (#3862 phase 4): the finger covers it, so the change
+        /// that says "Persona hears you" is its color and the words over the field; the size only confirms the touch.
+        /// None under Reduce Motion.
+        static let talkHeldScale: CGFloat = 1.06
     }
 }

@@ -35,6 +35,11 @@ import java.util.UUID
 internal data class ConversationGroups(
     val main: Session?, val directions: List<Session> = emptyList(), val others: List<Session> = emptyList(),
     val names: Map<String, String> = emptyMap(), val counts: Map<String, LeaderCounts> = emptyMap(),
+    /**
+     * The hub's direction tree (#4352), the same one [counts] is read from: each 常驻 lead folds open to its to-dos. Null
+     * from an older hub: the rows stay as they are.
+     */
+    val tree: persona.core.contracts.DirectionTree? = null,
     val recent: List<Session> = emptyList(),
     val background: String? = null,
 )
@@ -75,14 +80,16 @@ internal fun AssistantConversationOrigin.accessibilityLabel(resources: android.c
 
 /**
  * The drawer's Recent (#4922, #5196; web `recentConversations`, iOS `AssistantSidebarGroups.recent`): every conversation
- * that is not the main one, not a leader, not archived and not the built-in background supervisor, newest first, equal
- * times by session id, at most [limit]. Automatic chats carry their source's mark; only the supervisor stays in All chats.
+ * that is not the main one, not a leader, not archived, not the built-in background supervisor and not a scheduled
+ * task's own chat (#6228: the Scheduled Tasks entry and All chats keep those), newest first, equal times by session id,
+ * at most [limit]. The other automatic chats carry their source's mark; only the supervisor stays in All chats.
  */
 internal fun recentConversations(snapshot: AssistantSnapshot, limit: Int = RECENT_LIMIT): List<Session> {
     val leaders = snapshot.leaders.toSet()
     return snapshot.conversations.distinctBy { it.key }
         .filter { it.key != snapshot.mainSession && it.sessionId !in leaders && !it.archived &&
-            it.sessionId != snapshot.backgroundSupervisor }
+            it.sessionId != snapshot.backgroundSupervisor &&
+            automaticConversationOrigin(it.origin) != AssistantConversationOrigin.Task }
         .map { it to it.updated }
         .sortedWith(compareByDescending<Pair<Session, java.time.Instant?>> { it.second }.thenBy { it.first.sessionId })
         .take(limit).map { it.first }
@@ -114,6 +121,7 @@ internal fun conversationGroups(
     return ConversationGroups(
         snapshot.conversations.firstOrNull { it.key == snapshot.mainSession && !it.archived },
         directions, others, names, snapshot.leaderCounts,
+        tree = snapshot.directionTree,
         recent = if (query.isBlank()) recentConversations(snapshot) else emptyList(),
         background = background,
     )
@@ -281,6 +289,28 @@ internal fun assistantStatus(session: Session?, messages: List<OutboxMessage>,
 internal fun conversationTime(at: java.time.Instant?, locale: java.util.Locale,
     zone: java.time.ZoneId = java.time.ZoneId.systemDefault()): String? =
     at?.let { LocalizedFormats.format(it, LocalizedFormats.MONTH_DAY_TIME, locale, zone) }
+
+/**
+ * When a conversation last moved, as the history writes it (iOS `Fmt.relative`): "Just now" under 45 seconds, "5 min ago"
+ * under an hour, today the time ("14:30"), "Yesterday", within six days the weekday ("Tuesday"), else the month and day
+ * ("Nov 5"). Null when there is no time.
+ */
+internal fun historyTime(at: java.time.Instant?, res: android.content.res.Resources, now: java.time.Instant = java.time.Instant.now(),
+    zone: java.time.ZoneId = java.time.ZoneId.systemDefault()): String? {
+    at ?: return null
+    val locale = res.configuration.locales[0]
+    val seconds = java.time.Duration.between(at, now).seconds
+    val day = at.atZone(zone).toLocalDate()
+    val today = now.atZone(zone).toLocalDate()
+    return when {
+        seconds < 45 -> res.getString(R.string.assistant_time_just_now)
+        seconds < 3600 -> maxOf(1, (seconds / 60).toInt()).let { res.getQuantityString(R.plurals.assistant_time_minutes_ago, it, it) }
+        day == today -> LocalizedFormats.format(at, LocalizedFormats.TIME, locale, zone)
+        day == today.minusDays(1) -> res.getString(R.string.assistant_time_yesterday)
+        seconds < 6 * 86_400 -> LocalizedFormats.format(at, LocalizedFormats.WEEKDAY, locale, zone)
+        else -> LocalizedFormats.format(at, LocalizedFormats.MONTH_DAY, locale, zone)
+    }
+}
 
 /** The composition root adapts these options to the shared chat lane's presentation parameters. */
 data class AssistantChatOptions(

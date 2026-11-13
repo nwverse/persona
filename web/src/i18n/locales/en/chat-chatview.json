@@ -1,4 +1,5 @@
 {
+  "skills_route": "Selected skills belong to this assistant. Cancel task routing before sending.",
   "share": "Share…",
   "forked": "Branched to a new chat",
   "fork_failed": "Couldn't branch: {error}",
@@ -105,6 +106,8 @@
   "stopped_line": "This Agent has stopped. Its conversation and terminal stay here; it doesn't take messages.",
   "resume": "Resume",
   "resume_failed": "Couldn't resume this Agent. {error}",
+  "resume_in_terminal": "Resume in terminal",
+  "resume_no_engine": "No terminal engine on {computer}",
   "codex_waiting": "Codex is open on {computer}. Send its first message below, or type it in its terminal.",
   "codex_first_placeholder": "First message to Codex",
   "handoff_from": "Came from {title} · click to return",
@@ -127,6 +130,7 @@
   "search_no_progress": "Nothing earlier came in. Try again later.",
   "search_page_cap": "Loaded 20 pages. You can load more.",
   "search_not_found": "Can't find this one in the chat right now. You can go back to where you were.",
+  "message_further_up": "This message is further up in the chat.",
   "search_origin_changed": "Where you were has changed. Carry on from here.",
   "search_return": "Back to where you were",
   "search_menu": "Search in chat"
