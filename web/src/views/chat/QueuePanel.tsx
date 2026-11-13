@@ -1,9 +1,10 @@
 // The queued messages (Session.queued) at the top of the composer's card, as cindy's pending queue (#5327; the owner
 // asked this part of the chat to follow cindy): rows in send order, the top one next, no numbers (the labels carry
 // them). A row is one line, the marks of what it carries before its words; on hover or focus it shows a drag handle
-// and round buttons: Send now (where the agent takes queued messages now; it hands over the whole queue, so a first
-// press arms it in place and a second sends, its tooltip saying what happens), Edit (pulled back into the box below)
-// and Delete. Dragging the handle, or ↑ ↓ Home End on it, re-queues them all in the new order. Four rows or fewer show in full; five or more show three and "N more".
+// and round buttons: Send now (where the agent takes queued messages now; it hands over the whole queue at one press,
+// its tooltip saying so and what happens), Edit (pulled back into the box below) and Delete. Dragging the handle, or
+// ↑ ↓ Home End on it, re-queues them all in the new order. Four rows or fewer show in full; five or more show three
+// and "N more".
 // Messages from other conversations come last and are only shown; since #6394 they collapse into one line
 // ("N messages from other conversations are waiting"), opened on demand, so a backlog no longer spreads over the
 // composer. Every change goes through the hub (POST …/queue {keep}, …/queue/send-now) and the rows follow its next
@@ -42,8 +43,6 @@ const FOLDED_ROWS = 3;
 const HOLD_MS = 1500;
 /** How long a keyboard reorder's handle takes the focus back when its row is drawn again (the agent re-queues them). */
 const REFOCUS_MS = 5000;
-/** How long Send now stays armed for its second press. */
-const ARM_MS = 5000;
 
 interface Row {
   raw: string;
@@ -78,8 +77,6 @@ export function QueuePanel({ session, draftKey, canEdit, persona, onWithdrawn, p
 
   const [busy, setBusy] = useState<string | null>(null);
   const inFlight = useRef(false);
-  // the row whose Send now was pressed once: a second press sends (DESIGN_SYSTEM.md 4.4, no dialog)
-  const [armed, setArmed] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
   // relayed messages from other conversations are one collapsed line until the owner asks to inspect them (#6394)
   const [relayedOpen, setRelayedOpen] = useState(false);
@@ -123,35 +120,11 @@ export function QueuePanel({ session, draftKey, canEdit, persona, onWithdrawn, p
     if (at && at !== document.body) return;
     handles.current.get(back.id)?.focus({ preventScroll: true });
   });
-  // a drag ends with the queue it started on: once the queue changed (the agent took one), its places mean nothing;
-  // an armed Send now goes back too, since what it would send changed
+  // a drag ends with the queue it started on: once the queue changed (the agent took one), its places mean nothing
   useEffect(() => {
     dragging.current?.stop();
-    setArmed(null);
   }, [queueKey]);
   useEffect(() => () => dragging.current?.stop(), []);
-  // an armed Send now goes back after a while, at a press anywhere else, or at Esc, which then stops nothing else (the
-  // chat's own Esc would stop the agent: the one thing the user did not ask for)
-  useEffect(() => {
-    if (armed === null) return;
-    const timer = setTimeout(() => setArmed(null), ARM_MS);
-    const press = (e: PointerEvent) => {
-      if (!(e.target instanceof Element && e.target.closest("[data-send-now-armed]"))) setArmed(null);
-    };
-    const key = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || e.isComposing) return;
-      e.preventDefault();
-      e.stopPropagation();
-      setArmed(null);
-    };
-    addEventListener("pointerdown", press, true);
-    addEventListener("keydown", key, true);
-    return () => {
-      clearTimeout(timer);
-      removeEventListener("pointerdown", press, true);
-      removeEventListener("keydown", key, true);
-    };
-  }, [armed]);
 
   const run = async (id: string, work: () => Promise<void>): Promise<boolean> => {
     if (inFlight.current) return false;
@@ -192,20 +165,15 @@ export function QueuePanel({ session, draftKey, canEdit, persona, onWithdrawn, p
       else setTimeout(() => setHeld((h) => (h === mine ? null : h)), HOLD_MS);
     });
   };
-  const sendNow = (row: Row) => {
-    if (armed !== row.id) {
-      setArmed(row.id);
-      return;
-    }
-    setArmed(null);
+  // at one press, with no dialog: it loses nothing (the messages go now rather than at the next step), and Stop, which
+  // cuts the whole turn, and Delete beside it act at one press too (DESIGN_SYSTEM.md 4.4)
+  const sendNow = (row: Row) =>
     void run(row.id, async () => {
       await api(`${path}/queue/send-now`, { method: "POST", json: {} });
       toast(t("chat-queuepanel.sent_now", { agent }), "ok");
     }).then((ok) => ok && toBox(false));
-  };
   // what the dialog used to say, now the button's tooltip and description
   const explain = t(persona !== undefined ? "chat-queuepanel.send_now_body_persona" : "chat-queuepanel.send_now_body", { agent });
-  const armedLabel = t("chat-queuepanel.send_now_armed", { count: own });
 
   const keyMove = (e: React.KeyboardEvent, row: Row) => {
     const to = e.key === "ArrowUp" ? row.i - 1 : e.key === "ArrowDown" ? row.i + 1 : e.key === "Home" ? 0 : e.key === "End" ? own - 1 : null;
@@ -268,8 +236,6 @@ export function QueuePanel({ session, draftKey, canEdit, persona, onWithdrawn, p
       movable={canEdit && row.own && own > 1}
       takesNow={takesNow}
       agent={agent}
-      armed={armed === row.id && !locked}
-      armedLabel={armedLabel}
       explain={explain}
       explainId={explainId}
       busy={busy === row.id}
@@ -286,7 +252,6 @@ export function QueuePanel({ session, draftKey, canEdit, persona, onWithdrawn, p
       onKey={(e) => keyMove(e, row)}
       onPointerDown={(e) => startDrag(e, row)}
       onSendNow={() => sendNow(row)}
-      onDisarm={() => setArmed((a) => (a === row.id ? null : a))}
       onEdit={() => act(row, false)}
       onDelete={() => act(row, true)}
     />
@@ -369,9 +334,6 @@ export function QueuePanel({ session, draftKey, canEdit, persona, onWithdrawn, p
           {explain}
         </span>
       )}
-      <span className="sr-only" aria-live="polite" aria-atomic="true">
-        {armed !== null && !locked ? armedLabel : ""}
-      </span>
     </div>
   );
 }
@@ -389,15 +351,11 @@ const markWords = (kind: MarkKind, count: number) =>
 
 // cindy's row buttons: 20 px, round, a hairline ring on the card's own fill
 const ROUND = "touch-hit flex size-5 shrink-0 items-center justify-center rounded-full border border-line bg-surface text-ink-2 transition-colors enabled:hover:text-ink disabled:opacity-50";
-// Send now's own: the round button at rest, and armed a pill in the primary button's colors that grows left from the
-// round one's slot over the words, so neither the words nor Edit and Delete move; a ring of the row's fill ends the
-// words it covers in a clean gap
-const SEND_NOW = "touch-hit z-[1] flex h-5 shrink-0 items-center justify-center overflow-hidden rounded-full border whitespace-nowrap transition-[max-width,background-color,border-color,color] duration-200 ease-out disabled:opacity-50";
 // shown while the row is hovered or has the focus; always on a screen without hover
 const ON_ACTIVE = "opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100";
 
 /** One queued message. `photos`: ones it went with beside its words (a Persona chat's, when this browser sent it). */
-function QueueRow({ row, n, photos, editable, movable, takesNow, agent, armed, armedLabel, explain, explainId, busy, locked, dragging, rowRef, handleRef, onKey, onPointerDown, onSendNow, onDisarm, onEdit, onDelete }: {
+function QueueRow({ row, n, photos, editable, movable, takesNow, agent, explain, explainId, busy, locked, dragging, rowRef, handleRef, onKey, onPointerDown, onSendNow, onEdit, onDelete }: {
   row: Row;
   n: number;
   photos: number;
@@ -405,9 +363,6 @@ function QueueRow({ row, n, photos, editable, movable, takesNow, agent, armed, a
   movable: boolean;
   takesNow: boolean;
   agent: string;
-  /** Send now was pressed once: the next press sends. */
-  armed: boolean;
-  armedLabel: string;
   /** What sending now does, as Send now's tooltip and description. */
   explain: string;
   explainId: string;
@@ -419,7 +374,6 @@ function QueueRow({ row, n, photos, editable, movable, takesNow, agent, armed, a
   onKey: (e: React.KeyboardEvent) => void;
   onPointerDown: (e: React.PointerEvent<HTMLButtonElement>) => void;
   onSendNow: () => void;
-  onDisarm: () => void;
   onEdit: () => void;
   onDelete: () => void;
 }) {
@@ -449,7 +403,6 @@ function QueueRow({ row, n, photos, editable, movable, takesNow, agent, armed, a
       className={cx(
         "group flex items-center gap-1.5 rounded-[8px] border border-transparent px-2 py-0.5 transition-colors hover:bg-hover focus-within:bg-hover",
         dragging && "relative z-10 bg-hover",
-        armed && "bg-hover",
       )}
     >
       {movable ? (
@@ -500,26 +453,18 @@ function QueueRow({ row, n, photos, editable, movable, takesNow, agent, armed, a
         ) : (
           <div data-queue-actions className={cx("flex shrink-0 items-center gap-1", ON_ACTIVE)}>
             {takesNow && (
-              // the slot keeps the round button's width; armed, the pill overflows it to the left
-              <span className="flex w-5 shrink-0 justify-end">
-                <button
-                  type="button"
-                  data-send-now
-                  data-send-now-armed={armed || undefined}
-                  disabled={locked}
-                  onClick={onSendNow}
-                  onBlur={armed ? onDisarm : undefined}
-                  // a mouse moving off it; a finger or a pen leaves at every lift
-                  onPointerLeave={armed ? (e) => e.pointerType === "mouse" && onDisarm() : undefined}
-                  aria-label={armed ? armedLabel : tip}
-                  aria-describedby={explainId}
-                  title={`${armed ? armedLabel : tip}\n${explain}`}
-                  className={cx(SEND_NOW, armed ? "max-w-32 gap-1 border-ink bg-ink px-2 text-surface ring-4 ring-hover" : "w-5 max-w-5 border-line bg-surface text-ink-2 enabled:hover:text-ink")}
-                >
-                  <Icon name="arrowUp" size={12} stroke={2.25} className="shrink-0" />
-                  {armed && <span className="text-[12px] leading-none font-medium">{t("chat-queuepanel.send_now")}</span>}
-                </button>
-              </span>
+              <button
+                type="button"
+                data-send-now
+                disabled={locked}
+                onClick={onSendNow}
+                aria-label={tip}
+                aria-describedby={explainId}
+                title={`${tip}\n${explain}`}
+                className={ROUND}
+              >
+                <Icon name="arrowUp" size={12} stroke={2.25} />
+              </button>
             )}
             <button type="button" data-queue-edit disabled={locked} onClick={onEdit} aria-label={t("chat-queuepanel.edit_label", { n })} title={t("chat-queuepanel.edit")} className={ROUND}>
               <Icon name="pencil" size={11} stroke={2.25} />

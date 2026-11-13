@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // The queued messages at the top of the composer, as cindy's pending queue (#5327): each row's actions and the hub
-// requests they make, reordering from the handle by keyboard and by dragging, the fold past four rows, Send now's
-// two presses in place, and relayed rows that only show. The markup checks are in ChatDock.test.tsx.
+// requests they make, reordering from the handle by keyboard and by dragging, the fold past four rows, Send now at one
+// press, and relayed rows that only show. The markup checks are in ChatDock.test.tsx.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -55,107 +55,25 @@ describe("QueuePanel row actions", () => {
     expect(withdrawn).toEqual(["第二条", "第三条"]);
   });
 
-  it("arms Send now in place on the first press and sends every queued message on the second, with no dialog", async () => {
+  it("sends every queued message at one press, with no dialog; its tooltip and description say what happens", async () => {
     vi.mocked(api).mockResolvedValue({});
     render(<QueuePanel session={session} draftKey="qp-send" canEdit />);
     const send = within(2, "[data-send-now]");
-    // at rest: round, its name what it does, its description what the dialog used to say
     expect(send.getAttribute("aria-label")).toBe("现在就把排队的消息全部发给 Claude，不用等到下一步");
-    const body = document.getElementById(send.getAttribute("aria-describedby")!)!;
-    expect(body.textContent).toContain("Claude 会马上收到");
-    expect(send.title).toContain("Claude 会马上收到");
+    expect(document.getElementById(send.getAttribute("aria-describedby")!)!.textContent).toContain("Claude 会马上收到");
+    expect(send.title).toBe("现在就把排队的消息全部发给 Claude，不用等到下一步\nClaude 会马上收到，不用等到下一步。它正在跑的命令会转到后台继续；正在写的回复会带上你的消息重新开始。");
     click(send);
-    expect(api).not.toHaveBeenCalled();
     expect(document.querySelector('[role="dialog"]')).toBeNull();
-    // armed: the same button, now the labelled pill, its new name said aloud
-    expect(within(2, "[data-send-now]")).toBe(send);
-    expect(send.hasAttribute("data-send-now-armed")).toBe(true);
-    expect(send.textContent).toBe("立即发送");
-    expect(send.getAttribute("aria-label")).toBe("再按一次，立即发送排队的 3 条消息");
-    expect(host.querySelector('[aria-live="polite"]')!.textContent).toBe("再按一次，立即发送排队的 3 条消息");
-    // only one row is armed at a time
-    expect(rows().filter((r) => r.querySelector("[data-send-now-armed]"))).toHaveLength(1);
-    click(send);
-    await settle();
     expect(calls()).toEqual([["/sessions/m/s/queue/send-now", {}]]);
-  });
-
-  it("puts an armed Send now back after five seconds, at a press elsewhere, on blur, when the mouse leaves it and when the queue changes", () => {
-    vi.useFakeTimers();
-    try {
-      render(<QueuePanel session={session} draftKey="qp-disarm" canEdit />);
-      const send = within(0, "[data-send-now]");
-      const armed = () => send.hasAttribute("data-send-now-armed");
-      click(send);
-      expect(armed()).toBe(true);
-      act(() => void vi.advanceTimersByTime(4900));
-      expect(armed()).toBe(true);
-      act(() => void vi.advanceTimersByTime(100));
-      expect(armed()).toBe(false);
-      expect(send.getAttribute("aria-label")).toBe("现在就把排队的消息全部发给 Claude，不用等到下一步");
-      expect(host.querySelector('[aria-live="polite"]')!.textContent).toBe("");
-
-      click(send);
-      act(() => void document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })));
-      expect(armed()).toBe(false);
-
-      // a press on the pill itself is its second press, not a press elsewhere
-      click(send);
-      act(() => void send.querySelector("svg")!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })));
-      expect(armed()).toBe(true);
-
-      act(() => send.focus());
-      act(() => send.blur());
-      expect(armed()).toBe(false);
-
-      // React's leave comes from pointerout; a finger leaves at every lift, so only a mouse puts it back
-      const leave = (pointerType: string) => act(() => void send.dispatchEvent(new PointerEvent("pointerout", { pointerType, relatedTarget: document.body, bubbles: true })));
-      click(send);
-      leave("touch");
-      expect(armed()).toBe(true);
-      leave("mouse");
-      expect(armed()).toBe(false);
-
-      // the queue changed (the agent took the first): what it would send changed, so it asks again
-      click(within(1, "[data-send-now]"));
-      expect(within(1, "[data-send-now]").hasAttribute("data-send-now-armed")).toBe(true);
-      render(<QueuePanel session={{ ...session, queued: ["第二条", "第三条"] }} draftKey="qp-disarm" canEdit />);
-      expect(host.querySelector("[data-send-now-armed]")).toBeNull();
-      expect(api).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("puts an armed Send now back on Esc, which then does not reach the chat (its Esc stops the agent)", () => {
-    const chatEsc = vi.fn();
-    addEventListener("keydown", chatEsc);
-    try {
-      render(<QueuePanel session={session} draftKey="qp-esc" canEdit />);
-      const send = within(0, "[data-send-now]");
-      act(() => send.focus());
-      click(send);
-      expect(send.hasAttribute("data-send-now-armed")).toBe(true);
-      key(send, "Escape");
-      expect(send.hasAttribute("data-send-now-armed")).toBe(false);
-      expect(chatEsc.mock.calls.filter(([e]) => (e as KeyboardEvent).key === "Escape")).toHaveLength(0);
-      expect(document.activeElement).toBe(send);
-      // not armed, Esc is the chat's again
-      key(send, "Escape");
-      expect(chatEsc.mock.calls.filter(([e]) => (e as KeyboardEvent).key === "Escape")).toHaveLength(1);
-      expect(api).not.toHaveBeenCalled();
-    } finally {
-      removeEventListener("keydown", chatEsc);
-    }
+    await settle();
   });
 
   it("says in the Persona chat's words what sending now does", () => {
     const persona = { ...session, agent: undefined, assistant: true, queued: ["我的"] } as unknown as Session;
     render(<QueuePanel session={persona} draftKey="qp-persona-send" canEdit persona="Nova" />);
     const send = within(0, "[data-send-now]");
+    expect(send.getAttribute("aria-label")).toBe("现在就把排队的消息全部发给 Nova，不用等到下一步");
     expect(document.getElementById(send.getAttribute("aria-describedby")!)!.textContent).toContain("Nova 会马上收到");
-    click(send);
-    expect(send.getAttribute("aria-label")).toBe("再按一次，立即发送排队的 1 条消息");
   });
 
   it("shows a spinner where the busy row's actions were and takes no other action meanwhile", async () => {
