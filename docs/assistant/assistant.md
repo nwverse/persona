@@ -805,7 +805,7 @@ Why archive and not delete or hide in place: the old conversation's id is what o
 `former` keeps the last 10 main conversations put away, by New main chat and Clear context alike: someone who clears often pushes older ones out sooner, and those are then ordinary archived conversations (still listed while their machine lists them, still found by id).
 Why no confirmation: nothing is lost (`docs/design/DESIGN_SYSTEM.md` 4.4, the reversible rung), and Cindy's `/clear` asks nothing either. "New main chat…" stays for carrying a summary over.
 
-iOS and Android do not offer it yet (#5100).
+Android offers it in the main chat's title menu and as `/clear` in its composer (#5100, `docs/android/android.md`); iOS does not yet.
 ## Scheduled tasks
 
 Previously two systems: routines (daily time) and follow-ups (one-shot wakeups from `schedule_followup`), in separate settings;
@@ -940,7 +940,15 @@ Legacy App `routines` / `followups` APIs still read / write this table (`docs/pr
 Many main-chat rounds are not started by the user: another Persona conversation hands work over with `conversation_send` /
 `conversation_new` (a supervisor message), a scheduled task or follow-up runs, and the hub's supervision wakes the chat.
 They used to fill the main chat and push the user's own exchanges out of sight. Since #4314 the apps fold the first two
-the way quiet supervision rounds already were (#1988, `docs/assistant/unified-entry.md` "Supervision"):
+the way quiet supervision rounds already were (#1988, `docs/assistant/unified-entry.md` "Supervision"). #6595 applies the
+same folding to the leader conversations (`AssistantInfo.leaders`, "Leader conversations" in
+`docs/assistant/unified-entry.md`): a leader's patrol, supervision and relayed (`conversation`) rounds, including its
+answers to them, fold by default with the same line, expand state and visibility rule as the main chat; the owner's own
+messages and the leader's answers to them, `ask_user` / `notify_user` rounds and `task_review` verdict cards stay open.
+It is the same `assistant.main_background_folded` switch (on unless turned off); an ordinary side conversation is
+unchanged. The hub's mid-turn interject note (`prompts/assistant/interject.md`,
+`<persona-context kind="context" title="插话">`) is model instructions and never renders as a quote in the owner's
+bubble on any client, while staying in the model's input:
 
 - **Which rounds**: in the main conversation, a round whose first input has the message source (`Item.source.kind`, else
   the `persona-context kind="message-source"` metadata or the hub's `injected` mark, read by each client's `sourceOf`)
@@ -1013,6 +1021,18 @@ other conversations) goes through one per-conversation queue (`assistant.relay`,
   A previous version reads the queue as before and drops the fields on its next save, after which those messages rank
   and wait as ordinary ones and no hold applies. A message queued before `queued_at` existed counts its 5 minutes from
   its own time (`at`).
+- **The owner's whole round comes first (#6394).** On top of the two-minute presence window stands the owner-turn
+  gate (`relayBook.ownerTurns`, in memory only). When the owner sends a message to a conversation, the gate arms for
+  it and every queued message waits for the whole of the round that starts for them, whatever its rank — including a
+  late `ask_user` answer that the five-minute decision cap would otherwise let through. The owner's own message never
+  enters this queue, and `interject_background` still moves a running background command out of its way
+  ("Interjecting while it answers"). A session list showing the conversation working confirms the round; one showing
+  it stopped (`idle`, `done` or `interrupted`) releases the gate, and the queue drains by rank again. Two safety
+  limits keep a gate from sticking when the lists say nothing: `ownerTurnStartWait` (one minute) when the round is
+  never seen working (a refused send, a conversation the list dropped), and `ownerTurnMax` (30 minutes) as a hard cap
+  for a round seen working but never seen stopped; the owner speaking again refreshes both. A restart loses the
+  in-memory gates, after which the persisted presence window alone holds as before. The owner's cards stay
+  unblocked: a gate holds the queue, never the owner's own answers (`relayMsg.Owner`).
 - **Not covered**: a meeting's feed (`meeting_feed.go`) is the live words of a meeting the owner had the conversation
   attend, so it is not held. Interrupting a round already running is F2 of the proposal.
 
