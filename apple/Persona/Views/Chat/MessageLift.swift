@@ -224,6 +224,25 @@ nonisolated enum LiftLayout {
         return Placement(preview: preview, offset: offset, bar: CGRect(x: barX, y: barY, width: bar.width, height: bar.height), below: below)
     }
 
+    /// An end of a selection, the one a finger drags.
+    enum End { case start, end }
+
+    /// The end of a selection whose handle a finger went down on, at p: the nearer knob within `reach`. start / end: the
+    /// selection's first and last line (its start's knob over the first's start, its end's under the last's end). Since
+    /// iOS 27 a dragged handle moves the selection only once the finger lifts, so no change tells which it is (#5982).
+    static func handle(at p: CGPoint, start: CGRect?, end: CGRect?, reach: CGFloat) -> End? {
+        let s = start.map { hypot($0.minX - p.x, $0.minY - p.y) } ?? .infinity
+        let e = end.map { hypot($0.maxX - p.x, $0.maxY - p.y) } ?? .infinity
+        guard min(s, e) <= reach else { return nil }
+        return e <= s ? .end : .start
+    }
+
+    /// A handle held at an edge scrolls once it has moved from where it went down, not as soon as it is touched.
+    static func moved(_ finger: CGPoint, from down: CGPoint) -> Bool { hypot(finger.x - down.x, finger.y - down.y) >= Theme.Space.s }
+
+    /// A CJK opening bracket (「, （, 【…).
+    static func opensCJK(_ c: UnicodeScalar) -> Bool { c.properties.generalCategory == .openPunctuation && c.value >= 0x3000 }
+
     /// A selection handle held at y in a lifted message's shown part, `height` tall: how fast that part scrolls on, in
     /// points a second (up below zero). Nothing outside the bands at its ends, `band` tall (less in a short part, a third
     /// of it at most); in one, faster the deeper the handle is, `speed` at the edge and past it.
@@ -488,17 +507,20 @@ extension EnvironmentValues {
     /// The text view's right edge, in the window.
     var edge: CGFloat = 0
 
-    typealias Line = (glyphs: Int, minX: CGFloat, baseline: CGFloat, maxX: CGFloat, wordsMaxX: CGFloat, closes: Bool)
+    /// closes / opens: the line ends in a CJK closing bracket / starts with an opening one (the text view's lines).
+    typealias Line = (glyphs: Int, minX: CGFloat, baseline: CGFloat, maxX: CGFloat, wordsMaxX: CGFloat, closes: Bool, opens: Bool)
 
+    /// Each line as glyphs, minX, baseline, maxX, wordsMaxX and its brackets (1 closes, 2 opens).
     static func encode(_ lines: [Line]) -> String {
         lines.sorted { ($0.baseline, $0.minX) < ($1.baseline, $1.minX) }
-            .map { String(format: "%ld,%.1f,%.1f,%.1f,%.1f,%ld", $0.glyphs, $0.minX, $0.baseline, $0.maxX, $0.wordsMaxX, $0.closes ? 1 : 0) }
+            .map { String(format: "%ld,%.1f,%.1f,%.1f,%.1f,%ld", $0.glyphs, $0.minX, $0.baseline, $0.maxX, $0.wordsMaxX,
+                          ($0.closes ? 1 : 0) | ($0.opens ? 2 : 0)) }
             .joined(separator: ";")
     }
 
     /// The lines a view shows (`ShownWords.shown`), in the window: its origin there is `at`.
     static func lines(_ shown: [WordLine], at o: CGPoint) -> String {
-        encode(shown.map { ($0.glyphs, o.x + $0.minX, o.y + $0.baseline, o.x + $0.maxX, o.x + $0.maxX, false) })
+        encode(shown.map { ($0.glyphs, o.x + $0.minX, o.y + $0.baseline, o.x + $0.maxX, o.x + $0.maxX, false, false) })
     }
 
     /// A CJK closing bracket (」, ）, 】…).

@@ -170,7 +170,7 @@ func (s *Service) now() time.Time { return s.o.Clock.Now().UTC() }
 // shown is s as the API shows it: off while both destinations are off, its floor of intervals filled in.
 func shown(sub Subscription) Subscription {
 	sub.State = cmpOr(sub.RunState, StateOK)
-	if !sub.ToInbox && !sub.ToKB {
+	if !on(sub) {
 		sub.State = StateOff
 	}
 	sub.MinIntervalSeconds = floorOf(sub.Recipe.Mode, sub.SourceMin)
@@ -180,7 +180,8 @@ func shown(sub Subscription) Subscription {
 	return sub
 }
 
-func on(sub Subscription) bool { return sub.ToInbox || sub.ToKB }
+// on says whether sub is pulled: a destination is on, or it is a built-in's Inbox feed now (Migrated, #6265).
+func on(sub Subscription) bool { return sub.ToInbox || sub.ToKB || sub.Migrated != nil }
 
 // pullScheduled distinguishes ordinary polling from a finite continuation explicitly started by Run Now while off.
 func pullScheduled(sub Subscription) bool {
@@ -1008,7 +1009,7 @@ func (s *Service) switchOff(ctx context.Context, sub Subscription) (*Subscriptio
 		}
 		next, prev := sub, sub.Revision
 		next.ToInbox, next.ToKB, next.InboxFrom, next.InboxCatchup, next.KBFrom, next.NextRunAt = false, false, nil, nil, nil, nil
-		next.CatchupFrom = nil
+		next.CatchupFrom, next.Migrated = nil, nil // a built-in's feed switched to it goes back to the built-in (#6265)
 		next.Revision, next.UpdatedAt = prev+1, s.now()
 		ok, err := s.o.Store.UpdateSubscription(ctx, next, prev)
 		if err != nil {

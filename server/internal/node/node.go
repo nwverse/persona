@@ -1047,7 +1047,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			if p.ResumeSessionID != "" {
 				return nil, workStartRefused("work_target_required", "A work session must be new.")
 			}
-			cwd, _, err := n.checkStart(p.Cwd, p.Launcher, "", p.PermissionMode, p.Effort)
+			cwd, _, err := n.checkStart(p.Cwd, p.Launcher, "", p.PermissionMode, p.Effort, p.AgentType)
 			if err != nil {
 				return nil, workStartRefused("work_project_unavailable", "The project folder or start options are no longer valid.")
 			}

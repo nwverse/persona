@@ -25,7 +25,7 @@ var hostileModels = []string{
 // Claude Code.
 func TestHostileModelIsRefusedEverywhere(t *testing.T) {
 	for _, m := range hostileModels {
-		if err := (modelExecution{Model: m}).check(); err == nil || err.Error() != "invalid model" {
+		if err := (modelExecution{Model: m}).check("claude"); err == nil || err.Error() != "invalid model" {
 			t.Errorf("check(%q) = %v, want invalid model", m, err)
 		}
 		if _, err := modelCommand(m); err == nil && strings.TrimSpace(m) != "opus" {
@@ -38,7 +38,7 @@ func TestHostileModelIsRefusedEverywhere(t *testing.T) {
 	}
 	for _, m := range []string{"", "opus", "opus[1m]", "vendor/model-x", "qwen3:32b", "claude-x@20250101",
 		"~anthropic/claude-opus-latest", "~anthropic/claude-sonnet-latest[1m]"} {
-		if err := (modelExecution{Model: m}).check(); err != nil {
+		if err := (modelExecution{Model: m}).check("claude"); err != nil {
 			t.Errorf("check(%q) = %v", m, err)
 		}
 	}
