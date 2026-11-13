@@ -53,13 +53,14 @@ type keptRun struct {
 	Baseline        *time.Time    `json:"baseline,omitempty"`
 	InboxGroup      string        `json:"inbox_group,omitempty"`
 	InboxGroupFrom  *time.Time    `json:"inbox_group_from,omitempty"`
+	Migrated        *time.Time    `json:"migrated,omitempty"`
 }
 
 func encode(s Subscription) ([]byte, error) {
 	return json.Marshal(kept{Subscription: s, Keep: keptRun{Tool: s.Tool, ToolFingerprint: s.ToolFingerprint, SourceMin: s.SourceMin,
 		MaxCallsPerHour: s.MaxCallsPerHour, SinceAt: s.SinceAt, Continuation: s.Continuation, ShapeMisses: s.ShapeMisses, SnapshotHash: s.SnapshotHash,
 		RunState: s.RunState, Runs: s.Runs, InboxFrom: s.InboxFrom, InboxCatchup: s.InboxCatchup, KBFrom: s.KBFrom,
-		CatchupFrom: s.CatchupFrom, Baseline: s.Baseline, InboxGroup: s.InboxGroup, InboxGroupFrom: s.InboxGroupFrom}})
+		CatchupFrom: s.CatchupFrom, Baseline: s.Baseline, InboxGroup: s.InboxGroup, InboxGroupFrom: s.InboxGroupFrom, Migrated: s.Migrated}})
 }
 
 func decode(data []byte) (Subscription, error) {
@@ -72,7 +73,7 @@ func decode(data []byte) (Subscription, error) {
 	s.SinceAt, s.Continuation, s.ShapeMisses, s.SnapshotHash, s.RunState, s.Runs = k.Keep.SinceAt, k.Keep.Continuation, k.Keep.ShapeMisses, k.Keep.SnapshotHash, k.Keep.RunState, k.Keep.Runs
 	s.InboxFrom, s.InboxCatchup, s.KBFrom = k.Keep.InboxFrom, k.Keep.InboxCatchup, k.Keep.KBFrom
 	s.CatchupFrom, s.Baseline = k.Keep.CatchupFrom, k.Keep.Baseline
-	s.InboxGroup, s.InboxGroupFrom = k.Keep.InboxGroup, k.Keep.InboxGroupFrom
+	s.InboxGroup, s.InboxGroupFrom, s.Migrated = k.Keep.InboxGroup, k.Keep.InboxGroupFrom, k.Keep.Migrated
 	return s, nil
 }
 

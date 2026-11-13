@@ -11,6 +11,10 @@ var (
 	PermissionModes = []string{"default", "acceptEdits", "plan", "auto", "bypassPermissions"}
 )
 
+// CodexEffortLevels are Codex's reasoning efforts, weakest first: a codex launcher's model catalog advertises ultra,
+// so a start on one takes it too (node/codex_effort.go). Claude Code's list stops at max.
+var CodexEffortLevels = []string{"minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
+
 // ModeBypass skips every permission prompt; a headless claude only takes it at start (--permission-mode).
 const ModeBypass = "bypassPermissions"
 

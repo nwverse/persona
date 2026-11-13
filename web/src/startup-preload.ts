@@ -229,13 +229,15 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * 474,421 B on main at 47c38a3466, +133 B, of which 54 B fit the room main had: the readiness answer and an Agent this
  * browser started share one on-demand import of the rule, lib/star-prompt-load.ts, which a failed load only skips, and
  * the sidebar's milestone line is a lazy component; the rule, the pill, the line and their strings stay off the first
- * screen).
+ * screen). And 128 B for recent main changes (#6346: ja 474,617 B on main at 2010e8229f, 63 B over the old budget,
+ * with 65 B of room).
  */
-// Confirmed Assistant conversation deletion (#6172): 471,293 B en / 474,996 B ja / 472,288 B zh-Hans,
-// against 470,317 / 474,025 / 471,264 B at 481e7023d with the same Node and dependencies. The 971 B ja
-// increase uses 529 B of existing room and adds 442 B to this budget. The confirmation, tombstone page and their
-// strings load on intent; only the menu eligibility and shared deletion/cache/draft guards join the first screen.
-export const FIRST_SCREEN_BUDGET = 474_996;
+// Confirmed Assistant conversation deletion (#6172), including local sent-text/skill history cleanup:
+// 472,440 B en / 476,175 B ja / 473,441 B zh-Hans against 470,889 / 474,637 / 471,913 B at 2e85b78e,
+// measured with the same Node and dependencies. The 1,538 B ja increase uses 45 B of existing room and adds
+// 1,493 B to this budget. Confirmation/tombstone components and strings load on intent; the first screen keeps
+// menu eligibility and shared deletion/cache/draft/history guards. Check logic and negative tests are unchanged.
+export const FIRST_SCREEN_BUDGET = 476_175;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
@@ -407,7 +409,10 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
  * only the code they share with other chunks (#5760); 31 B of room so the next main does not tip it.
  * Every other lazy page loads on intent, not at idle; raise it on purpose, in the change that needs it.
  */
-export const IDLE_TIER_BUDGET = 44_000;
+// Assistant deletion/history privacy integration (#6172): 43,969 B on main at 2e85b78e and 44,127 B here,
+// with the same Node/dependencies. Its 158 B shared-chunk growth consumes 31 B of room and adds 127 B.
+// New confirmation, tombstone and history-search code stays on intent; the idle-page set/check is unchanged.
+export const IDLE_TIER_BUDGET = 44_127;
 
 const gzip = promisify(gzipCompress);
 

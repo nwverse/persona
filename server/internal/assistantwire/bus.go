@@ -53,6 +53,12 @@ const (
 	// follow-up; docs/assistant/meeting-minutes.md "Persona's echo"). The hub lists meeting_echo only while the default
 	// manager names it beside CapabilityMeetingAttendance; until then a phone leaves echo lines out of the upload.
 	CapabilityMeetingEcho = "meeting_echo"
+	// CapabilityMeetingTranscription: the manager transcribes meetings on the hub (#3862 phase 5: the upload's
+	// transcription and timeline, the audio socket GET …/audio and the gap uploads PUT …/audio, the hub's transcript of
+	// record, the meeting_transcription_* settings; docs/assistant/meeting-minutes.md "Phase 5: hub transcription").
+	// The hub lists meeting_transcription only while the default manager names it beside CapabilityMeetingConversation
+	// and CapabilityMeetingLiveView.
+	CapabilityMeetingTranscription = "meeting_transcription"
 	// CapabilityRecordingDay: the manager takes all-day recordings and writes their daily recap (the upload's kind
 	// day, POST …/segments, detail.recap, recap_state; #4741). The hub lists the recording_day feature only while the
 	// default manager names it.
@@ -244,6 +250,7 @@ var Routes = []string{
 	"PUT /api/v1/assistant/memory/{name}",
 	"DELETE /api/v1/assistant/memory/{name}",
 	"GET /api/v1/assistant/capabilities",
+	"GET /api/v1/assistant/skills",
 	"POST /api/v1/assistant/conversations",
 	"POST /api/v1/assistant/conversations/{id}/compact",
 	"PUT /api/v1/assistant/conversations/{id}/model", // the model a conversation's next messages run on (model_pick.go, #5033)
@@ -301,4 +308,13 @@ var Routes = []string{
 	"GET /api/v1/recordings/{id}/photos",
 	"GET /api/v1/recordings/{id}/photos/{n}",
 	"DELETE /api/v1/recordings/{id}/photos/{n}",
+	// Hub transcription's gap uploads (meeting_transcribe.go there, "Phase 5: hub transcription"); its audio socket is
+	// one of SocketRoutes.
+	"PUT /api/v1/recordings/{id}/audio",
 }
+
+// SocketRoutes are the assistant's routes that upgrade to a WebSocket. The hub relays them over a relay stream
+// (extwire.MethodAccept) to the default manager, as it relays the extensions' routes, never as http.request; the
+// manager's extensions layer hands them to the assistant (extmgr.Options.AssistantSocket). The assistant serves exactly
+// these on its socket handler (assistant.Service.ServeSocket).
+var SocketRoutes = []string{"GET /api/v1/recordings/{id}/audio"}

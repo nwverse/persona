@@ -1,3 +1,4 @@
+import { forgetSentHistory } from "./send-history";
 import { availableConversation, clearConversationDeletions, conversationDeleted, conversationKeyDeleted, deletedConversation, hasDeletedConversations, rememberConversationDeleted } from "./conversation-deleted";
 import { compatibleEnvelope, setCompatibilityFeatures } from "./compatibility";
 // App-wide state: what the hub pushes over the WebSocket (machines, sessions, interactions), plus the assistant.
@@ -989,6 +990,7 @@ export function setOutbox(key: string, list: OutboxEntry[]) {
 /** Applies only the hub's successful deletion or its authoritative tombstone/event. */
 export function markConversationDeleted(mid: string, sid: string) {
   rememberConversationDeleted(mid, sid);
+  forgetSentHistory(key(mid, sid));
   const id = runtimeIdentity({ machine_id: mid, session_id: sid } as Session);
   rowHints.delete(id);
   const outbox = { ...state.outbox };

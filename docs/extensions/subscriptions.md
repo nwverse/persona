@@ -36,8 +36,11 @@ A built-in connector of this kind can also implement `connector.ReadJSON` (found
 | `github` | `checks` | `checks`: the check runs, a failed Actions job's log end as `body` | the run's id |
 | `imessage` | `chats` | `chats`: one item per chat's latest message | the chat's id and that message's time; `thread` is the chat |
 | `imessage` | `read`, `search` | `messages`, `hits` | the message's id; `thread` is the chat |
+| `imessage` | `inbox_things` | `things`: the Inbox's rows ready-made, for a `things` recipe | each row's `thread` (the chat) and `last` (its newest message's time) |
 | `mail` | `accounts` | `accounts` | the account's id |
 | `mail` | `search` | `messages` | the Message-ID, else `account:mailbox:uid` |
+
+iMessage declares a catalog of its own (`connector.Catalog`, #6317): the three tools above as the derived catalog had them (same names, descriptions and schemas, so existing subscriptions keep theirs), and `inbox_things`, which answers the rows its `Collect` has, computed by the same function (`rows` in `connector/imessage/persona.go`). `inbox_things` is a catalog tool only, not one of the assistant's. `connector/imessage/inbox_things_test.go` compares the rows field by field: `Collect`'s with the tool's, and with what iMessage's default things subscription hands the Inbox once its feed is switched (P5a).
 
 `mail` `read` stays text: one message has no list to follow. The answers are pinned in each connector's `testdata/readjson`, and `server/internal/subscriptions/builtin_test.go` dry-runs them item by item. A snapshot subscription already made on one of these tools keeps working; its state is now the JSON.
 
@@ -83,9 +86,18 @@ Required fields are `mode`, `tool`, `kind`, and `group_by`. The tool must be a s
 
 The setup form has no pickers for these five: saving it keeps the recipe's own while the subscription reads the same tool.
 
+**Things** (#6296). In `mode: "things"` the tool's answer lists Inbox rows already made, in the connectors' own shape (`ConnectorInboxThing`: thread, kind, title, sender, preview, context, at, last, url, open_url, reply_to, can_reply, tier, done, read, tags…), at `items_path` (found as for items when empty). Each row needs a `thread` and a `last`; a row without a `kind` takes the recipe's. `group_by` must be `thread` (one Inbox row per the connector's thread), and the recipe maps no `fields` and has no pagination: an answer is the connector's current rows.
+
+- **Kept** as the connector made it, as this build reads the connectors' rows, keyed by a hash of all of it. A row whose state changes (read on the phone, replied, a new move) is kept again; an unchanged one isn't.
+- **Delivered** as each thread's newest kept row, exactly as it came: no `sub:` prefix, tag, tier or count is added, and there is no digest. The rows a built-in's `Collect` makes and the ones its `inbox_things` tool answers then reach the Inbox the same way, which is what lets a built-in's default subscription (below) keep every row as it was.
+- **Read-only.** The tool is held to the same read-only rules as any recipe's.
+- **Inbox only.** The knowledge base takes none of a things subscription's rows (it reads the source itself); turning it on is refused, and the pages leave its switch out.
+- **The dry run's** fields check becomes "every row is an Inbox row" (`bad_thing` otherwise).
+- **The pages** say the rows are provided by the connector, and offer the raw recipe but not the setup form, which maps fields.
+
 An items recipe can opt into resumable pagination. Cursor pagination sets both `cursor_arg` (the top-level tool argument that takes the cursor) and `next_cursor_path` (where the result's next cursor is); a missing, null or empty cursor is terminal. Page pagination sets `page_arg` (a positive integer argument, default 1) and can set `next_page_path` to the result's next page number, or to a boolean that is true when another page exists. Without `next_page_path`, a full requested page continues and a short page is terminal. The two strategies cannot be combined. Every leased run reads one page and commits its new items, dedup keys and bounded continuation in one transaction. A continuation keeps the original window and is due immediately, still subject to the connector's call gap, budget and backoff. `since_at` and destination catch-up advance only after the terminal page. Repeated cursors/pages, invalid values and the 100-page safety cap pause the subscription in `needs_recipe` instead of skipping ahead. Recipes without these mappings keep their legacy one-page behavior.
 
-`mode` is `items` for arriving items or `snapshot` for state such as a balance. Text results can only be snapshots. `group_by` is `thread` or `source`: how the items are grouped into Inbox rows and knowledge-base chats ("Destinations"). `source` is for a source that is one conversation (a group chat, a channel), `thread` for items that stand on their own (articles, notifications) or belong to one of several conversations, with `thread` mapped where there is one. `kind` is one of `sub_mail`, `sub_message`, `sub_notice`, `sub_deadline`, `sub_event`, `sub_update`, or `sub_digest`.
+`mode` is `items` for arriving items or `snapshot` for state such as a balance. Text results can only be snapshots. `things` is for a tool that answers Inbox rows ready-made (below). `group_by` is `thread` or `source`: how the items are grouped into Inbox rows and knowledge-base chats ("Destinations"). `source` is for a source that is one conversation (a group chat, a channel), `thread` for items that stand on their own (articles, notifications) or belong to one of several conversations, with `thread` mapped where there is one. `kind` is one of `sub_mail`, `sub_message`, `sub_notice`, `sub_deadline`, `sub_event`, `sub_update`, or `sub_digest`.
 
 The catalog stage checks parse, shape and references. The runner must additionally validate filled arguments against the tool schema, enforce the template-variable allowlist, dry-run field mapping, parse titles/times, and prove a repeated result yields nothing new. Missing ids fall back to content hashes and are marked as weak deduplication. A tool changing incompatibly, or repeated missing mapped fields, pauses the subscription for a new recipe.
 
@@ -135,7 +147,7 @@ A run writes its seen keys, its items and the cursor or bounded page continuatio
 ### Running
 
 - The manager looks for due subscriptions every 30 seconds, and at once after a change or Run now, after waiting a random 0–60 seconds at startup. A run holds a 5-minute lease. A run that died is made again once its lease ends, and the seen keys keep it from adding anything twice.
-- Each run reads from an hour before the newest item it has, or a day back the first time. A paginated recipe reads one page per leased run, resumes the same original window after a restart and schedules the next page immediately after each commit; its window advances only after the terminal page. A legacy recipe reads one page, and a full page of new items is reported as `maybe_more` by the dry run.
+- Each run reads from an hour before the newest item it has, or a day back the first time. A paginated recipe reads one page per leased run, resumes the same original window after a restart and schedules the next page immediately after each commit; its window advances only after the terminal page. A page that fails is tried again from the same position once; when it fails in the run before too (an expired page token is refused every time), the position is dropped and the next run pulls afresh from the window's start, the seen keys holding back what earlier pages delivered (#6310). A rate limit or an unreachable connector is no such failure and keeps the position; turning the subscription off drops it. A legacy recipe reads one page, and a full page of new items is reported as `maybe_more` by the dry run.
 - Limits are per connector, shared by its subscriptions:
   - one call at a time, at least 20 seconds apart with jitter;
   - at most `max_calls_per_hour` calls an hour (default 120); a run over the budget moves to when the budget allows;
@@ -143,6 +155,7 @@ A run writes its seen keys, its items and the cursor or bounded page continuatio
   - three failed calls in a row pause the connector, 1 minute first, doubling up to 6 hours.
 - A subscription's own failure retries after its interval × 2ⁿ, at most 6 hours, and never stops it. Two runs in a row whose items lose their title, or whose list is gone, pause it in `needs_recipe`, as does a tool that changed so that it no longer takes the recipe's arguments; a tool whose description changed while it still fits carries on.
 - A connector that is not `ok` or is switched off is `not_connected`: no failure, no run recorded, and it resumes by itself.
+- A connector's `changed` event (any scope) brings forward the next run of its subscriptions that are on and pull items (#6247), as it kicks the Inbox for the connector's own things. Each runs this way at most once a minute after its last run, and never sooner than the source's `min_interval_seconds`. The limits above still hold, and a run they hold back is left to the schedule. The run is recorded as `scheduled`; snapshots and push sources keep their own timing. A source that announces new items so reaches the Inbox in seconds, not at its next pull.
 - Intervals are at least 5 minutes and the source's `min_interval_seconds`; snapshots at least an hour, by default once a day at `daily_at` (08:00 in the user's time zone). Items default to every 15 minutes, or the source's minimum when longer.
 - Logs carry counts and states only. Creating, changing, running now and deleting are recorded in `plugin_audit` (`subscription_created`, `subscription_updated` with the changed field names, `subscription_run_now`, `subscription_deleted`).
 
@@ -306,6 +319,19 @@ pages would make.
 - **Undo.** Changes are recorded in `plugin_audit` with the actor `assistant`; an update's answer carries `previous`,
   the values that put it back with another confirmed save.
 - A meeting's turn refuses `subscription_save` and `subscription_run` like any tool that is not a meeting's.
+
+### Built-in sources switched to their default subscription
+
+A built-in source's Inbox feed can be switched to its default subscription and back (#6265; `docs/design/proposals/inbox-sources-migration.md`, decisions 1–3). The code is `server/internal/subscriptions/migrate.go`.
+
+- **Identity.** The default subscription has a fixed id, `sub_m_<connector>` (`MigrationID`); a random id's rest is hex, so no other starts so. While it is switched on (`migrated`, the time it was), the manager leaves the built-in out of the Inbox round (`readConnectors`). It hands the subscription's rows under the built-in's own source id, with the items' own threads and ids instead of `sub:<id>:` threads. The Inbox's item ids (`<source>:sha1(thread, last)`), mutes, policies, done threads, read errors and replies (through the built-in's connector) then match the built-in's, as long as the recipe maps the same thread and id.
+- **The switch** is `Service.Migrate(Migration, on)`, given each source's default recipe.
+  - **On** makes the subscription when there is none, both destinations off, and sets `migrated`; it is pulled at once. Its catch-up reaches a day back and comes as rows, never a digest. The rows the built-in already brought are known by their ids, so nothing between the built-in's last round and the subscription's first is missed, and nothing comes twice.
+  - **Off** clears `migrated`. The subscription stays, not pulled, with its seen keys and items; the built-in is read again from the next round.
+  - Deleting the subscription switches it back first.
+- **Mixed versions and rollback.** `migrated` is kept with the subscription's run data; its own `to_inbox` and `to_kb` stay false. A manager from before this knows neither the field nor the id, sees an off subscription, and never pulls it. The built-in's own feed is never switched off, so rolling the hub back restores the built-in on its next round, with no duplicates. Its pages are drawn by the manager, so no client needs a feature flag.
+- **The knowledge base** stays on the built-in's path (decision 3): `migrated` moves only the Inbox feed.
+- **For the AI twin** a switched source's rows read as the built-in's: the round names no subscription (`via`) for them.
 
 ### Push sources
 

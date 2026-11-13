@@ -1,5 +1,10 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- Inbox handling chats are implementation details, not user-created conversations (#5723). `Untitled` suppresses
+  automatic naming but does not hide a chat, and `titleFixed` still gives it the item's subject. Apply default
+  archiving in the common session snapshot, not only after starting or finishing: restored chats and follow-up
+  instructions must stay hidden too. Preserve item-chain links and the main conversation.
+
 - Count repeated conditional instructions at the runtime-send boundary, not just in a prompt golden (#5665).
   Two adjacent decision blocks repeated the same handling rules, but the newer one also required recording the choice.
   Remove the older copy, retain the newer obligations, and check both decision gating and the actual synthetic
@@ -420,3 +425,12 @@ resume paths reachable. Check every referenced identity on a start, including `r
 and discard a read that finishes after deletion. A fleet notification is not an applied acknowledgement: apply the manager's successful deletion to the hub before returning HTTP 200. Fence the final HTTP header commit per session, suppress late broadcasts at enqueue, and redact retained replay entries; do not claim to retract bytes already committed before the acknowledgement. A pending main-chat handoff also contains old turns: suppress it when
 its source is deleted. Task origins and previously saved knowledge remain separate records; deletion must not stop the
 Agents those tasks started. Tests use synthetic conversations, references and node events, never a live user's history.
+
+## Clear a "tell it later" record only after the tell went (#6306)
+
+After a node restart, `recoverAssistantTasks` cleared the record of a conversation's lost background tasks (written to
+the hub) before sending the message about them. When that one send failed (the launcher not up yet, the 1-minute
+deadline), the record was gone and no later connection told the conversation: an assistant that promised to report on CI
+waited forever. A record that exists only so something is said later is cleared after the saying succeeded, and only if it
+still holds what was said (the woken conversation may already have re-armed new tasks). Being told twice after a send
+that timed out but was delivered is the cheaper failure.
