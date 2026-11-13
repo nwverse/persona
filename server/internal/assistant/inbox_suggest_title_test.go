@@ -125,6 +125,15 @@ func TestInboxSuggestKeepsSourceTitles(t *testing.T) {
 		"moment":  {KindMoment, func(it *InboxItem) { it.Moment = &InboxMoment{PostID: "p1", Notice: "comment"} }},
 		"github":  {"review_requested", func(it *InboxItem) { it.Connector = &InboxConnector{Thread: "example-org/example-repo#12"} }},
 		"release": {"release", func(it *InboxItem) { it.Connector = &InboxConnector{Thread: "example-org/example-repo@v1"} }},
+		// GitHub's @me rows carry the chat kinds too, but their title is the pull request's or issue's: the source keeps it.
+		"github mention": {KindMention, func(it *InboxItem) {
+			it.Connector = &InboxConnector{Thread: "example-org/example-repo#12"}
+			it.Source = "github"
+		}},
+		"github dm": {KindDM, func(it *InboxItem) {
+			it.Connector = &InboxConnector{Thread: "example-org/example-repo#12"}
+			it.Source = "github"
+		}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			h, _, it := handledHub(t)
@@ -153,8 +162,8 @@ func TestInboxSuggestKeepsSourceTitles(t *testing.T) {
 	}
 }
 
-// A chat item of a connector (a direct message from another source) is named like one of the hub's own: the kind is
-// what decides, not the source.
+// A chat item of a connector (a direct message from another source) is named like one of the hub's own: the kind
+// decides, except where the source's own row is what the title is (GitHub, above).
 func TestInboxSuggestNamesConnectorChat(t *testing.T) {
 	h, _, it := handledHub(t)
 	h.inbox.mu.Lock()
