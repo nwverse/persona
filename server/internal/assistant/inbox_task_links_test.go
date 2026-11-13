@@ -181,7 +181,7 @@ func TestInboxTaskURLJudgeFallback(t *testing.T) {
 				it.Connector = &InboxConnector{URL: "https://github.com/example/project/pull/123#discussion_r456"}
 			}
 			h.setConfig(func(cfg *assistantwire.InboxConfig) { cfg.Agent.Enabled = true })
-			model, calls := captureModel(t, `{"task_id":"`+todo.ID+`"}`)
+			model, calls := captureModel(t, `{"task_id":"`+todo.ID+`","evidence":"Review the change"}`)
 			h.in.setModel(model)
 			h.inbox.mu.Lock()
 			h.inbox.items[it.ID] = it

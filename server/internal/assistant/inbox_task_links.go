@@ -38,17 +38,21 @@ func inboxTaskRefs(text string) []string {
 }
 
 // linkInboxTaskURLs runs before the AI twin's switch: exact task links need neither triage nor a model. Keep
-// existing links, leave ambiguous matches to the judge, and persist new links before notifying their supervisors.
+// existing links, leave ambiguous matches to the judge, and persist new links before notifying their supervisors. An
+// existing link of a GitHub item to an open task that does not name its repository (inbox_task_scope.go, #6424) is
+// cleared instead: persisted like any item write, and nothing is told about it.
 func (s *Service) linkInboxTaskURLs(ctx context.Context) {
 	if s.ensureTodosLoaded(ctx) != nil {
 		return
 	}
 	byURL := map[string]string{}
+	open := map[string]Todo{}
 	s.todos.mu.RLock()
 	for _, t := range s.todos.todos {
 		if t.DoneAt != nil || t.Cancelled() || isAskTodo(t.ID) {
 			continue
 		}
+		open[t.ID] = *t
 		for _, ref := range inboxTaskRefs(t.PRURL + " " + t.Title + " " + t.Notes) {
 			if id, exists := byURL[ref]; exists && id != t.ID {
 				byURL[ref] = "" // more than one open task names this link
@@ -62,10 +66,23 @@ func (s *Service) linkInboxTaskURLs(ctx context.Context) {
 	linked := map[*InboxItem]bool{}
 	var writes []*inboxWrite
 	var items []*InboxItem
+	var unlinked []string
 	b.mu.Lock()
 	for _, it := range b.items {
 		if !it.open() {
 			continue
+		}
+		if a := it.Agent; a != nil && a.TodoID != "" {
+			if sc := inboxScopeOf(it); sc.repo != "" {
+				if t, ok := open[a.TodoID]; ok && !taskOfRepo(t, sc.repo) {
+					w := beginWrite(it)
+					unlinked = append(unlinked, it.ID+" from "+a.TodoID)
+					a.TodoID = ""
+					b.settle(w)
+					writes = append(writes, w)
+					continue // one write per item a pass: a URL of it can link it on the next one
+				}
+			}
 		}
 		if it.Agent == nil || it.Agent.TodoID == "" {
 			text := it.Title + " " + it.Preview + " " + it.Context
@@ -98,6 +115,9 @@ func (s *Service) linkInboxTaskURLs(ctx context.Context) {
 		}
 	}
 	b.mu.Unlock()
+	for _, u := range unlinked {
+		s.logf("inbox: unlinked %s: the task does not name the item's repository", u)
+	}
 	failed := s.saveWrites(ctx, writes, "its task URL link")
 	kept := items[:0]
 	for _, it := range items {
