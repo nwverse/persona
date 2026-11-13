@@ -6117,7 +6117,6 @@ struct TerminalCover: View {
 /// page and resumes it there (#5521), as the web's line does; the words go above the two buttons, which stay on one line.
 private struct StoppedAgentBar: View {
 #if os(iOS)
-    @Environment(\.dynamicTypeSize) private var typeSize
     var session: Session
     var coordinator: CodexTakeoverCoordinator
 #endif
@@ -6136,10 +6135,7 @@ private struct StoppedAgentBar: View {
                     CodexTakeoverControl(session: session, coordinator: coordinator, onSession: onSession)
                 }
                 if let resume {
-                    // At accessibility sizes, stack the actions so neither label is cut short.
-                    let buttons = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: Theme.Space.s))
-                        : AnyLayout(HStackLayout(spacing: Theme.Space.s))
-                    buttons {
+                    HStack(spacing: Theme.Space.s) {
                         terminal
                         Button(action: resume) {
                             Label("Resume Session", systemImage: Theme.Icon.resume).font(Theme.Font.labelStrong).lineLimit(1)
@@ -6238,7 +6234,6 @@ struct QueueStrip: View {
     @State private var relayedExpanded = false
     /// One row's height with its spacing, as drawn (it follows the text size and the rows' line counts).
     @State private var rowHeight: CGFloat = 0
-    @Environment(\.dynamicTypeSize) private var typeSize
     private static let visibleRows: CGFloat = 3
 
     var body: some View {
@@ -6253,24 +6248,11 @@ struct QueueStrip: View {
             .padding(.top, Theme.Space.sm)
         } label: {
             Group {
-                if typeSize.isAccessibilitySize {
-                    // Side by side, Send Now (which keeps its width) left the title a few points and took the tap that
-                    // opens the strip (#4846): at these sizes the title wraps and Send Now has the line under it.
-                    VStack(alignment: .leading, spacing: Theme.Space.sm) {
-                        HStack(alignment: .firstTextBaseline, spacing: Theme.Space.sm) {
-                            tray
-                            title.multilineTextAlignment(.leading) // the label centers wrapped lines
-                        }
-                        sendNowButton
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    HStack(spacing: Theme.Space.sm) {
-                        tray
-                        title.lineLimit(1)
-                        Spacer(minLength: 0)
-                        sendNowButton
-                    }
+                HStack(spacing: Theme.Space.sm) {
+                    tray
+                    title.lineLimit(1)
+                    Spacer(minLength: 0)
+                    sendNowButton
                 }
             }
             .font(Theme.Font.labelStrong)
@@ -7324,7 +7306,6 @@ struct WorkLine: View, Equatable {
     private let doing: WorkNow?
     @State private var shown: WorkNow?
     @State private var shownAt = Date.distantPast
-    @Environment(\.dynamicTypeSize) private var typeSize
     let openTerminal: (() -> Void)?
     let toggle: () -> Void
 
@@ -7442,25 +7423,15 @@ struct WorkLine: View, Equatable {
     }
 
     /// One line: the step's words give way (a path or a command in the middle, a sentence at the end), "+2" and the
-    /// time stay whole. At the accessibility text sizes, where beside those the words kept a letter: up to two lines of
-    /// words, room for both always kept so the line holds still as the steps change, and "+2" and the time on a line under them.
+    /// time stay whole.
     @ViewBuilder private func stepSummary(_ step: WorkNow, now: Date) -> some View {
         let took = Self.duration(from: start, to: now)
-        if typeSize.isAccessibilitySize {
-            VStack(alignment: .leading, spacing: Theme.Space.flush) {
-                Text(step.text).truncationMode(step.tail ? .tail : .middle).lineLimit(2, reservesSpace: true)
-                // Whole: on a line too narrow it wraps rather than cuts.
-                Text(step.trailer(took: took, alone: true)).lineLimit(nil)
-            }
-            .accessibilityElement(children: .combine)
-        } else {
-            HStack(spacing: Theme.Space.flush) {
-                Text(step.text).truncationMode(step.tail ? .tail : .middle)
-                Text(step.trailer(took: took)).fixedSize()
-            }
-            .lineLimit(1)
-            .accessibilityElement(children: .combine)
+        HStack(spacing: Theme.Space.flush) {
+            Text(step.text).truncationMode(step.tail ? .tail : .middle)
+            Text(step.trailer(took: took)).fixedSize()
         }
+        .lineLimit(1)
+        .accessibilityElement(children: .combine)
     }
 
     private func counted(now: Date) -> some View {
