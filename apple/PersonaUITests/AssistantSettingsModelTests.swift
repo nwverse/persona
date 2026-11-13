@@ -73,14 +73,14 @@ final class AssistantSettingsModelTests: XCTestCase {
         try setQuiet(true)
     }
 
-    /// Settings › Assistant › Main Chat Supervises Its Own Tasks (#5083): off on a hub with the background supervisor, and
-    /// turning it on is sent to the hub.
+    /// Assistant Profile › Agent Follow-Up › Main Chat Supervises Its Own Tasks (#5083; on that page since #7005): off on a
+    /// hub with the background supervisor, and turning it on is sent to the hub.
     @MainActor func testMainSupervisesOwnTasksSwitch() throws {
         let key = "main_supervises_own_tasks"
         try setFlag(key, false)
-        let app = launch(["-openAssistantPage", "assistant"])
+        let app = launch(["-openAssistantPage", "agentFollowUp"])
         let toggle = app.switches["assistant-main-supervises-own-tasks"].firstMatch
-        XCTAssertTrue(app.staticTexts["定时任务"].firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.switches["followup-start-requested"].firstMatch.waitForExistence(timeout: 10))
         let viewport = app.windows.firstMatch.frame.insetBy(dx: 0, dy: 100)
         for _ in 0..<12 where !(toggle.exists && viewport.contains(toggle.frame)) {
             let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.70))
