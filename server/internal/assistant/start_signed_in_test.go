@@ -105,7 +105,8 @@ func TestBackgroundSupervisorSignedOutInItsWordsIsReplaced(t *testing.T) {
 // until #6015) had every later run end "Not logged in" there: a conversation cannot move to another profile. A run into
 // one whose last turn ended so asks for the profile the hub's conversations start in; the node refuses it when it is
 // in another one, and the run starts a new conversation, signed in, that the task keeps. One already in that profile is
-// resumed, and so is one on a node too old to be told a profile; one whose last turn went well is resumed as before (#6186).
+// resumed, and so is one on a node too old to be told a profile; Codex's (no profiles) and one whose last turn went well
+// are resumed as before (#6186).
 func TestATaskConversationSignedOutElsewhereIsReplaced(t *testing.T) {
 	setup := func(t *testing.T) (*Service, *fakeHub, proto.Session, *[]map[string]any) {
 		t.Helper()
@@ -179,6 +180,21 @@ func TestATaskConversationSignedOutElsewhereIsReplaced(t *testing.T) {
 		sends := sendsOf(f, asked)
 		if len(sends) != 2 || sends[1]["session_id"] != first.SessionID || sends[1]["config_dir"] != nil || next.SessionID != first.SessionID {
 			t.Fatalf("an old node's conversation is resumed as before: %q %v", next.SessionID, sends)
+		}
+	})
+
+	t.Run("not Claude Code", func(t *testing.T) {
+		s, f, first, asked := setup(t)
+		codex := signedOutSession(first.SessionID)
+		codex.Agent = "codex" // no profiles: the node would refuse a config_dir for it at every run
+		f.setSessions("server", codex)
+		next, err := runNow(t, s, "p")
+		if err != nil {
+			t.Fatal(err)
+		}
+		sends := sendsOf(f, asked)
+		if len(sends) != 1 || sends[0]["session_id"] != first.SessionID || sends[0]["config_dir"] != nil || next.SessionID != first.SessionID {
+			t.Fatalf("a Codex conversation is resumed as before: %q %v", next.SessionID, sends)
 		}
 	})
 

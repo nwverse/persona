@@ -1815,9 +1815,10 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 // It is resumed only in the profile the hub's conversations start in (meetingProfile): the node refuses it before
 // starting anything when it is in another one, and the run starts a new conversation, signed in (startConversation),
 // which the task keeps (#6186). One already in that profile is resumed as before, and so is any on a node too old to
-// be told a profile, whose conversations are all in that one.
+// be told a profile, whose conversations are all in that one. Only Claude Code has profiles: the node refuses a
+// config_dir for Codex or a runtime's conversation every time, so theirs are resumed as before.
 func (s *Service) resumeOwn(ctx context.Context, machine, sid string, params map[string]any) error {
-	if c, ok := s.session(ctx, machine, sid); ok && signedOut(c) {
+	if c, ok := s.session(ctx, machine, sid); ok && signedOut(c) && (c.Agent == "" || c.Agent == "claude") {
 		params["config_dir"] = meetingProfile
 	}
 	err := s.call(ctx, machine, DeviceAssistantSend, params, nil)
