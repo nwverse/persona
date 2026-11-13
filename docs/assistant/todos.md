@@ -157,6 +157,14 @@ A task's brief (#3822, `docs/assistant/unified-entry.md`, "Briefs"): what was as
 `expect_minutes_now` in effect, `clock_at`, `due_at`, `overdue_at`, `result`) and `lineage`. A task from before briefs
 gets a reconstructed one lazily.
 
+### 7. todo_imports table
+To-dos imported from another app (#4009, "Imported from Reminders" below). Migration `0499` (manager side).
+- `source` (text, `CHECK` `'reminders'`) and `external_id` (text, nonempty): the item in that app; together the PK.
+- `todo_id` (text, NULL, FK → `todos(id)` ON DELETE SET NULL, unique while set): the to-do it became; `NULL` once that
+  to-do was deleted in Persona, which keeps the item from being imported again.
+- `fingerprint` (text): short hashes of the title, notes and due date last taken from the item, one per field.
+- `created_at`, `updated_at` (timestamptz).
+
 Link/release semantics:
 - When an Agent is linked to a new to-do and is active on another, the same transaction marks the original association `released` (records `released_at`); the old to-do shows it as "Previously involved".
 - If an Agent previously involved in this to-do is manually linked back, clear `released_at`/`dismissed_at`, and refresh `linked_at` and snapshot information.
@@ -172,6 +180,7 @@ Link/release semantics:
 | POST | `/api/v1/todos` | Create `{"title", "notes"?, "due_at"? \| "due_date"?, "remind_at"?, "priority"?, "project"?, "kind"?}` → `{"todo": Todo}`; `kind` `concern` records one of the owner's concerns ("Concerns"; without the hub's database 503), `todo` or none a to-do, anything else 400; nonempty `title` required (400); `due_at` / `remind_at` RFC 3339, `due_date` `YYYY-MM-DD`, `priority` `high` / `normal` / `low` / `""`, `project` a knowledge-base project's slug or name (stored as its slug), anything else (or both due fields, or no such project) 400; read-only role (watch) 403 |
 | PATCH | `/api/v1/todos/{id}` | Edit `{"title"?, "notes"?, "done"?, "due_at"? \| "due_date"?, "remind_at"?, "priority"?, "project"?}` → `{"todo": Todo}`; only supplied fields change, `null` (or `""`) clears a due date or reminder, `""` takes it out of its project; either due field replaces the other; a new `remind_at` is pushed again; user completion-state changes clear `done_by` / `done_reason`, and reopening records `reopened_at`; `"done": true` on a to-do whose agent never started (closed by the hub with `start_error`) is the owner closing it: `start_error` cleared, `done_at` now (#3713); `"done": true` on an open concern 409 (only its report closes it, "Concerns"); missing 404; read-only role 403 |
 | POST | `/api/v1/todos/retitle` | Give short titles to task to-dos previously named from the prompt's first line ("To-do titles") → `{"dry_run", "todos": [{"id", "old_title", "new_title"}]}`; `?dry_run=1` lists without changes; read-only role 403 |
+| POST | `/api/v1/todos/import/reminders` | Import reminders from the phone `{"items": [{"external_id", "title", "notes"?, "due_at"? \| "due_date"?}]}` → `{"created", "updated", "unchanged", "skipped"}` ("Imported from Reminders"); at most 1000 items; a missing `external_id`, an unreadable or doubled due date 400 (nothing of the batch taken); read-only role 403 |
 | POST | `/api/v1/todos/{id}/accept` | Verify a to-do from a briefing's Accept button `{"asked_at"}` (the `brief` feed item's `accept[].asked_at`, `docs/protocol/protocol.md`) → `{"ok":true}`; no `asked_at` 400; not the round that waits now (the to-do was reopened or asked again since), already verified or never asked 409; a decision whose recommendation could not reach the task's Agent 502, in the request's language with the reason (nothing taken or recorded, the button works again); the stored asks could not be read or the acceptance could not be saved 503 (nothing verified, the button works again); the ask may have no Lark card (the bot is not set up, or its task reports are off); read-only role 403 |
 | POST | `/api/v1/todos/{id}/done-check` | Run an "Automatic completion" judgment → `{"verdict", "reason", "would_close", "skip", "replies", "signals"}`, no database write ("Automatic completion"); `{"apply": true}` (Re-check) writes it and adds `applied`, `stage` (#4867); missing 404; read-only role 403 |
 | DELETE | `/api/v1/todos/{id}` | Delete to-do and associations → `{"ok": true}`; Agent sessions untouched; missing 404; read-only role 403 |
@@ -705,6 +714,26 @@ Not yet: manual editing/undo of conclusions (currently **Replace** in decisions)
 - The push's title is the to-do's, its body the due date (or "was due" once it has passed), the first line of the notes, and when it went out more than two minutes late (the manager was down), the time it was for.
 - A done to-do is not reminded; changing `remind_at` re-arms it; a mesh member on standby leaves it to the center, as with scheduled tasks.
 
+## Imported from Reminders
+
+#4009 (`assistant/todo_imports.go`). The iPhone can import the user's Reminders as to-dos, one way. The phone reads the
+lists the user picked (Settings › Phone data › Reminders) and sends their incomplete reminders to
+`POST /api/v1/todos/import/reminders`; the manager matches each by its `external_id` (`todo_imports`):
+
+- **New**: a reminder never seen becomes a to-do with its title, notes and due date (a moment, or a day for an all-day
+  reminder). One without a title is skipped.
+- **Changed**: only the fields that changed in Reminders since the last import are written, so a title the user changed
+  in Persona stays until the reminder's title changes too. A due date removed in Reminders is removed here.
+- **Left alone**: completing or deleting a reminder does nothing to its to-do, and nothing is ever written back to
+  Reminders. A to-do deleted in Persona stays deleted: its reminder is skipped from then on.
+- One batch at a time per manager; when two managers import the same new reminder, the second removes its copy.
+
+The import runs only while the app does (launch, return to the foreground, a change in the Reminders database while it
+is in front), since only the phone can read Reminders; it is not real time. There is no background refresh yet, which
+keeps it out of the battery budget (#1633). A batch the hub already took (same hash, same hub) is not sent again
+(`apple/Persona/PhoneTools/RemindersImport.swift`). A request takes at most 1000 reminders; the phone sends more in
+several requests, in a stable order, and counts the set as sent only once every request was taken.
+
 ## Calendar
 
 #2029. The to-dos page switches between the list and a calendar (List | Calendar at its top, kept per device; the calendar's Day | Week | Month too). The calendar shows the to-dos that have a due date, from the same list the page already has: `GET /api/v1/todos` returns them all, so switching needs no request and works offline from the cache.
@@ -796,7 +825,7 @@ A to-do it makes is the user's own (no `origin`): work for an agent still goes t
 
 ## Design trade-offs and reasons
 
-1. **Not another Lark Tasks or Reminders**: Persona to-dos drive and track Agent workflows, focusing on which Agents share one task and their progress, not complex subtasks, deadlines, priority trees, calendar reminders or multi-party collaboration.
+1. **Not another Lark Tasks or Reminders**: Persona to-dos drive and track Agent workflows, focusing on which Agents share one task and their progress, not complex subtasks, deadlines, priority trees, calendar reminders or multi-party collaboration. The Reminders import (#4009) keeps to that: one way, title, notes and due date only, so a to-do started in Reminders can be handed to an Agent without retyping it; lists, subtasks, sharing and completion stay in Reminders.
 2. **No stored state**: overall state derives entirely from linked Agents' live runtime states (questioning, working, finished unread, etc.). Agent state changes frequently; derivation avoids dual-write consistency problems and large synchronization overhead.
 3. **One active to-do**: `UNIQUE (machine_id, session_id) WHERE released_at IS NULL` ensures each Agent serves only one current to-do at a time. Assigning other work automatically marks the previous task "Previously involved", keeping context and execution goal clear.
 4. **Automatic completion only for chat-dispatched tasks, judged by model**: these have explicit requirements (dispatch prompt) and deliverables (Agent's final reply), so requiring individual user completion taps is a burden; manual to-dos often represent the user's own plans, whose completion hub cannot know. Stopped is not finished, so do not close by state alone; judgment model decides, leaving open when uncertain. Wrong auto-close (user thinks finished) costs much more than missed close (one extra tap), hence reversible, reasoned, and not reclosed by the same work after reopening.

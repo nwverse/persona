@@ -40,7 +40,8 @@ fun JSidebarHistoryRow(
 ) {
     JRow(title, onClick = onClick, onLongClick = onMenu, selected = selected, chevron = false, subtitle = hint,
         titleAccessory = titleAccessory, titleLead = titleLead, trailing = {
-            if (status == Status.NeedsYou || status == Status.Working || status == Status.Unread || working) JStatusDot(status, spinning = working && status != Status.NeedsYou && status != Status.Unread)
+            // A Needs You dot is still, as iOS's `RowStateMark` in a dense list; a lead with work under it spins (#6230), as there.
+            if (status == Status.NeedsYou || status == Status.Working || status == Status.Unread || working) JStatusDot(status, spinning = working && status != Status.NeedsYou && status != Status.Unread, breathes = false)
             trailingAccessory?.invoke()
             JIconButton(PhIcons.DotsThree, menuLabel, onMenu)
         })

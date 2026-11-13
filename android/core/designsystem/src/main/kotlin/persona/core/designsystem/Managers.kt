@@ -176,7 +176,7 @@ fun JManagerAvatar(
                     color = ink, maxLines = 1)
             }
         }
-        if (alert) JStatusDot(Status.NeedsYou, Modifier.align(Alignment.TopEnd))
+        if (alert) JStatusDot(Status.NeedsYou, Modifier.align(Alignment.TopEnd), breathes = false) // still, as iOS's `AssistantWaitingDot`
     }
 }
 
