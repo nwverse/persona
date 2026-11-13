@@ -122,8 +122,11 @@ func groupBatch() *connector.InboxThing {
 type groupModel struct {
 	mu      sync.Mutex
 	replies []string
+	stops   []string // stop_reason per reply ("" none): "max_tokens" cuts it off, "refusal" is a decline
+	sleep   time.Duration
 	down    bool
 	calls   []capturedCall
+	budgets []int
 }
 
 func newGroupModel(t *testing.T, replies ...string) (*groupModel, *ai.Client) {
@@ -131,13 +134,15 @@ func newGroupModel(t *testing.T, replies ...string) (*groupModel, *ai.Client) {
 	m := &groupModel{replies: replies}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
-			System   string `json:"system"`
-			Messages []struct {
+			System    string `json:"system"`
+			MaxTokens int    `json:"max_tokens"`
+			Messages  []struct {
 				Content string `json:"content"`
 			} `json:"messages"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&in)
 		reply := `{"handle":false,"reason":"示例"}`
+		stop := ""
 		if strings.Contains(in.System, "归到「事件」里") {
 			m.mu.Lock()
 			c := capturedCall{System: in.System}
@@ -145,16 +150,29 @@ func newGroupModel(t *testing.T, replies ...string) (*groupModel, *ai.Client) {
 				c.User = in.Messages[0].Content
 			}
 			m.calls = append(m.calls, c)
+			m.budgets = append(m.budgets, in.MaxTokens)
 			down := m.down
-			reply = m.replies[min(len(m.calls), len(m.replies))-1]
+			sleep := m.sleep
+			i := min(len(m.calls), len(m.replies)) - 1
+			reply = m.replies[i]
+			if i < len(m.stops) {
+				stop = m.stops[i]
+			}
 			m.mu.Unlock()
+			if sleep > 0 {
+				time.Sleep(sleep)
+			}
 			if down {
 				w.WriteHeader(http.StatusInternalServerError)
 				_, _ = w.Write([]byte(`{"error":{"type":"api_error","message":"example failure"}}`))
 				return
 			}
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"content": []any{map[string]any{"type": "text", "text": reply}}})
+		body := map[string]any{"content": []any{map[string]any{"type": "text", "text": reply}}}
+		if stop != "" {
+			body["stop_reason"] = stop
+		}
+		_ = json.NewEncoder(w).Encode(body)
 	}))
 	t.Cleanup(srv.Close)
 	key := filepath.Join(t.TempDir(), "key")
@@ -166,6 +184,12 @@ func (m *groupModel) asked() []capturedCall {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([]capturedCall(nil), m.calls...)
+}
+
+func (m *groupModel) tokenBudgets() []int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]int(nil), m.budgets...)
 }
 
 // groupHub is a hub with the connector and model, an open event of chat F1 (lark:F1:1051) and one done yesterday
@@ -264,8 +288,245 @@ func TestInboxGroupByTheModel(t *testing.T) {
 	}
 }
 
-// An answer that does not hold up is the model being unavailable: the connector's fallback groups the batch, with the
-// events the model would have seen. A new event keeps its rule tier ("By rule", triaged_by rules) for good. An existing
+// A malformed answer or an answer that fails validation is handed back once with the original error. The correction
+// spends one call allowance, is not recorded as a tool call, and a valid correction is written by the model.
+func TestInboxGroupReasksAnInvalidAnswer(t *testing.T) {
+	badAnswer := `{"assign":[{"message":"m1060","event":"lark:F1:1051"}],"events":[{"event":"lark:F1:1051","title":"示例","tier":"fyi"}]}`
+	for _, tc := range []struct {
+		name, reply, problem string
+	}{
+		{name: "validation", reply: badAnswer, problem: "消息 m1061 没有归到事件"},
+		{name: "not JSON", reply: "not JSON", problem: ai.ErrNoObject.Error()},
+		{name: "decode", reply: `{"assign":[}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := &groupLark{batch: groupBatch(), placed: map[string]bool{}}
+			model, client := newGroupModel(t, tc.reply, groupAnswerOK)
+			h, _ := groupHub(t, g, client)
+			h.collectInbox(context.Background(), roundPoll)
+			h.waitGrouping()
+
+			calls := model.asked()
+			if len(calls) != 2 {
+				t.Fatalf("%d model calls, want the initial call and one correction", len(calls))
+			}
+			if !strings.Contains(calls[1].User, "你上一次给的结果不合格：") || !strings.Contains(calls[1].User, "改好后重新给出完整结果") {
+				t.Fatalf("correction input lacks the problem:\n%s", calls[1].User)
+			}
+			if tc.problem != "" && !strings.Contains(calls[1].User, tc.problem) {
+				t.Errorf("correction input lacks %q:\n%s", tc.problem, calls[1].User)
+			}
+			if !strings.Contains(calls[1].User, "还能查 3 次") || strings.Contains(calls[1].User, "你调了") {
+				t.Errorf("correction did not spend only one allowance:\n%s", calls[1].User)
+			}
+			if len(g.fallbacks) != 0 {
+				t.Fatalf("a valid correction used the fallback: %+v", g.fallbacks)
+			}
+			fresh := h.inbox.items["lark:F1:1061"]
+			if fresh == nil || fresh.Title != "示例 B 接口变更" || fresh.TriagedBy != "model" {
+				t.Fatalf("corrected event %+v", fresh)
+			}
+		})
+	}
+}
+
+// The other malformed replies A-4 names are corrected the same way: an object that never closes (ErrUnterminated) and
+// one cut off at max_tokens even after the client's own doubling (ErrTruncated).
+func TestInboxGroupReasksUnterminatedAndTruncated(t *testing.T) {
+	cut := `{"assign":[{"message":"m1060","event":"lark:F1:1051"}],"events":[{"event":"lark:F1:1051","ti`
+	for _, tc := range []struct {
+		name    string
+		replies []string
+		stops   []string
+		problem string
+		calls   int
+	}{
+		{name: "unterminated", replies: []string{`{"assign":[{"message":"m1060"`, groupAnswerOK}, problem: "unterminated", calls: 2},
+		// A closed object that does not decode into the answer (a json.UnmarshalTypeError, not a syntax error).
+		{name: "type mismatch", replies: []string{`{"assign":[{"message":1060,"event":"lark:F1:1051"}]}`, groupAnswerOK}, problem: "cannot unmarshal", calls: 2},
+		// JSONMax asks once more with twice the room itself; both cut, ErrTruncated is the grouping's to correct.
+		{name: "truncated", replies: []string{cut, cut, groupAnswerOK}, stops: []string{"max_tokens", "max_tokens"}, problem: "max_tokens", calls: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := &groupLark{batch: groupBatch(), placed: map[string]bool{}}
+			model, client := newGroupModel(t, tc.replies...)
+			model.stops = tc.stops
+			h, _ := groupHub(t, g, client)
+			h.collectInbox(context.Background(), roundPoll)
+			h.waitGrouping()
+
+			calls := model.asked()
+			if len(calls) != tc.calls {
+				t.Fatalf("%d model calls, want %d", len(calls), tc.calls)
+			}
+			last := calls[len(calls)-1].User
+			if !strings.Contains(last, "你上一次给的结果不合格：") || !strings.Contains(last, tc.problem) {
+				t.Fatalf("correction input lacks %q:\n%s", tc.problem, last)
+			}
+			if len(g.fallbacks) != 0 {
+				t.Fatalf("a valid correction used the fallback: %+v", g.fallbacks)
+			}
+			if fresh := h.inbox.items["lark:F1:1061"]; fresh == nil || fresh.TriagedBy != "model" {
+				t.Fatalf("corrected event %+v", fresh)
+			}
+		})
+	}
+}
+
+// The correction is one of the four allowances, so after it only three tool calls remain: a fourth request for a tool
+// is refused (the batch goes to the fallback), and a bad answer arriving when one allowance is left is corrected with
+// the prompt saying no more lookups are allowed.
+func TestInboxGroupCorrectionSpendsAnAllowance(t *testing.T) {
+	bad := `{"assign":[{"message":"m1060","event":"lark:F1:1051"}],"events":[{"event":"lark:F1:1051","title":"示例","tier":"fyi"}]}`
+	tool := `{"tool":"search","args":{"query":"示例","n":5}}`
+	t.Run("three tools after a correction", func(t *testing.T) {
+		model, client := newGroupModel(t, bad, tool, tool, tool, tool)
+		g := &groupLark{batch: groupBatch(), placed: map[string]bool{}, fallback: connector.GroupFallbackResult{
+			New: []connector.GroupNew{{Key: "k1", Messages: []string{"m1060", "m1061"}, RuleTier: connector.TierFYI}}}}
+		h, _ := groupHub(t, g, client)
+		plan, why := h.askGroup(context.Background(), sourceOf(g), *groupBatch(), h.groupEvents("lark", "chat:F1", ""))
+		if plan != nil || !strings.Contains(why, "还要查") {
+			t.Fatalf("plan %+v, why %q", plan, why)
+		}
+		if len(model.asked()) != groupCalls+1 || len(g.tools) != groupCalls-1 {
+			t.Fatalf("%d model calls and %d tool calls: one correction plus three tools", len(model.asked()), len(g.tools))
+		}
+	})
+	t.Run("bad answer with one allowance left", func(t *testing.T) {
+		model, client := newGroupModel(t, tool, tool, tool, bad, groupAnswerOK)
+		g := &groupLark{batch: groupBatch(), placed: map[string]bool{}}
+		h, _ := groupHub(t, g, client)
+		h.collectInbox(context.Background(), roundPoll)
+		h.waitGrouping()
+
+		calls := model.asked()
+		if len(calls) != groupCalls+1 {
+			t.Fatalf("%d model calls, want three tools, the bad answer and its correction", len(calls))
+		}
+		if last := calls[groupCalls].User; !strings.Contains(last, "你上一次给的结果不合格：") || !strings.Contains(last, "不能再查了") {
+			t.Fatalf("the correction with no allowance left:\n%s", last)
+		}
+		if h.inbox.items["lark:F1:1061"] == nil {
+			t.Fatal("not related after the correction")
+		}
+	})
+}
+
+// A model that takes too long is a timeout, not a malformed answer: it is not asked again, and the fallback groups the
+// batch (A-4: timeouts, holds, unconfigured models and transport errors are not corrected).
+func TestInboxGroupTimeoutIsNotReasked(t *testing.T) {
+	step, total := groupStepTimeout, groupTimeout
+	groupStepTimeout, groupTimeout = 20*time.Millisecond, time.Second
+	t.Cleanup(func() { groupStepTimeout, groupTimeout = step, total })
+	g := &groupLark{batch: groupBatch(), placed: map[string]bool{}, fallback: connector.GroupFallbackResult{
+		New: []connector.GroupNew{{Key: "k1", Messages: []string{"m1060", "m1061"}, RuleTier: connector.TierFYI}}}}
+	model, client := newGroupModel(t, groupAnswerOK)
+	model.sleep = 200 * time.Millisecond
+	h, _ := groupHub(t, g, client)
+	h.collectInbox(context.Background(), roundPoll)
+	h.waitGrouping()
+
+	if calls := model.asked(); len(calls) != 1 {
+		t.Fatalf("a timeout was retried: %d model calls", len(calls))
+	}
+	if len(g.fallbacks) != 1 {
+		t.Fatalf("%d fallback call(s)", len(g.fallbacks))
+	}
+}
+
+// A model that declines the request is not asked again: the same input is declined again, so a second call only spends
+// one (ai.ErrRefused). The fallback groups the batch.
+func TestInboxGroupRefusalIsNotReasked(t *testing.T) {
+	g := &groupLark{batch: groupBatch(), placed: map[string]bool{}, fallback: connector.GroupFallbackResult{
+		New: []connector.GroupNew{{Key: "k1", Messages: []string{"m1060", "m1061"}, RuleTier: connector.TierFYI}}}}
+	model, client := newGroupModel(t, groupAnswerOK)
+	model.stops = []string{"refusal"}
+	h, _ := groupHub(t, g, client)
+	h.collectInbox(context.Background(), roundPoll)
+	h.waitGrouping()
+
+	if calls := model.asked(); len(calls) != 1 {
+		t.Fatalf("a refusal was retried: %d model calls", len(calls))
+	}
+	if len(g.fallbacks) != 1 {
+		t.Fatalf("%d fallback call(s)", len(g.fallbacks))
+	}
+}
+
+// The correction is shown on the request right after the bad answer only: a tool call after a good correction carries
+// no problem, and the allowance the correction spent still shows in "还能查 N 次".
+func TestInboxGroupCorrectionShownOnce(t *testing.T) {
+	bad := `{"assign":[{"message":"m1060","event":"lark:F1:1051"}],"events":[{"event":"lark:F1:1051","title":"示例","tier":"fyi"}]}`
+	tool := `{"tool":"search","args":{"query":"示例","n":5}}`
+	model, client := newGroupModel(t, bad, tool, groupAnswerOK)
+	g := &groupLark{batch: groupBatch(), placed: map[string]bool{}}
+	h, _ := groupHub(t, g, client)
+	h.collectInbox(context.Background(), roundPoll)
+	h.waitGrouping()
+
+	calls := model.asked()
+	if len(calls) != 3 {
+		t.Fatalf("%d model calls, want bad, corrected tool call, answer", len(calls))
+	}
+	if !strings.Contains(calls[1].User, "你上一次给的结果不合格：") || !strings.Contains(calls[1].User, "还能查 3 次") {
+		t.Fatalf("correction input:\n%s", calls[1].User)
+	}
+	if strings.Contains(calls[2].User, "你上一次给的结果不合格") {
+		t.Errorf("the problem outlived the request it was for:\n%s", calls[2].User)
+	}
+	// One tool call and one correction: two allowances of the four, so the second tool call is still allowed.
+	if !strings.Contains(calls[2].User, "还能查 2 次") {
+		t.Errorf("allowance after a correction and a tool call:\n%s", calls[2].User)
+	}
+	if h.inbox.items["lark:F1:1061"] == nil {
+		t.Fatal("not related after the correction")
+	}
+	// Every step, the correction included, carries the batch's computed budget (never the old 0 = default).
+	budgets := model.tokenBudgets()
+	want := groupOutputBudget(len(groupBatch().Group.New), 2)
+	if len(budgets) != 3 {
+		t.Fatalf("%d budgets for 3 calls: %v", len(budgets), budgets)
+	}
+	for i, b := range budgets {
+		if b != want {
+			t.Errorf("call %d budget %d, want %d", i, b, want)
+		}
+	}
+}
+
+// A valid answer opening four events is accepted and written: the 3-event limit is the prompt's guidance only. The
+// extra events survive foldNoise (only noise is folded) and each is written once.
+func TestInboxGroupAcceptsMoreThanThreeNewEvents(t *testing.T) {
+	batch := groupBatch()
+	batch.Group.New = []string{"m1060", "m1061", "m1062", "m1063"}
+	var assign, events []string
+	for i, m := range batch.Group.New {
+		ev := fmt.Sprintf("new:%d", i+1)
+		assign = append(assign, fmt.Sprintf(`{"message":%q,"event":%q}`, m, ev))
+		events = append(events, fmt.Sprintf(`{"event":%q,"title":"示例事件 %d","summary":"示例","tier":"fyi","reason":"同步"}`, ev, i+1))
+	}
+	answer := `{"assign":[` + strings.Join(assign, ",") + `],"events":[` + strings.Join(events, ",") + `]}`
+	g := &groupLark{batch: batch, placed: map[string]bool{}}
+	model, client := newGroupModel(t, answer)
+	h, _ := groupHub(t, g, client)
+	h.collectInbox(context.Background(), roundPoll)
+	h.waitGrouping()
+
+	if calls := model.asked(); len(calls) != 1 {
+		t.Fatalf("%d model calls: a valid four-event answer should not be asked again", len(calls))
+	}
+	if len(g.appends) != 4 || len(g.fallbacks) != 0 {
+		t.Fatalf("%d appends, %d fallback(s)", len(g.appends), len(g.fallbacks))
+	}
+	for _, m := range batch.Group.New {
+		if it := h.inbox.items["lark:F1:"+strings.TrimPrefix(m, "m")]; it == nil || it.TriagedBy != "model" {
+			t.Fatalf("event of %s: %+v", m, it)
+		}
+	}
+}
+
+// An answer that is still invalid after its correction is the model being unavailable: the connector's fallback groups
+// the batch, with the events the model would have seen. A new event keeps its rule tier ("By rule", triaged_by rules) for good. An existing
 // event keeps its words and triage, with triaged_at advanced so the model coming back sorts nothing again.
 func TestInboxGroupFallsBackOnABadAnswer(t *testing.T) {
 	g := &groupLark{batch: groupBatch(), placed: map[string]bool{}, fallback: connector.GroupFallbackResult{
@@ -275,6 +536,17 @@ func TestInboxGroupFallsBackOnABadAnswer(t *testing.T) {
 	h, _ := groupHub(t, g, client)
 	h.collectInbox(context.Background(), roundPoll)
 	h.waitGrouping()
+
+	calls := model.asked()
+	if len(calls) != 2 || !strings.Contains(calls[1].User, "你上一次给的结果不合格：") {
+		t.Fatalf("bad answer was not corrected once: %d calls", len(calls))
+	}
+	h.inbox.grouping.mu.Lock()
+	why := h.inbox.grouping.why["lark"]
+	h.inbox.grouping.mu.Unlock()
+	if !strings.Contains(why, "重问后仍不合格") {
+		t.Errorf("fallback reason %q does not name the failed correction", why)
+	}
 
 	if len(g.fallbacks) != 1 || g.fallbacks[0].Batch != "chat:F1@1061" || len(g.fallbacks[0].Events) != 2 ||
 		g.fallbacks[0].Events[0].ID != "lark:F1:1051" || string(g.fallbacks[0].Events[0].Meta) != `{"messages":["m1051"]}` || !g.fallbacks[0].Events[1].Done {
@@ -446,7 +718,26 @@ func TestInboxGroupFallsBackWithoutTheModel(t *testing.T) {
 			if c == "tools" && (len(model.asked()) != groupCalls+1 || len(g.tools) != groupCalls) {
 				t.Fatalf("%d model calls, %d tool calls", len(model.asked()), len(g.tools))
 			}
+			if c == "down" && len(model.asked()) != 1 {
+				t.Fatalf("transport failure was retried: %d model calls", len(model.asked()))
+			}
 		})
+	}
+}
+
+// An invalid answer after the last allowed call goes straight to the fallback: there is no allowance for a correction.
+func TestInboxGroupDoesNotReaskWhenNoCallsRemain(t *testing.T) {
+	g := &groupLark{batch: groupBatch(), placed: map[string]bool{}}
+	tool := `{"tool":"search","args":{"query":"示例","n":5}}`
+	bad := `{"assign":[{"message":"m1060","event":"lark:F1:1051"}],"events":[{"event":"lark:F1:1051","title":"示例","tier":"fyi"}]}`
+	model, client := newGroupModel(t, tool, tool, tool, tool, bad, groupAnswerOK)
+	h, _ := groupHub(t, g, client)
+	plan, why := h.askGroup(context.Background(), sourceOf(g), *groupBatch(), h.groupEvents("lark", "chat:F1", ""))
+	if plan != nil || !strings.Contains(why, "模型的结果不合格") {
+		t.Fatalf("plan %+v, why %q", plan, why)
+	}
+	if len(model.asked()) != groupCalls+1 || len(g.tools) != groupCalls {
+		t.Fatalf("%d model calls and %d tool calls, want %d and %d", len(model.asked()), len(g.tools), groupCalls+1, groupCalls)
 	}
 }
 
@@ -503,6 +794,54 @@ func TestInboxGroupNeedsTheCapability(t *testing.T) {
 	}
 }
 
+// The response budget grows with the batch but stays within the model's lower and upper bounds.
+func TestInboxGroupOutputBudget(t *testing.T) {
+	for _, tc := range []struct {
+		fresh, candidates, want int
+	}{
+		{fresh: 1, candidates: 0, want: 1024},
+		{fresh: 8, candidates: 2, want: 1440},
+		{fresh: 100, candidates: 100, want: 4096},
+		// The floor: a small batch, and a batch whose candidates are many still counts only the messages.
+		{fresh: 0, candidates: 0, want: 1024},
+		{fresh: 3, candidates: 0, want: 1024},
+		{fresh: 2, candidates: 10, want: 1024},
+		// Above the floor: 4 messages and 4 candidates → 256 + 192 + 640.
+		{fresh: 4, candidates: 4, want: 1088},
+		// min(fresh, candidates+3) tops out at the messages themselves.
+		{fresh: 8, candidates: 100, want: 1920},
+		// The ceiling.
+		{fresh: 1000, candidates: 1000, want: 4096},
+	} {
+		if got := groupOutputBudget(tc.fresh, tc.candidates); got != tc.want {
+			t.Errorf("groupOutputBudget(%d, %d) = %d, want %d", tc.fresh, tc.candidates, got, tc.want)
+		}
+	}
+}
+
+// askGroup passes the computed budget to the model, rather than relying on JSON's default budget.
+func TestInboxGroupPassesOutputBudget(t *testing.T) {
+	batch := groupBatch()
+	batch.Group.New = []string{"m1060", "m1061", "m1062", "m1063", "m1064", "m1065", "m1066", "m1067"}
+	assign := make([]string, 0, len(batch.Group.New))
+	for _, id := range batch.Group.New {
+		assign = append(assign, fmt.Sprintf(`{"message":%q,"event":"new:1"}`, id))
+	}
+	answer := `{"assign":[` + strings.Join(assign, ",") + `],"events":[{"event":"new:1","title":"示例","tier":"fyi"}]}`
+	g := &groupLark{batch: batch, placed: map[string]bool{}}
+	model, client := newGroupModel(t, answer)
+	h, _ := groupHub(t, g, client)
+	events := h.groupEvents("lark", batch.Thread, "")
+	plan, why := h.askGroup(context.Background(), sourceOf(g), *batch, events)
+	if plan == nil || why != "" {
+		t.Fatalf("plan %+v, why %q", plan, why)
+	}
+	budgets := model.tokenBudgets()
+	if len(budgets) != 1 || budgets[0] != 1440 {
+		t.Fatalf("model budgets %v, want [1440]", budgets)
+	}
+}
+
 // The rules an answer is held to.
 func TestInboxGroupAnswerChecks(t *testing.T) {
 	seen := map[string]groupEvent{"e1": {ID: "e1"}, "e0": {ID: "e0", Done: true}}
@@ -535,12 +874,13 @@ func TestInboxGroupAnswerChecks(t *testing.T) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
-	// At most groupNewMax new events.
+	// The prompt suggests at most groupNewMax new events, but a larger valid answer is accepted.
 	var a groupAnswer
 	_ = json.Unmarshal([]byte(`{"assign":[{"message":"m1","event":"new:1"},{"message":"m2","event":"new:2"},{"message":"m3","event":"new:3"},
 		{"message":"m4","event":"new:4"}],"events":[`+ev("new:1", "fyi")+`,`+ev("new:2", "fyi")+`,`+ev("new:3", "fyi")+`,`+ev("new:4", "fyi")+`]}`), &a)
-	if _, err := checkGroupAnswer(a, []string{"m1", "m2", "m3", "m4"}, seen); err == nil {
-		t.Error("four new events passed")
+	plan, err := checkGroupAnswer(a, []string{"m1", "m2", "m3", "m4"}, seen)
+	if err != nil || len(plan.events) != 4 {
+		t.Errorf("four new events: plan %+v, err %v", plan, err)
 	}
 }
 
