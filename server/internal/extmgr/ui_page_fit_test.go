@@ -3,6 +3,7 @@ package extmgr
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -151,4 +152,36 @@ func errText(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+// BenchmarkPagePrepareRedraw redraws an unchanged page the way a source does,
+// each time with a new native version, with the session's memo and without.
+func BenchmarkPagePrepareRedraw(b *testing.B) {
+	for _, size := range []struct{ sections, items int }{{4, 8}, {10, 25}} {
+		for _, memo := range []bool{false, true} {
+			name := fmt.Sprintf("%dx%d/memo=%v", size.sections, size.items, memo)
+			b.Run(name, func(b *testing.B) {
+				h := &Manager{}
+				view := renderView(size.sections, size.items, "")
+				var fit *pageFitMemo
+				if memo {
+					fit = &pageFitMemo{}
+				}
+				state := renderState(nil, view, "page")
+				state.fit = fit
+				tree, _, err := h.pagePrepare(state, false, "")
+				if err != nil {
+					b.Fatal(err)
+				}
+				b.ReportAllocs()
+				for i := 0; b.Loop(); i++ {
+					state := renderState(tree, view, "page")
+					state.fit, state.native.Version = fit, int64(i+2)
+					if next, frame, err := h.pagePrepare(state, false, ""); err != nil || frame != nil || next != tree {
+						b.Fatal(err)
+					}
+				}
+			})
+		}
+	}
 }
