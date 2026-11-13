@@ -204,6 +204,7 @@ class MessageSelectionTest {
             Reply("a", "先看 `foo()` 的结果。\n\n- 要点一\n- 要点二\n\n1. 第一步\n2. 第二步\n\n```kotlin\nfun a() = 1\nfun b() = 2\n```\n\n结尾 [链接](https://example.com/x)。")
         }
         select("a", "…")
+        settle()
         copy()
         // No thin spaces round the code, a list item's marker on its line, the code block's lines among the words and
         // none of its title bar (the language and Copy), the link as its words.
