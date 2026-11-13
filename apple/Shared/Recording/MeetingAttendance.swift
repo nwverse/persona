@@ -82,6 +82,16 @@ nonisolated struct RecordingAttendance: Codable, Hashable, Sendable {
     /// timeline in hub mode (`timeline.roles`, the audio socket's `start` and `role`). Kept only for a meeting that asked
     /// for a transcription mode (`transcription`), so every other attendance stays as it was.
     var roles: [RecordingRoleChange] = []
+    /// The stretches of the recording's clock that were hub-mode meeting time (#3862 phase 5): one opens as a meeting
+    /// that asked for `hub` starts or as the recording becomes one (`openHubTime`), and closes when it turns into a Note,
+    /// when an older manager rolls it back, and at Stop (`closeHubTime`); the last is open (`end` nil) while it goes on.
+    /// Only audio inside them ever leaves the phone after the meeting (the gap uploads): what was recorded as a Note, or
+    /// after a rollback, stays here whatever the hub lacks. Empty: none, so nothing is uploaded.
+    var hubTime: [RecordingPeriod] = []
+    /// An older manager answered an upload of this meeting (a `200` without `transcription`, docs/assistant/
+    /// meeting-minutes.md「Choosing the mode」): `device` for the rest of the recording, kept with it so a relaunch with the
+    /// newer manager back never streams or uploads its audio again.
+    var hubRolledBack = false
 
     nonisolated enum StopReason: String, Codable, Sendable {
         case unsupported
@@ -105,12 +115,13 @@ nonisolated struct RecordingAttendance: Codable, Hashable, Sendable {
         a.privateMark = privateMark
         a.transcription = transcription
         if transcription != nil { a.roles = [RecordingRoleChange(at: max(0, at), attendance: role)] }
+        a.openHubTime(at: at)
         return a
     }
 
     enum CodingKeys: String, CodingKey {
         case role, session, sessionTitle, periods, live, liveSegments, spoken, stopped, room, photos, liveView, privateMark, mainPicked
-        case transcription, roles
+        case transcription, roles, hubTime, hubRolledBack
     }
 
     init(from decoder: Decoder) throws {
@@ -134,6 +145,37 @@ nonisolated struct RecordingAttendance: Codable, Hashable, Sendable {
         // Phase 5: a mode a later app wrote and this one doesn't know names none (the upload sends no mode).
         transcription = try? c.decodeIfPresent(MeetingTranscriptionMode.self, forKey: .transcription)
         roles = (try? c.decodeIfPresent([RecordingRoleChange].self, forKey: .roles)) ?? []
+        // None read: no hub-mode time, so none of its audio is ever uploaded after the meeting.
+        hubTime = (try? c.decodeIfPresent([RecordingPeriod].self, forKey: .hubTime)) ?? []
+        hubRolledBack = (try? c.decodeIfPresent(Bool.self, forKey: .hubRolledBack)) ?? false
+    }
+
+    /// The recording is a meeting that asked for `hub` from `at` on (its start, or a Note turned into a meeting): a
+    /// stretch of hub-mode time opens, unless one is open already or an older manager rolled the meeting back.
+    mutating func openHubTime(at: Double) {
+        guard transcription == .hub, !hubRolledBack, hubTime.last.map({ $0.end != nil }) ?? true else { return }
+        hubTime.append(RecordingPeriod(start: max(0, at, hubTime.last?.end ?? 0)))
+    }
+
+    /// Hub-mode time ends at `at` (the recording turned into a Note, or stopped): the open stretch closes there.
+    mutating func closeHubTime(at: Double) {
+        guard let last = hubTime.indices.last, hubTime[last].end == nil else { return }
+        hubTime[last].end = max(at, hubTime[last].start)
+    }
+
+    /// An older manager answered at `at`: hub-mode time ends, for the rest of the recording.
+    mutating func rollBackHub(at: Double) {
+        closeHubTime(at: at)
+        hubRolledBack = true
+    }
+
+    /// The hub-mode stretches as `[from, to]` pairs on the recording's clock, an open one ending at `end` (the recording's
+    /// length): what gap uploads are clipped to.
+    func hubStretches(until end: Double) -> [(from: Double, to: Double)] {
+        hubTime.compactMap { p in
+            let to = min(p.end ?? end, end)
+            return to > p.start ? (p.start, to) : nil
+        }
     }
 
     /// The attending session, nil for the main chat (when `mainPicked`) or nobody.

@@ -9,8 +9,9 @@ import Observation
 final class MeetingNetwork {
     static let shared = MeetingNetwork()
 
-    /// Unmetered until the monitor says otherwise (its first answer comes at once).
-    private(set) var kind: MeetingNetworkKind = .unmetered
+    /// Unknown, so not Wi-Fi, until the monitor's first answer: with **Hub transcription on Wi-Fi only** nothing goes
+    /// before the phone knows it is on Wi-Fi.
+    private(set) var kind: MeetingNetworkKind = .unknown
     @ObservationIgnored private var monitor: NWPathMonitor?
 
     func start() {
@@ -142,16 +143,19 @@ final class MeetingTranscriptionSettings {
     }
 
     /// The glossary as edited (the list editor's rows): cleaned as the hub cleans it (`cleanGlossary`), refused here
-    /// when the hub would refuse it, so nothing is sent that can't be kept.
-    func setGlossary(_ terms: [String]) async {
-        guard var shown = values else { return }
+    /// when the hub would refuse it, so nothing is sent that can't be kept. True once the hub has it (or had it already);
+    /// false when it was refused, failed, or not sent because another change is still being saved (`saving`).
+    @discardableResult
+    func setGlossary(_ terms: [String]) async -> Bool {
+        guard var shown = values else { return false }
         switch Self.cleanGlossary(terms) {
         case .failure(let problem):
             failure = problem
+            return false
         case .success(let clean):
-            guard clean != shown.glossary else { return }
+            guard clean != shown.glossary else { return true }
             shown.glossary = clean
-            await save(shown) { try await $0.setAssistant(meetingGlossary: clean) }
+            return await save(shown) { try await $0.setAssistant(meetingGlossary: clean) }
         }
     }
 
@@ -169,9 +173,12 @@ final class MeetingTranscriptionSettings {
         deps.wifiOnlyChanged(on)
     }
 
-    private func save(_ next: Values, _ put: (APIClient) async throws -> APIClient.AssistantState) async {
+    /// Saves `next` (shown at once, put back if the hub refuses it): true once the hub kept it; false when it refused,
+    /// failed, or another change is still being saved (one at a time: this one isn't sent).
+    @discardableResult
+    private func save(_ next: Values, _ put: (APIClient) async throws -> APIClient.AssistantState) async -> Bool {
         if api == nil { api = deps.api() }
-        guard let api, !saving else { return }
+        guard let api, !saving else { return false }
         let before = values
         values = next
         saving = true
@@ -181,9 +188,11 @@ final class MeetingTranscriptionSettings {
             failure = nil
             deps.serviceRead(service)
             await deps.saved(api)
+            return true
         } catch {
             values = before
             failure = .hub(Self.message(error))
+            return false
         }
     }
 

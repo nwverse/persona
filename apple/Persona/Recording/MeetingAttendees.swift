@@ -216,7 +216,8 @@ import Foundation
     /// A recording's attendance once it becomes a meeting again mid-recording, at `at` on its clock (a note turned into a
     /// meeting, #5243): `start`'s role and attendee from then on. One it had as a meeting before keeps what came with it:
     /// the live log the hub already has, the stretches Persona spoke in, and a room meeting its room (a meeting never
-    /// moves from its room). Nothing said before `at` is attended.
+    /// moves from its room). Nothing said before `at` is attended, and in hub mode (phase 5) its hub-mode time starts
+    /// again at `at`: what was recorded as a Note never leaves the phone.
     static func resumed(_ attendance: RecordingAttendance?, start: RecordingAttendance, at: Double) -> RecordingAttendance {
         var a: RecordingAttendance
         if var kept = attendance {
@@ -226,10 +227,13 @@ import Foundation
             a = start
             a.role = .off
             a.periods = []
-            // Its timeline (phase 5) starts here too: the role from `at`, not from the recording's start.
+            // Its timeline (phase 5) starts here too: the role from `at`, not from the recording's start, and its hub-mode
+            // time from `at` (a start's would hold the Note before it).
             a.roles = []
+            a.hubTime = []
         }
         a.set(start.role, at: at)
+        a.openHubTime(at: at)
         return a
     }
 

@@ -540,13 +540,20 @@ nonisolated enum MeetingTranscriptionRule {
     /// The `bad_frame`s in a row after which the phone stops trying: a frame it keeps getting wrong is its own bug.
     static let maxBadFrames = 3
 
+    /// A socket counts as healthy, and the failures in a row (the backoff, the `bad_frame`s) start again from none, only
+    /// once the hub acknowledged audio on it (its first `ack`) or it stayed up this long: a hub that fails right after
+    /// `ready` is not tried again every second, each time resending the 60 seconds held.
+    static let healthyAfter: Duration = .seconds(30)
+
     /// Whether audio may go now (docs/assistant/meeting-minutes.md「On the phone」, "Decided" 4): cellular data is allowed,
-    /// unless the owner turned on **Hub transcription on Wi-Fi only**; never without a network.
+    /// unless the owner turned on **Hub transcription on Wi-Fi only**; never without a network. A network not known yet
+    /// counts as not Wi-Fi. With the switch on, the socket and the gap uploads also ask the system to keep off cellular
+    /// and expensive networks (`URLRequest.keepOnWiFi`), so a path that changes after this check never carries them.
     static func mayStream(wifiOnly: Bool, network: MeetingNetworkKind) -> Bool {
         switch network {
         case .none: false
         case .unmetered: true
-        case .metered: !wifiOnly
+        case .metered, .unknown: !wifiOnly
         }
     }
 
@@ -562,18 +569,57 @@ nonisolated enum MeetingTranscriptionRule {
         var fellBack: Bool
     }
 
-    /// `hub`: the mode in effect is hub; `socketUp`: the socket is up (after `ready`); `problem`: the standing one;
-    /// `stopped`: the uplink stopped for good; `everUp`: the socket was up once in this meeting (the first connect is
-    /// no fallback yet); `down`: it is down now and the phone isn't just pausing or finished.
-    static func shown(hub: Bool, socketUp: Bool, everUp: Bool, down: Bool, problem: String?, stopped: Bool,
+    /// How long a socket that was up may be away (dropped and opening again, or opening again on Continue) before the
+    /// page says transcription fell back: a brief reconnect is no fallback.
+    static let reconnectGrace: Duration = .seconds(5)
+
+    /// `hub`: the mode in effect is hub; `socket`: the audio socket's state; `everUp`: it was up once in this meeting (the
+    /// first connect is no fallback); `away`: a socket that was up has been reconnecting longer than `reconnectGrace`;
+    /// `problem`: the standing one; `stopped`: the uplink stopped for good.
+    ///
+    /// Transcription has fallen back (the notice) only when the uplink stopped, a problem other than `no_interim` stands,
+    /// the phone waits for Wi-Fi, or the socket is down (one that was up, once `away`). Paused, at its end after Stop or
+    /// ended is no fallback: nothing is being transcribed then.
+    static func shown(hub: Bool, socket: MeetingAudioSocket, everUp: Bool, away: Bool, problem: String?, stopped: Bool,
                       role: MeetingAttendance) -> Shown {
         guard hub else { return Shown(hubInterim: false, hubLines: false, phoneLines: true, fellBack: false) }
-        let healthy = socketUp && !stopped && (problem == nil || problem == "no_interim")
-        let fellBack = stopped || (problem != nil && problem != "no_interim") || (!socketUp && (everUp || down))
+        let up = socket == .ready
+        let degraded = problem != nil && problem != "no_interim"
+        let healthy = up && !stopped && !degraded
+        let resting = [.paused, .ending, .ended].contains(socket)
+        let gone: Bool = switch socket {
+        case .waitingForWiFi: true
+        case .down: !everUp || away
+        case .connecting: everUp && away
+        default: false
+        }
+        let fellBack = stopped || (degraded && !resting) || gone
         // Role off: the hub's captions still come (they reach only this phone), but no line: the phone's own lines.
         let lines = healthy && role != .off
         return Shown(hubInterim: healthy, hubLines: lines, phoneLines: !lines, fellBack: fellBack)
     }
+}
+
+/// The audio socket of the recording being made (`MeetingTranscription.Socket`).
+nonisolated enum MeetingAudioSocket: String, Equatable, Sendable {
+    /// No socket: the meeting is transcribed on the phone, isn't being recorded here, or its uplink stopped.
+    case off
+    /// Hub mode asked for; the first upload's `200` isn't in yet (the audio is kept meanwhile).
+    case waitingForMode
+    /// **Hub transcription on Wi-Fi only**, and no Wi-Fi: no audio leaves the phone; the time becomes gaps.
+    case waitingForWiFi
+    /// Opened; the hub's `ready` isn't in yet.
+    case connecting
+    /// Up: the audio goes.
+    case ready
+    /// It dropped (or there is no network): another comes.
+    case down
+    /// The recording is paused: closed until it goes on.
+    case paused
+    /// `end` sent at Stop: the hub's last lines come, then it closes.
+    case ending
+    /// Closed after the meeting.
+    case ended
 }
 
 /// The kind of network the phone is on now, as the uplink's rule needs it.
@@ -583,6 +629,8 @@ nonisolated enum MeetingNetworkKind: String, Sendable {
     case unmetered
     /// Cellular, or a network marked expensive.
     case metered
+    /// Not known yet (the path monitor hasn't answered): not Wi-Fi.
+    case unknown
 }
 
 // MARK: Gap uploads
@@ -600,10 +648,13 @@ nonisolated enum MeetingGapUpload {
     }
 
     /// The requests that fill `gaps`, in order, each at most `maxSeconds`, rounded to samples; only what lies inside the
-    /// phone's audio (`held`, the recording's length here: a stretch past it has nothing to send).
-    static func plan(_ gaps: [MeetingGap], held: Double, maxSeconds: Double = MeetingGapUpload.maxSeconds) -> [Piece] {
+    /// phone's audio (`held`, the recording's length here: a stretch past it has nothing to send) and inside `within`,
+    /// the recording's hub-mode time (`MeetingTranscription.uploadable`): a gap the hub has where the recording was a
+    /// Note, or after a rollback, is never sent, and keeps the phone's text. Nothing `within`: nothing at all.
+    static func plan(_ gaps: [MeetingGap], held: Double, within allowed: [MeetingGap],
+                     maxSeconds: Double = MeetingGapUpload.maxSeconds) -> [Piece] {
         var out: [Piece] = []
-        for gap in MeetingGap.union(gaps) {
+        for gap in intersection(MeetingGap.union(gaps), MeetingGap.union(allowed)) {
             var at = MeetingAudioClock.rounded(max(0, gap.from))
             let to = MeetingAudioClock.rounded(min(gap.to, held))
             while to - at >= 1.0 / Double(MeetingAudioClock.rate) {
@@ -613,6 +664,25 @@ nonisolated enum MeetingGapUpload {
             }
         }
         return out
+    }
+
+    /// The stretches both `a` and `b` cover (each in order, without overlaps, as `MeetingGap.union` gives them).
+    static func intersection(_ a: [MeetingGap], _ b: [MeetingGap]) -> [MeetingGap] {
+        var out: [MeetingGap] = []
+        var i = 0, j = 0
+        while i < a.count, j < b.count {
+            let from = max(a[i].from, b[j].from), to = min(a[i].to, b[j].to)
+            if to > from { out.append(MeetingGap(from: from, to: to)) }
+            if a[i].to < b[j].to { i += 1 } else { j += 1 }
+        }
+        return out
+    }
+
+    /// How long before another gap pass after `passes` in a row left a meeting `later` (the hub or the network away):
+    /// 15, 30, 60, 120, 240, then every 300 seconds, so the gaps still reach the hub before its final pass (at most 30
+    /// minutes after the `complete: true` upload).
+    static func retryDelay(_ passes: Int) -> Double {
+        min(300, 15 * pow(2, Double(max(0, min(passes, 6) - 1))))
     }
 
     /// What to do after a refused `PUT …/audio`, in the contract's order of errors.

@@ -36,8 +36,8 @@ import UserNotifications
         capture.onStopping = { id in
             MeetingAsk.shared.ended(id)
             MeetingCall.shared.ended(id)
-            // The audio socket says `end` after the last audio (#3862 phase 5).
-            MeetingTranscription.shared.ended(id)
+            // The audio socket says `end` after the last audio, and hub-mode time ends here (#3862 phase 5).
+            MeetingTranscription.shared.ended(id, at: RecordingCapture.shared.timeline)
         }
         MeetingLive.shared.start()
         // The segment length follows what the meeting being recorded may send (#3862 phase 2).
@@ -238,6 +238,8 @@ import UserNotifications
             // in (kept out of the transcript), and a room meeting's room, which it never leaves.
             e.meeting = nil
             e.attendance?.set(.off, at: at)
+            // Hub mode (phase 5): the Note's audio stays on the phone, so hub-mode time ends here.
+            e.attendance?.closeHubTime(at: at)
         }
         return e
     }

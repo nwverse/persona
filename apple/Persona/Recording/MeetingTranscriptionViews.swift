@@ -122,6 +122,18 @@ nonisolated enum MeetingTranscriptionWords {
     static func detailFooter(days: Int) -> String {
         String(localized: "This meeting's audio also went through your hub to its speech service; the hub deletes it once the minutes are written. After the retention period (\(days) days) the recording is cleared from this device and Knowledge.")
     }
+
+    /// Whether the recording page's footer says the audio went through the hub (pure, for the tests): `detail.meta`'s
+    /// mode once read; before that what this phone knows, so the page never says the audio stayed here while it may not
+    /// have: the mode the upload's `200` decided (`hub`; `device` unless an older manager rolled a hub-mode meeting back),
+    /// else the meeting asked for the hub and had hub-mode time (`RecordingAttendance.hubTime`).
+    static func audioWentToHub(meta: MeetingTranscriptionView?, decided: MeetingTranscriptionRule.Decided?,
+                               attendance: RecordingAttendance?) -> Bool {
+        if let meta { return meta.mode == .hub }
+        if let decided, !decided.olderManager { return decided.mode == .hub }
+        guard let attendance, attendance.transcription == .hub else { return false }
+        return !attendance.hubTime.isEmpty
+    }
 }
 
 // MARK: Settings › Meetings
@@ -232,6 +244,8 @@ struct MeetingGlossaryPage: View {
                     ForEach(terms, id: \.self) { term in
                         Text(term).font(Theme.Font.body)
                             .accessibilityIdentifier("glossary-term")
+                            // One change at a time: a delete while another saves would not be sent.
+                            .deleteDisabled(settings.saving)
                     }
                     .onDelete { offsets in
                         var next = terms
@@ -248,13 +262,13 @@ struct MeetingGlossaryPage: View {
         .navigationBarTitleDisplayMode(.inline)
     }
 
-    /// The term typed goes first, so the newest is at the top; the field empties once the hub kept it.
+    /// The term typed goes first, so the newest is at the top; the field empties only once the hub kept it. Return while
+    /// another change is still being saved does nothing and keeps the text, as Add is off then.
     private func add() {
-        guard !blank else { return }
+        guard !blank, !settings.saving else { return }
         let term = draft
         Task {
-            await settings.setGlossary([term] + terms)
-            if settings.failure == nil { draft = "" }
+            if await settings.setGlossary([term] + terms), draft == term { draft = "" }
         }
     }
 
@@ -270,6 +284,25 @@ struct MeetingGlossaryPage: View {
 }
 
 // MARK: The recording's page
+
+/// The recording page's last footer (#3862 phase 5): what left the phone and how long it is kept. A meeting whose audio
+/// went through the hub says so (`MeetingTranscriptionWords.audioWentToHub`), from `detail.meta` once read and from what the
+/// phone knows before (the store, the attendance), so it never says the audio stayed here while the page waits for the
+/// minutes or is offline; else `device`. A view of its own, so the store's changes redraw only it (P5).
+struct RecordingRetentionFooter: View {
+    var id: UUID
+    var attendance: RecordingAttendance?
+    var meta: MeetingTranscriptionView?
+    var days: Int
+    /// The text when the audio stayed here.
+    var device: String
+    @State private var store = MeetingTranscription.shared
+
+    var body: some View {
+        let hub = MeetingTranscriptionWords.audioWentToHub(meta: meta, decided: store.meeting(id).decided, attendance: attendance)
+        Text(hub ? MeetingTranscriptionWords.detailFooter(days: days) : device)
+    }
+}
 
 /// The recording page's transcription row: what `detail.meta.transcription` says (`view`, read with the minutes), else
 /// what the transcription store last read, with the gap uploads the store runs. A view of its own, so the store's changes

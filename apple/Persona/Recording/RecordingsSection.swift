@@ -988,7 +988,17 @@ struct RecordingDetailView: View {
             Section {
                 EmptyView()
             } footer: {
+                #if os(iOS)
+                // A meeting whose audio went through the hub (#3862 phase 5) says so, before its `detail.meta` too.
+                if entry.attendance?.transcription != nil {
+                    RecordingRetentionFooter(id: id, attendance: entry.attendance, meta: minutes.transcription,
+                                             days: sync.store.days, device: retentionFooter(entry))
+                } else {
+                    Text(retentionFooter(entry))
+                }
+                #else
                 Text(retentionFooter(entry))
+                #endif
             }
         }
         // The minutes unfold when they arrive (Reduce Motion: at once).
@@ -1006,15 +1016,13 @@ struct RecordingDetailView: View {
         #endif
     }
 
-    /// What the page says, at its end, about what left the device and how long it is kept: a meeting the hub transcribed
-    /// (#3862 phase 5) sent its audio to the hub, which the words say rather than that the audio stayed here.
+    /// What the page says, at its end, about what left the device and how long it is kept, when the audio stayed here. A
+    /// meeting that asked for a transcription mode (#3862 phase 5) shows it through `RecordingRetentionFooter`, which says
+    /// the audio went through the hub instead when it may have.
     private func retentionFooter(_ entry: RecordingEntry) -> String {
         if entry.isRolling {
             return String(localized: "Rolling keeps the last \(Int(RecordingRolling.keepHours)) hours. Pull a range to transcribe it; text syncs into Knowledge. Audio stays on this device.")
         }
-        #if os(iOS)
-        if minutes.transcription?.mode == .hub { return MeetingTranscriptionWords.detailFooter(days: sync.store.days) }
-        #endif
         return String(localized: "Only the text and timestamps go into Knowledge; the original audio isn't uploaded. After the retention period (\(sync.store.days) days) it's cleared from this device and Knowledge.")
     }
 

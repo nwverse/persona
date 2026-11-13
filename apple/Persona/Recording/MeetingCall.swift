@@ -580,7 +580,9 @@ import OSLog
         if on {
             if voiceStart == nil {
                 voiceStart = (recording, capture.timeline)
-                // The audio socket says so in hub mode (#3862 phase 5), with what the voice has said of it yet.
+                // The audio socket says so in hub mode (#3862 phase 5), without the words: at playback's start the
+                // captions hold only the answer's beginning (`MeetingTranscription.spokenText`); the whole answer goes
+                // with the span once it ended.
                 MeetingTranscription.shared.speaking(recording, voice: .call, on: true, at: capture.timeline,
                                                      text: openSpan(for: recording)?.text)
             }

@@ -64,6 +64,20 @@ nonisolated struct LocalRequest: Sendable {
     var headers: [String: String] = [:]
     /// The caller's bound on the real URL request, exposed to transport-level tests.
     var timeout: TimeInterval = 30
+    /// The real request keeps off cellular data and expensive networks (`URLRequest.keepOnWiFi`), exposed to
+    /// transport-level tests as `timeout` is.
+    var wifiOnly = false
+}
+
+nonisolated extension URLRequest {
+    /// **Hub transcription on Wi-Fi only** (#3862 phase 5): with `on`, the system itself refuses to send the request over
+    /// cellular data or a network marked expensive (a phone's hotspot), whatever the app last saw of the network; a path
+    /// that changes under it (Wi-Fi Assist on a weak Wi-Fi, Wi-Fi gone during a retry) fails the request instead.
+    mutating func keepOnWiFi(_ on: Bool) {
+        guard on else { return }
+        allowsCellularAccess = false
+        allowsExpensiveNetworkAccess = false
+    }
 }
 
 nonisolated struct APIError: LocalizedError, Sendable {
@@ -418,14 +432,17 @@ nonisolated struct APIClient: Sendable {
     }
 
     /// `PUT` with `data` as an `application/octet-stream` body (a meeting's gap audio, #3862 phase 5: `PUT …/audio?at=`),
-    /// answered as `request` is. The fake transport gets the bytes as the body.
-    func putBytes(_ path: String, query: [String: String] = [:], data: Data, timeout: TimeInterval = 120) async throws -> Data {
+    /// answered as `request` is. The fake transport gets the bytes as the body. `wifiOnly`: the system sends it over
+    /// neither cellular data nor an expensive network (**Hub transcription on Wi-Fi only**, `URLRequest.keepOnWiFi`).
+    func putBytes(_ path: String, query: [String: String] = [:], data: Data, timeout: TimeInterval = 120,
+                  wifiOnly: Bool = false) async throws -> Data {
         let query = larkScoped(path, query)
         if config.isDemo { throw APIError(status: 403, message: DemoText.notSent) }
         let headers = clientMetadata.headers.merging(routing(path, query)) { _, manager in manager }
         if let transport {
             do {
-                return try await transport(LocalRequest(method: "PUT", path: path, query: query, body: data, headers: headers, timeout: timeout))
+                return try await transport(LocalRequest(method: "PUT", path: path, query: query, body: data, headers: headers, timeout: timeout,
+                                                        wifiOnly: wifiOnly))
             } catch var error as APIError {
                 error.requestPath = path
                 throw error
@@ -433,6 +450,7 @@ nonisolated struct APIClient: Sendable {
         }
         var req = URLRequest(url: url(path, query: query), timeoutInterval: timeout)
         req.httpMethod = "PUT"
+        req.keepOnWiFi(wifiOnly)
         config.authorize(&req)
         req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
         clientMetadata.apply(to: &req)

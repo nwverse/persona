@@ -256,6 +256,34 @@ struct MeetingAudioRingTests {
         #expect(socket.frames.last?["at"] as? Double == 0.3)
         #expect(decoded(socket.audio.reduce(Data(), +)).count == 4800)
     }
+
+    /// #3862 phase 5 review: an uplink kept on the tap after Stop never takes the next recording's audio.
+    @Test func nothingJoinsTheUplinkAfterItsEnd() {
+        let uplink = MeetingAudioUplink(recording: UUID())
+        uplink.feed(samples(3200), at: 0)
+        let socket = open(uplink)
+        uplink.ready(from: 0, generation: uplink.currentGeneration)
+        let done = Locked(false)
+        #expect(uplink.end(settle: 0) { done.set(true) })
+        Thread.sleep(forTimeInterval: 0.05)
+        uplink.drain()
+        #expect(done.value && uplink.isFinished, "the end says when it went: the time to take it off the tap")
+        let sent = socket.audio.count, held = uplink.heldEnd
+        // The next recording's clock starts at 0 and soon passes this one's end: none of it joins or goes.
+        uplink.feed(samples(16000), at: 0)
+        uplink.feed(samples(16000, from: 16000), at: 16000)
+        uplink.drain()
+        #expect(socket.audio.count == sent && uplink.heldEnd == held)
+    }
+}
+
+/// A value shared with a closure another queue runs (the tests' own).
+private final class Locked<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: Value
+    init(_ value: Value) { stored = value }
+    var value: Value { lock.withLock { stored } }
+    func set(_ value: Value) { lock.withLock { stored = value } }
 }
 
 // MARK: - Rules
@@ -295,12 +323,29 @@ struct MeetingTranscriptionRuleTests {
         #expect(!Rule.mayStream(wifiOnly: true, network: .metered))
         #expect(Rule.mayStream(wifiOnly: true, network: .unmetered))
         #expect(!Rule.mayStream(wifiOnly: false, network: .none))
+        #expect(!Rule.mayStream(wifiOnly: true, network: .unknown), "a network not known yet is not Wi-Fi")
+        #expect(Rule.mayStream(wifiOnly: false, network: .unknown), "cellular is allowed without the switch")
+    }
+
+    /// #3862 phase 5 review: with Wi-Fi Only the system itself keeps the socket and the gap uploads off cellular, and the
+    /// network counts as not Wi-Fi until the monitor first answers.
+    @MainActor @Test func wifiOnlyIsTheSystemsRuleAndTheNetworkStartsUnknown() throws {
+        #expect(MeetingNetwork().kind == .unknown)
+        let api = APIClient(config: ServerConfig(url: URL(string: "https://hub.invalid")!, token: "t"))
+        let kept = MeetingAudioEndpoint.request(api, recording: UUID(), wifiOnly: true)
+        #expect(!kept.allowsCellularAccess && !kept.allowsExpensiveNetworkAccess)
+        #expect(kept.value(forHTTPHeaderField: "Authorization") == "Bearer t" && kept.url?.scheme == "wss")
+        let free = MeetingAudioEndpoint.request(api, recording: UUID(), wifiOnly: false)
+        #expect(free.allowsCellularAccess && free.allowsExpensiveNetworkAccess, "cellular is allowed without the switch")
+        var put = URLRequest(url: try #require(URL(string: "https://hub.invalid/api/v1/recordings/x/audio?at=0")))
+        put.keepOnWiFi(true)
+        #expect(!put.allowsCellularAccess && !put.allowsExpensiveNetworkAccess)
     }
 
     @Test func thePageShowsTheHubWhileItIsUpAndHealthy() {
-        func shown(_ hub: Bool = true, up: Bool = true, everUp: Bool = true, down: Bool = false, problem: String? = nil,
-                   stopped: Bool = false, role: MeetingAttendance = .listener) -> Rule.Shown {
-            Rule.shown(hub: hub, socketUp: up, everUp: everUp, down: down, problem: problem, stopped: stopped, role: role)
+        func shown(_ hub: Bool = true, socket: MeetingAudioSocket = .ready, everUp: Bool = true, away: Bool = false,
+                   problem: String? = nil, stopped: Bool = false, role: MeetingAttendance = .listener) -> Rule.Shown {
+            Rule.shown(hub: hub, socket: socket, everUp: everUp, away: away, problem: problem, stopped: stopped, role: role)
         }
         #expect(shown(false) == .init(hubInterim: false, hubLines: false, phoneLines: true, fellBack: false))
         #expect(shown() == .init(hubInterim: true, hubLines: true, phoneLines: false, fellBack: false))
@@ -310,9 +355,26 @@ struct MeetingTranscriptionRuleTests {
         #expect(shown(role: .off) == .init(hubInterim: true, hubLines: false, phoneLines: true, fellBack: false),
                 "role off: the hub's caption and the phone's own lines")
         #expect(shown(stopped: true).fellBack && shown(stopped: true).phoneLines)
-        #expect(!shown(up: false, everUp: false).fellBack, "the first connect is no fallback yet")
-        #expect(shown(up: false, everUp: true).fellBack)
-        #expect(shown(up: false, everUp: false, down: true).fellBack, "never up and down: fallen back")
+        #expect(!shown(socket: .connecting, everUp: false).fellBack, "the first connect is no fallback yet")
+        #expect(shown(socket: .down, everUp: false).fellBack, "never up and down: fallen back")
+        #expect(shown(socket: .waitingForWiFi).fellBack && shown(socket: .waitingForWiFi, everUp: false).fellBack)
+    }
+
+    /// #3862 phase 5 review: pausing, the end after Stop and a brief reconnect are no fallback; a socket away longer is.
+    @Test func aPauseAnEndOrABriefReconnectIsNoFallback() {
+        func fellBack(_ socket: MeetingAudioSocket, away: Bool = false, problem: String? = nil, stopped: Bool = false) -> Bool {
+            Rule.shown(hub: true, socket: socket, everUp: true, away: away, problem: problem, stopped: stopped, role: .listener).fellBack
+        }
+        for socket in [MeetingAudioSocket.paused, .ending, .ended] {
+            #expect(!fellBack(socket), "\(socket): nothing is being transcribed")
+            #expect(!fellBack(socket, problem: "upstream_failed"), "\(socket): a problem from before says nothing now")
+            #expect(fellBack(socket, stopped: true), "\(socket): a stopped uplink is said")
+            #expect(!Rule.shown(hub: true, socket: socket, everUp: true, away: false, problem: nil, stopped: false, role: .listener).hubLines,
+                    "the hub's lines while the socket is up only, as the contract says")
+        }
+        #expect(!fellBack(.connecting) && !fellBack(.down), "a reconnect within the grace")
+        #expect(fellBack(.connecting, away: true) && fellBack(.down, away: true), "away longer than the grace")
+        #expect(Rule.reconnectGrace == .seconds(5))
     }
 
     @Test func aStartAsksForTheDefaultOrThePickWhileTheHubIsReady() {
@@ -375,13 +437,74 @@ struct MeetingTimelineTests {
         let start = RecordingAttendance.room(.listener, private: false, photos: false, liveView: true, transcription: .hub)
         let a = MeetingAttendees.resumed(nil, start: start, at: 30)
         #expect(a.transcription == .hub && a.roles == [RecordingRoleChange(at: 30, attendance: .listener)])
+        #expect(a.hubTime == [RecordingPeriod(start: 30)], "hub-mode time from the switch, not from the recording's start")
     }
 
     @Test func theAttendanceRoundTripsAndAnUnknownModeNamesNone() throws {
-        let a = RecordingAttendance.room(.participant, private: false, photos: false, liveView: true, transcription: .hub)
+        var a = RecordingAttendance.room(.participant, private: false, photos: false, liveView: true, transcription: .hub)
+        a.rollBackHub(at: 42)
+        #expect(a.hubTime == [RecordingPeriod(start: 0, end: 42)] && a.hubRolledBack)
         #expect(try JSON.decoder.decode(RecordingAttendance.self, from: JSON.encoder.encode(a)) == a)
         let later = try JSON.decoder.decode(RecordingAttendance.self, from: Data(#"{"role":"listener","transcription":"quantum"}"#.utf8))
         #expect(later.transcription == nil)
+        let before = try JSON.decoder.decode(RecordingAttendance.self, from: Data(#"{"role":"listener","transcription":"hub"}"#.utf8))
+        #expect(before.hubTime.isEmpty && !before.hubRolledBack, "none read: no hub-mode time, so nothing goes up")
+    }
+
+    // MARK: Hub-mode time (#3862 phase 5 review)
+
+    private func recording(_ attendance: RecordingAttendance?, seconds: Double, meeting: Bool = true) -> RecordingEntry {
+        var e = RecordingEntry(id: UUID(), createdAt: Date(timeIntervalSince1970: 1_800_000_000), source: .phone, title: "Weekly", active: true)
+        e.meeting = meeting ? RecordingMeeting(title: "Weekly") : nil
+        e.attendance = attendance
+        e.segments = [RecordingSegment(index: 0, start: 0, duration: seconds, sentences: [])]
+        return e
+    }
+
+    private let hubStart = RecordingAttendance.room(.listener, private: false, photos: false, liveView: true, transcription: .hub)
+
+    @MainActor @Test func aNoteTurnedIntoAHubMeetingNeverUploadsTheNote() {
+        let note = recording(nil, seconds: 900, meeting: false)
+        let e = MeetingRecorder.switched(note, meeting: true, at: 600, named: nil, start: hubStart)
+        #expect(e.attendance?.transcription == .hub && e.attendance?.hubTime == [RecordingPeriod(start: 600)])
+        #expect(MeetingTranscription.uploadable(e) == [MeetingGap(from: 600, to: 900)])
+        #expect(MeetingGapUpload.plan([MeetingGap(from: 0, to: 600)], held: e.duration, within: MeetingTranscription.uploadable(e)).isEmpty,
+                "the hub lacks the Note's ten minutes: they stay on the phone")
+    }
+
+    @MainActor @Test func aNoteBetweenTwoHubStretchesStaysOnThePhone() {
+        var e = recording(hubStart, seconds: 900)
+        #expect(e.attendance?.hubTime == [RecordingPeriod(start: 0)])
+        e = MeetingRecorder.switched(e, meeting: false, at: 300, named: nil, start: RecordingAttendance(role: .off))
+        #expect(e.attendance?.hubTime == [RecordingPeriod(start: 0, end: 300)], "a Note ends hub-mode time")
+        e = MeetingRecorder.switched(e, meeting: true, at: 500, named: nil, start: hubStart)
+        #expect(e.attendance?.hubTime == [RecordingPeriod(start: 0, end: 300), RecordingPeriod(start: 500)])
+        let allowed = MeetingTranscription.uploadable(e)
+        #expect(allowed == [MeetingGap(from: 0, to: 300), MeetingGap(from: 500, to: 900)])
+        let pieces = MeetingGapUpload.plan([MeetingGap(from: 0, to: 900)], held: e.duration, within: allowed)
+        #expect(!pieces.contains { $0.at < 500 && $0.at + $0.seconds > 300 }, "nothing of the Note between")
+        e.active = false
+        var a = e.attendance
+        a?.closeHubTime(at: 900)
+        #expect(a?.hubTime.last == RecordingPeriod(start: 500, end: 900), "Stop ends it")
+    }
+
+    @Test func aRolledBackMeetingNeverNeedsGaps() {
+        var e = recording(hubStart, seconds: 900)
+        e.active = false
+        e.expectedSegments = 1
+        #expect(MeetingTranscription.needsGaps(e, meeting: nil, expired: false, synced: true, done: false), "before the rollback")
+        var a = hubStart
+        a.rollBackHub(at: 120)
+        e.attendance = a
+        #expect(!MeetingTranscription.needsGaps(e, meeting: nil, expired: false, synced: true, done: false))
+        #expect(MeetingTranscription.uploadable(e).isEmpty)
+        a.openHubTime(at: 300)
+        #expect(a.hubTime == [RecordingPeriod(start: 0, end: 120)], "a rollback is for the rest of the recording")
+        var none = hubStart
+        none.hubTime = []
+        e.attendance = none
+        #expect(!MeetingTranscription.needsGaps(e, meeting: nil, expired: false, synced: true, done: false), "no hub-mode time: nothing")
     }
 
     private func meeting(_ attendance: RecordingAttendance) -> RecordingEntry {
@@ -420,10 +543,35 @@ struct MeetingTimelineTests {
 
 struct MeetingGapUploadTests {
     @Test func gapsBecomePiecesOfAtMostFiveMinutesWithinThePhonesAudio() {
-        let plan = MeetingGapUpload.plan([MeetingGap(from: 0, to: 700), MeetingGap(from: 690, to: 720), MeetingGap(from: 900, to: 1000)], held: 950)
+        let all = [MeetingGap(from: 0, to: 950)]
+        let plan = MeetingGapUpload.plan([MeetingGap(from: 0, to: 700), MeetingGap(from: 690, to: 720), MeetingGap(from: 900, to: 1000)],
+                                         held: 950, within: all)
         #expect(plan == [.init(at: 0, seconds: 300), .init(at: 300, seconds: 300), .init(at: 600, seconds: 120), .init(at: 900, seconds: 50)])
-        #expect(MeetingGapUpload.plan([MeetingGap(from: 1000, to: 1100)], held: 950).isEmpty, "past the phone's audio")
+        #expect(MeetingGapUpload.plan([MeetingGap(from: 1000, to: 1100)], held: 950, within: [MeetingGap(from: 0, to: 2000)]).isEmpty,
+                "past the phone's audio")
         #expect(300 * 16000 * 2 <= 10 << 20, "a piece fits a request")
+    }
+
+    /// #3862 phase 5 review: only audio recorded while the recording was a hub-mode meeting goes up; nothing without any.
+    @Test func gapsAreClippedToHubModeTime() {
+        let hubTime = [MeetingGap(from: 0, to: 300), MeetingGap(from: 500, to: 900)]
+        #expect(MeetingGapUpload.plan([MeetingGap(from: 300, to: 500)], held: 900, within: hubTime).isEmpty, "the Note between")
+        #expect(MeetingGapUpload.plan([MeetingGap(from: 200, to: 600)], held: 900, within: hubTime)
+                == [.init(at: 200, seconds: 100), .init(at: 500, seconds: 100)])
+        let whole: [MeetingGapUpload.Piece] = MeetingGapUpload.plan([MeetingGap(from: 0, to: 900)], held: 900, within: hubTime)
+        let seconds: Double = whole.reduce(0) { $0 + $1.seconds }
+        #expect(seconds == 700)
+        #expect(MeetingGapUpload.plan([MeetingGap(from: 0, to: 900)], held: 900, within: []).isEmpty, "no hub-mode time: nothing")
+        #expect(MeetingGapUpload.intersection([MeetingGap(from: 0, to: 10), MeetingGap(from: 20, to: 30)], [MeetingGap(from: 5, to: 25)])
+                == [MeetingGap(from: 5, to: 10), MeetingGap(from: 20, to: 25)])
+    }
+
+    /// #3862 phase 5 review: a pass left `later` is tried again, sooner first, before the hub's final pass (30 minutes).
+    @Test func aGapPassLeftLaterIsTriedAgainWithBackoff() {
+        let delays: [Double] = (1...8).map { MeetingGapUpload.retryDelay($0) }
+        #expect(delays == [15, 30, 60, 120, 240, 300, 300, 300])
+        let firstSeven: Double = delays.prefix(7).reduce(0, +)
+        #expect(firstSeven < 30 * 60, "several tries before the final pass")
     }
 
     @Test func refusalsInTheContractsOrderEachHaveTheirAnswer() {
@@ -481,6 +629,17 @@ struct MeetingGapUploadTests {
         var reuploads: [UUID] = []
         var audio: (at: Double, data: Data)? = (0, Data(repeating: 0, count: 64000))
         let store = UserDefaults(suiteName: "transcription-store-\(UUID())")!
+        /// Every wait asked for, in order.
+        var waits: [Duration] = []
+        /// Waits of 5 seconds or more never end while a test runs (the reconnect grace, the 20 seconds after `end`, a
+        /// healthy socket's 30, a gap retry), unless listed here; shorter ones (a retry's second or two) pass at once.
+        var passing: Set<Duration> = []
+        /// Where the recording is now (`Deps.position`).
+        var position: Double?
+        var linesAdded: [UUID] = []
+        /// Background time begun and ended for gap passes.
+        var backgroundBegun = 0
+        var backgroundEnded = 0
     }
 
     private func make(_ rig: Rig) -> MeetingTranscription {
@@ -495,11 +654,30 @@ struct MeetingGapUploadTests {
             network: { rig.network },
             listen: { sink in rig.listening = sink != nil },
             reupload: { rig.reuploads.append($0) },
-            // A retry's second or two pass at once; the 20 seconds after `end` never do while a test runs.
-            wait: { duration in if duration > .seconds(5) { try? await Task.sleep(for: .seconds(600)) } },
+            wait: { @MainActor duration in
+                rig.waits.append(duration)
+                if duration >= .seconds(5), !rig.passing.contains(duration) { try? await Task.sleep(for: .seconds(600)) }
+            },
             store: rig.store,
-            audio: { _, _ in rig.audio })
+            audio: { _, _ in rig.audio },
+            position: { _ in rig.position },
+            linesAdded: { rig.linesAdded.append($0) },
+            background: { _ in
+                rig.backgroundBegun += 1
+                return { rig.backgroundEnded += 1 }
+            })
         return MeetingTranscription(deps: deps, library: rig.library)
+    }
+
+    /// A meeting that ended and whose segments cover `seconds`, saved.
+    private func ended(_ rig: Rig, seconds: Double = 60, attendance: RecordingAttendance? = nil) throws -> RecordingEntry {
+        var e = try meeting(rig)
+        if let attendance { e.attendance = attendance }
+        e.active = false
+        e.expectedSegments = 1
+        e.segments = [RecordingSegment(index: 0, start: 0, duration: seconds, sentences: [])]
+        try rig.library.save(e)
+        return e
     }
 
     private func meeting(_ rig: Rig, mode: MeetingTranscriptionMode? = .hub, role: MeetingAttendance = .listener) throws -> RecordingEntry {
@@ -529,6 +707,7 @@ struct MeetingGapUploadTests {
         let socket = try #require(rig.sockets.last)
         #expect(socket.request.url?.absoluteString.hasSuffix("/api/v1/recordings/\(e.id.uuidString.lowercased())/audio") == true)
         #expect(socket.request.url?.scheme == "wss" && socket.request.value(forHTTPHeaderField: "Authorization") == "Bearer t")
+        #expect(socket.request.allowsCellularAccess, "cellular is allowed without Wi-Fi Only")
         #expect(t.meeting(e.id).socket == .connecting && t.hubTranscribes(e.id))
         let shown = t.shown(e.id, role: .listener)
         #expect(!shown.fellBack && shown.phoneLines, "connecting: the phone's lines, no notice yet")
@@ -639,6 +818,8 @@ struct MeetingGapUploadTests {
         rig.network = .unmetered
         t.follow(e.id, paused: false, entry: e)
         #expect(rig.sockets.count == 1 && t.meeting(e.id).socket == .connecting)
+        let kept = try #require(rig.sockets.last).request
+        #expect(!kept.allowsCellularAccess && !kept.allowsExpensiveNetworkAccess, "the system keeps it off cellular too")
         t.wifiOnlyChanged(false)
         rig.network = .metered
         t.follow(e.id, paused: false, entry: e)
@@ -654,8 +835,39 @@ struct MeetingGapUploadTests {
         t.follow(e.id, paused: true, entry: e)
         #expect(t.meeting(e.id).socket == .paused && rig.sockets.last?.closed == true && rig.listening)
         #expect(!t.shown(e.id, role: .listener).hubLines)
+        #expect(!t.shown(e.id, role: .listener).fellBack, "a pause is no fallback")
         t.follow(e.id, paused: false, entry: e)
         #expect(rig.sockets.count == 2 && t.meeting(e.id).socket == .connecting)
+        #expect(!t.shown(e.id, role: .listener).fellBack, "opening again after Continue: no fallback within the grace")
+    }
+
+    /// #3862 phase 5 review: a socket that was up shows no fallback while it reconnects briefly, and does once it has been
+    /// away longer than the grace; after Stop none shows.
+    @Test func aBriefReconnectShowsNoFallbackALongerOneDoes() async throws {
+        let rig = Rig(), t = make(rig)
+        let e = try meeting(rig)
+        t.uploaded(e, answer: .init(mode: "hub"))
+        t.follow(e.id, paused: false, entry: e)
+        try #require(rig.sockets.last).deliver(#"{"type":"ready","from":0,"gaps":[],"next":0}"#)
+        rig.sockets.last?.drop()
+        #expect(t.meeting(e.id).socket == .down || t.meeting(e.id).socket == .connecting)
+        #expect(!t.shown(e.id, role: .listener).fellBack, "a brief drop")
+        await until("another socket") { rig.sockets.count == 2 }
+        #expect(rig.waits.contains(MeetingTranscriptionRule.reconnectGrace), "the grace is waited for")
+        try #require(rig.sockets.last).deliver(#"{"type":"ready","from":0,"gaps":[],"next":0}"#)
+        #expect(!t.meeting(e.id).away && !t.shown(e.id, role: .listener).fellBack)
+
+        // Away longer than the grace: the notice.
+        rig.passing = [MeetingTranscriptionRule.reconnectGrace]
+        rig.sockets.last?.drop()
+        await until("away") { t.meeting(e.id).away }
+        #expect(t.shown(e.id, role: .listener).fellBack)
+        await until("a third socket") { rig.sockets.count == 3 }
+        try #require(rig.sockets.last).deliver(#"{"type":"ready","from":0,"gaps":[],"next":0}"#)
+        #expect(!t.meeting(e.id).away && !t.shown(e.id, role: .listener).fellBack, "back: no notice")
+
+        t.ended(e.id)
+        #expect(t.meeting(e.id).socket == .ending && !t.shown(e.id, role: .listener).fellBack, "after Stop: no fallback")
     }
 
     @Test func theRoleAndPersonasSpeakingGoOnTheSocket() throws {
@@ -690,6 +902,8 @@ struct MeetingGapUploadTests {
         t.follow(nil, paused: false, entry: nil)
         #expect(t.meeting(e.id).socket == .ending, "a socket at its end is left to finish")
         await until("the end frame") { socket.frames.last?["type"] as? String == "end" }
+        await until("off the tap after the end") { !rig.listening }
+        #expect(t.meeting(e.id).socket == .ending, "the socket stays for the hub's last lines")
         socket.deliver(#"{"type":"line","n":3,"start":10,"end":12,"text":"Bo will share the notes tomorrow."}"#)
         #expect(t.meeting(e.id).lines.last?.n == 3)
         socket.drop()
@@ -755,6 +969,178 @@ struct MeetingGapUploadTests {
         #expect(rig.hub.requests.isEmpty)
     }
 
+    // MARK: Review fixes (#3862 phase 5)
+
+    /// A hub that fails right after `ready` is not tried again every second: the failures in a row count across sockets
+    /// until one is healthy (its first `ack`), and so do `bad_frame`s.
+    @Test func aSocketCountsAsHealthyOnlyAfterItsFirstAck() async throws {
+        let rig = Rig(), t = make(rig)
+        let e = try meeting(rig)
+        t.uploaded(e, answer: .init(mode: "hub"))
+        t.follow(e.id, paused: false, entry: e)
+        func failRightAfterReady(_ n: Int) async throws {
+            let socket = try #require(rig.sockets.last)
+            socket.deliver(#"{"type":"ready","from":0,"gaps":[],"next":0}"#)
+            socket.deliver(#"{"type":"error","code":"hub_failed","fatal":true}"#)
+            await until("socket \(n + 1)") { rig.sockets.count == n + 1 }
+        }
+        try await failRightAfterReady(1)
+        try await failRightAfterReady(2)
+        try await failRightAfterReady(3)
+        #expect(rig.waits.filter { $0 < .seconds(5) } == [.seconds(1), .seconds(2), .seconds(4)], "the backoff grows: \(rig.waits)")
+        #expect(rig.waits.contains(MeetingTranscriptionRule.healthyAfter), "or healthy once up that long")
+
+        // Acknowledged audio: healthy, so the next drop starts again from a second.
+        let healthy = try #require(rig.sockets.last)
+        healthy.deliver(#"{"type":"ready","from":0,"gaps":[],"next":0}"#)
+        healthy.deliver(#"{"type":"ack","at":5}"#)
+        rig.waits.removeAll()
+        healthy.deliver(#"{"type":"error","code":"hub_failed","fatal":true}"#)
+        await until("socket 5") { rig.sockets.count == 5 }
+        #expect(rig.waits.filter { $0 < .seconds(5) } == [.seconds(1)])
+
+        // `bad_frame` right after each `ready`: the third in a row stops it.
+        for n in 5...7 {
+            let socket = try #require(rig.sockets.last)
+            socket.deliver(#"{"type":"ready","from":0,"gaps":[],"next":0}"#)
+            socket.deliver(#"{"type":"error","code":"bad_frame","fatal":true}"#)
+            if n < 7 { await until("socket \(n + 1)") { rig.sockets.count == n + 1 } }
+        }
+        #expect(t.meeting(e.id).stopped == "bad_frame" && rig.sockets.count == 7)
+    }
+
+    /// The meeting call's `speaking` on carries no text: its captions at playback's start are only the answer's first
+    /// words, so the hub applies the time rule; an answer's says what Persona says.
+    @Test func theCallsSpeakingGoesWithoutItsPartialWords() throws {
+        #expect(MeetingTranscription.spokenText(.call, "Yes") == nil && MeetingTranscription.spokenText(.answer, "好的") == "好的")
+        let rig = Rig(), t = make(rig)
+        let e = try meeting(rig, role: .participant)
+        t.uploaded(e, answer: .init(mode: "hub"))
+        t.speaking(e.id, voice: .call, on: true, at: 1, text: "Yes")
+        t.follow(e.id, paused: false, entry: e)
+        let socket = try #require(rig.sockets.last)
+        t.speaking(e.id, voice: .call, on: false, at: 6, text: nil)
+        t.speaking(e.id, voice: .call, on: true, at: 9, text: "Pack")
+        Thread.sleep(forTimeInterval: 0.05)
+        let on = socket.frames.filter { $0["type"] as? String == "speaking" && $0["on"] as? Bool == true }
+        #expect(on.count == 2 && on.allSatisfy { $0["text"] == nil }, "no partial words: \(on)")
+        #expect(on.first?["at"] as? Double == 1, "the stretch open as the socket started")
+    }
+
+    /// The Lock Screen's "Now:" follows the room in hub mode too: new live log positions bring the throttled topics read.
+    @Test func newHubLinesBringTheTopicsRead() async throws {
+        let rig = Rig(), t = make(rig)
+        let e = try meeting(rig)
+        rig.hub.on("GET", "/api/v1/recordings/\(e.id.uuidString.lowercased())/live",
+                   json: #"{"lines":[{"n":1,"start":4,"end":8,"text":"b","source":"hub"}],"more":false}"#)
+        t.uploaded(e, answer: .init(mode: "hub"))
+        t.follow(e.id, paused: false, entry: e)
+        let socket = try #require(rig.sockets.last)
+        socket.deliver(#"{"type":"ready","from":0,"gaps":[],"next":0}"#)
+        socket.deliver(#"{"type":"line","n":0,"start":0,"end":4,"text":"a"}"#)
+        #expect(rig.linesAdded == [e.id])
+        socket.deliver(#"{"type":"line","n":0,"start":0,"end":4,"text":"a"}"#)
+        #expect(rig.linesAdded == [e.id], "a position it had: nothing new")
+        socket.drop()
+        await until("another socket") { rig.sockets.count == 2 }
+        try #require(rig.sockets.last).deliver(#"{"type":"ready","from":8,"gaps":[],"next":2}"#)
+        await until("the missed line") { t.meeting(e.id).lines.count == 2 }
+        #expect(rig.linesAdded == [e.id, e.id], "a ?from= read that added positions")
+    }
+
+    /// A gap pass that hits a transient failure is tried again (15 s first) under background time, until it's done.
+    @Test func aGapPassLeftLaterIsTriedAgain() async throws {
+        let rig = Rig(), t = make(rig)
+        let e = try ended(rig)
+        let base = "/api/v1/recordings/\(e.id.uuidString.lowercased())"
+        var reads = 0
+        rig.hub.on("GET", base + "/live") { _ in
+            reads += 1
+            if reads == 1 { throw APIError(status: 503, message: "restarting", fields: ["code": "assistant_offline"]) }
+            return Data(#"{"transcription":{"mode":"hub","state":"finishing","gaps":[[0,2]]}}"#.utf8)
+        }
+        rig.hub.on("PUT", base + "/audio", json: #"{"gaps":[]}"#)
+        rig.passing = [.seconds(15)]
+        t.uploaded(e, answer: .init(mode: "hub"))
+        await until("the second pass") { t.meeting(e.id).gapUpload == .done }
+        #expect(reads == 2 && rig.waits.contains(.seconds(15)), "\(rig.waits)")
+        #expect(rig.hub.sent("PUT", base + "/audio").count == 1)
+        await until("the background time ended") { rig.backgroundEnded == rig.backgroundBegun }
+        #expect(rig.backgroundBegun >= 2, "each pass under background time")
+    }
+
+    /// With Wi-Fi Only the gap upload itself keeps off cellular, whatever the network looked like.
+    @Test func wifiOnlyGapUploadsKeepOffCellular() async throws {
+        let rig = Rig()
+        rig.store.set(true, forKey: MeetingAttendanceDefaults.wifiOnlyKey)
+        let t = make(rig)
+        let e = try ended(rig)
+        let base = "/api/v1/recordings/\(e.id.uuidString.lowercased())"
+        rig.hub.on("GET", base + "/live", json: #"{"transcription":{"mode":"hub","state":"finishing","gaps":[[0,2]]}}"#)
+        rig.hub.on("PUT", base + "/audio", json: #"{"gaps":[]}"#)
+        t.uploaded(e, answer: .init(mode: "hub"))
+        await until("the gap pass") { t.meeting(e.id).gapUpload == .done }
+        #expect(rig.hub.sent("PUT", base + "/audio").map(\.wifiOnly) == [true])
+    }
+
+    /// A Note turned into a hub-mode meeting: the hub lacks the Note's stretch, and it never goes up.
+    @Test func theNotesStretchIsNeverUploaded() async throws {
+        let rig = Rig(), t = make(rig)
+        var a = RecordingAttendance.room(.listener, private: false, photos: false, liveView: true, transcription: .hub)
+        a.hubTime = [RecordingPeriod(start: 600)]
+        let e = try ended(rig, seconds: 900, attendance: a)
+        let base = "/api/v1/recordings/\(e.id.uuidString.lowercased())"
+        rig.hub.on("GET", base + "/live", json: #"{"transcription":{"mode":"hub","state":"finishing","gaps":[[0,600]]}}"#)
+        rig.hub.on("PUT", base + "/audio", json: #"{"gaps":[]}"#)
+        t.uploaded(e, answer: .init(mode: "hub"))
+        await until("the gap pass") { t.meeting(e.id).gapUpload == .done }
+        #expect(rig.hub.sent("PUT", base + "/audio").isEmpty, "the Note's ten minutes stay on the phone")
+    }
+
+    /// A rollback mid-meeting is kept with the recording: after a relaunch, with the newer manager back and saying `hub`,
+    /// nothing streams and no gap goes up.
+    @Test func aRollbackIsKeptAcrossARelaunch() async throws {
+        let rig = Rig()
+        var e = try meeting(rig)
+        let before = make(rig)
+        before.uploaded(e, answer: .init(mode: "hub"))
+        before.follow(e.id, paused: false, entry: e)
+        rig.position = 300
+        before.uploaded(e, answer: .init(mode: nil))
+        let kept = try #require(rig.library.entry(e.id)?.attendance)
+        #expect(kept.hubRolledBack && kept.hubTime == [RecordingPeriod(start: 0, end: 300)], "kept with the recording")
+
+        // The relaunch: a fresh store, the meeting ended, the newer manager back.
+        e = try #require(rig.library.entry(e.id))
+        e.active = false
+        e.expectedSegments = 1
+        e.segments = [RecordingSegment(index: 0, start: 0, duration: 900, sentences: [])]
+        try rig.library.save(e)
+        let base = "/api/v1/recordings/\(e.id.uuidString.lowercased())"
+        rig.hub.on("GET", base + "/live", json: #"{"transcription":{"mode":"hub","state":"finishing","gaps":[[0,900]]}}"#)
+        rig.hub.on("PUT", base + "/audio", json: #"{"gaps":[]}"#)
+        let after = make(rig)
+        after.uploaded(e, answer: .init(mode: "hub"))
+        #expect(after.meeting(e.id).decided?.olderManager == true && !after.hubTranscribes(e.id))
+        after.kickGaps()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(rig.hub.sent("PUT", base + "/audio").isEmpty && rig.hub.sent("GET", base + "/live").isEmpty)
+        var live = e
+        live.active = true
+        let sockets = rig.sockets.count
+        after.follow(e.id, paused: false, entry: live)
+        #expect(rig.sockets.count == sockets, "no socket for it")
+    }
+
+    /// Stop ends the recording's hub-mode time where it stopped.
+    @Test func stopEndsHubModeTime() throws {
+        let rig = Rig(), t = make(rig)
+        let e = try meeting(rig)
+        #expect(rig.library.entry(e.id)?.attendance?.hubTime == [RecordingPeriod(start: 0)])
+        t.ended(e.id, at: 120)
+        #expect(rig.library.entry(e.id)?.attendance?.hubTime == [RecordingPeriod(start: 0, end: 120)])
+    }
+
     @Test func liveLinesDontGoInHubMode() async throws {
         let library = RecordingLibrary(root: FileManager.default.temporaryDirectory.appending(path: "meeting-live-hub-\(UUID())"))
         var e = RecordingEntry(id: UUID(), createdAt: .now, source: .phone, title: "Weekly", active: true)
@@ -774,6 +1160,23 @@ struct MeetingGapUploadTests {
 }
 
 // MARK: - Settings
+
+/// A `PUT` that waits until the test lets it go.
+private actor SlowPut {
+    private var released = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        if released { return }
+        await withCheckedContinuation { waiting.append($0) }
+    }
+
+    func open() {
+        released = true
+        waiting.forEach { $0.resume() }
+        waiting.removeAll()
+    }
+}
 
 @MainActor struct MeetingTranscriptionSettingsTests {
     private let assistant = #"{"machine_id":"m","launcher":"claude","cwd":"/","conversations":[],"meeting_transcription_default":"device","meeting_glossary":["Persona"],"meeting_transcription_extension":"","meeting_transcription_ready":true}"#
@@ -833,6 +1236,27 @@ struct MeetingGapUploadTests {
         await settings.setGlossary([String(repeating: "x", count: 41)])
         #expect(settings.failure == .termTooLong(String(repeating: "x", count: 41)) && hub.sent("PUT", "/api/v1/assistant").count == 1,
                 "refused here, never sent")
+    }
+
+    /// #3862 phase 5 review: a term submitted while another change saves is not sent and says so (false), so the field
+    /// keeps it; one the hub kept says true.
+    @Test func aTermWhileASaveIsInFlightIsNotDropped() async throws {
+        let gate = SlowPut()
+        var client = APIClient(config: ServerConfig(url: URL(string: "https://fake.invalid")!, token: "t"))
+        let json = assistant
+        client.transport = { req in
+            if req.method == "PUT" { await gate.wait() }
+            return Data(json.utf8)
+        }
+        let settings = MeetingTranscriptionSettings(deps: .init(api: { client }, store: UserDefaults(suiteName: "transcription-settings-\(UUID())")!))
+        await settings.load()
+        let first = Task { await settings.setGlossary(["Alice", "Persona"]) }
+        for _ in 0..<200 where !settings.saving { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(settings.saving)
+        #expect(await settings.setGlossary(["Bob", "Persona"]) == false, "not sent while the first saves")
+        await gate.open()
+        #expect(await first.value, "the first one went")
+        #expect(await settings.setGlossary(["Persona"]), "already the hub's: nothing to send")
     }
 
     @Test func aHubWithoutHubTranscriptionOffersNothing() async throws {
@@ -927,6 +1351,26 @@ struct MeetingGapUploadTests {
         #expect(Words.spans(Array(many.prefix(1))) == "0:00–0:10")
     }
 
+    /// #3862 phase 5 review: the recording page's footer says the audio went through the hub from what the phone knows,
+    /// before `detail.meta` arrives.
+    @Test func theFooterSaysTheHubBeforeTheMetaArrives() {
+        let hub = RecordingAttendance.room(.listener, private: false, photos: false, liveView: true, transcription: .hub)
+        #expect(Words.audioWentToHub(meta: nil, decided: nil, attendance: hub), "asked for the hub, meta not in yet")
+        #expect(!Words.audioWentToHub(meta: .init(mode: .device), decided: nil, attendance: hub), "the hub's word once read")
+        #expect(Words.audioWentToHub(meta: .init(mode: .hub), decided: nil, attendance: nil))
+        #expect(!Words.audioWentToHub(meta: nil, decided: .init(mode: .device, problem: "unavailable"), attendance: hub),
+                "the upload's 200 kept it on the phone")
+        #expect(Words.audioWentToHub(meta: nil, decided: .init(mode: .hub), attendance: hub))
+        #expect(Words.audioWentToHub(meta: nil, decided: .init(mode: .device, olderManager: true), attendance: hub),
+                "rolled back after streaming: the audio before may have gone")
+        let device = RecordingAttendance.room(.listener, private: false, photos: false, liveView: true, transcription: .device)
+        #expect(!Words.audioWentToHub(meta: nil, decided: nil, attendance: device))
+        #expect(!Words.audioWentToHub(meta: nil, decided: nil, attendance: nil))
+        var never = hub
+        never.hubTime = []
+        #expect(!Words.audioWentToHub(meta: nil, decided: nil, attendance: never), "no hub-mode time")
+    }
+
     @Test func theDetailReadsTranscriptionFromItsMeta() throws {
         let answer = try JSON.decoder.decode(RecordingMinutesModel.Answer.self, from: Data(#"""
         {"detail": {"meta": {"minutes_state": "pending", "transcription": {"mode": "hub", "state": "finishing", "gaps": [[600, 642.5]], "fallback": true}}}}
@@ -959,8 +1403,9 @@ struct MeetingGapUploadTests {
 
     @Test func theLockScreenShowsTheHubsLineThenThePhonesOwnSaidSo() throws {
         let e = meeting(lines: ["手机自己的一句"])
-        let healthy = MeetingTranscriptionRule.shown(hub: true, socketUp: true, everUp: true, down: false, problem: nil, stopped: false, role: .listener)
-        let fell = MeetingTranscriptionRule.shown(hub: true, socketUp: true, everUp: true, down: false, problem: "upstream_failed", stopped: false, role: .listener)
+        let healthy = MeetingTranscriptionRule.shown(hub: true, socket: .ready, everUp: true, away: false, problem: nil, stopped: false, role: .listener)
+        let fell = MeetingTranscriptionRule.shown(hub: true, socket: .ready, everUp: true, away: false, problem: "upstream_failed", stopped: false,
+                                                  role: .listener)
         let up = content(e, .init(hubLine: "Bo will share the notes tomorrow.", shown: healthy))
         #expect(up.line == "Bo will share the notes tomorrow." && up.fellBack == nil)
         let back = content(e, .init(hubLine: "Bo will share the notes tomorrow.", shown: fell))

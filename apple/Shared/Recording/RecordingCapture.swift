@@ -380,7 +380,8 @@ final class RecordingCapture {
 
     /// The hub uplink's own listener (#3862 phase 5, docs/assistant/meeting-minutes.md「On the phone」): every buffer of
     /// the recording's audio, as `listen`'s sink gets it and beside it, stamped with the same clock (the writer's frame
-    /// position, paused time left out). One uplink; nil stops it.
+    /// position, paused time left out). One uplink; nil stops it. Unlike `listen`'s, it belongs to the recording: Stop
+    /// takes it away once the last buffers reached it, so it never hears the next recording.
     func listenUplink(_ sink: (@Sendable (AVAudioPCMBuffer, Double) -> Void)?) {
         uplinkListener = sink
         writer?.listener = listeners
@@ -581,6 +582,8 @@ final class RecordingCapture {
         resumeTask?.cancel(); resumeTask = nil
         ticker?.cancel(); ticker = nil
         writer.stop()
+        // The uplink belongs to the recording that stopped (#3862 phase 5): the next one's writer never gets it.
+        uplinkListener = nil
         // Everything finished that the main thread has not registered yet (a stop on a segment boundary leaves no tail; a
         // midnight may have been crossed), in order and each in its own recording, before the end is written.
         var changes = applyWriterEvents(notify: false)
@@ -1414,6 +1417,7 @@ final class RecordingCapture {
     /// as they would.
     private func stopSample(_ id: UUID) -> UUID {
         onStopping?(id)
+        uplinkListener = nil
         if !allDay {
             RecordingLibrary.shared.change(id) { entry in
                 entry.active = false

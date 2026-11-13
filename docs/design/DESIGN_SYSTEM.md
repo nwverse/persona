@@ -1767,11 +1767,14 @@ page the user watches during the meeting is the page they keep writing in after 
   title: one caption line, the iPhone mark (`Theme.Icon.phone`) in `Theme.caution` and why in words (waiting for Wi-Fi,
   the hub stopped transcribing this meeting, or it isn't transcribing right now), "Showing this iPhone's transcript". Not
   a `NoticeBanner`: it is about the box's lines, so it sits in the box rather than pushing the page down, and goes by
-  itself when the hub is back. With Persona off, the phone's own lines and the hub's caption. The Lock Screen's line is
+  itself when the hub is back. It never shows for what isn't a fallback: a pause, the end after Stop, or a reconnect of
+  up to 5 seconds (a notice that flashes on every blip teaches people to ignore it). With Persona off, the phone's own
+  lines and the hub's caption. The Lock Screen's line is
   the hub's latest, or "On iPhone: …" with the iPhone mark once it fell back (docs/apple/live-activity.md "Recording").
   The recording's page says how it was transcribed in its header (`Theme.Icon.meetingTranscription`, a caption block:
   "Transcribed on the hub", "The hub is finishing the transcript…" with a small spinner until final, the stretches the
-  hub has no audio for, the gap uploads), and its footer says the audio went through the hub. Reason: the owner chose
+  hub has no audio for, the gap uploads), and its footer says the audio went through the hub, from what the phone knows
+  until the hub's word arrives (never "the original audio isn't uploaded" while it may have been). Reason: the owner chose
   where the audio goes, so the page says it, and a fallback must never pass for the hub's text.
 - **Talk about this meeting (phase 6)**: on the recording's page one row, in the section under the header beside
   Private Meeting, drawn as that row (a `Label` with the style's `Theme.Icon.conversation`, one line), pushing the after
@@ -1934,7 +1937,8 @@ to press; impromptu talks are meetings too (principles 1 and 4).
   default as an inline picker (as Persona in Meetings is), what it sends in the footer; **Speech Service**, a menu row,
   only when an extension beside the built-in one can transcribe; **Glossary**, a row with its count that pushes a list
   page (a field with **Add** on its row, the newest term first, swipe to delete, a refused term said in `Theme.danger`
-  under the field). **Hub Transcription on Wi-Fi Only**, a switch in a section of its own (it is this iPhone's, not the
+  under the field; one change at a time: while one saves, Add, Return and swipe do nothing and the field keeps its text,
+  which empties only once the hub kept the term). **Hub Transcription on Wi-Fi Only**, a switch in a section of its own (it is this iPhone's, not the
   hub's), with what it does in the footer. Identifiers: `settings-meeting-transcription` (the picker; its options go by
   their words), `settings-meeting-transcription-service`, `settings-meeting-glossary`, `settings-meeting-wifi-only`,
   `settings-meeting-transcription-not-ready`, `glossary-field`, `glossary-add`, `glossary-term`, `glossary-problem`.

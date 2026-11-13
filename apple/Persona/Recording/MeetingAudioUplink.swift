@@ -19,6 +19,8 @@ nonisolated final class MeetingAudioUplink: @unchecked Sendable {
     private var ring = MeetingAudioRing()
     private var socket: VoiceSocket?
     private var generation = 0
+    /// `end` went: the recording stopped, and no audio of any later one ever joins the ring or the socket.
+    private var finished = false
     private let queue = DispatchQueue(label: "persona.meeting-uplink", qos: .userInitiated)
 
     init(recording: UUID) {
@@ -31,14 +33,18 @@ nonisolated final class MeetingAudioUplink: @unchecked Sendable {
         feed(MeetingPCM.samples(buffer), at: MeetingAudioClock.sample(seconds))
     }
 
-    /// `samples` at sample `position` (the tests feed these directly).
+    /// `samples` at sample `position` (the tests feed these directly); nothing once `end` went.
     func feed(_ samples: [Int16], at position: Int64) {
         let streaming = lock.withLock { () -> Bool in
+            guard !finished else { return false }
             ring.append(samples, at: position)
             return ring.streaming && socket != nil
         }
         if streaming { queue.async { [weak self] in self?.pump() } }
     }
+
+    /// `end` went (`end`): later buffers are ignored.
+    var isFinished: Bool { lock.withLock { finished } }
 
     /// Opens `socket` for the meeting, closing the one before: `start` (the oldest second held and the whole timeline
     /// so far) goes at once, then `speaking` on for a stretch being said now and the role in effect. Events come to
@@ -58,8 +64,9 @@ nonisolated final class MeetingAudioUplink: @unchecked Sendable {
         var frames = [MeetingAudioOut.start(at: at, timeline: timeline)]
         if let speaking { frames.append(MeetingAudioOut.speaking(on: true, at: speaking.start, text: speaking.text)) }
         if let role { frames.append(MeetingAudioOut.role(at: role.at, attendance: role.attendance)) }
+        let first = frames
         queue.async {
-            for frame in frames { socket.send(text: frame) }
+            for frame in first { socket.send(text: frame) }
         }
         return gen
     }
@@ -91,15 +98,19 @@ nonisolated final class MeetingAudioUplink: @unchecked Sendable {
     }
 
     /// The recording stopped: the audio still held goes, then `end` at the last sample the tap gave (a buffer on its way
-    /// as the tap went still lands first: the end waits `settle`). False when no socket is open.
+    /// as the tap went still lands first: the end waits `settle`). From then on the uplink takes no more audio, and
+    /// `done` runs (on the uplink's queue): the time to take it off the tap. False when no socket is open.
     @discardableResult
-    func end(settle: TimeInterval = 0.25) -> Bool {
+    func end(settle: TimeInterval = 0.25, then done: (@Sendable () -> Void)? = nil) -> Bool {
         guard lock.withLock({ socket != nil }) else { return false }
         queue.asyncAfter(deadline: .now() + settle) { [weak self] in
             guard let self else { return }
+            // Closed to the tap first, so the end is the last sample sent.
+            self.lock.withLock { self.finished = true }
             self.pump()
-            guard let last = self.lock.withLock({ self.socket.map { ($0, MeetingAudioClock.seconds(self.ring.end)) } }) else { return }
-            last.0.send(text: MeetingAudioOut.end(at: last.1))
+            let last = self.lock.withLock { self.socket.map { ($0, MeetingAudioClock.seconds(self.ring.end)) } }
+            if let last { last.0.send(text: MeetingAudioOut.end(at: last.1)) }
+            done?()
         }
         return true
     }

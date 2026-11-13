@@ -28,27 +28,9 @@ import UIKit
 final class MeetingTranscription {
     static let shared = MeetingTranscription(deps: .live)
 
-    /// The audio socket of the recording being made.
-    nonisolated enum Socket: String, Equatable, Sendable {
-        /// No socket: the meeting is transcribed on the phone, isn't being recorded here, or its uplink stopped.
-        case off
-        /// Hub mode asked for; the first upload's `200` isn't in yet (the audio is kept meanwhile).
-        case waitingForMode
-        /// **Hub transcription on Wi-Fi only**, and no Wi-Fi: no audio leaves the phone; the time becomes gaps.
-        case waitingForWiFi
-        /// Opened; the hub's `ready` isn't in yet.
-        case connecting
-        /// Up: the audio goes.
-        case ready
-        /// It dropped (or there is no network): another comes.
-        case down
-        /// The recording is paused: closed until it goes on.
-        case paused
-        /// `end` sent at Stop: the hub's last lines come, then it closes.
-        case ending
-        /// Closed after the meeting.
-        case ended
-    }
+    /// The audio socket of the recording being made (`MeetingAudioSocket`: off, waiting for the mode or for Wi-Fi,
+    /// connecting, ready, down, paused, ending, ended).
+    typealias Socket = MeetingAudioSocket
 
     /// The gap uploads after the meeting.
     nonisolated enum GapUpload: Equatable, Sendable {
@@ -58,7 +40,8 @@ final class MeetingTranscription {
         case uploading
         /// Nothing (more) to upload: no gap left, the final pass started, or the meeting isn't the hub's.
         case done
-        /// Not now (the hub or the network away; its code when it said one): the next pass tries again.
+        /// Not now (the hub or the network away; its code when it said one): another pass comes after a while
+        /// (`MeetingGapUpload.retryDelay`).
         case later(String?)
     }
 
@@ -71,6 +54,9 @@ final class MeetingTranscription {
         var socket: Socket = .off
         /// The socket was up (`ready`) at least once: a drop from then on is a fallback, the first connect isn't.
         var everUp = false
+        /// A socket that was up has been away (down, or opening again) longer than `MeetingTranscriptionRule.reconnectGrace`:
+        /// a brief reconnect shows no fallback.
+        var away = false
         /// The hub's caption being said now.
         var interim: MeetingInterim?
         /// The live log's lines the phone has, by position (`n`): the hub's `line` frames, and what `?from=` read.
@@ -116,6 +102,15 @@ final class MeetingTranscription {
         var expired: (RecordingEntry) -> Bool = { _ in false }
         /// The hub has the recording's latest revision (`RecordingSync.status` `synced`): its `complete: true` upload too.
         var synced: (RecordingEntry) -> Bool = { _ in true }
+        /// Where the recording `id` is now on its clock, while this phone records it (`RecordingCapture.timeline`); nil
+        /// otherwise: where a rollback ends its hub-mode time.
+        var position: (UUID) -> Double? = { _ in nil }
+        /// The live log gained positions (a `line` frame, a `?from=` read): the room's topics are read behind the app,
+        /// as after an accepted `POST …/live` (`MeetingConversation.liveAccepted`), so the Lock Screen's "Now:" follows.
+        var linesAdded: (UUID) -> Void = { _ in }
+        /// Background time for a gap pass (`beginBackgroundTask`), so the one right after Stop survives the app going
+        /// behind; the closure returned ends it.
+        var background: (String) -> (() -> Void) = { _ in {} }
     }
 
     private(set) var meetings: [UUID: Meeting] = [:]
@@ -133,10 +128,17 @@ final class MeetingTranscription {
     @ObservationIgnored let deps: Deps
     @ObservationIgnored private let library: RecordingLibrary
     @ObservationIgnored private var uplink: MeetingAudioUplink?
+    /// Sockets that failed in a row (the backoff) and `bad_frame`s in a row, counted across sockets until one is healthy
+    /// (`MeetingTranscriptionRule.healthyAfter`): its first `ack`, or that long up.
     @ObservationIgnored private var failures = 0
     @ObservationIgnored private var badFrames = 0
+    /// The socket open now proved healthy.
+    @ObservationIgnored private var healthy = false
+    @ObservationIgnored private var healthTask: Task<Void, Never>?
     @ObservationIgnored private var retryTask: Task<Void, Never>?
     @ObservationIgnored private var endTask: Task<Void, Never>?
+    /// Per meeting, the wait before a socket that was up and is away counts as a fallback (`Meeting.away`).
+    @ObservationIgnored private var awayTasks: [UUID: Task<Void, Never>] = [:]
     /// The role the socket was told last (`role` frames go on a change only).
     @ObservationIgnored private var sentRole: MeetingAttendance?
     /// The stretches Persona speaks in now, by voice: one `speaking` on while any is open, off once the last closes.
@@ -145,6 +147,9 @@ final class MeetingTranscription {
     @ObservationIgnored private var lastNetwork: MeetingNetworkKind?
     @ObservationIgnored private var gapTask: Task<Void, Never>?
     @ObservationIgnored private var gapsAgain = false
+    /// The next gap pass after one that left a meeting `later`, and how many such passes in a row.
+    @ObservationIgnored private var gapRetryTask: Task<Void, Never>?
+    @ObservationIgnored private var gapRetries = 0
     /// Recordings with nothing (more) to upload in this run.
     @ObservationIgnored private var gapsDone: Set<UUID> = []
     /// What `follow` was last told: a retry follows it again, with the recording as the library has it then.
@@ -194,22 +199,30 @@ final class MeetingTranscription {
     /// What the page and the Live Activity show for `id`, whose role is `role` now.
     func shown(_ id: UUID, role: MeetingAttendance) -> MeetingTranscriptionRule.Shown {
         let m = meeting(id)
-        return MeetingTranscriptionRule.shown(hub: m.hubMode, socketUp: m.socketUp, everUp: m.everUp,
-                                              down: [.down, .waitingForWiFi].contains(m.socket), problem: m.problem,
-                                              stopped: m.stopped != nil, role: role)
+        return MeetingTranscriptionRule.shown(hub: m.hubMode, socket: m.socket, everUp: m.everUp, away: m.away,
+                                              problem: m.problem, stopped: m.stopped != nil, role: role)
     }
 
     // MARK: The mode
 
-    /// An upload of `entry` that named a mode was stored: its `200`'s `transcription` decides the mode in effect.
+    /// An upload of `entry` that named a mode was stored: its `200`'s `transcription` decides the mode in effect. A
+    /// rollback (an older manager) is kept with the recording (`RecordingAttendance.rollBackHub`), so a relaunch never
+    /// streams or uploads its audio again, and its hub-mode time ends where the recording is now.
     func uploaded(_ entry: RecordingEntry, answer: MeetingTranscriptionRule.Answer) {
         var m = meetings[entry.id] ?? Meeting()
         m.asked = entry.attendance?.transcription
+        if entry.attendance?.hubRolledBack == true, m.decided?.olderManager != true {
+            m.decided = MeetingTranscriptionRule.Decided(mode: .device, olderManager: true)
+        }
         m.decided = MeetingTranscriptionRule.decide(m.decided, asked: m.asked, answer: answer)
         if m.decided?.olderManager == true, meetings[entry.id]?.decided?.olderManager != true {
             log.notice("transcription: an older manager answered; the meeting stays on the phone")
         }
         set(entry.id, m)
+        if m.decided?.olderManager == true, let a = library.entry(entry.id)?.attendance, a.transcription == .hub, !a.hubRolledBack {
+            let at = deps.position(entry.id) ?? library.entry(entry.id)?.duration ?? entry.duration
+            library.change(entry.id) { $0.attendance?.rollBackHub(at: at) }
+        }
         if !entry.active { kickGaps() }
     }
 
@@ -224,7 +237,7 @@ final class MeetingTranscription {
         // Read here so a change of either brings the next pass.
         let network = deps.network()
         if lastNetwork != network {
-            let came = lastNetwork == MeetingNetworkKind.none || lastNetwork == .metered
+            let came = lastNetwork == MeetingNetworkKind.none || lastNetwork == .metered || lastNetwork == .unknown
             lastNetwork = network
             if came { kickGaps() }
         }
@@ -233,8 +246,9 @@ final class MeetingTranscription {
     /// `id` records now (`paused`), as `entry`; nil: nothing does (a socket at its `end` is left to finish).
     func follow(_ id: UUID?, paused: Bool, entry: RecordingEntry?) {
         followed = (id, paused)
+        // A rollback kept with the recording (`hubRolledBack`) is the older manager's word, also after a relaunch.
         guard let id, let entry, entry.active, entry.roomMeeting, let attendance = entry.attendance,
-              attendance.transcription == .hub else {
+              attendance.transcription == .hub, !attendance.hubRolledBack else {
             if let uplink, meetings[uplink.recording]?.socket != .ending { detach(uplink.recording, to: .off) }
             return
         }
@@ -293,6 +307,7 @@ final class MeetingTranscription {
         uplink = fresh
         failures = 0
         badFrames = 0
+        healthy = false
         sentRole = nil
         deps.listen { @Sendable buffer, at in fresh.feed(buffer, at: at) }
         return fresh
@@ -304,6 +319,8 @@ final class MeetingTranscription {
         retryTask = nil
         endTask?.cancel()
         endTask = nil
+        healthTask?.cancel()
+        healthTask = nil
         if let uplink, uplink.recording == id {
             deps.listen(nil)
             uplink.close()
@@ -325,7 +342,10 @@ final class MeetingTranscription {
             scheduleRetry(id)
             return
         }
-        let socket = deps.socket(MeetingAudioEndpoint.request(api, recording: id), api)
+        let socket = deps.socket(MeetingAudioEndpoint.request(api, recording: id, wifiOnly: wifiOnly), api)
+        healthy = false
+        healthTask?.cancel()
+        healthTask = nil
         let role = attendance.roles.last ?? RecordingRoleChange(at: 0, attendance: attendance.role)
         let open = speakingOpen[id]?.values.min { $0.start < $1.start }
         uplink.open(socket, timeline: MeetingTimeline(attendance), speaking: open, role: role) { [weak self] gen, event in
@@ -379,20 +399,23 @@ final class MeetingTranscription {
             m.gaps = gaps
             // The standing problem comes right after, if any.
             m.problem = nil
-            failures = 0
-            badFrames = 0
+            // Not healthy yet: the failures in a row start again only once it is (`healthyAfter`).
+            awaitHealth(id, generation: gen)
             let known = Self.contiguous(m.lines)
             if next > known { Task { await readLines(id, from: known) } }
         case .ack(let at):
             uplink.ack(at)
             m.acked = at
             m.lost = uplink.lost
+            provedHealthy()
         case .interim(let interim):
             m.interim = interim
         case .line(let line):
+            let added = !m.lines.contains { $0.n == line.n }
             m.lines = Self.merged(m.lines, [line])
             // The caption that line finishes is said.
             if let interim = m.interim, interim.start <= line.end { m.interim = nil }
+            if added { deps.linesAdded(id) }
         case .problem(let code):
             m.problem = code
             if code != nil, code != "no_interim" { m.interim = nil }
@@ -433,6 +456,28 @@ final class MeetingTranscription {
         set(id, m)
     }
 
+    /// The socket of `gen` said `ready`: it counts as healthy once it stayed up `healthyAfter` (or at its first `ack`).
+    private func awaitHealth(_ id: UUID, generation gen: Int) {
+        healthTask?.cancel()
+        let wait = deps.wait
+        healthTask = Task { [weak self] in
+            await wait(MeetingTranscriptionRule.healthyAfter)
+            guard !Task.isCancelled, let self, let uplink = self.uplink, uplink.recording == id, uplink.currentGeneration == gen,
+                  self.meetings[id]?.socket == .ready else { return }
+            self.provedHealthy()
+        }
+    }
+
+    /// The socket open now is healthy: the backoff and the `bad_frame`s start again from none.
+    private func provedHealthy() {
+        guard !healthy else { return }
+        healthy = true
+        failures = 0
+        badFrames = 0
+        healthTask?.cancel()
+        healthTask = nil
+    }
+
     private func closed(_ id: UUID, status: Int?, uplink: MeetingAudioUplink, generation gen: Int) {
         uplink.dropped(generation: gen)
         var m = meetings[id] ?? Meeting()
@@ -458,26 +503,50 @@ final class MeetingTranscription {
 
     /// Persona's `voice` began (`on`) or stopped saying something at `at` on the recording's clock, saying `text`: the
     /// hub holds back the sentences of an open stretch until it closes, then marks Persona's echo by its rule.
+    ///
+    /// The meeting call's `on` goes without `text` (`spokenText`): its words stream in with its audio, so at playback's
+    /// start they are at most the answer's first words, and the hub, which judges the held sentences against the `on`
+    /// frame's text alone, would let the rest of Persona's answer into the live log. Without one it applies the time rule
+    /// to the stretch; the whole answer reaches the hub's timeline with the stretch once it ended (`start.timeline`, the
+    /// uploads' `timeline`).
     func speaking(_ id: UUID, voice: Voice, on: Bool, at: Double, text: String?) {
+        let said = Self.spokenText(voice, text)
         var open = speakingOpen[id] ?? [:]
         let wasOpen = !open.isEmpty
-        if on { open[voice] = RecordingSpan(start: at, end: at, text: text) } else { open[voice] = nil }
+        if on { open[voice] = RecordingSpan(start: at, end: at, text: said) } else { open[voice] = nil }
         speakingOpen[id] = open.isEmpty ? nil : open
         guard wasOpen != !open.isEmpty, let uplink, uplink.recording == id,
               [.connecting, .ready].contains(meetings[id]?.socket) else { return }
-        uplink.send(text: MeetingAudioOut.speaking(on: !open.isEmpty, at: at, text: text))
+        uplink.send(text: MeetingAudioOut.speaking(on: !open.isEmpty, at: at, text: said))
+    }
+
+    /// The text a `speaking` on carries for `voice` (pure, for the tests): an answer's whole text (`MeetingSpeaker` says
+    /// it all), none for the meeting call's voice, whose captions at playback's start are only a beginning.
+    nonisolated static func spokenText(_ voice: Voice, _ text: String?) -> String? {
+        voice == .call ? nil : text
     }
 
     // MARK: Stop
 
-    /// The recording is stopping (`RecordingCapture.onStopping`): `end` goes on an open socket after the last audio, and
-    /// the hub's last lines come within 15 seconds before it closes; a socket that isn't up closes now (what the hub lacks
-    /// goes up as gaps).
-    func ended(_ id: UUID) {
+    /// The recording is stopping at `at` on its clock (`RecordingCapture.onStopping`): its hub-mode time ends there; `end`
+    /// goes on an open socket after the last audio, the uplink comes off the recorder's tap then (it never hears the
+    /// next recording), and the hub's last lines come within 15 seconds before it closes; a socket that isn't up closes
+    /// now (what the hub lacks goes up as gaps).
+    func ended(_ id: UUID, at: Double? = nil) {
         speakingOpen[id] = nil
+        if let at, library.entry(id)?.attendance?.hubTime.last.map({ $0.end == nil }) == true {
+            library.change(id) { $0.attendance?.closeHubTime(at: at) }
+        }
         guard let uplink, uplink.recording == id else { return }
         var m = meetings[id] ?? Meeting()
-        guard m.socket == .ready, uplink.end() else {
+        let ending = uplink
+        let offTheTap: @Sendable () -> Void = { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, self.uplink === ending else { return }
+                self.deps.listen(nil)
+            }
+        }
+        guard m.socket == .ready, uplink.end(then: offTheTap) else {
             detach(id, to: m.decided?.mode == .hub ? .ended : .off)
             return
         }
@@ -522,8 +591,10 @@ final class MeetingTranscription {
             }
             guard let read = try? JSON.decoder.decode(LinesRead.self, from: data) else { return }
             var m = meetings[id] ?? Meeting()
+            let had = Set(m.lines.map(\.n))
             m.lines = Self.merged(m.lines, read.lines)
             set(id, m)
+            if read.lines.contains(where: { !had.contains($0.n) }) { deps.linesAdded(id) }
             guard read.more, let last = read.lines.last, last.n >= from else { return }
             from = last.n + 1
         }
@@ -567,45 +638,95 @@ final class MeetingTranscription {
 
     // MARK: Wi-Fi only
 
+    /// **Hub transcription on Wi-Fi only** changed. Turned on, a socket opened without it opens again under it (its
+    /// request keeps off cellular, `URLRequest.keepOnWiFi`), or not at all off Wi-Fi; the gaps follow the rule too.
     func wifiOnlyChanged(_ on: Bool) {
-        if wifiOnly != on { wifiOnly = on }
+        guard wifiOnly != on else { return kickGaps() }
+        wifiOnly = on
+        if on, let uplink, let m = meetings[uplink.recording], [.connecting, .ready].contains(m.socket) {
+            uplink.close()
+            set(uplink.recording, m.with(socket: .down))
+            let (id, paused) = followed
+            follow(id, paused: paused, entry: id.flatMap { library.entry($0) })
+        }
         kickGaps()
     }
 
     // MARK: Gaps after the meeting
 
-    /// Looks at the meetings that ended in hub mode and uploads what their hub lacks, one pass at a time.
+    /// Looks at the meetings that ended in hub mode and uploads what their hub lacks, one pass at a time, under
+    /// background time (the pass right after Stop goes on as the app goes behind). A pass that left a meeting `later`
+    /// (the hub or the network away) brings another after `MeetingGapUpload.retryDelay`, until none is left `later`:
+    /// the hub's final pass waits at most 30 minutes for the gaps.
     func kickGaps() {
         guard gapTask == nil else { gapsAgain = true; return }
+        gapRetryTask?.cancel()
+        gapRetryTask = nil
+        let finish = deps.background("meeting-transcription-gaps")
         gapTask = Task { [weak self] in
-            guard let self else { return }
+            guard let self else { return finish() }
+            var later = false
             repeat {
                 self.gapsAgain = false
-                await self.gapPass()
+                later = await self.gapPass()
             } while self.gapsAgain
             self.gapTask = nil
+            finish()
+            if later { self.scheduleGapRetry() } else { self.gapRetries = 0 }
+        }
+    }
+
+    /// Another gap pass after `MeetingGapUpload.retryDelay` of the passes in a row that left one `later`.
+    private func scheduleGapRetry() {
+        gapRetries += 1
+        let delay = MeetingGapUpload.retryDelay(gapRetries)
+        let wait = deps.wait
+        gapRetryTask?.cancel()
+        gapRetryTask = Task { [weak self] in
+            await wait(.seconds(delay))
+            guard !Task.isCancelled, let self else { return }
+            self.gapRetryTask = nil
+            self.kickGaps()
         }
     }
 
     /// Whether `entry` may still need gap uploads (pure, for the tests): a room meeting recorded here that asked for hub
-    /// mode, ended, its last revision (the `complete: true` one) stored, within the hub's retention (the phone keeps its
-    /// audio at least that long, and never longer), not known to be done or transcribed on the phone.
+    /// mode and has hub-mode time (`RecordingAttendance.hubTime`; never one an older manager rolled back), ended, its last
+    /// revision (the `complete: true` one) stored, within the hub's retention (the phone keeps its audio at least that
+    /// long, and never longer), not known to be done or transcribed on the phone.
     nonisolated static func needsGaps(_ entry: RecordingEntry, meeting: Meeting?, expired: Bool, synced: Bool, done: Bool) -> Bool {
-        guard !entry.active, entry.roomMeeting, entry.attendance?.transcription == .hub, !expired, !done else { return false }
+        guard !entry.active, entry.roomMeeting, let attendance = entry.attendance, attendance.transcription == .hub,
+              !attendance.hubRolledBack, !attendance.hubTime.isEmpty, !expired, !done else { return false }
         if let mode = meeting?.mode, mode != .hub { return false }
         if meeting?.hub?.settled == true { return false }
         return entry.transcribedAll && synced
     }
 
-    private func gapPass() async {
+    /// The stretches of `entry`'s audio a gap upload may send (pure, for the tests): its hub-mode time, an open stretch
+    /// to the recording's end. Never what was recorded as a Note or after a rollback.
+    nonisolated static func uploadable(_ entry: RecordingEntry) -> [MeetingGap] {
+        guard let attendance = entry.attendance, attendance.transcription == .hub, !attendance.hubRolledBack else { return [] }
+        return MeetingGap.union(attendance.hubStretches(until: entry.duration).map { MeetingGap(from: $0.from, to: $0.to) })
+    }
+
+    /// One pass over the meetings that need gaps; true when one was left `later`.
+    private func gapPass() async -> Bool {
         let due = library.entries.filter {
             Self.needsGaps($0, meeting: meetings[$0.id], expired: deps.expired($0), synced: deps.synced($0), done: gapsDone.contains($0.id))
         }
-        for entry in due { await uploadGaps(entry) }
+        var later = false
+        for entry in due {
+            await uploadGaps(entry)
+            if case .later = meetings[entry.id]?.gapUpload { later = true }
+        }
+        return later
     }
 
     private func uploadGaps(_ entry: RecordingEntry) async {
         let id = entry.id
+        // Only audio recorded while it was a hub-mode meeting goes: none, nothing to do.
+        let allowed = Self.uploadable(entry)
+        guard !allowed.isEmpty else { return finishGaps(id) }
         guard let api = deps.api() else { return }
         guard MeetingTranscriptionRule.mayStream(wifiOnly: wifiOnly, network: deps.network()) else {
             setGapUpload(id, .waitingForWiFi)
@@ -630,7 +751,8 @@ final class MeetingTranscription {
         var tried: [MeetingGapUpload.Piece] = []
         var most = MeetingGapUpload.maxSeconds
         setGapUpload(id, .uploading)
-        while let piece = MeetingGapUpload.plan(gaps, held: entry.duration, maxSeconds: most).first(where: { !tried.contains($0) }) {
+        while let piece = MeetingGapUpload.plan(gaps, held: entry.duration, within: allowed, maxSeconds: most)
+            .first(where: { !tried.contains($0) }) {
             guard MeetingTranscriptionRule.mayStream(wifiOnly: wifiOnly, network: deps.network()) else {
                 return setGapUpload(id, .waitingForWiFi)
             }
@@ -638,7 +760,7 @@ final class MeetingTranscription {
             guard let audio = await deps.audio(entry, piece), !audio.data.isEmpty else { continue }
             do {
                 let data = try await api.putBytes(MeetingAudioEndpoint.path(id, "audio"), query: ["at": MeetingAudioClock.query(audio.at)],
-                                                  data: audio.data)
+                                                  data: audio.data, wifiOnly: wifiOnly)
                 let value = try? JSON.decoder.decode(JSONValue.self, from: data)
                 gaps = MeetingGap.list(value?["gaps"])
                 var m = meetings[id] ?? Meeting()
@@ -678,9 +800,31 @@ final class MeetingTranscription {
     }
 
     private func set(_ id: UUID, _ m: Meeting) {
+        var m = m
+        followAway(id, &m)
         if meetings[id] != m { meetings[id] = m }
         if m.hubMode != hubMeetings.contains(id) {
             if m.hubMode { hubMeetings.insert(id) } else { hubMeetings.remove(id) }
+        }
+    }
+
+    /// A socket that was up and is away (down, or opening again) becomes `away` after `reconnectGrace`, unless it is back
+    /// by then; anything else (up, paused, at its end, waiting for Wi-Fi) is no reconnect.
+    private func followAway(_ id: UUID, _ m: inout Meeting) {
+        guard m.everUp, [.down, .connecting].contains(m.socket) else {
+            m.away = false
+            awayTasks.removeValue(forKey: id)?.cancel()
+            return
+        }
+        guard !m.away, awayTasks[id] == nil else { return }
+        let wait = deps.wait
+        awayTasks[id] = Task { [weak self] in
+            await wait(MeetingTranscriptionRule.reconnectGrace)
+            guard !Task.isCancelled, let self else { return }
+            self.awayTasks[id] = nil
+            guard var m = self.meetings[id], m.everUp, [.down, .connecting].contains(m.socket) else { return }
+            m.away = true
+            self.set(id, m)
         }
     }
 
@@ -731,9 +875,12 @@ nonisolated enum MeetingAudioEndpoint {
         return comps.url ?? http
     }
 
-    static func request(_ api: APIClient, recording: UUID) -> URLRequest {
+    /// `wifiOnly`: **Hub transcription on Wi-Fi only**; the system then opens it over neither cellular data nor an
+    /// expensive network (`URLRequest.keepOnWiFi`), whatever the network looked like a moment ago.
+    static func request(_ api: APIClient, recording: UUID, wifiOnly: Bool) -> URLRequest {
         var req = URLRequest(url: url(api, recording: recording), timeoutInterval: 15)
         api.config.authorize(&req)
+        req.keepOnWiFi(wifiOnly)
         return req
     }
 }
@@ -754,7 +901,32 @@ extension MeetingTranscription.Deps {
                  }.value
              },
              expired: { RecordingSync.shared.isExpired($0) },
-             synced: { RecordingSync.shared.status($0) == .synced })
+             synced: { RecordingSync.shared.status($0) == .synced },
+             position: { id in RecordingCapture.shared.recordingID == id ? RecordingCapture.shared.timeline : nil },
+             linesAdded: { MeetingConversation.shared.liveAccepted($0) },
+             background: { name in
+                 let grant = MeetingBackgroundTask()
+                 grant.begin(name)
+                 return { grant.end() }
+             })
+    }
+}
+
+/// `beginBackgroundTask` for a gap pass, ended exactly once: by the pass, or in the expiration handler (which must end it
+/// before returning, or the system ends the app). The pass itself goes on if the app still runs.
+@MainActor private final class MeetingBackgroundTask {
+    private var id = UIBackgroundTaskIdentifier.invalid
+
+    func begin(_ name: String) {
+        id = UIApplication.shared.beginBackgroundTask(withName: name) { @Sendable in
+            MainActor.assumeIsolated { self.end() }
+        }
+    }
+
+    func end() {
+        guard id != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(id)
+        id = .invalid
     }
 }
 
