@@ -5,11 +5,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"io"
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -49,7 +49,7 @@ type importPackage struct {
 	bytes             int
 }
 
-var importName = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+var importName = lazyre.New(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
 func windowsReserved(s string) bool {
 	base := strings.ToLower(strings.SplitN(s, ".", 2)[0])

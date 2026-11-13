@@ -116,7 +116,25 @@ func (b builtinSources) List(ctx context.Context) []subscriptionsui.Builtin {
 		b.via(ctx, &src)
 		out = append(out, src)
 	}
-	return out
+	return append(out, b.assistant(ctx))
+}
+
+// assistantSource is the id of the assistant's own source (#6430): the rows it puts into the Inbox itself (inbox_post,
+// a scheduled task's "put it in the Inbox when done"). It has no connector: its one switch is the assistant's.
+const assistantSource = "assistant"
+
+// assistant is that source's row: Add to Inbox is the assistant's switch (on unless turned off). While the assistant
+// cannot be reached the switch shows on, its default, and a change is refused by SetFeed.
+func (b builtinSources) assistant(ctx context.Context) subscriptionsui.Builtin {
+	on := true
+	var res struct {
+		On bool `json:"on"`
+	}
+	if err := b.h.callAssistant(ctx, assistantwire.MethodInboxPost, map[string]any{}, &res); err == nil {
+		on = res.On
+	}
+	return subscriptionsui.Builtin{ID: assistantSource, Name: i18n.T(b.h.userLang(), "extmgr-inbox_sources.assistant"), Icon: "robot",
+		Status: connector.StateOK, Inbox: &on, InboxEvery: 0}
 }
 
 // migrations are the built-in sources whose Inbox feed can be read through a default subscription (#6345, the M steps
@@ -208,6 +226,12 @@ func (b builtinSources) rules(src *subscriptionsui.Builtin) {
 }
 
 func (b builtinSources) SetFeed(ctx context.Context, id string, inbox, on bool, _ subscriptions.Actor) error {
+	if id == assistantSource {
+		if !inbox {
+			return fmt.Errorf("%q has no knowledge-base feed", id)
+		}
+		return b.h.callAssistant(ctx, assistantwire.MethodInboxPost, map[string]any{"on": on}, nil)
+	}
 	f := connector.FeedArchive
 	if inbox {
 		f = connector.FeedInbox

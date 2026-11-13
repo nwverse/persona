@@ -1635,8 +1635,7 @@ question a supervisor passed up. `RuleSuggestionLine` draws it as one quiet line
   assistant's profile; for a standing authorization, the web app's settings for Persona (the Apple apps have no list
   of them); for `delegate`, that nothing was stored or turned on and that it is turned on in the assistant's
   configuration file on the hub's computer, with the key in brackets, as the hub's recommended-setup line for the
-  same mechanism words it. (The hub's suggestion line for `delegate` ends "You can turn this on in Settings", which
-  no app can do yet; the app does not repeat it.) The result is kept by card with the suggestion it answered
+  same mechanism words it. The result is kept by card with the suggestion it answered
   (`RuleSuggestions.made`), so it stays when the hub sends the card again without the line. A to-do's card is its
   decision round (the to-do's id with the ask's `asked_at`): the result is not drawn under the to-do's next
   decision, and another suggestion on the same card is offered in the result's place.

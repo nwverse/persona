@@ -415,10 +415,11 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
  * And 475 B for finding a Persona chat by what was said in it in ⌘K (#6283, 2026-11-13: 43,846 B on main at 39b5b57403,
  * 44,444 B after, +598 B, of which 154 B fit the room main had: the merge of the manager's results into the palette's
  * rows and the matched sentence as a row's second line; the search itself, lib/assistant-search.ts, loads on the first
- * query typed, off the idle tier; 31 B of room so the next main does not tip it).
+ * query typed, off the idle tier; 31 B of room so the next main does not tip it). And 108 B for the same main
+ * with the lead row-title restoration (#6400: 44,583 B after merging it, +108 B, of which 0 B fit the old room).
  * Every other lazy page loads on intent, not at idle; raise it on purpose, in the change that needs it.
  */
-export const IDLE_TIER_BUDGET = 44_475;
+export const IDLE_TIER_BUDGET = 44_583;
 
 const gzip = promisify(gzipCompress);
 

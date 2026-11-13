@@ -44,7 +44,7 @@ def features():
     # Match proto.Features, retaining the existing terminal fixture switches.
     return ["error_codes", "client_hello", "heartbeat", "app_ping", "client_msg_id", "send_refusals",
             "screen_dialog", "resumable_interactions", "secret_prompts", "request_id", "file_upload",
-            "tls", "endpoints", "connectors", "lark_attachments", "file_stream", "file_thumb", "git_blob", "task_push",
+            "tls", "endpoints", "connectors", "lark_attachments", "file_stream", "file_thumb", "git_blob", "task_push", "task_inbox",
             "machine_rename"] + ([] if os.environ.get("MOCK_MANAGERS") == "0" else ["sessions_manager"]) + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") else []) + (["git_review"] if os.environ.get("MOCK_REVIEW") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
                 ["terminal_control", "terminal_scroll", "terminal_click", "terminal_mouse"] if TERMINAL_CONTROL else []) + (
                 ["terminal_panes", "pane_new_space"] if os.environ.get("MOCK_TERMINAL_PANES") else []) + (["herdr_client"] + ([] if os.environ.get("MOCK_TERMINAL_FULL_NOFOCUS") else ["herdr_focus"]) if TERMINAL_FULL else []) + (
@@ -432,6 +432,10 @@ SYSTEMS = {
             "kernel": "6.1.0-26-arm64", "arch": "arm64", "model": "Raspberry Pi 5 Model B Rev 1.0", "cpu": "", "cores": 4,
             "memory": 8 * GB},
 }
+MACHINE_CONCERN_LEVELS = {}
+if os.environ.get("MOCK_MACHINE_CONCERNS") == "1":
+    from machine_concerns import install_machines
+    MACHINE_CONCERN_LEVELS.update(install_machines(MACHINES, SYSTEMS))
 if not os.environ.get("MOCK_MACHINES"):  # that mode has its own offline machine (MachinePagesTests counts them)
     MACHINES.append({"id": "nas", "name": "NAS", "kind": "ssh", "icon": "server", "ssh_host": "nas", "online": False,
                      "error": "ssh: connect to host nas port 22: Operation timed out", "hostname": "nas", "os": "linux",
@@ -478,13 +482,22 @@ def metric_at(mid, t):
     if mid == "server" and t > T0 - 25 * 60:  # a build running since 25 minutes before the mock started
         cpu = 92 + 6 * h  # always over the 90 % "critical" line
     cpu = max(0.5, min(99.5, cpu))
+    concern_level = MACHINE_CONCERN_LEVELS.get(mid)
+    if concern_level == "critical":
+        cpu = 95.0
+    elif concern_level == "warning":
+        cpu = 80.0
     mem_frac = {"server": 0.62, "macbook": 0.55, "studio": 0.31, "nas": 0.42}[template] + 0.05 * day + 0.04 * wave
     if mid == "server" and t > T0 - 25 * 60:
         mem_frac = 0.88 + 0.02 * h
+    if concern_level == "critical":
+        mem_frac = 0.95
     rx = max(0.0, {"server": 2.4e6, "macbook": 4.5e5, "studio": 1.2e6, "nas": 3e5}[template] * (1 + 0.6 * wave + 0.5 * h))
     tx = rx * {"server": 0.35, "macbook": 0.2, "studio": 0.6, "nas": 1.4}[template] * (0.7 + 0.6 * h)
     load = sys_["cores"] * cpu / 100 * (0.9 + 0.3 * h)
     disk_frac = {"server": 0.64, "macbook": 0.71, "studio": 0.38, "nas": 0.93}[template]
+    if concern_level == "critical":
+        disk_frac = 0.95
     return {"cpu": round(cpu, 1), "load": round(load, 2), "mem": round(mem_frac * sys_["memory"]),
             "swap": round({"server": 0.0, "macbook": 1.2, "studio": 0.0, "nas": 0.4}[template] * GB),
             "rx": round(rx, 1), "tx": round(tx, 1), "disk": round(disk_frac * {"nas": 4000, "studio": 2000}.get(mid, 1000) * GB)}
@@ -1005,6 +1018,9 @@ if MOCK_MACHINES:
                              "/Users/me/code/" + proj, status, state, proj, 4 + i % 4, "t%d" % (i // 4 + 1), i // 4 + 1,
                              i * 7, "第 %d 个 Agent 的最新一句话，长一点好看看会不会被截断或者挤到别的地方去。" % (i + 1),
                              pending=1 if state == "needs_you" else 0))
+if os.environ.get("MOCK_MACHINE_CONCERNS") == "1":
+    from machine_concerns import install_sessions
+    install_sessions(SESSIONS, sess)
 # MOCK_AGENTS=1: a long Agents list (AgentsListTests): ~120 agents, one big space with 35 finished-unread, a quiet
 # space, idle ones to fold. Sessions marked seen (WS "seen" or POST …/seen) turn idle; GET /mock/seen lists them.
 # MOCK_QUIET=1: a quiet space (two seen agents, nothing running) under "Idle spaces", for screenshots of its card
@@ -2088,7 +2104,7 @@ SCHEDULE = [
      "prompt": "周五发周报前，把这周的数据再核对一遍，有对不上的列出来。", "enabled": True, "created_by": "assistant",
      "machine_id": "macbook", "created_at": ago(hours=5)},
 ]
-TASK_FIELDS = ("title", "prompt", "repeat", "at", "time", "weekdays", "every_minutes", "cron", "enabled", "launcher", "permission_mode", "effort", "push")
+TASK_FIELDS = ("title", "prompt", "repeat", "at", "time", "weekdays", "every_minutes", "cron", "enabled", "launcher", "permission_mode", "effort", "push", "inbox")
 
 # MOCK_CRON=1 (#4399, docs/assistant/assistant.md "Scheduled tasks"): the hub runs cron tasks (feature task_cron) and has
 # one, every 30 minutes in work hours on weekdays. GET /api/v1/assistant/tasks/cron answers the web editor's examples as
@@ -2162,6 +2178,7 @@ def save_task(old, new):
     # "Notify after a run" (#2396): left out of an edit it stays; "asked" runs in the task's own conversation; "" is the default.
     if t.get("push") == "asked": t.pop("session_id", None)
     if not t.get("push"): t.pop("push", None)
+    if not t.get("inbox"): t.pop("inbox", None)
     # End time: left out it stays, null clears it, and a one-off never has one (the hub's until).
     if t.get("repeat") == "once" or ("until" in new and not new.get("until")):
         t.pop("until", None)
@@ -2947,7 +2964,7 @@ RULE_SUGGESTIONS = {
     "rs_mock_delegate": {
         "id": "rs_mock_delegate", "kind": "delegate",
         # The hub's own words (server/internal/i18n/locales/en/assistant-rule_suggest.json "delegate"), Settings and all.
-        "text": "You took the recommendation 3 times. Let Persona answer agents' own-call questions for you? You can turn this on in Settings.",
+        "text": "You took the recommendation 3 times. Let Persona answer agents' own-call questions for you?",
         "scope": {}, "creates": "", "setting": "agents.delegate", "count": 3},
 } if os.environ.get("MOCK_RULE_SUGGESTIONS") == "1" else {}
 RULE_SUGGESTIONS_ANSWERED = set()  # answered with Always or Not now
@@ -10216,6 +10233,26 @@ if os.environ.get("MOCK_IMESSAGE_INBOX"):
          "context": "我（10-30 07:58）：在吗\n张三（10-30 07:59）：示例：周五下午三点见，地方你定",
          "connector": {"thread": "imessage-0a1b2c3d4e5f", "open_url": "sms:+15550100", "reply_to": "在「信息」里回复（Persona 不替你发）",
                        "rule_tier": "action"}},
+    ]
+
+
+# MOCK_ASSISTANT_INBOX=1 (#6430): rows the assistant put into the Inbox (source `assistant`, made by the manager): the generic
+# `connector` block, its url the conversation's page. Only with ?sources=all, like connectors' items; made-up content.
+if os.environ.get("MOCK_ASSISTANT_INBOX"):
+    _ASSISTANT_BASE = os.environ.get("MOCK_PUBLIC_URL", "http://127.0.0.1:%d" % PORT).rstrip("/")  # the hub's public_url
+    INBOX[1:1] = [
+        {"id": "assistant:s1", "source": "assistant", "kind": "assistant_post", "account": "assistant", "account_name": "Assistant",
+         "title": "Morning briefing", "sender": "Assistant", "preview": "Three meetings today; the design review moved to 15:00",
+         "count": 1, "started_at": ago(minutes=30), "updated_at": ago(minutes=30), "tier": "fyi",
+         "summary": "Three meetings today; the design review moved to 15:00", "reason": "Your morning briefing task puts every run here", "read": False,
+         "context": "Morning briefing\nThree meetings today; the design review moved to 15:00.",
+         "connector": {"thread": "assistant:macbook/" + BLOG, "label": "Assistant", "url": _ASSISTANT_BASE + "/s/macbook/" + BLOG}},
+        {"id": "assistant:s2", "source": "assistant", "kind": "assistant_post", "account": "assistant", "account_name": "Assistant",
+         "title": "Price drop: the standing desk you watch", "sender": "Assistant", "preview": "Now 20% off until Sunday",
+         "count": 1, "started_at": ago(hours=3), "updated_at": ago(hours=3), "tier": "action",
+         "summary": "The desk you asked me to watch is 20% off until Sunday", "reason": "You asked to be told about price drops", "read": False,
+         "context": "Price drop\nNow 20% off until Sunday.",
+         "connector": {"thread": "assistant:macbook/" + TESTS, "label": "Assistant", "url": _ASSISTANT_BASE + "/s/macbook/" + TESTS}},
     ]
 
 

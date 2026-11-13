@@ -13,6 +13,7 @@ import { useEffect, useRef, useSyncExternalStore } from "react";
 import { api, ApiError, enc, errorText, getToken } from "./api";
 import { BASE } from "./base";
 import type { AgentMutes } from "./agent-groups";
+import type { ContextRef } from "./links";
 import { connectorOpenTitle } from "./connectors";
 import { contextBody } from "./context-body";
 import { larkPath } from "./lark-accounts";
@@ -624,6 +625,13 @@ export function contextXML(kind: string, title: string, url: string, text: strin
 
 /** The item as context the chat shows as a chip, then what to do with it (InboxHandOffSheet.message). */
 export function handOffMessage(it: InboxItem, ask: string): string {
+  const ref = handOffContext(it);
+  return `${contextXML(ref.kind, ref.title, ref.url, ref.text)}\n\n${ask.trim() || HANDOFF_PRESETS[0]}`;
+}
+
+/** The item as a `<persona-context kind="context">` (InboxHandOffSheet.contextRef): where it came from, its words, and how
+ *  the agent reads more or answers. "New Agent…" (#5933) puts it over New agent's first message as its card. */
+export function handOffContext(it: InboxItem): ContextRef {
   const title = `${it.connector ? it.account_name || it.source : isLark(it) ? t("lib-inbox.lark") : t("lib-inbox.kind_mail")} · ${it.title}`;
   let text = it.context?.trim() ? it.context : [it.sender ?? "", it.preview].filter(Boolean).join(t("lib-inbox.sender_separator"));
   if (it.lark) {
@@ -634,7 +642,7 @@ export function handOffMessage(it: InboxItem, ask: string): string {
   if (it.connector?.url) text += `\n\n${t("lib-inbox.handoff_connector", { name: it.account_name || it.source, url: it.connector.url })}`;
   const uid = it.mail?.uids[it.mail.uids.length - 1];
   if (it.mail && uid !== undefined) text += `\n\n${t("lib-inbox.handoff_mail", { account: it.mail.account_id, mailbox: it.mail.mailbox, uid })}`;
-  return `${contextXML("context", title, "", text)}\n\n${ask.trim() || HANDOFF_PRESETS[0]}`;
+  return { id: `inbox:${it.id}`, kind: "context", title, url: "", text };
 }
 
 /** "Hand to AI" to Persona's main conversation (docs/assistant/inbox.md "Item actions"): the item's manager sends text there
