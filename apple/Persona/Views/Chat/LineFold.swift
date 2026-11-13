@@ -32,9 +32,6 @@ struct LineFold<Words: View>: View {
                 // draws this row over the one below it, whose taps they took (#6645: a work line there never opened).
                 .contentShape(.rect)
                 .mask { if folds && !open { fade } else { Rectangle() } }
-                // Folded, one element as tall as what shows (its words all read out), as `BubbleFold`'s.
-                .accessibilityElement(children: folds && !open ? .combine : .contain)
-                .accessibilityAddTraits(folds && !open ? .isStaticText : [])
                 .background(alignment: .top) { probe }
             if folds { FoldToggle(open: open, prefix: "message", action: { flip(open) }) }
         }

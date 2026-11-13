@@ -11,7 +11,9 @@ Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in
   under it, which never opened, and its long-press recognizer took the long presses on the answer under that, so the
   card lifted instead. A 2 KB message hid about a screen of words.
 - Anything that cuts its content off by a clip takes `.contentShape(.rect)` right after the clip (`BubbleFold`,
-  `LineFold`, `ReplyQuote`). VoiceOver has the same trap: folded, make the words one element as tall as what shows.
+  `LineFold`, `ReplyQuote`). Leave the words' accessibility alone while doing it: wrapping them in
+  `.accessibilityElement(children: .contain)` made the lifted copy of an open card (`MessageLift` combines a short
+  message's elements) read only its sender and Collapse, without its words.
 - Prove it with a touch at the row's own spot, not by its element: `WorkLineUnderFoldUITests` taps and long-presses
   each row under a folded message (mock `MOCK_PEER_FOLD=1`). An element-based tap can't tell what lies on top.
 
