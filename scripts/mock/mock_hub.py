@@ -34,6 +34,12 @@ FAULT_LOCK = threading.Lock()
 LOST_RECEIPT = False
 
 
+# MOCK_SESSIONS_CATALOG=1 (with MOCK_SESSIONS_LIST=1, docs/protocol/protocol.md "Projects and spaces"): the paged list
+# answers catalog=1, place= and space=, and a Windows PC joins the computers with the weather repository checked out there too
+# and a notes folder that is no repository, like the server's.
+CATALOG = os.environ.get("MOCK_SESSIONS_CATALOG") == "1" and os.environ.get("MOCK_SESSIONS_LIST") == "1"
+
+
 def features():
     # Match proto.Features, retaining the existing terminal fixture switches.
     return ["error_codes", "client_hello", "heartbeat", "app_ping", "client_msg_id", "send_refusals",
@@ -46,6 +52,7 @@ def features():
                 ["messaging"] if os.environ.get("MOCK_MESSAGING") == "1" else []) + (
                 ["conversation_origin"] if os.environ.get("MOCK_AUTO_CONVERSATIONS") == "1" else []) + (
                 ["sessions_list", "sessions_lookup", "sessions_hierarchy"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
+                ["sessions_catalog"] if CATALOG else []) + (
                 ["preview"] if os.environ.get("MOCK_PREVIEW") else []) + (
                 ["task_cron"] if os.environ.get("MOCK_CRON") == "1" else []) + (
                 [] if os.environ.get("MOCK_TODO_SEEN") == "off" else ["todo_seen"]) + (
@@ -1468,6 +1475,31 @@ if os.environ.get("MOCK_SESSIONS_MANY"):
         SESSIONS.append(sess("server", "e4410a00-0000-4000-8000-%012d" % (_i + 1), "Session %03d" % (_i + 1),
                              "/home/me/code/fixture", "idle", "idle", "fixture", 24, "fixture-%03d" % (_i + 1), _i + 1,
                              60 * (_i + 1), "Done."))
+
+# MOCK_SESSIONS_CATALOG=1: what each directory's computer says its repository is (the node's git.status identity_only);
+# a directory not here is no repository. The weather repository is on the MacBook and the Windows PC; notes is a plain
+# folder on the server and the PC, written in two cases.
+CATALOG_ORIGINS = {
+    ("macbook", "/Users/me/code/weather"): "git.example.com/demo/weather",
+    ("winpc", "C:\\Users\\me\\code\\Weather"): "git.example.com/demo/Weather",
+    ("server", "/home/me/code/shop-api"): "git.example.com/demo/shop-api",
+    ("studio", "/Users/me/code/blog"): "git.example.com/demo/blog",
+    ("studio", "/Users/me/code/photo-sync"): "git.example.com/demo/photo-sync",
+    ("macbook", "/Users/me/code/recipes"): "git.example.com/demo/recipes",
+}
+if CATALOG:
+    MACHINES.append({"id": "winpc", "name": "Windows PC", "kind": "link", "icon": "desktop", "online": True, "hostname": "PC",
+                     "os": "windows", "arch": "amd64", "home": "C:\\Users\\me", "claude_version": "2.1.320", "last_seen": ago()})
+    SESSIONS += [
+        sess("winpc", "c47a1090-0000-4000-8000-000000000001", "给天气 App 写 Windows 小组件", "C:\\Users\\me\\code\\Weather", "working", "working",
+             "weather", 1, "widget", 1, 3, "WinUI 的小组件宿主接好了，正在接每小时预报的数据。", repo_root="C:\\Users\\me\\code\\Weather"),
+        sess("winpc", "c47a1090-0000-4000-8000-000000000002", "修 Windows 上的时区换算", "C:\\Users\\me\\code\\Weather\\core", "idle", "idle",
+             "weather", 1, "timezone", 2, 95, "夏令时切换那天的小时数对上了，测试已补。", repo_root="C:\\Users\\me\\code\\Weather"),
+        sess("winpc", "c47a1090-0000-4000-8000-000000000003", "整理读书笔记的目录", "D:\\work\\Notes", "idle", "idle",
+             "notes", 2, "notes", 1, 60 * 5, "按年份分了三个文件夹，索引页也更新了。"),
+        sess("server", "c47a1090-0000-4000-8000-000000000004", "把周报草稿合成一份", "/home/me/notes", "idle", "unread",
+             "notes", 31, "weekly", 1, 40, "四份草稿合成了一份，重复的两段删掉了。"),
+    ]
 
 # MOCK_OPENCODE=1 (#3070, docs/integrations/opencode.md): opencode in herdr panes on the server. Four are herdr sessions the Persona
 # plugin completes (working, needs you with a permission card, finished unread, idle with a long conversation), one has
@@ -16153,6 +16185,56 @@ LIST_JOURNAL_SIZE = 128  # the hub keeps at most 128 revisions too (docs/protoco
 LIST_TUPLE = lambda s: json.dumps([s["machine_id"], s["session_id"]], separators=(",", ":"))
 
 
+def folder_name(path):
+    """The last folder of a path as its computer wrote it (the hub's folderName): a drive-letter or UNC path is a
+    Windows computer's, read by backslashes and slashes; any other by slashes only."""
+    windows = path.startswith("\\\\") or (len(path) >= 3 and path[0].isalpha() and path[0].isascii() and path[1] == ":" and path[2] in "\\/")
+    separators = "/\\" if windows else "/"
+    trimmed = path.rstrip(separators)
+    cut = max(trimmed.rfind(c) for c in separators)
+    return trimmed[cut + 1:] or path
+
+
+def session_catalog(rows, revision, state_of):
+    """catalog=1 (sessions_catalog): the filtered rows' projects and spaces, as the hub's sessionCatalogOf builds them.
+    A directory whose computer names a network remote (CATALOG_ORIGINS) is that repository's project wherever it is
+    checked out; any other goes by its folder's name. needs_you (left out when 0) is by the state the list filters by."""
+    places, groups, names = {}, {}, {}
+    waiting = lambda n: {"needs_you": n} if n else {}
+    for s in rows:
+        needs = 1 if state_of(s) == "needs_you" else 0
+        path = s.get("repo_root") or s.get("workspace_cwd") or s.get("cwd", "")
+        at = places.setdefault((s["machine_id"], path), [0, 0])
+        at[0] += 1; at[1] += needs
+        group = s.get("space_id") or s.get("workspace_id", "")
+        at = groups.setdefault((s["machine_id"], group), [0, 0])
+        at[0] += 1; at[1] += needs
+        if group and s.get("space_name"):
+            names.setdefault((s["machine_id"], group), s["space_name"])
+    projects = {}
+    for (mid, path), (n, needs) in places.items():
+        origin = CATALOG_ORIGINS.get((mid, path), "")
+        # the rows in no directory are the project with the empty id
+        pid = "" if not path else "git:" + origin.lower() if origin else "dir:" + folder_name(path).lower()
+        project = projects.setdefault(pid, {"id": pid, "name": "", "total": 0, "needs": 0, "places": []})
+        project["total"] += n
+        project["needs"] += needs
+        project["places"].append({"machine_id": mid, "path": path, "total": n, **waiting(needs)})
+    for project in projects.values():
+        project.update(waiting(project.pop("needs")))
+        project["places"].sort(key=lambda p: (-p["total"], p["machine_id"], p["path"]))
+        first = project["places"][0]
+        origin = CATALOG_ORIGINS.get((first["machine_id"], first["path"]), "")
+        if project["id"]:
+            project["name"] = origin.rsplit("/", 1)[-1] if origin else folder_name(first["path"])
+        if origin:
+            project["origin"] = origin
+    spaces = [{"machine_id": mid, "id": group, "name": names.get((mid, group), group), "total": n, **waiting(needs)} for (mid, group), (n, needs) in groups.items()]
+    return {"revision": revision, "total": len(rows),
+            "projects": sorted(projects.values(), key=lambda p: (not p["id"], -p["total"], p["name"].lower(), p["id"])),
+            "spaces": sorted(spaces, key=lambda p: (not p["id"], -p["total"], p["name"].lower(), p["machine_id"], p["id"]))}
+
+
 def list_revision(rows):
     """The paged list's checkpoint for rows, journaled so a later `since` can answer what changed after it."""
     revision = hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()[:16]
@@ -16169,14 +16251,15 @@ def current_list_revision():
 
 # GET /api/v1/sessions as the hub's traffic counters would see it, split by what the query asked for (#3759):
 # /mock/sessions_reads, ?reset=1 starts counting again. `full` is the no-query complete list; `baseline` a page without
-# `since` (summary=0 is a complete row); `since` a delta page; `counts` / `lookup` the small reads.
+# `since` (summary=0 is a complete row); `since` a delta page; `counts` / `catalog` / `lookup` the small reads.
 SESSIONS_READS = {"reads": {}, "hints": 0, "started": time.monotonic()}
 SESSIONS_READS_LOCK = threading.Lock()
 
 
 def sessions_read(handler, size, status):
     q = parse_qs(urlparse(handler.path).query)
-    mode = ("lookup" if "session_id" in q else "counts" if q.get("counts", [""])[0] == "1" else "since" if "since" in q
+    mode = ("lookup" if "session_id" in q else "counts" if q.get("counts", [""])[0] == "1"
+            else "catalog" if CATALOG and q.get("catalog", [""])[0] in ("1", "true") else "since" if "since" in q
             else "full" if not (set(q) - {"manager", "machine_id"}) else "baseline")
     if status >= 400: mode += "_%d" % status
     client = (handler.headers.get("X-Persona-Client") or "").split("/")[0] or "unknown"
@@ -16243,6 +16326,19 @@ def paged_sessions(query):
     if under and not query.get("machine_id", [""])[0]:
         return {"error": "parent_session_id needs machine_id", "code": "invalid_query"}, 400
     state_of = folded_state if roots else (lambda s: s.get("state", "unknown"))
+    # sessions_catalog: place=["<machine>","<project>"] and space=["<machine>","<group>"], repeatable; an older hub (no
+    # MOCK_SESSIONS_CATALOG) ignores them.
+    pairs = {"place": [], "space": []}
+    for key in pairs if CATALOG else ():
+        if key not in query:
+            continue
+        try:
+            pairs[key] = [json.loads(v) for v in query[key]]
+        except ValueError:
+            pairs[key] = [None]
+        if len(pairs[key]) > 64 or any(not (isinstance(p, list) and len(p) == 2 and all(isinstance(x, str) for x in p) and p[0]) for p in pairs[key]):
+            return {"error": key + " must be a JSON array of a machine id and a value", "code": "invalid_query"}, 400
+    places, spaces = pairs["place"], pairs["space"]
 
     def matching(rows):
         rows = [s for s in rows if (not roots or not s.get("folded_under")) and (not under or s.get("folded_under") == under)
@@ -16250,11 +16346,15 @@ def paged_sessions(query):
                 and all(not query.get(k, [""])[0] or query[k][0] == s.get(v, "")
                                       for k, v in fields.items())
                 and (not query.get("project", [""])[0] or query["project"][0] == (s.get("repo_root") or s.get("workspace_cwd") or s.get("cwd", "")))
+                and (not places or [s["machine_id"], s.get("repo_root") or s.get("workspace_cwd") or s.get("cwd", "")] in places)
+                and (not spaces or [s["machine_id"], s.get("space_id") or s.get("workspace_id", "")] in spaces)
                 and (not search or search in "\n".join(str(s.get(k, "")) for k in ("title", "cwd", "space_name", "slot_name", "last_text")).lower())]
         rows.sort(key=LIST_TUPLE)
         rows.sort(key=lambda s: s.get("updated_at", ""), reverse=True)
         return rows
     rows = matching(rows)
+    if CATALOG and query.get("catalog", [""])[0] in ("1", "true"):
+        return session_catalog(rows, revision, state_of), 200
     if query.get("counts", [""])[0] == "1":
         counts = {"total": len(rows), "revision": revision, "machine": {}, "project": {}, "group": {}, "state": {}}
         for s in rows:
@@ -17596,8 +17696,8 @@ def features():
 
 
 _SEARCH_DROP = [re.compile(r"(?s)<persona-view-errors\b[^>]*>.*?</persona-view-errors>\s*"),
-                re.compile(r"(?s)<(?:persona|jarvis)-context\b[^>]*>.*?</(?:persona|jarvis)-context>\s*"),
-                re.compile(r"<(?:persona|jarvis)-file\b[^>]*?/?>(?:\s*</(?:persona|jarvis)-file>)?")]
+                re.compile(r"(?s)<persona-context\b[^>]*>.*?</persona-context>\s*"),
+                re.compile(r"<persona-file\b[^>]*?/?>(?:\s*</persona-file>)?")]
 _SEARCH_PASTED = re.compile(r"(?s)<pasted_content\b[^>]*>(.*?)</pasted_content>")
 _SEARCH_IMAGES = [re.compile(r"(?s)<attached_images>.*?</attached_images>"), re.compile(r"\[Image #\d+\]\s?")]
 _SEARCH_ACTION = re.compile(r'\n<persona-action view="[^"<>]*" action="[^"<>]*">\{[^<>]*\}</persona-action>$')
@@ -22032,6 +22132,7 @@ MOCK_HELP = [
     "MOCK_KB_SELECTION=missing|future|fail  Settings › Knowledge selection: a hub from before it (404) / a document with a field clients don't know / a save the hub refuses (503)",
     "MOCK_SESSIONS_LIST=1  Paged Agents, counts and exact lookup; list-mode sockets send hints instead of full lists (#6362)",
     "MOCK_SESSIONS_MANY=<n>  n more idle sessions to page through; GET /mock/sessions/touch expires the old cursors (#4410)",
+    "MOCK_SESSIONS_CATALOG=1  With MOCK_SESSIONS_LIST=1: catalog=1, place= and space= on the paged list, a Windows PC, one repository on two computers and a plain notes folder on two",
     "MOCK_MANUAL_HERDR=1  没挂待办的 herdr Agent 算手动开的（started_by_persona 为假），Agents「按待办」里出「手动开的」一段（#2917）",
     "MOCK_ORCA_CHILDREN=1  MacBook 上一个 Orca 工作区带三个子工作区（其中一个还有子项，parent_space_id，#2073）",
     "MOCK_CHILD_SESSIONS=1  The Paseo computer (MOCK_PASEO) with its agent's four created agents (one waiting for you, one working with a Codex subagent of its own, one done, one failed) and an agent whose creator is not listed: the hub folds them (folded_under / children) and the lead's chat draws a card for each (#5120)",

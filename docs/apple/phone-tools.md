@@ -6,6 +6,7 @@ Route: Claude calls a `phone_*` tool → `personad mcp` → node.sock → hub �
 the app queries/writes locally → `tool_result` returns along the same route.
 
 Device tool descriptions and schemas are registered by the app (iOS `apple/Persona/PhoneTools/`, Android `android/platform/phonetools/` (`PhoneToolCatalog.kt`)). The hub adds an optional `queue_if_offline` parameter to confirmed writes and supplies its own queue management tools from `server/internal/prompts/mcp/phone/` (`docs/assistant/prompts.md`, "MCP tools"). `personad mcp` adds `file` and `trim` to `phone_clipboard_set` (see "Copying a file to the clipboard").
+A conversation lists its tools once (`personad mcp` says `listChanged: false`): when the manager can't reach the hub for the phone's tools then, it asks again briefly, then lists the ones the hub last gave, so a hub restart does not leave a conversation without them (#6422).
 Descriptions and parameters for tools with the same name must match exactly on both platforms (the hub merges tools from all phones by name; `PhoneToolCatalogTest` compares against the catalog exported by iOS).
 
 Mail tools `mail_*` use the same `personad mcp`, but execute on the hub without going through the phone; see "Mail tools (mail_*)" below.
