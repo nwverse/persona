@@ -72,6 +72,16 @@ final class TerminalsRenameUITests: XCTestCase {
             XCTAssertEqual(try actions().last?["label"], "logs")
             app.buttons["terminal-close"].firstMatch.tap()
             XCTAssertTrue(self.row(app, "logs · npm run dev").waitForExistence(timeout: 10), "the list behind the page kept the old name")
+
+            // An Agent's terminal page is as it was: the settings button, no ⋯ (its chat's ⋯ renames it).
+            let agent = self.row(app, "Claude")
+            XCTAssertTrue(agent.waitForExistence(timeout: 5), "no Agent row")
+            agent.tap()
+            XCTAssertTrue(app.buttons["terminal-close"].firstMatch.waitForExistence(timeout: 15), "the Agent's terminal page did not open")
+            sleep(1)
+            XCTAssertFalse(app.buttons["terminal-more"].exists, "an Agent's terminal page got the ⋯")
+            XCTAssertTrue(app.buttons["终端设置"].exists, "an Agent's terminal page lost its settings button")
+            shot(app, "cover-agent-unchanged-\(scheme)")
             app.terminate()
         }
     }
