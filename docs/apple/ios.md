@@ -1067,7 +1067,7 @@ the web's (`web/src/lib/live-text.ts`, `docs/web/web.md`).
   same pacer (`DeltaPacer`, at most 5 draws a second, an empty delta at once).
 - **Even reveal** (#6651): the model's text comes in bursts (a few dozen characters about every 350 ms, up to 2 s apart), so drawing what
   arrived showed a jump per burst. `StreamingText` reveals it a few characters a frame (`StreamReveal` in PersonaKit, driven by
-  `StreamRevealClock`'s display link, which runs only while text waits, at most 60 Hz): a little slower than the stream's average so far,
+  `StreamRevealClock`'s display link, which runs only while text waits, at most 30 Hz: each change re-measures the chat list, #7135): a little slower than the stream's average so far,
   faster when more waits (waiting / 0.6 s), never slower than 20 characters a second. Only that view redraws per frame; the store and the
   list see the deltas as before. A first text over 80 characters (a chat opened mid-stream) shows at once; when the stream ends
   (`ChatStore.liveDone`), or the user holds the list, or the reply's item replaces it, the whole text shows at once. The Mac shows text as
