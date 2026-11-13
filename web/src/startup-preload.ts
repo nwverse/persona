@@ -234,9 +234,11 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * 0821d1acca measured ja 474,717 B, 35 B over the old budget; this change takes it to 475,028 B, +311 B: the `?at=` of a
  * search hit's address and the chat's landing on it, which pages back for one further up, waiting while the chat still
  * fills the screen, and its one line when the message is not reached; the search itself stays in ⌘K's on-intent load
- * and All chats' page; 31 B of room so the next main does not tip it).
+ * and All chats' page; 31 B of room so the next main does not tip it). And 87 B for restoring expanded Needs you title
+ * navigation and hydrating off-page question sessions (#6432: main at 9c320cf962 measured ja 475,029 B; sharing the
+ * header's label and chevron keeps this fix to 475,116 B, +87 B, with the same 30 B of room).
  */
-export const FIRST_SCREEN_BUDGET = 475_059;
+export const FIRST_SCREEN_BUDGET = 475_146;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
