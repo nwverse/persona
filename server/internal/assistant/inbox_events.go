@@ -141,7 +141,7 @@ func synthesizedChain(l i18n.Lang, it *InboxItem) []InboxChainEntry {
 		return nil
 	}
 	recv := InboxChainEntry{ID: "c1", At: it.StartedAt.UTC(), Kind: ChainReceived, Count: max(it.Count, 1), Sender: it.Sender,
-		Link: firstLink(it)}
+		Link: firstLink(it), Via: it.Source}
 	recv.Text = receivedText(l, it, recv.Count, recv.Sender)
 	out := []InboxChainEntry{recv}
 	if it.Tier != "" {
@@ -186,7 +186,7 @@ func triagedEntry(l i18n.Lang, it *InboxItem) InboxChainEntry {
 	if it.Urgent && it.Tier == TierAction {
 		key = "assistant-inbox_chain.triaged_urgent"
 	}
-	e := InboxChainEntry{Kind: ChainTriaged, Text: i18n.T(l, key, i18n.Args{"tier": tier}), Detail: tier}
+	e := InboxChainEntry{Kind: ChainTriaged, Text: i18n.T(l, key, i18n.Args{"tier": tier}), Detail: tier, Via: ViaAssistant}
 	if r := strings.TrimSpace(it.Reason); r != "" {
 		e.Detail = i18n.T(l, "assistant-inbox_chain.triaged_detail", i18n.Args{"tier": tier, "reason": r})
 	}
@@ -257,9 +257,10 @@ func seenOf(it *InboxItem) inboxSeen {
 	return s
 }
 
-// noteReceived records the batch that just came into the item (its Last moved from prev's): one entry a batch, with
-// how many, who, the messages when they can be told apart, and where the batch's first message is. messages, when
-// the caller has them (mail), are the batch's; else they are read from the item. Under b.mu.
+// noteReceived records the batch that just came into the item (its Last moved from prev's). A batch immediately after
+// another received batch merges into that entry: its count and messages join the earlier ones, its time becomes the
+// entry's, and the entry keeps the first batch's id and link. messages, when the caller has them (mail), are the
+// batch's; else they are read from the item. Under b.mu.
 func (b *inboxBook) noteReceived(it *InboxItem, prev inboxSeen, messages []InboxChainMessage) {
 	if it.Last == prev.last && prev.last != "" {
 		return
@@ -270,7 +271,7 @@ func (b *inboxBook) noteReceived(it *InboxItem, prev inboxSeen, messages []Inbox
 		n = it.Count
 	}
 	n = max(n, 1)
-	e := InboxChainEntry{Kind: ChainReceived, Count: n, Sender: it.Sender, At: it.UpdatedAt.UTC()}
+	e := InboxChainEntry{Kind: ChainReceived, Count: n, Sender: it.Sender, At: it.UpdatedAt.UTC(), Via: it.Source}
 	if e.At.IsZero() || e.At.After(time.Now().Add(time.Minute)) {
 		e.At = time.Now().UTC()
 	}
@@ -305,6 +306,24 @@ func (b *inboxBook) noteReceived(it *InboxItem, prev inboxSeen, messages []Inbox
 		messages = messages[len(messages)-chainMessagesMax:]
 	}
 	e.Messages = messages
+	if len(it.Chain) > 0 {
+		last := &it.Chain[len(it.Chain)-1]
+		if last.Kind == ChainReceived {
+			delete(b.listMemo.kept, it.ID)
+			last.Count += e.Count
+			last.At = e.At
+			if last.Sender != e.Sender {
+				last.Sender = ""
+			}
+			last.Text = receivedText(b.userLang(), it, last.Count, last.Sender)
+			last.Via = e.Via
+			last.Messages = append(slices.Clone(last.Messages), e.Messages...)
+			if len(last.Messages) > chainMessagesMax {
+				last.Messages = last.Messages[len(last.Messages)-chainMessagesMax:]
+			}
+			return
+		}
+	}
 	b.chainAdd(it, e)
 }
 
