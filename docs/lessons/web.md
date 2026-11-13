@@ -91,8 +91,8 @@ number of entries in each first-screen chunk's `export{…}` between the two bui
 
 ## A change's first-screen cost depends on the main it is measured on (#6348)
 
-The paged Agents list's groups measured +1,402 B for ja on one `main`, +1,510 B on the next and +1,396 B on the one
-after, within two hours and with the change's own code untouched: brotli counts a change against everything around it,
+The paged Agents list's groups measured +1,402 B for ja on one `main`, then +1,510 B, +1,396 B and +1,501 B on the
+next three, within two hours and with the change's own code untouched: brotli counts a change against everything around it,
 and each merge moved what it compresses against. For the same reason a lazy split saves far less than the module weighs
 alone: the sections' view is about 1.5 KB minified and compressed on its own, and moving it to its own chunk took 407 B
 off. Measure the branch and `main` at the same commit, after the last merge, and write that pair beside
