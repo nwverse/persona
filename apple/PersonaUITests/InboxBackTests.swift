@@ -51,8 +51,8 @@ final class InboxBackTests: XCTestCase {
         guard app.windows.firstMatch.frame.width > 600 else { throw XCTSkip("needs an iPad or an open Duo") }
     }
 
-    @MainActor private func openDetail(_ step: String) {
-        launch(["-tab", "mail", "-openInboxItem", Self.itemID])
+    @MainActor private func openDetail(_ step: String, extra: [String] = []) {
+        launch(["-tab", "mail", "-openInboxItem", Self.itemID] + extra)
         assertDetail(step)
     }
 
@@ -166,6 +166,17 @@ final class InboxBackTests: XCTestCase {
         swipeBack()
         assertDetail("wide-agent-back")
         assertWideSidebar("wide-agent-sidebar")
+    }
+
+    @MainActor func testUnifiedSidebarTimelineChatsSwipeBackBesideTheSidebar() throws {
+        openDetail("unified-detail", extra: ["-app.navigation", "sidebar"])
+        try requireWide()
+        assertWideSidebar("unified-sidebar-initial")
+
+        openChat(revealChainRow("管理者处理"), "unified-handling-chat")
+        swipeBack()
+        assertDetail("unified-handling-back")
+        assertWideSidebar("unified-handling-sidebar")
     }
 
     @MainActor func testInboxAgentRowSwipesBackToTheList() throws {

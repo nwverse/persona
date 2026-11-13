@@ -19,6 +19,13 @@ final class HelperArgumentsTests: XCTestCase {
         XCTAssertEqual(args.mode, .requestPermission)
     }
 
+    /// `--preflight` reads the permission without asking (the node's `screen_video.permission`); asking wins over it.
+    func testPreflight() throws {
+        XCTAssertEqual(try HelperArguments.parse(["--preflight"]).mode, .preflight)
+        XCTAssertEqual(try HelperArguments.parse(["--socket", "/tmp/s", "--token", "t", "--preflight"]).mode, .preflight)
+        XCTAssertEqual(try HelperArguments.parse(["--preflight", "--request-permission"]).mode, .requestPermission)
+    }
+
     func testDisplay() throws {
         let args = try HelperArguments.parse(["--socket", "/tmp/s", "--token", "t", "--display", "3"])
         XCTAssertEqual(args.display, 3)
