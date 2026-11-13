@@ -1,10 +1,17 @@
 """Scripted meeting PCM uplink, bilingual transcript, gap repair and final minutes; no upstream required."""
+import importlib.util
+import json
 import threading
 import unittest
 import uuid
+from pathlib import Path
 
 from test_meeting_attendance_mock import start
 from test_meeting_conversation_mock import Conversation, websocket
+
+HERE = Path(__file__).resolve().parent
+# The mock's lines, as the scripted upstream says them (TRANSCRIPTION_SCRIPT): the first is Persona's answer below.
+CAP_LINE, PRICING_LINE = "我们先把 export cap 保持在 4 MB。", "Let's revisit pricing next week."  # i18n-ignore: synthetic speech
 
 
 class Transcription(Conversation):
@@ -96,15 +103,21 @@ class MeetingTranscriptionMockTests(Transcription, unittest.TestCase):
         self.assertEqual(self.meta(rid)["transcription"], {"mode": "device"})
         note = self.upload(str(uuid.uuid4()), kind="note", transcription="hub")[1]
         self.assertEqual((note["transcription"], note["transcription_problem"]), ("device", "not_meeting"))
-        rid = self.recording(timeline={"roles": [{"at": 0, "attendance": "listener"}], "speaking": [[2, 3]]})
+        rid = self.recording(timeline={"roles": [{"at": 0, "attendance": "listener"}], "speaking": [{"start": 2, "end": 3, "text": "We keep the cap."}]})
         rev = self.live(rid)["revs"]["transcription"]
-        out = self.upload(rid, transcription="device", timeline={"roles": [{"at": 0, "attendance": "participant"}], "speaking": [[3, 4]]})[1]
+        out = self.upload(rid, transcription="device", timeline={"roles": [{"at": 0, "attendance": "participant"}],
+                                                                  "speaking": [{"start": 3, "end": 4, "text": "Bo owns it."}, {"start": 2, "end": 3, "text": "We keep the cap."}]})[1]
         self.assertEqual(out["transcription"], "hub")
-        self.assertEqual(self.observed(rid)["timeline"], {"roles": [{"at": 0, "attendance": "participant"}], "speaking": [[2, 4]]})
+        # Touching spans are one, their answers joined in time order; the span received again counts once.
+        self.assertEqual(self.observed(rid)["timeline"], {"roles": [{"at": 0, "attendance": "participant"}],
+                                                          "speaking": [{"start": 2, "end": 4, "text": "We keep the cap. Bo owns it."}]})
         self.assertEqual(self.live(rid)["revs"]["transcription"], rev)
-        for bad in ({"roles": [{"at": -1, "attendance": "off"}]}, {"speaking": [[4, 2]]}, {"speaking": [[0, 1]] * 1001}):
+        for bad in ({"roles": [{"at": -1, "attendance": "off"}]}, {"speaking": [{"start": 4, "end": 2}]}, {"speaking": [[0, 1]]},
+                    {"speaking": [{"start": 0, "end": 1, "text": 7}]}, {"speaking": [{"start": 0}]}, {"speaking": [{"start": 0, "end": 1}] * 1001}):
             self.upload(rid, timeline=bad)
-            self.assertEqual(self.observed(rid)["timeline"]["speaking"], [[2, 4]])
+            self.assertEqual(self.observed(rid)["timeline"]["speaking"], [{"start": 2, "end": 4, "text": "We keep the cap. Bo owns it."}])
+        self.upload(rid, timeline={"speaking": [{"start": 6, "end": 7, "text": "答" * 2000}]})
+        self.assertEqual(self.observed(rid)["timeline"]["speaking"][1]["text"], "答" * 1333)  # cut at 4000 bytes
         self.assertEqual(self.upload(rid, revision=1, transcription="device")[1]["transcription"], "hub")
 
     def test_bilingual_lines_interim_revisions_and_final_minutes(self):
@@ -145,7 +158,7 @@ class MeetingTranscriptionMockTests(Transcription, unittest.TestCase):
     def test_echo_hold_back_off_role_and_replacement(self):
         rid = self.recording()
         ws = self.socket(rid)
-        ws.send({"type": "speaking", "at": 0, "on": True})
+        ws.send({"type": "speaking", "at": 0, "on": True, "text": "好的。" + CAP_LINE})  # i18n-ignore: synthetic speech
         self.pcm(ws, 4)
         self.assertIsNone(ws("line", wait=0.1))
         self.assertNotIn("interim", self.live(rid))
@@ -157,7 +170,8 @@ class MeetingTranscriptionMockTests(Transcription, unittest.TestCase):
         self.pcm(ws, 3)
         self.wait(lambda: self.observed(rid)["bytes"] == 8 * 32000, "stored off-role audio")
         self.assertEqual(self.live(rid)["next"], 0)
-        self.assertEqual([s["text"] for s in self.detail(rid)["segments"]], ["Let's revisit pricing next week."])
+        # Persona's echo stays in the hub's transcript, marked; the role-off sentence is there too, unmarked.
+        self.assertEqual([(s["text"], s.get("echo", False)) for s in self.detail(rid)["segments"]], [(CAP_LINE, True), (PRICING_LINE, False)])
         replacement = self.socket(rid, begin=False)
         self.assertEqual(ws("error")["code"], "replaced")
         replacement.send({"type": "start", "at": 0, "timeline": {"roles": [{"at": 8, "attendance": "participant"}]}})
@@ -166,9 +180,23 @@ class MeetingTranscriptionMockTests(Transcription, unittest.TestCase):
         self.assertEqual(replacement("line")["n"], 0)
         self.end(replacement, 12)
         self.upload(rid, complete=True, duration=12)
-        final = self.wait(lambda: (d := self.detail(rid))["meta"]["transcription"]["state"] == "final" and d, "echo-free final")
-        self.assertEqual(len(final["segments"]), 2)
+        final = self.wait(lambda: (d := self.detail(rid))["meta"]["transcription"]["state"] == "final" and d, "the final pass")
+        self.assertEqual([s.get("echo", False) for s in final["segments"]], [True, False, False])
         self.assertNotIn("我们先把", final["summary"])
+        self.assertEqual(final["meta"]["chars"], sum(len(s["text"]) for s in final["segments"][1:]))
+        self.assertNotIn(CAP_LINE.rstrip("。"), json.dumps(final["minutes"], ensure_ascii=False))
+
+    def test_echo_is_the_answers_words_not_its_time(self):
+        rid = self.recording()
+        ws = self.socket(rid)
+        ws.send({"type": "speaking", "at": 0, "on": True, "text": "Bo will share the notes tomorrow."})
+        self.pcm(ws, 4)
+        self.assertIsNone(ws("line", wait=0.1))  # held while the span is open
+        ws.send({"type": "speaking", "at": 4, "on": False})
+        self.assertEqual(ws("line")["text"], CAP_LINE)  # someone else speaking during the answer is the meeting's
+        self.assertEqual(self.observed(rid)["timeline"]["speaking"], [{"start": 0, "end": 4, "text": "Bo will share the notes tomorrow."}])
+        self.assertNotIn("echo", self.detail(rid)["segments"][0])
+        self.end(ws, 4)
 
     def test_gap_upload_before_final_and_duplicate_audio(self):
         rid = self.recording()
@@ -230,22 +258,24 @@ class MeetingTranscriptionMockTests(Transcription, unittest.TestCase):
     def test_a_repaired_timeline_closes_the_open_speaking_span(self):
         rid = self.recording()
         ws = self.socket(rid)
-        ws.send({"type": "speaking", "at": 0, "on": True})
+        ws.send({"type": "speaking", "at": 0, "on": True, "text": "Noted."})
         self.pcm(ws, 1)
         self.wait(lambda: self.observed(rid)["bytes"] == 32000, "the audio before the drop")
         ws.close()  # the speaking off at 1 is lost with the socket
-        back = self.socket(rid, timeline={"speaking": [[0, 1]]})
+        back = self.socket(rid, timeline={"speaking": [{"start": 0, "end": 1, "text": "Noted."}]})
         self.pcm(back, 4)
         self.assertIsNotNone(back("interim"))
         self.assertEqual(back("line")["start"], 1)
-        self.assertEqual(self.observed(rid)["timeline"]["speaking"], [[0, 1]])
+        self.assertEqual(self.observed(rid)["timeline"]["speaking"], [{"start": 0, "end": 1, "text": "Noted."}])
         # An upload's timeline repairs it too.
-        back.send({"type": "speaking", "at": 5, "on": True})
+        back.send({"type": "speaking", "at": 5, "on": True, "text": "Again."})
         self.pcm(back, 2)
-        self.upload(rid, room={"attendance": "participant"}, timeline={"speaking": [[0, 1], [5, 5.5]]})
+        self.upload(rid, room={"attendance": "participant"},
+                    timeline={"speaking": [{"start": 0, "end": 1, "text": "Noted."}, {"start": 5, "end": 5.5, "text": "Again."}]})
         self.pcm(back, 2)
         self.assertEqual(back("line")["start"], 5)
-        self.assertEqual(self.observed(rid)["timeline"]["speaking"], [[0, 1], [5, 5.5]])
+        self.assertEqual(self.observed(rid)["timeline"]["speaking"],
+                         [{"start": 0, "end": 1, "text": "Noted."}, {"start": 5, "end": 5.5, "text": "Again."}])
 
     def test_a_heard_ask_flushes_the_hub_and_waits_for_fallback_material(self):
         rid = self.recording()
@@ -290,7 +320,7 @@ class MeetingTranscriptionMockTests(Transcription, unittest.TestCase):
         self.assertEqual(done["meta"]["transcription"]["state"], "failed")
         self.assertEqual([(s["text"], s.get("source", "device")) for s in done["segments"]], [("Device only.", "device")])
 
-    def test_late_timeline_keeps_echo_out_when_the_replay_cannot_run(self):
+    def test_late_timeline_marks_echo_when_the_replay_cannot_run(self):
         for switch in ({"upstream": "failed"}, {"upstream": "unavailable"}, {"ready": False}, {"fatal": "upstream_failed"}):
             with self.subTest(switch):
                 self.mode(upstream="ok", ready=True, fatal="")
@@ -300,10 +330,12 @@ class MeetingTranscriptionMockTests(Transcription, unittest.TestCase):
                 self.assertIsNotNone(ws("line"))
                 self.end(ws, 4)
                 self.mode(**switch)
-                self.upload(rid, complete=True, duration=4, timeline={"speaking": [[0, 4]]})
+                self.upload(rid, complete=True, duration=4, timeline={"speaking": [{"start": 0, "end": 4, "text": CAP_LINE}]})
                 done = self.wait(lambda: (d := self.detail(rid))["meta"]["transcription"]["state"] in ("final", "failed") and d, "the end")
-                self.assertEqual(done["meta"]["transcription"]["state"], "failed")
-                self.assertEqual(done["segments"], [])
+                # The hub's sentence stays, marked Persona's echo: no text of the meeting's, so no minutes.
+                self.assertEqual(done["meta"]["transcription"]["state"], "final")
+                self.assertEqual([(s["text"], s.get("echo")) for s in done["segments"]], [(CAP_LINE, True)])
+                self.assertEqual(done["meta"]["chars"], 0)
                 self.assertNotIn("minutes", done)
 
     def test_transcription_and_interim_events_are_content_free(self):
@@ -326,9 +358,9 @@ class MeetingTranscriptionMockTests(Transcription, unittest.TestCase):
         self.pcm(ws, 4)
         self.assertIsNotNone(ws("line"))
         self.end(ws, 4)
-        self.upload(rid, complete=True, duration=4, timeline={"speaking": [[0, 4]]})
-        self.wait(lambda: self.meta(rid)["transcription"]["state"] == "failed", "late echo filter")
-        self.assertEqual(self.detail(rid)["segments"], [])
+        self.upload(rid, complete=True, duration=4, timeline={"speaking": [{"start": 0, "end": 4, "text": CAP_LINE}]})
+        self.wait(lambda: self.meta(rid)["transcription"]["state"] == "final", "the final pass")
+        self.assertEqual([(s["text"], s.get("echo")) for s in self.detail(rid)["segments"]], [(CAP_LINE, True)])
         day = str(uuid.uuid4())
         out = self.upload(day, kind="day", day="2026-11-10", transcription="hub", timeline={"roles": [{"at": 0, "attendance": "participant"}]})[1]
         self.assertEqual((out["transcription"], out["transcription_problem"]), ("device", "not_meeting"))
@@ -484,6 +516,21 @@ class LegacyTranscriptionMockTests(Transcription, unittest.TestCase):
             websocket(self, path, status=503)
             websocket(self, path, headers={"X-Mock-Role": "answer"}, status=403)
         finally: stop()
+
+
+class MeetingEchoRuleTests(unittest.TestCase):
+    """The mock's echo rule (hub mode) says what the hub's and the phone's do: spec/fixtures/meeting-echo."""
+
+    def test_the_shared_cases(self):
+        spec = importlib.util.spec_from_file_location("echo_rule_mock", HERE / "mock_hub.py")
+        hub = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(hub)
+        cases = json.loads((HERE.parents[1] / "spec" / "fixtures" / "meeting-echo" / "cases.json").read_text())["cases"]
+        self.assertGreaterEqual(len(cases), 20)
+        for c in cases:
+            line = c["input"]["line"]
+            got = any(hub.echo_by(sp, line["start"], line["end"], line["text"]) for sp in c["input"]["spans"])
+            self.assertEqual(got, c["expected"]["echo"], c["name"])
 
 
 if __name__ == "__main__":

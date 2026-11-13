@@ -42,10 +42,13 @@ var e2eScript = []voicetest.Line{
 
 const e2eLength = 21.0
 
-// The timeline of the meeting: the role off over the fourth sentence, Persona speaking over the fifth.
+// e2eAnswer is what Persona says over the fifth sentence: that sentence, its echo, is part of it.
+var e2eAnswer = "好的。" + e2eScript[4].Text // i18n-ignore
+
+// The timeline of the meeting: the role off over the fourth sentence, Persona speaking over the fifth (its answer).
 var e2eTimeline = map[string]any{
 	"roles":    []map[string]any{{"at": 0, "attendance": "listener"}, {"at": 10.2, "attendance": "off"}, {"at": 12.8, "attendance": "listener"}},
-	"speaking": [][2]float64{{13.0, 16.2}},
+	"speaking": []map[string]any{{"start": 13.0, "end": 16.2, "text": e2eAnswer}},
 }
 
 // adapterTranscribers reaches the voice extension's transcription contribution over HTTP, as the extensions layer
@@ -173,7 +176,7 @@ func (e *e2eFixture) stream(p *testPhone, s voicetest.Script, total float64) {
 	}{
 		{10.2, map[string]any{"type": "role", "at": 10.2, "attendance": "off"}},
 		{12.8, map[string]any{"type": "role", "at": 12.8, "attendance": "listener"}},
-		{13.0, map[string]any{"type": "speaking", "on": true, "at": 13.0}},
+		{13.0, map[string]any{"type": "speaking", "on": true, "at": 13.0, "text": e2eAnswer}},
 		{16.2, map[string]any{"type": "speaking", "on": false, "at": 16.2}},
 	}
 	tick := time.NewTicker(10 * time.Millisecond)
@@ -206,9 +209,9 @@ func waitLong(t *testing.T, what string, d time.Duration, ok func() bool) {
 	t.Fatalf("timed out waiting for %s", what)
 }
 
-// The whole meeting: live lines verbatim and in order (a rogue session's invented replies nowhere, the echo nowhere,
-// the role-off sentence in the hub's transcript only), captions before lines; then the final pass, the transcript of
-// record the hub's, the minutes from it and the audio gone after them.
+// The whole meeting: live lines verbatim and in order (a rogue session's invented replies nowhere, Persona's echo and the
+// role-off sentence in the hub's transcript only, the echo marked), captions before lines; then the final pass, the
+// transcript of record the hub's (the echo marked), the minutes from it without the echo and the audio gone after them.
 func TestHubTranscriptionEndToEnd(t *testing.T) {
 	script := voicetest.Script{Sentences: e2eScript, CaptionNoise: 0.1, Rogue: map[int]int{1: 0}}
 	e := newE2EFixture(t, script)
@@ -257,8 +260,13 @@ func TestHubTranscriptionEndToEnd(t *testing.T) {
 		t.Fatalf("live log %q", got)
 	}
 	hub := e.hubTexts(id)
-	if !slices.Contains(hub, e.sentence[3]) || slices.Contains(hub, e.sentence[4]) {
+	if !slices.Contains(hub, e.sentence[3]) || !slices.Contains(hub, e.sentence[4]) {
 		t.Fatalf("the hub's live transcript %q", hub)
+	}
+	for i, echo := range e.hubEcho(id) {
+		if echo != (hub[i] == e.sentence[4]) {
+			t.Fatalf("the hub's live transcript's echo marks %v (%q)", e.hubEcho(id), hub)
+		}
 	}
 	for _, r := range voicetest.InventedReplies {
 		if slices.Contains(hub, r) {
@@ -272,14 +280,14 @@ func TestHubTranscriptionEndToEnd(t *testing.T) {
 		e.s.finalRound(context.Background())
 		return e.transcription(id)["state"] == "final"
 	})
-	wantFinal := []string{e.sentence[0], e.sentence[1], e.sentence[2], e.sentence[3], e.sentence[5]}
+	wantFinal := e.sentence // Persona's echo (the fifth) among them, marked
 	d, err := e.engine().Get(kb.KindRecording, id, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var got []string
 	for _, sg := range d.Segments {
-		if sg.Source != kb.SourceHub {
+		if sg.Source != kb.SourceHub || sg.Echo != (sg.Text == e.sentence[4]) {
 			t.Errorf("segment %+v", sg)
 		}
 		got = append(got, sg.Text)
@@ -288,7 +296,7 @@ func TestHubTranscriptionEndToEnd(t *testing.T) {
 		t.Fatalf("detail.segments:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(wantFinal, "\n"))
 	}
 	md, err := os.ReadFile(filepath.Join(e.s.kb.dir, kb.KindRecording, id, "transcript.md"))
-	if err != nil || !strings.Contains(string(md), e.sentence[2]) || strings.Contains(string(md), e.sentence[4]) {
+	if err != nil || !strings.Contains(string(md), e.sentence[2]) || !strings.Contains(string(md), "[Persona 回声] "+e.sentence[4]) {
 		t.Fatalf("transcript.md %s %v", md, err)
 	}
 	if len(e.f.liveEventsOf(id)) == 0 || !slices.ContainsFunc(e.f.liveEventsOf(id), func(ev map[string]any) bool {
@@ -307,9 +315,9 @@ func TestHubTranscriptionEndToEnd(t *testing.T) {
 	e.minutes.mu.Lock()
 	input := strings.Join(e.minutes.inputs, "\n")
 	e.minutes.mu.Unlock()
-	for _, s := range wantFinal {
-		if !strings.Contains(input, s) {
-			t.Errorf("the minutes' input lacks %q", s)
+	for i, s := range wantFinal {
+		if in := strings.Contains(input, s); in != (i != 4) {
+			t.Errorf("the minutes' input has %q: %v", s, in)
 		}
 	}
 	if _, err := os.Stat(filepath.Join(e.s.kb.dir, kb.KindRecording, id, "attachments", "audio")); !os.IsNotExist(err) {

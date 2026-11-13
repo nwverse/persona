@@ -19,11 +19,12 @@ import (
 // no audio socket is open (or it sent end) and no gap is left, or finalGapWait after the complete upload, the stored
 // audio goes through the contribution's replay job at 4x, with the transcript of record as reference frames. From its
 // start the recording takes no more audio (transcription_final). The final transcript is the pass's sentences in its
-// windows, the live sentences in the windows it kept and wherever it did not get to; the echo rule applies to its
-// sentences as to the live ones. A pass that fails is tried again after each of finalRetries from its first window
-// not done; then the state is final with the live sentences, or failed when the hub has none. A recording that never
-// completes is complete for the pass feedStale after its last upload. Once the pass stored its text the knowledge base
-// makes the minutes (again, quietly) and deletes the audio when no minutes will come (kb.FinalTranscriptStored).
+// windows, the live sentences in the windows it kept and wherever it did not get to; the echo rule marks Persona's echo
+// among its sentences as among the live ones (kept, with the mark). A pass that fails is tried again after each of
+// finalRetries from its first window not done; then the state is final with the live sentences, or failed when the hub
+// has none. A recording that never completes is complete for the pass feedStale after its last upload. Once the pass
+// stored its text the knowledge base makes the minutes (again, quietly) and deletes the audio when no minutes will
+// come (kb.FinalTranscriptStored).
 
 // finalPassState is one recording's final pass in this process: running (cancel ends the try, its recording deleted
 // or trimmed), when it may be tried again, the windows it finished (kept across tries) and where they end.
@@ -213,26 +214,26 @@ func (s *Service) finalPass(ctx context.Context, e *kb.Engine, id string, st *fi
 	if err != nil {
 		return err
 	}
+	var tl kb.Timeline // the complete upload's: its speaking spans mark Persona's echo in the final transcript
+	if t.Timeline != nil {
+		tl = *t.Timeline
+	}
 	live := h.Segments
 	if h.Pass == kb.HubPassFinal { // stored before a crash, before the state
 		st.windows, live = []finalWindow{{from: 0, to: math.Inf(1), sentences: h.Segments}}, nil
-		return s.finalEnd(e, id, st, live)
+		return s.finalEnd(e, id, st, live, tl)
 	}
 	held, err := e.AudioHeld(id)
 	if err != nil {
 		return err
 	}
 	if len(held) == 0 {
-		return s.finalEnd(e, id, st, live) // no audio at all
+		return s.finalEnd(e, id, st, live, tl) // no audio at all
 	}
-	var spans []kb.EchoSpan
-	if t.Timeline != nil {
-		spans = kb.EchoSpans(*t.Timeline)
-	}
-	err = s.replay(ctx, e, id, held, spans, st)
+	err = s.replay(ctx, e, id, held, tl, st)
 	switch {
 	case err == nil, errors.Is(err, errNoReplay):
-		return s.finalEnd(e, id, st, live)
+		return s.finalEnd(e, id, st, live, tl)
 	case ctx.Err() != nil:
 		return err // the manager stops (resumed after the restart), or the recording went (finalCancel)
 	}
@@ -243,13 +244,19 @@ func (s *Service) finalPass(ctx context.Context, e *kb.Engine, id string, st *fi
 		s.hubTr.mu.Unlock()
 		return nil
 	}
-	return s.finalEnd(e, id, st, live)
+	return s.finalEnd(e, id, st, live, tl)
 }
 
-// finalEnd stores recording id's final transcript (the windows done, the live sentences elsewhere) and its state:
+// finalEnd stores recording id's final transcript (the windows done, the live sentences elsewhere), Persona's echo in
+// it marked by timeline tl (the live sentences judged before a late timeline repaired a span too), and its state:
 // final, or failed when the hub has no sentence of its own; then the minutes are told.
-func (s *Service) finalEnd(e *kb.Engine, id string, st *finalPassState, live []kb.RecordingSegment) error {
+func (s *Service) finalEnd(e *kb.Engine, id string, st *finalPassState, live []kb.RecordingSegment, tl kb.Timeline) error {
 	merged := mergeFinal(st.windows, live)
+	for i, sg := range merged {
+		if !sg.Echo {
+			merged[i].Echo = kb.EchoOf(tl, sg.Start, sg.End, sg.Text)
+		}
+	}
 	state := kb.TranscriptionFinal
 	if len(merged) == 0 {
 		state = kb.TranscriptionFailed
@@ -304,7 +311,7 @@ func mergeFinal(windows []finalWindow, live []kb.RecordingSegment) []kb.Recordin
 // replay runs a replay job over recording id's audio held from the first window not done: the transcript of record
 // as reference frames first, then the audio, at most replayAhead ahead of the job's ack, with seek over holes. The
 // windows it finishes join st (also when it fails later).
-func (s *Service) replay(ctx context.Context, e *kb.Engine, id string, held [][2]float64, spans []kb.EchoSpan, st *finalPassState) error {
+func (s *Service) replay(ctx context.Context, e *kb.Engine, id string, held [][2]float64, tl kb.Timeline, st *finalPassState) error {
 	if s.trans == nil {
 		return errNoTranscribers
 	}
@@ -399,9 +406,10 @@ func (s *Service) replay(ctx context.Context, e *kb.Engine, id string, held [][2
 			switch f.Type {
 			case extwire.TFSentence:
 				if f.Start != nil && f.End != nil && f.Text != nil {
-					sg := kb.EchoSentence{Start: *f.Start, End: max(*f.End, *f.Start), Text: *f.Text}
-					if kb.EchoOf(sg, spans) == kb.EchoKeep && sg.Text != "" {
-						cur = append(cur, kb.RecordingSegment{Start: sg.Start, End: sg.End, Text: sg.Text, Source: kb.SourceHub})
+					sg := kb.RecordingSegment{Start: *f.Start, End: max(*f.End, *f.Start), Text: *f.Text, Source: kb.SourceHub}
+					if sg.Text != "" { // Persona's echo kept, marked (kb/echo.go)
+						sg.Echo = kb.EchoOf(tl, sg.Start, sg.End, sg.Text)
+						cur = append(cur, sg)
 					}
 				}
 			case extwire.TFWindow:

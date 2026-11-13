@@ -62,7 +62,7 @@ func TestTranscriptionUploadModes(t *testing.T) {
 		{"absent", `"kind":"meeting"`, true, TranscriptionDevice, "", "", false},
 		{"a note", `"kind":"note","transcription":"hub","timeline":{"roles":[{"at":0,"attendance":"listener"}]}`, true, TranscriptionDevice, TranscriptionNotMeeting, "", false},
 		{"a note asking device", `"kind":"note","transcription":"device"`, true, TranscriptionDevice, "", "", false},
-		{"a day", `"kind":"day","day":"2026-11-10","tz":"Asia/Shanghai","transcription":"hub","timeline":{"speaking":[[1,2]]}`, true, TranscriptionDevice, TranscriptionNotMeeting, "", false},
+		{"a day", `"kind":"day","day":"2026-11-10","tz":"Asia/Shanghai","transcription":"hub","timeline":{"speaking":[{"start":1,"end":2}]}`, true, TranscriptionDevice, TranscriptionNotMeeting, "", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			e := goldenEngine(t, nil)
@@ -132,7 +132,7 @@ func TestTranscriptionModeLocked(t *testing.T) {
 func TestTranscriptionNeverInMeta(t *testing.T) {
 	now := time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone)
 	e, _ := hubEngine(t, nil)
-	tl := &Timeline{Roles: []TimelineRole{{At: 0, Attendance: AttendanceListener}}, Speaking: [][2]float64{{3, 4}}}
+	tl := &Timeline{Roles: []TimelineRole{{At: 0, Attendance: AttendanceListener}}, Speaking: spk(3, 4)}
 	noMeta := func(step string) {
 		t.Helper()
 		for _, k := range []string{"transcription", "timeline", "mode", "gaps"} {
@@ -172,7 +172,7 @@ func TestParseTimeline(t *testing.T) {
 	spans := func(n int) string {
 		var parts []string
 		for i := range n {
-			parts = append(parts, `[`+strconv.Itoa(2*i)+`,`+strconv.Itoa(2*i+1)+`]`)
+			parts = append(parts, `{"start":`+strconv.Itoa(2*i)+`,"end":`+strconv.Itoa(2*i+1)+`}`)
 		}
 		return `{"speaking":[` + strings.Join(parts, ",") + `]}`
 	}
@@ -181,8 +181,13 @@ func TestParseTimeline(t *testing.T) {
 		ok        bool
 		want      *Timeline // nil: not compared
 	}{
-		{"whole", `{"roles":[{"at":10,"attendance":"Participant"},{"at":0,"attendance":"listener"}],"speaking":[[5,6],[1,2],[1.5,3]]}`, true,
-			&Timeline{Roles: []TimelineRole{{0, AttendanceListener}, {10, AttendanceParticipant}}, Speaking: [][2]float64{{1, 3}, {5, 6}}}},
+		{"whole", `{"roles":[{"at":10,"attendance":"Participant"},{"at":0,"attendance":"listener"}],` +
+			`"speaking":[{"start":5,"end":6,"text":"Later."},{"start":1,"end":2,"text":"We keep the cap."},{"start":1.5,"end":3,"text":"Bo owns it."}]}`, true,
+			&Timeline{Roles: []TimelineRole{{0, AttendanceListener}, {10, AttendanceParticipant}},
+				Speaking: []SpokenSpan{{Start: 1, End: 3, Text: "We keep the cap. Bo owns it."}, {Start: 5, End: 6, Text: "Later."}}}},
+		{"spans without text, or null", `{"speaking":[{"start":1,"end":2},{"start":4,"end":4,"text":null}]}`, true, &Timeline{Speaking: spk(1, 2, 4, 4)}},
+		{"text cut", `{"speaking":[{"start":0,"end":1,"text":"` + strings.Repeat("答", maxSpokenText) + `"}]}`, true,
+			&Timeline{Speaking: []SpokenSpan{{Start: 0, End: 1, Text: strings.Repeat("答", maxSpokenText/3)}}}},
 		{"empty object", `{}`, true, &Timeline{}},
 		{"null parts", `{"roles":null,"speaking":null}`, true, &Timeline{}},
 		{"same at twice: the later", `{"roles":[{"at":1,"attendance":"listener"},{"at":1,"attendance":"off"}]}`, true,
@@ -195,9 +200,12 @@ func TestParseTimeline(t *testing.T) {
 		{"role without at", `{"roles":[{"attendance":"listener"}]}`, false, nil},
 		{"at a string", `{"roles":[{"at":"0","attendance":"listener"}]}`, false, nil},
 		{"negative at", `{"roles":[{"at":-1,"attendance":"listener"}]}`, false, nil},
-		{"span backwards", `{"speaking":[[3,2]]}`, false, nil},
-		{"span of three", `{"speaking":[[1,2,3]]}`, false, nil},
-		{"span negative", `{"speaking":[[-1,2]]}`, false, nil},
+		{"span backwards", `{"speaking":[{"start":3,"end":2}]}`, false, nil},
+		{"span negative", `{"speaking":[{"start":-1,"end":2}]}`, false, nil},
+		{"span without end", `{"speaking":[{"start":1}]}`, false, nil},
+		{"span start a string", `{"speaking":[{"start":"1","end":2}]}`, false, nil},
+		{"text not a string", `{"speaking":[{"start":1,"end":2,"text":7}]}`, false, nil},
+		{"a pair, not an object", `{"speaking":[[1,2]]}`, false, nil},
 		{"roles not a list", `{"roles":{"at":0}}`, false, nil},
 		{"100 roles", roles(100), true, nil},
 		{"101 roles", roles(101), false, nil},
@@ -227,20 +235,29 @@ func TestParseTimeline(t *testing.T) {
 }
 
 func timelineEqual(a, b Timeline) bool {
-	return slices.Equal(a.Roles, b.Roles) && sameSpans(a.Speaking, b.Speaking)
+	return slices.Equal(a.Roles, b.Roles) && len(a.Speaking) == len(b.Speaking) && (len(a.Speaking) == 0 || slices.Equal(a.Speaking, b.Speaking))
+}
+
+// spk is the speaking spans of pairs of numbers (start, end), without text.
+func spk(pairs ...float64) []SpokenSpan {
+	var out []SpokenSpan
+	for i := 0; i+1 < len(pairs); i += 2 {
+		out = append(out, SpokenSpan{Start: pairs[i], End: pairs[i+1]})
+	}
+	return out
 }
 
 // The union: one role change per at (the later wins), spans merged when they overlap or touch; the limits apply to the
 // union (the first ones kept); RoleAt is the last change at or before a moment, the meeting's role before the first.
 func TestTimelineMergeAndRoleAt(t *testing.T) {
-	tl := Timeline{Roles: []TimelineRole{{0, AttendanceListener}, {60, AttendanceOff}}, Speaking: [][2]float64{{10, 12}}}
-	if tl.Merge(Timeline{Roles: []TimelineRole{{0, AttendanceListener}}, Speaking: [][2]float64{{10, 12}}}) {
+	tl := Timeline{Roles: []TimelineRole{{0, AttendanceListener}, {60, AttendanceOff}}, Speaking: spk(10, 12)}
+	if tl.Merge(Timeline{Roles: []TimelineRole{{0, AttendanceListener}}, Speaking: spk(10, 12)}) {
 		t.Fatal("the same timeline changed it")
 	}
-	if !tl.Merge(Timeline{Roles: []TimelineRole{{60, AttendanceParticipant}, {30, AttendanceOff}, {5, "bogus"}}, Speaking: [][2]float64{{12, 15}, {20, 21}, {11, 11.5}}}) {
+	if !tl.Merge(Timeline{Roles: []TimelineRole{{60, AttendanceParticipant}, {30, AttendanceOff}, {5, "bogus"}}, Speaking: spk(12, 15, 20, 21, 11, 11.5)}) {
 		t.Fatal("no change")
 	}
-	want := Timeline{Roles: []TimelineRole{{0, AttendanceListener}, {30, AttendanceOff}, {60, AttendanceParticipant}}, Speaking: [][2]float64{{10, 15}, {20, 21}}}
+	want := Timeline{Roles: []TimelineRole{{0, AttendanceListener}, {30, AttendanceOff}, {60, AttendanceParticipant}}, Speaking: spk(10, 15, 20, 21)}
 	if !timelineEqual(tl, want) {
 		t.Fatalf("merged %+v", tl)
 	}
@@ -261,11 +278,11 @@ func TestTimelineMergeAndRoleAt(t *testing.T) {
 		big.Roles = append(big.Roles, TimelineRole{At: float64(i), Attendance: AttendanceListener})
 	}
 	for i := range MaxTimelineSpans + 20 {
-		big.Speaking = append(big.Speaking, [2]float64{float64(3 * i), float64(3*i + 1)})
+		big.Speaking = append(big.Speaking, SpokenSpan{Start: float64(3 * i), End: float64(3*i + 1)})
 	}
 	var u Timeline
 	u.Merge(big)
-	if len(u.Roles) != MaxTimelineRoles || len(u.Speaking) != MaxTimelineSpans || u.Roles[0].At != 0 || u.Speaking[0][0] != 0 {
+	if len(u.Roles) != MaxTimelineRoles || len(u.Speaking) != MaxTimelineSpans || u.Roles[0].At != 0 || u.Speaking[0].Start != 0 {
 		t.Fatalf("limits: %d roles, %d spans", len(u.Roles), len(u.Speaking))
 	}
 }
@@ -280,12 +297,12 @@ func TestTranscriptionUploadTimeline(t *testing.T) {
 	if len(*changed) != 1 || !slices.Contains((*changed)[0], PartTranscription) {
 		t.Fatalf("first upload told %v", *changed)
 	}
-	putRecording(t, e, recID, hubUpload(3, start, false, &Timeline{Speaking: [][2]float64{{5, 6}}}), now)
-	if put, _ := e.PutRecording(recID, hubUpload(2, start, false, &Timeline{Speaking: [][2]float64{{50, 60}}}), now); put.Status != RecordingStale {
+	putRecording(t, e, recID, hubUpload(3, start, false, &Timeline{Speaking: spk(5, 6)}), now)
+	if put, _ := e.PutRecording(recID, hubUpload(2, start, false, &Timeline{Speaking: spk(50, 60)}), now); put.Status != RecordingStale {
 		t.Fatalf("stale %+v", put)
 	}
 	tr := transcriptionNow(t, e, recID)
-	if !timelineEqual(*tr.Timeline, Timeline{Roles: []TimelineRole{{0, AttendanceListener}}, Speaking: [][2]float64{{5, 6}}}) {
+	if !timelineEqual(*tr.Timeline, Timeline{Roles: []TimelineRole{{0, AttendanceListener}}, Speaking: spk(5, 6)}) {
 		t.Fatalf("union %+v", tr.Timeline)
 	}
 	if len(*changed) != 1 {
@@ -294,11 +311,11 @@ func TestTranscriptionUploadTimeline(t *testing.T) {
 	if !tr.CompleteAt.IsZero() || tr.End != 0 {
 		t.Fatalf("not complete yet %+v", tr)
 	}
-	u := hubUpload(4, start, true, &Timeline{Speaking: [][2]float64{{6, 7}}}, "一句")
+	u := hubUpload(4, start, true, &Timeline{Speaking: spk(6, 7)}, "一句")
 	u.Duration = 3733.5
 	putRecording(t, e, recID, u, now)
 	tr = transcriptionNow(t, e, recID)
-	if !tr.CompleteAt.Equal(now) || tr.End != 3733.5 || !sameSpans(tr.Timeline.Speaking, [][2]float64{{5, 7}}) {
+	if !tr.CompleteAt.Equal(now) || tr.End != 3733.5 || !slices.Equal(tr.Timeline.Speaking, spk(5, 7)) {
 		t.Fatalf("complete %+v", tr)
 	}
 	// The socket's end wins over a later complete upload's duration, and CompleteAt stays the first one's.
@@ -316,7 +333,7 @@ func TestTranscriptionUploadTimeline(t *testing.T) {
 	const other = "5b6c3f4a-1d2e-4f80-9a1b-2c3d4e5f6a7b"
 	dev := recUpload(1, start, true)
 	dev.Kind = RecordingMeeting
-	dev.SetTranscription(TranscriptionDevice, &Timeline{Speaking: [][2]float64{{1, 2}}})
+	dev.SetTranscription(TranscriptionDevice, &Timeline{Speaking: spk(1, 2)})
 	putRecording(t, e, other, dev, now)
 	if tr := transcriptionNow(t, e, other); tr.Mode != TranscriptionDevice || tr.Timeline != nil || !tr.CompleteAt.IsZero() {
 		t.Fatalf("device %+v", tr)
@@ -359,7 +376,7 @@ func TestTranscriptionUpdate(t *testing.T) {
 	if p := parts(); len(p) != 0 {
 		t.Fatalf("bookkeeping moved %v", p)
 	}
-	upd(func(t *MeetingTranscription) { t.Timeline = &Timeline{Speaking: [][2]float64{{1, 2}}} })
+	upd(func(t *MeetingTranscription) { t.Timeline = &Timeline{Speaking: spk(1, 2)} })
 	if p := parts(); len(p) != 0 {
 		t.Fatalf("the timeline moved %v", p)
 	}
@@ -402,14 +419,14 @@ func TestTranscriptionUpdate(t *testing.T) {
 // meetingParts sees it.
 func TestMeetingCloneTranscription(t *testing.T) {
 	m := Meeting{Transcription: &MeetingTranscription{Mode: TranscriptionHub, State: TranscriptionLive, Gaps: [][2]float64{{1, 2}},
-		Timeline: &Timeline{Roles: []TimelineRole{{0, AttendanceListener}}, Speaking: [][2]float64{{3, 4}}}}}
+		Timeline: &Timeline{Roles: []TimelineRole{{0, AttendanceListener}}, Speaking: spk(3, 4)}}}
 	c := m.Clone()
 	c.Transcription.Gaps[0][1] = 9
 	c.Transcription.Timeline.Roles[0].Attendance = AttendanceOff
-	c.Transcription.Timeline.Speaking[0][0] = 0
+	c.Transcription.Timeline.Speaking[0].Start = 0
 	c.Transcription.State = TranscriptionFinal
 	if m.Transcription.Gaps[0][1] != 2 || m.Transcription.Timeline.Roles[0].Attendance != AttendanceListener ||
-		m.Transcription.Timeline.Speaking[0][0] != 3 || m.Transcription.State != TranscriptionLive {
+		m.Transcription.Timeline.Speaking[0].Start != 3 || m.Transcription.State != TranscriptionLive {
 		t.Fatalf("the clone shares memory: %+v %+v", m.Transcription, m.Transcription.Timeline)
 	}
 	if p := meetingParts(m, c); !slices.Equal(p, []string{PartTranscription}) {

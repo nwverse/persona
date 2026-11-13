@@ -67,7 +67,8 @@ func (e *Engine) HubTranscript(rawID string) (HubTranscript, error) {
 }
 
 // cleanHubSegments are the hub's sentences as hub_segments.json keeps them: mended as the live log's are (cleanLive),
-// empty ones left out, in time order, Source SourceHub; at most as many and as long as an upload's.
+// empty ones left out, in time order, Source SourceHub, Persona's echo kept with its mark (Echo, echo.go); at most as
+// many and as long as an upload's.
 func cleanHubSegments(segs []RecordingSegment) []RecordingSegment {
 	out := make([]RecordingSegment, 0, len(segs))
 	total := 0
@@ -80,7 +81,7 @@ func cleanHubSegments(segs []RecordingSegment) []RecordingSegment {
 			break
 		}
 		total += len(l.Text)
-		out = append(out, RecordingSegment{Start: l.Start, End: l.End, Text: l.Text, Source: SourceHub})
+		out = append(out, RecordingSegment{Start: l.Start, End: l.End, Text: l.Text, Source: SourceHub, Echo: sg.Echo})
 	}
 	slices.SortStableFunc(out, func(a, b RecordingSegment) int {
 		switch {
@@ -198,7 +199,9 @@ func (s *Store) trimmedLocked(id string) bool {
 // TranscriptOfRecord is a recording's text of record: in device mode the upload's segments; in hub mode the hub's
 // sentences, and each upload segment the hub's sentences, taken together (their union), cover no more than half of,
 // in time order (the hub's first at the same start), with Source set (SourceHub, SourceDevice). The phone's text is
-// made on the device in the recording's language only, so in hub mode it fills only where the hub has none.
+// made on the device in the recording's language only, so in hub mode it fills only where the hub has none. Persona's
+// echo stays in it, marked (Echo: the hub's by the echo rule, the phone's as uploaded); what is built from the meeting
+// reads it through MeetingLines.
 func TranscriptOfRecord(hubMode bool, device, hub []RecordingSegment) []RecordingSegment {
 	if !hubMode {
 		return slices.Clone(device)
@@ -229,10 +232,11 @@ func TranscriptOfRecord(hubMode bool, device, hub []RecordingSegment) []Recordin
 	return out
 }
 
-// recordChars is how many characters segs have (meta.json's chars: in hub mode the transcript of record's).
+// recordChars is how many characters segs have without Persona's echo, which is not the meeting's text (meta.json's
+// chars: in hub mode the transcript of record's). A meeting of only Persona's echo has none, so it gets no minutes.
 func recordChars(segs []RecordingSegment) int {
 	n := 0
-	for _, sg := range segs {
+	for _, sg := range MeetingLines(segs) {
 		n += utf8.RuneCountInString(sg.Text)
 	}
 	return n

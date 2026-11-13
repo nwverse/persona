@@ -4592,6 +4592,10 @@ type KBRecordingSegment struct {
 	// Whose text the segment is in a meeting transcribed on the hub (docs/assistant/meeting-minutes.md "The transcript
 	// of record"): hub or device; absent means device.
 	Source string `json:"source,omitempty"`
+	// The line is Persona's own answer as the meeting's microphone heard it (docs/assistant/meeting-minutes.md
+	// "Persona's echo"): kept in the transcript but not what the meeting said, so leave it out of anything read as the
+	// meeting's words; absent (false) on every other line.
+	Echo bool `json:"echo,omitempty"`
 }
 
 // KBDayParams: kb.day: a chat's messages of one day in the knowledge base's time zone.

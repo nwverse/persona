@@ -159,6 +159,10 @@ type RecordingSegment struct {
 	// Source is whose text a segment of the transcript of record is in hub transcription (docs/assistant/meeting-minutes.md
 	// "The transcript of record"): "hub" or "device"; absent means device. Only the hub sets it, never an upload.
 	Source string `json:"source,omitempty"`
+	// Echo: the line is Persona's own answer as the meeting's microphone heard it (#5905,
+	// docs/assistant/meeting-minutes.md "Persona's echo"), marked by the phone or by the hub's rule (kb/echo.go). Kept,
+	// never fed to the minutes, the summary or the follow-up; absent (false) for every other line.
+	Echo bool `json:"echo,omitempty"`
 }
 
 // Hit is one search result.

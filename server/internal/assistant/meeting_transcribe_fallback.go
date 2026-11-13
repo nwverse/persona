@@ -15,8 +15,8 @@ import (
 // the first hub-mode upload while it never sent start), when the live job ended with a fatal error, or when a problem
 // other than no_interim has stood for fallbackAfter. Then each hub-mode upload's segments join the live log (source
 // device): those that end after the hub's last sentence and that the hub's sentences, taken together, cover no more
-// than half of, while the role at their end is not off and the echo rule keeps them. It ends once the hub's sentences
-// come again (hubRun.acceptLocked).
+// than half of, while the role at their end is not off and they are not Persona's echo (marked by the phone, or by the
+// echo rule against the timeline, kb.EchoOf). It ends once the hub's sentences come again (hubRun.acceptLocked).
 
 // hubUploaded is told of a stored hub-mode upload of recording id with its segments: the run learns the meeting's role,
 // its timeline and the phone's text; a socket that never started counts as down from the first one; in the fallback
@@ -91,14 +91,13 @@ func (r *hubRun) fillLocked() {
 		hub = append(hub, [2]float64{sg.Start, sg.End})
 	}
 	after := max(r.lastHubEnd, r.filledTo)
-	spans := kb.EchoSpans(r.timeline)
 	var add []kb.LiveSegment
 	for _, sg := range r.device {
 		switch {
 		case sg.End <= after || sg.Text == "":
 		case kb.CoveredShare(sg.Start, sg.End, hub) > 0.5:
 		case r.timeline.RoleAt(sg.End, r.role) == kb.AttendanceOff:
-		case kb.EchoOf(kb.EchoSentence{Start: sg.Start, End: sg.End, Text: sg.Text}, spans) == kb.EchoDrop:
+		case sg.Echo || kb.EchoOf(r.timeline, sg.Start, sg.End, sg.Text): // Persona's echo
 		default:
 			add = append(add, kb.LiveSegment{Start: sg.Start, End: sg.End, Text: sg.Text, Source: kb.SourceDevice})
 		}

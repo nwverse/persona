@@ -251,7 +251,7 @@ func (r *hubRun) runJob(j *liveJob) {
 			if f.Start != nil && f.End != nil && f.Text != nil {
 				r.mu.Lock()
 				if !r.stopped {
-					r.sentenceLocked(kb.EchoSentence{Start: *f.Start, End: *f.End, Text: *f.Text})
+					r.sentenceLocked(hubSentence{Start: *f.Start, End: *f.End, Text: *f.Text})
 				}
 				r.mu.Unlock()
 			}

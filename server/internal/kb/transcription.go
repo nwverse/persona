@@ -68,12 +68,12 @@ type TimelineRole struct {
 	Attendance string  `json:"attendance"`
 }
 
-// Timeline is a recording's role changes and the spans Persona spoke in, in recording seconds, as the phone keeps
-// them ("The timeline"); meeting.json keeps the union of every one received. Roles are in time order, one per At;
-// Speaking is a union (sorted, apart).
+// Timeline is a recording's role changes and the spans Persona spoke in, in recording seconds, each with the answer
+// said in it as an upload's spoken has them (SpokenSpan), as the phone keeps them ("The timeline"); meeting.json keeps
+// the union of every one received. Roles are in time order, one per At; Speaking is a union (sorted, apart: spokenUnion).
 type Timeline struct {
 	Roles    []TimelineRole `json:"roles,omitempty"`
-	Speaking [][2]float64   `json:"speaking,omitempty"`
+	Speaking []SpokenSpan   `json:"speaking,omitempty"`
 }
 
 // timelineRole is attendance as a timeline has it ("" when it is not one of the three roles).
@@ -86,9 +86,11 @@ func timelineRole(attendance string) string {
 }
 
 // ParseTimeline reads a timeline as the upload and the socket's start carry it: an object with roles
-// ([{"at", "attendance"}]) and speaking ([[from, to]]). ok is false when it is absent, malformed or over the limits: a
-// timeline with any entry that is not one (an at that is not a number of 0 or more, a role that is not one of the
-// three, a span that is not two numbers with from <= to) is ignored whole, never an error.
+// ([{"at", "attendance"}]) and speaking ([{"start", "end", "text"?}], as an upload's spoken; a text over maxSpokenText
+// bytes is cut at a character boundary). ok is false when it is absent, malformed or over the limits: a timeline with
+// any entry that is not one (an at that is not a number of 0 or more, a role that is not one of the three, a span that
+// is not an object with numbers start and end, 0 <= start <= end, and a string text if any) is ignored whole, never an
+// error.
 func ParseTimeline(raw json.RawMessage) (t Timeline, ok bool) {
 	if jsonNull(raw) {
 		return Timeline{}, false
@@ -123,19 +125,28 @@ func ParseTimeline(raw json.RawMessage) (t Timeline, ok bool) {
 		in.Roles = append(in.Roles, TimelineRole{At: *role.At, Attendance: a})
 	}
 	for _, raw := range speaking {
-		var span []float64
-		if json.Unmarshal(raw, &span) != nil || len(span) != 2 || span[0] < 0 || span[1] < span[0] {
+		var span struct {
+			Start *float64 `json:"start"`
+			End   *float64 `json:"end"`
+			Text  *string  `json:"text"`
+		}
+		if json.Unmarshal(raw, &span) != nil || span.Start == nil || span.End == nil || *span.Start < 0 || *span.End < *span.Start {
 			return Timeline{}, false
 		}
-		in.Speaking = append(in.Speaking, [2]float64{span[0], span[1]})
+		sp := SpokenSpan{Start: *span.Start, End: *span.End}
+		if span.Text != nil {
+			sp.Text = SpokenText(*span.Text)
+		}
+		in.Speaking = append(in.Speaking, sp)
 	}
 	t.Merge(in)
 	return t, true
 }
 
 // Merge adds o to t: one role change per at (o's winning: it was received later), in time order; overlapping or
-// touching spans made one. Past the limits t keeps the first MaxTimelineRoles role changes and MaxTimelineSpans spans.
-// Entries that are not ones are left out. changed says whether t moved.
+// touching spans made one, their texts joined in time order, a span received again counted once (spokenUnion). Past
+// the limits t keeps the first MaxTimelineRoles role changes and MaxTimelineSpans spans. Entries that are not ones are
+// left out. changed says whether t moved.
 func (t *Timeline) Merge(o Timeline) (changed bool) {
 	before, _ := json.Marshal(t)
 	byAt := map[float64]string{}
@@ -154,9 +165,9 @@ func (t *Timeline) Merge(o Timeline) (changed bool) {
 	if len(roles) > MaxTimelineRoles {
 		roles = roles[:MaxTimelineRoles]
 	}
-	var spans [][2]float64
-	for _, s := range UnionSpans(append(slices.Clone(t.Speaking), o.Speaking...)) {
-		if s[0] >= 0 {
+	var spans []SpokenSpan
+	for _, s := range spokenUnion(append(slices.Clone(t.Speaking), o.Speaking...)) {
+		if s.Start >= 0 {
 			spans = append(spans, s)
 		}
 	}

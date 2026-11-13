@@ -569,6 +569,20 @@ func (h *hubFixture) hubTexts(id string) []string {
 	return out
 }
 
+// hubEcho are the echo marks of recording id's hub transcript, in its order.
+func (h *hubFixture) hubEcho(id string) []bool {
+	h.t.Helper()
+	ht, err := h.engine().HubTranscript(id)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	var out []bool
+	for _, sg := range ht.Segments {
+		out = append(out, sg.Echo)
+	}
+	return out
+}
+
 // errDial is a contribution that cannot be reached.
 var errDial = errors.New("no contribution running")
 

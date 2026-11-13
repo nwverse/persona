@@ -41,8 +41,8 @@ const (
 )
 
 // The parts of a meeting the apps read again when they change (GET …/live?parts=, the meeting_live event). PartPhotos'
-// revision is kept in photos.json (recording_photos.go); PartAsks' and PartTopics' in live.json, and PartLines' is the
-// live log's length (live.go); the others' in meeting.json.
+// revision is kept in photos.json (recording_photos.go); PartAsks', PartTopics' and PartHighlights' in live.json, and
+// PartLines' is the live log's length (live.go); the others' in meeting.json.
 const (
 	PartRoom     = "room"
 	PartAsks     = "asks"
@@ -51,6 +51,8 @@ const (
 	PartPhotos   = "photos"
 	PartLines    = "lines"
 	PartTopics   = "topics"
+	// PartHighlights is the room's highlights of the meeting so far (phase 2b, live.go HighlightsSet).
+	PartHighlights = "highlights"
 )
 
 // Meeting is meeting.json.

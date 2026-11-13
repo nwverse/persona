@@ -302,3 +302,55 @@ func TestHubAudioSweep(t *testing.T) {
 		t.Fatalf("not noted %+v", tr)
 	}
 }
+
+// Persona's echo in hub mode (#5905): the hub's sentences keep their echo mark in hub_segments.json, the transcript of
+// record keeps it (the hub's and the phone's), transcript.md marks it, chars and the minutes leave it out, and a
+// meeting whose only words are Persona's gets no minutes.
+func TestHubEchoIsKeptMarkedAndLeftOutOfTheMinutes(t *testing.T) {
+	e, m, clock, _ := hubMinutesEngine(t, hubMinutesReply)
+	u := hubUpload(1, clock.Add(-time.Hour), true, nil, "手机一", "手机二", "phone three")
+	u.Segments[2].Echo = true // the phone's mark, where the hub has no sentence
+	putRecording(t, e, recID, u, *clock)
+	echo := RecordingSegment{Start: 10, End: 18, Text: "We keep the cap for this release.", Echo: true}
+	if _, err := e.HubTranscriptPut(recID, HubPassLive, []RecordingSegment{hseg(0, 8, "我们先把 export cap 保持在 4 MB。"), echo}); err != nil {
+		t.Fatal(err)
+	}
+	h, _ := e.HubTranscript(recID)
+	if len(h.Segments) != 2 || h.Segments[0].Echo || !h.Segments[1].Echo {
+		t.Fatalf("hub_segments.json %+v", h.Segments)
+	}
+	d, err := e.Get(KindRecording, recID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var marks []string
+	for _, sg := range d.Segments {
+		if sg.Echo {
+			marks = append(marks, sg.Source+": "+sg.Text)
+		}
+	}
+	if strings.Join(marks, "|") != "hub: We keep the cap for this release.|device: phone three" {
+		t.Fatalf("detail.segments' echo %q (%+v)", marks, d.Segments)
+	}
+	md, _ := os.ReadFile(e.Store.path(KindRecording, recID, "transcript.md"))
+	if !strings.Contains(string(md), "[Persona 回声] We keep the cap for this release.") || !strings.Contains(string(md), "[Persona 回声] phone three") {
+		t.Fatalf("transcript.md\n%s", md)
+	}
+	if r := recordingNow(t, e, recID); r.Chars != len([]rune("我们先把 export cap 保持在 4 MB。")) {
+		t.Fatalf("chars %d: Persona's echo counted", r.Chars)
+	}
+	finishTranscription(t, e, recID, TranscriptionFinal, nil)
+	if n := e.WriteMinutes(context.Background(), 2); n != 1 {
+		t.Fatalf("written %d", n)
+	}
+	if in := m.calls[0][1]; strings.Contains(in, "We keep the cap") || strings.Contains(in, "phone three") || !strings.Contains(in, "4 MB") {
+		t.Fatalf("the minutes' input:\n%s", in)
+	}
+
+	// Only Persona's words: no text, so no minutes.
+	const other = "7d8e5f6c-3f40-4b02-9c3d-4e5f6a7b8c9d"
+	hubCompleteMeeting(t, e, other, *clock, nil, []RecordingSegment{echo})
+	if r := recordingNow(t, e, other); r.Chars != 0 || r.MinutesState == MinutesPending {
+		t.Fatalf("an echo-only meeting: chars %d, minutes %q", r.Chars, r.MinutesState)
+	}
+}

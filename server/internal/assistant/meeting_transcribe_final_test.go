@@ -313,3 +313,60 @@ func TestFinalPassWaitsForTheLastLines(t *testing.T) {
 	}
 	h.finalState(meetingRec, "final")
 }
+
+// The final pass marks Persona's echo among its sentences by the timeline's spans and their answers (kb/echo.go),
+// never drops it: the final transcript and detail.segments keep it marked, transcript.md marks it, and chars leaves it
+// out.
+func TestFinalPassMarksEcho(t *testing.T) {
+	h := newHubFixture(t)
+	h.meetingAudio(meetingRec)
+	h.hubUpload(meetingRec, 3, map[string]any{"complete": true, "duration": 6.0, "ended_at": time.Now().UTC().Format(time.RFC3339),
+		"segments": phoneSegs(fakeLine{0.4, 1.6, "Phone one."}, fakeLine{2.1, 2.9, "Phone in the gap."}),
+		"timeline": map[string]any{"speaking": []map[string]any{{"start": 4.0, "end": 5.2, "text": "Bo owns the regression test."}}}})
+	h.tr.set(func(f *fakeTranscriber) {
+		f.replay = jobScript{windows: []fakeWindow{{0, 6, false, []fakeLine{{0.5, 1.5, "Replay one."}, {4.2, 5.0, "Bo owns the regression test."},
+			{4.4, 4.9, "Wait, who owns the docs?"}}}}}
+	})
+	h.s.finalLook(context.Background(), h.engine(), meetingRec, time.Now().Add(2*finalGapWait))
+	waitFor(t, "final", func() bool { return h.transcription(meetingRec)["state"] == "final" })
+	if got, echo := h.hubTexts(meetingRec), h.hubEcho(meetingRec); len(got) != 3 || !slices.Equal(echo, []bool{false, true, false}) {
+		t.Fatalf("the final transcript %q, echo %v", got, echo)
+	}
+	d, err := h.engine().Get(kb.KindRecording, meetingRec, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var marked []string
+	for _, sg := range d.Segments {
+		if sg.Echo {
+			marked = append(marked, sg.Text)
+		}
+	}
+	if !slices.Equal(marked, []string{"Bo owns the regression test."}) {
+		t.Fatalf("detail.segments %+v", d.Segments)
+	}
+	md, err := os.ReadFile(filepath.Join(h.s.kb.dir, kb.KindRecording, meetingRec, "transcript.md"))
+	if err != nil || !strings.Contains(string(md), "[Persona 回声] Bo owns the regression test.") {
+		t.Fatalf("transcript.md %s %v", md, err)
+	}
+	r, ok := h.engine().Store.Recording(meetingRec)
+	if want := len("Replay one.") + len("Wait, who owns the docs?") + len("Phone in the gap."); !ok || r.Chars != want {
+		t.Fatalf("chars %d, want %d (Persona's echo left out)", r.Chars, want)
+	}
+}
+
+// Without a replay the live sentences are final, and the complete upload's timeline marks Persona's echo among them
+// too (a span the live pass never saw closed, repaired late), never dropping it.
+func TestFinalLiveSentencesMarkedByTheLateTimeline(t *testing.T) {
+	h := newHubFixture(t)
+	h.meetingAudio(meetingRec)
+	h.hubUpload(meetingRec, 3, map[string]any{"complete": true, "duration": 6.0, "ended_at": time.Now().UTC().Format(time.RFC3339),
+		"timeline": map[string]any{"speaking": []map[string]any{{"start": 4.0, "end": 5.2, "text": "Live two."}}}})
+	h.tr.set(func(f *fakeTranscriber) { f.info.Features = []string{extwire.TranscriptionLive} })
+	finalGapWait = 0
+	h.finalState(meetingRec, "final")
+	if got, echo := h.hubTexts(meetingRec), h.hubEcho(meetingRec); !slices.Equal(got, []string{"Live one.", "Live two."}) ||
+		!slices.Equal(echo, []bool{false, true}) {
+		t.Fatalf("the final transcript %q, echo %v", got, echo)
+	}
+}

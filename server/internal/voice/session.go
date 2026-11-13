@@ -59,6 +59,10 @@ type conversation struct {
 	resume  []resumeRun
 	resumed bool // the app picked the call up again: its first session is told what was said
 	wake    chan struct{}
+	// sendsAnyway: the app's start said speech_gate, true or false (#5904): it has Send Anyway for what the
+	// user-speech gate held back, so such a handover with a task is kept for its resend and the model is told the
+	// screen offers that. An app from before it says nothing and has no such button. Set before ready, under mu.
+	sendsAnyway bool
 
 	mu         sync.Mutex
 	closed     bool
@@ -288,6 +292,9 @@ func (c *conversation) begin() error {
 	c.mu.Lock()
 	c.p, c.w, c.model, c.modelID = p, newWire(p.Dialect), model, p.ID+"/"+model
 	c.gate.echoes = start.EchoCancellation != nil && !*start.EchoCancellation
+	// Only a full device's call turns the user-speech gate off: another extension's call is held to it (docs/assistant/voice.md "Permissions").
+	c.gate.off = start.SpeechGate != nil && !*start.SpeechGate && (c.role == "" || c.role == roleFull)
+	c.sendsAnyway = start.SpeechGate != nil
 	if voicePattern.MatchString(start.Voice) && !gone { // a voice of the other upstream's may not exist here
 		c.voice = start.Voice
 	}

@@ -16,9 +16,11 @@ import (
 // Hub transcription (#3862 phase 5, docs/assistant/meeting-minutes.md "Phase 5: hub transcription"): a meeting uploaded
 // with transcription hub streams its audio to the hub (meeting_audio.go), which stores it (kb.AudioWriter) and hands
 // it to a transcription contribution's live job (meeting_transcribe_job.go). Each recording being transcribed has a
-// hubRun: it holds a sentence back while Persona speaks and keeps or drops it by the echo rule (kb.EchoHeld,
-// kb.EchoOf), puts the kept ones in the hub's transcript (hub_segments.json, kb.HubTranscriptPut) and, while the role
-// at their end is not off, in the live log (kb.LiveAppendHub), sending the phone its line frames. When the hub has no
+// hubRun: it holds a sentence back while Persona speaks and then marks it Persona's echo or not by the echo rule
+// (kb.EchoHeld, kb.EchoOf: kb/echo.go, against the speaking spans and the answers said in them), puts every sentence in
+// the hub's transcript (hub_segments.json, kb.HubTranscriptPut; Persona's echo with its mark) and the meeting's own,
+// while the role at their end is not off, in the live log (kb.LiveAppendHub), sending the phone its line frames.
+// Persona's echo never reaches the live log, a line frame or the room. When the hub has no
 // sentences the phone's text fills the live log (meeting_transcribe_fallback.go). After the meeting the final pass
 // transcribes the stored audio again (meeting_transcribe_final.go). Nothing here logs what was said.
 
@@ -97,13 +99,14 @@ type hubRun struct {
 	audioAt time.Time
 
 	// The timeline: meeting.json's union and what the socket said since; role is the meeting's own (before the
-	// timeline's first change). openFrom is a speaking span open now (since openAt), held the sentences waiting for
-	// it to close, in order.
+	// timeline's first change). openFrom is a speaking span open now (since openAt) and openText the answer being said
+	// in it (its speaking on's text), held the sentences waiting for it to close, in order.
 	timeline kb.Timeline
 	role     string
 	openFrom *float64
+	openText string
 	openAt   time.Time
-	held     []kb.EchoSentence
+	held     []hubSentence
 
 	// The hub's live sentences (hub_segments.json's and those since), whether hub_segments.json lags behind them,
 	// when it was last written, the end of the latest one.
@@ -136,6 +139,12 @@ type hubRun struct {
 	flushedTo float64
 	flushWant float64
 	wake      chan struct{}
+}
+
+// hubSentence is a sentence of a transcription job, in recording seconds.
+type hubSentence struct {
+	Start, End float64
+	Text       string
 }
 
 // The problems of hub transcription (the socket's problem frame, transcription.problem).
@@ -401,8 +410,9 @@ func (r *hubRun) roleFrame(at float64, attendance string) {
 	r.mergeTimelineLocked(kb.Timeline{Roles: []kb.TimelineRole{{At: at, Attendance: attendance}}})
 }
 
-// speaking is the socket's speaking frame: a span opens at at (sentences that end after it began wait), or closes.
-func (r *hubRun) speaking(on bool, at float64) {
+// speaking is the socket's speaking frame: a span opens at at, Persona saying text (sentences that end after it began
+// wait), or closes.
+func (r *hubRun) speaking(on bool, at float64, text string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.stopped {
@@ -410,7 +420,7 @@ func (r *hubRun) speaking(on bool, at float64) {
 	}
 	if on {
 		if r.openFrom == nil {
-			r.openFrom, r.openAt = &at, time.Now()
+			r.openFrom, r.openText, r.openAt = &at, kb.SpokenText(text), time.Now()
 			r.clearInterimLocked() // no caption goes out while Persona speaks
 		}
 		return
@@ -422,10 +432,11 @@ func (r *hubRun) speaking(on bool, at float64) {
 	r.closeSpanLocked(from, max(at, from))
 }
 
-// closeSpanLocked: the open span is [from, to]; the sentences held for it are judged now.
+// closeSpanLocked: the open span is [from, to], with the answer said in it; the sentences held for it are judged now.
 func (r *hubRun) closeSpanLocked(from, to float64) {
-	r.openFrom = nil
-	r.mergeTimelineLocked(kb.Timeline{Speaking: [][2]float64{{from, to}}})
+	span := kb.SpokenSpan{Start: from, End: to, Text: r.openText}
+	r.openFrom, r.openText = nil, ""
+	r.mergeTimelineLocked(kb.Timeline{Speaking: []kb.SpokenSpan{span}})
 	held := r.held
 	r.held = nil
 	for _, s := range held {
@@ -435,18 +446,17 @@ func (r *hubRun) closeSpanLocked(from, to float64) {
 }
 
 // expireSpanLocked: the open span counts as closed at to without the phone saying so (held echoHoldMost, or the run
-// ends): the sentences held for it are judged with [from, to] as a speaking span, which is never written to the
-// timeline. The timeline has only what the phone said, so a span whose speaking off a dropped socket lost (and that
-// the next start or upload repairs) never becomes an assumed span that drops real speech in the final pass.
+// ends): the sentences held for it are judged with [from, to] and the answer it carried as a speaking span, which is
+// never written to the timeline. The timeline has only what the phone said, so a span whose speaking off a dropped
+// socket lost (and that the next start or upload repairs) never becomes an assumed span that marks real speech in the
+// final pass.
 func (r *hubRun) expireSpanLocked(from, to float64) {
-	r.openFrom = nil
-	spans := append(kb.EchoSpans(r.timeline), kb.EchoSpan{From: from, To: max(from, to)})
+	span := kb.SpokenSpan{Start: from, End: max(from, to), Text: r.openText}
+	r.openFrom, r.openText = nil, ""
 	held := r.held
 	r.held = nil
 	for _, s := range held {
-		if kb.EchoOf(s, spans) == kb.EchoKeep {
-			r.acceptLocked(s)
-		}
+		r.judgeLocked(s, span)
 	}
 	r.notifyLocked()
 }
@@ -484,28 +494,26 @@ func (r *hubRun) mergeTimelineLocked(t kb.Timeline) {
 
 // ---- the sentences ----
 
-// sentenceLocked is a sentence of the live job: held while a speaking span that it may be inside is open (and behind
-// one held, so the live log stays in order), else judged at once.
-func (r *hubRun) sentenceLocked(s kb.EchoSentence) {
-	if len(r.held) > 0 || r.openFrom != nil && kb.EchoHeld(s, *r.openFrom) {
+// sentenceLocked is a sentence of the live job: held while a speaking span that it may be Persona's echo of is open
+// (and behind one held, so the live log stays in order), else judged at once.
+func (r *hubRun) sentenceLocked(s hubSentence) {
+	if len(r.held) > 0 || r.openFrom != nil && kb.EchoHeld(s.End, *r.openFrom) {
 		r.held = append(r.held, s)
 		return
 	}
 	r.judgeLocked(s)
 }
 
-// judgeLocked keeps or drops sentence s by the echo rule.
-func (r *hubRun) judgeLocked(s kb.EchoSentence) {
-	if kb.EchoOf(s, kb.EchoSpans(r.timeline)) == kb.EchoDrop {
-		return
-	}
-	r.acceptLocked(s)
+// judgeLocked takes sentence s, marked Persona's echo when the echo rule says so against the timeline's speaking spans
+// and extra (a span assumed closed, expireSpanLocked).
+func (r *hubRun) judgeLocked(s hubSentence, extra ...kb.SpokenSpan) {
+	r.acceptLocked(s, kb.EchoOf(r.timeline, s.Start, max(s.End, s.Start), s.Text, extra...))
 }
 
-// acceptLocked takes sentence s into the hub's transcript and, while the role at its end is not off and the phone's
-// text did not fill its time, into the live log, with its line frame. The hub's sentences coming again end a problem
-// and the fallback.
-func (r *hubRun) acceptLocked(s kb.EchoSentence) {
+// acceptLocked takes sentence s into the hub's transcript (echo: marked Persona's echo) and, unless it is Persona's
+// echo, while the role at its end is not off and the phone's text did not fill its time, into the live log, with its
+// line frame. The hub's sentences coming again (its echo too: the upstream is back) end a problem and the fallback.
+func (r *hubRun) acceptLocked(s hubSentence, echo bool) {
 	text := strings.TrimSpace(s.Text)
 	if text == "" {
 		return
@@ -513,7 +521,7 @@ func (r *hubRun) acceptLocked(s kb.EchoSentence) {
 	if s.End < s.Start {
 		s.End = s.Start
 	}
-	r.hub = append(r.hub, kb.RecordingSegment{Start: s.Start, End: s.End, Text: text, Source: kb.SourceHub})
+	r.hub = append(r.hub, kb.RecordingSegment{Start: s.Start, End: s.End, Text: text, Source: kb.SourceHub, Echo: echo})
 	r.hubDirty = true
 	r.lastHubEnd = max(r.lastHubEnd, s.End)
 	if r.upstream != "" || r.fatal {
@@ -524,8 +532,8 @@ func (r *hubRun) acceptLocked(s kb.EchoSentence) {
 		r.setFallbackLocked(false)
 	}
 	defer r.notifyLocked()
-	if r.timeline.RoleAt(s.End, r.role) == kb.AttendanceOff {
-		return // in the hub's transcript only
+	if echo || r.timeline.RoleAt(s.End, r.role) == kb.AttendanceOff {
+		return // in the hub's transcript only (Persona's echo marked there)
 	}
 	if kb.CoveredShare(s.Start, s.End, r.filled) > 0.5 {
 		return // the phone's text said it already
@@ -758,7 +766,7 @@ func (s *Service) hubFlush(ctx context.Context, id string, at float64) bool {
 	}
 	for {
 		r.mu.Lock()
-		if r.flushedTo >= at && !slices.ContainsFunc(r.held, func(h kb.EchoSentence) bool { return h.End <= at }) {
+		if r.flushedTo >= at && !slices.ContainsFunc(r.held, func(h hubSentence) bool { return h.End <= at }) {
 			r.mu.Unlock()
 			return true
 		}

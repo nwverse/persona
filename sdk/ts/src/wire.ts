@@ -4870,6 +4870,12 @@ export interface KBRecordingSegment {
    * of record"): hub or device; absent means device.
    */
   source?: string;
+  /**
+   * The line is Persona's own answer as the meeting's microphone heard it (docs/assistant/meeting-minutes.md
+   * "Persona's echo"): kept in the transcript but not what the meeting said, so leave it out of anything read as the
+   * meeting's words; absent (false) on every other line.
+   */
+  echo?: boolean;
 }
 
 /**

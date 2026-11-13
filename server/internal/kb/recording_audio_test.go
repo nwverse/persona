@@ -419,7 +419,7 @@ func TestAudioGoesWithTheRecording(t *testing.T) {
 	// Through the retention: the trimmed recording keeps its mode and state, no gaps, its audio noted gone.
 	const kept = "7d8e5f6c-3f40-4b02-9c3d-4e5f6a7b8c9d"
 	old := now.AddDate(0, 0, -20)
-	u := hubUpload(1, old, true, &Timeline{Speaking: [][2]float64{{1, 2}}}, "一句")
+	u := hubUpload(1, old, true, &Timeline{Speaking: spk(1, 2)}, "一句")
 	u.Duration = 10
 	putRecording(t, e, kept, u, old)
 	if _, err := e.AudioPut(kept, 0, pcmAt(0, secs(1))); err != nil {

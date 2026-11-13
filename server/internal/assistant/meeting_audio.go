@@ -74,6 +74,7 @@ type phoneFrame struct {
 	At         *float64        `json:"at"`
 	Attendance string          `json:"attendance"`
 	On         *bool           `json:"on"`
+	Text       string          `json:"text"` // speaking on: the answer Persona says
 	Timeline   json.RawMessage `json:"timeline"`
 }
 
@@ -245,7 +246,7 @@ func (s *Service) audioSocket(w http.ResponseWriter, r *http.Request) {
 			}
 		case "speaking":
 			if hasAt && f.On != nil {
-				run.speaking(*f.On, at)
+				run.speaking(*f.On, at, f.Text)
 			}
 		case "end":
 			if !hasAt {

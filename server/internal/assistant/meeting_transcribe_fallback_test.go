@@ -209,3 +209,35 @@ func TestFallbackJobStalled(t *testing.T) {
 	waitFor(t, "the fallback", func() bool { return h.transcription(meetingRec)["fallback"] == true })
 	waitFor(t, "the phone's line", func() bool { return slices.Contains(lineTexts(h.lines(meetingRec)), "Phone text.") })
 }
+
+// The fallback never puts Persona's echo into the live log: neither a segment the phone marked nor one the echo rule
+// marks against the timeline (its time and the answer's words); someone else speaking during an answer goes in. The
+// stored segments keep the phone's mark.
+func TestFallbackLeavesPersonasEchoOut(t *testing.T) {
+	h := newHubFixture(t)
+	segs := []map[string]any{
+		{"start": 0, "end": 3, "text": "Phone line one."},
+		{"start": 3.5, "end": 6, "text": "We keep the cap for this release.", "echo": true},
+		{"start": 6.5, "end": 9, "text": "Bo owns the regression test."},
+		{"start": 9.5, "end": 11, "text": "Hold on, what about the docs?"},
+	}
+	h.hubUpload(meetingRec, 1, map[string]any{"segments": segs, "timeline": map[string]any{"speaking": []map[string]any{
+		{"start": 3.4, "end": 6.1, "text": "We keep the cap for this release."},
+		{"start": 6.4, "end": 11.2, "text": "Bo owns the regression test, and the release note is Ada's."}}}})
+	waitFor(t, "the fallback", func() bool { return h.transcription(meetingRec)["fallback"] == true })
+	waitFor(t, "the phone's lines", func() bool { return len(h.lines(meetingRec)) == 2 })
+	if got := lineTexts(h.lines(meetingRec)); !slices.Equal(got, []string{"Phone line one.", "Hold on, what about the docs?"}) {
+		t.Fatalf("live log %q", got)
+	}
+	d, err := h.engine().Get(kb.KindRecording, meetingRec, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var marks []bool
+	for _, sg := range d.Segments {
+		marks = append(marks, sg.Echo)
+	}
+	if !slices.Equal(marks, []bool{false, true, false, false}) {
+		t.Fatalf("stored marks %v", marks)
+	}
+}
