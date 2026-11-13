@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-// U3 of the four-client compare (DECISIONS D3 "四端对比后统一", "图标照 meanings.json：... reported 用 reported 的字形，不和聊天来源
-// 的气泡共用"): a reported step and a chat-source step must not share one glyph, and the reported step takes the shared
-// reported mark (spec/icons/meanings.json: sf arrow.up.message). The chat-source step keeps the bubble it has on iOS
-// (four-way U3: "iOS draws arrow.up.message vs a bubble").
+// U3 of the four-client compare, as ruled (DECISIONS D3 "四端对比后统一" and the lead's ruling on 2026-11-13): the reported
+// step uses the shared table's per-platform glyph (`spec/icons/meanings.json` reported: sf arrow.up.message, phosphor
+// chat-circle; the web draws chat-circle), and the two sides are told apart on the source's: a branded source keeps its
+// brand mark, an unbranded one the web's generic source icon (`link`, mail its envelope), so no unbranded source borrows
+// reported's bubble. In a real inbox a chat source is branded (Lark); only a fixture's bare `chat` takes the fallback.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -59,16 +60,15 @@ afterEach(() => {
 
 const glyphOf = (id: string) => host.querySelector(`[data-chain-id="${id}"] [data-chain-glyph]`)?.getAttribute("data-chain-glyph");
 
-describe("链条图标：reported 与聊天来源不共用气泡", () => {
-  // U3's expectation: iOS draws a bubble next to the reported arrow. Web now falls back to `link` for an unbranded
-  // chat source, so this reads `link`; whether web keeps a bubble or moves to `link` is a ruling this package cannot make.
-  it("a chat-source step draws no message-arrow glyph (U3: it is the reported step's)", () => {
-    expect(glyphOf("c1")).not.toBe("reported");
-    expect(glyphOf("c1")).toBeTruthy();
+describe("链条图标：reported 用共享表的气泡，来源那边分开", () => {
+  // As ruled: an unbranded source draws the web's generic source icon (`link`); the reported step keeps the shared
+  // table's chat-circle. A chat source is branded in a real inbox (Lark), so only this fixture's bare `chat` falls back.
+  it("an unbranded source step draws the generic source icon, not the reported bubble", () => {
+    expect(glyphOf("c1")).toBe("link");
   });
 
-  it("a reported step does not draw the chat-source bubble", () => {
-    expect(glyphOf("c5")).toBeTruthy();
+  it("a reported step keeps the shared chat-circle and never the source's glyph", () => {
+    expect(glyphOf("c5")).toBe("chat");
     expect(glyphOf("c5")).not.toBe(glyphOf("c1"));
   });
 });
