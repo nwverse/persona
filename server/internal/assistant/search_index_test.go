@@ -24,6 +24,30 @@ type memSearch struct {
 	cursors map[searchKey]db.SearchCursorRow
 	resets  int
 	fail    error
+	emptied int // db.ResetSearch's count (search-reindex)
+	purges  int // PurgeSearch calls
+}
+
+// resetIndex is db.ResetSearch: `assistant search-reindex` emptying the index under a manager that runs.
+func (m *memSearch) resetIndex() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.rows, m.cursors = map[searchKey][]db.SearchItemRow{}, map[searchKey]db.SearchCursorRow{}
+	m.emptied++
+}
+
+func (m *memSearch) SearchReset(context.Context) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return int64(m.emptied), nil
+}
+
+func (m *memSearch) PurgeSearch(context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.rows, m.cursors = map[searchKey][]db.SearchItemRow{}, map[searchKey]db.SearchCursorRow{}
+	m.purges++
+	return nil
 }
 
 func newMemSearch() *memSearch {
@@ -335,6 +359,63 @@ func TestSearchIndexKeepsUp(t *testing.T) {
 	s.searchSweep(ctx)
 	if len(feed.reads) != 0 {
 		t.Fatalf("a working chat read again at once: %v", feed.reads)
+	}
+}
+
+// An index emptied under a running manager (search-reindex, #6340) is read again from the start at the next sweep:
+// what the manager wrote meanwhile from its old cursors goes too, even when no conversation can be read again yet.
+func TestSearchIndexReadsAgainAfterAReset(t *testing.T) {
+	s, feed, store, _ := searchFixture(t)
+	var logged []string
+	s.logf = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
+	ctx := context.Background()
+	for s.searchSweep(ctx) == 0 {
+	}
+	if store.purges != 0 || len(store.cursors) != 4 {
+		t.Fatalf("indexing purged %d times, %d cursors", store.purges, len(store.cursors))
+	}
+	feed.reads = nil
+	s.searchSweep(ctx)
+	if len(feed.reads) != 0 || store.purges != 0 {
+		t.Fatalf("no reset: read %v, purged %d times", feed.reads, store.purges)
+	}
+
+	store.resetIndex()
+	// the manager wrote one more page from the cursor it held before it saw the reset
+	if err := store.PutSearchItems(ctx, "server", "trip", "", 9, []db.SearchItemRow{{Seq: 9, ItemID: "i9#0", Role: "user",
+		Body: "StaleWord", Folded: "staleword"}}, false); err != nil {
+		t.Fatal(err)
+	}
+	feed.offline = true
+	s.searchSweep(ctx)
+	if store.purges != 1 || len(store.cursors) != 0 || len(store.rows) != 0 {
+		t.Fatalf("after the sweep that saw the reset: purged %d times, cursors %v, rows %v", store.purges, store.cursors, store.rows)
+	}
+	if a := searchFor(t, s, "bluelane"); !a.Partial || a.Indexed.Done != 0 {
+		t.Fatalf("not read again yet: partial=%v indexed=%+v", a.Partial, a.Indexed)
+	}
+	if !slices.ContainsFunc(logged, func(l string) bool { return strings.Contains(l, "emptied (search-reindex)") }) {
+		t.Fatalf("logged %q", logged)
+	}
+
+	feed.offline = false
+	s.search.mu.Lock()
+	clear(s.search.retry)
+	s.search.mu.Unlock()
+	feed.reads = nil
+	for s.searchSweep(ctx) == 0 {
+	}
+	if !slices.Contains(feed.reads, "trip 0") || store.purges != 1 {
+		t.Fatalf("reads %v, purged %d times: want every conversation from 0, purged once", feed.reads, store.purges)
+	}
+	if c := store.cursors[searchKey{"server", "trip"}]; c.AfterSeq != 6 {
+		t.Fatalf("trip read to %d, want 6", c.AfterSeq)
+	}
+	if got := found(searchFor(t, s, "bluelane")); !slices.Equal(got, []string{"trip title=false hits=2", "old title=false hits=1"}) {
+		t.Fatalf("found %v after reading again", got)
+	}
+	if got := found(searchFor(t, s, "staleword")); got != nil {
+		t.Fatalf("what was written from the old cursor is still found: %v", got)
 	}
 }
 

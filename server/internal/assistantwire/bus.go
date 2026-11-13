@@ -158,6 +158,7 @@ type HTTPResponse struct {
 // Routes are the routes the assistant answers (net/http patterns): the hub relays the apps' requests on them as
 // http.request. The assistant registers exactly these (assistant.TestRoutesAreTheWireOnes).
 var Routes = []string{
+	"POST /api/v1/skills/import",
 	"POST /api/v1/assistant/health/workouts",
 	"GET /api/v1/sessions/archived",
 	"POST /api/v1/sessions/{mid}/{sid}/archive",
@@ -243,6 +244,7 @@ var Routes = []string{
 	"POST /api/v1/todos/{id}/done-check",
 	"POST /api/v1/todos/{id}/retry",
 	"POST /api/v1/todos/retitle",
+	"POST /api/v1/todos/import/reminders",
 	// Its settings and its main conversation (profile.go, start.go).
 	"GET /api/v1/assistant",
 	"PUT /api/v1/assistant",

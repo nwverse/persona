@@ -106,10 +106,12 @@ var Features = []string{
 	"file_copy",                // POST /api/v1/machines/{mid}/files/copy: files and folders copied into a folder, or duplicated beside themselves (docs/protocol/protocol.md "Changing files")
 	"file_chmod",               // POST /api/v1/machines/{mid}/files/chmod: a file's or folder's permission bits (docs/protocol/protocol.md "Changing files")
 	"pane_cwd",                 // POST /api/v1/machines/{mid}/panes takes cwd: a new terminal in a folder (docs/integrations/terminal.md "Standalone terminal")
+	"pane_new_space",           // POST /api/v1/machines/{mid}/panes takes new_space: a terminal on a computer with no workspace yet, or 409 node_outdated (docs/integrations/terminal.md "Standalone terminal")
 	"launcher_scope",           // a Persona-managed provider's share, scope_machines, delivery, own_service and machine_keys (docs/integrations/launchers.md "Device scope and on-demand delivery")
 	"file_inbox",               // POST /api/v1/machines/{mid}/files?dest=inbox: into the machine's receive folder, kept for good (docs/protocol/file-transfer.md)
 	"file_transfer",            // POST/GET/DELETE /api/v1/files/transfer: computer to computer, run by the manager, file_transfer events (docs/protocol/file-transfer.md)
 	"task_push",                // Task.push on /api/v1/assistant/tasks: "Push when done", every run or only what a run sends (docs/assistant/assistant.md "Push when done")
+	"task_inbox",               // Task.inbox on /api/v1/assistant/tasks: "When done, put it in the Inbox", off / only if worth a look / every time (docs/assistant/assistant.md "Put it in the Inbox when done")
 	"task_cron",                // repeat "cron" with Task.cron on /api/v1/assistant/tasks, and GET /api/v1/assistant/tasks/cron (docs/assistant/assistant.md "Scheduled tasks")
 
 	// A secret may hold a provider's op://… reference: PUT …/{id}/-/secrets/{name} {reference}; secrets[].reference and

@@ -87,9 +87,7 @@ struct TerminalsView: View {
             problem(TerminalsLoad.withRequest(String(localized: "This computer hasn't answered yet."), request), ref)
         case .rows(let list):
             let rows = TerminalsList.rows(list)
-            if rows.isEmpty {
-                Text("No terminals on this computer.").font(Theme.Font.label).foregroundStyle(.secondary).themedRow()
-            }
+            if rows.isEmpty { empty(list, ref) }
             ForEach(rows) { r in row(r, on: ref, in: list).themedRow() }
         case .waiting:
             // Its panes are on their way; no answer within `patience` says so, with Retry (#6153). The row's own task
@@ -99,6 +97,22 @@ struct TerminalsView: View {
                     try? await Task.sleep(for: TerminalsLoad.patience)
                     if !Task.isCancelled { loads[ref.path, default: TerminalsLoad()].expire(load.request) }
                 }
+        }
+    }
+
+    /// A computer with no terminals: New Terminal when its engine can open one (in its home folder when it has no
+    /// workspace yet), otherwise where terminals come from.
+    @ViewBuilder private func empty(_ list: TerminalPanes, _ ref: MachineRef) -> some View {
+        if let space = TerminalsList.spaces(list, newSpace: hubHasNewSpace(ref)).first {
+            HStack(spacing: Theme.Space.m) {
+                Text("No terminals open on this computer.").font(Theme.Font.label).foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                Button("New Terminal") { newTerminal(on: ref, space: space) }
+                    .foregroundStyle(Theme.accent).lineLimit(1).accessibilityIdentifier("terminals.new")
+            }
+            .themedRow()
+        } else {
+            Text("Terminals open here when an Agent starts on this computer.").font(Theme.Font.label).foregroundStyle(.secondary).themedRow()
         }
     }
 
@@ -156,7 +170,7 @@ struct TerminalsView: View {
             Spacer(minLength: 0)
             if let list = loads[ref.path]?.list {
                 Menu {
-                    ForEach(TerminalsList.spaces(list), id: \.id) { s in
+                    ForEach(TerminalsList.spaces(list, newSpace: hubHasNewSpace(ref)), id: \.id) { s in
                         Button { newTerminal(on: ref, space: s) } label: {
                             Label(String(localized: "New Terminal in \(s.label)"), systemImage: Theme.Icon.add)
                         }
@@ -168,9 +182,14 @@ struct TerminalsView: View {
                         }
                     }
                 } label: {
-                    ThemedIcon(Theme.Icon.more)
+                    // A finger's square, the glyph at its trailing edge where it was. A menu is hit only in its label's
+                    // frame, and the header's cell holds no more than it lays out: the square takes `Space.s` above and
+                    // below as room, so the header grows 10 pt rather than 26, and all of the square is inside it (#6577).
+                    ThemedIcon(Theme.Icon.more).tapTargetFrame(alignment: .trailing)
                 }
+                .padding(.vertical, -Theme.Space.s)
                 .accessibilityLabel(String(localized: "Terminal actions for \(m.name)"))
+                .accessibilityIdentifier("terminals.more")
             }
         }
         .font(Theme.Font.secondaryStrong)
@@ -249,12 +268,19 @@ struct TerminalsView: View {
         }
     }
 
+    /// The hub checks the node can open a workspace for New Terminal (`pane_new_space`, #6362); an unknown list offers it.
+    private func hubHasNewSpace(_ ref: MachineRef) -> Bool {
+        let f = model.features(ref.group)
+        return f.isEmpty || f.contains("pane_new_space")
+    }
+
     private func newTerminal(on ref: MachineRef, space: TerminalsList.Space) {
         guard let api = model.api(ref.group) else { return }
         Task {
             do {
-                var body = ["workspace_id": space.id]
-                if !space.kind.isEmpty { body["kind"] = space.kind }
+                // no workspace yet: the node opens one (new_space: the hub answers node_outdated for a node that can't)
+                var body: [String: JSONValue] = space.id.isEmpty ? ["cwd": .string("~"), "new_space": .bool(true)] : ["workspace_id": .string(space.id)]
+                if !space.kind.isEmpty { body["kind"] = .string(space.kind) }
                 let data = try await api.nodeAction(machine: ref.id, "panes", body)
                 await load()
                 if let made = try? JSONDecoder().decode(NewShell.self, from: data), !made.terminal.isEmpty {
@@ -360,10 +386,13 @@ nonisolated enum TerminalsList {
         }
     }
 
-    /// The workspaces a new terminal can open in: those of hosts that open tabs.
-    static func spaces(_ list: TerminalPanes) -> [Space] {
+    /// The workspaces a new terminal can open in: those of hosts that open tabs. A host that opens tabs but has no
+    /// workspace yet offers its home folder (id "") when the hub has `pane_new_space` (`newSpace`): the node opens a new
+    /// workspace there.
+    static func spaces(_ list: TerminalPanes, newSpace: Bool) -> [Space] {
         list.hosts.filter(\.newTab).flatMap { h in
-            h.workspaces.map { Space(id: $0.id, label: $0.label.isEmpty ? $0.id : $0.label, kind: h.kind) }
+            h.workspaces.isEmpty ? (newSpace ? [Space(id: "", label: String(localized: "Home Folder"), kind: h.kind)] : [])
+                : h.workspaces.map { Space(id: $0.id, label: $0.label.isEmpty ? $0.id : $0.label, kind: h.kind) }
         }
     }
 

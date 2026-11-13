@@ -9,6 +9,12 @@ Do not route task entries or notification/session links through that reset. Exer
 those entry paths and after a restored stack; a navigator test that expects the old detail to survive a tab selection
 can accidentally pin the bug rather than prevent it.
 
+## A drag on the chat list hides the keyboard; Robolectric hands the focus back (#4210)
+
+`ChatListEffects` clears the focus and hides the keyboard on the list's `DragInteraction.Start`, which only a finger past the touch slop starts. Do not use `isScrollInProgress` for this: it is also true while the page's own `scrollToItem` or `animateScrollToItem` runs (following the newest message while someone types, a jump to a message, a search hit), and those must leave the keyboard up. A bare touch is not enough either, since it may still be a tap on a field inside the list (iOS tells the two apart as `.tracking` and `.interacting`).
+
+Test it by what the page asks of the focus manager and the keyboard controller, wrapped around the real ones (`KeyboardProbe`), and by the field losing focus once, not by the field staying unfocused: Robolectric is not in touch mode, where Android gives the focus straight back to the first field after `clearFocus()`, and in one test every second drag did. Aim the swipe at a message in the middle of the page: a swipe injected on the last message of the semantics tree never reached an Agent chat's list, because the top bar is drawn over it. Check that a test of this kind fails without the change; the tests that guard a tap, a long press and a scroll the page starts pass either way, by design.
+
 ## Keep a worktree fixed while Gradle verifies it (#5233)
 
 Do not merge main or edit source while a multi-task Gradle invocation is running in that worktree. Earlier tasks can
@@ -27,6 +33,16 @@ labels, and test owner-switch closure and parent Back navigation after adding a 
 ## A design-system signature change compiles every caller (#4145)
 
 #4124 added a `Boolean` after `JSectionHeader`'s composable slot. A caller passing the slot as a trailing lambda then bound it to the `Boolean`, and `main` stopped compiling for every Android build. No hosted CI runs on PRs, so the module's own build passing was not enough. Before merging a change to a `core/designsystem` component's parameters, compile `:app:compileDebugKotlin` (every feature's main code) and the test code of the modules that call it. Keep a composable slot last; `scripts/app/android_slot_order.py` checks that (#4146).
+
+## Adaptive evidence must survive serialization, re-chunking and cleanup
+
+A new `@Serializable` type in an Android module also needs `org.jetbrains.kotlin.plugin.serialization` in that module. The encoder's missing-serializer exception can otherwise disappear behind a `runCatching`, leaving an empty evidence file while production calls look successful. Robolectric also returns PID 0 by default: use `ShadowProcess.setPid` for tests of real positive-PID validation rather than weakening the production check.
+
+When a lazy item is a row chunked by the current column count, a width change can expose the new row key together with the old absolute item index. Keep the previous stable key, index, pixel offset and grid start, and restore the previous row's leftmost machine after re-chunking; testing only unchanged-column keys does not catch this. Cover 1→2→3→1 columns with a nonzero offset. Shared Go wire golden files contain wire input, not a client's presentation fixture: register the input through the production encoder and keep ordering, metrics and expected card presentation under Android test resources.
+
+`adb shell am start --es` creates a String extra, not a Boolean. A debug entry that reads `getBooleanExtra("debug.automation", false)` therefore never enables the probe when passed `--es debug.automation true`; use `--ez` for that Boolean. Only the initial launch needs DebugEntryActivity: subsequent debug opens must target MainActivity directly so `onNewIntent` applies the route without restarting the process. `mCurrentRotation=ROTATION_90` and `mCommittedState=Optional[DeviceState{name='…'}]` are normal platform output forms, not missing evidence; parse their names and the current `cur=WxH` rather than assuming numeric or physical-size fields.
+
+A live scene has not passed until its own cleanup has passed. Poll assertions for fresh Compose/probe evidence, print the final PASS only after cleanup, and preserve the original failure while making any additional cleanup failure visible. Shell cleanup must check its own ADB/reverse/mock/clock operations too; `|| true` and a PASS printed before the EXIT trap hide real leftover device state.
 
 ## Receipt navigation inside task details (#3841)
 
