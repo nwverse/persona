@@ -5826,7 +5826,8 @@ def transcription_put(rid, body):
     t = TRANSCRIPTIONS[rid]
     transcription_timeline(t, body.get("timeline"))
     sock = t.get("socket")
-    transcription_reconcile(rid, sock["send"] if sock and sock["started"] else None)
+    if t.get("speaking_on") is None or t["speaking_on"] is not sock:  # while up, the socket that saw it open closes it
+        transcription_reconcile(rid, sock["send"] if sock and sock["started"] else None)
     if t["state"] in ("final", "failed"): return
     if body.get("complete"):
         t.setdefault("end", body.get("duration") if transcription_number(body.get("duration")) else (t["held"][-1][1] if t["held"] else 0))
@@ -5890,7 +5891,7 @@ SPEAKING_HOLD = 180
 def transcription_unspeak(t):
     """No speaking span is open any more: the one that was (its start or None, the answer it carried)."""
     began, said = t.pop("speaking", None), t.pop("speaking_text", "")
-    t.pop("speaking_assumed", None)
+    t.pop("speaking_on", None); t.pop("speaking_assumed", None)
     return began, said
 
 
@@ -6176,7 +6177,8 @@ def transcription_control(h, method):
     elif method != "GET": return h.send_json({"code": "method_not_allowed"}, 405) or True
     return h.send_json({"on": meeting_transcription_on(), **TRANSCRIPTION_MODE,
                         "recordings": {rid: {"frames": t["frames"], "bytes": t["bytes"], "timeline": t["timeline"],
-                                              "gaps": transcription_gaps(t), "held": t["held"], "transcription": transcription_view(rid)}
+                                              "gaps": transcription_gaps(t), "held": t["held"], "socket": t.get("socket") is not None,
+                                              "transcription": transcription_view(rid)}
                                        for rid, t in TRANSCRIPTIONS.items()}}) or True
 
 
@@ -6325,6 +6327,7 @@ def transcription_socket(h, rid):
                             transcription_drain(rid, send, extra={"start": began, "end": at, "text": said})
                         if t.get("speaking") is None:  # the answer being said: what its echo is judged against
                             t["speaking"], t["speaking_text"] = at, spoken_cut(msg.get("text") or "")
+                        t["speaking_on"] = state  # its own speaking off comes on this socket
                         t.pop("interim", None)
                     elif t.get("speaking") is not None:
                         if at < t["speaking"]: fail("bad_frame"); break

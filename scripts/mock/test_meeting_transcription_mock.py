@@ -267,15 +267,26 @@ class MeetingTranscriptionMockTests(Transcription, unittest.TestCase):
         self.assertIsNotNone(back("interim"))
         self.assertEqual(back("line")["start"], 1)
         self.assertEqual(self.observed(rid)["timeline"]["speaking"], [{"start": 0, "end": 1, "text": "Noted."}])
-        # An upload's timeline repairs it too.
+        # An upload's timeline does not close a span while the socket that saw it open is up: its own off comes.
         back.send({"type": "speaking", "at": 5, "on": True, "text": "Again."})
         self.pcm(back, 2)
         self.upload(rid, room={"attendance": "participant"},
                     timeline={"speaking": [{"start": 0, "end": 1, "text": "Noted."}, {"start": 5, "end": 5.5, "text": "Again."}]})
         self.pcm(back, 2)
+        self.assertIsNone(back("line", wait=0.3))  # still held for the span
+        back.send({"type": "speaking", "at": 7, "on": False})
         self.assertEqual(back("line")["start"], 5)
         self.assertEqual(self.observed(rid)["timeline"]["speaking"],
-                         [{"start": 0, "end": 1, "text": "Noted."}, {"start": 5, "end": 5.5, "text": "Again."}])
+                         [{"start": 0, "end": 1, "text": "Noted."}, {"start": 5, "end": 7, "text": "Again."}])
+        # Once that socket is gone, an upload's timeline repairs a speaking off it lost.
+        back.send({"type": "speaking", "at": 9, "on": True, "text": "Once more."})
+        self.pcm(back, 4)
+        self.wait(lambda: self.observed(rid)["bytes"] == 13 * 32000, "the audio before the drop")
+        back.close()
+        self.wait(lambda: not self.observed(rid)["socket"], "the socket gone")
+        self.assertEqual(self.live(rid)["next"], 2)
+        self.upload(rid, room={"attendance": "participant"}, timeline={"speaking": [{"start": 9, "end": 9.5, "text": "Once more."}]})
+        self.assertEqual(self.live(rid)["next"], 3)  # the sentence held for it joined the live log
 
     def test_an_answer_longer_than_the_hold_stays_personas_echo(self):
         rid = self.recording()

@@ -246,7 +246,7 @@ func (s *Service) audioSocket(w http.ResponseWriter, r *http.Request) {
 			}
 		case "speaking":
 			if hasAt && f.On != nil {
-				run.speaking(*f.On, at, f.Text)
+				run.speaking(p, *f.On, at, f.Text)
 			}
 		case "end":
 			if !hasAt {

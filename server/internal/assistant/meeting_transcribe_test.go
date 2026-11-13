@@ -289,9 +289,9 @@ func TestHubEchoNextAnswerEndsAnAssumedSpan(t *testing.T) {
 	}
 }
 
-// A speaking off lost with a dropped socket: the next socket's start.timeline (or an upload's timeline) closes the
-// open span, and the sentences after it go out at once instead of waiting echoHoldMost; the timeline keeps the
-// phone's span.
+// A speaking off lost with a dropped socket: the next socket's start.timeline (or an upload's timeline while no socket
+// that saw the span open is up) closes the open span, and the sentences after it go out at once instead of waiting
+// echoHoldMost; the timeline keeps the phone's span.
 func TestHubEchoSpanRepairedByTheTimeline(t *testing.T) {
 	h := newHubFixture(t)
 	h.tr.set(func(f *fakeTranscriber) { f.live = jobScript{lines: mixedLines} })
@@ -322,7 +322,7 @@ func TestHubEchoSpanRepairedByTheTimeline(t *testing.T) {
 		t.Fatalf("the timeline: %+v", m.Transcription.Timeline)
 	}
 
-	// An upload's timeline repairs it too.
+	// An upload's timeline repairs it too, once the socket that saw it open is gone.
 	back.send(map[string]any{"type": "speaking", "on": true, "at": 4.7, "text": "Again."})
 	waitFor(t, "the span open", func() bool {
 		r := h.s.hubRunOf(meetingRec)
@@ -330,6 +330,8 @@ func TestHubEchoSpanRepairedByTheTimeline(t *testing.T) {
 		defer r.mu.Unlock()
 		return r.openFrom != nil
 	})
+	_ = back.c.CloseNow() // the speaking off at 4.8 is lost with it
+	waitFor(t, "the socket gone", func() bool { return !h.s.hubRunOf(meetingRec).socketOpen() })
 	h.hubUpload(meetingRec, 2, map[string]any{"timeline": map[string]any{"speaking": []map[string]any{
 		{"start": 1.65, "end": 1.7, "text": "Noted."}, {"start": 4.7, "end": 4.8, "text": "Again."}}}})
 	r := h.s.hubRunOf(meetingRec)
@@ -338,6 +340,47 @@ func TestHubEchoSpanRepairedByTheTimeline(t *testing.T) {
 	r.mu.Unlock()
 	if open != nil {
 		t.Fatalf("still open from %v after the upload closed it", *open)
+	}
+}
+
+// An upload while the socket that saw the span open is up does not close it, whatever its timeline says (a timeline
+// has only spans that ended; a phone that put the span being said there, ended at the upload's time, would cut it
+// short): the sentences of the answer after that time stay Persona's echo, and the socket's own speaking off closes it.
+func TestHubEchoSpanNotClosedByAnUploadWhileItsSocketIsUp(t *testing.T) {
+	h := newHubFixture(t)
+	h.tr.set(func(f *fakeTranscriber) { f.live = jobScript{lines: longAnswer} })
+	h.hubUpload(meetingRec, 1, nil)
+	p, _ := h.open(meetingRec, 0, nil)
+	p.audio(1.6)
+	p.wait("line", 1)
+	answer := longAnswer[1].text + " " + longAnswer[2].text
+	p.send(map[string]any{"type": "speaking", "on": true, "at": 1.8, "text": answer})
+	p.audio(1.6)
+	waitFor(t, "the first sentence of the answer held", func() bool {
+		return h.runHas(meetingRec, func(r *hubRun) bool { return len(r.held) == 1 })
+	})
+	h.hubUpload(meetingRec, 2, map[string]any{"timeline": map[string]any{"speaking": []map[string]any{
+		{"start": 1.8, "end": 2.5, "text": answer}}}})
+	if !h.runHas(meetingRec, func(r *hubRun) bool { return r.openFrom != nil }) {
+		t.Fatal("the upload closed the span its socket still has open")
+	}
+	p.audio(1.5)
+	p.send(map[string]any{"type": "speaking", "on": false, "at": 4.8})
+	p.audio(2)
+	waitFor(t, "the last sentence's line", func() bool {
+		lines := p.of("line")
+		return len(lines) > 0 && lines[len(lines)-1]["text"] == longAnswer[3].text
+	})
+	if got := p.texts(); !slices.Equal(got, []string{longAnswer[0].text, longAnswer[3].text}) {
+		t.Fatalf("lines %q", got)
+	}
+	waitFor(t, "the hub's transcript", func() bool { return len(h.hubTexts(meetingRec)) == 4 })
+	if got := h.hubEcho(meetingRec); !slices.Equal(got, []bool{false, true, true, false}) {
+		t.Fatalf("echo marks %v", got)
+	}
+	m, _, _ := h.engine().MeetingRead(meetingRec)
+	if tl := m.Transcription.Timeline; tl == nil || !slices.Equal(tl.Speaking, []kb.SpokenSpan{{Start: 1.8, End: 4.8, Text: answer}}) {
+		t.Fatalf("the timeline: %+v", m.Transcription.Timeline)
 	}
 }
 

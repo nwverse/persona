@@ -99,15 +99,16 @@ type hubRun struct {
 	audioAt time.Time
 
 	// The timeline: meeting.json's union and what the socket said since; role is the meeting's own (before the
-	// timeline's first change). openFrom is a speaking span open now (since openAt) and openText the answer being said
-	// in it (its speaking on's text), held the sentences waiting for it to close, in order. openAssumed: it was held
-	// echoHoldMost without closing, and is assumed open since: sentences are no longer held for it but judged with it
-	// (assumedSpanLocked) until a speaking off or the timeline closes it.
+	// timeline's first change). openFrom is a speaking span open now (since openAt), openText the answer being said in
+	// it (its speaking on's text) and openOn the socket that sent its speaking on; held the sentences waiting for it to
+	// close, in order. openAssumed: it was held echoHoldMost without closing, and is assumed open since: sentences are
+	// no longer held for it but judged with it (assumedSpanLocked) until a speaking off or the timeline closes it.
 	timeline    kb.Timeline
 	role        string
 	openFrom    *float64
 	openText    string
 	openAt      time.Time
+	openOn      *phoneSocket
 	openAssumed bool
 	held        []hubSentence
 
@@ -412,11 +413,12 @@ func (r *hubRun) roleFrame(at float64, attendance string) {
 	r.mergeTimelineLocked(kb.Timeline{Roles: []kb.TimelineRole{{At: at, Attendance: attendance}}})
 }
 
-// speaking is the socket's speaking frame: a span opens at at, Persona saying text (sentences that end after it began
-// wait), or closes. A speaking on at a later time while a span is open means the open span ended unseen (its speaking
-// off lost): it is closed there as assumed (expireSpanLocked) and the new one opens. A speaking off closes the open
-// span also after it was assumed open (releaseHoldLocked): the phone said where it ended.
-func (r *hubRun) speaking(on bool, at float64, text string) {
+// speaking is socket p's speaking frame: a span opens at at, Persona saying text (sentences that end after it began
+// wait), or closes. A speaking on for the span open already (a socket that started while it was open sends it again)
+// makes p the socket that saw it open; one at a later time means the open span ended unseen (its speaking off lost):
+// it is closed there as assumed (expireSpanLocked) and the new one opens. A speaking off closes the open span also
+// after it was assumed open (releaseHoldLocked): the phone said where it ended.
+func (r *hubRun) speaking(p *phoneSocket, on bool, at float64, text string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.stopped {
@@ -431,6 +433,7 @@ func (r *hubRun) speaking(on bool, at float64, text string) {
 			r.openFrom, r.openText, r.openAt = &at, kb.SpokenText(text), time.Now()
 			r.clearInterimLocked() // no caption goes out while Persona speaks
 		}
+		r.openOn = p
 		return
 	}
 	if r.openFrom == nil {
@@ -442,7 +445,7 @@ func (r *hubRun) speaking(on bool, at float64, text string) {
 
 // clearOpenLocked: no speaking span is open.
 func (r *hubRun) clearOpenLocked() {
-	r.openFrom, r.openText, r.openAssumed = nil, "", false
+	r.openFrom, r.openText, r.openOn, r.openAssumed = nil, "", nil, false
 }
 
 // closeSpanLocked: the open span is [from, to], with the answer said in it; the sentences held for it are judged now.
@@ -500,8 +503,9 @@ func (r *hubRun) assumedSpanLocked(s hubSentence) (kb.SpokenSpan, bool) {
 }
 
 // reconcileOpenLocked closes the open speaking span once the timeline has it closed: the speaking off a dropped
-// socket lost comes back in the next socket's start.timeline or an upload's timeline (a span still open when a socket
-// starts is not in its start, the phone sends speaking on after it): kb.EchoSpanClosed.
+// socket lost comes back in the next socket's start.timeline or an upload's timeline (a timeline has only spans that
+// ended; a span still open when a socket starts is not in its start, the phone sends speaking on after it):
+// kb.EchoSpanClosed.
 func (r *hubRun) reconcileOpenLocked() {
 	if r.openFrom == nil {
 		return
@@ -510,6 +514,12 @@ func (r *hubRun) reconcileOpenLocked() {
 	if to, ok := kb.EchoSpanClosed(r.timeline, from); ok {
 		r.closeSpanLocked(from, to)
 	}
+}
+
+// openSeenLocked: the socket that saw the open speaking span open (sent its speaking on) is still up, so its own
+// speaking off will come: an upload's timeline does not close the span before it (hubUploaded).
+func (r *hubRun) openSeenLocked() bool {
+	return r.openFrom != nil && r.openOn != nil && r.phone == r.openOn
 }
 
 // mergeTimelineLocked adds t to the run's timeline and meeting.json's.
