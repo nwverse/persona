@@ -211,15 +211,26 @@ import Synchronization
         if rect != nil, restore.pending { DispatchQueue.main.async { [weak self] in self?.restore.finish() } }
     }
 
-    /// The source over the page's picture, or (no page) where the small window comes up.
+    /// The source over the page's picture, or (no page) where the small window comes up. Its picture is laid out again
+    /// each time, also when the frame is the same: the system's transition leaves the layer as the small window drew
+    /// it, and the next one started from that, a corner of the picture (#6333).
     private func place() {
         guard let host, let window = host.window, let ref else { return }
         let screen: UICoordinateSpace = window.windowScene?.screen.coordinateSpace ?? window
         let page = pageRect.map { window.convert($0, from: screen) }
         let size = Self.size(VNC.current(ref)?.size ?? .zero, width: Theme.Size.pictureInPictureSource)
         let frame = VNCPiPPlacement.source(page: page, in: window.bounds, safeTop: window.safeAreaInsets.top, size: size, margin: Theme.Space.page)
-        guard host.frame != frame else { return }
-        UIView.performWithoutAnimation { host.frame = frame }
+        Self.log.notice("pip: source \(String(describing: frame), privacy: .public), its picture was \(Self.geometry(host), privacy: .public)")
+        UIView.performWithoutAnimation {
+            if host.frame != frame { host.frame = frame }
+            host.place()
+        }
+    }
+
+    /// The source's picture layer as it is (the system's log only).
+    private static func geometry(_ host: VNCScreenUIView) -> String {
+        let d = host.display
+        return "\(String(describing: d.frame)) in \(String(describing: d.superlayer?.bounds ?? .zero)), transform \(CATransform3DIsIdentity(d.transform) ? "none" : "set"), hidden \(d.isHidden), opacity \(d.opacity)"
     }
 
     /// The small window's ▶ after it could not connect: again (the card turns again).
@@ -351,10 +362,11 @@ import Synchronization
             wanted = false
             starting = false
             AppModel.shared.vncPiP = nil
-            // Ready again under the page when it is up (and by itself again when the app goes to the background);
-            // else the connection goes.
+            // Ready again under the page when it is up (and by itself again when the app goes to the background), its
+            // picture laid out again over the page's; else the connection goes.
             if let ref, AppModel.shared.screenOpen?.machine == ref {
                 controller?.canStartPictureInPictureAutomaticallyFromInline = true
+                place()
                 return
             }
             end()
