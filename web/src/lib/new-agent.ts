@@ -7,7 +7,6 @@ import { uuid } from "./format";
 import { apiOp } from "./ops";
 import { currentPlatform, modName, type Platform } from "./shortcuts";
 import { href, navigate } from "./router";
-import { withStarPrompt } from "./star-prompt-load";
 import { getState, putLaunch, upsertSession } from "./store";
 import { ultracodeErrorText, ultracodeRefused } from "./ultracode";
 import type { DraftImage } from "./drafts";
@@ -149,8 +148,6 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
       if (!getState().launches[id]) return;
       update({ session });
       upsertSession(session);
-      // one more Agent this browser started, for the GitHub star line (#5761)
-      withStarPrompt((m) => m.starPromptLaunched());
     }
     if (!launch.outgoing) {
       update({ phase: "uploading" });
@@ -222,6 +219,10 @@ export interface NewAgentPreset {
   images?: DraftImage[];
   /** An exact workspace destination takes precedence over the legacy machine/folder preset. */
   workspace?: WorkspaceTarget;
+  /** Hears the Agent started from this opening once its launch is ready, its first message sent (Inbox's "Hand to AI" ›
+   *  "New agent…", #5933: it files the item and remembers the Agent; lib/new-agent-started.ts). Never for a cancelled
+   *  sheet or a launch dropped before that. */
+  onStarted?: (session: Session) => void;
 }
 
 const openers = new Set<(preset: NewAgentPreset) => void>();

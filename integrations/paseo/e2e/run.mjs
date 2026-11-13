@@ -13,9 +13,9 @@
 // Code runs with, so its transcripts and its own config live there) and the workspace. The daemon listens on a free
 // port; the bridge reaches it only through its home's paseo.pid.
 
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { join } from 'node:path'
 import { checks, startNode, until } from '../../runtime-sdk/testing/node-harness.mjs'
@@ -156,6 +156,12 @@ await until('the row names its transcript', () => listed()?.status === 'done' ||
 check('listed as Claude Code, done, with its space', listed()?.agent === 'claude' && ['done', 'idle'].includes(listed()?.status) && listed()?.space_kind === 'paseo',
   JSON.stringify(listed()))
 check('no second row for its transcript (未运行)', node.sessions().filter((s) => s.cwd === work).length === 1, node.sessions().map((s) => s.session_id).join(','))
+
+// Seen in Persona (#6299): Paseo's own unread mark is cleared too, so it is not unread in Paseo's app either.
+const wasUnread = listed()?.status === 'done'
+await tryCall('session.seen', { session_id: sid })
+await until('seen in Paseo too', () => listed()?.status === 'idle', 20_000).catch(() => {})
+check('seen in Persona: no longer unread in Paseo either', wasUnread && listed()?.status === 'idle', `${wasUnread} ${listed()?.status}`)
 
 // Live text while it writes, the message's own echo.
 await node.call('session.send', { session_id: sid, text: 'Now E2E_HELLO again', client_msg_id: 'cm-e2e-1' })
@@ -302,6 +308,20 @@ check('resumed (session.start): the same agent, under the same id', resumed?.ses
 check('one row for the conversation throughout: never one under its transcript id', claudeSid && !underTranscript() &&
   node.sessions().filter((s) => s.cwd === work).length === 1, node.sessions().filter((s) => s.cwd === work).map((s) => s.session_id).join(','))
 
+// A branch of it (#6298): a copy of its transcript, a session not running; its first message continues it in Paseo.
+await until('idle for the branch', () => ['done', 'idle'].includes(listed()?.status), 60_000).catch(() => {})
+check('the session can be branched', listed()?.can_fork === true, JSON.stringify(listed()?.can_fork))
+const branch = (await tryCall('session.fork', { session_id: sid, at_item_id: '' }, 30_000))?.session_id
+await until('the branch listed', () => node.sessions().some((s) => s.session_id === branch), 30_000).catch(() => {})
+await tryCall('session.send', { session_id: branch, text: 'Branch E2E_HELLO', client_msg_id: 'cm-e2e-fork' }, 90_000)
+await until('the branch answered', async () => (await texts(branch)).some((i) => i.client_msg_id === 'cm-e2e-fork') &&
+  (await texts(branch)).filter((i) => i.text === 'Hello from the mock model, step by step.').length >= 2, 90_000).catch(() => {})
+const branchRow = node.sessions().find((s) => s.session_id === branch)
+const branchSaid = (await texts(branch)).filter((i) => i.role === 'user' && i.kind === 'text').map((i) => [i.text, i.client_msg_id ?? null])
+check('the branch goes on in Paseo under its own id, the original as it was', Boolean(branch) && branch !== sid && branchRow?.source_kind === 'runtime' &&
+  branchSaid.some(([t, cm]) => t === 'Branch E2E_HELLO' && cm === 'cm-e2e-fork') && branchSaid.some(([t]) => t === 'Back again E2E_HELLO') &&
+  !(await texts()).some((i) => i.text === 'Branch E2E_HELLO') && Boolean(listed()), `${branch} ${branchRow?.source_kind} ${JSON.stringify(branchSaid)}`)
+
 // ---- agents started in Paseo itself, never driven from the phone ----
 
 // Paseo runs Claude Code's command line itself, so such an agent's transcript reads like a script's one-shot run, which
@@ -345,6 +365,44 @@ await until('its rewound conversation', async () => !(await texts(forked?.claude
 check("a Paseo agent's rewind: Claude Code's fork, under the same session in Persona", fork && fork.persistence?.sessionId !== forked?.claude &&
   fork.labels?.['persona.session'] === forked?.claude && row(forked, true) && !node.sessions().some((s) => s.session_id === fork.persistence?.sessionId) &&
   !(await texts(forked?.claude)).some((i) => i.role === 'user' && i.text === 'Now E2E_HELLO again'), JSON.stringify(fork?.labels))
+
+// ---- Paseo's workspaces (#6295): the catalog, a worktree Paseo makes, a session started in it ----
+
+const gitEnv = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: 'Sample Dev',
+  GIT_AUTHOR_EMAIL: 'dev@example.com', GIT_COMMITTER_NAME: 'Sample Dev', GIT_COMMITTER_EMAIL: 'dev@example.com' }
+const git = (dir, ...args) => execFileSync('git', ['-C', dir, ...args], { env: gitEnv, encoding: 'utf8' }).trim()
+mkdirSync(join(root, 'repo'))
+const repo = realpathSync(join(root, 'repo'))
+git(repo, 'init', '--initial-branch=main')
+writeFileSync(join(repo, 'app.txt'), 'one\n')
+git(repo, 'add', 'app.txt')
+git(repo, 'commit', '-m', 'first')
+// Paseo's own app opens the folder: a workspace with no agent in it.
+const opened = await paseo.request('workspace.create.request', { source: { kind: 'directory', path: repo } }, { timeoutMs: 60_000 }).catch((e) => ({ error: e.message }))
+const repoWs = opened?.workspace?.id
+const catalog = async () => (await tryCall('workspaces.list', {}))?.workspaces ?? []
+const inCatalog = (id) => until('in the catalog', async () => (await catalog()).find((w) => w.source_id === id), 30_000).catch(() => undefined)
+const repoRow = repoWs && await inCatalog(repoWs)
+check('a Paseo workspace with no agents is in the node\'s catalog, as its main checkout', repoRow?.source === 'paseo' && repoRow.cwd === repo &&
+  repoRow.is_main === true && repoRow.workspace_kind === 'git' && repoRow.branch === 'main', JSON.stringify(repoRow ?? opened))
+const prep = await tryCall('worktree.prepare', { workspace_id: repoWs, kind: 'paseo' })
+check('New worktree on it: Paseo\'s worktrees folder of the repository', prep?.path?.startsWith(`${join(paseoHome, 'worktrees')}/`) &&
+  prep.root === repo && prep.branch === 'main' && prep.automatic_name === true, JSON.stringify(prep))
+const wt = prep && await tryCall('worktree.create', { workspace_id: repoWs, kind: 'paseo', branch: 'e2e/feature', path: join(prep.path, 'e2e-feature') }, 150_000)
+const paseoWs = async (id) => ((await paseo.request('fetch_workspaces_request', { filter: { query: id } }).catch(() => undefined))?.entries ?? []).find((w) => w.id === id)
+const madeWs = wt && await paseoWs(wt.workspace_id)
+check('a worktree made by Paseo, on the new branch from the workspace\'s HEAD, in its folder', wt?.path === join(prep.path, 'e2e-feature') &&
+  existsSync(join(wt.path, 'app.txt')) && git(wt.path, 'branch', '--show-current') === 'e2e/feature' &&
+  git(wt.path, 'rev-parse', 'HEAD') === git(repo, 'rev-parse', 'HEAD') && madeWs?.workspaceKind === 'worktree', JSON.stringify(wt ?? {}) + JSON.stringify(madeWs?.workspaceKind))
+const wtRow = wt && await inCatalog(wt.workspace_id)
+check('…and in the catalog at once, a worktree of the same project', wtRow?.is_main === false && wtRow.project_id === repoRow?.project_id && wtRow.branch === 'e2e/feature',
+  JSON.stringify(wtRow))
+const inWt = wt && await tryCall('session.start', { cwd: wt.path, workspace_id: wt.workspace_id, prompt: 'Please E2E_HELLO', launcher: 'e2e-claude' }, 60_000)
+const wtSid = inWt?.session?.session_id
+const wtAgent = wtSid && await until('its agent', async () => (await paseo.request('fetch_agent_request', { agentId: wtSid.slice('paseo-'.length) })).agent, 30_000).catch(() => undefined)
+await until('listed in its workspace', () => node.sessions().find((s) => s.session_id === wtSid)?.workspace_id, 30_000).catch(() => {})
+check('a session started in it: Paseo\'s agent is in that workspace, and its row names it', wtAgent?.workspaceId === wt?.workspace_id &&
+  node.sessions().find((s) => s.session_id === wtSid)?.workspace_id === wt?.workspace_id, JSON.stringify({ ws: wtAgent?.workspaceId, row: node.sessions().find((s) => s.session_id === wtSid)?.workspace_id }))
 
 // ---- the engine changed: the bridge stops ----
 

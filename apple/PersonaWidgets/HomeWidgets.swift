@@ -1,36 +1,61 @@
+import AppIntents
 import SwiftUI
 import WidgetKit
 
-/// Persona's Home Screen widgets (docs/apple/home-widgets.md): each draws only the snapshot the app left in the App
-/// Group (`HomeSnapshotStore`) and the persona's pictures the Live Activity's faces already hold (`FleetLookStore`).
-/// The app reloads a kind's timeline when its part of the snapshot changes; a timeline carries one more entry at the
-/// moment the snapshot turns stale, so old numbers step back without a reload.
+/// Persona's Home Screen and Lock Screen widgets (docs/apple/home-widgets.md): each draws only the snapshot the app left
+/// in the App Group (`HomeSnapshotStore`) and the persona's pictures the Live Activity's faces already hold
+/// (`FleetLookStore`). The app reloads a kind's timeline when its part of the snapshot changes; a timeline carries one
+/// more entry at the moment the snapshot turns stale, so old numbers step back without a reload.
+enum HomeTimeline {
+    static let placeholder = HomeEntry(date: .now, snapshot: HomeSnapshot(paired: true))
+
+    /// `edit` applies the widget's Edit Widget choices before the Smart Stack's score, which counts only what it shows.
+    static func entry(_ kind: HomeKind, at date: Date, snapshot: HomeSnapshot?, edit: (inout HomeEntry) -> Void) -> HomeEntry {
+        var e = HomeEntry(date: date, snapshot: snapshot ?? HomeSnapshot(), pictures: HomeFaces.load())
+        edit(&e)
+        e.relevance = HomeRelevance.of(kind, e.context)
+        return e
+    }
+
+    static func timeline(_ kind: HomeKind, edit: (inout HomeEntry) -> Void) -> Timeline<HomeEntry> {
+        let snapshot = HomeSnapshotStore.shared.read()
+        let now = Date.now
+        var entries = [entry(kind, at: now, snapshot: snapshot, edit: edit)]
+        if let snapshot, snapshot.at > 0 {
+            let stale = Date(timeIntervalSince1970: snapshot.at + HomeSnapshot.staleAfter)
+            if stale > now { entries.append(entry(kind, at: stale, snapshot: snapshot, edit: edit)) }
+        }
+        return Timeline(entries: entries, policy: .never)
+    }
+}
+
+/// A widget with nothing to edit.
 struct HomeProvider: TimelineProvider {
     var kind: HomeKind
 
-    func placeholder(in context: Context) -> HomeEntry {
-        HomeEntry(date: .now, snapshot: HomeSnapshot(paired: true))
-    }
+    func placeholder(in context: Context) -> HomeEntry { HomeTimeline.placeholder }
 
     func getSnapshot(in context: Context, completion: @escaping (HomeEntry) -> Void) {
-        completion(entry(at: .now, snapshot: HomeSnapshotStore.shared.read()))
+        completion(HomeTimeline.entry(kind, at: .now, snapshot: HomeSnapshotStore.shared.read()) { _ in })
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<HomeEntry>) -> Void) {
-        let snapshot = HomeSnapshotStore.shared.read()
-        let now = Date.now
-        var entries = [entry(at: now, snapshot: snapshot)]
-        if let snapshot, snapshot.at > 0 {
-            let stale = Date(timeIntervalSince1970: snapshot.at + HomeSnapshot.staleAfter)
-            if stale > now { entries.append(entry(at: stale, snapshot: snapshot)) }
-        }
-        completion(Timeline(entries: entries, policy: .never))
+        completion(HomeTimeline.timeline(kind) { _ in })
+    }
+}
+
+/// A widget with Edit Widget choices (Agents, Computers, Usage): the same timeline, filtered by them.
+struct HomeEditProvider<Intent: HomeWidgetEdit>: AppIntentTimelineProvider {
+    var kind: HomeKind
+
+    func placeholder(in context: Context) -> HomeEntry { HomeTimeline.placeholder }
+
+    func snapshot(for configuration: Intent, in context: Context) async -> HomeEntry {
+        HomeTimeline.entry(kind, at: .now, snapshot: HomeSnapshotStore.shared.read()) { configuration.apply(to: &$0) }
     }
 
-    private func entry(at date: Date, snapshot: HomeSnapshot?) -> HomeEntry {
-        var e = HomeEntry(date: date, snapshot: snapshot ?? HomeSnapshot(), pictures: HomeFaces.load())
-        e.relevance = HomeRelevance.of(kind, e.context)
-        return e
+    func timeline(for configuration: Intent, in context: Context) async -> Timeline<HomeEntry> {
+        HomeTimeline.timeline(kind) { configuration.apply(to: &$0) }
     }
 }
 
@@ -55,36 +80,35 @@ enum HomeFaces {
     }
 }
 
-/// How the Smart Stack ranks a widget (docs/apple/home-widgets.md「Smart Stack」): first when something waits for you or a
-/// recording runs, high when a meeting is close, low otherwise.
-enum HomeRelevance {
-    static func of(_ kind: HomeKind, _ c: HomeContext) -> TimelineEntryRelevance {
-        guard c.snapshot.paired, !c.stale else { return TimelineEntryRelevance(score: 0) }
-        let mood = c.mood(kind)
-        if kind == .record, c.snapshot.recording != nil { return TimelineEntryRelevance(score: 90) }
-        if mood == .needsYou { return TimelineEntryRelevance(score: 100) }
-        if kind == .today || kind == .record, let next = c.nextEvent, next.start - c.now < 15 * 60 {
-            return TimelineEntryRelevance(score: 70)
-        }
-        return TimelineEntryRelevance(score: mood == .working ? 30 : 10)
-    }
-}
-
-/// One kind's widget: its gallery name and line, its sizes, its view.
+/// One kind's widget: its gallery name and line, its sizes (the Lock Screen's too), its view.
 enum HomeWidgetConfiguration {
     static func make(_ kind: HomeKind) -> some WidgetConfiguration {
         StaticConfiguration(kind: kind.widgetKind, provider: HomeProvider(kind: kind)) { entry in
             HomeWidgetView(kind: kind, entry: entry)
         }
-        .configurationDisplayName(Text(kind.title))
-        .description(Text(kind.summary))
-        .supportedFamilies(kind.families.filter { [.systemSmall, .systemMedium, .systemLarge].contains($0) })
+        .home(kind)
+    }
+
+    /// The same with Edit Widget's choices. A widget placed before it had any keeps its kind and takes the defaults.
+    static func make<Intent: HomeWidgetEdit>(_ kind: HomeKind, editing: Intent.Type) -> some WidgetConfiguration {
+        AppIntentConfiguration(kind: kind.widgetKind, intent: Intent.self, provider: HomeEditProvider<Intent>(kind: kind)) { entry in
+            HomeWidgetView(kind: kind, entry: entry)
+        }
+        .home(kind)
+    }
+}
+
+private extension WidgetConfiguration {
+    func home(_ kind: HomeKind) -> some WidgetConfiguration {
+        configurationDisplayName(Text(kind.title))
+            .description(Text(kind.summary))
+            .supportedFamilies(kind.families)
     }
 }
 
 /// The widgets (#5664). Each kind is a type of its own: a `Widget` has no arguments.
 struct AgentsHomeWidget: Widget {
-    var body: some WidgetConfiguration { HomeWidgetConfiguration.make(.agents) }
+    var body: some WidgetConfiguration { HomeWidgetConfiguration.make(.agents, editing: AgentsWidgetEdit.self) }
 }
 
 struct InboxHomeWidget: Widget {
@@ -104,11 +128,11 @@ struct TodosHomeWidget: Widget {
 }
 
 struct UsageHomeWidget: Widget {
-    var body: some WidgetConfiguration { HomeWidgetConfiguration.make(.usage) }
+    var body: some WidgetConfiguration { HomeWidgetConfiguration.make(.usage, editing: UsageWidgetEdit.self) }
 }
 
 struct ComputersHomeWidget: Widget {
-    var body: some WidgetConfiguration { HomeWidgetConfiguration.make(.computers) }
+    var body: some WidgetConfiguration { HomeWidgetConfiguration.make(.computers, editing: ComputersWidgetEdit.self) }
 }
 
 struct HealthHomeWidget: Widget {

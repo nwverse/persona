@@ -65,11 +65,11 @@ struct SidebarWaitingBadge: View {
     }
 }
 
-/// The pages the Sidebar layout opens beside its sidebar by value, which the Persona page registers (they need its
-/// state): pushed onto the one path the page beside the sidebar has, a pick replacing what was there (as the web's
-/// routes). In the Separate layout these are presented by flag, as before.
+/// The pages the Sidebar layout opens beside its sidebar by value that are not the shell's places (`ShellRoute`), which
+/// the Persona page registers (Health needs its state): pushed onto the one path the page beside the sidebar has, a pick
+/// replacing what was there (as the web's routes). In the other layouts Health is presented by flag, as before.
 enum SidebarRoute: Hashable, Sendable {
-    case profile, routines, knowledge, recordings, health, todos, messages
+    case health, messages
 }
 
 extension ShellPage {

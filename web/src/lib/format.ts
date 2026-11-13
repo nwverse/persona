@@ -15,6 +15,15 @@ export function sessionCan(s: Session | undefined, operation: keyof SessionCapab
   return s.capabilities?.[operation] === true;
 }
 
+/** Rename (#6294): the node's `capabilities.rename` where it says (a runtime's session, which has no terminal), else as
+ *  before: a row that can send and is the user's own Agent or a Persona conversation (no other source). */
+export function sessionCanRename(s: Session | undefined): boolean {
+  if (!s) return false;
+  const said = s.capabilities?.rename;
+  if (typeof said === "boolean") return said;
+  return sessionCan(s, "send") && (Boolean(s.assistant) || !s.source_kind);
+}
+
 /** A stopped Agent (#4754, docs/integrations/engines.md "Agents run in a terminal"): an Agent of a terminal engine that is
  *  not running. Its row keeps its conversation and its terminal and takes no messages; the one way back is Resume on its
  *  terminal page. Only a node that knows it says so (capabilities read and terminal, no send): an older node's offline

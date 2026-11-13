@@ -151,6 +151,9 @@ func (c *Remote) Collect(context.Context) ([]connector.InboxThing, error) {
 
 var errNoReply = errors.New("在「信息」里回复：Persona 不替你发信息")
 
+// errNotHanded answers a read while the switch is off, for the assistant's tools and the subscription catalog alike.
+var errNotHanded = errors.New("「信息」没有交给 Persona（设置 › 连接器 › 信息）")
+
 // Reply: Persona does not send messages (the item's "Reply in Messages" opens Messages with the number).
 func (c *Remote) Reply(context.Context, connector.InboxReply) error { return errNoReply }
 
@@ -318,7 +321,7 @@ func (c *Remote) Catalog(context.Context) ([]connector.CatalogSource, error) {
 func (c *Remote) CatalogCall(ctx context.Context, q connector.CatalogQuery) (string, error) {
 	if q.Tool == inboxThings {
 		if !c.AI() {
-			return "", errors.New("「信息」没有交给 Persona（设置 › 连接器 › 信息）")
+			return "", errNotHanded
 		}
 		things, _, err := c.rows(ctx)
 		if err != nil {
@@ -401,7 +404,7 @@ type hits struct {
 // answer is what a read tool found: a ChatsPage, a MessagesPage or hits.
 func (c *Remote) answer(ctx context.Context, name string, args json.RawMessage) (any, error) {
 	if !c.AI() {
-		return nil, errors.New("「信息」没有交给 Persona（设置 › 连接器 › 信息）")
+		return nil, errNotHanded
 	}
 	var a struct {
 		Chat   string `json:"chat"`

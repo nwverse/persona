@@ -100,8 +100,8 @@ type InboxAgent struct {
 	// to its count, and the ones queued since are the newest. Pending is trimmed to the latest 20, so its length
 	// cannot tell how many came since.
 	told int
-	// signaled is the handling chain's newest received batch an inbox signal to the linked task's supervisor counted
-	// (in memory only, supervise_inbox.go): the next one counts the messages after it.
+	// signaled is the item's message count when an inbox signal to the linked task's supervisor last counted it
+	// (in memory only, supervise_inbox.go): the next one counts the messages since that count.
 	signaled int
 	// signaledOf is the newest message considered for a supervisor signal in this process. URL routing also runs
 	// while the twin is off, so Of (what its handling conversation took) is independent of this cursor.
@@ -176,8 +176,18 @@ func (s *Service) handPass(ctx context.Context) {
 	if tasks := s.activeTasks(ctx); len(tasks) > 0 { // which of the user's tasks a new one is about
 		for _, w := range escalated {
 			b.mu.Lock()
-			fresh := w.it.Agent != nil && w.it.Agent.SessionID == "" && w.it.Agent.TodoID == ""
+			a, todo := w.it.Agent, ""
+			fresh := a != nil && a.SessionID == "" && a.TodoID == ""
+			if a != nil {
+				todo = a.TodoID
+			}
 			b.mu.Unlock()
+			// A link to a task that was closed, with no one task carrying it on (superviseInbox would have moved it
+			// there), is no link: the judge picks again among the open ones.
+			if !fresh && todo != "" {
+				t, ok := s.todoNow(todo)
+				fresh = !ok || !taskOpen(t)
+			}
 			if fresh && s.linkTaskFor(ctx, w.it, tasks, w) {
 				linked[w.it] = true
 			}
@@ -476,12 +486,32 @@ func (s *Service) sweepInboxAgents(ctx context.Context, cfg InboxAgentConfig, no
 		if it.Handling != nil {
 			state = it.Handling.State
 		}
+		var link *InboxChainLink
+		if state == HandlingAgent {
+			link = inboxLatestAgentLink(it)
+		}
 		b.mu.Unlock()
 		reason := ""
 		switch {
 		case s.isWorkMachine(a.MachineID):
 			reason = i18n.T(s.lang(ctx), "assistant-start.work_machine")
 		case state == HandlingAgent:
+			if link != nil {
+				sess, found, reachable := s.inboxAgentSession(ctx, link.MachineID, link.SessionID)
+				if reachable && found {
+					if !s.recordInboxAgentStops(ctx, sess) { // also repairs a stop report lost in a restart
+						continue // known unsettled work (or an undone stop): wait for the next pass, never time it out now
+					}
+					b.mu.Lock()
+					stillAgent := it.Agent != nil && it.Agent.SessionID == a.SessionID && it.Handling != nil && it.Handling.State == HandlingAgent
+					b.mu.Unlock()
+					if !stillAgent {
+						continue // the stop returned the item to its processing conversation
+					}
+				}
+			}
+			// Only a session known to be unsettled waits past this bound. A link evicted by the chain cap, a session the
+			// node definitively says is gone, or an unreachable node keeps the old four-timeout fallback instead of hanging.
 			if a.StartedAt != nil && now.Sub(*a.StartedAt) > 4*agentTimeout(cfg) {
 				reason = i18n.T(s.lang(ctx), "assistant-inbox_agent.timeout")
 			}
