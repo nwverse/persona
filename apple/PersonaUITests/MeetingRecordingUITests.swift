@@ -8,7 +8,8 @@ final class MeetingRecordingUITests: XCTestCase {
     private let live = "00000000-0000-0000-0000-000000000002"
     private let past = "00000000-0000-0000-0000-000000000003"
 
-    /// The Recordings page leads with Meeting Recording; the drawer has it first among the places.
+    /// The Recordings page leads with Record, its one prominent button (#5243); the drawer has the page first among its
+    /// places (#5517).
     @MainActor func testMeetingRecordingIsOneTapAway() throws {
         let hub = try mockHub()
         let app = XCUIApplication()
@@ -16,16 +17,17 @@ final class MeetingRecordingUITests: XCTestCase {
         app.launchPinned()
         let start = app.buttons["recording-meeting-start"]
         XCTAssertTrue(start.waitForExistence(timeout: 15), app.debugDescription)
-        XCTAssertEqual(start.label, "会议录音")
-        XCTAssertTrue(app.buttons["recording-start"].exists, "the plain recording stays")
+        XCTAssertEqual(start.label, "录音")
+        XCTAssertFalse(app.buttons["recording-start"].exists, "one Record button: a note is the Type choice under it")
         try shot(app, "recordings")
 
         app.terminate()
-        app.launchArguments = ["-pairURL", pair(hub), "-tab", "assistant", "-newAssistant", "YES", "-openAssistantSidebar", "YES"]
+        app.launchArguments = ["-pairURL", pair(hub), "-tab", "assistant", "-newAssistant", "YES"]
         app.launchPinned()
+        openDrawer(app)
         let row = app.buttons["sidebar-meeting-recording"].firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 15), app.debugDescription)
-        XCTAssertTrue(row.label.contains("会议录音"), row.label)
+        XCTAssertTrue(row.label.contains("录音") && !row.label.contains("会议"), row.label)
     }
 
     /// A meeting being recorded: its name from the calendar, the time, Meeting, its bookmarks; the drawer's row opens it;
@@ -49,9 +51,9 @@ final class MeetingRecordingUITests: XCTestCase {
         XCTAssertTrue(try stored(hub, live)?.contains("产品周会") == true)
 
         app.terminate()
-        app.launchArguments = ["-pairURL", pair(hub), "-tab", "assistant", "-newAssistant", "YES", "-openAssistantSidebar", "YES",
-                               "-showMeetingSample", "recording"]
+        app.launchArguments = ["-pairURL", pair(hub), "-tab", "assistant", "-newAssistant", "YES", "-showMeetingSample", "recording"]
         app.launchPinned()
+        openDrawer(app)
         let row = app.buttons["sidebar-meeting-recording"].firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 15), app.debugDescription)
         XCTAssertTrue(row.label.contains("录音中"), row.label)
@@ -366,6 +368,15 @@ final class MeetingRecordingUITests: XCTestCase {
         guard let dir = env["PERSONA_SHOTS"] else { return }
         let appearance = env["PERSONA_SHOTS_APPEARANCE"] ?? "unknown"
         try png.write(to: URL(fileURLWithPath: "\(dir)/meeting-\(appearance)-\(name).png"))
+    }
+
+    /// Opens the drawer with its button, as a finger does: one opened by `-openAssistantSidebar` can come up without
+    /// its rows.
+    @MainActor private func openDrawer(_ app: XCUIApplication) {
+        let menu = app.buttons["assistant-sidebar-button"].firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 20), app.debugDescription)
+        sleep(1)
+        menu.tapCenter()
     }
 
     private func mockHub() throws -> String {

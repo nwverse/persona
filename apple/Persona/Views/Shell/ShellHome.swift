@@ -220,8 +220,9 @@ struct ShellNeedsYou: View {
         // `-showHomeState empty`: nothing needs the user (screenshots).
         if UserDefaults.standard.string(forKey: "showHomeState") == "empty" { return [] }
         #endif
-        let agents = model.pendingInteractions.filter { !model.isMuted($0.sessionKey) }.map(Line.agent)
-        let inbox = InboxStore.shared.items
+        // The current assistant's, as its Agents and Inbox pages list them.
+        let agents = model.scopedInteractions.filter { !model.isMuted($0.sessionKey) }.map(Line.agent)
+        let inbox = InboxStore.shared.scopedItems
             .filter { !$0.isDone && $0.triage == .action }
             .sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
             .map(Line.inbox)
@@ -436,6 +437,7 @@ struct ShellDestinations: ViewModifier {
                 .navigationDestination(for: TodoDetailRoute.self) { r in TodoDetailView(todoID: r.id) }
                 .modifier(InboxDestinations(accounts: accounts.accounts))
                 .navigationDestination(for: MachineDetailRoute.self) { r in MachineDetailView(ref: r.ref) }
+                .navigationDestination(for: TerminalsRoute.self) { r in TerminalsView(only: r.machine) }
                 .navigationDestination(for: SessionKey.self) { key in ChatView(key: key).id(key) }
                 .navigationDestination(for: InboxChatRoute.self) { r in ChatView(key: r.key, itemManager: r.manager).id(r.key) }
                 .environment(\.feishuOpen) { path.append($0) }

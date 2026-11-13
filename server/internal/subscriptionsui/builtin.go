@@ -306,6 +306,8 @@ func (p *pages) builtinSwitches(b Builtin) wire.Section {
 		r := row("d.to_inbox", p.t("dest.to_inbox"))
 		r.Value, r.Subtitle = p.t("builtin.always"), p.t("builtin.always_detail")
 		sec.Items = append(sec.Items, r)
+	case b.Inbox != nil && b.ID == "mail": // every account's unread mail (#5307)
+		sec.Items = append(sec.Items, sw("to_inbox", *b.Inbox, p.t("builtin.always_detail")))
 	case b.Inbox != nil:
 		sec.Items = append(sec.Items, sw("to_inbox", *b.Inbox, p.t("builtin.inbox_detail")))
 	}

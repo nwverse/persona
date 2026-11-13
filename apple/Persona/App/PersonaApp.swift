@@ -15,6 +15,7 @@ struct PersonaApp: App {
             RootView()
                 #if DEBUG && os(iOS)
                 .modifier(TreeSwapFlip()) // `-swapTreeAway YES` (#2836)
+                .overlay { HomeGalleryOverlay() } // `-showHomeWidgets YES`: every widget, every size (docs/apple/home-widgets.md)
                 #endif
                 .environment(model)
                 .task(id: model.fleetLook) { LiveActivityController.shared.look(model.fleetLook) { model.fleetFaces } }
@@ -30,6 +31,7 @@ struct PersonaApp: App {
                         return
                     }
                     if RecordingLink.matches(url) { MeetingRecorder.openRecordings(); return } // the recording's activity
+                    if let kind = HomeWidgetLink.kind(url) { model.openWidget(kind); return } // a Home Screen widget
                     #endif
                     if let link = ExtensionSystemLink(url: url) { model.openExtension(link); return }
                     if SentSettingsLink.matches(url) { model.openSentRecords(); return }
@@ -74,8 +76,12 @@ struct PersonaApp: App {
         .onChange(of: phase, initial: true) { old, new in
             if new == .active {
                 model.retryRegistry() // launched in the background before the first unlock: the pairing reads now
+                PushRegistrar.shared.foreground() // notifications allowed in Settings since a denial: register now (#1861)
                 model.resumeLinks()
                 model.refreshExtensionSurfaces()
+                #if os(iOS)
+                HomeWidgetWriter.shared.tellHub() // whether the hub should wake it for its widgets (#5721)
+                #endif
                 // Rolling recordings expire even when no segment arrives and the recording page stays closed.
                 RecordingRollingKeeper.shared.schedule()
                 // All-day recording: what waited while the app was away (a model can download now, a 403 pause ends), and
@@ -180,9 +186,15 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         }
         // `-openRecapsFresh YES`: no away recap closed yet, so the newest shows open again (RecapInFlowTests).
         if d.bool(forKey: "openRecapsFresh") { d.removeObject(forKey: "closedRecaps") }
-        // `-openDraftsFresh YES`: nothing left typed in any chat's box from an earlier run (SelectTextTests read a copy by
-        // pasting it there; a long one left behind makes the box tall and moves the chat, #603).
-        if d.bool(forKey: "openDraftsFresh") { AppModel.shared.drafts = [:] }
+        // `-openDraftsFresh YES`: nothing left in any chat's box from an earlier run, typed or over it (SelectTextTests
+        // read a copy by pasting it there; a long one left behind makes the box tall and moves the chat, #603; a forward
+        // a failed run left over a box takes the place of the same message forwarded again, #3838).
+        if d.bool(forKey: "openDraftsFresh") {
+            let model = AppModel.shared
+            model.drafts = [:]
+            model.composerContexts = [:]
+            model.composerComments = [:]
+        }
         // `-openScreenFresh YES`: no Mac's Screen Sharing sign-in remembered, One-Tap Unlock off (ScreenPasswordTests, #1322).
         if d.bool(forKey: "openScreenFresh") {
             ScreenCredentials.forgetAll()
@@ -248,6 +260,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         if let kind = d.string(forKey: "showTestNotification").flatMap(InteractionKind.init(rawValue:)) {
             let place = d.string(forKey: "showTestNotificationIn")
             Task { await AppDelegate.postTestNotification(kind, in: place) }
+        } else if d.string(forKey: "showTestNotification") == "decide" {
+            Task { await AppDelegate.postDecideTestNotification() }
         } else if let sample = d.string(forKey: "showTestNotification"),
                   ["extension-background", "extension-foreground", "extension-tap"].contains(sample) {
             Task { await AppDelegate.postExtensionTestNotification(sample) }
@@ -262,6 +276,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                 try? Data(PushCrypto.publicKey(key).utf8).write(to: dir.appending(path: "push-key.txt"))
             }
         }
+        #if os(iOS)
+        // `-showHomeWidgetSample YES`: the widgets draw the gallery's made-up snapshot, written at once (Home Screen
+        // screenshots without a hub, docs/apple/home-widgets.md「Screenshots」).
+        if d.bool(forKey: "showHomeWidgetSample") { HomeWidgetWriter.shared.showSample() }
+        #endif
         if let phase = d.string(forKey: "showFleetSample") {
             LiveActivityController.shared.showSample(phase, details: d.bool(forKey: "fleetDetails"), island: d.string(forKey: "fleetIsland"),
                                                      count: d.integer(forKey: "showFleetCount"))
@@ -291,6 +310,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         #endif
         WatchSync.shared.activate()
         AppModel.shared.start()
+        AppIconBadgeWatcher.shared.start(AppModel.shared)
         LiveActivityController.shared.start()
         if !automation { PushRegistrar.shared.registerIfPossible() }
         return true
@@ -356,6 +376,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         AppModel.shared.wakeLinks(group)
         nonisolated(unsafe) let done = completionHandler
         DispatchQueue.main.asyncAfter(deadline: .now() + 25) {
+            #if os(iOS)
+            HomeWidgetWriter.shared.flush() // the hub woke it for the widgets (#5721), or anything they show changed
+            #endif
             if UIApplication.shared.applicationState == .background { AppModel.shared.suspendLinks() }
             done(.newData)
         }
@@ -408,6 +431,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let ixID = info["interaction_id"] as? String
         let extensionNotice = info["extension_notification"] != nil
         let pair = PairPush(info) // a pairing receipt (#4199); nil from an older hub: a plain notification
+        let decision = NotificationActions.decision(action: action, info: info) // Take Recommendation on a decision's push
+        #if os(iOS)
+        let pushedRecording = MeetingTalk.recordingID(info) // a meeting's minutes (#3862 phase 6)
+        #endif
         let noteID = response.notification.request.identifier
         let event = ExtensionNotificationEvent(id: response.notification.request.identifier, info: info,
                                               category: response.notification.request.content.categoryIdentifier,
@@ -440,11 +467,26 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                     AppDelegate.inBackground("reply-from-notification", done: done) { await NotificationActions.sendReply(key, text: reply) }
                     return
                 }
+                if let decision {
+                    // Take Recommendation on a decision's push (#2056): answered in the background, the app stays where it is.
+                    AppDelegate.inBackground("take-recommendation", done: done) { await NotificationActions.take(decision, group: key?.group ?? ref?.group) }
+                    return
+                }
                 if let ixID, let resolution = NotificationActions.resolution(action: action, text: text) {
                     // A button on the notification: settle it in the background, the app stays where it is.
                     AppDelegate.resolveFromNotification(ixID, group: key?.group ?? ref?.group, resolution, action: action, done: done)
                     return
                 }
+                #if os(iOS)
+                // A meeting's minutes (#3862 phase 6): the meeting's thread when its recording is on this phone; else, and
+                // from a hub that doesn't name it, the session the push names, as before.
+                if let recording = MeetingTalk.threadToOpen(pushedRecording, interaction: ixID, action: action,
+                                                            onPhone: { RecordingLibrary.shared.entry($0) != nil }) {
+                    MeetingRecorder.openMeeting(recording)
+                    done()
+                    return
+                }
+                #endif
                 // No interaction: a turn finished ("Done"), opened at its answer like from the list.
                 if action != UNNotificationDismissActionIdentifier { AppDelegate.openFromNotification(key, finished: ixID == nil) }
                 done()
@@ -502,6 +544,35 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let (machine, session) = place.flatMap { p in p.firstIndex(of: "/").map { (String(p[..<$0]), String(p[p.index(after: $0)...])) } } ?? ("test", "test")
         content.userInfo = ["interaction_id": "ix_test_\(kind.rawValue)", "machine_id": machine, "session_id": session]
         try? await center.add(UNNotificationRequest(identifier: "test-\(kind.rawValue)", content: content,
+                                                     trigger: UNTimeIntervalNotificationTrigger(timeInterval: 3, repeats: false)))
+    }
+    /// `-showTestNotification decide` (#2056): what a decision's push looks like (`decidePayloadIn` in
+    /// server/internal/hub/push_payload.go), for the first to-do the paired hub lists with a recommendation, its round as
+    /// the hub sent it; delivered 3 s after the app goes to the background.
+    static func postDecideTestNotification() async {
+        let center = UNUserNotificationCenter.current()
+        _ = try? await center.requestAuthorization(options: [.alert, .sound])
+        for _ in 0..<60 where await center.notificationSettings().authorizationStatus != .authorized {
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+        TasksStore.shared.reloadTodos()
+        var found: (TodoItem, TodoAsk)?
+        for _ in 0..<40 {
+            found = TasksStore.shared.todos.values.sorted { $0.id < $1.id }
+                .compactMap { t in t.openAsk.flatMap { $0.recommend?.isEmpty == false ? (t, $0) : nil } }.first
+            if found != nil { break }
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+        guard let (todo, ask) = found else { return }
+        for await _ in NotificationCenter.default.notifications(named: UIApplication.didEnterBackgroundNotification) { break }
+        let content = UNMutableNotificationContent()
+        content.title = "等你决定" // i18n-ignore: the hub's push.json decide_title
+        content.body = ask.verdict ?? todo.title
+        content.subtitle = todo.title
+        content.categoryIdentifier = NotificationActions.decideCategory
+        content.userInfo = ["machine_id": "test", "session_id": "test",
+                            "todo": ["id": todo.id, "asked_at": ask.askedAt, "recommend": ask.recommend ?? ""]]
+        try? await center.add(UNNotificationRequest(identifier: "test-decide", content: content,
                                                      trigger: UNTimeIntervalNotificationTrigger(timeInterval: 3, repeats: false)))
     }
     static func postExtensionTestNotification(_ sample: String) async {

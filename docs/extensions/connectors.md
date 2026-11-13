@@ -411,7 +411,7 @@ GitHub reads `gh` login from a computer. The App has no generic connector login 
 Proposal: add two step types to `Prompt` beyond field entry:
 
 - `open_url`: `{url, callback_scheme}`. The App opens it through system web authentication (`ASWebAuthenticationSession`), then returns the callback URL as this step's value (`callback_url`). OAuth uses this.
-- `device_code`: `{url, user_code, interval}`. The App shows the code, opens the URL, then polls the same step every `interval` seconds until `done`. GitHub device-code login uses this.
+- `device_code`: `{url, user_code, interval}`. The App shows the code, opens the URL, then polls the same step every `interval` seconds until `done`. GitHub device-code login uses this. When `url` already carries `user_code` (Lark's), the hub adds `qr` and the web App draws it above the code: scanning it on the phone needs nothing typed (#5818).
 - `qr` (#1351): `{url, interval}`, where `url` is content for another App to scan (WeChat QR authorization). The hub adds the QR matrix `qr: {size, rows}` to its App response (`rows` is one string of `0` / `1` per row,
   without surrounding whitespace, generated like the admin pairing QR). The App draws it (black modules on white in both dark and light, with a quiet zone), polling the same step every `interval` seconds until `done`;
   a phone cannot scan its own screen, so a "Save QR code" action appears below (share / save to Photos, then recognize it from the album in the other App). iOS / Mac, web (Settings › Connectors, #1693) and Android all have connector login pages.
@@ -421,7 +421,7 @@ Proposal: add two step types to `Prompt` beyond field entry:
 
 The App then has **one** generic login page (field entry, web authorization, code display), used by Telegram, Gmail, Outlook and GitHub.
 
-`larkcli` uses the same `device_code` prompt. The manager starts the blocking `lark-cli auth login --domain all` process and returns its verification URL and user code; the App polls the same `login.step` until the process exits. A second start cancels the first one, and the manager stops it when the connector shuts down.
+`larkcli` uses the same `device_code` prompt (with its `qr`, since lark-cli's link carries the code). The manager starts the blocking `lark-cli auth login --domain all` process and returns its verification URL and user code; the App polls the same `login.step` until the process exits. A second start cancels the first one, and the manager stops it when the connector shuts down.
 
 - **Mail**: one connector has several accounts, while today's `Login` holds one session per connector. Add an "account" layer (`login.step` carries `account`, empty to add an account; `logout` names the account).
   Keep old `/api/v1/mail/oauth/*` for old Apps.

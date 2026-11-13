@@ -181,6 +181,22 @@ nonisolated enum Theme {
     static let monogramFill = Color(uiColor: .secondarySystemFill)
     #endif
 
+    /// A name's disc without a picture (`Monogram`) and its letter's color: the neutral disc in the label's color, or on
+    /// the Mac in a style with hued monograms (Lark, `StyleSpec.MacChrome.monogramHues`) the hue the name picks, the same
+    /// one on every launch, with a white letter. The iPhone, iPad and watch keep the neutral disc in every style.
+    static func monogram(_ name: String) -> (fill: Color, ink: Color?) {
+        #if os(macOS)
+        let hues = spec.mac.monogramHues
+        if !hues.isEmpty {
+            // FNV-1a over the name: `hashValue` is seeded per process, so a person's color would change on every launch.
+            var h: UInt32 = 2_166_136_261
+            for s in name.unicodeScalars { h = (h ^ s.value) &* 16_777_619 }
+            return (hues[Int(h % UInt32(hues.count))], onSolid)
+        }
+        #endif
+        return (monogramFill, nil)
+    }
+
     /// Diffs and Git: their own colors, text strength (≥ 4.5:1 on the code background) for signs and counts.
     enum Diff {
         static let add = Color(light: 0x1D7A4C, dark: 0x4CC38A)
@@ -489,6 +505,10 @@ nonisolated enum Theme {
         /// The width the small window's card is drawn at (VNCPiPCard: Connecting…, why not), in points, about the small
         /// window's own on an iPhone so its text reads at its size there.
         static let pictureInPictureCard: CGFloat = 240
+        /// A task sheet closes on a rightward swipe that starts within `edgeBackZone` of the leading edge and travels at
+        /// least `edgeBackDistance` (a sheet has no system edge-back; #5603).
+        static let edgeBackZone: CGFloat = 24
+        static let edgeBackDistance: CGFloat = 72
         static let line: CGFloat = 1
         static let lineMedium: CGFloat = 1.5
         static let rule: CGFloat = 2
@@ -499,6 +519,8 @@ nonisolated enum Theme {
         static let barWide: CGFloat = 4
         /// A share bar's thickness (the assistant's stacked-bar card).
         static let meter: CGFloat = 12
+        /// An Agent chat's header folded into its slim bar (Android `Tokens.Size.slimBar`).
+        static let slimBar: CGFloat = 40
         /// How far a sideways strip fades out at an end with more to scroll to (`.edgeFade()`): a cut-off chip reads as
         /// "more", not as a broken row.
         static let fadeEdge: CGFloat = 24
@@ -556,6 +578,8 @@ nonisolated enum Theme {
         /// The height of the map in a saved place's editor: the reminder's circle with the streets around it, and room to
         /// pan the map and tap where the place is (#4248).
         static let placeMap: CGFloat = 220
+        /// The map a place answer draws in the chat (`PlaceMapCard`, #5543): small enough to scroll past.
+        static let chatMap: CGFloat = 160
         static let box110: CGFloat = 110
         static let box120: CGFloat = 120
         /// The longest a tab's name gets in the chat header's strip of the space's tabs: one long name cannot push the
@@ -630,6 +654,10 @@ nonisolated enum Theme {
         static let doneFade: Double = 0.5
         /// A day of the month grid that belongs to the month before or after.
         static let outsideFade: Double = 0.45
+        /// A to-do being dragged, where it was (#2045): where it would land is drawn in full.
+        static let liftedFade: Double = 0.3
+        /// How far the axis scrolls each frame while a dragged to-do is held near its top or bottom edge.
+        static let autoscrollStep: CGFloat = 4
         /// Lines a day of the month grid shows: its entries, or one fewer and "N more".
         static let monthLines = 3
         /// Where a new to-do's time snaps to when the empty axis is tapped, in minutes.
@@ -888,6 +916,12 @@ nonisolated enum Theme {
         static let pink = Color(light: 0xD62E5C, dark: 0xFF6B8B)
         /// A quiet mark: a list row's tile that is information, not a place to go.
         static let gray = Color(light: 0x8E8E93, dark: 0x636366)
+        // The rest of an extension's named colors (UI version 6, `ExtensionUIStyle.color`, #827): marks only (icons,
+        // badges' tints, tiles, chart series), never text.
+        static let red = Color(light: 0xD1342C, dark: 0xFF6961)
+        static let amber = Color(light: 0xB7791F, dark: 0xF5B342)
+        static let yellow = Color(light: 0x9A7B00, dark: 0xFFD60A)
+        static let teal = Color(light: 0x0F7C80, dark: 0x40C8C8)
     }
 
     /// A permission mode's tone where the Agents header shows it (#3719), by how much the agent does without asking.
@@ -933,9 +967,9 @@ nonisolated enum Theme {
         /// The colors that travel around the composer while a reply is generating (Glow While Replying, `ComposerGlow`):
         /// blue through violet to pink, each in its light and dark shade.
         static let composerGlow: [Color] = [Hue.blue, Hue.indigo, Hue.purple, Hue.pink]
-        /// Reserve most of the keyboard-visible viewport for the conversation, not the draft.
-        static let composerHeightFraction: CGFloat = 0.22
-        static let composerMinimumLines = 3
+        /// iPhone and iPad drafts grow through six lines before scrolling; keyboard height does not lower the cap.
+        static let composerPhoneMaximumLines = 6
+        /// The shared Mac/visionOS composer retains its existing eight-line cap.
         static let composerMaximumLines = 8
         /// Text and TextField round line heights differently; half a line distinguishes adjacent counts.
         static let composerLineTolerance: CGFloat = 0.5

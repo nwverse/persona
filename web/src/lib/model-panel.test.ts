@@ -245,6 +245,16 @@ describe("what can be picked and customized", () => {
     expect(rowBlock(claude({ loading: true }), {})).toBeUndefined();
   });
 
+  it("the model that runs now can be picked back while a switch waits (it drops the switch), unless the chat is busy", () => {
+    const fixed = codex({ unavailable: "Codex can't change the model" });
+    const waiting = { pending: { provider: "claude", model: "opus" } };
+    expect(rowBlock(fixed, waiting, true)).toBeUndefined();
+    // its other rows stay off, and so does it with no switch waiting
+    expect(rowBlock(fixed, waiting)).toEqual({ reason: "Codex can't change the model" });
+    expect(rowBlock(fixed, {}, true)).toEqual({ reason: "Codex can't change the model" });
+    expect(rowBlock(fixed, { ...waiting, busy: "Working" }, true)).toEqual({ reason: "Working" });
+  });
+
   it("the model that runs now keeps its flyout when edits apply live, even when picks are off", () => {
     const sections = panelSections(input({ providers: [codex({ unavailable: "Codex can't change the model" })], state: state({ current: { provider: "codex", model: "gpt-5.5" }, recommended: [] }) }));
     const row = sections[0].rows[0];

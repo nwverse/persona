@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -278,9 +279,15 @@ func writeForgetErr(w http.ResponseWriter, err error) {
 }
 
 // withQR draws a QR step's code for the app (whatever the connector sent as QR is replaced: the code is always URL's).
+// A device-code step whose URL already carries its code (`user_code=` in the query, as Lark's does) gets one too, so
+// the phone can scan it instead of the code being typed (#5818); one whose page asks for the code (GitHub's) does not.
 func withQR(p *connector.Prompt) error {
 	p.QR = nil
-	if p.Kind != connector.PromptQRCode {
+	if p.Kind == connector.PromptDeviceCode {
+		if !urlCarriesCode(p.URL, p.UserCode) {
+			return nil
+		}
+	} else if p.Kind != connector.PromptQRCode {
 		return nil
 	}
 	if p.URL == "" {
@@ -292,6 +299,15 @@ func withQR(p *connector.Prompt) error {
 	}
 	p.QR = &connector.QRCode{Size: size, Rows: rows}
 	return nil
+}
+
+// urlCarriesCode: raw is an https URL whose query's user_code is code, so opening it needs nothing typed.
+func urlCarriesCode(raw, code string) bool {
+	if code == "" {
+		return false
+	}
+	u, err := url.Parse(raw)
+	return err == nil && u.Scheme == "https" && u.Host != "" && u.Query().Get("user_code") == code
 }
 
 // connectorLogin is connector id's sign-in, or writes why there is none.
@@ -425,6 +441,9 @@ func (h *Manager) setConnectorFeed(ctx context.Context, id string, f connector.F
 		}
 	}
 	if on && f == connector.FeedInbox {
+		if c := h.connectors.Get(id); c != nil && c.Manifest().InboxSwitch {
+			h.inbox.owed.Store(true) // mail is read on a full round: the next one is that (inboxLoop)
+		}
 		h.kickInbox()
 	} else if on {
 		h.kbKick(id, connector.ScopeChats)
@@ -584,7 +603,7 @@ func (h *Manager) registerConnectors() {
 	if gh.Configured() {
 		name := gh.Auth.FromMachine
 		if m := h.localMachine(name); m != nil {
-			name = m.cfg.Name
+			name = m.name()
 		}
 		ghc = github.New(gh, name, h.ghToken(gh.Auth.FromMachine))
 	} else {
@@ -631,7 +650,7 @@ func (h *Manager) ghToken(machine string) github.TokenSource {
 		case errors.As(err, &re) && re.Code == proto.CodeNotSignedIn:
 			return "", github.ErrNotSignedIn
 		case err != nil:
-			return "", fmt.Errorf("%s: %s", m.cfg.Name, github.Scrub(err.Error()))
+			return "", fmt.Errorf("%s: %s", m.name(), github.Scrub(err.Error()))
 		case out.Token == "":
 			return "", github.ErrNotSignedIn
 		}

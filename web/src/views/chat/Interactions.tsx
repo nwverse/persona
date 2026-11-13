@@ -1,7 +1,8 @@
 // What the agent is waiting on (questions, plans, permissions, terminal dialogs, MCP forms and links), as Beautiful UI's Approval Card.
-import { createContext, Fragment, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createContext, Fragment, Suspense, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { answerCard, usePendingLine } from "../../lib/card-answer";
 import { cardKeyAction, focusComposer } from "../../lib/card-keys";
+import { lazyPage } from "../../lib/lazy-page";
 import { delegateLines, isDelegating, recommendedLabels, type DelegatedAnswer } from "../../lib/delegate";
 import { Choice, DigitHint } from "./Choice";
 import { DelegatedCard } from "./Delegated";
@@ -47,7 +48,7 @@ export async function resolve(ix: Interaction, body: Record<string, unknown>) {
  * to the composer and never answers. `focused` is when — and only when — the card's key hints (option digits, the Enter
  * badge) are drawn: a card at rest looks exactly as before. Spread `root` on the card's root element (Card does).
  */
-function useCardKeys({ enter, digit }: { enter?: () => boolean | void; digit?: (n: number) => boolean } = {}) {
+export function useCardKeys({ enter, digit }: { enter?: () => boolean | void; digit?: (n: number) => boolean } = {}) {
   const ref = useRef<HTMLDivElement | null>(null);
   const [focused, setFocused] = useState(false);
   const at = useRef({ enter, digit });
@@ -106,7 +107,7 @@ const SendingAnswer = createContext("");
  *  says so for every kind but a tool approval, whose body already has that line (PermissionBody). */
 const AskedFrom = createContext("");
 
-function Card({ title, kicker, onDismiss, busy, children, footer, looking = false, cardKeys }: { title: string; kicker: string; onDismiss?: () => void; busy?: boolean; children: React.ReactNode; footer: React.ReactNode; looking?: boolean; cardKeys?: CardKeys }) {
+export function Card({ title, kicker, onDismiss, busy, children, footer, looking = false, cardKeys }: { title: string; kicker: string; onDismiss?: () => void; busy?: boolean; children: React.ReactNode; footer: React.ReactNode; looking?: boolean; cardKeys?: CardKeys }) {
   const asked = useContext(AskedByVoice);
   const sending = useContext(SendingAnswer);
   const from = useContext(AskedFrom);
@@ -160,7 +161,7 @@ function Card({ title, kicker, onDismiss, busy, children, footer, looking = fals
 }
 
 /** A terminal dialog's option: its words without the "(Recommended)" suffix, the "Recommended" tag instead. */
-function OptionLabel({ label }: { label: string }) {
+export function OptionLabel({ label }: { label: string }) {
   const shown = optionDisplay(label);
   return (
     <span className="block text-[13px] text-ink">
@@ -720,7 +721,7 @@ function SecretHandoffCard({ ix }: { ix: Interaction }) {
   );
 }
 
-function CloseBlockedAgent({ ix, disabled }: { ix: Interaction; disabled: boolean }) {
+export function CloseBlockedAgent({ ix, disabled }: { ix: Interaction; disabled: boolean }) {
   const session = useStore(() => getSession(ix.machine_id, ix.session_id));
   const [confirming, setConfirming] = useState(false);
   const [closing, setClosing] = useState(false);
@@ -742,7 +743,17 @@ function CloseBlockedAgent({ ix, disabled }: { ix: Interaction; disabled: boolea
   </div>;
 }
 
+/** Claude Code asking to run a command (#5266), said in plain words: its own chunk, loaded only when a command card
+ *  appears, since most chats never show one. Until it is in, the card is the terminal's question as before. */
+const CommandScreenCard = lazyPage(() => import("./CommandScreenCard").then((m) => m.CommandScreenCard));
+
 function ScreenCard({ ix }: { ix: Interaction }) {
+  // The hub sets `command` only on a shell command's permission prompt (one choice, no free-text field).
+  const plain = <PlainScreenCard ix={ix} />;
+  return ix.dialog?.command ? <Suspense fallback={plain}><CommandScreenCard ix={ix} /></Suspense> : plain;
+}
+
+function PlainScreenCard({ ix }: { ix: Interaction }) {
   const input = useRef<HTMLInputElement>(null);
   useLayoutEffect(() => {
     const el = input.current;
@@ -1166,6 +1177,10 @@ export function AnsweredCard({ card }: { card: Answered }) {
   );
 }
 
+/** What is drawn right under a card: views/assistant/Tasks puts the suggested rule's line here (#5802), whose code
+ *  loads with the first card that carries one. A slot, not an import: Tasks imports this file. */
+export const underCard: { line?: (ix: Interaction & { disabled?: boolean }) => React.ReactNode; /** The cards (by id) Always was answered on: their line stays to say what was made. */ made?: Set<string> } = {};
+
 export function InteractionCard({ ix }: { ix: Interaction }) {
   // a child session's card on its parent's page (#5120): its row is the one the parent's chat holds (a paging hub's
   // summary, which the store's complete rows never have)
@@ -1191,7 +1206,9 @@ export function InteractionCard({ ix }: { ix: Interaction }) {
       <AskedByVoice.Provider value={asked}>
         <SendingAnswer.Provider value={line}>
           <AskedFrom.Provider value={from}>
+            {/* a question a supervisor passed up may carry a suggested rule: its line goes under the card (#5802) */}
             <fieldset disabled={!canApprove || pending} className={canApprove ? "contents" : undefined}>{card}</fieldset>
+            {underCard.line?.(canApprove ? ix : { ...ix, disabled: true })}
           </AskedFrom.Provider>
         </SendingAnswer.Provider>
       </AskedByVoice.Provider>
