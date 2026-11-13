@@ -529,17 +529,18 @@ func (j *trJob) caption(s *trSession, e tevent, pos, clock int64) {
 // writes a caption session's whole meeting as one item, never final, the next sentence's text written over the last
 // one's, so a caption is told apart by its text: a frame of the caption being written that revises it (trRevises:
 // one within trCaptionFresh of its first frame, or one that grew it, its first or last words maybe revised) is of
-// it; one that does not begins a new caption, and the one before it keeps its last text. A service that splits its
-// captions by sentence gives each its own item: a frame of another item is of an earlier caption of that item still
-// open (one written after the next began), else it begins a new caption. A final frame closes its caption; one
-// without text withdraws it. A new caption begins where the session's audio was when its first frame came
+// it; one that does not begins a new caption, and the one before it keeps its last text. A final frame of its item is
+// of it whatever its text, before any of that (a service that marks a sentence's last caption final may write it in
+// another form: "twenty five", then "25."): it replaces the caption's text and closes it; one without text withdraws
+// it. A service that splits its captions by sentence gives each its own item: a frame of another item is of an
+// earlier caption of that item still open (one written after the next began), else it begins a new caption. A new caption begins where the session's audio was when its first frame came
 // (captionStart); nil: a frame with no text that withdraws nothing.
 func (j *trJob) captionOf(s *trSession, e tevent, pos int64) *trItem {
 	if !e.final && !trHasText(e.text) {
 		return nil
 	}
 	if cur := s.capCur; cur != nil && e.item == cur.id {
-		if !trHasText(e.text) || trRevises(cur.text, e.text, pos-cur.at <= trSamples(trCaptionFresh)) {
+		if e.final || !trHasText(e.text) || trRevises(cur.text, e.text, pos-cur.at <= trSamples(trCaptionFresh)) {
 			return cur
 		}
 		cur.closed = true // the next sentence, written over this one's text

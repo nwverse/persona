@@ -80,3 +80,37 @@ func TestCaptionRevisedAsMeasured(t *testing.T) {
 		t.Errorf("the first caption starts at %.2f s", trSeconds(s.items[0].start))
 	}
 }
+
+// A final frame of the caption's item replaces its interim text, however unlike it is: a service that marks a
+// sentence's last caption final may write it in another form ("twenty five", then the final "25."). The final text
+// is the window's captions, and sessions that wrote it are trusted against them.
+func TestCaptionFinalRevises(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		frames []trFrameAt
+		want   []string
+	}{
+		{"its own item", []trFrameAt{{1.0, "it-1", "twenty", false}, {1.4, "it-1", "twenty five", false}, {3.0, "it-1", "25.", true},
+			{5.0, "it-2", "Bo owns", false}, {6.0, "it-2", "Bo owns it.", true}}, []string{"25.", "Bo owns it."}},
+		{"one item", []trFrameAt{{1.0, "it", "twenty", false}, {1.4, "it", "twenty five", false}, {3.0, "it", "25.", true},
+			{5.0, "it", "Bo owns", false}, {6.0, "it", "Bo owns it.", true}}, []string{"25.", "Bo owns it."}},
+		{"withdrawn", []trFrameAt{{1.0, "it-1", "twenty five", false}, {3.0, "it-1", "", true}}, []string{""}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			j, s := trCaptionJob()
+			if got := feedCaptions(j, s, tt.frames); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("captions %q, want %q", got, tt.want)
+			}
+			caption := j.captionText(s, j.windows[0])
+			if caption != strings.Join(tt.want, "") {
+				t.Errorf("the window's captions %q", caption)
+			}
+			if !trHasText(caption) {
+				return
+			}
+			if pick, dropped := pickLive(caption, []string{caption, caption}); pick != 0 || dropped[0] || dropped[1] {
+				t.Errorf("sessions that wrote the final text: %d %v", pick, dropped)
+			}
+		})
+	}
+}
