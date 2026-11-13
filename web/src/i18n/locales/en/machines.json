@@ -8,8 +8,6 @@
   "offline": "Offline",
   "reconnect": "Reconnect",
   "memory": "Memory",
-  "disk": "Disk",
-  "disk_free": "{size} free",
   "waiting_node": "Waiting for this computer to reconnect",
   "unreachable": "Can't reach this computer",
   "agents_one": "{count} agent",

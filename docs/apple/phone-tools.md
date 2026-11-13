@@ -6,6 +6,7 @@ Route: Claude calls a `phone_*` tool → `personad mcp` → node.sock → hub �
 the app queries/writes locally → `tool_result` returns along the same route.
 
 Device tool descriptions and schemas are registered by the app (iOS `apple/Persona/PhoneTools/`, Android `android/platform/phonetools/` (`PhoneToolCatalog.kt`)). The hub adds an optional `queue_if_offline` parameter to confirmed writes and supplies its own queue management tools from `server/internal/prompts/mcp/phone/` (`docs/assistant/prompts.md`, "MCP tools"). `personad mcp` adds `file` and `trim` to `phone_clipboard_set` (see "Copying a file to the clipboard").
+A conversation lists its tools once (`personad mcp` says `listChanged: false`): when the manager can't reach the hub for the phone's tools then, it asks again briefly, then lists the ones the hub last gave, so a hub restart does not leave a conversation without them (#6422).
 Descriptions and parameters for tools with the same name must match exactly on both platforms (the hub merges tools from all phones by name; `PhoneToolCatalogTest` compares against the catalog exported by iOS).
 
 Mail tools `mail_*` use the same `personad mcp`, but execute on the hub without going through the phone; see "Mail tools (mail_*)" below.
@@ -91,6 +92,14 @@ See `docs/android/android.md` ("App shell and direct page navigation," the Setti
 In the Persona chat on iPhone, the results of `phone_location_current`, `phone_location_search` and `phone_maps_search_nearby` are also drawn as a map card under the turn's work line, with numbered pins and Directions to Apple Maps (#5543), a route `phone_maps_route` worked out as its line with the mode, time and distance and a labeled Start in Maps (#5544, #6177), and directions `phone_maps_navigate` opened in Maps as the destination's card with its mode and a button that opens them again (#5545; instant result cards in `docs/assistant/unified-entry.md`). The tool calls stay folded.
 
 Coordinates are WGS-84 everywhere, mainland China included: Core Location, MapKit's search (`MKLocalSearch`, `CLGeocoder`), `MKMapSnapshotter` and `MKDirections` take and give WGS-84, and MapKit shifts the mainland map (GCJ-02) itself. Nothing in Persona converts, so a place found by search, the phone's own fix and a saved place agree, and a reminder's circle is where the user meant (`docs/lessons/ios.md`, "MapKit speaks WGS-84 in mainland China too").
+
+### Reminders imported as to-dos (#4009)
+
+Under Settings › Phone data, once Reminders is on, **Import into To-dos** (off by default) sends the incomplete
+reminders of the lists the user leaves on (all of them at first) to the hub, which makes to-dos of them, one way
+(`RemindersImport`, `RemindersImporter`; `docs/assistant/todos.md`, "Imported from Reminders"). It runs on launch, on
+return to the foreground and when the Reminders database changes while the app is in front, and sends nothing when the
+batch is the same as the last one the hub took.
 
 ### Reminders by place (#6564)
 

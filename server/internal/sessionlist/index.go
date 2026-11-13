@@ -126,6 +126,13 @@ type Counts struct {
 	Revision          string `json:"revision"`
 }
 
+// PageWithCounts is a page with its view's current counts (with_counts=1): what a separate ?counts=1 read with the
+// same filters returns, ignoring since, cursor and limit (#4858; the personal Agents too, #6496).
+type PageWithCounts struct {
+	Page
+	Counts Counts `json:"counts"`
+}
+
 // Error lets adapters map invalid_query to HTTP 400 and cursor_expired or
 // revision_expired to HTTP 409 without interpreting human-readable messages.
 type Error struct {
