@@ -146,7 +146,13 @@ class MessagePointerMenuTest {
                         val clipboard = context.getSystemService(ClipboardManager::class.java)
                         assertEquals(target.text, clipboard.primaryClip?.getItemAt(0)?.text?.toString())
                     }
-                    MessageAction.Select -> assertReaderOpensAndReturns(R.string.chat_menu_select_title)
+                    MessageAction.Select -> {
+                        assertEquals(target, menu.selecting)
+                        assertNull(menu.target)
+                        assertNull(menu.pointerAnchor)
+                        rule.runOnUiThread { menu.endSelection(target.id) }
+                        assertNull(menu.selecting)
+                    }
                     MessageAction.Quote -> assertEquals("quote:${target.id}", events.last())
                     MessageAction.Share -> assertReaderOpensAndReturns(R.string.chat_share_card_title)
                     MessageAction.HandToPersona -> assertEquals("handoff:${target.text}", events.last())

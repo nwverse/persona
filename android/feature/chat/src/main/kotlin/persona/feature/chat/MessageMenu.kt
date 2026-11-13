@@ -94,6 +94,7 @@ internal class MessageMenuState {
     /** "Select": the menu goes and the message's words are selected where they are. */
     fun select(target: MessageTarget) {
         this.target = null
+        pointerAnchor = null
         selecting = target
     }
 

@@ -23,6 +23,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -41,6 +42,7 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import persona.core.contracts.SessionKey
@@ -64,6 +66,7 @@ class ComposerDropShotsTest {
 
     @Before fun attachmentSource() {
         val context = ApplicationProvider.getApplicationContext<Context>()
+        useChatFileProvider(context)
         source = File(File(context.cacheDir, "chat-captures").apply { mkdirs() }, "drop-shot.txt")
         source.writeText("shot")
         sourceUri = FileProvider.getUriForFile(context, "${context.packageName}.chat.files", source).toString()
@@ -140,24 +143,33 @@ class ComposerDropShotsTest {
         }
     }
 
-    @Test fun failureAndRetryInThreeLanguagesAtMaximumText() {
+    @Config(sdk = [35], qualifiers = "en-w640dp-h900dp-xhdpi")
+    @Test fun failureAndRetryInEnglishAtMaximumText() = failureAndRetryAtMaximumText(Locale.ENGLISH)
+
+    @Config(sdk = [35], qualifiers = "zh-w640dp-h900dp-xhdpi")
+    @Test fun failureAndRetryInChineseAtMaximumText() = failureAndRetryAtMaximumText(Locale.SIMPLIFIED_CHINESE)
+
+    @Config(sdk = [35], qualifiers = "ja-w640dp-h900dp-xhdpi")
+    @Test fun failureAndRetryInJapaneseAtMaximumText() = failureAndRetryAtMaximumText(Locale.JAPANESE)
+
+    private fun failureAndRetryAtMaximumText(language: Locale) {
+        RuntimeEnvironment.setFontScale(1.6f)
         var style by mutableStateOf(AppStyle.Glass)
-        var locale by mutableStateOf(Locale.ENGLISH)
-        rule.setContent { DropScene(Scene.Failed, style, dark = false, locale = locale, largeText = true) }
+        rule.setContent { DropScene(Scene.Failed, style, dark = false, locale = language, largeText = true) }
         val out = File(System.getProperty("persona.shots") ?: "build/composer-drop-localized-shots").apply { mkdirs() }
-        for (language in listOf(Locale.ENGLISH, Locale.SIMPLIFIED_CHINESE, Locale.JAPANESE)) for (s in AppStyle.entries) {
-            locale = language; style = s
+        for (s in AppStyle.entries) {
+            style = s
             rule.waitForIdle()
             val retry = when (language) {
                 Locale.SIMPLIFIED_CHINESE -> "重试"
                 Locale.JAPANESE -> "再試行"
                 else -> "Retry"
             }
-            rule.onNodeWithText(retry).assertIsDisplayed()
             val bitmap = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
             File(out, "failed-${s.name.lowercase()}-${language.language}-large-text.png").outputStream().use {
                 bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
             }
+            rule.onNodeWithText(retry).assertIsDisplayed()
         }
     }
 }

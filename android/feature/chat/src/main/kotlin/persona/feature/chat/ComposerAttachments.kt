@@ -242,7 +242,7 @@ internal fun ComposerAttachmentPreviews(
                             service == null -> stringResource(R.string.chat_attach_no_service)
                             else -> stringResource(R.string.chat_attach_uploading)
                         }, color = if (attachment.error != null) PersonaTheme.palette.danger.text else PersonaTheme.palette.ink2,
-                            style = PersonaTheme.type.caption)
+                            style = PersonaTheme.type.caption, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     }
                     if (attachment.error != null && attachment.uploadState != DraftUploadState.Invalid)
                         JTextButton(stringResource(R.string.chat_attach_retry), { retry(attachment.id) }, enabled = canRetry)
