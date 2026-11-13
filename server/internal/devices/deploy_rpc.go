@@ -198,17 +198,16 @@ func (m *Machine) waitNodeIdle(ctx context.Context) error {
 			return explain(i18n.Err("devices-deploy.idle_check_failed", i18n.Args{"err": err.Error()}), err)
 		}
 		m.setSessions(list.Sessions)
-		busy := m.machinePending() // a question of its agents waits on the phone
+		m.mu.Lock()
+		onlyCut := nodeHas(m.info, nodeproto.NodeUpdateIdle)
+		m.mu.Unlock()
+		// A node that commits on the old rule refuses while anything works: wait for that here too, rather than
+		// transfer the whole build again on every refusal.
+		busy := !onlyCut && m.machinePending() // a question of its agents waits on the phone
 		for _, s := range list.Sessions {
-			if s.State == proto.StateWorking || s.State == proto.StateNeedsYou || s.Status == proto.StatusWorking || s.PendingInteractions > 0 || s.Starting || len(s.Background) > 0 {
+			if updateWouldCut(s, onlyCut) {
 				busy = true
 				break
-			}
-			for _, sub := range s.Subagents {
-				if sub.Running {
-					busy = true
-					break
-				}
 			}
 		}
 		if !busy {
@@ -220,6 +219,28 @@ func (m *Machine) waitNodeIdle(ctx context.Context) error {
 		case <-time.After(m.deployRetry):
 		}
 	}
+}
+
+// updateWouldCut: the node's restart would interrupt s (docs/operations/node-update.md "Usage"). The restart execs in
+// place after stopping only the conversations the node runs headless, so with onlyCut terminal Agents and their
+// background work go on through it; a launch still starting does not. Without onlyCut (a node before
+// node_update_idle), every Agent at work counts.
+func updateWouldCut(s proto.Session, onlyCut bool) bool {
+	if s.Starting {
+		return true
+	}
+	if onlyCut && (!s.Assistant || s.Host != "") {
+		return false
+	}
+	if s.State == proto.StateWorking || s.State == proto.StateNeedsYou || s.Status == proto.StatusWorking || s.PendingInteractions > 0 || len(s.Background) > 0 {
+		return true
+	}
+	for _, sub := range s.Subagents {
+		if sub.Running {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Machine) sendNodeUpdate(ctx context.Context, bin string, record *nodeDeployRecord) error {

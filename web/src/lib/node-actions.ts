@@ -41,7 +41,7 @@ export interface MenuNode {
   canWorktree?: boolean;
   /** The node's fold: the row it hangs under folds and opens (the sidebar's and the terminal page's `fold:` keys). */
   fold?: { folded: boolean; toggle: () => void };
-  /** "New terminal" in this workspace (the terminal page). */
+  /** "New terminal" in this workspace, or on this computer when it has no workspace yet (the terminal page). */
   onOpenShell?: () => void;
   /** Read the list again (the terminal page). */
   onRefresh?: () => void;
@@ -154,7 +154,7 @@ export function nodeActions(node: MenuNode, deps: NodeActionDeps, opts: NodeActi
   group(
     node.fold && { key: "node-fold", label: node.fold.folded ? t("lib-node-actions.expand") : t("lib-node-actions.collapse"), icon: node.fold.folded ? "arrowDown" : "chevron", accel: "z", onSelect: node.fold.toggle },
     node.kind === "workspace" && online && Boolean(node.cwd) && { key: "node-new-agent", label: t("lib-node-actions.new_agent"), icon: "agent", accel: "n", onSelect: () => deps.newAgent(mid, node.cwd!) },
-    node.kind === "workspace" && online && node.onOpenShell && { key: "node-shell", label: t("lib-node-actions.new_terminal"), icon: "terminal", accel: "t", onSelect: node.onOpenShell },
+    (node.kind === "workspace" || node.kind === "machine") && online && node.onOpenShell && { key: "node-shell", label: t("lib-node-actions.new_terminal"), icon: "terminal", accel: "t", onSelect: node.onOpenShell },
     node.kind === "machine" && node.onRefresh && { key: "node-refresh", label: t("lib-node-actions.refresh"), icon: "retry", accel: "r", onSelect: node.onRefresh },
   );
 

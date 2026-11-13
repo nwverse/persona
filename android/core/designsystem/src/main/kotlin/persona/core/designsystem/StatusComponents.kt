@@ -33,10 +33,18 @@ import persona.core.designsystem.icons.PhIcons
  * A status mark: a glowing dot in glass, a dot in brief, a small square holder on the board.
  * Decorative for accessibility; always pair it with visible text. [waiting]: the working agents it stands for only wait in
  * the background, so Glass draws it in that state's lighter tone ([PersonaPalette.backgroundWaiting]) without the darker rim.
+ * [spinning]: a lead row whose Agents work while its own conversation is idle (#6230). It draws the working spinner instead
+ * of a dot, so "something under this row is running" reads the same as a turn the conversation runs itself; reduced motion
+ * freezes it as a static arc.
  */
 @Composable
-fun JStatusDot(status: Status, modifier: Modifier = Modifier, size: Dp = 8.dp, waiting: Boolean = false) {
+fun JStatusDot(status: Status, modifier: Modifier = Modifier, size: Dp = 8.dp, waiting: Boolean = false, spinning: Boolean = false) {
     val tone = PersonaTheme.palette.status(status, waiting)
+    if (spinning) {
+        // the dense row's mark slot is small; the arc keeps the dot's footprint rather than the 20dp default spinner
+        JSpinner(modifier.size(size + 4.dp), color = tone.dot, stroke = 1.8.dp)
+        return
+    }
     when (PersonaTheme.style) {
         AppStyle.Glass -> {
             val breath = needsYouBreath(status == Status.NeedsYou && !PersonaTheme.reduceMotion)
