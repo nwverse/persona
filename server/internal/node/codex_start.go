@@ -578,6 +578,7 @@ func codexStartNotef(w io.Writer, format string, a ...any) {
 
 // The rc file may change directory or export defaults. Restore the start's decisions without parsing them as code.
 // Only the names of the saved environment entries reach argv; values can be secrets. Indirection never evals them.
+// A carrier holds the whole NAME=value assignment: even NAME= is nonempty and restores an explicitly empty value.
 const codexNativeStartScript = `
 builtin cd -- "$1" || exit
 shift
@@ -609,6 +610,7 @@ func codexStartExec(path string, argv, env, explicit []string) (string, []string
 	inner := func() string { return codexInner(argv, env, cwd, home) }
 	run := append([]string{path}, argv[1:]...)
 	if argv[0] == "codex" && runtime.GOOS != "windows" {
+		// loginShellProgram selects only zsh or bash, never an arbitrary executable named by $SHELL.
 		if shell, err := exec.LookPath(loginShellProgram()); err == nil {
 			// Resolve a same-name function after its rc file, without expanding aliases twice or parsing data as code.
 			run = []string{shell, "-ic", codexNativeStartScript, "persona-codex-start", cwd}
