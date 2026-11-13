@@ -767,12 +767,18 @@ struct QuestionForm: View {
 
     private func send() {
         guard !isSending else { return } // a second tap sends nothing
-        sending = true
-        otherFocused = false
         var answers: [String: String] = [:]
         for q in questions { answers[q.question] = answer(q) }
+        let resolution = Resolution(answers: answers)
+        // A review made while the Agent could answer, sent after it stopped: only put-off answers go (#6839).
+        if localOnly, !interaction.isLocalResolution(resolution) {
+            withAnimation(Theme.Motion.standard) { reviewing = false }
+            return
+        }
+        sending = true
+        otherFocused = false
         Task {
-            await model.resolve(interaction, Resolution(answers: answers))
+            await model.resolve(interaction, resolution)
             sending = false
         }
     }
@@ -1830,9 +1836,17 @@ struct BUIQuestionForm: View {
 
     private func send(_ answers: ApprovalAnswers) {
         guard !isSending else { return } // a second tap sends nothing
+        let resolution = Resolution(answers: Self.answers(answers, questions))
+        // Answers held for the review while the Agent could answer, sent after it stopped: only put-off answers go
+        // (#6839); back to the questions, whose other choices are now off.
+        if localOnly, !interaction.isLocalResolution(resolution) {
+            kept = ApprovalAnswers()
+            reopen(at: 0)
+            return
+        }
         sending = true
         Task {
-            await model.resolve(interaction, Resolution(answers: Self.answers(answers, questions)))
+            await model.resolve(interaction, resolution)
             sending = false
         }
     }
