@@ -1,6 +1,22 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "This File Is Empty" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "This file is empty" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "このファイルは空です" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "这个文件是空的" } }
+      }
+    },
+    "Reload to check for new content." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Reload to check for new content." } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "再読み込みして新しい内容を確認できます。" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "点右上角菜单里的“刷新”，查看是否有新内容。" } }
+      }
+    },
     "%@ Wants to Run a Command" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -49151,6 +49167,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "大多数任务的默认"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "This warning is for the default model connection. This conversation uses another model connection." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This warning is for the default model connection. This conversation uses another model connection."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この警告はデフォルトのモデル接続に関するものです。この会話では別のモデル接続を使用しています。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这是默认模型连接的限流提醒；当前对话使用另一个模型连接。"
           }
         }
       },
