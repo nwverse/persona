@@ -105,6 +105,35 @@ final class FolderEditTests: XCTestCase {
         shot("edit-restored")
     }
 
+    func testRemoteCopyProgressLight() {
+        remoteProgress("light", copying: true)
+    }
+
+    func testRemoteCompressProgressDark() {
+        remoteProgress("dark", copying: false)
+    }
+
+    /// MOCK_FILE_OP_DELAY keeps the original POST open: the bar appears after one second and Cancel leaves no output.
+    private func remoteProgress(_ scheme: String, copying: Bool) {
+        app.terminate()
+        app.launchArguments += ["-ui.scheme", scheme]
+        app.launchPinned()
+        openHome()
+
+        app.staticTexts["notes.txt"].press(forDuration: 1.2)
+        let action = app.buttons[copying ? "创建副本" : "压缩"]
+        XCTAssertTrue(action.waitForExistence(timeout: 5), "no remote operation in the row menu:\n\(app.debugDescription)")
+        action.tap()
+        let cancel = app.buttons[copying ? "取消复制 notes.txt" : "取消压缩 notes.txt"]
+        XCTAssertTrue(cancel.waitForExistence(timeout: 10), "no progress bar with Cancel:\n\(app.debugDescription)")
+        sleep(2) // past the one-second threshold, with a polled byte count on screen
+        shot(copying ? "copy-progress" : "compress-progress")
+        cancel.tap()
+        XCTAssertTrue(cancel.waitForNonExistence(timeout: 5), "the cancelled operation stayed in the transfer bar")
+        XCTAssertFalse(app.staticTexts[copying ? "notes 2.txt" : "notes.zip"].waitForExistence(timeout: 2),
+                       "the cancelled operation left its output behind")
+    }
+
     /// iPad: files dragged in from another app outline the folder (the DEBUG `-showFilesDrop`; a drag from another
     /// app can't be driven from here).
     func testDropOutlinesTheFolder() throws {
