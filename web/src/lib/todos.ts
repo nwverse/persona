@@ -557,16 +557,11 @@ function sessionRank(s: Session, mutes: AgentMutes): number {
   return 5;
 }
 
-/** An agent opened by hand in herdr: not started by Persona (nor spawned through it). */
-function isManualHerdr(s: Session) {
-  return s.space_kind === "herdr" && !s.started_by_persona;
-}
-
 /**
  * Pure function for the Agents sidebar's "By to-do" grouping:
  * - one segment per unfinished todo with attached agents; the header is the todo's title and status, clicking it opens the todo
- * - agents on no todo opened by hand in herdr get one "Opened by hand" segment (#2608)
- * - the other agents on no todo go last in one "Unassigned" segment, folded by default (#1836)
+ * - the agents on no todo go last in one "Unassigned" segment, folded by default (#1836); the ones opened by hand in a
+ *   terminal too, their row's source mark saying so (#6591; a group of their own before, #2608)
  * - pin, mute and "Recent (not running)" follow the same rules as "By status"
  */
 export function buildTodoAgentGroups(
@@ -633,18 +628,8 @@ export function buildTodoAgentGroups(
     if (rA !== rB) return rA - rB;
     return byDate(a, b);
   };
-  const rest = live.filter((s) => !assignedSessionKeys.has(`${s.machine_id}/${s.session_id}`));
-
-  // agents opened by hand in herdr and on no todo get their own "Opened by hand" segment, before "Unassigned", open (#2608):
-  // no auto-attach rule recognizes them (not spawned, their space is on no todo either)
-  const manual = rest.filter(isManualHerdr);
-  if (manual.length > 0) {
-    manual.sort(byRank);
-    groups.push({ key: "todo:manual", name: t("lib-todos.manual"), hint: t("lib-todos.manual_hint"), sessions: manual });
-  }
-
-  // agents on no todo go last in one "Unassigned" segment, folded by default
-  const unassigned = rest.filter((s) => !isManualHerdr(s));
+  // agents on no todo go last in one "Unassigned" segment, folded by default; opened by hand in a terminal or not (#6591)
+  const unassigned = live.filter((s) => !assignedSessionKeys.has(`${s.machine_id}/${s.session_id}`));
   if (unassigned.length > 0) {
     unassigned.sort(byRank);
     groups.push({

@@ -343,6 +343,15 @@ def mock_workspaces():
                     result.append({"id": "catalog-" + wid, "machine_id": mid, "source": "orca", "source_id": wid,
                                    "title": branch, "cwd": path, "index": 20, "parent_source_id": WORKSPACE_LINEAGE[mid, wid],
                                    "online": True, "available": True})
+    if os.environ.get("MOCK_PASEO"):
+        for wid, title, path, branch in [(w, t, PASEO_ROOT if tree is None else PASEO_TREES + tree, b)
+                                         for w, t, tree, b in PASEO_WORKSPACES] + PASEO_MADE:
+            # every worktree here is one Paseo made (owned): the ones Delete worktree is offered for (#6297)
+            result.append({"id": "catalog-" + wid, "machine_id": "server", "source": "paseo", "source_id": wid, "title": title,
+                           "cwd": path, "branch": branch, "workspace_kind": "git", "is_main": path == PASEO_ROOT,
+                           **({} if path == PASEO_ROOT else {"owned": True}),
+                           "project_id": PASEO_PROJECT["id"], "project_name": PASEO_PROJECT["name"], "project_path": PASEO_ROOT,
+                           "online": True, "available": True, "last_seen": ago()})
     return list({(w["machine_id"], w["source"], w["source_id"]): w for w in result}.values())
 
 
@@ -1162,12 +1171,21 @@ if os.environ.get("MOCK_ROW_EDGES"):
 PASEO_LEAD = "9a5e0000-0000-4000-8000-000000000002"
 PASEO_ASKS = "paseo-9a5e0000-0000-4000-8000-000000000003"
 PASEO_CODEX = "paseo-9a5e0000-0000-4000-8000-000000000004"
+# Paseo's workspaces (#6295), as the node lists them in the catalog: the main checkout, the two worktrees its agents work
+# in and one it made with no agent yet: (workspace id, title, folder under its worktrees root or None, branch).
+PASEO_ROOT, PASEO_TREES = "/home/me/code/app", "/home/me/.paseo/worktrees/1a2b3c4d/"
+PASEO_WORKSPACES = [("wks_5a1e000000000001", "Triage", None, "main"),
+                    ("wks_5a1e000000000002", "Fix the login flow", "brave-fox", "fix/login"),
+                    ("wks_5a1e000000000003", "Speed up the importer", "calm-owl", "perf/importer"),
+                    ("wks_5a1e000000000004", "Try the new parser", "quiet-elk", "spike/parser")]
 if os.environ.get("MOCK_PASEO"):
-    _paseo_root = "/home/me/code/app"
+    _paseo_root = PASEO_ROOT
     def _paseo(sid, title, workspace, tree, branch, status, state, minutes, last, agent="claude", **kw):
-        cwd = _paseo_root if tree is None else "/home/me/.paseo/worktrees/1a2b3c4d/" + tree
+        cwd = _paseo_root if tree is None else PASEO_TREES + tree
+        # each agent names its workspace (workspace_id, #6295); a Paseo workspace is still no terminal slot (slot_name only)
+        wid = next((w for w, t, _, _ in PASEO_WORKSPACES if t == workspace), None)
         row = dict(space_kind="paseo", space_id="prj_app", space_name="app", space_index=None, slot_id=None, slot_name=workspace,
-                   slot_index=None, pane_id=None, tab_id=None, workspace_id=None, host="paseo",
+                   slot_index=None, pane_id=None, tab_id=None, workspace_id=wid, host="paseo",
                    source_kind="runtime", source_instance_id="paseo", repo_root=_paseo_root, worktree=cwd, workspace_cwd=cwd,
                    branch=branch, launcher="claude" if agent == "claude" else "codex", started_by_persona=False,
                    # Paseo declares rename and close: the node lists both, rename not on an agent another one started (#6294),
@@ -2882,6 +2900,10 @@ def _direction_agents(t, sessions):
     return roots
 
 
+def _direction_running(agents):
+    return any(a.get("state") == "working" or _direction_running(a.get("children") or []) for a in agents)
+
+
 def mock_direction_tree():
     """GET /api/v1/assistant/directions/tree (#4352): each current leader with the open to-dos it supervises, then the
     secretary's group (the main conversation's id) with the rest. The real hub decides the states with the To-dos page's
@@ -2904,7 +2926,8 @@ def mock_direction_tree():
         tasks.sort(key=lambda x: x["_at"], reverse=True)
         tasks.sort(key=lambda x: _DIRECTION_STATE_ORDER[x["state"]])
         counts = {k: sum(1 for x in tasks if x["state"] == k) for k in _DIRECTION_STATE_ORDER}
-        return {"id": did, "name": name, **extra, "counts": counts,
+        # an Agent under it at work, at any depth and whatever its task's state (#6626, the hub's treeRunning)
+        return {"id": did, "name": name, **extra, "counts": counts, "running": any(_direction_running(x["agents"]) for x in tasks),
                 "tasks": [{k: v for k, v in x.items() if k != "_at"} for x in tasks]}
 
     out = [direction(lid, MOCK_DIRECTION_NAMES.get(lid, ""), groups[lid]) for lid in MOCK_LEADERS]
@@ -3360,7 +3383,18 @@ RECORDINGS_TRIMMED = {}
 # POST /api/v1/recordings/{id}/minutes/todos {version, actions} confirms action items as to-dos (#4062): each gets a to-do and
 # its todo_id; an old version is 409 minutes_stale. POST /mock/recording_minutes_rewrite {"id"} writes the next version at once
 # (what the user sees is then stale).
+# The minutes' shape (#6563, docs/assistant/meeting-minutes.md "Summary card (#6563)"): MOCK_RECORDING_MINUTES_SHAPE=legacy
+# (the default) writes them as a hub from before the summary card does, with no `overview`; overview adds the summary card
+# (`overview`, with every point and decision one bullet) and lays the Markdown out after it; malformed keeps the legacy
+# minutes and adds an `overview` that the contract's "Clients" rules clean down to nothing, so clients fall back to the
+# legacy layout. Every shape has `language` and `markdown`. POST /mock/recording_minutes {"mode", "shape"} switches both
+# (a body without `shape` goes back to the variable's; any other value is 400 and changes nothing).
+MINUTES_SHAPES = ("legacy", "overview", "malformed")
+MINUTES_SHAPE_START = os.environ.get("MOCK_RECORDING_MINUTES_SHAPE", "legacy")
+if MINUTES_SHAPE_START not in MINUTES_SHAPES:
+    sys.exit("mock hub: MOCK_RECORDING_MINUTES_SHAPE must be one of %s" % ", ".join(MINUTES_SHAPES))
 RECORDING_MINUTES = [os.environ.get("MOCK_RECORDING_MINUTES", "pending")]
+RECORDING_MINUTES_SHAPE = [MINUTES_SHAPE_START]
 RECORDING_MINUTES_ASKED = []
 # All-day recording fixtures (#4741): ready makes a recap from the stored text; the other modes let clients exercise
 # waiting, retry and the time before a recap is due. All recording routes share the lock, including delete and trim.
@@ -3716,31 +3750,267 @@ def minutes_span(body):
 
 def recording_minutes(body, rid=None):
     """Made-up minutes in the contract's shape (docs/assistant/meeting-minutes.md) from a recording's own sentences: the
-    first two are points, those that decide / assign / leave something open are decisions / actions / open questions.
+    first two with words are points, those that decide / assign / leave something open are decisions / actions / open
+    questions; a sentence without words (only punctuation, spaces or marks) is no item.
     Each item's `at` is its sentence's start (seconds into the recording). A photo with words (its caption, the text
-    the phone read, the room's note) is a point of its own that cites it (`"photo": n`, its `at` the photo's)."""
+    the phone read, the room's note) is a point of its own that cites it (`"photo": n`, its `at` the photo's).
+    In the overview shape (RECORDING_MINUTES_SHAPE) every sentence that neither decides, assigns nor leaves something
+    open is a point, in time order, so each topic has a few lines; a decision loses its "决定：" label; and the points
+    and decisions are also the summary card's bullets (minutes_overview). The malformed shape is the legacy minutes with
+    a broken `overview` (MINUTES_OVERVIEW_MALFORMED). Every shape has `language` and the hub's `markdown`
+    (minutes_markdown)."""
     segs = [x for x in (transcription_record(rid) if rid and transcription_hub(rid) else body.get("segments", []))
             if x.get("text") and not x.get("echo")]  # Persona's echo is not the meeting's (#5905)
+    shape = RECORDING_MINUTES_SHAPE[0]
     cal = body.get("calendar") or {}
-    item = lambda x: {"text": x["text"].rstrip("。"), "at": x["start"]}
+    # The summary card's texts carry no Markdown (bold is `strong`) and are cleaned as the hub cleans every item: the
+    # marks out, on one line, at most 400 characters (minutes_clip). An item left without words is dropped before
+    # either the legacy lists or the overview are made, as the hub drops it, in every shape.
+    plain = (lambda s: minutes_clip(" ".join(s.replace("**", "").split()), 400)) if shape == "overview" else (lambda s: s)
+    item = lambda x: {"text": plain(x["text"].rstrip("。")).rstrip("。"), "at": x["start"]}
+    worded = lambda xs: [x for x in xs if x["text"].strip()]
+    # A decision's own "决定：" label goes in the summary card's words: the Markdown says "Decided: " before it.
+    decided = (lambda s: re.sub(r"^\s*(?:决定|[Dd]ecided?|[Dd]ecision)\s*[:：]\s*(?=\S)", "", s)) if shape == "overview" else (lambda s: s)  # i18n-ignore: fixture keywords
     acts = [x for x in segs if "负责" in x["text"]]
+    photo_points = worded([{"text": plain((x.get("caption") or (x.get("text") or x.get("note") or "").split("\n")[0])[:200]), "at": x["at"], "photo": x["n"]}
+                           for x in (photos_listed(rid) if rid else []) if x.get("caption") or x.get("text") or x.get("note")])
+    if shape == "overview":  # in time order, as the hub sorts them
+        said = worded([item(x) for x in segs if not any(w in x["text"] for w in ("决定", "负责", "没定"))])  # i18n-ignore: fixture keywords
+        points = sorted(said + photo_points, key=lambda x: x["at"])[:100]
+    else:
+        points = worded([item(x) for x in segs])[:2] + photo_points
     out = {
         "version": 1,
         "title": cal.get("title") or body.get("title") or None,
         **minutes_span(body),  # `when`, and the same span as `start` / `end` for the apps to format (#4713)
         "where": cal.get("location"),
         "attendees": cal.get("attendees"),
-        "points": [item(x) for x in segs[:2]] + [
-            {"text": (x.get("caption") or (x.get("text") or x.get("note") or "").split("\n")[0])[:200], "at": x["at"], "photo": x["n"]}
-            for x in (photos_listed(rid) if rid else []) if x.get("caption") or x.get("text") or x.get("note")],
-        "decisions": [item(x) for x in segs if "决定" in x["text"]],
+        "points": points,
+        "decisions": worded([dict(item(x), text=decided(item(x)["text"])) for x in segs if "决定" in x["text"]]),
         # Who is named before 负责 ("does"), and a deadline when one is said ("周五前").
-        "actions": [{k: v for k, v in {"id": "a%d" % (i + 1), "who": x["text"].split("负责")[0][-3:] or None, "what": x["text"].rstrip("。"),
+        "actions": [{k: v for k, v in {"id": "a%d" % (i + 1), "who": x["text"].split("负责")[0][-3:] or None, "what": plain(x["text"].rstrip("。")),
                                       "by": "周五前" if "周五前" in x["text"] else None, "at": x["start"], "todo_id": ""}.items() if v is not None}
                     for i, x in enumerate(acts)],
-        "open": [item(x) for x in segs if "没定" in x["text"]],
+        "open": worded([item(x) for x in segs if "没定" in x["text"]]),
     }
-    return {k: v for k, v in out.items() if v}
+    out = {k: v for k, v in out.items() if v}
+    lang = minutes_lang(body)
+    if shape == "overview" and (overview := minutes_overview(out, segs, lang)):
+        out["overview"] = overview
+    elif shape == "malformed":
+        out["overview"] = copy.deepcopy(MINUTES_OVERVIEW_MALFORMED)
+    out["language"] = lang
+    out["markdown"] = minutes_markdown(out, body, lang, out.get("overview") if shape == "overview" else None)
+    return out
+
+
+# The summary card (#6563, docs/assistant/meeting-minutes.md "Summary card (#6563)"): the topic icons, in the contract's
+# order, which the mock's topics take in turn.
+MINUTES_ICONS = ("progress", "schedule", "release", "performance", "metrics", "tooling", "quality", "design", "people",
+                 "customer", "budget", "risk", "general")
+# The two groups of 4 or more topics: the meeting's first and second half, which is what they are (the topics go in time
+# order). Made-up words in the minutes' language, not the hub's.
+MINUTES_HALVES = {"zh-Hans": ("前半场", "后半场"), "en": ("First half", "Second half"), "ja": ("前半", "後半")}  # i18n-ignore: fixture words
+# What the contract's "Clients" rules clean down to nothing (no group, topic or bullet is left), so a client shows the
+# legacy minutes: a headline and conclusions of the wrong type, members that are no objects, a group without a list of
+# topics, topics without a title or a list of bullets, and bullets without words. A client that keeps any of them shows
+# words that say what it got wrong.
+MINUTES_OVERVIEW_MALFORMED = {
+    "headline": 3,
+    "conclusions": {"text": "Conclusions that are not a list", "at": 1},
+    "groups": [
+        "x", 7, None, [],
+        {"title": "A group without topics"},
+        {"title": "A group whose topics are not a list", "topics": "x"},
+        {"title": ["a title that is not a string"], "topics": [
+            "x", None,
+            {"title": "  ", "icon": "progress", "bullets": [{"text": "A topic with a blank title", "at": 1}]},
+            {"title": 3, "icon": "progress", "bullets": [{"text": "A topic whose title is a number", "at": 1}]},
+            {"icon": "progress", "bullets": [{"text": "A topic without a title", "at": 1}]},
+            {"title": "A topic whose bullets are not a list", "icon": "progress", "bullets": {"text": "x", "at": 1}},
+            {"title": "A topic without bullets", "icon": "progress"},
+            {"title": "A topic whose bullets have no words", "icon": "not-an-icon", "bullets": [
+                "x", 5, None, [], {"text": "   ", "at": 1}, {"text": 42, "at": 1}, {"text": None, "at": 1, "decision": True},
+                {"at": 1, "strong": ["x"]}]},
+        ]},
+    ],
+}
+
+
+def minutes_lang(body):
+    """The language the hub writes a recording's minutes in (kb/language.go outputLang): the recording's, when the hub has
+    a catalog for it, else Chinese (the mock has no owner's language)."""
+    primary = str(body.get("language") or "").strip().replace("_", "-").split("-")[0].lower()
+    return {"zh": "zh-Hans", "en": "en", "ja": "ja"}.get(primary, "zh-Hans")
+
+
+_MINUTES_CATALOGS = {}
+# The summary card's words in the hub's catalog (kb-minutes.json), for a tree whose catalog does not have them yet.
+_MINUTES_WORDS = {  # i18n-ignore: the hub's words
+    "en": {"conclusions": "Core conclusions", "decided": "Decided: ", "ai_note": "AI-generated from the recording. Check anything important."},
+    "zh-Hans": {"conclusions": "核心结论", "decided": "已决定：", "ai_note": "由 AI 根据录音生成，重要内容请核对。"},
+    "ja": {"conclusions": "主な結論", "decided": "決定：", "ai_note": "録音から AI が作成しました。重要な内容は確認してください。"},
+}
+
+
+def minutes_t(lang, key, **args):
+    """The hub's kb-minutes.json words (server/internal/i18n/locales/<lang>/kb-minutes.json), {name} filled from args."""
+    if lang not in _MINUTES_CATALOGS:
+        root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        try:
+            with open(os.path.join(root, "server", "internal", "i18n", "locales", lang, "kb-minutes.json"), encoding="utf-8") as f:
+                _MINUTES_CATALOGS[lang] = json.load(f)
+        except (OSError, ValueError): _MINUTES_CATALOGS[lang] = {}
+    s = _MINUTES_CATALOGS[lang].get(key) or _MINUTES_WORDS.get(lang, {}).get(key) or key
+    return re.sub(r"\{(\w+)\}", lambda m: str(args.get(m.group(1), m.group(0))), s)
+
+
+def minutes_clip(text, n):
+    """text at most n characters, as the hub clips an item (400), a conclusion (200) or a headline (120): a cut keeps
+    n - 1 characters and ends in "…"."""
+    return text if len(text) <= n else text[:n - 1] + "…"
+
+
+def minutes_strong(text, limit=None):
+    """The text's bold places (`strong`) as the mock marks them: its first number (with a unit), or 完成 / done, whichever
+    comes first; kept only where the contract's rule finds it (its first occurrence) and when it is not the whole text.
+    In a text minutes_clip cut to limit, one that ends at the "…" is not bold: the mock cannot tell whether the cut
+    reached it, and the hub leaves out a mark the cut reaches."""
+    m = re.search(r"\d+(?:\.\d+)?(?:\s?(?:%|[KMGT]B\b|K\b|ms\b))?|完成|\b[Dd]one\b", text)  # i18n-ignore: fixture keywords
+    if not m or text.find(m.group(0)) != m.start() or len(m.group(0)) > 20 or m.group(0) == text.strip(): return []
+    if limit and len(text) == limit and text.endswith("…") and m.end() == limit - 1: return []
+    return [m.group(0)]
+
+
+def minutes_bold(text, strong):
+    """text as the Markdown writes it: a literal * escaped, the `strong` places wrapped in ** by the contract's rule (each
+    entry's first occurrence at or after the end of the one before; one not found bolds nothing)."""
+    out, i = [], 0
+    for s in strong or []:
+        j = text.find(s, i) if isinstance(s, str) and s else -1
+        if j < 0: continue
+        out += [text[i:j].replace("*", "\\*"), "**" + s.replace("*", "\\*") + "**"]
+        i = j + len(s)
+    return "".join(out) + text[i:].replace("*", "\\*")
+
+
+def minutes_topic_title(text, names=()):
+    """A topic's title from its first bullet: the subject it names before a colon ("导出：超过 4 MB 的条目会被丢弃",
+    "Export: entries over 4 MB are dropped"), unless that is an attendee's name (a speaker); else its first clause after
+    such a name, cut to 12 characters in Chinese or Japanese and to whole words within 40 otherwise."""
+    label = re.match(r"\s*([^\s:：，,。]{1,12}(?: [^\s:：，,。]+){0,3})\s*[:：]\s*(?=\S)", text)
+    if label and label.group(1) not in names: return label.group(1)[:40]
+    words = text[label.end():] if label else text
+    clause = re.split(r"[，,。;；!?！？、]|\.(?:\s|$)", words, maxsplit=1)[0].strip() or words.strip() or text.strip()
+    if re.search(r"[\u3040-\u30ff\u3400-\u9fff]", clause): return clause[:12]
+    title = ""
+    for w in clause.split():
+        if len(title) + len(w) + 1 > 40: break
+        title = (title + " " + w).strip()
+    return title or clause[:40]
+
+
+def minutes_overview(m, segs, lang):
+    """The summary card (#6563) from minutes m, as the hub guarantees it ("The `overview` field"): every point and decision
+    is one bullet (same text, at and photo), the bullets of each transcript minute a topic titled by its first one
+    (minutes_topic_title; minutes merged when there would be more than 12, topics of the same title one), icons in turn,
+    two titled groups (the halves) when there are 4 or more topics, else one untitled. A bullet's and a conclusion's bold
+    place is minutes_strong's. The conclusions are the first 4 decisions, citing a photo only when a bullet cites it; the
+    headline is the first sentence. None when there is no point or decision, as the hub leaves the overview out."""
+    bullets = [{"text": x["text"], "at": x["at"], **({"photo": x["photo"]} if x.get("photo") else {}), "_decision": False}
+               for x in m.get("points") or []]
+    bullets += [{"text": x["text"], "at": x["at"], **({"photo": x["photo"]} if x.get("photo") else {}), "_decision": True}
+                for x in m.get("decisions") or []]
+    if not bullets: return None
+    at = lambda b: b["at"] if isinstance(b["at"], (int, float)) else 0
+    bullets.sort(key=at)
+    minutes = sorted({int(at(b) // 60) for b in bullets})
+    per = -(-len(minutes) // 12)  # transcript minutes per topic: at most 12 topics
+    buckets = {}
+    for b in bullets: buckets.setdefault(minutes.index(int(at(b) // 60)) // per, []).append(b)
+    topics = []
+    for k in sorted(buckets):
+        title = minutes_topic_title(buckets[k][0]["text"], m.get("attendees") or ())
+        same = next((t for t in topics if t["title"].casefold() == title.casefold()), None)
+        if same: same["bullets"] += buckets[k]
+        else: topics.append({"title": title, "icon": MINUTES_ICONS[len(topics) % len(MINUTES_ICONS)], "bullets": list(buckets[k])})
+
+    def bullet(b):
+        strong = minutes_strong(b["text"], 400)
+        return {"text": b["text"], **({"strong": strong} if strong else {}), "at": b["at"],
+                **({"photo": b["photo"]} if b.get("photo") else {}), **({"decision": True} if b["_decision"] else {})}
+
+    topics = [{"title": t["title"], "icon": t["icon"], "bullets": [bullet(b) for b in sorted(t["bullets"], key=at)]}
+              for t in topics]
+    if len(topics) >= 4:
+        half, names = (len(topics) + 1) // 2, MINUTES_HALVES[lang]
+        groups = [{"title": names[0], "topics": topics[:half]}, {"title": names[1], "topics": topics[half:]}]
+    else:
+        groups = [{"title": "", "topics": topics}]
+    cited = {b["photo"] for t in topics for b in t["bullets"] if b.get("photo")}
+    conclusions = []
+    for x in (m.get("decisions") or [])[:4]:
+        text = minutes_clip(x["text"], 200)
+        strong = minutes_strong(text, 200)
+        conclusions.append({"text": text, **({"strong": strong} if strong else {}), "at": x["at"],
+                            **({"photo": x["photo"]} if x.get("photo") in cited else {})})
+    first = minutes_clip(" ".join(segs[0]["text"].replace("**", "").split()).rstrip("。"), 120) if segs else ""
+    out = {}
+    if first and first != m.get("title"): out["headline"] = first
+    if conclusions: out["conclusions"] = conclusions
+    out["groups"] = groups
+    return out
+
+
+def minutes_markdown(m, body, lang, ov=None):
+    """minutes.md as the hub writes it (kb/minutes.go renderMinutes): with clock times in the local zone, sections with
+    nothing left out, the fixed words from the hub's kb-minutes.json in the minutes' language. With the overview ov (the
+    overview shape's; a malformed one is never laid out) it follows the contract's "Markdown" (#6563): the headline, the
+    core conclusions, the topics under their group headings (or as the sections with one untitled group) with decisions
+    after "Decided: ", the action items and open questions as before with no checkbox, a literal * escaped in every text
+    the minutes hold, then the AI note. Without one it is the legacy layout, byte for byte."""
+    try: start = datetime.fromisoformat(str(body.get("started_at")).replace("Z", "+00:00")).astimezone()
+    except (TypeError, ValueError): start = None
+    clock = lambda sec: "[" + ((start + timedelta(microseconds=math.trunc(sec * 1_000_000 if isinstance(sec, (int, float)) else 0)))
+                               .strftime("%H:%M:%S") if start else "00:00:00") + "] "
+    photo = lambda x: minutes_t(lang, "photo", n=x["photo"]) if x.get("photo") else ""
+    # The hub's title when none was given: the recording's name in Chinese (the mock's 录音), else when it started.
+    title = m.get("title") or ("录音" if lang == "zh-Hans" else  # i18n-ignore: the recording's name
+                               minutes_t(lang, "untitled", when=start.strftime("%Y-%m-%d %H:%M") if start else ""))
+    esc = (lambda s: str(s).replace("*", "\\*")) if ov else str
+    out = "# " + esc(title) + "\n\n- " + minutes_t(lang, "when", when=m.get("when") or "") + "\n"
+    if m.get("where"): out += "- " + minutes_t(lang, "where", where=esc(m["where"])) + "\n"
+    if m.get("attendees"): out += "- " + minutes_t(lang, "attendees", names=minutes_t(lang, "list_sep").join(map(esc, m["attendees"]))) + "\n"
+    if ov:
+        if ov.get("headline"): out += "\n" + esc(ov["headline"]) + "\n"
+        if ov.get("conclusions"):
+            out += "\n## " + minutes_t(lang, "conclusions") + "\n\n"
+            out += "".join("- " + clock(c["at"]) + minutes_bold(c["text"], c.get("strong")) + photo(c) + "\n" for c in ov["conclusions"])
+        named = len(ov["groups"]) > 1
+        for g in ov["groups"]:
+            if named: out += "\n## " + esc(g["title"]) + "\n"
+            for t in g["topics"]:
+                out += "\n" + ("### " if named else "## ") + esc(t["title"]) + "\n\n"
+                out += "".join("- " + clock(x["at"]) + (minutes_t(lang, "decided") if x.get("decision") else "")
+                               + minutes_bold(x["text"], x.get("strong")) + (minutes_t(lang, "who", who=esc(x["who"])) if x.get("who") else "")
+                               + photo(x) + "\n" for x in t["bullets"])
+    else:
+        if m.get("points"):
+            out += "\n## " + minutes_t(lang, "points") + "\n\n"
+            out += "".join("- " + clock(x["at"]) + x["text"] + (minutes_t(lang, "who", who=x["who"]) if x.get("who") else "")
+                           + photo(x) + "\n" for x in m["points"])
+        if m.get("decisions"):
+            out += "\n## " + minutes_t(lang, "decisions") + "\n\n" + "".join("- " + clock(x["at"]) + x["text"] + photo(x) + "\n" for x in m["decisions"])
+    if m.get("actions"):
+        out += "\n## " + minutes_t(lang, "actions") + "\n\n"
+        out += "".join("- " + clock(a["at"]) + (minutes_t(lang, "owner", who=esc(a["who"])) if a.get("who") else "") + esc(a["what"])
+                       + (minutes_t(lang, "by", by=esc(a.get("by") or a.get("due_date"))) if a.get("by") or a.get("due_date") else "")
+                       + photo(a) + "\n" for a in m["actions"])
+    if m.get("open"):
+        out += "\n## " + minutes_t(lang, "open") + "\n\n" + "".join("- " + clock(x["at"]) + esc(x["text"]) + photo(x) + "\n" for x in m["open"])
+    if m.get("partial"): out += "\n> " + minutes_t(lang, "partial") + "\n"
+    if ov: out += "\n*" + minutes_t(lang, "ai_note") + "*\n"
+    return out.rstrip("\n")
 
 
 # The managers' roster (docs/assistant/managers.md): the hub's own assistant (the default), one on another computer, one offline,
@@ -3812,6 +4082,7 @@ def _manager_known(mid):
 def stamp_managers(path, obj):
     """The merged lists' `manager` on each item, as the hub adds it; the default manager's items too."""
     if not _stamps() or not isinstance(obj, dict): return obj
+    if MOCK_INBOX_SHOWCASE and path == "/api/v1/inbox": return obj
     dflt = MANAGERS["default"]
     if path in ("/api/v1/inbox", "/api/v1/inbox/done") and isinstance(obj.get("items"), list):
         obj = dict(obj, items=[dict(x, manager=inbox_owner(x.get("id"))) if isinstance(x, dict) else x for x in obj["items"]])
@@ -5506,9 +5777,17 @@ def photos_of(rid, make=False):
 
 
 def photos_cited(rid):
-    """The numbers of the photos the current minutes cite."""
+    """The numbers of the photos the current minutes cite: their items', and the summary card's conclusions' and bullets'
+    (#6563; a malformed overview's members that are no objects cite nothing)."""
     minutes = (KB_DETAIL.get(("recordings", rid)) or {}).get("minutes") or {}
-    return {x["photo"] for k in ("points", "decisions", "actions", "open") for x in minutes.get(k) or [] if isinstance(x.get("photo"), int)}
+    lists = [minutes.get(k) for k in ("points", "decisions", "actions", "open")]
+    ov = minutes.get("overview")
+    if isinstance(ov, dict):
+        lists.append(ov.get("conclusions"))
+        for g in ov.get("groups") if isinstance(ov.get("groups"), list) else []:
+            for t in g.get("topics") if isinstance(g, dict) and isinstance(g.get("topics"), list) else []:
+                if isinstance(t, dict): lists.append(t.get("bullets"))
+    return {x["photo"] for xs in lists if isinstance(xs, list) for x in xs if isinstance(x, dict) and isinstance(x.get("photo"), int)}
 
 
 def photos_listed(rid):
@@ -6594,8 +6873,14 @@ def recordings_route_locked(h, method, p):
                                              "segments": v["segments"], "fed": v["fed"], "asks": v["asks"]}
                                          for k, v in MEETING_LIVE.items()}}) or True
     if p == "/mock/recording_minutes" and method == "POST":
-        # A fresh start for the next test on the same mock: what an earlier one stored (its minutes) is gone too.
-        RECORDING_MINUTES[0] = json.loads(h.last_body or b"{}").get("mode", "pending")
+        # A fresh start for the next test on the same mock: what an earlier one stored (its minutes) is gone too. The
+        # minutes' shape (#6563) is the body's, else MOCK_RECORDING_MINUTES_SHAPE's; another one changes nothing.
+        try: body = json.loads(h.last_body or b"{}")
+        except ValueError: body = None
+        if not isinstance(body, dict) or body.get("shape", MINUTES_SHAPE_START) not in MINUTES_SHAPES:
+            return h.send_json({"error": "shape must be one of " + ", ".join(MINUTES_SHAPES)}, 400) or True
+        RECORDING_MINUTES[0] = body.get("mode", "pending")
+        RECORDING_MINUTES_SHAPE[0] = body.get("shape", MINUTES_SHAPE_START)
         for t in TRANSCRIPTIONS.values():
             if t.get("socket"): t["socket"]["fail"]("recording_deleted")
         TRANSCRIPTIONS.clear()
@@ -6604,7 +6889,7 @@ def recordings_route_locked(h, method, p):
         with PHOTO_LOCK: PHOTO_STORE.clear()
         KB["recordings"] = []
         for key in [k for k in KB_DETAIL if k[0] == "recordings"]: KB_DETAIL.pop(key)
-        return h.send_json({"mode": RECORDING_MINUTES[0]}) or True
+        return h.send_json({"mode": RECORDING_MINUTES[0], "shape": RECORDING_MINUTES_SHAPE[0]}) or True
     if p == "/mock/recordings" and method == "GET":
         return h.send_json({"recordings": RECORDINGS, "deleted": sorted(RECORDINGS_DELETED), "puts": RECORDING_PUTS[0],
                             "minutes_asked": RECORDING_MINUTES_ASKED, "trimmed": sorted(RECORDINGS_TRIMMED)}) or True
@@ -8985,6 +9270,60 @@ if os.environ.get("MOCK_SCREEN_DANGER") in ("before", "after"):
                    + "\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n\n Esc to cancel · Tab to amend",
          "dialog": _danger})
 
+# MOCK_LONG_ASKS=1 (#6605): pending cards whose command or plan runs far past the cards' area, one long card per
+# conversation and two on one. The review agent: a terminal prompt read without its command (the dialog's detail is the
+# agent's words and the 52-line command, Yes / No), as a hub reads one whose header scrolled off. The blog agent: a Bash
+# permission with the same command. The orders agent: a 60-line plan. The release agent: the command as a hub reads it
+# now (command, description, warning, countdown) and a second long Bash permission. None of them is a chat
+# PendingCardsTests opens, so one mock with MOCK_AGENTS=1 serves both.
+def _long_ask_cmd():
+    rows = ["set -euo pipefail", "cd ./fixtures", "python3 -I - <<'EOF'", "import json, pathlib",
+            "root = pathlib.Path('.')", "seen = {}"]
+    for n in range(1, 15):
+        rows += ["p%d = root / 'city-%02d.json'" % (n, n),
+                 "d%d = json.loads(p%d.read_text()) if p%d.exists() else {'hours': []}" % (n, n, n),
+                 "seen['city-%02d'] = len(d%d['hours'])  # hours of rain to check" % (n, n)]
+    rows += ["print(json.dumps(seen, indent=2, sort_keys=True))", "EOF",
+             "swift test --filter ForecastFormatTests 2>&1 | tail -20", "git status --short ./fixtures | head -40"]
+    return "\n".join(rows)
+
+
+if os.environ.get("MOCK_LONG_ASKS") == "1":
+    _long_cmd = _long_ask_cmd()
+    _long_desc = "Check every city fixture's rain hours and run the formatter's tests"
+    _long_plan = "## 天气小组件的降雨时间线\n\n" + "\n".join(
+        "%d. 第 %d 步：把第 %d 个城市的小时数据接到时间线上，补上对应的格式化测试，跑一遍确认没有回归" % (n, n, n)
+        for n in range(1, 41)) + "\n\n## 不做的事\n\n" + "\n".join("- 第 %d 件先不做的事：留到下一轮再说" % n for n in range(1, 16))
+    INTERACTIONS.extend([
+        {"id": "scr_macbook_review_long", "machine_id": "macbook", "session_id": REVIEW, "session_title": "检查 PR #42 的改动",
+         "cwd": "/Users/me/code/weather", "kind": "screen", "created_at": ago(minutes=1), "expires_at": later(hours=24),
+         "screen": " " + _long_desc + "\n " + _long_cmd.replace("\n", "\n ") + "\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n\n Esc to cancel",
+         "dialog": {"question": "Do you want to proceed?", "detail": _long_desc + "\n" + _long_cmd, "rev": "6605a0000001",
+                    "options": [{"key": "1", "label": "Yes", "keys": ["1"]}, {"key": "2", "label": "No", "keys": ["2"]}]}},
+        {"id": "ix_blog_long_bash", "machine_id": "studio", "session_id": BLOG, "session_title": "博客迁移到 Astro",
+         "cwd": "/Users/me/code/blog", "kind": "permission", "created_at": ago(minutes=1), "expires_at": later(minutes=29),
+         "tool_name": "Bash", "tool_use_id": "toolu_long_bash", "summary": _long_cmd,
+         "tool_input": {"command": _long_cmd, "description": _long_desc}},
+        {"id": "ix_orders_long_plan", "machine_id": "server", "session_id": ORDERS, "session_title": "排查 /orders 接口变慢",
+         "cwd": "/home/me/code/shop-api", "kind": "plan", "created_at": ago(minutes=1), "expires_at": later(minutes=29),
+         "tool_name": "ExitPlanMode", "tool_use_id": "toolu_long_plan", "plan": _long_plan},
+        {"id": "scr_macbook_release_long", "machine_id": "macbook", "session_id": RELEASE, "session_title": "整理发布说明",
+         "cwd": "/Users/me/code/weather", "kind": "screen", "created_at": ago(minutes=2), "expires_at": later(hours=24),
+         "screen": " Bash command\n " + _long_desc + "\n │ " + _long_cmd.replace("\n", "\n │ ")
+                   + "\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n\n Esc to cancel · Tab to amend",
+         "dialog": {"question": "Do you want to proceed?", "rev": "6605a0000002", "detail": "Bash command\n" + _long_desc + "\n" + _long_cmd,
+                    "command": _long_cmd, "description": _long_desc, "risk": "delete",
+                    "warning": "Dangerous rm operation not ruled out — the shell may read this command differently than it was parsed",
+                    "deadline": "Claude Code will automatically block this request in 4:59, to avoid holding up an unattended session",
+                    "deadline_action": "deny",
+                    "deadline_at": (datetime.now(timezone.utc) + timedelta(seconds=299)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "options": [{"key": "1", "label": "Yes", "keys": ["1"]}, {"key": "2", "label": "No", "keys": ["2"]}]}},
+        {"id": "ix_release_long_bash", "machine_id": "macbook", "session_id": RELEASE, "session_title": "整理发布说明",
+         "cwd": "/Users/me/code/weather", "kind": "permission", "created_at": ago(minutes=1), "expires_at": later(minutes=29),
+         "tool_name": "Bash", "tool_use_id": "toolu_long_bash_2", "summary": _long_cmd,
+         "tool_input": {"command": _long_cmd, "description": _long_desc}},
+    ])
+
 # MOCK_SCREEN_MULTI=1: a multi-select AskUserQuestion read off the terminal (Claude Code 2.1.316), the second of
 # three questions: two boxes already ticked at the computer, a few words in its free-text field, "Next" to send it.
 # /mock/reset puts it back unanswered (MultiSelectCardTests: each case starts from the card).
@@ -9645,10 +9984,20 @@ def mock_panes(mid):
     return {"hosts": [{"kind": "herdr", "stream": True, "control": True, "new_tab": True, "worktree": True, "workspaces": ws, "tabs": tabs, "panes": panes}]}
 
 
+PASEO_MADE = []  # worktrees made on Paseo's workspaces from the web (#6295), in the catalog after PASEO_WORKSPACES
+
+
 def worktree_route(h, p, body):
     """POST /api/v1/machines/{mid}/worktree/{prepare,create} (#2431)."""
     mid, verb = p.split("/")[4], p.split("/")[6]
     NODE_ACTIONS.append({"machine": mid, "route": "worktree/" + verb, **body})
+    if body.get("kind") == "paseo":  # Paseo makes it, in its own worktrees folder of the repository (#6295)
+        if verb == "prepare":
+            return h.send_json({"root": PASEO_ROOT, "repoName": "app", "branch": "main", "path": PASEO_TREES.rstrip("/"), "automatic_name": True})
+        branch, path = str(body.get("branch", "")), str(body.get("path", ""))
+        wid = "wks_5a1e00000000%04d" % (100 + len(PASEO_MADE))
+        PASEO_MADE.append((wid, branch, path, branch))
+        return h.send_json({"workspace_id": wid, "path": path, "branch": branch})
     if verb == "prepare":
         return h.send_json({"root": "/home/me/persona", "repoName": "persona", "branch": "main", "path": "/home/me/.herdr/worktrees/persona",
                             "choose_parent": body.get("kind") == "orca"})
@@ -9662,6 +10011,80 @@ def worktree_route(h, p, body):
     parent = body.get("parent_workspace_id") or body.get("workspace_id", "")
     if body.get("kind") == "orca": WORKSPACE_LINEAGE[mid, wid] = parent
     return h.send_json({"workspace_id": wid, "parent_workspace_id": parent, "tab_id": wid + ":t1", "pane": wid + ":p1", "terminal": "pane:" + wid + ":p1", "path": path, "branch": branch})
+
+
+# MOCK_PASEO=1 (#6297): Rename and Delete worktree on Paseo's rows, and Rename space on its project, answered as the node
+# answers them (node/runtimeworkspaces_manage.go): a title, the project's name (its agents' space_name, the catalog's
+# project_name), and a deletion previewed, then confirmed with the preview's token, only of a worktree Paseo made (the
+# main checkout is refused); the login flow's worktree has two uncommitted changes, which the dialog asks to confirm.
+# Recorded at GET /mock/node_actions.
+PASEO_PROJECT = {"id": "prj_app", "name": "app"}
+PASEO_PREVIEWS, PASEO_DIRTY = {}, {"wks_5a1e000000000002": 2}
+
+
+def _paseo_path(row):
+    """A Paseo workspace row's folder: PASEO_WORKSPACES name a folder under its worktrees root (None: the main checkout),
+    PASEO_MADE the whole path."""
+    return row[2] if row in PASEO_MADE else PASEO_ROOT if row[2] is None else PASEO_TREES + row[2]
+
+
+def _paseo_failed(h, detail):
+    """A node's refusal as the hub writes it (docs/protocol/protocol.md "Error body"): the node's words in detail."""
+    return h.send_json({"error": "The request could not be completed. Open details for the diagnostic.", "code": "internal", "detail": detail}, 502)
+
+
+def paseo_worktree_route(h, p, body):
+    """POST /api/v1/machines/{mid}/worktree/{rename,delete} of a Paseo row (#6297)."""
+    mid, verb = p.split("/")[4], p.split("/")[6]
+    NODE_ACTIONS.append({"machine": mid, "route": "worktree/" + verb, **body})
+    wid = str(body.get("workspace_id", ""))
+    found = next(((rows, i) for rows in (PASEO_WORKSPACES, PASEO_MADE) for i, row in enumerate(rows) if row[0] == wid), None)
+    if verb == "rename":
+        if not found:
+            return _paseo_failed(h, "Paseo no longer lists this workspace; refresh and try again")
+        rows, i = found
+        rows[i] = (wid, str(body.get("name", "")).strip()) + tuple(rows[i][2:])
+        return h.send_json({"ok": True})
+    token = str(body.get("preview_token", ""))
+    if body.get("preview"):
+        if not found:
+            return _paseo_failed(h, "The workspace or its changes differ from the preview; review a new preview")
+        rows, i = found
+        path = _paseo_path(rows[i])
+        if path == PASEO_ROOT:
+            return _paseo_failed(h, "The repository's main checkout cannot be deleted")
+        token = "paseo-preview-%d" % (len(PASEO_PREVIEWS) + 1)
+        PASEO_PREVIEWS[token] = wid
+        return h.send_json({"workspace_id": wid, "kind": "paseo", "host_id": "local", "instance_id": "paseo-mock", "path": path,
+                            "branch": rows[i][3], "dirty": PASEO_DIRTY.get(wid, 0), "folder": False, "preview_token": token})
+    if PASEO_PREVIEWS.get(token) != wid:
+        return _paseo_failed(h, "Preview this exact workspace again before deleting it")
+    if body.get("reconcile"):
+        return h.send_json({"workspace_id": wid, "removed": not found, "state": "present" if found else "removed"})
+    if not found:
+        return _paseo_failed(h, "Deletion was already sent; reconcile its status before any further action")
+    if PASEO_DIRTY.get(wid) and not body.get("force"):
+        return _paseo_failed(h, "The worktree has uncommitted changes")
+    rows, i = found
+    del rows[i]
+    SESSIONS[:] = [s for s in SESSIONS if not (s.get("space_kind") == "paseo" and s.get("workspace_id") == wid)]  # archived with it
+    return h.send_json({"workspace_id": wid, "removed": True, "state": "removed", **({"branch_deleted": True} if body.get("delete_branch") else {})})
+
+
+def paseo_space_route(h, p, body):
+    """POST /api/v1/machines/{mid}/spaces/{id}/rename of Paseo's project, by its id or one of its workspaces' (#6297): its
+    agents and the catalog show the new name; the hub answers it as pins.go does. False when the id is no Paseo one."""
+    sid = p.split("/")[6]
+    if sid != PASEO_PROJECT["id"] and not any(row[0] == sid for row in PASEO_WORKSPACES + PASEO_MADE):
+        return False
+    NODE_ACTIONS.append({"machine": p.split("/")[4], "route": "spaces/rename", "workspace_id": sid, **body})
+    name = str(body.get("name", "")).strip()
+    PASEO_PROJECT["name"] = name
+    for s in SESSIONS:
+        if s.get("space_kind") == "paseo" and s.get("space_id") == PASEO_PROJECT["id"]:
+            s["space_name"] = name
+    h.send_json({"ok": True, "name": name})
+    return True
 
 
 # MOCK_AGENT_WORKTREE=1 (#6115): a new agent in a worktree of its own. worktree/status says a folder under
@@ -10648,6 +11071,8 @@ def inbox_done_days(query):
 
 def inbox_for(query):
     """The list as the hub gives it: connectors' items only with ?sources=all."""
+    if MOCK_INBOX_SHOWCASE:
+        return copy.deepcopy(INBOX)
     all_sources = (query.get("sources") or [""])[0] == "all"
     return [dict({k: v for k, v in x.items() if k != "context"}, version=inbox_version(x)) for x in INBOX if all_sources or "connector" not in x]
 
@@ -11190,6 +11615,48 @@ def larkcli_area(h, method, p, raw):
                         "qr": {"size": len(WECHAT_QR_ROWS), "rows": WECHAT_QR_ROWS}}) or True
 
 
+
+# MOCK_LARKCLI_INBOX=1: a Lark mention read through lark-cli (飞书 · 我的消息) and its conversation page, as a hub that
+# reads the chat's own record gives it (kind group, the chat's name); =legacy: as an older hub gave it, an empty kind and
+# name (lark-cli's message list says neither). Its words are what lark-cli writes: a post's Markdown with a picture by
+# image key, an interactive message's <card title="…"> envelope, plain text. All made up.
+LARKCLI_INBOX = os.environ.get("MOCK_LARKCLI_INBOX", "")
+LARKCLI_THREAD = "larkcli:chat:oc_example_oncall"
+
+
+def larkcli_thread_page():
+    now = datetime.now(timezone.utc)
+    def at(h, m):
+        return now.replace(hour=h, minute=m, second=0, microsecond=0).isoformat().replace("+00:00", "Z")
+    a, b = {"id": "ou_example_a", "name": "示例同事"}, {"id": "ou_example_b", "name": "另一个示例同事"}
+    bot, helper = {"id": "cli_example_bot", "name": "示例值班机器人"}, {"id": "cli_example_helper", "name": "示例助手"}
+    msgs = [
+        {"id": "om_example_1", "at": at(1, 2), "sender": a, "text": "@示例用户 帮忙看下这个播放数的问题"},
+        {"id": "om_example_2", "at": at(1, 30), "sender": a, "text": "/save"},
+        {"id": "om_example_3", "at": at(1, 30), "sender": helper, "format": "markdown", "text": "<card>\n已将群聊转为常驻群，不会自动解散\n</card>"},
+        {"id": "om_example_4", "at": at(2, 13), "sender": bot, "format": "markdown", "text": (
+            "<card title=\"Oncall Notice\">\n本群已长时间未响应，工单已停留 **120** 小时，请确认是否结束。\n\n"
+            "如果问题已解决，请点击「已解决」；还没解决，请值班同学尽快响应。\n</card>")},
+        {"id": "om_example_5", "at": at(2, 16), "sender": b, "format": "markdown", "text": (
+            "**现象**：示例广告组的播放数低于展示数，漏斗倒挂；10-31 起自行恢复。\n"
+            "**已定位**\n- 问题在原始事件流：起播事件缺失，2 秒播放正常\n- 两端漏斗都正常，异常集中在一批未知端的请求\n"
+            "**请协助确认**\n1. 起播事件为什么没有上报\n2. 历史数据能否回补\n\n"
+            "[示例结论文档](https://example.com/doc)\n![Image](img_example_key)")},
+        {"id": "om_example_6", "at": at(2, 20), "sender": {"id": "ou_example_me", "name": "示例用户"}, "mine": True, "text": "收到，我来跟进"},
+    ]
+    legacy = LARKCLI_INBOX == "legacy"
+    return {"chat": {"id": LARKCLI_THREAD, "name": "" if legacy else "示例值班群", "kind": "" if legacy else "group"}, "messages": msgs}
+
+
+def larkcli_thread_area(h, method, p):
+    """The Lark (lark-cli) conversation page; True when it answered."""
+    if not LARKCLI_INBOX or method != "GET" or p != "/api/v1/connectors/larkcli/thread":
+        return False
+    if parse_qs(urlparse(h.path).query).get("thread", [""])[0] != LARKCLI_THREAD:
+        return h.send_json({"error": "没有叫这个的会话"}, 502) or True
+    return h.send_json(larkcli_thread_page()) or True
+
+
 TELEGRAM_MODE = os.environ.get("MOCK_TELEGRAM", "")
 TELEGRAM = {"enabled": TELEGRAM_MODE not in ("", "off"), "creds": TELEGRAM_MODE in ("signed_in", "limited"),
             "signed_in": TELEGRAM_MODE in ("signed_in", "limited"), "limited": TELEGRAM_MODE == "limited",
@@ -11456,6 +11923,17 @@ def telegram_area(h, method, p, raw):
     return False
 
 
+if LARKCLI_INBOX:
+    INBOX[1:1] = [
+        {"id": "larkcli:example_oncall", "source": "larkcli", "kind": "mention", "account": "larkcli", "account_name": "飞书 · 我的消息",
+         "title": "示例值班群", "sender": "示例值班机器人", "preview": "Oncall Notice", "count": 1,
+         "started_at": ago(minutes=30), "updated_at": ago(minutes=30), "tier": "action",
+         "summary": "值班群里在催你确认示例问题的进展", "reason": "被点名催响应", "read": False,
+         "context": "示例同事: @示例用户 帮忙看下这个播放数的问题\n另一个示例同事: **现象**：示例广告组的播放数低于展示数……\n示例值班机器人: <card title=\"Oncall Notice\">……</card>",
+         "connector": {"thread": LARKCLI_THREAD, "label": "飞书提及", "reply_to": "以你的身份发到「示例值班群」，会话里的人都能看到", "can_reply": True}},
+    ]
+
+
 if os.environ.get("MOCK_TELEGRAM_INBOX"):
     INBOX[1:1] = [
         {"id": "telegram:dm1", "source": "telegram", "kind": "dm", "account": "telegram", "account_name": "Telegram",
@@ -11692,6 +12170,18 @@ if MOCK_INBOX_EVENTS:
         }
         for _x in INBOX:
             if _x["id"] in _event_mutes: _x["mutes"] = _event_mutes[_x["id"]]
+
+
+# MOCK_INBOX_SHOWCASE=1: run `MOCK_INBOX_SHOWCASE=1 python3 scripts/mock/mock_hub.py` to serve the shared
+# side-by-side screenshot scenario from spec/fixtures/inbox/showcase.json. The list and item details keep the
+# fixture's items exactly as written, including their timestamps; clients fix their clocks to the fixture's
+# now_clock themselves. This takes precedence over MOCK_INBOX_EVENTS and leaves every other switch unchanged.
+MOCK_INBOX_SHOWCASE = os.environ.get("MOCK_INBOX_SHOWCASE") == "1"
+if MOCK_INBOX_SHOWCASE:
+    _showcase_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
+                                  "spec", "fixtures", "inbox", "showcase.json")
+    with open(_showcase_path, encoding="utf-8") as _f:
+        INBOX[:] = json.load(_f)["items"]
 
 
 # MOCK_HANDOFF_CARD=1 (with MOCK_TASKS=1): an item handed to the main conversation that wrote back (#5932,
@@ -12554,6 +13044,31 @@ def fs_find(mid):
 
 def fs_get(h, p, q):
     """GET /api/v1/lark/… and /mock/lark with MOCK_LARK (True when handled; the rest falls through)."""
+    # The unread switch must cross a whole read-only page, not filter just the first screen (#6553).
+    if os.environ.get("MOCK_LARK_UNREAD") and p in ("/api/v1/lark/conversations", "/api/v1/lark/pinned"):
+        pages = max(1, min(16, int(os.environ.get("MOCK_LARK_UNREAD_PAGES", "1"))))
+        rows = [dict(id="read-%03d" % n, name="Project archive %02d" % n, is_group=True, unread=0,
+                     at_me=False, muted=False, preview="Notes are up to date.", is_mine=False,
+                     updated_at="2026-01-02T12:00:00Z", pinned=n == 1) for n in range(1, pages * 60 + 1)]
+        rows += [dict(id=feed, name=name, is_group=True, unread=count, marked_unread=marked,
+                      at_me=False, muted=False, preview="A new update is waiting.", is_mine=False,
+                      updated_at="2026-01-01T12:00:00Z", pinned=feed == "f1")
+                 for feed, name, count, marked in [("f3", "Design review", 3, False),
+                                                  ("f2", "Weekend plans", 0, True),
+                                                  ("f1", "Release notes", 1, False)]]
+        if p.endswith("pinned"):
+            rows = [row for row in rows if row.get("pinned")]
+        elif q.get("scope", ["chats"])[0] == "unread":
+            rows = [row for row in rows if row["unread"] or row.get("marked_unread")]
+        cursor, limit = int(q.get("cursor", ["0"])[0] or "0"), int(q.get("limit", ["60"])[0])
+        if cursor:
+            delay = max(0, min(3, float(os.environ.get("MOCK_LARK_UNREAD_PAGE_DELAY", "0"))))
+            if delay:
+                print(f"lark-unread-page-start cursor={cursor}", flush=True)
+                time.sleep(delay)
+        h.send_json({"conversations": rows[cursor:cursor + limit], "account_id": LARK_ACCOUNT_ID,
+                     "next_cursor": str(cursor + limit) if cursor + limit < len(rows) else ""})
+        return True
     if p == "/mock/lark":
         h.send_json(FS_LOG); return True
     if p.startswith("/api/v1/lark/media/"):
@@ -12575,6 +13090,14 @@ def fs_get(h, p, q):
         h.end_headers(); h.wfile.write(data)
         return True
     if p == "/api/v1/lark/conversations":
+        # Optimized before/after list-scroll measurements use the same paginated synthetic workload (#6553).
+        if os.environ.get("MOCK_LARK_LIST"):
+            rows = FS_CONVS + [dict(FS_CONVS[-1], id="list-%03d" % n, name="Archive %03d" % n)
+                               for n in range(min(2000, int(os.environ["MOCK_LARK_LIST"])))]
+            cursor, limit = int(q.get("cursor", ["0"])[0] or "0"), int(q.get("limit", ["60"])[0])
+            h.send_json({"conversations": rows[cursor:cursor + limit], "account_id": LARK_ACCOUNT_ID,
+                         "next_cursor": str(cursor + limit) if cursor + limit < len(rows) else ""})
+            return True
         h.send_json({"conversations": FS_CONVS, "next_cursor": ""}); return True
     if p.startswith("/api/v1/lark/conversations/") and p.endswith("/messages"):
         h.send_json(fs_page(p.split("/")[5], q)); return True
@@ -12810,7 +13333,7 @@ LAUNCHER_MODELS = {
     ]},
     "codex": {"agent": "codex", "models": [
         {"id": "gpt-5.5", "name": "GPT-5.5", "description": "Latest model for coding and everyday work", "default": True, "efforts": ["low", "medium", "high", "xhigh"], "default_effort": "medium"},
-        {"id": "gpt-5.5-codex", "name": "GPT-5.5-Codex", "description": "Tuned for long agentic coding", "efforts": ["low", "medium", "high", "xhigh"], "default_effort": "medium"},
+        {"id": "gpt-5.5-codex", "name": "GPT-5.5-Codex", "description": "Tuned for long agentic coding", "efforts": ["low", "medium", "high", "xhigh"], "default_effort": "medium", "service_tiers": [{"id": "default", "name": "Standard"}, {"id": "priority", "name": "Fast", "description": "Increased usage"}]},
         {"id": "gpt-5.5-mini", "name": "GPT-5.5-Mini", "description": "Smaller and cheaper", "efforts": ["low", "medium", "high"], "default_effort": "medium"},
     ]},
 }
@@ -15430,15 +15953,33 @@ ITEMS["hlth0004-0000-4000-8000-000000000004"] = (
 )
 # Assistant screenshots with the shared renderer: a read-only persona-view and a legacy persona-card, leaving other mock modes unchanged.
 if os.environ.get("MOCK_EXTENSION_CARDS") == "1":
-    _view = {"sections": [{"title": "本周概览", "items": [
+    # A card needs its `fallback` (the words a client that can't draw it shows): without one it is drawn as text.
+    _view = {"fallback": "本周概览：会议记录已整理。", "sections": [{"title": "本周概览", "items": [
         {"type": "markdown", "text": "**会议记录已整理**，可以查看摘要。"},
         {"type": "row", "title": "周会摘要", "icon": "doc", "action": {"id": "must-not-run"}},
         {"type": "button", "title": "不应运行", "action": {"id": "must-not-run"}},
         {"type": "link", "title": "查看说明", "url": "https://example.com/guide"}]}]}
     _legacy = {"type": "stat", "title": "今天步数", "value": 8432, "unit": "步", "note": "这是演示数据"}
     _fence = lambda language, data: "```" + language + "\n" + json.dumps(data, ensure_ascii=False) + "\n```"
-    ITEMS[ASK1] = [it("user", "text", 2, text="把今天的概览放到卡片里"),
-                   it("assistant", "text", 1, text=_fence("persona-view", _view) + "\n\n" + _fence("persona-card", _legacy))]
+    # UI version 4's code-hosting components in a card (#827): drawn read-only by ExtensionCodeSummary, now that cards
+    # report UI version 6 and the hub sends them as they are.
+    _code = {"fallback": "合并请求 #42：登录页支持“记住我”，3 个文件。", "sections": [{"title": "合并请求 #42", "items": [
+        {"type": "header", "title": "登录页支持“记住我”", "subtitle": "remember-me → main · 3 个提交"},
+        {"type": "breadcrumb", "crumbs": [{"title": "app"}, {"title": "web"}, {"title": "login.tsx"}]},
+        {"type": "file_tree", "entries": [
+            {"path": "web/login.tsx", "kind": "file", "status": "modified", "additions": 24, "deletions": 6},
+            {"path": "web/session.ts", "kind": "file", "status": "added", "additions": 41, "deletions": 0},
+            {"path": "web/old-login.css", "kind": "file", "status": "deleted", "additions": 0, "deletions": 18}]},
+        {"type": "code", "path": "web/session.ts", "language": "ts",
+         "text": "export function remember(days: number) {\n  const until = Date.now() + days * 86_400_000\n  return { until }\n}"},
+        {"type": "comment_thread", "comments": [
+            {"author": "评审人", "at": "2026-11-12T09:30:00Z", "body": "“记住我”默认关着比较稳妥。"},
+            {"author": "作者", "at": "2026-11-12T10:05:00Z", "body": "好，已经改成默认关。"}]},
+        {"type": "composer", "name": "reply", "placeholder": "回复", "buttons": [{"title": "发送", "action": {"id": "must-not-run"}}]}]}]}
+    ITEMS[ASK1] = [it("user", "text", 4, text="把今天的概览放到卡片里"),
+                   it("assistant", "text", 3, text=_fence("persona-view", _view) + "\n\n" + _fence("persona-card", _legacy)),
+                   it("user", "text", 2, text="合并请求 #42 现在怎么样了"),
+                   it("assistant", "text", 1, text=_fence("persona-view", _code))]
 
 if os.environ.get("MOCK_SPLIT_TABS"):
     ITEMS.update(split_tabs_items())
@@ -17870,7 +18411,7 @@ def search_index_text(item):
         return None
     text = item.get("text") or ""
     if item.get("role") == "assistant":
-        text = search_card_text(text)
+        text = search_plain(search_card_text(text))
     elif item.get("role") == "user":
         if item.get("from") or item.get("injected"):
             return None
@@ -17885,26 +18426,142 @@ def search_index_text(item):
     return text if text.strip() else None
 
 
+# A reply's Markdown as the chat shows it (#7072): the manager's searchPlain (server/internal/assistant/search_text.go),
+# pattern for pattern; spec/fixtures/chat-search checks both.
+_PLAIN_FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})")
+_PLAIN_RULE = re.compile(r"^[ \t]{0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$")
+_PLAIN_TABLE_SEP = re.compile(r"^[ \t]*\|?[ \t]*:?-{3,}:?[ \t]*(?:\|[ \t]*:?-{3,}:?[ \t]*)*\|?[ \t]*$")
+_PLAIN_HEADING = re.compile(r"^[ \t]{0,3}#{1,6}[ \t]+")
+_PLAIN_QUOTE = re.compile(r"^[ \t]{0,3}>[ \t]?")
+_PLAIN_LIST = re.compile(r"^[ \t]*(?:[-*+]|[0-9]{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?")
+_PLAIN_ESCAPE = re.compile(r"\\([\\`*_{}\[\]()#+\-.!|>~<])")
+_PLAIN_INLINE = [
+    (re.compile(r"!\[([^\]\n]*)\]\([^)\n]*\)"), r"\1"),
+    (re.compile(r"\[([^\]\n]+)\]\([^)\n]*\)"), r"\1"),
+    (re.compile(r"\[([^\]\n]+)\]\[[^\]\n]*\]"), r"\1"),
+    (re.compile(r"<((?:https?|mailto):[^> \t\n]+)>"), r"\1"),
+    (re.compile(r"\*\*([^ \t\n*]|[^ \t\n*][^\n]*?[^ \t\n*])\*\*"), r"\1"),
+    (re.compile(r"(^|[^0-9A-Za-z_])__([^ \t\n_]|[^ \t\n_][^\n]*?[^ \t\n_])__($|[^0-9A-Za-z_])"), r"\1\2\3"),
+    (re.compile(r"~~([^~\n]+?)~~"), r"\1"),
+    (re.compile(r"\*([^ \t\n*]|[^ \t\n*][^*\n]*?[^ \t\n*])\*"), r"\1"),
+    (re.compile(r"(^|[^0-9A-Za-z_])_([^ \t\n_]|[^ \t\n_][^_\n]*?[^ \t\n_])_($|[^0-9A-Za-z_])"), r"\1\2\3"),
+]
+_PLAIN_ESCAPED = 0xE000
+
+
+def search_plain(md):
+    """A reply's Markdown as the chat shows it, without the markup (searchPlain)."""
+    if not any(c in md for c in "*_`#>[~|-+!<\\0123456789"):
+        return md
+    out, fence = [], ""
+    for line in md.split("\n"):
+        if fence:
+            t = line.strip()
+            if t.startswith(fence) and t.strip(fence[0]) == "":
+                fence = ""
+            else:
+                out.append(line)
+            continue
+        m = _PLAIN_FENCE.match(line)
+        if m:
+            fence = m.group(1)
+            continue
+        if _PLAIN_RULE.match(line) or _PLAIN_TABLE_SEP.match(line):
+            continue
+        line = _PLAIN_HEADING.sub("", line, count=1)
+        while _PLAIN_QUOTE.match(line):
+            line = _PLAIN_QUOTE.sub("", line, count=1)
+        line = _PLAIN_LIST.sub("", line, count=1)
+        t = line.strip()
+        if t.startswith("|"):
+            line = " ".join(c.strip() for c in t.strip("|").split("|"))
+        out.append(search_inline(line))
+    return "\n".join(out).strip()
+
+
+def search_code_span(s):
+    """The first code span: (where its backticks start, how many, where the closing run starts), or None."""
+    frm = 0
+    while True:
+        at = s.find("`", frm)
+        if at < 0:
+            return None
+        n = 0
+        while at + n < len(s) and s[at + n] == "`":
+            n += 1
+        j = at + n
+        while j < len(s):
+            k = s.find("`", j)
+            if k < 0:
+                break
+            m = 0
+            while k + m < len(s) and s[k + m] == "`":
+                m += 1
+            if m == n:
+                return at, n, k
+            j = k + m
+        frm = at + n
+
+
+def search_marks(s):
+    for r, w in _PLAIN_INLINE:
+        s = r.sub(w, s)
+        if w.endswith("\\3"):
+            s = r.sub(w, s)
+    return s
+
+
+def search_inline(line):
+    line = _PLAIN_ESCAPE.sub(lambda m: chr(_PLAIN_ESCAPED + ord(m.group(1))), line)
+    out = []
+    while line:
+        span = search_code_span(line)
+        if not span:
+            out.append(search_marks(line))
+            break
+        at, n, end = span
+        out.append(search_marks(line[:at]))
+        code = line[at + n:end]
+        if len(code) >= 2 and code[0] == " " and code[-1] == " " and code.strip(" "):
+            code = code[1:-1]
+        out.append(code)
+        line = line[end + n:]
+    return "".join(chr(ord(c) - _PLAIN_ESCAPED) if _PLAIN_ESCAPED <= ord(c) < _PLAIN_ESCAPED + 128 else c for c in "".join(out))
+
+
 def search_fold(s):
     return unicodedata.normalize("NFKC", s).lower()
+
+
+def search_fold_map(s):
+    """`s` folded a character at a time (`search_fold`), and for each folded character the index of the one it came
+    from: NFKC makes "…" three dots, so a cut snippet's folded text is longer than it (the manager's searchFoldRunes)."""
+    out, src = [], []
+    for i, ch in enumerate(s):
+        f = search_fold(ch)
+        out.append(f)
+        src.extend([i] * len(f))
+    return "".join(out), src
 
 
 def search_snippet(body, words):
     """The text around the first match on one line, "…" where cut, and every match's UTF-16 [start, end)."""
     start, end = 0, min(len(body), 120)
-    low = search_fold(body)
+    low, src = search_fold_map(body)
     for w in words:
         at = low.find(w)
-        if at >= 0 and len(low) == len(body):
-            start, end = max(0, at - 40), min(len(body), at + len(w) + 80)
+        if at >= 0:
+            first, last = src[at], src[at + len(w) - 1]
+            start, end = max(0, first - 40), min(len(body), last + 1 + 80)
             break
     snippet = ("…" if start else "") + " ".join(x.strip() for x in body[start:end].splitlines() if x.strip()) + ("…" if end < len(body) else "")
-    marked, low = [False] * len(snippet), search_fold(snippet)
+    marked = [False] * len(snippet)
+    low, src = search_fold_map(snippet)
     for w in words:
-        i = low.find(w) if len(low) == len(snippet) else -1
+        i = low.find(w)
         while i >= 0:
             for j in range(i, i + len(w)):
-                marked[j] = True
+                marked[src[j]] = True
             i = low.find(w, i + len(w))
     utf16 = [0]
     for ch in snippet:
@@ -19069,6 +19726,19 @@ LIVE = []  # (send, subscribed session ids) of each open WebSocket
 # GET /api/v1/messaging lists the source lark, /api/v1/messaging/lark/… answers in the protocol's shapes, the feature
 # messaging is on, every {type: lark} push goes out as {type: messaging} too.
 MOCK_MESSAGING = os.environ.get("MOCK_MESSAGING") == "1"
+# Settings › Inbox Sources › Source Relationships (`GET /api/v1/subscriptions/-/graph`, SourcesGraphView): one
+# extension's reads, two sources and the Inbox; `-openSourcesGraph YES`, then tap `graph.source.news` for its sheet.
+SOURCES_GRAPH = {
+    "extensions": [{"id": "mail", "name": "Mail", "line": "Two accounts"}],
+    "reads": [{"id": "mail.inbox", "extension": "mail", "title": "Inbox", "direct": True},
+              {"id": "mail.lists", "extension": "mail", "title": "Mailing lists", "push": True}],
+    "sources": [{"id": "news", "read": "mail.lists", "name": "Newsletters", "icon": "", "line": "Daily at 9:00",
+                 "badge": {"text": "On", "tone": "positive"}, "reading": True, "to": ["inbox"], "state": "active",
+                 "ask": "persona://assistant?q=newsletters"},
+                {"id": "work", "read": "mail.inbox", "name": "Work mail", "icon": "", "line": "As it arrives",
+                 "reading": True, "to": ["inbox"], "state": "active"}],
+    "destinations": [{"id": "inbox", "name": "Inbox", "line": "What needs you"}],
+}
 if MOCK_MESSAGING:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import lark_messaging
@@ -19257,6 +19927,124 @@ def zrle_rect(px, W, x, y, w, h, z):
                 out += b"\x00" + b"".join(cp(c) for c in tile)
     comp = z.compress(out) + z.flush(zlib.Z_SYNC_FLUSH)
     return struct.pack(">I", len(comp)) + comp
+
+
+# MOCK_SCREEN_VIDEO=1|missing (#3954): MacBook's node offers the live screen's video channel (`screen_video`; =missing:
+# Screen Recording isn't granted for Persona Screen), and …/screen/video/connect?pair=… plays
+# scripts/mock/screen_video/fixture.bin (a made-up desktop; make_fixture.sh makes it again) round and round at 30 fps:
+# `hello`, `format`, then its frames, numbered on and stamped with this clock. Only for a pair a 5900 connection carried
+# (else 403, as the node's not_signed_in). GET /mock/screen-video says what the phone sent (`start`s, report count) and
+# how many streams are open; …?drop=1 closes them all, ?refuse=1 refuses new ones (503, ?refuse=0 back), ?pause=locked
+# sends `paused` with that reason (no frames and no heartbeats, as the helper), ?resume=1 sends `resumed` and starts over
+# with `hello`, `format` and the keyframe.
+SCREEN_VIDEO = {"mode": os.environ.get("MOCK_SCREEN_VIDEO", ""), "pairs": set(), "streams": [], "starts": [], "reports": 0,
+                "refuse": False}
+_SCREEN_VIDEO_FIXTURE = []
+
+
+def screen_video_fixture():
+    """The fixture's messages as (type, body), read once."""
+    if not _SCREEN_VIDEO_FIXTURE:
+        data = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "screen_video", "fixture.bin"), "rb").read()
+        i = 0
+        while i < len(data):
+            n = struct.unpack(">I", data[i:i + 4])[0]
+            _SCREEN_VIDEO_FIXTURE.append((data[i + 4], data[i + 5:i + 4 + n]))
+            i += 4 + n
+    return _SCREEN_VIDEO_FIXTURE
+
+
+def screen_video_control(h, q):
+    if q.get("drop", ["0"])[0] == "1":
+        for st in list(SCREEN_VIDEO["streams"]): st["open"] = False
+    if "refuse" in q: SCREEN_VIDEO["refuse"] = q["refuse"][0] == "1"
+    if "pause" in q:
+        for st in SCREEN_VIDEO["streams"]: st["pause"] = q["pause"][0]
+    if q.get("resume", ["0"])[0] == "1":
+        for st in SCREEN_VIDEO["streams"]: st["resume"] = True
+    h.send_json({"open": sum(1 for st in SCREEN_VIDEO["streams"] if st["open"]), "starts": SCREEN_VIDEO["starts"],
+                 "reports": SCREEN_VIDEO["reports"], "refuse": SCREEN_VIDEO["refuse"]})
+
+
+def screen_video_connect(h, mid):
+    """…/screen/video/connect?pair=…: the helper's side of the video channel, from the fixture (see MOCK_SCREEN_VIDEO)."""
+    pair = parse_qs(urlparse(h.path).query).get("pair", [""])[0]
+    if not pair: return h.send_json({"error": "a pair is required"}, 400)
+    if pair not in SCREEN_VIDEO["pairs"]:
+        return h.send_json({"error": "the paired screen-sharing stream has not signed in"}, 403)
+    if SCREEN_VIDEO["refuse"] or SCREEN_VIDEO["mode"] == "missing":
+        return h.send_json({"error": "no live-screen video helper on this node"}, 503)
+    key = h.headers.get("Sec-WebSocket-Key", "")
+    accept = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()
+    h.send_response(101, "Switching Protocols")
+    h.send_header("Upgrade", "websocket"); h.send_header("Connection", "Upgrade")
+    h.send_header("Sec-WebSocket-Accept", accept); h.end_headers(); h.wfile.flush()
+    st = {"open": True, "pause": None, "resume": False, "started": threading.Event()}
+    SCREEN_VIDEO["streams"].append(st)
+    lock = threading.Lock()
+
+    def ws(op, data):
+        n = len(data)
+        hdr = bytes([0x80 | op]) + (bytes([n]) if n < 126 else bytes([126]) + struct.pack(">H", n) if n < 65536 else bytes([127]) + struct.pack(">Q", n))
+        with lock:
+            h.wfile.write(hdr + data); h.wfile.flush()
+
+    def msg(t, body):
+        ws(0x2, struct.pack(">IB", len(body) + 1, t) + body)
+
+    def play():
+        msgs = screen_video_fixture()
+        hello, fmt, frames = msgs[0], msgs[1], msgs[2:]
+        if not st["started"].wait(10): st["open"] = False; return
+        number, i, restart = 0, 0, True
+        try:
+            while st["open"]:
+                if st["pause"]:
+                    msg(5, json.dumps({"reason": st["pause"]}).encode())
+                    st["pause"] = None
+                    while st["open"] and not st["resume"]: time.sleep(0.1)
+                if st["resume"]:
+                    st["resume"] = False
+                    msg(6, b"{}")
+                    restart = True
+                if restart: msg(*hello); msg(*fmt); i, restart = 0, False
+                body = frames[i][1]
+                number += 1
+                msg(3, struct.pack(">IQ", number, int(time.monotonic() * 1e6)) + body[12:])
+                i = (i + 1) % len(frames)
+                time.sleep(1 / 30)
+        except OSError:
+            pass
+        try: ws(0x8, struct.pack(">H", 1000))
+        except OSError: pass
+        st["open"] = False
+
+    threading.Thread(target=play, daemon=True).start()
+    buf, r = b"", h.rfile
+    try:
+        while st["open"]:
+            hd = r.read(2)
+            if len(hd) < 2: break
+            op = hd[0] & 0x0F; n = hd[1] & 0x7F
+            if n == 126: n = struct.unpack(">H", r.read(2))[0]
+            elif n == 127: n = struct.unpack(">Q", r.read(8))[0]
+            mask = r.read(4) if hd[1] & 0x80 else b"\0\0\0\0"
+            payload = bytes(b ^ mask[k % 4] for k, b in enumerate(r.read(n)))
+            if op == 8: break
+            if op == 9: ws(0xA, payload); continue
+            buf += payload
+            while len(buf) >= 4 and len(buf) >= 4 + struct.unpack(">I", buf[:4])[0]:
+                n = struct.unpack(">I", buf[:4])[0]
+                t, body, buf = buf[4], buf[5:4 + n], buf[4 + n:]
+                if t == 16:
+                    SCREEN_VIDEO["starts"].append(json.loads(body or b"{}"))
+                    st["started"].set()
+                elif t == 17:
+                    SCREEN_VIDEO["reports"] += 1
+    except OSError:
+        pass
+    st["open"] = False
+    h.close_connection = True
 
 
 def fake_screen_sharing():
@@ -19774,6 +20562,10 @@ def bump(what, session=None):
     return {"error": "nothing to bump"}
 
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import stream_trace  # /mock/say?trace=… (#6651)
+
+
 # /mock/say?drop=1: the reply is written and the session list moves, but its push never reaches the page (#3139).
 # /mock/say?preset=markdown: a long reply whose blocks change height as they render (a code block, a table, a list),
 # for StreamingScrollTests: streamed at the hub's pace it shows whether the chat holds still while it grows.
@@ -20136,7 +20928,7 @@ def narrate(step, words, answer, steps=8, ms=250, line=True, ask="帮我把网�
     return {"error": "step is start or finish"}
 
 
-def say(text, user=None, stream=False, steps=10, ms=300, late=0, drop=False, upto=0):
+def say(text, user=None, stream=False, steps=10, ms=300, late=0, drop=False, upto=0, plan=None):
     """A reply (after `user`'s message, if given) in every conversation an app has open (/mock/say). `stream`: the
     message first, then the reply arrives as growing `delta` text over about 3 s, like the Persona assistant's. `drop`: the
     transcript grows and the session list says so (updated_at), but the items push is lost: the page has to notice (#3139).
@@ -20156,7 +20948,12 @@ def say(text, user=None, stream=False, steps=10, ms=300, late=0, drop=False, upt
                     send({"type": "items", "machine_id": mid, "session_id": sid, "items": asked, **span(asked, before)})
                     user = None
                 shown = text[:upto] if upto > 0 else text
-                for k in range(1, steps + 1):
+                if plan:  # a recorded stream's cadence (&trace=…): each send at its time, the text so far
+                    began = time.monotonic()
+                    for at, n in plan:
+                        time.sleep(max(0, at / 1000 - (time.monotonic() - began)))
+                        send({"type": "delta", "machine_id": mid, "session_id": sid, "text": shown[:n]})
+                for k in range(1, 0 if plan else steps + 1):
                     time.sleep(ms / 1000)
                     send({"type": "delta", "machine_id": mid, "session_id": sid, "text": shown[:len(shown) * k // steps]})
                 if upto > 0:
@@ -20334,6 +21131,9 @@ def computer_of(machine_id, enabled):
     c = {"enabled": enabled, **COMPUTER_STATES.get(state, COMPUTER_STATES["ready"])}
     if machine_id == "macbook" and c.get("screen_sharing") and FAKE_NODE_DISPLAYS:
         c["displays"] = FAKE_NODE_DISPLAYS  # MOCK_SCREEN_DISPLAYS=2:node
+    if machine_id == "macbook" and c.get("screen_sharing") and SCREEN_VIDEO["mode"]:  # MOCK_SCREEN_VIDEO (#3954)
+        c["screen_video"] = {"version": 1, "codecs": ["hevc", "h264"],
+                             "permission": "missing" if SCREEN_VIDEO["mode"] == "missing" else "granted"}
     return c
 
 
@@ -20676,6 +21476,12 @@ if ENGINE_SETS:
     for _s in SESSIONS:
         if _s.get("session_id") == WIDGET:
             _s["host"], _s["also_open_in"] = "herdr", ["herdr-core"]
+if os.environ.get("MOCK_PASEO"):  # the server enables Paseo beside herdr: its workspaces are the catalog's (#6295)
+    for _m in MACHINES:
+        if _m["id"] == "server" and _m.get("online"):
+            _m["engines"] = [e for e in _m["engines"] if e["id"] != "paseo"] + [{"id": "paseo", "name": "Paseo", "available": True, "version": "0.14"}]
+            _m["engine_hosts"], _m["engine_default"] = ["herdr", "paseo"], "herdr"
+            _m["engine"] = legacy_engine(_m["engine_hosts"], _m["engine_default"])
 if RESUME_TERMINAL:  # the Mac mini enables no terminal engine: the empty set (#3302), herdr still named for older clients
     for _m in MACHINES:
         if _m["id"] == "mini":
@@ -22284,7 +23090,7 @@ MOCK_HELP = [
     "MOCK_MANUAL_HERDR=1  没挂待办的 herdr Agent 算手动开的（started_by_persona 为假），Agents「按待办」里出「手动开的」一段（#2917）",
     "MOCK_ORCA_CHILDREN=1  MacBook 上一个 Orca 工作区带三个子工作区（其中一个还有子项，parent_space_id，#2073）",
     "MOCK_CHILD_SESSIONS=1  The Paseo computer (MOCK_PASEO) with its agent's four created agents (one waiting for you, one working with a Codex subagent of its own, one done, one failed) and an agent whose creator is not listed: the hub folds them (folded_under / children) and the lead's chat draws a card for each (#5120)",
-    "MOCK_PASEO=1  A computer whose engine is Paseo: a project with its main checkout and two titled worktree workspaces, an agent with the two agents it created (one waiting for you), and a Codex agent whose thread has a subagent",
+    "MOCK_PASEO=1  A computer that enables Paseo beside herdr: a project with its main checkout, two titled worktree workspaces and one with no agent, all in the workspace catalog (New worktree… makes one in Paseo's folder, #6295; Rename, Delete worktree and Rename space as the node answers them, the login flow's worktree with two uncommitted changes, #6297), an agent with the two agents it created (one waiting for you), and a Codex agent whose thread has a subagent",
     "MOCK_LIVE_STEP=bash|command|reads|parallel|thinking|thinking-folded  The widget chat a minute into a turn whose newest step is still going: the running work line names it (#2987)",
     "MOCK_TOOL_OUTCOMES=1  A turn whose tool results carry outcomes: a failed test run (exit code, the cut output's end), a denied edit, a refused write, an interrupted and a timed-out command; only the failure is red (#4303)",
     "MOCK_PERMISSION_DIFF=1  Two chats wait on a Claude Code permission card for an Edit (longer than the card's preview) and a Write; the card shows the change (#4621)",
@@ -22698,6 +23504,7 @@ class H(BaseHTTPRequestHandler):
         if preview_route and preview_route(self, "GET", p, q): return
         if p == "/api/v1/assistant/conversations/" + ASK1 + "/always":
             return self.send_json({"grants": ALWAYS_GRANTS})
+        if p == "/api/v1/subscriptions/-/graph": return self.send_json(SOURCES_GRAPH)
         if recordings_route(self, "GET", p): return
         if custom_models_route(self, "GET", p, q): return
         if managers_route(self, "GET", p): return
@@ -22817,9 +23624,13 @@ class H(BaseHTTPRequestHandler):
             # &history=mock-1.r1: the transcript's history token from now on, on pushes and pages alike (a branch was abandoned,
             # the file was rewritten: docs/protocol/protocol.md "Continuity of items"); /mock/reset puts mock-1 back.
             if q.get("history", [""])[0]: HISTORY_NOW["token"] = q["history"][0]
-            args = (SAY_PRESETS.get(q.get("preset", [""])[0]) or q.get("text", ["好了。"])[0], q["user"][0] if "user" in q else None, q.get("stream", ["0"])[0] == "1",
+            # &trace=markdown|prose&node=lead|trail: a recorded reply at the cadence the node sends it (scripts/mock/stream_trace.py, #6651).
+            trace = stream_trace.load(q["trace"][0]) if q.get("trace", [""])[0] else None
+            plan = stream_trace.deltas(trace["tokens"], q.get("node", ["trail"])[0]) if trace else None
+            args = (trace["text"] if trace else SAY_PRESETS.get(q.get("preset", [""])[0]) or q.get("text", ["好了。"])[0], q["user"][0] if "user" in q else None,
+                    q.get("stream", ["0"])[0] == "1" or trace is not None,
                     int(q.get("steps", ["10"])[0]), int(q.get("ms", ["300"])[0]), int(q.get("late", ["0"])[0]), q.get("drop", ["0"])[0] == "1",
-                    int(q.get("upto", ["0"])[0]))
+                    int(q.get("upto", ["0"])[0]), plan)
             threading.Thread(target=say, args=args, daemon=True).start()
             return self.send_json({"ok": True})
         if MOCK_LARK and (p.startswith("/api/v1/lark/") or p == "/mock/lark") and fs_get(self, p, q): return  # area: feishu chat page
@@ -22836,6 +23647,9 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/ports": return self.send_json({"connects": PORT_LOG})
         if p == "/mock/lark/uploads": return self.send_json(LARK_UPLOAD_REPLIES)  # #1035: what each attachment quoted
         if MOCK_WEB and (p.startswith("/screen/") or p.startswith("/assets/")): return self.web_file(p)
+        if p == "/mock/screen-video": return screen_video_control(self, parse_qs(urlparse(self.path).query))
+        if SCREEN_VIDEO["mode"] and p.startswith("/api/v1/machines/") and p.endswith("/screen/video/connect"):
+            return screen_video_connect(self, p.split("/")[4])
         if p.startswith("/api/v1/machines/") and "/ports/" in p:
             parts = p.split("/")  # ['', 'api', 'v1', 'machines', mid, 'ports', port, ('connect')]
             port = int(parts[6]) if parts[6].isdigit() else 0
@@ -23344,6 +24158,9 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(t) if t else self.send_json({"error": "no such inbox item"}, 404)
         if p.startswith("/api/v1/inbox/"):
             iid = p[len("/api/v1/inbox/"):]
+            if MOCK_INBOX_SHOWCASE:
+                x = next((x for x in INBOX if x["id"] == iid), None)
+                if x is not None: return self.send_json(x)
             for x in INBOX + INBOX_HISTORY:  # an item done long ago: the history's (#2200)
                 if x["id"] == iid: return self.send_json(dict(x, context=x.get("context") or x["preview"]))
         if mail_area(self, "GET", p, q): return
@@ -23359,6 +24176,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/mail/messages": return self.send_json({"messages": [], "has_more": False})
         if p == "/api/v1/lark/unread-count": return self.send_json({"count": 4})
         if telegram_area(self, "GET", p, b""): return
+        if larkcli_thread_area(self, "GET", p): return
         if plugin_connector_area(self, "GET", p, b""): return
         if triage_route(self, "GET", p, b""): return
         if kb_selection_route(self, "GET", p, b""): return
@@ -23804,8 +24622,14 @@ class H(BaseHTTPRequestHandler):
         if plugins_route(self, p, self.last_body): return
         if os.environ.get("MOCK_TERMINAL_PANES") and re.fullmatch(r"/api/v1/machines/[^/]+/(panes/(close|close_finished|split|agent|git)|tabs/(close|rename))", p):
             return node_action(self, p, json.loads(self.last_body or b"{}"))
-        if os.environ.get("MOCK_TERMINAL_PANES") and re.fullmatch(r"/api/v1/machines/[^/]+/worktree/(prepare|create)", p):
+        if (os.environ.get("MOCK_TERMINAL_PANES") or os.environ.get("MOCK_PASEO")) and re.fullmatch(r"/api/v1/machines/[^/]+/worktree/(prepare|create)", p):
             return worktree_route(self, p, json.loads(self.last_body or b"{}"))
+        if os.environ.get("MOCK_PASEO") and re.fullmatch(r"/api/v1/machines/[^/]+/worktree/(rename|delete)", p) \
+                and json.loads(self.last_body or b"{}").get("kind") == "paseo":
+            return paseo_worktree_route(self, p, json.loads(self.last_body or b"{}"))
+        if os.environ.get("MOCK_PASEO") and re.fullmatch(r"/api/v1/machines/[^/]+/spaces/[^/]+/rename", p) \
+                and paseo_space_route(self, p, json.loads(self.last_body or b"{}")):
+            return
         if AGENT_WORKTREE and re.fullmatch(r"/api/v1/machines/[^/]+/worktree/(status|add|remove)", p):
             return agent_worktree_route(self, p, json.loads(self.last_body or b"{}"))
         if os.environ.get("MOCK_TERMINAL_PANES") and re.fullmatch(r"/api/v1/machines/[^/]+/spaces/[^/]+/rename", p):
@@ -24520,7 +25344,8 @@ class H(BaseHTTPRequestHandler):
                                        "code": START_FAIL["code"], "delivered": "unknown", "retryable": False}, 502)
             body = json.loads(self.last_body or b"{}")
             prompt = body.get("prompt", "")
-            SENT.append({"text": prompt, "images": body.get("images"), **({"launcher": body["launcher"]} if body.get("launcher") else {})})
+            SENT.append({"text": prompt, "images": body.get("images"), **({"launcher": body["launcher"]} if body.get("launcher") else {}),
+                         **({"service_tier": body["service_tier"]} if body.get("service_tier") else {})})
             now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             sid = str(uuid.uuid4())
             session = assistant_sess(sid, "", 0, "")  # what the hub returns: no title, model or transcript rev yet
@@ -24532,6 +25357,16 @@ class H(BaseHTTPRequestHandler):
             session.update(machine_id=mid, **({"cwd": home + "/.persona/assistant"} if home and mid != "server" else {}))
             session.update(status="working", state="working", updated_at=now, launcher=body.get("launcher") or "claude",
                            permission_mode=body.get("permission_mode") or "", effort=body.get("effort") or "")
+            listed = next((m for m in LAUNCHER_MODELS.get(session["launcher"], {}).get("models", [])
+                           if m.get("id") == (body.get("model") or engine_default_model(session["launcher"]))), {})
+            tiers = listed.get("service_tiers") or []
+            requested_tier = body.get("service_tier")
+            if requested_tier and requested_tier not in {tier["id"] for tier in tiers}:
+                return self.send_json({"error": "This model cannot apply the requested service tier", "code": "assistant_service_tier_unsupported",
+                                       "delivered": "none", "retryable": False}, 409)
+            if tiers:
+                # thread/settings/update was acknowledged before the first turn: the response and sessions push agree.
+                session.update(service_tier=requested_tier or "default", service_tiers=copy.deepcopy(tiers))
             session["main"] = bool(body.get("main"))
             if body.get("space") == "health":
                 session.update(cwd="/home/me/.persona/health", space="health")
@@ -25353,6 +26188,8 @@ class H(BaseHTTPRequestHandler):
         except OSError:
             return self.send_json({"error": "nothing is listening on port %d" % port}, 404)
         PORT_LOG.append({"machine_id": mid, "port": port})
+        if port == 5900 and (pair := parse_qs(urlparse(self.path).query).get("pair", [""])[0]):
+            SCREEN_VIDEO["pairs"].add(pair)  # the video channel binds to it (MOCK_SCREEN_VIDEO, #3954)
         key = self.headers.get("Sec-WebSocket-Key", "")
         accept = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()
         self.send_response(101, "Switching Protocols")
@@ -26026,6 +26863,7 @@ MOCK_HELP.append("MOCK_MOMENTS_FEED=<名字>  知识库的公司圈帖子带 fee
 MOCK_HELP.append("MOCK_NO_LARK=1  没装接飞书的扩展的 hub：features 里没有 lark / lark_moments / lark_attachments，/api/v1/lark/… 404，连接器里没有飞书")
 MOCK_HELP.append("MOCK_INBOX_TRIAGE=<状态>[:<条数>[:<来源名，逗号隔开>[:<原因>]]]  收件箱列表带 triage（新条目在等分拣，#1773）：unconfigured / paused / error / timeout / behind / ok；不设时没有 triage（老 hub）")
 MOCK_HELP.append("MOCK_INBOX_UNREAD=<来源名>[:<代码>[:<原因>]],…  收件箱 triage 的这些来源这一轮没读到（read_error / read_reason，#1849）：代码 timeout / rate_limited / failed；不写原因就没有 read_reason")
+MOCK_HELP.append("MOCK_INBOX_SHOWCASE=1  收件箱列表和单条详情使用 spec/fixtures/inbox/showcase.json 的 items（四端并排截图的同一场景，字段和时间保持夹具原值；客户端自己把时钟固定到 now_clock）；同时开 MOCK_INBOX_EVENTS 时以本开关为准")
 
 # ---------- area: commenting in the Feishu document reader (#1290) ----------
 # MOCK_DOC_COMMENTS=1: the plugin says `lark_doc_comments`; GET /api/v1/lark/raw/documents/comments has three made-up
@@ -27605,7 +28443,7 @@ _features_without_model_pick = features
 
 
 def features():
-    return _features_without_model_pick() + (["assistant_model_pick"] if MODEL_PICK_MODE else [])
+    return _features_without_model_pick() + (["assistant_model_pick", "assistant_start_service_tier"] if MODEL_PICK_MODE else [])
 
 
 MOCK_HELP.append("MOCK_MODEL_PICK=1|picked  Persona 对话自己的模型（#5033）：features 带 assistant_model_pick；主对话的启动器（?purpose=assistant）带默认和 unavailable"
