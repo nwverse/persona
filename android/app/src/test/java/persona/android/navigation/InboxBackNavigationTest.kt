@@ -115,6 +115,17 @@ class InboxBackNavigationTest {
         assertEquals(InboxRoute, stacks.getValue(AppTab.Persona).last())
     }
 
+    /**
+     * The old behaviour stays: an unsourced assistant chat with no inbox conversation under it still becomes the
+     * Persona home's conversation, clearing whatever secondary pages were open (docs/android/android.md "No home page").
+     */
+    @Test fun anUnsourcedAssistantChatStillBecomesTheHomeWhenNoSourcedPageIsOpen() {
+        openEvent()
+        navigator.navigate(ChatRoute("machine", "other", ConversationKind.Assistant))
+        assertEquals(AppTab.Persona, selected)
+        assertEquals(listOf(AssistantRoute), stacks.getValue(AppTab.Persona))
+    }
+
     @Test fun aSourcedChatOpensOnThePersonaTabWhicheverTabIsShowing() {
         kinds = mapOf(SessionKey("machine", "assistant") to ConversationKind.Assistant)
         openEvent()
