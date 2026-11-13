@@ -1,6 +1,7 @@
 package persona.feature.inbox
 
 import android.graphics.Bitmap
+import android.content.res.Configuration
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
@@ -13,11 +14,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import androidx.navigation3.runtime.NavKey
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -38,10 +42,12 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import persona.core.contracts.api.ConnectionState
 import persona.core.contracts.api.InboxEntry
+import persona.core.contracts.Session
 import persona.core.contracts.inboxEventFields
 import persona.core.designsystem.AppStyle
 import persona.core.designsystem.PersonaTheme
 import persona.core.domain.inbox.InboxItem
+import persona.core.domain.sort.AgentSession
 import persona.core.navigation.AppTab
 import persona.core.navigation.Navigator
 import java.io.File
@@ -56,9 +62,9 @@ import java.util.Locale
 class InboxShowcaseShotsTest {
     @get:Rule val rule = createComposeRule()
 
-    private class ShowcaseInbox(records: List<InboxRecord>) : InboxRepository {
+    private class ShowcaseInbox(records: List<InboxRecord>, sessions: List<AgentSession> = emptyList()) : InboxRepository {
         override val entries = MutableStateFlow(emptyList<InboxEntry>())
-        override val snapshot = MutableStateFlow(InboxSnapshot(records = records))
+        override val snapshot = MutableStateFlow(InboxSnapshot(records = records, sessions = sessions))
         override val connectionState = flowOf(ConnectionState.Online)
         override val preferences = MutableStateFlow(InboxPreferences(expanded = listOf("action", "working", "fyi", "noise", "done")))
         override suspend fun refresh() = Unit
@@ -102,14 +108,35 @@ class InboxShowcaseShotsTest {
         return records to Instant.parse(fixture.getValue("now_clock").jsonPrimitive.content)
     }
 
-    @Test fun drawsTheSharedListInEveryStyleAndAppearance() {
+    private fun saveShot(name: String, tag: String) {
+        val bitmap = rule.onNodeWithTag(tag).captureToImage().asAndroidBitmap()
+        val background = bitmap.getPixel(1, 1)
+        var other = 0
+        for (y in 0 until bitmap.height step 7) for (x in 0 until bitmap.width step 7) if (bitmap.getPixel(x, y) != background) other++
+        assertTrue("$name drew nothing", other > 100)
+        val out = File(System.getProperty("persona.shots") ?: "build/inbox-showcase-shots").apply { mkdirs() }
+        File(out, "$name.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+    }
+
+    private fun localizedConfiguration(base: Configuration, locale: Locale, dark: Boolean) = Configuration(base).apply {
+        setLocale(locale)
+        setLayoutDirection(locale)
+        uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
+            if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
+    }
+
+    @Test fun drawsTheSharedListInEveryLanguageStyleAndAppearance() {
         val (records, clock) = showcase()
         val inbox = ShowcaseInbox(records)
         var style by mutableStateOf(AppStyle.Glass)
         var dark by mutableStateOf(false)
+        var locale by mutableStateOf(Locale.SIMPLIFIED_CHINESE)
         var run by mutableIntStateOf(0)
         rule.setContent {
-            CompositionLocalProvider(LocalInboxClock provides { clock }, LocalInboxZone provides ZoneOffset.UTC) {
+            CompositionLocalProvider(
+                LocalConfiguration provides localizedConfiguration(LocalConfiguration.current, locale, dark),
+                LocalInboxClock provides { clock }, LocalInboxZone provides ZoneOffset.UTC,
+            ) {
                 PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
                     key(run) {
                         Box(Modifier.testTag("showcase-list").width(400.dp).height(1800.dp).background(PersonaTheme.palette.background)) {
@@ -119,28 +146,69 @@ class InboxShowcaseShotsTest {
                 }
             }
         }
-        for (appearance in AppStyle.entries) for (night in listOf(false, true)) {
-            style = appearance; dark = night; run++
+        for (language in listOf(Locale.SIMPLIFIED_CHINESE, Locale.ENGLISH)) for (appearance in AppStyle.entries) for (night in listOf(false, true)) {
+            rule.runOnIdle { locale = language; style = appearance; dark = night; run++ }
             rule.waitForIdle()
-            // This timestamp is sc-1's updated_at; every other row still renders its own updated_at.
+            val english = language == Locale.ENGLISH
+            val separator = if (english) ": " else "："
             for (words in listOf(
-                "春季订单的报价", "订单群 · 张三：好的，我看一下新的", "张三发现税率错了，正在等他确认更正后的报价",
-                "等张三确认新报价", "问更正后的报价行不行", "周五午饭", "李四：周五还约吗？", "等你确认回复",
-                "全员群 · 行政：提醒：周一关闭", "发布群 · 王五：我晚点回你", "赵六：收到，谢谢", "你回过了",
-                displayTime("2026-01-01T11:21:00Z", Locale.SIMPLIFIED_CHINESE, ZoneOffset.UTC),
+                "春季订单的报价", "订单群 · 张三$separator好的，我看一下新的", "张三发现税率错了，正在等他确认更正后的报价",
+                if (english) "Waiting for 张三确认新报价" else "等张三确认新报价", "问更正后的报价行不行",
+                "周五午饭", "李四$separator周五还约吗？", if (english) "Waiting for you to confirm a reply" else "等你确认回复",
+                "全员群 · 行政${separator}提醒：周一关闭", "发布群 · 王五${separator}我晚点回你", "赵六$separator收到，谢谢",
+                if (english) "You replied" else "你回过了", displayTime("2026-01-01T11:21:00Z", language, ZoneOffset.UTC),
             )) {
                 val found = rule.onAllNodes(hasText(words, substring = true), useUnmergedTree = true).fetchSemanticsNodes()
-                assertTrue("$appearance dark=$night: missing $words", found.isNotEmpty())
+                assertTrue("$appearance dark=$night locale=$language: missing $words", found.isNotEmpty())
             }
-            val bitmap = rule.onNodeWithTag("showcase-list").captureToImage().asAndroidBitmap()
-            val background = bitmap.getPixel(1, 1)
-            var other = 0
-            for (y in 0 until bitmap.height step 7) for (x in 0 until bitmap.width step 7) if (bitmap.getPixel(x, y) != background) other++
-            assertTrue("showcase-list-$appearance-$night drew nothing", other > 100)
-            val out = File(System.getProperty("persona.shots") ?: "build/inbox-showcase-shots").apply { mkdirs() }
-            File(out, "list-${appearance.name.lowercase()}-${if (night) "dark" else "light"}.png").outputStream().use {
-                bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
+            val prefix = if (english) "list-en" else "list"
+            saveShot("$prefix-${appearance.name.lowercase()}-${if (night) "dark" else "light"}", "showcase-list")
+        }
+    }
+
+    @Test fun drawsTheSharedDetailFoldedAndExpandedInEveryLanguageStyleAndAppearance() {
+        val (records, clock) = showcase()
+        val agent = AgentSession(Session(machineId = "m1", sessionId = "s-agent", status = "blocked", state = "needs_you", awaitsReply = true))
+        val inbox = ShowcaseInbox(records, listOf(agent))
+        val detail = records.first { it.item.id == "sc-1" }
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        var locale by mutableStateOf(Locale.SIMPLIFIED_CHINESE)
+        var run by mutableIntStateOf(0)
+        rule.setContent {
+            CompositionLocalProvider(
+                LocalConfiguration provides localizedConfiguration(LocalConfiguration.current, locale, dark),
+                LocalInboxClock provides { clock }, LocalInboxZone provides ZoneOffset.UTC,
+            ) {
+                PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                    key(run) {
+                        Box(Modifier.testTag("showcase-detail").width(400.dp).height(1800.dp).background(PersonaTheme.palette.background)) {
+                            InboxEventScreen(inbox, InboxEventRoute(detail.item.id), navigator)
+                        }
+                    }
+                }
             }
+        }
+        for (language in listOf(Locale.SIMPLIFIED_CHINESE, Locale.ENGLISH)) for (appearance in AppStyle.entries) for (night in listOf(false, true)) {
+            rule.runOnIdle { locale = language; style = appearance; dark = night; run++ }
+            rule.waitForIdle()
+            val english = language == Locale.ENGLISH
+            val separator = if (english) ": " else "："
+            rule.onNodeWithText("订单群 · 张三${separator}好的，我看一下新的", useUnmergedTree = true).assertExists()
+            rule.onNodeWithText(if (english) "Waiting for 张三确认新报价" else "等张三确认新报价", useUnmergedTree = true).assertExists()
+            rule.onNodeWithText("发了邮件：报价单更正", useUnmergedTree = true).assertExists()
+            rule.onNodeWithText(if (english) "Assistant says" else "助手说", useUnmergedTree = true).assertExists()
+            rule.onNodeWithText("收到 2 条消息 · 张三", useUnmergedTree = true).assertDoesNotExist()
+            rule.onNodeWithText("收到 1 条消息 · 张三", useUnmergedTree = true).assertExists()
+            saveShot("detail-folded-${if (english) "en" else "zh-Hans"}-${appearance.name.lowercase()}-${if (night) "dark" else "light"}", "showcase-detail")
+
+            rule.onNodeWithText(if (english) "Show all (7)" else "展开全部（7）").performClick()
+            rule.waitForIdle()
+            rule.onNodeWithText("收到 2 条消息 · 张三", useUnmergedTree = true).assertExists()
+            rule.onNodeWithText("开了 Agent：核对报价单", useUnmergedTree = true).assertExists()
+            rule.onNodeWithText("Agent 停了：报价单第 3 行税率错了", useUnmergedTree = true).assertExists()
+            rule.onNodeWithText(if (english) "Needs you" else "需要你", useUnmergedTree = true).assertExists()
+            saveShot("detail-expanded-${if (english) "en" else "zh-Hans"}-${appearance.name.lowercase()}-${if (night) "dark" else "light"}", "showcase-detail")
         }
     }
 }

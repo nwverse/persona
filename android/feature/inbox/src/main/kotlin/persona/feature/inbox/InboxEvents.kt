@@ -97,9 +97,9 @@ internal fun suggestionButtons(suggestion: InboxSuggestion): SuggestionButtons =
 internal fun confirmText(suggestion: InboxSuggestion, edited: String?): String? =
     edited?.trim()?.takeIf { it.isNotEmpty() && it != suggestion.text.trim() }
 
-/** The chain as shown: only the newest entry while collapsed, else all of it, oldest first. */
+/** The chain as shown: the three newest entries while collapsed, else all of it, oldest of the shown entries first. */
 internal fun shownChain(chain: List<InboxChainEntry>, expanded: Boolean): List<InboxChainEntry> =
-    if (expanded || chain.size <= 1) chain else chain.takeLast(1)
+    if (expanded || chain.size <= 3) chain else chain.takeLast(3)
 
 /** What tapping a chain entry does. */
 internal sealed interface ChainTarget {

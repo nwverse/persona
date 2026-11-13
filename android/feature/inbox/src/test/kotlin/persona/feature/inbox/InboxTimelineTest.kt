@@ -1,0 +1,69 @@
+package persona.feature.inbox
+
+import androidx.test.core.app.ApplicationProvider
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+import persona.core.contracts.InboxChainEntry
+import persona.core.contracts.InboxChainLink
+import persona.core.contracts.Session
+import persona.core.contracts.inboxEventFields
+import persona.core.designsystem.resolve
+import persona.core.domain.sort.AgentSession
+import persona.core.domain.sort.stateWord
+import java.io.File
+
+/** Every shared timeline case, plus the live-session lookup behind an Agent step. */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35], qualifiers = "en")
+class InboxTimelineTest {
+    @Test fun everySharedCaseMatchesItsRowsIconsAndReportedFlags() {
+        val root = System.getProperty("persona.repo.root")?.let(::File) ?: generateSequence(File(".").canonicalFile) { it.parentFile }
+            .first { File(it, ".git").exists() && File(it, "android").isDirectory }
+        val fixture = Json.parseToJsonElement(File(root, "spec/fixtures/inbox/timeline.json").readText()).jsonObject
+        for (case in fixture.getValue("cases").jsonArray.map { it.jsonObject }) {
+            val name = case.getValue("name").jsonPrimitive.content
+            val chain = inboxEventFields(case.getValue("input").jsonObject.getValue("item").jsonObject).chain
+            val expected = case.getValue("expected").jsonObject
+            assertEquals("$name/folded", expected.getValue("folded").jsonArray.map { it.jsonPrimitive.content }, shownChain(chain, false).map { it.id })
+            assertEquals("$name/expanded", expected.getValue("expanded").jsonArray.map { it.jsonPrimitive.content }, shownChain(chain, true).map { it.id })
+            for (step in expected.getValue("steps").jsonArray.map { it.jsonObject }) {
+                val entry = chain.single { it.id == step.getValue("id").jsonPrimitive.content }
+                assertEquals("$name/${entry.id}/icon", step.getValue("icon").jsonPrimitive.content, chainIconMeaning(entry))
+                assertEquals("$name/${entry.id}/reported", step.getValue("reported").jsonPrimitive.content == "true", entry.kind == "reported")
+            }
+        }
+    }
+
+    private fun agent(machine: String, session: String, state: String, awaits: Boolean = false) = AgentSession(
+        Session(machineId = machine, sessionId = session, status = state, state = state, awaitsReply = awaits),
+    )
+
+    private fun entry(kind: String, machine: String = "m1", session: String = "s-agent") = InboxChainEntry(
+        "c1", kind = kind, link = InboxChainLink(type = "session", machineId = machine, sessionId = session),
+    )
+
+    @Test fun agentStepsReadTheCurrentSessionStateIncludingGroupSuffixes() {
+        val res = ApplicationProvider.getApplicationContext<android.content.Context>().resources
+        val working = agent("m1", "s-agent", "working")
+        val stopped = agent("m2~g12345678", "s-agent", "offline")
+        val asking = agent("m3", "s-agent", "idle", awaits = true)
+        assertSame(working, chainAgentSession(entry("agent"), listOf(working)))
+        assertSame(stopped, chainAgentSession(entry("agent_stopped", machine = "m2"), listOf(stopped)))
+        assertSame(asking, chainAgentSession(entry("agent", machine = "m3"), listOf(asking)))
+        assertEquals("Working", working.stateWord(false).resolve(res))
+        assertEquals("Not running", stopped.stateWord(false).resolve(res))
+        assertEquals("Awaiting reply", asking.stateWord(false).resolve(res))
+        assertNull(chainAgentSession(entry("handling"), listOf(working)))
+        assertNull(chainAgentSession(entry("agent", machine = "unknown"), listOf(working)))
+        assertNull(chainAgentSession(InboxChainEntry("c2", kind = "agent"), listOf(working)))
+    }
+}
