@@ -437,8 +437,24 @@ unaffected. Direct chat messages and `agent_send` still work; a user-completed t
 while a hub-completed task reopens on new work as described below.
 
 After a task dispatched from assistant chat (nonempty `origin`) completes—manually or automatically—its Agent stops running (with Agent tasks on, `docs/assistant/unified-entry.md` "Agent tasks", that includes the Agents started from an app or another chat, whose to-dos have an `origin` too):
-assistant checks every minute (`assistant/tasks_close.go`, reading hub's App-facing session list through `sessions.list`); once task completion and Agent inactivity both reach 3 minutes (`taskCloseIdle`, measured from the later of completion time and last activity), it asks node to stop it (`session.stop` with `retire`, `node/retire.go`):
+assistant checks every minute (`assistant/tasks_close.go`, reading hub's App-facing session list through `sessions.list`); once task completion, Agent inactivity and owner inactivity all reach 10 minutes (`taskCloseIdle`, measured from the latest completion, Agent activity or owner activity), it asks node to stop it (`session.stop` with `retire`, `node/retire.go`):
 the Agent process quits (Ctrl+C twice, up to three rounds, until the engine no longer shows the Agent in its pane) and **its terminal stays**: the tab keeps the shell the Agent ran in, ending with Claude's "Resume this session with: …". Persona never closes an Agent's terminal on its own (#4754, `docs/integrations/engines.md` "Agents run in a terminal"); an Agent that does not quit is reported (`not_stopped`) and left running, never closed to make it go.
+
+**Owner activity protects the conversation** (#6819): `task_review` acceptance/cancellation and automatic completion
+refuse to close an open task while the owner has viewed or messaged a still-linked Agent within ten minutes, or any
+connected app still subscribes to its conversation. The refusal explains why and asks the supervisor to retry later;
+it does not record a review or clear the task's pending decision. Live subscriptions keep a quiet page protected without
+periodic client heartbeats; another app leaving cannot clear the remaining viewer. Leaving the last view starts the
+ten-minute inactivity window. Recent activity uses the durable seen timestamps, so a manager restart does not forget it.
+The owner may still explicitly complete a task in the UI; that does not stop its Agent.
+
+**Closure and Agent retirement are separate**: completed and cancelled tasks both keep their Agent conversations usable.
+The web chat shows a persistent completed/cancelled ownership line, separate from active task ownership, with a link to
+the task and a continuation hint only while sending remains available. Cancellation no longer interrupts the Agent or
+answers its permission/plan cards. Only after the Agent is idle, with no queued work, background work, pending interaction
+or open view, and the inactivity window has elapsed, does the hub request a safe retirement and archive the stopped
+session. A refused stop never falls back to closing its terminal. The reversible archive preserves an explicit
+"Stopped because its to-do was closed" reason across restarts. A new active association or a reopened task takes precedence.
 
 **What stays**: to-do Agent record (machine, session id, directory) remains, not released; node's launch information (launcher, directory, model, hub `node_sessions`), transcripts and the terminal remain.
 Results still read from transcripts (receipts, `agent_read`, chat page); Unread Agents may also stop.

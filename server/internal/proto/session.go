@@ -500,8 +500,9 @@ const (
 
 // TodoRef names a session's associated todo; Session.Todo is active, CompletedTodo() is display-only history.
 type TodoRef struct {
-	ID    string `json:"id"`
-	Title string `json:"title"`
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	Cancelled bool   `json:"cancelled,omitempty"`
 }
 
 // SourceRuntime is the source_kind of a session an agent runtime lists (docs/integrations/runtimes.md): source_instance_id names

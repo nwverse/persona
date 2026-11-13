@@ -416,18 +416,66 @@ func (h *Hub) fleetClientsChanged() {
 	f := &h.reported
 	f.clientsSend.Lock()
 	defer f.clientsSend.Unlock()
-	c := assistantwire.Clients{Elicitation: h.hasElicitationClient(), ElicitationPush: h.push.pushesElicitation(h.desktopOnline())}
+	c := assistantwire.Clients{Elicitation: h.hasElicitationClient(), ElicitationPush: h.push.pushesElicitation(h.desktopOnline()),
+		Viewing: h.viewedSessions()}
 	f.mu.Lock()
-	same := f.clientsSent && f.clients == c
+	same := f.clientsSent && f.clients.Elicitation == c.Elicitation && f.clients.ElicitationPush == c.ElicitationPush &&
+		slices.Equal(f.clients.Viewing, c.Viewing)
 	f.clients, f.clientsSent = c, true
 	f.mu.Unlock()
 	if !same {
-		if err := h.notifyManagers(assistantwire.EventClients, c); err != nil {
+		sent := false
+		for _, p := range h.busRoster() {
+			if p.Role == bus.RoleManager && h.notifyBus(p.ID, assistantwire.EventClients, h.clientsForManager(c, p.ID)) == nil {
+				sent = true
+			}
+		}
+		if !sent {
 			f.mu.Lock()
 			f.clientsSent = false
 			f.mu.Unlock()
 		}
 	}
+}
+
+func (h *Hub) viewedSessions() []assistantwire.SessionRef {
+	h.mu.Lock()
+	clients := make([]*client, 0, len(h.clients))
+	for c := range h.clients {
+		clients = append(clients, c)
+	}
+	h.mu.Unlock()
+	seen := map[[2]string]bool{}
+	for _, c := range clients {
+		c.mu.Lock()
+		for key := range c.subs {
+			seen[key] = true
+		}
+		for key := range c.termSubs {
+			seen[[2]string{key[0], key[1]}] = true
+		}
+		c.mu.Unlock()
+	}
+	out := make([]assistantwire.SessionRef, 0, len(seen))
+	for key := range seen {
+		out = append(out, assistantwire.SessionRef{MachineID: key[0], SessionID: key[1]})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].MachineID < out[j].MachineID ||
+			out[i].MachineID == out[j].MachineID && out[i].SessionID < out[j].SessionID
+	})
+	return out
+}
+
+func (h *Hub) clientsForManager(c assistantwire.Clients, manager string) assistantwire.Clients {
+	out := c
+	out.Viewing = nil
+	for _, ref := range c.Viewing {
+		if h.sessionOwner(ref.MachineID, ref.SessionID) == manager {
+			out.Viewing = append(out.Viewing, ref)
+		}
+	}
+	return out
 }
 
 // clientsSettle runs on a manager connection's first word after its handshake, as mutesSettle does, and tells it what
@@ -447,7 +495,7 @@ func (h *Hub) clientsSettle(c *busConn) {
 		clients := f.clients
 		f.mu.Unlock()
 		if h.busCurrent(c) {
-			_ = c.peer.Notify(assistantwire.EventClients, clients)
+			_ = c.peer.Notify(assistantwire.EventClients, h.clientsForManager(clients, c.ident.ID))
 		}
 	}()
 }

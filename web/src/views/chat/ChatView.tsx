@@ -1823,6 +1823,17 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       {backPage && (cameFrom ? <Suspense fallback={null}><HandoffBack from={cameFrom} onDismiss={() => setCameFrom(null)} /></Suspense> : cameFrom === undefined ? <Suspense fallback={null}><InboxBack key={`${mid}/${sid}`} mid={mid} sid={sid} session={session} /></Suspense> : null)}
       {/* a known session keeps its chat: a failed background read is retried quietly (runtime-session.ts) */}
       {archivedHere ? <ArchivedNotice session={archivedHere} /> : noDetails && <SessionDetailNotice error={detail.error} retry={retryDetail} />}
+      {!assistant && !session?.todo && session?.completed_todo && (
+        <div role="status" data-completed-todo className="shrink-0 border-b border-line bg-inset px-3 py-2 text-xs text-ink-2">
+          {t(session.completed_todo.cancelled ? "chat-chatview.todo_cancelled_owner" : "chat-chatview.todo_completed_owner")}{" "}
+          <a
+            href={`/todos?id=${encodeURIComponent(session.completed_todo.id)}`}
+            onClick={(event) => { event.preventDefault(); navigate(`/todos?id=${encodeURIComponent(session.completed_todo!.id)}`); }}
+            className="font-medium text-accent-ink underline decoration-current/40 underline-offset-2 hover:decoration-current"
+          >{session.completed_todo.title}</a>
+          {canCompose && !stoppedLine && <>{" "}{t("chat-chatview.todo_closed_continue")}</>}
+        </div>
+      )}
 
       {/* the page's middle: the chat and (once shown) the terminal stacked in one box; without a terminal to show it adds no box */}
       <div className={switchable ? "relative min-h-0 flex-1" : "contents"}>
@@ -2032,7 +2043,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
         {/* kept while a call is on (its draft, attachments and quotes stay), the bar in its place */}
         <div ref={composerBox} className="shrink-0" hidden={voiceState === "live" || Boolean(picker)}>
         {stoppedLine ? (
-          <StoppedAgentLine mid={mid} sid={sid} onTerminal={openTerminal} />
+          <StoppedAgentLine mid={mid} sid={sid} onTerminal={openTerminal} reason={session?.read_only_reason} />
         ) : (
         <Composer
           draftKey={draftKey}

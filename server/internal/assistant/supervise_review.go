@@ -141,6 +141,11 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	if a.UserCheck && verdict != reviewAccepted {
 		return "", fmt.Errorf("user_check applies to accepted only")
 	}
+	if verdict == reviewAccepted || verdict == reviewCancelled {
+		if err := s.taskCloseActivityError(ctx, t, time.Now()); err != nil {
+			return "", err
+		}
+	}
 	if verdict == reviewAccepted { // done_needs_delivery: its PR is live first (supervise_review_delivery.go)
 		if err := s.acceptedDeliveryError(ctx, t, strings.TrimSpace(a.Link), a.Outcome); err != nil {
 			return "", err
@@ -305,9 +310,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 			}
 		}
 		if verdict == reviewCancelled {
-			s.stopTaskAgents(ctx, t) // its cards stop asking the user (supervise_leader.go)
-			return fmt.Sprintf("Task %s is cancelled and closed; its agents are being stopped and archived (their terminals stay; archived, not deleted: "+
-				"agent_unarchive brings one back), and the cards they had waiting end. Tell the user only if they need to know.", t.ID), nil
+			return fmt.Sprintf("Task %s is cancelled and closed; its Agent conversations stay usable. They will be stopped and "+
+				"archived only when idle and the user has been inactive for 10 minutes (their terminals stay). "+
+				"Tell the user only if they need to know.", t.ID), nil
 		}
 		against := result.words()
 		if gaps := result.unsettled(); len(gaps) > 0 {
@@ -479,6 +484,11 @@ type reviewFeedBody struct {
 // accepted task's outcome is recorded, as when it closes by itself or the user closes it (todo_outcome.go, #2820); a
 // cancelled one came to nothing and records none.
 func (s *Service) reviewDoneTodo(ctx context.Context, id, reason string, accepted bool) (bool, error) {
+	if t, ok := s.todoNow(id); ok {
+		if err := s.taskCloseActivityError(ctx, t, time.Now()); err != nil {
+			return false, err
+		}
+	}
 	if t, ok := s.todoNow(id); ok && t.isConcern() {
 		return false, nil // only its report closes a concern (concerns.go)
 	}

@@ -663,6 +663,7 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 // UserSpoke: the user is talking in the conversation again: back in the list, and it works for them, not for a chain
 // of conversations.
 func (s *Service) UserSpoke(ctx context.Context, r SessionRef) {
+	s.rememberSessionActivity(ctx, r.MachineID, r.SessionID)
 	s.availOwnerSpoke(r, time.Now()) // before anything else: what the conversation is doing as the message comes (availability.go)
 	s.clearToolLoop([2]string{r.MachineID, r.SessionID}, loopUserInput)
 	// A meeting's turn under way is the user's from here on (meeting_turns.go).

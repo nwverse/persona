@@ -1658,6 +1658,12 @@ func (s *Service) autoDoneTodo(ctx context.Context, id, reason string, work time
 	if t, ok := s.todoNow(id); ok && t.isConcern() {
 		return false, nil
 	}
+	if t, ok := s.todoNow(id); ok {
+		if err := s.taskCloseActivityError(ctx, t, time.Now()); err != nil {
+			s.logf("task %s: auto close deferred: %v", id, err)
+			return false, nil
+		}
+	}
 	s.todos.writing.Lock() // no other store write lands between the store's close and memory's
 	unlocked := false
 	unlock := func() {

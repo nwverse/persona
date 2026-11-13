@@ -11,5 +11,6 @@
   "close_node_old": "Update Persona on that computer to close agents from here",
   "close_refused": "The computer would not close this agent, so it is still open",
   "close_failed": "Closing the agent on its computer failed, so it may still be open",
-  "close_upgrade": "Update the assistant to archive and close agents"
+  "close_upgrade": "Update the assistant to archive and close agents",
+  "task_closed": "Stopped because its to-do was closed. The conversation and terminal are kept; resume the Agent from its terminal to continue."
 }

@@ -11,8 +11,6 @@ import (
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
-	"github.com/nwverse/persona/server/internal/proto"
-	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // Leader conversations (#3133, docs/assistant/unified-entry.md "Leader conversations"). By default only the main
@@ -194,94 +192,6 @@ func (s *Service) setLeaders(ctx context.Context, v json.RawMessage) (*ownChange
 			return fmt.Sprintf("assistant.leaders is %q: tasks these conversations hand out with task_plan from now on are theirs to "+
 				"supervise (tasks handed out before keep their supervisor).", list), nil
 		}}, nil
-}
-
-// ---- a cancelled task's agents ----
-
-// cancelStopWait is how long a cancelled task's closed agent may still read busy before it is left unarchived;
-// cancelStopPoll how often it is looked at meanwhile.
-var cancelStopWait, cancelStopPoll = 30 * time.Second, 500 * time.Millisecond
-
-// stopTaskAgents stops what task t's agents still ask of the user once t is cancelled: each agent on it is closed on
-// its computer (session.close: its tab and process go, its transcript stays, and where its engine can resume it a
-// message does), its
-// cards still waiting end, and it is archived (reversible, nothing deleted). It runs in the background: closing can
-// take a while and the review is answered first.
-func (s *Service) stopTaskAgents(ctx context.Context, t Todo) {
-	var agents []TodoAgent
-	for _, a := range t.Agents {
-		if a.ReleasedAt == nil && a.DismissedAt == nil && a.SessionID != "" {
-			agents = append(agents, a)
-		}
-	}
-	if len(agents) == 0 {
-		return
-	}
-	ctx = context.WithoutCancel(ctx)
-	go func() {
-		for _, a := range agents {
-			s.stopCancelledAgent(ctx, t.ID, a.MachineID, a.SessionID)
-		}
-	}()
-}
-
-// stopCancelledAgent stops, ends the cards of and archives one agent of cancelled task id; one that works for another
-// open task now, an assistant conversation (the user's to stop) or a session its machine does not list is left alone.
-// The agent quits and its terminal stays (session.stop, #4754); a session with no terminal (another tool's, an engine
-// that runs agents itself) is closed as before.
-func (s *Service) stopCancelledAgent(ctx context.Context, id, machine, session string) {
-	s.todos.mu.RLock()
-	other, linked := s.todos.activeBySession[[2]string{machine, session}]
-	s.todos.mu.RUnlock()
-	if linked && other != id {
-		s.logf("task %s cancelled: agent %s/%s works for %s now, left alone", id, machine, short(session), other)
-		return
-	}
-	c, err := s.agentArchiveTarget(ctx, machine, session) // refuses an assistant conversation and an unknown session
-	if err != nil {
-		s.logf("task %s cancelled: agent %s/%s left alone: %v", id, machine, short(session), err)
-		return
-	}
-	machine = c.MachineID
-	if c.Status != proto.StatusOffline {
-		cctx, cancel := context.WithTimeout(ctx, agentArchiveCloseTimeout)
-		err := s.call(cctx, machine, deviceSessionStop, map[string]any{"session_id": session}, nil)
-		if re := (*rpc.Error)(nil); errors.As(err, &re) && re.Code == "no_terminal" {
-			err = s.call(cctx, machine, "session.close", map[string]any{"session_id": session}, nil)
-		}
-		if err != nil {
-			s.logf("task %s cancelled: stop agent %s/%s: %v", id, machine, short(session), err)
-		}
-		cancel()
-	}
-	s.endSessionCards(machine, session)
-	// The archive waits for the list to show it closed: a row still busy there (working, a card waiting) would bring
-	// it straight back (archivedSessions).
-	var row proto.Session
-	for deadline := time.Now().Add(cancelStopWait); ; time.Sleep(cancelStopPoll) {
-		r, err := s.agentArchiveTarget(ctx, machine, session)
-		if err != nil {
-			s.logf("task %s cancelled: archive agent %s/%s: %v", id, machine, short(session), err)
-			return
-		}
-		if !agentArchiveBusy(r) {
-			row = r
-			break
-		}
-		if time.Now().After(deadline) {
-			s.logf("task %s cancelled: agent %s/%s still busy, left unarchived", id, machine, short(session))
-			return
-		}
-	}
-	if err := s.noteAgentArchive(ctx, row, true); err != nil {
-		s.logf("task %s cancelled: archive agent %s/%s: %v", id, machine, short(session), err)
-		return
-	}
-	if err := s.noteAgentArchiveClosed(ctx, row, time.Now().UTC()); err != nil { // what it writes as it goes is not new work
-		s.logf("task %s cancelled: archive agent %s/%s: %v", id, machine, short(session), err)
-	}
-	s.publishList(row.MachineID)
-	s.logf("task %s cancelled: closed and archived agent %s/%s", id, machine, short(session))
 }
 
 // endSessionCards ends the cards machine/session still waits on (cancelled in the history), as when its node goes away.

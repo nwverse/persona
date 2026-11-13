@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -23,7 +24,7 @@ import (
 
 var (
 	// taskCloseIdle is how long a done task's agent must have been still (and the task done) before it is closed.
-	taskCloseIdle = 3 * time.Minute
+	taskCloseIdle = taskUserIdle
 	// taskCloseEvery is how often the assistant looks for agents to close (tests shorten them).
 	taskCloseEvery = time.Minute
 	// taskCloseRetry is how long a node's refusal stands for an agent that did not change: a node updated meanwhile
@@ -157,10 +158,23 @@ func (s *Service) closeDoneTaskAgents(ctx context.Context, refused taskCloseRefu
 		if !ok || !retirable(c, a.doneAt, now) {
 			continue
 		}
+		if s.sessionActivityReason(ctx, a.machine, a.session, now) != "" {
+			continue
+		}
 		if r, ok := refused[key]; ok && r.updated.Equal(c.UpdatedAt) && now.Sub(r.at) < taskCloseRetry {
 			continue
 		}
-		s.retireAgent(ctx, refused, "task "+a.todo, a.machine, c, now)
+		// A takeover or reopen may have happened while the node's session was read.
+		t, ok := s.todoNow(a.todo)
+		if !ok || t.DoneAt == nil || !t.DoneAt.Equal(a.doneAt) {
+			continue
+		}
+		if open, _ := s.openTaskOf(key); open {
+			continue
+		}
+		if s.retireAgent(ctx, refused, "task "+a.todo, a.machine, c, now) {
+			s.archiveRetiredTaskAgent(ctx, c)
+		}
 	}
 }
 
@@ -191,7 +205,7 @@ func (s *Service) doneTaskAgentRow(ctx context.Context, lists map[string]map[str
 
 // retireAgent asks c's node to stop its agent and keep its terminal (session.stop with retire) and remembers a
 // refusal; who names the reason in the log.
-func (s *Service) retireAgent(ctx context.Context, refused taskCloseRefused, who, machine string, c proto.Session, now time.Time) {
+func (s *Service) retireAgent(ctx context.Context, refused taskCloseRefused, who, machine string, c proto.Session, now time.Time) bool {
 	key := [2]string{machine, c.SessionID}
 	var res struct {
 		Stopped bool `json:"stopped"`
@@ -205,6 +219,7 @@ func (s *Service) retireAgent(ctx context.Context, refused taskCloseRefused, who
 		delete(refused, key)
 		if res.Stopped {
 			s.logf("%s: stopped agent %s/%s (its terminal stays)", who, machine, c.SessionID)
+			return true
 		}
 	case errors.As(err, &re): // the node refused (or is too old to know session.stop: nothing closed): not again for a while
 		if prev, ok := refused[key]; !ok || prev.why != err.Error() {
@@ -214,4 +229,17 @@ func (s *Service) retireAgent(ctx context.Context, refused taskCloseRefused, who
 	default:
 		s.logf("%s: close agent %s/%s: %v", who, machine, c.SessionID, err)
 	}
+	return false
+}
+
+func (s *Service) archiveRetiredTaskAgent(ctx context.Context, c proto.Session) {
+	c.ReadOnlyReason = i18n.T(s.lang(ctx), "hub-agent_archives.task_closed")
+	if err := s.noteAgentArchive(ctx, c, true); err != nil {
+		s.logf("closed task agent %s/%s: archive: %v", c.MachineID, short(c.SessionID), err)
+		return
+	}
+	if err := s.noteAgentArchiveClosed(ctx, c, time.Now().UTC()); err != nil {
+		s.logf("closed task agent %s/%s: archive close reason: %v", c.MachineID, short(c.SessionID), err)
+	}
+	s.publishList(c.MachineID)
 }

@@ -35,6 +35,14 @@ afterEach(() => {
 });
 
 describe("a stopped Agent's read-only line", () => {
+  it("explains that closing its to-do stopped it without losing Terminal or Resume", () => {
+    const reason = "Stopped because its to-do was closed.";
+    act(() => root.render(<StoppedAgentLine mid="m1" sid="s1" onTerminal={onTerminal} reason={reason} />));
+    expect(el.textContent).toContain(reason);
+    expect(button(t("chat-chatview.terminal"))).toBeDefined();
+    expect(button(t("chat-chatview.resume"))).toBeDefined();
+  });
+
   it("says it has stopped and opens its terminal", () => {
     expect(el.textContent).toContain(t("chat-chatview.stopped_line"));
     act(() => button(t("chat-chatview.terminal")).click());
