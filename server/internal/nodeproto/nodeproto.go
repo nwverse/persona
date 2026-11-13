@@ -47,6 +47,8 @@ const (
 	// AssistantConfigDir: assistant.send / assistant.warm / session.send honor an explicit
 	// config_dir and preserve the selected Claude profile when resuming a conversation.
 	AssistantConfigDir = "assistant_config_dir"
+	// SessionSkills: session.skills and validated explicit skill selections on ordinary session.send.
+	SessionSkills = "session_skills_v1"
 	// AssistantServiceTier: assistant.send takes service_tier for a new Codex conversation and acknowledges it before
 	// the first turn. A node without it would start the conversation and silently drop an explicit, billable choice.
 	AssistantServiceTier = "assistant_service_tier"
@@ -140,7 +142,7 @@ const (
 )
 
 // Announced is what a node built from this code announces.
-var Announced = []string{ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, Sessions, ModelConfiguration, AssistantConfigDir, AssistantServiceTier, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, LauncherSwitchIdle, PaneCwd, NodeUpdateIdle, PaneNewSpace}
+var Announced = []string{SessionSkills, ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, Sessions, ModelConfiguration, AssistantConfigDir, AssistantServiceTier, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, LauncherSwitchIdle, PaneCwd, NodeUpdateIdle, PaneNewSpace}
 
 // ShareProjection is the bounded complete-source sharing projection, not light Items.
 const ShareProjection = "share_projection.v1"

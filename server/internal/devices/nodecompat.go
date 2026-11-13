@@ -49,8 +49,8 @@ func nodeHas(info proto.NodeInfo, cap string) bool {
 		return slices.Contains(info.Capabilities, cap)
 	}
 	switch cap {
-	case nodeproto.AssistantConfigDir, nodeproto.AssistantServiceTier:
-		return false // no pre-handshake node honors these assistant start options
+	case nodeproto.AssistantConfigDir, nodeproto.AssistantServiceTier, nodeproto.SessionSkills:
+		return false // these contracts arrived after the handshake
 	case nodeproto.ModelConfiguration:
 		return info.Version == "" || info.ModelConfiguration // "": a test's or a dev node that said nothing
 	case nodeproto.NodeUpdate:
