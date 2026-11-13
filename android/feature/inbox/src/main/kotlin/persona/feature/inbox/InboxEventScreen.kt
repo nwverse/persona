@@ -55,6 +55,7 @@ fun InboxEventScreen(repository: InboxRepository, route: InboxEventRoute, naviga
     var markingDone by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var stale by rememberSaveable(route.itemId) { mutableStateOf(false) }
+    var lineageRevision by remember(route.itemId) { mutableIntStateOf(0) }
     val open = LocalLarkLinkOpener.current
     fun go(target: ChainTarget) {
         val shown = record ?: return
@@ -90,6 +91,7 @@ fun InboxEventScreen(repository: InboxRepository, route: InboxEventRoute, naviga
                         finally { markingDone = false }
                     }
                 })
+            if (record != null) InboxSameMatterMenu(repository, record, onLinked = { lineageRevision++ })
         },
     ) {
         if (record == null) {
@@ -139,7 +141,7 @@ fun InboxEventScreen(repository: InboxRepository, route: InboxEventRoute, naviga
         }
         error?.let { message -> item("event-error") { StatusText(message, isError = true) } }
         eventChain(record, ::go)
-        item("event-line") { InboxLineSection(repository, record, navigator) }
+        item("event-line") { InboxLineSection(repository, record, navigator, reload = lineageRevision) }
         if (record.event.related.isNotEmpty()) {
             item("event-related-header") { JSectionHeader(stringResource(R.string.inbox_event_related), count = record.event.related.size) }
             itemsIndexed(record.event.related, key = { _, it -> "event-related:${it.id}" }) { index, related ->

@@ -8,4 +8,9 @@
     <string name="inbox_line_gone">No longer in the Inbox</string>
     <string name="inbox_line_not_same">Not the same matter</string>
     <string name="inbox_line_not_same_done">Marked as not the same matter</string>
+    <string name="inbox_line_same">Same matter as…</string>
+    <string name="inbox_line_linked">Linked to “%1$s”</string>
+    <string name="inbox_line_search_placeholder">Search titles and places</string>
+    <string name="inbox_line_empty">No open matters match</string>
+    <string name="inbox_line_legacy_meta">%1$s: %2$s</string>
 </resources>

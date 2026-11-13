@@ -1,6 +1,7 @@
 package persona.feature.inbox
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -20,6 +21,7 @@ import persona.core.designsystem.JRow
 import persona.core.designsystem.JSectionHeader
 import persona.core.designsystem.JTextButton
 import persona.core.designsystem.LocalAppFeedback
+import persona.core.designsystem.Tokens
 import persona.core.designsystem.icons.PhIcons
 import persona.core.designsystem.text
 import persona.core.domain.inbox.InboxTier
@@ -29,14 +31,16 @@ import persona.core.navigation.TodoDetailRoute
 
 /** The item's Thread section. Loading, an empty line and a failed first read draw nothing, as on iOS and the web. */
 @Composable
-internal fun InboxLineSection(repository: InboxRepository, record: InboxRecord, navigator: Navigator, modifier: Modifier = Modifier) {
+internal fun InboxLineSection(repository: InboxRepository, record: InboxRecord, navigator: Navigator, reload: Int = 0, modifier: Modifier = Modifier) {
     val snapshot by repository.snapshot.collectAsStateWithLifecycle()
     val pages = LocalInboxItemPages.current
     val feedback = LocalAppFeedback.current
     val scope = rememberCoroutineScope()
     var tree by remember(record.item.id) { mutableStateOf<InboxLineage?>(null) }
     var busy by remember(record.item.id) { mutableStateOf<String?>(null) }
-    LaunchedEffect(record.item.id, record.manager) {
+    var showSame by remember(record.item.id) { mutableStateOf(false) }
+    LaunchedEffect(record.item.id, record.manager, reload) {
+        tree = null
         try { tree = repository.inboxLine(record) }
         catch (e: CancellationException) { throw e }
         catch (_: Exception) { tree = null }
@@ -94,7 +98,11 @@ internal fun InboxLineSection(repository: InboxRepository, record: InboxRecord, 
                 })
             }
         }
+        JTextButton(stringResource(R.string.inbox_line_same), onClick = { showSame = true },
+            Modifier.padding(horizontal = Tokens.Space.s), icon = PhIcons.LinkSimple)
     }
+    if (showSame) InboxSameMatterSheet(repository, record, initialTree = tree,
+        onDismiss = { showSame = false }, onLinked = { tree = it })
 }
 
 /** Isolated so the display package's shared `now` words can replace the legacy fallback when that baseline lands. */
