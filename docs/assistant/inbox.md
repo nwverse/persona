@@ -318,6 +318,16 @@ Triage, drafting, AI twin, done state, and retention use hub's generic logic.
   - With no GitHub items, the UI is unchanged.
   - Mock `MOCK_GITHUB_INBOX=1`; UI tests `InboxConnectorTests`.
 
+## Assistant rows (2026-11-13, #6430)
+
+The assistant can put one of its conversations into the Inbox as a row, so a result is not missed behind a quiet unread dot. It happens only on the user's explicit request (the `inbox_post` tool's description says so; its required `reason` is shown on the row) or when a scheduled task is set to put its runs there (`docs/assistant/assistant.md`, "Put it in the Inbox when done"). Who it serves: the Assistant's everyday users, who say "tell me if there is anything worth a look" or "send me the briefing every time"; no engineering words anywhere.
+
+- **An internal source** `assistant`, made by the manager like a push subscription's: no connector, no hub reading; the hub only forwards `/api/v1/inbox`. Code: `assistant/inbox_post.go`.
+- **The generic row.** An item carries the `connector` block an app draws for a source it does not know (`thread` = `<machine>/<conversation>`, `label` Assistant, `url` the conversation's page in the web app at the hub's `public_url`), `kind` `assistant_post`, the tier the post asked for (`action` or `fyi`) with `reason` as its why, the title and a summary line. Without a `public_url` the row has no `url`: it still draws and its content is in the row. Checked on the mock hub (`MOCK_ASSISTANT_INBOX=1`): the web app draws it in its source group and opens the conversation in the side panel from the row's Open button; the iPhone app takes the same path for any item with a `connector` block (`InboxGroups`, `InboxConnectorViews`). An app that knows the source can open the conversation directly from `thread`.
+- **One row a conversation.** A post for a conversation within 30 minutes of its row's last one updates that row (title, summary, tier, the newest content) and opens it again if it was handled; a later post starts a new row. A task set to every time posts after each run that answered; a failed or empty run posts nothing.
+- **The user's rules still apply**: a policy set for the source (Rules, "Policies") changes the tier like any source's.
+- **One switch.** Inbox Sources lists an **Assistant** row (`b.assistant`, icon robot) whose Add to Inbox switch is `Settings.InboxPost` (`inbox.post` on the bus; on unless turned off). Off, `inbox_post` answers that nothing was added and says to tell the user in the conversation, and tasks set to every time add nothing; rows already there stay. The Relationships view shows it with the other Persona-side sources.
+
 ## Muting (2026-11-03, connector v2 · V3, #670)
 
 All sources work alike. Long-press an Inbox row for Done / Reopen plus available mute targets: Mute repository (GitHub), Mute chat

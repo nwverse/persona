@@ -109,6 +109,10 @@ type Settings struct {
 	// InboxSignals: new Inbox messages the judge links to a supervised task reach its supervisor as the signal inbox
 	// (#4293, supervise_inbox.go). nil is off (the default): each one is a supervisor turn.
 	InboxSignals *bool `json:"inbox_signals,omitempty"`
+	// InboxPost: the assistant may put a conversation into the Inbox (inbox_post, a task's "put it in the Inbox when
+	// done", inbox_post.go). nil is on: a row only comes from the user's own request or a task they set. The Inbox
+	// Sources page's switch for it.
+	InboxPost *bool `json:"inbox_post,omitempty"`
 	// IdleCloseHours: an agent Persona started that has been idle this many hours with nothing going on is closed
 	// (tasks_idle.go); 0 turns it off, nil is 12 (the default).
 	IdleCloseHours *int `json:"idle_close_hours,omitempty"`

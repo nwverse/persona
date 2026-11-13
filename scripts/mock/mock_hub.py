@@ -44,7 +44,7 @@ def features():
     # Match proto.Features, retaining the existing terminal fixture switches.
     return ["error_codes", "client_hello", "heartbeat", "app_ping", "client_msg_id", "send_refusals",
             "screen_dialog", "resumable_interactions", "secret_prompts", "request_id", "file_upload",
-            "tls", "endpoints", "connectors", "lark_attachments", "file_stream", "file_thumb", "git_blob", "task_push",
+            "tls", "endpoints", "connectors", "lark_attachments", "file_stream", "file_thumb", "git_blob", "task_push", "task_inbox",
             "machine_rename"] + ([] if os.environ.get("MOCK_MANAGERS") == "0" else ["sessions_manager"]) + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") else []) + (["git_review"] if os.environ.get("MOCK_REVIEW") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
                 ["terminal_control", "terminal_scroll", "terminal_click", "terminal_mouse"] if TERMINAL_CONTROL else []) + (
                 ["terminal_panes", "pane_new_space"] if os.environ.get("MOCK_TERMINAL_PANES") else []) + (["herdr_client"] + ([] if os.environ.get("MOCK_TERMINAL_FULL_NOFOCUS") else ["herdr_focus"]) if TERMINAL_FULL else []) + (
@@ -2101,7 +2101,7 @@ SCHEDULE = [
      "prompt": "周五发周报前，把这周的数据再核对一遍，有对不上的列出来。", "enabled": True, "created_by": "assistant",
      "machine_id": "macbook", "created_at": ago(hours=5)},
 ]
-TASK_FIELDS = ("title", "prompt", "repeat", "at", "time", "weekdays", "every_minutes", "cron", "enabled", "launcher", "permission_mode", "effort", "push")
+TASK_FIELDS = ("title", "prompt", "repeat", "at", "time", "weekdays", "every_minutes", "cron", "enabled", "launcher", "permission_mode", "effort", "push", "inbox")
 
 # MOCK_CRON=1 (#4399, docs/assistant/assistant.md "Scheduled tasks"): the hub runs cron tasks (feature task_cron) and has
 # one, every 30 minutes in work hours on weekdays. GET /api/v1/assistant/tasks/cron answers the web editor's examples as
@@ -2175,6 +2175,7 @@ def save_task(old, new):
     # "Notify after a run" (#2396): left out of an edit it stays; "asked" runs in the task's own conversation; "" is the default.
     if t.get("push") == "asked": t.pop("session_id", None)
     if not t.get("push"): t.pop("push", None)
+    if not t.get("inbox"): t.pop("inbox", None)
     # End time: left out it stays, null clears it, and a one-off never has one (the hub's until).
     if t.get("repeat") == "once" or ("until" in new and not new.get("until")):
         t.pop("until", None)
@@ -2960,7 +2961,7 @@ RULE_SUGGESTIONS = {
     "rs_mock_delegate": {
         "id": "rs_mock_delegate", "kind": "delegate",
         # The hub's own words (server/internal/i18n/locales/en/assistant-rule_suggest.json "delegate"), Settings and all.
-        "text": "You took the recommendation 3 times. Let Persona answer agents' own-call questions for you? You can turn this on in Settings.",
+        "text": "You took the recommendation 3 times. Let Persona answer agents' own-call questions for you?",
         "scope": {}, "creates": "", "setting": "agents.delegate", "count": 3},
 } if os.environ.get("MOCK_RULE_SUGGESTIONS") == "1" else {}
 RULE_SUGGESTIONS_ANSWERED = set()  # answered with Always or Not now
@@ -10229,6 +10230,26 @@ if os.environ.get("MOCK_IMESSAGE_INBOX"):
          "context": "我（10-30 07:58）：在吗\n张三（10-30 07:59）：示例：周五下午三点见，地方你定",
          "connector": {"thread": "imessage-0a1b2c3d4e5f", "open_url": "sms:+15550100", "reply_to": "在「信息」里回复（Persona 不替你发）",
                        "rule_tier": "action"}},
+    ]
+
+
+# MOCK_ASSISTANT_INBOX=1 (#6430): rows the assistant put into the Inbox (source `assistant`, made by the manager): the generic
+# `connector` block, its url the conversation's page. Only with ?sources=all, like connectors' items; made-up content.
+if os.environ.get("MOCK_ASSISTANT_INBOX"):
+    _ASSISTANT_BASE = os.environ.get("MOCK_PUBLIC_URL", "http://127.0.0.1:%d" % PORT).rstrip("/")  # the hub's public_url
+    INBOX[1:1] = [
+        {"id": "assistant:s1", "source": "assistant", "kind": "assistant_post", "account": "assistant", "account_name": "Assistant",
+         "title": "Morning briefing", "sender": "Assistant", "preview": "Three meetings today; the design review moved to 15:00",
+         "count": 1, "started_at": ago(minutes=30), "updated_at": ago(minutes=30), "tier": "fyi",
+         "summary": "Three meetings today; the design review moved to 15:00", "reason": "Your morning briefing task puts every run here", "read": False,
+         "context": "Morning briefing\nThree meetings today; the design review moved to 15:00.",
+         "connector": {"thread": "assistant:macbook/" + BLOG, "label": "Assistant", "url": _ASSISTANT_BASE + "/s/macbook/" + BLOG}},
+        {"id": "assistant:s2", "source": "assistant", "kind": "assistant_post", "account": "assistant", "account_name": "Assistant",
+         "title": "Price drop: the standing desk you watch", "sender": "Assistant", "preview": "Now 20% off until Sunday",
+         "count": 1, "started_at": ago(hours=3), "updated_at": ago(hours=3), "tier": "action",
+         "summary": "The desk you asked me to watch is 20% off until Sunday", "reason": "You asked to be told about price drops", "read": False,
+         "context": "Price drop\nNow 20% off until Sunday.",
+         "connector": {"thread": "assistant:macbook/" + TESTS, "label": "Assistant", "url": _ASSISTANT_BASE + "/s/macbook/" + TESTS}},
     ]
 
 

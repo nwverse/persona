@@ -2,6 +2,38 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## Selecting the words of a long lifted answer (#5291)
+
+- A `LazyVStack` opened at item N in a scroll view still lays out items 0 and 1 first, then walks the items between
+  them and N, all in the first frame. To lift item N without that cost, give the items above it fixed-height
+  placeholders on the first frame and swap in the real ones on a later frame (`AnswerPartsLift`), keeping the pressed
+  item where it is on screen while they arrive.
+- `.task` and `onAppear` run inside the frame that shows the view, not after it. To defer work to a later frame, use a
+  display link and skip one tick (`LiftFrames`).
+- A text view that doesn't scroll sets its text container's height to its own frame height whenever its frame is set,
+  so its last line is dropped when that line's spacing hangs below the frame. Keep the container unbounded in
+  `layoutSubviews` (`LiftUITextView.keepsAllLaidOut`). A UI test comparing its lines to the chat's catches the missing line.
+- Making a UIKit view inside SwiftUI the first responder costs tens of milliseconds whatever the view holds: SwiftUI's
+  focus bridge walks the hosting view's whole responder tree. The first text selection after launch also loads
+  TextInputUI (the cursor glow), and the first edit menu loads the Translate service. Measured in the simulator, the
+  two loads were about 30 ms each. Start the selection in a later frame than heavy text layout, and show the edit
+  menu one frame after that, so the costs don't add up in one frame.
+- To see what fills a long main-thread block, read the watchdog's backtraces in the frame report the UI test
+  attaches. They show which step of the frame the block was in before you add any tracing.
+- TextKit 1 can keep a stale end for a line it laid out once and then breaks elsewhere (here: wrapped on its own,
+  then where the chat's lines break, through `shouldBreakLineByWordBeforeCharacterAt`). The glyphs are drawn in the
+  right places, but `boundingRect(forGlyphRange:)` of the line's new last glyph is a zero-wide box at the line's right
+  edge. Set the breaks before anything lays the words out, and remember that setting a `UITextView`'s
+  `attributedText` can lay it out then and there: work the breaks out from the new string and set them before
+  assigning it (`LiftUITextView.render`). When the breaks still change after a layout, invalidate all of the glyphs
+  (`resnap`); it costs no more than the relayout. On macOS the stale box appears only after something measured the
+  old layout, and only invalidating every glyph clears it. A command-line repro built with `swiftc` for the iOS
+  simulator and run with `simctl spawn` did not show it there, so check the fix in the app.
+- A selection handle's knob hangs past the selected lines: over the first, under the last. When a text view is
+  exactly as large as its words inside a SwiftUI view, a touch on the knob lands outside it and the handle can't be
+  dragged. Make the text view reach past the words (`Theme.Lift.handleReach`), with a matching
+  `textContainerInset` that keeps the words where they are.
+
 ## Tab selection and targeted opens are different navigation intents (#5641)
 
 - An Agent pushed on Assistant's stack still uses the dev chat view, which writes the shared last-opened Agent marker.

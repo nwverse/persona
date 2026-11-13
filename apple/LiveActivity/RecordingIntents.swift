@@ -13,7 +13,7 @@ import Foundation
 struct StartMeetingRecordingIntent: AudioRecordingIntent {
     nonisolated static let title: LocalizedStringResource = "Record [Recordings Section ef2821]"
     // The contract's Wording (#3862 phase 4): a room meeting taking part may send what is said while Talk is held.
-    nonisolated static let description = IntentDescription("Starts recording a meeting in Persona, named after the calendar event happening now. Audio stays on this iPhone, except while you hold Talk: what is said then goes to the voice service. The transcript goes to Knowledge.")
+    nonisolated static let description = IntentDescription("Starts recording a meeting in Persona, named after the calendar event happening now. Audio stays on this device, except while you hold Talk: what is said then goes to the voice service. The transcript goes to Knowledge.")
     nonisolated static var supportedModes: IntentModes { [.background, .foreground(.dynamic)] }
 
     nonisolated init() {}
