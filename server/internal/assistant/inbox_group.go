@@ -38,7 +38,7 @@ const (
 	groupNewMax       = 3                  // new events the prompt suggests for one batch; also sizes the output budget
 	groupOpenMax      = 10                 // open events the events tool lists, independently of done events
 	groupDoneMax      = 6                  // recent done events the events tool lists, independently of open events
-	groupDoneFor      = 3 * 24 * time.Hour // how long a done event is still listed
+	groupDoneFor      = 3 * 24 * time.Hour // how long a done event is still listed; keep whole days so DoneDays matches
 	groupDoneCountMax = 50                 // 50 is a starting value with no supporting measurements; done events at this count are not candidates
 	groupConcurrency  = 4                  // batches related at once (the others wait for the next round)
 	groupAttempts     = 3                  // tries of one event's append
@@ -236,7 +236,7 @@ func (s *Service) groupEvents(connectorID, thread, query string) []groupEvent {
 		}
 	}
 	newestFirst := func(list []*InboxItem) {
-		sort.Slice(list, func(i, j int) bool { return list[i].UpdatedAt.After(list[j].UpdatedAt) })
+		sort.Slice(list, func(i, j int) bool { return newerItem(list[i], list[j]) })
 	}
 	newestFirst(open)
 	newestFirst(done)

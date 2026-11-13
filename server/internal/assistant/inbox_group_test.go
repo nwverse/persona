@@ -1019,6 +1019,25 @@ func TestInboxGroupEventsIndependentQuotas(t *testing.T) {
 	}
 }
 
+// Equal activity times use the same id tie-break as newerItem, so repeated candidate lists keep their exact order.
+func TestInboxGroupEventsEqualActivityOrder(t *testing.T) {
+	h, _ := admitHub(t, nil)
+	now := time.Now()
+	for _, id := range []string{"open-a", "open-b"} {
+		addGroupCandidate(h, id, "示例", now, false)
+	}
+	doneAt := now.Add(-time.Hour)
+	for _, id := range []string{"done-a", "done-b"} {
+		addGroupCandidate(h, id, "示例", doneAt, true)
+	}
+	want := []string{"open-b", "open-a", "done-b", "done-a"}
+	for range 20 {
+		if ids := groupCandidateIDs(h.groupEvents("lark", "chat:F1", "")); !slices.Equal(ids, want) {
+			t.Fatalf("candidates %v, want the deterministic order %v", ids, want)
+		}
+	}
+}
+
 // Query filtering happens before either cap: newer non-matches take no slots, and both matching groups still truncate.
 func TestInboxGroupEventsQueryPrecedesIndependentCaps(t *testing.T) {
 	h, _ := admitHub(t, nil)
@@ -1103,8 +1122,14 @@ func TestInboxGroupFallbackGetsIndependentCandidates(t *testing.T) {
 	if len(got) != len(want) {
 		t.Fatalf("fallback received %d candidates, want %d", len(got), len(want))
 	}
+	metaText := func(meta json.RawMessage) string {
+		if len(meta) == 0 {
+			return "null" // JSON carries an absent RawMessage as null across the connector call.
+		}
+		return string(meta)
+	}
 	for i, event := range want {
-		if got[i].ID != event.ID || got[i].Done != event.Done || string(got[i].Meta) != string(event.Meta) {
+		if got[i].ID != event.ID || got[i].Done != event.Done || metaText(got[i].Meta) != metaText(event.Meta) {
 			t.Errorf("fallback candidate %d = %+v, want %+v", i, got[i], event)
 		}
 	}
