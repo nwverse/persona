@@ -187,6 +187,38 @@ fun ComponentCatalogScreen(modifier: Modifier = Modifier, onBack: (() -> Unit)? 
             AgentTreeHeader("服务器", folded = true, onToggle = { feedback = "展开服务器" }, icon = PhIcons.HardDrives, online = false, detail = "1 个空间，2 个会话")
         }
         item("agents-pinned") { AgentTreeHeader("置顶", folded = false, onToggle = { feedback = "折叠置顶" }, icon = PhIcons.PushPin, counts = listOf(Status.Working to 1)) }
+        item("agents-repo") {
+            // By repository on Glass (#4338 A7): a repository's card with its header and worktree lines. The home's repository
+            // page gives the card its fill; the catalog lends it the surface.
+            CompositionLocalProvider(LocalRepoCard provides PersonaTheme.palette.surfaceOpaque) {
+                Column {
+                    AgentRepoHeader("persona", folded = false, onToggle = { feedback = "折叠 persona" }, Modifier.repoCard(first = true, last = false),
+                        onLongClick = { feedback = "仓库操作：打开空间、全部标为已读、置顶、屏蔽、重命名、待办" }, actionsLabel = "仓库操作")
+                    AgentWorktreeLine("main", main = true, folded = false, onToggle = { feedback = "折叠 main" }, Modifier.repoCard(first = false, last = false),
+                        tally = "2 个 Agent")
+                    AgentWorktreeLine("Speed up the importer", main = false, folded = false, onToggle = { feedback = "折叠 Speed up the importer" },
+                        Modifier.repoCard(first = false, last = false), branch = "perf/importer", tally = "1 个 Agent")
+                    AgentWorktreeLine("bisect", main = false, folded = true, onToggle = { feedback = "展开 bisect" },
+                        Modifier.repoCard(first = false, last = false), detached = true, tally = "空闲", quiet = true)
+                    // A working tree's idle agents behind one line (#4338 A8), and the line that folds them again.
+                    AgentRepoIdleLine(2, listOf("review", "research"), open = false, onClick = { feedback = "展开 2 个空闲" },
+                        Modifier.repoCard(first = false, last = false))
+                    AgentRepoIdleLine(2, emptyList(), open = true, onClick = { feedback = "收起空闲的 2 个" }, Modifier.repoCard(first = false, last = true))
+                }
+            }
+        }
+        item("agents-idle-repos") {
+            // A computer's idle repositories (#4338 A8): their heading, then one row each in one card.
+            CompositionLocalProvider(LocalRepoCard provides PersonaTheme.palette.surfaceOpaque) {
+                Column {
+                    JSectionHeader("空闲的仓库", count = 2, countTone = Status.Idle)
+                    AgentIdleRepoRow("notes", agents = 2, tabs = listOf("minutes", "planning"), time = "2 小时前", folded = true,
+                        onToggle = { feedback = "展开 notes" }, Modifier.repoCard(first = true, last = false, spaced = false))
+                    AgentIdleRepoRow("scripts", agents = 1, tabs = emptyList(), time = "3 天前", folded = true,
+                        onToggle = { feedback = "展开 scripts" }, Modifier.repoCard(first = false, last = true))
+                }
+            }
+        }
         item("agents-located") {
             AgentRow(
                 "整理发布说明", Status.Working, onClick = { feedback = "整理发布说明" }, position = GroupPosition(first = true, last = false),

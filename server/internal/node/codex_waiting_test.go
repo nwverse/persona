@@ -278,7 +278,7 @@ func TestCodexWaitingRowsInOneDirectory(t *testing.T) {
 	const threadA, threadB = "01a19a00-0000-7000-8000-00000000000a", "01a19a00-0000-7000-8000-00000000000b"
 	pathA := writeWaitRollout(t, home, cwd, threadA, time.Now().Add(-5*time.Second), "make the tests pass")
 	pathB := writeWaitRollout(t, home, cwd, threadB, time.Now().Add(-4*time.Second), "write the docs")
-	tui, daemon := holdOpen(t, pathB), holdOpen(t, pathA)
+	tui, daemon := holdOpenPID(t, pathB), holdOpenPID(t, pathA)
 	n.codices.checked = nil
 	n.codices.scan = func() []codexProcess {
 		return []codexProcess{
@@ -571,8 +571,9 @@ func clearRolloutCache(home string) {
 	rolloutCaches.Unlock()
 }
 
-// holdOpen runs a process that holds path open, as a Codex holds its rollout, and returns its pid.
-func holdOpen(t *testing.T, path string) int {
+// holdOpenPID runs a process that holds path open, as a Codex holds its rollout, and returns its pid (the
+// Windows tests have their own holdOpen, codex_desktop_windows_test.go).
+func holdOpenPID(t *testing.T, path string) int {
 	t.Helper()
 	f, err := os.Open(path)
 	if err != nil {

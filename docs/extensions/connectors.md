@@ -55,7 +55,7 @@ unknown capabilities, or kinds without an Inbox capability all fail registration
 | `status` | `Accounts` | `Status()`: state, accounts, a human-readable error sentence and `Guide` | All except Lark and mail (absence means `ok`; a `Proxy` is always asked for its own status) |
 | `tools` / `actions` | `ReadTools` / `Actions` | Read-only tools; writes (`Describe` produces the card text and returns errors for bad parameters without showing a card; `Do` performs the write). A connector that knows the id of the message a write made also implements `RefActions` (`DoRef`: `Do`'s text and that id, for the sent-as-user ledger), and one that can take such a message back implements `Recaller` (`CanRecall`, `Recall`; "Sent as the user" below); one whose read tools can answer subscriptions with JSON implements `ReadJSON` (`CallJSON`; [subscriptions.md](subscriptions.md) "Existing connectors"); all three are found by type assertion, declare nothing and are optional (a program's connector, which implements every interface, is a `Recaller` only when it declares the capability `recall`) | See above |
 | `options` | `Options` | Connector-specific settings (JSON), edited in the App | GitHub |
-| `events` | `Events` | Live events, `changed(Scope)`; `Scope` is a typed constant, validated when received from subprocesses | Each has its own |
+| `events` | `Events` | Live events, `changed(Scope)`; `Scope` is a typed constant, validated when received from subprocesses. Any scope also brings forward the connector's subscriptions' runs (`docs/extensions/subscriptions.md` "Running") | Each has its own |
 | `archive`, `chats`, `items` | `Archive`, `Chats`, `Items` | Three shapes for knowledge-base ingestion | See above |
 | `inbox`, `settle` | `Inbox`, `InboxSettler` | Inbox candidates and replies (`Reply` receives the full `InboxReply`: conversation, item, which step it answers, body); settle old items by rule | GitHub, Messages, Telegram; `settle` only GitHub |
 | `login` | `Login` | Stepwise login | Telegram, larkcli |
@@ -411,7 +411,7 @@ GitHub reads `gh` login from a computer. The App has no generic connector login 
 Proposal: add two step types to `Prompt` beyond field entry:
 
 - `open_url`: `{url, callback_scheme}`. The App opens it through system web authentication (`ASWebAuthenticationSession`), then returns the callback URL as this step's value (`callback_url`). OAuth uses this.
-- `device_code`: `{url, user_code, interval}`. The App shows the code, opens the URL, then polls the same step every `interval` seconds until `done`. GitHub device-code login uses this.
+- `device_code`: `{url, user_code, interval}`. The App shows the code, opens the URL, then polls the same step every `interval` seconds until `done`. GitHub device-code login uses this. When `url` already carries `user_code` (Lark's), the hub adds `qr` and the web App draws it above the code: scanning it on the phone needs nothing typed (#5818).
 - `qr` (#1351): `{url, interval}`, where `url` is content for another App to scan (WeChat QR authorization). The hub adds the QR matrix `qr: {size, rows}` to its App response (`rows` is one string of `0` / `1` per row,
   without surrounding whitespace, generated like the admin pairing QR). The App draws it (black modules on white in both dark and light, with a quiet zone), polling the same step every `interval` seconds until `done`;
   a phone cannot scan its own screen, so a "Save QR code" action appears below (share / save to Photos, then recognize it from the album in the other App). iOS / Mac, web (Settings › Connectors, #1693) and Android all have connector login pages.
@@ -421,7 +421,7 @@ Proposal: add two step types to `Prompt` beyond field entry:
 
 The App then has **one** generic login page (field entry, web authorization, code display), used by Telegram, Gmail, Outlook and GitHub.
 
-`larkcli` uses the same `device_code` prompt. The manager starts the blocking `lark-cli auth login --domain all` process and returns its verification URL and user code; the App polls the same `login.step` until the process exits. A second start cancels the first one, and the manager stops it when the connector shuts down.
+`larkcli` uses the same `device_code` prompt (with its `qr`, since lark-cli's link carries the code). The manager starts the blocking `lark-cli auth login --domain all` process and returns its verification URL and user code; the App polls the same `login.step` until the process exits. A second start cancels the first one, and the manager stops it when the connector shuts down.
 
 - **Mail**: one connector has several accounts, while today's `Login` holds one session per connector. Add an "account" layer (`login.step` carries `account`, empty to add an account; `logout` names the account).
   Keep old `/api/v1/mail/oauth/*` for old Apps.

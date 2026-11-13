@@ -182,6 +182,8 @@
 /* Phones under 340 px wide (iPhone SE first generation, small Android phones): `max-xs:` is below 340 px, where the composer's mode chips turn into
    an icon and a short word (#4316). */
 @theme { --breakpoint-xs: 340px; }
+/* The task cards' type scale by role (docs/design/task-cards.md §4.1): the card and row title, the meta line, the chip / label. The sizes the cards already used, now named; iOS Theme.Font bodyStrong / caption / label. */
+@theme { --text-card-title: 14.5px; --text-meta: 13px; --text-label: 12px; }
 @theme inline {
   --color-page: var(--page);
   --color-canvas: var(--canvas);
@@ -206,6 +208,7 @@
   --color-orange-tint: var(--orange-tint);
   --color-red: var(--red);
   --color-red-tint: var(--red-tint);
+  --color-danger-wash: var(--danger-wash);
   --color-attention: var(--attention);
   --color-danger-fill: var(--danger-fill);
   --color-ai: var(--ai);
@@ -238,7 +241,7 @@
   --sidebar-fold-close-ease: ease-in;
 
   --font-sans: Inter, -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  --font-mono: "JetBrains Mono", "SF Mono", "DejaVu Sans Mono", "Liberation Mono", ui-monospace, Menlo, Consolas, monospace;
 }
 
 body {
@@ -431,6 +434,7 @@ button:disabled { cursor: default; }
 /* A permission mode's tone (#3956; iOS Theme.ModeTone, Android ModeTone, docs/design/DESIGN_SYSTEM.md): how much a
  * mode lets an agent do without asking, on the header's mode button. None is an agent state's color (blue, orange, green).
  * Ask First (and a mode not reported yet) is the quiet ink on the chip fill; the others wash their capsule at 12%. */
+:root { --danger-wash: color-mix(in srgb, var(--red) 12%, transparent); } /* iOS Theme.danger at 12%: the failed and interrupted conclusion cards and the failed Needs you row (#5569). Reds are 4.78:1 on the tray's surface and 4.31:1 on the light canvas, so every word on the wash is --ink (12:1 and up) and --red only colours icons (theme-contrast.test.ts). --red-tint stays neutral (selection and error fills of the other pages). */
 :root { --mode-plans: #0e7c86; --mode-acts: var(--hue-purple); --mode-allows: var(--red); }
 .dark { --mode-plans: #4fd1c5; }
 :root { --mode-plans-tint: color-mix(in srgb, var(--mode-plans) 12%, transparent); --mode-acts-tint: color-mix(in srgb, var(--mode-acts) 12%, transparent); --mode-allows-tint: color-mix(in srgb, var(--mode-allows) 12%, transparent); }

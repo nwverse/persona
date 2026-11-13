@@ -32,9 +32,9 @@ struct NewChatView: View {
     /// A todo handed to a new Agent (TodoHandoffSheet): the todo's context block goes ahead of the first message, the
     /// session is named after the todo, and only the todo's hub's machines are offered.
     var contextBlock: String? = nil
-    /// A message forwarded to a new Agent (#3807): its card over the first message, which carries it as `contextBlock`,
-    /// and the pictures it had, attached.
-    var forwarded: ContextRef? = nil
+    /// A message forwarded to a new Agent (#3807), or several together (#3838): its card over the first message, which
+    /// carries it as `contextBlock`, and the pictures it had, attached.
+    var forwarded: [ContextRef] = []
     var forwardedImages: [UIImage] = []
     var nameHint: String? = nil
     var onlyGroup: String? = nil
@@ -382,9 +382,14 @@ struct NewChatView: View {
                 }
 
                 Section {
-                    if let forwarded {
-                        QuoteCard(heading: forwarded.quoteHeading, icon: Theme.Icon.forwardMessage, meta: ForwardMessage.meta(forwarded),
-                                  summary: forwarded.forwardSummary, lines: QuoteBlock.forwardLines, tint: Theme.accent, ink: .secondary) {}
+                    if forwarded.count == 1, let one = forwarded.first {
+                        QuoteCard(heading: one.quoteHeading, icon: Theme.Icon.forwardMessage, meta: ForwardMessage.meta(one),
+                                  summary: one.forwardSummary, lines: QuoteBlock.forwardLines, tint: Theme.accent, ink: .secondary) {}
+                            .accessibilityIdentifier("newChat.forward")
+                    } else if !forwarded.isEmpty {
+                        QuoteCard(heading: ForwardMessage.groupHeading(forwarded), icon: Theme.Icon.forwardMessage,
+                                  meta: forwarded[0].extra?["machine"], summary: forwarded.map(ForwardMessage.line).joined(separator: "\n"),
+                                  lines: QuoteBlock.forwardLines, tint: Theme.accent, ink: .secondary) {}
                             .accessibilityIdentifier("newChat.forward")
                     }
                     promptField
@@ -585,8 +590,9 @@ struct NewChatView: View {
                        addsProvider: ref.group == (model.hub?.group ?? ""))
     }
 
-    /// The machines offered: this hub's when a todo is handed over (`onlyGroup`), else all of them.
-    private var machinesShown: [Machine] { Self.offered(model.machines, onlyGroup: onlyGroup) }
+    /// The machines offered: the current assistant's (`AppModel.scopedMachines`), and of them this hub's when a todo is
+    /// handed over (`onlyGroup`).
+    private var machinesShown: [Machine] { Self.offered(model.scopedMachines(), onlyGroup: onlyGroup) }
 
     /// Not one waiting to be confirmed (the hub refuses it, 409 machine_pending): it is not the user's yet.
     static func offered(_ machines: [Machine], onlyGroup: String?) -> [Machine] {
@@ -595,6 +601,9 @@ struct NewChatView: View {
 
     /// The remembered machine belongs to another hub than the one the todo is on.
     private var machineOutsideGroup: Bool { onlyGroup.map { machine?.group != $0 } ?? false }
+
+    /// The remembered machine is another assistant's than the one whose computers are offered.
+    private var machineOutsideScope: Bool { machine.map { !model.assistantScope.has($0.manager, group: $0.group) } ?? false }
 
     /// The setups that started an Agent here before (#2134), one store for the app.
     private var recents: RecentSetupsStore { .shared }
@@ -671,7 +680,7 @@ struct NewChatView: View {
 
     /// Remember the last machine, but fall back to the first online one (machines may arrive after the sheet opens).
     private func pickDefaultMachine() {
-        if machine == nil || machine?.online == false || machine?.isPending == true || machineOutsideGroup,
+        if machine == nil || machine?.online == false || machine?.isPending == true || machineOutsideGroup || machineOutsideScope,
            let m = machinesShown.first(where: \.online) ?? machinesShown.first {
             machineID = m.ref.path
         }

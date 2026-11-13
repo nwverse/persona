@@ -202,6 +202,12 @@ class AddressHintTests(unittest.TestCase):
             self.assertEqual(pc.problems("mail " + address + " now", []), [address])
         self.assertEqual(pc.problems("mail " + email + " now", [], emails=False), [])
 
+    def test_personal_company_and_attribution_emails_are_not_allowlisted(self):
+        # #5747: #5559 allow-listed whole domains, which would also let an employee's personal company address through.
+        for address in ("employee.name@" + "bytedance.com", "noreply@" + "moonshot.cn", "noreply@" + "moonshot.ai"):
+            with self.subTest(address=address):
+                self.assertEqual(pc.problems("Co-Authored-By: Someone <" + address + ">", []), [address])
+
     def test_lines_without_the_hint_have_no_addresses(self):
         for line in ["@Override", "a @ b.io", "v1.2", "1. 2. 3. 4", "x@ example", "end."]:
             with self.subTest(line=line):
@@ -703,14 +709,16 @@ class PrivacyCheckIntegrationTests(unittest.TestCase):
         (self.repo / "README.md").write_text(
             (self.repo / "README.md").read_text() +
             "Private privacy host: https://privacy.notexample.com; private hub: hub.notexample.com.\n")
-        (self.repo / "README.md.notexample.com").write_text("plain\n")
+        # A name that only starts with an allowed doc does not share its allowance (and carries no value itself, so
+        # the report can name it without disclosing anything).
+        (self.repo / "README.md.bak").write_text("Install from https://public-site.notexample.com.\n")
         self.git("add", ".")
         result = self.scan()
         self.assertNotEqual(result.returncode, 0)
         output = result.stdout + result.stderr
         self.assertIn("notes.md:1: private value", output)
         self.assertIn("README.md:2: private value", output)
-        self.assertIn("README.md.notexample.com:path: private value", output)
+        self.assertIn("README.md.bak:1: private value", output)
         for path in pc.PUBLIC_SITE_DOCS | {"site/public/index.html"}:
             self.assertNotIn(path + ":1:", output)
         self.assertNotIn("notexample", output)

@@ -4,11 +4,11 @@ import { api, errorText } from "../lib/api";
 // conversation, `/persona/<id>` one of them, `/persona/new` a new one-off conversation. With no main conversation yet, the first
 // message on `/` starts it.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { MentionSource } from "./chat/MentionMenu";
+import type { MentionSource } from "./chat/ComposerPanel";
 import { startConversation } from "../lib/assistant-start";
 import { feedCacheScope, mainConversationMachine, readFeedCache } from "../lib/feed-cache";
 import { startOfDay } from "../lib/feed";
-import { ago, uuid } from "../lib/format";
+import { uuid } from "../lib/format";
 import { codedFailure, helpTopic, passesBySelf, refreshReadiness, type CodedFailure } from "../lib/readiness";
 import { conversationPage } from "../lib/conversation-page";
 import { navigate } from "../lib/router";
@@ -338,14 +338,12 @@ function Starter({ main, cleared, onToggleSidebar }: { main?: boolean; cleared?:
         // the conversation page's own header, as it will read once the conversation is there
         <Header
           title={main ? mainTitle : conversationTitle({ title: "" })}
-          subtitle={main || !sending ? undefined : [sending.launcher, ago(new Date(sending.at).toISOString())].join(" · ")}
           machineName=""
           assistant
           main={main}
           siblings={NO_SESSIONS}
           onToggleSidebar={onToggleSidebar}
           onInterrupt={noop}
-          onStopLoop={noop}
           topCenter={main ? <ShellSwitch page="assistant" /> : undefined}
           actions={main ? <StartSessionButton compact /> : undefined}
         />

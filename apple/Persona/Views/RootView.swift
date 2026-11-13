@@ -255,8 +255,7 @@ struct RootView: View {
         #if DEBUG || PERF_SIGNPOST
         let _ = PerfTrace.body("RootTabs")
         #endif
-        @Bindable var model = model
-        TabView(selection: $model.selectedTab) {
+        TabView(selection: Binding(get: { model.selectedTab }, set: { model.selectHomeTab($0) })) {
             AssistantRootTab()
             AgentsRootTab()
             #if os(iOS) || os(visionOS)
@@ -533,10 +532,11 @@ private struct TabPage<Page: View>: View, Equatable {
         .badge(badge) // Demo Mode is left from Settings; the plugins' entries are on it (docs/extensions/extensions.md「UI slots」, badges)
     }
 
-    /// Demo; else what the plugins' main-navigation entries' badges add up to (only words: a dot).
+    /// Demo; else what the plugins' main-navigation entries' badges add up to (only words: a dot), while Settings shows
+    /// them (the default assistant current).
     private var badge: Text? {
         if model.isDemo { return Text("Demo") }
-        let total = ExtensionSlots.shared.total
+        let total = ExtensionSlots.shared.settingsTotal(model)
         if let text = CountBadge.text(total.count) { return Text(text) }
         return total.dot ? Text("•") : nil
     }

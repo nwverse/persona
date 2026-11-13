@@ -67,7 +67,8 @@ class ModelManagerScopeShotsTest {
         }
         rule.waitForIdle()
         rule.runOnIdle { AssistantManagerChoice.pick("work") } // the sidebar's switcher picks Work
-        rule.onNodeWithContentDescription("New model provider").performClick()
+        rule.onNodeWithText("Advanced").performClick()
+        rule.onNodeWithText("Add provider").performClick()
         rule.waitForIdle()
         assertEquals(listOf("work"), owners)
         rule.onNodeWithText("Work").assertExists()

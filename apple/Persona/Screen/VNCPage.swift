@@ -14,6 +14,9 @@ struct VNCPage: View {
     @State private var help = false
     @State private var typing = false
     @State private var unlocked = false
+    /// Which of its ways each rail is in on an iPhone on its side (`fittingRail`, #5289).
+    @State private var topRailFit = 0
+    @State private var bottomRailFit = 0
     #if os(iOS) || os(visionOS)
     @State private var screenView: VNCScreenUIView?
     @State private var modifiers = VNCModifiers()
@@ -135,20 +138,61 @@ struct VNCPage: View {
 
     // MARK: Bars
 
-    /// A bar of buttons: a row across the page, or on an iPhone on its side a rail down it, closer together when it does
+    /// The bottom bar: a row across the page, or on an iPhone on its side a rail down it, closer together when it does
     /// not fit (the keyboard up), and scrolling when even that does not (the largest text sizes).
-    @ViewBuilder private func bar<Content: View>(spacing: CGFloat, @ViewBuilder _ content: () -> Content) -> some View {
+    @ViewBuilder private func bar<Content: View>(spacing: CGFloat, @ViewBuilder _ content: @escaping () -> Content) -> some View {
         if railed {
-            let tight = rail(spacing: spacing, tight: true, content)
-            ViewThatFits(in: .vertical) {
-                rail(spacing: spacing, tight: false, content)
-                tight
-                ScrollView(.vertical) { tight }.scrollIndicators(.hidden)
+            fittingRail([RailWay(), RailWay(tight: true), RailWay(tight: true, scrolls: true)], spacing: spacing, fit: $bottomRailFit) { _ in
+                content()
             }
         } else {
-            HStack(spacing: spacing) { content() }
-                .padding(.horizontal, Theme.Space.page)
-                .padding(.vertical, Theme.Space.s)
+            row(spacing: spacing, content)
+        }
+    }
+
+    /// A row of buttons across the page.
+    private func row<Content: View>(spacing: CGFloat, @ViewBuilder _ content: () -> Content) -> some View {
+        HStack(spacing: spacing) { content() }
+            .padding(.horizontal, Theme.Space.page)
+            .padding(.vertical, Theme.Space.s)
+    }
+
+    /// One way a rail can sit down the page's side: closer together, Picture in Picture in ⋯, scrolling.
+    private struct RailWay {
+        var tight = false, pipButton = true, scrolls = false
+    }
+
+    /// A rail down the page's side in the first of `ways` that fits its height, as `ViewThatFits` picks, but drawn as the
+    /// same views whichever it is (#5289). Opening a menu from a rail hides the keyboard, the page gets taller and a
+    /// roomier way fits; had that put other views in, the menu's morph out of its button (iOS 26) would find the button
+    /// gone and stop the app. So hidden copies of the ways are measured, the one picked says so, and the rail shown only
+    /// changes its spacing, what `content` does with the way, and whether it scrolls.
+    private func fittingRail<Content: View>(_ ways: [RailWay], spacing: CGFloat, fit: Binding<Int>,
+                                            @ViewBuilder _ content: @escaping (RailWay) -> Content) -> some View {
+        let way = ways[min(max(fit.wrappedValue, 0), ways.count - 1)]
+        return ViewThatFits(in: .vertical) {
+            ForEach(0..<ways.count, id: \.self) { i in
+                Group {
+                    if ways[i].scrolls {
+                        ScrollView(.vertical) { rail(spacing: spacing, tight: ways[i].tight) { content(ways[i]) } }
+                    } else {
+                        rail(spacing: spacing, tight: ways[i].tight) { content(ways[i]) }
+                    }
+                }
+                .onAppear { fit.wrappedValue = i }
+            }
+        }
+        .hidden()
+        .accessibilityHidden(true)
+        .overlay {
+            GeometryReader { g in
+                ScrollView(.vertical) {
+                    rail(spacing: spacing, tight: way.tight) { content(way) }
+                        .frame(height: way.scrolls ? nil : g.size.height)
+                }
+                .scrollDisabled(!way.scrolls)
+                .scrollIndicators(.hidden)
+            }
         }
     }
 
@@ -166,16 +210,12 @@ struct VNCPage: View {
         let pip = false
         #endif
         if railed {
-            // Down the leading rail, Picture in Picture under Close (#3075). Short of room (the keyboard up at the
-            // largest text sizes) the buttons close up first, then Picture in Picture goes into ⋯ so Close, Help and ⋯
-            // stay in sight, and only then does the rail scroll.
-            ViewThatFits(in: .vertical) {
-                rail(spacing: Theme.Space.s, tight: false) { topButtons(pipButton: pip, nameInRow: false) }
-                rail(spacing: Theme.Space.s, tight: true) { topButtons(pipButton: pip, nameInRow: false) }
-                rail(spacing: Theme.Space.s, tight: false) { topButtons(pipButton: false, nameInRow: false) }
-                rail(spacing: Theme.Space.s, tight: true) { topButtons(pipButton: false, nameInRow: false) }
-                ScrollView(.vertical) { rail(spacing: Theme.Space.s, tight: true) { topButtons(pipButton: false, nameInRow: false) } }
-                    .scrollIndicators(.hidden)
+            // Down the leading rail, Picture in Picture under Close (#3075). Short of room (the keyboard up) the buttons
+            // close up first, then (the largest text sizes) Picture in Picture goes into ⋯ so Close, Help and ⋯ stay in
+            // sight, and only then does the rail scroll.
+            fittingRail([RailWay(), RailWay(tight: true), RailWay(pipButton: false), RailWay(tight: true, pipButton: false),
+                         RailWay(tight: true, pipButton: false, scrolls: true)], spacing: Theme.Space.s, fit: $topRailFit) { way in
+                topButtons(pipButton: pip && way.pipButton, nameInRow: false)
             }
         } else {
             // One line where it fits, Picture in Picture right of Close (#3075). At the largest text sizes the name goes
@@ -192,7 +232,7 @@ struct VNCPage: View {
 
     private func topRow(pipButton: Bool, nameBelow: Bool) -> some View {
         VStack(spacing: .zero) {
-            bar(spacing: Theme.Space.s) { topButtons(pipButton: pipButton, nameInRow: !nameBelow) }
+            row(spacing: Theme.Space.s) { topButtons(pipButton: pipButton, nameInRow: !nameBelow) }
             if nameBelow {
                 nameAndPhase
                     .padding(.horizontal, Theme.Space.page)

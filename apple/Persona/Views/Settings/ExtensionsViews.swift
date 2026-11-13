@@ -4,8 +4,10 @@ import SwiftUI
 /// the way to its page. Extensions are installed on the hub's side only (docs/extensions/extensions.md「Install, upgrade, roll back, uninstall」): with `personad plugin` on
 /// its machine or in its admin UI (/admin); the footer says how.
 struct ExtensionsView: View {
+    @Environment(AppModel.self) private var app
     @State private var page = ExtensionsModel()
     @State private var cardLink: LinkTarget?
+    @State private var settingsSlots: ExtensionSlots?
 
     var body: some View {
         SettingsForm {
@@ -22,28 +24,18 @@ struct ExtensionsView: View {
                     .bareListRow()
                 }
             }
-            #if os(macOS)
-            // The plugins' overview cards (docs/extensions/extensions.md「UI slots」): the Mac has no Overview, they lead the installed ones (their
-            // pages are in the sidebar). The iPhone has them on Settings itself.
-            ExtensionCardsSection(link: $cardLink)
-            #endif
+            if let settingsSlots {
+                #if os(macOS)
+                ExtensionCardsSection(link: $cardLink, slots: settingsSlots)
+                #else
+                ExtensionSlotsSettingsSection(link: $cardLink, slots: settingsSlots)
+                #endif
+            }
             if let plugins = page.plugins, plugins.isEmpty {
                 Section {
                     EmptyStateView(symbol: Theme.Icon.plugins, title: String(localized: "No Extensions"),
                                    message: String(localized: "Install extensions in the hub's admin page (/admin) or on the hub machine with personad extension install, then turn them on and set them up here."))
                         .listRowBackground(Color.clear)
-                }
-            } else if let groups = page.groups {
-                // Several managers (docs/assistant/managers.md "Grouping"): each one's under its name, the default first.
-                ForEach(groups) { group in
-                    Section {
-                        Group { rows(group.items) }
-                            .bareListRow()
-                    } header: {
-                        ManagerHeading(manager: group.manager, count: group.items.count)
-                    } footer: {
-                        if group.id == groups.last?.id { footer }
-                    }
                 }
             } else if let plugins = page.plugins {
                 Section {
@@ -72,21 +64,23 @@ struct ExtensionsView: View {
         }
         .accessibilityIdentifier("extensions-list")
         .themedPage()
-        #if os(macOS)
         .pluginLinks($cardLink)
-        #endif
+        .extensionPushes(settingsSlots?.cardPages ?? [])
         .overlay { if page.plugins == nil && page.loading { ProgressView() } }
         .detailTitle(String(localized: "Extensions"))
         .navigationBarTitleDisplayMode(.inline)
-        .task { await page.load() }
-        #if os(macOS)
-        .task { await ExtensionSlots.shared.reload() }
-        #endif
+        .task(id: "\(app.assistantManagerID ?? "")|\(app.managersRevision)|\(app.settingsPath.count)|\(app.config?.url.absoluteString ?? "")") { await page.load() }
+        .task(id: "\(app.assistantManagerID ?? "")|\(app.config?.url.absoluteString ?? "")") {
+            let scope = AssistantSettingsRequestScope(app)
+            let slots = ExtensionSlots(deps: .init(api: { scope.api(app) }, connection: { app.socket(scope.group) }),
+                                       manager: scope.manager)
+            settingsSlots = slots
+            await slots.reload()
+        }
         .refreshable {
             await page.load()
-            await ExtensionSlots.shared.reload()
+            await settingsSlots?.reload()
         }
-        .onChange(of: AppModel.shared.managersRevision) { Task { await page.load() } }
     }
 
     /// The rows of a list, each opening its manager's copy: an id is listed once per manager (each one's built-ins).
@@ -178,7 +172,6 @@ struct ExtensionDetailView: View {
     @State private var page: ExtensionModel
     @State private var editingSecret: ExtensionSecret?
     /// An Always rule the user asked to remove: confirmed first.
-    @State private var removingRule: HandoffRule?
     @State private var declarations = ExtensionTextContributions()
     @State private var connectorInbox: ExtensionConnectorsModel
     /// Its connectors' source subscriptions (#2041): the entry row's counts, nil while it is hidden.
@@ -194,6 +187,7 @@ struct ExtensionDetailView: View {
     /// `manager`: another manager's copy (docs/assistant/managers.md "Grouping"): everything the page reads and changes is
     /// that manager's, and so are the pages and connectors it opens. nil: the default manager's.
     init(id: String, manager: String? = nil) {
+        let manager = manager ?? AppModel.shared.assistantManagerID
         _page = State(initialValue: ExtensionModel(id: id, manager: manager))
         _signIn = State(initialValue: ExtensionSignInModel(id: id, manager: manager))
         _connectorInbox = State(initialValue: ExtensionConnectorsModel(manager: manager))
@@ -252,18 +246,11 @@ struct ExtensionDetailView: View {
                               saveReference: { await page.setSecretReference(secret.name, reference: $0) },
                               clear: { await page.clearSecret(secret.name) }, close: { editingSecret = nil })
         }
-        .confirmationDialog(String(localized: "Remove this rule?"), isPresented: Binding(get: { removingRule != nil }, set: { if !$0 { removingRule = nil } }),
-                            titleVisibility: .visible, presenting: removingRule) { rule in
-            Button(role: .destructive) { Task { await page.removeHandoffRule(rule.id) } } label: { Text("Remove [Handoff Rule]").lineLimit(1) }
-                .accessibilityIdentifier("handoff-rule-remove-confirm")
-            Button("Cancel", role: .cancel) {}
-        } message: { _ in
-            Text("The next time an Agent asks for it, you approve it again.")
-        }
         .task { await page.load() }
         // A launcher field's choices (format launcher): the hub asks every machine for them, so apart from the page.
         .task(id: page.detail?.plugin.id) { await page.loadLaunchersIfNeeded() }
-        .subscriptionCounts($subscriptions, enabled: page.manager == nil) { [id = page.id] in $0.extensionID == id }
+        // Its own manager's subscriptions (the current assistant's in Settings), as everything else on the page.
+        .subscriptionCounts($subscriptions, manager: page.manager) { [id = page.id] in $0.extensionID == id }
         // Again when the connector's page closes (its switch may have changed there) or the extension is switched.
         // Also once paired (opened at launch, before the hub's address is known) or paired to another hub.
         .task(id: ConnectorSectionsKey(ids: connectorIDs, depth: AppModel.shared.settingsPath.count,
@@ -273,7 +260,7 @@ struct ExtensionDetailView: View {
         .tabActiveTask(id: ExtensionTextSource(group: AppModel.shared.hub?.group ?? "", features: AppModel.shared.hubFeatures,
                                                hub: AppModel.shared.api?.config.url.absoluteString, active: phase == .active)) {
             guard phase == .active else { return }
-            await declarations.refreshWhileActive(api: AppModel.shared.api)
+            await declarations.refreshWhileActive(api: AppModel.shared.api?.manager(page.manager))
         }
         .refreshable { await page.load() }
         // What the page read is the hub's latest word on the sign-in too; an install that ended waiting for a sign-in
@@ -354,12 +341,12 @@ struct ExtensionDetailView: View {
         }
         pages(d)
         if d.plugin.enabled ?? true {
-            SubscriptionsEntrySection(counts: subscriptions, state: SubscriptionsUI.state(extension: d.plugin.id))
+            SubscriptionsEntrySection(counts: subscriptions, state: SubscriptionsUI.state(extension: d.plugin.id), manager: page.manager)
         }
         connectorSections(d)
         if !d.readOnly && !d.form.isEmpty { form(d) }
         if !d.readOnly && !d.secrets.isEmpty { secrets(d) }
-        SecretProviderSections(users: d.secretUsers, rules: d.handoffRules, editable: !d.readOnly) { removingRule = $0 }
+        SecretProviderSections(users: d.secretUsers, rules: d.handoffRules, editable: !d.readOnly) { await page.removeHandoffRule($0.id) }
         if !d.readOnly && !d.form.isEmpty {
             Section {
                 FormAction {
@@ -644,7 +631,8 @@ private struct ExtensionFieldRow: View {
                 // The page's hub's machines (the app's first group), as the machine switches list them.
                 ExtensionChoicePicker(title: title, placeholder: placeholder, path: path, page: page,
                                       choices: ExtensionPickerChoice.machines(field, current: page.value(path)?.string,
-                                                                              machines: model.machines.filter { $0.group.isEmpty }.map { ($0.id, $0.name, $0.os) }))
+                                                                              machines: AssistantSettingsRequestScope(group: model.hub?.group ?? "", manager: page.manager, roster: model.managerRoster)
+                                                                                .machines(model).map { ($0.id, $0.name, $0.os) }))
             } else if field.picksLauncher, let launchers = page.launchers {
                 ExtensionChoicePicker(title: title, placeholder: placeholder, path: path, page: page,
                                       choices: ExtensionPickerChoice.launchers(current: page.value(path)?.string, launchers: launchers))
@@ -769,9 +757,10 @@ private struct ExtensionMachineSwitches: View {
     /// The page's hub's machines (the app's first group), of the systems asked for.
     private var machines: [Machine] {
         let os = field.items?.os ?? []
-        return model.machines.filter { $0.group.isEmpty && (os.isEmpty || os.contains($0.os ?? "")) }
+        return AssistantSettingsRequestScope(group: model.hub?.group ?? "", manager: page.manager, roster: model.managerRoster)
+            .machines(model).filter { os.isEmpty || os.contains($0.os ?? "") }
     }
-    private var unknown: [String] { items.filter { id in !model.machines.contains { $0.group.isEmpty && $0.id == id } } }
+    private var unknown: [String] { items.filter { id in !machines.contains { $0.id == id } } }
     /// A plugin for operating computers (extension point computer) or their browsers (browser): the rows say how Cua
     /// Driver or ego lite is there too.
     private var computers: Bool { page.detail?.plugin.contributes?["computer"] != nil }
@@ -1062,14 +1051,16 @@ private struct ExtensionSecretSheet: View {
 }
 
 /// A secret provider's page (docs/extensions/secret-providers.md): the settings that hold its references, each the
-/// user's standing approval, and its Always rules for hand-offs to Agents, each removable after a confirm (the page's
-/// `removingRule`). Nothing shows for an extension that is no provider.
+/// user's standing approval, and its Always rules for hand-offs to Agents, each removable after a confirm that comes
+/// from its own row (on iOS 26 a popover pointing at the rule swiped). Nothing shows for an extension that is no provider.
 private struct SecretProviderSections: View {
     @Environment(AppModel.self) private var model
     var users: [ExtensionSecretUser]
     var rules: [HandoffRule]
     var editable: Bool
-    var remove: (HandoffRule) -> Void
+    var remove: (HandoffRule) async -> Void
+    /// The rule whose removal is being confirmed.
+    @State private var confirming: HandoffRule.ID?
 
     var body: some View {
         if !users.isEmpty {
@@ -1098,18 +1089,29 @@ private struct SecretProviderSections: View {
                     .accessibilityElement(children: .combine)
                     .accessibilityIdentifier("handoff-rule")
                     // Row actions as everywhere (DESIGN_SYSTEM 3.4): a swipe and the same in the context menu, and a
-                    // named action for VoiceOver; the page confirms before anything goes.
+                    // named action for VoiceOver; the row confirms before anything goes.
                     .swipeActions(edge: .trailing) {
                         if editable {
-                            Button(role: .destructive) { remove(r) } label: { Text("Remove [Handoff Rule]") }
+                            // Tinted, not `.destructive`: that role folds the row away at once, and the dialog it anchors
+                            // went with it, closing Settings' cover instead.
+                            Button { confirming = r.id } label: { Text("Remove [Handoff Rule]") }.tint(Theme.danger)
                         }
                     }
                     .contextMenu {
                         if editable {
-                            Button(role: .destructive) { remove(r) } label: { Text("Remove [Handoff Rule]") }
+                            Button(role: .destructive) { confirming = r.id } label: { Text("Remove [Handoff Rule]") }
                         }
                     }
-                    .accessibilityAction(named: Text("Remove [Handoff Rule]")) { if editable { remove(r) } }
+                    .accessibilityAction(named: Text("Remove [Handoff Rule]")) { if editable { confirming = r.id } }
+                    .confirmationDialog(String(localized: "Remove this rule?"),
+                                        isPresented: Binding(get: { confirming == r.id }, set: { if !$0 { confirming = nil } }),
+                                        titleVisibility: .visible) {
+                        Button(role: .destructive) { Task { await remove(r) } } label: { Text("Remove [Handoff Rule]").lineLimit(1) }
+                            .accessibilityIdentifier("handoff-rule-remove-confirm")
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("The next time an Agent asks for it, you approve it again.")
+                    }
                 }
             } header: {
                 SettingsHeading(String(localized: "Always for Agents"))

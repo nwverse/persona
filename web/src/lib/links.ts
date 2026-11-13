@@ -4,8 +4,9 @@ import { APP_SCHEMES, assistantPath } from "./compatibility";
 // framed panel would just be blank), Feishu documents and Moments posts open in the side panel's reader (the same links
 // the phone reads natively, FeishuLinks.route) when the hub reads Feishu (feature `lark`; otherwise they are ordinary
 // pages), and persona://session links move to that conversation. This hub's own agent and task pages (/s/<machine>/
-// <session>, /todos?id=…, the links the assistant writes) open as pages of their own, never beside the chat (#5096), and
-// so do its conversations (/persona/<id>). The
+// <session>, /todos?id=…, the links the assistant writes) open where the browser's setting says (lib/agent-open.ts,
+// #5424): in the side panel next to where they were clicked, the default, or as pages of their own (#5096); on a narrow
+// screen, which has no room beside the page, as pages either way. Its conversations (/persona/<id>) are pages. The
 // hub's own pages are those of this page's origin and of every address the hub advertises (hello's endpoints, its
 // public_url first: the address the assistant writes, which may not be the one this page was opened at).
 //
@@ -15,6 +16,7 @@ import { t } from "../i18n";
 import { useSyncExternalStore } from "react";
 import { uuid } from "./format";
 import { openPanel } from "./panel";
+import { agentOpenMode } from "./agent-open";
 import { leaveChat, taskRoute } from "./handoff";
 import { navigate, parse as parseRoute } from "./router";
 import { BASE, stripBase } from "./base";
@@ -23,6 +25,10 @@ import { otherManager } from "./manager-choice";
 import { localhostLink, PREVIEW_FEATURE } from "./preview";
 import type { PortLink } from "./port-links";
 import { getSession, getState, hubHas, larkOn, onHubEvent } from "./store";
+import { mediaMatches, NARROW } from "./viewport";
+
+/** An Agent's or a task's link opens in the side panel: Agents open there (lib/agent-open.ts) and there is room. */
+const beside = () => agentOpenMode() === "panel" && !mediaMatches(NARROW);
 
 /** What a Feishu document link points at, from the link alone (FeishuDocsKind.from). A wiki link does not say. */
 export type DocKind = "doc" | "sheet" | "bitable" | "mindnote" | "file" | "slides" | "wiki" | "page" | "whiteboard" | "other";
@@ -247,12 +253,15 @@ export function openLink(url: string, title?: string, manager?: string) {
     case "session":
       navigate({ name: "session", mid: r.mid, sid: r.sid });
       return;
-    // a page of its own at every width, never a side panel (#5096, cindy's session links); the chat keeps its place
+    // the side panel on a wide screen while Agents open there (#5424), else a page of its own (#5096, cindy's session
+    // links), the chat keeping its place
     case "agent":
-      leaveChat({ name: "session", mid: r.mid, sid: r.sid }, false);
+      if (beside()) openPanel({ kind: "agent", mid: r.mid, sid: r.sid });
+      else leaveChat({ name: "session", mid: r.mid, sid: r.sid }, false);
       return;
     case "task":
-      leaveChat(taskRoute(r.id), false);
+      if (beside()) openPanel({ kind: "task", todo: r.id });
+      else leaveChat(taskRoute(r.id), false);
       return;
     case "conversation":
       navigate({ name: "persona", sid: r.sid, ...(r.mid ? { mid: r.mid } : {}), ...(r.manager ? { manager: r.manager } : {}) });

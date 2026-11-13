@@ -199,10 +199,14 @@ fun ChatDestination(
     val handToPersona = rememberHandToPersona(wiring?.mainSender?.takeIf { style != ChatRenderStyle.Assistant }, navigator)
     val composer by (editor?.composer ?: remember { MutableStateFlow<ChatComposerState?>(null) }).collectAsStateWithLifecycle()
     val error by (editor?.error ?: remember { MutableStateFlow<Int?>(null) }).collectAsStateWithLifecycle()
+    ComposerFocusAskEffect(session, composer)
+    // The next card another chat waits on you with, after answering here (Persona's conversation in the Assistant tab).
+    val elsewhere = LocalWaitingElsewhere.current.takeUnless { historyReadOnly }
     androidx.compose.runtime.CompositionLocalProvider(LocalUsageRead provides wiring?.usage) {
         ChatScreen(session, services.chats(), services.messages(),
             services.interactions(), services.sessions(), onBack = onHistoryBack ?: navigator::back,
             onTerminal = onTerminal ?: { navigator.navigate(TerminalRoute(it.machineId, it.sessionId)) },
+            onResumeInTerminal = { navigator.navigate(TerminalRoute(it.machineId, it.sessionId, resume = true)) },
             chrome = ChatChromeBindings(actions = wiring?.actions.takeUnless { historyReadOnly }, connection = wiring?.connection,
                 worktrees = wiring?.worktrees.takeUnless { historyReadOnly },
                 onOpenSession = { navigator.navigate(ChatRoute(it.machineId, it.sessionId)) },
@@ -212,7 +216,8 @@ fun ChatDestination(
                 tasks = wiring?.tasks?.takeIf { style == ChatRenderStyle.Assistant && !historyReadOnly },
                 assistantManagement = assistantManagement,
                 agentShares = sharing,
-                inboxTrays = services.inboxTrays(), inboxScope = wiring?.scope?.path),
+                inboxTrays = services.inboxTrays(), inboxScope = wiring?.scope?.path,
+                waiting = elsewhere?.waiting.orEmpty(), onOpenRequest = elsewhere?.open),
             renderStyle = style,
             embedded = embedded, showTopBar = showTopBar,
             historyReadOnly = historyReadOnly, historyFooter = historyFooter, historySession = historySession,

@@ -222,6 +222,7 @@ struct UserBubble: View, Equatable {
     nonisolated static func == (a: Self, b: Self) -> Bool { a.item == b.item && a.external == b.external }
     @Environment(\.openFile) private var openFile
     @Environment(\.loadImage) private var loadImage
+    @Environment(\.chatPin) private var pin
 
     var body: some View {
         #if DEBUG || PERF_SIGNPOST
@@ -242,8 +243,11 @@ struct UserBubble: View, Equatable {
             if !shown.isEmpty || !quotes.isEmpty {
                 HStack {
                     Spacer(minLength: 48)
-                    UserBubbleBody(quotes: quotes, text: d.words, paths: d.pathRefs, comments: d.comments, lead: d.lead)
-                        .messageLongPress(id: item.id) { UserBubbleBody(quotes: quotes, text: d.words, paths: d.pathRefs, comments: d.comments, lead: d.lead) }
+                    let fold = BubbleFoldKey(id: item.id)
+                    UserBubbleBody(quotes: quotes, text: d.words, paths: d.pathRefs, comments: d.comments, lead: d.lead, fold: fold)
+                        .messageLongPress(id: item.id, opens: { fold.openOnPress(scope: memoScope, pin: pin) }) {
+                            UserBubbleBody(quotes: quotes, text: d.words, paths: d.pathRefs, comments: d.comments, lead: d.lead)
+                        }
                 }
             }
             if let openFile { FileChips(paths: d.chips, open: openFile) }
@@ -368,6 +372,8 @@ struct PendingBubble: View {
     var discard: () -> Void
     @Environment(\.viewImages) private var viewImages
     @Environment(\.chatImages) private var chatImages
+    @Environment(\.rowMemoScope) private var memoScope
+    @Environment(\.chatPin) private var pin
 
     var body: some View {
         let parsed = ContextRef.parse(msg.text)
@@ -423,9 +429,11 @@ struct PendingBubble: View {
                     .accessibilityAction(named: Text("Delete"), discard)
                 }
                 let split = MessageComments.inBubble(shown)
-                UserBubbleBody(quotes: ContextRef.quotes(parsed.refs) ?? [], text: split?.rest ?? shown, comments: split?.comments ?? [], lead: split?.quote)
+                let fold = BubbleFoldKey(id: "pending-" + msg.id.uuidString) // folded as a sent bubble is (#5676)
+                UserBubbleBody(quotes: ContextRef.quotes(parsed.refs) ?? [], text: split?.rest ?? shown, comments: split?.comments ?? [], lead: split?.quote,
+                               fold: fold)
                     .opacity(msg.state == .failed || msg.state == .waiting ? 0.6 : 1)
-                    .messageLongPress(id: msg.id.uuidString) {
+                    .messageLongPress(id: msg.id.uuidString, opens: { fold.openOnPress(scope: memoScope, pin: pin) }) {
                         UserBubbleBody(quotes: ContextRef.quotes(parsed.refs) ?? [], text: split?.rest ?? shown, comments: split?.comments ?? [], lead: split?.quote)
                     }
             }
@@ -757,7 +765,7 @@ struct ThinkingRow: View {
             isWorking: false,
             doneTitle: open ? String(localized: "Thinking [Message Views a62acb]") : ToolPresentation.firstLine(text),
             rows: [BeautifulUI.ThinkingRow(id: item.id, text)],
-            isExpanded: Binding(get: { open }, set: { v in toggleInPlace(pin, pinKey, animation: Theme.Motion.standard) { open = v } }),
+            isExpanded: Binding(get: { open }, set: { v in toggleInPlace(pin, pinKey, animation: Theme.Motion.standard, closing: !v) { open = v } }),
             maxWidth: .infinity
         )
         .chatPinned(pinKey) // the trace's header is its top
@@ -797,7 +805,7 @@ struct CompactDivider: View {
         VStack(spacing: Theme.Space.s) {
             Button {
                 let opening = !open
-                toggleInPlace(pin, "compact-" + item.id, animation: Theme.Motion.state) { open.toggle() }
+                toggleInPlace(pin, "compact-" + item.id, animation: Theme.Motion.state, closing: open) { open.toggle() }
                 // The divider as the last row: the notes open under it, past the composer on a short screen.
                 guard opening, let pin else { return }
                 Task { @MainActor in
@@ -862,7 +870,7 @@ struct NoticeRow: View {
 
     private var long: some View {
         Button {
-            toggleInPlace(pin, "notice-" + item.id, animation: Theme.Motion.state) {
+            toggleInPlace(pin, "notice-" + item.id, animation: Theme.Motion.state, closing: expanded) {
                 if let openTools { openTools.set("notice-" + item.id, !expanded) } else { expandedHere.toggle() }
             }
         } label: {

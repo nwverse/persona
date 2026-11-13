@@ -213,6 +213,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.InboxSignals != nil {
 			v.InboxSignals = in.InboxSignals
 		}
+		if in.NextSuggestions != nil {
+			v.NextSuggestions = in.NextSuggestions
+		}
 		if in.MainSupervisesOwnTasks != nil {
 			v.MainSupervisesOwnTasks = in.MainSupervisesOwnTasks
 		}
@@ -225,6 +228,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.settingsChanged(ctx)
+	if in.Main != "" && in.Main != "-" && in.Main != before.Main {
+		s.handOverMainTasks(context.WithoutCancel(ctx), before.Main, in.Main) // its open tasks follow the main conversation (main_handover.go)
+	}
 	apierr.WriteJSON(w, s.view(ctx, false))
 }
 

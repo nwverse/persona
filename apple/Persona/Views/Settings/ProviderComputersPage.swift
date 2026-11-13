@@ -6,6 +6,7 @@ import SwiftUI
 /// computers. The form is `ProviderScopeForm`; the editor that opened it holds it and sends it.
 struct ProviderComputersPage: View {
     @Environment(AppModel.self) private var model
+    private let requestScope = AssistantSettingsRequestScope(AppModel.shared)
     @Binding var scope: ProviderScopeForm
     /// The stored provider (its `key_machines`, `legacy_scope`); nil for a new one.
     var old: LauncherView?
@@ -30,7 +31,7 @@ struct ProviderComputersPage: View {
         #endif
     }
 
-    private var machines: [Machine] { model.hubMachines }
+    private var machines: [Machine] { requestScope.machines(model) }
     private func machine(_ id: String) -> Machine? { machines.first { $0.id == id } }
     private func name(_ id: String) -> String { machine(id)?.name ?? id }
     private var stored: [String] { old?.keyMachines ?? [] }
@@ -196,9 +197,12 @@ struct ProviderComputersPage: View {
         let typed = !(scope.keys[id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
             Text(name(id)).font(Theme.Font.labelStrong).foregroundStyle(.secondary).lineLimit(1)
-            SecretField(has && !removed ? String(localized: "Type a key to replace it") : String(localized: "Uses the provider's key"),
-                        text: Binding(get: { scope.keys[id] ?? "" }, set: { scope.keys[id] = $0 }),
-                        identifier: "computers.key.\(id)")
+            ProviderKeyField(title: has && !removed ? String(localized: "Type a key to replace it") : String(localized: "Uses the provider's key"),
+                             filled: String(localized: "Filled in"),
+                             text: Binding(get: { scope.keys[id] ?? "" }, set: { scope.keys[id] = $0 }),
+                             byReference: Binding(get: { scope.keyRefs[id] ?? false }, set: { scope.keyRefs[id] = $0 }),
+                             references: model.hubFeatures.contains("launcher_secret_references"),
+                             stored: old?.machineKeyReferences?[id], identifier: "computers.key.\(id)")
             if has, !typed {
                 HStack(spacing: Theme.Space.s) {
                     if removed {
@@ -228,6 +232,7 @@ struct ProviderComputersPage: View {
 /// The Computers row the editors show: what the scope comes to in a few words, its page behind it.
 struct ProviderComputersRow: View {
     @Environment(AppModel.self) private var model
+    private let requestScope = AssistantSettingsRequestScope(AppModel.shared)
     @Binding var scope: ProviderScopeForm
     var old: LauncherView?
     var kind: String
@@ -240,7 +245,7 @@ struct ProviderComputersRow: View {
         } label: {
             LabeledContent(String(localized: "Computers")) {
                 Text(scope.rowSummary(legacy: old?.legacyScope == true && scope == ProviderScopeForm(view: old),
-                                      name: { id in model.hubMachines.first { $0.id == id }?.name ?? id }))
+                                      name: { id in requestScope.machines(model).first { $0.id == id }?.name ?? id }))
                 .foregroundStyle(scope.problem == nil ? Color.secondary : Theme.danger)
             }
             .lineLimit(1)

@@ -98,7 +98,8 @@ func TestDirectionTreeGroupsTasksBySupervisor(t *testing.T) {
 	if want := sortedIDs(mainTask, none, empty, ended, unknown); !slices.Equal(sortedIDs(taskIDs(sec)...), want) {
 		t.Fatalf("secretary's tasks: %v, want %v", taskIDs(sec), want)
 	}
-	if sec.Counts != (treeCounts{Working: 5}) || got[0].Counts != (treeCounts{Working: 1}) {
+	// No agent has worked on any of them: not started.
+	if sec.Counts != (treeCounts{Planned: 5}) || got[0].Counts != (treeCounts{Planned: 1}) {
 		t.Fatalf("counts: %+v %+v", got[0].Counts, sec.Counts)
 	}
 }
@@ -199,7 +200,7 @@ func TestDirectionTreeLeavesOutWhatIsNotOpen(t *testing.T) {
 	e.task("Shelved", func(t *Todo) {
 		t.Supervision, t.Origin, t.CreatedAt, t.UpdatedAt = &Supervision{Supervisor: "conv_lead_a"}, treeMain, long, long
 	})
-	if a := e.tree().Directions[0]; !slices.Equal(taskIDs(a), []string{open}) || a.Counts != (treeCounts{Working: 1}) {
+	if a := e.tree().Directions[0]; !slices.Equal(taskIDs(a), []string{open}) || a.Counts != (treeCounts{Planned: 1}) {
 		t.Fatalf("A: %+v", a)
 	}
 }
@@ -332,7 +333,7 @@ func TestDirectionTreeRouteShape(t *testing.T) {
 		string(got.Directions[2]["secretary"]) != "true" || string(got.Directions[2]["name"]) != `""` {
 		t.Fatalf("the secretary's fields: %v %s", k, got.Directions[2]["secretary"])
 	}
-	if c := string(got.Directions[0]["counts"]); c != `{"working":1,"needs_you":0,"stuck":0,"review":0}` {
+	if c := string(got.Directions[0]["counts"]); c != `{"working":1,"needs_you":0,"stuck":0,"review":0,"planned":0}` {
 		t.Fatalf("counts: %s", c)
 	}
 	if ts := string(got.Directions[1]["tasks"]); ts != "[]" {
@@ -463,8 +464,8 @@ func TestDirectionTreeCountsAddUpToTheOpenCount(t *testing.T) {
 	sum := 0
 	for _, d := range e.tree().Directions {
 		c := d.Counts
-		sum += c.Working + c.NeedsYou + c.Stuck + c.Review
-		if n := c.Working + c.NeedsYou + c.Stuck + c.Review; n != len(d.Tasks) {
+		sum += c.Working + c.NeedsYou + c.Stuck + c.Review + c.Planned
+		if n := c.Working + c.NeedsYou + c.Stuck + c.Review + c.Planned; n != len(d.Tasks) {
 			t.Fatalf("%s: counts %+v for %d tasks", d.ID, c, len(d.Tasks))
 		}
 	}

@@ -264,9 +264,10 @@ final class MessageLiftUITests: XCTestCase {
 
     /// A line of words as `LiftLines` writes it: its glyphs, its first glyph's left edge, its baseline, its last glyph's
     /// right edge, and (the text view's) its last word's.
-    /// closes: the text view's line ends in a CJK closing bracket, which TextKit 1 draws narrower than SwiftUI there.
+    /// closes: the text view's line ends in a CJK closing bracket, which TextKit 1 draws narrower than SwiftUI there;
+    /// opens: it starts with a CJK opening bracket, which TextKit 1 draws narrower there too (the line is moved right).
     private struct Line: CustomStringConvertible {
-        var glyphs: Int, minX: Double, baseline: Double, maxX: Double, wordsMaxX: Double, closes = false
+        var glyphs: Int, minX: Double, baseline: Double, maxX: Double, wordsMaxX: Double, closes = false, opens = false
         var description: String { "\(glyphs)@(\(minX), \(baseline))…\(maxX)" + (wordsMaxX < maxX - 0.05 ? " (words …\(wordsMaxX))" : "") }
     }
 
@@ -276,7 +277,9 @@ final class MessageLiftUITests: XCTestCase {
     private static func parse(_ s: Substring) -> [Line] {
         s.split(separator: ";").compactMap { l in
             let v = l.split(separator: ",").compactMap { Double($0) }
-            return v.count >= 5 ? Line(glyphs: Int(v[0]), minX: v[1], baseline: v[2], maxX: v[3], wordsMaxX: v[4], closes: v.count > 5 && v[5] == 1) : nil
+            let brackets = v.count > 5 ? Int(v[5]) : 0
+            return v.count >= 5 ? Line(glyphs: Int(v[0]), minX: v[1], baseline: v[2], maxX: v[3], wordsMaxX: v[4],
+                                       closes: brackets & 1 != 0, opens: brackets & 2 != 0) : nil
         }
     }
 
@@ -307,7 +310,9 @@ final class MessageLiftUITests: XCTestCase {
     /// sameEngine: the lines hold the same glyphs. Else `b` is the text view's: its count may add a line's end, its line
     /// ends where the chat's does with or without the space there, and both end at its right edge (`edge`: a code line
     /// longer than its box runs on under the box's edge). A line that ends in a CJK closing bracket may end up to a fifth
-    /// of an em (17 pt) short: TextKit 1 draws that bracket narrower there (docs/lessons/ios.md).
+    /// of an em (17 pt) short: TextKit 1 draws that bracket narrower there (docs/lessons/ios.md). One that starts with a
+    /// CJK opening bracket may start up to as much in: TextKit 1 draws that bracket narrower there too, and the line is
+    /// moved right by what it lost, for the words after it to be on the chat's (#5982).
     private static func difference(_ a: [Line], _ b: [Line], dy: Double = 0, sameEngine: Bool = true, edge: Double = 0) -> String? {
         guard !a.isEmpty else { return "no lines" }
         guard a.count == b.count else { return "\(a.count) lines, then \(b.count):\n\(a)\n\(b)" }
@@ -315,7 +320,9 @@ final class MessageLiftUITests: XCTestCase {
             let end = sameEngine || edge <= 0 ? x.maxX : min(x.maxX, edge)
             var right = sameEngine ? abs(end - y.maxX) : min(abs(end - y.maxX), abs(end - y.wordsMaxX))
             if !sameEngine, y.closes, end - y.maxX > 0, end - y.maxX <= 3.4 { right = 0 }
-            let off = [abs(x.minX - y.minX), abs(x.baseline + dy - y.baseline), right].max()!
+            var left = abs(x.minX - y.minX)
+            if !sameEngine, y.opens, y.minX - x.minX > 0, y.minX - x.minX <= 3.4 { left = 0 }
+            let off = [left, abs(x.baseline + dy - y.baseline), right].max()!
             let count = sameEngine ? x.glyphs == y.glyphs : abs(x.glyphs - y.glyphs) <= 1
             if off > 0.5 || !count { return "line \(i + 1): \(x) then \(y) (moved by \(dy))\nall: \(a)\nthen: \(b)" }
         }
@@ -325,12 +332,15 @@ final class MessageLiftUITests: XCTestCase {
     /// Lifts the message with `words` and selects all of its words in place: in each state its lines are where the
     /// chat drew them. Lifted, a message with no room for its bar beside it moves (all of it, upright, `moves`); the
     /// text view over the selected words lays them out as the chat did (`selectMatches`), within half a point.
+    /// unfold: the message is a long one of yours, folded in the chat (#5676; a long press would open it rather than lift
+    /// it): opened with Show More first, then pressed open, as these checks are about the words of an open message.
     @MainActor private func checkTheWordsStay(_ words: String, _ name: String, moves: Bool = false, selectMatches: Bool = true,
-                                             close: Bool = false, reveal: Bool = false) {
+                                             close: Bool = false, reveal: Bool = false, unfold: Bool = false) {
         guard text(words).waitForExistence(timeout: 20) else { return XCTFail("\(name): missing \(words)") }
         // Closed again even when a step fails, so the next check finds the chat as it was.
         defer { if close, self.lifted.exists { closeTheLift(name) } }
         sleep(2)
+        if unfold { openYourFoldedMessage(name) }
         if reveal { self.reveal(words) }
         shot(name + "-normal")
         guard liftAt(words) else { return XCTFail("\(name): did not lift") }
@@ -353,6 +363,19 @@ final class MessageLiftUITests: XCTestCase {
         }
         print("LIFT-LINES \(name) select=\(selected.select)")
         shot(name + "-selected")
+    }
+
+    /// Show More on your folded long message (#5676), if it is folded (open is kept from an earlier run). Its frame may
+    /// come flipped in the upside-down chat list (as `liftAt` finds): tapped where it shows.
+    @MainActor private func openYourFoldedMessage(_ name: String) {
+        let more = app.buttons["bubble.expand"].firstMatch
+        guard more.exists else { return }
+        let window = app.windows.firstMatch.frame
+        var f = more.frame
+        if !window.insetBy(dx: 0, dy: window.height * 0.12).contains(CGPoint(x: f.midX, y: f.midY)) { f.origin.y = window.height - f.maxY }
+        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: f.minX + 24, dy: f.midY)).tap()
+        XCTAssertTrue(app.buttons["bubble.collapse"].firstMatch.waitForExistence(timeout: 5), "\(name): Show More did not open it")
+        sleep(1)
     }
 
     /// Two taps beside the lifted message: the first ends the selecting, the second puts it back.
@@ -380,7 +403,7 @@ final class MessageLiftUITests: XCTestCase {
             checkTheWordsStay("可以，就这么改", "mine-short")
             app = XCUIApplication()
             launchWithLines(mix)
-            checkTheWordsStay("定时检查", "mine-long", moves: true)
+            checkTheWordsStay("定时检查", "mine-long", moves: true, unfold: true)
         }
     }
 
@@ -415,7 +438,7 @@ final class MessageLiftUITests: XCTestCase {
             checkTheWordsStay("要我先带你看哪一块", "persona-answer", moves: true)
             app = XCUIApplication()
             launchWithLines(mix, style: "clay")
-            checkTheWordsStay("定时检查", "clay-mine", moves: true)
+            checkTheWordsStay("定时检查", "clay-mine", moves: true, unfold: true)
             app = XCUIApplication()
             launchWithLines(mix, style: "clay")
             checkTheWordsStay("下一次核对在整点之后五分钟", "clay-answer", moves: true)
@@ -496,9 +519,9 @@ final class MessageLiftUITests: XCTestCase {
             && s.contains(Self.splitMiddle) && s.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix(Self.splitLast)
     }
 
-    /// Long-presses the split answer's middle part: the whole answer is lifted (its first and last sentences are in
-    /// the lifted copy, the pressed line shows), opening at the pressed part; it scrolls inside to its first line; Copy
-    /// copies all of it, as written.
+    /// Long-presses the split answer's middle part: the whole answer is lifted, the pressed line where it was; it
+    /// scrolls inside to the answer's first line (its first part, laid out as it comes into view); Copy copies all of
+    /// it, as written.
     @MainActor func testALongPressOnAPartOfALongAnswerLiftsAndCopiesAllOfIt() throws {
         inEachScheme {
             launch(split, ["-openDraftsFresh", "YES", "-openChatsFresh", "YES"])
@@ -510,22 +533,20 @@ final class MessageLiftUITests: XCTestCase {
             XCTAssertTrue(lifted.waitForExistence(timeout: 3), "no lifted copy")
             let pressed = lifted.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", Self.splitMiddle)).firstMatch
             XCTAssertTrue(shows(pressed), "the pressed line shows in the lifted copy:\n\(lifted.debugDescription)")
-            for words in [Self.splitFirst, Self.splitLast] {
-                XCTAssertTrue(lifted.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", words)).firstMatch.exists,
-                              "the lifted copy is the whole answer, with \(words):\n\(lifted.debugDescription)")
-            }
             let bar = app.buttons["复制"].firstMatch.frame
             XCTAssertTrue(app.frame.contains(bar), "the bar is on screen")
             shot("split-lifted")
             let heading = lifted.staticTexts[Self.splitHeading].firstMatch
+            // Down across the card, wherever its bar is (under it, or above it when the pressed part starts on screen).
             for _ in 0..<10 where !shows(heading) {
-                let origin = app.coordinate(withNormalizedOffset: .zero)
-                let top = max(lifted.frame.minY, app.frame.height * 0.2)
-                origin.withOffset(CGVector(dx: app.frame.midX, dy: top + 30))
-                    .press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: app.frame.midX, dy: bar.minY - 30)))
+                let origin = app.coordinate(withNormalizedOffset: .zero), card = lifted.frame
+                origin.withOffset(CGVector(dx: app.frame.midX, dy: card.minY + 40))
+                    .press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: app.frame.midX, dy: card.maxY - 40)))
                 sleep(1)
             }
             XCTAssertTrue(shows(heading), "the lifted answer scrolls to its first line:\n\(lifted.debugDescription)")
+            XCTAssertTrue(lifted.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", Self.splitFirst)).firstMatch.exists,
+                          "the answer's first sentence is in the lifted copy")
             XCTAssertEqual(app.buttons["复制"].firstMatch.frame, bar, "the bar stays where it is")
             shot("split-top")
             app.buttons["复制"].firstMatch.tap()
@@ -558,6 +579,38 @@ final class MessageLiftUITests: XCTestCase {
         XCTAssertTrue(isTheWholeSplitAnswer(copied, markdown: false), "拷贝 copied all of the answer: \(copied.prefix(80))…\(copied.suffix(40))")
     }
 
+    /// A second long press on the lifted split answer, at the start of the pressed paragraph: its words are selected
+    /// there (all of its parts laid out first, what showed kept where it was), with the edit menu over them; Copy copies
+    /// a word of that line (with the copy a few lines off, it was another line's), and the text view's paragraph is
+    /// where the chat's was.
+    @MainActor func testASecondLongPressOnALongAnswerSelectsWhereItIs() throws {
+        launch(split, ["-openDraftsFresh", "YES", "-openChatsFresh", "YES"])
+        XCTAssertTrue(text(Self.splitLast).waitForExistence(timeout: 20), "missing the split answer")
+        sleep(2)
+        bringToTheMiddle(Self.splitMiddle)
+        liftAt(Self.splitMiddle)
+        let line = lifted.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", Self.splitMiddle)).firstMatch
+        XCTAssertTrue(shows(line), "the pressed line shows in the lifted copy")
+        let before = line.frame
+        // On its first words, 「第 4 节的说明」.
+        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: before.minX + 12, dy: before.minY + 12)).press(forDuration: 0.8)
+        let words = app.textViews["lift-text"]
+        XCTAssertTrue(words.waitForExistence(timeout: 5), "a second long press did not select in place")
+        let copy = menuItem("拷贝")
+        XCTAssertTrue(copy.waitForExistence(timeout: 3), "no edit menu:\n\(app.debugDescription)")
+        XCTAssertTrue(isTheWholeSplitAnswer(words.value as? String ?? "", markdown: false), "the text view holds the whole answer")
+        sleep(1)
+        shot("split-second-press")
+        let laid = words.textViews.matching(NSPredicate(format: "label BEGINSWITH %@", Self.splitMiddle)).firstMatch
+        XCTAssertTrue(laid.exists, "no paragraph with the pressed line:\n\(words.debugDescription)")
+        XCTAssertLessThanOrEqual(abs(laid.frame.minY - before.minY), 6, "the words stayed where they were (\(before.minY) → \(laid.frame.minY))")
+        copy.tap()
+        XCTAssertTrue(words.waitForNonExistence(timeout: 3), "拷贝 did not put the answer back")
+        let copied = pasted().trimmingCharacters(in: .whitespacesAndNewlines)
+        XCTAssertFalse(copied.isEmpty, "nothing was selected")
+        XCTAssertTrue(Self.splitMiddle.contains(copied), "the word selected is the pressed one, in 「\(Self.splitMiddle)」: \(copied)")
+    }
+
     /// A short answer, as before: lifted where it is, all of it; Copy copies it.
     @MainActor func testALongPressOnAShortAnswerLiftsAndCopiesIt() throws {
         inEachScheme {
@@ -575,5 +628,81 @@ final class MessageLiftUITests: XCTestCase {
             XCTAssertTrue(lifted.waitForNonExistence(timeout: 3), "复制 did not put the answer back")
             XCTAssertEqual(pasted(), "收到，都提交了。")
         }
+    }
+
+    // MARK: What lifting a very long answer costs (#5221)
+
+    /// GET on a mock's own route, its JSON (`PerfTestCase.mock`).
+    private func get(_ url: String) -> [String: Any] {
+        guard let u = URL(string: url), let data = try? Data(contentsOf: u),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
+        return obj
+    }
+
+    private func darwinPost(_ name: String) {
+        CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFNotificationName(name as CFString),
+                                             nil, nil, true)
+    }
+
+    /// The app's own frames (`FrameStats`, `-showFrameProbe YES`) while `block` runs, through the mock at `hub`.
+    @MainActor private func frames(_ hub: String, _ name: String, _ block: () -> Void) -> [String: Any] {
+        _ = get(hub + "/mock/frames_label?name=" + name)
+        darwinPost("com.persona.perf.frames.start")
+        block()
+        sleep(1)
+        darwinPost("com.persona.perf.frames.stop")
+        sleep(1)
+        let runs = (get(hub + "/mock/frames?name=" + name)["runs"] as? [[String: Any]]) ?? []
+        return runs.last ?? [:]
+    }
+
+    /// The 33,000-character report of `MOCK_LONG_REPORT=1` (a mock at PERSONA_LIFT_REPORT_HUB), long-pressed near its
+    /// end, then Select Text: the app's frames during each (`-showFrameProbe`), printed as `lift-frames:` lines with
+    /// the longest frame and the main thread's blocks of 100 ms or more. Measures; asserts only that each happened.
+    @MainActor func testTheLongReportLiftAndSelectTextFrames() throws {
+        guard let reportHub = ProcessInfo.processInfo.environment["PERSONA_LIFT_REPORT_HUB"] else {
+            throw XCTSkip("needs a mock with MOCK_LONG_REPORT=1 (PERSONA_LIFT_REPORT_HUB)")
+        }
+        let pair = "persona://pair?url=" + reportHub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
+        app.launchArguments = ["-pairURL", pair, "-tab", "dev", "-openSession", "macbook/a1f3c2d4-0000-4000-8000-000000000090",
+                               "-ui.scheme", scheme, "-openChatsFresh", "YES", "-openDraftsFresh", "YES", "-showFrameProbe", "YES"]
+        app.launchPinned()
+        acceptIconAlert(timeout: 3)
+        let near = "12.3 细节 3"
+        XCTAssertTrue(text("核对过了").waitForExistence(timeout: 30), "the chat did not open")
+        sleep(3)
+        bringToTheMiddle(near)
+        sleep(2)
+        func line(_ what: String, _ r: [String: Any]) {
+            let blocks = r["main_thread_blocks"] as? [String: Any]
+            print(String(format: "lift-frames: %@ max_ms=%.0f hitches=%@ busy_max_ms=%.0f blocks_over_100ms=%@ blocks_max_ms=%.0f",
+                         what, (r["max_ms"] as? NSNumber)?.doubleValue ?? -1, "\(r["hitches"] ?? "?")",
+                         (r["busy_max_ms"] as? NSNumber)?.doubleValue ?? -1, "\(blocks?["count"] ?? "?")",
+                         (blocks?["max_ms"] as? NSNumber)?.doubleValue ?? -1))
+            let a = XCTAttachment(string: "\(r)")
+            a.name = "frames-\(what)"
+            a.lifetime = .keepAlways
+            add(a)
+        }
+        // Nothing is asked of the app's accessibility while frames are recorded: a snapshot of it is a test's own cost
+        // (the text view's table pictures were made PNGs for it, seconds on the main thread).
+        let f = text(near).frame
+        let at = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: f.midX, dy: f.midY))
+        let lift = frames(reportHub, "report-lift") {
+            at.press(forDuration: 0.8)
+            sleep(2)
+        }
+        line("lift", lift)
+        XCTAssertTrue(app.buttons["选择文本"].firstMatch.waitForExistence(timeout: 10), "no bar")
+        shot("report-lifted")
+        let selectText = app.buttons["选择文本"].firstMatch.frame
+        let select = frames(reportHub, "report-select") {
+            app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: selectText.midX, dy: selectText.midY)).tap()
+            sleep(5)
+        }
+        line("select", select)
+        XCTAssertTrue(app.textViews["lift-text"].waitForExistence(timeout: 20), "选择文本 did not select in place")
+        shot("report-selected")
+        XCTAssertFalse(lift.isEmpty || select.isEmpty, "the app sent no frames")
     }
 }

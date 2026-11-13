@@ -13,7 +13,9 @@ import { onModelPicker, sessionLauncher } from "../../lib/model-switch";
 import { effortTitle } from "../../lib/session-actions";
 import { dropPick, launcherOffered, usePickedEffort, usePickedLauncher, usePickedModel } from "../../lib/assistant-chat";
 import { ASSISTANT_MODEL_PICK_FEATURE, assistantPickKey, assistantPillView, assistantSetup, type AssistantChat } from "../../lib/assistant-models";
-import { assistantLaunchers, modelList, pendingView, pillView, readAssistantLaunchers, readForPanel, readModels, sessionSwitches, useModelLists, type PillSetup } from "../../lib/session-models";
+import {
+  assistantLaunchers, ENGINE_SWITCH_FEATURE, engineSwitchable, modelList, pendingView, pillView, readAssistantLaunchers, readForPanel, readModels, sessionSwitches, useModelLists, type PillSetup,
+} from "../../lib/session-models";
 import { hubHas, useStore } from "../../lib/store";
 import { CODEX_ULTRA, ultracodeOn } from "../../lib/ultracode";
 import type { Session } from "../../lib/types";
@@ -49,7 +51,7 @@ export function ModelPill({
 }: {
   current: PillSetup;
   /** A switch accepted for the next message (#5035): a clock first, the launcher it moves to named (the engine, when
-   *  that changes) and drawn, the tooltip both setups. */
+   *  that changes, #5054: Cindy's "clock · agent · model") and drawn, the tooltip both setups. */
   pending?: PillSetup | null;
   /** The model list is read for the first time. */
   loading?: boolean;
@@ -154,13 +156,15 @@ export function ModelPill({
 }
 
 /** An Agent's pill: what the session runs, and its panel. Loads the session's own model list once, for the name its list
- *  gives the model and to say when that list can't be read. */
+ *  gives the model and to say when that list can't be read. It opens where the model or the effort can change, or the
+ *  engine (a Codex Agent in a terminal on a hub that moves it to Claude Code, #5054). */
 export const AgentModelPill = memo(function AgentModelPill({ session }: { session: Session }) {
   useModelLists();
   const mid = session.machine_id;
   const own = sessionLauncher(session);
   const switches = sessionSwitches(session);
-  const opens = switches.model || switches.effort;
+  const engineSwitch = useStore((s) => hubHas(s.features, ENGINE_SWITCH_FEATURE)) && engineSwitchable(session);
+  const opens = switches.model || switches.effort || engineSwitch;
   useEffect(() => {
     if (opens) void readModels(mid, own, { first: true });
   }, [opens, mid, own]);

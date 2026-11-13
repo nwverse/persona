@@ -2,6 +2,7 @@ import MarkdownUI
 import PersonaKit
 import SwiftUI
 #if os(iOS) || os(visionOS)
+import CoreText
 import UIKit
 import UIKit.UIGestureRecognizerSubclass
 #endif
@@ -277,14 +278,14 @@ final class LiftUITextView: UITextView, UITextViewDelegate, UIEditMenuInteractio
     var quote: ((String) -> Void)?
     var ended: () -> Void = {}
     var copied: () -> Void = {}
-    /// A finger on the words (in the window), the selection when it went down, and which end of it the finger drags:
-    /// one that changes the selection is a handle's (or a press's, word by word), held at an edge it scrolls on (`edgeTick`).
+    /// A finger on the words (in the window), where it went down, the selection then, and which end of it the finger
+    /// drags: the handle it went down on, or the end a change of the selection moved (a press's, word by word); held at
+    /// an edge it scrolls on (`edgeTick`).
     private var finger: CGPoint?
+    private var down: CGPoint?
     private var touched: NSRange?
-    private var draggedEnd: DraggedEnd?
+    private var draggedEnd: LiftLayout.End?
     private var edgeLink: CADisplayLink?
-
-    private enum DraggedEnd { case start, end }
 
     init() {
         let container = NSTextContainer(size: CGSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
@@ -369,7 +370,7 @@ final class LiftUITextView: UITextView, UITextViewDelegate, UIEditMenuInteractio
             let s = text.substring(with: chars)
             guard s.contains(where: { !$0.isWhitespace }) else { return }
             starts.append(range.location)
-            shifts[range.location] = self.wrappedStart(rect, range, chars.location, text)
+            shifts[range.location] = self.wrappedStart(rect, range, chars.location, text) ?? self.narrowedBracket(range, chars.location, text)
             let block = self.storage.attribute(.replyBlock, at: chars.location, effectiveRange: nil) as? ReplyBlock
             let id = block.map { ObjectIdentifier($0).hashValue }
             // A code block's first line, under its title bar: on the chat's next line, wherever the bar put it.
@@ -397,6 +398,21 @@ final class LiftUITextView: UITextView, UITextViewDelegate, UIEditMenuInteractio
         let size = (storage.attribute(.font, at: first, effectiveRange: nil) as? UIFont)?.pointSize ?? 0
         let past = rect.minX + layout.location(forGlyphAt: glyphs.location).x - indent
         return past > 0.5 && past <= size * 0.6 ? -past : nil
+    }
+
+    /// How far right a line that starts with a CJK opening bracket goes to put its words after the bracket where the
+    /// chat's are; nil: it starts with none, or it is not narrower. Laid out in Chinese, TextKit 1 draws that bracket
+    /// narrower than the chat does (6.1 pt of its 8.6 at 17 pt), the rest of the line that much to the left: a selection
+    /// there was off the words, and its end handle short of the last one (#5982). Moved, the bracket starts that much in,
+    /// the rest of the line is on the chat's.
+    private func narrowedBracket(_ glyphs: NSRange, _ first: Int, _ text: NSString) -> CGFloat? {
+        guard glyphs.length > 1, first < text.length, let c = UnicodeScalar(text.character(at: first)), LiftLayout.opensCJK(c),
+              layout.characterIndexForGlyph(at: glyphs.location) == first,
+              let font = storage.attribute(.font, at: first, effectiveRange: nil) as? UIFont else { return nil }
+        var glyph = layout.cgGlyph(at: glyphs.location), advance = CGSize.zero
+        CTFontGetAdvancesForGlyphs(font as CTFont, .horizontal, &glyph, &advance, 1)
+        let lost = advance.width - (layout.location(forGlyphAt: glyphs.location + 1).x - layout.location(forGlyphAt: glyphs.location).x)
+        return lost > 0.5 && lost < font.pointSize * 0.6 ? lost : nil
     }
 
     /// Its paragraphs that wrap as words, a list item's past its marker: not a code block's lines (which do not
@@ -431,6 +447,41 @@ final class LiftUITextView: UITextView, UITextViewDelegate, UIEditMenuInteractio
         #if DEBUG
         if LiftLines.on { LiftLines.shared.select = LiftLines.lines(of: self, layout: layout) }
         #endif
+    }
+
+    /// The place between two characters nearest a point, on the lines as they show (`LineSnap`): in the last line that
+    /// starts at or above it (the first, above them all), the nearest place, its end before its line break. A folded
+    /// quote's hidden lines are not where they lie. The system's lookup missed the moved lines: a second long press
+    /// picked a word above the one pressed, a handle dragged onto the line under a table ended before the table (#6099).
+    /// A moved line can start inside the one before it (a table picture's, taller here than the chat's table), where the
+    /// layout manager's lookup takes the earlier line too.
+    override func closestPosition(to point: CGPoint) -> UITextPosition? {
+        guard storage.length > 0, let container = layout.textContainers.first else { return super.closestPosition(to: point) }
+        let p = CGPoint(x: point.x - textContainerInset.left, y: point.y - textContainerInset.top)
+        // Not the first line holding the point: the lines are in order, but one can start above the end of the one before.
+        var line: (rect: CGRect, used: CGRect, glyphs: NSRange)?
+        layout.enumerateLineFragments(forGlyphRange: layout.glyphRange(for: container)) { rect, used, _, glyphs, _ in
+            guard !self.snapper.hidden.contains(glyphs.location), line == nil || rect.minY <= p.y else { return }
+            line = (rect, used, glyphs)
+        }
+        guard let line else { return super.closestPosition(to: point) }
+        let text = storage.string as NSString
+        let chars = layout.characterRange(forGlyphRange: line.glyphs, actualGlyphRange: nil)
+        var end = NSMaxRange(chars)
+        if end > chars.location, UnicodeScalar(text.character(at: end - 1)).map(CharacterSet.newlines.contains) == true { end -= 1 }
+        var best = chars.location, distance = CGFloat.infinity, at = chars.location
+        while at <= end {
+            let x = at < end ? line.rect.minX + layout.location(forGlyphAt: layout.glyphIndexForCharacter(at: at)).x : line.used.maxX
+            if abs(x - p.x) < distance { (best, distance) = (at, abs(x - p.x)) }
+            at = at < end ? min(NSMaxRange(text.rangeOfComposedCharacterSequence(at: at)), end) : end + 1
+        }
+        return position(from: beginningOfDocument, offset: best)
+    }
+
+    override func closestPosition(to point: CGPoint, within range: UITextRange) -> UITextPosition? {
+        guard let at = closestPosition(to: point) else { return nil }
+        if compare(at, to: range.start) == .orderedAscending { return range.start }
+        return compare(at, to: range.end) == .orderedDescending ? range.end : at
     }
 
     /// The selection's highlight, the same on every line: a line it covers to its end reaches across the whole width,
@@ -545,9 +596,15 @@ final class LiftUITextView: UITextView, UITextViewDelegate, UIEditMenuInteractio
     // here, and the dragged end of the selection follows the words under the finger as they move.
 
     private func follow(_ at: CGPoint?) {
-        if finger == nil { touched = selectedRange }
+        if finger == nil {
+            touched = selectedRange
+            down = at
+            // Since iOS 27 a dragged handle moves the selection only when the finger lifts (#5982): no change tells it.
+            draggedEnd = at.flatMap(handle(at:))
+        }
         finger = at
         if at == nil {
+            down = nil
             touched = nil
             draggedEnd = nil
         }
@@ -569,9 +626,19 @@ final class LiftUITextView: UITextView, UITextViewDelegate, UIEditMenuInteractio
         return s
     }
 
-    /// Points a second the message scrolls on, for a handle held where the finger is (`LiftLayout.edgeScroll`).
+    /// The end of the selection whose handle is at a point in the window (`LiftLayout.handle`).
+    private func handle(at point: CGPoint) -> LiftLayout.End? {
+        guard selectedRange.length > 0, let range = selectedTextRange else { return nil }
+        let rects = selectionRects(for: range)
+        return LiftLayout.handle(at: convert(point, from: nil), start: rects.first(where: \.containsStart)?.rect,
+                                 end: rects.last(where: \.containsEnd)?.rect, reach: Theme.Size.tapTarget)
+    }
+
+    /// Points a second the message scrolls on, for a handle held where the finger is (`LiftLayout.edgeScroll`), once it
+    /// has moved from where it went down.
     private func edgeSpeed() -> CGFloat {
         guard draggedEnd != nil, let finger, let s = scroller else { return 0 }
+        if let down, !LiftLayout.moved(finger, from: down) { return 0 }
         return LiftLayout.edgeScroll(at: s.convert(finger, from: nil).y - s.bounds.minY, height: s.bounds.height,
                                      band: Theme.Lift.edgeScroll, speed: Theme.Lift.edgeScrollSpeed)
     }
@@ -655,7 +722,8 @@ extension LiftLines {
             let x1 = min(v.convert(CGPoint(x: inset.left + right(last), y: 0), to: nil).x, edge)
             let w1 = word >= 0 ? min(v.convert(CGPoint(x: inset.left + right(word), y: 0), to: nil).x, edge) : x1
             let end = text.attributedSubstring(from: NSRange(location: layout.characterIndexForGlyph(at: last), length: 1)).string.unicodeScalars.first
-            out.append((n, p.x, p.y, x1, w1, end.map(Self.closesCJK) ?? false))
+            let start = text.attributedSubstring(from: NSRange(location: layout.characterIndexForGlyph(at: first), length: 1)).string.unicodeScalars.first
+            out.append((n, p.x, p.y, x1, w1, end.map(Self.closesCJK) ?? false, start.map(LiftLayout.opensCJK) ?? false))
         }
         return encode(out)
     }

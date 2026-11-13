@@ -325,10 +325,10 @@ describe("New agent's model panel (#5104)", () => {
 
   it("leaves the permission mode and the folder alone when a model is picked", async () => {
     await open();
-    act(() => radio("只做计划").click());
+    act(() => radio("计划模式").click());
     type(folder(), "/code/other");
     await pick("model:claude\nsonnet");
-    expect(radio("只做计划").getAttribute("aria-checked")).toBe("true");
+    expect(radio("计划模式").getAttribute("aria-checked")).toBe("true");
     expect(folder().value).toBe("/code/other");
     start();
     expect(launched[0]).toMatchObject({ cwd: "/code/other", permissionMode: "plan", launcher: "claude", model: "sonnet" });

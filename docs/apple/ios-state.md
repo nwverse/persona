@@ -350,6 +350,23 @@ rather than asking SwiftUI's `ScrollPosition`:
    forgets the position before it moves the list for the same reason. 0.3 s after landing the list is looked at once more:
    if anything took it from the newest end while the chat follows, it goes there again (logged as `chat-jump`).
 
+### Every other jump (#5076)
+
+The chat's other animated jumps to its newest end run the same way on iPhone and iPad (`ChatJumpRun`), not through
+SwiftUI's animated `ScrollPosition`, which drew every text on screen again on every frame (in a long Chinese answer,
+most of each frame: docs/lessons/ios.md「Animated jumps redraw every text they pass」):
+
+- To the newest end, animated (`scrollToEnd(animated: true)`): a message sent while reading the history, following
+  catching up more than a screen away, a held row let go. As ↓: the position is forgotten first, the jump runs, the
+  geometry is read once there and looked at again 0.3 s later.
+- To a line (the edge navigator's line, a quote's message, a call): SwiftUI's animated `scrollTo(id:anchor: .center)`
+  as before. Run on the list, a far one cost a longer frame than SwiftUI's own worst there, and one partly on screen
+  moved where SwiftUI's did not (docs/lessons/ios.md「Animated jumps redraw every text they pass」).
+- Offsets stay on whole pixels on the way; the last frame is the exact target. Reduce Motion: there at once.
+- `-showSwiftUIJumps YES` (DEBUG) keeps SwiftUI's animated scroll for these too, to measure against in one build
+  (`-showJumpPerf`, `-showAutoScroll`'s sweep, which runs on the list by default; docs/operations/testing.md「Long Agent
+  answer (#4970)」). The Mac keeps SwiftUI's (frozen).
+
 ↓ acts the moment the finger lands, a glide or not: a UIKit view laid over the button takes the touch
 (`JumpArrowTouch`; a tap on the SwiftUI `Button` during a glide did nothing on phones,
 docs/lessons/ios.md「Jump to Latest during a glide: take the touch in UIKit, on touch-down」).
@@ -374,7 +391,7 @@ and each write recomputes the whole page). `atBottom`, `followsEnd`, `scratch.la
 | `land()` / `landed()` | Land at saved position or start of latest answer | `landing`, decide by `near` at finish; if user takes over mid-way, release position wins |
 | `hold()` / `endHold()` | Expand / collapse work row (`changeWork`), ends after `ChatPin.holdTime` (1.5 s) | `holding`, then **restore previous state** |
 | `hold(anchored: true)` | Expand work row while following | `holding`, uncapped: heading stays put (at latest, moves below top bar, #1173), running turn keeps growing; user release decides by position, ↓ / send resumes following, collapse resumes following and scrolls to latest |
-| `toggledRow()` | A row opened or closed in place (`toggleInPlace`: a tool call, a thought, a card) or a run of tool chips, while following or about to (#3005) | `holding`, anchored on the tapped row (`ChatPin.anchor`, a kept hold): new steps, the turn's answer and the next turn come in under it without moving it; ↓ / send / the user's own scroll end it. While reading: nothing |
+| `toggledRow(closing:atNewest:)` | A row opened or closed in place (`toggleInPlace`: a tool call, a thought, a card), while following or about to (#3005, #3757) | `.kept`: `holding`, anchored on the tapped row (`ChatPin.toggled`, a kept hold): new steps, the turn's answer and the next turn come in under it without moving it; ↓ / send / the user's own scroll end it. `.rising`, opened at the newest end while following: anchored too, the row first rising to just under the top bar (`ChatPin.hold(rise:)`) as what opened and what comes in next grow up from the newest end, which stays on screen. `.moment`, closed at the newest end while following: still following, the list back at the newest end; or while reading: nothing |
 
 Derived: following `follows = mode == .following && !touching`; withholding `holdsBack = mode == .reading || touching || draggedAway`; ↓ `arrow = !near && (mode != .following || draggedAway)`,
 plus `settled` after entering the chat. `frozen` snapshots are taken and cleared with `holdsBack`.
@@ -400,11 +417,23 @@ Why it works this way:
   back by how far that edge moved on screen (`ChatPin.resized`), a glide under way with it; not for the keyboard, above which the newest stays
   as before. Folded at the newest end, the list glides to the newest end with the offset set every display frame (`ChatPin.glide`), not UIKit's
   animated scroll, which ran from wherever SwiftUI had put the offset in the same pass.
-  A work line folded where the chat would follow stays anchored on its header too; going back to the newest end 1.5 s later moved the list
-  by itself. Only a fold the list cannot keep the header for (at the newest end, what is left under it shorter than the screen) glides there
+  A work line folded in the middle where the chat would follow stays anchored on its header too; going back to the newest end 1.5 s later moved
+  the list by itself. Only a fold the list cannot keep the header for (at the newest end, what is left under it shorter than the screen) glides there
   and follows again (`ChatPin.landed`, #1173). While a hold is kept, any move of the offset but the user's finger or a glide is put back in the
   same pass (`ChatPin.keepHeld`, KVO on `contentOffset`): as a step came in under an open row, the list was now and then set back after the pin
   had moved it, the row 56 pt up while SwiftUI still reported it in place.
+- **At the newest end, what opens grows upward** (`.rising`, the user's rule, #3757; docs/design/DESIGN_SYSTEM.md 4.7.1): kept still there, a row opened at the
+  newest end pushed the newest end off below the composer, and the chat seemed to stop following. Now it rises with what opened, as a work line opened there
+  always has (#1173), and with what comes in after, until it is under the top bar; only then does the newest end leave the screen and ↓ show. A run of tool
+  chips does the same, and a work line follows the same rule closed (`changeWork`). Closed at the newest end while following, a row leaves the chat following: the pin glides the list back to the newest end.
+- **At the oldest end the list goes past its old length at once** (`ChatPin.known`, #3757): the scroll view's content size follows the rows a pass
+  late, and the pin bounded where the list may go by the held header's far edge only. At the oldest end that kept the list a frame or two short of
+  where the header needed it, which showed the header 116–150 pt up as a work line opened there and again as its steps came in. The bound is now the
+  header's far edge plus whatever lay beyond it when the hold began: what opens or closes lies between the header and the newest end.
+- **The hold waits for what comes from the hub** (`ChatPin.awaiting`, #3757): a work line the hub folded fetches its steps when opened, and on a phone's network
+  they arrived a second after the tap, after the pin had stopped watching the content (0.72 s) and nearly at the end of its hold. Inserted under the header in one
+  pass, they pushed it past the top of the screen, out of the lazy list; nothing put it back and the list fell onto a later message. `FoldedWorkRow`'s fetch
+  (`openFold`) now runs inside the hold, which lasts until the steps are in and then watches the content again from where the header is held.
 - **Withhold while the finger is down (including inertia after release), then decide by position** (`holdsBack` includes `touching`): in an inverted list, growth at latest pushes content under the finger upward,
   causing 23 pt and 39 pt movement during a light drag while streaming. Release within tolerance resumes following, so a short look upward doesn't stop the stream, bringing held content in together. Leaving tolerance separately records `draggedAway` to control ↓.
 
