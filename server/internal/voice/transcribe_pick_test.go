@@ -52,6 +52,11 @@ func TestMedoid(t *testing.T) {
 	if got := medoid(texts, []int{1, 3}, nil); got != 1 {
 		t.Errorf("of two without an anchor %d", got)
 	}
+	// Of two that agree, the longer: the other missed what it has more.
+	longer := []string{"abcdefghij", "abcdefghijkl"}
+	if a, b := medoid(longer, []int{0, 1}, nil), medoid(longer, []int{1, 0}, nil); a != 1 || b != 1 {
+		t.Errorf("of two the longer: %d %d", a, b)
+	}
 }
 
 func TestPickLive(t *testing.T) {
@@ -91,6 +96,11 @@ func TestPickReplay(t *testing.T) {
 		"The backend merge API now returns the conflicting paragraphs, so the client can show them to the user."
 	caption := "Board cap 这词还是保持在 4 兆吗？"
 	other := "Let's keep the landing page on the web, so it does not need another app review."
+	// A session that heard a window's 14 s of speech (45 letters and digits), one that missed its end (its first 40,
+	// 0.11 from it), and a reference of its first 20: the partial session is near it (0.50), the complete one not
+	// (0.56).
+	complete := "Alice owns the rollout plan and the release notes 2026"
+	partial, short := "Alice owns the rollout plan and the release note", "Alice owns the rollout p"
 	for _, tt := range []struct {
 		name    string
 		ref     *string
@@ -118,6 +128,9 @@ func TestPickReplay(t *testing.T) {
 		{"two rogues far from it and each other", &ref, []string{rogue, voicetest.InventedReplies[2]}, []bool{false, false}, 3, -1, true, trRefChecked},
 		{"a rogue that writes much does not make it short", &ref, []string{rogue + " " + rogue, said}, []bool{false, false}, 3, 1, false, trRefChecked},
 		{"sessions that wrote nothing do not outvote it", &ref, []string{"", ""}, []bool{false, false}, 3, -1, true, trRefChecked},
+		// A too-short reference keeps out no session: the one near it is no better than the one that heard more.
+		{"a short reference, the partial session near it", &short, []string{complete, partial}, []bool{false, false}, 14, 0, false, trRefShort},
+		{"a short reference, the partial session first", &short, []string{partial, complete}, []bool{false, false}, 14, 1, false, trRefShort},
 	} {
 		pick, kept, use := pickReplay(tt.ref, tt.texts, tt.stopped, tt.speech)
 		if pick != tt.pick || kept != tt.kept || use != tt.use {
