@@ -77,7 +77,14 @@ const entries = () => [...host.querySelectorAll<HTMLButtonElement>("[data-assist
 const entry = (key: string) => host.querySelector<HTMLButtonElement>(`[data-assistant-actionbar] [data-tray-entry="${key}"]`)!;
 
 /** Opens the Needs you rows the tray folds to a line (#5569); a row with its key opens that one. */
-const openRows = (key?: string) => act(async () => host.querySelectorAll<HTMLButtonElement>(`button[data-needs-row${key ? `="${key}"` : ""}][aria-expanded="false"]`).forEach((b) => b.click()));
+const openRows = async (ready: string, key?: string) => {
+  await act(async () => host.querySelectorAll<HTMLButtonElement>(`button[data-needs-row${key ? `="${key}"` : ""}][aria-expanded="false"]`).forEach((b) => b.click()));
+  // Module preloading does not wait for React.lazy/Suspense to commit the expanded row.
+  await vi.waitFor(async () => {
+    await act(async () => {});
+    expect(host.querySelector(ready), "expanded row content").not.toBeNull();
+  });
+};
 
 const label = { needs: t("assistant-tasks.tray_needs_you"), running: t("assistant-tasks.tray_running") };
 // where a click went as a page (set to Full page, #5096); the side panel, the default, says so itself (getPanel)
@@ -263,7 +270,7 @@ describe("Assistant Needs you / In progress trays", () => {
     todo = { ...todo, ask: firstRound, supervision: { ...todo.supervision!, state: "needs_user" } };
     await act(async () => putTodo(todo));
     await act(async () => { entry("needs").click(); await import("./TaskDecision"); });
-    await openRows();
+    await openRows('[data-brief-row="accept"]');
     expect(host.querySelectorAll('[data-brief-row="accept"]')).toHaveLength(1);
     expect(host.textContent).not.toContain(t("assistant-tasks.review_needs_user"));
     const first = [...host.querySelectorAll("button")].find((button) => button.textContent?.trim() === t("assistant-brief.take"))!;
@@ -273,7 +280,7 @@ describe("Assistant Needs you / In progress trays", () => {
       todo = { ...todo, ask: { ...firstRound, asked_at: nextRound } };
       putTodo(todo);
     });
-    await openRows(); // the next round asks folded again
+    await openRows('[data-brief-row="accept"]'); // the next round asks folded again
     const second = [...host.querySelectorAll("button")].find((button) => button.textContent?.trim() === t("assistant-brief.take"))!;
     expect(second).not.toBe(first);
     await act(async () => second.click());
@@ -287,7 +294,7 @@ describe("Assistant Needs you / In progress trays", () => {
     todo = { ...todo, ask, supervision: { ...todo.supervision!, state: "needs_user" } };
     await act(async () => putTodo(todo));
     await act(async () => { entry("needs").click(); await import("./TaskDecision"); });
-    await openRows();
+    await openRows('[data-brief-row="accept"]');
     expect(host.textContent!.split(todo.title).length - 1, "an opened row names its task once").toBe(1);
     const row = host.querySelector('[data-brief-row="accept"]')!;
     expect([...row.querySelectorAll("button")].map((b) => b.textContent?.trim())).toEqual([t("assistant-brief.open"), t("assistant-brief.finish"), t("assistant-tasks.later"), t("assistant-tasks.dismiss_draft"), t("assistant-brief.take")]);
@@ -321,7 +328,7 @@ describe("Assistant Needs you / In progress trays", () => {
       await import("./TaskDecision");
     });
     expect(host.querySelector('[data-testid="message-card"]')).toBeNull(); // folded until opened
-    await openRows();
+    await openRows('[data-testid="message-card"]');
     expect(host.querySelector('[data-testid="message-card"]')).not.toBeNull();
     expect(host.textContent).toContain(t("assistant-tasks.review_needs_user"));
     const draftCard = host.querySelector('[data-testid="message-card"]')!;
