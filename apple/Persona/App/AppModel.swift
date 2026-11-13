@@ -174,6 +174,8 @@ final class AppModel {
     #endif
     /// Cards being answered, and whether the hub ended them meanwhile: a failed answer puts back only the ones it did not.
     @ObservationIgnored private var answering = AnsweringInteractions()
+    /// What question cards show while their answers are on the way, or after one failed (#6279).
+    private(set) var answerAttempts = AnswerAttempts()
     /// The machine whose engine the pairing asks for (a newly paired group's hub machine).
     var pairingEngineMachine: MachineRef?
     /// Just paired (#4195): the checklist page comes up once the hub says what the main conversation still needs
@@ -2227,6 +2229,7 @@ final class AppModel {
             let uid = group.isEmpty ? id : group + "|" + id
             endedInteractionIDs.insert(uid)
             answering.hubEnded(uid)
+            if answerAttempts.progress(uid) != .sending { answerAttempts.finish(uid) }
             if let assistant, let ix = interactions[uid] { keepDelegated(ix, assistant) }
             interactions[uid] = nil
             summariesChanged()
@@ -2340,6 +2343,21 @@ final class AppModel {
     /// This device's answer to the card is on its way (the card is hidden meanwhile).
     func isAnswering(_ uid: String) -> Bool { answering.contains(uid) }
 
+    /// The card's answer is on its way or failed (a question card stays in place meanwhile, #6279).
+    func answerProgress(_ uid: String) -> AnswerAttempts.Progress? { answerAttempts.progress(uid) }
+
+    /// Why the card's answer failed, while it shows the error and Retry.
+    func answerFailure(_ uid: String) -> String? {
+        if case .failed(let message)? = answerAttempts.progress(uid) { return message }
+        return nil
+    }
+
+    /// Sends a failed question's answer again, with the op id it had.
+    func retryAnswer(_ ix: Interaction) async {
+        guard let r = answerAttempts.retryable(ix.uid) else { return }
+        await resolve(ix, r)
+    }
+
     /// `handoffCard`: the hand-off card's own buttons answer; an approval of one from anywhere else is refused here, as
     /// the hub would refuse it (`SecretHandoff`).
     func resolve(_ ix: Interaction, _ r: Resolution, handoffCard: Bool = false) async {
@@ -2352,14 +2370,25 @@ final class AppModel {
         }
         // No network: the card stays as it is (taking it away and bringing it back a moment later read as "done").
         guard connection.networkUp else { notDone(); return }
-        interactions[ix.uid] = nil
-        endedInteractionIDs.insert(ix.uid)
+        // A question's card stays where it is, greyed and marked "Sending…", until the hub has the answer: its picks and
+        // text stay for a retry (#6279). Every other card goes at once and comes back if its answer fails.
+        let keepsCard = ix.kind == .question
+        guard let op = answerAttempts.begin(ix.uid, r) else { return } // its answer is on the way: a second tap sends nothing
+        if !keepsCard {
+            interactions[ix.uid] = nil
+            endedInteractionIDs.insert(ix.uid)
+        }
         answering.begin(ix.uid)
         defer { answering.finish(ix.uid) }
         // One op id for this answer: a retry through a hub restart (the request died with the old process, a proxy
-        // answered 502) goes with it again, and the hub presses the keys once. The card stays away meanwhile, for up
-        // to a minute (OpRetry.limit), then comes back with the error.
-        let op = UUID()
+        // answered 502) goes with it again, and the hub presses the keys once. The card waits meanwhile, for up to a
+        // minute (OpRetry.limit), then shows the error (a question's) or comes back with it.
+        func over() {
+            answerAttempts.finish(ix.uid)
+            guard keepsCard else { return }
+            interactions[ix.uid] = nil
+            endedInteractionIDs.insert(ix.uid)
+        }
         do {
             let res = try await OpRetry.untilDelivered { try await api.resolve(ix.id, r, opID: op, handoffCard: handoff) }
             if res.already == true, let existing = res.resolution, existing.answeredBy == AssistantAnswer.assistant, ix.kind == .question {
@@ -2371,19 +2400,29 @@ final class AppModel {
                 let text = (lines.first?.answer.isEmpty == false) ? String(localized: "Already answered: \(lines.first!.answer)") : String(localized: "Already answered")
                 toast = Toast(text, style: .success)
             }
+            over()
             Haptics.success()
         } catch let e as APIError where e.code == "prompt_changed" {
             // Nothing pressed: the terminal's dialog changed. The hub has ended a screen card and sends one for what is
             // there now; a Codex card it keeps open goes back.
+            answerAttempts.finish(ix.uid)
             putBack(ix)
             Haptics.attention()
             toast = Toast(String(localized: "The dialog in the terminal changed, so no keys were pressed. Check the new one and answer again."), style: .error)
         } catch let e as APIError where e.status == 410 {
             let reason = Answered.endedText(e.fields["status"])
+            over()
             toast = Toast(reason, style: .error)
         } catch {
-            putBack(ix)
-            show(error)
+            if keepsCard, answering.putsBack(ix.uid), interactions[ix.uid] != nil, !error.isOffline, !error.isQuiet {
+                // The card shows the error and Retry itself.
+                answerAttempts.fail(ix.uid, error.localizedDescription)
+                Haptics.error()
+            } else {
+                answerAttempts.finish(ix.uid)
+                putBack(ix)
+                show(error)
+            }
         }
     }
 
@@ -3000,10 +3039,12 @@ final class AppModel {
         guard let api = api(key.group), rewinding.insert(key).inserted else { return false }
         defer { rewinding.remove(key) }
         toast = Toast(String(localized: "Rewinding…"))
+        // A session whose node declares rewind (#6294): its own lines, and no Claude input box to have kept the message.
+        let offer = Rewind.offer(session(key))
         do {
             var full: String?
-            if let cut = Rewind.cutItem(items, id: itemID) { full = try await api.fullItem(key, id: cut).text }
-            guard let target = Rewind.target(items, id: itemID, full: full) else {
+            if let cut = Rewind.cutItem(items, id: itemID, anyLine: offer.declared) { full = try await api.fullItem(key, id: cut).text }
+            guard let target = Rewind.target(items, id: itemID, full: full, anyLine: offer.declared) else {
                 toast = Toast(String(localized: "This message has no text, so you can't rewind to it"), style: .error)
                 return false
             }
@@ -3012,6 +3053,8 @@ final class AppModel {
             let result = (try? JSON.decoder.decode(Rewind.Result.self, from: data)) ?? Rewind.Result()
             if result.inputCleared == true {
                 drafts[key] = text
+                toast = Toast(Rewind.done(result, asked: restore), style: .success)
+            } else if offer.declared {
                 toast = Toast(Rewind.done(result, asked: restore), style: .success)
             } else {
                 let done = Rewind.done(result, asked: restore)
@@ -3029,7 +3072,7 @@ final class AppModel {
 
     @discardableResult
     func close(_ key: SessionKey) async -> Bool {
-        guard let session = latest(key), session.canTerminal else {
+        guard let session = latest(key), session.canClose else {
             toast = Toast(String(localized: "This agent can't be stopped and closed from the phone"), style: .error)
             return false
         }
@@ -3050,7 +3093,9 @@ final class AppModel {
             }
             if let list = sessionsByMachine[key.machineRef] { sessionsByMachine[key.machineRef] = ended(list) }
             if let list = pendingSessions[key.machineRef] { pendingSessions[key.machineRef] = ended(list) }
-            toast = Toast(String(localized: "Agent stopped and closed. The chat history was kept."), style: .success)
+            // A session without a terminal (a runtime's, #6294): whether its history stays is its runtime's, so not promised.
+            toast = Toast(session.canTerminal ? String(localized: "Agent stopped and closed. The chat history was kept.")
+                                              : String(localized: "Agent stopped and closed"), style: .success)
             Haptics.success()
             return true
         } catch {
@@ -3680,9 +3725,10 @@ final class AppModel {
         await refresh()
     }
 
-    /// Renames an agent's herdr tab and / or its Claude session name (nil leaves that one alone).
+    /// Renames an agent's herdr tab and / or its Claude session name (nil leaves that one alone); a session without a
+    /// terminal, its name where its runtime keeps it (`Session.canRename`, #6294).
     func renameSession(_ k: SessionKey, tab: String?, title: String?) async {
-        guard session(k)?.canTerminal == true, let api = api(k.group) else { return }
+        guard session(k)?.canRename == true, let api = api(k.group) else { return }
         let tab = tab?.trimmingCharacters(in: .whitespacesAndNewlines), title = title?.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
             try await api.renameSession(k, tabName: tab?.isEmpty == false ? tab : nil, title: title?.isEmpty == false ? title : nil)

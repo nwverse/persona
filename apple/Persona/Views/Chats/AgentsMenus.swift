@@ -189,6 +189,10 @@ struct AgentRowMenu: View, Equatable {
     nonisolated let looping: Bool
     nonisolated let live: Bool
     nonisolated var terminal = true
+    /// Rename… and Close Agent… are offered (`Session.canRename`, `canClose`): a terminal's, or where the node says so
+    /// for a session without one (a runtime's, #6294).
+    nonisolated var renamable = true
+    nonisolated var closable = true
     nonisolated var attachable = false
     /// Delete Chat is offered (`Session.canDelete`).
     nonisolated var deletable = false
@@ -222,7 +226,8 @@ struct AgentRowMenu: View, Equatable {
 
     nonisolated static func == (a: Self, b: Self) -> Bool {
         a.key == b.key && a.pinned == b.pinned && a.muted == b.muted && a.looping == b.looping && a.live == b.live
-            && a.terminal == b.terminal && a.attachable == b.attachable && a.deletable == b.deletable
+            && a.terminal == b.terminal && a.renamable == b.renamable && a.closable == b.closable
+            && a.attachable == b.attachable && a.deletable == b.deletable
             && a.paneActions == b.paneActions && a.interruptible == b.interruptible && a.unread == b.unread && a.actions === b.actions
     }
 
@@ -248,7 +253,7 @@ struct AgentRowMenu: View, Equatable {
         if unread {
             Button { model.markSeen(key) } label: { Label("Mark as Seen", systemImage: Theme.Icon.view) }
         }
-        if terminal {
+        if renamable {
             Button { if let s = now() { actions.rename(s) } } label: {
                 Label(String(localized: "agent.rename", defaultValue: "Rename Agent…"), systemImage: Theme.Icon.edit)
             }
@@ -308,7 +313,7 @@ struct AgentRowMenu: View, Equatable {
         if paneActions {
             Section { AgentNodeMenuItems(now: now) }
         }
-        if live && terminal {
+        if live && closable {
             Button(role: .destructive) { if let s = now() { actions.close(s) } } label: { Label("Close Agent…", systemImage: Theme.Icon.end) }
         }
         if deletable {
@@ -324,7 +329,8 @@ extension AgentRowMenu {
     /// the rows' swipes gone there (#1244), Interrupt and Mark as Seen are here too.
     @MainActor init(_ s: Session, model: AppModel, actions: Actions) {
         self.init(key: s.key, pinned: model.isPinned(s.key), muted: model.isMuted(s), looping: s.loop != nil, live: s.state.isLive,
-                  terminal: s.canTerminal, attachable: s.canAttach, deletable: s.canDelete, paneActions: NodeMenu.offersPaneActions(s),
+                  terminal: s.canTerminal, renamable: s.canRename, closable: s.canClose, attachable: s.canAttach, deletable: s.canDelete,
+                  paneActions: NodeMenu.offersPaneActions(s),
                   interruptible: (s.state == .working || s.state == .needsYou) && s.canInterrupt, unread: s.state == .unread,
                   actions: actions)
     }

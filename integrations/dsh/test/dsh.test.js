@@ -621,6 +621,33 @@ test('advertises DSH configured models as launchers in hello and launchers.model
   assert.ok(res.models.some((m) => m.id === 'deepseek-chat'))
 })
 
+test('reads models from the session controller modelCatalog when nothing else provides them (#6451)', async (t) => {
+  const { n, ctl, rt } = await setup(t)
+  assert.equal(ctl.listModels, undefined)
+  assert.equal(ctl.models, undefined)
+  ctl.modelCatalog = async () => ({
+    groups: [
+      { id: 'deepseek', name: 'DeepSeek', models: [{ id: 'deepseek-chat', name: 'DeepSeek V3' }, { id: 'deepseek-reasoner', name: 'DeepSeek R1' }] },
+      { id: 'anthropic', name: 'Anthropic', models: [{ id: 'claude-opus-5-5', name: 'Claude Opus 5.5' }] },
+    ],
+  })
+  rt.start()
+  await n.ready
+  const res = await n.peer.call('launchers.models', {})
+  assert.deepEqual(res.models.map((m) => m.id).sort(), ['claude-opus-5-5', 'deepseek-chat', 'deepseek-reasoner'])
+  const names = (await n.peer.call('launchers.models', {})).models.map((m) => m.name)
+  assert.ok(names.includes('DeepSeek V3'))
+})
+
+test('keeps reading models from controller.listModels when modelCatalog is absent (#6451)', async (t) => {
+  const { n, ctl, rt } = await setup(t)
+  ctl.listModels = async () => [{ provider: 'deepseek', name: 'DeepSeek', models: [{ id: 'deepseek-chat', name: 'DeepSeek V3' }] }]
+  rt.start()
+  await n.ready
+  const res = await n.peer.call('launchers.models', {})
+  assert.deepEqual(res.models.map((m) => m.id), ['deepseek-chat'])
+})
+
 test('selects model before sending the first prompt when model is specified (#5572)', async (t) => {
   const dshModels = [
     {

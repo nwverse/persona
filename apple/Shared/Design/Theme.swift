@@ -289,6 +289,9 @@ nonisolated enum Theme {
         /// message on that way, faster the closer it gets: up to `edgeScrollSpeed` points a second (#3188).
         static let edgeScroll: CGFloat = 44
         static let edgeScrollSpeed: CGFloat = 900
+        /// How far a selection handle's knob reaches past the selected lines (over the first, under the last): the text
+        /// view over a lifted message's words reaches that far past them, so a knob there is in it, to be dragged (#5291).
+        static let handleReach: CGFloat = 16
     }
     #endif
 

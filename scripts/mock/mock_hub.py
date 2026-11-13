@@ -34,18 +34,25 @@ FAULT_LOCK = threading.Lock()
 LOST_RECEIPT = False
 
 
+# MOCK_SESSIONS_CATALOG=1 (with MOCK_SESSIONS_LIST=1, docs/protocol/protocol.md "Projects and spaces"): the paged list
+# answers catalog=1, place= and space=, and a Windows PC joins the computers with the weather repository checked out there too
+# and a notes folder that is no repository, like the server's.
+CATALOG = os.environ.get("MOCK_SESSIONS_CATALOG") == "1" and os.environ.get("MOCK_SESSIONS_LIST") == "1"
+
+
 def features():
     # Match proto.Features, retaining the existing terminal fixture switches.
     return ["error_codes", "client_hello", "heartbeat", "app_ping", "client_msg_id", "send_refusals",
             "screen_dialog", "resumable_interactions", "secret_prompts", "request_id", "file_upload",
-            "tls", "endpoints", "connectors", "lark_attachments", "file_stream", "file_thumb", "git_blob", "task_push",
+            "tls", "endpoints", "connectors", "lark_attachments", "file_stream", "file_thumb", "git_blob", "task_push", "task_inbox",
             "machine_rename"] + ([] if os.environ.get("MOCK_MANAGERS") == "0" else ["sessions_manager"]) + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") else []) + (["git_review"] if os.environ.get("MOCK_REVIEW") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
                 ["terminal_control", "terminal_scroll", "terminal_click", "terminal_mouse"] if TERMINAL_CONTROL else []) + (
-                ["terminal_panes"] if os.environ.get("MOCK_TERMINAL_PANES") else []) + (["herdr_client"] + ([] if os.environ.get("MOCK_TERMINAL_FULL_NOFOCUS") else ["herdr_focus"]) if TERMINAL_FULL else []) + (
+                ["terminal_panes", "pane_new_space"] if os.environ.get("MOCK_TERMINAL_PANES") else []) + (["herdr_client"] + ([] if os.environ.get("MOCK_TERMINAL_FULL_NOFOCUS") else ["herdr_focus"]) if TERMINAL_FULL else []) + (
                 ["assistant_compact", "assistant_main_new", "assistant_main_clear"] if os.environ.get("MOCK_MAIN_ACTIONS") == "1" else []) + (
                 ["messaging"] if os.environ.get("MOCK_MESSAGING") == "1" else []) + (
                 ["conversation_origin"] if os.environ.get("MOCK_AUTO_CONVERSATIONS") == "1" else []) + (
                 ["sessions_list", "sessions_lookup", "sessions_hierarchy"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
+                ["sessions_catalog"] if CATALOG else []) + (
                 ["preview"] if os.environ.get("MOCK_PREVIEW") else []) + (
                 ["task_cron"] if os.environ.get("MOCK_CRON") == "1" else []) + (
                 [] if os.environ.get("MOCK_TODO_SEEN") == "off" else ["todo_seen"]) + (
@@ -425,6 +432,10 @@ SYSTEMS = {
             "kernel": "6.1.0-26-arm64", "arch": "arm64", "model": "Raspberry Pi 5 Model B Rev 1.0", "cpu": "", "cores": 4,
             "memory": 8 * GB},
 }
+MACHINE_CONCERN_LEVELS = {}
+if os.environ.get("MOCK_MACHINE_CONCERNS") == "1":
+    from machine_concerns import install_machines
+    MACHINE_CONCERN_LEVELS.update(install_machines(MACHINES, SYSTEMS))
 if not os.environ.get("MOCK_MACHINES"):  # that mode has its own offline machine (MachinePagesTests counts them)
     MACHINES.append({"id": "nas", "name": "NAS", "kind": "ssh", "icon": "server", "ssh_host": "nas", "online": False,
                      "error": "ssh: connect to host nas port 22: Operation timed out", "hostname": "nas", "os": "linux",
@@ -471,13 +482,22 @@ def metric_at(mid, t):
     if mid == "server" and t > T0 - 25 * 60:  # a build running since 25 minutes before the mock started
         cpu = 92 + 6 * h  # always over the 90 % "critical" line
     cpu = max(0.5, min(99.5, cpu))
+    concern_level = MACHINE_CONCERN_LEVELS.get(mid)
+    if concern_level == "critical":
+        cpu = 95.0
+    elif concern_level == "warning":
+        cpu = 80.0
     mem_frac = {"server": 0.62, "macbook": 0.55, "studio": 0.31, "nas": 0.42}[template] + 0.05 * day + 0.04 * wave
     if mid == "server" and t > T0 - 25 * 60:
         mem_frac = 0.88 + 0.02 * h
+    if concern_level == "critical":
+        mem_frac = 0.95
     rx = max(0.0, {"server": 2.4e6, "macbook": 4.5e5, "studio": 1.2e6, "nas": 3e5}[template] * (1 + 0.6 * wave + 0.5 * h))
     tx = rx * {"server": 0.35, "macbook": 0.2, "studio": 0.6, "nas": 1.4}[template] * (0.7 + 0.6 * h)
     load = sys_["cores"] * cpu / 100 * (0.9 + 0.3 * h)
     disk_frac = {"server": 0.64, "macbook": 0.71, "studio": 0.38, "nas": 0.93}[template]
+    if concern_level == "critical":
+        disk_frac = 0.95
     return {"cpu": round(cpu, 1), "load": round(load, 2), "mem": round(mem_frac * sys_["memory"]),
             "swap": round({"server": 0.0, "macbook": 1.2, "studio": 0.0, "nas": 0.4}[template] * GB),
             "rx": round(rx, 1), "tx": round(tx, 1), "disk": round(disk_frac * {"nas": 4000, "studio": 2000}.get(mid, 1000) * GB)}
@@ -998,6 +1018,9 @@ if MOCK_MACHINES:
                              "/Users/me/code/" + proj, status, state, proj, 4 + i % 4, "t%d" % (i // 4 + 1), i // 4 + 1,
                              i * 7, "第 %d 个 Agent 的最新一句话，长一点好看看会不会被截断或者挤到别的地方去。" % (i + 1),
                              pending=1 if state == "needs_you" else 0))
+if os.environ.get("MOCK_MACHINE_CONCERNS") == "1":
+    from machine_concerns import install_sessions
+    install_sessions(SESSIONS, sess)
 # MOCK_AGENTS=1: a long Agents list (AgentsListTests): ~120 agents, one big space with 35 finished-unread, a quiet
 # space, idle ones to fold. Sessions marked seen (WS "seen" or POST …/seen) turn idle; GET /mock/seen lists them.
 # MOCK_QUIET=1: a quiet space (two seen agents, nothing running) under "Idle spaces", for screenshots of its card
@@ -1118,7 +1141,10 @@ if os.environ.get("MOCK_PASEO"):
                    slot_index=None, pane_id=None, tab_id=None, workspace_id=None, host="paseo",
                    source_kind="runtime", source_instance_id="paseo", repo_root=_paseo_root, worktree=cwd, workspace_cwd=cwd,
                    branch=branch, launcher="claude" if agent == "claude" else "codex", started_by_persona=False,
-                   capabilities={"read": True, "send": True, "interrupt": True, "approve": True, "terminal": False, "attach": False})
+                   # Paseo declares rename and close: the node lists both, rename not on an agent another one started (#6294),
+                   # one that waits for the user included (listed without its parent meanwhile)
+                   capabilities={"read": True, "send": True, "interrupt": True, "approve": True, "terminal": False, "attach": False,
+                                 "close": True, "rename": not (kw.get("is_subagent") or kw.get("asking_parent_session_id"))})
         row.update(kw)
         return sess("server", sid, title, cwd, status, state, "", 0, "", 0, minutes, last, agent=agent, **row)
     SESSIONS += [
@@ -1466,6 +1492,31 @@ if os.environ.get("MOCK_SESSIONS_MANY"):
                              "/home/me/code/fixture", "idle", "idle", "fixture", 24, "fixture-%03d" % (_i + 1), _i + 1,
                              60 * (_i + 1), "Done."))
 
+# MOCK_SESSIONS_CATALOG=1: what each directory's computer says its repository is (the node's git.status identity_only);
+# a directory not here is no repository. The weather repository is on the MacBook and the Windows PC; notes is a plain
+# folder on the server and the PC, written in two cases.
+CATALOG_ORIGINS = {
+    ("macbook", "/Users/me/code/weather"): "git.example.com/demo/weather",
+    ("winpc", "C:\\Users\\me\\code\\Weather"): "git.example.com/demo/Weather",
+    ("server", "/home/me/code/shop-api"): "git.example.com/demo/shop-api",
+    ("studio", "/Users/me/code/blog"): "git.example.com/demo/blog",
+    ("studio", "/Users/me/code/photo-sync"): "git.example.com/demo/photo-sync",
+    ("macbook", "/Users/me/code/recipes"): "git.example.com/demo/recipes",
+}
+if CATALOG:
+    MACHINES.append({"id": "winpc", "name": "Windows PC", "kind": "link", "icon": "desktop", "online": True, "hostname": "PC",
+                     "os": "windows", "arch": "amd64", "home": "C:\\Users\\me", "claude_version": "2.1.320", "last_seen": ago()})
+    SESSIONS += [
+        sess("winpc", "c47a1090-0000-4000-8000-000000000001", "给天气 App 写 Windows 小组件", "C:\\Users\\me\\code\\Weather", "working", "working",
+             "weather", 1, "widget", 1, 3, "WinUI 的小组件宿主接好了，正在接每小时预报的数据。", repo_root="C:\\Users\\me\\code\\Weather"),
+        sess("winpc", "c47a1090-0000-4000-8000-000000000002", "修 Windows 上的时区换算", "C:\\Users\\me\\code\\Weather\\core", "idle", "idle",
+             "weather", 1, "timezone", 2, 95, "夏令时切换那天的小时数对上了，测试已补。", repo_root="C:\\Users\\me\\code\\Weather"),
+        sess("winpc", "c47a1090-0000-4000-8000-000000000003", "整理读书笔记的目录", "D:\\work\\Notes", "idle", "idle",
+             "notes", 2, "notes", 1, 60 * 5, "按年份分了三个文件夹，索引页也更新了。"),
+        sess("server", "c47a1090-0000-4000-8000-000000000004", "把周报草稿合成一份", "/home/me/notes", "idle", "unread",
+             "notes", 31, "weekly", 1, 40, "四份草稿合成了一份，重复的两段删掉了。"),
+    ]
+
 # MOCK_OPENCODE=1 (#3070, docs/integrations/opencode.md): opencode in herdr panes on the server. Four are herdr sessions the Persona
 # plugin completes (working, needs you with a permission card, finished unread, idle with a long conversation), one has
 # no plugin (terminal only, with why), and gemini is an agent nothing reads (terminal only).
@@ -1544,8 +1595,11 @@ if os.environ.get("MOCK_DESKTOP_APPS"):
         kw = dict(NO_SPACE, agent_surface=surface, started_by_persona=False)
         cwd = "/Users/me/" + project[1:] if project.startswith("~") else f"/Users/me/code/{project}" if project else "/Users/me"
         if surface == "desktop" and agent == "codex":
+            # Its effort changes from the phone through the App (#5575, node/codex_desktop_effort.go): its model's levels
+            # on the App's codex, and the effort its last turn ran with.
             kw.update(space_kind="codex_app", space_id=f"codex-project:{cwd}", space_name=cwd.rsplit("/", 1)[-1],
-                      agent_name="Codex App", source_kind="codex_history", capabilities={"read": True, "send": True})
+                      agent_name="Codex App", source_kind="codex_history", capabilities={"read": True, "send": True},
+                      efforts=["low", "medium", "high", "xhigh", "max", "ultra"], effort="max")
         elif surface == "desktop" and status != "offline":
             kw.update(source_kind="claude_desktop", capabilities=_desktop_caps)  # a live one, through its peer inbox
         SESSIONS.append(sess("macbook", sid, title, cwd, status, state, "", 0, "", 0, mins,
@@ -2020,7 +2074,7 @@ ROUTINE_FIELDS = ("title", "prompt", "time", "weekdays", "enabled")
 SCHEDULE = [
     {"id": "morning", "title": "早报", "prompt": "给我今天的早报，一屏以内，结论先行。", "repeat": "daily", "time": "09:00",
      "weekdays": WEEKDAYS, "enabled": True, "last_run": prev_at("09:00", WEEKDAYS, late=timedelta(minutes=3)),
-     "last_session_id": ASK2, "last_status": "ok",
+     "last_session_id": ASK2, "last_status": "ok", "inbox": "every",
      "run_machine_id": "server", "run_session_id": ASK2, "run_launcher": "claude",  # its own conversation ("Morning briefing · Wednesday")
      "next_run": next_at("09:00", WEEKDAYS)},
     {"id": "fu_patrol", "title": "Agent 巡检", "prompt": "看看各台电脑上的 Agent：哪些在等我、哪些卡住了，有要我处理的就列出来；都正常就回一句。",
@@ -2033,7 +2087,7 @@ SCHEDULE = [
     {"id": "rt_patrol", "title": "项目巡检", "prompt": "看看各台电脑上的 Agent 和昨晚的 CI，有卡住的就告诉我。", "repeat": "daily",
      "time": "22:00", "weekdays": [], "enabled": True, "created_by": "assistant", "last_run": prev_at("22:00", []),
      "last_session_id": ASK4, "last_status": "ok", "next_run": next_at("22:00", []),
-     "push": "asked"},  # "Notify after a run": only what a run sends (#2396, #2676); the apps mark it on the row
+     "push": "asked", "inbox": "worthy"},  # "Notify after a run": only what a run sends (#2396, #2676); the apps mark it on the row
     {"id": "evening", "title": "晚间回顾", "prompt": "今天的晚间回顾。", "repeat": "daily", "time": "21:30", "weekdays": WEEKDAYS,
      "enabled": False, "last_run": prev_at("21:30", WEEKDAYS, back=1, late=timedelta(minutes=45)), "last_status": "skipped",
      "last_error": "Persona 停机，错过了时间"},
@@ -2050,7 +2104,7 @@ SCHEDULE = [
      "prompt": "周五发周报前，把这周的数据再核对一遍，有对不上的列出来。", "enabled": True, "created_by": "assistant",
      "machine_id": "macbook", "created_at": ago(hours=5)},
 ]
-TASK_FIELDS = ("title", "prompt", "repeat", "at", "time", "weekdays", "every_minutes", "cron", "enabled", "launcher", "permission_mode", "effort", "push")
+TASK_FIELDS = ("title", "prompt", "repeat", "at", "time", "weekdays", "every_minutes", "cron", "enabled", "launcher", "permission_mode", "effort", "push", "inbox")
 
 # MOCK_CRON=1 (#4399, docs/assistant/assistant.md "Scheduled tasks"): the hub runs cron tasks (feature task_cron) and has
 # one, every 30 minutes in work hours on weekdays. GET /api/v1/assistant/tasks/cron answers the web editor's examples as
@@ -2124,6 +2178,7 @@ def save_task(old, new):
     # "Notify after a run" (#2396): left out of an edit it stays; "asked" runs in the task's own conversation; "" is the default.
     if t.get("push") == "asked": t.pop("session_id", None)
     if not t.get("push"): t.pop("push", None)
+    if not t.get("inbox"): t.pop("inbox", None)
     # End time: left out it stays, null clears it, and a one-off never has one (the hub's until).
     if t.get("repeat") == "once" or ("until" in new and not new.get("until")):
         t.pop("until", None)
@@ -2909,7 +2964,7 @@ RULE_SUGGESTIONS = {
     "rs_mock_delegate": {
         "id": "rs_mock_delegate", "kind": "delegate",
         # The hub's own words (server/internal/i18n/locales/en/assistant-rule_suggest.json "delegate"), Settings and all.
-        "text": "You took the recommendation 3 times. Let Persona answer agents' own-call questions for you? You can turn this on in Settings.",
+        "text": "You took the recommendation 3 times. Let Persona answer agents' own-call questions for you?",
         "scope": {}, "creates": "", "setting": "agents.delegate", "count": 3},
 } if os.environ.get("MOCK_RULE_SUGGESTIONS") == "1" else {}
 RULE_SUGGESTIONS_ANSWERED = set()  # answered with Always or Not now
@@ -9425,6 +9480,7 @@ def cell_width(ch):
 # workspaces, tabs and panes of the machines (agents of the mock sessions and plain shells, GET /api/v1/machines/{mid}/panes);
 # POST there opens a new shell tab. A terminal addressed "pane:<id>" is a made-up shell, not the Claude screen.
 # MOCK_PANES_DELAY=<seconds>: GET .../panes answers that late (the Terminals page's "hasn't answered yet" with Retry, #6153).
+# MOCK_PANES_NO_WORKSPACE=1: the engine runs and opens tabs but has no workspace yet, until a "New Terminal" opens one.
 PANES_NEW = {}  # machine id -> [(workspace id, pane)] opened by POST
 # The menu actions (close / split / rename / run an agent / git), recorded at GET /mock/node_actions and applied to the
 # layout above: a closed pane or tab is gone, a renamed tab has its new name, a split adds a shell, an agent run in a
@@ -9441,6 +9497,8 @@ def mock_panes(mid):
     sessions = [s for s in SESSIONS if s.get("machine_id") == mid and s.get("pane_id")][:2]
     if mid == "studio":
         return {"hosts": []}
+    if os.environ.get("MOCK_PANES_NO_WORKSPACE") and not PANES_NEW.get(mid):
+        return {"hosts": [{"kind": "herdr", "stream": True, "control": True, "new_tab": True, "workspaces": [], "tabs": [], "panes": []}]}
     ws = [{"id": "w1", "label": "persona", "number": 1, "cwd": "/home/me/persona", "branch": "main"},
           {"id": "w2", "label": "notes", "number": 2, "cwd": "/home/me/notes"}]
     tabs = [{"id": "w1:t1", "workspace_id": "w1", "label": "agent-1", "number": 1},
@@ -9912,6 +9970,7 @@ PREFS = {"input": True, "done": "long", "live_activity": True, "lock_details": F
          "quiet": {"enabled": True, "start": "23:00", "end": "07:00"} if os.environ.get("MOCK_QUIET_HOURS") else {"enabled": False, "start": "", "end": ""}}  # one device is enough
 PREFS_FAIL = [os.environ.get("MOCK_PREFS_FAIL") == "1"]  # Settings › Notifications can't read the prefs (503, #1860); GET /mock/prefs_fail?on=0|1
 RESOLVED = []  # resolve calls, newest last (GET /mock/resolved)
+RESOLVE_MODE = [os.environ.get("MOCK_RESOLVE", "ok")]  # how answers to cards go: ok | slow | fail (MOCK_RESOLVE, /mock/resolve-mode)
 DEVICES = []  # POST /api/v1/devices, newest last (GET /mock/devices): each one's id, kind and push `features` (#2433)
 # The last client_hello's features, platform and version, and the X-Persona-Client of the last GET /api/v1/interactions
 # (GET /mock/hello): the hub lists MCP elicitation cards in REST answers only when the two match (docs/protocol/protocol.md
@@ -10174,6 +10233,26 @@ if os.environ.get("MOCK_IMESSAGE_INBOX"):
          "context": "我（10-30 07:58）：在吗\n张三（10-30 07:59）：示例：周五下午三点见，地方你定",
          "connector": {"thread": "imessage-0a1b2c3d4e5f", "open_url": "sms:+15550100", "reply_to": "在「信息」里回复（Persona 不替你发）",
                        "rule_tier": "action"}},
+    ]
+
+
+# MOCK_ASSISTANT_INBOX=1 (#6430): rows the assistant put into the Inbox (source `assistant`, made by the manager): the generic
+# `connector` block, its url the conversation's page. Only with ?sources=all, like connectors' items; made-up content.
+if os.environ.get("MOCK_ASSISTANT_INBOX"):
+    _ASSISTANT_BASE = os.environ.get("MOCK_PUBLIC_URL", "http://127.0.0.1:%d" % PORT).rstrip("/")  # the hub's public_url
+    INBOX[1:1] = [
+        {"id": "assistant:s1", "source": "assistant", "kind": "assistant_post", "account": "assistant", "account_name": "Assistant",
+         "title": "Morning briefing", "preview": "Three meetings today; the design review moved to 15:00",
+         "count": 1, "started_at": ago(minutes=30), "updated_at": ago(minutes=30), "tier": "fyi",
+         "summary": "Three meetings today; the design review moved to 15:00", "reason": "Your morning briefing task puts every run here", "read": False,
+         "context": "Morning briefing\nThree meetings today; the design review moved to 15:00",
+         "connector": {"thread": "assistant:macbook/" + BLOG, "label": "Assistant", "url": _ASSISTANT_BASE + "/s/macbook/" + BLOG}},
+        {"id": "assistant:s2", "source": "assistant", "kind": "assistant_post", "account": "assistant", "account_name": "Assistant",
+         "title": "Price drop: the standing desk you watch", "preview": "The desk you asked me to watch is 20% off until Sunday",
+         "count": 1, "started_at": ago(hours=3), "updated_at": ago(hours=3), "tier": "action",
+         "summary": "The desk you asked me to watch is 20% off until Sunday", "reason": "You asked to be told about price drops", "read": False,
+         "context": "Price drop: the standing desk you watch\nThe desk you asked me to watch is 20% off until Sunday",
+         "connector": {"thread": "assistant:macbook/" + TESTS, "label": "Assistant", "url": _ASSISTANT_BASE + "/s/macbook/" + TESTS}},
     ]
 
 
@@ -16143,6 +16222,56 @@ LIST_JOURNAL_SIZE = 128  # the hub keeps at most 128 revisions too (docs/protoco
 LIST_TUPLE = lambda s: json.dumps([s["machine_id"], s["session_id"]], separators=(",", ":"))
 
 
+def folder_name(path):
+    """The last folder of a path as its computer wrote it (the hub's folderName): a drive-letter or UNC path is a
+    Windows computer's, read by backslashes and slashes; any other by slashes only."""
+    windows = path.startswith("\\\\") or (len(path) >= 3 and path[0].isalpha() and path[0].isascii() and path[1] == ":" and path[2] in "\\/")
+    separators = "/\\" if windows else "/"
+    trimmed = path.rstrip(separators)
+    cut = max(trimmed.rfind(c) for c in separators)
+    return trimmed[cut + 1:] or path
+
+
+def session_catalog(rows, revision, state_of):
+    """catalog=1 (sessions_catalog): the filtered rows' projects and spaces, as the hub's sessionCatalogOf builds them.
+    A directory whose computer names a network remote (CATALOG_ORIGINS) is that repository's project wherever it is
+    checked out; any other goes by its folder's name. needs_you (left out when 0) is by the state the list filters by."""
+    places, groups, names = {}, {}, {}
+    waiting = lambda n: {"needs_you": n} if n else {}
+    for s in rows:
+        needs = 1 if state_of(s) == "needs_you" else 0
+        path = s.get("repo_root") or s.get("workspace_cwd") or s.get("cwd", "")
+        at = places.setdefault((s["machine_id"], path), [0, 0])
+        at[0] += 1; at[1] += needs
+        group = s.get("space_id") or s.get("workspace_id", "")
+        at = groups.setdefault((s["machine_id"], group), [0, 0])
+        at[0] += 1; at[1] += needs
+        if group and s.get("space_name"):
+            names.setdefault((s["machine_id"], group), s["space_name"])
+    projects = {}
+    for (mid, path), (n, needs) in places.items():
+        origin = CATALOG_ORIGINS.get((mid, path), "")
+        # the rows in no directory are the project with the empty id
+        pid = "" if not path else "git:" + origin.lower() if origin else "dir:" + folder_name(path).lower()
+        project = projects.setdefault(pid, {"id": pid, "name": "", "total": 0, "needs": 0, "places": []})
+        project["total"] += n
+        project["needs"] += needs
+        project["places"].append({"machine_id": mid, "path": path, "total": n, **waiting(needs)})
+    for project in projects.values():
+        project.update(waiting(project.pop("needs")))
+        project["places"].sort(key=lambda p: (-p["total"], p["machine_id"], p["path"]))
+        first = project["places"][0]
+        origin = CATALOG_ORIGINS.get((first["machine_id"], first["path"]), "")
+        if project["id"]:
+            project["name"] = origin.rsplit("/", 1)[-1] if origin else folder_name(first["path"])
+        if origin:
+            project["origin"] = origin
+    spaces = [{"machine_id": mid, "id": group, "name": names.get((mid, group), group), "total": n, **waiting(needs)} for (mid, group), (n, needs) in groups.items()]
+    return {"revision": revision, "total": len(rows),
+            "projects": sorted(projects.values(), key=lambda p: (not p["id"], -p["total"], p["name"].lower(), p["id"])),
+            "spaces": sorted(spaces, key=lambda p: (not p["id"], -p["total"], p["name"].lower(), p["machine_id"], p["id"]))}
+
+
 def list_revision(rows):
     """The paged list's checkpoint for rows, journaled so a later `since` can answer what changed after it."""
     revision = hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()[:16]
@@ -16159,14 +16288,15 @@ def current_list_revision():
 
 # GET /api/v1/sessions as the hub's traffic counters would see it, split by what the query asked for (#3759):
 # /mock/sessions_reads, ?reset=1 starts counting again. `full` is the no-query complete list; `baseline` a page without
-# `since` (summary=0 is a complete row); `since` a delta page; `counts` / `lookup` the small reads.
+# `since` (summary=0 is a complete row); `since` a delta page; `counts` / `catalog` / `lookup` the small reads.
 SESSIONS_READS = {"reads": {}, "hints": 0, "started": time.monotonic()}
 SESSIONS_READS_LOCK = threading.Lock()
 
 
 def sessions_read(handler, size, status):
     q = parse_qs(urlparse(handler.path).query)
-    mode = ("lookup" if "session_id" in q else "counts" if q.get("counts", [""])[0] == "1" else "since" if "since" in q
+    mode = ("lookup" if "session_id" in q else "counts" if q.get("counts", [""])[0] == "1"
+            else "catalog" if CATALOG and q.get("catalog", [""])[0] in ("1", "true") else "since" if "since" in q
             else "full" if not (set(q) - {"manager", "machine_id"}) else "baseline")
     if status >= 400: mode += "_%d" % status
     client = (handler.headers.get("X-Persona-Client") or "").split("/")[0] or "unknown"
@@ -16233,6 +16363,19 @@ def paged_sessions(query):
     if under and not query.get("machine_id", [""])[0]:
         return {"error": "parent_session_id needs machine_id", "code": "invalid_query"}, 400
     state_of = folded_state if roots else (lambda s: s.get("state", "unknown"))
+    # sessions_catalog: place=["<machine>","<project>"] and space=["<machine>","<group>"], repeatable; an older hub (no
+    # MOCK_SESSIONS_CATALOG) ignores them.
+    pairs = {"place": [], "space": []}
+    for key in pairs if CATALOG else ():
+        if key not in query:
+            continue
+        try:
+            pairs[key] = [json.loads(v) for v in query[key]]
+        except ValueError:
+            pairs[key] = [None]
+        if len(pairs[key]) > 64 or any(not (isinstance(p, list) and len(p) == 2 and all(isinstance(x, str) for x in p) and p[0]) for p in pairs[key]):
+            return {"error": key + " must be a JSON array of a machine id and a value", "code": "invalid_query"}, 400
+    places, spaces = pairs["place"], pairs["space"]
 
     def matching(rows):
         rows = [s for s in rows if (not roots or not s.get("folded_under")) and (not under or s.get("folded_under") == under)
@@ -16240,11 +16383,15 @@ def paged_sessions(query):
                 and all(not query.get(k, [""])[0] or query[k][0] == s.get(v, "")
                                       for k, v in fields.items())
                 and (not query.get("project", [""])[0] or query["project"][0] == (s.get("repo_root") or s.get("workspace_cwd") or s.get("cwd", "")))
+                and (not places or [s["machine_id"], s.get("repo_root") or s.get("workspace_cwd") or s.get("cwd", "")] in places)
+                and (not spaces or [s["machine_id"], s.get("space_id") or s.get("workspace_id", "")] in spaces)
                 and (not search or search in "\n".join(str(s.get(k, "")) for k in ("title", "cwd", "space_name", "slot_name", "last_text")).lower())]
         rows.sort(key=LIST_TUPLE)
         rows.sort(key=lambda s: s.get("updated_at", ""), reverse=True)
         return rows
     rows = matching(rows)
+    if CATALOG and query.get("catalog", [""])[0] in ("1", "true"):
+        return session_catalog(rows, revision, state_of), 200
     if query.get("counts", [""])[0] == "1":
         counts = {"total": len(rows), "revision": revision, "machine": {}, "project": {}, "group": {}, "state": {}}
         for s in rows:
@@ -17586,8 +17733,8 @@ def features():
 
 
 _SEARCH_DROP = [re.compile(r"(?s)<persona-view-errors\b[^>]*>.*?</persona-view-errors>\s*"),
-                re.compile(r"(?s)<(?:persona|jarvis)-context\b[^>]*>.*?</(?:persona|jarvis)-context>\s*"),
-                re.compile(r"<(?:persona|jarvis)-file\b[^>]*?/?>(?:\s*</(?:persona|jarvis)-file>)?")]
+                re.compile(r"(?s)<persona-context\b[^>]*>.*?</persona-context>\s*"),
+                re.compile(r"<persona-file\b[^>]*?/?>(?:\s*</persona-file>)?")]
 _SEARCH_PASTED = re.compile(r"(?s)<pasted_content\b[^>]*>(.*?)</pasted_content>")
 _SEARCH_IMAGES = [re.compile(r"(?s)<attached_images>.*?</attached_images>"), re.compile(r"\[Image #\d+\]\s?")]
 _SEARCH_ACTION = re.compile(r'\n<persona-action view="[^"<>]*" action="[^"<>]*">\{[^<>]*\}</persona-action>$')
@@ -22022,6 +22169,7 @@ MOCK_HELP = [
     "MOCK_KB_SELECTION=missing|future|fail  Settings › Knowledge selection: a hub from before it (404) / a document with a field clients don't know / a save the hub refuses (503)",
     "MOCK_SESSIONS_LIST=1  Paged Agents, counts and exact lookup; list-mode sockets send hints instead of full lists (#6362)",
     "MOCK_SESSIONS_MANY=<n>  n more idle sessions to page through; GET /mock/sessions/touch expires the old cursors (#4410)",
+    "MOCK_SESSIONS_CATALOG=1  With MOCK_SESSIONS_LIST=1: catalog=1, place= and space= on the paged list, a Windows PC, one repository on two computers and a plain notes folder on two",
     "MOCK_MANUAL_HERDR=1  没挂待办的 herdr Agent 算手动开的（started_by_persona 为假），Agents「按待办」里出「手动开的」一段（#2917）",
     "MOCK_ORCA_CHILDREN=1  MacBook 上一个 Orca 工作区带三个子工作区（其中一个还有子项，parent_space_id，#2073）",
     "MOCK_CHILD_SESSIONS=1  The Paseo computer (MOCK_PASEO) with its agent's four created agents (one waiting for you, one working with a Codex subagent of its own, one done, one failed) and an agent whose creator is not listed: the hub folds them (folded_under / children) and the lead's chat draws a card for each (#5120)",
@@ -22696,6 +22844,9 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/delegate": return self.send_json(*mock_delegate(q))
         if p == "/mock/reanswered": return self.send_json({"reanswered": REANSWERED})
         if p == "/mock/resolved": return self.send_json({"resolved": RESOLVED})
+        if p == "/mock/resolve-mode":
+            if q.get("mode", [""])[0] in ("ok", "slow", "fail"): RESOLVE_MODE[0] = q["mode"][0]
+            return self.send_json({"mode": RESOLVE_MODE[0]})
         if p == "/mock/screen-steps": return self.send_json(mock_screen_steps(q))
         if p == "/mock/devices": return self.send_json({"devices": DEVICES})
         if p == "/mock/hello": return self.send_json(HELLO)
@@ -24883,6 +25034,12 @@ class H(BaseHTTPRequestHandler):
         if p.startswith("/api/v1/interactions/") and p.endswith("/reanswer") and p.count("/") == 5:
             return self.send_json(*mock_reanswer(p.split("/")[4], json.loads(self.last_body or b"{}")))
         if p.startswith("/api/v1/interactions/") and p.endswith("/resolve"):  # notification buttons (UI test reads it back)
+            # MOCK_RESOLVE=slow holds every answer for 6 s before it goes through; =fail refuses it with a 400 (nothing is
+            # resolved): an answer being sent, and one that failed (#6279). GET /mock/resolve-mode?mode=ok|slow|fail switches it.
+            if RESOLVE_MODE[0] == "fail":
+                return self.send_json({"error": "the hub could not take this answer"}, 400)
+            if RESOLVE_MODE[0] == "slow":
+                time.sleep(6)
             RESOLVED.append({"id": p.split("/")[4], "resolution": json.loads(self.last_body or b"{}")})
             if os.environ.get("MOCK_CODEX") and p.split("/")[4] == "cxa_orders_curl" and \
                     sum(r["id"] == "cxa_orders_curl" for r in RESOLVED) == 1:
@@ -26225,6 +26382,8 @@ def plugins_route(handler, p, body):
         return True
     if PLUGINS_MODE and p.startswith("/api/v1/extensions/showcase/-/ui/"):
         return mock_showcase(handler, p.rsplit("/", 1)[-1], body)
+    if PLUGINS_MODE and p.startswith("/api/v1/extensions/showcase/-/image/"):
+        return _showcase_image(handler, p.rsplit("/", 1)[-1])
     if p == "/mock/invalidate" and PLUGINS_MODE:
         return mock_invalidate(handler)
     if p == "/mock/controls/reset" and PLUGINS_MODE:
@@ -26259,6 +26418,7 @@ def mock_showcase(handler, ui, body):
     request = json.loads(body) if body else {}
     if ui == "controls":
         return _showcase_controls(handler, view, request)
+    _sign_refs(view)
     if request.get("action") == "context":
         return _showcase_context(handler, request.get("values") or {})
     if request.get("action"):
@@ -26303,6 +26463,38 @@ def _showcase_controls(handler, view, request):
             c["action"]["confirm"] = words
     handler.send_json({"items": [changed]} if changed else {"view": view})
     return True
+
+
+# Pictures through the hub (UI version 6's `ui.image`, #827): as the hub does for an app of version 6, every `ref` gets a
+# `path` of the hub's image route (here the token is the ref itself, nothing signed), and the route answers a made-up
+# picture of the ref's shape; `missing` and unknown refs answer 404, to show a picture that does not load.
+_SHOWCASE_PICTURES = {"garden": (320, 240, (86, 150, 92)), "camera.front_door": (480, 270, (88, 104, 128)),
+                      "plant": (240, 240, (64, 160, 110)), "map": (480, 200, (226, 222, 210))}
+
+
+def _sign_refs(obj):
+    if isinstance(obj, list):
+        for x in obj: _sign_refs(x)
+    elif isinstance(obj, dict):
+        ref = obj.get("ref")
+        if isinstance(ref, str) and "path" not in obj and re.fullmatch(r"[A-Za-z0-9_.-]+", ref):
+            obj["path"] = "/api/v1/extensions/showcase/-/image/" + ref
+        for v in obj.values(): _sign_refs(v)
+
+
+def _showcase_image(handler, ref):
+    shape = _SHOWCASE_PICTURES.get(ref)
+    if not shape:
+        handler.send_json({"error": "没有这张图", "code": "not_found"}, 404)
+        return True
+    w, h, (r, g, b) = shape
+    # A soft diagonal light over the ref's color, so cropping and fitting show.
+    lift = lambda c, x, y: min(255, c + (x + y) * 60 // (w + h))
+    data = _png_rgba(w, h, lambda x, y: (lift(r, x, y), lift(g, x, y), lift(b, x, y), 255))
+    handler.send_response(200)
+    handler.send_header("Content-Type", "image/png"); handler.send_header("Content-Length", str(len(data)))
+    handler.send_header("Cache-Control", "private, max-age=600")
+    handler.end_headers(); handler.wfile.write(data)
 
 
 def _showcase_context(handler, values):
