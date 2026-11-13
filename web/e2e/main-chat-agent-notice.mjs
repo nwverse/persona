@@ -2,7 +2,7 @@
 // The notice and pill name what runs, the existing New main dialog opens, and Models previews the same explanation.
 // Same-kind and unknown defaults are negative controls. Light/dark, desktop standard text and phone large text.
 //
-//   MOCK_MODEL_PICK=otherkind PORT=18874 python3 scripts/mock/mock_hub.py &
+//   MOCK_MAIN_ACTIONS=1 MOCK_MODEL_PICK=otherkind PORT=18874 python3 scripts/mock/mock_hub.py &
 //   (cd web && PERSONA_HUB_URL=http://127.0.0.1:18874 npx vite --port 5374 --strictPort &)
 //   PERSONA_E2E_CHROMIUM=<chrome> node web/e2e/main-chat-agent-notice.mjs http://127.0.0.1:5374 \
 //     --hub http://127.0.0.1:18874 --shots <dir>
