@@ -709,6 +709,7 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
 ### 3.7 Buttons
 
 - One style: `.themedButton(prominent:)` (`apple/Persona/DesignSystem/Styling.swift:127`), 185 uses. Glass, bordered or soft per style. Soft buttons have a 44 pt minimum and dim to 0.45 when disabled; glass prominent dims to 0.4.
+- A secondary button's label reads at 3:1 or more on its own fill, wherever the button sits (#6157). On iOS the glass and bordered (Lark) ones blend the label in the tint with the fill under it: lighter in dark, darker in light, more on a lighter fill. Plain tint read 2.0:1 on a panel in a dark sheet, where the glass turns lighter, and 2.7:1 for coral on Lark's wash in light. Soft buttons (Clay, Island) keep the plain tint on `Theme.card`. Checks: `StyleSpecTests.secondarySoftButtonsRead` for the soft fill, a token; `ButtonContrastUITests` measures the system's fills on screen, on every kind of fill the app puts a secondary button on (`-showButtonContrast YES`). Don't fix one call site with its own tint: the component already does it.
 - Forms use `.formButton` and `FormAction`.
 - Icon buttons use a 44 pt frame around a smaller visual (composer round button, viewer chrome).
 - Destructive actions use `role: .destructive`. Red is also used for risky-but-not-destructive actions (DS-24).
