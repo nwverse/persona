@@ -267,7 +267,7 @@
  "web/src/views/session/terminal/LinkStatus.tsx": 2,
  "web/src/views/session/terminal/ModeToggle.tsx": 1,
  "web/src/views/session/terminal/Shortcuts.tsx": 8,
- "web/src/views/session/terminal/TerminalOptions.tsx": 17,
+ "web/src/views/session/terminal/TerminalOptions.tsx": 9,
  "web/src/views/session/terminal/UploadStatus.tsx": 1,
  "web/src/views/session/terminal/cjk.ts": 1,
  "web/src/views/settings/AgentSettings.tsx": 10,

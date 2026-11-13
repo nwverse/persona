@@ -1547,8 +1547,11 @@ if os.environ.get("MOCK_DESKTOP_APPS"):
         kw = dict(NO_SPACE, agent_surface=surface, started_by_persona=False)
         cwd = "/Users/me/" + project[1:] if project.startswith("~") else f"/Users/me/code/{project}" if project else "/Users/me"
         if surface == "desktop" and agent == "codex":
+            # Its effort changes from the phone through the App (#5575, node/codex_desktop_effort.go): its model's levels
+            # on the App's codex, and the effort its last turn ran with.
             kw.update(space_kind="codex_app", space_id=f"codex-project:{cwd}", space_name=cwd.rsplit("/", 1)[-1],
-                      agent_name="Codex App", source_kind="codex_history", capabilities={"read": True, "send": True})
+                      agent_name="Codex App", source_kind="codex_history", capabilities={"read": True, "send": True},
+                      efforts=["low", "medium", "high", "xhigh", "max", "ultra"], effort="max")
         elif surface == "desktop" and status != "offline":
             kw.update(source_kind="claude_desktop", capabilities=_desktop_caps)  # a live one, through its peer inbox
         SESSIONS.append(sess("macbook", sid, title, cwd, status, state, "", 0, "", 0, mins,
