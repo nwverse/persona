@@ -2,6 +2,14 @@
 
 Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE.md`, index in `docs/lessons/README.md`). Add new lessons to the matching section; create a section if none fits.
 
+## Supervised handoffs and runtime children (#5751)
+
+Codex sidecar parent/root metadata establishes display ancestry, not a to-do link. A standalone `create_thread` can
+have no parent metadata at all. Use `task_spawn` for a separate session on the current supervised task; never work
+around missing task tools by extracting the hub token. Codex's shared daemon may carry an old pane environment, so
+its per-turn `CODEX_THREAD_ID` must resolve unambiguously in the node's registry before a CLI handoff. Unknown
+threads must not fall back to whichever task an inherited pane happens to run.
+
 - An Agent SDK guest must register its session id and tools before the node starts: its bridge lists tools before
   `assistant.send` returns. A later `guestSet` makes the first list empty, and a connected MCP server with no tools
   does not fail by itself. On SDK 0.3.318 / Claude Code 2.1.322, use `tools: []` for no built-ins and register the
