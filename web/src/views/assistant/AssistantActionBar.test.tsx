@@ -214,6 +214,24 @@ describe("Assistant Needs you / In progress trays", () => {
     }
   });
 
+  it("keeps a stale parked task visible in In progress but out of its number, the To-dos page's rule (#3331)", async () => {
+    const stale = "2026-11-05T08:00:00Z";
+    moreSessions = [{ machine_id: "demo", session_id: "parked-worker", title: "Parked agent", cwd: "/demo", state: "idle", status: "idle", updated_at: stale } as Session];
+    moreTodos = [{
+      ...todo, id: "tray-parked", pr_url: undefined, plan_id: undefined, created_at: stale, updated_at: stale,
+      agents: [{ machine_id: "demo", session_id: "parked-worker", linked_at: stale }],
+      supervision: { supervisor: conversation, state: "parked", updated_at: stale, reviews: [], parked: { reason: "Waiting on another team", until: "2026-11-14T09:00:00Z", waiting_on: "someone_else", count: 1 } },
+    }];
+    await act(async () => { await refresh(); await refreshTodos(); });
+    // the working fixture task is still the only one counted; the parked one adds no number
+    expect(entry("running").textContent).toBe(`${label.running}1`);
+    act(() => entry("running").click());
+    const slots = host.querySelectorAll("[data-task-slot]");
+    expect(slots).toHaveLength(2);
+    // its parked line stays visible in the tray even though the badge does not count it
+    expect(host.textContent).toContain("Waiting on another team");
+  });
+
   it("updates the same row while it runs, opens the task, and drops it once it is accepted", () => {
     act(() => entry("running").click());
     const row = host.querySelector("[data-task-slot]");
@@ -340,6 +358,9 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(opened.hasAttribute("data-needs-open")).toBe(true);
     expect(opened.querySelector("button[aria-expanded=true]")).not.toBeNull();
     expect(opened.textContent).toContain("8080");
+    // its title is the fold toggle, so the opened card has its own way to the task (#6255)
+    expect(opened.querySelectorAll("[data-needs-open-entry]")).toHaveLength(1);
+    expect(opened.querySelector("[data-needs-open-entry]")!.getAttribute("title")).toContain("Demo task");
     act(() => opened.querySelector<HTMLButtonElement>("button[aria-expanded=true]")!.click());
     expect(host.querySelector('[data-needs-row="task:tray-task"]')!.tagName).toBe("BUTTON");
     // every row is folded again when the tray is closed and opened

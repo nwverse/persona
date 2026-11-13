@@ -202,6 +202,8 @@ final class AttachMenuTests: XCTestCase {
             XCTAssertTrue(more.waitForExistence(timeout: 5), "no panel:\n\(app.debugDescription)")
             more.tap()
             let todo = app.buttons["attach-context-todo"]
+            // The sheet opens at half height (#4312): the row may be further down the list.
+            if !todo.waitForExistence(timeout: 2) { app.descendants(matching: .any)["attach-sheet"].firstMatch.swipeUp() }
             XCTAssertTrue(todo.waitForExistence(timeout: 5), "no To-do… in More:\n\(app.debugDescription)")
             shot("attach-panel-more-context", scheme)
             todo.tap()
