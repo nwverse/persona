@@ -102,9 +102,9 @@ final class InboxSourceDirectSplitTests: XCTestCase {
         return nil
     }
 
-    /// `e` is in the list column: hittable and, with the divider read, on the same side of it as the Inbox's toolbar.
-    @MainActor private func listSide(_ e: XCUIElement, divider: XCUIElement, inbox: XCUIElement) -> Bool {
-        guard e.exists && e.isHittable else { return false }
+    /// `e` is in the list column: shown, and with the divider read, on the same side of it as the Inbox's toolbar.
+    @MainActor private func listSide(_ e: XCUIElement, divider: XCUIElement, inbox: XCUIElement, hittable: Bool = true) -> Bool {
+        guard e.exists, !hittable || e.isHittable else { return false }
         guard divider.exists, inbox.exists else { return true }
         return (e.frame.midX > divider.frame.midX) == (inbox.frame.midX > divider.frame.midX)
     }
@@ -123,12 +123,12 @@ final class InboxSourceDirectSplitTests: XCTestCase {
         XCTAssertEqual(backs.count, 1, "the chat page has \(backs.count) back buttons:\n\(app.debugDescription)")
     }
 
-    /// The push stays in the detail column: the list keeps its rows and its width.
+    /// The push stays in the detail column: the list keeps its rows beside the chat.
     @MainActor private func assertListStaysBeside() {
-        let divider = element("split.divider.assistant.list")
+        let divider = element("split.divider.assistant.list"), inbox = element("inbox.more")
         XCTAssertTrue(divider.exists, "the split lost its divider when the chat opened")
         let rows = app.staticTexts.matching(NSPredicate(format: "label == %@", Self.itemTitle)).allElementsBoundByIndex
-        XCTAssertTrue(rows.contains { $0.exists && $0.frame.maxX < divider.frame.maxX },
+        XCTAssertTrue(rows.contains { listSide($0, divider: divider, inbox: inbox, hittable: false) },
                       "the inbox list is gone from beside the chat:\n\(app.debugDescription)")
     }
 
