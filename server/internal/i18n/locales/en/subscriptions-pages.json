@@ -59,7 +59,7 @@
   "builtin.trouble_why": "What it brought before stays in the Inbox. Persona tries again on its own.",
   "builtin.via": "Read through its subscription",
   "builtin.via_confirm": "Read {source} through its subscription? The Inbox gets the same rows as now, so nothing there changes, and you can switch back here at any time.",
-  "builtin.via_detail": "{source}'s Inbox rows come through a subscription to its own read tool: the same rows, on the subscription's schedule and whenever {source} says something changed.",
+  "builtin.via_detail": "The Inbox rows come through a subscription: the same rows, read as soon as {source} changes.",
   "builtin.via_footer": "Switching back reads {source} as before, at once. The knowledge base keeps reading it itself either way.",
   "builtin.via_inbox": "Through its subscription",
   "builtin.via_inbox_detail": "To use this switch again, turn reading through the subscription off below.",

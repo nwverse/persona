@@ -59,7 +59,7 @@
   "builtin.trouble_why": "之前进来的还在收件箱里，Persona 会自己再试。",
   "builtin.via": "通过订阅读取",
   "builtin.via_confirm": "改为通过订阅读取「{source}」？收件箱拿到的行和现在完全一样，那里什么都不会变；随时可以在这里切回。",
-  "builtin.via_detail": "「{source}」进收件箱的行改由订阅它自己的读取工具带来：行完全一样，按订阅的频率读，「{source}」一有变化也会马上读。",
+  "builtin.via_detail": "收件箱里的行改由订阅带来：和现在完全一样，「{source}」有变化时马上读。",
   "builtin.via_footer": "切回后马上按原来的方式读取「{source}」。知识库不论哪种方式都由它自己读。",
   "builtin.via_inbox": "通过订阅",
   "builtin.via_inbox_detail": "要再用这个开关，先在下面关掉「通过订阅读取」。",
