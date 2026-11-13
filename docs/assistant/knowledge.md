@@ -1075,9 +1075,11 @@ them. An entry says that the bytes which had this mtime and size have these keys
 opens the file, asks the open file for its mtime and size, reads through the same handle and asks it again, and both answers have to be the ones
 the look got. A file that is another one by then (replaced, even by text of the same size, and even if the first is back under its own mtime
 later) or that changes while it is read is left out of that run and counted as waiting: searches read it, and the next run looks again. Asking
-the path a second time would not do, since by then it can name the first file again while the bytes read were the other's; nothing else in the
-index pairs a `stat` with bytes read at another moment (the log, a merge and a purge carry entries as they were written and read no file of the
-archive). A few changed files go to the log; more than 4,096 (a first build, an import) are written
+the path a second time would not do, since by then it can name the first file again while the bytes read were the other's. Nothing else in the
+index pairs the `stat` of a file of the archive with bytes read at another moment: the log, a merge and a purge carry entries as they were
+written and read no file of the archive. The index's own manifest is the one other file looked at and read at two moments, in the order that
+is safe: its mtime and size are taken before it is read, so one replaced in between is read again at the next look, and no result depends on
+it. A few changed files go to the log; more than 4,096 (a first build, an import) are written
 as segments of at most 2 million keys, each published as it is finished, so a run that is cut short loses one batch and searches use what is
 done. More than 8 segments are merged into one, streaming. The lane runs at most once a minute while it only follows the files (a run looks at
 every file, and live messages kick a round every few seconds), and at once for a first build, an index that failed a check or a deletion (below).
