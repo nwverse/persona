@@ -150,6 +150,7 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
             HStack(alignment: .bottom, spacing: Theme.Space.xs) {
                 if !expanded { plus }
                 TextField(placeholder, text: $text, selection: fieldSelection, axis: .vertical)
+                    .readingContent() // what is typed grows past the interface's cap, as in Messages
                     .font(Theme.Font.body)
                     .lineLimit(expanded ? 1...maximumLines : 1...1)
                     #if os(iOS) || os(visionOS)
@@ -603,6 +604,7 @@ private struct ComposerPageEditor: View {
                         .accessibilityIdentifier("composer-page-quotes")
                 }
                 TextEditor(text: $text, selection: $cursor)
+                    .readingContent()
                     .font(Theme.Font.body)
                     .focused($focused)
                     .scrollContentBackground(.hidden)

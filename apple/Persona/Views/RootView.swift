@@ -10,7 +10,7 @@ struct RootView: View {
     /// not on them (the owner asked, #138: a toast covered Back). The Mac's stay at the top of the window.
     private var toastClearance: CGFloat {
         #if os(iOS)
-        ShellNavigationClearance.needed(at: model.textSize.applied(to: systemTypeSize))
+        ShellNavigationClearance.needed(at: Theme.interfaceTypeSize(model.textSize.applied(to: systemTypeSize)))
         #else
         0
         #endif
@@ -188,8 +188,10 @@ struct RootView: View {
         #endif
         .tint(Theme.accent)
         .fontDesign(model.style.fontDesign)
-        .dynamicTypeSize(model.textSize.applied(to: systemTypeSize))
-        .environment(\.shellBaseTypeSize, model.textSize.applied(to: systemTypeSize))
+        // The interface stops at xxxLarge; reading content takes the chosen size on to AX5 (`readingContent()`).
+        .dynamicTypeSize(Theme.interfaceTypeSize(model.textSize.applied(to: systemTypeSize)))
+        .environment(\.shellBaseTypeSize, Theme.interfaceTypeSize(model.textSize.applied(to: systemTypeSize)))
+        .environment(\.readingTypeSize, model.textSize.applied(to: systemTypeSize))
         .buiTheme(.persona())
         // No scroll bars anywhere (2026-10-31, the user: they look bad); the environment reaches every ScrollView,
         // List and sheet below. UIKit scroll views (MonoTextView, the terminal, web views) turn theirs off themselves.
