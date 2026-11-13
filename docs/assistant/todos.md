@@ -870,3 +870,63 @@ A to-do it makes is the user's own (no `origin`): work for an agent still goes t
 3. **Empty-workspace rename does not migrate**: when renaming through hub with no active sessions, hub cannot resolve old workspace name; `todo_spaces` does not automatically migrate, like pin/mute.
 4. **`/clear` recreates session**: Agent `/clear` creates a new session uuid underneath; new session does not auto-link to old to-do, and original session row stays listed.
 5. **Assistant disconnected**: to-do APIs and create/send with `todo_id` return 503; workspace renames through hub do not migrate and answered cards are not recorded as decisions ("Who owns what").
+
+## Repository associations
+
+Repository associations are optional metadata for ordinary to-dos and existing
+single-repository tasks. They do not create or remove directories, change the
+workspace mode, or advance task progress. Legacy `new` / `existing` / `none`,
+Engine-created workspaces, reused directories and cleanup retain their existing
+behavior. The existing `pr_url` and delivery judgment stay independent: multiple
+linked PRs never imply that a task is complete.
+
+The Web to-do creation dialog and detail use the optional **Repositories and
+links** group. Source options are disclosed per repository. No alias or base
+branch is required: an empty alias means no directory override and a missing ref
+means the remote default branch. This feature does no Git or remote issue lookup.
+An issue/PR URL must belong to the saved provider, instance and target repository;
+links retain numeric string IDs, including IDs beyond JavaScript's integer range.
+
+| Method | Route | Contract |
+| --- | --- | --- |
+| GET | `/api/v1/todos/{id}/repositories` | Returns `schema_version`, `manager`, `todo_id`, `revision` and `repositories` |
+| PUT | `/api/v1/todos/{id}/repositories` | `{expected_revision, expected_catalog_revision, repositories}` replaces business associations atomically; `[]` clears them |
+| PUT | `/api/v1/todos/{id}/repositories/{repo_id}/links` | `{expected_revision, links}` replaces one repository's links; `[]` clears them |
+
+`POST /api/v1/todos` also accepts optional `repository_bindings` containing
+`catalog_revision` and `repositories`. The Todo and associations commit in one
+transaction. Older requests omitting it retain existing behavior; ordinary PATCH
+operations never touch association storage. The catalog response and
+`repositories_list` include `catalog_revision`. Writes require exact revisions;
+conflicts preserve the client draft and require reconciliation. Read failures
+never masquerade as an empty set.
+
+`todo_repositories_get`, `todo_repositories_set` and `todo_repository_links_set`
+expose the same manager-owned store. `todo_get` points to the dedicated association read without adding a catalog
+read dependency to the old tool. `todo_create` accepts the optional creation object; a matching
+existing Todo with supplied bindings is explicitly refused so callers can read
+and edit that Todo without silently discarding associations. Writes retain the
+existing outbound confirmation rule for health conversations.
+
+Shared Go types and validators: `server/internal/assistant/repository/task.go`.
+Web types/helpers: `web/src/lib/task-repositories.ts`. Fixed consumer fixture:
+`spec/fixtures/task-repositories/contract.json`. Directory aliases use one ASCII
+rule, case-insensitive uniqueness, reserved-device-name rejection and an optional
+empty override. Explicit `root` layout maps one selected repository to `.`;
+`container` layout uses a validated nonempty effective directory name. This
+opt-in mapping never changes legacy cwd inference.
+
+Each association saves identity and credential-free transport by value. Catalog
+names are independent. A removed or identity-changed catalog entry is reported
+without replacing the saved source. Catalog clients omitting `clone_url` preserve
+its previous value when identity is unchanged; a changed identity gets its own
+canonical fallback. Adopting a new source requires removing and reselecting the
+association in separate saves.
+
+Preparation consumers use `db.ReadTodoRepositoriesTx` with the expected revision,
+select repository IDs through `repository.Snapshot`, and persist that value with
+their operation in the same transaction. The reader locks the Todo, including an
+empty set. Digests exclude links and association revision. Consumers retain the
+operation's snapshot for retries; no permanent business-association seal or
+legacy-start hook exists. Physical records, paths, resolved commits and cleanup
+belong to the workspace preparation service.
