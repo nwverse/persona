@@ -112,6 +112,7 @@ struct ReadinessSheets: ViewModifier {
             NavigationStack {
                 MachinesView()
                     .navigationDestination(for: MachineDetailRoute.self) { MachineDetailView(ref: $0.ref) }
+                    .navigationDestination(for: TerminalsRoute.self) { TerminalsView(only: $0.machine) }
                     .toolbar { ToolbarItem(placement: .cancellationAction) { DoneButton { route = nil } } }
             }
         case .providerWizard:

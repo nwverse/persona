@@ -323,7 +323,8 @@ nonisolated struct APIClient: Sendable {
         config.authorize(&req)
         req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
         clientMetadata.apply(to: &req)
-        let requestID = String(UUID().uuidString.prefix(8)).lowercased()
+        // The caller's own id when it names one (a page that shows it, to match the hub's log), else a new one.
+        let requestID = headers["X-Client-Request-Id"] ?? String(UUID().uuidString.prefix(8)).lowercased()
         req.setValue(requestID, forHTTPHeaderField: "X-Client-Request-Id")
         for (name, value) in headers { req.setValue(value, forHTTPHeaderField: name) }
         if let body {

@@ -3241,6 +3241,8 @@ export const CONNECTOR_SUBSCRIPTION_KINDS = ["sub_mail", "sub_message", "sub_not
 
 /**
  * Paths relative to one item. Only $, .field and [index] are supported; no expressions or recursive descent.
+ * sender_id, chat and chat_name name who and where for mutes and policies (the Inbox row's sender and chat tags);
+ * they are not part of an item's content.
  */
 export interface ConnectorSubscriptionFields {
   id?: string;
@@ -3251,6 +3253,12 @@ export interface ConnectorSubscriptionFields {
   body?: string;
   link?: string;
   due_date?: string;
+  /** The sender's stable id; without it the sender tag is the lowercased display name. */
+  sender_id?: string;
+  /** The conversation's stable id: the row gets a chat tag. */
+  chat?: string;
+  /** The conversation's name, the chat tag's name. */
+  chat_name?: string;
 }
 
 /**

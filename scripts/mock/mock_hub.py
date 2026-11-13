@@ -8616,6 +8616,7 @@ def cell_width(ch):
 # MOCK_TERMINAL_PANES=1 (with MOCK_TERMINAL_STREAM / MOCK_TERMINAL_CONTROL): the hub says terminal_panes and lists made-up
 # workspaces, tabs and panes of the machines (agents of the mock sessions and plain shells, GET /api/v1/machines/{mid}/panes);
 # POST there opens a new shell tab. A terminal addressed "pane:<id>" is a made-up shell, not the Claude screen.
+# MOCK_PANES_DELAY=<seconds>: GET .../panes answers that late (the Terminals page's "hasn't answered yet" with Retry, #6153).
 PANES_NEW = {}  # machine id -> [(workspace id, pane)] opened by POST
 # The menu actions (close / split / rename / run an agent / git), recorded at GET /mock/node_actions and applied to the
 # layout above: a closed pane or tab is gone, a renamed tab has its new name, a split adds a shell, an agent run in a
@@ -22214,6 +22215,7 @@ class H(BaseHTTPRequestHandler):
                                    "context_tokens": 48200, "output_tokens": 12800, "compactions": 0, "turns": 6,
                                    "started_at": ago(minutes=40), "last_activity": ago()})
         if os.environ.get("MOCK_TERMINAL_PANES") and re.fullmatch(r"/api/v1/machines/[^/]+/panes", p):
+            time.sleep(float(os.environ.get("MOCK_PANES_DELAY", "0")))  # seconds: a computer slow to answer (#6153)
             return self.send_json(mock_panes(p.split("/")[4]))
         if p.startswith("/api/v1/sessions/") and p.endswith("/screen"):
             fail = os.environ.get("MOCK_SCREEN_FAIL_AFTER")
