@@ -68,7 +68,7 @@ class ProviderPasteShotsTest {
             HubLauncher("old", source = "persona", origin = "zshrc:cc_imported@mac"),
         )
         override suspend fun launcher(name: String) = launchers().first { it.name == name }
-        override suspend fun parse(text: String) = ProviderPasteResult(format = "shell", drafts = listOf(ProviderPasteDraft(
+        override suspend fun parse(text: String) = ProviderPasteResult(format = if (text.startsWith("persona://provider/import")) "link" else "shell", drafts = listOf(ProviderPasteDraft(
             label = "cc_work",
             provider = PastedProvider(name = "cc_work", displayName = "Work gateway", baseUrl = "https://work.example.com", apiKey = "eg-secret", auth = "bearer",
                 model = "new-model", models = parsedModels, env = "MAX_OUTPUT=8000", headers = "X-Team: synthetic"),
@@ -123,6 +123,40 @@ class ProviderPasteShotsTest {
         rule.waitForIdle()
         rule.onNodeWithText("1 model", substring = true).assertExists()
         rule.onNodeWithText("1 models", substring = true).assertDoesNotExist()
+    }
+
+    @Test fun anImportLinkLightOpensReviewAndPrefillWithoutSaving() = importLinkOpensReviewAndPrefill(false)
+
+    @Config(sdk = [35], qualifiers = "en-w400dp-h1500dp-night-xhdpi")
+    @Test fun anImportLinkDarkOpensReviewAndPrefillWithoutSaving() = importLinkOpensReviewAndPrefill(true)
+
+    private fun importLinkOpensReviewAndPrefill(dark: Boolean) {
+        val api = Providers()
+        val link = "persona://provider/import?v=1&data=FAKE-EXAMPLE-KEY"
+        rule.setContent {
+            PersonaTheme(darkTheme = dark, reduceMotion = true) {
+                Box(Modifier.testTag("shot").width(400.dp).height(1450.dp).background(PersonaTheme.palette.background)) {
+                    NewProviderPage(api, onBack = {}, onSaved = {}, machines = machines, importLink = link)
+                }
+            }
+        }
+        rule.waitForIdle()
+        val suffix = if (dark) "dark" else "light"
+        rule.onNodeWithText("Opened from a link", substring = true).assertExists()
+        rule.onNodeWithText("A provider import link").assertExists()
+        rule.onNodeWithText("Work gateway").assertExists()
+        rule.onNodeWithText(link, substring = true).assertDoesNotExist()
+        assertTrue("nothing is added before Save", api.added.isEmpty())
+        capture("provider-import-link-review-$suffix")
+
+        rule.onNodeWithText("Add as a new provider").performClick()
+        rule.onNodeWithText("Continue").performClick()
+        rule.waitForIdle()
+        rule.onAllNodesWithText("cc_work").onFirst().assertExists()
+        rule.onNodeWithText("https://work.example.com").assertExists()
+        rule.onNodeWithText("Save").assertExists()
+        assertTrue("the prefilled form still has not saved", api.added.isEmpty())
+        capture("provider-import-link-prefill-$suffix")
     }
 
     @Config(sdk = [35], qualifiers = "en-w400dp-h1500dp-night-xhdpi")

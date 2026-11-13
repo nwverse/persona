@@ -52,6 +52,7 @@ import persona.core.designsystem.LocalPersonaDesign
 import persona.core.designsystem.dense
 import persona.core.designsystem.keepAmbientLightMoving
 import persona.core.navigation.*
+import persona.feature.settings.ProviderImportRequests
 import persona.feature.settings.SettingsServices
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -266,6 +267,12 @@ class MainActivity : ComponentActivity() {
         }
         if (uri.host == "pair") {
             pendingPairLink.value = uri.toString()
+            return
+        }
+        if (uri.scheme == "persona" && uri.host == "provider" && uri.path == "/import") {
+            // A gateway's or a shared provider import link (#5428): the providers page reads it through the hub.
+            ProviderImportRequests.pending.value = uri.toString()
+            openNavigation.value = focusing { router -> router.parse(RouteInput.Internal(SettingsPageRoute(SettingsPage.Providers))) }
             return
         }
         val link = uri.toString()

@@ -46,6 +46,7 @@
                 <data android:scheme="persona" android:host="pair" />
                 <data android:scheme="persona" android:host="password-login" />
                 <data android:scheme="persona" android:host="open" />
+                <data android:scheme="persona" android:host="provider" />
                 <data android:scheme="@string/compatibility_legacy_scheme" android:host="pair" />
                 <data android:scheme="@string/compatibility_legacy_scheme" android:host="open" />
             </intent-filter>

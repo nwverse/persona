@@ -20,9 +20,10 @@ import (
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
-// Provider import links (#5420, docs/integrations/launchers.md "Import links"): cindy's
-// cindy://provider/import?v=1&data=… and the web's <web address>/settings?tab=models#import=…[&v=1] carry one
-// provider in cindy's v1 JSON, base64url-encoded. parsePaste reads a pasted or opened link here. A link comes from
+// Provider import links (#5420, #5428, docs/integrations/launchers.md "Import links"): cindy's
+// cindy://provider/import?v=1&data=…, Persona's persona://provider/import?v=1&data=… and the web's
+// <web address>/settings?tab=models#import=…[&v=1] carry one provider in cindy's v1 JSON, base64url-encoded.
+// parsePaste reads a pasted or opened link here. A link comes from
 // someone else and may carry a key, so it is checked as strictly as cindy checks it (createProviderImportDraftFromRest,
 // decodeBase64Url and parsePayload in cindy's providerImport.ts) before parseCindy reads it as any cindy paste. A link
 // failing a check is used for nothing: its one note names at most the path of the field to blame, never a value.

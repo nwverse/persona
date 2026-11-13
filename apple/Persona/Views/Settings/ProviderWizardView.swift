@@ -124,7 +124,7 @@ struct ProviderWizard: View {
         @Bindable var wizard = wizard
         let presetStep = step == .key
         return ProviderComputersPage(scope: $wizard.scope, old: presetStep ? nil : wizard.existing,
-                                     kind: presetStep ? wizard.preset?.kind ?? "launcher" : wizard.existing?.kind ?? "launcher",
+                                     kind: presetStep ? wizard.preset?.kind ?? "launcher" : wizard.providerKind,
                                      agent: presetStep ? nil : wizard.existing?.agent, assign: presetStep && wizard.preset?.runsClaude != false && wizard.assign)
     }
 
@@ -785,7 +785,7 @@ struct ProviderWizard: View {
             }
             // Where it runs and when its key travels (#2333), the same kind of row; only on a hub that takes scopes.
             if wizard.scopeShown {
-                ProviderComputersRow(scope: $wizard.scope, old: wizard.existing, kind: wizard.existing?.kind ?? "launcher",
+                ProviderComputersRow(scope: $wizard.scope, old: wizard.existing, kind: wizard.providerKind,
                                      agent: wizard.existing?.agent)
             }
             VStack(alignment: .leading, spacing: Theme.Space.xs) {

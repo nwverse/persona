@@ -361,7 +361,12 @@ private fun SettingsContent(
         "storage" -> StoragePage(back, services.clearCacheFiles, footer = deviceFeedback)
         "providers" -> {
             val providerService = mine.providers.takeUnless { services.demo }
-            when {
+            val importLink = ProviderImportRequests.pending.value
+            if (importLink != null && providerService != null) {
+                NewProviderPage(providerService, onBack = { ProviderImportRequests.clear(); providerStep = null },
+                    onSaved = { ProviderImportRequests.clear(); providerStep = null }, readiness = services.readiness,
+                    machines = machines, importLink = importLink)
+            } else when {
                 providerStep == "add" && providerService != null -> NewProviderPage(providerService, onBack = { providerStep = null }, onSaved = { providerStep = null },
                     readiness = services.readiness, machines = machines)
                 providerStep == "import" && providerService != null -> ProviderImportPage(providerService, machines, onBack = { providerStep = null }, onDone = { providerStep = null })
