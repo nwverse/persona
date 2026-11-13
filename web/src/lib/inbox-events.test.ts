@@ -111,11 +111,11 @@ describe("收件箱事件：处理链条", () => {
     // an unknown link and nothing to expand: nothing happens
     expect(chainTap({ id: "x", kind: "future", text: "以后的", link: { type: "elsewhere" } }, conv)).toEqual({ kind: "none" });
   });
-  it("ignores reported detail for expansion but keeps messages and other kinds expandable", () => {
+  it("keeps detail and messages expandable for reported and other kinds", () => {
     const conv = (mid: string, sid: string) => ({ name: "session", mid, sid }) as const;
     const reported = { id: "r", kind: "reported", text: "Assistant says: sent", detail: "Sent" };
-    expect(canExpand(reported)).toBe(false);
-    expect(chainTap(reported, conv)).toEqual({ kind: "none" });
+    expect(canExpand(reported)).toBe(true);
+    expect(chainTap(reported, conv)).toEqual({ kind: "expand" });
     const withMessages = { ...reported, messages: [{ text: "Original message" }] };
     expect(canExpand(withMessages)).toBe(true);
     expect(chainTap(withMessages, conv)).toEqual({ kind: "expand" });
