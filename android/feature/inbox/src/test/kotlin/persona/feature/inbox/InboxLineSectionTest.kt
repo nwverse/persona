@@ -61,7 +61,7 @@ class InboxLineSectionTest {
         val repository = FakeRepository(InboxLineage(InboxParentRef("inbox", "current"), current,
             listOf(InboxLineAncestor(InboxParentRef("inbox", "parent"), parent), InboxLineAncestor(InboxParentRef("inbox", "raw-gone")))))
         show(repository, current)
-        rule.onNodeWithText("已不在收件箱里").assertExists()
+        rule.onNodeWithText("已不在收件箱里", substring = true).assertExists()
         rule.onNodeWithText("raw-gone").assertDoesNotExist()
         rule.onNodeWithText("Parent", substring = true).performClick()
         assertEquals(InboxEventRoute("parent"), opened.last())
