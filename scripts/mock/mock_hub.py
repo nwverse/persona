@@ -51,7 +51,7 @@ def features():
                 ["assistant_compact", "assistant_main_new", "assistant_main_clear"] if os.environ.get("MOCK_MAIN_ACTIONS") == "1" else []) + (
                 ["messaging"] if os.environ.get("MOCK_MESSAGING") == "1" else []) + (
                 ["conversation_origin"] if os.environ.get("MOCK_AUTO_CONVERSATIONS") == "1" else []) + (
-                ["sessions_list", "sessions_lookup", "sessions_hierarchy"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
+                ["sessions_list", "sessions_lookup", "sessions_hierarchy", "sessions_todo", "sessions_quick_filters"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
                 ["sessions_catalog"] if CATALOG else []) + (
                 ["preview"] if os.environ.get("MOCK_PREVIEW") else []) + (
                 ["task_cron"] if os.environ.get("MOCK_CRON") == "1" else []) + (
@@ -7140,6 +7140,34 @@ def kb_link(kind, eid):
     return dict(next(x for x in KB[kind] if x["id"] == eid))
 
 
+def kb_base_meta(kind, e):
+    """An entry's meta when KB_DETAIL has none: its own fields; a chat's and a document's also say where they came from."""
+    return dict(e, source="lark", source_id=e["id"], kind=e.get("extra") or "group") if kind == "chats" else \
+        dict(e, source="lark") if kind == "docs" else e
+
+
+def kb_meta(kind, eid):
+    """The meta a detail shows, kept in KB_DETAIL so a correction sticks (None for an entry that isn't there)."""
+    e = next((x for x in KB.get(kind, []) if x["id"] == eid), None)
+    if e is None: return None
+    return KB_DETAIL.setdefault((kind, eid), {}).setdefault("meta", dict(kb_base_meta(kind, e)))
+
+
+def kb_unlink(kind, eid, lst, oid):
+    """remove_people / remove_chats / remove_projects as the hub's kb.Update: the other entry leaves this one's list, this
+    one leaves the other's (a project names documents, meetings, events and recordings in `items` as kind/id), both lists
+    are locked against the automatic linking, and neither detail links the other any more."""
+    named = kind in ("people", "chats", "projects")
+    back, member = (kind, eid) if named else ("items", "%s/%s" % (kind, eid))
+    for m, field, x in ((kb_meta(kind, eid), lst, oid), (kb_meta(lst, oid), back, member)):
+        if m is None: continue
+        m[field] = [v for v in m.get(field) or [] if v != x]
+        m["locked_fields"] = sorted(set(m.get("locked_fields") or []) | {field})
+    for (k, i), other in (((kind, eid), (lst, oid)), ((lst, oid), (kind, eid))):
+        d = KB_DETAIL.get((k, i))
+        if d and d.get("links"): d["links"] = [l for l in d["links"] if (l["kind"], l["id"]) != other]
+
+
 # The entries the Android captures add: a summary under its name, a line of timeline, what it is about now, two links.
 for _kind, _id, _links in (("projects", "photo-sync", (("people", "lilei"), ("projects", "weather-app"))),
                            ("people", "lilei", (("chats", "design-review"), ("projects", "weather-app"))),
@@ -7157,6 +7185,19 @@ if os.environ.get("MOCK_KB_MANY_LINKS") == "1":
                              "relevance": 20, "updated": ago(days=2)})
     KB_DETAIL[("projects", "weather-app")]["links"] += [kb_link("people", "lilei")] + \
         [kb_link("people", "p_sample_%d" % _i) for _i in range(4)]
+
+
+# MOCK_KB_CORRECTIONS=1: the lists links are held in (a project's people, chats and items, an entry's projects, a person's
+# chats, a chat's people), so a link can be removed, and confirmed facts on 李雷 (#6997; docs/assistant/knowledge.md
+# "Corrections, locks and unlinking").
+if os.environ.get("MOCK_KB_CORRECTIONS") == "1":
+    kb_meta("projects", "weather-app").update(people=["p_han"], chats=["oc_team"], items=["docs/doc_widget"])
+    kb_meta("people", "lilei").update(projects=["weather-app"], chats=["design-review"],
+                                      pinned="负责天气 App 的图标和视觉，不负责交互稿。\n周二、周四下午不在。")
+    kb_meta("chats", "design-review").update(people=["lilei", "p_han"])
+    kb_meta("people", "p_han").update(projects=["weather-app"])
+    kb_meta("chats", "oc_team").update(projects=["weather-app"])
+    kb_meta("docs", "doc_widget").update(projects=["weather-app"])
 
 
 # MOCK_KB_TOPICS=1: knowledge points curated by topic (#3783, docs/assistant/knowledge.md "Topics"), out of the example
@@ -9992,6 +10033,35 @@ def mock_panes(mid):
             panes.append({"pane": f"w12:p{i}", "terminal": f"pane:w12:p{i}", "tab_id": f"w12:t{i}", "workspace_id": "w12", "agent": agent,
                           "status": status, "title": title, "cwd": "/home/me/code/marks", "session_id": sid})
     return {"hosts": [{"kind": "herdr", "stream": True, "control": True, "new_tab": True, "worktree": True, "workspaces": ws, "tabs": tabs, "panes": panes}]}
+
+
+def mock_panes_file(mid):
+    """MOCK_PANES_FILE=<json>: the answers of real computers saved locally ({"panes": {id: answer}}), handed out in order to
+    the mock's computers. The file stays out of the repository."""
+    answers = list(json.load(open(os.environ["MOCK_PANES_FILE"])).get("panes", {}).values())
+    ids = [m["id"] for m in MACHINES]
+    i = ids.index(mid) if mid in ids else -1
+    a = answers[i] if 0 <= i < len(answers) else {"hosts": []}
+    return a if "hosts" in a else {"hosts": []}
+
+
+def mock_panes_many(mid):
+    """MOCK_PANES_MANY=1: a real-sized answer (#7115): about 40 panes, a second host (tmux) whose pane ids repeat the first
+    host's, panes with no title / cwd / tab, and no engine on one computer."""
+    base = mock_panes(mid)
+    if mid == "studio":
+        return {"hosts": []}
+    host = base["hosts"][0] if base["hosts"] else {"kind": "herdr", "new_tab": True, "workspaces": [], "tabs": [], "panes": []}
+    n = sum(ord(c) for c in mid) % 7
+    panes = list(host["panes"])
+    for i in range(40):
+        panes.append({"pane": "w3:p%d" % (i + 1), "terminal": "pane:w3:p%d" % (i + 1), "tab_id": "w3:t%d" % (i % 9 + 1),
+                      "workspace_id": "w3", **({} if i % 3 else {"title": "zsh", "cwd": "/home/me/code/p%d" % i}),
+                      **({"foreground": "vim"} if i % 5 == 0 else {})})
+    host = dict(host, panes=panes)
+    twin = {"kind": "tmux", "new_tab": n % 2 == 0, "worktree": False, "workspaces": [{"id": "w1", "label": ""}],
+            "tabs": [], "panes": [dict(p, tab_id="") for p in panes[:12]]}
+    return {"hosts": [host, twin]}
 
 
 PASEO_MADE = []  # worktrees made on Paseo's workspaces from the web (#6295), in the catalog after PASEO_WORKSPACES
@@ -15342,8 +15412,105 @@ def mock_peer_fold():
                          "有一件要你定：版本切换后搜索的范围。"))
 
 
-if os.environ.get("MOCK_PEER_FOLD") == "1":
+# Also with MOCK_PEER_FOLD=1 (or =live: its session pushed again every 1.5 s): work lines right under a long message from
+# another session, folded to a few lines with Expand (#6645: the folded words still took the long presses below the
+# card, so a long press on the answer under it lifted the card). A working Agent chat: the exchange reported (a tool
+# and a reply in its work line, 37 minutes long, a 2 KB answer); one with tools only; one with a reply only; then the
+# running one, its last tool still going. Synthetic text.
+PEER_FOLD = "a1f3c2d4-0000-4000-8000-000000006645"
+PEER_REPORT = ("合并队列的进展：\n"
+               "- 发布分支已经合上最新的主干，只有一个说明文件冲突，已经解决，不用变基。\n"
+               "- 打包脚本拆成构建和上传两步以后，构建在本机 3 分钟内跑完，上传单独重试。\n"
+               "- 弹窗的单测现在是 62 个，全部通过；界面测试还差两条，在跑。\n"
+               "- 要不要放进下一个小版本，由你和它定；我这边可以随时排进队列。\n"
+               "- 截图在 PR 里，深浅色各一套。\n"
+               "- 下一步：等界面测试跑完再报一次。\n"
+               "最后一行在这里。")
+# The reported exchange as the real one was shaped: a message from another session in English, folded to three lines;
+# a reply and the turn's end; 37 minutes later a background agent's result woke the agent (a wake tool_result, its call
+# on an earlier page), it sent a message, and a long answer came (about 2 KB, drawn in several rows).
+PEER_EN_REPORT = ("Got feature-split 1a2b3c4d. It merges onto the new main with only a .lane/REPORT.md conflict, so no "
+                  "rebase is needed. Whether it ships in the next patch release is up to you and the lead; I queued it "
+                  "behind the two open fixes. The popup count in PopupTests is now 62, all passing; two UI tests are "
+                  "still running and I will report again when they finish. Screenshots for light and dark are in the PR.")
+PEER_LONG_ANSWER = ("已经回复 release-worker，等它的界面测试结果。构建脚本的新版本也做完了，在 `core` 的 `build-split` 分支上，"
+                    "提交 `5e6f7a8b`，没有推送或合并；分支已经交给 release-worker 排进合并队列。\n\n"
+                    "**做了什么**\n"
+                    "- **拆分**：`release.sh` 现在分成构建和上传两步，上传失败只重试上传，不再从头构建；两步之间的产物放在 `dist/`，带校验和。\n"
+                    "- **结果**：原来一次失败要重跑 12 分钟，现在重试上传只要 40 秒；三次模拟的上传失败都在第二次重试时成功。\n"
+                    "- **没改 core 以外的文件**：守护进程和配置都不用改，旧的一步式命令还能用，会打印一行提示换成新命令。\n\n"
+                    "**验证**\n"
+                    "- 离线：`go build` 和 `go vet` 干净，`go test ./...` 全过（含新加的 9 个用例）。\n"
+                    "- 本机：完整走了一遍构建、上传、校验，产物和旧脚本逐字节一致。\n"
+                    "- 失败注入：上传中途断网三次，每次都只重试了上传，日志里能看到重试次数和耗时。\n"
+                    "- 兼容：旧的一步式命令在三台不同的构建机上各跑了一遍，结果和新命令一致，提示行也都打印出来了。\n"
+                    "- 回滚：把分支回退到拆分前再跑一遍，产物和拆分后的逐字节一致，说明拆分没有改动构建本身。\n\n"
+                    "**风险**\n"
+                    "- 上传那一步换了重试的写法，网络特别慢的时候第一次重试会等满 30 秒才开始，日志里会多一行等待提示，不影响结果。\n"
+                    "- 产物目录 `dist/` 现在会留到下一次构建开始才清，磁盘紧张的机器上要注意，我在说明里写了一句。\n"
+                    "- 旧命令的提示只打印一次，长期跑在定时任务里的机器可能看不到，建议发版说明里专门提一下。\n\n"
+                    "**还没做**\n"
+                    "- 文档里的发布步骤还是旧的一步式写法，等合并后一起改。\n"
+                    "- 签名证书下个月到期，下一次发版前要换，已经记进待办。\n"
+                    "- 是否放进下一个小版本，等你和 release-worker 定。")
+
+
+def mock_peer_fold_work():
+    items = [it("user", "text", 70, text="把发布脚本拆成构建和上传两步"),
+             *tool("Edit", {"file_path": "/Users/me/code/shop-app/scripts/release.sh", "old_string": "build && upload",
+                            "new_string": "build\nupload"}, "ok", 69),
+             it("assistant", "text", 68, text="拆好了：构建和上传现在是两步，上传失败只重试上传。")]
+    # The case reported, shaped as it was (see PEER_EN_REPORT): its work line reads "Tools 1 · Replies 1 · 37 min".
+    items += [it("user", "text", 62, text=PEER_EN_REPORT, **{"from": "release-worker"}),
+              it("assistant", "text", 61.9, text="先回它一句，说收到了；构建脚本那边还在后台跑，跑完再一起报。"),
+              it("system", "turn_duration", 61.9, turn_duration={"duration_ms": 7000}),
+              it("user", "tool_result", 25, tool_use_id="toolu_peer_fold_bg", text="构建脚本拆分完成，验证全过。", wake=True,
+                 task={"kind": "agent", "status": "completed", "title": "拆分构建脚本", "task_id": "bgsplit",
+                       "tool_use_id": "toolu_peer_fold_bg", "output_file": "/tmp/claude/bgsplit.output", "detail": "完成"}),
+              *tool("SendMessage", {"to": "release-worker", "message": "收到，界面测试跑完再报。"}, "sent", 24.8),
+              it("assistant", "text", 24.6, text=PEER_LONG_ANSWER),
+              it("system", "turn_duration", 24.6, turn_duration={"duration_ms": 26000})]
+    # Tools only.
+    items += [it("user", "text", 20, text=PEER_REPORT, **{"from": "docs-worker"}),
+              *tool("Read", {"file_path": "/Users/me/code/shop-app/docs/release.md"}, "# 发布", 19.6),
+              *tool("Bash", {"command": "git log --oneline -3", "description": "看最近的提交"}, "a1b2c3d 拆分发布脚本", 19.2),
+              it("assistant", "text", 18, text="发布文档和最近的提交都对得上，不用改。")]
+    # A reply only.
+    items += [it("user", "text", 15, text=PEER_REPORT, **{"from": "release-worker"}),
+              it("assistant", "text", 14.6, text="这条只是进展，不需要动手。"),
+              it("assistant", "text", 14, text="记下了，等它下一次报告。")]
+    # Running: a reply, a tool, then a tool still going.
+    items += [it("user", "text", 4, text=PEER_REPORT, **{"from": "docs-worker"}),
+              it("assistant", "text", 3.8, text="先跑一遍界面测试确认。"),
+              *tool("Bash", {"command": "npm run test:ui -- popup", "description": "跑弹窗的界面测试"}, "60 passed", 3.5),
+              it("assistant", "text", 3, text="还差两条，接着跑。"),
+              it("assistant", "tool_use", 2.9, tool_use_id="toolu_peer_fold_running", tool_name="Bash",
+                 tool_input={"command": "npm run test:ui -- popup --last-two", "description": "跑剩下两条"})]
+    ITEMS[PEER_FOLD] = items
+    SESSIONS.append(sess("macbook", PEER_FOLD, "发布脚本拆分", "/Users/me/code/shop-app", "working", "working", "shop-app", 22,
+                         "peers", 1, 0, "还差两条，接着跑。",
+                         background=[{"id": "bkload", "kind": "shell", "description": "压测第 1 轮", "command": "npm run load -- round1",
+                                      "output_file": "/tmp/claude/bkload.output", "started_at": ago(minutes=40)}]))
+
+
+def peer_fold_ticker():
+    """MOCK_PEER_FOLD=live: the session's row again every 1.5 s (a new rev and time, nothing else), as the hub sends it
+    while background work goes on: the reported chat was running when its work line would not open."""
+    while True:
+        time.sleep(1.5)
+        push = globals().get("push_machine")  # defined further down; the thread starts while the module still loads
+        if push is None:
+            continue
+        row = next(x for x in SESSIONS if x["session_id"] == PEER_FOLD)
+        row.update(updated_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"), rev=(row.get("rev") or 0) + 1)
+        push("macbook")
+
+
+if os.environ.get("MOCK_PEER_FOLD") in ("1", "live"):
     mock_peer_fold()
+    mock_peer_fold_work()
+    if os.environ.get("MOCK_PEER_FOLD") == "live":
+        threading.Thread(target=peer_fold_ticker, daemon=True).start()
 
 
 # MOCK_LONG_INPUT=1: your own long message folds (#5676): an Agent chat with a long pasted report (past 14 lines on a
@@ -16996,6 +17163,16 @@ def summary_row(s):
     return out
 
 
+def pane_origin(s):
+    """Where a session was opened, as the hub's sessionorigin.Of says it (the paged list's pane_source)."""
+    if s.get("space_kind") == "codex_app" or s.get("host") in ("paseo", "cindy") or (s.get("source_kind") == "runtime" and s.get("source_instance_id") == "orca"):
+        return "desktop"
+    pane = s.get("pane_id") or ""
+    if not pane:
+        return "unknown"
+    return "feishu" if pane.split(":", 1)[0] == "botmux" and ":" in pane else "terminal"
+
+
 def paged_sessions(query):
     """Small screenshot fixture for paging hubs; unqueried reads retain the legacy full list.
 
@@ -17037,6 +17214,12 @@ def paged_sessions(query):
         if len(pairs[key]) > 64 or any(not (isinstance(p, list) and len(p) == 2 and all(isinstance(x, str) for x in p) and p[0]) for p in pairs[key]):
             return {"error": key + " must be a JSON array of a machine id and a value", "code": "invalid_query"}, 400
     places, spaces = pairs["place"], pairs["space"]
+    # sessions_todo (#6662): todo=<id> the sessions on that open to-do, todo=none the sessions on none
+    todo = query.get("todo", [""])[0]
+    # sessions_quick_filters (#6662): waiting=0|1 (only waiting in the background, or not), pane_source=<origin> and
+    # exclude_pane_source=<origin>
+    waiting = query.get("waiting", [""])[0]
+    origin, not_origin = query.get("pane_source", [""])[0], query.get("exclude_pane_source", [""])[0]
 
     def matching(rows):
         rows = [s for s in rows if (not roots or not s.get("folded_under")) and (not under or s.get("folded_under") == under)
@@ -17046,6 +17229,9 @@ def paged_sessions(query):
                 and (not query.get("project", [""])[0] or query["project"][0] == (s.get("repo_root") or s.get("workspace_cwd") or s.get("cwd", "")))
                 and (not places or [s["machine_id"], s.get("repo_root") or s.get("workspace_cwd") or s.get("cwd", "")] in places)
                 and (not spaces or [s["machine_id"], s.get("space_id") or s.get("workspace_id", "")] in spaces)
+                and (not todo or (s.get("todo") or {}).get("id", "") == ("" if todo == "none" else todo))
+                and (not waiting or bool(s.get("background_waiting")) == (waiting in ("1", "true")))
+                and (not origin or pane_origin(s) == origin) and (not not_origin or pane_origin(s) != not_origin)
                 and (not search or search in "\n".join(str(s.get(k, "")) for k in ("title", "cwd", "space_name", "slot_name", "last_text")).lower())]
         rows.sort(key=LIST_TUPLE)
         rows.sort(key=lambda s: s.get("updated_at", ""), reverse=True)
@@ -17054,10 +17240,14 @@ def paged_sessions(query):
     if CATALOG and query.get("catalog", [""])[0] in ("1", "true"):
         return session_catalog(rows, revision, state_of), 200
     if query.get("counts", [""])[0] == "1":
-        counts = {"total": len(rows), "revision": revision, "machine": {}, "project": {}, "group": {}, "state": {}}
+        counts = {"total": len(rows), "revision": revision, "machine": {}, "project": {}, "group": {}, "state": {}, "todo": {}, "pane_source": {}}
+        waits = sum(1 for s in rows if s.get("background_waiting") and state_of(s) == "working")
+        if waits:
+            counts["background_waiting"] = waits
         for s in rows:
             values = {"machine": s["machine_id"], "project": s.get("repo_root") or s.get("workspace_cwd") or s.get("cwd", ""),
-                      "group": s.get("space_id") or s.get("workspace_id", ""), "state": state_of(s)}
+                      "group": s.get("space_id") or s.get("workspace_id", ""), "state": state_of(s), "todo": (s.get("todo") or {}).get("id", ""),
+                      "pane_source": pane_origin(s)}
             for key, value in values.items():
                 counts[key][value] = counts[key].get(value, 0) + 1
         return counts, 200
@@ -23091,9 +23281,10 @@ VOICE_VOICES = {
 MOCK_HELP = [
     "MOCK_TURN_USAGE=1|multi|unpriced  What a finished exchange cost, after the reply's time: \"菜谱搜索按用时排序\" on Opus 5.5 (1), with a Sonnet 5.5 subagent (multi), or on Haiku 5.5 without a price (unpriced: its tokens); the main conversation's last exchange the same (#5426)",
     "MOCK_CF_ACCESS=<client id>:<client secret>  The hub behind Cloudflare Access: /api/ requests without those two CF-Access-Client-* headers get a 302 to an Access login (no token) or Access's 403 page (wrong token) (#3502)",
+    "MOCK_KB_CORRECTIONS=1  Knowledge base: the lists links are held in, so links can be removed, and confirmed facts on one person (#6997)",
     "MOCK_KB_TOPICS=1  Knowledge base: five topics of knowledge points from the example projects and chats (Topics tab, a topic's page, the knowledge map)",
     "MOCK_KB_SELECTION=missing|future|fail  Settings › Knowledge selection: a hub from before it (404) / a document with a field clients don't know / a save the hub refuses (503)",
-    "MOCK_SESSIONS_LIST=1  Paged Agents, counts and exact lookup; list-mode sockets send hints instead of full lists (#6362)",
+    "MOCK_SESSIONS_LIST=1  Paged Agents, counts, exact lookup and by to-do (todo=, #6662); list-mode sockets send hints instead of full lists (#6362)",
     "MOCK_SESSIONS_MANY=<n>  n more idle sessions to page through; GET /mock/sessions/touch expires the old cursors (#4410)",
     "MOCK_SIDE_SESSIONS=1  Two Claude desktop side sessions under the PR review (parent_agent_id, #5935), one waiting for you",
     "MOCK_SESSIONS_CATALOG=1  With MOCK_SESSIONS_LIST=1: catalog=1, place= and space= on the paged list, a Windows PC, one repository on two computers and a plain notes folder on two",
@@ -24405,6 +24596,10 @@ class H(BaseHTTPRequestHandler):
                                    "started_at": ago(minutes=40), "last_activity": ago()})
         if os.environ.get("MOCK_TERMINAL_PANES") and re.fullmatch(r"/api/v1/machines/[^/]+/panes", p):
             time.sleep(float(os.environ.get("MOCK_PANES_DELAY", "0")))  # seconds: a computer slow to answer (#6153)
+            if os.environ.get("MOCK_PANES_FILE"):
+                return self.send_json(mock_panes_file(p.split("/")[4]))
+            if os.environ.get("MOCK_PANES_MANY"):
+                return self.send_json(mock_panes_many(p.split("/")[4]))
             return self.send_json(mock_panes(p.split("/")[4]))
         if p.startswith("/api/v1/sessions/") and p.endswith("/screen"):
             fail = os.environ.get("MOCK_SCREEN_FAIL_AFTER")
@@ -24438,8 +24633,7 @@ class H(BaseHTTPRequestHandler):
             if e is None: return self.send_json({"error": "not found"}, 404)
             # Like the hub's Detail, meta is always there (the entry's own fields unless KB_DETAIL has more). A chat's
             # and a document's say where it came from (source and the source's id), which a per-item selection names.
-            meta = dict(e, source="lark", source_id=e["id"], kind=e.get("extra") or "group") if kind == "chats" else \
-                dict(e, source="lark") if kind == "docs" else e
+            meta = kb_base_meta(kind, e)
             d = dict({"kind": kind, "id": e["id"], "path": "/home/me/.persona/data/%s/%s" % (kind, e["id"]), "meta": meta,
                       "summary": e.get("one_line")}, **KB_DETAIL.get((kind, e["id"]), {}))
             if kind == "recordings": d["meta"] = meeting_detail_meta(e["id"], d.get("meta") or {})
@@ -25211,6 +25405,12 @@ class H(BaseHTTPRequestHandler):
             if meta is not None:
                 meta.update({k: e[k] for k in ("importance", "relevance", "tags") if k in e})
                 if kind == "projects": meta["kind"], meta["status"] = e["extra"].split(" · ")
+            if isinstance(body.get("pinned"), str):  # confirmed facts: "" clears them
+                m = kb_meta(kind, eid)
+                if body["pinned"]: m["pinned"] = body["pinned"]
+                else: m.pop("pinned", None)
+            for field, lst in (("remove_people", "people"), ("remove_chats", "chats"), ("remove_projects", "projects")):
+                for oid in body.get(field) or []: kb_unlink(kind, eid, lst, oid)
             KB_UPDATES.append({"kind": kind, "id": eid, **body})
             return self.send_json({"ok": True})
         if os.environ.get("MOCK_LARK_NATIVE_OLK") and (p == "/test/lark-encryption/reset" or p == "/api/v1/lark/encryption/unlock" or p.endswith(("/encryption/covers", "/encryption/prepare", "/encrypted-messages"))):

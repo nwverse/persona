@@ -497,6 +497,7 @@ function ChainRow({ item, e, tap, onTap, agentState }: { item: InboxItem; e: Cha
   const expandable = canExpand(e);
   const goes = tap.kind === "source" || tap.kind === "route";
   const reported = e.kind === "reported";
+  const text = reported ? (e.detail?.trim() || e.text) : e.text;
   const press = () => (goes ? onTap(tap) : expandable && setOpen((o) => !o));
   return (
     <li data-chain-entry={e.kind} data-chain-id={e.id} data-chain-reported={reported ? "" : undefined}>
@@ -511,7 +512,7 @@ function ChainRow({ item, e, tap, onTap, agentState }: { item: InboxItem; e: Cha
           <span className="min-w-[34px] shrink-0 text-[11.5px] whitespace-nowrap text-ink-3 tabular-nums">{chainTime(e.at)}</span>
           <ChainIcon item={item} e={e} />
           {reported && <Tag>{t("inbox-inboxdetail.assistant_says")}</Tag>}
-          <span className="min-w-0 flex-1 truncate">{e.text}</span>
+          <span className="min-w-0 flex-1 truncate">{text}</span>
           {agentState && <span className="shrink-0 text-[11.5px] whitespace-nowrap text-ink-3" data-chain-agent-state>{agentState}</span>}
           {goes && <Icon name="chevronRight" size={11} stroke={2.4} className="shrink-0 text-ink-3" />}
           {!goes && expandable && <Icon name="chevronRight" size={11} stroke={2.4} className="shrink-0 text-ink-3 transition-transform duration-200" style={{ transform: open ? "rotate(90deg)" : undefined }} />}
