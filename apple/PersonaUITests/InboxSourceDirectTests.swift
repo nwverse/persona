@@ -185,10 +185,11 @@ final class InboxSourceDirectTests: XCTestCase {
         let window = app.windows.firstMatch
         let start: XCUICoordinate
         if regularWidth {
-            let divider = element("split.divider.assistant.list")
-            XCTAssertTrue(divider.waitForExistence(timeout: 5), "no persistent-sidebar divider:\n\(app.debugDescription)")
-            // Just beyond the divider's touch area is the detail column's leading edge.
-            let x = divider.frame.maxX - window.frame.minX + 1
+            // The system starts interactive-pop at the detail navigation bar's leading edge, not the divider's handle.
+            guard let bar = app.navigationBars.allElementsBoundByIndex.last(where: { $0.exists && $0.frame.minX > 50 }) else {
+                return XCTFail("no detail-column navigation bar:\n\(app.debugDescription)")
+            }
+            let x = bar.frame.minX - window.frame.minX + 2
             start = window.coordinate(withNormalizedOffset: .zero)
                 .withOffset(CGVector(dx: x, dy: window.frame.height * 0.5))
         } else {

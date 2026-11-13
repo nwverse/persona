@@ -365,6 +365,7 @@ struct InboxChainSection: View {
                     entry(e)
                 }
             }
+            .accessibilityElement(children: .contain)
             .accessibilityIdentifier("inbox.chain")
             .task(id: CutChain(key: item.key, count: item.chainCount)) { await readWhole() }
         }
