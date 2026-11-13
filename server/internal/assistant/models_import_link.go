@@ -75,8 +75,8 @@ var linkPriority = map[string]map[string]int{
 	"pi":          {cindyChat: 30, cindyResponses: 20, cindyMessages: 10, cindyGoogle: 10},
 }
 
-// parseLink reads t (the paste, trimmed) when it is an import link: one word starting with cindy:// (in any case), or
-// an http(s) address whose fragment has import. ok is false for anything else, which the other readers take (an
+// parseLink reads t (the paste, trimmed) when it is an import link: one word starting with cindy:// or persona:// (in
+// any case), or an http(s) address whose fragment has import. ok is false for anything else, which the other readers take (an
 // address with another fragment is no link). Text whose first word is a link but which goes on after a blank is a
 // link a chat app broke at a space or a line break: which part of it is the data is unknown, so it is refused whole.
 func parseLink(t string) (res pasteResult, ok bool) {
@@ -85,7 +85,8 @@ func parseLink(t string) (res pasteResult, ok bool) {
 		word = t[:i]
 	}
 	cindy := hasPrefixFold(word, "cindy://")
-	if !cindy && !hasPrefixFold(word, "http://") && !hasPrefixFold(word, "https://") {
+	persona := hasPrefixFold(word, "persona://")
+	if !cindy && !persona && !hasPrefixFold(word, "http://") && !hasPrefixFold(word, "https://") {
 		return res, false
 	}
 	// a web link: only its fragment is read, what comes before it is the user's own web address
@@ -94,12 +95,14 @@ func parseLink(t string) (res pasteResult, ok bool) {
 	var data string
 	var n pasteNote
 	switch {
-	case !cindy && params["import"] == nil:
+	case !cindy && !persona && params["import"] == nil:
 		return res, false
 	case word != t:
 		n = pasteNote{Code: noteLinkInvalid}
 	case cindy:
 		data, n = cindyLinkData(word[len("cindy://"):])
+	case persona:
+		data, n = cindyLinkData(word[len("persona://"):])
 	case len(frag) > linkMost:
 		n = pasteNote{Code: noteLinkTooLong}
 	default:
@@ -127,8 +130,8 @@ func hasPrefixFold(s, prefix string) bool {
 	return len(s) >= len(prefix) && strings.EqualFold(s[:len(prefix)], prefix)
 }
 
-// cindyLinkData is the data of a cindy link (rest: what follows cindy://), or why the link is refused: anything but
-// provider/import with v and data once each, nothing after them.
+// cindyLinkData is the data of a cindy or persona link (rest: what follows the scheme), or why the link is refused:
+// anything but provider/import with v and data once each, nothing after them.
 func cindyLinkData(rest string) (string, pasteNote) {
 	if len(rest) > linkMost {
 		return "", pasteNote{Code: noteLinkTooLong}
