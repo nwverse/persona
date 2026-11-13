@@ -439,15 +439,28 @@ displays to offer; on a narrow screen the button keeps only its icon). The rules
 
 A hardware video channel next to RFB, so the phone shows a Mac's screen at a fraction of today's bitrate for the same
 picture (from #3067's frames: 0.27–0.31 Mbit/s as HEVC at SSIM ≥ 0.98, against 2.1–2.6 as ZRLE). RFB stays open for
-input, the clipboard and as the fallback; only the picture moves to video. Off by default behind DEBUG
-`-showScreenVideo NO` until the PoC passes its gates; the web, the Mac app and Android keep RFB.
+input, the clipboard and as the fallback; only the picture moves to video. The phone and the web offer it only for a
+Mac whose node advertises `screen_video`, which a node does once it has the helper (the picture switcher in ⋯ stays
+hidden otherwise); until then every client shows RFB. The web, the Mac app and Android don't decode video yet.
 
 - **Persona Screen** (`apple/PersonaLink/Sources/PersonaScreen`, `PersonaScreenKit`): a Swift helper app inside
   Persona Link.app (`Contents/Helpers/Persona Screen.app`, bundle id `<link id>.screen`) that captures one display
   with ScreenCaptureKit and encodes it with VideoToolbox (HEVC Main, else H.264 High). It is an app bundle so its
   Screen Recording grant is its own, not the node's: the node starts it through LaunchServices
   (`open -g -n -b <id>.screen --args --socket <path> --token <t>`), and it connects back over a 0600 Unix socket, one
-  per stream, whose first line is the token. `--request-permission` calls `CGRequestScreenCaptureAccess()` and exits.
+  per stream, whose first line is the token. `--request-permission` calls `CGRequestScreenCaptureAccess()` and exits;
+  `--preflight` prints whether Screen Recording is granted without asking (`CGPreflightScreenCaptureAccess()`), which
+  the node reports as `screen_video.permission`.
+  - **Capture** (`ScreenCaptureSource`): the encoder settings gate ① measured (`RealTime`, low-latency rate control,
+    no frame reordering, `MaxFrameDelayCount` 0, capture queue depth 3, NV12 straight into the encoder; ≈5 ms p50 and
+    ≈10 ms p95 from a screen change to an encoded frame at 1080p60). The picture's long edge is at most `start.max_size`
+    (never upscaled, even sides), the frame rate 1–60, and a keyframe comes at least every 10 s and whenever asked.
+  - **Messages**: `start` gets `hello` (codec, display, size), then `format` and a keyframe; `format` again whenever the
+    parameter sets change. A still screen gives no frames, so a `heartbeat` goes out each second nothing did.
+    `update` changes the bitrate cap and frame rate in place; a new display, size or codec restarts capture with a
+    fresh `hello`, `format` and keyframe. `paused` says why capture stopped (`permission`, `locked`, `login_window`,
+    `display_gone`, `busy`); when the Mac unlocks it sends `resumed` and starts again. The stream closing ends the
+    helper.
 - **Node** (`screen.dial {id, pair, keep_awake}`): starts the helper and joins its socket to the stream, or refuses
   with `video_unavailable` (no helper or no permission), `not_signed_in` (no RFB stream with this `pair` past Screen
   Sharing's SecurityResult) or `busy` (two streams already open). It binds the video to the signed-in 5900 stream
@@ -459,8 +472,12 @@ input, the clipboard and as the fallback; only the picture moves to video. Off b
 - **Wire** (length-prefixed messages: u32 big-endian length, u8 type, body). Helper → phone: `hello`, `format`,
   `frame`, `heartbeat`, `paused`, `resumed`. Phone → helper: `start`, `report`, `keyframe`, `update`. Unknown types
   are skipped by length, so either side may add more. `PersonaScreenKit` is the codec, shared with the app's client.
-- **Adaptation**: the phone reports when each frame arrived; the helper turns that into a queueing delay and cuts the
-  bitrate 30% over 150 ms, skips frames over 500 ms, and raises it 10% under 50 ms for 2 s. The phone caps it: 12 Mbit/s
+- **Adaptation** (`RateController`): the phone reports when each frame arrived; the helper turns that into a queueing
+  delay and cuts the bitrate 30% over 150 ms, skips frames over 500 ms, and raises it 10% under 50 ms for 2 s. The
+  delay is measured above the lowest one-way delay of the last 10 s, so the phone's and the Mac's clocks needn't agree.
+  After a cut the next waits 500 ms, so one congested moment cuts once; while skipping, one frame still goes every
+  250 ms, so reports keep saying when the queue has drained. A stream starts at the phone's cap but at most 4 Mbit/s,
+  and never goes below 0.2. The phone caps it: 12 Mbit/s
   on Wi-Fi, 4 on cellular, 1.5 in Low Data Mode; 15 fps in Low Power Mode or a serious thermal state.
 - **Switching**: RFB signs in first and shows until the first video frame decodes; the phone then stops asking RFB for
   updates (Screen Sharing encodes nothing meanwhile). It returns to RFB within about a second on any of: the stream

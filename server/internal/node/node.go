@@ -717,6 +717,15 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return nil, fmt.Errorf("bad params: %w", err)
 		}
 	}
+	hasSelectedSkills := false
+	if method == "session.send" && !n.isAssistantSession(p.SessionID) {
+		refs, err := assistantskills.References(p.Text)
+		if err != nil {
+			return nil, skillSelectionError(err)
+		}
+		hasSelectedSkills = len(refs) > 0
+		ctx = withSkillOwner(ctx, p.SkillOwner)
+	}
 	if isCodexWaitID(p.SessionID) && (strings.HasPrefix(method, "session.") || strings.HasPrefix(method, "terminal.")) {
 		// A Codex opened with no first message (codex_waiting.go): the thread it became since the client looked, or
 		// what its row answers while it waits.
@@ -724,6 +733,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			p.SessionID, params = t, withSessionID(params, t)
 		} else if w := n.codexWaitByID(p.SessionID); w != nil {
 			if method == "session.send" {
+				if hasSelectedSkills {
+					return nil, skillSelectionError(assistantskills.ErrReference)
+				}
 				return n.sendFirstCodexCall(ctx, w, params, p.Text, p.Images)
 			}
 			if r, err, handled := n.codexWaitCalls(method, p.SessionID); handled {
@@ -748,6 +760,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	}
 	if n.codexBlocked(p.ResumeSessionID) && devicewire.IsSessionStart(method) {
 		return nil, refusal("identity_conflict", "会话 ID 与另一来源重复，不能恢复", nil)
+	}
+	if method == "session.skills" {
+		return n.sessionSkillCatalog(ctx, p.SkillOwner, p.SessionID)
 	}
 	if devicewire.IsSessionStart(method) && n.externalCodex(p.ResumeSessionID) && !n.codexResumable(withStartHost(ctx, p.Host), p.ResumeSessionID) { // codex_resume.go
 		return nil, refusal("codex_read_only", "外部 Codex 会话只能接入原 app-server，不能用启动器恢复", nil)
@@ -824,6 +839,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	} else if h, err := n.runtimeFor(ctx, method, p.SessionID); err != nil {
 		return nil, err
 	} else if h != nil {
+		if hasSelectedSkills {
+			return nil, skillSelectionError(assistantskills.ErrReference)
+		}
 		if err := n.switchNowElsewhere(method, p.SessionID, params); err != nil {
 			return nil, err // the runtime would take the message without the switch (launcher_switch.go)
 		}
@@ -831,6 +849,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return res, err
 		}
 	} else if r, ok := n.terminalOnly(p.SessionID); ok { // a pi or opencode without its extension, any other agent (opencode.go)
+		if hasSelectedSkills {
+			return nil, skillSelectionError(assistantskills.ErrReference)
+		}
 		if err := n.switchNowElsewhere(method, p.SessionID, params); err != nil {
 			return nil, err
 		}
