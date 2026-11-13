@@ -1823,7 +1823,7 @@ func TestInboxGroupDMFallbackNewMutedDoneStaysDone(t *testing.T) {
 
 // Reopening a done target does not mark its handling as looking when the twin is disabled.
 func TestInboxGroupDMFallbackNewReopenLeavesTwinDisabled(t *testing.T) {
-	g, h, open, done := groupDMJoinFixture(t, connector.GroupFallbackResult{
+	_, h, open, done := groupDMJoinFixture(t, connector.GroupFallbackResult{
 		New: []connector.GroupNew{{Key: "k1", Messages: []string{"m1060", "m1061"}, RuleTier: connector.TierAction}},
 	})
 	now := time.Now()
@@ -1842,6 +1842,8 @@ func TestInboxGroupDMFallbackNewReopenLeavesTwinDisabled(t *testing.T) {
 	if done.Handling.State == HandlingLooking {
 		t.Fatalf("the disabled twin was woken: %+v", done.Handling)
 	}
+	h.inbox.mu.Lock()
+	defer h.inbox.mu.Unlock()
 	for _, n := range done.Agent.Pending {
 		if n.Name == prompts.NoteNewMessages {
 			t.Fatalf("new messages queued for the disabled twin: %+v", done.Agent.Pending)
