@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
 )
 
@@ -118,5 +119,39 @@ func TestMutesOfWhere(t *testing.T) {
 	it.Where = ""
 	if got := fmt.Sprint(mutesOf(it)); got != "[{chat f1 Latest message}]" {
 		t.Fatalf("without a where the title names the chat: %s", got)
+	}
+}
+
+// Grouped events take where on the model, fallback and done-event writes too; fallback title preservation does not
+// restore an old chat name, and the listed JSON carries the current one.
+func TestPutEventWhere(t *testing.T) {
+	h := newInboxHub(t)
+	source := assistantwire.InboxSource{ID: "lark", Name: "Chat"}
+	thing := connector.InboxThing{ID: "lark:10:5", Thread: "chat:10", Kind: KindGroup, At: time.Now(), Tags: chatTags("Example Group"),
+		Extra: &connector.ThingExtra{Source: "lark", Count: 1, Lark: rawJSON(InboxLark{FeedID: "10", IsGroup: true, StartPosition: "5"})}}
+	existing := ""
+	write := func(last, name, title string, byModel bool) *InboxItem {
+		thing.Last, thing.Title, thing.Tags = last, title, chatTags(name)
+		it := h.putEvent(source, thing.Thread, plannedEvent{existing: existing, messages: []string{last}, title: title, tier: TierAction}, thing, byModel)
+		existing = thing.ID
+		return it
+	}
+	it := write("5", "Example Group", "Model title", true)
+	if it == nil || it.Where != "Example Group" {
+		t.Fatalf("model event: %+v", it)
+	}
+	listed, _ := json.Marshal(it.listed())
+	if !strings.Contains(string(listed), `"where":"Example Group"`) {
+		t.Fatalf("grouped event is not listed with where: %s", listed)
+	}
+	it = write("6", "Renamed Group", "Fallback title", false)
+	if it == nil || it.Where != "Renamed Group" || it.Title != "Model title" {
+		t.Fatalf("fallback event: %+v", it)
+	}
+	done := time.Now()
+	it.DoneAt, it.DoneBy = &done, "user"
+	it = write("7", "Latest Group", "Reopened title", true)
+	if it == nil || it.Where != "Latest Group" {
+		t.Fatalf("done event's next write: %+v", it)
 	}
 }
