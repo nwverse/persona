@@ -26,7 +26,7 @@ struct TerminalOnlyAgentTests {
     @Test func otherSessionsKeepTheMenuEntry() throws {
         #expect(!(try session(reason).isTerminalOnly)) // an older hub names no agent: Claude Code
         for agent in ["claude", "codex", "traex"] {
-            #expect(!(try session(#","agent":"\#(agent)""# + reason).isTerminalOnly), agent)
+            #expect(!(try session(#","agent":"\#(agent)""# + reason).isTerminalOnly), "\(agent)")
         }
         #expect(!(try session(#","agent":"kiro","assistant":true"#+reason).isTerminalOnly))
         // A runtime's session (pi-web, cindy, paseo…) has its own chat.
