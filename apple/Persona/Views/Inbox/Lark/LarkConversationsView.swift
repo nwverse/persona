@@ -299,10 +299,14 @@ private struct LarkConversationsPage: View {
             filter(.all, title: String(localized: "lark.filter.all"), proxy: proxy)
             filter(.unread, title: String(localized: "lark.filter.unread"), proxy: proxy)
         }
-        .padding(Theme.Space.xxs)
-        .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.control))
+        .padding(.horizontal, Theme.Space.xxs)
+        .background {
+            RoundedRectangle(cornerRadius: Theme.Radius.control)
+                .fill(Theme.Fill.well)
+                .padding(.vertical, Theme.Space.sm)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, Theme.Space.page)
-        .padding(.vertical, Theme.Space.s)
         .background(Theme.pageBackground)
     }
 
@@ -313,15 +317,15 @@ private struct LarkConversationsPage: View {
             Haptics.tap()
         } label: {
             Text(title)
-                .font(selected ? Theme.Font.secondaryStrong : Theme.Font.secondary)
+                .font(selected ? Theme.Font.captionStrong : Theme.Font.caption)
                 // Section headers supply a secondary foreground; explicit semantic colors keep these controls legible.
                 .foregroundStyle(selected ? Color.primary : Color.secondary)
                 .lineLimit(1)
-                .frame(maxWidth: .infinity)
-                .padding(.horizontal, Theme.Space.s)
+                .padding(.horizontal, Theme.Space.l)
                 .padding(.vertical, Theme.Space.xs)
-                .tapTargetHeight()
                 .background(selected ? Theme.Fill.pressed : .clear, in: .rect(cornerRadius: Theme.Radius.control))
+                .padding(.vertical, Theme.Space.s)
+                .tapTargetHeight()
                 .contentShape(.rect)
         }
         .buttonStyle(.plain)
