@@ -43,8 +43,10 @@ final class WalkNavigation {
     private(set) var phase: Phase = .planning
     private(set) var route: WalkRoute?
     private(set) var progress: WalkProgress?
-    /// The latest fix on the route's map (the simulated walker's in DEBUG; the system draws the real one).
+    /// The latest fix (the simulated walker's in DEBUG).
     private(set) var fix: CLLocationCoordinate2D?
+    /// Which way the walker faces, 0…360 from north: the phone's course while it moves, else the route's way there.
+    private(set) var heading: Double?
     /// A DEBUG walk: no location updates or voice, the walker placed on the route.
     private(set) var simulated = false
     var muted: Bool {
@@ -98,9 +100,10 @@ final class WalkNavigation {
         route = nil
         progress = nil
         fix = nil
+        heading = nil
         simulated = false
         phase = .planning
-        announcer.reset()
+        announcer = WalkAnnouncer()
         reroute = WalkReroute()
         isPresented = false
     }
@@ -149,6 +152,7 @@ final class WalkNavigation {
         let now = WalkGuide.progress(of: coordinate, on: route, hint: progress?.segment ?? 0)
         fix = coordinate
         progress = now
+        heading = location.course >= 0 && location.speed >= 0.5 ? location.course : route.bearing(at: now.segment)
         let arrived = WalkGuide.arrived(coordinate, now, on: route)
         if let line = announcer.due(now, on: route, arrived: arrived) { say(line) }
         if arrived {
@@ -215,11 +219,8 @@ final class WalkNavigation {
     /// The words for a line of guidance: Apple's instruction, with how far ahead when it isn't right here.
     nonisolated static func words(_ line: WalkAnnouncer.Line, on route: WalkRoute) -> String? {
         switch line {
-        case .start(let step):
-            let instruction = route.steps[step].instruction
-            return instruction.isEmpty
-                ? String(localized: "Walking to \(route.name) [Walk Navigation]")
-                : String(localized: "Walking to \(route.name). \(instruction) [Walk Navigation]")
+        case .start:
+            return String(localized: "Walking to \(route.name) [Walk Navigation]")
         case .maneuver(let step, let meters):
             let instruction = route.steps[step].instruction
             guard !instruction.isEmpty else { return nil }
@@ -257,39 +258,49 @@ final class WalkNavigation {
         simulated = true
         route = sample
         let meters = value == "end" ? sample.length : min(Double(value) ?? 0, sample.length)
-        let at = Self.point(on: sample, at: meters)
-        fix = at
-        progress = WalkGuide.progress(of: at, on: sample)
+        let at = sample.point(at: meters)
+        fix = at.coordinate
+        heading = at.bearing
+        progress = WalkGuide.progress(of: at.coordinate, on: sample)
         phase = value == "end" ? .arrived : .guiding
         isPresented = true
     }
 
-    private static func point(on route: WalkRoute, at meters: Double) -> CLLocationCoordinate2D {
-        guard let i = route.along.lastIndex(where: { $0 <= meters }), i < route.line.count - 1 else { return route.line.last! }
-        let span = route.along[i + 1] - route.along[i]
-        let t = span > 0 ? (meters - route.along[i]) / span : 0
-        let a = route.line[i], b = route.line[i + 1]
-        return CLLocationCoordinate2D(latitude: a.latitude + t * (b.latitude - a.latitude),
-                                      longitude: a.longitude + t * (b.longitude - a.longitude))
-    }
     #endif
 }
 
 #if DEBUG
 extension WalkRoute {
-    /// The mock hub's walk to the second cafe (scripts/mock/mock_hub.py, MOCK_PLACE_MAP): east, right, then left.
+    /// The mock hub's walk to the second cafe (scripts/mock/mock_hub.py, MOCK_PLACE_MAP), as Apple Maps worked it out
+    /// for those two points (walking, 979 m, Chinese instructions), so screenshots follow real streets.
     static let sample = WalkRoute(
         name: "安静书房咖啡", // i18n-ignore: the mock hub's place
-        destination: CLLocationCoordinate2D(latitude: 31.2291, longitude: 121.4769),
+        destination: CLLocationCoordinate2D(latitude: 31.229074, longitude: 121.476983),
         steps: [
-            WalkStep(instruction: "沿人民大道向东走", // i18n-ignore: Apple's instruction, as the mock route gives it
-                     line: [.init(latitude: 31.2310, longitude: 121.4730), .init(latitude: 31.2310, longitude: 121.4752)]),
-            WalkStep(instruction: "右转进入西藏中路", // i18n-ignore: Apple's instruction, as the mock route gives it
-                     line: [.init(latitude: 31.2310, longitude: 121.4752), .init(latitude: 31.2291, longitude: 121.4752)]),
-            WalkStep(instruction: "左转进入延安东路，目的地在右侧", // i18n-ignore: Apple's instruction, as the mock route gives it
-                     line: [.init(latitude: 31.2291, longitude: 121.4752), .init(latitude: 31.2291, longitude: 121.4769)]),
+            WalkStep(instruction: "右转", // i18n-ignore: Apple's instruction
+                     line: [.init(latitude: 31.231799, longitude: 121.473693), .init(latitude: 31.231729, longitude: 121.473719), .init(latitude: 31.231605, longitude: 121.473809)]),
+            WalkStep(instruction: "右转", // i18n-ignore: Apple's instruction
+                     line: [.init(latitude: 31.231605, longitude: 121.473809), .init(latitude: 31.231588, longitude: 121.473733), .init(latitude: 31.231620, longitude: 121.473679), .init(latitude: 31.231699, longitude: 121.473567), .init(latitude: 31.231756, longitude: 121.473517), .init(latitude: 31.232081, longitude: 121.473239), .init(latitude: 31.232212, longitude: 121.473067), .init(latitude: 31.232780, longitude: 121.472620)]),
+            WalkStep(instruction: "左转", // i18n-ignore: Apple's instruction
+                     line: [.init(latitude: 31.232780, longitude: 121.472620), .init(latitude: 31.232898, longitude: 121.473251), .init(latitude: 31.232911, longitude: 121.473771), .init(latitude: 31.232892, longitude: 121.474028), .init(latitude: 31.232792, longitude: 121.474432), .init(latitude: 31.232673, longitude: 121.474727), .init(latitude: 31.232550, longitude: 121.474968), .init(latitude: 31.232404, longitude: 121.475204), .init(latitude: 31.232329, longitude: 121.475289)]),
+            WalkStep(instruction: "右转", // i18n-ignore: Apple's instruction
+                     line: [.init(latitude: 31.232329, longitude: 121.475289), .init(latitude: 31.232386, longitude: 121.475370), .init(latitude: 31.232442, longitude: 121.475450)]),
+            WalkStep(instruction: "左转", // i18n-ignore: Apple's instruction
+                     line: [.init(latitude: 31.232442, longitude: 121.475450), .init(latitude: 31.232394, longitude: 121.475463), .init(latitude: 31.231912, longitude: 121.475619), .init(latitude: 31.231725, longitude: 121.475719)]),
+            WalkStep(instruction: "继续前行", // i18n-ignore: Apple's instruction
+                     line: [.init(latitude: 31.231725, longitude: 121.475719), .init(latitude: 31.231756, longitude: 121.475764), .init(latitude: 31.231844, longitude: 121.475884)]),
+            WalkStep(instruction: "左转", // i18n-ignore: Apple's instruction
+                     line: [.init(latitude: 31.231844, longitude: 121.475884), .init(latitude: 31.231725, longitude: 121.475971), .init(latitude: 31.231717, longitude: 121.475976), .init(latitude: 31.231653, longitude: 121.475842), .init(latitude: 31.231570, longitude: 121.475899), .init(latitude: 31.231296, longitude: 121.476087), .init(latitude: 31.231320, longitude: 121.476129), .init(latitude: 31.230797, longitude: 121.476502)]),
+            WalkStep(instruction: "右转进入西藏中路", // i18n-ignore: Apple's instruction
+                     line: [.init(latitude: 31.230797, longitude: 121.476502), .init(latitude: 31.230818, longitude: 121.476548), .init(latitude: 31.230904, longitude: 121.476725)]),
+            WalkStep(instruction: "稍向右转，进入武胜路", // i18n-ignore: Apple's instruction
+                     line: [.init(latitude: 31.230904, longitude: 121.476725), .init(latitude: 31.230780, longitude: 121.476822), .init(latitude: 31.230268, longitude: 121.477209)]),
+            WalkStep(instruction: "稍向右转", // i18n-ignore: Apple's instruction
+                     line: [.init(latitude: 31.230268, longitude: 121.477209), .init(latitude: 31.230107, longitude: 121.477198), .init(latitude: 31.229329, longitude: 121.477144), .init(latitude: 31.229276, longitude: 121.477133)]),
+            WalkStep(instruction: "到达目的地", // i18n-ignore: Apple's instruction
+                     line: [.init(latitude: 31.229276, longitude: 121.477133), .init(latitude: 31.229247, longitude: 121.477084), .init(latitude: 31.229195, longitude: 121.477052), .init(latitude: 31.229074, longitude: 121.476983)]),
         ],
-        expectedSeconds: 420
+        expectedSeconds: 1028
     )
 }
 #endif

@@ -123,6 +123,14 @@ nonisolated enum Theme {
     static let brand = Palette.coral
     static var danger: Color { spec.extensionColors?.danger ?? Role.dangerColor }
 
+    /// Walking navigation's own colors (#6672), as navigation apps draw guidance over a map: a dark slate panel that sets
+    /// the next turn apart from any map, the side of the turn arrow standing on the road, and the way already walked.
+    enum Navigation {
+        static let panel = Color(light: 0x253240, dark: 0x1B2530)
+        static let arrowSide = Color(light: 0x7F93A8, dark: 0x4F6073)
+        static let walked = Color(light: 0xAAB4BE, dark: 0x5A6570)
+    }
+
     // Meanings that are not agent states. Never use a state color (StatusPalette) for these: changing a state color
     // must not recolor diffs, warnings or categories.
     /// Success and "connected / online / usable" outside the agent states (toasts, the hub dot, a finished to-do).
@@ -521,6 +529,10 @@ nonisolated enum Theme {
         /// How much of a long quote in a reply shows while it is folded (about four lines of body text, #2984).
         static let quoteFold: CGFloat = 104
         static let barWide: CGFloat = 4
+        /// Walking navigation's route line and the casing drawn under it (#6672), thick enough for chevrons inside,
+        /// as navigation apps draw a route.
+        static let routeLine: CGFloat = 16
+        static let routeCasing: CGFloat = 20
         /// A share bar's thickness (the assistant's stacked-bar card).
         static let meter: CGFloat = 12
         /// An Agent chat's header folded into its slim bar (Android `Tokens.Size.slimBar`).

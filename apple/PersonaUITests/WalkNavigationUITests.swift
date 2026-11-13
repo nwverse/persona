@@ -32,11 +32,11 @@ final class WalkNavigationUITests: XCTestCase {
     }
 
     @MainActor func testAWalkShowsTheNextTurnMutesAndGoesBackToTheChat() throws {
-        let app = launch("150")
+        let app = launch("700")
         let any = app.descendants(matching: .any)
         let banner = any["walk-nav.banner"].firstMatch
         XCTAssertTrue(banner.waitForExistence(timeout: 20), "no navigation screen:\n\(app.debugDescription)")
-        // 150 m along the first street: the right turn is next, about 60 m ahead.
+        // 700 m along the sample walk: the right turn onto Xizang Road is next, about 30 m ahead, then a slight right.
         XCTAssertTrue(banner.label.contains("西藏中路"), "the banner does not show the next turn: \(banner.label)")
         XCTAssertTrue(any["walk-nav.left"].firstMatch.exists, "no time and distance left")
         sleep(2) // the map's tiles

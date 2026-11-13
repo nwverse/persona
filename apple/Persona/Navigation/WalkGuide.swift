@@ -5,11 +5,13 @@ import Foundation
 // how far the next maneuver and the end are, when they have left the route or arrived, and what to say when. No
 // Core Location manager, MapKit request or timer here, so all of it runs in unit tests (WalkGuideTests).
 
-/// One step of a walking route as `MKDirections` gives it: the instruction for the maneuver where the step starts
-/// ("Turn right onto Nanjing Road"), in the phone's language, and the line walked after it.
+/// One step of a walking route as `MKDirections` gives it: the line to walk, and the instruction for the maneuver
+/// where that line ends ("Turn right onto Nanjing Road"), in the phone's language. Apple's walking routes read that
+/// way: a first step with no length ("start the route"), each instruction turning the way the line turns at the step's
+/// end, and a last step whose end is the destination ("arrive at the destination").
 nonisolated struct WalkStep: Equatable, Sendable {
     var instruction: String
-    /// The step's own line, from its maneuver to the next one.
+    /// The step's own line, from the maneuver before to its own.
     var line: [CLLocationCoordinate2D]
 
     static func == (a: WalkStep, b: WalkStep) -> Bool {
@@ -20,7 +22,7 @@ nonisolated struct WalkStep: Equatable, Sendable {
 /// How a maneuver turns, from the angle between the way in and the way out. `MKRoute.Step` has no maneuver type, so
 /// the arrow on the screen is read off the line itself.
 nonisolated enum WalkManeuver: Equatable, Sendable {
-    case start, straight, slightLeft, slightRight, left, right, sharpLeft, sharpRight, uTurn, arrive
+    case straight, slightLeft, slightRight, left, right, sharpLeft, sharpRight, uTurn, arrive
 
     /// A turn of `degrees` (positive: clockwise, to the right).
     static func turn(_ degrees: Double) -> WalkManeuver {
@@ -36,7 +38,7 @@ nonisolated enum WalkManeuver: Equatable, Sendable {
 }
 
 /// A walking route ready to guide: its steps with the empty ones dropped, the whole line, and where each step starts
-/// along it.
+/// and ends along it.
 nonisolated struct WalkRoute: Sendable {
     var name: String
     var destination: CLLocationCoordinate2D
@@ -51,11 +53,15 @@ nonisolated struct WalkRoute: Sendable {
     let stepStarts: [Double]
     /// The index in `line` where each step starts.
     let stepFirstPoint: [Int]
+    /// Meters along `line` where each step ends: where its maneuver is.
+    let stepEnds: [Double]
+    /// The index in `line` where each step ends.
+    let stepLastPoint: [Int]
 
     var length: Double { along.last ?? 0 }
 
-    /// Drops what `MKDirections` adds that guides nobody: steps without a line, and the first step's empty instruction
-    /// when it has no length ("start here"). Nil when nothing walkable is left.
+    /// Drops what `MKDirections` adds that guides nobody: steps without a line (the first one, "start the route").
+    /// Nil when nothing walkable is left.
     init?(name: String, destination: CLLocationCoordinate2D, steps: [WalkStep], expectedSeconds: Double) {
         let kept = steps.filter { $0.line.count >= 2 }
         guard !kept.isEmpty else { return nil }
@@ -80,13 +86,96 @@ nonisolated struct WalkRoute: Sendable {
         self.along = along
         self.stepFirstPoint = firsts
         self.stepStarts = firsts.map { along[$0] }
+        let lasts = Array(firsts.dropFirst()) + [line.count - 1]
+        self.stepLastPoint = lasts
+        self.stepEnds = lasts.map { along[$0] }
     }
 
-    /// The maneuver where step `i` starts: the first is where the walk starts; the others turn by the angle between
-    /// the end of the line before and the start of the line after.
+    /// The compass bearing of the line's segment `i` (from point `i` to the next), the way the walker faces there.
+    func bearing(at segment: Int) -> Double {
+        let i = max(0, min(segment, line.count - 2))
+        return WalkGeo.bearing(line[i], line[i + 1])
+    }
+
+    /// The point `meters` along the line, and the bearing of the segment it is on.
+    func point(at meters: Double) -> (coordinate: CLLocationCoordinate2D, bearing: Double) {
+        let d = max(0, min(meters, length))
+        let i = min((along.lastIndex { $0 <= d }) ?? 0, line.count - 2)
+        let span = along[i + 1] - along[i]
+        let t = span > 0 ? (d - along[i]) / span : 0
+        let a = line[i], b = line[i + 1]
+        let at = CLLocationCoordinate2D(latitude: a.latitude + t * (b.latitude - a.latitude),
+                                        longitude: a.longitude + t * (b.longitude - a.longitude))
+        return (at, WalkGeo.bearing(a, b))
+    }
+
+    /// Where the marks that show the way go on the line ahead: every `every` meters from `from` (leaving room
+    /// around the walker and before the end), at most `most` of them.
+    func arrows(from meters: Double, every: Double = 45, most: Int = 24)
+        -> [(coordinate: CLLocationCoordinate2D, bearing: Double, meters: Double)] {
+        guard every > 0 else { return [] }
+        var out: [(CLLocationCoordinate2D, Double, Double)] = []
+        var d = meters + every / 2
+        while d < length - every / 3, out.count < most {
+            let p = point(at: d)
+            out.append((p.coordinate, p.bearing, d))
+            d += every
+        }
+        return out
+    }
+
+    /// The line between `from` and `to` meters along it.
+    func slice(from a: Double, to b: Double) -> [CLLocationCoordinate2D] {
+        let lo = max(0, min(a, length)), hi = max(lo, min(b, length))
+        var out = [point(at: lo).coordinate]
+        for i in line.indices where along[i] > lo && along[i] < hi { out.append(line[i]) }
+        out.append(point(at: hi).coordinate)
+        return out
+    }
+
+    /// Chevrons lying on the road ahead, pointing the way, as navigation apps print a route's texture: a close row of
+    /// them, each its back-left point, tip and back-right point, `size` meters, every `every` meters from `from`, none
+    /// within `clear` (the maneuver arrow's stretch).
+    func chevrons(from meters: Double, every: Double = 11, size: Double = 2.2, clear: ClosedRange<Double>? = nil)
+        -> [[CLLocationCoordinate2D]] {
+        arrows(from: meters, every: every, most: 90).filter { clear?.contains($0.meters) != true }.map { p in
+            let back = WalkGeo.offset(p.coordinate, meters: size, bearing: p.bearing + 180)
+            return [WalkGeo.offset(back, meters: size, bearing: p.bearing - 90), p.coordinate,
+                    WalkGeo.offset(back, meters: size, bearing: p.bearing + 90)]
+        }
+    }
+
+    /// The stretch of the route the maneuver arrow at step `i`'s end covers: `before` meters up to it, `after` past it.
+    func arrowStretch(_ i: Int, before: Double = 25, after: Double = 15) -> ClosedRange<Double>? {
+        guard i >= 0, i < steps.count - 1 else { return nil }
+        let at = stepEnds[i]
+        return max(0, at - before)...min(length, at + after)
+    }
+
+    /// The arrow painted on the road at step `i`'s maneuver, as navigation apps draw the next turn: a shaft along the
+    /// route over `arrowStretch`, and a head, a triangle `head` meters long pointing the way out. None for arriving.
+    func maneuverArrow(_ i: Int, head: Double = 9) -> (shaft: [CLLocationCoordinate2D], head: [CLLocationCoordinate2D])? {
+        guard let stretch = arrowStretch(i), stretch.upperBound > stretch.lowerBound else { return nil }
+        let shaft = slice(from: stretch.lowerBound, to: stretch.upperBound)
+        let end = point(at: stretch.upperBound).coordinate
+        // The way out at the very end, measured just before it: at a corner `point(at:)` already faces the next leg.
+        let way = point(at: max(stretch.lowerBound, stretch.upperBound - 0.5)).bearing
+        let tip = WalkGeo.offset(end, meters: head, bearing: way)
+        let left = WalkGeo.offset(end, meters: head * 0.8, bearing: way - 90)
+        let right = WalkGeo.offset(end, meters: head * 0.8, bearing: way + 90)
+        return (shaft, [left, tip, right])
+    }
+
+    /// Where step `i`'s maneuver is, on the line: where the step ends.
+    func maneuverPoint(_ i: Int) -> CLLocationCoordinate2D {
+        line[stepLastPoint[max(0, min(i, steps.count - 1))]]
+    }
+
+    /// The maneuver at the end of step `i`: the last step's is arriving; the others turn by the angle between the end of
+    /// their line and the start of the next.
     func maneuver(at i: Int) -> WalkManeuver {
-        guard i > 0, i < steps.count else { return i >= steps.count ? .arrive : .start }
-        let p = stepFirstPoint[i]
+        guard i >= 0, i < steps.count - 1 else { return .arrive }
+        let p = stepLastPoint[i]
         guard let before = WalkGeo.pointBack(line, from: p, meters: 8),
               let after = WalkGeo.pointAhead(line, from: p, meters: 8) else { return .straight }
         let into = WalkGeo.bearing(before, line[p])
@@ -97,13 +186,13 @@ nonisolated struct WalkRoute: Sendable {
 
 /// Where the walker is on the route.
 nonisolated struct WalkProgress: Equatable, Sendable {
-    /// The step being walked.
+    /// The step being walked; its instruction is the next maneuver.
     var step: Int
     /// Meters along the route of the fix's nearest point.
     var along: Double
     /// Meters from the fix to the route.
     var offRoute: Double
-    /// Meters to the next maneuver (the start of the next step), or to the end on the last step.
+    /// Meters to the next maneuver: the end of the step being walked.
     var toNext: Double
     /// Meters left to the destination.
     var remaining: Double
@@ -112,8 +201,8 @@ nonisolated struct WalkProgress: Equatable, Sendable {
     /// The segment of the line the fix fell on, the hint for the next fix.
     var segment: Int
 
-    /// The next maneuver's step, or nil when the next thing is arriving.
-    func nextStep(in route: WalkRoute) -> Int? { step + 1 < route.steps.count ? step + 1 : nil }
+    /// The step after the one being walked, whose maneuver comes after the next; nil on the last step.
+    func thenStep(in route: WalkRoute) -> Int? { step + 1 < route.steps.count ? step + 1 : nil }
 }
 
 nonisolated enum WalkGuide {
@@ -141,7 +230,7 @@ nonisolated enum WalkGuide {
         }
         let along = best.along
         let step = max(0, (route.stepStarts.lastIndex { $0 <= along + 0.01 }) ?? 0)
-        let next = step + 1 < route.stepStarts.count ? route.stepStarts[step + 1] : route.length
+        let next = route.stepEnds[step]
         let remaining = max(0, route.length - along)
         let seconds = route.length > 0 ? route.expectedSeconds * remaining / route.length : 0
         return WalkProgress(step: step, along: along, offRoute: best.distance, toNext: max(0, next - along),
@@ -187,22 +276,23 @@ nonisolated struct WalkReroute: Sendable {
     }
 }
 
-/// What the voice says and when: the first instruction at the start, each maneuver once as it comes within `ahead`
-/// meters, and the arrival. A step shorter than that is said as soon as the walker is on the step before.
+/// What the voice says and when: that the walk starts, each maneuver once as it comes within `ahead` meters (at once
+/// on a step shorter than that), and the arrival.
 nonisolated struct WalkAnnouncer: Sendable {
     /// How far ahead of a maneuver it is said: about half a minute's walk.
     static let ahead = 40.0
 
     /// What is due.
     nonisolated enum Line: Equatable, Sendable {
-        /// The walk starts: step 0's instruction.
-        case start(step: Int)
-        /// The maneuver starting `step`, `meters` ahead.
+        /// The walk starts.
+        case start
+        /// The maneuver at the end of `step`, `meters` ahead.
         case maneuver(step: Int, meters: Double)
         case arrived
     }
 
     private(set) var said: Set<Int> = []
+    private(set) var saidStart = false
     private(set) var saidArrival = false
 
     /// The line due for `progress`, if any, marked as said.
@@ -212,17 +302,17 @@ nonisolated struct WalkAnnouncer: Sendable {
             saidArrival = true
             return .arrived
         }
-        if !said.contains(0) {
-            said.insert(0)
-            // Already past the start's step (a new route from where the walker is), straight to what comes next.
-            if progress.step == 0 { return .start(step: 0) }
+        if !saidStart {
+            saidStart = true
+            return .start
         }
-        guard let next = progress.nextStep(in: route), !said.contains(next), progress.toNext <= Self.ahead else { return nil }
-        said.insert(next)
-        return .maneuver(step: next, meters: progress.toNext)
+        let step = progress.step
+        guard !said.contains(step), progress.toNext <= Self.ahead else { return nil }
+        said.insert(step)
+        return .maneuver(step: step, meters: progress.toNext)
     }
 
-    /// Forgets what was said, for a new route.
+    /// Forgets the maneuvers said, for a new route (the start was said already).
     mutating func reset() { said = []; saidArrival = false }
 }
 
@@ -249,6 +339,20 @@ nonisolated enum WalkGeo {
         guard length > 0 else { return (0, hypot(px, py)) }
         let t = max(0, min(1, (px * bx + py * by) / length))
         return (t, hypot(px - t * bx, py - t * by))
+    }
+
+    /// The point `meters` from `p` toward `bearing`.
+    static func offset(_ p: CLLocationCoordinate2D, meters: Double, bearing: Double) -> CLLocationCoordinate2D {
+        let r = bearing * .pi / 180
+        let scale = cos(p.latitude * .pi / 180)
+        return CLLocationCoordinate2D(latitude: p.latitude + meters * cos(r) / metersPerDegree,
+                                      longitude: p.longitude + meters * sin(r) / (metersPerDegree * max(scale, 0.01)))
+    }
+
+    /// Every point of `points` moved `meters` toward `bearing`: the side of a mark standing on the road, seen from a
+    /// tilted camera.
+    static func shifted(_ points: [CLLocationCoordinate2D], meters: Double, bearing: Double) -> [CLLocationCoordinate2D] {
+        points.map { offset($0, meters: meters, bearing: bearing) }
     }
 
     /// The compass bearing from `a` to `b`, 0…360, clockwise from north.

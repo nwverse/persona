@@ -355,6 +355,8 @@ extension Theme {
         static let uTurn = "arrow.uturn.left"
         /// Walking navigation: keep going this way.
         static let goStraight = "location.north.fill"
+        /// Walking navigation: the walker on the map, pointing the way they face.
+        static let walker = goStraight
         /// Walking navigation: the destination is here.
         static let arrive = place
         /// Walking navigation's voice, off (on: `voiceSpeaking`).

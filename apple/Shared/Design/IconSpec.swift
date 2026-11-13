@@ -31,9 +31,11 @@ nonisolated struct IconSpec: Sendable, Equatable {
 
 nonisolated extension Theme.Icon {
     /// Filled symbols whose fill is what they say: a state dot, a playing or listening control, a set filter, a pin,
-    /// and round buttons drawn as a filled circle (send, hang up, resume). They stay filled in every style.
+    /// round buttons drawn as a filled circle (send, hang up, resume), and walking navigation's walker on the map.
+    /// They stay filled in every style.
     static let keepsFill: Set<String> = [
         dot, pause, interrupt, run, playMedia, dictating, voiceUnmute, voiceResume, voiceEnd, filterActive, pinned, submit,
+        walker, // walking navigation's walker on the map (#6672)
     ]
 
     /// The outline form of a filled symbol (`hand.raised.fill` → `hand.raised`); other names, and names whose outline
