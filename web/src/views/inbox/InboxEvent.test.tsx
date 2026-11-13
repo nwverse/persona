@@ -127,7 +127,7 @@ describe("收件箱事件：详情", () => {
     await press("展开全部（7）");
     expect(ids()).toEqual(["c1", "c2", "c3", "c4", "c5", "c6", "c7"]);
     expect(host.querySelector('[data-chain-id="c3"] [data-chain-agent-state"]')?.textContent).toBe("需要你");
-    expect(host.querySelector('[data-chain-id="c4"] [data-chain-agent-state"]')?.textContent).toBe("需要你");
+    expect(host.querySelector('[data-chain-id="c4"] [data-chain-agent-state]')?.textContent).toBe("需要你");
     await press("收起");
     expect(ids()).toEqual(["c5", "c6", "c7"]);
   });
