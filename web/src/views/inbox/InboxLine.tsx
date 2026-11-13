@@ -14,7 +14,7 @@ import { t } from "../../i18n";
 import { Button, cx } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { lazyDialog } from "../LazyOverlay";
-import { detachInboxParent, type InboxItemRef } from "./InboxParent";
+import { detachInboxParent, onInboxParentChanged, type InboxItemRef } from "./InboxParent";
 
 const SameMatterDialog = lazyDialog(() => import("./InboxSameMatter").then((m) => m.InboxSameMatter));
 
@@ -136,6 +136,7 @@ export function InboxLine({ item }: { item: InboxItem }) {
   const summaries = useStore((s) => s.sessionSummaries);
   const conversations = useStore((s) => s.assistant?.conversations);
   const parentKey = item.parent ? `${item.parent.kind}:${item.parent.id}` : "";
+  useEffect(() => onInboxParentChanged(() => setRevision((n) => n + 1)), []);
   useEffect(() => {
     let live = true;
     setTree(null);
@@ -158,7 +159,7 @@ export function InboxLine({ item }: { item: InboxItem }) {
   const detach = async (target: LineTarget) => {
     setPending(target.id);
     try {
-      if (await detachInboxParent(target)) setRevision((n) => n + 1);
+      await detachInboxParent(target);
     } finally {
       setPending(undefined);
     }
@@ -171,7 +172,6 @@ export function InboxLine({ item }: { item: InboxItem }) {
         item={item}
         tree={tree ?? undefined}
         onClose={() => setSameOpen(false)}
-        onLinked={() => setRevision((n) => n + 1)}
       />
     </>
   );

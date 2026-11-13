@@ -12,7 +12,7 @@ vi.mock("../../lib/api", async (orig) => ({
 vi.mock("../../ui/atoms", async (orig) => ({ ...(await orig<typeof import("../../ui/atoms")>()), toast: vi.fn() }));
 
 import { toast } from "../../ui/atoms";
-import { detachInboxParent, linkInboxParent } from "./InboxParent";
+import { detachInboxParent, linkInboxParent, onInboxParentChanged } from "./InboxParent";
 
 const item = (id: string, title: string, over: Partial<InboxItem> = {}): InboxItem => ({
   id, source: "examplechat", kind: "group", account: "examplechat", account_name: "Example Chat", title, preview: "", count: 1, ...over,
@@ -44,6 +44,17 @@ describe("线索的父子关系请求", () => {
     expect(JSON.stringify(init?.json)).toBe('{"kind":"inbox","id":"parent"}');
     expect(init?.headers).toEqual({ "X-Persona-Manager": "m-1" });
     expect(toast).toHaveBeenCalledWith("已连到「发布准备」", "ok");
+  });
+
+  it("notifies a visible Trail after a change from either entry point", async () => {
+    const listener = vi.fn();
+    const off = onInboxParentChanged(listener);
+    try {
+      await linkInboxParent({ id: "child" }, item("parent", "发布准备"));
+      expect(listener).toHaveBeenCalledOnce();
+    } finally {
+      off();
+    }
   });
 
   it.each(["detach", "link"] as const)("uses the existing error toast on %s failure and does not claim success", async (action) => {
