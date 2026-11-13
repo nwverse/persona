@@ -61,6 +61,8 @@ Read this before changing the Windows node (#1090), or developing or testing `pe
 - **`FlushFileBuffers` needs a handle that may write**: `f.Sync()` on a file opened with `os.Open`, or on a directory, returns access denied. Open the file read-write to flush it; a directory cannot be flushed: use `MoveFileEx` with `MOVEFILE_WRITE_THROUGH` for a durable rename instead.
 - **No inherited descriptors**: `exec.Cmd.ExtraFiles` is not supported, so a child cannot report readiness on fd 3. Report through a file both sides read.
 - **A program runs from the file a process has open**: the watchdog runs from the backup it may restore, so the backup can only be moved aside, not deleted, until the watchdog exits.
+- **A restart is a new process**: with exec the new program keeps the pid the rollback watchdog recorded; on Windows it does not, so a target build that never records itself (one from before Windows updates) kept running after a rollback put the old file back (found 2026-11-13 updating a node to a release without this support). Record the supervisor and find its children.
+- **The image path follows a rename**: `QueryFullProcessImageName` returns where the program's file is now (the moved-aside name), while `Get-Process` / `Win32_Process.ExecutablePath` show the path it was started from. Match both.
 
 ## Claude Code's peer inbox (desktop app, other terminals)
 

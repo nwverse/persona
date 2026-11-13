@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 
@@ -112,4 +115,79 @@ func processStart(pid int) (string, error) {
 		return id.Start, nil
 	}
 	return "", fmt.Errorf("no creation time for process %d", pid)
+}
+
+// supervisorOf is the process that started this node and its identity: persona-link's supervisor, which starts the
+// updated program as a new process (stopRestarted finds that process through it).
+func supervisorOf() (int, string) {
+	pid := os.Getppid()
+	return pid, osproc.Identify(pid).Start
+}
+
+// stopRestarted stops the node the supervisor restarted onto the new program, once the watchdog has put the old one
+// back at restored. With no exec that node is a new process; a build that can take updates here records its pid at
+// startup (recover) and killRecorded stops it, but one that cannot (a build from before Windows updates) never does,
+// and would keep running. It stops the recorded supervisor's children that run from the node's file (now moved aside)
+// and started between the supervisor and the restore: never another program, never the old node it starts next.
+func stopRestarted(p pending, restored time.Time) {
+	if p.SupervisorPID < 2 || p.SupervisorStart == "" {
+		return
+	}
+	since, ok := createdAt(p.SupervisorPID, p.SupervisorStart)
+	if !ok {
+		return // the supervisor is gone (its job took its children with it) or the pid is another process now
+	}
+	snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return
+	}
+	defer windows.CloseHandle(snap)
+	var e windows.ProcessEntry32
+	e.Size = uint32(unsafe.Sizeof(e))
+	for err = windows.Process32First(snap, &e); err == nil; err = windows.Process32Next(snap, &e) {
+		if e.ParentProcessID == uint32(p.SupervisorPID) {
+			stopIfRestarted(e.ProcessID, p.Exe, since, restored)
+		}
+	}
+}
+
+// stopIfRestarted terminates pid when it runs from exe, or from a file replaceFile moved aside from there, and started
+// after since and before until, checked and terminated through one handle so a reused pid is never hit.
+func stopIfRestarted(pid uint32, exe string, since, until time.Time) {
+	h, err := windows.OpenProcess(windows.PROCESS_TERMINATE|windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
+	if err != nil {
+		return
+	}
+	defer windows.CloseHandle(h)
+	buf := make([]uint16, windows.MAX_LONG_PATH)
+	size := uint32(len(buf))
+	// Where its file is now: moved aside (retired) when the rollback put the old program back.
+	if windows.QueryFullProcessImageName(h, 0, &buf[0], &size) != nil {
+		return
+	}
+	image := windows.UTF16ToString(buf[:size])
+	if !strings.EqualFold(image, exe) && !(strings.EqualFold(filepath.Dir(image), filepath.Dir(exe)) && strings.HasPrefix(filepath.Base(image), retiredPrefix)) {
+		return
+	}
+	var created, exited, kernel, user windows.Filetime
+	if windows.GetProcessTimes(h, &created, &exited, &kernel, &user) != nil {
+		return
+	}
+	if at := time.Unix(0, created.Nanoseconds()); at.After(since) && at.Before(until) {
+		_ = windows.TerminateProcess(h, 1)
+	}
+}
+
+// createdAt is when pid started, while it is still the process whose identity is start.
+func createdAt(pid int, start string) (time.Time, bool) {
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	if err != nil {
+		return time.Time{}, false
+	}
+	defer windows.CloseHandle(h)
+	var created, exited, kernel, user windows.Filetime
+	if windows.GetProcessTimes(h, &created, &exited, &kernel, &user) != nil || osproc.Identify(pid).Start != start {
+		return time.Time{}, false
+	}
+	return time.Unix(0, created.Nanoseconds()), true
 }

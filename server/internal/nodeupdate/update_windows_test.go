@@ -15,6 +15,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/nodeproto"
+	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -172,7 +173,7 @@ func TestWindowsSupervisedUpdateConfirmsOrRollsBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, outcome := range []string{"confirmed", "unconfirmed", "startup-crash"} {
+	for _, outcome := range []string{"confirmed", "unconfirmed", "startup-crash", "legacy-build"} {
 		t.Run(outcome, func(t *testing.T) {
 			dir, err := os.MkdirTemp("", "nu-win-*") // short: the fixture's unix socket path must stay under 108 bytes
 			if err != nil {
@@ -186,8 +187,11 @@ func TestWindowsSupervisedUpdateConfirmsOrRollsBack(t *testing.T) {
 			oldHash := hash(t, exe)
 			proof := filepath.Join(dir, "proof")
 			env := append(os.Environ(), "HOME="+dir, "PERSONA_HOME="+dir, "FIXTURE_PROOF="+proof)
-			if outcome == "startup-crash" {
+			switch outcome {
+			case "startup-crash":
 				env = append(env, "FIXTURE_CRASH=next")
+			case "legacy-build": // the new program runs but cannot take updates here: it never records its new pid
+				env = append(env, "FIXTURE_LEGACY=next")
 			}
 			s := superviseWindowsFixture(t, exe, env)
 			waitFor(t, 10*time.Second, func() bool { b, _ := os.ReadFile(proof); return bytes.Contains(b, []byte(`"version":"old"`)) })
@@ -264,8 +268,11 @@ func TestWindowsSupervisedUpdateConfirmsOrRollsBack(t *testing.T) {
 			default:
 				// Nobody confirms: the watchdog restores the old file (the new program's is moved aside while it
 				// runs) and stops the node; the supervisor's restart runs the old program, which clears the transaction.
-				if outcome == "unconfirmed" {
+				var legacyPID int
+				if outcome == "unconfirmed" || outcome == "legacy-build" {
 					waitFor(t, 10*time.Second, func() bool { p, ok := proofOf(proof); return ok && p.Version == "next" })
+					got, _ := proofOf(proof)
+					legacyPID = got.PID
 				}
 				waitFor(t, 15*time.Second, func() bool {
 					p, ok := proofOf(proof)
@@ -275,6 +282,9 @@ func TestWindowsSupervisedUpdateConfirmsOrRollsBack(t *testing.T) {
 				waitFor(t, 5*time.Second, func() bool { _, err := os.Stat(markerPath(exe)); return os.IsNotExist(err) })
 				if hash(t, exe) != oldHash {
 					t.Fatal("old executable was not restored")
+				}
+				if legacyPID != 0 && osproc.AliveMine(legacyPID) {
+					t.Fatalf("the new program (pid %d) still runs after the rollback", legacyPID)
 				}
 			}
 		})

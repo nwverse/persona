@@ -30,6 +30,13 @@ func removeRetired(string) {}
 // discard deletes path: a file a process runs from can be deleted here.
 func discard(path string) { _ = os.Remove(path) }
 
+// supervisorOf is nothing here: an update execs the new program in the node's own process, so the recorded pid is the
+// one the watchdog stops.
+func supervisorOf() (int, string) { return 0, "" }
+
+// stopRestarted has nothing to stop: killRecorded already stopped the process the new program runs in.
+func stopRestarted(pending, time.Time) {}
+
 // syncFile flushes the staged file to disk. Reopening an already executed signed Mach-O file for writing can make
 // macOS kill a subsequent self-check, so it is opened for reading only: here that is enough to flush it.
 func syncFile(path string) error {

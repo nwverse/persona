@@ -351,6 +351,7 @@ func (m *Manager) Commit(ctx context.Context, id string, idle func() error) (pro
 			return err
 		}
 		p := pending{ID: id, Exe: m.exe, Backup: backup, Stage: stage, Version: u.Spec.Version, From: m.version, OldHash: oldHash, NewHash: newHash, PID: os.Getpid(), ProcessStart: birth, ProcessPrecise: osproc.Identify(os.Getpid()).Start, Deadline: time.Now().Add(m.timeout)}
+		p.SupervisorPID, p.SupervisorStart = supervisorOf()
 		if err := savePending(p); err != nil {
 			_ = os.Remove(backup)
 			return err

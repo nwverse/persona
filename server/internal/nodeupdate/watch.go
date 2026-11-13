@@ -18,21 +18,25 @@ import (
 )
 
 type pending struct {
-	ID             string    `json:"id"`
-	Exe            string    `json:"exe"`
-	Backup         string    `json:"backup"`
-	Stage          string    `json:"stage"`
-	Version        string    `json:"version"`
-	From           string    `json:"from"`
-	OldHash        string    `json:"old_sha256"`
-	NewHash        string    `json:"new_sha256"`
-	PID            int       `json:"pid"`
-	ProcessStart   string    `json:"process_start"`
-	ProcessPrecise string    `json:"process_start_precise,omitempty"` // exact instance identity; absent in older markers
-	WatchPID       int       `json:"watch_pid"`
-	WatchStart     string    `json:"watch_start"`
-	WatchPrecise   string    `json:"watch_start_precise,omitempty"`
-	Deadline       time.Time `json:"deadline"`
+	ID             string `json:"id"`
+	Exe            string `json:"exe"`
+	Backup         string `json:"backup"`
+	Stage          string `json:"stage"`
+	Version        string `json:"version"`
+	From           string `json:"from"`
+	OldHash        string `json:"old_sha256"`
+	NewHash        string `json:"new_sha256"`
+	PID            int    `json:"pid"`
+	ProcessStart   string `json:"process_start"`
+	ProcessPrecise string `json:"process_start_precise,omitempty"` // exact instance identity; absent in older markers
+	WatchPID       int    `json:"watch_pid"`
+	WatchStart     string `json:"watch_start"`
+	WatchPrecise   string `json:"watch_start_precise,omitempty"`
+	// SupervisorPID and SupervisorStart identify what started the node, where an update restarts it as a new process
+	// (Windows: persona-link's supervisor), so the watchdog can find that process (stopRestarted).
+	SupervisorPID   int       `json:"supervisor_pid,omitempty"`
+	SupervisorStart string    `json:"supervisor_start,omitempty"`
+	Deadline        time.Time `json:"deadline"`
 }
 
 func markerPath(exe string) string { return exe + ".node-update-pending.json" }
@@ -394,7 +398,9 @@ func Watch(ctx context.Context, path, id string, ready io.Writer) error {
 				done = true
 				return cleanup(p)
 			}
+			restored := time.Time{}
 			if sum == p.NewHash {
+				restored = time.Now()
 				if err := restore(p); err != nil {
 					if errors.Is(err, errSuperseded) {
 						// A deployment we did not stage replaced the file after
@@ -411,6 +417,11 @@ func Watch(ctx context.Context, path, id string, ready io.Writer) error {
 			// unrelated reused PID.
 			if err := killRecorded(p.PID, p.ProcessStart, p.ProcessPrecise); err != nil {
 				return err
+			}
+			// Without exec (Windows) the new program is a new process, which records
+			// itself only when it is a build that can take updates there.
+			if !restored.IsZero() {
+				stopRestarted(p, restored)
 			}
 			// Keep the rollback barrier for a supervisor replacement that may
 			// already have loaded the new inode. Old-version startup clears it.
