@@ -83,6 +83,104 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(api.call_count, 1)
         self.assertEqual(api.call_args.args[0][:2], ["gh", "api"])
 
+    def test_base_change_invalidates_same_head_evidence(self):
+        new_base = "d" * 40
+        with patch.object(pr_watch, "pr_snapshot", side_effect=[pr(), pr(), pr(baseRefOid=new_base), pr(baseRefOid=new_base)]), \
+                patch.object(pr_watch, "semantic_review", return_value=[]) as review, \
+                patch.object(pr_watch, "verify", return_value=[{"name": "test", "ok": True, "command": [], "summary": ""}]), \
+                patch.object(self.watcher, "merge", return_value=False):
+            self.watcher.process("example/one", 7)
+            self.watcher.process("example/one", 7)
+        self.assertEqual(review.call_count, 2)
+        self.assertEqual(self.watcher.state.get("example/one", 7)["base"], new_base)
+
+    def test_snapshot_failure_does_not_mark_head_failed(self):
+        with patch.object(pr_watch, "pr_snapshot", side_effect=pr_watch_common.WatchError("closed")), \
+                patch.object(self.watcher.state, "put") as put:
+            self.watcher.process("example/one", 7)
+        put.assert_not_called()
+
+    def test_dry_run_never_calls_github_writes_or_merge(self):
+        self.watcher.dry_run = True
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review", return_value=[]), \
+                patch.object(pr_watch, "verify", return_value=[{"name": "test", "ok": True, "command": [], "summary": ""}]), \
+                patch.object(self.watcher, "merge", wraps=self.watcher.merge) as merge, \
+                patch.object(pr_watch, "run") as api:
+            self.watcher.process("example/one", 7)
+        merge.assert_called_once()
+        api.assert_not_called()
+        self.assertEqual(self.comments, [])
+        self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "passed")
+        self.assertFalse(self.watcher.state.get("example/one", 7)["review_posted"])
+
+    def test_live_after_dry_run_publishes_and_merges(self):
+        self.watcher.dry_run = True
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review", return_value=[]) as review, \
+                patch.object(pr_watch, "verify", return_value=[{"name": "test", "ok": True, "command": [], "summary": ""}]):
+            self.watcher.process("example/one", 7)
+        self.watcher.dry_run = False
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review", return_value=[]) as live_review, \
+                patch.object(self.watcher, "merge", return_value=True) as merge:
+            self.watcher.process("example/one", 7)
+        live_review.assert_not_called()
+        merge.assert_called_once()
+        self.assertEqual(self.comments, ["passed"])
+
+    def test_prepare_failures_exhaust_bounded_retries(self):
+        for attempt in range(3):
+            with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                    patch.object(self.watcher, "worktree", side_effect=pr_watch_common.WatchError("fetch failed")):
+                self.watcher.process("example/one", 7)
+            state = self.watcher.state.get("example/one", 7)
+            self.assertEqual(state["review_attempts"], attempt + 1)
+            state["retry_after"] = 0
+            state.pop("head", None)
+            self.watcher.state.put("example/one", 7, SHA_A, **state)
+        self.assertEqual(state["outcome"], "failed")
+        self.assertEqual(len(self.comments), 1)
+
+    def test_review_prompt_is_required_and_oversized_diff_fails(self):
+        with patch.object(pr_watch_review, "checked", side_effect=["x" * 240001, "base...head", "stat", "file.py"]):
+            with self.assertRaises(pr_watch_common.WatchError):
+                pr_watch_review.review("example/one", pr(), ".", {})
+        captured = {}
+        def fake_run(argv, **kwargs):
+            captured["argv"] = argv
+            return subprocess.CompletedProcess(argv, 0, json.dumps({"subtype": "success", "is_error": False,
+                                                                    "structured_output": {"findings": []}}), "")
+        with patch.object(pr_watch_review, "checked", side_effect=["diff", "stat", "file.py"]), \
+                patch.object(pr_watch_review, "changed_lines", return_value={}), \
+                patch.object(pr_watch_review, "run", side_effect=fake_run):
+            pr_watch_review.review("example/one", pr(), ".", {})
+        self.assertIn(pr_watch_review.SYSTEM_PROMPT, captured["argv"][2])
+
+    def test_verification_does_not_import_pr_selector_or_receive_gh_credentials(self):
+        with patch.object(pr_watch_verify, "checked", return_value="scripts/ci/paths.py\n"), \
+                patch.object(pr_watch_verify, "load_paths") as selector, \
+                patch.dict(os.environ, {"GH_TOKEN": "not-for-builds", "HOME": "/maintainer-home"}):
+            selector.return_value.select.return_value = {"scripts": True}
+            commands = pr_watch_verify.persona_checks(".", pr(), 1, {})
+            env = pr_watch_common.verification_env()
+        self.assertEqual(selector.call_args.args[0], HERE.parent.parent)
+        self.assertNotIn("GH_TOKEN", env)
+        self.assertNotEqual(env["HOME"], "/maintainer-home")
+
+    def test_persona_wrapper_owns_lock_and_expects_reviewed_head(self):
+        repo = "nwverse/persona"
+        config = dict(self.config)
+        config["repositories"] = [{"name": repo, "checkout": str(self.root / "checkout"), "base": "main",
+                                  "verify": {}, "merge": True, "privacy": None, "notify_command": None}]
+        watcher = pr_watch.Watcher(config, verbose=False)
+        with patch.object(pr_watch, "run", return_value=subprocess.CompletedProcess([], 0, "", "")) as run, \
+                patch.object(pr_watch, "pr_snapshot", return_value=pr(state="MERGED")):
+            watcher.merge(config["repositories"][0], pr())
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[2:6], ["--expect-head", SHA_A, "--expect-base", SHA_BASE])
+        self.assertEqual(argv[6], "7")
+
     def test_new_sha_reviews_again(self):
         with patch.object(pr_watch, "pr_snapshot", side_effect=[pr(), pr(), pr(SHA_B), pr(SHA_B)]), \
                 patch.object(pr_watch, "semantic_review", return_value=[]) as review, \

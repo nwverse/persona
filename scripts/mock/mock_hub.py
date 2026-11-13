@@ -11195,6 +11195,48 @@ def larkcli_area(h, method, p, raw):
                         "qr": {"size": len(WECHAT_QR_ROWS), "rows": WECHAT_QR_ROWS}}) or True
 
 
+
+# MOCK_LARKCLI_INBOX=1: a Lark mention read through lark-cli (飞书 · 我的消息) and its conversation page, as a hub that
+# reads the chat's own record gives it (kind group, the chat's name); =legacy: as an older hub gave it, an empty kind and
+# name (lark-cli's message list says neither). Its words are what lark-cli writes: a post's Markdown with a picture by
+# image key, an interactive message's <card title="…"> envelope, plain text. All made up.
+LARKCLI_INBOX = os.environ.get("MOCK_LARKCLI_INBOX", "")
+LARKCLI_THREAD = "larkcli:chat:oc_example_oncall"
+
+
+def larkcli_thread_page():
+    now = datetime.now(timezone.utc)
+    def at(h, m):
+        return now.replace(hour=h, minute=m, second=0, microsecond=0).isoformat().replace("+00:00", "Z")
+    a, b = {"id": "ou_example_a", "name": "示例同事"}, {"id": "ou_example_b", "name": "另一个示例同事"}
+    bot, helper = {"id": "cli_example_bot", "name": "示例值班机器人"}, {"id": "cli_example_helper", "name": "示例助手"}
+    msgs = [
+        {"id": "om_example_1", "at": at(1, 2), "sender": a, "text": "@示例用户 帮忙看下这个播放数的问题"},
+        {"id": "om_example_2", "at": at(1, 30), "sender": a, "text": "/save"},
+        {"id": "om_example_3", "at": at(1, 30), "sender": helper, "format": "markdown", "text": "<card>\n已将群聊转为常驻群，不会自动解散\n</card>"},
+        {"id": "om_example_4", "at": at(2, 13), "sender": bot, "format": "markdown", "text": (
+            "<card title=\"Oncall Notice\">\n本群已长时间未响应，工单已停留 **120** 小时，请确认是否结束。\n\n"
+            "如果问题已解决，请点击「已解决」；还没解决，请值班同学尽快响应。\n</card>")},
+        {"id": "om_example_5", "at": at(2, 16), "sender": b, "format": "markdown", "text": (
+            "**现象**：示例广告组的播放数低于展示数，漏斗倒挂；10-31 起自行恢复。\n"
+            "**已定位**\n- 问题在原始事件流：起播事件缺失，2 秒播放正常\n- 两端漏斗都正常，异常集中在一批未知端的请求\n"
+            "**请协助确认**\n1. 起播事件为什么没有上报\n2. 历史数据能否回补\n\n"
+            "[示例结论文档](https://example.com/doc)\n![Image](img_example_key)")},
+        {"id": "om_example_6", "at": at(2, 20), "sender": {"id": "ou_example_me", "name": "示例用户"}, "mine": True, "text": "收到，我来跟进"},
+    ]
+    legacy = LARKCLI_INBOX == "legacy"
+    return {"chat": {"id": LARKCLI_THREAD, "name": "" if legacy else "示例值班群", "kind": "" if legacy else "group"}, "messages": msgs}
+
+
+def larkcli_thread_area(h, method, p):
+    """The Lark (lark-cli) conversation page; True when it answered."""
+    if not LARKCLI_INBOX or method != "GET" or p != "/api/v1/connectors/larkcli/thread":
+        return False
+    if parse_qs(urlparse(h.path).query).get("thread", [""])[0] != LARKCLI_THREAD:
+        return h.send_json({"error": "没有叫这个的会话"}, 502) or True
+    return h.send_json(larkcli_thread_page()) or True
+
+
 TELEGRAM_MODE = os.environ.get("MOCK_TELEGRAM", "")
 TELEGRAM = {"enabled": TELEGRAM_MODE not in ("", "off"), "creds": TELEGRAM_MODE in ("signed_in", "limited"),
             "signed_in": TELEGRAM_MODE in ("signed_in", "limited"), "limited": TELEGRAM_MODE == "limited",
@@ -11459,6 +11501,17 @@ def telegram_area(h, method, p, raw):
             INBOX.remove(x)
         return h.send_json({"chats": 3, "people": 5, "inbox": len(gone)}) or True
     return False
+
+
+if LARKCLI_INBOX:
+    INBOX[1:1] = [
+        {"id": "larkcli:example_oncall", "source": "larkcli", "kind": "mention", "account": "larkcli", "account_name": "飞书 · 我的消息",
+         "title": "示例值班群", "sender": "示例值班机器人", "preview": "Oncall Notice", "count": 1,
+         "started_at": ago(minutes=30), "updated_at": ago(minutes=30), "tier": "action",
+         "summary": "值班群里在催你确认示例问题的进展", "reason": "被点名催响应", "read": False,
+         "context": "示例同事: @示例用户 帮忙看下这个播放数的问题\n另一个示例同事: **现象**：示例广告组的播放数低于展示数……\n示例值班机器人: <card title=\"Oncall Notice\">……</card>",
+         "connector": {"thread": LARKCLI_THREAD, "label": "飞书提及", "reply_to": "以你的身份发到「示例值班群」，会话里的人都能看到", "can_reply": True}},
+    ]
 
 
 if os.environ.get("MOCK_TELEGRAM_INBOX"):
@@ -23377,6 +23430,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/mail/messages": return self.send_json({"messages": [], "has_more": False})
         if p == "/api/v1/lark/unread-count": return self.send_json({"count": 4})
         if telegram_area(self, "GET", p, b""): return
+        if larkcli_thread_area(self, "GET", p): return
         if plugin_connector_area(self, "GET", p, b""): return
         if triage_route(self, "GET", p, b""): return
         if kb_selection_route(self, "GET", p, b""): return
