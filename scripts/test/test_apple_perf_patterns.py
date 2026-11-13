@@ -158,7 +158,7 @@ class ApplePerfPatternTests(unittest.TestCase):
         self.assertEqual(calls("let r = PHAsset.fetchAssets(with: o)\nlet d = try Data(contentsOf: url)\n"
                                "let i = UIImage(data: d)\nSecItemCopyMatching(q as CFDictionary, &out)\n"
                                "try fm.contentsOfDirectory(at: u, includingPropertiesForKeys: nil)"), [])
-        self.assertEqual(set(PATTERNS), {"defaults-synchronize", "localized-lookup", "unpaused-animation"})
+        self.assertEqual(set(PATTERNS), {"defaults-synchronize", "localized-lookup", "unpaused-animation", "window-frame"})
 
     def test_compare(self):
         self.assertEqual(compare({"a": {"x": 2}}, {"a": {"x": 1}}), (["a: x 1 -> 2"], []))
