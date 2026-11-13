@@ -36,6 +36,8 @@ import { DraftDialog } from "./InboxDialogs";
 import { TriageBanner } from "./TriageBanner";
 import { UnreadNotice } from "./UnreadNotice";
 import { EventMark } from "./InboxEvent";
+import { canMerge, mergeItems } from "../../lib/inbox-actions";
+import { openTodoDialog } from "./InboxTodoDialog";
 import { FolderBar, FolderLine, FolderSettingsDialog, openFolderDialog, useFoldersShown } from "./InboxFolders";
 import { folderCrumbs, UNFILED } from "../../lib/inbox-folders";
 import { AgentWorking, Chip, Count, DraftCard, Glyph, ItemAvatar, Spark, StatusMenu, Tag, type GlyphName } from "./InboxParts";
@@ -273,6 +275,10 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
     void setAllDone(chosen, "done");
     onPicked?.(null);
   };
+  // Merge: the picked rows become one row (undoable); Add to to-dos asks the due time once. Both end selecting when they went through.
+  const mergeable = canMerge(chosen);
+  const mergeChosen = () => void mergeItems(chosen).then((ok) => ok && onPicked?.(null));
+  const todoChosen = () => openTodoDialog(chosen, () => onPicked?.(null));
   // Clean up all files them as Dismiss (dismiss): the user set them aside, they did not handle them.
   const runBulk = () => {
     if (!openInView.length) return;
@@ -486,6 +492,11 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
         <div className="mx-auto flex max-w-[760px] items-center gap-2">
           <Button tone="quiet" onClick={pickAll} disabled={!shownOpen.length}>{allChosen ? t("inbox-inboxlist.deselect_all") : t("inbox-inboxlist.select_all")}</Button>
           <span className="min-w-0 flex-1 truncate text-[12px] text-ink-3 tabular-nums" aria-live="polite">{chosenFolded ? t("inbox-inboxlist.picked_folded", { count: chosen.length, folded: chosenFolded }) : t("inbox-inboxlist.selected_count", { count: chosen.length })}</span>
+          {/* Merge and Add to to-dos: a label on a wide bar, only the icon on a phone */}
+          <Button tone="secondary" icon="merge" disabled={!mergeable} onClick={mergeChosen} className="max-sm:hidden">{t("inbox-inboxlist.merge")}</Button>
+          <IconButton icon="merge" label={t("inbox-inboxlist.merge")} disabled={!mergeable} onClick={mergeChosen} size={32} className="sm:hidden" />
+          <Button tone="secondary" icon="todo" disabled={!chosen.length} onClick={todoChosen} className="max-sm:hidden">{t("inbox-inboxlist.todo_add_short")}</Button>
+          <IconButton icon="todo" label={t("inbox-inboxlist.todo_add_short")} disabled={!chosen.length} onClick={todoChosen} size={32} className="sm:hidden" />
           <Button tone="primary" icon="check" disabled={!chosen.length} onClick={markChosenDone}>{t("inbox-inboxlist.mark_done_title")}</Button>
         </div>
       </div>
@@ -669,6 +680,7 @@ const ItemRow = memo(function ItemRow({ it, selected, showAccount, folder, onEdi
               ) : (
                 <span className="line-clamp-2 text-[12.5px] leading-[1.5] break-words text-ink-2">{from}</span>
               )}
+              {it.merged_from && it.merged_from.length > 0 && <span className="mt-0.5 block truncate text-[11px] text-ink-3" data-merged>{t("inbox-inboxlist.merged_from", { count: it.merged_from.length + 1 })}</span>}
               {showAccount && !isLark(it) && !it.connector && <span className="mt-0.5 block truncate text-[11px] text-ink-3">{it.account_name}</span>}
               {folder !== undefined && <FolderLine it={it} folder={folder} />}
             </span>
@@ -729,6 +741,7 @@ export function rowMenu(it: InboxItem, done: boolean, folders = false): MenuItem
       ? { key: "undone", label: t("inbox-inboxlist.move_back"), icon: "inbox", onSelect: () => void setDone(it, false) }
       : { key: "done", label: t("inbox-inboxlist.done"), icon: "check", onSelect: () => void markFromRow(it, true, true) }, // a menu pick: "Undo" on any screen (#4162)
   ];
+  if (!done) items.splice(1, 0, { key: "todo", label: t("inbox-inboxlist.todo_add_short"), icon: "todo", onSelect: () => openTodoDialog([it]) });
   (it.mutes ?? []).forEach((m, i) => items.push({ key: `mute:${m.tag}:${m.value}`, label: muteTitle(m), detail: muteShortName(m), icon: "bellOff", divider: i === 0, onSelect: () => void muteItem(it, m) }));
   // then a rule for each (docs/assistant/inbox.md "Policies"): the tier its items get, what the AI twin does with them
   (it.mutes ?? []).forEach((m, i) => items.push({ key: `policy:${m.tag}:${m.value}`, label: policyMenuTitle(m), detail: muteShortName(m), icon: "target", divider: i === 0, onSelect: () => openPolicyDialog({ item: it, option: m, source: it.source }) }));
