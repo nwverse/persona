@@ -1064,11 +1064,13 @@ struct InboxRow: View {
     }
 
     private var avatar: some View {
-        if item.isAssistantRow {
-            // The assistant's own row wears the assistant's avatar, with no source badge.
-            PersonaAvatar(size: Theme.Size.avatar).opacity(item.isDone ? 0.6 : 1)
-        } else {
-            sourceAvatar
+        Group {
+            if item.isAssistantRow {
+                // The assistant's own row wears the assistant's avatar, with no source badge.
+                PersonaAvatar(size: Theme.Size.avatar).opacity(item.isDone ? 0.6 : 1)
+            } else {
+                sourceAvatar
+            }
         }
     }
 

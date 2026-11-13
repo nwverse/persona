@@ -728,11 +728,15 @@ struct AssistantTaskEditor: View {
         } header: {
             Text("When Done, Put It in the Inbox")
         } footer: {
-            Text(switch draft.inbox ?? "" {
-                 case APIClient.ScheduledTask.inboxEvery: String(localized: "Every run adds a row to your Inbox so you can follow up. Tapping it opens that chat.")
-                 case APIClient.ScheduledTask.inboxWorthy: String(localized: "A row is added to your Inbox only when a run finds something worth a look. Tapping it opens that chat.")
-                 default: String(localized: "Nothing is added to your Inbox.")
-                 })
+            Text(inboxHint)
+        }
+    }
+
+    private var inboxHint: String {
+        switch draft.inbox ?? "" {
+        case APIClient.ScheduledTask.inboxEvery: String(localized: "Every run adds a row to your Inbox so you can follow up. Tapping it opens that chat.")
+        case APIClient.ScheduledTask.inboxWorthy: String(localized: "A row is added to your Inbox only when a run finds something worth a look. Tapping it opens that chat.")
+        default: String(localized: "Nothing is added to your Inbox.")
         }
     }
 
