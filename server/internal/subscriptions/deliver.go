@@ -86,6 +86,9 @@ func (s *Service) InboxSources(ctx context.Context) ([]InboxSource, error) {
 // itself (StateNotConnected), and ReplyTarget asks before a reply goes.
 func (s *Service) replying(ctx context.Context) map[string]bool {
 	out := map[string]bool{}
+	if s.o.Connectors == nil { // a service that only delivers (the assistant's tests): no connector to reply through
+		return out
+	}
 	for _, info := range s.o.Connectors.All(ctx) {
 		if _, ok := connector.As[connector.Inbox](info.Conn); ok && info.Enabled {
 			out[info.ID] = true
@@ -100,7 +103,7 @@ func (s *Service) replying(ctx context.Context) map[string]bool {
 // no id of the source's, or the connector cannot reply now: the reply is refused as for a row that cannot be replied to.
 func (s *Service) ReplyTarget(ctx context.Context, id, last string) (conn connector.Inbox, thread string, ok bool) {
 	sub, err := s.o.Store.GetSubscription(ctx, id)
-	if err != nil || sub == nil || last == "" || strings.HasPrefix(last, weakPrefix) {
+	if err != nil || sub == nil || last == "" || strings.HasPrefix(last, weakPrefix) || s.o.Connectors == nil {
 		return nil, "", false
 	}
 	h, err := s.o.Store.HeldItem(ctx, id, last)
