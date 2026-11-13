@@ -160,12 +160,15 @@ class WatcherTests(unittest.TestCase):
     def test_verification_does_not_import_pr_selector_or_receive_gh_credentials(self):
         with patch.object(pr_watch_verify, "checked", return_value="scripts/ci/paths.py\n"), \
                 patch.object(pr_watch_verify, "load_paths") as selector, \
-                patch.dict(os.environ, {"GH_TOKEN": "not-for-builds", "HOME": "/maintainer-home"}):
+                patch.dict(os.environ, {"GH_TOKEN": "not-for-builds", "HOME": "/maintainer-home",
+                                        "PR_WATCH_WEBHOOK_SECRET": "not-for-builds", "GRADLE_USER_HOME": "/trusted-gradle"}):
             selector.return_value.select.return_value = {"scripts": True}
             commands = pr_watch_verify.persona_checks(".", pr(), 1, {})
             env = pr_watch_common.verification_env()
         self.assertEqual(selector.call_args.args[0], HERE.parent.parent)
         self.assertNotIn("GH_TOKEN", env)
+        self.assertNotIn("PR_WATCH_WEBHOOK_SECRET", env)
+        self.assertEqual(env["GRADLE_USER_HOME"], "/trusted-gradle")
         self.assertNotEqual(env["HOME"], "/maintainer-home")
 
     def test_persona_wrapper_owns_lock_and_expects_reviewed_head(self):
