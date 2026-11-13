@@ -214,7 +214,7 @@ class InboxShowcaseShotsTest {
             rule.onNodeWithText("收到 1 条消息 · 张三", useUnmergedTree = true).assertExists()
             saveShot("detail-folded-${if (english) "en" else "zh-Hans"}-${appearance.name.lowercase()}-${if (night) "dark" else "light"}", "showcase-detail")
 
-            rule.onNodeWithText(if (english) "Show all (7)" else "展开全部（7）").performClick()
+            rule.onNodeWithText(if (english) "What happened" else "处理链条").performClick()
             rule.waitForIdle()
             rule.onNodeWithText("收到 2 条消息 · 张三", useUnmergedTree = true).assertExists()
             rule.onNodeWithText("开了 Agent：核对报价单", useUnmergedTree = true).assertExists()

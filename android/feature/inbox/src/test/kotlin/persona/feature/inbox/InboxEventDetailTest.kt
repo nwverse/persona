@@ -84,12 +84,12 @@ class InboxEventDetailTest {
         rule.onNodeWithText("Received", useUnmergedTree = true).assertDoesNotExist()
         rule.onNodeWithText("Reported", useUnmergedTree = true).assertExists()
         rule.onNodeWithText("Assistant says", useUnmergedTree = true).assertExists()
-        rule.onNodeWithText("Show all (4)").performClick()
+        rule.onNodeWithText("What happened").performClick()
         rule.onNodeWithText("Received", useUnmergedTree = true).assertExists()
         rule.onNodeWithText("Handling", useUnmergedTree = true).assertExists()
         rule.onNodeWithText("Agent", useUnmergedTree = true).assertExists()
         rule.onNodeWithText("Working", useUnmergedTree = true).assertExists()
-        rule.onNodeWithText("Collapse").performClick()
+        rule.onNodeWithText("What happened").performClick()
         rule.onNodeWithText("Received", useUnmergedTree = true).assertDoesNotExist()
     }
 
@@ -106,11 +106,11 @@ class InboxEventDetailTest {
         val tierOnly = suggested.copy(event = suggested.event.copy(suggestion = null, handling = null, status = "fyi"),
             item = suggested.item.copy(status = "fyi", tier = "fyi"))
         repository.snapshot.value = InboxSnapshot(records = listOf(tierOnly))
-        rule.onAllNodesWithText("FYI", useUnmergedTree = true).assertCountEquals(2)
+        rule.onAllNodesWithText("FYI", useUnmergedTree = true).assertCountEquals(1)
 
         val done = tierOnly.copy(item = tierOnly.item.copy(doneAt = "2026-01-01T12:00:00Z", status = null),
             event = tierOnly.event.copy(status = null, doneBy = "user"))
         repository.snapshot.value = InboxSnapshot(records = listOf(done))
-        rule.onAllNodesWithText("Done", useUnmergedTree = true).assertCountEquals(2)
+        rule.onAllNodesWithText("Done", useUnmergedTree = true).assertCountEquals(1)
     }
 }

@@ -100,7 +100,7 @@ private fun inboxDays(at: Instant, now: Instant, zone: ZoneId): Long =
 /** The follow-up's short future moment: clock today, tomorrow in words, then a localized date and 24-hour clock. */
 internal fun inboxFollowTime(value: String?, res: Resources, locale: Locale, now: Instant = Instant.now(), zone: ZoneId = ZoneId.systemDefault()): String {
     val at = value?.let { runCatching { Instant.parse(it) }.getOrNull() } ?: return ""
-    val days = inboxDays(at, now, zone)
+    val days = -inboxDays(at, now, zone)
     val time = clockTime(at, locale, zone)
     return when {
         days <= 0 -> time
