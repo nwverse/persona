@@ -1800,6 +1800,14 @@ ASSISTANT = [
     assistant_sess(ASK4, "整理这个季度的读书笔记", 60 * 50, "第 30 本整理好了。"),
 ]
 
+# MOCK_ASSISTANT_WORKING=1 (#6230): the main conversation is mid-turn with the user's message not answered yet, so the
+# chat draws its live work line in the message stream and nothing repeats it in the dock. The transcript item is added
+# where ITEMS is defined; off by default.
+if os.environ.get("MOCK_ASSISTANT_WORKING") == "1":
+    for _s in ASSISTANT:
+        if _s["session_id"] == ASK1:
+            _s.update(status="working", state="working", state_since=ago(minutes=1), seen_at=None)
+
 
 def mock_png(w=96, h=64):
     """A made-up picture (a two-tone gradient) as base64 PNG, for photos the mock hands back."""
@@ -7206,6 +7214,9 @@ ITEMS[ASK1] = (
 - 14:00 设计评审（会议室 3）
 - 16:30 和李雷 1:1""")]
 )
+# MOCK_ASSISTANT_WORKING=1 (#6230): the unanswered user message the working main conversation is on.
+if os.environ.get("MOCK_ASSISTANT_WORKING") == "1":
+    ITEMS[ASK1] = ITEMS[ASK1] + [it("user", "text", 0.2, text="把今天的待办按优先级排一下，告诉我先做哪个。")]
 # MOCK_QUOTE=1: a message sent with "Quote" earlier (#2427): the main conversation's history has one that starts with a
 # `> ` block of the answer above, and a reply to it, so the bubble's quote card shows for a message from the transcript.
 if os.environ.get("MOCK_QUOTE") == "1":

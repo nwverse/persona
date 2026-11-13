@@ -292,11 +292,12 @@ enum HomeTodos {
 /// The subscription windows as the Machines page lists them (live ones, the fullest first, stale ones marked), today's
 /// tokens and tokens a minute as the island's, and the hours.
 enum HomeUsage {
-    static let shown = 3
+    /// The widgets draw three at most; Edit Widget lists every account kept here (as the snapshot keeps eight computers).
+    static let kept = 8
 
     static func build(_ accounts: [UsageAccount], tokens: Int, tpm: Int, hourly: [Int]) -> HomeSnapshot.Usage? {
         guard !accounts.isEmpty || tokens > 0 else { return nil }
-        return .init(accounts: accounts.prefix(shown).map { a in
+        return .init(accounts: accounts.prefix(kept).map { a in
             .init(id: a.id, name: a.name, windows: a.windows.map {
                 .init(label: $0.label, minutes: $0.windowMinutes, percent: $0.usedPercent, resetsAt: $0.resetsAt?.timeIntervalSince1970)
             }, stale: a.stale)

@@ -28019,19 +28019,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Background round"
+            "value" : "Reported from the background"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "后台轮次"
+            "value" : "后台回报"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "バックグラウンドのラウンド"
+            "value" : "バックグラウンドからの報告"
           }
         }
       }
@@ -116417,19 +116417,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Running in the background"
+            "value" : "Working in the background…"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "后台运行中"
+            "value" : "后台处理中…"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "バックグラウンドで実行中"
+            "value" : "バックグラウンドで作業中…"
           }
         }
       }
@@ -131656,19 +131656,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Supervision record"
+            "value" : "Handled in the background"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "督办记录"
+            "value" : "已在后台处理"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "監督記録"
+            "value" : "バックグラウンドで処理済み"
           }
         }
       }
@@ -131679,19 +131679,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Supervision record · running"
+            "value" : "Handling in the background…"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "督办记录 · 处理中"
+            "value" : "正在后台处理…"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "監督記録 · 処理中"
+            "value" : "バックグラウンドで処理中…"
           }
         }
       }
