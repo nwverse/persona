@@ -2007,7 +2007,7 @@ same spread, and the Mac's `sshd-session` already has TCP_NODELAY (lsof `-T f`: 
 ## Killing ssh must include its ProxyCommand (2026-11-13, #6251)
 
 - `exec.CommandContext`'s default `Cancel` kills only ssh. Its ProxyCommand stays alive and is adopted by the service manager; when that command holds a relay connection, it can compete with the replacement ssh connection for replies. `WaitDelay` only bounds pipe draining and does not kill the surviving child.
-- Start ssh in its own process group (`osproc.GroupAttr`) and override `cmd.Cancel` to stop that group (`osproc.StopGroup`). Do not apply this to the hub machine's local node: that one still needs stdin EOF and its graceful-stop grace period. The regression test abandons a real `Machine.connect` handshake and checks the ProxyCommand child's pid, not just ssh's exit.
+- Start ssh in its own process group (`osproc.GroupAttr`) and override `cmd.Cancel` to stop its descendants, not only its own pid. On Unix stop the process group and, after `Wait` reaps ssh, call `osproc.SweepGroup` so a child forked concurrently with the signal cannot survive. On Windows `taskkill /T` loses the tree once its root has exited, so walk the remaining descendants in a process snapshot instead. Do not apply this to the hub machine's local node: that one still needs stdin EOF and its graceful-stop grace period. The regression test abandons a real `Machine.connect` handshake with ssh both running and already exited, and checks the ProxyCommand child's pid, not just ssh's exit.
 
 ## A field in `proto.Session` is paid on every copy (#4342)
 

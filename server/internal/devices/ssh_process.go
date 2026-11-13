@@ -13,6 +13,6 @@ func stopSSHTreeOnCancel(cmd *exec.Cmd) {
 		if cmd.Process == nil {
 			return nil
 		}
-		return osproc.StopGroup(cmd.Process.Pid, true)
+		return stopSSHProcessTree(cmd.Process.Pid)
 	}
 }
