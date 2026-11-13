@@ -9,9 +9,11 @@
   // public personad), which worker.mjs reads from the R2 bucket DL (#2541: a static file is at most 25 MiB), the
   // extension catalog and icons behind the /extensions page (extensions.mjs), and the release metadata (releases.mjs).
   // Release packages themselves go straight to GitHub; this Worker never proxies their bytes.
+  // Every request reaches the Worker so it can select a language for HTML and localized 404 pages. Other existing
+  // assets go straight back to ASSETS with the same request; no language header changes downloads or the relay.
   "main": "worker.mjs",
   "assets": { "directory": "public", "binding": "ASSETS", "html_handling": "auto-trailing-slash", "not_found_handling": "404-page",
-              "run_worker_first": ["/relay/*", "/dl/*", "/extensions/catalog.json", "/extensions/icons/*", "/releases/data.json"] },
+              "run_worker_first": ["/*"] },
   "r2_buckets": [
     { "binding": "DL", "bucket_name": "persona-dl" }
   ],
