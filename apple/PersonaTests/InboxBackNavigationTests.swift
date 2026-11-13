@@ -114,5 +114,31 @@ struct InboxBackNavigationTests {
                                  push: { _ in Issue.record("nothing sent must not push") }, fallback: { fallback += 1 })
             #expect(fallback == targets.count + 1)
         }
+    @Test func newAgentCompletionPushesTheAgentRecordedByStarted() throws {
+        try keepingDefaults {
+            let app = AppModel(), item = try item(manager: "m2")
+            let agent = SessionKey(machineID: "computer", sessionID: "started")
+            var fallback = 0
+            let handOff = InboxHandOffModel(itemID: item.id, deps: .init(
+                load: { _ in item },
+                handOff: { _, _, _ in agent },
+                showMain: { _, _, _ in },
+                plainToMain: { _ in agent },
+                startNew: { _ in agent },
+                sendToAgent: { _, _, _ in .sent },
+                open: { _, _ in fallback += 1 },
+                markDone: {}))
+            // The sheet records the started Agent before openSent reads it; this order is part of the navigation contract.
+            handOff.started(agent, markDone: false)
+            var pushed: [InboxChatRoute] = []
+            InboxHandOffBar.open(sent: handOff.sent, item: item, model: app,
+                                 push: { pushed.append($0) }, fallback: handOff.open)
+            #expect(handOff.sent?.target == .agent(agent))
+            #expect(pushed == [InboxChatRoute(key: app.inHub(agent), manager: "m2")])
+            #expect(fallback == 0)
+
+            InboxHandOffBar.open(sent: handOff.sent, item: item, model: app, push: nil, fallback: handOff.open)
+            #expect(fallback == 1)
+        }
     }
 }

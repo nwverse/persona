@@ -366,6 +366,6 @@ struct InboxHandOffBar: View {
         memory.rememberStarted(item, agent: key)
         handOff.started(key, markDone: prefill.markDone)
         Haptics.success()
-        handOff.open()
+        openSent()
     }
 }
