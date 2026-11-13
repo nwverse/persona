@@ -219,6 +219,10 @@ class HomeChromeTest {
                 assertTrue("360dp must stay inline: $case / $face / $switcher",
                     switcher.top < face.bottom && switcher.bottom > face.top)
             }
+            if (style == AppStyle.Glass && scale == 1f && trailingActions == 2 && (w == 360.dp || w == 384.dp)) {
+                assertTrue("Glass must use a one-row gap layout: $case / $face / $switcher",
+                    switcher.top < face.bottom && switcher.bottom > face.top)
+            }
             val beforeFace = faceClicks
             val beforeNew = newClicks
             val beforeOptions = optionClicks
@@ -275,6 +279,38 @@ class HomeChromeTest {
             assertTrue("switcher is not inline with $count trailing actions: $face / $switcher",
                 switcher.top < face.bottom && switcher.bottom > face.top)
             assertEquals("switcher is not centered with $count trailing actions",
+                (pane.left.value + pane.right.value) / 2,
+                (switcher.left.value + switcher.right.value) / 2, 0.51f)
+        }
+    }
+
+    @Test fun glassStackedSwitcherStaysCenteredWithBadge() {
+        var trailingActions by mutableStateOf(1)
+        rule.setContent {
+            PersonaTheme(style = AppStyle.Glass, reduceMotion = true) {
+                Box(Modifier.width(200.dp).height(160.dp).testTag("pane")) {
+                    HomeNavigation(
+                        items = listOf(
+                            NavItem("assistant", "Assistant", PhIcons.ChatCircle),
+                            NavItem("agents", "Agents", PhIcons.Robot, badge = 2),
+                        ),
+                        selected = "agents", onSelect = {},
+                        leading = { JPersonaButton(PersonaState.Idle, "Sidebar", {}) },
+                        trailing = {
+                            JIconButton(PhIcons.NotePencil, "New session", {})
+                            if (trailingActions == 2) JIconButton(PersonaIcons.moreMenu, "List options", {})
+                        },
+                    )
+                }
+            }
+        }
+        for (count in 1..2) {
+            rule.runOnIdle { trailingActions = count }
+            rule.waitForIdle()
+            val pane = rule.onNodeWithTag("pane").getBoundsInRoot()
+            val switcher = rule.onNodeWithTag("home-switcher").getBoundsInRoot()
+            rule.onNodeWithTag("home-level-stacked").assertExists()
+            assertEquals("stacked switcher shifted left with $count trailing actions",
                 (pane.left.value + pane.right.value) / 2,
                 (switcher.left.value + switcher.right.value) / 2, 0.51f)
         }

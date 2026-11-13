@@ -285,19 +285,19 @@ fun HomeNavigation(
             trailingSpacing = Tokens.Space.s,
             centerSwitcher = false,
             centerInlineVertically = true,
-            switcherEndAccessory = null,
+            hasEndAccessory = false,
             leading = leading,
             trailing = trailing,
             fullSwitcher = switcher,
             compactSwitcher = {
                 CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides
-                    androidx.compose.ui.unit.Density(density.density, fontScale = 1f)) {
+                    androidx.compose.ui.unit.Density(density.density, fontScale = minOf(density.fontScale, 1f))) {
                     switcher()
                 }
             },
             stackedSwitcher = {
                 CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides
-                    androidx.compose.ui.unit.Density(density.density, fontScale = 1f)) {
+                    androidx.compose.ui.unit.Density(density.density, fontScale = minOf(density.fontScale, 1f))) {
                     switcher()
                 }
             },
@@ -309,9 +309,6 @@ fun HomeNavigation(
     }
     val segmentWidth = HomeTokens.segmentWidth * scale
     val waiting = items.lastOrNull()?.badge ?: 0
-    val endAccessory: (@Composable () -> Unit)? = if (waiting > 0) {
-        { GlassHomeBadge(waiting) }
-    } else null
     HomeNavigationLayout(
         modifier = modifier.fillMaxWidth().statusBarsPadding().heightIn(min = HomeTokens.headerHeight),
         horizontalPadding = Tokens.Space.l,
@@ -320,7 +317,7 @@ fun HomeNavigation(
         trailingSpacing = null,
         centerSwitcher = true,
         centerInlineVertically = false,
-        switcherEndAccessory = endAccessory,
+        hasEndAccessory = waiting > 0,
         leading = leading,
         trailing = trailing,
         fullSwitcher = {
@@ -328,7 +325,7 @@ fun HomeNavigation(
         },
         compactSwitcher = {
             CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides
-                androidx.compose.ui.unit.Density(density.density, fontScale = 1f)) {
+                androidx.compose.ui.unit.Density(density.density, fontScale = minOf(density.fontScale, 1f))) {
                 GlassHomeSwitcher(items, selected, HomeTokens.segmentWidth, scale = 1f, onClick = choose)
             }
         },
@@ -337,7 +334,7 @@ fun HomeNavigation(
             val fittedWidth = ((available - Tokens.Space.xs * 2) / items.size.coerceAtLeast(1))
                 .coerceAtMost(HomeTokens.segmentWidth * compactScale)
             CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides
-                androidx.compose.ui.unit.Density(density.density, fontScale = 1f)) {
+                androidx.compose.ui.unit.Density(density.density, fontScale = minOf(density.fontScale, 1f))) {
                 GlassHomeSwitcher(items, selected, fittedWidth, compactScale, onClick = choose)
             }
         },
@@ -345,8 +342,8 @@ fun HomeNavigation(
 }
 
 /**
- * Measures the real switcher and action widths, then tries full inline, compact inline and stacked in that order.
- * Measurement candidates hide their semantics; only the selected candidate is composed again for placement.
+ * Measures real control widths, then tries centered full, centered compact, gap full, gap compact and stacked.
+ * Non-Glass styles start at gap full. Measurement candidates hide their semantics; only the selected one is placed.
  */
 @Composable
 private fun HomeNavigationLayout(
@@ -357,7 +354,7 @@ private fun HomeNavigationLayout(
     trailingSpacing: Dp?,
     centerSwitcher: Boolean,
     centerInlineVertically: Boolean,
-    switcherEndAccessory: (@Composable () -> Unit)?,
+    hasEndAccessory: Boolean,
     leading: @Composable () -> Unit,
     trailing: @Composable RowScope.() -> Unit,
     fullSwitcher: @Composable () -> Unit,
@@ -378,12 +375,8 @@ private fun HomeNavigationLayout(
         val compact = subcompose(3) {
             Box(Modifier.clearAndSetSemantics {}) { compactSwitcher() }
         }.first().measure(androidx.compose.ui.unit.Constraints())
-        val accessory = switcherEndAccessory?.let { content ->
-            subcompose(4) { Box(Modifier.clearAndSetSemantics {}) { content() } }.first()
-                .measure(androidx.compose.ui.unit.Constraints())
-        }
         // The badge starts at the capsule's right edge minus its own width, so only its offset overflows that edge.
-        val accessoryOverflow = if (accessory != null) Tokens.Space.s.roundToPx() else 0
+        val accessoryOverflow = if (hasEndAccessory) Tokens.Space.s.roundToPx() else 0
         val horizontal = horizontalPadding.roundToPx()
         val vertical = verticalPadding.roundToPx()
         val gap = inlineSpacing?.roundToPx() ?: 0
@@ -391,22 +384,36 @@ private fun HomeNavigationLayout(
             horizontal * 2 + leadingPlaceable.width + full.width + trailingPlaceable.width + gap * 2
         }
         val contentWidth = (width - horizontal * 2).coerceAtLeast(0)
-        fun fits(switcherWidth: Int): Boolean {
-            if (centerSwitcher) {
-                val left = (contentWidth - switcherWidth) / 2
-                return left >= leadingPlaceable.width &&
-                    left + switcherWidth + accessoryOverflow <= contentWidth - trailingPlaceable.width
-            }
-            return leadingPlaceable.width + switcherWidth + accessoryOverflow + trailingPlaceable.width + gap * 2 <= contentWidth
+        fun fitsCentered(switcherWidth: Int): Boolean {
+            if (!centerSwitcher) return false
+            val left = (contentWidth - switcherWidth) / 2
+            return left >= leadingPlaceable.width &&
+                left + switcherWidth + accessoryOverflow <= contentWidth - trailingPlaceable.width
         }
-        val inline = fits(full.width)
-        val compactInline = !inline && fits(compact.width)
+        fun fitsGap(switcherWidth: Int) =
+            leadingPlaceable.width + switcherWidth + accessoryOverflow + trailingPlaceable.width + gap * 2 <= contentWidth
+        val centeredFull = fitsCentered(full.width)
+        val centeredCompact = !centeredFull && fitsCentered(compact.width)
+        val gapFull = !centeredFull && !centeredCompact && fitsGap(full.width)
+        val gapCompact = !centeredFull && !centeredCompact && !gapFull && fitsGap(compact.width)
+        val inline = centeredFull || gapFull
+        val compactInline = centeredCompact || gapCompact
+        val centeredInline = centeredFull || centeredCompact
         val stacked = !inline && !compactInline
+        val level = when {
+            centeredFull -> "home-level-centered-full"
+            centeredCompact -> "home-level-centered-compact"
+            gapFull -> "home-level-gap-full"
+            gapCompact -> "home-level-gap-compact"
+            else -> "home-level-stacked"
+        }
         val stackedWidth = (contentWidth - accessoryOverflow).coerceAtLeast(0)
         val switcher = when {
-            inline -> subcompose(6) { fullSwitcher() }.first().measure(androidx.compose.ui.unit.Constraints())
-            compactInline -> subcompose(7) { compactSwitcher() }.first().measure(androidx.compose.ui.unit.Constraints())
-            else -> subcompose(5) { stackedSwitcher(stackedWidth.toDp()) }.first()
+            inline -> subcompose(6) { Box(Modifier.testTag(level)) { fullSwitcher() } }.first()
+                .measure(androidx.compose.ui.unit.Constraints())
+            compactInline -> subcompose(7) { Box(Modifier.testTag(level)) { compactSwitcher() } }.first()
+                .measure(androidx.compose.ui.unit.Constraints())
+            else -> subcompose(5) { Box(Modifier.testTag(level)) { stackedSwitcher(stackedWidth.toDp()) } }.first()
                 .measure(androidx.compose.ui.unit.Constraints(maxWidth = contentWidth))
         }
         val firstRowHeight = maxOf(leadingPlaceable.height, trailingPlaceable.height)
@@ -421,8 +428,13 @@ private fun HomeNavigationLayout(
         val switcherY = if (stacked) vertical + firstRowHeight + stackGap
             else if (centerInlineVertically) vertical + ((contentHeight - switcher.height) / 2f).roundToInt() else vertical
         val switcherX = when {
-            stacked -> horizontal + (contentWidth - switcher.width - accessoryOverflow) / 2
-            centerSwitcher -> horizontal + (contentWidth - switcher.width) / 2
+            stacked -> horizontal + (contentWidth - switcher.width) / 2
+            centeredInline -> horizontal + (contentWidth - switcher.width) / 2
+            centerSwitcher -> {
+                val gapStart = horizontal + leadingPlaceable.width + gap
+                val gapWidth = contentWidth - leadingPlaceable.width - trailingPlaceable.width - gap * 2 - accessoryOverflow
+                gapStart + (gapWidth - switcher.width) / 2
+            }
             else -> horizontal + leadingPlaceable.width + gap
         }.coerceAtLeast(horizontal)
         layout(width, height) {
