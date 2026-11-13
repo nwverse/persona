@@ -108,6 +108,17 @@ func (p *pages) source() wire.View {
 	if s.Recipe.Mode == wire.ConnectorSubscriptionModeThings {
 		dest.Items = dest.Items[:1] // its rows are the Inbox's only: the knowledge base reads the source itself (#6296)
 	}
+	if subscriptions.IsMigration(s.ID) {
+		// A built-in's default subscription: switched on its built-in's page, its own switches kept off (#6345).
+		r := row("d.to_inbox", p.t("dest.to_inbox"))
+		r.Value = p.t("source.via_off")
+		if s.Migrated != nil {
+			r.Value = p.t("source.via_on")
+		}
+		r.Subtitle = p.t("source.via_detail", i18n.Args{"source": s.Label})
+		r.Action = open(state{P: pageBuiltin, C: s.Connector}, s.Label)
+		dest = wire.Section{Key: "dest", Title: p.t("source.dest"), Items: []wire.Component{r}}
+	}
 	v.Sections = append(v.Sections, dest)
 	freq := row("f.interval", p.t("source.interval"))
 	freq.Value = p.schedule(s)
