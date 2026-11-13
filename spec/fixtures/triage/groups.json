@@ -195,7 +195,7 @@
               "a"
             ]
           ],
-          "just_done": [
+          "done": [
             [
               "b"
             ]
@@ -269,7 +269,7 @@
     },
     {
       "name": "failed_start_superseded_by_finished_work",
-      "description": "没开起来的那条，同一行里已经有真正做完的（同一计划）：新鲜结果先待看，不算开着，排在做完的那条后面；同一行里只有别的没开起来的：照旧等你重试。",
+      "description": "没开起来的那条，同一行里已经有真正做完的（同一计划）：立即归入已完成，不算开着，排在做完的那条后面；同一行里只有别的没开起来的：照旧等你重试。",
       "source": [
         "docs/assistant/todo-status-sop.md \"Decision table\"",
         "web/src/lib/todo-triage.ts supersededFailedStarts"
@@ -354,7 +354,7 @@
               "f3"
             ]
           ],
-          "just_done": [
+          "done": [
             [
               "done1",
               "f1"
@@ -635,7 +635,7 @@
               "stale"
             ]
           ],
-          "just_done": [
+          "done": [
             [
               "accepted"
             ],
@@ -652,7 +652,7 @@
     },
     {
       "name": "unfinished_before_just_finished_and_seen_in_done",
-      "description": "未完成的排在「刚做完」前面：同一件事里没做完的那条领头；看过的（知道了，或打开过）直接进「已完成」，不算未完成。",
+      "description": "未完成的工作仍优先于已完成；显式关闭和看过的普通完成轮次都直接进「已完成」，不算未完成。",
       "source": [
         "docs/assistant/todo-status-sop.md \"Sections\"",
         "docs/assistant/todo-status-sop.md \"Seen\"",
@@ -760,14 +760,12 @@
               "fix"
             ]
           ],
-          "just_done": [
-            [
-              "logs"
-            ]
-          ],
           "done": [
             [
               "speed"
+            ],
+            [
+              "logs"
             ],
             [
               "notes"
@@ -896,7 +894,7 @@
               "open"
             ]
           ],
-          "just_done": [
+          "done": [
             [
               "completed"
             ]

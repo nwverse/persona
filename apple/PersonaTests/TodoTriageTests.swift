@@ -74,8 +74,8 @@ struct TodoTriageTests {
         #expect(t.section == .working && t.rule == .agentRunning)
     }
 
-    @Test func closedIsJustFinishedForADayThenDone() {
-        #expect(at(todo("t", done: 3)).section == .justDone)
+    @Test func closedIsImmediatelyDone() {
+        #expect(at(todo("t", done: 3)).section == .done)
         #expect(at(todo("t", updated: 30, done: 30)).section == .done)
     }
 
@@ -85,7 +85,7 @@ struct TodoTriageTests {
             $0.supervision = acceptedReopened()
         }
         let t = at(td)
-        #expect(t.section == .justDone && t.rule == .accepted)
+        #expect(t.section == .done && t.rule == .accepted)
         let status = TodosLogic.todoStatus(td, lookup: lookup)
         #expect(td.statusLabel(status) == "已验收")
         #expect(td.shownState(status) == .done)
@@ -127,12 +127,12 @@ struct TodoTriageTests {
         #expect(t.section == .justDone && t.rule == .finishedUnseen)
     }
 
-    // #5707 + #5732: Seen files ordinary turns and fresh closures, never acceptance of an unaccepted delivery
+    // #5707 + #5732: Seen files ordinary turns, never closure, acceptance of an unaccepted delivery
     @Test func seenFilesOrdinaryTurnsButNotAcceptanceOrAnUnacceptedDelivery() {
         let closed = { (seen: Double) in self.at(self.todo("t", done: 3) { $0.seenAt = self.ago(seen) }) }
         #expect(closed(2).section == .done && closed(2).rule == .closed)
         #expect(closed(3).section == .done)
-        #expect(closed(4).section == .justDone && closed(4).rule == .closed)
+        #expect(closed(4).section == .done && closed(4).rule == .closed)
         let accepted = at(todo("t", agents: ["idle"]) { $0.supervision = acceptedReopened(); $0.seenAt = ago(4) })
         #expect(accepted.section == .done && accepted.rule == .accepted)
         let deployed = at(todo("t") { $0.delivery = .init(state: "live", at: ago(2)); $0.seenAt = ago(1) })
@@ -178,8 +178,8 @@ struct TodoTriageTests {
         ]
         let r = TodoTriageLogic.triageTodos(list, lookup: look, now: now)
         #expect(r.groups(.other).map { $0.members.map(\.id) } == [["test", "fix"]])
-        #expect(r.groups(.justDone).map(\.lead.id) == ["logs"])
-        #expect(r.groups(.done).map(\.lead.id) == ["speed", "notes"])
+        #expect(r.groups(.justDone).isEmpty)
+        #expect(r.groups(.done).map(\.lead.id) == ["speed", "logs", "notes"])
         #expect(r.open == 2 && r.shelved == 0 && r.finished == 3)
     }
 
@@ -273,7 +273,8 @@ struct TodoTriageTests {
     @Test func neverMergesAClosedTodoIntoAnOpenRow() {
         let r = TodoTriageLogic.triageTodos([todo("a", title: "Same title"), todo("b", title: "Same title", done: 1)], lookup: lookup, now: now)
         #expect(r.groups(.other).count == 1)
-        #expect(r.groups(.justDone).count == 1)
+        #expect(r.groups(.justDone).isEmpty)
+        #expect(r.groups(.done).count == 1)
     }
 
     /// The same case as `failed_start_superseded_by_finished_work` in spec/fixtures/triage/groups.json (#3713): a failed
@@ -287,15 +288,16 @@ struct TodoTriageTests {
         let list = [failed, done, other, twin]
         #expect(TodoTriageLogic.supersededFailedStarts(list) == ["f1"])
         let r = TodoTriageLogic.triageTodos(list, lookup: lookup, now: now)
-        #expect(r.groups(.justDone).map { $0.members.map(\.id) } == [["done1", "f1"]])
+        #expect(r.groups(.justDone).isEmpty)
+        #expect(r.groups(.done).map { $0.members.map(\.id) } == [["done1", "f1"]])
         #expect(r.groups(.waiting).map { $0.members.map(\.id) } == [["f2", "f3"]])
         #expect(r.open == 2 && r.finished == 2)
         #expect(TodoTriageLogic.bucket(failed, lookup: lookup, now: now, superseded: true) == .closed)
         #expect(TodoTriageLogic.bucket(failed, lookup: lookup, now: now) == .open)
         // the checkbox: open while it waits on the owner, done once superseded
         #expect(TodoTriageLogic.checksAsOpen(other, r.groups(.waiting)[0].triage["f2"]))
-        #expect(!TodoTriageLogic.checksAsOpen(failed, r.groups(.justDone)[0].triage["f1"]))
-        #expect(!TodoTriageLogic.checksAsOpen(done, r.groups(.justDone)[0].triage["done1"]))
+        #expect(!TodoTriageLogic.checksAsOpen(failed, r.groups(.done)[0].triage["f1"]))
+        #expect(!TodoTriageLogic.checksAsOpen(done, r.groups(.done)[0].triage["done1"]))
     }
 
     @Test func failedStartWaitingOnTheOwnerCountsAsOpen() {

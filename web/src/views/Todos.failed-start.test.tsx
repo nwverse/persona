@@ -79,10 +79,13 @@ describe("a to-do whose agent never started", () => {
     expect((patch?.[1] as { json?: unknown })?.json).toEqual({ done: true });
   });
 
-  it("goes with the fresh work that finished in its row, behind it and still closed", async () => {
+  it("goes with the work that finished in its row, behind it and immediately Done", async () => {
     expect(section("waiting")?.querySelector("[data-id=gone]")).toBeNull();
+    const done = section("done")!;
+    expect(done.getAttribute("data-todos")).toBe("2");
+    await act(async () => done.querySelector("button")!.click());
     const r = row("done")!;
-    expect(section("just_done")?.contains(r)).toBe(true);
+    expect(done.contains(r)).toBe(true);
     expect(r.getAttribute("data-members")).toBe("2");
   });
 });

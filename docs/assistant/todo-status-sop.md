@@ -30,9 +30,9 @@ then the folded ones, Done and Cancelled last. The same order decides which memb
 | PR to merge | open | Its work stopped at a pull request that is still open and nothing runs: however old, it stays here, with the PR link and how long since it moved |
 | Parked (web) | open | An explicitly parked task whose wait has not expired; it is unfinished, even if its last agent turn was seen |
 | Other open | open | Open, recently active, none of the above (an agent stopped and seen, a reminder of the user's own) |
-| Delivered · awaiting review | open | Worth a look: a fresh closed or accepted result, an unaccepted delivery, unseen turn, pending review or done / please-verify ask. An unaccepted `live` delivery stays here and open indefinitely, even after being seen; it never ages into Done or Shelved |
+| Delivered · awaiting review | open | Worth a look: an unaccepted delivery, unseen turn, pending review or done / please-verify ask. An unaccepted `live` delivery stays here and open indefinitely, even after being seen; it never ages into Done or Shelved |
 | Inactive (web; Shelved on native clients) | folded | No activity for 48 hours and nothing running (see "Shelving"); not an explicit parked verdict |
-| Done | folded | Non-cancelled closed or accepted work after its fresh result has been seen or is 24 hours old; an ordinary unsupervised finished turn seen since it last moved. Unaccepted `live` work never enters this section merely through age or Seen |
+| Done | folded | Non-cancelled closed, accepted or superseded work immediately; an ordinary unsupervised finished turn seen since it last moved. Unaccepted `live` work never enters this section merely through age or Seen |
 | Cancelled | folded | Cancelled work, with its cancellation reason; never counted as Done |
 
 ## Decision table
@@ -43,19 +43,22 @@ The first rule that holds wins.
 | :--- | :--- | :--- | :--- |
 | 0 | `cancelled` | The API cancellation projection or a legacy cancelled supervision state | Cancelled, with its reason; this wins over closed, accepted and agent states |
 | 1 | `failed_start` | The task's agent never started (`start_error`) | Waiting for you; Done once 48 hours passed |
-| 1a | `superseded` | Rule 1, and its row (see "Related to-dos") has a to-do that really finished: closed without a start error (#3713) | Delivered · awaiting review for 24 hours or until seen, then Done; behind that to-do in the row, never leading it |
+| 1a | `superseded` | Rule 1, and its row (see "Related to-dos") has a to-do that really finished: closed without a start error (#3713) | Done immediately, behind that to-do in the row, never leading it |
 | 2 | `agent_asks` | An agent waits on the owner (question, approval, plan) or was cut off by a model error | Waiting for you |
 | 3 | `owner_decides` | Open, and the review says `needs_user`, or its ask is a decision or "cannot be done" | Waiting for you |
 | 4 | `agent_running` | An agent is working or starting | Working |
-| 5 | `closed` | `done_at` is set | Delivered · awaiting review for 24 hours or until seen, then Done; explicit completion is never left open |
+| 5 | `closed` | `done_at` is set | Done immediately, regardless of age or Seen; explicit completion is never left open |
 | 5a | `parked` (web) | Open and the current review is parked | Parked until its `until`; after that, Other open while awaiting review, never Done just because its agent stopped |
-| 6 | `accepted` | The latest review accepted it and no review came since, even when the hub reopened it (see "Accepted tasks") | Delivered · awaiting review for 24 hours after the review or until seen, then Done; acceptance is never left open |
+| 6 | `accepted` | The latest review accepted it and no review came since, even when the hub reopened it (see "Accepted tasks") | Done immediately, regardless of review age or Seen; acceptance is never left open |
 | 7 | `finished_unseen` | `delivery.state` is `live`, but the task has not been accepted | Delivered · awaiting review, open until main-chat acceptance or explicit user completion; no 24-hour or 48-hour timeout, including after Seen |
 | 8 | `finished_unseen` | An agent finished a turn nobody has seen, the review is pending, or its ask says done / please verify; either not seen or acceptance is still required | Delivered · awaiting review |
 | 9 | `pr_open` | Its PR is open (rule "PR / delivery" above); a `pr_url` whose stage is Merge or later is a merged PR, never this (#3205) | PR to merge |
 | 9a | `seen` | Rule 8's signals, seen by the owner since it last moved (see "Seen"), with no supervisor and no pending acceptance; an open PR takes precedence | Done |
 | 10 | `stale` | Shelvable (see "Shelving") and no activity for 48 hours | Shelved |
 | 11 | `rest` | Anything else | Other open |
+
+The hub-only secretary concern is the exception to rule 5: its report leaves it in Delivered · awaiting review rather than
+filing it immediately as Done (docs/assistant/todos.md "Concerns"). Ordinary explicit task closure has no such exception.
 
 On the web, the header's Parked count is the number of to-dos in the Parked section (included in open).
 Inactive counts only automatic 48-hour shelving. Cancelled has its own count and is never included in Done / completed.

@@ -16,8 +16,6 @@ export const FOLDED_SECTIONS: ReadonlySet<TriageSection> = new Set(["shelved", "
 
 /** No activity for this long, nothing of it running: shelved (SOP rule 11). */
 export const SHELVE_AFTER_MS = 48 * 3600_000;
-/** A fresh closed or accepted result stays visible for a day unless seen first; unaccepted live work has no such timeout. */
-export const JUST_DONE_MS = 24 * 3600_000;
 
 /** Which SOP rule placed a to-do (for tests and the SOP's wording); the section follows from it. */
 export type TriageRule =
@@ -100,13 +98,13 @@ export function seenCanFile(todo: Todo): boolean {
  * A to-do's section by the SOP's table (docs/assistant/todo-status-sop.md, "Decision table"), first match wins:
  *
  *  1. failed_start    the task's agent never started                    → Waiting on you (retry or remove), Done after 48 h;
- *     superseded      … and a related to-do (its row) really finished   → Done (#3713)
+ *     superseded      … and a related to-do (its row) really finished   → Done immediately (#3713)
  *  2. agent_asks      an agent asks (question, approval) or was cut off → Waiting on you
  *  3. owner_decides   review says needs_user, or a decision / "cannot" ask → Waiting on you
  *  4. agent_running   an agent is working or starting                   → Working
- *  5. closed          done_at set                                       → Just finished for 24 h, then Done
+ *  5. closed          done_at set                                       → Done immediately
  *  5a. parked         an explicit unexpired wait                         → Parked; expired → Other open
- *  6. accepted        the latest review accepted it (even reopened)     → Just finished for 24 h, then Done
+ *  6. accepted        the latest review accepted it (even reopened)     → Done immediately
  *  7. finished_unseen its delivery is live, not accepted                → Delivered · awaiting review, with no timeout
  *  8. finished_unseen an agent finished unseen, awaits review, or a done ask → Delivered · awaiting review
  *  9. pr_open         its PR is open, nothing running                   → PR to merge (however old)
@@ -121,29 +119,28 @@ export function triage(todo: Todo, lookup: SessionLookup | undefined, now: numbe
   const last = lastActivity(todo, lookup, restoredAt);
   const status: TodoStatus = todoStatus(todo, lookup);
   // Seen files an unsupervised finished turn (#5707), never a task that still needs acceptance (#5732).
-  // A fresh closed or accepted result is awaiting a read receipt, not still open work (#5929).
+  // Explicit closure and acceptance are already Done; Seen does not move them through awaiting review.
   const seenAt = ms(todo.seen_at);
   const seen = (at: number) => seenAt > 0 && seenAt >= at;
-  const fresh = (at: number) => now - at < JUST_DONE_MS && !seen(at);
   const ask = openAsk(todo);
   const at = (section: TriageSection, rule: TriageRule): Triage => ({ section, rule, last });
 
   if (isCancelled(todo)) return at("cancelled", "cancelled");
   if (status === "failed") {
     // the same piece of work finished in a related to-do (`supersededFailedStarts`): history, nothing left to retry
-    if (superseded) return at(fresh(ms(todo.done_at) || last) ? "just_done" : "done", "superseded");
+    if (superseded) return at("done", "superseded");
     return at(now - last < SHELVE_AFTER_MS ? "waiting" : "done", "failed_start");
   }
   if (status === "needs_you" || status === "interrupted") return at("waiting", "agent_asks");
   if (!todo.done_at && (reviewState(todo) === "needs_user" || ask?.outcome === "decide" || ask?.outcome === "cannot")) return at("waiting", "owner_decides");
   if (status === "working" || status === "waiting") return at("working", "agent_running");
-  if (todo.done_at) return at(fresh(ms(todo.done_at)) ? "just_done" : "done", "closed");
+  if (todo.done_at) return at("done", "closed");
   // A stopped turn is not a completed task. When the wait expires it needs review, not filing as done.
   if (reviewState(todo) === "parked") {
     const until = ms(todo.supervision?.parked?.until);
     return at(until && until <= now ? "other" : "parked", "parked");
   }
-  if (acceptanceStands(todo)) return at(fresh(ms(latestReview(todo.supervision)?.at)) ? "just_done" : "done", "accepted");
+  if (acceptanceStands(todo)) return at("done", "accepted");
   // Live is delivery, not acceptance: an unreviewed live task stays open and awaiting review, however old or seen (#5732).
   if (todo.delivery?.state === "live") return at("just_done", "finished_unseen");
   const finished = status === "unread" || reviewState(todo) === "pending_review" || (ask && !ask.outcome) || ask?.outcome === "done";
