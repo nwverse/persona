@@ -12729,6 +12729,31 @@ def fs_find(mid):
 
 def fs_get(h, p, q):
     """GET /api/v1/lark/… and /mock/lark with MOCK_LARK (True when handled; the rest falls through)."""
+    # The unread switch must cross a whole read-only page, not filter just the first screen (#6553).
+    if os.environ.get("MOCK_LARK_UNREAD") and p in ("/api/v1/lark/conversations", "/api/v1/lark/pinned"):
+        pages = max(1, min(16, int(os.environ.get("MOCK_LARK_UNREAD_PAGES", "1"))))
+        rows = [dict(id="read-%03d" % n, name="Project archive %02d" % n, is_group=True, unread=0,
+                     at_me=False, muted=False, preview="Notes are up to date.", is_mine=False,
+                     updated_at="2026-01-02T12:00:00Z", pinned=n == 1) for n in range(1, pages * 60 + 1)]
+        rows += [dict(id=feed, name=name, is_group=True, unread=count, marked_unread=marked,
+                      at_me=False, muted=False, preview="A new update is waiting.", is_mine=False,
+                      updated_at="2026-01-01T12:00:00Z", pinned=feed == "f1")
+                 for feed, name, count, marked in [("f3", "Design review", 3, False),
+                                                  ("f2", "Weekend plans", 0, True),
+                                                  ("f1", "Release notes", 1, False)]]
+        if p.endswith("pinned"):
+            rows = [row for row in rows if row.get("pinned")]
+        elif q.get("scope", ["chats"])[0] == "unread":
+            rows = [row for row in rows if row["unread"] or row.get("marked_unread")]
+        cursor, limit = int(q.get("cursor", ["0"])[0] or "0"), int(q.get("limit", ["60"])[0])
+        if cursor:
+            delay = max(0, min(3, float(os.environ.get("MOCK_LARK_UNREAD_PAGE_DELAY", "0"))))
+            if delay:
+                print(f"lark-unread-page-start cursor={cursor}", flush=True)
+                time.sleep(delay)
+        h.send_json({"conversations": rows[cursor:cursor + limit], "account_id": LARK_ACCOUNT_ID,
+                     "next_cursor": str(cursor + limit) if cursor + limit < len(rows) else ""})
+        return True
     if p == "/mock/lark":
         h.send_json(FS_LOG); return True
     if p.startswith("/api/v1/lark/media/"):
@@ -12750,6 +12775,14 @@ def fs_get(h, p, q):
         h.end_headers(); h.wfile.write(data)
         return True
     if p == "/api/v1/lark/conversations":
+        # Optimized before/after list-scroll measurements use the same paginated synthetic workload (#6553).
+        if os.environ.get("MOCK_LARK_LIST"):
+            rows = FS_CONVS + [dict(FS_CONVS[-1], id="list-%03d" % n, name="Archive %03d" % n)
+                               for n in range(min(2000, int(os.environ["MOCK_LARK_LIST"])))]
+            cursor, limit = int(q.get("cursor", ["0"])[0] or "0"), int(q.get("limit", ["60"])[0])
+            h.send_json({"conversations": rows[cursor:cursor + limit], "account_id": LARK_ACCOUNT_ID,
+                         "next_cursor": str(cursor + limit) if cursor + limit < len(rows) else ""})
+            return True
         h.send_json({"conversations": FS_CONVS, "next_cursor": ""}); return True
     if p.startswith("/api/v1/lark/conversations/") and p.endswith("/messages"):
         h.send_json(fs_page(p.split("/")[5], q)); return True

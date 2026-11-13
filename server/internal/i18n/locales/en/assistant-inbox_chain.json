@@ -52,5 +52,7 @@
   "handed_agent": "Handed to Agent “{title}”",
   "handed_agent_generic": "Handed to an Agent",
   "handed_conversation": "Handed to “{title}”",
-  "handed_conversation_generic": "Handed to a conversation"
+  "handed_conversation_generic": "Handed to a conversation",
+  "waiting_who": "Waiting for {who} · look again {at}",
+  "waiting_reply": "Waiting for a reply · look again {at}"
 }
