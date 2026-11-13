@@ -88,6 +88,8 @@ class InboxOneRowTest {
         override suspend fun savePreferences(value: InboxPreferences) { preferences.value = value }
         override val conversationInbox = MutableStateFlow<InboxConversations?>(null)
         val calls = mutableListOf<Pair<List<InboxDoneTarget>, InboxBulkAction>>()
+        /** One row's own Done / Move back, as the row's swipe and menu make it: the item alone, never its chat. */
+        val singles = mutableListOf<Pair<String, Boolean>>()
         val reads = mutableListOf<String>()
         var history: List<InboxRecord> = emptyList()
         override suspend fun markLatestRead(feedId: String): Boolean {
@@ -113,7 +115,13 @@ class InboxOneRowTest {
         override fun conversation(feedId: String, startPosition: Long?) = flowOf(LarkConversation())
         override suspend fun loadOlder(feedId: String) = Unit
         override suspend fun refreshConversation(feedId: String) = Unit
-        override suspend fun setDone(itemId: String, done: Boolean) = error("Rows file by versioned bulk")
+        override suspend fun setDone(itemId: String, done: Boolean) {
+            singles += itemId to done
+            snapshot.value = snapshot.value.copy(records = snapshot.value.records.map {
+                if (it.item.id == itemId) it.copy(item = it.item.copy(
+                    doneAt = if (done) "2026-11-12T11:00:00Z" else null)) else it
+            })
+        }
         override suspend fun readDraft(target: ReplyTarget): ReplyDraft? = null
         override suspend fun saveDraft(target: ReplyTarget, draft: ReplyDraft) = Unit
         override suspend fun reply(target: ReplyTarget, request: ReplyRequest) = error("A gesture must never send a reply")
@@ -148,8 +156,8 @@ class InboxOneRowTest {
         row("First event").performTouchInput { swipeRight() }
         rule.waitForIdle()
         rule.runOnIdle {
-            assertEquals("A gesture files this item only", listOf(listOf(InboxDoneTarget("a", "v-a"))), inbox.calls.map { it.first })
-            assertEquals(InboxBulkAction.Done, inbox.calls.single().second)
+            assertEquals("A gesture files this item only", listOf("a" to true), inbox.singles)
+            assertTrue("A row's own Done is one item's, not its chat's bulk", inbox.calls.isEmpty())
             assertTrue(inbox.snapshot.value.records.single { it.item.id == "a" }.item.isDone)
             assertFalse("The other item of the chat stays open", inbox.snapshot.value.records.single { it.item.id == "b" }.item.isDone)
         }
@@ -183,7 +191,8 @@ class InboxOneRowTest {
         rule.onNodeWithText(res.getString(R.string.inbox_mark_done)).performClick()
         rule.waitForIdle()
         rule.runOnIdle {
-            assertEquals(listOf(listOf("busy")), inbox.calls.map { c -> c.first.map { it.id } })
+            assertEquals(listOf("busy" to true), inbox.singles)
+            assertTrue(inbox.calls.isEmpty())
             assertFalse(inbox.snapshot.value.records.single { it.item.id == "open" }.item.isDone)
         }
     }
