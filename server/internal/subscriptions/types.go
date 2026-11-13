@@ -136,6 +136,10 @@ type Subscription struct {
 	// only the items stored from InboxGroupFrom on (nil: all), as the earlier ones came in as rows grouped otherwise.
 	InboxGroup     string     `json:"-"`
 	InboxGroupFrom *time.Time `json:"-"`
+	// Migrated is when a built-in connector's Inbox feed was switched to this, its default subscription
+	// (MigrationID, #6265); nil while it is not. While set the subscription is pulled and its rows go to the Inbox under
+	// the built-in's own source id; its ToInbox stays false, so a manager that does not know Migrated leaves it off.
+	Migrated *time.Time `json:"-"`
 }
 
 // Run is one execution, as the subscription's history keeps it (the newest RunsKept).
@@ -413,6 +417,8 @@ type Item struct {
 	// Seen: the item was seen in the source (#6176), when the pull that stored it or a later one read it so; never
 	// turned off again.
 	Seen bool `json:"seen,omitempty"`
+	// ReplyTo says where a reply goes, for people (#6198): with it the row can be replied to (deliverer.replies).
+	ReplyTo string `json:"reply_to,omitempty"`
 }
 
 // Seen is a dedup key kept for a subscription (subscription_seen).

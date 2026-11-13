@@ -121,6 +121,8 @@ type assistantProc struct {
 	// model of the conversation's last reply. compactIdleAt follows the window Claude Code reports for it (followWindow).
 	declaredWindow int
 	replyModel     string
+	// repliedAt: when replyModel last answered (assistant_recovery.go: a transient "model does not exist" on it).
+	repliedAt time.Time
 
 	// usageChecked: how far the transcript was checked for an impossible usage at the end of its turns
 	// (assistant_usage.go); 0: from the start.
@@ -270,11 +272,11 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		n.cancelAssistantRecovery(id)
 	}
 	restartForRecovery := recovery != nil && restart
-	if err := validModes(mode, effort); err != nil {
-		return "", err
-	}
 	resume := id != ""
 	st, _ := n.state.get(id)
+	if err := validModesFor(launcherOr(launcher, st.Launcher), mode, effort); err != nil {
+		return "", err
+	}
 	isMain := executionOption(options).IsMain
 	interject := executionOption(options).Interject // this message, not the conversation (assistant_interject.go)
 	if len(options) == 0 {
@@ -349,7 +351,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if effort != "" {
 		execution.Effort = effort
 	}
-	if err := execution.check(); err != nil {
+	if err := execution.check(rl); err != nil {
 		return "", err
 	}
 	if launcher == "" && id != "" {
@@ -744,7 +746,7 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 						p.context = tokens
 					}
 					if m := ev.Event.Message.Model; m != "" {
-						p.replyModel = m
+						p.replyModel, p.repliedAt = m, time.Now()
 					}
 					first, p.requested = !p.requested, true
 				}

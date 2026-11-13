@@ -80,7 +80,7 @@ The same definition as the app, from the same code (principle 4):
 | To-dos | the count | the To-dos page's Today filter: due today, plus open overdue ones | `TodoStore`, `TodoListLogic` |
 | Usage | a window's percent, reset time | `GET /api/v1/usage/windows`, the Machines page's numbers | `UsageWindowsStore` |
 | Usage | tokens today, by the hour | the island's Tokens Today; the hours from `GET /api/v1/usage`'s `hourly` (#5721) | `FleetState.stats`, the usage summary |
-| Usage | money spent today | only what a gateway reports (`LauncherQuota.Usage.costUSD`); never estimated from prices | launcher quotas |
+| Usage | money spent today | only what a gateway reports (`LauncherQuota.Usage.costUSD`); never estimated from prices. Not read yet (phase 3, with the accounts in Edit Widget): until then the widget shows no money | launcher quotas |
 | Computers | online, load | `Machine.online`; load from `FleetState.stats.loads` | `AppModel.machines` |
 | Health | steps, sleep, resting heart rate | Health's own numbers, with the user's permission | `HealthTool.daily` / `.summary` |
 | Inbox | Need You, Unread | open items the triage marks as yours (`InboxStore.actionCount`); the Inbox badge's number | `InboxStore` |
@@ -121,6 +121,12 @@ Widgets/faces/<id>_<rev>/    the chosen package's pictures, one per state, at th
 - **Waking the app** (#5721): from the foreground the app tells the hub whether any of the widgets is on a screen
   (`widgets` in its device prefs, `HomeWidgetWriter.tellHub`); the hub's silent `persona_wake: "widgets"` push then
   connects it for 25 seconds, and it writes before it lets go.
+- **What the app reads itself** (`HomeWidgetData`): today's calendar events (EventKit, off the main actor, only with
+  the access Persona already has), Health's numbers (`HealthTool.daily`: steps for 8 days, sleep, resting heart rate,
+  active energy), the subscription windows (`UsageWindowsStore`) and today's tokens by the hour (`GET /api/v1/usage`'s
+  `hourly`). Each is read only while a widget that shows it is on a screen (`WidgetCenter`'s configurations, from the
+  foreground), at most every 10, 15 and 5 minutes, and again when the hub wakes the app; a read that fails (Health is
+  locked with the phone) keeps the last.
 - **Off the main thread** (P1): the file is written on a background task, protected until first unlock as
   `FleetLookStore`'s; only encoding the few kilobytes runs on the main actor, at most every 5 seconds.
 - **Stale**: the timeline adds an entry at `HomeSnapshot.staleAfter` (an hour after the write). From then on the
@@ -128,8 +134,8 @@ Widgets/faces/<id>_<rev>/    the chosen package's pictures, one per state, at th
 
 ## Taps
 
-A widget opens its page (`persona://widget/<kind>`): the Agents list, To-dos, Machines, Recordings, Health, Inbox,
-and the calendar for Today. Agents opens the most urgent agent's chat (`persona://open?machine=…&session=…`, the Live
+A widget opens its page (`persona://widget/<kind>`): the Agents list, To-dos, Machines, Recordings, Health, Inbox;
+Today opens To-dos too (Persona has no calendar page of its own), and Usage opens Machines, where the windows are. Agents opens the most urgent agent's chat (`persona://open?machine=…&session=…`, the Live
 Activity's link). Each row of the large Agents widget opens its own agent. The Record button runs the Record control's
 intent without opening the app, and the recording's Live Activity confirms it at once.
 
@@ -144,7 +150,8 @@ The gallery draws every widget at its Home Screen sizes in light and dark with m
 `-showHomeWidgets YES` in a Debug build. A view outside a widget gets no container background, family, margins or tint
 from the system, so the gallery supplies stand-ins for them. For the Home Screen itself, `-showHomeWidgetSample YES`
 writes the same made-up snapshot instead of the app's, so the widgets added to a simulator's Home Screen show it
-without a hub; those shots, on each PR, are the proof (both DEBUG launch arguments, in `release.sh`'s list).
+without a hub (`-showHomeWidgetSample ticked`: two to-dos just ticked, one on its way and one the hub refused); those
+shots, on each PR, are the proof (both DEBUG launch arguments, in `release.sh`'s list).
 
 ## Phases
 
@@ -153,6 +160,9 @@ without a hub; those shots, on each PR, are the proof (both DEBUG launch argumen
    Screen), the gallery, `HomeWidgetTests` (Needs You replayed from `spec/fixtures/needs-you/cases.json` against the
    Agents badge, rows past the cap, the file read back only in its shape, which kinds reload, writes only on change,
    moods).
-2. **The rest of the Home Screen**: Today, To-dos (with ticking off), Usage, Computers, Health.
+2. **The rest of the Home Screen**: Today, To-dos (with ticking off, `CompleteTodoIntent`, `HomeWidgetActions`), Usage,
+   Computers, Health; their data (`HomeWidgetData`, `HomeToday`, `HomeTodos`, `HomeUsage`); taps to the To-dos,
+   Machines and Health pages.
 3. **Lock Screen, settings and the Smart Stack**: the accessory families, Edit Widget (entities for computers and
-   accounts read from the snapshot), relevance, background refresh, and the hub's push (#5721, its own PR).
+   accounts read from the snapshot), the gateways' money for Usage, relevance, background refresh, and the hub's push
+   (#5721, its own PR).

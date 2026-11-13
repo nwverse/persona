@@ -220,6 +220,10 @@ func TestSubscriptionsAreInboxAndKnowledgeBaseSources(t *testing.T) {
 	if r.Names[sub.ID] != "Notices" || src == nil || !src.Extension || !src.Counts || src.Kinds["sub_digest"] == "" || len(src.Things) != 2 {
 		t.Fatalf("the round: names %v, source %+v", r.Names, src)
 	}
+	// What it reads and its row's knowledge-base chat, for the AI twin (#6222).
+	if src.Via != "example" || src.ViaSource != "notices" || len(src.Chats) != 1 {
+		t.Fatalf("what the subscription reads: %q %q %v", src.Via, src.ViaSource, src.Chats)
+	}
 	if chats := h.readInbox(ctx, roundChats); chats.Names[sub.ID] != "Notices" || len(chats.Sources) != 0 {
 		t.Fatalf("a round of the Feishu chats: %+v", chats)
 	}

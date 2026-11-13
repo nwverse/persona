@@ -187,8 +187,14 @@ type InboxSource struct {
 	// #5671); another connector's is ignored there, and each move counts one.
 	Counts bool `json:"counts,omitempty"`
 	// Kinds are its kinds of things as it describes them, for the models.
-	Kinds  map[string]string          `json:"kinds,omitempty"`
-	Things []connectorwire.InboxThing `json:"things"`
+	Kinds map[string]string `json:"kinds,omitempty"`
+	// Via, ViaSource and Chats are a subscription's (#6222): the connector it reads and that source's name, for the AI
+	// twin; and the knowledge-base chat of each thread it hands while its knowledge base is on, under its archive
+	// (kb.ChatID(ID, chat)).
+	Via       string                     `json:"via,omitempty"`
+	ViaSource string                     `json:"via_source,omitempty"`
+	Chats     map[string]string          `json:"chats,omitempty"`
+	Things    []connectorwire.InboxThing `json:"things"`
 	// ReadError: its Collect failed this round (Things is empty and means nothing; what it had stays): a short code,
 	// never the error's text (ReadTimeout, ReadRateLimited, ReadFailed). The apps say which source is behind.
 	ReadError string `json:"read_error,omitempty"`

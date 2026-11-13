@@ -68,6 +68,12 @@ func TestSubscriptionsRevisionLeaseAndRun(t *testing.T) {
 	if err != nil || len(kept) != 2 || kept[0].UID != "n1" || kept[0].Seq >= kept[1].Seq || !kept[0].CreatedAt.Equal(now) {
 		t.Fatalf("items: %+v %v", kept, err)
 	}
+	if r, err := d.SubscriptionItem(ctx, "sub_a", "n2"); err != nil || r == nil || r.UID != "n2" || r.Seq != kept[1].Seq {
+		t.Fatalf("the held item n2: %+v %v", r, err)
+	}
+	if r, err := d.SubscriptionItem(ctx, "sub_a", "gone"); err != nil || r != nil {
+		t.Fatalf("an item it doesn't hold: %+v %v", r, err)
+	}
 	var one, two map[string]any
 	if json.Unmarshal(kept[0].Data, &one) != nil || one["seen"] != true || one["title"] != "One" ||
 		json.Unmarshal(kept[1].Data, &two) != nil || two["seen"] != nil || two["title"] != "Two" {
