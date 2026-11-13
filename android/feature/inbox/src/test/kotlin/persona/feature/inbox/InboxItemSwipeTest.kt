@@ -1,6 +1,5 @@
 package persona.feature.inbox
 
-import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -182,7 +181,8 @@ class InboxItemSwipeTest {
 
         row("One matter").performTouchInput { longClick() }
         rule.waitForIdle()
-        rule.onNodeWithText("Move Back").assertIsNotEnabled()
+        rule.onNodeWithText("Move Back").assertDoesNotExist()
+        rule.onNodeWithText("Hand to AI").assertDoesNotExist()
 
         inbox.doneGate?.complete(Unit)
         rule.waitForIdle()
