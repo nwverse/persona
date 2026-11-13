@@ -156,13 +156,15 @@ struct InboxHandOffDoneDefaultTests {
         let hub = FakeHub(), path = "/api/v1/inbox/lark:f1:11/handoff"
         hub.on("POST", path, json: #"{"item":{"id":"lark:f1:11"},"session":{"machine_id":"server","session_id":"main-1"}}"#)
         let key = SessionKey(group: "work", machineID: "laptop", sessionID: "a-1")
-        try await hub.client.inboxHandoffRecord("lark:f1:11", session: key, kind: .agent, title: "Release notes", clientID: UUID())
+        let id = UUID()
+        try await hub.client.inboxHandoffRecord("lark:f1:11", session: key, kind: .agent, title: "Release notes", clientID: id)
         let sent = try #require(hub.sent("POST", path).first)
         let body = try JSONSerialization.jsonObject(with: try #require(sent.body)) as? [String: Any]
         let session = try #require(body?["session"] as? [String: String])
         let keys = (body ?? [:]).keys.sorted()
         #expect(keys == ["client_id", "kind", "session", "title"])
         #expect(body?["text"] == nil)
+        #expect(body?["client_id"] as? String == id.uuidString.lowercased()) // the hub's ids are lower case
         #expect(session == ["machine_id": "laptop", "session_id": "a-1"])
         #expect(body?["kind"] as? String == "agent" && body?["title"] as? String == "Release notes")
 
