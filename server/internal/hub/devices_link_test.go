@@ -474,6 +474,55 @@ func TestAManagersViewIsItsOwnReport(t *testing.T) {
 	}
 }
 
+// A machine nobody is known to carry (the ownership setting could not be read: unknownMachineOwner) is offline at once,
+// hub start or not: there is no manager to wait for (#6795).
+func TestNoWaitForAMachineNobodyIsKnownToCarry(t *testing.T) {
+	h := newTestHub(t)
+	h.cfg.Machines = []MachineConfig{{ID: "own", Name: "Own", Kind: "local", OwnerRequired: true}}
+	h.startDevices(context.Background()) // the start's window is open, nobody has reported
+	m := h.machineByID("own")
+	if o := m.ownerOrCarrier(); o != unknownMachineOwner {
+		t.Fatalf("own's manager: %q", o)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	began := time.Now()
+	if err := m.call(ctx, "fs.list", map[string]any{"path": "/"}, nil); !errors.Is(err, errManagerOffline) || time.Since(began) > time.Second {
+		t.Fatalf("a call to a machine nobody carries: %v after %v", err, time.Since(began))
+	}
+	if h.devicesUpFor(unknownMachineOwner) {
+		t.Fatal("nobody is up")
+	}
+}
+
+// The end of a manager's connection forgets its up state only when no newer connection is there: one that connected
+// and reported before the old end was handled keeps it (#6795).
+func TestAGoneConnectionDoesNotForgetTheNewOnesUp(t *testing.T) {
+	h := newTestHub(t)
+	const b = "m-0b0b0b"
+	h.devicesConnected(b)
+	h.applyDeviceStatesFrom(b, devicewire.States{})
+	d := &h.devices
+	d.mu.Lock()
+	conns := d.conns[b]
+	d.mu.Unlock()
+	// The next connection's handshake and report land before the old one's end is handled.
+	h.devicesConnected(b)
+	h.applyDeviceStatesFrom(b, devicewire.States{})
+	h.upGone(b, conns)
+	if !h.devicesUpFor(b) {
+		t.Fatal("the new connection's up state went with the old connection")
+	}
+	// Nothing newer: the end forgets it, and a call waits for a new connection (the start's window) or fails.
+	d.mu.Lock()
+	conns = d.conns[b]
+	d.mu.Unlock()
+	h.upGone(b, conns)
+	if h.devicesUpFor(b) {
+		t.Fatal("the up state outlived its connection")
+	}
+}
+
 // A report from a manager removed from the roster (sent before it was hung up) does not make it up: nothing of its
 // counts any more, as its entries do not (machine_entries.go).
 func TestAReportAfterLeavingTheRosterIsNotUp(t *testing.T) {
@@ -532,6 +581,16 @@ func TestACallToAnotherManagersWarmMachineWaitsForIt(t *testing.T) {
 	case <-time.After(300 * time.Millisecond):
 	}
 	b := connectGuardManagerWith(t, srv.URL, "m-0b0b0b", bTok, nodeAnswers)
+	// B's own call reaches its machine from its handshake on, before its report; anyone else's still waits for that.
+	if err := b.call(t, assistantwire.MethodDevice, assistantwire.DeviceCall{Device: "mb", Method: "panes.list", Params: json.RawMessage(`{}`)}, nil); err != nil ||
+		!strings.Contains(b.log(), `"method":"panes.list"`) {
+		t.Fatalf("B's own call before its report: %v", err)
+	}
+	select {
+	case err := <-res:
+		t.Fatalf("B connecting ended the wait for its report: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
 	b.report(t, devicewire.State{Machine: proto.Machine{ID: "mb", Name: "mb"}})
 	select {
 	case err := <-res:

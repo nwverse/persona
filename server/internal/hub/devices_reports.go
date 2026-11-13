@@ -115,8 +115,13 @@ func (d *devicesState) upChanLocked(owner string) chan struct{} {
 }
 
 // waitDevicesFor returns nil once manager owner is up; errManagerOffline at once while it is not, unless the hub just
-// started (its machines shown as before) and owner has not reported since: then a call waits for it that long.
+// started (its machines shown as before) and owner has not reported since: then a call waits for it that long. A
+// manager of the roster that is away is waited for like the carrier; a machine nobody is known to carry
+// (unknownMachineOwner: the ownership could not be read, ownership.go) is offline at once.
 func (h *Hub) waitDevicesFor(ctx context.Context, owner string) error {
+	if owner == unknownMachineOwner {
+		return errManagerOffline
+	}
 	d := &h.devices
 	d.mu.Lock()
 	if d.upOpen[owner] {
@@ -370,6 +375,10 @@ func (h *Hub) devicesConnected(owner string) {
 		d.fresh = map[string]bool{}
 	}
 	d.fresh[owner] = true
+	if d.conns == nil {
+		d.conns = map[string]uint64{}
+	}
+	d.conns[owner]++
 	d.mu.Unlock()
 	for _, m := range h.machinesNow() {
 		m.mu.Lock()
@@ -448,11 +457,9 @@ func (h *Hub) connectionEnded(m *Machine, why string) {
 func (h *Hub) devicesGone(owner string) {
 	d := &h.devices
 	d.mu.Lock()
-	if d.upOpen[owner] { // the next wait for it gets a channel of its own (upChanLocked)
-		delete(d.up, owner)
-		delete(d.upOpen, owner)
-	}
+	conns := d.conns[owner]
 	d.mu.Unlock()
+	h.upGone(owner, conns)
 	// The hub's own stop (the manager gets its SIGTERM at the same time): the next hub shows them as they were
 	// (startDevices). A moment's wait lets the hub's stop begin first.
 	time.Sleep(500 * time.Millisecond)
@@ -484,6 +491,23 @@ func (h *Hub) devicesGone(owner string) {
 			h.sessionsChanged(m)
 		}
 	}
+}
+
+// upGone forgets owner's up state with the connection that ended, unless a newer one is there already: current now, or
+// connected (devicesConnected) since conns was read. A manager reports only after its handshake, so an up state found
+// with no newer connection is the old connection's; one found after a newer handshake is that connection's and stays.
+func (h *Hub) upGone(owner string, conns uint64) {
+	if h.busConnOf(owner) != nil {
+		return
+	}
+	d := &h.devices
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.conns[owner] != conns || !d.upOpen[owner] {
+		return
+	}
+	delete(d.up, owner) // the next wait for it gets a channel of its own (upChanLocked)
+	delete(d.upOpen, owner)
 }
 
 // offlineLocal shows m offline with error why until its manager reports it again: its streams close, its sessions'

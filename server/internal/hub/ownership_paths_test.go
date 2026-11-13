@@ -174,10 +174,6 @@ func TestALinkRelayFollowsItsMachine(t *testing.T) {
 	if err := peer.Call(cctx, busHello, map[string]any{"id": "m-0b0b0b"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := peer.Notify(devicewire.EventState, devicewire.States{}); err != nil { // B is up: a link of its own is handed to it
-		t.Fatal(err)
-	}
-	eventually(t, 5*time.Second, "B reported", func() bool { return h.devicesUpFor("m-0b0b0b") })
 	tok, _ := linkToken(t, h, "laptop")
 	dialLink := func() *websocket.Conn {
 		t.Helper()

@@ -80,6 +80,9 @@ type devicesState struct {
 	up        map[string]chan struct{}
 	upOpen    map[string]bool
 	warmUntil time.Time
+	// conns counts owner's connections (devicesConnected): the end of one forgets its up state only when no newer one
+	// came meanwhile (upGone).
+	conns map[string]uint64
 	// fresh: the manager's connection is new (by manager); at its first report the hub asks it to watch what the
 	// apps watch.
 	fresh map[string]bool

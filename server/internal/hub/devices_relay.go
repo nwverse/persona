@@ -174,8 +174,9 @@ func (h *Hub) serveLinkStream(w http.ResponseWriter, r *http.Request) {
 // (Persona Link tries again).
 func (h *Hub) relayLinkConn(w http.ResponseWriter, r *http.Request, a devicewire.Accept, opts *websocket.AcceptOptions, limit int64) {
 	// Right after the hub started (its listeners come up before the managers do) the link waits for its machine's
-	// manager a little, within what Persona Link gives a handshake; otherwise it is told to come back.
-	if !h.awaitManagerFor(r.Context(), h.machineOwner(a.MachineID), linkManagerWait) {
+	// manager a little, within what Persona Link gives a handshake. A manager that is connected takes it, reported or
+	// not (it answers for its machines from its handshake on); without one it is told to come back.
+	if owner := h.machineOwner(a.MachineID); !h.awaitManagerFor(r.Context(), owner, linkManagerWait) && h.busConnOf(owner) == nil {
 		writeErrCode(w, http.StatusServiceUnavailable, "assistant_offline", errAssistantOffline)
 		return
 	}
