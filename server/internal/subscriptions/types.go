@@ -58,6 +58,7 @@ const (
 	CodeShapeChanged     = "shape_changed"
 	CodeToolChanged      = "tool_changed"
 	CodePagination       = "invalid_pagination" // a cursor/page cannot make safe progress: the recipe must be edited
+	CodeBadThing         = "bad_thing"          // a things recipe's answer has an item that is not an Inbox row
 	CodeNoModel          = "no_model"           // drafting: no model is set up for it
 	CodeModelFailed      = "model_failed"       // drafting: the model's call failed
 )
@@ -136,6 +137,10 @@ type Subscription struct {
 	// only the items stored from InboxGroupFrom on (nil: all), as the earlier ones came in as rows grouped otherwise.
 	InboxGroup     string     `json:"-"`
 	InboxGroupFrom *time.Time `json:"-"`
+	// Migrated is when a built-in connector's Inbox feed was switched to this, its default subscription
+	// (MigrationID, #6265); nil while it is not. While set the subscription is pulled and its rows go to the Inbox under
+	// the built-in's own source id; its ToInbox stays false, so a manager that does not know Migrated leaves it off.
+	Migrated *time.Time `json:"-"`
 }
 
 // Run is one execution, as the subscription's history keeps it (the newest RunsKept).
@@ -415,6 +420,8 @@ type Item struct {
 	Seen bool `json:"seen,omitempty"`
 	// ReplyTo says where a reply goes, for people (#6198): with it the row can be replied to (deliverer.replies).
 	ReplyTo string `json:"reply_to,omitempty"`
+	// Thing is a things recipe's row as the connector made it (#6296), handed to the Inbox as it is.
+	Thing json.RawMessage `json:"thing,omitempty"`
 }
 
 // Seen is a dedup key kept for a subscription (subscription_seen).

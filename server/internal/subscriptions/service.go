@@ -118,6 +118,7 @@ type Service struct {
 	busy     map[string]bool // connectors whose subscriptions are running now
 	running  int
 	asked    map[string]bool // subscriptions asked to run now
+	kicked   map[string]bool // subscriptions their connector's changed event made due (ConnectorChanged)
 	wake     chan struct{}
 
 	// Push sources (push.go): one push at a time, and each device's items in the last hour.
@@ -161,7 +162,7 @@ func New(o Options) *Service {
 		o.Delivered = func(Subscription) {}
 	}
 	return &Service{o: o, catalogs: map[string]catalogEntry{}, reading: map[string]bool{}, gates: map[string]*gate{},
-		busy: map[string]bool{}, asked: map[string]bool{}, wake: make(chan struct{}, 1), pushed: map[string][]time.Time{}}
+		busy: map[string]bool{}, asked: map[string]bool{}, kicked: map[string]bool{}, wake: make(chan struct{}, 1), pushed: map[string][]time.Time{}}
 }
 
 func (s *Service) now() time.Time { return s.o.Clock.Now().UTC() }
@@ -169,7 +170,7 @@ func (s *Service) now() time.Time { return s.o.Clock.Now().UTC() }
 // shown is s as the API shows it: off while both destinations are off, its floor of intervals filled in.
 func shown(sub Subscription) Subscription {
 	sub.State = cmpOr(sub.RunState, StateOK)
-	if !sub.ToInbox && !sub.ToKB {
+	if !on(sub) {
 		sub.State = StateOff
 	}
 	sub.MinIntervalSeconds = floorOf(sub.Recipe.Mode, sub.SourceMin)
@@ -179,7 +180,8 @@ func shown(sub Subscription) Subscription {
 	return sub
 }
 
-func on(sub Subscription) bool { return sub.ToInbox || sub.ToKB }
+// on says whether sub is pulled: a destination is on, or it is a built-in's Inbox feed now (Migrated, #6265).
+func on(sub Subscription) bool { return sub.ToInbox || sub.ToKB || sub.Migrated != nil }
 
 // pullScheduled distinguishes ordinary polling from a finite continuation explicitly started by Run Now while off.
 func pullScheduled(sub Subscription) bool {
@@ -549,7 +551,7 @@ func (s *Service) check(ctx context.Context, c ConnectorInfo, sourceID string, r
 	}
 	if pl.problem != nil {
 		switch pl.problem.Code {
-		case CodeNoList, CodeTextNeedsSnap, CodePagination:
+		case CodeNoList, CodeTextNeedsSnap, CodePagination, CodeBadThing:
 			dr.Checks[2].Error = pl.problem
 		case CodeBadArgs:
 			dr.Checks[1].OK, dr.Checks[1].Error = false, pl.problem
@@ -866,6 +868,10 @@ func (s *Service) Update(ctx context.Context, id string, p Patch, by Actor) (Sub
 	if p.Recipe != nil {
 		next = rebased(next, *cur, p.Existing, now)
 	}
+	if next.ToKB && next.Recipe.Mode == wire.ConnectorSubscriptionModeThings {
+		// Its rows are the Inbox's; the knowledge base reads the source itself (#6296).
+		return Subscription{}, errorf(http.StatusBadRequest, CodeBadRequest, "a things subscription's rows go to the Inbox only")
+	}
 	switch {
 	case !on(next):
 		next.NextRunAt = nil
@@ -935,6 +941,37 @@ func (s *Service) RunNow(ctx context.Context, id string, by Actor) (Subscription
 	return out, nil
 }
 
+// changedGap is the least time between a subscription's last run and one its connector's changed event starts (#6247).
+const changedGap = time.Minute
+
+// ConnectorChanged runs soon the subscriptions of connector id that are on and pull items on a schedule: the connector
+// said it has something new, as it kicks the Inbox for its own (#6247). A subscription is run so at most once a
+// changedGap after its last run, and never sooner than its source's own minimum; the connector's call gap, hourly
+// budget and pauses hold as for any run, and a run they hold back is left to the schedule. A snapshot keeps its
+// schedule. The run is a scheduled one brought forward.
+func (s *Service) ConnectorChanged(ctx context.Context, id string) {
+	all, err := s.o.Store.ListSubscriptions(ctx)
+	if err != nil {
+		s.o.Logf("subscriptions: %s changed: %v", id, err)
+		return
+	}
+	now, kicked := s.now(), false
+	s.mu.Lock()
+	for _, sub := range all {
+		if sub.Connector != id || IsPush(sub) || !on(sub) || sub.Recipe.Mode == wire.ConnectorSubscriptionModeSnapshot {
+			continue
+		}
+		if last := sub.LastRunAt; last != nil && now.Sub(*last) < max(changedGap, time.Duration(sub.SourceMin)*time.Second) {
+			continue
+		}
+		s.kicked[sub.ID], kicked = true, true
+	}
+	s.mu.Unlock()
+	if kicked {
+		s.poke()
+	}
+}
+
 // Delete removes a subscription with its dedup keys and pending items. withData also has the destinations remove what
 // they took from it (#2039): its destinations are switched off first, so they take nothing more meanwhile; when the
 // removal fails the subscription stays (off), and deleting again finishes it. It is recorded either way.
@@ -976,7 +1013,7 @@ func (s *Service) switchOff(ctx context.Context, sub Subscription) (*Subscriptio
 		}
 		next, prev := sub, sub.Revision
 		next.ToInbox, next.ToKB, next.InboxFrom, next.InboxCatchup, next.KBFrom, next.NextRunAt = false, false, nil, nil, nil, nil
-		next.CatchupFrom = nil
+		next.CatchupFrom, next.Migrated = nil, nil // a built-in's feed switched to it goes back to the built-in (#6265)
 		next.Revision, next.UpdatedAt = prev+1, s.now()
 		ok, err := s.o.Store.UpdateSubscription(ctx, next, prev)
 		if err != nil {

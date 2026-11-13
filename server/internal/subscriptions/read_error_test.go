@@ -59,3 +59,19 @@ func TestAFailingSubscriptionIsBehindInTheInboxAtOnce(t *testing.T) {
 		t.Fatalf("with its Inbox off: %q", got)
 	}
 }
+
+// A subscription says what it reads, and while its knowledge base is on, each row's chat there (#6222): the one chat
+// of a subscription grouped by source.
+func TestInboxSourcesSayWhatTheyReadAndTheirRowsChats(t *testing.T) {
+	e := newEnv(t)
+	sub := e.turnOn(e.create(itemsRecipe()))
+	e.svc.RunDue(e.ctx)
+	if src := e.inbox(sub.ID); src.Connector != "example" || src.SourceName != "Notices" || src.Chats != nil {
+		t.Fatalf("with its knowledge base off: %+v", src)
+	}
+	e.patch(sub.ID, Patch{ToKB: ptr(true)})
+	src, rows := e.inbox(sub.ID), e.rows(sub.ID)
+	if len(rows) == 0 || len(src.Chats) != len(rows) || src.Chats[rows[0].Thread] != rowAll {
+		t.Fatalf("with its knowledge base on: chats %v, rows %d", src.Chats, len(rows))
+	}
+}

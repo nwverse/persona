@@ -45,14 +45,12 @@ func callsFor(f *fakeHub, id string) []string {
 // waitCallsFor waits for n node calls about session id.
 func waitCallsFor(t *testing.T, f *fakeHub, id string, n int) []string {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		got := callsFor(f, id)
-		if len(got) >= n || time.Now().After(deadline) {
-			return got
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	var got []string
+	waitFor(t, "the agent switch node calls", func() bool {
+		got = callsFor(f, id)
+		return len(got) >= n
+	})
+	return got
 }
 
 // One call: the agent its usage limit stopped is switched and continued, the idle one switched with nothing sent, the
@@ -116,10 +114,7 @@ func TestAgentsSwitchEachByItsState(t *testing.T) {
 	if got := waitCallsFor(t, ft.f, "s3busy0001", 2); strings.Join(got, ",") != "session.modes,session.switch" {
 		t.Fatalf("at the end of its turn: %v", got)
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for ft.s.queuedSwitchOf("mac", "s3busy0001") != "" && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitFor(t, "the queued agent switch to finish", func() bool { return ft.s.queuedSwitchOf("mac", "s3busy0001") == "" })
 	if to := ft.s.queuedSwitchOf("mac", "s3busy0001"); to != "" {
 		t.Errorf("still queued: %q", to)
 	}
@@ -151,10 +146,7 @@ func TestAgentsSwitchFilterBusyAndMovedMeanwhile(t *testing.T) {
 	n := len(callsFor(ft.f, "s1dflt0001"))
 	moved := agentRow("s1dflt0001", "elsewhere", proto.StatusIdle)
 	ft.sessions("mac", moved)
-	deadline := time.Now().Add(5 * time.Second)
-	for ft.s.queuedSwitchOf("mac", "s1dflt0001") != "" && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitFor(t, "the moved agent switch to leave the queue", func() bool { return ft.s.queuedSwitchOf("mac", "s1dflt0001") == "" })
 	if to := ft.s.queuedSwitchOf("mac", "s1dflt0001"); to != "" {
 		t.Fatalf("still queued after the user moved it: %q", to)
 	}
@@ -235,7 +227,9 @@ func TestAgentsSwitchStoppedAndFailed(t *testing.T) {
 		t.Fatalf("failed: %s, queued %q", got, ft.s.queuedSwitchOf("mac", "s3idle0001"))
 	}
 	ft.sessions("mac", agentRow("s3idle0001", "", proto.StatusIdle))
-	time.Sleep(200 * time.Millisecond)
+	observe := time.NewTicker(200 * time.Millisecond)
+	<-observe.C
+	observe.Stop()
 	if got := callsFor(ft.f, "s3idle0001"); len(got) != n {
 		t.Errorf("a failed switch was tried again: %v", got)
 	}

@@ -346,9 +346,26 @@ function EarlierHeader({ count, needs, window, folded, onToggle }: { count: numb
   );
 }
 
-/** A pill that names what is chosen and opens the choices in the design system's menu (no native select). */
+/** An element's width, followed while it is on screen: the sidebar it sits in can be dragged wider or narrower. */
+function useWidth(el: HTMLElement | null): number {
+  const [width, setWidth] = useState(0);
+  useLayoutEffect(() => {
+    if (!el) return;
+    const measure = () => setWidth(Math.round(el.getBoundingClientRect().width));
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [el]);
+  return width;
+}
+
+/** A pill that names what is chosen and opens the choices in the design system's menu (no native select). The menu is
+ *  as wide as its pill, like a select's list, and never narrower than a menu is anywhere else. */
 function PickChip({ label, header = label, value, shown, items, onChoose, grow = false }: { label: string; header?: string; value: string; shown: string; items: { key: string; label: string; hint?: string; detail?: string }[]; onChoose: (key: string) => void; grow?: boolean }) {
   const menu = useMenu();
+  const width = Math.max(useWidth(menu.anchor), SESSION_LIST_METRICS.pickMenuMin);
   const rows: MenuItem[] = items.map((it, i) => ({ ...it, radio: true, checked: it.key === value, divider: i === 1, onSelect: () => onChoose(it.key) }));
   return <>
     <button type="button" aria-label={label} aria-haspopup="menu" aria-expanded={Boolean(menu.anchor)} title={shown} onClick={menu.open}
@@ -356,6 +373,6 @@ function PickChip({ label, header = label, value, shown, items, onChoose, grow =
       <span className="min-w-0 flex-1 truncate text-left">{shown}</span>
       <Icon name="chevron" size={11} className="shrink-0 text-ink-3" />
     </button>
-    {menu.anchor && <Menu items={rows} anchor={menu.anchor} onClose={menu.close} header={header} width={260} />}
+    {menu.anchor && <Menu items={rows} anchor={menu.anchor} onClose={menu.close} header={header} width={width} />}
   </>;
 }
