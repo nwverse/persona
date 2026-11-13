@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -52,23 +53,32 @@ func TestWorkspaceProjectConcurrentCreationChecksRevisionBeforeNativeCall(t *tes
 	d := newBoardDevs()
 	s, _ := newBoardService(t, newMemoryBoardStore(), d)
 	var calls atomic.Int32
+	entered, release := make(chan struct{}, 12), make(chan struct{})
 	d.add("computer", func(_ context.Context, method string, _ json.RawMessage) (any, error) {
 		if method != "workspace.create" {
 			t.Errorf("unexpected method %s", method)
 		}
 		calls.Add(1)
-		time.Sleep(20 * time.Millisecond)
+		entered <- struct{}{}
+		<-release
 		return proto.Workspace{ID: "native", Source: "codex_app", SourceID: "native", Cwd: `C:\Projects\Example`, Available: true}, nil
 	})
 	start, results := make(chan struct{}), make(chan int, 12)
+	var ready sync.WaitGroup
+	ready.Add(12)
 	for i := range 12 {
 		go func() {
 			<-start
+			ready.Done()
+			ready.Wait()
 			body := fmt.Sprintf(`{"revision":0,"action":"add_card","machine_id":"computer","cwd":"C:\\Projects\\Example","title":"Project %d","column_id":"todo","create_directory":true,"desktop_app":"codex_app"}`, i)
 			results <- boardCall(s, "POST", "/api/v1/workspace-board", body, roleFull).Code
 		}()
 	}
 	close(start)
+	ready.Wait()
+	<-entered
+	close(release)
 	succeeded := 0
 	for range 12 {
 		switch code := <-results; code {

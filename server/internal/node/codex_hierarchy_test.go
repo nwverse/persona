@@ -3,9 +3,12 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/proto"
@@ -45,13 +48,18 @@ func TestCodexProjectRootRealWorktrees(t *testing.T) {
 	if got := codexProjectRoot(other, cache); got == codexProjectRoot(repo, cache) {
 		t.Fatal("same basename merged independent repositories")
 	}
-	alias := filepath.Join(base, "alias")
-	if err := os.Symlink(repo, alias); err != nil {
-		t.Fatal(err)
-	}
-	if codexProjectRoot(alias, cache) != realPath(repo) {
-		t.Fatal("symlink did not resolve")
-	}
+	t.Run("symlink", func(t *testing.T) {
+		alias := filepath.Join(base, "alias")
+		if err := os.Symlink(repo, alias); err != nil {
+			if runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(1314)) {
+				t.Skip("Windows symlink creation requires Developer Mode or the symlink privilege")
+			}
+			t.Fatal(err)
+		}
+		if codexProjectRoot(alias, cache) != realPath(repo) {
+			t.Fatal("symlink did not resolve")
+		}
+	})
 }
 
 func TestCodexHistoricalHierarchyWithoutDesktop(t *testing.T) {
