@@ -152,14 +152,12 @@ fun JStatusMark(status: Status, modifier: Modifier = Modifier, animated: Boolean
  * warning mark and the words in the danger colour instead ("Error").
  */
 @Composable
-fun JStateLabel(text: String, status: Status, modifier: Modifier = Modifier, problem: Boolean = false,
-    overflow: TextOverflow = TextOverflow.Ellipsis,
-) {
+fun JStateLabel(text: String, status: Status, modifier: Modifier = Modifier, problem: Boolean = false) {
     val palette = PersonaTheme.palette
     Row(modifier.semantics(mergeDescendants = true) {}, horizontalArrangement = Arrangement.spacedBy(6.dp.dense), verticalAlignment = Alignment.CenterVertically) {
         if (problem) JIcon(PhIcons.WarningCircle, null, size = 14.dp, tint = palette.danger.dot) else JStatusDot(status)
         Text(text, style = PersonaTheme.type.caption, color = if (problem) palette.danger.text else palette.ink2, maxLines = 1, softWrap = false,
-            overflow = overflow)
+            overflow = TextOverflow.Ellipsis)
     }
 }
 

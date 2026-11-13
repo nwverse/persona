@@ -43,7 +43,7 @@ enum class MessageSource { Lark, Mail, Other }
 
 private const val STACK_TITLE_TIME_AT_FONT_SCALE = 1.5f
 
-/** An Inbox row's optional `where · who: latest line`, with its current state at the trailing side. */
+/** An Inbox row's optional source-specific latest line, with its current state on a separate line below. */
 @Immutable
 data class MessageItemMeta(
     val text: String,
@@ -56,10 +56,11 @@ data class MessageItemMeta(
 @Composable
 private fun MessageItemState(meta: MessageItemMeta) {
     val palette = PersonaTheme.palette
-    if (meta.accent) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+    if (meta.accent) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
         JIcon(PhIcons.Sparkle, null, size = Tokens.Space.m, tint = palette.accent, decorative = true)
-        Text(meta.state.orEmpty(), style = PersonaTheme.type.caption, color = palette.ink2, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip)
-    } else JStateLabel(meta.state.orEmpty(), meta.status, problem = meta.problem, overflow = TextOverflow.Clip)
+        Text(meta.state.orEmpty(), Modifier.weight(1f), style = PersonaTheme.type.caption, color = palette.ink2,
+            maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
+    } else JStateLabel(meta.state.orEmpty(), meta.status, modifier = Modifier.fillMaxWidth(), problem = meta.problem)
 }
 
 /**
@@ -167,7 +168,6 @@ fun MessageItem(
                     }
                 }
                 if (followed) Spacer(Modifier.height(Tokens.Space.xs))
-                val stateInSummary = meta?.let { it.text.isBlank() && it.state != null } == true
                 preview?.let {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         if (followed) {
@@ -177,22 +177,19 @@ fun MessageItem(
                             JSpinner(Modifier.size(12.dp), stroke = 1.6.dp)
                             Spacer(Modifier.width(6.dp.dense))
                         }
-                        Text(it, if (stateInSummary) Modifier.weight(1f) else Modifier, style = type.callout,
-                            color = if (!followed && status == Status.Working && style != AppStyle.Brief) palette.working.text
+                        Text(it, style = type.callout, color = if (!followed && status == Status.Working && style != AppStyle.Brief) palette.working.text
                             else if (followed) palette.ink else palette.ink2, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        if (stateInSummary) meta?.let { line -> MessageItemState(line) }
                     }
                 }
                 meta?.let { line ->
-                    if (line.text.isNotBlank() || preview == null && line.state != null) {
+                    if (line.text.isNotBlank()) {
                         if (preview != null) Spacer(Modifier.height(Tokens.Space.xs))
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                            if (line.text.isNotBlank()) Text(line.text, Modifier.weight(1f),
-                                style = if (preview == null) type.callout else type.caption, color = palette.ink2,
-                                maxLines = if (preview == null && line.state == null) 2 else 1, overflow = TextOverflow.Ellipsis)
-                            else Spacer(Modifier.weight(1f))
-                            line.state?.let { MessageItemState(line) }
-                        }
+                        Text(line.text, Modifier.fillMaxWidth(), style = if (preview == null) type.callout else type.caption,
+                            color = palette.ink2, maxLines = if (preview == null) 2 else 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    line.state?.let {
+                        Spacer(Modifier.height(Tokens.Space.xs))
+                        MessageItemState(line)
                     }
                 }
                 if (attachment != null || tags.isNotEmpty()) {

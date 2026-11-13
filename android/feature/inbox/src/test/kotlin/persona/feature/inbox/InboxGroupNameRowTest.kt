@@ -111,6 +111,7 @@ class InboxGroupNameRowTest {
             rule.waitForIdle()
             val context = "$appearance dark=$night scale=$fontScale"
             assertTitleStartsVisibly(record.item.title, context)
+            assertFullyVisible(meta, context)
             val title = rule.onNodeWithText(record.item.title, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
             val summary = rule.onNodeWithText(record.item.summary!!, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
             val latest = rule.onNodeWithText(meta, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
@@ -172,6 +173,7 @@ class InboxGroupNameRowTest {
             val context = "$appearance dark=$night scale=$fontScale"
             assertTitleStartsVisibly(followed.item.title, context)
             assertFullyVisible("等你确认回复", context)
+            assertFullyVisible(metaText, context)
             val title = rule.onNodeWithText(followed.item.title, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
             val summary = rule.onNodeWithText("AI summary", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
             val meta = rule.onNodeWithText(metaText, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
@@ -221,11 +223,11 @@ class InboxGroupNameRowTest {
         rule.onNodeWithText(sender, useUnmergedTree = true).assertDoesNotExist()
         rule.onNodeWithText(metaText, useUnmergedTree = true).assertDoesNotExist()
 
-        // A repeated summary leaves no empty third row: its state shares the summary row instead.
+        // A repeated summary leaves no empty third row: its state takes the next line, as on every other row.
         rule.runOnIdle { shown = followed.copy(item = followed.item.copy(preview = "AI summary"), source = "assistant") }
         val summaryRow = rule.onNodeWithText("AI summary", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
-        val inlineState = rule.onNodeWithText("等你确认回复", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
-        assertTrue("The state must share the summary row rather than occupy a blank meta row: $inlineState / $summaryRow",
-            inlineState.top < summaryRow.bottom)
+        val separateState = rule.onNodeWithText("等你确认回复", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        assertTrue("The state must sit below the summary, not beside it: $separateState / $summaryRow",
+            separateState.top >= summaryRow.bottom - 1f)
     }
 }
