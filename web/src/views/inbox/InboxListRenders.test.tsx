@@ -10,15 +10,22 @@ vi.hoisted(() => {
   window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
 });
 
-// every render of an ItemRow reads its from line once, every AgentRow its agent title: counted per item / interaction
+// every render of an ItemRow reads its from line once (rowMeta, which falls back to fromLine), every AgentRow its agent
+// title: counted per item / interaction
 const renders = vi.hoisted(() => new Map<string, number>());
 vi.mock("../../lib/inbox", async (load) => {
   const real = await load<typeof import("../../lib/inbox")>();
+  const counted = (id: string) => renders.set(id, (renders.get(id) ?? 0) + 1);
   return {
     ...real,
     fromLine: (...a: Parameters<typeof real.fromLine>) => {
-      renders.set(a[0].id, (renders.get(a[0].id) ?? 0) + 1);
+      counted(a[0].id);
       return real.fromLine(...a);
+    },
+    // the row reads rowMeta (where · sender: preview); with no `where` it returns fromLine's line itself
+    rowMeta: (...a: Parameters<typeof real.rowMeta>) => {
+      counted(a[0].id);
+      return real.rowMeta(...a);
     },
     interactionAgentTitle: (...a: Parameters<typeof real.interactionAgentTitle>) => {
       renders.set(a[0].id, (renders.get(a[0].id) ?? 0) + 1);
