@@ -1,0 +1,215 @@
+{
+  "schema_version": 1,
+  "operation": "inbox_showcase",
+  "description": "One scenario every client draws for the side-by-side screenshots: the list, then sc-1's detail with its timeline expanded and folded. Items are as the hub lists them (wire JSON). Clock: 2026-01-01T12:00:00Z; language zh-Hans and en; light and dark.",
+  "now_clock": "2026-01-01T12:00:00Z",
+  "detail": "sc-1",
+  "items": [
+    {
+      "id": "sc-1",
+      "source": "chat",
+      "kind": "group",
+      "account": "chat",
+      "account_name": "Team chat",
+      "title": "Quote for the spring order",
+      "summary": "Alex found a wrong tax rate; waiting for them to confirm the corrected quote",
+      "where": "Orders group",
+      "sender": "Alex",
+      "preview": "Thanks, I'll check the new one",
+      "count": 3,
+      "started_at": "2026-01-01T11:02:00Z",
+      "updated_at": "2026-01-01T11:21:00Z",
+      "tier": "action",
+      "status": "working",
+      "now": "waiting",
+      "handling": {
+        "owner": "manager",
+        "state": "waiting",
+        "machine_id": "m1",
+        "session_id": "s-handling",
+        "since": "2026-01-01T11:20:30Z"
+      },
+      "follow": {
+        "who": "Alex to confirm the new quote",
+        "next": "ask whether the corrected quote is fine",
+        "check_at": "2026-01-02T09:00:00Z"
+      },
+      "recap": "Alex asked for the quote. An Agent checked it against the price list and found line 3 used last year's tax rate; a corrected quote went out by email.",
+      "chain": [
+        {
+          "id": "c1",
+          "at": "2026-01-01T11:02:00Z",
+          "kind": "received",
+          "text": "Received 2 messages · Alex",
+          "via": "chat",
+          "count": 2,
+          "sender": "Alex",
+          "link": {
+            "type": "source"
+          }
+        },
+        {
+          "id": "c2",
+          "at": "2026-01-01T11:03:00Z",
+          "kind": "handling",
+          "text": "Assistant handling",
+          "via": "assistant",
+          "link": {
+            "type": "session",
+            "machine_id": "m1",
+            "session_id": "s-handling"
+          }
+        },
+        {
+          "id": "c3",
+          "at": "2026-01-01T11:04:00Z",
+          "kind": "agent",
+          "text": "Opened an Agent: check the quote",
+          "via": "agent",
+          "link": {
+            "type": "session",
+            "machine_id": "m1",
+            "session_id": "s-agent"
+          }
+        },
+        {
+          "id": "c4",
+          "at": "2026-01-01T11:19:00Z",
+          "kind": "agent_stopped",
+          "text": "Agent stopped: line 3 of the quote has the wrong tax rate",
+          "via": "agent",
+          "link": {
+            "type": "session",
+            "machine_id": "m1",
+            "session_id": "s-agent"
+          }
+        },
+        {
+          "id": "c5",
+          "at": "2026-01-01T11:20:00Z",
+          "kind": "reported",
+          "text": "Sent an email: quote corrected",
+          "via": "agent"
+        },
+        {
+          "id": "c6",
+          "at": "2026-01-01T11:20:30Z",
+          "kind": "waiting",
+          "text": "Waiting for Alex to confirm the new quote · look again tomorrow 09:00",
+          "via": "assistant"
+        },
+        {
+          "id": "c7",
+          "at": "2026-01-01T11:21:00Z",
+          "kind": "received",
+          "text": "Received 1 message · Alex",
+          "via": "chat",
+          "count": 1,
+          "sender": "Alex",
+          "link": {
+            "type": "source"
+          }
+        }
+      ]
+    },
+    {
+      "id": "sc-2",
+      "source": "chat",
+      "kind": "dm",
+      "account": "chat",
+      "account_name": "Team chat",
+      "title": "Lunch on Friday",
+      "summary": "Sam asks whether Friday lunch still works",
+      "where": "Sam",
+      "sender": "Sam",
+      "preview": "Still on for Friday?",
+      "count": 1,
+      "started_at": "2026-01-01T10:40:00Z",
+      "updated_at": "2026-01-01T10:40:00Z",
+      "tier": "action",
+      "status": "action",
+      "now": "confirm_reply",
+      "handling": {
+        "owner": "manager",
+        "state": "done",
+        "machine_id": "m1",
+        "session_id": "s-2",
+        "since": "2026-01-01T10:41:00Z"
+      },
+      "suggestion": {
+        "version": 1,
+        "kind": "reply",
+        "text": "Yes, see you at noon.",
+        "handback": false,
+        "at": "2026-01-01T10:41:00Z"
+      }
+    },
+    {
+      "id": "sc-3",
+      "source": "chat",
+      "kind": "group",
+      "account": "chat",
+      "account_name": "Team chat",
+      "title": "Office closed on Monday",
+      "summary": "The office is closed next Monday for maintenance",
+      "where": "All staff",
+      "sender": "Facilities",
+      "preview": "Reminder: closed Monday",
+      "count": 1,
+      "started_at": "2026-01-01T09:00:00Z",
+      "updated_at": "2026-01-01T09:00:00Z",
+      "tier": "fyi",
+      "status": "fyi",
+      "now": "fyi"
+    },
+    {
+      "id": "sc-4",
+      "source": "chat",
+      "kind": "group",
+      "account": "chat",
+      "account_name": "Team chat",
+      "title": "Release checklist",
+      "summary": "Checked three times, no reply yet",
+      "where": "Release group",
+      "sender": "Kim",
+      "preview": "I'll get back to you",
+      "count": 2,
+      "started_at": "2025-12-29T09:00:00Z",
+      "updated_at": "2025-12-31T09:00:00Z",
+      "tier": "action",
+      "status": "action",
+      "now": "follow_up_ask",
+      "handling": {
+        "owner": "manager",
+        "state": "done",
+        "machine_id": "m1",
+        "session_id": "s-4",
+        "since": "2026-01-01T09:00:00Z"
+      },
+      "follow": {
+        "who": "Kim to send the checklist",
+        "next": "ask Kim again",
+        "checks": 3
+      }
+    },
+    {
+      "id": "sc-5",
+      "source": "chat",
+      "kind": "dm",
+      "account": "chat",
+      "account_name": "Team chat",
+      "title": "Badge photo",
+      "summary": "Sent the photo",
+      "where": "Jo",
+      "sender": "Jo",
+      "preview": "Got it, thanks",
+      "count": 2,
+      "started_at": "2026-01-01T07:00:00Z",
+      "updated_at": "2026-01-01T07:30:00Z",
+      "tier": "fyi",
+      "done_at": "2026-01-01T07:31:00Z",
+      "done_by": "replied",
+      "now": "done_replied"
+    }
+  ]
+}
