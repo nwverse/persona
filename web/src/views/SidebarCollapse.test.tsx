@@ -343,7 +343,7 @@ describe("the main conversation: the column's first row, Persona with the app's 
     // the brand row reads as a conversation, not a heading: a small "主对话" under the name (#6293)
     const mark = mainRow().querySelector("[data-row-line]:not([data-draft])");
     expect(mark?.textContent).toBe("主对话");
-    expect(mainRow().querySelector('img[src$="/app-icon.png"]')).not.toBeNull();
+    expect(mainRow().querySelector("svg.rounded-full")).not.toBeNull();
     expect(mainRow().textContent).toContain("2"); // its pending count
     // the line parts it from the pages, which come after it
     const line = host.querySelector("[data-persona-divider]")!;

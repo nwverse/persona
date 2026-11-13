@@ -790,29 +790,44 @@ struct AssistantWelcome: View {
                     .modifier(WelcomeFold.Mark(first: s.title == suggestions.first?.title))
                 }
             }
-        } else {
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
-                ForEach(cardRows.map { Array(suggestions.prefix($0 * 2)) } ?? suggestions, id: \.title) { s in
-                    Button {
-                        ask(s)
-                    } label: {
-                        VStack(alignment: .leading, spacing: Theme.Space.m) {
-                            ThemedIcon(s.symbol)
-                                .font(Theme.Font.title)
-                                .foregroundStyle(Theme.accent)
-                            Text(s.title).font(Theme.Font.heading).foregroundStyle(Color.primary)
-                        }
-                        .scaledFrame(maxWidth: .infinity, minHeight: Theme.Size.box72, alignment: .topLeading)
-                        .card(padding: 14)
+        } else if let cardRows {
+            // The shell's few cards are all made, wherever they are (#4073): a lazy grid never makes the ones below the
+            // page, and at the largest text sizes the greeting already fills it, so the fold was never measured and
+            // Needs You took every row it had over the composer.
+            Grid(horizontalSpacing: 12, verticalSpacing: 12) {
+                let shown = Array(suggestions.prefix(cardRows * 2))
+                let rows = stride(from: 0, to: shown.count, by: 2).map { Array(shown[$0..<min($0 + 2, shown.count)]) }
+                ForEach(rows, id: \.[0].title) { row in
+                    GridRow {
+                        ForEach(row, id: \.title) { card($0) }
                     }
-                    .buttonStyle(.plain)
-                    // Two cards a row, and the first two rows kept clear of Needs You: the fold is where the tallest
-                    // of the first four ends (#5648: English and Japanese titles run to two lines, and the second row
-                    // was half under the fade when the fold was the first row's end).
-                    .modifier(WelcomeFold.Mark(first: suggestions.prefix(WelcomeFold.cards).contains { $0.title == s.title }))
                 }
             }
+        } else {
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
+                ForEach(suggestions, id: \.title) { card($0) }
+            }
         }
+    }
+
+    private func card(_ s: Suggestion) -> some View {
+        Button {
+            ask(s)
+        } label: {
+            VStack(alignment: .leading, spacing: Theme.Space.m) {
+                ThemedIcon(s.symbol)
+                    .font(Theme.Font.title)
+                    .foregroundStyle(Theme.accent)
+                Text(s.title).font(Theme.Font.heading).foregroundStyle(Color.primary)
+            }
+            .scaledFrame(maxWidth: .infinity, minHeight: Theme.Size.box72, alignment: .topLeading)
+            .card(padding: 14)
+        }
+        .buttonStyle(.plain)
+        // Two cards a row, and the first two rows kept clear of Needs You: the fold is where the tallest of the first
+        // four ends (#5648: English and Japanese titles run to two lines, and the second row was half under the fade
+        // when the fold was the first row's end).
+        .modifier(WelcomeFold.Mark(first: suggestions.prefix(WelcomeFold.cards).contains { $0.title == s.title }))
     }
 
     private var header: some View {
