@@ -866,7 +866,8 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
   Assistant (`settings/AssistantSettings.tsx`): On its own (opens scheduled tasks), About me (`PUT /assistant {notes}`, saved on Save or leaving),
   Memory (`/assistant/memory`: titles first use the Chinese titles from the MEMORY.md index; view / edit the whole file / delete, with a read-only index), Skills (`GET /skills`, skills on the computer running the assistant, read-only, `settings/Skills.tsx`), and Runs on (read-only; no model entry, models are under Model configuration › Main chat).
   **Repositories** (#5330, Web only, `settings/Repositories.tsx`) manages the current assistant's saved references on demand.
-  Preview parses HTTPS/SSH remotes; Check existence and save requires positive provider metadata. Inconclusive checks
+  Local preview immediately parses HTTP(S)/SSH links and repository subpages into a canonical web root, explicitly
+  unconfirmed until Check existence and save obtains matching provider metadata. No preview request or button is needed. Inconclusive checks
   stay unsaved with the server's reason. Name, comma-separated aliases and purpose are optional; descriptive edits
   preserve the verification time without probing again. Unbind confirms the exact canonical URL and offers the shared
   Undo toast, restoring the original record. Empty/loading/pending/success/failure states remain distinct; refresh
