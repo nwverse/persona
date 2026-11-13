@@ -87,12 +87,12 @@ describe("desktop attention lifecycle", () => {
     let click: ((route: string) => void) | undefined;
     let unsubscribe = 0;
     features = [];
-    window.personaDesktop = Object.assign({}, window.personaDesktop!, {
+    vi.stubGlobal("window", Object.assign(window, { personaDesktop: Object.assign({}, window.personaDesktop!, {
       onOpenNotification: (callback: (route: string) => void) => {
         click = callback;
         return () => { unsubscribe++; click = undefined; };
       },
-    });
+    }) }));
     await act(async () => root.render(<Probe />));
     await act(async () => hello?.());
     await act(async () => { notifyOn = false; changeNotifications?.(); });
