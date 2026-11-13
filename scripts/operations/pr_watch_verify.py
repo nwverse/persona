@@ -16,7 +16,15 @@ def command_with_prefix(command, arguments):
 
 
 def result_summary(result):
-    return bounded((result.stdout + "\n" + result.stderr).strip(), 4500)
+    """Keep failed checks and their nearby errors, not just earlier passing lanes."""
+    lines = (result.stdout + "\n" + result.stderr).strip().splitlines()
+    selected = set()
+    for index, line in enumerate(lines):
+        if any(word in line for word in ("FAIL", "FAILED", "Error", "error", "panic", "Traceback", "TIMEOUT")):
+            selected.update(range(max(0, index - 2), min(len(lines), index + 5)))
+    if selected:
+        lines = [line for index, line in enumerate(lines) if index in selected]
+    return bounded("\n".join(lines), 4500)
 
 
 def run_check(name, argv, worktree, timeout, environ=None):
