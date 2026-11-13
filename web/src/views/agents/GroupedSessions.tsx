@@ -34,7 +34,7 @@ export interface GroupedSessionsProps<T> {
   /** The search, the provider and the state: what every section's sessions are narrowed by. */
   scope: ListFilters;
   source: GroupedSource<T>;
-  renderRow: (row: T, within: GroupDimension) => ReactNode;
+  renderRow: (row: T, within: GroupDimension, group: SessionGroup) => ReactNode;
   groupName: (group: SessionGroup) => string;
   machineName: (id: string) => string;
   /** Where the open conversation is: its section opens by itself. */
@@ -61,7 +61,7 @@ export function GroupedSessions<T>({ groups, dimension, kind, scope, source, ren
 
 function GroupSection<T>({ group, first, startsOpen, dimension, kind, scope, source, renderRow, name, machineName, several, holds }: {
   group: SessionGroup; first: boolean; startsOpen: boolean; dimension: GroupDimension; kind: string; scope: ListFilters; source: GroupedSource<T>;
-  renderRow: (row: T, within: GroupDimension) => ReactNode; name: string; machineName: (id: string) => string; several: boolean; holds: boolean;
+  renderRow: (row: T, within: GroupDimension, group: SessionGroup) => ReactNode; name: string; machineName: (id: string) => string; several: boolean; holds: boolean;
 }) {
   // The busiest few start open, the rest folded: an open section keeps a list of its own up to date. "Expand all"
   // leaves them alone for the same reason (it would start one read per group). What someone folds or opens is kept.
@@ -116,7 +116,7 @@ function GroupPlaces({ group, machineName }: { group: SessionGroup; machineName:
 
 /** An open section's sessions: the list's own rows, the newest first. A few at first, then a page at a time. */
 function GroupRows<T>({ group, dimension, scope, source, renderRow }: {
-  group: SessionGroup; dimension: GroupDimension; scope: ListFilters; source: GroupedSource<T>; renderRow: (row: T, within: GroupDimension) => ReactNode;
+  group: SessionGroup; dimension: GroupDimension; scope: ListFilters; source: GroupedSource<T>; renderRow: (row: T, within: GroupDimension, group: SessionGroup) => ReactNode;
 }) {
   const { path, identity, compare, removeIdentity, event, summary, roots } = source;
   // rows only: the section's numbers are the ones its heading already has
@@ -139,7 +139,7 @@ function GroupRows<T>({ group, dimension, scope, source, renderRow }: {
     setLimit(limit + PAGE_SIZE);
   };
   return <>
-    {rows.map((row) => <div key={identity(row)} data-session-row="">{renderRow(row, dimension)}</div>)}
+    {rows.map((row) => <div key={identity(row)} data-session-row="">{renderRow(row, dimension, group)}</div>)}
     {page.loading && !page.loaded && <p role="status" className="px-2 py-1 text-xs text-ink-3">{t("sidebar.loading")}</p>}
     {page.error && <div className="px-2 py-1"><p role="alert" className="text-xs text-red">{page.error}</p><Button onClick={() => void list.retry().catch(() => {})}>{t("sidebar.retry")}</Button></div>}
     {page.loaded && !page.loading && !page.error && !page.rows.length && <p className="px-2 py-1 text-xs text-ink-3">{t("sidebar.no_match")}</p>}

@@ -113,7 +113,7 @@ async function show({ catalog = true, open = "" }: { catalog?: boolean; open?: s
   await act(async () => root.render(<PagedSessionList root={list} path="/sessions" identity={identity} compare={compare} event="sessions_list" catalog={catalog}
     label={(dimension, id) => dimension === "machine" ? NAMES[id] ?? id : id} isOpen={(r) => r.id === open}
     placeOf={(r) => ({ machine: r.machine, project: r.project, group: r.group })}
-    renderRow={(r, within) => <span data-row={r.id} data-within={within ?? ""}>{r.id}</span>} />));
+    renderRow={(r, within, group) => <span data-row={r.id} data-within={within ?? ""} data-group={group?.name ?? ""}>{r.id}</span>} />));
 }
 const settle = () => act(async () => { await vi.advanceTimersByTimeAsync(0); });
 async function browseBy(key: "recent" | "machine" | "project" | "group") {
@@ -240,6 +240,8 @@ describe("the list by project, on a hub with the catalog", () => {
 
     const app = sections()[0];
     expect(rowsIn(app)).toEqual(["a1", "a2", "b1"]);
+    // a row is told the group it is under: the sidebar names the computer on a row of a project that has several
+    expect([...app.querySelectorAll<HTMLElement>("[data-row]")].map((el) => `${el.dataset.within}:${el.dataset.group}`)).toEqual(["project:app", "project:app", "project:app"]);
     // its remote, then each directory with its computer and how many of the sessions are there
     const where = [...app.querySelectorAll(`[aria-label="${t("paged-agents.places")}"] li`)]
       .map((li) => [li.querySelector("span[title]")!.textContent, li.querySelector("span[aria-hidden]")?.textContent].filter(Boolean).join(" = "));
