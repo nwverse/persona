@@ -5,7 +5,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.hoisted(() => {
-  window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
+  window.matchMedia ??= ((query: string) => ({ matches: query.includes("max-width: 1023px"), media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
 });
 
 const calls = vi.hoisted(() => ({ items: [] as unknown[] }));
@@ -28,7 +28,7 @@ vi.mock("../../lib/translate", () => ({ useTranslatePrefs: () => ({ enabled: fal
 vi.mock("./LarkThread", () => ({ LarkThread: () => null, chatOfItem: () => ({}) }));
 
 import { resetInboxForTests, type InboxItem } from "../../lib/inbox";
-import { onOverlayEntry } from "../../lib/back-close";
+import { onOverlayEntry, overlayDepth } from "../../lib/back-close";
 import { stepsToInbox } from "../../lib/inbox-nav";
 import { settleRosterDefault } from "../../lib/manager-choice";
 import { t } from "../../i18n";
@@ -73,6 +73,14 @@ const openDocument = async () => {
   act(() => rowLink("d1").click());
   await openItem("d1");
   expect(host.querySelector("[data-event-body]")).not.toBeNull();
+};
+const openOriginalAndMenu = async () => {
+  await openDocument();
+  act(() => buttonNamed(t("inbox-inboxdetail.view_source")).click());
+  act(() => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("inbox-inboxdetail.mute")}"]`)!.click());
+  await flush();
+  expect(document.querySelectorAll('[role="menuitem"]').length).toBeGreaterThan(0);
+  expect(overlayDepth()).toBe(2);
 };
 
 beforeEach(async () => {
@@ -178,6 +186,7 @@ describe("Back from an Inbox item (#3329)", () => {
   });
 
   it("‹ with Original open still goes back to the list", async () => {
+    const start = history.length;
     await openDocument();
     act(() => buttonNamed(t("inbox-inboxdetail.view_source")).click());
     expect(onOverlayEntry()).toBe(true);
@@ -186,9 +195,11 @@ describe("Back from an Inbox item (#3329)", () => {
     await flush();
     expect(location.pathname).toBe("/inbox");
     expect(onOverlayEntry()).toBe(false);
+    expect(history.length - start).toBe(2);
   });
 
   it("Done with Original open still goes back to the list", async () => {
+    const start = history.length;
     await openDocument();
     act(() => buttonNamed(t("inbox-inboxdetail.view_source")).click());
     expect(onOverlayEntry()).toBe(true);
@@ -197,6 +208,35 @@ describe("Back from an Inbox item (#3329)", () => {
     await flush();
     expect(location.pathname).toBe("/inbox");
     expect(onOverlayEntry()).toBe(false);
+    expect(history.length - start).toBe(2);
+  });
+
+  it("‹ with Original and a menu open goes back past both to the list", async () => {
+    const start = history.length;
+    await openOriginalAndMenu();
+    expect(history.length - start).toBe(3);
+
+    await act(() => popped(() => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("inbox-inbox.back_to_inbox")}"]`)!.click()));
+    await flush();
+    expect(location.pathname).toBe("/inbox");
+    expect(stepsToInbox(history.state)).toBe(0);
+    expect(overlayDepth()).toBe(0);
+    expect(document.querySelectorAll('[role="menuitem"]')).toHaveLength(0);
+    expect(history.length - start).toBe(3);
+  });
+
+  it("Done with Original and a menu open goes back past both to the list", async () => {
+    const start = history.length;
+    await openOriginalAndMenu();
+    expect(history.length - start).toBe(3);
+
+    await act(() => popped(() => buttonNamed(t("inbox-inboxdetail.done")).click()));
+    await flush();
+    expect(location.pathname).toBe("/inbox");
+    expect(stepsToInbox(history.state)).toBe(0);
+    expect(overlayDepth()).toBe(0);
+    expect(document.querySelectorAll('[role="menuitem"]')).toHaveLength(0);
+    expect(history.length - start).toBe(3);
   });
 
   it("opening another item takes Original's entry without an extra Back", async () => {
