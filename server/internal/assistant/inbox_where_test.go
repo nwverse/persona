@@ -18,9 +18,10 @@ func chatTags(name string) []connector.Tag {
 	return []connector.Tag{{Key: connector.TagChat, Value: "oc_chat", Name: name}}
 }
 
-// fillMigrated takes where a chat thing happens from its chat tag's name, on every write: a group's name or the other
-// person of a direct chat, trimmed. A thing that names no chat (a document), a chat tag with a blank name, and any
-// other tag leave the item's where as it was; a renamed chat follows on the next move.
+// fillMigrated takes where a chat thing happens from its chat tag's name, or else its repository tag's name or value,
+// on every write: a group's name or the other person of a direct chat, trimmed. A thing that names neither (a
+// document), a chat tag with a blank name and no repository, and any other tag leave the item's where as it was; a
+// renamed chat follows on the next move.
 func TestFillMigratedWhere(t *testing.T) {
 	for _, c := range []struct {
 		name  string
@@ -36,8 +37,12 @@ func TestFillMigratedWhere(t *testing.T) {
 		{"a blank name keeps it", "Example Group", chatTags(""), "Example Group"},
 		{"a spaces-only name keeps it", "Example Group", chatTags("   "), "Example Group"},
 		{"a chat tag without a name keeps it", "Example Group", []connector.Tag{{Key: connector.TagChat, Value: "oc_chat"}}, "Example Group"},
-		{"a non-chat tag keeps it", "Example Group", []connector.Tag{{Key: connector.TagRepo, Value: "example-org/example-repo",
-			Name: "example-org/example-repo"}}, "Example Group"},
+		{"a repository's name", "", []connector.Tag{{Key: connector.TagRepo, Value: "example-org/example-repo", Name: "Example repository"}},
+			"Example repository"},
+		{"a repository's value", "", []connector.Tag{{Key: connector.TagRepo, Value: "example-org/example-repo"}}, "example-org/example-repo"},
+		{"a blank chat name falls back to the repository", "Old Name", append(chatTags(" "),
+			connector.Tag{Key: connector.TagRepo, Value: "example-org/example-repo"}), "example-org/example-repo"},
+		{"another tag keeps it", "Example Group", []connector.Tag{{Key: connector.TagSender, Value: "alice", Name: "Alice"}}, "Example Group"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			it := &InboxItem{ID: "lark:10:5", Source: "lark", Where: c.start}
@@ -176,6 +181,40 @@ func TestMigratedRenameOnABlockOnlyWrite(t *testing.T) {
 	h.collectInbox(ctx, roundPoll)
 	if it := h.inbox.items["lark:10:5"]; it == nil || it.Lark == nil || it.Lark.ReplyTo != "m5" || it.Where != "Renamed Group" {
 		t.Fatalf("a rename on a blocks-only write did not follow: where %q, block %+v", it.Where, it.Lark)
+	}
+}
+
+// A generic connector's item takes where from its tags as it comes in and as it moves on (spec/fixtures/inbox/row.json
+// "repo_where": a repository's name, or its id when it has no name), and lists it; a thing that drops its tags keeps
+// the place it had.
+func TestConnectorItemWhere(t *testing.T) {
+	h := newInboxHub(t)
+	now := time.Now()
+	apply := func(tags []connector.Tag, last string) *InboxItem {
+		h.inbox.mu.Lock()
+		defer h.inbox.mu.Unlock()
+		th := thing(last, now)
+		th.Tags = tags
+		h.inbox.applyConnector("example", "Example", []connector.InboxThing{th}, now)
+		return openItems(h)[0]
+	}
+	repo := func(name string) []connector.Tag {
+		return []connector.Tag{{Key: connector.TagRepo, Value: "example-org/example-repo", Name: name}}
+	}
+
+	it := apply(repo(""), "a")
+	if it.Where != "example-org/example-repo" {
+		t.Fatalf("a repository's id: where %q", it.Where)
+	}
+	listed, _ := json.Marshal(it.listed())
+	if !strings.Contains(string(listed), `"where":"example-org/example-repo"`) {
+		t.Fatalf("the list does not carry where: %s", listed)
+	}
+	if it = apply(repo("Example repository"), "b"); it.Where != "Example repository" {
+		t.Fatalf("a repository's name: where %q", it.Where)
+	}
+	if it = apply(nil, "c"); it.Where != "Example repository" {
+		t.Fatalf("a move without tags dropped it: where %q", it.Where)
 	}
 }
 
