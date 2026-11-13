@@ -778,6 +778,35 @@ if os.environ.get("MOCK_BYPASS_AVAILABLE") == "1":
     for _s in SESSIONS:
         if _s["session_id"] == WIDGET: _s["bypass_available"] = True
 
+# Full access by a restart (#6476, node/mode_restart.go): Allow All picked for a terminal Claude Code whose process has
+# no bypass flag (bypass_available false) is not refused. Its row says a restart waits (bypass_pending) and keeps the
+# mode it runs in; once its turn is over (here: MOCK_BYPASS_RESTART_SECONDS, default 6, after an idle pick; a working
+# agent waits until it is idle) the "restart" comes up in it, with bypass_available. Any other mode drops it.
+BYPASS_RESTART_SECONDS = float(os.environ.get("MOCK_BYPASS_RESTART_SECONDS") or 6)
+
+
+def bypass_restart(s, mode):
+    """True when s takes mode by a restart (queued here); a pick of another mode drops one that waits."""
+    if mode != "bypassPermissions":
+        if mode: s.pop("bypass_pending", None)
+        return False
+    if s.get("assistant") or s.get("agent") not in (None, "claude") or not s.get("pane_id") or s.get("bypass_available") \
+            or s.get("permission_mode") == "bypassPermissions":
+        return False
+    s["bypass_pending"] = True
+
+    def restarted():
+        if not s.get("bypass_pending"): return  # dropped meanwhile
+        if s.get("state") in ("working", "needs_you"):
+            threading.Timer(BYPASS_RESTART_SECONDS, restarted).start()  # waits for the turn to end
+            return
+        s.pop("bypass_pending", None)
+        s.update(permission_mode="bypassPermissions", bypass_available=True, updated_at=ago(minutes=0))
+        push_machine(s["machine_id"])
+    threading.Timer(BYPASS_RESTART_SECONDS, restarted).start()
+    return True
+
+
 # MOCK_STALE_DONE=1 (#2069): the widget session as the hub listed it while herdr said done through a turn the phone
 # started (status done, state idle, its activity still moving): the Agents list before the node's fix.
 if os.environ.get("MOCK_STALE_DONE") == "1":
@@ -25170,7 +25199,11 @@ class H(BaseHTTPRequestHandler):
             body = json.loads(self.last_body or b"{}")
             for s in SESSIONS + ASSISTANT:  # the stored sessions: all_sessions() hands out copies
                 if s["session_id"] == p.split("/")[5]:
-                    s.update({k: v for k, v in body.items() if k in ("permission_mode", "effort", "model") and v})
+                    applied = body
+                    if bypass_restart(s, body.get("permission_mode")):
+                        applied = {k: v for k, v in body.items() if k != "permission_mode"}
+                        push_machine(s["machine_id"])
+                    s.update({k: v for k, v in applied.items() if k in ("permission_mode", "effort", "model") and v})
                     MODES_LOG.append({"session_id": s["session_id"], **{k: v for k, v in body.items() if k in ("permission_mode", "effort", "model")}})
             return self.send_json({"ok": True})
         self.send_json({"ok": True})

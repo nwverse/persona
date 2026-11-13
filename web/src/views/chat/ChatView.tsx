@@ -95,6 +95,7 @@ import { useEarlierStretches } from "./useEarlierStretches";
 import { useFoldSearch } from "./useFoldSearch";
 import { ArchiveCloseDialog, CloseAgentDialog, DeleteSessionDialog, RenameDialog, RenameSpaceDialog, renameTitle, SessionInfoDialog } from "./SessionDialogs";
 import { PermissionPicker, usePlanMode } from "./PermissionPicker";
+import { permissionsCommand } from "../../lib/permissions-command";
 import { archiveItems } from "../AgentMenus";
 import { ChatSidebarButton } from "../ShellSwitch";
 import { appArchiveDeps, deleteInsteadOfArchive, restoreAgent, useArchived } from "../../lib/agent-archives";
@@ -1742,10 +1743,10 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const lastRole = lastItem?.role;
   const lastKind = lastItem?.kind;
   const faceLast = useMemo(() => (lastRole && lastKind ? { role: lastRole, kind: lastKind } : undefined), [lastRole, lastKind]);
-  // the main conversation's /clear (#5095, lib/main-clear.ts): Persona's other conversations take no commands
+  // the main conversation's /clear (#5095, lib/main-clear.ts) and every Persona conversation's /permissions (#6476)
   // /workflows opens this page's side panel: a chat drawn inside a panel (the Team panel's worker) does not offer it (#5421)
   const commands = useMemo(
-    () => (assistant ? (clears ? mainCommands() : []) : agentCommands(AGENT_COMMANDS, session).filter((c) => !(embedded && c.text === WORKFLOWS_COMMAND))),
+    () => (assistant ? [...(clears ? mainCommands() : []), ...(session ? [permissionsCommand()] : [])] : agentCommands(AGENT_COMMANDS, session).filter((c) => !(embedded && c.text === WORKFLOWS_COMMAND))),
     [assistant, clears, session, embedded],
   );
   // the permission picker after the + (#5324), where the mode can be switched: a Persona conversation whatever its state

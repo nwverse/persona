@@ -100,6 +100,7 @@ type InboxJudgeInput struct {
 type InboxTask struct {
 	ID, Title, State string
 	Last             string // what its latest agent said last, in a line
+	Notes            string // the task's own description, clipped: the judge reads its subject there and quotes it as evidence
 }
 
 func RenderInboxJudgeInput(in InboxJudgeInput) string { return render("inbox/judge_input", in) }

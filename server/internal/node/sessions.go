@@ -387,6 +387,7 @@ func (n *Node) decorateIn(s *proto.Session, pass *codexListPass) {
 		s.Title = filepath.Base(s.Cwd)
 	}
 	s.BypassAvailable = n.hooks.canBypass(s.SessionID) // modes.go claudeCanBypass
+	n.modeRestartRow(s) // mode_restart.go
 	n.ultracodeRow(s, pass)
 }
 
