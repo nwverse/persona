@@ -995,6 +995,13 @@ the web's (`web/src/lib/live-text.ts`, `docs/web/web.md`).
 - **Which deltas**: `AppModel.streamsAgentReplies`: a listed session that is not a Persona conversation, or a chat already given an agent's delta.
   An unlisted session's delta is handled as before (the assistant's rules), and its chat in the Agents style draws nothing. Both go through the
   same pacer (`DeltaPacer`, at most 5 draws a second, an empty delta at once).
+- **Even reveal** (#6651): the model's text comes in bursts (a few dozen characters about every 350 ms, up to 2 s apart), so drawing what
+  arrived showed a jump per burst. `StreamingText` reveals it a few characters a frame (`StreamReveal` in PersonaKit, driven by
+  `StreamRevealClock`'s display link, which runs only while text waits, at most 60 Hz): a little slower than the stream's average so far,
+  faster when more waits (waiting / 0.6 s), never slower than 20 characters a second. Only that view redraws per frame; the store and the
+  list see the deltas as before. A first text over 80 characters (a chat opened mid-stream) shows at once; when the stream ends
+  (`ChatStore.liveDone`), or the user holds the list, or the reply's item replaces it, the whole text shows at once. The Mac shows text as
+  it comes. Measured with `PerfAssistantTests/testStreamingTrace*` (recorded model streams, `scripts/mock/stream_trace.py`).
 - **What it shows** (`ChatStore.agentStreamed`, `Shared/LiveText.swift`, a port of `live-text.ts`, compiled for the watch too): the delta as it
   came (`agentLive`) is never drawn as it is, only what of it the newest items lack (`liveText`): the agent's latest message only (its words at
   the end of the transcript, nothing after them), only where a word ends, a cut item counting as its whole block (`full_size`); a late whole copy
