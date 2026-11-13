@@ -22,7 +22,7 @@ type modelProbeResult struct {
 // launcherModelCheck verifies argument forwarding without contacting a model API.
 // A fixed --model flag must not silently win over the user's purpose-specific choice.
 func (n *Node) launcherModelCheck(ctx context.Context, name, model string) (string, error) {
-	if err := (modelExecution{Model: model}).check(); err != nil {
+	if err := (modelExecution{Model: model}).check(name); err != nil {
 		return "", err
 	}
 	if m, managed := n.managedLauncher(name); managed {

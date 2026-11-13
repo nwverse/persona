@@ -1280,7 +1280,12 @@ func checkTask(t *Task, now time.Time) error {
 	if t.PermissionMode != "" && !slices.Contains(proto.PermissionModes, t.PermissionMode) {
 		return i18n.Err("assistant-schedule.bad_permission_mode", i18n.Args{"mode": strconv.Quote(t.PermissionMode)})
 	}
-	if t.Effort != "" && !slices.Contains(proto.EffortLevels, t.Effort) {
+	// A codex task takes its launcher's own effort list (ultra included, #6181); everything else keeps Claude Code's.
+	efforts := proto.EffortLevels
+	if t.Launcher == "codex" {
+		efforts = proto.CodexEffortLevels
+	}
+	if t.Effort != "" && !slices.Contains(efforts, t.Effort) {
 		return i18n.Err("assistant-schedule.bad_effort", i18n.Args{"effort": strconv.Quote(t.Effort)})
 	}
 	return checkUntil(t, now)
