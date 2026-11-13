@@ -15378,29 +15378,6 @@
         }
       }
     },
-    "%lld working" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld working"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "作業中 %lld"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "在做 %lld"
-          }
-        }
-      },
-      "extractionState" : "manual"
-    },
     "%lld working [State Names]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -15423,29 +15400,6 @@
           }
         }
       }
-    },
-    "%lld working · %lld need you" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld working · %lld need you"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "作業中 %1$lld · 対応待ち %2$lld"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "在做 %1$lld · 等你 %2$lld"
-          }
-        }
-      },
-      "extractionState" : "manual"
     },
     "%lld working, %lld waiting for you" : {
       "localizations" : {

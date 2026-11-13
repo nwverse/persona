@@ -2882,6 +2882,10 @@ def _direction_agents(t, sessions):
     return roots
 
 
+def _direction_running(agents):
+    return any(a.get("state") == "working" or _direction_running(a.get("children") or []) for a in agents)
+
+
 def mock_direction_tree():
     """GET /api/v1/assistant/directions/tree (#4352): each current leader with the open to-dos it supervises, then the
     secretary's group (the main conversation's id) with the rest. The real hub decides the states with the To-dos page's
@@ -2904,7 +2908,8 @@ def mock_direction_tree():
         tasks.sort(key=lambda x: x["_at"], reverse=True)
         tasks.sort(key=lambda x: _DIRECTION_STATE_ORDER[x["state"]])
         counts = {k: sum(1 for x in tasks if x["state"] == k) for k in _DIRECTION_STATE_ORDER}
-        return {"id": did, "name": name, **extra, "counts": counts,
+        # an Agent under it at work, at any depth and whatever its task's state (#6626, the hub's treeRunning)
+        return {"id": did, "name": name, **extra, "counts": counts, "running": any(_direction_running(x["agents"]) for x in tasks),
                 "tasks": [{k: v for k, v in x.items() if k != "_at"} for x in tasks]}
 
     out = [direction(lid, MOCK_DIRECTION_NAMES.get(lid, ""), groups[lid]) for lid in MOCK_LEADERS]
