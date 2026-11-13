@@ -953,9 +953,9 @@ struct AssistantSidebar: View {
                     AssistantSwitcherHeader(manager: current, nameFont: Theme.Font.title, compact: macTitleRow, openSettings: showSettings)
                 } else {
                     #if os(macOS)
-                    Text(model.persona.name).font(Theme.Font.title).foregroundStyle(Theme.macLabel).lineLimit(1)
+                    Text(model.assistantShownName).font(Theme.Font.title).foregroundStyle(Theme.macLabel).lineLimit(1)
                     #else
-                    Text(model.persona.name).font(isShell && !besideBar ? Theme.Font.display : Theme.Font.title).foregroundStyle(Color.primary).lineLimit(1)
+                    Text(model.assistantShownName).font(isShell && !besideBar ? Theme.Font.display : Theme.Font.title).foregroundStyle(Color.primary).lineLimit(1)
                     #endif
                 }
                 Spacer(minLength: Theme.Space.s)
@@ -1188,10 +1188,10 @@ struct AssistantSidebar: View {
         return Button { if let key { open(key) } else { newConversation() } } label: {
             HStack(spacing: Theme.Sidebar.gap) {
                 // Where the places below have their symbol, the same width (on the Mac's plain list, `macPlace`'s).
-                AppGlyph(size: macPlacesGroup ? Theme.Sidebar.mark : Theme.Sidebar.glyphColumn, scaled: true)
+                PersonaAvatar(size: macPlacesGroup ? Theme.Sidebar.mark : Theme.Sidebar.glyphColumn)
                 // The small "Main Chat" under the name keeps the row readable as a conversation, not a heading (#6328, as the web, #6293).
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                    Text(Self.mainTitle).font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
+                    Text(mainDisplayName).font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
                     Text("Main Chat").font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 0)
@@ -1208,7 +1208,7 @@ struct AssistantSidebar: View {
         }
         .buttonStyle(.plain)
         .macListRow(selected: selected, in: Rectangle(), drawsShade: false) // the row draws its own (`selectedFill`)
-        .accessibilityLabel([Self.mainTitle, String(localized: "Main Chat"), main.flatMap(stateWord)].compactMap { $0 }.joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label")))
+        .accessibilityLabel([mainDisplayName, String(localized: "Main Chat"), main.flatMap(stateWord)].compactMap { $0 }.joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label")))
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier("sidebar-main")
         .disabled(key == nil && model.assistantConfig == nil)
@@ -1231,8 +1231,15 @@ struct AssistantSidebar: View {
         }
     }
 
-    /// The main conversation's name in the sidebar (#2004; it was Main Chat before, and again in #4606).
-    static let mainTitle = "Persona"
+    /// The main conversation's name in the sidebar (#2004; it was Main Chat before, and again in #4606). The current
+    /// assistant's own name when the hub has a roster (#6401: the sidebar's head and this row name one identity),
+    /// else the look's name; "Persona" only as the last fallback.
+    static func mainDisplayName(_ model: AppModel) -> String {
+        model.currentAssistant?.name ?? model.persona.name
+    }
+
+    /// The main conversation's name on this sidebar.
+    private var mainDisplayName: String { Self.mainDisplayName(model) }
 
     @ViewBuilder private func action(_ title: String, _ symbol: String, id: String? = nil, count: Int = 0, run: @escaping () -> Void) -> some View {
         if AppStyle.current.usesBeautifulUI {
@@ -1418,7 +1425,7 @@ struct AssistantSidebar: View {
         // The main conversation and the hub's built-in background supervisor (#5083) stay: no Archive, Pin or End.
         let builtIn = model.isBackgroundSupervisor(s.sessionID)
         let kept = isMain || builtIn
-        let title = isMain ? Self.mainTitle : named ?? (s.title.isEmpty || s.title == "Claude Code" ? String(localized: "New Chat [Quick Actions ea4b29]") : s.title)
+        let title = isMain ? mainDisplayName : named ?? (s.title.isEmpty || s.title == "Claude Code" ? String(localized: "New Chat [Quick Actions ea4b29]") : s.title)
         let preview = s.lastText.map { Fmt.plain($0).replacingOccurrences(of: "\n", with: " ") } ?? ""
         let counts: String? = model.assistantLeaders.contains(s.sessionID)
             ? model.directionCounts[s.sessionID].flatMap { DirectionCountsText.label(working: $0.working, needsYou: $0.needsYou) }
@@ -1433,7 +1440,7 @@ struct AssistantSidebar: View {
                 // The shell's list is ChatGPT's: titles only, all in one column (the marks made it busy); the main
                 // conversation (only in search results here) keeps the app's logo, as its first row has it (#2004).
                 if isMain {
-                    AppGlyph(size: isShell ? Theme.Sidebar.glyphColumn : Theme.Sidebar.mark, scaled: true)
+                    PersonaAvatar(size: isShell ? Theme.Sidebar.glyphColumn : Theme.Sidebar.mark)
                 } else if isShell {
                     EmptyView()
                 } else {

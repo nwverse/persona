@@ -2585,7 +2585,7 @@ struct ChatView: View {
                 }
                 // The last card was answered: one low-key entry to the next conversation that needs you (#4348).
                 if let next = nextNeedsYouSession {
-                    NextNeedsYouStrip(title: next.assistant ? (next.title.isEmpty ? model.persona.name : next.title) : next.displayTitle) {
+                    NextNeedsYouStrip(title: next.assistant ? (next.title.isEmpty ? model.assistantShownName : next.title) : next.displayTitle) {
                         openNext(next)
                     }
                 }
@@ -2595,7 +2595,7 @@ struct ChatView: View {
                     QueueStrip(key: key, queued: queued, own: session?.ownQueuedCount ?? queued.count, sending: sending,
                                photoMarks: model.chat(key).queuePhotoMarks,
                                steers: session?.steersQueue == true || (session?.assistant == true && session?.canSend == true),
-                               persona: session?.assistant == true ? model.persona.name : nil)
+                               persona: session?.assistant == true ? model.assistantShownName : nil)
                 }
                 // The newest plan while its line is out of view (#5602): which step of how many; tap, the whole plan.
                 // Folded while a card asks something (#2970): it sat over the card's buttons.
@@ -2620,7 +2620,7 @@ struct ChatView: View {
                     Text(reason).font(Theme.Font.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if session?.isStopped != true { // a stopped Agent takes no messages: its line above says so (#4754)
-                    Composer(key: key, status: status, placeholder: style == .assistant ? String(localized: "Ask \(model.persona.name)…") : String(localized: "Message \(session?.agentLabel ?? "Claude") [Chat View c6f021]"),
+                    Composer(key: key, status: status, placeholder: style == .assistant ? String(localized: "Ask \(model.assistantShownName)…") : String(localized: "Message \(session?.agentLabel ?? "Claude") [Chat View c6f021]"),
                              covered: link != nil, onCleared: { switchTo($0) }, onFocus: { composerTyping = $0 }, pickMode: { requestMode($0) })
                         // The shell's expanding field stays in the page's layout graph; so does BeautifulUI's prompt bar,
                         // whose menus hang above it: an island's hosting view takes no touches outside its bounds.
@@ -2735,7 +2735,7 @@ struct ChatView: View {
                     .onChange(of: phase) { _, phase in store.traceSendFeedback(phase) }
                     #endif
             } else if frozen == nil, startingTurn(pending) {
-                TypingIndicator(text: String(localized: "\(style == .assistant ? model.persona.name : (session?.agentLabel ?? "Claude")) is getting ready…"))
+                TypingIndicator(text: String(localized: "\(style == .assistant ? model.assistantShownName : (session?.agentLabel ?? "Claude")) is getting ready…"))
                     .flippedBack()
                     .id("starting-turn")
             }
@@ -5316,7 +5316,7 @@ struct Composer: View, Equatable {
             } else if usesShellComposer {
                 // The shell's composer (docs/apple/ios.md「New shell」), whatever the style: the assistant's and an agent's (#1091).
                 ShellComposerBar(placeholder: status.isActive ? String(localized: "Add a note (queued)")
-                                     : (suggestion ?? (shellChat ? String(localized: "Ask \(model.persona.name)") : placeholder ?? String(localized: "Message Claude"))),
+                                     : (suggestion ?? (shellChat ? String(localized: "Ask \(model.assistantShownName)") : placeholder ?? String(localized: "Message Claude"))),
                                  text: textBinding, selection: $selection, focused: $focused, canSend: canSend,
                                  hasAttachments: hasAttachments,
                                  stop: status.isActive && model.session(key)?.canInterrupt == true ? { Task { await model.interrupt(key) } } : nil,

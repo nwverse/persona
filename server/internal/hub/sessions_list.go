@@ -25,8 +25,11 @@ const (
 	// key and answers with every manager's sessions, so an app sends it only to a hub that says this.
 	featureSessionsManager = "sessions_manager"
 	// featureSessionsPageCounts: a paged GET /api/v1/sessions takes with_counts=1 and answers with the page plus the
-	// counts ?counts=1 would give for the same filters (pageWithCounts), one read where a refresh took two (#4858).
+	// counts ?counts=1 would give for the same filters (sessionlist.PageWithCounts), one read where a refresh took two (#4858).
 	featureSessionsPageCounts = "sessions_page_counts"
+	// featureAgentsPageCounts: the same for a paged GET /api/v1/agents/sessions, the personal Agents the extension
+	// manager serves (extmgr/agents.go, #6496).
+	featureAgentsPageCounts = "agents_page_counts"
 	// featureSessionsHierarchy: a paged GET /api/v1/sessions takes roots=1 (the child sessions folded under a listed
 	// parent left out of the rows and counts, the parents counted by their folded state) and parent_session_id=<sid>
 	// with machine_id (the children folded under that session), docs/protocol/protocol.md "Session hierarchy" (#5120).
@@ -39,13 +42,6 @@ const (
 	// keys, so an app sends them only to a hub that says this.
 	featureSessionsCatalog = "sessions_catalog"
 )
-
-// pageWithCounts is a page with its view's current counts (with_counts=1): what a separate ?counts=1 read with the
-// same filters returns, ignoring since, cursor and limit.
-type pageWithCounts struct {
-	sessionlist.Page
-	Counts sessionlist.Counts `json:"counts"`
-}
 
 // runtimeList is a transport cache of the manager's already-decorated rows. It
 // does not derive agent state or store business data. sessionsMu orders updates
@@ -552,7 +548,7 @@ func (h *Hub) pagedSessions(w http.ResponseWriter, r *http.Request, manager stri
 			sessionListErr(w, err)
 			return
 		}
-		writeJSON(w, pageWithCounts{Page: page, Counts: counts})
+		writeJSON(w, sessionlist.PageWithCounts{Page: page, Counts: counts})
 		return
 	}
 	writeJSON(w, page)

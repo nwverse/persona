@@ -41,6 +41,10 @@ type codexAppThread struct {
 	Source      string `json:"source"`
 	UpdatedAtMs int64  `json:"updatedAtMs"`
 	Paginated   bool   `json:"-"`
+	// Model and Effort are what the App runs the chat with (its model and reasoning_effort columns, #6501): its
+	// history in the App's database says neither. Empty in a schema without them.
+	Model  string `json:"model"`
+	Effort string `json:"effort"`
 }
 
 func (t codexAppThread) updated() time.Time { return time.UnixMilli(t.UpdatedAtMs) }
@@ -178,10 +182,16 @@ func readCodexThreads(ctx context.Context, db, where string) (map[string]codexAp
 	}
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	q := `SELECT id, rollout_path AS rolloutPath, COALESCE(NULLIF(name, ''), title) AS title, cwd, source, ` +
-		`COALESCE(updated_at_ms, updated_at * 1000) AS updatedAtMs FROM threads ` +
-		`WHERE ` + where
-	out, err := exec.CommandContext(cctx, sqlite, "-readonly", "-bail", "-json", "-cmd", ".timeout 2000", codexDBTarget(db), q).Output()
+	q := func(settings string) string {
+		return `SELECT id, rollout_path AS rolloutPath, COALESCE(NULLIF(name, ''), title) AS title, cwd, source, ` +
+			`COALESCE(updated_at_ms, updated_at * 1000) AS updatedAtMs` + settings + ` FROM threads WHERE ` + where
+	}
+	target := codexDBTarget(db)
+	out, err := exec.CommandContext(cctx, sqlite, "-readonly", "-bail", "-json", "-cmd", ".timeout 2000", target,
+		q(`, COALESCE(model, '') AS model, COALESCE(reasoning_effort, '') AS effort`)).Output()
+	if err != nil { // a schema without those columns: the rest as before
+		out, err = exec.CommandContext(cctx, sqlite, "-readonly", "-bail", "-json", "-cmd", ".timeout 2000", target, q("")).Output()
+	}
 	if err != nil {
 		return nil, err
 	}

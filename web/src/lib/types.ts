@@ -280,6 +280,10 @@ export interface Session {
   effort?: string;
   /** This Claude Code may switch to Allow All while it runs: it was started with a flag that allows it (#1379). */
   bypass_available?: boolean;
+  /** Full access was picked while this Claude Code cannot reach it with shift+tab: the node restarts the session in it
+   *  once its turn is over, resuming the same conversation (#6476, node/mode_restart.go); `permission_mode` is the mode
+   *  it still runs in until then. */
+  bypass_pending?: boolean;
   /** What the model saw in the latest reply and the model's window, in tokens (#2430); omitted while the node cannot tell. */
   context_tokens?: number;
   context_window?: number;

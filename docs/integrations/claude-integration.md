@@ -956,3 +956,28 @@ Variable injection when disabled:
 - No-fallback block: refusal card, no Retry; push, receipt, main-chat notice, triage all say Blocked by Safety Checks, not Model Service Error; manager sends no automatic messages, tested.
 - Automatic fallback: chat notice; `scope: "session"` gives model button Fell Back, Switch Back sends /model.
 - iOS, web, Android dark / light screenshots inspected; item-structure change includes `ChatCache` directory version bump.
+
+## Full access by a restart
+
+Claude Code has Allow All (`bypassPermissions`) in its Shift+Tab cycle only when it was started with
+`--dangerously-skip-permissions`, `--allow-dangerously-skip-permissions` or `--permission-mode bypassPermissions`
+(`bypass_available`, #1379). For any other terminal Claude Code, picking it (the composer's permission picker, `/permissions`,
+#6476) does not fail. The node restarts the session in it (`server/internal/node/mode_restart.go`):
+
+- **When**: once the turn is over. A busy agent (working, waiting for the user, still starting, or with background work a
+  quit would end, the launcher switch's `switchBusy`) keeps its turn, and no running tool call is interrupted. The session
+  list starts the restart as soon as the row is idle, the way it runs a queued ultracode switch. A draft in the box or a
+  dialog in front puts it off (retried after 3 s, doubling up to a minute), so nothing is typed over someone at the computer.
+- **How**: as a launcher switch restarts an agent. It presses Ctrl+C until only the shell is left, then types the
+  launcher's command with `--resume <id> --permission-mode bypassPermissions` in the same terminal, on the launcher, model
+  and effort the session runs on, in the conversation's folder. The conversation goes on in the same transcript. Meanwhile
+  the row is listed as starting: messages and the user's Resume wait for it, and mode, model and key changes are refused.
+  A start that does not come up is followed by one in the mode the agent had (`switch_failed`), or the agent is left
+  stopped (`switch_failed_stopped`).
+- **What the apps see**: `bypass_pending: true` on the row while the restart waits, with `permission_mode` still the mode
+  it runs in. Picking any other mode first drops the restart, and so does a pick older than a day.
+- **Where**: only a Claude Code Agent in a pane of a terminal host that can say what runs there and start an agent in it
+  (herdr), on a launcher Persona can tell, in a folder it can tell. Runtimes, Antigravity, Codex and sessions outside
+  Persona's terminals keep the refusal. The restart is kept in the node's memory (shared by a resident node's Nodes), so
+  a node restart forgets it rather than restarting the agent later without the user knowing.
+

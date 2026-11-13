@@ -778,6 +778,35 @@ if os.environ.get("MOCK_BYPASS_AVAILABLE") == "1":
     for _s in SESSIONS:
         if _s["session_id"] == WIDGET: _s["bypass_available"] = True
 
+# Full access by a restart (#6476, node/mode_restart.go): Allow All picked for a terminal Claude Code whose process has
+# no bypass flag (bypass_available false) is not refused. Its row says a restart waits (bypass_pending) and keeps the
+# mode it runs in; once its turn is over (here: MOCK_BYPASS_RESTART_SECONDS, default 6, after an idle pick; a working
+# agent waits until it is idle) the "restart" comes up in it, with bypass_available. Any other mode drops it.
+BYPASS_RESTART_SECONDS = float(os.environ.get("MOCK_BYPASS_RESTART_SECONDS") or 6)
+
+
+def bypass_restart(s, mode):
+    """True when s takes mode by a restart (queued here); a pick of another mode drops one that waits."""
+    if mode != "bypassPermissions":
+        if mode: s.pop("bypass_pending", None)
+        return False
+    if s.get("assistant") or s.get("agent") not in (None, "claude") or not s.get("pane_id") or s.get("bypass_available") \
+            or s.get("permission_mode") == "bypassPermissions":
+        return False
+    s["bypass_pending"] = True
+
+    def restarted():
+        if not s.get("bypass_pending"): return  # dropped meanwhile
+        if s.get("state") in ("working", "needs_you"):
+            threading.Timer(BYPASS_RESTART_SECONDS, restarted).start()  # waits for the turn to end
+            return
+        s.pop("bypass_pending", None)
+        s.update(permission_mode="bypassPermissions", bypass_available=True, updated_at=ago(minutes=0))
+        push_machine(s["machine_id"])
+    threading.Timer(BYPASS_RESTART_SECONDS, restarted).start()
+    return True
+
+
 # MOCK_STALE_DONE=1 (#2069): the widget session as the hub listed it while herdr said done through a turn the phone
 # started (status done, state idle, its activity still moving): the Agents list before the node's fix.
 if os.environ.get("MOCK_STALE_DONE") == "1":
@@ -2074,7 +2103,7 @@ ROUTINE_FIELDS = ("title", "prompt", "time", "weekdays", "enabled")
 SCHEDULE = [
     {"id": "morning", "title": "早报", "prompt": "给我今天的早报，一屏以内，结论先行。", "repeat": "daily", "time": "09:00",
      "weekdays": WEEKDAYS, "enabled": True, "last_run": prev_at("09:00", WEEKDAYS, late=timedelta(minutes=3)),
-     "last_session_id": ASK2, "last_status": "ok",
+     "last_session_id": ASK2, "last_status": "ok", "inbox": "every",
      "run_machine_id": "server", "run_session_id": ASK2, "run_launcher": "claude",  # its own conversation ("Morning briefing · Wednesday")
      "next_run": next_at("09:00", WEEKDAYS)},
     {"id": "fu_patrol", "title": "Agent 巡检", "prompt": "看看各台电脑上的 Agent：哪些在等我、哪些卡住了，有要我处理的就列出来；都正常就回一句。",
@@ -2087,7 +2116,7 @@ SCHEDULE = [
     {"id": "rt_patrol", "title": "项目巡检", "prompt": "看看各台电脑上的 Agent 和昨晚的 CI，有卡住的就告诉我。", "repeat": "daily",
      "time": "22:00", "weekdays": [], "enabled": True, "created_by": "assistant", "last_run": prev_at("22:00", []),
      "last_session_id": ASK4, "last_status": "ok", "next_run": next_at("22:00", []),
-     "push": "asked"},  # "Notify after a run": only what a run sends (#2396, #2676); the apps mark it on the row
+     "push": "asked", "inbox": "worthy"},  # "Notify after a run": only what a run sends (#2396, #2676); the apps mark it on the row
     {"id": "evening", "title": "晚间回顾", "prompt": "今天的晚间回顾。", "repeat": "daily", "time": "21:30", "weekdays": WEEKDAYS,
      "enabled": False, "last_run": prev_at("21:30", WEEKDAYS, back=1, late=timedelta(minutes=45)), "last_status": "skipped",
      "last_error": "Persona 停机，错过了时间"},
@@ -10242,16 +10271,16 @@ if os.environ.get("MOCK_ASSISTANT_INBOX"):
     _ASSISTANT_BASE = os.environ.get("MOCK_PUBLIC_URL", "http://127.0.0.1:%d" % PORT).rstrip("/")  # the hub's public_url
     INBOX[1:1] = [
         {"id": "assistant:s1", "source": "assistant", "kind": "assistant_post", "account": "assistant", "account_name": "Assistant",
-         "title": "Morning briefing", "sender": "Assistant", "preview": "Three meetings today; the design review moved to 15:00",
+         "title": "Morning briefing", "preview": "Three meetings today; the design review moved to 15:00",
          "count": 1, "started_at": ago(minutes=30), "updated_at": ago(minutes=30), "tier": "fyi",
          "summary": "Three meetings today; the design review moved to 15:00", "reason": "Your morning briefing task puts every run here", "read": False,
-         "context": "Morning briefing\nThree meetings today; the design review moved to 15:00.",
+         "context": "Morning briefing\nThree meetings today; the design review moved to 15:00",
          "connector": {"thread": "assistant:macbook/" + BLOG, "label": "Assistant", "url": _ASSISTANT_BASE + "/s/macbook/" + BLOG}},
         {"id": "assistant:s2", "source": "assistant", "kind": "assistant_post", "account": "assistant", "account_name": "Assistant",
-         "title": "Price drop: the standing desk you watch", "sender": "Assistant", "preview": "Now 20% off until Sunday",
+         "title": "Price drop: the standing desk you watch", "preview": "The desk you asked me to watch is 20% off until Sunday",
          "count": 1, "started_at": ago(hours=3), "updated_at": ago(hours=3), "tier": "action",
          "summary": "The desk you asked me to watch is 20% off until Sunday", "reason": "You asked to be told about price drops", "read": False,
-         "context": "Price drop\nNow 20% off until Sunday.",
+         "context": "Price drop: the standing desk you watch\nThe desk you asked me to watch is 20% off until Sunday",
          "connector": {"thread": "assistant:macbook/" + TESTS, "label": "Assistant", "url": _ASSISTANT_BASE + "/s/macbook/" + TESTS}},
     ]
 
@@ -25170,7 +25199,11 @@ class H(BaseHTTPRequestHandler):
             body = json.loads(self.last_body or b"{}")
             for s in SESSIONS + ASSISTANT:  # the stored sessions: all_sessions() hands out copies
                 if s["session_id"] == p.split("/")[5]:
-                    s.update({k: v for k, v in body.items() if k in ("permission_mode", "effort", "model") and v})
+                    applied = body
+                    if bypass_restart(s, body.get("permission_mode")):
+                        applied = {k: v for k, v in body.items() if k != "permission_mode"}
+                        push_machine(s["machine_id"])
+                    s.update({k: v for k, v in applied.items() if k in ("permission_mode", "effort", "model") and v})
                     MODES_LOG.append({"session_id": s["session_id"], **{k: v for k, v in body.items() if k in ("permission_mode", "effort", "model")}})
             return self.send_json({"ok": True})
         self.send_json({"ok": True})

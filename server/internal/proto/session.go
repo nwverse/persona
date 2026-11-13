@@ -303,6 +303,11 @@ type Session struct {
 	// push, deploy, send…): the apps fill it in but offer no one-tap send (#4644). Set by the manager; kept beside
 	// the flags above, where it fits in their padding: a larger Session costs every copy of a list.
 	SuggestionRisky bool `json:"suggestion_risky,omitempty"`
+	// BypassPending: Allow All was picked for this Claude Code while it cannot reach it with shift+tab (BypassAvailable
+	// false), so the node restarts it in that mode once its turn is over: it quits the agent and resumes the same
+	// conversation in the same terminal with --permission-mode bypassPermissions (node/mode_restart.go, #6476). Until
+	// then PermissionMode is the mode it still runs in. Kept here, in the flags' padding, as SuggestionRisky is.
+	BypassPending bool `json:"bypass_pending,omitempty"`
 	// TurnError: the agent's latest turn ended in a model API error (the connection lost mid-response, overloaded,
 	// rate limited, the model service down…). The node sets it when the agent's own record says the turn failed
 	// (Codex: a rollout's task_complete.error, an app-server's failed turn, #2185); otherwise the hub reads it off the
