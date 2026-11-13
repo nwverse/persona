@@ -838,6 +838,7 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
   A failed save keeps the draft for retry. After saving, the page reloads authoritative detail; if that read fails, **Retry refresh** repeats only the read and explains that the facts were already saved. Drafts and delayed results belong to the requested entry, authenticated credentials and default manager, and are discarded when that identity changes.
   **Remove relationship** appears beside explicit metadata-backed related entries. Confirming names both entries and preserves their records, content, tags and confirmed facts. Provenance links, such as a document's source chat, remain navigation-only. Project links to documents, meetings, events and recordings are removed by updating the linked item's project list.
   **Minutes** (a recording that is a meeting, `docs/assistant/meeting-minutes.md`) sits under the recording's facts: the title, time, place and attendees, then key points, decisions, action items and open questions. Each item's clock time scrolls the transcript to its line and highlights it; an item that cites a meeting photo shows the photo instead (see the photos below).
+  Minutes that carry an overview (#6563, `docs/assistant/meeting-minutes.md` "Summary card (#6563)") read as one summary card instead (`knowledge/MinutesOverview.tsx`, read and cleaned by `src/lib/minutes-overview.ts`): the headline (or the title) with the time, place and attendees on one line, **Core conclusions** on the AI tint, then the points and decisions as topic cards under their group headings, two to a row in the page's column (a card alone in its row takes all of it) and one on a phone, each card tinted by its group, its key figures in bold, a decision marked with a flag and the word **Decision**, folded after 4 lines (**Show N more**, whose name for a screen reader names its topic), then the action items, the open questions and a note that AI wrote it. The times, photos and to-do buttons work as in the other layout; minutes whose overview is missing or unusable look exactly as before. Design and tokens: `docs/design/DESIGN_SYSTEM.md` "Minutes cards (#5026)".
   Each action item has **Add to to-dos**, and the remaining ones have **Add all**. Both go through `POST /api/v1/recordings/{id}/minutes/todos`; an item already added shows **Added**. **Copy** copies the minutes' Markdown. **Regenerate** (or **Make minutes** on a complete recording that has none) asks the hub to write them again.
   While they are being written the section says so and the page re-reads the detail every few seconds. Screenshots and browser checks with fixtures: `web/e2e/recording-minutes.mjs`.
   **Day recap** (an all-day recording, `meta.kind: day`, #4741, `knowledge/RecordingDayRecap.tsx`, contract in `docs/assistant/day-recap.md`) takes the place of the minutes: the recap's summary, how far it read ("So far, up to HH:MM" until it is final), the time not recorded with its reasons, the timeline by morning, afternoon and evening (each entry's clock range and title, meetings with a **Meeting** pill and a link to the meeting's entry, points whose clock time scrolls the transcript like the minutes'), and the suggested to-dos with the minutes' **Add to to-dos** / **Add all** (`POST …/minutes/todos`, answered with the recap). Clocks are in the recording's `tz` when the browser knows it. **Write now**, **Update** and **Regenerate** ask the hub through `POST …/minutes`; a day recording never offers **Make minutes**, and its **Profile** section is hidden while the recap shows the same summary. Screenshots and browser checks with fixtures: `web/e2e/recording-day-recap.mjs`.
@@ -1818,7 +1819,18 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   lives on this page and goes with each message (`launcher`, `model`) and the effort with `POST …/modes`, as the old
   chips did, and a pick of a launcher the list no longer offers goes back to the default with a word. The new-chat page
   keeps its pick for the start (`POST /assistant/conversations` `{launcher, model?, effort?}`), which the new chat keeps
-  as its own pick on a hub with `assistant_model_pick` (an older hub ignores the model and keeps nothing).
+  as its own pick on a hub with `assistant_model_pick` (an older hub ignores the model and keeps nothing). While the
+  roster's default manager is in use and the hub lists `assistant_start_service_tier` from that manager's hello, a new
+  chat whose selected model natively advertises `priority` in `service_tiers` also offers Fast in the same Customize
+  flyout: its independent local choice adds `service_tier: "priority"` to the first request, and the node acknowledges
+  it before the first turn. Effort changes preserve Fast and Fast changes preserve effort; enabling Fast pins every
+  displayed start option (launcher, model and effort), so a cleared main cannot revive a carried value. Model or provider
+  switches keep Fast only with the destination row's own setup and advertised support. A manager change disarms the
+  draft before the destination catalog answers, even while the panel is closed; the always-mounted pill also clears it
+  after a hub downgrade or a native catalog change. An untouched start omits the tier, a refused start retains it for
+  retry, and success, Follow default or a dropped pick clears it. An older hub or a non-default manager gets no pre-start
+  Fast control or tier field; an older manager gets 501 `assistant_service_tier_manager_outdated` for an explicit tier,
+  and an older node refuses it rather than running Standard. New Agent has no start speed setting.
 - **Tests**: `lib/session-models.test.ts` (providers, the current row, unavailable reasons, Codex, prices, what a pick
   sends, the lists kept and read again), `lib/session-panel.test.ts` (the switch to another launcher: with and without the
   feature, another engine, the pending setup and note, what a switch or its cancel sends, the pill's pending setup, which
@@ -1834,7 +1846,9 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   `ContextMeter.test.tsx`, `Composer.test.tsx` (the trailing slot). Screenshots: the mock's `MOCK_MODEL_PANEL_USAGE=1`
   scenario supplies synthetic weekly windows without reading a real account; `MOCK_LAUNCHER_SWITCH=1` supplies a second
   Claude Code launcher, `work`, on every computer (`=pending` has the PR review waiting to switch to it; `=refuse` refuses
-  the message that carries a switch out); a Persona chat's: `MOCK_MODEL_PICK=1` (`=picked`: the second chat has a pick of its own).
+  the message that carries a switch out); a Persona chat's: `MOCK_MODEL_PICK=1` (`=picked`: the second chat has a pick of its own;
+  its `gpt-5.5-codex` catalog row advertises Fast for the new-chat checks, while `gpt-5.5` is the negative control; a
+  capable start acknowledges the requested tier in both the returned session and the sessions push).
 
 ## Switching an Agent between Claude Code and Codex (#5054)
 
