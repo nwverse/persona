@@ -143,7 +143,7 @@ public extension ContinuityJSON {
         case "reconnect": .reconnected
         case "load_older": .loadOlder
         case "open_fold": .openFold(fold_id: try require(text("fold_id"), "open_fold fold_id"))
-        case "fill_timer": nil
+        case "continue_fill": nil
         case let kind?: throw ContinuityFixtureError.unknownEvent(kind)
         case nil: throw ContinuityFixtureError.invalidFixture("event kind is missing")
         }
@@ -160,8 +160,6 @@ public extension Effect {
         get throws {
             switch self {
             case let .fetch(chat: _, request: request): request.requestJSON
-            case let .startTimer(timer: _, delay_ms: delay):
-                Request.scheduleFill(delay_ms: delay).requestJSON
             case let .rejected(reason: reason): throw ContinuityFixtureError.rejected(reason)
             }
         }
@@ -172,8 +170,6 @@ public extension Request {
     var requestJSON: ContinuityJSON {
         var object: [String: ContinuityJSON]
         switch self {
-        case let .scheduleFill(delay_ms: delay):
-            object = ["kind": .string("schedule_fill"), "delay_ms": .number(Double(delay))]
         case let .fetchAfter(after_seq: after):
             object = ["kind": .string("fetch_after"), "after_seq": .number(Double(after))]
         case let .fetchLatest(fold_work: fold):

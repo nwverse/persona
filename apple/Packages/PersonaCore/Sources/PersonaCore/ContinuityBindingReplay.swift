@@ -16,7 +16,7 @@ public struct ContinuityBindingReplay: Sendable {
         let name = "\(`case`.file)/\(`case`.name)"
         let chat = "fixture/continuity"
         let recorder = EffectRecorder()
-        let client = try PersonaCoreClient(config: Config(manualTimers: true), callbacks: PersonaCoreCallbacks(run: { effect in
+        let client = try PersonaCoreClient(config: Config(), callbacks: PersonaCoreCallbacks(run: { effect in
             recorder.effects.withLock { $0.append(effect) }
         }))
         defer { client.close() }
@@ -32,15 +32,13 @@ public struct ContinuityBindingReplay: Sendable {
         _ = try step(client, chat: chat, list: &list, label: "\(name) initial")
         patches += 1
         recorder.effects.withLock { $0.removeAll() }
-        var timers: [UInt64] = []
         for (index, event) in `case`.events.enumerated() {
             let label = "\(name) step \(index)"
             let action: Action
             if let event = try event.chatEvent() {
                 action = .chat(chat: chat, event: event)
             } else {
-                guard !timers.isEmpty else { throw ContinuityFixtureError.missingTimer }
-                action = .timerFired(timer: timers.removeFirst())
+                action = .continueFill(chat: chat)
             }
             try client.dispatch(action)
             let patch = try step(client, chat: chat, list: &list, label: label)
@@ -54,9 +52,6 @@ public struct ContinuityBindingReplay: Sendable {
                 switch effect {
                 case let .fetch(chat: effectChat, request: _):
                     guard effectChat == chat else { throw ContinuityFixtureError.invalidFixture("\(label): wrong chat") }
-                    requests.append(try effect.requestJSON ?? .null)
-                case let .startTimer(timer: timer, delay_ms: _):
-                    timers.append(timer)
                     requests.append(try effect.requestJSON ?? .null)
                 case let .rejected(reason: reason): throw ContinuityFixtureError.rejected("\(label): \(reason)")
                 }

@@ -159,8 +159,8 @@ pub trait PlatformHost: Send + Sync {
 Why it is shaped this way:
 
 - **Fixtures replay with no fakes.** A fixture's events are actions, and its expected requests are effects. The
-  continuity fixtures' `delay_ms: 1500` becomes a `Schedule` effect followed by a `TimerFired` action carrying the
-  time, so no test waits on a clock.
+  continuity fixtures issue `FetchAfter` immediately and use an explicit `continue_fill` step for a duplicate
+  gap signal while a fetch is in flight, so no test waits on a clock.
 - **Effects map onto `PlatformHost`.** Each host effect kind is one capability. Adding a capability is an API change
   that is visible in review.
 - **Pull, not push, for view state.** `changed` only wakes the client. The UI pulls patches on its next frame through
@@ -188,7 +188,7 @@ What never crosses the boundary:
 
 | Capability | Phase | Notes |
 | --- | --- | --- |
-| Timers | 1 | Run by persona-core-runtime, not the host: `Schedule { id, delay_ms }` / `TimerFired { id, now_ms }` |
+| Timers | later, if a domain needs one | The continuity slice has no settling timer: iOS fills a gap immediately. Any later timer has an independently justified behavior and a fixture |
 | Transport (HTTP and WebSocket) | 2 | Stays native (decision 2). The host sends requests the core asks for, and passes response bodies and WebSocket frames to `dispatch` as raw bytes. JSON is decoded once, in Rust, off the main thread |
 | Storage | 4 | Run by persona-core-runtime, not the host (decision 4). The host passes the per-hub scope directories (D6) when it creates the core |
 | Secure storage | 3 | Host: Keychain, Keystore + Tink, HarmonyOS Asset Store (what the SSH core uses). The core sees opaque references, never key bytes, unless a domain needs them |
@@ -289,7 +289,10 @@ Phase 1 (#6871) lands in several PRs.
 
 - **First PR.**
   - `native/app-core` with `persona-core`'s `continuity`, the runtime, the C and JNI entry points and the Kotlin codecs.
-  - `cargo test` replays all 29 continuity cases (70 steps), directly and through the runtime.
+  - `cargo test` replays all 38 continuity cases (94 steps), directly and through the runtime.
+  - The iOS-alignment follow-up corrects the initial port's repeated-item, immediate-fill, opened-fold and promotion
+    behavior, including the previously missing adjacency cases. iOS's own XCTest replay remains required; passing
+    these shared fixtures is not a substitute for it.
   - Android's `:core:rustcore` replays them through the real JNI binding on a host build.
   - The new `core` CI lane runs these checks.
   - Size, for orientation only: the stripped x86_64 release library is 678 KB (322 KB gzipped). The go / no-go numbers
@@ -298,7 +301,7 @@ Phase 1 (#6871) lands in several PRs.
   - `apple/Packages/PersonaCore` holds the generated Swift codecs, the C adapter and the XCFramework builder. Only the
     iOS app and `PersonaTests` link it; no binary is committed. The iOS production `ChatStore` is unchanged apart from
     restoring the existing `supervision_user` Codable key, and no screen changes.
-  - The shared continuity corpus now has 34 cases (79 steps), including immediate fill, a complete repeated-item
+  - The shared continuity corpus now has 38 cases (94 steps), including immediate fill, a complete repeated-item
     `ListOp.Update`, the `from_seq == covered + 1` boundary, opened-fold retention and supervision promotion.
     Real-C XCTest and a native-Store XCTest replay the same JSON and effects/patches; macOS `swift test` exercises the
     same C binding under Swift 6 strict concurrency. Local verification used Xcode 27.2, so Xcode 26.0 is not verified.

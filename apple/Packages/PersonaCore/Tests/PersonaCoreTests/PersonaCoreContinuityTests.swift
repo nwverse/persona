@@ -5,14 +5,14 @@ import Synchronization
 final class PersonaCoreContinuityTests: XCTestCase {
     func testEveryFixtureThroughTheRealCBinding() throws {
         let result = try ContinuityBindingReplay.replayAll()
-        XCTAssertEqual(result.cases, 34)
-        XCTAssertEqual(result.steps, 79)
+        XCTAssertEqual(result.cases, 38)
+        XCTAssertEqual(result.steps, 94)
         print("PersonaCore C binding: \(result.cases) cases, \(result.steps) steps, \(result.patches) drained patches")
     }
 
     func testRepeatedItemUsesUpdateAndIndependentChatWakes() throws {
         let changes = Mutex<[String: [UInt64]]>([:])
-        let client = try PersonaCoreClient(config: Config(manualTimers: true), callbacks: PersonaCoreCallbacks(changed: { version in
+        let client = try PersonaCoreClient(config: Config(), callbacks: PersonaCoreCallbacks(changed: { version in
             // The version is global but does not identify a chat. This smoke test uses the drain below for each chat;
             // two callbacks before either drain proves the old global wake loss cannot reappear.
             changes.withLock { $0["wake", default: []].append(version) }

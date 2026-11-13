@@ -5,7 +5,7 @@ indirect public enum Action: Hashable, Sendable {
     case openChat(chat: String, snapshot: PersonaCoreWire.ChatSnapshot)
     case closeChat(chat: String)
     case chat(chat: String, event: PersonaCoreWire.ChatEvent)
-    case timerFired(timer: UInt64)
+    case continueFill(chat: String)
 
     public func serialize<S: Serializer>(serializer: S) throws {
         try serializer.increase_container_depth()
@@ -21,9 +21,9 @@ indirect public enum Action: Hashable, Sendable {
             try serializer.serialize_variant_index(value: 2)
             try serializer.serialize_str(value: chat)
             try event.serialize(serializer: serializer)
-        case .timerFired(let timer):
+        case .continueFill(let chat):
             try serializer.serialize_variant_index(value: 3)
-            try serializer.serialize_u64(value: timer)
+            try serializer.serialize_str(value: chat)
         }
         try serializer.decrease_container_depth()
     }
@@ -53,9 +53,9 @@ indirect public enum Action: Hashable, Sendable {
             try deserializer.decrease_container_depth()
             return .chat(chat: chat, event: event)
         case 3:
-            let timer = try deserializer.deserialize_u64()
+            let chat = try deserializer.deserialize_str()
             try deserializer.decrease_container_depth()
-            return .timerFired(timer: timer)
+            return .continueFill(chat: chat)
         default: throw DeserializationError.invalidInput(issue: "Unknown variant index for Action: \(index)")
         }
     }
@@ -308,15 +308,12 @@ public struct ChatSnapshot: Hashable, Sendable {
 }
 
 public struct Config: Hashable, Sendable {
-    @Indirect public var manualTimers: Bool
 
-    public init(manualTimers: Bool) {
-        self.manualTimers = manualTimers
+    public init() {
     }
 
     public func serialize<S: Serializer>(serializer: S) throws {
         try serializer.increase_container_depth()
-        try serializer.serialize_bool(value: self.manualTimers)
         try serializer.decrease_container_depth()
     }
 
@@ -328,9 +325,8 @@ public struct Config: Hashable, Sendable {
 
     public static func deserialize<D: Deserializer>(deserializer: D) throws -> Config {
         try deserializer.increase_container_depth()
-        let manualTimers = try deserializer.deserialize_bool()
         try deserializer.decrease_container_depth()
-        return Config.init(manualTimers: manualTimers)
+        return Config.init()
     }
 
     public static func bincodeDeserialize(input: [UInt8]) throws -> Config {
@@ -345,7 +341,6 @@ public struct Config: Hashable, Sendable {
 
 indirect public enum Effect: Hashable, Sendable {
     case fetch(chat: String, request: PersonaCoreWire.Request)
-    case startTimer(timer: UInt64, delay_ms: UInt32)
     case rejected(reason: String)
 
     public func serialize<S: Serializer>(serializer: S) throws {
@@ -355,12 +350,8 @@ indirect public enum Effect: Hashable, Sendable {
             try serializer.serialize_variant_index(value: 0)
             try serializer.serialize_str(value: chat)
             try request.serialize(serializer: serializer)
-        case .startTimer(let timer, let delay_ms):
-            try serializer.serialize_variant_index(value: 1)
-            try serializer.serialize_u64(value: timer)
-            try serializer.serialize_u32(value: delay_ms)
         case .rejected(let reason):
-            try serializer.serialize_variant_index(value: 2)
+            try serializer.serialize_variant_index(value: 1)
             try serializer.serialize_str(value: reason)
         }
         try serializer.decrease_container_depth()
@@ -382,11 +373,6 @@ indirect public enum Effect: Hashable, Sendable {
             try deserializer.decrease_container_depth()
             return .fetch(chat: chat, request: request)
         case 1:
-            let timer = try deserializer.deserialize_u64()
-            let delay_ms = try deserializer.deserialize_u32()
-            try deserializer.decrease_container_depth()
-            return .startTimer(timer: timer, delay_ms: delay_ms)
-        case 2:
             let reason = try deserializer.deserialize_str()
             try deserializer.decrease_container_depth()
             return .rejected(reason: reason)
@@ -470,7 +456,6 @@ indirect public enum ListOp: Hashable, Sendable {
 }
 
 indirect public enum Request: Hashable, Sendable {
-    case scheduleFill(delay_ms: UInt32)
     case fetchAfter(after_seq: Int64)
     case fetchLatest(fold_work: Bool)
     case subscribe(since_seq: Int64?, fold_work: Bool)
@@ -480,25 +465,22 @@ indirect public enum Request: Hashable, Sendable {
     public func serialize<S: Serializer>(serializer: S) throws {
         try serializer.increase_container_depth()
         switch self {
-        case .scheduleFill(let delay_ms):
-            try serializer.serialize_variant_index(value: 0)
-            try serializer.serialize_u32(value: delay_ms)
         case .fetchAfter(let after_seq):
-            try serializer.serialize_variant_index(value: 1)
+            try serializer.serialize_variant_index(value: 0)
             try serializer.serialize_i64(value: after_seq)
         case .fetchLatest(let fold_work):
-            try serializer.serialize_variant_index(value: 2)
+            try serializer.serialize_variant_index(value: 1)
             try serializer.serialize_bool(value: fold_work)
         case .subscribe(let since_seq, let fold_work):
-            try serializer.serialize_variant_index(value: 3)
+            try serializer.serialize_variant_index(value: 2)
             try serialize_option_i64(value: since_seq, serializer: serializer)
             try serializer.serialize_bool(value: fold_work)
         case .fetchOlder(let before_seq, let fold_work):
-            try serializer.serialize_variant_index(value: 4)
+            try serializer.serialize_variant_index(value: 3)
             try serializer.serialize_i64(value: before_seq)
             try serializer.serialize_bool(value: fold_work)
         case .fetchRange(let from_seq, let through_seq):
-            try serializer.serialize_variant_index(value: 5)
+            try serializer.serialize_variant_index(value: 4)
             try serializer.serialize_i64(value: from_seq)
             try serializer.serialize_i64(value: through_seq)
         }
@@ -516,28 +498,24 @@ indirect public enum Request: Hashable, Sendable {
         try deserializer.increase_container_depth()
         switch index {
         case 0:
-            let delay_ms = try deserializer.deserialize_u32()
-            try deserializer.decrease_container_depth()
-            return .scheduleFill(delay_ms: delay_ms)
-        case 1:
             let after_seq = try deserializer.deserialize_i64()
             try deserializer.decrease_container_depth()
             return .fetchAfter(after_seq: after_seq)
-        case 2:
+        case 1:
             let fold_work = try deserializer.deserialize_bool()
             try deserializer.decrease_container_depth()
             return .fetchLatest(fold_work: fold_work)
-        case 3:
+        case 2:
             let since_seq = try deserialize_option_i64(deserializer: deserializer)
             let fold_work = try deserializer.deserialize_bool()
             try deserializer.decrease_container_depth()
             return .subscribe(since_seq: since_seq, fold_work: fold_work)
-        case 4:
+        case 3:
             let before_seq = try deserializer.deserialize_i64()
             let fold_work = try deserializer.deserialize_bool()
             try deserializer.decrease_container_depth()
             return .fetchOlder(before_seq: before_seq, fold_work: fold_work)
-        case 5:
+        case 4:
             let from_seq = try deserializer.deserialize_i64()
             let through_seq = try deserializer.deserialize_i64()
             try deserializer.decrease_container_depth()

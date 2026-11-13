@@ -1,6 +1,6 @@
 # 对话同步的连续性
 
-本领域记录当前 iOS 的同步行为，供各客户端的 core 逐步回放。依据是 [协议](../../../docs/protocol/protocol.md)「items 的连续性」「折叠的工作」、[重设计 D1、D4](../../../docs/archive/redesign/README.md) 和 [流程图 11](../../../docs/archive/redesign/flows.md)。当前共有 34 个用例、79 个事件步骤，数据全部编造；新增用例时同步更新计数。
+本领域记录当前 iOS 的同步行为，供纯 Kotlin 核心逐步回放。依据是 [协议](../../../docs/protocol/protocol.md)「items 的连续性」「折叠的工作」、[重设计 D1、D4](../../../docs/archive/redesign/README.md) 和 [流程图 11](../../../docs/archive/redesign/flows.md)。夹具共 38 个用例、94 个事件步骤，数据全部编造。
 
 ## 来源与规则
 
@@ -17,11 +17,11 @@
 | --- | --- | --- |
 | 连续批次按 id 合并，`from_seq <= covered` 时取 `max(covered, to_seq)`。 | Store `apply`；Tests `aBatchThatDoesNotContinueRevealsAHole`；Corpus `simClient.apply` | `append_then_fill_lost_batch`、`overlapping_batch_never_regresses_covered` |
 | 没有 item 的行仍计入 `covered`。 | Store `apply`；Tests `emptyBatchesMoveCoveredForward` | `empty_batch_advances_covered` |
-| 已有基线时，`from_seq > covered` 保留新消息并立即从当时的 `covered` 补洞；`from_seq == covered + 1` 也返回 `.fill` 且不推进 `covered`（`from <= covered` 才推进）。 | Store `apply`；Model `settle`、`fill`；协议「items 的连续性」 | `append_then_fill_lost_batch`、`from_seq_covered_plus_one_keeps_coverage_and_fills` |
+| 已有基线时，`from_seq > covered` 保留新消息但不推进位置，立即从当前连续位置补洞。 | Store `apply`；Model `settle`；协议「items 的连续性」 | `append_then_fill_lost_batch` |
 | 从零接续的首批推送可以直接建立基线。 | Tests `aBatchFromTheFirstLineIsABaseline`；Store `apply` | `first_line_push_is_baseline` |
 | 无基线且首页未到时先等首页，首页已到仍无基线时改取最新页。 | Tests `noFillBeforeABaseline`、`aLostFirstPushOfANewSessionIsNoticed`；Store `apply` | `wait_for_first_backlog`、`lost_first_push_after_empty_backlog` |
 | 订阅补发带 `more_after: true` 时继续补洞。 | Tests `aCappedCatchUpAsksForTheRest`；Store `apply` | `capped_subscription_requests_rest` |
-| 补洞请求在途时补发到达，后续请求读取当时的 `covered`；`filling` 防止重复 fill，但不恢复旧的1.5秒等待。当前步 `gap=none` 不必然结束 fill：在途期间新听到的缺口仍需要下一页。 | Model `settle`、`fill` | `timer_uses_current_covered`、`gaps_during_one_fill_keep_page_budget_and_current_cursor` |
+| 发现缺口立即补洞；在途补洞去重，等待期间听到的变化在本轮结束时再读一次。 | Model `settle`、`fill` | `fill_reads_current_covered` |
 | 第八页仍返回补洞需求时立即改取最新页，不发第九次 `after_seq` 请求。 | Model `fill`；Corpus `simRun.fill`；流程图 11 | `eight_fill_pages_fall_back_to_latest` |
 | `history` 改变时清空旧状态，完整首页或从零开始的批次可直接接收，其他接续批次要求重取。 | Store `apply`、`reset`；Tests `anotherHistoryStartsOver` | `history_changes_reset_local_items`、`new_history_from_zero_is_self_contained` |
 | 最新页首条位置大于 `covered + 1` 时替换缓存，相邻或重叠的页合并。 | Store `apply`；Tests `aLatestPageThatDoesNotReachTheCacheReplacesIt` | `latest_page_replaces_distant_cache`、`adjacent_latest_page_merges` |
@@ -32,16 +32,17 @@
 | `merge` 仅在 backlog 且首次加载或合并后条数不超过本批条数时接受分页标志，接受 false 还须覆盖最早消息。 | Store `merge` | `page_reaching_oldest_can_end_history`、`smaller_page_cannot_overwrite_history_flag` |
 | 历史分页用 `prepend` 合并并直接设置 `has_more`，不改变 `covered` 或 `history`。 | Store `prepend`；Model `loadOlder` | `older_page_sets_has_more_without_moving_covered` |
 | 缺少 `to_seq` 时按老 hub 规则合并并以末条位置推进，`more_after` 只能触发重取。 | Store `apply`；Tests `olderHubsWithoutSpansWorkAsBefore` | `legacy_batches_merge_without_gap_detection` |
-| 普通 item 的重复 id 采用最新完整副本；缓存去重也保留最新副本及已确认的 promotion。 | Store `merge`；Tests `duplicateIDsInOneBacklogKeepTheNewestCopy` | `same_id_plain_item_uses_newest_full_copy` |
+| 重复 id 的完整 item 使用最新副本；缓存重复和同批重复也保留最后副本，已有可见标记不降级。 | Store `merge`、`newestCopies`；Tests `duplicateIDsInOneBacklogKeepTheNewestCopy` | `same_id_plain_item_uses_newest_copy`、`duplicate_cache_and_batch_keep_newest` |
 | 新 fold 替换范围内的工作，同 id 且范围变大的 fold 也替换旧 fold。 | Store `dropFolded`；FoldTests `aFoldReplacesTheStepsItCoversAndOpeningItPutsThemBack` | `fold_replaces_work_and_expands_in_pages` |
 | fold 的闭区间按 seq 和数字块序号判断，范围内的 narration 被替换，范围外的工作和最终正文保留。 | Store `Item.folds`、`Item.isWork`；FoldTests `narrationTextFollowsItsFoldInBothDirections` | `fold_range_uses_numeric_block_bounds`、`fold_preserves_steps_outside_range` |
 | 展开按 `from_seq…through_seq` 分页取回，`more` 时从末条 seq 加一继续，完成后一次替换 fold。 | API `foldedWork`；Model `unfold`；Store `unfold` | `fold_replaces_work_and_expands_in_pages` |
-| 展开保留 opened fold 与 supervision；重复页不关闭已展开工作，部分重叠不降级。 | Store `opened`、`retainingPromotion`；FoldTests `workOpenedHereStaysOpenWhenAPageFoldsItAgain`、`partialOverlapRetainsPromotionAfterRemovingTheFold` | `opened_fold_and_supervision_survive_repeated_pages`、`partial_work_replaces_promoted_fold_without_downgrade` |
+| 展开响应中的 fold 不再合入，展开本身不改变连续位置或分页判断。 | Store `unfold` | `unfold_discards_fold_items_in_response` |
 
 ## JSON 结构
 
 每个主题文件为 `{"version": 1, "cases": [...]}`。用例包含公共字段 `name`、`description`、`source`、`input`、`expected`，以及 `from_test` 或 `derived`。
 
+- `adjacency.json`：连续位置、空批次边界与相邻一位缺口。
 - `append_and_gaps.json`：正常追加、缺口、首批基线、补洞上限。
 - `history_and_cache.json`：历史重写、缓存替换、重连。
 - `pagination_and_legacy.json`：分页信息、老 hub、重复 id。
@@ -67,8 +68,8 @@
 | --- | --- |
 | `http_latest` | HTTP 首页响应：`items`、可选 `history/from_seq/to_seq/has_more`；调用 `apply` 时 `backlog=true` |
 | `ws_items` | WS 推送或订阅补发：`items`、可选 `history/from_seq/to_seq/backlog/has_more/more_after`；缺失 Bool 参数默认为 false，`has_more` 仍为未知 |
-| `fill_timer` | 之前安排的补洞等待结束；开始一次最多八页的补洞，正在补洞则不另起一次 |
-| `http_after` | 当前补洞请求的响应：`items`、可选范围字段和 `more_after`；沿用 `AppModel.fill`，不把 `has_more` 传给 Store。新的 gap 在首个响应前到达时合并进同一个 fill，不重置页预算；`fill_timer` 仅是旧夹具兼容入口，当前 iOS 不再使用 |
+| `continue_fill` | 在途补洞期间再次发现缺口：iOS 的 filling 门控不另发请求，不等待定时器 |
+| `http_after` | 当前补洞请求的响应：`items`、可选范围字段和 `more_after`；沿用 `AppModel.fill`，不把 `has_more` 传给 Store |
 | `http_reload` | 重取最新页的响应：`items`、必填 `has_more`、可选范围字段；调用 `replace`，不等同于首次 `apply` |
 | `load_older` | 用户请求历史；本地 `has_more=true` 且 items 非空时发出 `before_seq` 请求 |
 | `http_older` | 历史页响应：`items`、必填 `has_more`；调用 `prepend`，范围字段不参与连续性判断 |
@@ -84,14 +85,13 @@
 
 | `kind` | 参数与含义 |
 | --- | --- |
-| `schedule_fill` | 仅为旧客户端的 wire 兼容保留；当前 iOS 不产生该动作，也不等待1.5秒 |
 | `fetch_after` | `after_seq`，补洞的接续位置 |
 | `fetch_latest` | `fold_work: true`，改取最新一页 |
 | `subscribe` | `fold_work: true`，已有基线时带 `since_seq`，否则省略该键 |
 | `fetch_older` | `before_seq`、`fold_work: true` |
 | `fetch_range` | `from_seq`、`through_seq`，两端都包含；下一页按末条 seq 加一 |
 
-请求中的机器、会话、鉴权、`lazy_images` 等不影响本领域判定的公共参数省略。当前 `AppModel.settle` 在缺口出现时立即调用 `fill`，每页读取当时的 `covered`；同一聊天已有 fill 在途时合并请求，不另起八页预算。测试不睡眠，由事件和 effects 表达这一控制流。
+请求中的机器、会话、鉴权、`lazy_images` 等不影响本领域判定的公共参数省略。`from_seq` 是续读游标，批次覆盖 `from_seq + 1` 到 `to_seq`（包括没有 item 的行）；`covered` 是已经连续覆盖的位置。发现缺口立即 `fetch_after`，没有补洞定时器。测试不睡眠，由 `continue_fill` 表达在途去重。
 
 ## 对照验证
 
@@ -109,33 +109,26 @@ JNI binding:
 ```bash
 cd native/app-core && cargo test --locked
 cd android && ./gradlew :core:rustcore:test
-xcrun swift test --package-path apple/Packages/PersonaCore
-# iOS：先运行 native/app-core/scripts/build-apple.sh，再在 Persona scheme 运行 PersonaTests/PersonaCoreContinuityTests。
 ```
 
 [continuity_fixtures_test.go](../../../server/internal/transcript/continuity_fixtures_test.go) 读取本目录全部 JSON，拒绝未知字段、未知事件、重复名称及缺少逐步期望的用例，逐步比较完整 items、位置、分页信息、加载标志和动作。
 
 Go 测试保持原有 corpus 测试不变，额外直接调用原有 `simClient.apply` 对照以下七个场景：`append_then_fill_lost_batch`、`empty_batch_advances_covered`、`overlapping_batch_never_regresses_covered`、`first_line_push_is_baseline`、`wait_for_first_backlog`、`capped_subscription_requests_rest`、`latest_page_replaces_distant_cache`。其余语义使用按当前 Store 和 Model 写的测试模型，避免改变 corpus 既有行为。
 
-`apple/PersonaTests/PersonaCoreContinuityTests.swift` 是已提交的 Swift 对照入口。`ContinuityBindingReplay` 读取本目录 JSON，通过真实 C ABI 编码 action、等待 worker、drain 并逐步应用 patch，再核对完整 items、id 顺序、`covered`、`history`、`hasMore`、`loadedOnce` 和 effects。macOS `swift test` 与 iOS XCTest 共用这份实现。
-
-`NativeChatStoreContinuityReplay` 用同一 JSON 初始化真实、未修改的 `ChatStore`，直接调用 `apply`、`replace`、`prepend`、`unfold`，逐步核对状态；`PersonaCoreIntegrationTests` 检查 target 范围和无二进制提交。iOS 调度另通过真实 `AppModel` 和假 transport 验证缺口立即触发 `fill`，不把调度枚举翻译成一个人为 sleep。
-
-验证边界：没有启动真实 `APIClient` 或网络；`has_more: null` 在原生 Swift Store 中投影成 false。新打开 fold 的 supervision、重复项替换及补洞邻接边界来自当前 iOS 测试和实现，不由 Rust 输出生成。Phase 1 不替换生产 `ChatStore`，也不改变屏幕。
+iOS 的真实 `ChatStore` 由 PersonaCore 的 XCTest 夹具回放直接驱动，和 Rust 的 C binding 使用同一份 JSON。不能只用 Rust、Go 或 Kotlin 与夹具的一致代替真实 iOS 行为验证；请求动作由 `AppModel.settle/fill` 的规则对照。
 
 ## 与简写规则的差异
 
-- 任务中的「同 id 的 item 被新版本覆盖」对普通 item 和 fold 都成立：普通 item 采用最新完整副本，fold 的范围或元数据变化也采用新副本；已确认的 promotion 不因未标记副本而降级。
-- `from_seq == covered + 1` 仍大于 covered，当前 iOS 返回 `.fill` 且不推进 `covered`；`from_seq <= covered` 才取 `max(covered, to_seq)`。
+- 普通 item 和 fold 的重复 id 都使用最新完整副本，已展开的 fold 与 supervision 标记按 iOS 单独保留；不能只比较 id。
 - 流程图 11 把 history 变化统一画成重新取页；Store 对已经自包含的新首页或从零接续的批次会清空后直接接收。
 - 「补洞超过八页」在实现中是第八页仍需继续便重取；不会先发第九页请求。
 - `has_more` 的未知值在响应中保留为可选值，Store 内部仍为 Bool；缺失字段不能抹掉已有分页判断，空批次的 false 也不能证明已经到头。
 - `replace` 不主动把 `loadedOnce` 置为 true；history reset 后紧接 reload 时该值仍为 false，夹具保留这一实现细节。
 
-这些差异均以当前 iOS 行为为准，本车道未修改客户端或服务端生产代码。
+这些差异均以当前 iOS 行为为准；Android、HarmonyOS 与 Rust 的旧移植据此修正，不改变 iOS 的生产行为。
 
 ## 新增用例
 
 先定位 Store 或 Model 的对应分支及现有测试，再选择主题文件。新增英文 snake_case 名称和中文说明，填写可定位的来源；移植已有单测用 `from_test`，补充分支用 `derived: true`。沿用现有单测但增加定时器、请求或范围分页步骤时，`source` 同时列出调度实现。
 
-编写独立的 `input.initial`，逐事件手写完整 expected；用不存在于任何真实会话中的示例内容。运行 Go 回放和已提交的 `PersonaCoreContinuityTests`（真实 C binding 与原生 `ChatStore`），更新上方规则表；新增只属于调度层的动作时，明确写出无法由 Store 单独验证的部分。最后按顶层约定检查 JSON 排版、隐私和提交信息。
+编写独立的 `input.initial`，逐事件手写完整 expected；用不存在于任何真实会话中的示例内容。运行 Go 回放和临时 Swift 对照，更新上方规则表；新增只属于调度层的动作时，明确写出无法由 Store 单独验证的部分。最后按顶层约定检查 JSON 排版、隐私和提交信息。

@@ -1,12 +1,9 @@
 //! One chat's items and how far they are known to be complete (`spec/fixtures/continuity/README.md`).
 //!
-//! The current iOS `ChatStore` is the behavioral reference. `covered` starts at zero, meaning no baseline. A push
-//! that continues from zero sets the baseline. A later push without a baseline waits for the backlog, then asks for
-//! a reload once it has arrived. A different history clears the old items and opened-fold evidence. A repeated id
-//! takes its newest complete copy, including metadata and receipts; opened folds and supervision promotion survive
-//! overlapping pages.
+//! The reference is iOS's `ChatStore`, not another client's older port. Repeated full items replace stale copies,
+//! opened work stays expanded across repeated pages, and authoritative supervision evidence is retained monotonically.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::item::Item;
@@ -22,7 +19,7 @@ pub enum Gap {
     Reload,
 }
 
-/// The fields of one batch of items, as a response or a push carries it.
+/// The fields of one batch of items, as a response or a push carries them.
 #[derive(Debug, Default)]
 pub struct Batch {
     pub items: Vec<Item>,
@@ -36,18 +33,14 @@ pub struct Batch {
 
 #[derive(Debug, Default)]
 pub struct Reducer {
-    /// Ordered by `(seq, block)`, like `ChatStore.ordered`.
     items: Vec<Arc<Item>>,
     ids: HashSet<String>,
     history: Option<String>,
     covered: i64,
-    /// `None` until a page gave usable pagination information, and again after a history reset. iOS projects this
-    /// onto its Bool as false; the wire retains the missing-information state.
     has_more: Option<bool>,
     loaded_once: bool,
-    /// Folds opened here, retained as the page brought them so a repeated page cannot close them again or erase
-    /// promotion evidence. A replacement of the transcript forgets them.
-    opened: HashMap<String, Arc<Item>>,
+    /// Work opened by the user, retained when a repeated page still carries its fold.
+    opened: std::collections::HashMap<String, Arc<Item>>,
 }
 
 impl Reducer {
@@ -87,8 +80,8 @@ impl Reducer {
         loaded_once: bool,
     ) {
         self.clear();
+        self.opened.clear();
         self.items = items.into_iter().map(Arc::new).collect();
-        self.ids = self.items.iter().map(|i| i.id.clone()).collect();
         self.history = history;
         self.covered = covered.max(0);
         self.has_more = has_more;
@@ -109,11 +102,7 @@ impl Reducer {
         if let (Some(new), Some(old)) = (&history, &self.history)
             && new != old
         {
-            self.clear();
-            self.history = Some(new.clone());
-            self.covered = 0;
-            self.has_more = None;
-            self.loaded_once = false;
+            self.restore(Vec::new(), Some(new.clone()), 0, None, false);
             if from_seq.is_some_and(|f| f > 0) {
                 return Gap::Reload;
             }
@@ -149,23 +138,22 @@ impl Reducer {
         Gap::None
     }
 
-    /// A reload's latest page. Pushes of the same history strictly past `to_seq` stay, without claiming coverage
-    /// through them. `loaded_once` does not change.
+    /// A reload's latest page keeps strictly newer pushes of the same history, without claiming coverage through them.
     pub fn replace(&mut self, items: Vec<Item>, history: Option<String>, to_seq: Option<i64>, has_more: bool) {
         let same_history = history.is_none() || history == self.history;
         let keep: Vec<Arc<Item>> = match to_seq {
             Some(to) if same_history => self.items.iter().filter(|i| i.seq > to).cloned().collect(),
             _ => Vec::new(),
         };
-        self.clear();
+        self.items.clear();
+        self.ids.clear();
+        self.opened.clear();
         self.has_more = Some(has_more);
         if history.is_some() {
             self.history = history;
         }
         self.merge(items, false, None);
-        for item in keep {
-            self.insert_shared(item);
-        }
+        self.merge_shared(keep);
         self.covered = to_seq.unwrap_or_else(|| self.last_seq().unwrap_or(0));
     }
 
@@ -177,8 +165,7 @@ impl Reducer {
         self.merge(items, false, None);
     }
 
-    /// Puts an opened fold's work back in its place, all pages at once, leaving out folds in the response. The opened
-    /// fold itself is evidence for a later overlapping page, even when the caller held an older, unpromoted copy.
+    /// Puts an opened fold's work back in its place, all pages at once, leaving out folds in the response.
     pub fn unfold(&mut self, fold_id: &str, work: Vec<Item>) {
         let Some(index) = self.items.iter().position(|i| i.id == fold_id) else {
             return;
@@ -196,154 +183,124 @@ impl Reducer {
     fn clear(&mut self) {
         self.items.clear();
         self.ids.clear();
-        self.opened.clear();
     }
 
-    /// Keeps the last complete copy of each id, preserving the relative order of the surviving items. Promotion is
-    /// collected before deduplication, just as `ChatStore.newestCopies` requires for a replayed cache.
-    fn newest_shared(items: Vec<Arc<Item>>) -> Vec<Arc<Item>> {
-        if items.len() < 2 {
-            return items;
+    fn newest_copies(items: Vec<Arc<Item>>) -> Vec<Arc<Item>> {
+        let mut seen = HashSet::new();
+        let mut newest: Vec<Arc<Item>> = Vec::with_capacity(items.len());
+        for item in items.into_iter().rev() {
+            if seen.insert(item.id.clone()) {
+                newest.push(item);
+            }
         }
-        let last: HashSet<usize> = {
-            let mut seen = HashSet::new();
-            (0..items.len())
-                .rev()
-                .filter(|index| seen.insert(items[*index].id.clone()))
-                .collect()
+        newest.reverse();
+        newest
+    }
+
+    /// iOS keeps authoritative supervision evidence when a newer copy, a replacement fold or its represented work
+    /// arrives. The flag is synthesized on the retained item, not treated as a new transport field.
+    fn retain_promotion(
+        items: Vec<Arc<Item>>,
+        opened: &std::collections::HashMap<String, Arc<Item>>,
+        new: &[Arc<Item>],
+        deduplicated: bool,
+    ) -> Vec<Arc<Item>> {
+        let evidence: Vec<&Item> = items
+            .iter()
+            .map(Arc::as_ref)
+            .chain(opened.values().map(Arc::as_ref))
+            .chain(new.iter().map(Arc::as_ref))
+            .filter(|item| item.has_supervision_evidence())
+            .collect();
+        let promoted_ids: HashSet<String> = evidence
+            .iter()
+            .filter(|item| item.supervision_user)
+            .map(|item| item.id.clone())
+            .collect();
+        let promoted_folds: Vec<Item> = evidence
+            .iter()
+            .filter(|item| item.fold.is_some())
+            .map(|item| (*item).clone())
+            .collect();
+        let promoted_work: Vec<Item> = evidence
+            .iter()
+            .filter(|item| item.is_work())
+            .map(|item| (*item).clone())
+            .collect();
+        let items = if deduplicated {
+            Self::newest_copies(items)
+        } else {
+            items
         };
         items
             .into_iter()
-            .enumerate()
-            .filter(|(index, _)| last.contains(index))
-            .map(|(_, item)| item)
+            .map(|item| {
+                if promoted_ids.contains(&item.id)
+                    || item.is_work() && promoted_folds.iter().any(|fold| fold.folds(&item))
+                    || item.fold.is_some() && promoted_work.iter().any(|work| item.folds(work))
+                {
+                    Arc::new((*item).clone().with_supervision())
+                } else {
+                    item
+                }
+            })
             .collect()
-    }
-
-    fn newest(items: Vec<Item>) -> Vec<Item> {
-        if items.len() < 2 {
-            return items;
-        }
-        let last: HashSet<usize> = {
-            let mut seen = HashSet::new();
-            (0..items.len())
-                .rev()
-                .filter(|index| seen.insert(items[*index].id.clone()))
-                .collect()
-        };
-        items
-            .into_iter()
-            .enumerate()
-            .filter(|(index, _)| last.contains(index))
-            .map(|(_, item)| item)
-            .collect()
-    }
-
-    fn still_open(&self, item: &Item) -> bool {
-        let (Some(range), Some(was)) = (&item.fold, self.opened.get(&item.id).and_then(|i| i.fold.as_ref())) else {
-            return false;
-        };
-        item.kind == "fold"
-            && (range.through_seq, crate::item::part(&range.through_id))
-                <= (was.through_seq, crate::item::part(&was.through_id))
     }
 
     fn merge(&mut self, new: Vec<Item>, backlog: bool, has_more: Option<bool>) {
-        let new: Vec<Item> = new
-            .into_iter()
-            .map(|mut item| {
-                item.public_refusal();
-                item
-            })
-            .collect();
-        let original_len = new.len();
+        let new_len = new.len();
         let new_min = new.iter().map(|i| i.seq).min();
-        let mut evidence: Vec<Arc<Item>> = self
-            .items
-            .iter()
-            .chain(self.opened.values())
-            .filter(|item| item.has_promotion())
-            .cloned()
-            .collect();
-        evidence.extend(new.iter().filter(|item| item.has_promotion()).cloned().map(Arc::new));
         let deduplicated = self.items.len() != self.ids.len();
+        let incoming = new.into_iter().map(Arc::new).collect::<Vec<_>>();
+        self.items = Self::retain_promotion(std::mem::take(&mut self.items), &self.opened, &incoming, deduplicated);
         if deduplicated {
-            self.items = Self::newest_shared(std::mem::take(&mut self.items));
-            self.ids = self.items.iter().map(|i| i.id.clone()).collect();
-        }
-        let before_retention = self.items.clone();
-        if !evidence.is_empty() {
-            self.items =
-                Self::retain_promotion(self.items.iter().map(|item| item.as_ref().clone()).collect(), &evidence);
-        }
-        let changed = deduplicated || self.items != before_retention;
-        let promoted_new: Vec<Item> = Self::newest(new);
-        let fresh: Vec<Item> = Self::retain_promotion(promoted_new, &evidence)
-            .into_iter()
-            .map(|item| Arc::into_inner(item).expect("a newly retained item has one owner"))
-            .filter(|item| !self.still_open(item))
-            .collect();
-        let batch_work: Vec<Item> = fresh
-            .iter()
-            .filter(|item| item.is_work() && item.kind != "fold")
-            .cloned()
-            .collect();
-        let fresh: Vec<Item> = fresh
-            .into_iter()
-            .filter(|item| !(item.kind == "fold" && batch_work.iter().any(|work| item.folds(work))))
-            .collect();
-
-        // A changed fold replaces work it covers; real overlapping work replaces an old fold even when its page is
-        // only partial. Neither operation may discard the evidence retained above.
-        let folds: Vec<&Item> = fresh
-            .iter()
-            .filter(|item| item.kind == "fold" && !self.find(&item.id).is_some_and(|old| old.same_fold(item)))
-            .collect();
-        let work: Vec<&Item> = fresh
-            .iter()
-            .filter(|item| item.is_work() && item.kind != "fold")
-            .collect();
-        let before = self.items.len();
-        self.items.retain(|item| {
-            !(item.is_work() && folds.iter().any(|fold| fold.folds(item)))
-                && !(item.kind == "fold" && work.iter().any(|work| item.folds(work)))
-        });
-        self.ids = self.items.iter().map(|i| i.id.clone()).collect();
-        let mut changed = changed || self.items.len() != before;
-        let indices: HashMap<String, usize> = self
-            .items
-            .iter()
-            .enumerate()
-            .map(|(index, item)| (item.id.clone(), index))
-            .collect();
-        let mut in_order = !deduplicated;
-        for item in fresh {
-            if let Some(&index) = indices.get(item.id.as_str()) {
-                if self.items[index].as_ref() != &item {
-                    if self.items[index].key() != item.key() {
-                        in_order = false;
-                    }
-                    self.items[index] = Arc::new(item);
-                    changed = true;
-                }
-                continue;
-            }
-            if self.items.last().is_some_and(|last| item.key() < last.key()) {
-                in_order = false;
-            }
-            self.ids.insert(item.id.clone());
-            self.items.push(Arc::new(item));
-            changed = true;
-        }
-        if changed && !in_order {
             self.items.sort_by_key(|item| item.key());
         }
-        // The comparison is against the list after fold removal, not a saved first item from before it. When the
-        // list is empty, a non-empty page reaches its start (iOS's `.max` fallback).
-        let reaches_start = new_min.is_some_and(|min| min <= self.first_seq().unwrap_or(i64::MAX));
+        let incoming = Self::newest_copies(incoming);
+        let promoted = Self::retain_promotion(incoming, &self.opened, &self.items, false);
+        let batch_work: Vec<Arc<Item>> = promoted
+            .iter()
+            .filter(|i| i.is_work() && i.kind != "fold")
+            .cloned()
+            .collect();
+        let fresh: Vec<Arc<Item>> = promoted
+            .into_iter()
+            .filter(|item| {
+                let still_open = item.kind == "fold"
+                    && self
+                        .opened
+                        .get(&item.id)
+                        .is_some_and(|old| match (&old.fold, &item.fold) {
+                            (Some(old), Some(now)) => {
+                                (now.through_seq, crate::item::part(&now.through_id))
+                                    <= (old.through_seq, crate::item::part(&old.through_id))
+                            }
+                            _ => false,
+                        });
+                !still_open && !(item.kind == "fold" && batch_work.iter().any(|work| item.folds(work)))
+            })
+            .collect();
+        let folds: Vec<Arc<Item>> = fresh
+            .iter()
+            .filter(|item| item.kind == "fold" && !self.find(&item.id).is_some_and(|old| old.same_fold(item)))
+            .cloned()
+            .collect();
+        self.items.retain(|old| {
+            !(old.kind != "fold" && old.is_work() && folds.iter().any(|fold| fold.folds(old))
+                || old.kind == "fold" && batch_work.iter().any(|work| old.folds(work)))
+        });
+        self.ids = self.items.iter().map(|i| i.id.clone()).collect();
+        let existing_first = self.first_seq();
+        for item in fresh {
+            self.insert_shared(item);
+        }
+        let reaches_start = match (new_min, existing_first.or_else(|| self.items.first().map(|i| i.seq))) {
+            (Some(min), Some(first)) => min <= first,
+            _ => false,
+        };
         if let Some(more) = has_more
             && backlog
-            && (!self.loaded_once || self.items.len() <= original_len)
+            && (!self.loaded_once || self.items.len() <= new_len)
             && (more || reaches_start)
         {
             self.has_more = Some(more);
@@ -353,35 +310,22 @@ impl Reducer {
         }
     }
 
-    fn retain_promotion(items: Vec<Item>, evidence: &[Arc<Item>]) -> Vec<Arc<Item>> {
-        if evidence.is_empty() {
-            return items.into_iter().map(Arc::new).collect();
+    fn merge_shared(&mut self, items: Vec<Arc<Item>>) {
+        for item in items {
+            self.insert_shared(item);
         }
-        let promoted_ids: HashSet<&str> = evidence
-            .iter()
-            .filter(|item| item.supervision_user)
-            .map(|item| item.id.as_str())
-            .collect();
-        let folds: Vec<&Arc<Item>> = evidence.iter().filter(|item| item.fold.is_some()).collect();
-        let work: Vec<&Arc<Item>> = evidence.iter().filter(|item| item.is_work()).collect();
-        items
-            .into_iter()
-            .map(|mut item| {
-                if promoted_ids.contains(item.id.as_str())
-                    || (item.is_work() && folds.iter().any(|fold| fold.folds(&item)))
-                    || (item.fold.is_some() && work.iter().any(|work| item.folds(work)))
-                {
-                    item.set_supervision();
-                }
-                Arc::new(item)
-            })
-            .collect()
     }
 
     fn insert_shared(&mut self, item: Arc<Item>) {
-        if !self.ids.insert(item.id.clone()) {
+        // A repeated full item replaces the old copy, including changed receipt metadata. Keep its Arc when nothing
+        // changed so the runtime's incremental diff stays cheap for append-only pushes.
+        if let Some(old) = self.items.iter_mut().find(|old| old.id == item.id) {
+            if old.json() != item.json() {
+                *old = item;
+            }
             return;
         }
+        self.ids.insert(item.id.clone());
         let key = item.key();
         let index = if self.items.last().is_none_or(|last| last.key() <= key) {
             self.items.len()
@@ -389,5 +333,48 @@ impl Reducer {
             self.items.partition_point(|i| i.key() <= key)
         };
         self.items.insert(index, item);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_cache_keeps_promotion_on_the_newest_copy() {
+        let mut reducer = Reducer::new();
+        reducer.restore(
+            Item::list_from_json(r#"[{"id":"1#0","seq":1,"kind":"text","text":"旧版","supervision_user":true},{"id":"1#0","seq":1,"kind":"text","text":"新版"}]"#).unwrap(),
+            Some("h".into()),
+            1,
+            Some(false),
+            false,
+        );
+        reducer.merge(Vec::new(), false, None);
+        assert_eq!(reducer.items().len(), 1);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(reducer.items()[0].json()).unwrap(),
+            serde_json::json!({"id":"1#0","seq":1,"kind":"text","text":"新版","supervision_user":true})
+        );
+    }
+
+    #[test]
+    fn partial_work_keeps_the_folds_promotion() {
+        let mut reducer = Reducer::new();
+        reducer.restore(
+            Item::list_from_json(r#"[{"id":"fold:2#0","seq":2,"role":"assistant","kind":"fold","fold":{"through_seq":8,"through_id":"8#0","supervision_user":true}}]"#).unwrap(),
+            Some("h".into()),
+            8,
+            Some(false),
+            false,
+        );
+        let incoming =
+            Item::list_from_json(r#"[{"id":"2#0","seq":2,"role":"assistant","kind":"thinking","text":"示例步骤"}]"#)
+                .unwrap();
+        assert!(reducer.items()[0].has_supervision_evidence());
+        assert!(reducer.items()[0].folds(&incoming[0]));
+        reducer.merge(incoming, false, None);
+        assert_eq!(reducer.items().len(), 1);
+        assert!(reducer.items()[0].supervision_user);
     }
 }

@@ -47,7 +47,7 @@ public struct NativeChatStoreContinuityReplay {
             case "http_range":
                 range += try decodeItems(event)
                 if !event.flag("more"), let opened { store.unfold(opened, into: range) }
-            case "fill_timer":
+            case "continue_fill":
                 // Compatibility only. Current AppModel.settle starts fill immediately, and the shared fixtures use
                 // http_after directly rather than inventing a wait the iOS scheduler no longer has.
                 break

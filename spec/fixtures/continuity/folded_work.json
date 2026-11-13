@@ -1218,15 +1218,23 @@
       "derived": true
     },
     {
-      "name": "opened_fold_and_supervision_survive_repeated_pages",
-      "description": "展开的工作再次遇到同范围 fold 仍保持展开；已确认的 supervision 标记传到展开工作且不被未标记页面降级。",
+      "name": "opened_work_survives_repeated_fold_page",
+      "description": "用户已展开的工作在重复 HTTP/backlog 页到来时不重新折叠，范围变长的 fold 才替换。",
       "source": [
-        "ios/PersonaTests/FoldedWorkTests.swift: workOpenedHereStaysOpenWhenAPageFoldsItAgain, aRepeatedPromotedFoldUpdatesWorkThatStaysOpen",
-        "ios/Shared/ChatStore.swift: opened, retainingPromotion"
+        "ios/Shared/ChatStore.swift: opened, stillOpen",
+        "ios/PersonaTests/FoldedWorkTests.swift: workOpenedHereStaysOpenWhenAPageFoldsItAgain"
       ],
+      "from_test": "workOpenedHereStaysOpenWhenAPageFoldsItAgain",
       "input": {
         "initial": {
           "items": [
+            {
+              "id": "1#0",
+              "seq": 1,
+              "role": "user",
+              "kind": "text",
+              "text": "示例输入"
+            },
             {
               "id": "fold:2#0",
               "seq": 2,
@@ -1239,9 +1247,16 @@
                 "through_seq": 8,
                 "through_id": "8#0"
               }
+            },
+            {
+              "id": "20#0",
+              "seq": 20,
+              "role": "assistant",
+              "kind": "text",
+              "text": "示例答复"
             }
           ],
-          "covered": 8,
+          "covered": 20,
           "history": "h",
           "has_more": false,
           "loaded_once": true
@@ -1259,51 +1274,62 @@
                 "seq": 2,
                 "role": "assistant",
                 "kind": "thinking",
-                "text": "Fictional plan"
+                "text": "示例步骤"
               },
               {
                 "id": "3#0",
                 "seq": 3,
                 "role": "assistant",
                 "kind": "tool_use",
-                "tool_use_id": "read",
-                "tool_name": "Read"
+                "text": "示例步骤"
               },
               {
                 "id": "4#0",
                 "seq": 4,
-                "role": "user",
-                "kind": "tool_result",
-                "tool_use_id": "read",
-                "text": "Fictional result"
+                "role": "assistant",
+                "kind": "tool_use",
+                "text": "示例步骤"
+              },
+              {
+                "id": "5#0",
+                "seq": 5,
+                "role": "assistant",
+                "kind": "tool_use",
+                "text": "示例步骤"
+              },
+              {
+                "id": "6#0",
+                "seq": 6,
+                "role": "assistant",
+                "kind": "tool_use",
+                "text": "示例步骤"
+              },
+              {
+                "id": "7#0",
+                "seq": 7,
+                "role": "assistant",
+                "kind": "tool_use",
+                "text": "示例步骤"
+              },
+              {
+                "id": "8#0",
+                "seq": 8,
+                "role": "assistant",
+                "kind": "tool_use",
+                "text": "示例步骤"
               }
             ]
           },
           {
-            "kind": "ws_items",
+            "kind": "http_latest",
             "items": [
               {
-                "id": "fold:2#0",
-                "seq": 2,
-                "role": "assistant",
-                "kind": "fold",
-                "fold": {
-                  "items": 7,
-                  "tools": 3,
-                  "thoughts": 1,
-                  "through_seq": 8,
-                  "through_id": "8#0",
-                  "supervision_user": true
-                }
-              }
-            ],
-            "history": "h",
-            "from_seq": 0,
-            "to_seq": 8
-          },
-          {
-            "kind": "ws_items",
-            "items": [
+                "id": "1#0",
+                "seq": 1,
+                "role": "user",
+                "kind": "text",
+                "text": "示例输入"
+              },
               {
                 "id": "fold:2#0",
                 "seq": 2,
@@ -1316,17 +1342,66 @@
                   "through_seq": 8,
                   "through_id": "8#0"
                 }
+              },
+              {
+                "id": "20#0",
+                "seq": 20,
+                "role": "assistant",
+                "kind": "text",
+                "text": "示例答复"
               }
             ],
             "history": "h",
-            "from_seq": 0,
-            "to_seq": 8
+            "to_seq": 20,
+            "backlog": true
+          },
+          {
+            "kind": "http_latest",
+            "items": [
+              {
+                "id": "1#0",
+                "seq": 1,
+                "role": "user",
+                "kind": "text",
+                "text": "示例输入"
+              },
+              {
+                "id": "fold:2#0",
+                "seq": 2,
+                "role": "assistant",
+                "kind": "fold",
+                "fold": {
+                  "items": 9,
+                  "tools": 4,
+                  "thoughts": 1,
+                  "through_seq": 10,
+                  "through_id": "10#0"
+                }
+              },
+              {
+                "id": "20#0",
+                "seq": 20,
+                "role": "assistant",
+                "kind": "text",
+                "text": "示例答复"
+              }
+            ],
+            "history": "h",
+            "to_seq": 20,
+            "backlog": true
           }
         ]
       },
       "expected": [
         {
           "items": [
+            {
+              "id": "1#0",
+              "seq": 1,
+              "role": "user",
+              "kind": "text",
+              "text": "示例输入"
+            },
             {
               "id": "fold:2#0",
               "seq": 2,
@@ -1339,15 +1414,24 @@
                 "through_seq": 8,
                 "through_id": "8#0"
               }
+            },
+            {
+              "id": "20#0",
+              "seq": 20,
+              "role": "assistant",
+              "kind": "text",
+              "text": "示例答复"
             }
           ],
-          "item_ids": [
-            "fold:2#0"
-          ],
-          "covered": 8,
+          "covered": 20,
           "history": "h",
           "has_more": false,
           "loaded_once": true,
+          "item_ids": [
+            "1#0",
+            "fold:2#0",
+            "20#0"
+          ],
           "gap": "none",
           "actions": [
             {
@@ -1360,133 +1444,223 @@
         {
           "items": [
             {
+              "id": "1#0",
+              "seq": 1,
+              "role": "user",
+              "kind": "text",
+              "text": "示例输入"
+            },
+            {
               "id": "2#0",
               "seq": 2,
               "role": "assistant",
               "kind": "thinking",
-              "text": "Fictional plan"
+              "text": "示例步骤"
             },
             {
               "id": "3#0",
               "seq": 3,
               "role": "assistant",
               "kind": "tool_use",
-              "tool_use_id": "read",
-              "tool_name": "Read"
+              "text": "示例步骤"
             },
             {
               "id": "4#0",
               "seq": 4,
-              "role": "user",
-              "kind": "tool_result",
-              "tool_use_id": "read",
-              "text": "Fictional result"
+              "role": "assistant",
+              "kind": "tool_use",
+              "text": "示例步骤"
+            },
+            {
+              "id": "5#0",
+              "seq": 5,
+              "role": "assistant",
+              "kind": "tool_use",
+              "text": "示例步骤"
+            },
+            {
+              "id": "6#0",
+              "seq": 6,
+              "role": "assistant",
+              "kind": "tool_use",
+              "text": "示例步骤"
+            },
+            {
+              "id": "7#0",
+              "seq": 7,
+              "role": "assistant",
+              "kind": "tool_use",
+              "text": "示例步骤"
+            },
+            {
+              "id": "8#0",
+              "seq": 8,
+              "role": "assistant",
+              "kind": "tool_use",
+              "text": "示例步骤"
+            },
+            {
+              "id": "20#0",
+              "seq": 20,
+              "role": "assistant",
+              "kind": "text",
+              "text": "示例答复"
             }
           ],
-          "item_ids": [
-            "2#0",
-            "3#0",
-            "4#0"
-          ],
-          "covered": 8,
+          "covered": 20,
           "history": "h",
           "has_more": false,
           "loaded_once": true,
+          "item_ids": [
+            "1#0",
+            "2#0",
+            "3#0",
+            "4#0",
+            "5#0",
+            "6#0",
+            "7#0",
+            "8#0",
+            "20#0"
+          ],
           "gap": "none",
           "actions": []
         },
         {
           "items": [
             {
+              "id": "1#0",
+              "seq": 1,
+              "role": "user",
+              "kind": "text",
+              "text": "示例输入"
+            },
+            {
               "id": "2#0",
               "seq": 2,
               "role": "assistant",
               "kind": "thinking",
-              "text": "Fictional plan",
-              "supervision_user": true
+              "text": "示例步骤"
             },
             {
               "id": "3#0",
               "seq": 3,
               "role": "assistant",
               "kind": "tool_use",
-              "tool_use_id": "read",
-              "tool_name": "Read",
-              "supervision_user": true
+              "text": "示例步骤"
             },
             {
               "id": "4#0",
               "seq": 4,
-              "role": "user",
-              "kind": "tool_result",
-              "tool_use_id": "read",
-              "text": "Fictional result",
-              "supervision_user": true
+              "role": "assistant",
+              "kind": "tool_use",
+              "text": "示例步骤"
+            },
+            {
+              "id": "5#0",
+              "seq": 5,
+              "role": "assistant",
+              "kind": "tool_use",
+              "text": "示例步骤"
+            },
+            {
+              "id": "6#0",
+              "seq": 6,
+              "role": "assistant",
+              "kind": "tool_use",
+              "text": "示例步骤"
+            },
+            {
+              "id": "7#0",
+              "seq": 7,
+              "role": "assistant",
+              "kind": "tool_use",
+              "text": "示例步骤"
+            },
+            {
+              "id": "8#0",
+              "seq": 8,
+              "role": "assistant",
+              "kind": "tool_use",
+              "text": "示例步骤"
+            },
+            {
+              "id": "20#0",
+              "seq": 20,
+              "role": "assistant",
+              "kind": "text",
+              "text": "示例答复"
             }
           ],
-          "item_ids": [
-            "2#0",
-            "3#0",
-            "4#0"
-          ],
-          "covered": 8,
+          "covered": 20,
           "history": "h",
           "has_more": false,
           "loaded_once": true,
+          "item_ids": [
+            "1#0",
+            "2#0",
+            "3#0",
+            "4#0",
+            "5#0",
+            "6#0",
+            "7#0",
+            "8#0",
+            "20#0"
+          ],
           "gap": "none",
           "actions": []
         },
         {
           "items": [
             {
-              "id": "2#0",
+              "id": "1#0",
+              "seq": 1,
+              "role": "user",
+              "kind": "text",
+              "text": "示例输入"
+            },
+            {
+              "id": "fold:2#0",
               "seq": 2,
               "role": "assistant",
-              "kind": "thinking",
-              "text": "Fictional plan",
-              "supervision_user": true
+              "kind": "fold",
+              "fold": {
+                "items": 9,
+                "tools": 4,
+                "thoughts": 1,
+                "through_seq": 10,
+                "through_id": "10#0"
+              }
             },
             {
-              "id": "3#0",
-              "seq": 3,
+              "id": "20#0",
+              "seq": 20,
               "role": "assistant",
-              "kind": "tool_use",
-              "tool_use_id": "read",
-              "tool_name": "Read",
-              "supervision_user": true
-            },
-            {
-              "id": "4#0",
-              "seq": 4,
-              "role": "user",
-              "kind": "tool_result",
-              "tool_use_id": "read",
-              "text": "Fictional result",
-              "supervision_user": true
+              "kind": "text",
+              "text": "示例答复"
             }
           ],
-          "item_ids": [
-            "2#0",
-            "3#0",
-            "4#0"
-          ],
-          "covered": 8,
+          "covered": 20,
           "history": "h",
           "has_more": false,
           "loaded_once": true,
+          "item_ids": [
+            "1#0",
+            "fold:2#0",
+            "20#0"
+          ],
           "gap": "none",
           "actions": []
         }
-      ],
-      "derived": true
+      ]
     },
     {
-      "name": "partial_work_replaces_promoted_fold_without_downgrade",
-      "description": "部分展开工作替换其 fold 时保留 supervision；同一未标记工作的后续副本不得清除证据。",
+      "name": "partial_work_replaces_fold_and_keeps_promotion",
+      "description": "部分真实工作到来时移除重叠 fold，fold 的可见标记转移给工作，后续无标记副本不降级。",
       "source": [
-        "ios/PersonaTests/FoldedWorkTests.swift: partialOverlapRetainsPromotionAfterRemovingTheFold",
-        "ios/Shared/ChatStore.swift: retainingPromotion, dropOverlappingFolds"
+        "ios/Shared/ChatStore.swift: dropOverlappingFolds, retainingPromotion",
+        "ios/PersonaTests/FoldedWorkTests.swift: partialOverlapRetainsPromotionAfterRemovingTheFold"
       ],
+      "from_test": "partialOverlapRetainsPromotionAfterRemovingTheFold",
       "input": {
         "initial": {
           "items": [
@@ -1508,7 +1682,7 @@
           "covered": 8,
           "history": "h",
           "has_more": false,
-          "loaded_once": true
+          "loaded_once": false
         },
         "events": [
           {
@@ -1519,12 +1693,12 @@
                 "seq": 2,
                 "role": "assistant",
                 "kind": "thinking",
-                "text": "Fictional plan"
+                "text": "示例步骤"
               }
             ],
             "history": "h",
-            "from_seq": 8,
-            "to_seq": 9
+            "to_seq": 8,
+            "backlog": false
           },
           {
             "kind": "ws_items",
@@ -1534,12 +1708,12 @@
                 "seq": 2,
                 "role": "assistant",
                 "kind": "thinking",
-                "text": "Fictional plan"
+                "text": "示例步骤"
               }
             ],
             "history": "h",
-            "from_seq": 8,
-            "to_seq": 9
+            "to_seq": 8,
+            "backlog": false
           }
         ]
       },
@@ -1551,17 +1725,17 @@
               "seq": 2,
               "role": "assistant",
               "kind": "thinking",
-              "text": "Fictional plan",
+              "text": "示例步骤",
               "supervision_user": true
             }
           ],
+          "covered": 8,
+          "history": "h",
+          "has_more": false,
+          "loaded_once": false,
           "item_ids": [
             "2#0"
           ],
-          "covered": 9,
-          "history": "h",
-          "has_more": false,
-          "loaded_once": true,
           "gap": "none",
           "actions": []
         },
@@ -1572,22 +1746,410 @@
               "seq": 2,
               "role": "assistant",
               "kind": "thinking",
-              "text": "Fictional plan",
+              "text": "示例步骤",
               "supervision_user": true
             }
           ],
+          "covered": 8,
+          "history": "h",
+          "has_more": false,
+          "loaded_once": false,
           "item_ids": [
             "2#0"
           ],
-          "covered": 9,
-          "history": "h",
-          "has_more": false,
-          "loaded_once": true,
           "gap": "none",
           "actions": []
         }
+      ]
+    },
+    {
+      "name": "promotion_transfers_back_to_replacement_fold",
+      "description": "工作的可见标记在重新折叠时转回新 fold，不会因更新或展开丢失。",
+      "source": [
+        "ios/Shared/ChatStore.swift: retainingPromotion",
+        "ios/PersonaTests/FoldedWorkTests.swift: promotionTransfersBackIntoAReplacementFold"
       ],
-      "derived": true
+      "from_test": "promotionTransfersBackIntoAReplacementFold",
+      "input": {
+        "initial": {
+          "items": [
+            {
+              "id": "2#0",
+              "seq": 2,
+              "role": "assistant",
+              "kind": "thinking",
+              "text": "示例步骤",
+              "supervision_user": true
+            },
+            {
+              "id": "3#0",
+              "seq": 3,
+              "role": "assistant",
+              "kind": "tool_use",
+              "text": "示例步骤"
+            }
+          ],
+          "covered": 3,
+          "history": "h",
+          "has_more": false,
+          "loaded_once": false
+        },
+        "events": [
+          {
+            "kind": "ws_items",
+            "items": [
+              {
+                "id": "fold:2#0",
+                "seq": 2,
+                "role": "assistant",
+                "kind": "fold",
+                "fold": {
+                  "items": 7,
+                  "tools": 3,
+                  "thoughts": 1,
+                  "through_seq": 8,
+                  "through_id": "8#0"
+                }
+              }
+            ],
+            "history": "h",
+            "to_seq": 3,
+            "backlog": false
+          },
+          {
+            "kind": "ws_items",
+            "items": [
+              {
+                "id": "fold:2#0",
+                "seq": 2,
+                "role": "assistant",
+                "kind": "fold",
+                "fold": {
+                  "items": 7,
+                  "tools": 3,
+                  "thoughts": 1,
+                  "through_seq": 8,
+                  "through_id": "8#0"
+                }
+              }
+            ],
+            "history": "h",
+            "to_seq": 3,
+            "backlog": false
+          },
+          {
+            "kind": "open_fold",
+            "fold_id": "fold:2#0"
+          },
+          {
+            "kind": "http_range",
+            "items": [
+              {
+                "id": "2#0",
+                "seq": 2,
+                "role": "assistant",
+                "kind": "thinking",
+                "text": "示例步骤"
+              }
+            ]
+          }
+        ]
+      },
+      "expected": [
+        {
+          "items": [
+            {
+              "id": "fold:2#0",
+              "seq": 2,
+              "role": "assistant",
+              "kind": "fold",
+              "fold": {
+                "items": 7,
+                "tools": 3,
+                "thoughts": 1,
+                "through_seq": 8,
+                "through_id": "8#0",
+                "supervision_user": true
+              },
+              "supervision_user": true
+            }
+          ],
+          "covered": 3,
+          "history": "h",
+          "has_more": false,
+          "loaded_once": false,
+          "item_ids": [
+            "fold:2#0"
+          ],
+          "gap": "none",
+          "actions": []
+        },
+        {
+          "items": [
+            {
+              "id": "fold:2#0",
+              "seq": 2,
+              "role": "assistant",
+              "kind": "fold",
+              "fold": {
+                "items": 7,
+                "tools": 3,
+                "thoughts": 1,
+                "through_seq": 8,
+                "through_id": "8#0",
+                "supervision_user": true
+              },
+              "supervision_user": true
+            }
+          ],
+          "covered": 3,
+          "history": "h",
+          "has_more": false,
+          "loaded_once": false,
+          "item_ids": [
+            "fold:2#0"
+          ],
+          "gap": "none",
+          "actions": []
+        },
+        {
+          "items": [
+            {
+              "id": "fold:2#0",
+              "seq": 2,
+              "role": "assistant",
+              "kind": "fold",
+              "fold": {
+                "items": 7,
+                "tools": 3,
+                "thoughts": 1,
+                "through_seq": 8,
+                "through_id": "8#0",
+                "supervision_user": true
+              },
+              "supervision_user": true
+            }
+          ],
+          "covered": 3,
+          "history": "h",
+          "has_more": false,
+          "loaded_once": false,
+          "item_ids": [
+            "fold:2#0"
+          ],
+          "gap": "none",
+          "actions": [
+            {
+              "kind": "fetch_range",
+              "from_seq": 2,
+              "through_seq": 8
+            }
+          ]
+        },
+        {
+          "items": [
+            {
+              "id": "2#0",
+              "seq": 2,
+              "role": "assistant",
+              "kind": "thinking",
+              "text": "示例步骤",
+              "supervision_user": true
+            }
+          ],
+          "covered": 3,
+          "history": "h",
+          "has_more": false,
+          "loaded_once": false,
+          "item_ids": [
+            "2#0"
+          ],
+          "gap": "none",
+          "actions": []
+        }
+      ]
+    },
+    {
+      "name": "mixed_batch_keeps_real_work_over_promoted_fold",
+      "description": "同一批次的真实工作和 fold 重叠时保留真实工作并保留可见标记。",
+      "source": [
+        "ios/Shared/ChatStore.swift: merge",
+        "ios/PersonaTests/FoldedWorkTests.swift: aMixedBatchKeepsRealWorkInsteadOfItsOverlappingPromotedFold"
+      ],
+      "from_test": "aMixedBatchKeepsRealWorkInsteadOfItsOverlappingPromotedFold",
+      "input": {
+        "initial": {
+          "items": [],
+          "covered": 0,
+          "history": "h",
+          "has_more": false,
+          "loaded_once": false
+        },
+        "events": [
+          {
+            "kind": "ws_items",
+            "items": [
+              {
+                "id": "fold:2#0",
+                "seq": 2,
+                "role": "assistant",
+                "kind": "fold",
+                "fold": {
+                  "items": 7,
+                  "tools": 3,
+                  "thoughts": 1,
+                  "through_seq": 8,
+                  "through_id": "8#0",
+                  "supervision_user": true
+                },
+                "supervision_user": true
+              },
+              {
+                "id": "3#0",
+                "seq": 3,
+                "role": "assistant",
+                "kind": "tool_use",
+                "text": "示例步骤"
+              }
+            ],
+            "history": "h",
+            "to_seq": 8,
+            "backlog": false
+          }
+        ]
+      },
+      "expected": [
+        {
+          "items": [
+            {
+              "id": "3#0",
+              "seq": 3,
+              "role": "assistant",
+              "kind": "tool_use",
+              "text": "示例步骤",
+              "supervision_user": true
+            }
+          ],
+          "covered": 8,
+          "history": "h",
+          "has_more": false,
+          "loaded_once": false,
+          "item_ids": [
+            "3#0"
+          ],
+          "gap": "none",
+          "actions": []
+        }
+      ]
+    },
+    {
+      "name": "duplicate_cache_and_batch_keep_newest",
+      "description": "缓存和同批次的重复 id 都保留最后副本；先收到的可见标记仍保留。",
+      "source": [
+        "ios/Shared/ChatStore.swift: newestCopies",
+        "ios/PersonaTests/ChatStoreTests.swift: duplicateIDsInOneBacklogKeepTheNewestCopy, duplicateCachedIDsKeepTheNewestCopyBeforeAnEmptyMerge"
+      ],
+      "from_test": "duplicateCachedIDsKeepTheNewestCopyBeforeAnEmptyMerge",
+      "input": {
+        "initial": {
+          "items": [
+            {
+              "id": "1#0",
+              "seq": 1,
+              "role": "assistant",
+              "kind": "text",
+              "text": "旧版",
+              "supervision_user": true
+            },
+            {
+              "id": "1#0",
+              "seq": 1,
+              "role": "assistant",
+              "kind": "text",
+              "text": "新版"
+            }
+          ],
+          "covered": 1,
+          "history": "h",
+          "has_more": false,
+          "loaded_once": false
+        },
+        "events": [
+          {
+            "kind": "ws_items",
+            "items": [],
+            "history": "h",
+            "to_seq": 1,
+            "backlog": false
+          },
+          {
+            "kind": "http_latest",
+            "items": [
+              {
+                "id": "1#0",
+                "seq": 1,
+                "role": "assistant",
+                "kind": "text",
+                "text": "同批旧版"
+              },
+              {
+                "id": "1#0",
+                "seq": 1,
+                "role": "assistant",
+                "kind": "text",
+                "text": "同批新版"
+              }
+            ],
+            "history": "h",
+            "to_seq": 1,
+            "backlog": true
+          }
+        ]
+      },
+      "expected": [
+        {
+          "items": [
+            {
+              "id": "1#0",
+              "seq": 1,
+              "role": "assistant",
+              "kind": "text",
+              "text": "新版",
+              "supervision_user": true
+            }
+          ],
+          "covered": 1,
+          "history": "h",
+          "has_more": false,
+          "loaded_once": false,
+          "item_ids": [
+            "1#0"
+          ],
+          "gap": "none",
+          "actions": []
+        },
+        {
+          "items": [
+            {
+              "id": "1#0",
+              "seq": 1,
+              "role": "assistant",
+              "kind": "text",
+              "text": "同批新版",
+              "supervision_user": true
+            }
+          ],
+          "covered": 1,
+          "history": "h",
+          "has_more": false,
+          "loaded_once": true,
+          "item_ids": [
+            "1#0"
+          ],
+          "gap": "none",
+          "actions": []
+        }
+      ]
     }
   ]
 }
