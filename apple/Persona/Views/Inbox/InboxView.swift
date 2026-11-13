@@ -1141,27 +1141,14 @@ struct InboxRow: View {
     /// The same state line as the other clients: waiting has a still clock, only AI work spins, and anything that
     /// needs the owner carries the existing Needs you mark. FYI and folded states do not spin.
     private func nowLine(_ words: String) -> some View {
-        HStack(spacing: Theme.Space.sm) {
-            nowSymbol
+        let symbol = InboxNow.symbol(for: item)
+        return HStack(spacing: Theme.Space.sm) {
+            InboxNowSymbol(symbol: symbol)
             Text(words).font(Theme.Font.label)
-                .foregroundStyle(item.now == "failed" ? AnyShapeStyle(Theme.danger) : AnyShapeStyle(.secondary))
+                .foregroundStyle(symbol == .failed ? AnyShapeStyle(Theme.danger) : AnyShapeStyle(.secondary))
                 .lineLimit(1)
         }
         .padding(.top, Theme.Space.xxs)
-    }
-
-    @ViewBuilder private var nowSymbol: some View {
-        switch item.now {
-        case "waiting":
-            ThemedIcon(Theme.Icon.time).font(Theme.Font.label).foregroundStyle(.secondary)
-        case "queued", "looking", "agent_working":
-            InboxSpinner()
-        case "confirm_reply", "confirm_agent", "decide", "follow_up_ask", "check_due", "needs_you", "failed":
-            ThemedIcon(Theme.Icon.needsYou).font(Theme.Font.label)
-                .foregroundStyle(item.now == "failed" ? AnyShapeStyle(Theme.danger) : AnyShapeStyle(StatusPalette.needsYou.text))
-        default:
-            EmptyView()
-        }
     }
 
     /// Who wrote what (under the AI's summary once it has one).
@@ -1372,6 +1359,7 @@ struct InboxDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var drafting = false
     @State private var handingOff = false
+    @State private var sameMatter = false
     @State private var ruling: InboxPolicyTarget?
     @State private var todoRequest: InboxTodoRequest?
     @State private var slot: InboxItemSlotModel
@@ -1390,6 +1378,7 @@ struct InboxDetailView: View {
                 InboxDraftSheet(item: current, accounts: accounts, onSent: { dismiss() })
             }
             .sheet(isPresented: $handingOff) { InboxHandOffSheet(item: current) }
+            .sheet(isPresented: $sameMatter) { InboxSameMatterPicker(item: current, tree: nil) }
             .sheet(item: $ruling) { InboxPolicySheet(target: $0) }
             .sheet(item: $todoRequest) { InboxDueSheet(request: $0) }
             #if DEBUG
@@ -1403,21 +1392,23 @@ struct InboxDetailView: View {
             }
             #endif
             .pageToolbar {
-                if !current.isDone || !(current.mutes ?? []).isEmpty {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Menu {
-                            if !current.isDone {
-                                // Add to To-Dos (#6480): the row counts as handled, so the page closes like Done
-                                Menu {
-                                    InboxDueButtons(add: { InboxStore.shared.addTodos([current], due: $0) { dismiss() } },
-                                                    pick: { todoRequest = InboxTodoRequest(items: [current]) { dismiss() } })
-                                } label: { Label("Add to To-Dos", systemImage: Theme.Icon.todo) }
-                            }
-                            if !(current.mutes ?? []).isEmpty { InboxRuleButtons(item: current) { ruling = $0 } }
-                        } label: { ThemedIcon(Theme.Icon.moreMenu) }
-                            .accessibilityLabel("More")
-                            .accessibilityIdentifier("inbox.detail.more")
-                    }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        if !current.isDone {
+                            // Add to To-Dos (#6480): the row counts as handled, so the page closes like Done
+                            Menu {
+                                InboxDueButtons(add: { InboxStore.shared.addTodos([current], due: $0) { dismiss() } },
+                                                pick: { todoRequest = InboxTodoRequest(items: [current]) { dismiss() } })
+                            } label: { Label("Add to To-Dos", systemImage: Theme.Icon.todo) }
+                        }
+                        if let mutes = current.mutes, !mutes.isEmpty {
+                            InboxRuleButtons(item: current) { ruling = $0 }
+                        }
+                        Button { sameMatter = true } label: { Label("Same matter as…", systemImage: Theme.Icon.link) }
+                            .accessibilityIdentifier("inbox.detail.sameMatter")
+                    } label: { ThemedIcon(Theme.Icon.moreMenu) }
+                        .accessibilityLabel("More")
+                        .accessibilityIdentifier("inbox.detail.more")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     if current.isDone {
