@@ -2,7 +2,8 @@ import XCTest
 
 /// The assistant sidebar finds a chat by what was said in it and opens it at that message (#6284), against
 /// scripts/mock/mock_hub.py with `MOCK_CHAT_SEARCH=1` (`TEST_RUNNER_PERSONA_MOCK_HUB`): the user's words in a result row,
-/// tapping it lands on that message; an early one is paged back for; a thought is never found.
+/// tapping it lands on that message; Persona's reply is found as well (one inside a folded turn opens it); an early one
+/// is paged back for; a thought is never found.
 final class AssistantChatSearchUITests: XCTestCase {
     private var hub: String!
 
@@ -64,6 +65,19 @@ final class AssistantChatSearchUITests: XCTestCase {
         let message = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@ AND NOT (label CONTAINS %@)", "冰川邮局 GlacierPost", "琥珀灯塔")).firstMatch
         XCTAssertTrue(message.waitForExistence(timeout: 30), "the early message was not paged back for:\n\(app.debugDescription)")
         shot(app, "sidebar-search-early-landed")
+    }
+
+    @MainActor func testFindsPersonasEarlierReplyAndOpensItsFoldedTurn() {
+        // Persona's reply, not its last one (so not the row's last message), inside a turn the chat shows folded
+        let app = launch()
+        search(app, "WisteriaTea")
+        let row = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "WisteriaTea 紫藤茶馆")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "no row with Persona's reply:\n\(app.debugDescription)")
+        row.tap()
+        let reply = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@ AND NOT (label CONTAINS %@)", "WisteriaTea 紫藤茶馆 在巷口", "琥珀灯塔")).firstMatch
+        XCTAssertTrue(reply.waitForExistence(timeout: 15), "the folded turn did not open at the reply:\n\(app.debugDescription)")
+        XCTAssertTrue(reply.isHittable, "the reply is not on screen")
+        shot(app, "sidebar-search-reply-landed")
     }
 
     @MainActor func testNeverFindsAThought() {
