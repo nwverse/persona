@@ -168,7 +168,7 @@ func pendingQuestion(ix proto.Interaction) string {
 	case proto.IxPlan:
 		return strings.TrimSpace(planTitle(ix.Plan))
 	case proto.IxPermission:
-		return strings.TrimSpace(toolDisplayName(ix.ToolName) + " " + oneLine(ix.Summary))
+		return strings.TrimSpace(ixToolName(ix) + " " + oneLine(ix.Summary))
 	}
 	return strings.TrimSpace(oneLine(ix.Summary))
 }

@@ -7,16 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
-	"os/exec"
-	"path/filepath"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/connector/github"
-	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -282,9 +279,15 @@ func writeForgetErr(w http.ResponseWriter, err error) {
 }
 
 // withQR draws a QR step's code for the app (whatever the connector sent as QR is replaced: the code is always URL's).
+// A device-code step whose URL already carries its code (`user_code=` in the query, as Lark's does) gets one too, so
+// the phone can scan it instead of the code being typed (#5818); one whose page asks for the code (GitHub's) does not.
 func withQR(p *connector.Prompt) error {
 	p.QR = nil
-	if p.Kind != connector.PromptQRCode {
+	if p.Kind == connector.PromptDeviceCode {
+		if !urlCarriesCode(p.URL, p.UserCode) {
+			return nil
+		}
+	} else if p.Kind != connector.PromptQRCode {
 		return nil
 	}
 	if p.URL == "" {
@@ -296,6 +299,15 @@ func withQR(p *connector.Prompt) error {
 	}
 	p.QR = &connector.QRCode{Size: size, Rows: rows}
 	return nil
+}
+
+// urlCarriesCode: raw is an https URL whose query's user_code is code, so opening it needs nothing typed.
+func urlCarriesCode(raw, code string) bool {
+	if code == "" {
+		return false
+	}
+	u, err := url.Parse(raw)
+	return err == nil && u.Scheme == "https" && u.Host != "" && u.Query().Get("user_code") == code
 }
 
 // connectorLogin is connector id's sign-in, or writes why there is none.
@@ -429,6 +441,9 @@ func (h *Manager) setConnectorFeed(ctx context.Context, id string, f connector.F
 		}
 	}
 	if on && f == connector.FeedInbox {
+		if c := h.connectors.Get(id); c != nil && c.Manifest().InboxSwitch {
+			h.inbox.owed.Store(true) // mail is read on a full round: the next one is that (inboxLoop)
+		}
 		h.kickInbox()
 	} else if on {
 		h.kbKick(id, connector.ScopeChats)
@@ -598,47 +613,19 @@ func (h *Manager) registerConnectors() {
 	if err := h.addConnector(ghc); err != nil {
 		h.logf("github connector: %v", err)
 	}
+	// lark-cli is a separate source from the optional Lark gateway extension. It
+	// is deliberately absent when lark.cli is unset, preserving existing hubs.
+	if h.cfg.Lark.CLI != nil {
+		if err := h.syncLarkCLIProfile(context.Background()); err != nil {
+			h.logf("larkcli profile sync: %v", err)
+		}
+		lc := h.newLarkCLIConnector(h.effectiveLarkCLIProfile(context.Background()))
+		if err := h.addConnector(lc); err != nil {
+			h.logf("larkcli connector: %v", err)
+		}
+	}
 	// Messages (imessage) is registered once the extensions are there: its Mac is the extension's, else manager.json's
 	// (applyIMessage, startConnectors).
-}
-
-// siblingProgram is a program released with personad (update.ProgramNames) next to the running personad ("" when there
-// is none).
-func siblingProgram(name string) string {
-	exe, err := os.Executable()
-	if err != nil {
-		return ""
-	}
-	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
-		exe = resolved
-	}
-	p := filepath.Join(filepath.Dir(exe), name)
-	if _, err := os.Stat(p); err != nil {
-		return ""
-	}
-	return p
-}
-
-// sameBuild holds a built-in plugin's program (named name, for people) to the hub's build: the two come from one
-// build (`version -v` says the same).
-func sameBuild(h *Manager, name, path string) func(context.Context) error {
-	want := fmt.Sprintf("%s\nchannel %s, build %d", h.version, h.build.Channel, h.build.Number)
-	return func(ctx context.Context) error {
-		if _, err := os.Stat(path); err != nil {
-			return errors.New(i18n.T(h.userLang(), "hub-connectors.program_missing", i18n.Args{"name": name, "path": path}))
-		}
-		vctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-		defer cancel()
-		out, err := exec.CommandContext(vctx, path, "version", "-v").Output()
-		if err != nil {
-			return errors.New(i18n.T(h.userLang(), "hub-connectors.program_fails", i18n.Args{"name": name, "err": err.Error()}))
-		}
-		if got := strings.TrimSpace(string(out)); got != strings.TrimSpace(want) {
-			first := func(s string) string { line, _, _ := strings.Cut(s, "\n"); return line }
-			return errors.New(i18n.T(h.userLang(), "hub-connectors.program_version", i18n.Args{"name": name, "got": first(got), "want": first(want)}))
-		}
-		return nil
-	}
 }
 
 // ghToken reads the token of machine's gh login (credential.gh_token); it never goes to a log.

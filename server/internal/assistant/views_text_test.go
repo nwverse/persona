@@ -23,7 +23,7 @@ func TestGoldenCardTitleFallback(t *testing.T) {
 	f := newFakeHub()
 	f.replies = []string{"研究 | 示例进度"}
 	s := newTestService(t, f)
-	s.makeTitle(context.Background(), time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC), "看看进度", "```persona-view\n{\"fallback\":\"构建和测试已经完成\",\"sections\":[]}\n```")
+	s.makeTitle(context.Background(), time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC), "看看进度", "```persona-view\n{\"fallback\":\"构建和测试已经完成\",\"sections\":[]}\n```", "")
 	calls := f.modelCalls()
 	if len(calls) == 0 {
 		t.Fatal("no title input")

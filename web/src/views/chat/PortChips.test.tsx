@@ -68,6 +68,18 @@ describe("port chips under an agent's answer", () => {
     expect(request.mock.calls.map((c) => c[0]).sort()).toEqual(["/machines/m1/ports/4000", "/machines/m1/ports/8000"]);
   });
 
+  it.each([
+    "https://example.com/?next=[::1]:4173/app",
+    "https://example.com/path(localhost:4173/app)",
+    "https://example.com/path(http://localhost:4173/app)",
+  ])("offers no chip, local probe or preview for an address inside %s", async (text) => {
+    request.mockResolvedValue({ listening: true, http: true });
+    await render(text);
+    expect(chips()).toHaveLength(0);
+    expect(request).not.toHaveBeenCalled();
+    expect(getPanel()).toBeNull();
+  });
+
   it("asks once while the answer is fresh, however often it is drawn again", async () => {
     await render();
     await render(ANSWER + " ");
@@ -78,6 +90,28 @@ describe("port chips under an agent's answer", () => {
     await render();
     await act(async () => chip(4000)!.click());
     expect(getPanel()).toMatchObject({ kind: "preview", mid: "m1", sid: "s1", cwd: "/w/site", port: 4000, path: "/preview" });
+  });
+
+  it("shows explicit default-port chips and opens their original page in the session preview", async () => {
+    request.mockResolvedValue({ listening: true, http: true });
+    await render("Open http://localhost:80/app?x=1#top or https://localhost:443/docs");
+    expect(chips().map((b) => b.dataset.port)).toEqual(["80", "443"]);
+    expect(chip(443)?.title).toContain("https://localhost:443/docs");
+    await act(async () => chip(80)!.click());
+    expect(getPanel()).toMatchObject({ kind: "preview", mid: "m1", sid: "s1", cwd: "/w/site", port: 80, path: "/app?x=1#top" });
+    expect(request.mock.calls.map((c) => c[0]).sort()).toEqual(["/machines/m1/ports/443", "/machines/m1/ports/80"]);
+  });
+
+  it.each([
+    "Open http://[::1]:4173/app?x=1#top",
+    "Open [preview](http://[::1]:4173/app?x=1#top)",
+  ])("opens an IPv6 reply link through its existing chip: %s", async (text) => {
+    request.mockResolvedValue({ listening: true, http: true });
+    await render(text);
+    expect(chips().map((b) => b.dataset.port)).toEqual(["4173"]);
+    await act(async () => chip(4173)!.click());
+    expect(getPanel()).toMatchObject({ kind: "preview", mid: "m1", sid: "s1", cwd: "/w/site", port: 4173, path: "/app?x=1#top" });
+    expect(request.mock.calls.map((c) => c[0])).toEqual(["/machines/m1/ports/4173"]);
   });
 
   it("draws nothing for an assistant conversation, a session without a folder, or a hub without previews", async () => {

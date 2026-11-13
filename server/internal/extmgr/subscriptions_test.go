@@ -197,7 +197,7 @@ func TestSubscriptionsAreInboxAndKnowledgeBaseSources(t *testing.T) {
 	from, mark := now.Add(-time.Minute), now.Add(-30*time.Second)
 	sub := subscriptions.Subscription{ID: "sub_example", Connector: "example", Source: "notices", Label: "Notices",
 		Recipe: subscriptions.Recipe{Mode: "items", Kind: "sub_notice", GroupBy: "source"}, ToInbox: true, ToKB: true,
-		InboxFrom: &from, InboxCatchup: &mark, KBFrom: &from, Revision: 1, CreatedAt: now.Add(-time.Hour)}
+		InboxFrom: &from, InboxCatchup: &mark, InboxGroup: "source", KBFrom: &from, Revision: 1, CreatedAt: now.Add(-time.Hour)}
 	if err := store.CreateSubscription(ctx, sub); err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +216,8 @@ func TestSubscriptionsAreInboxAndKnowledgeBaseSources(t *testing.T) {
 			src = &r.Sources[i]
 		}
 	}
-	if r.Names[sub.ID] != "Notices" || src == nil || !src.Extension || src.Kinds["sub_digest"] == "" || len(src.Things) != 3 {
+	// One row for the subscription grouped by source (#5671) and the failure notice's end; its count is the Inbox's to read.
+	if r.Names[sub.ID] != "Notices" || src == nil || !src.Extension || !src.Counts || src.Kinds["sub_digest"] == "" || len(src.Things) != 2 {
 		t.Fatalf("the round: names %v, source %+v", r.Names, src)
 	}
 	if chats := h.readInbox(ctx, roundChats); chats.Names[sub.ID] != "Notices" || len(chats.Sources) != 0 {

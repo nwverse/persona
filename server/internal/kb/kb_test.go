@@ -167,7 +167,7 @@ func TestPipeline(t *testing.T) {
 
 	// Items get tagged and linked to the project.
 	_ = st.PutItem(&Item{Kind: KindEvent, ID: "e1", Title: "X 周会", At: t0})
-	if err := e.TagItems(context.Background()); err != nil {
+	if _, err := e.TagItems(context.Background(), 10); err != nil {
 		t.Fatal(err)
 	}
 	it, _ := st.Item(KindEvent, "e1")

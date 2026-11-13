@@ -43,7 +43,7 @@ import Testing
         let items = [input(), item(2), call, result, item(5, kind: .recap), item(6)]
         let folded = build(items)
         #expect(folded.count == 1)
-        guard case .supervision(_, let trace, _)? = quiet(folded)?.content else { return }
+        guard case .supervision(_, let trace, _, _)? = quiet(folded)?.content else { return }
         #expect(trace.contains { if case .work(_, let items, _, _, _) = $0.content { items.contains { if case .step(.call(let c)) = $0 { c.result?.text == "Synthetic result" } else { false } } } else { false } })
         #expect(trace.contains { if case .row(.recap) = $0.content { true } else { false } })
         #expect(trace.contains { if case .row(.assistant(let i)) = $0.content { i.seq == 6 } else { false } })

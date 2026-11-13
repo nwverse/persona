@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"slices"
 	"strconv"
@@ -41,11 +42,16 @@ const (
 
 func (feishuSink) progressIdle() time.Duration { return feishuProgressIdle }
 
-// When Feishu says the card is updated too often, updates stop for 5 s, then 10, 20, at most 30; the answer is not held.
+// When Feishu says the card is updated too often, updates stop for 5 s, then 10, 20, at most 30; the answer is not
+// held back by the pause, except that its own last write into the card waits the first window out once (answerCardWait).
 const (
 	cardBackoffFirst = 5 * time.Second
 	cardBackoffMost  = 30 * time.Second
 )
+
+// answerCardWait is how long the answer waits out a refused update of the progress card before giving up on the card:
+// the run is over, so no later update writes it again.
+var answerCardWait = cardBackoffFirst
 
 // chansNow is the channels' clock.
 func (s *Service) chansNow() time.Time {
@@ -168,7 +174,9 @@ func (f feishuSink) recalled(ctx context.Context, m channel.Folded) {
 // answer writes the answer into the progress card (more cards when long), and marks the messages DONE. When nothing
 // of it got out because the hub could not be reached it says so (tried again later); once a piece is out, the rest
 // is best effort (a card sent twice would show twice). The card's last line says how the run ended; a quiet end
-// still turns the progress card into that line, so it never stays on "Working".
+// still turns the progress card into that line — or, when that card was refused or the run gave it back on a held
+// wait, posts it as a card of its own under a key (so a retry lands once) — so the chat never stays on "Working" and
+// is never left silent.
 func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note string, took time.Duration, final, quiet bool, end channel.End) error {
 	s := f.s
 	l := s.botLang(ctx)
@@ -183,8 +191,18 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 		steps = append([]string{}, all...)
 	}
 	card := r.Ext["card"]
-	cards := answerCards(l, answer, quiet, steps, foot)
-	if quiet && card != "" {
+	// With answer_new_card the answer is a card of its own at the bottom of the chat (Lark notifies on a new message,
+	// not on an edit) and the progress card folds into the process (#5396); a quiet ending stays in the progress card.
+	newCard := false
+	if f, ready := s.feishuFeatures(ctx); ready && f.AnswerNewCard && card != "" && !quiet {
+		newCard = true
+	}
+	answerSteps := steps
+	if newCard {
+		answerSteps = nil // they go into the folded progress card
+	}
+	cards := answerCards(l, answer, quiet, answerSteps, foot)
+	if quiet {
 		c := feishubot.NewCard("", "", foot)
 		processPanel(l, c, steps)
 		cards = []botAnswerCard{{card: c.Note(foot)}}
@@ -207,15 +225,51 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 			endHeader(l, c, end)
 		}
 		if quiet && i == 0 {
-			if err := s.botUpdateCard(ctx, card, c); err != nil {
-				s.logf("bots: the progress card's end: %v", err)
+			// The ending has to land somewhere: in the progress card the run still has, or — when that card was refused
+			// (recalled, no longer a card, still limited after the wait) or a held run gave its card back with its
+			// message — as a card of its own, which says how the run ended, done or not (#4228). A recalled message
+			// says nothing.
+			var err error
+			post := end != channel.EndRecalled
+			if card != "" {
+				if err = s.botUpdateAnswerCard(ctx, card, c); err == nil {
+					post = false
+				} else if post {
+					s.logf("bots: the progress card's end: %v; sending it", err)
+				}
+			}
+			if post {
+				var mid string
+				mid, err = s.botPostTo(ctx, to, r.ReplyTo, c, foot, endKey(r.ID))
+				if err == nil && to.ChatID == "" {
+					s.rememberBotThread(mid, botTargetOf(r), r.Label)
+				}
+			}
+			if err != nil {
+				if unreachable(err) {
+					return err // nothing went out: the ending is tried again later, under the same key
+				}
+				s.logf("bots: the run's quiet ending: %v", err)
 			}
 			break
 		}
 		var mid string
 		var err error
-		if i == 0 && card != "" {
-			if err = s.botUpdateCard(ctx, card, c); err == nil {
+		if i == 0 && newCard {
+			// Under a key of the progress card's: a retry after an unreachable failure lands once.
+			if mid, err = s.botPostTo(ctx, to, r.ReplyTo, c, piece, answerKey(r.ID, card)); err == nil {
+				if ferr := s.botUpdateAnswerCard(ctx, card, foldedProgressCard(l, steps)); ferr != nil {
+					s.logf("bots: fold the progress card: %v", ferr)
+				}
+			} else if unreachable(err) {
+				return err // nothing went out: the whole answer is tried again later, under the same key
+			} else {
+				s.logf("bots: answer as a new card: %v; writing it into the progress card", err)
+				mid = ""
+			}
+		}
+		if i == 0 && card != "" && mid == "" {
+			if err = s.botUpdateAnswerCard(ctx, card, c); err == nil {
 				mid = card
 			} else {
 				s.logf("bots: answer into the progress card: %v; sending it", err)
@@ -254,6 +308,48 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 		}
 	}
 	return nil
+}
+
+// answerKey is the key a run's answer goes out under as a new card (answer_new_card): one per progress card, as a
+// held run answers each turn under a card of its own. Hashed to fit Feishu's 50-character uuid, as endKey is.
+func answerKey(id, card string) string {
+	sum := sha256.Sum256([]byte("answer:" + id + "\x00" + card))
+	return "ans-" + hex.EncodeToString(sum[:12])
+}
+
+// foldedProgressCard is what a progress card becomes once its answer went out as a new card: the process, folded,
+// and a line pointing to the answer below it.
+func foldedProgressCard(l i18n.Lang, steps []string) *feishubot.Card {
+	below := i18n.T(l, "assistant-feishu.answer_below")
+	c := feishubot.NewCard("", "", below)
+	processPanel(l, c, steps)
+	return c.Note("↓ " + below)
+}
+
+// endKey is the key a run's quiet ending goes out under when it is posted as a card of its own: a retry after an
+// unreachable failure lands once. Feishu caps a uuid at 50 characters, so it is hashed like the nudge's.
+func endKey(id string) string {
+	sum := sha256.Sum256([]byte("end:" + id))
+	return "end-" + hex.EncodeToString(sum[:12])
+}
+
+// botUpdateAnswerCard writes the answer into the progress card. Feishu refusing the update for being too often is
+// waited out once: the run is over, so no later update writes that card again, and the owner would keep a card that
+// says it is still working. Any other refusal, and a second one, is left to the caller (a card of the answer's own).
+func (s *Service) botUpdateAnswerCard(ctx context.Context, messageID string, card *feishubot.Card) error {
+	err := s.botUpdateCard(ctx, messageID, card)
+	if err == nil || !feishubot.RateLimited(err) {
+		return err
+	}
+	s.logf("bots: the progress card's answer: %v; waiting %s", err, answerCardWait)
+	t := time.NewTimer(answerCardWait)
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return s.botUpdateCard(ctx, messageID, card)
 }
 
 // missingPiecesNote says, in l, which pieces of an answer did not get to Feishu (1-based) and where the whole is.

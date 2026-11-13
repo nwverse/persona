@@ -76,6 +76,32 @@ struct AssistantTopBarTests {
         #expect(sidebar.transform == .identity)
     }
 
+    /// Under iPhone Duo's side bars the page stays and the sidebar slides in over it from the leading edge, under the
+    /// finger, without the lift (#3755); closed it is hidden as anywhere else. Back under horizontal bars it lifts again.
+    @Test @MainActor func sidebarSlidesOverAPageThatStaysUnderSideBars() {
+        let drawer = AssistantDrawer()
+        let sidebar = UIView(frame: CGRect(x: 0, y: 0, width: 300, height: 800))
+        drawer.sidebarView = sidebar
+        drawer.width = 300
+        drawer.inPlace = true
+        for progress in [CGFloat(0.01), 0.25, 0.5, 0.75, 1] {
+            drawer.progress = progress
+            #expect(sidebar.transform.tx == -(1 - progress) * 300)
+            #expect(sidebar.transform.ty == 0)
+            #expect(sidebar.transform.a == 1 && sidebar.transform.d == 1)
+            #expect(sidebar.alpha == 1 && !sidebar.isHidden && !sidebar.accessibilityElementsHidden)
+        }
+        drawer.progress = 0.5
+        drawer.width = 250
+        #expect(sidebar.transform.tx == -125)
+        drawer.progress = 0
+        #expect(sidebar.isHidden && sidebar.accessibilityElementsHidden)
+        drawer.inPlace = false
+        drawer.progress = 0.5
+        #expect(sidebar.transform.tx == 0)
+        #expect(sidebar.transform.ty == Theme.Motion.drawerLift / 2)
+    }
+
     /// Dragging back retraces the same lift and completely removes the closed sidebar from VoiceOver.
     @Test @MainActor func closingSidebarRetracesItsLiftAndHidesIt() {
         let drawer = AssistantDrawer()
@@ -115,6 +141,7 @@ struct AssistantTopBarTests {
         let all = [try s("1", "早报 · 周三", "两个会议"), try s("2", "Weekly Report", nil), try s("3", "吃饭", "已经加到日历")]
         #expect(AssistantSidebarSearch.filter(all, "日历").map(\.sessionID) == ["3"])
         #expect(AssistantSidebarSearch.filter(all, "ｗｅｅｋｌｙ").map(\.sessionID) == ["2"]) // width and case
+        #expect(AssistantSidebarSearch.filter(all, "Growth", names: ["3": "Growth"]).map(\.sessionID) == ["3"]) // a direction by its name
         #expect(AssistantSidebarSearch.filter(all, "  ").count == 3)
     }
 
@@ -135,6 +162,58 @@ struct AssistantTopBarTests {
                                                    try s("today2", hoursAgo: 1)], now: now, calendar: cal)
         #expect(groups.map(\.title) == ["今天", "昨天", "最近 7 天", "更早"])
         #expect(groups.map { $0.sessions.map(\.sessionID) } == [["today2", "today"], ["yesterday"], ["week"], ["old", "none"]])
+    }
+
+    /// The sidebar's Directions: the leader conversations in the hub's order, never the main one, none the list lacks.
+    @Test func directionsFollowTheHubsOrder() throws {
+        func s(_ id: String) throws -> Session {
+            let o: [String: Any] = ["session_id": id, "machine_id": "hub", "status": "idle", "title": "1110 | explore | \(id)", "assistant": true]
+            return try JSON.decoder.decode(Session.self, from: JSONSerialization.data(withJSONObject: o))
+        }
+        let all = [try s("main"), try s("mine"), try s("lead-b"), try s("lead-a")]
+        let main = all[0].key
+        let picked = AssistantSidebarGroups.directions(all, leaders: ["lead-a", "gone", "main", "lead-b"], main: main)
+        #expect(picked.map(\.sessionID) == ["lead-a", "lead-b"])
+        #expect(AssistantSidebarGroups.directions(all, leaders: [], main: main).isEmpty)
+    }
+
+    /// The sidebar's Recent (#4873, #5195): the newest five chats whoever opened them (an Inbox item's, a scheduled
+    /// task's, a channel's), never the main one, a direction (listed above it) or the background supervisor; nothing
+    /// when no chat is left.
+    @Test func recentIsTheNewestFiveOfTheRest() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        func s(_ id: String, hoursAgo: Double?, origin: String? = nil) throws -> Session {
+            var o: [String: Any] = ["session_id": id, "machine_id": "hub", "status": "idle", "title": id, "assistant": true]
+            if let origin { o["origin"] = origin }
+            var x = try JSON.decoder.decode(Session.self, from: JSONSerialization.data(withJSONObject: o))
+            x.updatedAt = hoursAgo.map { now.addingTimeInterval(-$0 * 3600) }
+            return x
+        }
+        let all = [try s("main", hoursAgo: 0), try s("lead", hoursAgo: 0.5), try s("bg", hoursAgo: 0.1, origin: "task"),
+                   try s("inbox", hoursAgo: 0.2, origin: "inbox"), try s("task", hoursAgo: 0.3, origin: "task"),
+                   try s("a", hoursAgo: 1), try s("lark", hoursAgo: 2, origin: "lark_agent"), try s("wx", hoursAgo: 3, origin: "channel"),
+                   try s("e2", hoursAgo: 5), try s("e1", hoursAgo: 5), try s("never", hoursAgo: nil)]
+        let main = all[0].key
+        let recent = AssistantSidebarGroups.recent(all, leaders: ["lead"], main: main, background: "bg")
+        #expect(recent.map(\.sessionID) == ["inbox", "task", "a", "lark", "wx"])
+        let more = AssistantSidebarGroups.recent(all.filter { !["inbox", "task", "a"].contains($0.sessionID) }, leaders: ["lead"],
+                                                 main: main, background: "bg")
+        #expect(more.map(\.sessionID) == ["lark", "wx", "e1", "e2", "never"]) // equal times: by session id; no time: last
+        // An ended direction comes back among the rest; a hub without a background supervisor lists that chat as any other.
+        #expect(AssistantSidebarGroups.recent(all, leaders: [], main: main, background: "bg").map(\.sessionID) == ["inbox", "task", "lead", "a", "lark"])
+        #expect(AssistantSidebarGroups.recent(all, leaders: ["lead"], main: main, background: nil).map(\.sessionID).first == "bg")
+        #expect(AssistantSidebarGroups.recent(Array(all.prefix(3)), leaders: ["lead"], main: main, background: "bg").isEmpty)
+    }
+
+    /// A direction's name comes from GET /api/v1/assistant/leaders: current ones with a name only.
+    @Test func directionNamesSkipEndedAndBlank() {
+        let names = APIClient.directionNames([
+            .init(id: "a", name: "Product", ended: nil),
+            .init(id: "b", name: "  ", ended: nil),
+            .init(id: "c", name: "Old", ended: true),
+            .init(id: "", name: "Nobody", ended: nil),
+        ])
+        #expect(names == ["a": "Product"])
     }
 
     /// A drag to the right on something that scrolls sideways and is not at its left edge scrolls it, not the sidebar.

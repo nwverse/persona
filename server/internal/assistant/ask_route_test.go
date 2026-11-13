@@ -112,14 +112,25 @@ func (e *routeEnv) pushesOf(ids ...string) int {
 	return n
 }
 
-// lastShown is the card id as the apps were told of it last.
-func (e *routeEnv) lastShown(id string) proto.Interaction {
+// shown is the card id as the apps were told of it last, and whether they were told of it at all: a waitFor check
+// asks this one, as a card not shown yet is "not yet" there, not a failure (#4407).
+func (e *routeEnv) shown(id string) (proto.Interaction, bool) {
 	df := &delegateFleet{fleetTest: e.fleetTest}
 	list := df.shownAs(id)
 	if len(list) == 0 {
+		return proto.Interaction{}, false
+	}
+	return list[len(list)-1], true
+}
+
+// lastShown is the card id as the apps were told of it last, for a card that must have been shown by now.
+func (e *routeEnv) lastShown(id string) proto.Interaction {
+	e.t.Helper()
+	ix, ok := e.shown(id)
+	if !ok {
 		e.t.Fatalf("card %s was never shown", id)
 	}
-	return list[len(list)-1]
+	return ix
 }
 
 // noticeWith waits for a message into conversation to that says want, and answers it.
@@ -377,7 +388,7 @@ func TestAskHoldWaitsForABusySupervisor(t *testing.T) {
 	if got := e.f.noticesTo("conv1"); len(got) != 0 {
 		t.Fatalf("the card climbed while its leader worked: %q", got)
 	}
-	if _, ok := e.s.routedTo("ix1", "lead1"); !ok {
+	if _, ok := e.s.routedTo("ix1", "lead1", false); !ok {
 		t.Fatal("the card left its leader")
 	}
 
@@ -391,7 +402,7 @@ func TestAskHoldWaitsForABusySupervisor(t *testing.T) {
 	if got := e.pushesOf("ix1"); got != 0 {
 		t.Fatalf("the card reached the user while the main conversation worked (%d)", got)
 	}
-	if _, ok := e.s.routedTo("ix1", "conv1"); !ok {
+	if _, ok := e.s.routedTo("ix1", "conv1", true); !ok {
 		t.Fatal("the card left the main conversation")
 	}
 
@@ -437,13 +448,13 @@ func TestRestoredAskFindsItsSupervisorAgain(t *testing.T) {
 		p := s2.fleet.interactions[ask.ID]
 		return p != nil && p.resolved != nil // await made its channel: the wait is on the card
 	})
-	if got, ok := s2.routedTo("ix1", "lead1"); !ok || got != e.todo.ID {
+	if got, ok := s2.routedTo("ix1", "lead1", false); !ok || got != e.todo.ID {
 		t.Fatalf("the card its node claimed before the handshake: route to its leader = %q, %v", got, ok)
 	}
 
 	s2.FleetUp(context.Background())
 	for _, id := range []string{"ix1", "ix2"} {
-		if got, ok := s2.routedTo(id, "lead1"); !ok || got != e.todo.ID {
+		if got, ok := s2.routedTo(id, "lead1", false); !ok || got != e.todo.ID {
 			t.Fatalf("restored card %s: route to its leader = %q, %v", id, got, ok)
 		}
 		if ix, ok := s2.pendingIx(id); !ok || !ix.Delegating {
@@ -499,7 +510,7 @@ func TestRestoredApprovalReachingTheUserRings(t *testing.T) {
 	shortSupervise(t, s2)
 	noDirectionsTimers(s2)
 	s2.FleetUp(context.Background())
-	if _, ok := s2.routedTo("ix1", "lead1"); !ok {
+	if _, ok := s2.routedTo("ix1", "lead1", false); !ok {
 		t.Fatal("the restored card has no route to its leader")
 	}
 	s2.askTick(time.Now().Add(2 * askHoldFor)) // its leader has had its time
@@ -543,12 +554,12 @@ func TestRestoredQuestionReachingTheUserDoesNotRing(t *testing.T) {
 	shortSupervise(t, s2)
 	noDirectionsTimers(s2)
 	s2.FleetUp(context.Background())
-	if _, ok := s2.routedTo("ix1", "lead1"); !ok {
+	if _, ok := s2.routedTo("ix1", "lead1", false); !ok {
 		t.Fatal("the restored card has no route to its leader")
 	}
 	s2.askTick(time.Now().Add(2 * askHoldFor)) // its leader has had its time
 	s2.askTick(time.Now().Add(3 * askHoldFor)) // the main conversation too
-	waitFor(t, "the card the user's", func() bool { return !e.lastShown("ix1").Delegating })
+	waitFor(t, "the card the user's", func() bool { ix, ok := e.shown("ix1"); return ok && !ix.Delegating })
 	if n := e.pushesOf("ix1"); n != 0 {
 		t.Fatalf("a restored question was pushed again %d times", n)
 	}
@@ -618,7 +629,7 @@ func TestQuietTaskAskIsNotPushedOnTimeout(t *testing.T) {
 		t.Fatalf("the main conversation's message:\n%s", n)
 	}
 	e.s.askTick(time.Now().Add(2 * askHoldFor))
-	waitFor(t, "the card the user's", func() bool { return !e.lastShown("ix1").Delegating })
+	waitFor(t, "the card the user's", func() bool { ix, ok := e.shown("ix1"); return ok && !ix.Delegating })
 	e.settle()
 	if n := e.pushesOf("ix1"); n != 0 {
 		t.Fatalf("a quiet task's card was pushed %d times", n)
@@ -641,7 +652,7 @@ func TestEscalateLeavesADelegatedCard(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.raise(askQuestion("ix1", "worker-1"))
-	waitFor(t, "the delegation", func() bool { return e.lastShown("ix1").Delegating })
+	waitFor(t, "the delegation", func() bool { ix, ok := e.shown("ix1"); return ok && ix.Delegating })
 	if _, err := runJSON(t, e.s, "lead1", "ask_escalate", map[string]any{"todo_id": e.todo.ID, "reason": "x"}); err == nil {
 		t.Fatal("escalated a card the assistant is deciding on")
 	}

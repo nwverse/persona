@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -172,7 +173,7 @@ func TestOutsideClaudeSendNotTaken(t *testing.T) {
 	shortPeerWait(t, 500*time.Millisecond)
 	p := bgTranscript(t, home, home, sidA, "plan")
 	inbox := newFakeInbox(t, p)
-	inbox.mode = "hold"
+	inbox.setMode("hold")
 	writeOutsideClaude(t, home, sidA, "cli", "idle", inbox, nil)
 	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
 	_, err := request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "still there?", "client_msg_id": "m-1"})
@@ -181,6 +182,31 @@ func TestOutsideClaudeSendNotTaken(t *testing.T) {
 	}
 	if len(inbox.users()) != 1 {
 		t.Fatalf("the inbox read %d messages", len(inbox.users()))
+	}
+}
+
+// A session waiting on a question or permission prompt takes the message into its queue, but reads it only once that
+// is answered at the computer: the send succeeds and says so (waits_on_computer); one that is working or idle does not.
+func TestOutsideClaudeSendBehindDialog(t *testing.T) {
+	n, f, home := herdrNode(t)
+	noPaneEnv(t)
+	shortPeerWait(t, 3*time.Second)
+	p := bgTranscript(t, home, home, sidA, "plan")
+	inbox := newFakeInbox(t, p)
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	for i, c := range []struct {
+		status string
+		waits  bool
+	}{{"waiting", true}, {"busy", false}, {"idle", false}} {
+		writeOutsideClaude(t, home, sidA, "cli", c.status, inbox, nil)
+		res, err := request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "why nothing to tap? " + c.status,
+			"client_msg_id": "m-" + strconv.Itoa(i)})
+		if err != nil {
+			t.Fatalf("%s: %v", c.status, err)
+		}
+		if res["ok"] != true || (res["waits_on_computer"] == true) != c.waits {
+			t.Errorf("%s: answer %v", c.status, res)
+		}
 	}
 }
 
@@ -289,6 +315,39 @@ func TestPeerTaken(t *testing.T) {
 	}()
 	if !peerTaken(context.Background(), func() string { return p }, st.Size(), "say \"hi\"\nsecond line", 2*time.Second) {
 		t.Fatal("the queue-operation it wrote was not seen")
+	}
+}
+
+// A line longer than peerSeen decodes (a user line with pasted images inline, a large tool result) is read past: the
+// queue-operation after it still counts, and nothing is made up when none follows.
+func TestPeerSeenPastALongLine(t *testing.T) {
+	long := `{"type":"user","message":{"content":"` + strings.Repeat("A", 9<<20) + `"}}` + "\n"
+	taken := `{"type":"queue-operation","operation":"enqueue","content":"say \"hi\""}` + "\n"
+	for _, c := range []struct {
+		name, after string
+		want        bool
+	}{
+		{"taken after it", taken, true},
+		{"nothing after it", `{"type":"assistant","message":{"content":"ok"}}` + "\n", false},
+		{"taken, no newline yet", strings.TrimSuffix(taken, "\n"), true},
+	} {
+		p := filepath.Join(t.TempDir(), "s.jsonl")
+		if err := os.WriteFile(p, []byte(`{"type":"summary"}`+"\n"+long+c.after), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got := peerSeen(p, int64(len(`{"type":"summary"}`)+1), `say "hi"`); got != c.want {
+			t.Errorf("%s: peerSeen = %v, want %v", c.name, got, c.want)
+		}
+	}
+	// A long line that fits is still decoded: a peer's message with a long body.
+	p := filepath.Join(t.TempDir(), "s.jsonl")
+	body := `say "hi" ` + strings.Repeat("x", 200<<10)
+	line, _ := json.Marshal(map[string]any{"type": "user", "origin": map[string]string{"kind": "peer", "body": body}})
+	if err := os.WriteFile(p, append(line, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !peerSeen(p, 0, `say "hi"`) {
+		t.Error("a 200 KiB peer line was not decoded")
 	}
 }
 

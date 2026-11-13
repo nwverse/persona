@@ -13,6 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/shellcmd"
 )
 
 // launcherCheckDir starts the name of the temp directory a check runs in; Claude Code names the projects directory it
@@ -26,19 +27,10 @@ var launcherCheckTimeout = 90 * time.Second
 // directory, and says whether an answer came back, how long it took and which model answered. It is a real request
 // (a few tokens).
 func (n *Node) launcherCheck(ctx context.Context, name string) proto.LauncherCheck {
-	if name != "claude" && !nameRe.MatchString(name) {
+	if name != "claude" && !shellcmd.NameRe.MatchString(name) {
 		return proto.LauncherCheck{Error: fmt.Sprintf("invalid launcher %q", name)}
 	}
-	agent := "claude"
-	if m, managed := n.managedLauncher(name); managed {
-		agent = m.AgentType()
-	} else if name != "claude" {
-		if res, ok := n.runtimeLauncherModels(name); ok && res.Agent != "" {
-			agent = res.Agent
-		} else if d := n.launcherProbeCached(ctx, name); d.Agent != "" {
-			agent = d.Agent
-		}
-	}
+	agent := n.launcherAgent(ctx, name)
 	dir, err := os.MkdirTemp("", launcherCheckDir)
 	if err != nil {
 		return proto.LauncherCheck{Error: err.Error()}
@@ -76,12 +68,12 @@ func (n *Node) launcherCheck(ctx context.Context, name string) proto.LauncherChe
 		if err := os.WriteFile(ours, []byte(`{"disableAllHooks":true}`), 0o600); err != nil {
 			return proto.LauncherCheck{Error: err.Error()}
 		}
-		after += ` --settings ` + shellQuote(n.claudeSettings(ctx, name, ours, dir))
+		after += scriptSettingsFlag(n.claudeSettings(ctx, name, ours, dir))
 	}
 	ctx, cancel := context.WithTimeout(ctx, launcherCheckTimeout)
 	defer cancel()
 	run := func(flag string) (string, error) {
-		cmd := loginShell(ctx, "cd "+shellQuote(dir)+" && "+n.launcherCommand(name)+before+flag+after+" </dev/null")
+		cmd := loginShell(ctx, n.launcherInDirScript(name, dir, before+flag+after))
 		killGroupOnCancel(cmd)
 		out, err := cmd.CombinedOutput()
 		return strings.TrimSpace(string(out)), err
@@ -139,6 +131,22 @@ func (n *Node) launcherCheck(ctx context.Context, name string) proto.LauncherChe
 		res.Error = clipText(redactCheck(err.Error()), 400)
 	}
 	return res
+}
+
+// launcherAgent is the CLI launcher name runs: a managed one's type, a runtime's word for it, what a probe saw, else
+// claude.
+func (n *Node) launcherAgent(ctx context.Context, name string) string {
+	if m, managed := n.managedLauncher(name); managed {
+		return m.AgentType()
+	}
+	if name != "claude" {
+		if res, ok := n.runtimeLauncherModels(name); ok && res.Agent != "" {
+			return res.Agent
+		} else if d := n.launcherProbeCached(ctx, name); d.Agent != "" {
+			return d.Agent
+		}
+	}
+	return "claude"
 }
 
 // checkOutput is the end of what a check printed, as its error says it: the last lines, without keys, URLs or IPs.

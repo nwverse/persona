@@ -62,6 +62,7 @@ function deps(over: Partial<ArchiveDeps> = {}) {
     archive: vi.fn().mockResolvedValue({ ok: true }),
     unarchive: vi.fn().mockResolvedValue({ ok: true }),
     drop: vi.fn(),
+    restore: vi.fn(),
     refresh: vi.fn().mockResolvedValue(undefined),
     notify: (text, tone, action) => void notes.push({ text, tone, action }),
     ...over,
@@ -81,10 +82,12 @@ describe("archiving", () => {
     await vi.waitFor(() => expect(notes[1]).toMatchObject({ tone: "ok", text: t("lib-agent-archives.restored", { title: "Fix the build" }) }));
   });
 
-  it("says the agent is busy when the hub refuses (409), and re-reads so the row comes back", async () => {
+  it("says the agent is busy when the hub refuses (409), and restores before refreshing", async () => {
     const { d, notes } = deps({ archive: vi.fn().mockRejectedValue(new ApiError(409, "busy", { code: "agent_busy" })) });
     expect((await archiveAgent(open, false, d)).ok).toBe(false);
     expect(notes).toEqual([{ text: t("lib-agent-archives.busy"), tone: "error", action: undefined }]);
+    expect(d.restore).toHaveBeenCalledWith(open);
+    expect(vi.mocked(d.restore).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(d.refresh).mock.invocationCallOrder[0]);
     expect(d.refresh).toHaveBeenCalled();
     const close = deps({ archive: vi.fn().mockRejectedValue(new ApiError(409, "busy", { code: "agent_busy" })) });
     await archiveAgent(open, true, close.d);

@@ -5,6 +5,7 @@
     <string name="terminal_control_watching">閲覧のみ</string>
     <string name="terminal_select_text">テキストを選択</string>
     <string name="terminal_display_settings">表示設定</string>
+    <string name="terminal_close">ターミナルを閉じる</string>
     <string name="terminal_retry">再試行</string>
     <string name="terminal_busy_title">ターミナルを引き継ぎますか？</string>
     <string name="terminal_busy_text">コンピューター上の別のプログラムがこのターミナルを使用しています。引き継ぐとそのプログラムは切断され、ターミナルはスマートフォンのサイズで表示されます。</string>
@@ -43,7 +44,12 @@
     <string name="terminal_select_empty_body">ターミナルに内容が表示されてから選択してください。</string>
     <string name="terminal_screen_description">ターミナル画面</string>
     <string name="terminal_note_offline">ハブに接続できません。前回の画面を表示しています</string>
-    <string name="terminal_note_no_terminal">ターミナルがありません。セッションを再開すると表示されます</string>
+    <string name="terminal_note_no_terminal">このセッションはコンピュータで実行されていません。メッセージを送ると再開します。</string>
+    <string name="terminal_no_terminal_title">ターミナルがありません</string>
+    <string name="terminal_note_no_terminal_resume">このセッションはコンピュータで実行されていません。再開するとターミナルを開けます。</string>
+    <string name="terminal_resume">セッションを再開</string>
+    <string name="terminal_resuming">再開しています…</string>
+    <string name="terminal_resume_failed">セッションを再開できませんでした</string>
     <string name="terminal_note_read_failed">ターミナルを読み込めませんでした。再試行しています</string>
     <string name="terminal_note_disconnected">接続が切れました。直前の入力は送信されていません</string>
     <string name="terminal_note_stream_stopped">ターミナルのストリームが停止しました。再試行しています</string>

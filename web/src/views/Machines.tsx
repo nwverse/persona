@@ -2,6 +2,7 @@
 // (feature machines_add) adds one from here, and a computer waiting to be confirmed (trust pending) says so on its card.
 import { memo, useCallback, useEffect, useId, useState } from "react";
 import { t as tr } from "../i18n";
+import { foldRows } from "../lib/folded-rows";
 import { canAddComputer, isPending, machineErrorText, neverConnected } from "../lib/add-computer";
 import { api, enc, errorText } from "../lib/api";
 import { readinessChanged } from "../lib/readiness";
@@ -10,7 +11,8 @@ import { hubLabel, routeText } from "../lib/mesh";
 import { machineDeployment } from "../lib/machine-deploy";
 import { classifyConnection } from "../lib/node-health";
 import { href, navigate, onLinkClick, type Route } from "../lib/router";
-import { offlineManagerOf, useRoster } from "../lib/managers";
+import { currentRoster, managerOrder, multiManager, offlineManagerOf, useRoster } from "../lib/managers";
+import { defaultManager, withManager } from "../lib/manager-choice";
 import { useStore } from "../lib/store";
 import { documentPage, visiblePoll } from "../lib/visible-poll";
 import type { Machine, MachineMetrics, MetricPoint, Session } from "../lib/types";
@@ -39,10 +41,27 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
 
   useEffect(() => {
     let dead = false;
-    const load = () =>
-      api<{ machines: MachineMetrics[] }>("/metrics")
-        .then((r) => !dead && (setMetrics(r.machines ?? []), setError("")))
-        .catch((e) => !dead && setError(errorText(e)));
+    const previous = new Map<string, MachineMetrics[]>();
+    const load = async () => {
+      const roster = currentRoster();
+      const ids = multiManager(roster) ? managerOrder(roster).filter((m) => m.online).map((m) => m.id) : [defaultManager()];
+      const results = await Promise.allSettled(ids.map((id) => api<{ machines: MachineMetrics[] }>(withManager("/metrics", id))));
+      if (dead) return;
+      const failed = results.find((r) => r.status === "rejected");
+      if (failed && results.every((r) => r.status === "rejected")) {
+        setError(errorText(failed.reason));
+        return;
+      }
+      const merged = new Map<string, MachineMetrics>();
+      results.forEach((r, i) => {
+        if (r.status === "fulfilled") previous.set(ids[i], r.value.machines ?? []);
+        for (const m of previous.get(ids[i]) ?? []) {
+          if (!merged.has(m.machine_id)) merged.set(m.machine_id, m);
+        }
+      });
+      setMetrics([...merged.values()]);
+      setError("");
+    };
     // Right away and every 10 s while the tab is shown; a hidden tab asks nothing and loads again when shown.
     const stop = visiblePoll(() => void load(), 10_000, documentPage);
     return () => {
@@ -91,19 +110,19 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
         {machines.length > 0 && canAdd && add}
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {/* two columns, three on a wide screen: the cards used to stop at 1000px and leave half a wide window empty */}
+        {/* two columns, three on a wide screen: the cards used to stop at 1000px and leave half a wide window empty; a full-row item takes col-span-full, since md:col-span-2 alone leaves a third of the row to the next card */}
         <div className="mx-auto grid max-w-[1560px] grid-cols-1 gap-3 px-5 py-6 sm:px-8 md:grid-cols-2 2xl:grid-cols-3">
           <TodayTokens machines={machines} metrics={metrics} />
           {!metrics && !error && <Loading />}
           {/* a failed refresh says so even with the last numbers on screen (iOS / Android keep their notice up) */}
           {error && (
-            <p role="alert" className="flex items-start gap-2 rounded-[8px] bg-red-tint px-3 py-2 text-[12.5px] text-red md:col-span-2">
+            <p role="alert" className="flex items-start gap-2 rounded-[8px] bg-red-tint px-3 py-2 text-[12.5px] text-red col-span-full">
               <Icon name="warning" size={14} className="mt-px shrink-0" />
               <span className="min-w-0 break-words">{metrics ? t("machines.refresh_failed_stale", { error, seconds: 10 }) : t("machines.load_failed", { error })}</span>
             </p>
           )}
           {loaded && machines.length === 0 && (metrics || error) && (
-            <div className="md:col-span-2">
+            <div className="col-span-full">
               <Empty icon="machine" title={error && !metrics ? t("machines.empty_unavailable") : t("machines.empty_title")} action={add}>
                 {t("machines.empty_body_add")}
               </Empty>
@@ -152,7 +171,8 @@ type CardProps = {
 // another computer leaves its props and its counts as they were, so it (and its Stat, Spark, MachineDeploy) does not
 // render again. Nor does a machines push that only moved last_seen on (sameCard).
 const MachineCard = memo(function MachineCard({ m, index, metrics: mm, hub, route, canAdd, answering, onReconnect, onAnswer, onAddAgain, managerOffline }: CardProps) {
-  const [agents, working] = useStore((s) => (m.online ? agentCounts(s.sessions[m.id]) : NO_AGENTS));
+  // each parent once, in its folded state: its child sessions are not agents of their own here either (#5120)
+  const [agents, working] = useStore((s) => (m.online ? agentCounts(s.sessions[m.id] && foldRows(s.sessions[m.id])) : NO_AGENTS));
   const l = mm?.latest;
   const memPct = l?.mem_used && l.mem_total ? (l.mem_used / l.mem_total) * 100 : undefined;
   const diskPct = l?.disk_used && l.disk_total ? (l.disk_used / l.disk_total) * 100 : undefined;
@@ -309,7 +329,7 @@ function TodayTokens({ machines, metrics }: { machines: Machine[]; metrics: Mach
   const ranked = shares.filter((s) => totalTokens(s.usage.today) > 0).sort((a, b) => totalTokens(b.usage.today) - totalTokens(a.usage.today));
   const shade = (i: number) => Math.max(0.85 - i * 0.2, 0.2);
   return (
-    <section className="rounded-card bg-surface px-4 py-3 shadow-card md:col-span-2 2xl:col-span-3" data-testid="machines-tokens">
+    <section className="rounded-card bg-surface px-4 py-3 shadow-card col-span-full" data-testid="machines-tokens">
       <h2 className="text-[13px] font-medium text-ink">{t("machines-usage.today_title")}</h2>
       <div className="mt-2 flex flex-wrap items-end gap-x-8 gap-y-2">
         <Stat label={t("machines-usage.total")} value={formatTokens(all)} />

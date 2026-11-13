@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Issue #5925's isolated, synthetic hub fixture; the shared mock stays unchanged."""
+"""Issue #5925's isolated, synthetic hub fixture, with the AI twin set apart too (#4232); the shared mock stays unchanged."""
 import importlib.util
 import json
 import os
@@ -15,8 +15,10 @@ spec.loader.exec_module(mock)
 
 PARENT = {"revision": 11, "override": {"provider": "launcher.claude", "model": "agents-default", "effort": "medium"}}
 mock.MODEL_BINDINGS["agent.new"] = PARENT
-STATE = {"revision": 0, "override": {}}
-WRITES = []
+# The uses of Agents the user can set apart, in the hub's order, each with its own record and writes.
+CHILDREN = {"inbox.agent": "AI 分身执行", "lark.agent": "飞书 /agent"}
+STATES = {pid: {"revision": 0, "override": {}} for pid in CHILDREN}
+WRITES = {pid: [] for pid in CHILDREN}
 BASE_CATALOG = mock.model_configuration
 mock.LAUNCHER_MODELS["demo"] = {"agent": "claude", "models": [
     {"id": "example-model", "name": "示例模型", "efforts": ["low", "medium", "high"]}
@@ -30,20 +32,29 @@ def catalog(include_uses=False):
         {"id": "api.messages", "name": "示例 Messages API", "kind": "api", "api": "messages", "model": "api-default"},
     ]
     parent = next(p for p in result["purposes"] if p["id"] == "agent.new")
-    binding = dict(STATE["override"])
-    effective = dict(parent["effective"])
-    if binding.get("provider"):
-        provider = next(p for p in result["providers"] if p["id"] == binding["provider"])
-        effective = {"provider": provider["id"], "model": provider.get("model", "")}
-    effective.update(binding)
-    purpose = {"id": "lark.agent", "category_id": "agent.new", "parent": "agent.new", "name": "飞书 /agent",
-               "group": "Agents", "kind": "launcher", "override": binding, "effective": effective,
-               "revision": STATE["revision"], "fields": ["provider", "model", "effort"],
-               "provider_ids": ["launcher.claude", "launcher.demo", "api.messages"]}
-    if not binding:
-        purpose["inherited_from"] = "Agents"
-    result["purposes"] = [p for p in result["purposes"] if p["id"] != "lark.agent"] + [purpose]
+    children = []
+    for pid, name in CHILDREN.items():
+        state = STATES[pid]
+        binding = dict(state["override"])
+        effective = dict(parent["effective"])
+        if binding.get("provider"):
+            provider = next(p for p in result["providers"] if p["id"] == binding["provider"])
+            effective = {"provider": provider["id"], "model": provider.get("model", "")}
+        effective.update(binding)
+        purpose = {"id": pid, "category_id": "agent.new", "parent": "agent.new", "name": name,
+                   "group": "Agents", "kind": "launcher", "override": binding, "effective": effective,
+                   "revision": state["revision"], "fields": ["provider", "model", "effort"],
+                   "provider_ids": ["launcher.claude", "launcher.demo", "api.messages"]}
+        if not binding:
+            purpose["inherited_from"] = "Agents"
+        children.append(purpose)
+    result["purposes"] = [p for p in result["purposes"] if p["id"] not in CHILDREN] + children
     return result
+
+
+def audit(pid):
+    return {"writes": WRITES[pid], "parent": mock.MODEL_BINDINGS["agent.new"], "state": STATES[pid],
+            "others": {other: STATES[other] for other in CHILDREN if other != pid}}
 
 
 mock.model_configuration = catalog
@@ -54,30 +65,37 @@ class Handler(mock.H):
         path = urlparse(self.path).path
         if path == "/api/v1/model-config/providers/launcher.demo/models":
             return self.send_json(mock.LAUNCHER_MODELS["demo"])
-        if path == "/mock/lark-agent":
+        if path == "/mock/lark-agent" or path.startswith("/mock/model-child/"):
+            pid = "lark.agent" if path == "/mock/lark-agent" else path.rsplit("/", 1)[1]
+            if pid not in CHILDREN:
+                return self.send_json({"error": "unknown use"}, 404)
             with mock.MODEL_CONFIG_LOCK:
-                return self.send_json({"writes": WRITES, "parent": mock.MODEL_BINDINGS["agent.new"], "state": STATE})
+                return self.send_json(audit(pid))
         return super().do_GET()
 
     def do_POST(self):
         if urlparse(self.path).path == "/mock/lark-agent/reset":
             self.body()
             with mock.MODEL_CONFIG_LOCK:
-                STATE.update(revision=0, override={})
-                WRITES.clear()
+                for pid in CHILDREN:
+                    STATES[pid].update(revision=0, override={})
+                    WRITES[pid].clear()
             return self.send_json({"ok": True})
         return super().do_POST()
 
     def do_PATCH(self):
-        if urlparse(self.path).path != "/api/v1/model-config/purposes/lark.agent":
+        path = urlparse(self.path).path
+        pid = path.rsplit("/", 1)[1]
+        if not path.startswith("/api/v1/model-config/purposes/") or pid not in CHILDREN:
             return super().do_PATCH()
         body = json.loads(self.body() or b"{}")
         with mock.MODEL_CONFIG_LOCK:
-            if body.get("revision") != STATE["revision"]:
+            state = STATES[pid]
+            if body.get("revision") != state["revision"]:
                 return self.send_json({"error": "配置已在别处修改"}, 409)
             if set(body) - {"revision", "provider", "model", "effort"}:
                 return self.send_json({"error": "unsupported field"}, 400)
-            binding = dict(STATE["override"])
+            binding = dict(state["override"])
             if "provider" in body and body["provider"] != binding.get("provider"):
                 binding.pop("model", None)
                 binding.pop("effort", None)
@@ -88,10 +106,10 @@ class Handler(mock.H):
                     binding.pop(field, None)
                 else:
                     binding[field] = body[field]
-            WRITES.append(body)
-            STATE.update(revision=STATE["revision"] + 1, override=binding)
+            WRITES[pid].append(body)
+            state.update(revision=state["revision"] + 1, override=binding)
             result = catalog()
-            purpose = next(p for p in result["purposes"] if p["id"] == "lark.agent")
+            purpose = next(p for p in result["purposes"] if p["id"] == pid)
             return self.send_json({"purpose": purpose, "providers": result["providers"]})
 
 

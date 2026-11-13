@@ -37,6 +37,8 @@ data class HubConnectionConfig(
     val token: String,
     val endpoints: List<Endpoint>,
     val version: String,
+    /** The pairing link's proxied origins, checked with system trust (#2622, [HubHttpClient.systemOrigins]). */
+    val systemOrigins: Set<String> = emptySet(),
     val deviceId: String? = null,
     val build: JsonElement? = null,
     val os: JsonObject? = null,
@@ -66,7 +68,7 @@ class OkHttpHubConnection(
     private val config: HubConnectionConfig,
     initialNetwork: HubNetwork,
     val http: HubHttpClient = HubHttpClient(config.hubId, config.fingerprint, config.version,
-        pins = config.members.mapNotNullTo(LinkedHashSet()) { it.fingerprint }),
+        pins = config.members.mapNotNullTo(LinkedHashSet()) { it.fingerprint }, systemOrigins = config.systemOrigins),
     dispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val onReady: suspend (OkHttpHubConnection) -> Unit = {},
     // Android callers should inject SystemClock.elapsedRealtime, which includes deep sleep.
@@ -114,6 +116,8 @@ class OkHttpHubConnection(
     @Volatile private var attemptOwner: Owner? = null
     private val _state = MutableStateFlow(ConnectionState.Connecting)
     override val state = _state.asStateFlow()
+    private val _currentHello = MutableStateFlow<SocketHello?>(null)
+    override val currentHello = _currentHello.asStateFlow()
     private val _serverFeatures = MutableStateFlow<Set<String>>(emptySet())
     val serverFeatures = _serverFeatures.asStateFlow()
     /** A pairing-owned consumer for phone calls, before typed event decoding. */
@@ -249,6 +253,7 @@ class OkHttpHubConnection(
     }
 
     private fun clearRoute() {
+        if (_currentHello.value != null) _currentHello.value = null
         _route.value = null
         _tunnel.value = null
         updateDiagnostics { it.copy(currentPath = null, fingerprint = null, heartbeatSeconds = null, pongTimeoutSeconds = null) }
@@ -634,10 +639,12 @@ class OkHttpHubConnection(
             updateDiagnostics { it.copy(lastReceivedAt = Instant.now().toString()) }
         }
         _heartbeat.value = Heartbeat(20, 15)
+        _currentHello.value = null
         val owner = ownerOf(selected)
         resumed = false
         val resumeFrom = resumePoint
         val socketNumber = socketCount.incrementAndGet()
+        var ended = false // Under lock: a queued hello must not revive proof after an OkHttp failure callback.
         val ws = webSocketFactory.newWebSocket(
             authorized(socketUrl(selected.endpoint.baseUrl(), resumeFrom), owner).build(),
             object : WebSocketListener() {
@@ -657,12 +664,20 @@ class OkHttpHubConnection(
                 }
                 override fun onMessage(webSocket: WebSocket, bytes: okio.ByteString) { received() }
                 override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                    synchronized(lock) {
+                        ended = true
+                        if (socket === webSocket) _currentHello.value = null
+                    }
                     // 1001 "going away": the hub is stopping (a deploy) and the next one takes over within seconds.
                     if (code == 1001) markRestart()
                     webSocket.close(code, null)
                     messages.trySend(Signal.Failed(HubFailure(HubError.Transport, "WebSocket closed ($code): $reason")))
                 }
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    synchronized(lock) {
+                        ended = true
+                        if (socket === webSocket) _currentHello.value = null
+                    }
                     val error = response?.use { HubFailure.from(it) } ?: HubFailure.from(t)
                     messages.trySend(Signal.Failed(error))
                 }
@@ -859,6 +874,7 @@ class OkHttpHubConnection(
                                 throw HubFailure(HubError.Incompatible, retryable = false)
                             }
                             receivedHello = true
+                            synchronized(lock) { if (socket === ws && !ended) _currentHello.value = SocketHello(socketNumber, event) }
                             helloDeadline.cancel()
                             resumed = event.resumed == true && resumeFrom != null && event.eventStream == resumeFrom.first
                             if (!resumed) {
@@ -921,10 +937,12 @@ class OkHttpHubConnection(
                             }
                             continue
                         }
+                        is MessageSendStateEvent -> if (!receivedHello ||
+                            _currentHello.value?.takeIf { it.generation == socketNumber }?.hello?.messageSendState != 1) continue
                         is Pong -> pendingPing.get()?.takeIf { it.first == event.id }?.second?.complete(Unit)
                         else -> Unit
                     }
-                    outgoing.send(socketNumber to event)
+                    outgoing.send(socketNumber to if (event is MessageSendStateEvent) event.copy(socketGeneration = socketNumber) else event)
                 }
             }
         } finally {
@@ -937,7 +955,7 @@ class OkHttpHubConnection(
             ws.cancel()
             messages.close()
             activity.close()
-            if (socket === ws) socket = null
+            synchronized(lock) { if (socket === ws) { socket = null; _currentHello.value = null } }
             if (mailbox === messages) mailbox = null
         }
     }
@@ -1060,13 +1078,15 @@ class OkHttpHubConnection(
 
     /** Pinned health probes; without other hubs exactly the single-hub probe. */
     private suspend fun probe(endpoint: Endpoint): Health {
-        if (members.isEmpty()) return http.health(endpoint)
+        // A replacement tunnel can listen on the same loopback address: never probe it through the old listener's connection.
+        val fresh = endpoint.kind == "ssh" || endpoint.kind == "proxy"
+        if (members.isEmpty()) return http.health(endpoint, fresh = fresh)
         val owner = ownerFor(endpoint)
         // HTTPS without a pin is only checked against the system CAs when the group's own pairing had no fingerprint.
         if (endpoint.baseUrl().isHttps && owner.fingerprint == null && !http.systemTrusted) {
             throw HubFailure(HubError.CertificateMismatch, retryable = false)
         }
-        return http.health(endpoint, expectedHubId = owner.hubId, expectedPin = owner.fingerprint)
+        return http.health(endpoint, fresh = fresh, expectedHubId = owner.hubId, expectedPin = owner.fingerprint)
     }
 
     /** The hub behind a route: id, pin, the credential to send and whether it is that hub's own. */

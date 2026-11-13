@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/kbwire"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/textfmt"
@@ -121,21 +122,40 @@ type itemTags struct {
 	} `json:"items"`
 }
 
-// TagItems tags documents, meetings and events that are new or changed, 40 per call.
-func (e *Engine) TagItems(ctx context.Context) error {
+// tagItemsBatch is how many items one tagging call reads.
+const tagItemsBatch = 40
+
+// TagItems tags documents, meetings and events that are new or changed, tagItemsBatch per call and at most max calls
+// per run; more reports that untagged ones are left for the next round: the cap was reached, the connection is paused or
+// the run ended (not when no model is set up: the next collection asks again). The items of a batch whose call failed
+// wait (retryWait, per item) and the next batch goes on, so a batch the model keeps failing on costs a call now and then
+// rather than every run, and does not hold back the rest; an item changed since (what the model reads of it) is tried
+// at once. A paused connection or no model returns its error at once without counting.
+func (e *Engine) TagItems(ctx context.Context, max int) (more bool, err error) {
 	if e.Model == nil {
-		return nil
+		return false, nil
 	}
+	now := time.Now()
 	var todo []*Item
+	due := map[string]bool{}
 	for _, k := range []string{KindEvent, KindMeeting, KindDoc} {
 		for _, it := range e.Store.Items(k) {
 			if it.TaggedAt.IsZero() && it.Title != "" && !it.Locked {
+				key := it.Kind + "/" + it.ID
+				due[key] = true
+				if e.retries().items.waits(key, itemAbout(it), now) {
+					continue
+				}
 				todo = append(todo, it)
 			}
 		}
 	}
-	for len(todo) > 0 && ctx.Err() == nil {
-		batch := todo[:min(40, len(todo))]
+	e.retries().items.keep(due) // tagged, locked or gone in the meantime
+	for calls := 0; len(todo) > 0 && ctx.Err() == nil; calls++ {
+		if calls >= max {
+			return true, nil
+		}
+		batch := todo[:min(tagItemsBatch, len(todo))]
 		todo = todo[len(batch):]
 		byID := map[string]*Item{}
 		in := prompts.KBItemsInput{Projects: e.knownProjects(), Tags: e.TopTags(40)}
@@ -154,10 +174,21 @@ func (e *Engine) TagItems(ctx context.Context) error {
 		}
 		var out itemTags
 		cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
-		err := e.modelFor("kb.items").JSONMax(cctx, prompts.RenderKBItems(prompts.KBOwner{Owner: e.Owner}), prompts.RenderKBItemsInput(in), 6000, &out)
+		err := e.modelFor("kb.items").JSONMax(cctx, prompts.RenderKBItems(prompts.KBOwner{Owner: e.ownerName()}), prompts.RenderKBItemsInput(in), 6000, &out)
 		cancel()
 		if err != nil {
-			return err
+			if deferred(ctx, err) {
+				return !ai.IsNotConfigured(err), err
+			}
+			var f projectRetry
+			for _, it := range batch {
+				f = e.retries().items.fail(it.Kind+"/"+it.ID, itemAbout(it))
+			}
+			e.logf("tag items: %v (%d item(s), failed %d time(s) in a row, next try in %s)", err, len(batch), f.failures, retryWait(f.failures))
+			continue
+		}
+		for _, it := range batch {
+			e.retries().items.clear(it.Kind + "/" + it.ID)
 		}
 		e.Store.applyMu.Lock()
 		now := time.Now().UTC()
@@ -191,7 +222,12 @@ func (e *Engine) TagItems(ctx context.Context) error {
 			}
 		}
 	}
-	return nil
+	return len(todo) > 0, nil // the run ended with some not tried
+}
+
+// itemAbout is what the model reads of an item to tag it: an item changed since a failure is tried at once.
+func itemAbout(it *Item) string {
+	return it.Title + "\x00" + it.At.UTC().Format(time.RFC3339) + "\x00" + it.Where + "\x00" + it.Pinned
 }
 
 // --- reading ---
@@ -204,12 +240,13 @@ type (
 
 // Search finds lines containing every word of the query (case-insensitive) in summaries, metadata, timelines, the
 // Markdown of the ExtraDirs and (when messages is set) the message archive; newest message days first. At most limit
-// hits.
-func (e *Engine) Search(query string, messages bool, limit int) []Hit {
+// hits. A line skip says yes to is passed over (not a hit, and not counted against limit).
+func (e *Engine) Search(query string, messages bool, limit int, skip ...func(line string) bool) []Hit {
 	s := e.newSearcher(query, limit, true)
 	if s == nil {
 		return nil
 	}
+	s.skip = skip
 	// The data dir's files come from Find's walk (searchFiles), kept while no directory changed: profile files, the
 	// ExtraDirs, the message days newest first, then the Moments archive (moments.go), thousands of posts read after
 	// everything else so they never crowd it out.
@@ -255,10 +292,10 @@ func (e *Engine) Search(query string, messages bool, limit int) []Hit {
 // files under that kind's directory, by entry, those whose name has every word of the query first, then as List ranks
 // them (the walk alone goes by id, and a recording's id is random, so "last week's" one could come after older ones);
 // with messages, the chats' message days after them, newest first. Never the ExtraDirs or the Moments posts. Nil for
-// any other kind.
-func (e *Engine) SearchKind(query, kind string, messages bool, limit int) []Hit {
+// any other kind. skip as for Search.
+func (e *Engine) SearchKind(query, kind string, messages bool, limit int, skip ...func(line string) bool) []Hit {
 	switch kind {
-	case KindProject, KindChat, KindPerson, KindDoc, KindMeeting, KindEvent, KindRecording:
+	case KindProject, KindChat, KindPerson, KindDoc, KindMeeting, KindEvent, KindRecording, KindTopic:
 	default:
 		return nil
 	}
@@ -266,6 +303,7 @@ func (e *Engine) SearchKind(query, kind string, messages bool, limit int) []Hit 
 	if s == nil {
 		return nil
 	}
+	s.skip = skip
 	list := e.List(kind, "")
 	if kind == KindRecording { // kb_list's order for recordings, newest first (List ranks them by the model's importance)
 		start := map[string]time.Time{}
@@ -329,6 +367,7 @@ type searcher struct {
 	recording map[string]map[string][]byte
 	limit     int
 	hits      []Hit
+	skip      []func(line string) bool // lines never to give (Search's skip)
 }
 
 // newSearcher starts a search; nil when there is nothing to find. Files come through Find's cache (findCache.text): a
@@ -368,10 +407,19 @@ func (s *searcher) scan(p string) {
 		if s.full() {
 			return
 		}
-		if s.match(l) {
+		if s.match(l) && !s.skipped(l) {
 			s.hits = append(s.hits, Hit{Path: rel, Line: clip(strings.TrimSpace(l), 300)})
 		}
 	}
+}
+
+func (s *searcher) skipped(l string) bool {
+	for _, f := range s.skip {
+		if f(l) {
+			return true
+		}
+	}
+	return false
 }
 
 // clip cuts s to its first n runes plus an ellipsis (textfmt.Clip).
@@ -428,7 +476,7 @@ func (e *Engine) List(kind, tag string) []Entry {
 		}
 	case KindPerson:
 		for _, p := range e.Store.People() {
-			if has(p.Tags) {
+			if p.Status != "ignored" && has(p.Tags) {
 				out = append(out, Entry{Kind: kind, ID: p.ID, Name: p.Name, OneLine: p.Note, Importance: p.Importance,
 					Relevance: p.Relevance, Tags: p.Tags, Updated: p.LastSeen})
 			}
@@ -446,6 +494,8 @@ func (e *Engine) List(kind, tag string) []Entry {
 				out = append(out, recordingEntry(r))
 			}
 		}
+	case KindTopic:
+		return e.listTopics(has) // the biggest first: topics carry no importance of their own
 	}
 	Rank(out)
 	return out
