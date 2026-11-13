@@ -104,6 +104,23 @@ final class InboxBackTests: XCTestCase {
         XCTAssertTrue(back.waitForExistence(timeout: 5), "\(step): the conversation is not pushed over its opening page")
     }
 
+    @MainActor private func openPlaceDrawer() {
+        let button = app.buttons["shell-place-sidebar"].firstMatch
+        XCTAssertTrue(button.waitForExistence(timeout: 5), "no sidebar button on the pushed place page")
+        button.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["assistant-sidebar"].firstMatch.waitForExistence(timeout: 5),
+                      "the drawer did not open over the pushed place")
+    }
+
+    @MainActor private func pickPlace(_ id: String, title: String? = nil) {
+        app.buttons[id].firstMatch.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["assistant-sidebar"].firstMatch.waitForNonExistence(timeout: 5),
+                      "the drawer did not close after \(id)")
+        if let title {
+            XCTAssertTrue(app.navigationBars[title].firstMatch.waitForExistence(timeout: 15), "no \(title) place")
+        }
+    }
+
     /// Back as a finger does it: an edge drag, held and slow, after the push has settled.
     @MainActor private func swipeBack() {
         sleep(1)
@@ -184,6 +201,25 @@ final class InboxBackTests: XCTestCase {
         shot("phone-handoff-chat")
         swipeBack()
         assertDetail("phone-handoff-back")
+    }
+
+    @MainActor func testPhoneInboxChatIsRestoredWithItsPlace() throws {
+        openDetail("place-detail")
+        try requirePhone()
+        openChat(revealChainRow("开了子会话"), "place-chat")
+
+        openPlaceDrawer()
+        pickPlace("sidebar-知识库", title: "知识库")
+        shot("place-knowledge")
+        openPlaceDrawer()
+        pickPlace("sidebar-inbox")
+
+        let composer = app.descendants(matching: .any)["shell-composer-field"].firstMatch
+        XCTAssertTrue(composer.waitForExistence(timeout: 15), "the inbox did not restore its pushed chat")
+        assertPushed("place-restored-chat")
+        shot("place-restored-chat")
+        swipeBack()
+        assertDetail("place-back-to-detail")
     }
 
     @MainActor func testNewChatAgentRowSwipesBackToNewChat() throws {

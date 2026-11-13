@@ -1179,3 +1179,17 @@ for old items. Parse a textual card envelope only inside one source message, and
 keep incomplete or unknown card shapes readable. Capability errors need their own
 code; a 409 without `Threads` is different from a temporary failure or lost access.
 A failed page refresh must not erase a loaded page or its pending reply draft.
+
+## A conversation link is not an answer to a task decision (#5929)
+
+Carry the task and its original decision round when offering Answer in chat. An ordinary chat message, an Agent
+question's answer in the task's ledger, and a pending needs-user closeout are distinct: a decision record alone
+does not settle that closeout. Reuse explicit task routing, show what the next message will answer, reject stale
+rounds, and refresh the pending card only after delivery and recording. A parked review likewise takes precedence
+over stopped/seen turn signals: seeing a turn cannot complete the task.
+
+Keep completed session ownership separate from active task membership. Filling active `session.todo` with a closed
+task would make older consumers treat history as current work. The optional `completed_todo` display reference keeps
+the Web menu useful without changing active links, supervision, counts or quiet rules.
+Put its completion marker before the variable-length title: end truncation can hide a suffix even when a DOM-text
+test finds it. Regress the order in every translation and inspect the actual long-title menu.
