@@ -121,9 +121,14 @@ func TestInboxSuggestKeepsSourceTitles(t *testing.T) {
 		kind string
 		set  func(*InboxItem)
 	}{
-		"mail":    {KindMail, func(it *InboxItem) { it.Mail = &InboxMail{AccountID: "acc1", Mailbox: "INBOX"} }},
-		"doc":     {KindDoc, func(it *InboxItem) { it.Doc = &InboxDoc{URL: "https://example.feishu.cn/docx/AbC"} }},
-		"moment":  {KindMoment, func(it *InboxItem) { it.Moment = &InboxMoment{PostID: "p1", Notice: "comment"} }},
+		"mail": {KindMail, func(it *InboxItem) { it.Mail = &InboxMail{AccountID: "acc1", Mailbox: "INBOX"} }},
+		// A document and a company-feed row of a chat carry its chat block too: the block is not what decides.
+		"doc": {KindDoc, func(it *InboxItem) {
+			it.Doc, it.Lark = &InboxDoc{URL: "https://example.feishu.cn/docx/AbC"}, &InboxLark{FeedID: "f9"}
+		}},
+		"moment": {KindMoment, func(it *InboxItem) {
+			it.Moment, it.Lark = &InboxMoment{PostID: "p1", Notice: "comment"}, &InboxLark{FeedID: "f9"}
+		}},
 		"github":  {"review_requested", func(it *InboxItem) { it.Connector = &InboxConnector{Thread: "example-org/example-repo#12"} }},
 		"release": {"release", func(it *InboxItem) { it.Connector = &InboxConnector{Thread: "example-org/example-repo@v1"} }},
 		// GitHub's @me rows carry the chat kinds too, but their title is the pull request's or issue's.
