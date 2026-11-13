@@ -67,8 +67,10 @@ final class PersonaQueueUITests: XCTestCase {
         let app = launch()
         let strip = app.descendants(matching: .any)["queue-strip"].firstMatch
         XCTAssertTrue(strip.waitForExistence(timeout: 20), app.debugDescription)
-        XCTAssertTrue(strip.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Persona")).firstMatch.exists,
-                      "the queue names the persona, not Claude:\n\(strip.debugDescription)")
+        // The assistant by the name shown everywhere else (#6489: the roster's, 「助手」 in the mock), never Claude.
+        let named = { (name: String) in strip.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", name)).firstMatch }
+        XCTAssertTrue(named("助手").exists, "the queue does not name the assistant:\n\(strip.debugDescription)")
+        XCTAssertFalse(named("Claude").exists, "the queue names Claude, not the assistant:\n\(strip.debugDescription)")
         let sendNow = app.buttons["queue-send-now"]
         XCTAssertTrue(sendNow.waitForExistence(timeout: 5), "no Send Now for the user's own queued messages:\n\(app.debugDescription)")
         sendNow.tap()
