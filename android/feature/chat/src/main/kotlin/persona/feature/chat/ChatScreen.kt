@@ -1294,7 +1294,7 @@ private fun ChatPage(
                                 if (renderStyle == ChatRenderStyle.Assistant && SlashCommand.suggestions(composer.value.text, clear = true).isEmpty())
                                     ChatQueueStrip(session, chrome.actions, composer, { notice = it }, sessions::refresh)
                                 val claudeCommands = session?.canTypeClaudeCommands == true
-                                ChatComposer(key, composer, session?.status == "working", sending || submittedDraft != null,
+                                LargeWindowComposer(key, composer, session?.status == "working", sending || submittedDraft != null,
                                     // /clear and /model type into Claude's pane: Claude in a terminal engine only (positive check).
                                     canClear = clearingPane == null && session?.canTypeClaudeCommands == true,
                                     service = composerService, onSend = { send() }, onCommand = { send(it) }, onNotice = { notice = it },

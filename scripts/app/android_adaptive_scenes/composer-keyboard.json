@@ -1,0 +1,133 @@
+{
+  "id": "composer-keyboard",
+  "manifestId": "composer-hardware-send",
+  "description": "Keep a multiline chat draft and its caret intact through ordinary Return, Shift Return, rotation and one Ctrl/Meta Return send per physical combination.",
+  "requires": {
+    "page": "chat",
+    "fields": [
+      "selectedKey",
+      "draftHmac",
+      "selection.start",
+      "selection.end",
+      "focused",
+      "attachments"
+    ]
+  },
+  "manualEvidence": {
+    "mockSendCount": "Read GET /mock/sent before and after each Ctrl/Meta Return; exactly one new session message is required. The existing runner does not query this endpoint.",
+    "expandedEditor": "Exercise Ctrl/Meta Return and Escape in LargeWindowComposerTest and ComposerHardwareTest; repeat on a hardware keyboard during integrated verification.",
+    "ime": "Use InputConnection.setComposingText or a real Chinese/Japanese IME; ASCII adb input text is not composition evidence.",
+    "meta": "If adb cannot inject META_LEFT, use instrumentation or a physical keyboard and record Meta as unverified until then."
+  },
+  "steps": [
+    {
+      "step": "launch",
+      "session": "chat",
+      "conversationKind": "agent"
+    },
+    {
+      "step": "tap",
+      "resource-id": "chat-composer-field"
+    },
+    {
+      "step": "text",
+      "text": "first-line"
+    },
+    {
+      "step": "key",
+      "key": "ENTER"
+    },
+    {
+      "step": "text",
+      "text": "second-line"
+    },
+    {
+      "step": "key",
+      "keycombination": ["SHIFT_LEFT", "ENTER"]
+    },
+    {
+      "step": "text",
+      "text": "third-line"
+    },
+    {
+      "step": "assert",
+      "checks": {
+        "selection": {"equals": {"start": 33, "end": 33}},
+        "focused": true,
+        "attachments": {"equals": []},
+        "route": {"matches": "/chat$"}
+      }
+    },
+    {
+      "step": "capture",
+      "name": "01-multiline",
+      "state": "multiline-draft"
+    },
+    {
+      "step": "rotate",
+      "orientation": "landscape"
+    },
+    {
+      "step": "assert",
+      "checks": {
+        "pid": "unchanged",
+        "route": "unchanged",
+        "selectedKey": "unchanged",
+        "draftHmac": "unchanged",
+        "selection": "unchanged",
+        "focused": true,
+        "attachments": "unchanged",
+        "window.orientation": "landscape"
+      }
+    },
+    {
+      "step": "key",
+      "keycombination": ["CTRL_LEFT", "ENTER"]
+    },
+    {
+      "step": "assert",
+      "checks": {
+        "selection": {"equals": {"start": 0, "end": 0}},
+        "attachments": {"equals": []},
+        "route": "unchanged"
+      }
+    },
+    {
+      "step": "capture",
+      "name": "02-ctrl-sent",
+      "state": "ctrl-return-sent"
+    },
+    {
+      "step": "tap",
+      "resource-id": "chat-composer-field"
+    },
+    {
+      "step": "text",
+      "text": "meta-send"
+    },
+    {
+      "step": "assert",
+      "checks": {
+        "selection": {"equals": {"start": 9, "end": 9}},
+        "focused": true
+      }
+    },
+    {
+      "step": "key",
+      "keycombination": ["META_LEFT", "ENTER"]
+    },
+    {
+      "step": "assert",
+      "checks": {
+        "selection": {"equals": {"start": 0, "end": 0}},
+        "attachments": {"equals": []},
+        "route": "unchanged"
+      }
+    },
+    {
+      "step": "capture",
+      "name": "03-meta-sent",
+      "state": "meta-return-sent"
+    }
+  ]
+}
