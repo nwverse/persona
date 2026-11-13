@@ -1267,11 +1267,37 @@ nonisolated struct WorkState: Codable, Hashable, Sendable {
     var max: Int? = nil
     /// The agent it waits for.
     var agent: WorkAgent? = nil
+    /// What the work produced: pull requests, commits, documents, builds (`WorkArtifact`). Nil from a hub without them.
+    var artifacts: [WorkArtifact]? = nil
+    /// What the agent said of its own work as the turn ended (`Closeout`, #3612). A turn the hub could not call finished
+    /// carries it with an empty `phase` and a line. Nil when it wrote none, and from a hub before closeouts.
+    var closeout: Closeout? = nil
 
     enum CodingKeys: String, CodingKey {
-        case phase, on, line, wait, then, attempts, max, agent
+        case phase, on, line, wait, then, attempts, max, agent, artifacts, closeout
         case wakeAt = "wake_at", resetsAt = "resets_at"
     }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        phase = try c.decode(String.self, forKey: .phase)
+        on = try c.decodeIfPresent(String.self, forKey: .on)
+        line = try c.decodeIfPresent(String.self, forKey: .line)
+        wait = try c.decodeIfPresent(String.self, forKey: .wait)
+        then = try c.decodeIfPresent(String.self, forKey: .then)
+        wakeAt = try c.decodeIfPresent(Date.self, forKey: .wakeAt)
+        resetsAt = try c.decodeIfPresent(Date.self, forKey: .resetsAt)
+        attempts = try c.decodeIfPresent(Int.self, forKey: .attempts)
+        max = try c.decodeIfPresent(Int.self, forKey: .max)
+        agent = try c.decodeIfPresent(WorkAgent.self, forKey: .agent)
+        // New (#3612): one that does not decode is as if there were none, never the whole work state failing.
+        artifacts = try? c.decodeIfPresent([WorkArtifact].self, forKey: .artifacts)
+        closeout = try? c.decodeIfPresent(Closeout.self, forKey: .closeout)
+    }
+
+    /// A turn nobody can call finished (docs/assistant/agent-work.md "Closeout"): the hub publishes it with an empty
+    /// phase, the closeout and a line saying why. It stays Unread and never counts as waiting.
+    var notFinished: Bool { phase.isEmpty && closeout != nil && !(line ?? "").isEmpty }
 
     /// The hub waits it out: it wakes it (`wake_at`), or it wakes itself (its background tasks, a /loop). Waiting in the
     /// lists (the web's `hubWaits`, lib/work.ts).
@@ -1301,21 +1327,30 @@ nonisolated struct TriageSwitches: Codable, Hashable, Sendable {
     static let defaultReplyReminderMinutes = 30
     /// After how many minutes since the user looked the hub reminds (what Settings › Session Triage says).
     var replyReminderAfter: Int { replyReminderMinutes.flatMap { $0 > 0 ? $0 : nil } ?? Self.defaultReplyReminderMinutes }
+    /// Ask for a Closeout (#3612): hold a stop once when a turn that did work ends without one. Nil from a hub that
+    /// does not know it: Settings shows no switch then, and a PUT leaves it out, so the hub keeps its value.
+    var closeout: Bool? = nil
+    /// The switch as Settings flips it (off while the hub names none).
+    var asksCloseout: Bool {
+        get { closeout ?? false }
+        set { closeout = newValue }
+    }
 
     enum CodingKeys: String, CodingKey {
-        case enabled, decide, wake
+        case enabled, decide, wake, closeout
         case autoContinue = "auto_continue"
         case replyReminder = "reply_reminder", replyReminderMinutes = "reply_reminder_minutes"
     }
 
     init(enabled: Bool = false, decide: Bool = false, autoContinue: Bool = false, wake: Bool = false,
-         replyReminder: Bool = true, replyReminderMinutes: Int? = nil) {
+         replyReminder: Bool = true, replyReminderMinutes: Int? = nil, closeout: Bool? = nil) {
         self.enabled = enabled
         self.decide = decide
         self.autoContinue = autoContinue
         self.wake = wake
         self.replyReminder = replyReminder
         self.replyReminderMinutes = replyReminderMinutes
+        self.closeout = closeout
     }
 
     init(from decoder: Decoder) throws {
@@ -1326,6 +1361,7 @@ nonisolated struct TriageSwitches: Codable, Hashable, Sendable {
         wake = try c.decodeIfPresent(Bool.self, forKey: .wake) ?? false
         replyReminder = (try? c.decodeIfPresent(Bool.self, forKey: .replyReminder)).flatMap { $0 } ?? true
         replyReminderMinutes = (try? c.decodeIfPresent(Int.self, forKey: .replyReminderMinutes)).flatMap { $0 }
+        closeout = (try? c.decodeIfPresent(Bool.self, forKey: .closeout)).flatMap { $0 }
     }
 }
 
@@ -1605,8 +1641,29 @@ extension Session {
         if state == .needsYou, let r = attentionReason, !r.isEmpty { return r } // a stale reason (offline, seen) stays out
         if state != .working, let r = failureReason, !r.isEmpty { return Session.failureText(r) }
         if let r = replyLine(muted: muted) { return r }
+        // The native Mac app is frozen (docs/apple/mac.md): its rows keep the line they had.
+        #if !os(macOS)
+        if let c = closeoutPreview() { return c }
+        #endif
         if let w = workLine() { return w }
         return lastText.flatMap { $0.isEmpty ? nil : Fmt.plain($0) }
+    }
+    /// The closeout to show (the web's `shownCloseout`): one with a status this build knows, while the session is not
+    /// working (a new turn has no closeout yet, and the previous turn's no longer says where the work stands).
+    var shownCloseout: Closeout? {
+        guard let w = work, let c = w.closeout, c.known != nil, state != .working, w.phase != "working" else { return nil }
+        return c
+    }
+    /// A stopped session's line when its agent ended the turn with a closeout (the web's `closeoutPreview`): the hub's
+    /// line as before (the closeout's own words when the hub gave none: the last words would be the raw block), then
+    /// "merged · not deployed" where the agent said or the hub found it, a claim the hub found untrue marked. One
+    /// string: the row truncates it like any other line.
+    func closeoutPreview(now: Date = Date()) -> String? {
+        guard let c = shownCloseout else { return nil }
+        let line = workLine(now: now) ?? c.line ?? ""
+        let suffix = c.suffix
+        if line.isEmpty { return suffix.isEmpty ? nil : suffix }
+        return suffix.isEmpty ? line : String(localized: "\(line) · \(suffix)")
     }
     /// The question an Awaiting Reply row shows: what the triage says it waits on the user for (blocked · user), else what
     /// its last reply asks; nil when it is not Awaiting Reply or names nothing.
