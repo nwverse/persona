@@ -50,5 +50,10 @@
   "runtime_folder": "{engine} keeps its worktrees in {path}; only the folder name can be chosen",
   "runtime_parent": "{engine} places a new worktree in the project of its source workspace; another parent cannot be chosen",
   "runtime_unconfirmed": "{engine} did not report the created worktree; refresh before retrying",
-  "runtime_prepare": "{engine} did not say where it keeps worktrees; update it and try again"
+  "runtime_prepare": "{engine} did not say where it keeps worktrees; update it and try again",
+  "runtime_source_required": "Choose the workspace or folder to make the worktree from",
+  "runtime_folder_name": "{engine} can’t name a worktree folder “{name}”; use letters a–z or digits",
+  "runtime_folder_taken": "{path} already exists, so {engine} would put the worktree somewhere else; choose another name",
+  "runtime_slow": "{engine} didn’t finish making the worktree in time; refresh to see whether it appeared before retrying",
+  "agent_branch_exhausted": "No branch name is free for the Agent’s worktree: its name and the next 49 are all taken"
 }

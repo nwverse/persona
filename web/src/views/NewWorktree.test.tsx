@@ -97,6 +97,7 @@ it("a Paseo workspace: the basic form in Paseo's folder, the source as its own p
     source, parent: source, changed: vi.fn(), onCreated: vi.fn() };
   const launch = vi.fn(); const stop = onOpenNewAgent(launch); await mount();
   expect(calls.find((c) => c.url.endsWith("/worktree/prepare"))?.body).toEqual({ workspace_id: paseoRow.source_id, kind: "paseo" });
+  expect(document.body.textContent).not.toContain(t("worktree-composer.legacy")); // Orca's update notice is not Paseo's
   await input(t("worktree.branch_label"), "feature/child"); await click(t("worktree-composer.create"));
   expect(creates()[0].body).toEqual({ workspace_id: paseoRow.source_id, kind: "paseo", branch: "feature/child", path: "/paseo/worktrees/abcd1234/feature-child" });
   expect(document.body.textContent).toContain(paseoCreated.path);
@@ -172,6 +173,7 @@ it("keeps the basic old-node branch/path fallback and exposes no advanced contro
   const original = fetcher.getMockImplementation()!;
   fetcher.mockImplementation((url, init) => String(url).endsWith("/worktree/prepare") ? Promise.resolve(response({ root: "/projects/demo", repoName: "Demo", branch: "main", path: "/worktrees" })) : original(url, init));
   await mount(); expect(document.body.textContent).not.toContain(t("worktree-composer.github"));
+  expect(document.body.textContent).toContain(t("worktree-composer.legacy")); // an Orca adapter an update would make advanced
   await input(t("worktree.branch_label"), "feature/basic"); await click(t("worktree-composer.create"));
   expect(creates()[0].body).toEqual({ workspace_id: "source-a", kind: "orca", branch: "feature/basic", path: "/worktrees/feature-basic" });
 });

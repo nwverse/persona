@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -280,15 +281,32 @@ func TestRuntimeWorktreePrepareAndCreate(t *testing.T) {
 		t.Fatalf("an existing branch: %v", made)
 	}
 
+	// The folder is named as Paseo names it: the name asked for, as its slug, so the checks are on the folder it uses.
+	res, err = request(t, r.n, "worktree.create", map[string]any{"workspace_id": "wks_main", "kind": "paseo", "branch": "feat/y",
+		"path": filepath.Join(r.trees, "Feat Y")})
+	if err != nil || res["path"] != filepath.Join(r.trees, "feat-y") {
+		t.Fatalf("a name Paseo slugs: %v %v", res, err)
+	}
+	made = map[string]any{}
+	_ = json.Unmarshal(r.rt.got("workspace.create")[2], &made)
+	if made["name"] != "feat-y" {
+		t.Fatalf("the name sent: %v", made)
+	}
+
 	// Refusals, none of which reaches the runtime.
+	mkdir(t, filepath.Join(r.trees, "empty")) // Paseo would not use it, but put the worktree beside it (empty-1)
 	calls := len(r.rt.got("workspace.create"))
 	for name, p := range map[string]map[string]any{
 		"checked out elsewhere": {"workspace_id": "wks_main", "branch": "main", "path": filepath.Join(r.trees, "main"), "locale": "en"},
 		"another folder":        {"workspace_id": "wks_main", "branch": "other", "path": filepath.Join(r.repo, "..", "other"), "locale": "en"},
 		"a folder in use":       {"workspace_id": "wks_main", "branch": "other", "path": filepath.Join(r.trees, "feat-x")},
+		"its slug in use":       {"workspace_id": "wks_main", "branch": "other", "path": filepath.Join(r.trees, "FEAT_X"), "locale": "en"},
+		"an empty folder":       {"workspace_id": "wks_main", "branch": "other", "path": filepath.Join(r.trees, "empty"), "locale": "en"},
+		"no slug at all":        {"workspace_id": "wks_main", "branch": "other", "path": filepath.Join(r.trees, "新功能"), "locale": "en"},
 		"another parent":        {"workspace_id": "wks_main", "branch": "other", "path": filepath.Join(r.trees, "other"), "parent_workspace_id": "wks_new1", "locale": "en"},
 		"an unknown workspace":  {"workspace_id": "wks_gone", "branch": "other", "path": filepath.Join(r.trees, "other"), "locale": "en"},
 		"a bad branch":          {"workspace_id": "wks_main", "branch": "-x", "path": filepath.Join(r.trees, "x")},
+		"no source":             {"workspace_id": "", "cwd": "", "branch": "other", "path": filepath.Join(r.trees, "other"), "locale": "en"},
 	} {
 		_, err := request(t, r.n, "worktree.create", p)
 		if err == nil {
@@ -296,7 +314,9 @@ func TestRuntimeWorktreePrepareAndCreate(t *testing.T) {
 			continue
 		}
 		want := map[string]string{"checked out elsewhere": "already checked out", "another folder": "Paseo keeps its worktrees in " + r.trees,
-			"another parent": "another parent cannot be chosen", "an unknown workspace": "Paseo no longer lists this workspace"}[name]
+			"its slug in use": filepath.Join(r.trees, "feat-x") + " already exists", "an empty folder": filepath.Join(r.trees, "empty") + " already exists",
+			"no slug at all": "Paseo can’t name a worktree folder “新功能”", "another parent": "another parent cannot be chosen",
+			"an unknown workspace": "Paseo no longer lists this workspace", "no source": "Choose the workspace or folder"}[name]
 		if want != "" && !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: %v", name, err)
 		}
@@ -338,5 +358,111 @@ func TestRuntimeAgentWorktree(t *testing.T) {
 	st, err := request(t, r.n, "worktree.status", map[string]any{"cwd": want})
 	if err != nil || st["worktree"] != true || st["ours"] == true || st["checkouts"] != r.trees || st["branch"] != "persona/fix-the-login" {
 		t.Fatalf("status: %v %v", st, err)
+	}
+
+	// A folder already there, even an empty one, takes its name: Paseo would put the worktree beside it.
+	mkdir(t, filepath.Join(r.trees, "persona-fix-the-login-3"))
+	if res, err := request(t, r.n, "worktree.add", map[string]any{"cwd": r.repo, "name_hint": "Fix the login"}); err != nil ||
+		res["branch"] != "persona/fix-the-login-4" || res["path"] != filepath.Join(r.trees, "persona-fix-the-login-4") {
+		t.Fatalf("past an empty folder: %v %v", res, err)
+	}
+	// A name as long as Paseo's folders take: its -10 shortens the name, not the number (Paseo's own cut would drop the
+	// number and land on the name's folder).
+	long := "persona/" + strings.Repeat("a", 40)
+	for i := 2; i <= 9; i++ {
+		runPullGit(t, r.repo, "branch", fmt.Sprintf("%s-%d", long, i))
+	}
+	mkdir(t, filepath.Join(r.trees, "persona-"+strings.Repeat("a", 40)))
+	res, err = request(t, r.n, "worktree.add", map[string]any{"cwd": r.repo, "name_hint": strings.Repeat("a", 40)})
+	folder := "persona-" + strings.Repeat("a", 39) + "-10"
+	if err != nil || res["branch"] != long+"-10" || res["path"] != filepath.Join(r.trees, folder) {
+		t.Fatalf("a long name's -10: %v %v", res, err)
+	}
+	creates := r.rt.got("workspace.create")
+	made = map[string]any{}
+	_ = json.Unmarshal(creates[len(creates)-1], &made)
+	if made["name"] != folder || runtimeFolderName(folder) != folder {
+		t.Fatalf("the folder sent for a long name: %v", made)
+	}
+}
+
+// The folder a runtime engine makes for a name is Paseo's slug of it (its slugify, @getpaseo/protocol branch-slug.js:
+// these are its answers).
+func TestRuntimeFolderName(t *testing.T) {
+	for in, want := range map[string]string{
+		"feat-x": "feat-x", "Feature X": "feature-x", "--a__b--": "a-b", "新功能": "", "fix/登录": "fix", "İstanbul": "i-stanbul",
+		strings.Repeat("a", 30) + "-" + strings.Repeat("b", 29): strings.Repeat("a", 30),
+		strings.Repeat("a", 10) + "-" + strings.Repeat("b", 60): strings.Repeat("a", 10) + "-" + strings.Repeat("b", 39),
+		strings.Repeat("a", 49) + "-bbb":                        strings.Repeat("a", 49),
+		strings.Repeat("a", 60):                                 strings.Repeat("a", 50),
+		"persona-" + strings.Repeat("a", 40) + "-10":            "persona-" + strings.Repeat("a", 40),
+	} {
+		if got := runtimeFolderName(in); got != want {
+			t.Errorf("runtimeFolderName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// A runtime that is connected but not one of the machine's engines (Paseo's bridge running while the machine enables
+// herdr only) makes, lists and deletes no workspaces: its workspaces are not the catalog's, and no worktree asked for
+// with its kind reaches it.
+func TestRuntimeWorkspacesOnlyAsAnEngine(t *testing.T) {
+	r := runtimeRepoNode(t)
+	r.n.eng.mu.Lock()
+	r.n.eng.set = &proto.EngineChoice{Hosts: []string{proto.EngineHerdr}, Default: proto.EngineHerdr}
+	r.n.eng.mu.Unlock()
+	if _, _, ok := r.n.runtimeEngine(proto.EnginePaseo); ok {
+		t.Fatal("Paseo is an engine of a machine that does not enable it")
+	}
+	if raw, err := nodeCall(t, r.n, "workspaces.list", map[string]any{}); err == nil && strings.Contains(string(raw), "wks_main") {
+		t.Fatalf("the catalog lists a runtime that is not an engine: %s", raw)
+	}
+	for _, c := range []struct {
+		method string
+		params map[string]any
+	}{
+		{"worktree.prepare", map[string]any{"workspace_id": "wks_main", "kind": "paseo"}},
+		{"worktree.create", map[string]any{"workspace_id": "wks_main", "kind": "paseo", "branch": "x", "path": filepath.Join(r.trees, "x")}},
+		{"worktree.create", map[string]any{"workspace_id": "wks_main", "kind": "paseo", "auto_name": true}},
+		{"worktree.add", map[string]any{"cwd": r.repo, "kind": "paseo", "name_hint": "x"}},
+		{"worktree.status", map[string]any{"cwd": r.repo, "kind": "paseo"}},
+	} {
+		_, _ = request(t, r.n, c.method, c.params)
+	}
+	if p, c := r.rt.got("workspace.prepare"), r.rt.got("workspace.create"); len(p)+len(c) != 0 {
+		t.Fatalf("a runtime that is not an engine was asked: prepare %d, create %d", len(p), len(c))
+	}
+	enablePaseo(r.n)
+	if _, err := request(t, r.n, "worktree.prepare", map[string]any{"workspace_id": "wks_main", "kind": "paseo"}); err != nil ||
+		len(r.rt.got("workspace.prepare")) != 1 {
+		t.Fatalf("enabled again: %v", err)
+	}
+}
+
+// One deadline for the whole of a create: what asking the runtime for its folder took is not given again to making the
+// worktree, and running out of it says so.
+func TestRuntimeWorktreeCreateHasOneDeadline(t *testing.T) {
+	r := runtimeRepoNode(t)
+	old := runtimeWorktreeDeadline
+	runtimeWorktreeDeadline = 600 * time.Millisecond
+	t.Cleanup(func() { runtimeWorktreeDeadline = old })
+	r.rt.answer = func(method string, _ json.RawMessage) (any, error) {
+		switch method {
+		case "workspace.prepare":
+			time.Sleep(400 * time.Millisecond)
+			return map[string]any{"checkouts": r.trees}, nil
+		case "workspace.create":
+			time.Sleep(3 * time.Second)
+		}
+		return map[string]any{"ok": true}, nil
+	}
+	start := time.Now()
+	_, err := request(t, r.n, "worktree.create", map[string]any{"workspace_id": "wks_main", "kind": "paseo", "branch": "slow",
+		"path": filepath.Join(r.trees, "slow"), "locale": "en"})
+	if err == nil || !strings.Contains(err.Error(), "Paseo didn’t finish making the worktree in time") {
+		t.Fatalf("a create past its deadline: %v", err)
+	}
+	if took := time.Since(start); took > 2*time.Second {
+		t.Fatalf("took %s: making the worktree had a deadline of its own", took)
 	}
 }

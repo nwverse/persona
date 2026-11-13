@@ -57,7 +57,7 @@ Optional (for each one present, the SDK declares the capability in `runtime.hell
 | `models({launcher, refresh})` / `check({launcher, cwd, prompt})` | The launcher's models as the runtime has them now (`caps.models`, the pickers' refresh) / Settings › Models "Test" run through the runtime with its own login (`caps.check`): one real prompt in the node's empty check directory, answered as `{ok, model, answer, error}` |
 | `seen({session_id})` | The user saw the session in Persona (`caps.seen`, #6299): a runtime that keeps an unread mark of its own clears it, so the session is not unread in its own app too. The manager tells the node only while the runtime lists the session as `done` (unread), best effort |
 | `archive({session_id})` / `unarchive({session_id})` | The runtime's own reversible archive (`caps.archive`, declared only when both exist): when the user archives a session in Persona, it is archived in the runtime too, and restored with it. Archive an idle session without stopping or closing anything (Persona refuses busy sessions first) and keep it restorable; both must be idempotent (already archived / restored is success). A runtime whose archive also stops the session, or that has no way back, leaves them out: the archive is then Persona's alone (`docs/protocol/protocol.md`, "Agent session archives") |
-| `createWorkspace({cwd, workspace_id, branch, create_branch, base, name, key})` / `prepareWorkspace({cwd, repo_root})` | Workspaces of its own (`caps.workspaces`, declared with `createWorkspace`): a worktree it makes as a workspace of its own / the folder it puts a repository's worktrees in. With them it lists its workspaces through `rt.workspacesChanged(list)`. Only an engine's are used; see "Workspaces" below |
+| `createWorkspace({cwd, workspace_id, branch, create_branch, base, name, key})` / `prepareWorkspace({cwd, repo_root})` | Workspaces of its own (`caps.workspaces`, declared only when both exist: the node asks where the worktrees go before each one it has made): a worktree it makes as a workspace of its own / the folder it puts a repository's worktrees in. With them it lists its workspaces through `rt.workspacesChanged(list)`. Only an engine's are used; see "Workspaces" below |
 | `watchChanged(id, watching, {transcript})` | The phone starts / stops watching a session (when a new node connects or the runtime stops, all stop): for runtimes that only follow a session while someone is watching (Paseo subscribes to the timeline per session) |
 
 In `createRuntime`'s options, a runtime that runs several Agents can also pass `launchers: [{name, model, agent, models}]`: besides `launcher`, the new-session form then has these entries, one per provider,
@@ -75,7 +75,7 @@ Call the SDK when things happen:
 | `rt.sessionsChanged()` | Sessions added or removed, a turn started / ended, a rename |
 | `rt.append(id, {items, fromSeq, toSeq, history})` | New content was persisted (when no one is watching, the SDK just has the list refresh `rev`). `items` can be empty: content not shown in the chat must still advance seq |
 | `rt.stream(id, text)` / `rt.streamEnd(id)` | The full text being generated / that segment ended (the SDK throttles to at most once every 120 ms) |
-| `rt.workspacesChanged(list)` | Its workspaces changed (one made, renamed or archived, a branch moved): the whole list, which the SDK also tells every node it connects to later. Only with `createWorkspace` ("Workspaces" below) |
+| `rt.workspacesChanged(list)` | Its workspaces changed (one made, renamed or archived, a branch moved): the whole list, which the SDK also tells every node it connects to later. Only with `createWorkspace` and `prepareWorkspace` ("Workspaces" below) |
 | `rt.ask(interaction, {signal})` | A person must decide: the card goes to the phone and waits for an answer. Returns a `Resolution`; `{dismiss: true}` = handed back to the computer (tapped on the phone, expired, no hub), for the runtime's own UI. Meanwhile the session shows "Needs you" automatically |
 | `rt.phoneFirst(id)` | Whether to ask the phone or the local UI first |
 | `rt.tools()` / `rt.callTool({name, args, session_id})` | The hub's tools (the phone's `phone_*`, `mail_*`) for your own Agent: list them and register as your own tools; calls go through node to the hub (`createRuntime`'s `onHub` is called after hello and whenever the hub comes and goes, which is the right time to fetch tools) |
@@ -247,8 +247,8 @@ and calls `rt.workspacesChanged(list)` with the whole list whenever it changes (
   repository's main checkout), `worktree` (a linked worktree) or `folder` (no repository; anything else counts as one);
   `space_id` / `space_name` are the space its sessions are grouped in; `repo_root` is the repository's main checkout;
   `owned` says the runtime made the checkout and removes it with the workspace. At most 2000 rows; invalid ones are dropped.
-- **Only an engine's count**: the node uses the list while the runtime is one of the computer's engines (Paseo) on its own
-  socket. Its rows are then `workspaces.list` rows whose `source` is the runtime id (`project_id` its `space_id`, `is_main`
+- **Only an engine's count**: the node uses the list while the runtime is one of the computer's enabled engines (Paseo) on
+  its own socket; a runtime that is connected but not enabled makes, lists and deletes no workspaces. Its rows are then `workspaces.list` rows whose `source` is the runtime id (`project_id` its `space_id`, `is_main`
   true for a checkout, `workspace_kind` `git` or `folder`), and its session rows keep their `workspace_id`. Any other
   runtime's `workspace_id` is cleared, as before, and a daemon never gets the feature.
 - **Starting in one**: `start` gets the catalog row's id as `workspace_id`, sessions in it or not. One the runtime no longer
@@ -260,6 +260,10 @@ and calls `rt.workspacesChanged(list)` with the whole list whenever it changes (
   one cut from `base` (the source checkout's branch, or its commit when detached), `name` the folder's name; with neither
   branch nor name, the runtime names both. `key` is the same for a retried call. It answers `{workspace}`, the new
   workspace's row with the folder and branch it actually has, once the checkout exists; the node lists it at once.
+  `name` comes as Paseo names a folder (`[a-z0-9]` runs joined by single hyphens, at most 50 characters), and the node
+  has checked that nothing is at `<checkouts>/<name>`, an empty folder included: make the worktree there, never beside it,
+  so the path the user was shown is the one made. The node gives the whole create one deadline (145 s, inside the hub's
+  150 s), the time `workspace.prepare` took included.
 - **Where** (`workspace.prepare {cwd, repo_root}` → `{checkouts}`): the folder the runtime puts that repository's worktrees
   in. The dialog's path must be in it; only the worktree's own folder name can be chosen.
 

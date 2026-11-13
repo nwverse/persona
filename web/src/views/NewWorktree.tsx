@@ -222,7 +222,8 @@ function Composer({ session, request, onClose }: { session: WorktreeCreationSess
             </div></details>
             <p className="text-xs text-ink-3">{t("worktree-composer.agent_help")}</p>
           </> : <>
-            <Notice>{t("worktree-composer.legacy")}</Notice>
+            {/* only Orca has the advanced options an update would bring */}
+            {source.host === "orca" && <Notice>{t("worktree-composer.legacy")}</Notice>}
             <p className="truncate text-xs text-ink-3" title={info.root}>{info.branch ? t("worktree.repo_on_branch", { repo: info.repoName, branch: info.branch }) : t("worktree.repo_detached", { repo: info.repoName })}</p>
             {repo.basic && <Notice>{t("worktree-composer.basic_help")}</Notice>}
             {(draft.name || draft.note || repo.baseRef || repo.preset || repo.provider || unsupportedWorktreeParent(draft, info)) && <Button tone="quiet" onClick={() => {

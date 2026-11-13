@@ -98,7 +98,8 @@ run with `ELECTRON_RUN_AS_NODE=1`. A plain `node` always runs the bridge without
     by its Agent rather than its title, and one that stopped running shown as replaced by another there. A workspace's Agents are separate conversations,
     as they are separate tabs in Paseo, so each is a row of its own under the project.
   - Agents without project information from Paseo keep the existing behavior: their workspace is their space, with no workspace name.
-  - **Paseo's workspaces are the computer's workspaces** (#6295): the bridge follows Paseo's list of workspaces as it follows its Agents (one
+  - **Paseo's workspaces are the computer's workspaces** (#6295), while Paseo is one of the computer's enabled engines (a bridge still connected after
+    the computer moved to another engine makes, lists and deletes none): the bridge follows Paseo's list of workspaces as it follows its Agents (one
     subscription, `fetch_workspaces_request`) and tells node the whole list when what it lists changes (`runtime.workspaces`,
     `docs/integrations/runtimes.md` ("Workspaces")). Node lists them in the workspace catalog with source `paseo`, Agents in them or not: a folder
     opened in Paseo's App, a worktree whose Agents were all archived. A row's title is the workspace's name, `project_id` its space (the Paseo project
@@ -110,11 +111,18 @@ run with `ELECTRON_RUN_AS_NODE=1`. A plain `node` always runs the bridge without
   - **New worktree** (#6295; on the web, the ⋯ of a Paseo Git workspace in By repository and the Agents space menu): Paseo makes the worktree, as a
     workspace of its own (`workspace.create.request`), in its worktrees folder: `<worktrees root>/<project hash>/<name>`, the root being Paseo's
     `worktrees.root` setting or `<Paseo home>/worktrees`. The dialog shows that folder (beside a worktree Paseo already made of the repository, else
-    derived from the repository's path as Paseo derives it); only the worktree's own folder name can be chosen. Persona's rules still hold, checked
-    by node with git first: an existing branch is checked out as it is and refused while another worktree has it, a new branch starts at the source's
-    HEAD, a folder that holds something is refused, nothing is forced. Automatic naming leaves the branch and the folder to Paseo. No Agent is created
+    derived from the repository's path as Paseo derives it); only the worktree's own folder name can be chosen, and node takes it as Paseo names a
+    folder (its `slugify`: lowercase, `[a-z0-9]` runs joined by single hyphens, at most 50 characters), so the checks are on the folder Paseo uses and
+    the path made is the one shown. Persona's rules still hold, checked by node with git first: an existing branch is checked out as it is and refused
+    while another worktree has it, a new branch starts at the source's HEAD, a folder that exists is refused (an empty one too: Paseo would make
+    `<name>-1` beside it), a name with nothing left is refused, nothing is forced. Automatic naming leaves the branch and the folder to Paseo. No Agent is created
     with it (Paseo would rename a new branch after a first Agent's prompt); the dialog's next step is Start Agent there, since a Paseo workspace has
-    no terminal to open. A new Agent's own worktree (#6115) and an assistant task's worktree on a computer whose engine is Paseo are made the same way.
+    no terminal to open. A new Agent's own worktree (#6115) and an assistant task's worktree on a computer whose engine is Paseo are made the same way:
+    the clients send the engine the Agent opens in (`kind`), and the `-2`, `-3`… of a name too long for Paseo's folders shorten the name, not the
+    number. Closing a Paseo Agent does not offer to remove its worktree (`worktree/status` says `ours: false`): Paseo keeps it as a workspace.
+  - **Terminals for a Paseo Agent's folder**: a Paseo workspace has no terminal, so Open Terminal Here and a dev server's Start for one of its
+    Agents open in the terminal engine's workspace that holds the folder, else in a new workspace there, never in one that only happens to be first;
+    the web and iOS offer Start only for sessions with a terminal.
 - **Agents created by another Agent** (#4494): with Paseo's `create_agent` an Agent starts others (an orchestrator and its reviewers). Paseo marks them with the label
   `paseo.parent-agent-id`, shows them under their creator, notifies nobody when they finish (their creator is told what they did) and archives them with their creator. In Persona:
   - Such an Agent's row names its creator's session (`is_subagent`, `parent_session_id`) while the creator is listed in the same workspace, however many Agents created one another
