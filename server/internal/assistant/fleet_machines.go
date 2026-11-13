@@ -143,7 +143,7 @@ func isMeetingRoomCwd(cwd string) bool {
 	if cwd == "" {
 		return false
 	}
-	clean := filepath.Clean(filepath.ToSlash(cwd))
+	clean := filepath.Clean(filepath.ToSlash(identity.NodePath(cwd))) // a Windows node's too, on any hub (#6419)
 	parent := filepath.Base(filepath.Dir(clean))
 	if parent != "guest-meeting" {
 		return false

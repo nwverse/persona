@@ -176,8 +176,18 @@ func (s *Service) handPass(ctx context.Context) {
 	if tasks := s.activeTasks(ctx); len(tasks) > 0 { // which of the user's tasks a new one is about
 		for _, w := range escalated {
 			b.mu.Lock()
-			fresh := w.it.Agent != nil && w.it.Agent.SessionID == "" && w.it.Agent.TodoID == ""
+			a, todo := w.it.Agent, ""
+			fresh := a != nil && a.SessionID == "" && a.TodoID == ""
+			if a != nil {
+				todo = a.TodoID
+			}
 			b.mu.Unlock()
+			// A link to a task that was closed, with no one task carrying it on (superviseInbox would have moved it
+			// there), is no link: the judge picks again among the open ones.
+			if !fresh && todo != "" {
+				t, ok := s.todoNow(todo)
+				fresh = !ok || !taskOpen(t)
+			}
 			if fresh && s.linkTaskFor(ctx, w.it, tasks, w) {
 				linked[w.it] = true
 			}

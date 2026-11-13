@@ -1865,6 +1865,9 @@ Quota extensions contribute `quota` and answer a launcher's quota (`docs/integra
    methods are GET / POST / PUT / DELETE / HEAD only, request body at most 1 MB, response at most 4 MB, and redirects are only followed to the same origin.
 3. The extension returns `{report}` (`Report` in `server/internal/quota`: `key_name`, `usage`, `budget`, `pools`, `note`…; when `gateway` / `gateway_name` are omitted, the contribution's id / name are used; the app shows `gateway_name`);
    if it is not its gateway, it returns the error code `unsupported` and the hub asks the next one.
+   Each `usage` entry may say what its `label` covers in `period`: `day`, `week` or `month`, in the user's `tz`. Clients
+   add up only entries that say (the iPhone's Usage widget takes the `cost_usd` of the `day` ones); an entry without it
+   is shown by its label alone.
 
 **Outside the launcher page** (#2846): sidebar pages (`nav_page`), cards and widgets have no launcher context, so extensions that accepted `launcher_keys` can look up launchers themselves:
 
