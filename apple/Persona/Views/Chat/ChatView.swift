@@ -5067,6 +5067,9 @@ struct Composer: View, Equatable {
     @State private var voiceNote: VoiceUnavailableNote?
     /// The model menu's "Other Model…" (#1644): a model ID typed by hand, through POST …/modes.
     @State private var typingModel = false
+    /// The main Persona chat's own model sheet (#6542): the conversation-scoped pick (#5033), opened from its model row.
+    @State private var showAssistantModel = false
+    @State private var assistantPanel: AssistantModelPanelModel?
 
     /// The voice call bound to this conversation, live or ended (docs/assistant/voice.md 6.2): the bar takes the box's place while
     /// it is on, and 「语音已结束 · 继续」 sits over the box after it ended by itself.
@@ -5146,6 +5149,18 @@ struct Composer: View, Equatable {
         return s.canSend && s.canTerminal && s.paneID != nil && !s.isCodex && !s.isTraex && !s.assistant
     }
 
+    /// The main Persona conversation: its model row opens the conversation model sheet (#6542), never the terminal
+    /// session's `/model` menu (the headless assistant has no terminal to type into).
+    private var isAssistantChat: Bool { model.session(key)?.assistant == true }
+    /// The hub keeps a conversation's own model pick (#5033); an older hub keeps nothing and the row stays read-only.
+    private var assistantModelPickAvailable: Bool { isAssistantChat && model.keepsConversationModelPick(key.group) }
+    /// What the main chat's next message runs on: its own pick, then the Main chat default, then the running process's
+    /// last model while the picker has not answered (the 11-13 Haiku/Opus divergence fix).
+    private var assistantEffective: AssistantModelChoice.Effective? {
+        guard isAssistantChat else { return nil }
+        return AssistantModelChoice.effective(session: model.session(key), response: model.cachedAssistantLaunchers(key.machineRef))
+    }
+
     @ViewBuilder private var extensionPrompts: some View {
         if !declarations.prompts.isEmpty {
             Section("Extension Prompts") {
@@ -5216,10 +5231,20 @@ struct Composer: View, Equatable {
         return MentionToken.at(text, selection: selection)
     }
 
-    /// What the @ list offers here: this chat's files and its session's folder, then the other sessions.
+    /// What the @ list offers here: this chat's files and its session's folder, then Persona's workspaces and the other
+    /// sessions. The frozen Mac and visionOS composers keep their existing resources.
     private var mentionSource: MentionSource {
         MentionSource(machine: key.machineRef, cwd: model.session(key)?.cwd,
-                      files: { MentionRows.usedPaths(model.chat(key).items) }, except: key)
+                      files: { MentionRows.usedPaths(model.chat(key).items) }, except: key,
+                      workspaces: offersWorkspaceMentions)
+    }
+
+    private var offersWorkspaceMentions: Bool {
+        #if os(iOS)
+        return uploadDest == nil && model.session(key)?.assistant == true
+        #else
+        return false
+        #endif
     }
 
     /// The + menu's Mention: `@` at the caret, which opens the @ list (the web's @ button beside +).
@@ -5237,10 +5262,10 @@ struct Composer: View, Equatable {
         focused = true
     }
 
-    /// A session picked in the @ list: quoted over the box, once.
+    /// A workspace or session picked in the @ list: its context sits over the box, once.
     private func quoteMention(_ ref: ContextRef) {
-        guard !contexts.wrappedValue.contains(where: { $0.url == ref.url }) else { return }
-        contexts.wrappedValue.append(ref)
+        guard let updated = ContextRef.addingMention(ref, to: contexts.wrappedValue) else { return }
+        contexts.wrappedValue = updated
     }
 
     /// Effort and permission mode can change: Claude Code and the assistant (`SessionModeBar` shows them for the same).
@@ -5249,9 +5274,14 @@ struct Composer: View, Equatable {
     /// Only the effort can change: a Codex thread on its app-server (`Session.setsEffortOnly`).
     private var setsEffortOnly: Bool { model.session(key)?.setsEffortOnly == true }
 
-    /// The model button's title; with nothing to show or pick, no button.
+    /// The model button's title; with nothing to show or pick, no button. The main conversation names its *effective*
+    /// model (pick > Main chat default > running), so a hub-side change shows after the picker refreshes (#6542).
     private var modesTitle: SessionModes.ComposerTitle? {
         let effort = setsModes || setsEffortOnly
+        if isAssistantChat, let effective = assistantEffective {
+            let name = AssistantModelChoice.displayName(effective, response: model.cachedAssistantLaunchers(key.machineRef))
+            return SessionModes.composerTitle(model: name, effort: effort ? SessionModes.effortLabel(model.session(key)?.effort) : nil)
+        }
         return SessionModesMenu.title(model.session(key), setsModes: effort) ?? (effort || canPickModel ? .init(model: String(localized: "Model [Assistant View c98e11]")) : nil)
     }
 
@@ -5432,7 +5462,8 @@ struct Composer: View, Equatable {
                     #endif
                 } modes: {
                     SessionModesMenu(key: key, session: model.session(key), picksModel: canPickModel, setsModes: setsModes,
-                                     setsEffortOnly: setsEffortOnly, otherModel: canPickModel ? { typingModel = true } : nil, pick: pickMode)
+                                     setsEffortOnly: setsEffortOnly, otherModel: canPickModel ? { typingModel = true } : nil,
+                                     assistantPick: assistantModelPickAvailable ? { showAssistantModel = true } : nil, pick: pickMode)
                 }
             } else if AppStyle.current.usesBeautifulUI {
                 // The BeautifulUI style's prompt bar; every other style keeps the original input line.
@@ -5663,6 +5694,22 @@ struct Composer: View, Equatable {
         #endif
         .modifier(ComposerCaptureSheets(camera: $showCamera, glasses: $showGlasses, scan: $showScan, pages: { addScan($0) }) { add($0) })
         .sheet(isPresented: $typingModel) { SessionTypedModelSheet(key: key, session: model.session(key)) }
+        .onChange(of: showAssistantModel) { _, on in
+            if on, assistantPanel == nil {
+                assistantPanel = AssistantModelPanelModel(key: key, machine: key.machineRef)
+            }
+        }
+        .sheet(isPresented: $showAssistantModel, onDismiss: { assistantPanel = nil }) {
+            if let assistantPanel {
+                AssistantModelSheet(session: model.session(key), panel: assistantPanel)
+            }
+        }
+        // Keep the effective Main chat model fresh so the composer title matches what the next message runs (#6542):
+        // re-read when the conversation is replaced (/clear) or Model Settings change.
+        .task(id: "\(key.sessionID)-\(model.launchersRevision)") {
+            guard assistantModelPickAvailable else { return }
+            _ = try? await model.assistantLaunchers(key.machineRef)
+        }
         .onChange(of: picks) { _, items in
             guard !items.isEmpty else { return }
             Task { await load(items) }
@@ -6316,7 +6363,7 @@ struct QueueStrip: View {
                             .lineLimit(1)
                         Spacer(minLength: 0)
                         ThemedIcon(Theme.Icon.expand)
-                            .font(Theme.Font.caption.weight(.semibold))
+                            .font(Theme.Font.captionStrong)
                             .foregroundStyle(.secondary)
                             .rotationEffect(.degrees(relayedExpanded ? 180 : 0))
                     }
