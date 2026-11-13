@@ -1,7 +1,7 @@
 import XCTest
 
 /// A cancelled task and its replacement open each other through the lineage links (#5732).
-/// Run against scripts/mock/mock_hub.py with MOCK_INTERRUPTS=1; TEST_RUNNER_PERSONA_MOCK_HUB supplies its loopback URL.
+/// Run against scripts/mock/mock_hub.py with MOCK_TASKS=1 MOCK_INTERRUPTS=1; TEST_RUNNER_PERSONA_MOCK_HUB supplies its loopback URL.
 final class TodoLineageTests: XCTestCase {
     @MainActor func testHandoffLinksOpenBothDirections() throws {
         guard let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] else {
