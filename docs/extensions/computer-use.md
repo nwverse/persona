@@ -508,8 +508,9 @@ hidden otherwise); until then every client shows RFB. The web, the Mac app and A
   `PersonaScreenKit` (Mac and Vision compile the same sources and leave video out). `ScreenVideoStream` sends `start`,
   decodes each frame with VideoToolbox as it comes (the helper never reorders), sends a `report` for every frame, and
   shows only the newest picture of a burst. `ScreenVideoLink`, one per RFB session, opens the stream once RFB is
-  signed in, shows its pictures in a layer over RFB's on the same display (`hello.rect`, else the display shown), and
-  holds RFB's update requests while they show; the request held goes out when video stops, so RFB's picture catches up.
+  signed in, shows its pictures in a layer over RFB's on the same display (`hello.rect`, else the display shown; RFB's layer is
+  hidden meanwhile, so a picture of another shape leaves black, not a stale frame), and holds RFB's update requests while
+  they show; the request held goes out when video stops, so RFB's picture catches up.
   Video is chosen by default on a Mac that offers it (⋯ › Picture, kept per Mac) and runs only while one display is
   shown: the Mac's only one, or one picked from several the node numbered; all of several displays at once stay RFB.
   It pauses while Picture in Picture shows the screen or the app is in the background (RFB carries the picture then).

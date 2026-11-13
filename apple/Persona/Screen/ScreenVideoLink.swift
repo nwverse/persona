@@ -15,19 +15,26 @@ nonisolated struct ScreenVideoBudget: Equatable, Sendable {
 }
 
 /// How long the page waits before trying video again after it stopped (#3954): 30 s, then twice as long each time up
-/// to 5 min; back to 30 s once a picture shows.
+/// to 5 min; back to 30 s once video has stayed up a while (`ScreenVideoLink`'s `stable`), so a connection that keeps
+/// dropping is tried less and less often instead of flipping the picture (and its line) back and forth.
 nonisolated struct ScreenVideoBackoff: Equatable, Sendable {
-    static let first: Duration = .seconds(30)
-    static let longest: Duration = .seconds(300)
-    private(set) var next: Duration = first
+    let first: Duration
+    let longest: Duration
+    private(set) var next: Duration
+
+    init(first: Duration = .seconds(30), longest: Duration = .seconds(300)) {
+        self.first = first
+        self.longest = longest
+        next = first
+    }
 
     /// The wait before this retry; the one after is twice as long.
     mutating func take() -> Duration {
-        defer { next = min(next * 2, Self.longest) }
+        defer { next = min(next * 2, longest) }
         return next
     }
 
-    mutating func reset() { next = Self.first }
+    mutating func reset() { next = first }
 }
 
 /// Why the page shows VNC while video was chosen (#3954), in words anyone reads: no protocol or codec names.
@@ -54,6 +61,11 @@ nonisolated enum ScreenVideoFallback: Equatable, Sendable {
         case .locked: String(localized: "The Mac is locked. Showing VNC until it’s unlocked.")
         case .notAllowed: String(localized: "This Mac hasn’t allowed video yet. Showing VNC.")
         }
+    }
+
+    /// The one thing the user can do about `notAllowed` themselves, in one sentence (the page's "How to turn it on").
+    static var howToAllow: String {
+        String(localized: "On that Mac, turn on Persona Screen in System Settings › Privacy & Security › Screen & System Audio Recording.")
     }
 }
 
@@ -104,13 +116,19 @@ import UIKit
     @ObservationIgnored var onShowing: @MainActor (Bool) -> Void = { _ in }
     /// Opens the stream's transport; tests give a scripted one.
     @ObservationIgnored var transport: @MainActor (Ready) -> RFBTransport? = ScreenVideoLink.hubTransport
+    /// Each change of `fallback`, and each wait before a retry (tests).
+    @ObservationIgnored var onFallback: @MainActor (ScreenVideoFallback?) -> Void = { _ in }
+    @ObservationIgnored var onRetry: @MainActor (Duration) -> Void = { _ in }
 
     @ObservationIgnored private var want: Want?
     @ObservationIgnored private var ready: Ready?
     @ObservationIgnored private var held: Set<String> = []
     @ObservationIgnored private var stream: ScreenVideoStream?
     @ObservationIgnored private var opened: (Want, Ready)?
-    @ObservationIgnored private var backoff = ScreenVideoBackoff()
+    @ObservationIgnored private var backoff: ScreenVideoBackoff
+    /// How long video must stay up before a drop starts the waits from the first again.
+    @ObservationIgnored private let stable: Duration
+    @ObservationIgnored private var shownSince: ContinuousClock.Instant?
     @ObservationIgnored private var retry: Task<Void, Never>?
     @ObservationIgnored private let layers = NSHashTable<AVSampleBufferDisplayLayer>.weakObjects()
     @ObservationIgnored private let mailbox = ScreenVideoMailbox()
@@ -119,7 +137,9 @@ import UIKit
     @ObservationIgnored private let path = NWPathMonitor()
     @ObservationIgnored private var budget: ScreenVideoBudget
 
-    init() {
+    init(backoff: ScreenVideoBackoff = .init(), stable: Duration = .seconds(60)) {
+        self.backoff = backoff
+        self.stable = stable
         budget = Self.currentBudget(path: nil)
         path.pathUpdateHandler = { @Sendable [weak self] p in
             let expensive = p.isExpensive, constrained = p.isConstrained
@@ -136,15 +156,15 @@ import UIKit
     func want(_ w: Want?) {
         guard w != want else { return }
         want = w
-        if w == nil { fallback = nil; stopRetry(); backoff.reset() }
+        if w == nil { say(nil); stopRetry(); backoff.reset() }
         reconsider()
     }
 
-    /// The signed-in RFB connection (its pair), or nil when there is none: a new connection starts video afresh.
+    /// The signed-in RFB connection (its pair), or nil when there is none: a new connection tries video at once. The
+    /// fallback said stays (the page shows it only while VNC is live), so a reconnection doesn't blink it off and on.
     func rfb(_ r: Ready?) {
         guard r != ready else { return }
         ready = r
-        fallback = nil
         stopRetry()
         reconsider()
     }
@@ -230,8 +250,7 @@ import UIKit
         shownAt.removeAll { now.timeIntervalSince($0) > 1 }
         fps = Double(shownAt.count)
         if !showing {
-            fallback = nil
-            backoff.reset()
+            say(nil) // video is back: the line goes
             show(true)
         }
         Self.enqueue(pb, in: layers.allObjects)
@@ -240,7 +259,7 @@ import UIKit
     private func paused(_ why: String) {
         guard stream != nil else { return }
         show(false)
-        fallback = .paused(why)
+        say(.paused(why))
     }
 
     private func ended(_ why: ScreenVideoStream.Ending) {
@@ -248,9 +267,10 @@ import UIKit
         opened = nil
         show(false)
         guard want != nil, ready != nil else { return }
-        fallback = .lost
+        say(.lost)
         let wait = backoff.take()
-        retryAt = Date.now.addingTimeInterval(TimeInterval(wait.components.seconds))
+        retryAt = Date.now.addingTimeInterval(Double(wait.components.seconds) + Double(wait.components.attoseconds) / 1e18)
+        onRetry(wait)
         retry = Task { [weak self] in
             try? await Task.sleep(for: wait)
             guard !Task.isCancelled, let self else { return }
@@ -266,10 +286,23 @@ import UIKit
         retryAt = nil
     }
 
+    /// Changes the line only when the reason changes: the same one again (a retry that fails as the last one did) is
+    /// no change, so nothing redraws.
+    private func say(_ f: ScreenVideoFallback?) {
+        guard f != fallback else { return }
+        fallback = f
+        onFallback(f)
+    }
+
     private func show(_ on: Bool) {
         guard showing != on else { return }
         showing = on
-        if !on {
+        if on {
+            shownSince = .now
+        } else {
+            // Video that stayed up a while starts the waits over; one that dropped soon after coming back keeps doubling.
+            if let since = shownSince, ContinuousClock.now - since >= stable { backoff.reset() }
+            shownSince = nil
             fps = 0
             decodeMs = nil
             latest = nil

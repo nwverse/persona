@@ -969,7 +969,8 @@ final class VNCTests: XCTestCase {
 
     /// #3954: the video channel (the mock with MOCK_SCREEN_VIDEO=1, TEST_RUNNER_PERSONA_SCREEN_VIDEO=1). RFB signs in,
     /// then video takes the picture (the phone sent `start` with its cap, and reports frames); the Mac locking puts VNC
-    /// back and says so in plain words, unlocking brings video back, and the stream dropping puts VNC back again.
+    /// back and says so in plain words, unlocking brings video back and the line goes; no permission says where to turn
+    /// it on (one sentence); the stream dropping puts VNC back again.
     @MainActor func testVideoTakesThePictureAndFallsBack() throws {
         guard ProcessInfo.processInfo.environment["PERSONA_SCREEN_VIDEO"] == "1" else {
             throw XCTSkip("needs the mock's video channel: MOCK_SCREEN_VIDEO=1 (PERSONA_SCREEN_VIDEO=1)")
@@ -993,6 +994,24 @@ final class VNCTests: XCTestCase {
         try mock(hub!, "/mock/screen-video?resume=1")
         XCTAssertTrue(picture(screen, "video"), "unlocked: video again")
         XCTAssertTrue(says("Mac 锁屏了").waitForNonExistence(timeout: 5))
+
+        // The Mac took Persona Screen's permission away: the one reason the user fixes, so the line says where.
+        try mock(hub!, "/mock/screen-video?pause=permission")
+        XCTAssertTrue(picture(screen, "vnc"), "not allowed: VNC again")
+        XCTAssertTrue(says("还没允许视频").waitForExistence(timeout: 5), "why:\n\(app.debugDescription)")
+        let how = app.buttons["screen-fallback-help"].firstMatch
+        XCTAssertTrue(how.waitForExistence(timeout: 5), "how to turn it on:\n\(app.debugDescription)")
+        shot(app, "vnc-video-not-allowed")
+        how.tap()
+        let alert = app.alerts.firstMatch
+        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        XCTAssertTrue(alert.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "录屏与系统录音")).firstMatch.exists,
+                      "where: \(alert.debugDescription)")
+        shot(app, "vnc-video-how")
+        alert.buttons.firstMatch.tap()
+        try mock(hub!, "/mock/screen-video?resume=1")
+        XCTAssertTrue(picture(screen, "video"), "allowed again: video")
+        XCTAssertTrue(says("还没允许视频").waitForNonExistence(timeout: 5), "the line goes with video back")
 
         try mock(hub!, "/mock/screen-video?drop=1")
         XCTAssertTrue(picture(screen, "vnc"), "dropped: VNC again")

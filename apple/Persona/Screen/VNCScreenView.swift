@@ -26,6 +26,8 @@ final class VNCScreenUIView: UIView, UIGestureRecognizerDelegate {
     let display = AVSampleBufferDisplayLayer()
     /// The video channel's picture (#3954), over RFB's on its display while it shows.
     let video = AVSampleBufferDisplayLayer()
+    /// This view shows the video channel (the page's; the small window's source shows RFB's picture only).
+    var showsVideo = false
     /// Holds the picture and cuts it to the part shown.
     private let clip = CALayer()
     private let pointerLayer = CALayer()
@@ -162,8 +164,10 @@ final class VNCScreenUIView: UIView, UIGestureRecognizerDelegate {
         clip.frame = port.rect
         display.frame = port.framebufferFrame(screenSize)
         #if os(iOS) && canImport(PersonaScreenKit)
-        if let v = session?.video {
+        if showsVideo, let v = session?.video {
             video.isHidden = !v.showing
+            // RFB's picture is held (stale) while video shows: hidden, so a video of another shape leaves black, not it.
+            display.isHidden = v.showing
             video.frame = port.frame(of: v.rect ?? CGRect(origin: .zero, size: screenSize))
         }
         #endif
@@ -452,6 +456,7 @@ struct VNCScreen: UIViewRepresentable {
         v.onPicture = onPicture
         session.show(in: v.display)
         #if os(iOS) && canImport(PersonaScreenKit)
+        v.showsVideo = true
         session.video.show(in: v.video)
         #endif
         onView(v)

@@ -10,7 +10,8 @@ import VideoToolbox
 
 @main
 struct MakeFixture {
-    static let width = 960, height = 540, fps = 30, seconds = 3
+    /// The mock's own Screen Sharing is 480×300 (16:10): the same shape, so the video lies exactly over its picture.
+    static let width = 960, height = 600, fps = 30, seconds = 3
 
     static func main() throws {
         let out = URL(fileURLWithPath: CommandLine.arguments[1])

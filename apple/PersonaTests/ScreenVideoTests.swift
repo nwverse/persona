@@ -74,8 +74,8 @@ struct ScreenVideoTests {
         s.run()
         try await seen.until { $0.last?.hasPrefix("ended") == true }
         let events = seen.all
-        #expect(events.first == "hello hevc 960x540")
-        let pictures = events.filter { $0 == "picture 960x540" }.count
+        #expect(events.first == "hello hevc 960x600")
+        let pictures = events.filter { $0 == "picture 960x600" }.count
         #expect(pictures >= 1 && pictures <= 4, "\(events)")
         #expect(events.last == "ended closed")
         func reports() -> Int { t.sent.filter { $0.count > 4 && $0[4] == ScreenVideoWire.Kind.report.rawValue }.count }
@@ -90,7 +90,7 @@ struct ScreenVideoTests {
         let s = ScreenVideoStream(transport: t, start: Self.start, silence: .milliseconds(300)) { seen.add($0) }
         s.run()
         try await seen.until { $0.last?.hasPrefix("ended") == true }
-        #expect(seen.all == ["hello hevc 960x540", "ended silent"])
+        #expect(seen.all == ["hello hevc 960x600", "ended silent"])
     }
 
     /// Paused capture sends no heartbeats: the stream waits for `resumed` instead of counting the silence.
@@ -139,7 +139,73 @@ struct ScreenVideoTests {
         let wait = (link.retryAt ?? .distantPast).timeIntervalSinceNow
         #expect(wait > 25 && wait <= 30)
         link.rfb(nil)
-        #expect(link.fallback == nil && link.retryAt == nil)
+        #expect(link.retryAt == nil, "a new connection tries at once")
+        #expect(link.fallback == .lost, "kept: the page shows it only while VNC is live, so a reconnection doesn't blink it")
+    }
+
+    /// The line goes by itself once video is back: the Mac locked (`paused`), then unlocked (`resumed`, a fresh
+    /// hello, format and keyframe).
+    @MainActor @Test func theLineGoesWhenVideoIsBack() async throws {
+        let link = ScreenVideoLink()
+        var said: [ScreenVideoFallback?] = []
+        link.onFallback = { said.append($0) }
+        let t = VideoScript([try Self.prefix(messages: 4)], holds: true)
+        link.transport = { _ in t }
+        link.want(.init(display: nil, rect: nil))
+        link.rfb(.init(group: "", machine: "macbook", pair: "0123"))
+        try await Self.until { link.showing }
+        t.feed(Array(ScreenVideoMessage.paused(PausedMessage(reason: "locked")).framed()))
+        try await Self.until { link.fallback == .locked }
+        #expect(!link.showing)
+        t.feed(Array(ScreenVideoMessage.resumed.framed()) + (try Self.prefix(messages: 4)))
+        try await Self.until { link.showing }
+        #expect(link.fallback == nil)
+        #expect(said == [.locked, nil])
+        link.want(nil)
+    }
+
+    /// Retries that fail as the first drop did keep the same line: it never blinks off and on between them.
+    @MainActor @Test func aRetryThatFailsKeepsTheLineSteady() async throws {
+        let link = ScreenVideoLink(backoff: .init(first: .milliseconds(40), longest: .milliseconds(80)))
+        var said: [ScreenVideoFallback?] = []
+        link.onFallback = { said.append($0) }
+        var opens = 0
+        let first = VideoScript([try Self.prefix(messages: 4)], holds: false)
+        link.transport = { _ in
+            opens += 1
+            return opens == 1 ? first : nil // the hub or the node says no from then on
+        }
+        link.want(.init(display: nil, rect: nil))
+        link.rfb(.init(group: "", machine: "macbook", pair: "0123"))
+        try await Self.until { opens >= 5 }
+        #expect(said == [.lost], "\(said)")
+        #expect(!link.showing)
+        link.want(nil)
+        #expect(said == [.lost, nil])
+    }
+
+    /// Video that keeps dropping soon after it comes back waits twice as long each time (30 s, 1 min, 2 min… in the
+    /// app), so the picture and its line don't flip back and forth; video that stayed up starts the waits over.
+    @MainActor @Test func videoThatKeepsDroppingWaitsLongerEachTime() async throws {
+        for (stable, want) in [(Duration.seconds(60), [40, 80, 160]), (Duration.zero, [40, 40, 40])] {
+            let link = ScreenVideoLink(backoff: .init(first: .milliseconds(40), longest: .seconds(1)), stable: stable)
+            var waits: [Int] = []
+            link.onRetry = { waits.append(Int($0.components.attoseconds / 1_000_000_000_000_000)) }
+            let pieces = [try Self.prefix(messages: 4), Array(ScreenVideoMessage.heartbeat(HeartbeatMessage(last: 2)).framed())]
+            link.transport = { _ in VideoScript(pieces, holds: false) } // a few frames, then it drops
+            link.want(.init(display: nil, rect: nil))
+            link.rfb(.init(group: "", machine: "macbook", pair: "0123"))
+            try await Self.until(seconds: 5) { waits.count >= 3 }
+            #expect(Array(waits.prefix(3)) == want, "stable \(stable): \(waits)")
+            link.want(nil)
+        }
+    }
+
+    /// Waits (polling the main actor) until `done`, at most `seconds`.
+    @MainActor static func until(seconds: Double = 3, _ done: () -> Bool) async throws {
+        let end = Date.now.addingTimeInterval(seconds)
+        while !done(), Date.now < end { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(done(), "never came")
     }
 
     // MARK: Fixture
@@ -208,6 +274,9 @@ private final class VideoScript: RFBTransport, @unchecked Sendable {
     }
 
     func send(_ bytes: [UInt8]) async throws { lock.withLock { _sent.append(bytes) } }
+
+    /// More from the other side, later (a `holds` script).
+    func feed(_ bytes: [UInt8]) { lock.withLock { chunks.append(bytes) } }
 
     func receive() async throws -> [UInt8] {
         try await Task.sleep(for: .milliseconds(5))
