@@ -29,9 +29,10 @@ type DevelopmentBackupConfig struct {
 }
 
 type DevelopmentCandidate struct {
-	Branch   string `json:"branch"`
-	Commit   string `json:"commit"`
-	BackupID string `json:"backup_id,omitempty"`
+	Branch    string `json:"branch"`
+	Commit    string `json:"commit"`
+	UpdatedAt string `json:"updated_at,omitempty"` // Pinned commit's committer date, not check time.
+	BackupID  string `json:"backup_id,omitempty"`
 }
 
 // DevelopmentVersion describes the programs saved before an update, not its target.

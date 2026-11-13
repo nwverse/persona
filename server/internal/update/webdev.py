@@ -69,12 +69,19 @@ def sync_dir(path):
         os.close(fd)
 
 
-def resolve():
+def resolve(request):
     refs = run(["git", "ls-remote", REPOSITORY, "refs/heads/main"], output=True)
     match = re.fullmatch(r"([a-f0-9]{40})\trefs/heads/main\n?", refs)
     if not match:
         raise ValueError("project main branch did not return a full commit")
-    return {"branch": "main", "commit": match[1]}
+    source = Path(request["work"]) / "metadata"
+    source.mkdir()
+    run(["git", "init", "--quiet", str(source)])
+    run(["git", "-C", str(source), "remote", "add", "origin", REPOSITORY])
+    # Read the committer date of the captured object, not a later branch head or check time.
+    run(["git", "-C", str(source), "fetch", "--depth=1", "--filter=blob:none", "--no-tags", "origin", match[1]])
+    updated_at = run(["git", "-C", str(source), "show", "-s", "--format=%cI", match[1]], output=True).strip()
+    return {"branch": "main", "commit": match[1], "updated_at": updated_at}
 
 
 def build(request):
@@ -403,7 +410,7 @@ def main():
     os.environ["GIT_TERMINAL_PROMPT"] = "0"
     signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(InterruptedError()))
     operation = request["operation"]
-    result = {"resolve": lambda r: resolve(), "build": build, "backup": snapshot,
+    result = {"resolve": resolve, "build": build, "backup": snapshot,
               "backups": backups, "prepare_backup": prepare_backup}[operation](request)
     write_json(Path(request["result"]), result)
 

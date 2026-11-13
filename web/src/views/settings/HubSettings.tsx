@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, errorText } from "../../lib/api";
 import { ago } from "../../lib/format";
-import { formatDate, t } from "../../i18n";
+import { t } from "../../i18n";
 import {
   applyHubUpdateBackup, channelTitle, checkHubUpdate, dockerSteps, hubUpdate, hubUpdateBackups, hubUpdateHistory, latestWarning, recordTitle, recordTone, setHubUpdateSettings, startHubUpdate,
   updateFinished, updateStateTitle, updateView, updateWorking, type HubUpdateBackup, type HubUpdateRecord, type HubUpdateStatus,
@@ -155,7 +155,12 @@ function HubUpdates() {
   const activeBackup = working ? status.latest?.backup_id : undefined;
   const selectedID = activeBackup || selectedVersion;
   const selectedBackup = status.source === "web-dev" ? backups.find(v => v.id === selectedID) : undefined;
-  const dateTime = (value?: string) => value ? formatDate(value, { dateStyle: "medium", timeStyle: "short" }) : t("settings-hubsettings.unknown");
+  const updateDate = (value?: string) => {
+    const date = value ? new Date(value) : null;
+    if (!date || Number.isNaN(date.getTime())) return t("settings-hubsettings.unknown");
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  };
+  const datedCommit = (commit?: string, date?: string) => commit ? `${updateDate(date)} · ${commit.slice(0, 12)}` : t("settings-hubsettings.unknown");
 
   return (
     <>
@@ -189,8 +194,8 @@ function HubUpdates() {
         {status.source === "web-dev" && <>
           <SettingsHint>{t("settings-hubsettings.dev_scope")}</SettingsHint>
           <Row label={t("settings-hubsettings.branch")} wrapValue>{status.development?.branch}</Row>
-          <Row label={t("settings-hubsettings.current_commit")} mono wrapValue>{status.development?.current_commit?.slice(0, 12) || t("settings-hubsettings.unknown")}</Row>
-          <Row label={t("settings-hubsettings.updated_at")} wrapValue>{dateTime(status.development?.current_updated_at)}</Row>
+          <Row label={t("settings-hubsettings.current_commit")} mono wrapValue>{datedCommit(status.development?.current_commit, status.development?.current_updated_at)}</Row>
+          <Row label={t("settings-hubsettings.latest_commit")} mono wrapValue>{!status.latest?.backup_id ? datedCommit(status.latest?.commit, status.latest?.updated_at) : t("settings-hubsettings.unknown")}</Row>
         </>}
         {status.last_check && <Row label={t("settings-hubsettings.last_check")}>{ago(status.last_check)}</Row>}
         <div className="flex justify-end px-4 py-2.5">
@@ -206,9 +211,9 @@ function HubUpdates() {
             <select aria-label={t("settings-hubsettings.update_version")} className={cx(settingsInputClass, "min-w-0 max-w-full")}
               value={selectedID} disabled={working || checking || starting || savingSource || loadingBackups}
               onChange={e => setSelectedVersion(e.target.value)}>
-              <option value="">{t("settings-hubsettings.latest_main")}{status.latest?.commit && !status.latest.backup_id ? ` · ${status.latest.commit.slice(0, 12)}` : ""}</option>
-              {backups.map(v => <option key={v.id} value={v.id}>{t("settings-hubsettings.backup_version")} · {v.commit.slice(0, 12)} · {dateTime(v.updated_at)}</option>)}
-              {activeBackup && !backups.some(v => v.id === activeBackup) && <option value={activeBackup}>{t("settings-hubsettings.backup_version")} · {status.latest?.commit?.slice(0, 12)}</option>}
+              <option value="">{t("settings-hubsettings.latest_main")}{status.latest?.commit && !status.latest.backup_id ? ` · ${datedCommit(status.latest.commit, status.latest.updated_at)}` : ""}</option>
+              {backups.map(v => <option key={v.id} value={v.id}>{t("settings-hubsettings.backup_version")} · {datedCommit(v.commit, v.updated_at)}</option>)}
+              {activeBackup && !backups.some(v => v.id === activeBackup) && <option value={activeBackup}>{t("settings-hubsettings.backup_version")} · {datedCommit(status.latest?.commit, status.latest?.updated_at)}</option>}
             </select>
           </Row>
           {backupError && <div className="flex items-center gap-3 px-4 py-2.5">
@@ -216,9 +221,8 @@ function HubUpdates() {
             <Button disabled={loadingBackups} onClick={() => void loadBackups()}>{t("settings-hubsettings.retry")}</Button>
           </div>}
           {selectedBackup && <>
-            <Row label={t("settings-hubsettings.target_commit")} mono wrapValue>{selectedBackup.commit.slice(0, 12)}</Row>
-            <Row label={t("settings-hubsettings.updated_at")} wrapValue>{dateTime(selectedBackup.updated_at)}</Row>
-            <Row label={t("settings-hubsettings.backup_created_at")} wrapValue>{dateTime(selectedBackup.created_at)}</Row>
+            <Row label={t("settings-hubsettings.target_commit")} mono wrapValue>{datedCommit(selectedBackup.commit, selectedBackup.updated_at)}</Row>
+            <Row label={t("settings-hubsettings.backup_created_at")} wrapValue>{updateDate(selectedBackup.created_at)}</Row>
             <SettingsHint>{t("settings-hubsettings.program_backup_hint")}</SettingsHint>
             {!working && <div className="flex justify-end px-4 py-2.5">
               <Button tone="accent" busy={starting} disabled={starting || checking || savingSource || loadingBackups} onClick={() => setConfirmBackup(true)}>{t("settings-hubsettings.apply_backup")}</Button>
@@ -288,10 +292,10 @@ function HubUpdates() {
                 {r.auto && <Pill>{t("settings-hubsettings.auto")}</Pill>}
                 {r.source === "web-dev" && <Pill>{t("settings-hubsettings.web_dev")}</Pill>}
                 <span className="flex-1" />
-                {(r.ended || r.started) && <span className="shrink-0 text-[11.5px] text-ink-3">{dateTime(r.ended || r.started)}</span>}
+                {(r.ended || r.started) && <span className="shrink-0 text-[11.5px] text-ink-3">{updateDate(r.ended || r.started)}</span>}
               </div>
               <div className="mt-0.5 truncate font-mono text-[11.5px] text-ink-3">{`${r.from_version} → ${r.to_version}`}</div>
-              {r.commit && <div className="mt-0.5 font-mono text-[11.5px] text-ink-3">{r.commit.slice(0, 12)}</div>}
+              {r.commit && <div className="mt-0.5 font-mono text-[11.5px] text-ink-3">{datedCommit(r.commit, r.ended || r.started)}</div>}
               {r.reason && <p className="mt-0.5 text-[11.5px] leading-snug text-ink-3">{r.reason}</p>}
             </div>
           ))}

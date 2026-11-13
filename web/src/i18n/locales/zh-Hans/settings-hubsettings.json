@@ -61,7 +61,6 @@
   "dev_auto_footer": "默认关闭。开启后每小时检查，编译固定提交，备份历史后在空闲时更新。切换渠道会关闭此选项。",
   "computer_auto": "自动更新电脑服务",
   "computer_auto_footer": "默认关闭。开启后，hub 确认成功及电脑重连时会更新匹配的电脑服务。否则请逐台使用“重新部署”。",
-  "updated_at": "更新时间",
   "update_version": "更新版本",
   "latest_main": "最新版本 · main",
   "backup_version": "历史备份",
@@ -69,5 +68,6 @@
   "program_backup_hint": "应用备份中的程序及内嵌 Web，保留当前数据库和历史数据。",
   "apply_backup": "应用备份",
   "apply_backup_confirm": "应用此程序版本？当前数据库和历史数据会保留。安装前会新建备份，并关闭开发版自动更新；更新会等待运行中的会话空闲。",
-  "backup_error": "读取历史备份失败：{error}"
+  "backup_error": "读取历史备份失败：{error}",
+  "latest_commit": "最新提交"
 }

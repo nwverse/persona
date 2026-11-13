@@ -32,6 +32,7 @@ export interface HubUpdateStatus {
     /** Why auto-update does not install this newer one. */
     held?: string;
     commit?: string;
+    updated_at?: string;
     branch?: string;
     backup_id?: string;
   };

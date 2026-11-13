@@ -43,6 +43,7 @@ async function mount(state = "available") {
     state, busy: [], auto: false, auto_notice: false, confirmed: true, auto_update_nodes: false,
     development: { configured: true, branch: "main", current_commit: "a".repeat(40), current_updated_at: "2026-11-13T10:00:00Z" },
     latest: { version: "web-dev-new", build: 202611130001, newer: true, bad: false, commit: "b".repeat(40), branch: "main",
+      updated_at: "2026-11-14T10:00:00Z",
       backup_id: state === "applying_backup" ? "snapshot-fixture" : undefined },
     backup: { id: "snapshot-fixture", retained: 3, pruned: ["snapshot-old"] }
   };
@@ -55,6 +56,10 @@ it("puts historical program versions in the development update selector and hide
   expect(host.textContent).toContain("main");
   expect(host.textContent).toContain("a".repeat(12));
   expect(host.textContent).toContain("b".repeat(12));
+  const versionGroup = host.querySelector('[data-settings-group="hub-version"]')!;
+  expect(versionGroup.textContent).toContain(`Installed commit2026-11-13 · ${"a".repeat(12)}`);
+  expect(versionGroup.textContent).toContain(`Latest commit2026-11-14 · ${"b".repeat(12)}`);
+  expect(versionGroup.textContent).not.toContain("Updated at");
   expect(host.querySelector('select[aria-label="Update version"]')?.textContent).toContain("c".repeat(12));
   const automatic = host.querySelector('[role="switch"]') as HTMLButtonElement;
   expect(automatic.getAttribute("aria-checked")).toBe("false");

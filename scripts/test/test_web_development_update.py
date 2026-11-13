@@ -53,8 +53,11 @@ class DevelopmentFixtures(unittest.TestCase):
         repository = patch.object(webdev, "REPOSITORY", self.repo.as_uri())
         repository.start()
         self.addCleanup(repository.stop)
-        selected = webdev.resolve()
+        resolve_work = self.root/"resolve"
+        resolve_work.mkdir()
+        selected = webdev.resolve({"work": str(resolve_work)})
         self.assertEqual(selected["branch"], "main")
+        self.assertEqual(selected["updated_at"], self.git("show", "-s", "--format=%cI", selected["commit"]))
         (self.repo / "newer").write_text("remote advanced after checking")
         self.git("add", ".")
         self.git("commit", "-m", "Second fixture")
@@ -84,7 +87,7 @@ if pathlib.Path(sys.argv[0]).name == 'go' and args[0] == 'build':
         self.assertFalse(any("test" in args or "vet" in args for _, args in commands))
         self.git("branch", "-m", "other")
         with self.assertRaisesRegex(ValueError, "project main branch"):
-            webdev.resolve()
+            webdev.resolve({"work": str(resolve_work)})
 
     def history_fixture(self):
         runtime = self.root / "runtime"

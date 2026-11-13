@@ -57,9 +57,10 @@ exact object even if the remote advances while building. There are no repository
 or default-branch mappings.
 
 For Web development only, **Update version** combines the latest `main` candidate and retained
-program backup versions in one selector. Current and historical versions show their commit and
-successful installation time. An unknown installation time is shown as unknown; the separate
-backup creation time is not presented as an update time. Selecting a backup exposes **Apply backup**:
+program backup versions in one selector. **Current commit** and **Latest commit** remain two rows,
+each with its update date in `yyyy-mm-dd` before the hash. The current/backup date comes from
+successful installation; the latest date is the pinned Git commit's committer date, not check time.
+Unknown dates stay unknown. Backup creation time is shown separately. Selecting a backup exposes **Apply backup**:
 after confirmation it disables development auto-update and installs the saved programs and embedded
 Web, keeping the **current database, configuration, keys and history data**. It does not check out
 Git, rebuild, extract the history archive or restore a database dump. Preparation verifies the

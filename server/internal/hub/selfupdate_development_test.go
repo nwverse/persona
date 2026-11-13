@@ -258,7 +258,7 @@ func TestDevelopmentUsesSharedInstallAndPreservesRecovery(t *testing.T) {
 				var response any
 				switch operation {
 				case "resolve":
-					response = update.DevelopmentCandidate{Branch: "main", Commit: strings.Repeat("b", 40)}
+					response = update.DevelopmentCandidate{Branch: "main", Commit: strings.Repeat("b", 40), UpdatedAt: "2026-11-13T10:00:00Z"}
 				case "build":
 					if got := input["platforms"].([]string); !slices.Equal(got, []string{runtime.GOOS + "-" + runtime.GOARCH}) {
 						t.Fatalf("unexpected build platforms: %v", got)
@@ -278,6 +278,9 @@ func TestDevelopmentUsesSharedInstallAndPreservesRecovery(t *testing.T) {
 			}
 			if _, err := u.check(context.Background()); err != nil {
 				t.Fatal(err)
+			}
+			if u.view().Latest.UpdatedAt != "2026-11-13T10:00:00Z" {
+				t.Fatal("latest commit date missing from the update view")
 			}
 			if u.wantsAuto() {
 				t.Fatal("automatic adoption before opting in")

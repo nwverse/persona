@@ -669,15 +669,16 @@ type updateView struct {
 }
 
 type latestView struct {
-	Commit   string     `json:"commit,omitempty"`
-	Branch   string     `json:"branch,omitempty"`
-	BackupID string     `json:"backup_id,omitempty"`
-	Version  string     `json:"version"`
-	Build    int64      `json:"build"` // 0 for an image (tags have no build numbers)
-	Released *time.Time `json:"released,omitempty"`
-	Notes    string     `json:"notes,omitempty"`
-	Newer    bool       `json:"newer"`
-	Bad      bool       `json:"bad"` // went back before: not installed automatically
+	Commit    string     `json:"commit,omitempty"`
+	UpdatedAt string     `json:"updated_at,omitempty"`
+	Branch    string     `json:"branch,omitempty"`
+	BackupID  string     `json:"backup_id,omitempty"`
+	Version   string     `json:"version"`
+	Build     int64      `json:"build"` // 0 for an image (tags have no build numbers)
+	Released  *time.Time `json:"released,omitempty"`
+	Notes     string     `json:"notes,omitempty"`
+	Newer     bool       `json:"newer"`
+	Bad       bool       `json:"bad"` // went back before: not installed automatically
 	// Held: why a newer release is not installed automatically even with auto-update on (Build.Hold, unreplaced), for
 	// people.
 	Held string `json:"held,omitempty"`
@@ -719,6 +720,7 @@ func (u *updater) viewIn(l i18n.Lang) updateView {
 		if r.Development != nil {
 			v.Latest.Released = nil // checked Git candidates have no publication date
 			v.Latest.Commit, v.Latest.Branch = r.Development.Commit, r.Development.Branch
+			v.Latest.UpdatedAt = r.Development.UpdatedAt
 			v.Latest.BackupID = r.Development.BackupID
 			v.Latest.Newer = r.Development.Commit != u.h.build.Commit
 			v.Latest.Bad = v.Latest.Bad || slices.Contains(u.settings.DevelopmentBad, r.Development.Commit)
