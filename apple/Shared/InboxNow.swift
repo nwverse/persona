@@ -23,7 +23,7 @@ nonisolated enum InboxNow {
     private static let timeMemo = TextMemo<String>(limit: 128)
 
     /// The row's state in the launched interface language. Only this convenience reads a clock; the compositor below is pure.
-    static func text(for item: InboxItem, now: Date = .now, calendar: Calendar = .current) -> String? {
+    static func text(for item: InboxItem, now: Date = AppClock.now, calendar: Calendar = .current) -> String? {
         let lang = interfaceTextLocale.identifier
         let formattedTime: String?
         if item.now == "waiting", let checkAt = item.follow?.checkAt {
