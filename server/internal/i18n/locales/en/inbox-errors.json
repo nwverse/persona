@@ -37,5 +37,8 @@
   "history_limit": "limit must be a number from 1 to {max}",
   "history_cursor": "before must be an RFC 3339 time, and before_id comes with it",
   "history_zone": "tz must be a time zone name, such as Europe/Berlin",
-  "bad_folder": "folder must have at least one name between the slashes"
+  "bad_folder": "folder must have at least one name between the slashes",
+  "session_ref_required": "session requires machine_id and session_id",
+  "handoff_kind": "kind must be agent or conversation",
+  "handoff_record_text": "text must be empty when session is set"
 }

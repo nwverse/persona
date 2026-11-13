@@ -36,5 +36,9 @@
   "suggested_handback": "助手给了建议，等你拿主意",
   "confirmed_agent": "你确认了，开了 Agent",
   "failed_agent": "Agent 没有开起来",
-  "handed_main": "交给了 Persona 主对话"
+  "handed_main": "交给了 Persona 主对话",
+  "handed_agent": "交给了 Agent「{title}」",
+  "handed_agent_generic": "交给了 Agent",
+  "handed_conversation": "交给了「{title}」",
+  "handed_conversation_generic": "交给了一个对话"
 }

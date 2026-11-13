@@ -37,5 +37,8 @@
   "history_limit": "limit は1〜{max}の数値にしてください。",
   "history_cursor": "before はRFC 3339形式の時刻にしてください。before_id は before と一緒に指定します。",
   "history_zone": "tz にはタイムゾーン名（例: Europe/Berlin）を指定してください。",
-  "bad_folder": "フォルダのパスには少なくとも 1 つの名前が必要です。"
+  "bad_folder": "フォルダのパスには少なくとも 1 つの名前が必要です。",
+  "session_ref_required": "session には machine_id と session_id が必要です。",
+  "handoff_kind": "kind は agent または conversation にしてください。",
+  "handoff_record_text": "session を指定する場合は text を空にしてください。"
 }
