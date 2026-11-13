@@ -650,6 +650,7 @@ sending identity or confirmation behavior.
 - Web sidebar groups share visible disclosure chevrons and sticky, interactive headings in every grouping (to-do, computer, repository, project and state). Nested group headings stack below their parents and the measured Persona row; the next sibling replaces the current heading as it scrolls past. The Agents title, grouping segments and quick filters form one sticky toolbar below Persona (at the viewport top on the phone Agents page). One chevron button (`GroupFoldButton`, drawn by `FoldAllButton` in `web/src/ui/FoldAllButton.tsx`) is the list's only Collapse all / Expand all; the list menu does not repeat them, and the keyboard shortcut stays (#6447). Its icon shows the next action like its label: corners pointing in (`foldToggle`) for Collapse all, pointing out (`unfoldToggle`) for Expand all, so a folded list's button reads as "open". It acts on the list under the controls only: the Agents title, grouping segments, quick filters, search and Filter never fold with it. Its action follows what is on screen, so a click always changes something (`agentsFoldAction`): Collapse all while any visible group is open folds every group to its heading, and Expand all when they are all folded opens them; with the list folded under the Agents title (the title's own click), Expand all opens the list and every group in it. The chat-list view, and a list with no groups at all (a grouping still loading, nothing listed), have no headings to fold to, so the button is not shown: folding a flat list's rows would leave a blank under the search that reads as an empty list, and a flat list gets no invented heading (below). A first fix folded the whole block there, taking the controls with it; the owner rejected it. Its spoken label names the next action, and the same words show in a tooltip under it on hover after 300 ms and on keyboard focus (a dark tooltip in the `--tooltip-*` colors, no native `title`), with no second line explaining them: the owner found Collapse all / Expand all needs none. Why: before #6447 it acted on the groups alone, so in the chat-list view and under a folded block a click only flipped its own label. The toolbar stays above the section headings on an opaque theme background, with no fog over the first heading. Individual folds remain independently reversible; flat conversation lists have no invented group headings.
 - A grouping's top level is one kind of row (#6458): in the web's **By to-do** that is the to-do's row (chevron, mark, title, count, state word, each in the same place), and the groups beside the to-dos (Not on a to-do, Recent (not running)) are rows of that kind, never a heading of another look. Where an Agent came from is its row's source mark (Terminal, Lark, Desktop app), not a group of its own: the Agents opened by hand in a terminal are in Not on a to-do (#6591). A group's state is the most urgent of its sessions', after its count, as a to-do's is; a to-do's word is the one its own page uses (5.6). No grouping nests a location (repository, folder) under a grouping that is not by location. What a group holds, when its name does not say, is an ⓘ beside its title (3.8 "Info tips") and the group's empty state, never a line always shown under it. Rows that fold groups select no text (`select-none`): a drag over them painted the grey `::selection` behind each line.
 - A long list of records on a detail page (a to-do's Decisions, web and iOS, #6447): the first five show, with **Show all N** under them and **Show the first 5** to go back. The header carries the fold-all button with the Agents title row's meaning (the web's chevron icon, corners in to collapse and out to expand, and its name as the tooltip; iOS's Collapse All / Expand All symbols, `Theme.Icon.collapseAll` / `expandAll`): Collapse all while any record is shown folds the list away, Expand all shows it whole. The header's count is unchanged by what is shown. Nothing is stored: each to-do opens at the first five, and recording or revising one shows the whole list so the new one is in view. No button while the list is empty.
+- **Inbox matter detail** (#6611; web `InboxDetail.tsx` and `InboxEvent.tsx`): the title's small line says where and who, then the current state, any suggestion, the background and the timeline. The state sentence keeps the processing-conversation link and offers **Say something** when no suggestion is waiting, or **Try again** after a failure; the instruction field reuses the suggestion editor's input and standard small buttons. The timeline starts with the three newest steps and expands on request. A `reported` step always uses the reported icon and is distinguished from program-confirmed steps by the existing neutral **Tag** ("Assistant says") and secondary text, not a new surface, tint or token. Source and Agent states reuse the existing brand marks and shared state words; missing fields keep the old presentation.
 - Status sections (web To-dos, #3156): a list grouped by what the user should do next uses folding section titles in a fixed order (what the user has to act on, then the unfinished work, then what just finished; only Shelved and Done start folded, Done last, #5707), one row per piece of work with related items behind an "N related" disclosure, and stale items folded under Shelved with a one-tap Restore instead of being hidden or deleted. A row that is only worth a look (Just finished) has a one-tap **Got it** under its words, the same secondary button as Restore (iOS: also a leading swipe action after the full swipe's own), which files it under Done at once with an Undo toast (4.4, reversible rung); opening the item counts as seeing it, without a word. Rules in `docs/assistant/todo-status-sop.md` ("Seen"). Why not the folder groups: they say where work lives, not who has to act. Why unfinished work above Just finished: what still has to be done should not take a scroll and a tap while finished work sits above it.
   - Section titles are the Agents list's state headers (`SectionHeader`: the name and a `CountBadge` in the state's tone; `FoldButton` for the folding ones), and the count is the items listed under the title. No separate summary line repeats them (#3712).
   - "N related" sits inside the row it belongs to, under its words; opened, the related rows come under it a level in, with a line down their side.
@@ -836,26 +837,40 @@ yet"); Android puts them first in the composer's one @ list under "Message a tas
 under "Mention a file or session", the typed word narrowing all of them, so the list takes no more room above the
 keyboard than before.
 
-New chat's @ (iOS `StarterComposer` with `MentionSource(machine:)`, Android `starterMentionSource`; #4339 C16): a
-conversation that doesn't exist yet has no tasks, files or folder, so the list offers the agents' sessions on every
-computer (newest first, at most eight, Persona's own conversations left out) and, once a typed word is an absolute or `~`
-path with a slash, that folder alone, read from the assistant's computer: folders first, then files, names that start with
-the word first, hidden ones only after a typed dot. A picked folder stays typed with its slash and the list browses it;
-a picked file types `@path `; a picked session waits over the composer as a chat's quote card and goes in front of the
-first message as a `<persona-context>` tag. While the list is open, what needs the user over the composer steps aside
-(iOS `MentionMenuOpen`): above the keyboard the lines, the list and the composer don't fit together. They fade and fold
-away as the list comes in and back as it goes, in the state motion (`Tokens.Motion.State`; iOS `withAnimation(Theme.Motion.standard)`;
-Android `NeedsStepAside`, the list growing in with the same spring on Glass), and the dock keeps the page's own backdrop
-meanwhile, so the things to ask fade out above it instead of being cut at the composer. Same rows and words
-as a chat's @ list ("Reading folder…", "Nothing matches in this folder" while browsing); every style draws it in its own
-list, since it is behaviour.
+New chat's @ (iOS `StarterComposer` with `MentionSource(machine:)`, Android `starterMentionSource`; #4339 C16, workspaces #2599): a
+conversation that doesn't exist yet has no tasks, files or folder, so on iPhone and iPad the list offers Persona's workspaces,
+then the agents' sessions on every computer (newest first, at most eight, Persona's own conversations left out) and, once a
+typed word is an absolute or `~` path with a slash, that folder alone, read from the assistant's computer: folders first, then
+files, names that start with the word first, hidden ones only after a typed dot. A picked folder stays typed with its slash and
+the list browses it; a picked file types `@path `; a picked workspace or session waits over the composer as a context card and
+goes in front of the first message as a `<persona-context>` tag. While the list is open, what needs the user over the composer
+steps aside (iOS `MentionMenuOpen`): above the keyboard the lines, the list and the composer don't fit together. They fade and
+fold away as the list comes in and back as it goes, in the state motion (`Tokens.Motion.State`; iOS
+`withAnimation(Theme.Motion.standard)`; Android `NeedsStepAside`, the list growing in with the same spring on Glass), and the
+dock keeps the page's own backdrop meanwhile, so the things to ask fade out above it instead of being cut at the composer.
+Same rows and words as a chat's @ list ("Reading folder…", "Nothing matches in this folder" while browsing); every style draws
+it in its own list, since it is behaviour.
 
 A chat's @ list (iOS `ComposerMentionMenu` with `MentionSource(machine:cwd:files:)`, Android `mentionRows`; #4339 C16) reads
 its session's computer: after the files its tools used it lists the session folder's own entries (folders first, then files,
 hidden ones only after a typed dot, at most twelve, none a used file already is; "Folder" for a folder and "Session folder"
-for a file beside the name), then the other sessions; a word with a slash lists that folder alone, relative to the session's,
-and a picked folder keeps the list browsing it. The + menu has the same list's first step, "Mention a file or session", in
-every composer that has an @ list: it types the `@` at the caret, as the @ button beside + does.
+for a file beside the name), then Persona's workspaces on iPhone and iPad, then the other sessions; a word with a slash lists
+that folder alone, relative to the session's, and a picked folder keeps the list browsing it. The + menu has the same list's
+first step, "Mention a file or session", in every composer that has an @ list: it types the `@` at the caret, as the @ button
+beside + does.
+
+Workspace rows (#2599) are the existing resource row with the folder mark, title and a second line computer · shortened folder
+(· branch), at most eight after the folder's entries and before sessions. They match title, raw folder, computer or branch,
+case-insensitively; title prefixes come first, then available before unavailable, stable in the hub's order. The first row for
+one computer and folder wins (trailing `/` ignored), and folderless rows are omitted. Unavailable rows stay pickable. Persona's
+conversations and the ordinary new conversation read `GET /api/v1/workspaces` once per opening; Agents, Health, Mac and
+visionOS don't offer them. The active hub link holds only its last good in-memory snapshot: later openings show it before
+the request answers, a different answer replaces it, and an old hub or unavailable manager keeps it. A hub that has never
+answered has none, so only that first opening can shift when the response arrives; there is no prefetch. Removing the hub
+group drops the link and its snapshot. A pick takes the @word out
+and adds a removable Workspace context using the existing `QuoteBar`; send writes `<persona-context kind="workspace"
+machine="…" cwd="…" branch="…">` before the message (`branch` when known), which the manager expands as for the web. No new
+component, token, style or setting is introduced. The separate legacy BeautifulUI `PromptComposer` @ menu is unchanged.
 
 Agent header permission mode (#3719, `HeaderModeButton` in `apple/Persona/Views/Chat/SessionModes.swift`): an icon-only
 capsule at the trailing end of the open Agents header's second row, under `⋯`, as tall as the tabs, with a 44 pt target that
