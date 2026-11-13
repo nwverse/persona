@@ -3,6 +3,8 @@ package assistant
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -115,5 +117,49 @@ func TestKBCountedModel(t *testing.T) {
 	}
 	if kbCounted(nil) != nil {
 		t.Fatal("a missing model became one")
+	}
+}
+
+// The index lane (the search index, kb/search_index.go) builds the index on its first run and then follows the
+// files at most every kbIndexEvery, since a run looks at every file and a live message kicks a round every few
+// seconds; text deleted on purpose does not wait, so the index never keeps it past the next round.
+func TestKBIndexLaneRunsWhenThereIsSomethingToDo(t *testing.T) {
+	s := newKBService(t, newFakeHub())
+	e := kbEng(t, s)
+	ctx := context.Background()
+	var last time.Time
+	if e.Store.SearchIndexReady() || !e.Store.SearchIndexWanted() {
+		t.Fatal("a new archive says it has a search index")
+	}
+	if !s.kbIndexLane(ctx, e, &last) || !e.Store.SearchIndexReady() || last.IsZero() {
+		t.Fatal("the first run built no index")
+	}
+	if s.kbIndexLane(ctx, e, &last) {
+		t.Fatal("ran again at once with nothing asked of it")
+	}
+	e.Store.SearchIndexPurge()
+	if !s.kbIndexLane(ctx, e, &last) || e.Store.SearchIndexWanted() {
+		t.Fatal("text was deleted on purpose and the index waited")
+	}
+	last = last.Add(-kbIndexEvery)
+	if !s.kbIndexLane(ctx, e, &last) {
+		t.Fatalf("did not run %s after its last run", kbIndexEvery)
+	}
+	// The loop's lanes have it, and a round runs it.
+	var lane *kbLane
+	for _, l := range s.kbLaneSet(&kbRounds{}).lanes {
+		if l.name == "index" {
+			lane = l
+		}
+	}
+	if lane == nil {
+		t.Fatal("the knowledge base has no index lane")
+	}
+	if err := os.RemoveAll(filepath.Join(e.Store.Dir, kb.SearchIndexDir)); err != nil {
+		t.Fatal(err)
+	}
+	s.kbRunLane(ctx, e, lane)
+	if _, err := os.Stat(filepath.Join(e.Store.Dir, kb.SearchIndexDir, "manifest.json")); err != nil {
+		t.Fatalf("the lane wrote no index: %v", err)
 	}
 }

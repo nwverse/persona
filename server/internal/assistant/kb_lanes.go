@@ -20,7 +20,11 @@ import (
 //   - topics: knowledge points' distill and merge (topics and their sources' marks, under the store's topicMu);
 //   - minutes: meeting minutes from recordings (the recordings' minutes, under recMu);
 //   - recap: the daily recap of all-day recordings (their notes and recaps, under recMu; kb_day.go), so a long day
-//     never holds back a meeting's minutes.
+//     never holds back a meeting's minutes;
+//   - index: the search index (kb/search_index.go; .search/ in the data dir, which only this lane writes). It reads
+//     the files changed since its last run; its first run on an existing archive reads them all, which is why it
+//     has a lane of its own: search answers meanwhile by reading the files the index has not reached. Not at every
+//     kick (kbIndexEvery): a run looks at every file.
 //
 // The loop (kbLoop) starts a lane when it is due (a round's time, a wake, a kick) and not still running; one still
 // running when it became due starts again as soon as it ends, as a round used to after a long one.
@@ -90,6 +94,7 @@ func (k *kbLanes) startDue(prepare func() bool, run func(l *kbLane)) {
 
 // kbLaneSet is the knowledge base's lanes; r is the archive lane's own bookkeeping (only that lane touches it).
 func (s *Service) kbLaneSet(r *kbRounds) *kbLanes {
+	var indexed time.Time // when the index lane last ran (only that lane touches it)
 	return newKBLanes(
 		&kbLane{name: "archive", run: func(ctx context.Context, e *kb.Engine) { s.kbArchiveLane(ctx, e, r) }},
 		&kbLane{name: "topics", run: func(ctx context.Context, e *kb.Engine) {
@@ -103,7 +108,40 @@ func (s *Service) kbLaneSet(r *kbRounds) *kbLanes {
 		// All-day recordings' recaps (kb/day_recap_write.go): one recording's notes or recap a run, and the day's push
 		// at its recap time; appends that finished an hour wake it.
 		&kbLane{name: "recap", run: func(ctx context.Context, e *kb.Engine) { e.WriteDayRecaps(ctx, 1) }},
+		&kbLane{name: "index", run: func(ctx context.Context, e *kb.Engine) { s.kbIndexLane(ctx, e, &indexed) }},
 	)
+}
+
+const (
+	// kbIndexEvery is the least time between two index runs that only follow the files: a run stats every file of
+	// the archive (half a second at four million lines), and live messages kick a round every few seconds. A file
+	// the index has not read yet costs a search one read, so nothing waits for it. A first build, an index that
+	// failed a check and text deleted on purpose (kb.Store.SearchIndexWanted) do not wait.
+	kbIndexEvery = time.Minute
+	// An index run that read this many files, or took this long, is worth a log line (a first build, the catch-up
+	// after an import); the few files of an ordinary round are not.
+	kbIndexSayFiles = 1000
+	kbIndexSayTook  = 5 * time.Second
+)
+
+// kbIndexLane is one run of the index lane: the search index brought up to date with the files, unless the last
+// run (*last) was within kbIndexEvery and nothing is asked of this one; it reports whether it ran. A run cut short
+// (the manager stops) keeps what it read. The log says counts and times, and an error names at most a file of the
+// index: never a file of the archive, never a word.
+func (s *Service) kbIndexLane(ctx context.Context, e *kb.Engine, last *time.Time) bool {
+	if time.Since(*last) < kbIndexEvery && !e.Store.SearchIndexWanted() {
+		return false
+	}
+	stats, err := e.UpdateSearchIndex(ctx)
+	*last = time.Now()
+	switch {
+	case err != nil && ctx.Err() == nil:
+		s.logf("kb: search index: %v (search reads the files it does not have)", err)
+	case stats.Rebuilt || stats.Read >= kbIndexSayFiles || stats.Took >= kbIndexSayTook:
+		s.logf("kb: search index: read %d of %d file(s) in %s (waiting %d, dropped %d, merged %v, started again %v)",
+			stats.Read, stats.Files, stats.Took.Round(time.Millisecond), stats.Waiting, stats.Dropped, stats.Merged, stats.Rebuilt)
+	}
+	return true
 }
 
 // kbRunLane runs one go of l with e, under kbRun, and logs what it did when it called the model or took longer than a

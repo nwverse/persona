@@ -90,11 +90,12 @@ func matcher(query string) func(string) bool {
 // Nor is live ingestion's bookkeeping in a chat (ingest.go): the receipts
 // (.receipts.json: the source, every message's id and time, one long line), the intent of a write in progress
 // (.ingest.json) and the zone the days are in (messages/.zone, zone.go). Profile files are read before any day, so a
-// query of digits, a date or the source's name matched every chat's receipts and filled the limit (#5991).
+// query of digits, a date or the source's name matched every chat's receipts and filled the limit (#5991). Nor is the
+// search index itself (.search/, search_index.go).
 func searchable(rel string) bool {
 	parts := strings.Split(filepath.ToSlash(rel), "/")
 	switch {
-	case parts[0] == "cursors" || parts[0] == "history" || parts[0] == selectDir || parts[0] == trashDirName:
+	case parts[0] == "cursors" || parts[0] == "history" || parts[0] == selectDir || parts[0] == trashDirName || parts[0] == SearchIndexDir:
 		return false
 	case len(parts) == 3 && parts[0] == KindChat && (parts[2] == retentionFile || parts[2] == ingestReceipts || parts[2] == ingestJournal):
 		return false
@@ -339,8 +340,9 @@ func (e *Engine) walkLocked() *dirWalk {
 		for i := range ents {
 			switch d := &ents[i]; {
 			case d.dir:
-				// Attachments hold no text; history/ and select/ are bookkeeping, not searched (see searchable).
-				if d.name != "attachments" && d.rel != "history" && d.rel != selectDir {
+				// Attachments hold no text; history/, select/ and the search index are bookkeeping, not searched (see
+				// searchable).
+				if d.name != "attachments" && d.rel != "history" && d.rel != selectDir && d.rel != SearchIndexDir {
 					walk(d.path, d.rel)
 				}
 			case d.day:

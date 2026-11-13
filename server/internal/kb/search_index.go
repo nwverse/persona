@@ -1,0 +1,500 @@
+package kb
+
+import (
+	"bufio"
+	"encoding/binary"
+	"encoding/json"
+	"errors"
+	"hash/crc32"
+	"io"
+	"io/fs"
+	"maps"
+	"os"
+	"path/filepath"
+	"slices"
+	"sort"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+	"unicode"
+
+	"golang.org/x/text/unicode/norm"
+)
+
+// The search index (#1273, docs/assistant/knowledge.md "Search index") lets Find, Search and Matches pass over a
+// file without reading it. It is kept in the data dir itself, in .search/: the files stay the source of truth, the
+// index is only what was worked out from them, and it goes when the data dir goes.
+//
+// What it holds: for each file it has read, the path, mtime and size the file had then, and the file's keys
+// (search_index_grams.go). What it is asked: "can this file, as it is now, hold every word of the query?". It may
+// only answer no for a file whose path, mtime and size are the ones it read, so a file changed, added, renamed or
+// not read yet is never passed over: the search reads it as it always did. An index that is missing, half built,
+// behind or damaged therefore changes how long a search takes and nothing else.
+//
+// On disk:
+//
+//	.search/manifest.json    which files below make up the index, and what they were built with
+//	.search/seg-<n>.idx      segments (search_index_segment.go), immutable; a file's newest entry is the one used
+//	.search/log-<n>.log      the files read since the last segment was written, appended to; they come first
+//
+// One process writes it, the one that holds the data dir (UpdateSearchIndex, search_index_update.go); a read-only
+// store uses what is there, and looks every indexFollowEvery whether the writer has published another.
+const (
+	// SearchIndexDir is the index's directory in the data dir. Worked out from the files, so a copy of the data dir
+	// can leave it out (the history import's backups do).
+	SearchIndexDir   = ".search"
+	indexManifest    = "manifest.json"
+	indexFormat      = 1
+	indexLogMagic    = "PKBLOG1\n"
+	indexLogMaxEntry = 256 << 20
+)
+
+// indexFollowEvery is how often a read-only store looks at the manifest for another process's update (a variable
+// for the tests).
+var indexFollowEvery = 30 * time.Second
+
+// indexTables names the tables fold was built with: a key is taken from fold's output, so an index written with
+// other case or normalization tables is not asked (it is built again).
+var indexTables = unicode.Version + "/" + norm.Version
+
+type indexManifestFile struct {
+	Format int    `json:"format"`
+	Tables string `json:"tables"`
+	// Seq is the last number given to a file of the index.
+	Seq uint64 `json:"seq"`
+	// Segments, oldest first, and the log (may not exist yet).
+	Segments []string `json:"segments"`
+	Log      string   `json:"log"`
+	// Merged is when the segments were last written as one: entries of files gone or changed since are in it at
+	// most that long (UpdateSearchIndex).
+	Merged time.Time `json:"merged"`
+	// Complete: an update has finished since the index was started, so it holds the archive but for what changed
+	// since (SearchIndexReady).
+	Complete bool `json:"complete"`
+}
+
+// errIndexVersion: the index was written with another format or other folding tables.
+var errIndexVersion = errors.New("search index: written by another version")
+
+// damaged reports whether err says the index itself is wrong (so it is built again), not that reading it failed
+// this time (so it is tried again).
+func damaged(err error) bool {
+	var syntax *json.SyntaxError
+	var typ *json.UnmarshalTypeError
+	return errors.Is(err, errSegment) || errors.Is(err, errIndexVersion) || errors.Is(err, fs.ErrNotExist) ||
+		errors.As(err, &syntax) || errors.As(err, &typ)
+}
+
+// docRef is where a file's entry is in a snapshot's segments, with what tells the file changed since.
+type docRef struct {
+	seg  int32
+	id   uint32
+	mod  int64
+	size int64
+}
+
+// searchSnap is the index as one search sees it. Never changed once published.
+type searchSnap struct {
+	segs  []*indexSeg
+	where map[string]docRef    // by path: the file's entry in the newest segment that has one
+	log   map[string]*builtDoc // by path: the files in the log; they come before where
+}
+
+func (s *searchSnap) empty() bool { return s == nil || len(s.where) == 0 && len(s.log) == 0 }
+
+// searchIndex is a store's index: the snapshot searches use, and the writer's state.
+type searchIndex struct {
+	// update: one writer at a time (UpdateSearchIndex), for the whole of its run.
+	update sync.Mutex
+	// mu guards loading and publishing; held briefly.
+	mu     sync.Mutex
+	loaded bool
+	snap   atomic.Pointer[searchSnap]
+	man    indexManifestFile
+	logLen int64 // the log's valid bytes
+	// logOld counts the log's entries that a later one replaced: still on disk until the log becomes a segment.
+	logOld int
+	// manStat is the manifest's mtime and size when it was read, and looked when a read-only store last compared
+	// them with the file's (UnixNano).
+	manStat fileTime
+	looked  atomic.Int64
+	// broken: a check failed while the index was read. It is not asked again until the writer rebuilt it.
+	broken atomic.Bool
+	// ready: the manifest's Complete (SearchIndexReady).
+	ready atomic.Bool
+	// purge: files were deleted on purpose (a source forgotten, retention): the next update drops their entries
+	// at once instead of within the hour.
+	purge atomic.Bool
+}
+
+func (s *Store) searchDir() string { return filepath.Join(s.Dir, SearchIndexDir) }
+
+// snapshot is the index to search with, read from disk the first time; nil when there is none to use. follow: the
+// store does not write the index (it is read-only), so the one on disk is read again when its manifest changed.
+func (ix *searchIndex) snapshot(dir string, follow bool) *searchSnap {
+	if follow {
+		now, last := time.Now().UnixNano(), ix.looked.Load()
+		if now-last >= int64(indexFollowEvery) && ix.looked.CompareAndSwap(last, now) {
+			ix.mu.Lock()
+			if ix.loaded && statFile(filepath.Join(dir, indexManifest)) != ix.manStat {
+				ix.loaded = false
+				ix.broken.Store(false)
+				ix.snap.Store(nil)
+			}
+			ix.mu.Unlock()
+		}
+	}
+	if ix.broken.Load() {
+		return nil
+	}
+	if snap := ix.snap.Load(); snap != nil {
+		return snap
+	}
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	if !ix.loaded && ix.loadLocked(dir) != nil {
+		return nil
+	}
+	return ix.snap.Load()
+}
+
+// reload reads the index from disk again when snap is still the one in use: a file of it is gone, which is another
+// process's merge when the manifest names other files now, and damage when it still names that one.
+func (ix *searchIndex) reload(dir string, snap *searchSnap) {
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	if ix.snap.Load() == snap {
+		_ = ix.loadLocked(dir)
+	}
+}
+
+// loadLocked reads the index from dir. One that does not check out leaves an empty index and broken set, for the
+// writer to start again; when reading failed for another reason nothing is loaded, and the next caller tries again.
+// ix.mu is held.
+func (ix *searchIndex) loadLocked(dir string) error {
+	ix.man, ix.logLen, ix.logOld = indexManifestFile{}, 0, 0
+	ix.manStat = statFile(filepath.Join(dir, indexManifest))
+	snap, man, logLen, logOld, err := readIndex(dir)
+	switch {
+	case err == nil:
+		ix.man, ix.logLen, ix.logOld = man, logLen, logOld
+		ix.snap.Store(snap)
+		ix.ready.Store(man.Complete)
+	case damaged(err):
+		ix.broken.Store(true)
+		ix.snap.Store(&searchSnap{})
+	default:
+		return err
+	}
+	ix.loaded = true
+	return nil
+}
+
+// readIndex reads the index at dir: an empty one when there is no manifest. logLen and logOld are the log's whole
+// entries in bytes, and how many of them a later entry replaced.
+func readIndex(dir string) (snap *searchSnap, man indexManifestFile, logLen int64, logOld int, err error) {
+	raw, err := os.ReadFile(filepath.Join(dir, indexManifest))
+	if errors.Is(err, fs.ErrNotExist) {
+		return &searchSnap{}, man, 0, 0, nil
+	}
+	if err != nil {
+		return nil, man, 0, 0, err
+	}
+	if err := json.Unmarshal(raw, &man); err != nil {
+		return nil, man, 0, 0, err
+	}
+	if man.Format != indexFormat || man.Tables != indexTables {
+		return nil, man, 0, 0, errIndexVersion
+	}
+	snap = &searchSnap{}
+	for _, name := range man.Segments {
+		if name != filepath.Base(name) {
+			return nil, man, 0, 0, errSegment
+		}
+		seg, err := openSeg(filepath.Join(dir, name))
+		if err != nil {
+			return nil, man, 0, 0, err
+		}
+		snap.segs = append(snap.segs, seg)
+	}
+	snap.where = whereOf(snap.segs)
+	if man.Log != "" {
+		if man.Log != filepath.Base(man.Log) {
+			return nil, man, 0, 0, errSegment
+		}
+		if snap.log, logLen, logOld, err = readIndexLog(filepath.Join(dir, man.Log)); err != nil {
+			return nil, man, 0, 0, err
+		}
+	}
+	return snap, man, logLen, logOld, nil
+}
+
+// whereOf maps every path of segs to its entry in the newest segment that has one.
+func whereOf(segs []*indexSeg) map[string]docRef {
+	n := 0
+	for _, s := range segs {
+		n += len(s.docs)
+	}
+	where := make(map[string]docRef, n)
+	for i, s := range segs {
+		for id, d := range s.docs {
+			where[d.name] = docRef{seg: int32(i), id: uint32(id), mod: d.mod, size: d.size}
+		}
+	}
+	return where
+}
+
+// readIndexLog reads the log at path: its files (the last entry of each), how many of its bytes are whole entries,
+// and how many entries a later one replaced. What follows the whole entries (an append cut short) is not read; the
+// writer cuts it off. No file is an empty log.
+func readIndexLog(path string) (docs map[string]*builtDoc, valid int64, old int, err error) {
+	f, err := os.Open(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, 0, 0, nil
+	}
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	defer f.Close()
+	r := bufio.NewReaderSize(f, 1<<20)
+	head := make([]byte, len(indexLogMagic))
+	switch n, err := io.ReadFull(r, head); {
+	case err == nil && string(head) == indexLogMagic:
+	case (err == io.EOF || err == io.ErrUnexpectedEOF) && string(head[:n]) == indexLogMagic[:n]:
+		// Its first append was cut short (the log is not synced: a crash loses the newest entries, whose files are
+		// read again): a log with nothing in it yet.
+		return map[string]*builtDoc{}, 0, 0, nil
+	case err != nil && err != io.EOF && err != io.ErrUnexpectedEOF:
+		return nil, 0, 0, err
+	default:
+		return nil, 0, 0, errSegment
+	}
+	docs = map[string]*builtDoc{}
+	valid = int64(len(indexLogMagic))
+	var frame [8]byte
+	for {
+		if _, err := io.ReadFull(r, frame[:]); err != nil {
+			break
+		}
+		n := binary.LittleEndian.Uint32(frame[:])
+		if n == 0 || n > indexLogMaxEntry {
+			break
+		}
+		body := make([]byte, n)
+		if _, err := io.ReadFull(r, body); err != nil || crc32.Checksum(body, crcTable) != binary.LittleEndian.Uint32(frame[4:]) {
+			break
+		}
+		d, ok := decodeLogEntry(body)
+		if !ok {
+			break
+		}
+		if docs[d.name] != nil {
+			old++
+		}
+		docs[d.name] = d
+		valid += 8 + int64(n)
+	}
+	return docs, valid, old, nil
+}
+
+func encodeLogEntry(dst []byte, d *builtDoc) []byte {
+	start := len(dst)
+	dst = append(dst, 0, 0, 0, 0, 0, 0, 0, 0)
+	dst = binary.AppendUvarint(dst, uint64(len(d.name)))
+	dst = append(dst, d.name...)
+	dst = binary.LittleEndian.AppendUint64(dst, uint64(d.mod))
+	dst = binary.AppendUvarint(dst, uint64(d.size))
+	dst = binary.AppendUvarint(dst, uint64(len(d.keys)))
+	prev := uint64(0)
+	for _, k := range d.keys {
+		dst = binary.AppendUvarint(dst, k-prev)
+		prev = k
+	}
+	body := dst[start+8:]
+	binary.LittleEndian.PutUint32(dst[start:], uint32(len(body)))
+	binary.LittleEndian.PutUint32(dst[start+4:], crc32.Checksum(body, crcTable))
+	return dst
+}
+
+func decodeLogEntry(b []byte) (*builtDoc, bool) {
+	n, b, ok := takeUvarint(b)
+	if !ok || n > uint64(len(b)) {
+		return nil, false
+	}
+	d := &builtDoc{}
+	d.name, b = string(b[:n]), b[n:]
+	if len(b) < 8 {
+		return nil, false
+	}
+	d.mod = int64(binary.LittleEndian.Uint64(b))
+	size, b, ok := takeUvarint(b[8:])
+	if !ok {
+		return nil, false
+	}
+	d.size = int64(size)
+	count, b, ok := takeUvarint(b)
+	if !ok || count > uint64(len(b)) {
+		return nil, false
+	}
+	d.keys = make([]uint64, count)
+	key := uint64(0)
+	for i := range d.keys {
+		var gap uint64
+		if gap, b, ok = takeUvarint(b); !ok || (i > 0 && gap == 0) {
+			return nil, false
+		}
+		key += gap
+		d.keys[i] = key
+	}
+	return d, len(b) == 0
+}
+
+// searchFilter is the index asked one query: skip says which files a search need not read.
+type searchFilter struct {
+	snap    *searchSnap
+	clauses []gramClause
+	cand    []bitset // per segment: the files that can hold every word
+}
+
+// skip reports whether the file at name (relative to the data dir, with slashes), whose stat is st now, cannot hold
+// every word of the query. False for a file the index did not read as it is now.
+func (f *searchFilter) skip(name string, st fileTime) bool {
+	if d := f.snap.log[name]; d != nil {
+		return d.mod == st.mod && d.size == st.size && !keysMay(d.keys, f.clauses)
+	}
+	r, ok := f.snap.where[name]
+	return ok && r.mod == st.mod && r.size == st.size && !f.cand[r.seg].has(r.id)
+}
+
+// keysMay reports whether a file with these keys (sorted) can hold every clause's word.
+func keysMay(keys []uint64, clauses []gramClause) bool {
+	for _, c := range clauses {
+		if len(c.all) == 0 {
+			i := sort.Search(len(keys), func(i int) bool { return keys[i] >= c.lo })
+			if i == len(keys) || keys[i] >= c.hi {
+				return false
+			}
+			continue
+		}
+		for _, k := range c.all {
+			if _, ok := slices.BinarySearch(keys, k); !ok {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// filter asks the index the query of words ws (folded, as words returns them). Nil when there is nothing to ask:
+// no index, or one that failed a check just now (broken is set and the caller searches without it). follow as for
+// snapshot.
+func (ix *searchIndex) filter(dir string, ws []string, follow bool) *searchFilter {
+	clauses, ok := queryClauses(ws)
+	if !ok {
+		return nil
+	}
+	for range 3 { // again when the segments were replaced while they were read
+		snap := ix.snapshot(dir, follow)
+		if snap.empty() {
+			return nil
+		}
+		f := &searchFilter{snap: snap, clauses: clauses, cand: make([]bitset, len(snap.segs))}
+		var err error
+		for i, s := range snap.segs {
+			if f.cand[i], err = s.candidates(clauses); err != nil {
+				break
+			}
+		}
+		if err == nil {
+			return f
+		}
+		if ix.snap.Load() != snap {
+			continue
+		}
+		if errors.Is(err, fs.ErrNotExist) {
+			ix.reload(dir, snap)
+			continue
+		}
+		if damaged(err) {
+			ix.broken.Store(true)
+		}
+		return nil
+	}
+	return nil
+}
+
+// searchFilter is the index asked the query of ws for this engine's store; nil without one. A damaged index is
+// said once, then left alone until the next update builds it again.
+func (e *Engine) searchFilter(ws []string) *searchFilter {
+	ix := &e.Store.search
+	was := ix.broken.Load()
+	f := ix.filter(e.Store.searchDir(), ws, e.Store.readOnly)
+	if !was && ix.broken.Load() {
+		e.logf("search index: a check failed; searching without it until it is built again")
+	}
+	return f
+}
+
+// SearchIndexReady reports whether the archive has a search index: an update has finished since it was started (or
+// started again after a check failed), so searches read only what changed since and what can hold their words.
+func (s *Store) SearchIndexReady() bool {
+	ix := &s.search
+	ix.snapshot(s.searchDir(), s.readOnly)
+	return ix.ready.Load() && !ix.broken.Load()
+}
+
+// SearchIndexWanted reports whether an update has more to do than follow the files as they change: the index has
+// not been through every file yet, a check of it failed, or text was deleted on purpose (SearchIndexPurge).
+func (s *Store) SearchIndexWanted() bool { return s.search.purge.Load() || !s.SearchIndexReady() }
+
+// SearchIndexPurge has the next update drop at once every entry that is not of a file as it is now: called after
+// text was deleted on purpose (a source forgotten, retention, a recording or project deleted), so the index does
+// not keep what the knowledge base no longer has.
+func (s *Store) SearchIndexPurge() { s.search.purge.Store(true) }
+
+// writeIndexFile replaces path with data through a temporary file, synced before it is renamed: a manifest never
+// names a file that is not on disk yet.
+func writeIndexFile(path string, data []byte) error {
+	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	err = f.Chmod(0o600)
+	if err == nil {
+		_, err = f.Write(data)
+	}
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		_ = os.Remove(tmp)
+	}
+	return err
+}
+
+// indexOwned reports whether name is a file the index wrote (so one it may delete).
+func indexOwned(name string) bool {
+	return name == indexManifest || strings.HasPrefix(name, indexManifest+".tmp-") ||
+		strings.HasPrefix(name, "seg-") && (strings.HasSuffix(name, ".idx") || strings.HasSuffix(name, ".tmp")) ||
+		strings.HasPrefix(name, "log-") && strings.HasSuffix(name, ".log")
+}
+
+// cloneWhere copies where for a new snapshot that adds seg (at index i) to it.
+func cloneWhere(where map[string]docRef, i int, seg *indexSeg) map[string]docRef {
+	out := maps.Clone(where)
+	if out == nil {
+		out = make(map[string]docRef, len(seg.docs))
+	}
+	for id, d := range seg.docs {
+		out[d.name] = docRef{seg: int32(i), id: uint32(id), mod: d.mod, size: d.size}
+	}
+	return out
+}
