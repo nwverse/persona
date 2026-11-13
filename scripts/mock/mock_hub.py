@@ -6235,7 +6235,7 @@ def transcription_socket(h, rid):
                 raw = h.rfile.read(2 if n == 126 else 8)
                 if len(raw) != (2 if n == 126 else 8): break
                 n = int.from_bytes(raw, "big")
-            if not head[0] & 128 or head[0] & 112 or not head[1] & 128 or n > (64 << 10 if op == 2 else 4608 << 10):
+            if not head[0] & 128 or head[0] & 112 or not head[1] & 128 or n > (64 << 10 if op == 2 else 8704 << 10):
                 fail("bad_frame"); break
             mask, data = h.rfile.read(4), h.rfile.read(n)
             if len(mask) != 4 or len(data) != n: break

@@ -228,13 +228,21 @@ func TestAudioSocketPositions(t *testing.T) {
 // A start frame with a whole timeline at the contract's limits (kb.MaxTimelineRoles role changes, kb.MaxTimelineSpans
 // spans with 4000 bytes of answer each, about 4 MB) is taken: ready, and the timeline joins meeting.json's.
 func TestAudioSocketStartTakesAWholeTimeline(t *testing.T) {
+	for _, tc := range []struct{ name, said string }{
+		{"utf8", strings.Repeat("答", 1333) + "a"}, // 4000 bytes, i18n-ignore: synthetic speech
+		{"escaped", strings.Repeat(`"`, 4000)},    // 4000 bytes that JSON doubles
+	} {
+		t.Run(tc.name, func(t *testing.T) { wholeTimeline(t, tc.said) })
+	}
+}
+
+func wholeTimeline(t *testing.T, said string) {
 	h := newHubFixture(t)
 	h.hubUpload(meetingRec, 1, nil)
 	roles := make([]map[string]any, 0, kb.MaxTimelineRoles)
 	for i := range kb.MaxTimelineRoles {
 		roles = append(roles, map[string]any{"at": float64(i * 30), "attendance": []string{"listener", "participant"}[i%2]})
 	}
-	said := strings.Repeat("答", 1333) + "a" // 4000 bytes, i18n-ignore: synthetic speech
 	spans := make([]map[string]any, 0, kb.MaxTimelineSpans)
 	for i := range kb.MaxTimelineSpans {
 		spans = append(spans, map[string]any{"start": float64(i * 10), "end": float64(i*10 + 5), "text": said})

@@ -422,7 +422,7 @@ class MeetingTranscriptionMockTests(Transcription, unittest.TestCase):
         self.assertEqual(self.socket(missing, begin=False)("error")["code"], "recording_deleted")
         self.call("POST", "/mock/meeting_attendance", {"kb_read_only": False})
         for payload, op, begin, claim in [(b"\0\0", 2, False, None), (b"{", 1, True, None), (b"x", 2, True, None), (bytes(65538), 2, True, None),
-                                          (b"", 1, True, 4608 * 1024 + 1)]:  # a text frame over 4.5 MiB: refused from its header
+                                          (b"", 1, True, 8704 * 1024 + 1)]:  # a text frame over 8.5 MiB: refused from its header
             rid = self.recording()
             ws = self.socket(rid, begin=begin)
             ws.send(payload, op=op, claim=claim)
