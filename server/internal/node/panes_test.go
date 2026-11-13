@@ -248,6 +248,38 @@ func TestNewShellOpensATabInTheWorkspace(t *testing.T) {
 	}
 }
 
+// "New Terminal" on a computer whose engine runs with no workspace yet (cwd "~", no workspace_id): the shell opens as the
+// first tab of a new workspace in the home folder, named shell, the way an Agent start opens one.
+func TestNewShellOpensAWorkspaceWhenThereIsNone(t *testing.T) {
+	streamingHerdr()
+	n, f, home := herdrNode(t)
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	if _, err := n.listPanes(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.reset()
+	f.reply("workspace.create", map[string]any{"workspace": map[string]any{"workspace_id": "w1"},
+		"tab": map[string]any{"tab_id": "w1:t1"}, "root_pane": map[string]any{"pane_id": "w1:p1"}})
+	f.reply("session.snapshot", snapshot([]any{map[string]any{"workspace_id": "w1", "label": "home", "number": 1}}, nil, nil,
+		[]any{map[string]any{"pane_id": "w1:p1", "tab_id": "w1:t1", "workspace_id": "w1"}}))
+
+	res, err := request(t, n, "panes.new", map[string]any{"kind": host.Herdr, "cwd": "~"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res["pane"] != "w1:p1" || res["terminal"] != "pane:w1:p1" || res["tab_id"] != "w1:t1" {
+		t.Errorf("result = %v", res)
+	}
+	realHome, _ := filepath.EvalSymlinks(home)
+	assertTrace(t, f.trace("workspace.create", "tab.create", "tab.rename"), []string{
+		call("workspace.create", map[string]any{"cwd": realHome, "label": filepath.Base(realHome), "focus": false}),
+		call("tab.rename", map[string]any{"tab_id": "w1:t1", "label": "shell"}),
+	})
+	if _, err := n.terminalPane(context.Background(), "pane:w1:p1"); err != nil {
+		t.Errorf("the new pane is not addressable: %v", err)
+	}
+}
+
 func TestPanesResponseJSON(t *testing.T) {
 	b, err := json.Marshal(proto.PanesResponse{Hosts: []proto.PaneHost{{Kind: "herdr", Panes: []proto.PaneItem{{Pane: "w1:p1", Terminal: "pane:w1:p1"}}}}})
 	if err != nil || !strings.Contains(string(b), `"terminal":"pane:w1:p1"`) || strings.Contains(string(b), "session_id") {

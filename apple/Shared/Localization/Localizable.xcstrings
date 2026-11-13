@@ -171059,25 +171059,71 @@
         }
       }
     },
-    "No terminals on this computer.": {
+    "New Terminal": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "No terminals on this computer."
+            "value": "New Terminal"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "このコンピュータにはターミナルがありません。"
+            "value": "新規ターミナル"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "这台电脑上没有终端。"
+            "value": "新建终端"
+          }
+        }
+      }
+    },
+    "No terminals open on this computer.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No terminals open on this computer."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このコンピュータで開いているターミナルはありません。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台电脑上没有打开的终端。"
+          }
+        }
+      }
+    },
+    "Terminals open here when an Agent starts on this computer.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Terminals open here when an Agent starts on this computer."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このコンピュータで Agent を開始すると、ここにターミナルが表示されます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在这台电脑上启动 Agent 后，终端会显示在这里。"
           }
         }
       }

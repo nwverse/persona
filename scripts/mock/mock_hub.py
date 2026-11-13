@@ -9414,6 +9414,7 @@ def cell_width(ch):
 # workspaces, tabs and panes of the machines (agents of the mock sessions and plain shells, GET /api/v1/machines/{mid}/panes);
 # POST there opens a new shell tab. A terminal addressed "pane:<id>" is a made-up shell, not the Claude screen.
 # MOCK_PANES_DELAY=<seconds>: GET .../panes answers that late (the Terminals page's "hasn't answered yet" with Retry, #6153).
+# MOCK_PANES_NO_WORKSPACE=1: the engine runs and opens tabs but has no workspace yet, until a "New Terminal" opens one.
 PANES_NEW = {}  # machine id -> [(workspace id, pane)] opened by POST
 # The menu actions (close / split / rename / run an agent / git), recorded at GET /mock/node_actions and applied to the
 # layout above: a closed pane or tab is gone, a renamed tab has its new name, a split adds a shell, an agent run in a
@@ -9430,6 +9431,8 @@ def mock_panes(mid):
     sessions = [s for s in SESSIONS if s.get("machine_id") == mid and s.get("pane_id")][:2]
     if mid == "studio":
         return {"hosts": []}
+    if os.environ.get("MOCK_PANES_NO_WORKSPACE") and not PANES_NEW.get(mid):
+        return {"hosts": [{"kind": "herdr", "stream": True, "control": True, "new_tab": True, "workspaces": [], "tabs": [], "panes": []}]}
     ws = [{"id": "w1", "label": "persona", "number": 1, "cwd": "/home/me/persona", "branch": "main"},
           {"id": "w2", "label": "notes", "number": 2, "cwd": "/home/me/notes"}]
     tabs = [{"id": "w1:t1", "workspace_id": "w1", "label": "agent-1", "number": 1},
