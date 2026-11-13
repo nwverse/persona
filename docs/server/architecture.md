@@ -74,6 +74,10 @@ A single binary `personad`, four modes:
 The hub only handles communication: app and other clients ↔ managers, hub ↔ hub (linked hubs), connections (WebSocket, node / connector links), pairing and auth, the admin UI, push delivery, and various relays.
 Business logic lives in the managers (`server/internal/assistant`, `devices`, `extmgr`; see `docs/server/machines.md`, `docs/extensions/extensions.md` ("Who owns what"), `docs/assistant/assistant.md`):
 the data for the assistant, Inbox, to-dos, usage limits, board, extensions and devices, plus model calls (triage, titles, summaries, judgments). The hub forwards these endpoints to the managers as-is (`assistantwire.Routes`, `devicewire.Routes`, `extwire.Routes`).
+An ordinary route goes as one `http.request` on the bus, its body read whole; a route that upgrades to a WebSocket cannot, so the extensions' routes and the assistant's
+WebSocket routes (`assistantwire.SocketRoutes`: a meeting's audio socket, `docs/assistant/meeting-minutes.md` "Audio from the phone") go over a relay stream instead
+(`extwire.MethodAccept`): the manager dials the relay and serves the request there, and the manager's extensions layer hands the assistant's to it
+(`extmgr.Options.AssistantSocket`). Who asked goes in the hub's headers, the caller's credential stays at the hub, and revoking the device ends the socket.
 
 `server/internal/hub/architecture_guard_test.go` pins down what the hub looks like now and fails if it grows in the wrong direction:
 
