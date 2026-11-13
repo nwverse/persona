@@ -345,28 +345,36 @@ fn apply(session: &mut Session, event: ChatEvent) -> Result<Step, String> {
 /// a changed item with the same position and id is an Update, preserving its native list identity.
 fn diff(old: &[Arc<Item>], new: &[Arc<Item>]) -> Vec<ListOp> {
     let common = old.iter().zip(new).take_while(|(a, b)| Arc::ptr_eq(a, b)).count();
+    let overlap = old.len().min(new.len());
     let mut ops = Vec::new();
-    let mut updated = HashSet::new();
-    for index in common..old.len().min(new.len()) {
+    let mut paired = vec![false; old.len()];
+    for index in common..overlap {
         if old[index].id == new[index].id && old[index].seq == new[index].seq && old[index].part() == new[index].part()
         {
-            ops.push(update(index, &new[index]));
-            updated.insert(new[index].id.as_str());
+            paired[index] = true;
+            if old[index].json() != new[index].json() {
+                ops.push(update(index, &new[index]));
+            }
         }
     }
-    let kept: HashSet<*const Item> = new.iter().skip(common).map(Arc::as_ptr).collect();
+    let kept: HashSet<*const Item> = new
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !paired.get(*index).copied().unwrap_or(false))
+        .map(|(_, item)| Arc::as_ptr(item))
+        .collect();
     let mut survivors = Vec::new();
     for (index, item) in old.iter().enumerate().rev() {
-        if index >= common && (kept.contains(&Arc::as_ptr(item)) || updated.contains(item.id.as_str())) {
+        if index >= common && !paired[index] && kept.contains(&Arc::as_ptr(item)) {
             survivors.push(item);
-        } else if index >= common {
+        } else if index >= common && !paired[index] {
             ops.push(ListOp::Remove { index: index as u32 });
         }
     }
     survivors.reverse();
     let mut next = 0;
     for (index, item) in new.iter().enumerate().skip(common) {
-        if updated.contains(item.id.as_str()) {
+        if paired.get(index).copied().unwrap_or(false) {
             continue;
         }
         if next < survivors.len() && Arc::ptr_eq(survivors[next], item) {
@@ -375,7 +383,7 @@ fn diff(old: &[Arc<Item>], new: &[Arc<Item>]) -> Vec<ListOp> {
             ops.push(insert(index, item));
         }
     }
-    if next + updated.len() == survivors.len() {
+    if next == survivors.len() {
         return ops;
     }
     // Never expected: items that stayed changed order. Start the list over.
@@ -438,11 +446,11 @@ mod tests {
     }
 
     #[test]
-    fn replacement_does_not_remove_and_reinsert_the_same_id() {
-        let old = items(r#"[{"id":"1#0","seq":1,"text":"old"}]"#);
-        let new = items(r#"[{"id":"1#0","seq":1,"text":"newest"}]"#);
+    fn a_changed_item_is_only_updated_not_removed_and_reinserted() {
+        let old = items(r#"[{"id":"1#0","seq":1,"text":"old"},{"id":"2#0","seq":2}]"#);
+        let new = items(r#"[{"id":"1#0","seq":1,"text":"new"},{"id":"2#0","seq":2}]"#);
         assert_eq!(diff(&old, &new), vec![update(0, &new[0])]);
-        assert_eq!(replay(&old, &diff(&old, &new)), vec!["1#0"]);
+        assert_eq!(replay(&old, &diff(&old, &new)), vec!["1#0", "2#0"]);
     }
 
     #[test]
