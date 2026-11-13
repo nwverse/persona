@@ -38,6 +38,10 @@ type startFrame struct {
 	} `json:"resume"`
 	// EchoCancellation false: the app records without echo cancellation (absent: not said, taken as with it).
 	EchoCancellation *bool `json:"echo_cancellation"`
+	// SpeechGate false: the user turned the user-speech gate off on this device (#5904, gate.go; true or absent: on).
+	// Only a full device's call can: another extension's call keeps it. Said at all, the app has Send Anyway
+	// (conversation.sendsAnyway): an app from before #5904 says nothing.
+	SpeechGate *bool `json:"speech_gate"`
 }
 
 type wireLine struct {
@@ -56,8 +60,9 @@ type resumeRun struct {
 }
 
 // The features this extension's protocol 2 has (GET /info, ready): only what is there (docs/assistant/voice.md "Version negotiation").
-// speak is POST /speak (speak.go), outside a call.
-var features = []string{"target", "runs", "asks", "resume", "suspend", "speak"}
+// speak is POST /speak (speak.go), outside a call. speech_gate (#5904): a run the user-speech gate refused (unprompted)
+// can be sent again (resend), and start takes speech_gate.
+var features = []string{"target", "runs", "asks", "resume", "suspend", "speak", "speech_gate"}
 
 const (
 	// snapshotWait is how long the snapshot's parts that may be left out are waited for (docs/assistant/voice.md 4.5): it is

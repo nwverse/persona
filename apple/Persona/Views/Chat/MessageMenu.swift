@@ -275,8 +275,11 @@ extension View {
     /// when pressed; card: it is words on the page with nothing around them (an answer), lifted on a card of its own.
     /// part: this is that row of the rows a message is drawn in (a long answer, #4970), and preview draws all of the
     /// message, this part marked with `liftPressedPart` and identified by this number (`MessageLift.part`).
-    func messageLongPress<P: View>(id: String, card: Bool = false, part: Int? = nil, @ViewBuilder preview: @escaping () -> P) -> some View {
-        modifier(MessageLongPress(id: id, card: card, part: part, preview: preview))
+    /// opens: the press opens what it pressed instead (your own long message folded, #5676), when it says so; nothing
+    /// is lifted then. Asked as the press begins.
+    func messageLongPress<P: View>(id: String, card: Bool = false, part: Int? = nil, opens: (() -> Bool)? = nil,
+                                   @ViewBuilder preview: @escaping () -> P) -> some View {
+        modifier(MessageLongPress(id: id, card: card, part: part, opens: opens, preview: preview))
     }
     /// The whole row of a message: hosts the action bar above the press point and lifts the row above its neighbours.
     /// pending: your message not in the transcript yet (`PendingBubble`, #6427): Copy, Select Text and Share only, no
@@ -312,6 +315,7 @@ private struct MessageLongPress<P: View>: ViewModifier {
     let id: String
     let card: Bool
     let part: Int?
+    let opens: (() -> Bool)?
     let preview: () -> P
     /// Where the part is, kept without drawing anything again (it changes on every scrolled frame).
     @State private var place = LiftPlace()
@@ -328,6 +332,7 @@ private struct MessageLongPress<P: View>: ViewModifier {
                     LiftPlace.Frames(global: g.frame(in: .global), row: g.frame(in: .named(MessageMenu.row)))
                 } action: { place.frames = $0 }
                 .gesture(LongPressAt(changed: menu.pressChanged) { p in
+                    if let opens, opens() { return } // it opened (with its own tap of the haptics), no bar
                     Haptics.tap()
                     menu.anchor = p
                     capturing = true
