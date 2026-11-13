@@ -129,9 +129,9 @@ func TestAdmissionDirectionFull(t *testing.T) {
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		t.Fatal(err)
 	}
-	// Three open tasks of dir-1, each with a live agent: the default cap is 3.
+	// Eight open tasks of dir-1, each with a live agent: the default cap is 8.
 	s.todos.mu.Lock()
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 8; i++ {
 		id := "dir-task-" + string(rune('a'+i))
 		s.todos.todos[id] = &Todo{
 			ID: id, Supervision: &Supervision{Supervisor: "dir-1"},
@@ -142,7 +142,7 @@ func TestAdmissionDirectionFull(t *testing.T) {
 
 	_, err := s.admitTaskStart(ctx, admissionPlanTask("busy", machineFlexible))
 	if err == nil || !strings.Contains(err.Error(), admissionText(s, "admission_direction_full", i18n.Args{
-		"running": 3, "limit": 3})) {
+		"running": 8, "limit": 8})) {
 		t.Fatalf("want a direction-full refusal, got %v", err)
 	}
 	if starts := taskStartMachines(f); len(starts) != 0 {
@@ -312,7 +312,7 @@ func TestAdmissionProjectDirectionOverride(t *testing.T) {
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		t.Fatal(err)
 	}
-	// Three open tasks would hit the default cap of 3, but the project's line is 8.
+	// Three open tasks stay under the default cap of 8, and the project's line of 8 admits a fourth.
 	for i := 0; i < 3; i++ {
 		id := "p-task-" + string(rune('a'+i))
 		s.todos.mu.Lock()
