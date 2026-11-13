@@ -174,6 +174,52 @@ final class SidebarLayoutTests: XCTestCase {
         }
     }
 
+    /// What a busy hub's pushes cost in each layout (#6332, docs/apple/performance.md "Measuring", step 4): the same
+    /// churn of the mock (20 rounds 400 ms apart, sessions, inbox and the waiting count) under Separate's Persona tab and
+    /// Agents tab, and under Sidebar, each counting the view bodies and the main thread's time per round
+    /// (`-perfCounts YES`). Written to TEST_RUNNER_PERSONA_SHOTS as perf-<layout>.txt. Debug build: the bodies compare,
+    /// the times only roughly.
+    @MainActor func testPushesCostInEachLayout() throws {
+        guard let dir = ProcessInfo.processInfo.environment["PERSONA_SHOTS"] else { throw XCTSkip("measurements only") }
+        let rounds = 20
+        func mock(_ what: String) -> [String: Any] {
+            let done = expectation(description: what)
+            var out: [String: Any] = [:]
+            URLSession.shared.dataTask(with: URL(string: hub + "/mock/" + what)!) { data, _, _ in
+                out = (data.flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any]) ?? [:]
+                done.fulfill()
+            }.resume()
+            wait(for: [done], timeout: 10)
+            return out
+        }
+        func counts() -> [String: Any] {
+            let probe = app.staticTexts["perf.counts"]
+            XCTAssertTrue(probe.waitForExistence(timeout: 5), "perf.counts (launched with -perfCounts YES)")
+            return (try? JSONSerialization.jsonObject(with: Data(probe.label.utf8))) as? [String: Any] ?? [:]
+        }
+        for (name, args, pinned) in [("separate-persona", ["-app.navigation", "separate", "-tab", "assistant"], false),
+                                     ("separate-agents", ["-app.navigation", "separate", "-tab", "dev"], false),
+                                     ("sidebar", ["-tab", "assistant"], true)] {
+            launch(args + ["-perfCounts", "YES"], layoutPinned: pinned)
+            sleep(6) // launch settles
+            let a = counts()
+            _ = mock("churn?n=\(rounds)&ms=400&steps=1&inbox=1&waiting=1")
+            let deadline = Date.now.addingTimeInterval(30)
+            while (mock("churned")["rounds"] as? Int ?? 0) < rounds, Date.now < deadline { usleep(300_000) }
+            sleep(1)
+            let b = counts()
+            let ba = b["bodies"] as? [String: Int] ?? [:], aa = a["bodies"] as? [String: Int] ?? [:]
+            var lines = [String(format: "%@: per round %.1f ms main thread, slowest pass %.1f ms, %d pushes", name,
+                                ((b["ms"] as? Double ?? 0) - (a["ms"] as? Double ?? 0)) / Double(rounds), b["max"] as? Double ?? 0,
+                                (b["events"] as? Int ?? 0) - (a["events"] as? Int ?? 0))]
+            for (k, v) in ba.sorted(by: { $0.key < $1.key }) where v - (aa[k] ?? 0) > 0 {
+                lines.append(String(format: "  %@ %.1f", k, Double(v - (aa[k] ?? 0)) / Double(rounds)))
+            }
+            try? lines.joined(separator: "\n").write(toFile: dir + "/perf-\(name).txt", atomically: true, encoding: .utf8)
+            app.terminate()
+        }
+    }
+
     /// Settings › Appearance › Navigation, not pinned at launch: Sidebar takes the app over at once with Settings still
     /// open on its page, and Separate brings the tabs back (the app is left in Separate, the default).
     @MainActor func testTheChoiceAppliesAtOnce() {
