@@ -269,12 +269,12 @@ struct InboxPage: View {
                         // its newest group open (only Just Now and Today start open), then scrolled to its first row:
                         // Done's title and the group's stick above it
                         if UserDefaults.standard.bool(forKey: "showInboxDoneFolded"),
-                           let last = InboxGroups.done(done, now: .now).filter({ groupOpen("done", $0.key) }).last?.items.last {
+                           let last = InboxGroups.done(done, now: AppClock.now).filter({ groupOpen("done", $0.key) }).last?.items.last {
                             // `-showInboxDoneFolded YES`: the groups as they start (Just Now and Today open), the last
                             // open row at the top so the folded ones with their counts follow it (#2969 screenshots)
                             try? await Task.sleep(for: .milliseconds(300))
                             scrollTarget = last.key
-                        } else if let g = InboxGroups.done(done, now: .now).first {
+                        } else if let g = InboxGroups.done(done, now: AppClock.now).first {
                             setGroupOpen("done", g.key, true)
                             try? await Task.sleep(for: .milliseconds(300))
                             scrollTarget = g.items.first?.key
@@ -292,10 +292,10 @@ struct InboxPage: View {
                         if !folds.isOpen("done") { folds.toggle("done") }
                         setGroupOpen("done", key, true)
                         autoLoaded.insert(key)
-                        store.loadDoneGroup(key, range: InboxGroups.timeRange(key, now: .now))
+                        store.loadDoneGroup(key, range: InboxGroups.timeRange(key, now: AppClock.now))
                         for _ in 0..<50 where store.groupLoading.contains(key) || store.history.isEmpty { try? await Task.sleep(for: .milliseconds(100)) }
                         try? await Task.sleep(for: .milliseconds(300))
-                        scrollTarget = store.history.filter { InboxGroups.timeKey($0.doneAt, now: .now, recent: true) == key }
+                        scrollTarget = store.history.filter { InboxGroups.timeKey($0.doneAt, now: AppClock.now, recent: true) == key }
                             .max { ($0.doneAt ?? .distantPast) < ($1.doneAt ?? .distantPast) }?.key
                     }
                     // `-showInboxPickGroups YES`: Select with the mail group folded and picked whole and the Lark group picked.
@@ -343,7 +343,7 @@ struct InboxPage: View {
     /// A section's items by source (the chips' order) or by time.
     private func groupsOf(_ items: [InboxItem]) -> [InboxGroups.Group] {
         if grouping == InboxGroups.Grouping.time.rawValue {
-            return InboxGroups.byTime(items, now: .now, at: \.updatedAt)
+            return InboxGroups.byTime(items, now: AppClock.now, at: \.updatedAt)
         }
         let order = ["lark"] + accounts.map { "mail:\($0.id)" } + connectorSources.map { "c:\($0.id)" }
         return InboxGroups.bySource(items, order: order) { id in accounts.first { $0.id == id }?.email ?? id }
@@ -366,7 +366,7 @@ struct InboxPage: View {
     /// counts are of what is loaded ("n+" until the group is complete), and `next` is the group "Show Older" loads.
     /// Without them, as before: what the history has loaded, "n+" on the last group while there is more.
     private func doneGroups(_ done: [InboxItem], days: [String: Int]?) -> (groups: [DoneGroup], next: DoneGroup?) {
-        let now = Date.now
+        let now = AppClock.now
         let loaded = InboxGroups.done(done, now: now)
         guard let days else {
             let more = store.historyMore && !store.history.isEmpty
@@ -779,7 +779,7 @@ struct InboxPage: View {
             for _ in 0..<50 where first == nil {
                 try? await Task.sleep(for: .milliseconds(100))
                 if store.groupLoading.contains(key) { continue }
-                first = store.history.filter { InboxGroups.timeKey($0.doneAt, now: .now, recent: true) == key }
+                first = store.history.filter { InboxGroups.timeKey($0.doneAt, now: AppClock.now, recent: true) == key }
                     .max { ($0.doneAt ?? .distantPast) < ($1.doneAt ?? .distantPast) }?.key
             }
             guard let first else { return }
