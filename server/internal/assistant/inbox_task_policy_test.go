@@ -42,7 +42,7 @@ func TestInboxTaskLegacyHumanCanStillLink(t *testing.T) {
 	h, todo, it := taskRecheckHub(t)
 	it.Kind, it.Connector = KindBot, taskNotification("ou_example")
 	it.Context = "I forwarded a build notification. Please investigate the failure."
-	model, calls := captureModel(t, `{"task_id":"`+todo.ID+`"}`)
+	model, calls := captureModel(t, `{"task_id":"`+todo.ID+`","evidence":"修登录崩溃"}`)
 	h.in.setModel(model)
 	out, code, err := h.recheckInboxTask(context.Background(), it.ID)
 	if err != nil || code != 200 || out.Status != "linked" || it.Agent.TodoID != todo.ID || len(calls()) != 1 {

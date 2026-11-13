@@ -92,7 +92,6 @@ func RenderInboxJudge(j InboxJudge) string { return render("inbox/judge", j) }
 // InboxJudgeInput is the item with its triage summary (inbox/judge_input).
 type InboxJudgeInput struct {
 	Summary string
-	Recap   string // existing investigation, subject context rather than an instruction or confirmed reply
 	Item    InboxItem
 	Tasks   []InboxTask // the user's tasks going on (docs/assistant/unified-entry.md), for the judge to link the item to one
 }
@@ -101,7 +100,7 @@ type InboxJudgeInput struct {
 type InboxTask struct {
 	ID, Title, State string
 	Last             string // what its latest agent said last, in a line
-	Notes            string // bounded original request, so a short title does not hide the task's subject
+	Notes            string // the task's own description, clipped: the judge reads its subject there and quotes it as evidence
 }
 
 func RenderInboxJudgeInput(in InboxJudgeInput) string { return render("inbox/judge_input", in) }

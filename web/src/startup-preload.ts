@@ -243,10 +243,17 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * code measured +1,396 B and +1,510 B on the two mains before, docs/lessons/web.md; the 30 B of room main had stay).
  * +100 B for the scheduled tasks list's "Inbox: …" marks and the assistant's own Inbox row (#6430): the Japanese first
  * screen was 49 B over with them, in three languages' text and a few lines of code.
- * Main synchronization accounting (#6395): clean e2a0b4d3 and this Inbox branch both measure ja 476,774 B
- * (114 B over main's cap). Keep 30 B of room; the Inbox feature adds no first-screen bytes or cold imports.
+ * And 720 B for "By to-do" as one kind of row (#6458: main at 8269cd921 measured ja 476,774 B, 114 B over the budget
+ * before; this change takes it to 477,349 B, +575 B: the to-dos at the top level and their groups, "Recent (not running)"
+ * among them, as rows with a count, a state and an ⓘ, a to-do's state in the To-dos page's word, and the groups'
+ * explanations; the ⓘ's words, ui/InfoTipPanel.tsx, load the first time one is asked for, which took 287 B back off;
+ * 31 B of room).
+ * And 176 B for side sessions drawn under their parent, with main's own growth (#5935: main at 2d9596043 measured ja
+ * 477,447 B, 67 B over the budget before; this change takes it to 477,525 B, +78 B: lib/side-sessions.ts's
+ * arrangement, the paged list's use of it for its order and the Earlier split, and a row's parent identity in
+ * lib/runtime-list.ts; 31 B of room).
  */
-export const FIRST_SCREEN_BUDGET = 476_804;
+export const FIRST_SCREEN_BUDGET = 477_556;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").

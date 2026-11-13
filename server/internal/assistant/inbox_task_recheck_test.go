@@ -31,6 +31,7 @@ func taskRecheckHub(t *testing.T) (*inboxHub, Todo, *InboxItem) {
 		Draft: "The fix is being checked.", Note: "Keep this draft."}
 	it.Handling = &InboxHandling{State: HandlingDone}
 	it.Recap = "The investigation traced the crash to screen rotation."
+	it.Context = "The original human message reports a login crash when rotating the screen."
 	it.Suggestion = &InboxSuggestion{Kind: SuggestReply, Text: it.Agent.Draft, Version: 3}
 	h.inbox.mu.Lock()
 	h.inbox.items[it.ID] = it
@@ -43,7 +44,7 @@ func TestInboxTaskRecheckDraft(t *testing.T) {
 	turnInboxSignalsOn(t, h.Service)
 	h.superviseTodo(context.Background(), todo.ID, "conv1", []string{"Verified"}, 0)
 	before := *it.Agent
-	model, calls := captureModel(t, `{"task_id":"`+todo.ID+`"}`)
+	model, calls := captureModel(t, `{"task_id":"`+todo.ID+`","evidence":"修登录崩溃"}`)
 	h.in.setModel(model)
 	path := "/api/v1/inbox/" + it.ID + "/task-link/recheck"
 	code, out := inboxCall(t, h.routes(), "POST", path, "")
@@ -55,8 +56,12 @@ func TestInboxTaskRecheckDraft(t *testing.T) {
 	if string(rawJSON(before)) != string(rawJSON(after)) || !it.open() || it.Handling.State != HandlingDone || it.Suggestion.Version != 3 {
 		t.Fatalf("processing changed: %+v / %+v / %+v", it.Agent, it.Handling, it.Suggestion)
 	}
-	if c := onlyCall(t, calls()); !strings.Contains(c.User, todo.ID) || !strings.Contains(c.User, todo.Notes) || !strings.Contains(c.User, it.Recap) {
-		t.Fatalf("the judge did not see the task: %s", c.User)
+	c := onlyCall(t, calls())
+	if !strings.Contains(c.User, todo.ID) || !strings.Contains(c.User, todo.Notes) || !strings.Contains(c.User, it.Context) {
+		t.Fatalf("the judge did not see the task and original event evidence: %s", c.User)
+	}
+	if strings.Contains(c.User, it.Recap) {
+		t.Fatal("a generated recap must not become original task-link evidence")
 	}
 	waitFor(t, "the supervisor's Inbox notice", func() bool {
 		return strings.Contains(strings.Join(h.f.notices(), "\n"), it.ID)
@@ -125,7 +130,7 @@ func TestInboxTaskRecheckConcurrentChanges(t *testing.T) {
 					h.todos.todos[todo.ID].DoneAt = &now
 					h.todos.mu.Unlock()
 				}
-				_ = json.NewEncoder(w).Encode(map[string]any{"content": []any{map[string]any{"type": "text", "text": `{"task_id":"` + todo.ID + `"}`}}})
+				_ = json.NewEncoder(w).Encode(map[string]any{"content": []any{map[string]any{"type": "text", "text": `{"task_id":"` + todo.ID + `","evidence":"修登录崩溃"}`}}})
 			}))
 			t.Cleanup(model.Close)
 			h.in.setModel(modelAt(t, model.URL))
@@ -153,7 +158,7 @@ func TestInboxTaskRecheckSaveFailure(t *testing.T) {
 	}
 	it := actionItem("example:old", time.Now())
 	h.inbox.items[it.ID] = it
-	h.in.setModel(fakeModel(t, `{"task_id":"`+todo.ID+`"}`))
+	h.in.setModel(fakeModel(t, `{"task_id":"`+todo.ID+`","evidence":"Check the fix"}`))
 	before := stateOf(h, it)
 	st.failAll = true
 	_, code, err := h.recheckInboxTask(context.Background(), it.ID)
@@ -183,7 +188,7 @@ func TestInboxTaskRecheckAllOpenCandidates(t *testing.T) {
 	now := time.Now()
 	h.todos.todos[ids[0]].DoneAt = &now
 	h.todos.mu.Unlock()
-	model, calls := captureModel(t, `{"task_id":"`+todo.ID+`"}`)
+	model, calls := captureModel(t, `{"task_id":"`+todo.ID+`","evidence":"修登录崩溃"}`)
 	h.in.setModel(model)
 	out, code, err := h.recheckInboxTask(ctx, it.ID)
 	if err != nil || code != 200 || out.Status != "linked" {

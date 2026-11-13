@@ -366,7 +366,9 @@ func (s *Service) linkTaskFor(ctx context.Context, it *InboxItem, tasks []prompt
 	return false
 }
 
-// judgeInboxTask only chooses from the supplied candidates; callers own applying and saving the result.
+// judgeInboxTask is the task the judge links item it to, among tasks (inbox_task_scope.go): only the tasks the item's
+// repository or thread allows are offered (none: no model call), and an answer counts only when it is a task it was
+// shown and quotes that task's title or notes as its evidence. "" for none. Callers apply and save the result.
 func (s *Service) judgeInboxTask(ctx context.Context, it *InboxItem, tasks []prompts.InboxTask) (string, error) {
 	b := &s.inbox
 	b.mu.Lock()
@@ -374,11 +376,18 @@ func (s *Service) judgeInboxTask(ctx context.Context, it *InboxItem, tasks []pro
 		b.mu.Unlock()
 		return "", nil
 	}
-	input := prompts.RenderInboxJudgeInput(prompts.InboxJudgeInput{Summary: it.Summary, Recap: clip(it.Recap, 1600), Item: b.promptItem(it), Tasks: tasks})
+	sc := inboxScopeOf(it)
+	b.mu.Unlock()
+	if tasks = s.scopeInboxTasks(sc, tasks); len(tasks) == 0 {
+		return "", nil
+	}
+	b.mu.Lock()
+	input := prompts.RenderInboxJudgeInput(prompts.InboxJudgeInput{Summary: it.Summary, Item: b.promptItem(it), Tasks: tasks})
 	b.mu.Unlock()
 	system := prompts.RenderInboxJudge(prompts.InboxJudge{Owner: s.owner(ctx), Rules: s.inboxConfig(ctx).AgentRules})
 	var out struct {
-		TaskID string `json:"task_id"`
+		TaskID   string `json:"task_id"`
+		Evidence string `json:"evidence"`
 	}
 	cctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	err := s.inboxModelJSON(cctx, purposeJudge, system, input, 0, &out)
@@ -386,8 +395,12 @@ func (s *Service) judgeInboxTask(ctx context.Context, it *InboxItem, tasks []pro
 	if err != nil {
 		return "", err
 	}
-	for _, t := range tasks { // only a task it was shown
+	for _, t := range tasks { // only a task it was shown, with a line copied from it
 		if t.ID == strings.TrimSpace(out.TaskID) {
+			if !judgeEvidence(t, out.Evidence) {
+				s.logf("inbox: %s: the judge named task %s without evidence from it (%q): not linked", it.ID, t.ID, clip(oneLine(out.Evidence), 80))
+				return "", nil
+			}
 			return t.ID, nil
 		}
 	}
