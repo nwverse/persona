@@ -8,7 +8,7 @@ import { Icon } from "./icons";
 
 // shown 300 ms after the pointer rests (`visibility` switches after the delay), at once on keyboard focus
 const HINT =
-  "pointer-events-none invisible absolute top-full right-0 z-30 mt-1 w-max max-w-60 rounded-control bg-tooltip-bg px-2.5 py-1.5 text-[12px] leading-snug text-tooltip-fg shadow-overlay transition-[visibility] peer-hover/fold:visible peer-hover/fold:delay-300 peer-focus-visible/fold:visible";
+  "pointer-events-none invisible absolute top-full right-0 z-30 mt-1 w-max max-w-60 rounded-control bg-tooltip-bg px-2.5 py-1.5 text-xs leading-snug text-tooltip-fg shadow-overlay transition-[visibility] peer-hover/fold:visible peer-hover/fold:delay-300 peer-focus-visible/fold:visible";
 
 export function FoldAllButton({ label, hint, onClick, className, testId }: { label: string; hint: string; onClick: () => void; className?: string; testId?: string }) {
   const id = useId();
