@@ -492,6 +492,11 @@ conversation the item was handed to ("Item actions", Hand to AI), rejecting othe
   When the linked task is supervised and the assistant's `inbox_signals` is on (off by default, #4293), each pass that takes new messages from other people into the item also tells the task's supervisor:
   the signal `inbox` in its next supervision message, naming the item (id, title, sender, one line) and how many messages came ([unified-entry.md](unified-entry.md), "Supervision (#3124)").
   Persona's own confirmed reply and bot chats never raise one, and nothing the handling chat does goes into the Inbox.
+  A link follows the work (#6423): when the linked task is closed (done or cancelled) and exactly one open task carries it on through `continues`
+  (down a line of continuations, at most 8 deep), the next pass moves the item's `agent.todo_id` there and saves it, whatever `inbox_signals` says; the move
+  itself raises no signal. A message is counted as told only once a signal took it, so one that came while the linked task could not hear it reaches
+  the task that carries it on. A link to a closed task that nobody carries on (or that two tasks carry on) counts as none: the next escalation asks the judge again,
+  even when the item already has its handling chat.
 
 **Confirmation API** `POST /api/v1/inbox/{id}/suggestion`: `{version, action, text?, client_id?}`, `action` = `confirm` / `reject` / `instruct`.
 
