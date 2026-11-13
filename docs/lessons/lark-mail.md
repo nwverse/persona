@@ -40,6 +40,13 @@ When mainline hides the send button for an empty composer, attachment drafts sti
 - A thread list can omit its root and identify bot mentions by open ID while search uses app ID. Do not assume a
   synthetic thread fixture containing the root proves real handoff context. Resolve the bot's open ID from its
   binding and the root's ID from the source reply, then read that root explicitly as the user.
+- Explicit recovery must propagate failed Inbox writes, not return success after the save layer rolls them back.
+  Log paired request begin/end records without private selectors; zero retained rows and a client timeout are not
+  a request-level terminal receipt. Keep an uncertain attempt locked until execution and deduplication evidence
+  justify a separately reviewed retry.
+- A historical bot mention may have a later completion reply from the bot even when the owner never replied.
+  Inspect the full topic and the processing conclusion before calling its automatic completion a bug or treating
+  initial Needs You admission as proof that an unresolved request remains there.
 
 - An all-account mail search must fail when any account fails, even if another supplies results; otherwise older HTTP, tool and subscription clients accept an incomplete page as complete. Keep cancellation distinct, and do not put upstream error details or credentials into the aggregate error (#4462). Verify the actual callers with two independent loopback IMAP servers, including retry after repair and a healthy empty result.
 

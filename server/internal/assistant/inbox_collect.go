@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"slices"
 	"time"
@@ -129,7 +130,10 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 	}
 	b.batch = nil
 	b.mu.Unlock()
-	s.saveInboxUndo(ctx, changed, s.undoWrites(ws, "what the round changed"))
+	failed := s.saveInboxUndo(ctx, changed, s.undoWrites(ws, "what the round changed"))
+	if r.Replay && len(failed) > 0 {
+		return fmt.Errorf("Inbox replay could not save %d item(s); inspect retained items before retrying", len(failed))
+	}
 	if r.Replay {
 		if len(replayIDs) > 0 {
 			s.handoffLarkMentions(ctx, replayIDs...)

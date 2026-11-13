@@ -4,6 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"regexp"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -127,5 +131,85 @@ func TestInboxReplayFailureDoesNotFallBackToCollect(t *testing.T) {
 	err := h.replayLarkInbox(context.Background(), assistantwire.InboxLarkReplay{ChatID: "c", Start: "s", End: "e", MessageIDs: []string{"m"}})
 	if err == nil || lark.replays.Load() != 1 || lark.collects.Load() != 0 {
 		t.Fatalf("error=%v replay=%d collect=%d", err, lark.replays.Load(), lark.collects.Load())
+	}
+}
+
+func TestInboxReplayLogsPairedOutcomeWithoutPrivateSelectors(t *testing.T) {
+	for _, tc := range []struct {
+		name, outcome, stage string
+		offline, canceled    bool
+		readErr, applyErr    error
+	}{
+		{name: "success", outcome: "complete", stage: "apply"},
+		{name: "offline", outcome: "failed", stage: "prepare", offline: true},
+		{name: "canceled wait", outcome: "failed", stage: "waiting", canceled: true},
+		{name: "source error", outcome: "failed", stage: "read", readErr: errors.New("private-source-error")},
+		{name: "save error", outcome: "failed", stage: "apply", applyErr: errors.New("private-save-error")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newTestManager(t)
+			h.connectors = connector.NewRegistry(nil)
+			lark := &replayInboxConnector{state: connector.StateOK, err: tc.readErr}
+			if err := h.addConnector(lark); err != nil {
+				t.Fatal(err)
+			}
+			h.opts.Assistant = func(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+				return json.RawMessage(`{}`), tc.applyErr
+			}
+			if tc.offline {
+				h.opts.Assistant = nil
+			}
+			var mu sync.Mutex
+			var logs []string
+			h.opts.Logf = func(format string, args ...any) {
+				mu.Lock()
+				defer mu.Unlock()
+				logs = append(logs, fmt.Sprintf(format, args...))
+			}
+			ctx := context.Background()
+			if tc.canceled {
+				h.inbox.init()
+				if err := h.inbox.lock(ctx); err != nil {
+					t.Fatal(err)
+				}
+				defer h.inbox.unlock()
+				canceled, cancel := context.WithCancel(ctx)
+				cancel()
+				ctx = canceled
+			}
+			err := h.replayLarkInbox(ctx, assistantwire.InboxLarkReplay{
+				ChatID: "private-chat", Start: "private-start", End: "private-end",
+				MessageIDs: []string{"private-message"},
+			})
+			if (err == nil) != (tc.outcome == "complete") {
+				t.Fatalf("error=%v outcome=%s", err, tc.outcome)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			var replayLogs []string
+			for _, line := range logs {
+				if strings.HasPrefix(line, "inbox replay ") {
+					replayLogs = append(replayLogs, line)
+				}
+				if strings.Contains(line, "private-") {
+					t.Fatalf("replay log exposed private input: %s", line)
+				}
+			}
+			if len(replayLogs) != 2 {
+				t.Fatalf("replay logs=%v", replayLogs)
+			}
+			begin := regexp.MustCompile(`^inbox replay ([0-9a-f]{16}/[0-9]+): begin$`).FindStringSubmatch(replayLogs[0])
+			if len(begin) != 2 {
+				t.Fatalf("invalid begin record: %s", replayLogs[0])
+			}
+			wantEnd := fmt.Sprintf(`^inbox replay %s: %s stage=%s elapsed_ms=[0-9]+$`,
+				regexp.QuoteMeta(begin[1]), tc.outcome, tc.stage)
+			if !regexp.MustCompile(wantEnd).MatchString(replayLogs[1]) {
+				t.Fatalf("unpaired terminal record: %s", replayLogs[1])
+			}
+			if tc.canceled && lark.replays.Load() != 0 {
+				t.Fatalf("canceled replay read the source %d times", lark.replays.Load())
+			}
+		})
 	}
 }
