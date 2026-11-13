@@ -2469,7 +2469,7 @@ private struct AgentsList: View {
                             } else {
                                 Text(title).lineLimit(1)
                             }
-                            DirectionCountsLine(counts: e.direction.counts).textCase(nil)
+                            DirectionCountsLine(direction: e.direction).textCase(nil)
                         }
                     }
                 }
