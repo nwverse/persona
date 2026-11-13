@@ -378,8 +378,8 @@ A manager's own sections of the configuration are in its `manager.json`, not in 
   since an attachment goes with its line: with `text_days` 365, a source set to 3650 keeps 365 days of attachments,
   `history` (importing chats' older history, **off unless `enabled` is `true`**; `docs/assistant/knowledge.md` "History import"):
   `{"enabled": true, "sources": {"<connector id>": {"profile": "careful", "needs_search_index": true}}}`. Sources run one at a time in the order written, and only after
-  the owner approves each source's plan in the assistant chat. Per source: `profile` (`careful`, the default, or `standard`), `needs_search_index` (default `true`: wait for
-  the knowledge base's search index, #1273; `false` runs before it), `page_limit` (page size asked for, a hint, 50) and pace overrides, each `[least, most]` or one number:
+  the owner approves each source's plan in the assistant chat. Per source: `profile` (`careful`, the default, or `standard`), `needs_search_index` (default `true`: wait until
+  the knowledge base has built its search index, which the manager does by itself within its first minutes on an existing archive, #1273; `false` does not wait), `page_limit` (page size asked for, a hint, 50) and pace overrides, each `[least, most]` or one number:
   `interval_seconds`, `batch_calls`, `rest_minutes`, `long_rest_every_hours` and `long_rest_minutes` (`[0, 0]`: none), `quiet_periods_per_day` and `quiet_hours`,
   `switch_chat_pages`, `image_interval_seconds`, and `slow_factor` (≥ 1: every interval and rest multiplied by it, e.g. `2` after a stop the import caused). A range that
   does not read (most below least, a negative number or bound) or a negative `slow_factor` is an error in `manager.json` like any other (a running manager keeps what it last read). Changing `kb.history`

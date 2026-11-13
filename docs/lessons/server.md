@@ -27,6 +27,22 @@ resource after what is in use now (the slot that served last), not after how man
 process's clean-up remove only what it made: the edge notes any socket file already at a slot's path when it starts
 it and leaves that file alone. A test of one failed switch passed for this reason; test failures in a row.
 
+## An index over files answers only for the files it read, and is measured on text that varies (2026-11-13, #1273)
+
+The knowledge base's search index (`server/internal/kb/search_index.go`) is kept beside files that people, Agents and
+the import all write, so "is the index current?" has no single answer. What made it safe was asking it a smaller
+question: it may rule a file out only when the file's path, mtime and size are exactly the ones it read, and
+everything else is read by the scan that existed before. Then a missing, half-built, stale or damaged index can only
+cost time, and the tests compare results with the scan instead of trusting an invalidation scheme. Three things went
+wrong on the way. The first benchmark archive repeated one line four million times: its index was 22 MB and built in
+13 s, while text with a long tail of rare characters and words gave 155 MB and 30 s, and the first design, which kept
+every segment's key table in memory, peaked at 1.1 GB on it against a 1 GB target (the keys now stay on disk in
+blocks, with one entry per block in memory). An index that outlives the process also outlives what a cache forgave:
+a writer whose index directory is removed under it, a reader in another process after the writer merged, and entries
+of deleted text that no search uses but that stay on disk until something rewrites them each needed their own rule
+and test. And a lane that runs on every round runs on every kick: one `stat` per file is cheap once and not every five
+seconds.
+
 ## A new file in the knowledge base is searched unless `searchable` says otherwise (2026-11-13, #5991)
 
 Search reads every `.md` and `.json` file of the data dir it is not told to skip, profile files before any message
