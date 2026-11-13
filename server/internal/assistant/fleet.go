@@ -369,11 +369,13 @@ func sessionTurnErrorCode(c proto.Session) string {
 	return code
 }
 
-// signedOut: conversation c's last turn ended "Not logged in". The node says so only in the turn's words (TurnError,
-// Claude Code's own reply): the lists work the code out of them (sessionTurnErrorCode), while session.get answers the
-// node's session as it is, with no code.
+// signedOut: conversation c's last turn ended "Not logged in". The node says so only in the turn's words: TurnError while
+// the conversation's process runs, and only its last words (LastText, Claude Code's own reply) once it is listed from
+// its transcript with no process, as a task's conversation between runs is (scanOffline). The lists work the error and
+// its code out of those (latestTurnError, sessionTurnErrorCode); session.get answers the node's session as it is.
 func signedOut(c proto.Session) bool {
-	return c.TurnErrorCode == proto.TurnErrorNotLoggedIn || sessionTurnErrorCode(c) == proto.TurnErrorNotLoggedIn
+	text, _ := latestTurnError(c)
+	return c.TurnErrorCode == proto.TurnErrorNotLoggedIn || turnErrorCode(text) == proto.TurnErrorNotLoggedIn
 }
 
 // userTurnError: a turn error with code is the user's to fix; a rate limit passes (or is the user's when the
