@@ -1,6 +1,5 @@
 package persona.feature.inbox
 
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -9,7 +8,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -59,6 +57,15 @@ fun InboxEventScreen(repository: InboxRepository, route: InboxEventRoute, naviga
     val zone = LocalInboxZone.current
     val nowText = record?.let { inboxNowForRow(it, res, currentLocale, now = clock(), zone = zone) }
     val oldMark = record?.let { eventMark(it) }
+    val processingAction: (@Composable () -> Unit)? = record?.let { current ->
+        inboxProcessingSession(current)?.let { session ->
+            {
+                JTextButton(stringResource(R.string.inbox_event_processing_chat), onClick = {
+                    navigator.navigate(inboxConversationRoute(session.machineId, session.sessionId, current.item.id))
+                })
+            }
+        }
+    }
     fun go(target: ChainTarget) {
         val shown = record ?: return
         when (target) {
@@ -117,21 +124,17 @@ fun InboxEventScreen(repository: InboxRepository, route: InboxEventRoute, naviga
                     else Spacer(Modifier.weight(1f))
                     JTextButton(stringResource(R.string.inbox_event_view_source), { navigator.navigate(pages.open(record)) }, icon = PhIcons.ArrowSquareOut)
                 }
-                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-                    eventTag(record)?.let { (text, status) -> JTag(text, status = status) }
-                    inboxSourceTags(res, record).forEach { JTag(it) }
-                }
             }
         }
         val suggestion = record.event.suggestion
         if (suggestion == null || record.item.isDone) {
             if (nowText != null) item("event-state") {
                 EventStateLine(EventMark.Now(nowText, inboxNowStatus(record.event.now), problem = record.event.now == "failed",
-                    accent = oldMark is EventMark.Suggests, key = record.event.now), Modifier.padding(bottom = Tokens.Space.s))
+                    key = record.event.now), Modifier.padding(bottom = Tokens.Space.s), processingAction)
             } else if (oldMark != null) item("event-state") {
-                EventStateLine(oldMark, Modifier.padding(bottom = Tokens.Space.s))
+                EventStateLine(oldMark, Modifier.padding(bottom = Tokens.Space.s), processingAction)
             } else item("event-state") {
-                EventFallbackState(record, Modifier.padding(bottom = Tokens.Space.s))
+                EventFallbackState(record, Modifier.padding(bottom = Tokens.Space.s), processingAction)
             }
         }
         record.item.summary?.takeIf { it.isNotBlank() }?.let { summary ->
@@ -151,9 +154,6 @@ fun InboxEventScreen(repository: InboxRepository, route: InboxEventRoute, naviga
                 needsYou = record.item.needsYou, onStale = { stale = it })
         }
         error?.let { message -> item("event-error") { StatusText(message, isError = true) } }
-        record.item.summary?.takeIf { it.isNotBlank() }?.let { summary ->
-            item("event-summary") { JNotice(summary, Modifier.padding(bottom = Tokens.Space.s), title = stringResource(R.string.inbox_ai_summary), icon = PhIcons.Sparkle) }
-        }
         record.event.recap?.let { recap ->
             item("event-recap") {
                 JCard(Modifier.padding(bottom = Tokens.Space.s)) {
@@ -195,27 +195,27 @@ private fun eventTag(record: InboxRecord): Pair<String, Status?>? {
 
 /** A state line even for an older hub's suggestion, tier-only or done item: reuse the page's existing words. */
 @Composable
-private fun EventFallbackState(record: InboxRecord, modifier: Modifier = Modifier) {
+private fun EventFallbackState(record: InboxRecord, modifier: Modifier = Modifier, action: (@Composable () -> Unit)? = null) {
     val (word, status) = eventTag(record) ?: return
     JInlineStatus(word, modifier, tone = when (status) {
         Status.Working -> InlineTone.Busy
         Status.NeedsYou -> InlineTone.Caution
         else -> InlineTone.Done
-    })
+    }, action = action)
 }
 
 /** Where the processing stands, as one line: who is on it, "AI is preparing a suggestion", or that it failed. */
 @Composable
-internal fun EventStateLine(mark: EventMark, modifier: Modifier = Modifier) {
+internal fun EventStateLine(mark: EventMark, modifier: Modifier = Modifier, action: (@Composable () -> Unit)? = null) {
     when (mark) {
-        is EventMark.Working -> JInlineStatus(stringResource(mark.word), modifier, tone = InlineTone.Busy)
-        EventMark.Preparing -> JInlineStatus(stringResource(R.string.inbox_handling_preparing), modifier, tone = InlineTone.Busy)
+        is EventMark.Working -> JInlineStatus(stringResource(mark.word), modifier, tone = InlineTone.Busy, action = action)
+        EventMark.Preparing -> JInlineStatus(stringResource(R.string.inbox_handling_preparing), modifier, tone = InlineTone.Busy, action = action)
         is EventMark.Failed -> JInlineStatus(mark.reason?.let { stringResource(R.string.inbox_handling_failed_reason, it) }
-            ?: stringResource(R.string.inbox_handling_failed), modifier, tone = InlineTone.Failed)
+            ?: stringResource(R.string.inbox_handling_failed), modifier, tone = InlineTone.Failed, action = action)
         is EventMark.Suggests -> Unit
         is EventMark.Now -> {
             val icon = inboxNowIcon(mark.key)
-            JInlineStatus(mark.text, modifier, tone = icon.tone, icon = icon.icon)
+            JInlineStatus(mark.text, modifier, tone = icon.tone, icon = icon.icon, action = action)
         }
     }
 }
