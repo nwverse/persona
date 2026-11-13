@@ -1,8 +1,11 @@
 package persona.feature.inbox
 
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.longClick
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
@@ -29,7 +32,6 @@ import org.robolectric.annotation.GraphicsMode
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.ConnectionState
 import persona.core.contracts.api.InboxBulkAction
-import persona.core.contracts.api.InboxBulkResult
 import persona.core.contracts.api.InboxDoneTarget
 import persona.core.contracts.api.InboxEntry
 import persona.core.designsystem.PersonaTheme
@@ -126,14 +128,22 @@ class InboxItemSwipeTest {
 
     private fun row(title: String) = rule.onNode(hasText(title) and hasClickAction())
 
-    @Test fun aFilteredRightSwipeFilesOnlyTheVisibleItem() {
+    private fun handOffFromLongPress(title: String) {
+        row(title).performTouchInput { longClick() }
+        rule.waitForIdle()
+        rule.onNodeWithContentDescription("More").performClick()
+        rule.onNodeWithText("Hand to AI").performClick()
+        rule.waitForIdle()
+    }
+
+    @Test fun aFilteredEndSwipeFilesOnlyTheVisibleItem() {
         val inbox = FakeInbox(listOf(
             record("visible", "Visible matter", "Visible match"),
             record("hidden", "Hidden matter", "Different text"),
         ), query = "Visible")
         screen(inbox)
 
-        row("Visible matter").performTouchInput { swipeRight() }
+        row("Visible matter").performTouchInput { swipeLeft() }
         rule.waitForIdle()
 
         assertEquals(listOf("visible" to true), inbox.doneCalls)
@@ -145,7 +155,7 @@ class InboxItemSwipeTest {
     @Test fun aFailedCompletionRestoresAndRetryUsesOnlyThatItem() {
         val inbox = FakeInbox(listOf(record("one", "One matter"))).apply { failDone = true }
         screen(inbox)
-        row("One matter").performTouchInput { swipeRight() }
+        row("One matter").performTouchInput { swipeLeft() }
         rule.waitForIdle()
         rule.onNodeWithText("previous state is back", substring = true).assertExists()
         assertFalse(inbox.snapshot.value.records.single().item.isDone)
@@ -159,28 +169,35 @@ class InboxItemSwipeTest {
         assertTrue(inbox.snapshot.value.records.single().item.isDone)
     }
 
-    @Test fun pendingCompletionBlocksBothDirections() {
+    @Test fun pendingCompletionBlocksRepeatedDoneGesturesAndTheMenuAction() {
         val inbox = FakeInbox(listOf(record("one", "One matter"))).apply { doneGate = CompletableDeferred() }
         screen(inbox)
-        row("One matter").performTouchInput { swipeRight() }
         row("One matter").performTouchInput { swipeLeft() }
+        row("One matter").performTouchInput { swipeLeft() }
+        row("One matter").performTouchInput { swipeRight() }
 
         assertEquals(listOf("one" to true), inbox.doneCalls)
         assertTrue(inbox.handoffs.isEmpty())
         assertTrue(opened.isEmpty())
+
+        row("One matter").performTouchInput { longClick() }
+        rule.waitForIdle()
+        rule.onNodeWithText("Move Back").assertIsNotEnabled()
 
         inbox.doneGate?.complete(Unit)
         rule.waitForIdle()
         assertTrue(inbox.snapshot.value.records.single().item.isDone)
     }
 
-    @Test fun aFilteredLeftSwipeHandsOffOnlyTheVisibleItem() {
+    @Test fun aFilteredLongPressHandsOffOnlyTheVisibleItem() {
         val inbox = FakeInbox(listOf(
             record("visible", "Visible matter", "Visible match"),
             record("hidden", "Hidden matter", "Different text"),
         ), query = "Visible")
         screen(inbox)
-        row("Visible matter").performTouchInput { swipeLeft() }
+        row("Visible matter").performTouchInput { swipeRight() }
+        rule.onNodeWithText("What should it do").assertDoesNotExist()
+        handOffFromLongPress("Visible matter")
         rule.onNodeWithText("What should it do").assertExists()
         rule.onNodeWithText("Send").performClick()
         rule.waitForIdle()

@@ -172,7 +172,7 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
         val action = if (done) InboxBulkAction.Done else InboxBulkAction.Reopen
         pending[id] = done
         failedCompletions.remove(id)
-        haptics(doneHaptic(done))
+        haptics(doneHaptic(done, single = true))
         scope.launch {
             try { repository.setDone(id, done) }
             catch (e: CancellationException) { throw e }

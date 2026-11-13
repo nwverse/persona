@@ -243,7 +243,9 @@ protocol in `docs/protocol/connector-protocol.md`, "Event grouping").
   treating this version as triaged. If the user handled an event meanwhile, create a new continuation instead. An unchanged `last` is a retransmission, with no store / push (push once per ID + version). Muted events remain directly done.
 - **Fallback**: unavailable model (unconfigured, no quota, error, timeout) or invalid result invokes plugin `group.fallback` for structural grouping (reply / quote chains, topics, consecutive messages by one person, time gaps).
   Without `group.fallback`, do not write the batch; wait for the model and resubmit next round, like Inbox items without fallback.
-  It receives events under the same rules as `events`. Use plugin `rule_tier`, reason "Rule-based," `triaged_by: "rules"`; do not send this version back to the model. Validate fallback results by the same rules; invalid batches remain unwritten until the next round.
+  It receives events under the same rules as `events`. For an event the fallback opens, use plugin `rule_tier`, reason "Rule-based," `triaged_by: "rules"`; do not send this version back to the model.
+  When fallback messages join an existing event, only the messages and version advance: its title, summary, tier, reason, urgency and `triaged_by` stay unchanged (user policy tiers still apply), and `triaged_at` advances so this version is not retriaged.
+  Validate fallback results by the same rules; invalid batches remain unwritten until the next round.
 - **One pass per batch**: association runs in the background without delaying collection or pull-to-refresh. One batch per chat at a time (resubmitting the same batch or twice in one round still counts as one); at most 4 chats concurrently, others retry next round.
   Once every batch message belongs to an item, the plugin stops submitting it; unfinished batches resubmit remaining messages.
 - **List**: events are ordinary items with added `triaged_by`. `meta` and their chat membership stay on hub, not the list (plugin detail slot `inbox_item` receives meta through `ui.render`, #1681).
@@ -432,7 +434,7 @@ awaiting response → Working; failure → Needs you; otherwise `tier` (FYI / Ne
 **Event splitting**:
 - **Atomic threads** come from sources: connector `InboxThing.thread` (one Lark chat, mail thread, GitHub PR / issue).
 - **Noise stays one item per atomic thread** (`foldNoise`): all noise events newly created by the model in a grouping batch merge into that chat's open noise event, or one new noise event if absent. Noise events do not absorb higher-tier messages
-  (those create separate items), so noise is never split by topic, merged with other work, or upgraded.
+  (those create separate items), so noise is never split by topic, merged with other work, or upgraded. Fallback messages joining an existing noise event likewise leave its tier and title unchanged.
 - **FYI / Needs you** still split by topic ("Event grouping" above).
 - **New messages follow the existing event**: while it is being handled (`handling` looking / agent / waiting, or a suggestion awaiting you), new messages record only `received`; tier, title, summary, urgency stay unchanged,
   with no retriage (`TriagedAt` advances directly). Its handling chat decides what to do (below). Inactive items retriage as before.
@@ -497,7 +499,8 @@ conversation the item was handed to ("Item actions", Hand to AI), rejecting othe
 - Old `inbox_draft` (reply only) remains supported, equivalent to `kind: reply`, for chats started before the tool list changed.
 - `item` (an item id) is needed from a conversation the item was handed to (`assistant/inbox_handoff.go`); from the item's own handling chat it changes nothing. A tool error refuses an unknown item,
   one not handed to this conversation (only a conversation in its `handoffs` may write back) and one the user already filed ("answer in the chat instead"; a filed item is not reopened);
-  nothing changes then. Without `item` the tool works as before. A suggestion from a hand-off records where it came from (`suggestion.conversation`), its chain entry links that
+  nothing changes then. The item's own handling chat is likewise refused when it submits a kind after the item was filed: nothing changes, while a recap-only call still updates the recap.
+  Without `item` the tool works as before. A suggestion from a hand-off records where it came from (`suggestion.conversation`), its chain entry links that
   conversation, and the item's `agent` / `handling` stay as they were (no message card, no old-App draft).
 - **Task-related items**: for linked tasks (2′), prompts include task progress; a reply suggestion inserts a message card into the chat that started the task (`message`, retaining sent state after sending).
   When the linked task is supervised and the assistant's `inbox_signals` is on (off by default, #4293), each pass that takes new messages from other people into the item also tells the task's supervisor:
@@ -639,7 +642,7 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   Done's title has Jump To (its groups with counts; picking one unfolds it, loads it if it isn't, and scrolls to its first row, since an iOS `List` can't scroll to a header)
   and Fold all / Unfold all.
   On iOS each title a finger taps (a section's and its Mark all seen / Clear all, a group's and, selecting, its tick, Done's and its Jump To) is at least 44 pt tall,
-  its header or row adding no room above or below it (#6576, `InboxTitleTargetUITests`); a tap on Jump To opens its menu and leaves Done's fold beside it alone.
+  its header or row adding no room above or below it (#6576, `InboxTitleTargetUITests`); the tick is a finger wide too, over the header's inset and the gap before the title, with nothing drawn moving (#6658); a tap on Jump To opens its menu and leaves Done's fold beside it alone.
 - **Done's history**: past what the list holds (its 3 days, at most 200 done items), Done reads each manager's `GET /api/v1/inbox/done` ("History" under "Lifecycle"; 100 a page; on iOS the default manager's).
   Items the hub didn't stamp with a manager get the default one when there are several, so the per-manager filter keeps them. Done from history reopens through the item's own manager.
   - **With day counts** (#2969; "Days" under "Lifecycle", #2967): when the list is shown the apps ask for the counts in this device's zone, and Done lists every group they name

@@ -299,9 +299,6 @@ final class AppModel {
     /// good answer count as stale.
     @ObservationIgnored private var directionTreeAsk = 0
     @ObservationIgnored private var directionTreeLanded = 0
-    /// How much work each direction holds, by leader conversation id: the tree's `counts` (the secretary group left
-    /// out), for the sidebar's "N working · N need you" under each name. Empty from a hub without the tree.
-    var directionCounts: [String: DirectionTree.Counts] { directionTree?.leaderCounts ?? [:] }
     @ObservationIgnored private var assistantRetryInFlight: Task<Void, Never>?
     /// The assistant conversation shown in the Chat tab (persisted across launches).
     ///
