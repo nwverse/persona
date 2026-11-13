@@ -76,7 +76,7 @@ func (s *Service) Migrate(ctx context.Context, m Migration, on bool, by Actor) (
 				return Subscription{}, notFound("subscription")
 			}
 			sub := Subscription{ID: id, Connector: m.Connector, Source: m.Source, SourceName: m.SourceName, Label: m.Label,
-				Icon: m.Icon, Recipe: m.Recipe, RecipeOrigin: OriginExtension, RecipeAt: now, Tool: m.Recipe.Tool,
+				Icon: m.Icon, Recipe: m.Recipe, RecipeOrigin: OriginPersona, RecipeAt: now, Tool: m.Recipe.Tool,
 				IntervalSeconds: defaultIntervalOf(m.Recipe.Mode, 0), RunState: StateOK, Revision: 1, CreatedAt: now, UpdatedAt: now}
 			if err := s.o.Store.CreateSubscription(ctx, sub); err != nil {
 				return Subscription{}, err

@@ -17,7 +17,7 @@ func withMessages(migrated bool) (*fake, *fakeBuiltins) {
 	b.list = append(b.list, Builtin{ID: "imessage", Name: "Messages", Icon: "chat", Status: "ok", Inbox: &yes, InboxEvery: 120,
 		Mutable: true, Via: &Via{On: migrated, Subscription: subscriptions.MigrationID("imessage")}})
 	sub := subscriptions.Subscription{ID: subscriptions.MigrationID("imessage"), Connector: "imessage", Source: "imessage",
-		Label: "Messages", State: subscriptions.StateOK, IntervalSeconds: 900, Revision: 2,
+		Label: "Messages", State: subscriptions.StateOK, IntervalSeconds: 900, Revision: 2, RecipeOrigin: subscriptions.OriginPersona,
 		Recipe: subscriptions.Recipe{Mode: wire.ConnectorSubscriptionModeThings, Tool: "inbox_things", Kind: "sub_message", GroupBy: "thread"}}
 	if migrated {
 		sub.Migrated = &now
@@ -86,5 +86,16 @@ func TestADefaultSubscriptionIsItsBuiltin(t *testing.T) {
 	v = draw(t, f, env, state{P: pageSource, ID: subscriptions.MigrationID("imessage")})
 	if in := item(v, "d.to_inbox"); in == nil || in.Control != nil || in.Value != "As its source's rows" || item(v, "d.to_kb") != nil {
 		t.Fatalf("its page's Inbox: %+v", in)
+	}
+	if r := item(v, "h.recipe"); r == nil || r.Subtitle != "Provided by the connector · Comes with Persona" {
+		t.Fatalf("its recipe's row, no tool name: %+v", r)
+	}
+	// Its recipe stays the manager's, so its rows stay the built-in's: tried, not changed.
+	v = draw(t, f, env, state{P: pageRecipe, ID: subscriptions.MigrationID("imessage")})
+	if item(v, "b.dry") == nil || item(v, "x.tools") != nil || item(v, "x.raw") != nil || item(v, "x.tool") != nil {
+		t.Fatal("a default subscription's recipe can be changed")
+	}
+	if p := item(v, "plain"); p == nil || strings.Contains(p.Text, "inbox_things") {
+		t.Fatalf("what it does names the tool: %+v", p)
 	}
 }

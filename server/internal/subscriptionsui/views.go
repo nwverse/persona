@@ -137,6 +137,9 @@ func (p *pages) source() wire.View {
 	}
 	recipe := row("h.recipe", p.t("source.recipe"))
 	recipe.Subtitle = p.t("source.recipe_line", i18n.Args{"tool": toolTitle(src, s.Recipe.Tool), "origin": p.originShort(s.RecipeOrigin)})
+	if s.Recipe.Mode == wire.ConnectorSubscriptionModeThings { // no tool name for people: what the rows are (#6296)
+		recipe.Subtitle = p.t("source.recipe_line_things", i18n.Args{"origin": p.originShort(s.RecipeOrigin)})
+	}
 	recipe.Action = open(state{P: pageRecipe, ID: s.ID}, p.t("source.recipe"))
 	rules := row("h.rules", p.t("source.rules"))
 	rules.Subtitle = s.TriageRules
@@ -322,12 +325,15 @@ func (p *pages) recipe(dry *subscriptions.DryRun, dryErr error) wire.View {
 	other.Action = open(state{P: pageTools, ID: s.ID, C: s.Connector, S: s.Source}, p.t("title.tools"))
 	raw := row("x.raw", p.t("recipe.raw"))
 	raw.Action = open(state{P: pageRaw, ID: s.ID}, p.t("recipe.raw"))
-	edits := []wire.Component{edit, other, raw}
-	if s.Recipe.Mode == wire.ConnectorSubscriptionModeThings {
-		edits = []wire.Component{other, raw} // the setup form maps fields, which a things recipe has none of (#6296)
+	edits := append(p.askRows("ask.line_recipe"), edit, other, raw)
+	switch {
+	case subscriptions.IsMigration(s.ID): // a built-in's default: its rows must stay the built-in's, so only tried (#6345)
+		edits = nil
+	case s.Recipe.Mode == wire.ConnectorSubscriptionModeThings:
+		edits = append(p.askRows("ask.line_recipe"), other, raw) // the setup form maps fields, which a things recipe has none of (#6296)
 	}
 	v.Sections = append(v.Sections, wire.Section{Key: "edit", Footer: p.origin(s) + " " + p.t("recipe.no_model"),
-		Items: append(append([]wire.Component{try}, p.askRows("ask.line_recipe")...), edits...)})
+		Items: append([]wire.Component{try}, edits...)})
 	return v
 }
 

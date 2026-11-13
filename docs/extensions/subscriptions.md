@@ -336,6 +336,7 @@ A built-in source's Inbox feed can be switched to its default subscription and b
   - Turning it on asks once (decision 2): the Inbox gets the same rows, so nothing there changes, and it can be switched back. Turning it off switches back at once.
   - While it is on, the page's Inbox destination says "Through its subscription" instead of offering the connector's own switch, and a row opens the subscription's page (runs, schedule, a recipe "provided by the connector").
   - The default subscriptions are left out of the list and the relationship view, which reads the built-in as through its subscription, so a source shows once. A default subscription's own page has no Inbox switch, only a line saying it is switched on its built-in's page; its stored switches stay off.
+  - A default subscription's recipe is the manager's (origin `persona`, "Comes with Persona"): its page offers a try, not the assistant, another tool or the raw recipe, so its rows stay the built-in's. A things recipe's row reads "Provided by the connector", never its tool's name.
   - The manager keeps each source's default (`migrations` in `server/internal/extmgr/inbox_sources.go`). iMessage's is a `things` recipe over its `inbox_things` tool (#6317), so its rows stay the ones its `Collect` makes.
 
 ### Push sources

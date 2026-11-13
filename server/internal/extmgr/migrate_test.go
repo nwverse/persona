@@ -94,7 +94,8 @@ func TestABuiltinSwitchesToItsDefaultSubscription(t *testing.T) {
 		t.Fatalf("switched on: %+v", v)
 	}
 	s, _, err := h.subs.Get(ctx, subscriptions.MigrationID(c.ID()))
-	if err != nil || s.Label != connector.DisplayName(ctx, c) || s.Recipe.Mode != wire.ConnectorSubscriptionModeThings || s.ToInbox {
+	if err != nil || s.Label != connector.DisplayName(ctx, c) || s.Recipe.Mode != wire.ConnectorSubscriptionModeThings || s.ToInbox ||
+		s.RecipeOrigin != subscriptions.OriginPersona {
 		t.Fatalf("its subscription: %+v %v", s, err)
 	}
 	if err := b.SetMigrated(ctx, c.ID(), false, subscriptions.Actor{ID: "device:phone"}); err != nil || viaOf().On {
