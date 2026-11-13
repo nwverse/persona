@@ -994,7 +994,8 @@ private struct HomeComputerLine: View {
         HStack(spacing: HomeWidgetTokens.gap * 1.5) {
             HomeComputerRing(machine: machine, side: HomeWidgetTokens.ringMedium, named: false)
             VStack(alignment: .leading, spacing: 0) {
-                Text(verbatim: machine.name).font(HomeWidgetTokens.headline).lineLimit(1).homeInk(machine.online ? .primary : .tertiary)
+                Text(verbatim: machine.name).font(HomeWidgetTokens.headline).lineLimit(1).minimumScaleFactor(HomeWidgetTokens.nameMinScale)
+                    .homeInk(machine.online ? .primary : .tertiary)
                 Group {
                     if let color = state.color { Text(verbatim: state.words).homeTone(color) } else { Text(verbatim: state.words).homeInk(.secondary) }
                 }
