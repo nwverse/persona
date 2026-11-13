@@ -236,8 +236,11 @@ class InboxHandOffBarModel internal constructor(
 
     private suspend fun send(operation: HandOffBarOperation) {
         try {
+            var known: InboxRecord? = null
             if (operation.text == null) {
-                val record = repository.snapshot.value.records.inboxRecord(itemId) ?: error("The Inbox item is no longer available")
+                // A finished item opened from history is not in the live list; the page's own lookup finds it.
+                val record = repository.item(itemId) ?: error("The Inbox item is no longer available")
+                known = record
                 operation.text = handoffPrompt(resources, handOffItem(record, repository.personaContext(itemId)), operation.ask)
             }
             val text = checkNotNull(operation.text)
@@ -245,7 +248,7 @@ class InboxHandOffBarModel internal constructor(
             val operationId = operation.operationId ?: operation.attempt.operationId(text, target).also { operation.operationId = it }
             val session = repository.handOff(InboxHandOffRequest(itemId, text, target?.machineId, target?.sessionId, operationId))
             operation.attempt.done()
-            val record = repository.snapshot.value.records.inboxRecord(itemId)
+            val record = repository.snapshot.value.records.inboxRecord(itemId) ?: known
             val memoryKey = record?.let { InboxHandOffMemory.key(it.source, it.mutes) }
             if (memoryKey != null) {
                 try {
