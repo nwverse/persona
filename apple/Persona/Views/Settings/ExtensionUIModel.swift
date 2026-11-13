@@ -24,6 +24,12 @@ nonisolated extension ExtensionUIPlace: Identifiable {
 }
 
 nonisolated extension ExtensionUIContext {
+    #if os(macOS)
+    /// The frozen Mac app (docs/apple/mac.md) keeps the versions it reported before #827: new features skip it, so the
+    /// hub goes on turning newer components into ones it has always drawn.
+    static let pageVersion = 4
+    static let cardVersion = version
+    #else
     /// The UI version a whole page of the app draws (`ExtensionPageView`): 4's code hosting (#2961), 5's code review
     /// (#3136) and 6's pictures, controls, row actions, charts, tiles, fields and styles (#827).
     static let pageVersion = 6
@@ -33,6 +39,7 @@ nonisolated extension ExtensionUIContext {
     /// (`ExtensionCodeSummary`). Widgets, the watch and the system extensions keep `version` (Shared, 3): they draw
     /// none of it.
     static let cardVersion = 6
+    #endif
 
     /// This context for a whole page: the page's UI version.
     func forPage() -> Self {
