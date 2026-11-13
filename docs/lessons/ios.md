@@ -2,6 +2,17 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## An edit menu needs the selection's rect, not just a point (#6005)
+
+- If `UIEditMenuInteraction.presentEditMenu(with:)` gets only a `sourcePoint` and its delegate has no
+  `editMenuInteraction(_:targetRectFor:)`, the system doesn't know how tall the selection is or where its handles are.
+  In the lifted message it put the menu just under the selection's top edge, covering the selected word and its end
+  handle, so the handle couldn't be dragged. Return the selection's rect, clipped to what shows and padded for each
+  handle's knob (the start handle's above the first line, the end handle's below the last). The system then places
+  the menu above that rect, or below it when there is no room.
+- To check this in a UI test, a DEBUG value reports the selected lines and the handle views
+  (`UITextSelectionHandleView`) in window coordinates. Compare them with the frame of the edit menu's items.
+
 ## Selecting the words of a long lifted answer (#5291)
 
 - A `LazyVStack` opened at item N in a scroll view still lays out items 0 and 1 first, then walks the items between

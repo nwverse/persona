@@ -1354,6 +1354,10 @@ if MOCK_CLOSEOUT:
                    "closeout": {"status": "not_done", "did": ["搜索页的结果高亮做了一半，中文分词还没接"],
                                 "verified": "untested", "missing": "需要你确认用哪个分词库"}}),
     ]
+    # With MOCK_WORKFLOWS=1 the blocked one also has a workflow running in the background: its chat's header shows the
+    # workflow section with the closeout card under it.
+    if os.environ.get("MOCK_WORKFLOWS") == "1":
+        next(x for x in SESSIONS if x["session_id"] == CLOSEOUT_BLOCKED)["workflows"] = MOCK_WORKFLOW_RUNS
 
 # MOCK_SOURCES=1: sessions that do not live in a terminal engine (docs/protocol/protocol.md "Codex sources and capabilities"): a live Codex
 # app-server thread the phone can write to and join (POST …/attach; joining lets it approve), a Codex history thread it
@@ -3094,13 +3098,63 @@ TODO_ORPHANED = {
 TODO_ORPHANED_SINCE = ago(hours=5)
 
 
+# MOCK_DECISIONS=1 (#3804, docs/assistant/todos.md "Decisions the owner can answer"; with MOCK_TODO_ASKS=1): every
+# decision ask carries what the hub's decision does: the question, why only the owner can answer, two or three options
+# with what each leads to (the recommended one first), what waiting costs, the background line, the default and the
+# fixed answers. The PR check is irreversible (no default, two taps on an option); the cache choice (MOCK_TASKS) is a
+# priority call taken by default in three hours; the unit tests' (MOCK_TASK_DECISION, its card in the main chat) is
+# seen by another team (two taps, no default). POST …/accept with `response` "explain_first" keeps the round open
+# with `response` set, as the hub does; any other response or an option ends it.
+MOCK_DECISIONS = os.environ.get("MOCK_DECISIONS") == "1"
+DECISION_RESPONSES = ["decide_yourself", "not_what_i_asked", "explain_first"]
+DECISION_FIELDS = {
+    "todo_review": {
+        "question": "PR #42 删掉旧的公开接口，现在合入还是先保留旧接口？", "why_owner": "irreversible",
+        "options": [{"label": "先合入", "leads_to": "旧接口下个版本再删，调用方有一个版本的时间迁移"},
+                    {"label": "保留旧接口", "leads_to": "PR 改成只加新接口，删除另开一个 PR"},
+                    {"label": "关掉 PR", "leads_to": "分支保留，什么都不合入"}],
+        "cost_of_waiting": "发布分支周五冻结", "background": "来自周一主对话里的消息；CI 已通过，有两个外部调用方",
+        "default": "never",
+    },
+    "todo_task_cache": {
+        "question": "网络层先用本地缓存，还是现在就引入 Redis？", "why_owner": "priority",
+        "options": [{"label": "本地缓存", "leads_to": "今天就能交给网络层 Agent，Redis 下个月再评估"},
+                    {"label": "引入 Redis", "leads_to": "要先申请实例，网络层推迟两天"},
+                    {"label": "两个都做", "leads_to": "先本地缓存，同时准备 Redis 的配置"}],
+        "cost_of_waiting": "网络层 Agent 在等这个决定", "background": "来自主对话的任务；测试已通过，两种方案都试过",
+        "default": "taken", "deadline_hours": 3,
+    },
+    "todo_task_tests": {  # MOCK_TASK_DECISION: its card in the main chat
+        "question": "测试已通过：现在合入网络层的 PR，还是等另一组 review 完？", "why_owner": "visible_to_others",
+        "options": [{"label": "现在合入", "leads_to": "另一组今天就会用上新的网络层"},
+                    {"label": "等 review", "leads_to": "明天合入，PR 先开着"}],
+        "cost_of_waiting": "网络层的 PR 一直开着", "background": "来自主对话的任务；网络层的单元测试全部通过",
+        "default": "never",
+    },
+}
+DECISION_KEPT = {}  # to-do id -> the fixed answer given while its round stays open (explain_first)
+
+
+def decision_ask(tid, ask):
+    """The ask as the hub sends a decision (MOCK_DECISIONS): its own fields over the verdict line."""
+    fields = DECISION_FIELDS.get(tid)
+    if not MOCK_DECISIONS or ask.get("outcome") != "decide" or not fields:
+        return ask
+    out = dict(ask, **{k: v for k, v in fields.items() if k != "deadline_hours"}, responses=DECISION_RESPONSES)
+    if fields.get("deadline_hours"):
+        out["deadline"] = later(hours=fields["deadline_hours"])
+    if tid in DECISION_KEPT:
+        out["response"] = DECISION_KEPT[tid]
+    return out
+
+
 def sorted_todos():
     tds = copy.deepcopy(TODOS)
     tds.sort(key=lambda t: t.get("created_at") or "", reverse=True)
     out = [format_todo(t) for t in tds]
     for t in out:
         if t.get("done_at") is None and t["id"] in TODO_ASKS and t["id"] not in BRIEF_ACCEPTED:
-            t["ask"] = dict(TODO_ASKS[t["id"]], asked_at=TODO_ASKED_AT)
+            t["ask"] = decision_ask(t["id"], dict(TODO_ASKS[t["id"]], asked_at=TODO_ASKED_AT))
             if sg := rule_suggestion(t["id"]):
                 t["ask"]["suggestion"] = sg
         if t.get("done_at") is None and t["id"] in TODO_ORPHANED:
@@ -8328,6 +8382,10 @@ def tasks_area(h, method, p, raw):
         expected = current_ask.get("asked_at") if current_ask is not None else (brief or {}).get("asked_at")
         if tid in BRIEF_ACCEPTED or expected is None or sent.get("asked_at") != expected:
             h.send_json({"error": "已经处理过了"}, 409)
+        elif MOCK_DECISIONS and sent.get("response") == "explain_first" and tid in TODO_ASKS:
+            DECISION_KEPT[tid] = "explain_first"  # the round stays open, no longer taken by default (decision.go)
+            h.send_json({"ok": True})
+            push_todos()
         else:
             BRIEF_ACCEPTED.add(tid)
             h.send_json({"ok": True})
@@ -9512,6 +9570,12 @@ def terminal_frames(cols=96, rows=24, ticks=40):
 # another program holds the terminal — busy until the app subscribes with takeover.
 TERMINAL_CONTROL = bool(os.environ.get("MOCK_TERMINAL_CONTROL"))
 TERMINAL_INPUT = []
+# GET /mock/terminal_node?state=stalled|gone|back[&machine=<id>] (with MOCK_TERMINAL_STREAM, #6327): a computer's node as a
+# deploy replaces it. stalled: its terminals' subscribes go unanswered (the takeover went with the old connection: no
+# frame, no terminal_control); gone: the computer is offline, the subscriptions left unanswered end with the hub's
+# words and new ones fail at once, as the hub's connectionEnded and errOffline do; back: online again, subscribes
+# answered as before. machine: macbook unless named.
+TERMINAL_NODE = {"state": "", "machine": "macbook", "stalled": []}
 
 
 def cell_width(ch):
@@ -12751,6 +12815,10 @@ LAUNCHER_MODELS = {
     ]},
 }
 LAUNCHER_MODELS["sonnetcc"] = dict(LAUNCHER_MODELS["claude"], locked="启动器固定了模型参数，不能覆盖具体模型")
+# The Codex App's launcher (MOCK_DESKTOP_APPS): the App picks a chat's model, so the node answers no models and why
+# (server/internal/node/launcher_models.go), as for the Claude desktop app's.
+LAUNCHER_MODELS["codex-app"] = {"agent": "codex", "models": [], "locked": "Codex App 用它自己选的模型运行这个对话。"}
+LAUNCHER_MODELS["claude-desktop"] = {"agent": "claude", "models": [], "locked": "Claude 桌面版用它自己选的模型运行这个会话。"}
 # MOCK_NEW_AGENT_PANEL=1 (#5104, web/e2e/new-agent-model.mjs): the gateway behind claude's glm-5.3 also serves Codex, so
 # codex lists the same model ID and New Agent's flyout offers that model under both engines; and the Mac Studio has no
 # codex launcher, so a Codex pick made on another computer falls back to the default there.
@@ -23021,6 +23089,23 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/queue": return self.send_json(queue_messages(q.get("text", [None])[0], "clear" in q, int(q.get("photos", ["0"])[0] or 0)))
         if p == "/mock/queue_edits": return self.send_json({"edits": QUEUE_EDITS})
         if p == "/mock/terminal_input": return self.send_json({"input": TERMINAL_INPUT})
+        if p == "/mock/terminal_node":
+            state, mid = q.get("state", [""])[0], q.get("machine", [TERMINAL_NODE["machine"]])[0]
+            if state not in ("stalled", "gone", "back"):
+                return self.send_json({"error": "state is stalled, gone or back"}, 400)
+            TERMINAL_NODE.update(state="" if state == "back" else state, machine=mid)
+            m = next((x for x in MACHINES if x["id"] == mid), None)
+            if m and state in ("gone", "back"):
+                m["online"] = state == "back"
+                for send, _ in list(LIVE):
+                    try: send({"type": "machines", "machines": out_machines()})
+                    except Exception: pass
+            if state == "gone":  # what waited on the old connection ends now, after the machines say it is offline
+                for send, smid, sid in TERMINAL_NODE["stalled"]:
+                    try: send({"type": "terminal", "machine_id": smid, "session_id": sid, "error": "rpc: connection closed"})
+                    except Exception: pass
+                TERMINAL_NODE["stalled"] = []
+            return self.send_json({"state": state, "machine": mid})
         if p == "/mock/herdr_client": return self.send_json({"log": FULL_LOG})
         if p == "/mock/herdr_focus":
             # ?pane=w1:p2[&session=<id>&source=client|persona|other&mine=1|0&view=<id>]: herdr's focus moved, as the hub tells the views
@@ -25548,6 +25633,14 @@ class H(BaseHTTPRequestHandler):
                     send({"type": "terminal", "machine_id": msg.get("machine_id"), "session_id": msg.get("session_id"),
                           "error": "session %s is not running" % msg.get("session_id")})
                     continue
+                if msg.get("type") == "terminal_subscribe" and TERMINAL_STREAM and TERMINAL_NODE["state"] and msg.get("machine_id") == TERMINAL_NODE["machine"]:
+                    mid, sid = msg.get("machine_id"), msg.get("session_id")
+                    drive.clear()
+                    if TERMINAL_NODE["state"] == "gone":  # the hub answers at once: the computer's node is not connected
+                        send({"type": "terminal", "machine_id": mid, "session_id": sid, "error": "%s: offline" % mid})
+                    else:  # stalled: nothing comes back
+                        TERMINAL_NODE["stalled"].append((send, mid, sid))
+                    continue
                 if msg.get("type") == "terminal_subscribe" and TERMINAL_STREAM and TERMINAL_CONTROL and msg.get("control"):
                     sid, mid, ctl = msg.get("session_id"), msg.get("machine_id"), msg["control"]
                     if os.environ.get("MOCK_TERMINAL_BUSY") and not msg.get("takeover"):
@@ -27964,9 +28057,13 @@ def features():
 MOCK_HELP.append("MOCK_AGENT_ARCHIVES=1|archive  Agent 归档：features 带 agent_session_archives 和 agent_session_archive_close（archive：只有归档，像旧管理器）；"
                  "先有两个已归档的 Agent；忙的 Agent 回 409 agent_busy；?close=1 关闭开着的 Claude Agent。MOCK_ARCHIVE_CLOSE=refuse|offline：电脑没关它")
 MOCK_HELP.append("MOCK_CLOSEOUT=1  Four stopped agents on the server that ended their turn with a closeout (#3612): done with merged and deployed confirmed by the hub; "
-                 "done saying merged where the hub found it is not; blocked on someone, nothing checked; not done, its reply only the block. Each last reply carries the raw block")
+                 "done saying merged where the hub found it is not; blocked on someone, nothing checked; not done, its reply only the block. Each last reply carries the raw block. "
+                 "With MOCK_WORKFLOWS=1 the blocked one also runs a background workflow (the header with both sections)")
 MOCK_HELP.append("MOCK_TASKS_PARKED=1  With MOCK_TASKS=1: the blog migration task is parked by its supervisor (#3804): `supervision.state` "
                  "`parked` with `supervision.parked` {reason, until, waiting_on, count}; it is In progress, not in Needs you")
+MOCK_HELP.append("MOCK_DECISIONS=1  With MOCK_TODO_ASKS=1: decision asks carry options, background, default and fixed answers (#3804): "
+                 "the PR check is irreversible (two taps), the cache choice (MOCK_TASKS=1) is taken by default in 3 hours; "
+                 "explain_first keeps the round open with `response` set")
 MOCK_HELP.append("MOCK_ORPHANED=1  Open to-dos nobody is working on (#3618): `orphaned` on the PR check (error), the blog (offline) and, "
                  "with MOCK_TASKS=1, the blog task (closed) and the release notes task (error)")
 
