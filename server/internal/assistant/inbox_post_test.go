@@ -48,6 +48,9 @@ func TestInboxPostMakesAGenericRow(t *testing.T) {
 		it.Reason != "you asked to hear about drops" || !it.open() || it.Count != 1 || it.Summary == "" {
 		t.Fatalf("row %+v connector %+v", it, it.Connector)
 	}
+	if it.Sender != "" || it.Summary != "20% off until Sunday" || it.Context != "Price drop\n20% off until Sunday" {
+		t.Fatalf("no sender (the Assistant tag says who), the summary is the whole text and the context only title and summary: %q %q %q", it.Sender, it.Summary, it.Context)
+	}
 	if it.Kind != inboxPostKind || it.Connector.Label == "" || it.AccountName == "" {
 		t.Fatalf("an unknown source draws as a generic row: kind %q label %q name %q", it.Kind, it.Connector.Label, it.AccountName)
 	}
