@@ -8,6 +8,13 @@
 // difference is only an upgrade hint.
 package nodeproto
 
+// EventRestarting announces a planned resident exec; CodeRestarting refuses a request before it starts.
+// Both are optional: older managers ignore the event and newer managers never replay an ambiguous dropped call.
+const (
+	EventRestarting = "node.restarting"
+	CodeRestarting  = "node_restarting"
+)
+
 // PersonaContracts is the optional bidirectional naming capability. It does not
 // change the node protocol floor or become a required capability.
 const PersonaContracts = "persona_contracts_v1"
@@ -76,6 +83,24 @@ const (
 	// ModelHTTP: model.http, a direct-API model request an API connection sends through this computer
 	// (docs/assistant/model-config.md "Sending through a computer").
 	ModelHTTP = "model_http"
+	// EngineSwitch: session.modes takes a launcher of the other engine (Claude Code ↔ Codex) for a running terminal
+	// Agent, kept as its pending switch (Session.pending_switch.agent); its next session.send with apply_switch starts
+	// that engine in the same terminal with a handoff summary, or resumes the conversation's earlier session of it, and
+	// the conversation's earlier sessions are named on the row now running it (engine_history) and left out of the
+	// list (docs/protocol/protocol.md "Switching a running Agent to another engine"). A node without it refuses such a
+	// pick (switch_unsupported / switch_other_agent).
+	EngineSwitch = "engine_switch"
+	// ModelRun: model.run, an API purpose's request answered by a launcher's CLI run headless on this computer
+	// (docs/assistant/model-config.md "Running API purposes on a launcher").
+	ModelRun = "model_run"
+	// LauncherSwitchNow: session.send takes switch_now, the assistant's agent_switch (#5973): the switch it picked is
+	// carried out with that message now, or the message is refused (switch_busy and the other switch codes) with
+	// nothing typed and the switch dropped. A node without it would take the message as apply_switch alone: typed on the
+	// launcher the agent runs on while it is busy, with the switch left waiting for the user's next message.
+	LauncherSwitchNow = "launcher_switch_now"
+	// PaneCwd: panes.new takes cwd, a folder to start the new terminal in (the file page's Open Terminal Here, #5832);
+	// without it the hub answers node_outdated rather than open the terminal somewhere else.
+	PaneCwd = "pane_cwd"
 )
 
 // Error codes in the manager's answers to a resident node's replayed notifications (a notify with spool_id,
@@ -100,7 +125,7 @@ const (
 )
 
 // Announced is what a node built from this code announces.
-var Announced = []string{ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, Sessions, ModelConfiguration, AssistantConfigDir, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP}
+var Announced = []string{ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, Sessions, ModelConfiguration, AssistantConfigDir, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, PaneCwd}
 
 // ShareProjection is the bounded complete-source sharing projection, not light Items.
 const ShareProjection = "share_projection.v1"

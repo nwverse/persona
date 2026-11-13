@@ -5,28 +5,27 @@ import SwiftUI
 
 /// A row's look: what leads it (an icon, an avatar or a thumbnail), its title and subtitle, its value and badge, and a
 /// chevron when it can be used (a spinner while it runs); `trailing` at its very end (a control, UI version 6).
+/// At the accessibility text sizes the title wraps and the value and badge go under it, so neither is cut to a word
+/// beside the other (#5634); the default sizes keep them on one line.
 struct ExtensionComponentRowLabel<Trailing: View>: View {
     var row: ExtensionRowComponent
     var model: (any ExtensionViewControlling)?
     var chevron: Bool
     @ViewBuilder var trailing: Trailing
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
+        let stacked = typeSize.isAccessibilitySize
         HStack(spacing: Theme.Space.m) {
             leading
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                Text(row.title).font(Theme.Font.body).lineLimit(1).minimumScaleFactor(0.8)
-                if let s = row.subtitle, !s.isEmpty { Text(s).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(2) }
+                Text(row.title).font(Theme.Font.body).lineLimit(stacked ? 3 : 1).minimumScaleFactor(stacked ? 1 : 0.8)
+                if let s = row.subtitle, !s.isEmpty { Text(s).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(stacked ? 4 : 2) }
+                if stacked { details(lines: 2) }
             }
             Spacer(minLength: Theme.Space.s)
-            if let v = row.value, !v.isEmpty { ExtensionChangingText(v).font(Theme.Font.body.monospacedDigit()).foregroundStyle(.secondary).lineLimit(1) }
-            if let b = row.badge {
-                // Drawn again with another tone, its colors change; with other words, they fade in (#37).
-                Chip(text: b.text, look: b.tone == nil || b.tone == "neutral" ? .neutral : .tint(ExtensionUIStyle.tone(b.tone)))
-                    .contentTransition(.opacity)
-                    .animation(reduceMotion ? nil : Theme.Motion.state, value: b)
-            }
+            if !stacked { details(lines: 1) }
             if let action = row.action, model?.selected(action.id) == true {
                 ThemedIcon(Theme.Icon.success).font(Theme.Font.labelStrong).foregroundStyle(Theme.positive)
                     .accessibilityLabel("Selected [Extension Components 7ecf1c]")
@@ -40,6 +39,20 @@ struct ExtensionComponentRowLabel<Trailing: View>: View {
             trailing
         }
         .contentShape(.rect)
+    }
+
+    /// The trend (UI version 6), the value and the badge: after the title's column, or under the title at the
+    /// accessibility sizes.
+    @ViewBuilder private func details(lines: Int) -> some View {
+        // UI version 6: its trend before its value.
+        if let spark = row.spark { ExtensionSparkLine(spark: spark) }
+        if let v = row.value, !v.isEmpty { ExtensionChangingText(v).font(Theme.Font.body.monospacedDigit()).foregroundStyle(.secondary).lineLimit(lines) }
+        if let b = row.badge {
+            // Drawn again with another tone, its colors change; with other words, they fade in (#37).
+            Chip(text: b.text, look: ExtensionUIStyle.badge(b))
+                .contentTransition(.opacity)
+                .animation(reduceMotion ? nil : Theme.Motion.state, value: b)
+        }
     }
 
     @ViewBuilder private var leading: some View {
@@ -60,6 +73,9 @@ struct ExtensionComponentRowLabel<Trailing: View>: View {
             .scaledFrame(width: Theme.Size.wellL, height: Theme.Size.wellL)
             .clipShape(.circle)
             .accessibilityHidden(true)
+        } else if let i = row.icon, !i.isEmpty, let hue = ExtensionUIStyle.color(row.iconColor) {
+            // UI version 6: its named color on the app's tile.
+            IconTile(ExtensionUIStyle.icon(i), tint: hue).accessibilityHidden(true)
         } else if let i = row.icon, !i.isEmpty {
             // The icon and its column stop growing at the largest standard size, where the glyph still fits: past it the
             // glyph followed the text to 3 × while the column stopped at `sizeScale`'s 1.6 ×, and spilled into the
@@ -227,7 +243,7 @@ struct ExtensionEmpty: View {
 
     var body: some View {
         EmptyStateView(symbol: ExtensionUIStyle.icon(empty.icon), title: empty.title, message: empty.detail ?? "",
-                       action: button)
+                       action: button, tint: ExtensionUIStyle.color(empty.iconColor))
             .frame(maxWidth: .infinity)
             .listRowBackground(Color.clear)
             .accessibilityIdentifier("plugin-ui-empty")
@@ -353,7 +369,9 @@ enum ExtensionOutcome {
         } else if let t = o.toast {
             app.toast = Toast(t, style: .success)
         }
-        if let url = o.url, !app.openIfExtensionSettings(url) { link.wrappedValue = LinkTarget(url: url) }
+        if let url = o.url, !app.openIfExtensionSettings(url, from: o.settingsOwner), !app.openIfAsk(url), !app.openIfSourcesGraph(url) {
+            link.wrappedValue = LinkTarget(url: url)
+        }
     }
 }
 
@@ -370,6 +388,29 @@ struct ExtensionChartItem: View {
     /// The x axis: the first series' labels (the others line up with them).
     private var labels: [String] { series.first?.points.map(\.label) ?? [] }
 
+    private var mapped: [DataChart.Series] {
+        series.enumerated().map { i, s in
+            DataChart.Series(name: s.name?.isEmpty == false ? s.name! : String(localized: "Series \(i + 1)"),
+                             color: ExtensionUIStyle.series(s.tone) ?? ExtensionUIStyle.color(s.color), values: s.points.map(\.value),
+                             displays: s.points.map(\.display))
+        }
+    }
+
+    /// UI version 6 adds `area`; every other kind but `line` is drawn as bars.
+    private var chartKind: DataChart.Kind {
+        item.kind == "line" ? .line : item.kind == ExtensionChartKind.area ? .area : .bar
+    }
+
+    /// A stacked bar of one category (a single day's parts): it is a horizontal segmented bar, not a lone column.
+    private var singleShare: [SegmentedShareBar.Share]? {
+        let mapped = mapped
+        guard DataChart.isSingleCategoryShare(kind: chartKind, stacked: item.stacked == true, series: mapped) else { return nil }
+        let total = mapped.reduce(0) { $0 + $1.values[0] }
+        return mapped.enumerated().map { i, s in
+            SegmentedShareBar.Share(id: i, color: s.color ?? DataChart.hues[i % DataChart.hues.count], ratio: s.values[0] / total)
+        }
+    }
+
     var body: some View {
         if !labels.isEmpty {
             VStack(alignment: .leading, spacing: Theme.Space.s) {
@@ -379,13 +420,23 @@ struct ExtensionChartItem: View {
                 if item.kind == ExtensionChartKind.donut || item.kind == ExtensionChartKind.pie, let s = series.first {
                     RingChart(parts: s.points.map { RingChart.Part(label: $0.label, value: $0.value, display: $0.display ?? format($0.value)) },
                               center: item.center, pie: item.kind == ExtensionChartKind.pie)
+                } else if item.kind == ExtensionChartKind.candlestick, let s = series.first {
+                    // UI version 6: one series of open / high / low / close (value is the close), rising green unless
+                    // the extension says red (as its market writes it).
+                    let up = item.rising == "red" ? Theme.Diff.del : Theme.Diff.add
+                    let down = item.rising == "red" ? Theme.Diff.add : Theme.Diff.del
+                    CandleChart(candles: s.points.map { p in
+                                    CandleChart.Candle(label: p.label, open: p.open ?? p.value, high: p.high ?? p.value, low: p.low ?? p.value,
+                                                       close: p.close ?? p.value, volume: p.volume)
+                                },
+                                rising: up, falling: down, format: format, compact: compact)
+                        .animation(reduceMotion ? nil : Theme.Motion.layout, value: item.series)
+                } else if let shares = singleShare {
+                    if series.count > 1 { shareLegend }
+                    SegmentedShareBar(shares: shares)
                 } else {
-                DataChart(kind: item.kind == "line" ? .line : .bar, labels: labels,
-                          series: series.enumerated().map { i, s in
-                              DataChart.Series(name: s.name?.isEmpty == false ? s.name! : String(localized: "Series \(i + 1)"),
-                                               color: ExtensionUIStyle.series(s.tone), values: s.points.map(\.value),
-                                               displays: s.points.map(\.display))
-                          },
+                DataChart(kind: chartKind, labels: labels,
+                          series: mapped,
                           stacked: item.stacked == true, format: format, compact: compact)
                 // Drawn again with other values, the bars and lines move to them (#37).
                 .animation(reduceMotion ? nil : Theme.Motion.layout, value: item.series)
@@ -398,10 +449,40 @@ struct ExtensionChartItem: View {
         }
     }
 
+    /// The color and name of each share, one line that wraps on a narrow card (the rows below carry the values).
+    private var shareLegend: some View {
+        let shares = singleShare ?? []
+        return HStack(spacing: Theme.Space.m) {
+            ForEach(Array(series.enumerated()), id: \.offset) { i, s in
+                HStack(spacing: Theme.Space.xs) {
+                    Circle().fill(shares.first { $0.id == i }?.color ?? DataChart.hues[i % DataChart.hues.count])
+                        .scaledFrame(width: Theme.Size.dot, height: Theme.Size.dot)
+                    Text(s.name?.isEmpty == false ? s.name! : String(localized: "Series \(i + 1)")).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
+                }
+            }
+        }
+    }
+
     private func format(_ v: Double) -> String {
         let n = DataChart.compact(v)
         guard let u = item.unit, !u.isEmpty else { return n }
         return n + " " + u
+    }
+}
+
+/// An extension's `spark` (UI version 6): a small trend line, in its named color, else its tone's, else the quiet ink.
+struct ExtensionSparkLine: View {
+    var spark: ExtensionSpark
+    var width: CGFloat? = Theme.Size.box56
+
+    var body: some View {
+        if spark.values.filter(\.isFinite).count >= 2 {
+            TrendLine(values: spark.values, color: Self.color(spark), fill: spark.fill == true, width: width)
+        }
+    }
+
+    static func color(_ s: ExtensionSpark) -> Color {
+        ExtensionUIStyle.color(s.color) ?? (s.tone == nil || s.tone == "neutral" ? Color.secondary : ExtensionUIStyle.tone(s.tone))
     }
 }
 
@@ -443,6 +524,7 @@ struct ExtensionStatGrid: View {
         VStack(alignment: .leading, spacing: Theme.Space.xxs) {
             Text(s.label).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
             ExtensionChangingText(s.value).font(Theme.Font.heading.monospacedDigit()).lineLimit(1).minimumScaleFactor(0.6)
+            if let spark = s.spark { ExtensionSparkLine(spark: spark) }
             if let d = s.detail, !d.isEmpty {
                 Text(d).font(Theme.Font.label).foregroundStyle(ExtensionUIStyle.tone(s.tone)).lineLimit(1).minimumScaleFactor(0.8)
             }

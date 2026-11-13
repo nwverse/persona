@@ -5,17 +5,15 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { initI18n, t } from "../../i18n";
 import type { FeedItem, TodayBody } from "../../lib/feed";
+import { closePanel, getPanel } from "../../lib/panel";
 import { FeedLineView } from "./Tasks";
-
-// where a click went: a page of its own (#5096), never a side panel
-const opened = () => location.pathname + location.search;
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 let root: Root;
 let host: HTMLDivElement;
 beforeEach(() => {
-  history.replaceState(null, "", "/");
+  closePanel();
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -23,7 +21,7 @@ beforeEach(() => {
 afterEach(async () => {
   act(() => root.unmount());
   host.remove();
-  history.replaceState(null, "", "/");
+  closePanel();
   await initI18n("zh-Hans");
 });
 
@@ -54,9 +52,9 @@ describe("Today tasks awaiting review", () => {
     let button = host.querySelector("button")!;
     expect(button.textContent).toBe(action);
     act(() => button.click());
-    expect(opened()).toBe(`/todos?id=${first.id}`);
+    expect(getPanel()).toEqual({ kind: "task", todo: first.id });
 
-    history.replaceState(null, "", "/");
+    closePanel();
     draw({ pending_review: [second, first] });
     expect(host.textContent).toContain(multiple);
     expect(host.textContent).not.toContain(first.title);
@@ -65,7 +63,7 @@ describe("Today tasks awaiting review", () => {
     button = host.querySelector("button")!;
     expect(button.textContent).toBe(action);
     act(() => button.click());
-    expect(opened()).toBe(`/todos?id=${second.id}`);
+    expect(getPanel()).toEqual({ kind: "task", todo: second.id });
   });
 
   it.each([{ pending_review: undefined }, { pending_review: [] }])("keeps the empty card when pending_review is $pending_review", ({ pending_review }) => {
@@ -88,8 +86,8 @@ describe("Today tasks awaiting review", () => {
     const buttons = [...host.querySelectorAll("button")].filter((b) => b.textContent === "去看");
     expect(buttons).toHaveLength(2);
     act(() => buttons[0].click());
-    expect(opened()).toBe(`/todos?id=${"waiting"}`);
+    expect(getPanel()).toEqual({ kind: "task", todo: "waiting" });
     act(() => buttons[1].click());
-    expect(opened()).toBe(`/todos?id=${first.id}`);
+    expect(getPanel()).toEqual({ kind: "task", todo: first.id });
   });
 });

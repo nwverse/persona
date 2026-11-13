@@ -38,6 +38,7 @@ import (
 type Node struct {
 	Version string
 	updater *nodeupdate.Manager // resident-owned, shared across attach connections
+	reload  *ResidentReload     // admission/draining while the attach transport stays available
 
 	// dataDirOnce finds the data folder the path guard refuses the credentials of (pathguard.go dataDirs).
 	dataDirOnce sync.Once
@@ -364,9 +365,17 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 		w = &updateResponseWriter{Writer: w, responseWritten: n.updater.ResponseWritten}
 	}
 	n.peer = rpc.New("n", w)
+	n.peer.TrackReplies = n.reload != nil
+	n.reload.peer(n.peer, func() {
+		cancel()
+		if closer, ok := r.(io.Closer); ok {
+			_ = closer.Close()
+		}
+	})
+	defer n.reload.peer(n.peer, nil)
 	// A tool call whose caller went away (the assistant's turn stopped, a hook killed) ends on the hub too: an
 	// approval it was waiting on is withdrawn, not left to run the call when allowed later (#2597).
-	n.peer.Cancels = map[string]bool{"mcp.call": true}
+	n.peer.Cancels = map[string]bool{"mcp.call": true, "state.load": true}
 	n.peer.OnRequest = n.handle
 	n.streams = streams.New(n.peer.Notify)
 	defer n.streams.CloseAll()
@@ -565,6 +574,15 @@ func (n *Node) writeClaudeConfig() error { return writeGeneratedConfig(n.dir, n.
 func (n *Node) hubSupportsPersonaContracts() bool { return n.hubPersonaContracts.Load() }
 
 func (n *Node) handle(ctx context.Context, method string, params json.RawMessage) (any, error) {
+	if n.reload != nil {
+		done, err := n.reload.enter()
+		if err != nil {
+			return nil, err // explicitly not started: the manager can retry on the replacement
+		}
+		if !rpc.AfterReply(ctx, done) {
+			defer done()
+		}
+	}
 	if strings.HasPrefix(method, "node.update.") {
 		return n.handleUpdate(ctx, method, params)
 	}
@@ -581,6 +599,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.secretStageCall(params)
 	case proto.MethodModelHTTP: // an API connection's request sent through this computer (modelhttp.go); the same
 		return modelHTTP(ctx, params)
+	case proto.MethodModelRun: // an API purpose's request answered by a launcher here (modelrun.go); the same
+		return n.modelRun(ctx, params)
 	}
 	if strings.HasPrefix(method, "plugin.node.") { // plugins' programs on this computer (plugins.go)
 		return n.handlePlugins(ctx, method, params)
@@ -596,6 +616,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		Paths            []string      `json:"paths"`
 		Offset           int64         `json:"offset"`
 		Stream           bool          `json:"stream"`
+		Detail           bool          `json:"detail"` // fs.stat: the Info sheet's fields (files_info.go)
 		SessionID        string        `json:"session_id"`
 		CreationID       string        `json:"creation_id"`
 		Incarnation      string        `json:"incarnation"`
@@ -775,10 +796,16 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	} else if h, err := n.runtimeFor(ctx, method, p.SessionID); err != nil {
 		return nil, err
 	} else if h != nil {
+		if err := n.switchNowElsewhere(method, p.SessionID, params); err != nil {
+			return nil, err // the runtime would take the message without the switch (launcher_switch.go)
+		}
 		if res, err, handled := n.runtimeHandle(ctx, h, method, params); handled {
 			return res, err
 		}
 	} else if r, ok := n.terminalOnly(p.SessionID); ok { // a pi or opencode without its extension, any other agent (opencode.go)
+		if err := n.switchNowElsewhere(method, p.SessionID, params); err != nil {
+			return nil, err
+		}
 		if res, err, handled := n.terminalOnlyCalls(ctx, method, p.SessionID, r); handled {
 			return res, err
 		}
@@ -1106,8 +1133,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		if p.ResumeSessionID != "" {
 			// A message carrying out a launcher switch quits the agent and starts it again in its terminal
 			// (launcher_switch.go): the Resume waits for it, then finds the agent running, or resumes it as it is.
-			n.awaitSwitch(ctx, p.ResumeSessionID)
-			r = n.fillResume(p.ResumeSessionID, r) // what it ran with, for what the start leaves out (retire.go)
+			defer n.resumeTurn(ctx, p.ResumeSessionID)() // and a switch to the other engine does not resume it beside this
+			r = n.fillResume(p.ResumeSessionID, r)       // what it ran with, for what the start leaves out (retire.go)
 			// The user's Resume (the only way a stopped agent runs again, #4754): in the shell it left when that is
 			// still there (stopped.go).
 			ctx = n.inKeptTerminal(ctx, p.ResumeSessionID, r.cwd)
@@ -1207,7 +1234,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "session.send":
 		var opts sendOpts
 		_ = json.Unmarshal(params, &opts)
-		return ok(n.sends.once(opts.ClientMsgID, func() error {
+		ctx = context.WithValue(ctx, sendTraceKey{}, opts.ClientMsgID)
+		ctx, waits := withComputerWait(ctx) // claudebg.go: an outside Claude took it behind a dialog
+		err := n.sends.once(opts.ClientMsgID, func() error {
 			var after int
 			if opts.ClientMsgID != "" {
 				after = n.echoBase(p.SessionID)
@@ -1219,7 +1248,11 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 				}
 				return n.send(ctx, p.SessionID, p.Text, p.Images, opts)
 			})
-		}))
+		})
+		if err == nil && *waits {
+			return map[string]any{"ok": true, "waits_on_computer": true}, nil
+		}
+		return ok(err)
 	case "session.echoes": // what the hub kept of earlier sends (echo.go), after this node started
 		var a struct {
 			Echoes []echoRecord `json:"echoes"`
@@ -1335,9 +1368,10 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		var a struct {
 			Kind        string `json:"kind"`
 			WorkspaceID string `json:"workspace_id"`
+			Cwd         string `json:"cwd"` // the file page's Open Terminal Here (#5832)
 		}
 		_ = json.Unmarshal(params, &a)
-		return n.newShell(ctx, a.Kind, a.WorkspaceID)
+		return n.newShell(ctx, a.Kind, a.WorkspaceID, a.Cwd)
 	case "panes.close_finished": // the user's "Close finished terminals" (stopped.go, #4754)
 		var a struct {
 			Panes   string `json:"panes"`
@@ -1371,7 +1405,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		if in.Composer {
 			return n.worktreeComposerPrepare(worktreeComposerContext(ctx, params), p.Kind, p.WorkspaceID)
 		}
-		return n.worktreePrepare(ctx, p.Kind, p.WorkspaceID, p.Cwd)
+		return n.worktreePrepare(worktreeComposerContext(ctx, params), p.Kind, p.WorkspaceID, p.Cwd)
 	case "worktree.create": // a Git worktree of a workspace's repository, opened as a workspace (worktree.go)
 		var in struct {
 			Composer bool `json:"composer"`
@@ -1389,9 +1423,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			if strings.TrimSpace(p.Branch) != "" || strings.TrimSpace(p.Path) != "" {
 				return nil, errors.New("Choose automatic naming or an explicit branch and path")
 			}
-			return n.worktreeCreateAutomatic(ctx, p.Kind, p.WorkspaceID, p.Cwd, p.ParentWorkspaceID)
+			return n.worktreeCreateAutomatic(worktreeComposerContext(ctx, params), p.Kind, p.WorkspaceID, p.Cwd, p.ParentWorkspaceID)
 		}
-		return n.worktreeCreate(ctx, p.Kind, p.WorkspaceID, p.Cwd, p.Branch, p.Path, p.ParentWorkspaceID)
+		return n.worktreeCreate(worktreeComposerContext(ctx, params), p.Kind, p.WorkspaceID, p.Cwd, p.Branch, p.Path, p.ParentWorkspaceID)
 	case "worktree.source":
 		return n.worktreeSources(worktreeComposerContext(ctx, params), p.Kind, p.WorkspaceID, params)
 	case "worktree.preset":
@@ -1479,10 +1513,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return f.UserInputs(ctx)
 		}
 		// Items are kept without their image data; a caller that did not ask for lazy images (an older hub) gets it.
+		// Finished subagents' results carry what they used (agent_usage.go).
 		items := func(items []proto.Item) []proto.Item {
 			if !p.LazyImages {
 				items = f.WithImages(items)
 			}
+			agentUsage(f, items)
 			return nonNil(n.echoed(p.SessionID, f, items))
 		}
 		limit := p.Limit
@@ -1496,6 +1532,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		// Pages counted back from the end fold the agent's work for callers that ask (transcript.FoldWork).
 		fold := func(page []proto.Item) []proto.Item {
 			if p.FoldWork {
+				if p.BeforeSeq == 0 {
+					return transcript.FoldWorkLatest(page)
+				}
 				return transcript.FoldWork(page)
 			}
 			return page
@@ -1589,6 +1628,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.uploadCall(method, params)
 	case "file.rename", "file.move", "file.trash", "file.restore":
 		return n.fileEditCall(method, params)
+	case "file.mkdir", "file.write", "file.zip", "file.copy", "file.chmod": // new folders, text files, zips, copies, permissions (filemake.go, filecopy.go)
+		return n.fileMake(ctx, method, params)
 	case "health.reports.list", "health.reports.delete":
 		return n.healthReportsCall(method, params)
 	case "file.chunk":
@@ -1633,8 +1674,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		"browser.status", "browser.install", "browser.open", "browser.cancel", "browser.call",
 		"browser.cookies.list", "browser.cookies.import", "browser.cookies.clear":
 		return legacyBuiltinCall(ctx, method, params, n.lcuComputerCall)
-	case "fs.stat":
-		return map[string]any{"stats": n.statPaths(p.Paths, p.Cwd)}, nil
+	case "fs.stat": // detail: the Info sheet (files_info.go)
+		return map[string]any{"stats": n.statPaths(p.Paths, p.Cwd, p.Detail)}, nil
 	case "space.rename":
 		name, err := n.renameSpace(ctx, p.WorkspaceID, p.Name)
 		if err != nil {
@@ -1767,8 +1808,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		}
 		_ = json.Unmarshal(params, &closeParams)
 		if closeParams.Force {
-			a, ok := n.agent(p.SessionID)
-			if !ok || a.AgentStatus != proto.StatusBlocked || n.isAssistantSession(p.SessionID) || n.runtimeAssistant(p.SessionID) {
+			if n.isAssistantSession(p.SessionID) || n.runtimeAssistant(p.SessionID) || !n.waitsOnUser(ctx, p.SessionID) {
 				return nil, refusal("agent_busy", "the Agent is no longer waiting for confirmation", nil)
 			}
 		}

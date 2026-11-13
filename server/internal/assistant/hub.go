@@ -157,6 +157,7 @@ const (
 	DeviceSessionRename      = assistantwire.DeviceSessionRename
 	DeviceAssistantSend      = assistantwire.DeviceAssistantSend
 	DeviceSessionSend        = assistantwire.DeviceSessionSend
+	DeviceSessionModes       = assistantwire.DeviceSessionModes
 	DeviceSessionStart       = assistantwire.DeviceSessionStart
 	DeviceWorktreePrepare    = assistantwire.DeviceWorktreePrepare
 	DeviceWorktreeCreate     = assistantwire.DeviceWorktreeCreate
@@ -176,6 +177,8 @@ const (
 	AppPlugins               = assistantwire.AppPlugins
 	PluginsAssistant         = assistantwire.PluginsAssistant
 	PluginsSkillsNeed        = assistantwire.PluginsSkillsNeed
+	PluginsProjectContext    = assistantwire.PluginsProjectContext
+	PluginsInboxContext      = assistantwire.PluginsInboxContext
 	SettingsList             = assistantwire.SettingsList
 	AppConnectors            = assistantwire.AppConnectors
 	ConnectorsSnapshots      = assistantwire.ConnectorsSnapshots

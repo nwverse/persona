@@ -24,6 +24,7 @@ const (
 	previewMax = 200  // a dry run's body
 	exampleMax = 120  // a dry run's path examples
 	titleMax   = 500
+	idMax      = 500 // an item's, a sender's or a chat's id
 	pathsMax   = 40
 	keysMax    = 30
 )
@@ -309,6 +310,10 @@ func mapItem(v any, f *connector.SubscriptionFields, kind string, loc *time.Loca
 	it.Thread = clip(get(f.Thread), titleMax)
 	it.Title = clip(oneLine(get(f.Title)), titleMax)
 	it.Sender = clip(oneLine(get(f.Sender)), titleMax)
+	// Ids as the source writes them: a built-in's mutes match them as they are (Lark's sender and chat ids).
+	it.SenderID = clip(strings.TrimSpace(get(f.SenderID)), idMax)
+	it.Chat = clip(strings.TrimSpace(get(f.Chat)), idMax)
+	it.ChatName = clip(oneLine(get(f.ChatName)), titleMax)
 	it.Body = clip(get(f.Body), bodyMax)
 	it.Link = clip(get(f.Link), 2000)
 	m.rawTime, m.rawDue = get(f.Time), get(f.DueDate)
@@ -329,7 +334,7 @@ func mapItem(v any, f *connector.SubscriptionFields, kind string, loc *time.Loca
 	m.hasTitle = it.Title != ""
 	m.hash = hashOf(id, it.Thread, it.Title, it.Sender, m.rawTime, it.Body, it.Link, m.rawDue)
 	if id != "" {
-		it.UID, m.idFound = clip(id, 500), true
+		it.UID, m.idFound = clip(id, idMax), true
 	} else {
 		it.UID = "h:" + hashOf(it.Title, m.rawTime, it.Sender)[:24]
 	}

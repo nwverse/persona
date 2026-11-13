@@ -295,6 +295,10 @@ type Session struct {
 	TurnErrorAfterWork bool `json:"turn_error_after_work,omitempty"`
 	// Known transcript provenance, packed with flags; its JSON remains a string.
 	TitleSource TitleSource `json:"title_source,omitempty"`
+	// SuggestionRisky: Suggestion names a command, a path, a link, a secret-looking string or a risky action (delete,
+	// push, deploy, send…): the apps fill it in but offer no one-tap send (#4644). Set by the manager; kept beside
+	// the flags above, where it fits in their padding: a larger Session costs every copy of a list.
+	SuggestionRisky bool `json:"suggestion_risky,omitempty"`
 	// TurnError: the agent's latest turn ended in a model API error (the connection lost mid-response, overloaded,
 	// rate limited, the model service down…). The node sets it when the agent's own record says the turn failed
 	// (Codex: a rollout's task_complete.error, an app-server's failed turn, #2185); otherwise the hub reads it off the
@@ -429,11 +433,16 @@ const (
 )
 
 // PendingSwitch is Session.PendingSwitch: the launcher the Agent moves to, the model and effort to run it with ("":
-// the launcher's own default model; the effort it runs with now), and when the user picked it.
+// the launcher's own default model; the effort it runs with now), and when the user picked it. Agent is the engine
+// ("claude" or "codex") a switch to another engine moves the conversation to (#5054, docs/protocol/protocol.md
+// "Switching a running Agent to another engine"): its next message starts that engine in the same terminal, with a
+// handoff summary, or resumes the conversation's own earlier session of it. Empty for a switch between launchers of
+// the same engine (#5035).
 type PendingSwitch struct {
 	Launcher string    `json:"launcher"`
 	Model    string    `json:"model,omitempty"`
 	Effort   string    `json:"effort,omitempty"`
+	Agent    string    `json:"agent,omitempty"`
 	At       time.Time `json:"at"`
 }
 
@@ -473,6 +482,10 @@ const (
 	// CodeSwitchFailedStopped: the agent did not come up on the new launcher and could not be brought back on its own
 	// one: it has stopped (Resume on its terminal page).
 	CodeSwitchFailedStopped = "switch_failed_stopped"
+	// CodeSwitchBusy: the assistant's switch (session.send with switch_now, #5973) could not be carried out now: the
+	// agent works, waits for the user, is starting or has background work a quit would end. Nothing was typed and the
+	// switch was dropped.
+	CodeSwitchBusy = "switch_busy"
 )
 
 // TodoRef is a session's link to an active todo (docs/assistant/todos.md).
@@ -523,6 +536,14 @@ type ModelPick struct {
 	Launcher string `json:"launcher"`
 	Model    string `json:"model,omitempty"`
 	Effort   string `json:"effort,omitempty"`
+}
+
+// QueueEdit is the answer to POST /api/v1/sessions/{mid}/{sid}/queue in a Persona conversation (node session.queue.edit,
+// docs/protocol/protocol.md): the messages that were queued before the edit, in order, and their photos for the composer
+// when any carried some. Images[i] is message i's photos, null when it had none; the key is left out when no message did.
+type QueueEdit struct {
+	Queue  []string  `json:"queue"`
+	Images [][]Image `json:"images,omitempty"`
 }
 
 // ServiceTier is a speed advertised by the native Codex model catalog.

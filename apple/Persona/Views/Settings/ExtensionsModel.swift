@@ -262,15 +262,6 @@ nonisolated struct ExtensionSecret: Codable, Hashable, Sendable, Identifiable {
     var id: String { name }
 }
 
-/// A secret provider's reference a setting holds: whose it is, the reference and what it names in words.
-nonisolated struct SecretReference: Codable, Hashable, Sendable {
-    var provider: String
-    var providerName: String
-    var reference: String
-    var title: String?
-    private enum CodingKeys: String, CodingKey { case provider, reference, title, providerName = "provider_name" }
-}
-
 /// A setting that holds one of a provider's references: another extension's secret, or a model provider's key (on one
 /// computer when `machine` is set).
 nonisolated struct ExtensionSecretUser: Codable, Hashable, Sendable, Identifiable {
@@ -450,6 +441,16 @@ enum ExtensionText {
         }
     }
 
+    /// Where a reference's value comes from: "From <provider> · <item>"; the reference itself once its provider is gone
+    /// (the hub then answers its id and name empty).
+    static func referenceState(_ r: SecretReference) -> String {
+        let provider = r.providerName.isEmpty ? r.provider : r.providerName
+        guard !provider.isEmpty else { return r.title.flatMap { $0.isEmpty ? nil : $0 } ?? r.reference }
+        let from = String(localized: "From \(provider)", comment: "A secret that holds a secret provider's reference")
+        guard let title = r.title, !title.isEmpty else { return from }
+        return from + " · " + title
+    }
+
     /// A secret's row: set (with its last four characters when the hub gives them, #5906), or not set (required).
     static func secretState(_ s: ExtensionSecret) -> String {
         if let r = s.reference { return String(localized: "From \(r.providerName.isEmpty ? r.provider : r.providerName)", comment: "A secret that holds a secret provider's reference") }
@@ -584,7 +585,7 @@ enum ExtensionText {
     }
 }
 
-/// Settings › Extensions: the list, under each manager's name when the hub has several (docs/assistant/managers.md "Grouping").
+/// Settings › Extensions: only the current assistant's installed extensions.
 @Observable final class ExtensionsModel {
     struct Deps {
         var api: () -> APIClient?
@@ -593,44 +594,52 @@ enum ExtensionText {
     }
 
     private(set) var plugins: [HubExtension]?
-    /// The hub's managers, read with the list; nil from a hub without a roster.
     private(set) var roster: ManagerRoster?
-    /// The hub has plugin markets: the list shows Extension Market.
+    private(set) var manager: String?
     private(set) var markets = false
     private(set) var loading = false
     private(set) var error: String?
+    private(set) var missing = false
     @ObservationIgnored private let deps: Deps
+    @ObservationIgnored private var context: APIClient?
+    @ObservationIgnored private var read = 0
 
     init(deps: Deps = .live) { self.deps = deps }
 
-    /// The hub has no extensions to list (404: an older hub, or Demo Mode): the Mac says so instead of the error.
-    private(set) var missing = false
-
-    /// The list under each manager's name; nil with one manager (or none known): one list, as before.
-    var groups: [ManagerGroup<HubExtension>]? { plugins.flatMap { list in roster?.groups(list) { $0.manager } } }
-
-    /// The manager an extension's page and requests name: nil for the default's.
-    func manager(of p: HubExtension) -> String? { roster?.named(p.manager) }
+    /// Kept for callers that inspect grouping; a current-assistant list never groups.
+    var groups: [ManagerGroup<HubExtension>]? { nil }
+    func manager(of p: HubExtension) -> String? { manager }
 
     func load() async {
-        guard !loading else { return }
+        guard let api = deps.api()?.currentAssistantSettings() else { return }
+        if !api.sameSettingsScope(as: context) {
+            plugins = nil
+            markets = false
+            roster = nil
+            error = nil
+        }
+        context = api
+        manager = api.managerID
+        read += 1
+        let revision = read
         loading = true
-        defer { loading = false }
+        defer { if revision == read { loading = false } }
         do {
-            guard let api = deps.api() else { throw APIError(status: 0, message: String(localized: "Not connected to the hub yet")) }
-            let last = roster
-            async let managers = ManagerRoster.read(api, keeping: last)
+            async let managers = ManagerRoster.read(api.manager(nil), keeping: roster)
             let list = try await api.pluginList()
-            roster = await managers
-            plugins = list.plugins.sorted {
+            let roster = await managers
+            guard revision == read, !Task.isCancelled, api.sameSettingsScope(as: deps.api()) else { return }
+            self.roster = roster
+            plugins = ManagerRoster.settingsItems(list.plugins, roster: roster, manager: manager, stamped: { $0.manager }).sorted {
                 ExtensionPopularity.precedes(downloads: $0.downloads, name: $0.name, identity: $0.listKey,
                                              downloads: $1.downloads, name: $1.name, identity: $1.listKey)
             }
-            for p in list.plugins where p.auth != nil { deps.auth.received(p.id, p.auth, manager: manager(of: p)) }
+            for p in plugins ?? [] where p.auth != nil { deps.auth.received(p.id, p.auth, manager: manager) }
             markets = list.markets
             error = nil
             missing = false
         } catch {
+            guard revision == read, !Task.isCancelled, api.sameSettingsScope(as: deps.api()) else { return }
             self.error = error.localizedDescription
             missing = (error as? APIError)?.status == 404
         }
@@ -720,13 +729,14 @@ nonisolated enum ExtensionSecretSave: Equatable, Sendable {
         if let name = await name { managerName = name }
     }
 
-    /// Reads the hub's launchers when the form has a launcher field and they aren't in yet. GET /api/v1/launchers asks
-    /// every machine (up to half a minute), so it runs apart from load. They are the hub's, not a manager's: asked of
-    /// the default client.
+    /// Reads the launchers when the form has a launcher field and they aren't in yet. GET /api/v1/launchers asks every
+    /// machine (up to half a minute), so it runs apart from load. They are the model providers of this copy's manager
+    /// (the current assistant's in Settings, Models › Providers and Keys), whose extension picks one: asked of it, as the
+    /// page's other requests.
     func loadLaunchersIfNeeded() async {
         guard launchers == nil, !loadingLaunchers, let form = detail?.form,
               form.contains(where: { $0.picksLauncher || ($0.fields ?? []).contains(where: \.picksLauncher) }),
-              let api = deps.api() else { return }
+              let api else { return }
         loadingLaunchers = true
         defer { loadingLaunchers = false }
         launchers = try? await api.allLaunchers()

@@ -1,6 +1,6 @@
 // End-to-end check of New agent's recent setups (#2134, docs/web/web.md "Recent setups"): two starts through the form are
 // remembered; reopened, New agent shows them as cards above the computers (with a made-up offline computer's one,
-// dimmed, that can't be picked, and Allow everything marked); a tap fills computer, folder, launcher, model, permission
+// dimmed, that can't be picked, and Full access marked); a tap fills computer, folder, launcher, model, permission
 // mode and effort and starts nothing; the ⋯ removes one and clears them. The model, launcher and effort are New agent's
 // model pill and panel (#5104): a row picked there puts in its launcher and model, the effort is set in the flyout of the
 // row that runs, and the pill says what the form holds.
@@ -163,8 +163,8 @@ async function run(browser, theme, width) {
   // Two starts through the form: each is remembered, newest first, with the model and effort sent. Opus 5.5 is claude's
   // row in the panel, so the setup carries its launcher too (the old list offered the followed launcher's models with
   // no launcher of their own); sonnetcc is its Default row (it fixes its own model).
-  await startThrough(page, tag, { computer: "MacBook", folder: "/Users/me/code/weather-app", pick: ["claude", "opus"], mode: "只做计划", effort: "高" });
-  await startThrough(page, tag, { computer: "Mac Studio", folder: "/Users/me/code/site", pick: ["sonnetcc", "default"], mode: "全部放行", effort: "很高" });
+  await startThrough(page, tag, { computer: "MacBook", folder: "/Users/me/code/weather-app", pick: ["claude", "opus"], mode: "计划模式", effort: "高" });
+  await startThrough(page, tag, { computer: "Mac Studio", folder: "/Users/me/code/site", pick: ["sonnetcc", "default"], mode: "完全访问", effort: "很高" });
   const kept = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? "[]"), KEY);
   const want = [
     { machine: "studio", cwd: "/Users/me/code/site", launcher: "sonnetcc", model: "", agent_type: "claude", mode: "bypassPermissions", effort: "xhigh" },
@@ -178,7 +178,7 @@ async function run(browser, theme, width) {
     localStorage.setItem(key, JSON.stringify(list));
   }, { key: KEY, offline: OFFLINE });
 
-  // Reopened: three cards on top, the offline one dimmed and not pickable, Allow everything marked.
+  // Reopened: three cards on top, the offline one dimmed and not pickable, Full access marked.
   const dialog = await newAgent(page);
   const cards = dialog.locator("[data-recent-setup]");
   if ((await cards.count()) !== 3) fail(`${tag}: ${await cards.count()} cards`);
@@ -189,7 +189,7 @@ async function run(browser, theme, width) {
   if (!(await offline.isDisabled())) fail(`${tag}: the offline card can be picked`);
   if (!(await offline.textContent()).includes("离线")) fail(`${tag}: the offline card doesn't say so`);
   await shot(page, `${width}-${theme}-cards`);
-  ok(`${tag}: three cards, the offline one dimmed, Allow everything marked`);
+  ok(`${tag}: three cards, the offline one dimmed, Full access marked`);
   await offline.click({ force: true });
   if ((await offline.getAttribute("aria-pressed")) !== "false") fail(`${tag}: the offline card got picked`);
 
@@ -202,7 +202,7 @@ async function run(browser, theme, width) {
   if ((await dialog.locator("input[placeholder]").first().inputValue()) !== "/Users/me/code/weather-app") fail(`${tag}: the folder isn't filled`);
   // the model and effort: what the pill says (the model chips and effort chips are gone)
   await until(async () => (await pillOf(dialog).textContent()).includes("Opus 5.5"), async () => `${tag}: the model isn't filled (${await pillOf(dialog).textContent()})`);
-  if ((await dialog.getByRole("radio", { name: "只做计划", exact: true }).getAttribute("aria-checked")) !== "true") fail(`${tag}: the mode isn't filled`);
+  if ((await dialog.getByRole("radio", { name: "计划模式", exact: true }).getAttribute("aria-checked")) !== "true") fail(`${tag}: the mode isn't filled`);
   if ((await pillEffort(dialog)) !== "高") fail(`${tag}: the effort isn't filled (${await pillEffort(dialog)})`);
   if (!(await page.evaluate(() => document.activeElement?.tagName === "TEXTAREA"))) fail(`${tag}: the first message isn't focused`);
   await shot(page, `${width}-${theme}-picked`);
@@ -216,10 +216,10 @@ async function run(browser, theme, width) {
   const lit = await openPanel(page, dialog, tag);
   if (!(await lit.locator(`${rowSel("sonnetcc", "default")}[data-current]`).count())) fail(`${tag}: sonnetcc's row isn't the one lit`);
   await closePanel(page, tag);
-  if ((await dialog.getByRole("radio", { name: "全部放行", exact: true }).getAttribute("aria-checked")) !== "true") fail(`${tag}: Allow everything isn't filled`);
+  if ((await dialog.getByRole("radio", { name: "完全访问", exact: true }).getAttribute("aria-checked")) !== "true") fail(`${tag}: Full access isn't filled`);
   await shot(page, `${width}-${theme}-bypass`);
   if ((await started()).length !== before) fail(`${tag}: a tap started an agent`);
-  ok(`${tag}: the bypass card fills its launcher and Allow everything, with the form's warning`);
+  ok(`${tag}: the bypass card fills its launcher and Full access, with the form's warning`);
 
   // The ⋯: remove one, then clear them all.
   await dialog.getByRole("button", { name: "最近配置选项" }).click();

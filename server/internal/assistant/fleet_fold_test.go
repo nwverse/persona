@@ -2,7 +2,6 @@ package assistant
 
 import (
 	"testing"
-	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -171,19 +170,15 @@ func TestPublishedListFoldsChildren(t *testing.T) {
 	kid := proto.Session{SessionID: "kid", Status: proto.StatusWorking, Cwd: "/w/app", Agent: "codex", IsSubagent: true,
 		ParentSessionID: "lead", RootSessionID: "lead"}
 	ft.sessions("mac", lead, kid)
+	var published []proto.Session
 	waitFolded := func(want proto.SessionChildren) []proto.Session {
 		t.Helper()
-		deadline := time.Now().Add(5 * time.Second)
-		for {
-			list := ft.lastList("mac")
-			if l, k := rowNamed(list, "lead"), rowNamed(list, "kid"); l != nil && k != nil && k.FoldedUnder() == "lead" && l.Children() == want {
-				return list
-			}
-			if time.Now().After(deadline) {
-				t.Fatalf("not folded with %+v: %+v", want, list)
-			}
-			time.Sleep(5 * time.Millisecond)
-		}
+		waitFor(t, "the published fold", func() bool {
+			published = ft.lastList("mac")
+			l, k := rowNamed(published, "lead"), rowNamed(published, "kid")
+			return l != nil && k != nil && k.FoldedUnder() == "lead" && l.Children() == want
+		})
+		return published
 	}
 	list := waitFolded(proto.SessionChildren{Total: 1, Working: 1})
 	if l := rowNamed(list, "lead"); l.FoldedUnder() != "" || l.FoldedState() != proto.StateWorking {

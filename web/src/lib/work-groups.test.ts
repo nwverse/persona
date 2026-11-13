@@ -19,6 +19,7 @@ import {
   planTodos,
   workBlocks,
   workDuration,
+  TICKING_DURATION,
   type AgentStatus,
   type ToolStep,
   type WorkGroupNode,
@@ -134,6 +135,19 @@ describe("a finished exchange", () => {
     const b = blocks([user("u1", 0), ...tool("t1", "Bash", 1000), say("a1", "第一部分。", 5000), say("a2", "第二部分。", 6000)]);
     expect(topSteps(b)).toEqual(["a2"]);
     expect(folded(b, "a1")).toBe(true);
+  });
+});
+
+describe("Codex commentary as assistant text (#5853)", () => {
+  it("answers a mid-turn question in the text slot, then stays readable as folded narration", () => {
+    const items = [user("u1", 0, "What is the current status?"), ...tool("check", "Bash", 1000), say("status", "The focused tests pass; the full run is next.", 2000), ...tool("verify", "Bash", 3000)];
+    const running = blocks(items, true);
+    expect(topSteps(running)).toEqual(["status"]);
+    expect(folded(running, "status")).toBe(false);
+
+    const done = blocks([...items, say("final", "All checks passed.", 4000)]);
+    expect(topSteps(done)).toEqual(["final"]);
+    expect(groups(done)[0].children.map(shape)).toEqual([["check"], "status", ["verify"]]);
   });
 });
 
@@ -453,6 +467,14 @@ describe("titles and plans", () => {
     expect(workDuration(3_900_000)).toBe("1 小时 5 分");
     expect(workDuration(93_900_000)).toBe("1 天 2 小时 5 分");
     expect(workDuration(86_400_000)).toBe("1 天 0 小时 0 分");
+  });
+
+  it("reads as cindy's running status bar with its options: from 0s, the seconds always kept under an hour (#5312)", () => {
+    expect(workDuration(0, TICKING_DURATION)).toBe("0s");
+    expect(workDuration(59_000, TICKING_DURATION)).toBe("59s");
+    expect(workDuration(60_000, TICKING_DURATION)).toBe("1m 0s");
+    expect(workDuration(65_000, TICKING_DURATION)).toBe("1m 5s");
+    expect(workDuration(3_600_000, TICKING_DURATION)).toBe("1 小时 0 分");
   });
 
   it("a group without its times is Work details", () => {

@@ -496,9 +496,9 @@ final class MessageLiftUITests: XCTestCase {
             && s.contains(Self.splitMiddle) && s.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix(Self.splitLast)
     }
 
-    /// Long-presses the split answer's middle part: the whole answer is lifted (its first and last sentences are in
-    /// the lifted copy, the pressed line shows), opening at the pressed part; it scrolls inside to its first line; Copy
-    /// copies all of it, as written.
+    /// Long-presses the split answer's middle part: the whole answer is lifted, the pressed line where it was; it
+    /// scrolls inside to the answer's first line (its first part, laid out as it comes into view); Copy copies all of
+    /// it, as written.
     @MainActor func testALongPressOnAPartOfALongAnswerLiftsAndCopiesAllOfIt() throws {
         inEachScheme {
             launch(split, ["-openDraftsFresh", "YES", "-openChatsFresh", "YES"])
@@ -510,22 +510,20 @@ final class MessageLiftUITests: XCTestCase {
             XCTAssertTrue(lifted.waitForExistence(timeout: 3), "no lifted copy")
             let pressed = lifted.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", Self.splitMiddle)).firstMatch
             XCTAssertTrue(shows(pressed), "the pressed line shows in the lifted copy:\n\(lifted.debugDescription)")
-            for words in [Self.splitFirst, Self.splitLast] {
-                XCTAssertTrue(lifted.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", words)).firstMatch.exists,
-                              "the lifted copy is the whole answer, with \(words):\n\(lifted.debugDescription)")
-            }
             let bar = app.buttons["复制"].firstMatch.frame
             XCTAssertTrue(app.frame.contains(bar), "the bar is on screen")
             shot("split-lifted")
             let heading = lifted.staticTexts[Self.splitHeading].firstMatch
+            // Down across the card, wherever its bar is (under it, or above it when the pressed part starts on screen).
             for _ in 0..<10 where !shows(heading) {
-                let origin = app.coordinate(withNormalizedOffset: .zero)
-                let top = max(lifted.frame.minY, app.frame.height * 0.2)
-                origin.withOffset(CGVector(dx: app.frame.midX, dy: top + 30))
-                    .press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: app.frame.midX, dy: bar.minY - 30)))
+                let origin = app.coordinate(withNormalizedOffset: .zero), card = lifted.frame
+                origin.withOffset(CGVector(dx: app.frame.midX, dy: card.minY + 40))
+                    .press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: app.frame.midX, dy: card.maxY - 40)))
                 sleep(1)
             }
             XCTAssertTrue(shows(heading), "the lifted answer scrolls to its first line:\n\(lifted.debugDescription)")
+            XCTAssertTrue(lifted.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", Self.splitFirst)).firstMatch.exists,
+                          "the answer's first sentence is in the lifted copy")
             XCTAssertEqual(app.buttons["复制"].firstMatch.frame, bar, "the bar stays where it is")
             shot("split-top")
             app.buttons["复制"].firstMatch.tap()
@@ -558,6 +556,38 @@ final class MessageLiftUITests: XCTestCase {
         XCTAssertTrue(isTheWholeSplitAnswer(copied, markdown: false), "拷贝 copied all of the answer: \(copied.prefix(80))…\(copied.suffix(40))")
     }
 
+    /// A second long press on the lifted split answer, at the start of the pressed paragraph: its words are selected
+    /// there (all of its parts laid out first, what showed kept where it was), with the edit menu over them; Copy copies
+    /// a word of that line (with the copy a few lines off, it was another line's), and the text view's paragraph is
+    /// where the chat's was.
+    @MainActor func testASecondLongPressOnALongAnswerSelectsWhereItIs() throws {
+        launch(split, ["-openDraftsFresh", "YES", "-openChatsFresh", "YES"])
+        XCTAssertTrue(text(Self.splitLast).waitForExistence(timeout: 20), "missing the split answer")
+        sleep(2)
+        bringToTheMiddle(Self.splitMiddle)
+        liftAt(Self.splitMiddle)
+        let line = lifted.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", Self.splitMiddle)).firstMatch
+        XCTAssertTrue(shows(line), "the pressed line shows in the lifted copy")
+        let before = line.frame
+        // On its first words, 「第 4 节的说明」.
+        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: before.minX + 12, dy: before.minY + 12)).press(forDuration: 0.8)
+        let words = app.textViews["lift-text"]
+        XCTAssertTrue(words.waitForExistence(timeout: 5), "a second long press did not select in place")
+        let copy = menuItem("拷贝")
+        XCTAssertTrue(copy.waitForExistence(timeout: 3), "no edit menu:\n\(app.debugDescription)")
+        XCTAssertTrue(isTheWholeSplitAnswer(words.value as? String ?? "", markdown: false), "the text view holds the whole answer")
+        sleep(1)
+        shot("split-second-press")
+        let laid = words.textViews.matching(NSPredicate(format: "label BEGINSWITH %@", Self.splitMiddle)).firstMatch
+        XCTAssertTrue(laid.exists, "no paragraph with the pressed line:\n\(words.debugDescription)")
+        XCTAssertLessThanOrEqual(abs(laid.frame.minY - before.minY), 6, "the words stayed where they were (\(before.minY) → \(laid.frame.minY))")
+        copy.tap()
+        XCTAssertTrue(words.waitForNonExistence(timeout: 3), "拷贝 did not put the answer back")
+        let copied = pasted().trimmingCharacters(in: .whitespacesAndNewlines)
+        XCTAssertFalse(copied.isEmpty, "nothing was selected")
+        XCTAssertTrue(Self.splitMiddle.contains(copied), "the word selected is the pressed one, in 「\(Self.splitMiddle)」: \(copied)")
+    }
+
     /// A short answer, as before: lifted where it is, all of it; Copy copies it.
     @MainActor func testALongPressOnAShortAnswerLiftsAndCopiesIt() throws {
         inEachScheme {
@@ -575,5 +605,81 @@ final class MessageLiftUITests: XCTestCase {
             XCTAssertTrue(lifted.waitForNonExistence(timeout: 3), "复制 did not put the answer back")
             XCTAssertEqual(pasted(), "收到，都提交了。")
         }
+    }
+
+    // MARK: What lifting a very long answer costs (#5221)
+
+    /// GET on a mock's own route, its JSON (`PerfTestCase.mock`).
+    private func get(_ url: String) -> [String: Any] {
+        guard let u = URL(string: url), let data = try? Data(contentsOf: u),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
+        return obj
+    }
+
+    private func darwinPost(_ name: String) {
+        CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFNotificationName(name as CFString),
+                                             nil, nil, true)
+    }
+
+    /// The app's own frames (`FrameStats`, `-showFrameProbe YES`) while `block` runs, through the mock at `hub`.
+    @MainActor private func frames(_ hub: String, _ name: String, _ block: () -> Void) -> [String: Any] {
+        _ = get(hub + "/mock/frames_label?name=" + name)
+        darwinPost("com.persona.perf.frames.start")
+        block()
+        sleep(1)
+        darwinPost("com.persona.perf.frames.stop")
+        sleep(1)
+        let runs = (get(hub + "/mock/frames?name=" + name)["runs"] as? [[String: Any]]) ?? []
+        return runs.last ?? [:]
+    }
+
+    /// The 33,000-character report of `MOCK_LONG_REPORT=1` (a mock at PERSONA_LIFT_REPORT_HUB), long-pressed near its
+    /// end, then Select Text: the app's frames during each (`-showFrameProbe`), printed as `lift-frames:` lines with
+    /// the longest frame and the main thread's blocks of 100 ms or more. Measures; asserts only that each happened.
+    @MainActor func testTheLongReportLiftAndSelectTextFrames() throws {
+        guard let reportHub = ProcessInfo.processInfo.environment["PERSONA_LIFT_REPORT_HUB"] else {
+            throw XCTSkip("needs a mock with MOCK_LONG_REPORT=1 (PERSONA_LIFT_REPORT_HUB)")
+        }
+        let pair = "persona://pair?url=" + reportHub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
+        app.launchArguments = ["-pairURL", pair, "-tab", "dev", "-openSession", "macbook/a1f3c2d4-0000-4000-8000-000000000090",
+                               "-ui.scheme", scheme, "-openChatsFresh", "YES", "-openDraftsFresh", "YES", "-showFrameProbe", "YES"]
+        app.launchPinned()
+        acceptIconAlert(timeout: 3)
+        let near = "12.3 细节 3"
+        XCTAssertTrue(text("核对过了").waitForExistence(timeout: 30), "the chat did not open")
+        sleep(3)
+        bringToTheMiddle(near)
+        sleep(2)
+        func line(_ what: String, _ r: [String: Any]) {
+            let blocks = r["main_thread_blocks"] as? [String: Any]
+            print(String(format: "lift-frames: %@ max_ms=%.0f hitches=%@ busy_max_ms=%.0f blocks_over_100ms=%@ blocks_max_ms=%.0f",
+                         what, (r["max_ms"] as? NSNumber)?.doubleValue ?? -1, "\(r["hitches"] ?? "?")",
+                         (r["busy_max_ms"] as? NSNumber)?.doubleValue ?? -1, "\(blocks?["count"] ?? "?")",
+                         (blocks?["max_ms"] as? NSNumber)?.doubleValue ?? -1))
+            let a = XCTAttachment(string: "\(r)")
+            a.name = "frames-\(what)"
+            a.lifetime = .keepAlways
+            add(a)
+        }
+        // Nothing is asked of the app's accessibility while frames are recorded: a snapshot of it is a test's own cost
+        // (the text view's table pictures were made PNGs for it, seconds on the main thread).
+        let f = text(near).frame
+        let at = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: f.midX, dy: f.midY))
+        let lift = frames(reportHub, "report-lift") {
+            at.press(forDuration: 0.8)
+            sleep(2)
+        }
+        line("lift", lift)
+        XCTAssertTrue(app.buttons["选择文本"].firstMatch.waitForExistence(timeout: 10), "no bar")
+        shot("report-lifted")
+        let selectText = app.buttons["选择文本"].firstMatch.frame
+        let select = frames(reportHub, "report-select") {
+            app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: selectText.midX, dy: selectText.midY)).tap()
+            sleep(5)
+        }
+        line("select", select)
+        XCTAssertTrue(app.textViews["lift-text"].waitForExistence(timeout: 20), "选择文本 did not select in place")
+        shot("report-selected")
+        XCTAssertFalse(lift.isEmpty || select.isEmpty, "the app sent no frames")
     }
 }

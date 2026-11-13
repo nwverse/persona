@@ -103,6 +103,17 @@ JSON
       nonzero) printf '%s\n' 'message-body-example' >&2; exit 17 ;;
     esac
     case "$scenario:${2:-}" in
+      inbox_followup:+messages-search) cat "$LARKCLI_FAKE_SEARCH" ;;
+      inbox_followup:+chat-list)
+        if [ -n "${LARKCLI_FAKE_CHATS:-}" ]; then
+          cat "$LARKCLI_FAKE_CHATS"
+        else
+          printf '%s\n' '{"ok":true,"data":{"chats":[]}}'
+        fi
+        ;;
+      inbox_followup:+chat-messages-list|inbox_followup:+threads-messages-list)
+        cat "$LARKCLI_FAKE_CONTEXT"
+        ;;
       inbox:+messages-search)
         case " $* " in
           *" --sender "*) cat "$base/inbox_seed.json" ;;
@@ -129,6 +140,16 @@ JSON
         ;;
       inbox:+messages-send|inbox:+messages-reply|inbox_pages:+messages-send|inbox_pages:+messages-reply)
         cat "$base/send_result.json"
+        ;;
+      inbox_lag:+messages-search) cat "$base/inbox_lag_search.json" ;;
+      inbox_lag:+chat-list) cat "$base/inbox_lag_chats.json" ;;
+      inbox_lag:+chat-messages-list|inbox_lag:+threads-messages-list)
+        # Chat history, by chat: what message search had not indexed yet.
+        case " $* " in
+          *" oc_lag_bot "*) cat "$base/inbox_lag_bot.json" ;;
+          *" oc_lag_dm "*) cat "$base/inbox_lag_dm.json" ;;
+          *) cat "$base/inbox_lag_search.json" ;;
+        esac
         ;;
       *:+chat-list) cat "$base/chats.json" ;;
       *:+chat-messages-list|*:+threads-messages-list) cat "$base/messages.json" ;;
