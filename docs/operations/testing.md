@@ -105,6 +105,8 @@ Local prerequisites: Go from `server/go.mod`, Node from `web/.nvmrc`, Python 3.9
 `pip install -r scripts/ci/requirements.txt` and `go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12` for scripts, Bun 1.4.2 for
 TypeScript SDK. Android needs JDK 21 and SDK `platforms;android-37.0` / `build-tools;37.0.0` plus GNU timeout; Apple needs macOS 26,
 Xcode 26.0.1, XcodeGen and rsync. Local scripts fail on missing required tools rather than claim success. They do not deploy or publish.
+Android also needs NDK `29.0.14206865` and the pinned Rust `aarch64-linux-android` / `x86_64-linux-android` targets to package
+`:core:rustcore-android` (its setup, ABI/size report and owned-device fixture replay: `android/core/rustcore-android/README.md`).
 The unsigned Mac app/notification-extension build keeps shipping entitlements. Before the ad-hoc signed offline Mac test invocation,
 `scripts/ci/apple_entitlements.py` removes only profile-authorized push, time-sensitive notification and shared Keychain permissions from
 the disposable source snapshot. The sandbox, other permissions and project hardened-runtime settings remain unchanged; the checked-in
