@@ -59,6 +59,12 @@ func (h *Hub) startDevices(ctx context.Context) {
 		}
 		if w, ok := saved.Machines[mc.ID]; ok && (w.Until.IsZero() || w.Until.After(time.Now())) {
 			m.info, m.sessions, m.warmUntil = w.Info, w.Sessions, until
+			if len(w.Archived) > 0 {
+				m.archived, m.archivedBy = make(map[string]proto.Session, len(w.Archived)), w.ArchivedBy
+				for _, s := range w.Archived {
+					m.archived[s.SessionID] = s
+				}
+			}
 			if !w.Until.IsZero() && w.Until.Before(until) {
 				m.warmUntil = w.Until
 			}

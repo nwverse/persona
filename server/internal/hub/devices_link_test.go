@@ -183,6 +183,8 @@ func TestTheHubShowsTheHandOverUntilTheManagerReports(t *testing.T) {
 	}
 	// Stopping, the hub hands the next process what the manager reported (its own settings, not the manager's).
 	waitFor(t, "the manager reports box", func() bool { s := m.snapshot(); return s.Online && len(m.sessionList()) == 1 })
+	// With the archived rows its manager told apart (#6836): still found by id while the manager comes back.
+	m.setArchived("assistant", []proto.Session{{MachineID: "box", SessionID: "old-archived", Archived: true}})
 	h.saveDevicesWarm(context.Background())
 	next := newTestHub(t)
 	next.store = st
@@ -190,6 +192,9 @@ func TestTheHubShowsTheHandOverUntilTheManagerReports(t *testing.T) {
 	next.startDevices(context.Background())
 	if s := next.machineByID("box").snapshot(); !s.Online || s.Hostname != "box" || len(next.machineByID("box").sessionList()) != 1 {
 		t.Fatalf("the next hub process: %+v", s)
+	}
+	if s, ok := next.machineByID("box").session("old-archived"); !ok || !s.Archived {
+		t.Fatalf("the next hub process lost the archived rows: %v %+v", ok, s)
 	}
 	// It stops again before its manager reported: what it still shows from the hand-over is handed on.
 	next.saveDevicesWarm(context.Background())
@@ -199,6 +204,9 @@ func TestTheHubShowsTheHandOverUntilTheManagerReports(t *testing.T) {
 	third.startDevices(context.Background())
 	if s := third.machineByID("box").snapshot(); !s.Online || len(third.machineByID("box").sessionList()) != 1 {
 		t.Fatalf("a second quick restart: %+v", s)
+	}
+	if _, ok := third.machineByID("box").session("old-archived"); !ok {
+		t.Fatal("a second quick restart lost the archived rows")
 	}
 	// ... with the first hand-over's deadline, not a new one: restarts in a row do not keep it shown for ever.
 	nm, tm := next.machineByID("box"), third.machineByID("box")

@@ -56,6 +56,9 @@ type Hello struct {
 	// SecretHandoffGate: the hub lets only a device that may approve a hand-off card say yes to one, and names it in
 	// HTTPRequest.HandoffApprover. An older hub never sends it; a manager then shows no hand-off card at all.
 	SecretHandoffGate bool `json:"secret_handoff_gate,omitempty"`
+	// ArchivedApart: the hub takes a machine's archived rows apart from its list (EventFleetArchived, #6836). An older
+	// hub never sends it, and a manager then tells them inside EventFleetSessions as before.
+	ArchivedApart bool `json:"archived_apart,omitempty"`
 }
 
 // NotifyTimings are hub.json's notify section, and manager.json's hook_timeout_minutes, in milliseconds (0: the

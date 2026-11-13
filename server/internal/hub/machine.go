@@ -58,6 +58,11 @@ type Machine struct {
 	sessions []proto.Session
 	// lists decodes the manager's lists (fleet.sessions), only the sessions whose bytes changed (fleet_link.go).
 	lists proto.SessionListDecoder
+	// archived are the archived rows the manager archivedBy tells apart from its list (fleet.archived, #6836), by id:
+	// the apps never get them (Hub.shown leaves archived rows out), and only a lookup by session (session) finds them,
+	// as it found them in the list before. Replaced whole, never changed in place.
+	archived   map[string]proto.Session
+	archivedBy string
 	// raws are the bytes each session of the list rawsOf names came in, by id ("" for an id the list names twice),
 	// when that list was decoded from them: a list kept any other way since has none (rawsFor). Never changed: a new
 	// list gets a new map.
@@ -301,6 +306,7 @@ func (m *Machine) keptSessions() []proto.Session {
 	return m.sessions
 }
 
+// session is session id as the manager listed it: in its list, else among its archived rows (archived).
 func (m *Machine) session(id string) (proto.Session, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -309,7 +315,29 @@ func (m *Machine) session(id string) (proto.Session, bool) {
 			return m.sessions[i], true
 		}
 	}
-	return proto.Session{}, false
+	s, ok := m.archived[id]
+	return s, ok
+}
+
+// setArchived keeps list as the archived rows manager told apart (fleet.archived).
+func (m *Machine) setArchived(manager string, list []proto.Session) {
+	byID := make(map[string]proto.Session, len(list))
+	for _, s := range list {
+		byID[s.SessionID] = s
+	}
+	m.mu.Lock()
+	m.archived, m.archivedBy = byID, manager
+	m.mu.Unlock()
+}
+
+// archivedOnlyOf drops the archived rows unless manager told them: a list from another manager (the machine moved to
+// one that tells them in its list) has its own.
+func (m *Machine) archivedOnlyOf(manager string) {
+	m.mu.Lock()
+	if m.archivedBy != manager {
+		m.archived, m.archivedBy = nil, ""
+	}
+	m.mu.Unlock()
 }
 
 // watcherJoined counts one more app subscribed to session id, watcherLeft one fewer. Neither tells the node: the
@@ -380,14 +408,22 @@ func (m *Machine) setSessionListRaws(list []proto.Session, raws []string) {
 	for _, s := range list {
 		listed[s.SessionID] = true
 	}
+	// An archived row told apart (archived) is still the manager's, as when it came in the list.
+	gone := func(id string) bool {
+		if listed[id] {
+			return false
+		}
+		_, archived := m.archived[id]
+		return !archived
+	}
 	for id := range m.lastSeq {
-		if !listed[id] && !m.watchStateInUseLocked(id) {
+		if gone(id) && !m.watchStateInUseLocked(id) {
 			delete(m.lastSeq, id)
 		}
 	}
 	var unsettled []string
 	for id, state := range m.nodeWatch {
-		if state == nodeWatchUnknown && !listed[id] && m.watchers[id] <= 0 {
+		if state == nodeWatchUnknown && gone(id) && m.watchers[id] <= 0 {
 			unsettled = append(unsettled, id)
 		}
 	}
