@@ -6,6 +6,14 @@ They never write Claude's `custom-title` records into a Codex rollout. Worktree 
 Codex (`codex` CLI) running in herdr appears in the "Agents" tab like Claude: lists, chats, live state, messaging, terminals, and closing all work,
 and it can also be started from the phone ("Starting from the phone"). Supported since 2026-10-26; `server/internal/node/codex.go` + `server/internal/transcript/codex.go`.
 
+## Standalone TUI takeover
+
+A takeover succeeds only after the same thread is loaded and joined on the shared app-server. A transient input box during TUI startup is not sufficient: folder-trust and update dialogs can appear later. The takeover keeps applying the existing start-readiness checks until shared ownership is confirmed, or returns an explicit not-ready error.
+
+Eligible sessions advertise `capabilities.takeover: {running, can_resume, reason?}`, where `reason` is `encrypted_context` or `unavailable`. A signed-in user on a full device can use the manager's `GET` then `POST /api/v1/machines/{mid}/codex/{sid}/takeover` flow; generic device-call APIs and assistant tools cannot invoke it. GET returns `{token, cwd, transcript_path, continuation_prompt}`; the single-use token expires after two minutes. POST requires `confirm_stop: true` only while the original writer is running; when it has exited, `false` is accepted.
+
+The manager sends one Ctrl+D through the selected session's terminal writer only after confirming the composer is empty, with no modal or queued input, and rechecking both process identity and terminal instance. Remote terminal-writer bridges are supported. It waits for the process to exit, the transcript to end on a complete stable line, and a fresh scan to find no writer. Any failed check or timeout refuses takeover; no signal or forced termination is used. Takeover resumes the same thread and session ID in a new terminal tab. The separate continue option starts an independent session with context and the attached to-do preserved. `encrypted_context` is continuation-only.
+
 ## Recognition
 
 - herdr reports Codex panes as `agent: "codex"`. With herdr's Codex integration installed (`~/.codex/herdr-agent-state.sh`, registered on
@@ -84,6 +92,8 @@ not screen reading or typing into the terminal. Panes it cannot join retain the 
   - Async questions (`request_user_input_async`) are messages, not requests. Recognize them from rollout as before ("Questions and approvals"); send the answer envelope as an app-server message (`turn/start` / `turn/steer`).
   - Phone messages use `turn/start` when idle or `turn/steer` with the current turn while working (for a turn already running before connection, read it once with `thread/read`).
     No terminal typing: computer input drafts stay untouched, neither swallowed nor mixed into the message.
+  - The thread's turn on the app-server counts over herdr's state: a pane herdr calls done / idle / unknown is listed Working while the app-server runs a turn in it,
+    from the reply to `turn/start` on (#4865, `docs/protocol/agent-states.md`, "Codex").
   - Thinking effort can be changed on the phone (permission mode cannot); see "Thinking effort" below.
   - Computer answers first: `serverRequest/resolved` removes the card (`interaction.dismiss`); a later phone answer does nothing. Phone answers first: the TUI prompt closes.
     Simultaneous answers: app-server accepts only the first, and runs the command only once. Observers never auto-answer (`codex_remote_asks.go`).

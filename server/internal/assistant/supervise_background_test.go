@@ -800,6 +800,7 @@ func TestBackgroundSupervisorGoneAfterRestartKeepsItsQueuedMessage(t *testing.T)
 // are quiet; a decision goes before an older ordinary message.
 func TestOwnerPresenceAndMainSupervisionQueue(t *testing.T) {
 	presenceTimes(t, 400*time.Millisecond, time.Hour)
+	ownerTurnTimes(t, 400*time.Millisecond, time.Hour)
 	s, f, _ := newBackgroundService(t)
 	stopHolds(t, s)
 	ctx := context.Background()

@@ -619,6 +619,50 @@ The depth is dot (the main chat or a leader conversation) → task leader → wo
 - **Permissions**: a task that is not read-only (`readonly: false`) takes the default mode as elsewhere (the owner's default, else the launcher's). Claude-family launchers always start in `bypassPermissions`, for both read-only and writable tasks. Codex read-only tasks keep plan mode and the read-only sandbox. If a read-only task is already in plan mode, its `ExitPlanMode` request is denied automatically before a card is registered, with instructions to return findings and report completion to its supervisor (#3985).
 - **Work-trust computers**: a `role: "leader"` task is refused with a readable reason at planning, at Start, on a retry, in `startTaskAgent` (so a remedy or recovered start) and in the health detour (`healthyPlace` never moves a flexible task leader there): a work-trust computer's agents get only the reporting tools, so the role could not work, and its privacy boundary is not widened.
 
+### Separate sessions within a supervised task (#5751)
+
+**Audience: coding Agents and their supervisors.** A supervised Agent can hand part of its existing assignment to a
+separate session with `task_spawn {title, prompt}`. Codex and other pane-based Agents without Persona MCP can use the
+same tool through the local node, with no hub credential:
+
+```sh
+personad tool task_spawn '{"title":"Check the regression","prompt":"Inspect the tests and return evidence."}'
+```
+
+- **Ownership**: the node resolves the Agent currently in the calling pane. For Codex shell tools, the runtime's
+  per-turn `CODEX_THREAD_ID` takes precedence over a shared daemon's potentially stale pane environment: it must
+  match exactly one thread in the node's registry (ambiguous or unknown IDs are refused, not matched by directory).
+  The manager verifies its active link to
+  an open supervised to-do, starts the child on that computer in that directory, and records `source: spawned`,
+  `via: <parent machine>/<parent session>` on the **same to-do** before returning the child, to-do and supervisor IDs.
+  The child participates in the existing task's progress, completion review and retirement. No new task, task-leader
+  role or supervision level is created. An ordinary worker still cannot use a leader's `task_plan` or `task_review`.
+- **Scope**: only `title` and `prompt` are accepted, and the assignment must remain within the current task. Task,
+  supervisor, parent, machine, directory and permissions cannot be supplied by the Agent. The current launcher's
+  model and effort are reused. Permission comes from the live parent, or its persisted original plan assignment
+  when Codex does not expose it; unknown permission stays in plan mode, never a writable owner default. Another
+  spawned session with unknown permission cannot borrow the original Agent's plan permission.
+- **Failure**: an unbound pane, unrelated Agent, completed task, guest or work-trust computer cannot dispatch this
+  way. A known Codex thread needs no pane. Other `personad tool` calls retain the assistant-only connector gate.
+  If ownership changes while the child
+  starts, the manager refuses the link and asks the node to stop the child; the error names its session and stop
+  result. An uncertain start must not be retried automatically.
+- **Runtime new-conversation tools are different**: a standalone Codex `create_thread` can be recorded as
+  `thread_source: user` with no parent. Persona cannot securely infer its task from a matching directory, title or
+  returned thread ID. Use `task_spawn` for supervised handoffs; ask the supervisor for unrelated work rather than
+  silently opening an unmanaged conversation. Existing unmanaged conversations are not retroactively adopted.
+- **Native sidecars**: Codex `source.subagent.thread_spawn.parent_thread_id` / `parent_thread_id` establish session
+  ancestry (`is_subagent`, `parent_session_id`, `root_session_id`). The web folds known children under their parent,
+  and the task tree can show those helpers. This is display/runtime ancestry, **not a `todo_agents` link**.
+  Automatic task links require the existing `persona_from` / `spawn_from` marker, a linked workspace or the botmux
+  dispatch relationship (see [Following spawned Agents](todos.md#following-spawned-agents)). Native sidecars without
+  such a link remain bounded in-session helpers, not independently reviewed Persona tasks or leader workers.
+- **Credentials**: assignment prompts explicitly forbid reading `~/.persona/hub.json`, extracting its hub token or
+  calling privileged `/api/v1` endpoints to manage tasks. A refusal is not permission to bypass the scoped tool.
+  The existing [agent sandbox](../server/agent-sandbox.md) can mask those credential files for supported starts,
+  but is opt-in and does not wrap an already-running external Codex daemon. This change neither enables it nor
+  claims an OS security boundary for unrestricted processes running as the hub's user.
+
 #### Standing authorizations
 
 The manager keeps explicit user grants in its Postgres settings key `assistant.standing_authorizations`.
@@ -1007,7 +1051,7 @@ Agents started manually in Agents have no to-do, or a to-do with empty `origin`,
   - **Today**: first main-chat display each day calls `POST …/today` (`TasksStore.loadToday`), placing the card at midnight: completed tasks, waiting tasks, working count,
     Lark meetings (Prepare sends a message for you), chats mentioning you (Review); if the App already has reminder permission, also include reminders due today (no permission prompt for this).
   - **Direct-start tasks**: Persona profile's Proactive work section lists remembered kinds, with swipe-left deletion.
-- **Message cards link to tasks** (hub): first, PR/issue URLs in the item's connector link, title, preview and context are matched against open to-dos' PR URL, title and notes (`server/internal/assistant/inbox_task_links.go`, #5578). Comment fragments and query parameters are ignored; host, repository, PR/issue kind and number must agree (on github.com the kind is left out: one number is one issue or pull request there). Within a GitHub item's repository (#6507) a task also names the item when it writes `owner/repo#N`, when it writes a bare `#N` and belongs to that repository by #6424's rule (it names `owner/repo` or its Agent works in the repository's directory), or when the PR is one its Agents named before the current one (kept as `prs` next to `pr` in `assistant.todo_stages`, at most 20); an issue no task names links through a pull request of its repository whose own Inbox item says it closes the issue (`Closes`/`Fixes`/`Resolves #N`), without a request to GitHub. Only a unique task is linked, and an existing link is kept while its task is open; a closed task's link moves to the one open task that continues it (#6423). This step needs neither a model nor the AI twin. Linking old content does not bypass the twin's age limit when it is later enabled. With the twin enabled, an unmatched or ambiguous item still goes to the Inbox's judge (`inbox/judge.md`), which sees active tasks and may return `task_id` (only an ID shown to it), with `evidence` copied verbatim (at least 4 characters, white space and case folded) from that task's title or notes; an answer without such evidence links nothing (#6424).
+- **Message cards link to tasks** (hub): first, PR/issue URLs in the item's connector link, title, preview and context are matched against open to-dos' PR URL, title and notes (`server/internal/assistant/inbox_task_links.go`, #5578). Comment fragments and query parameters are ignored; host, repository, PR/issue kind and number must agree (on github.com the kind is left out: one number is one issue or pull request there). Within a GitHub item's repository (#6507) a task also names the item when it writes `owner/repo#N`, when it writes a bare `#N` and belongs to that repository by #6424's rule (it names `owner/repo` or its Agent works in the repository's directory), or when the PR is one its Agents named before the current one (kept as `prs` next to `pr` in `assistant.todo_stages`, at most 20); an issue no task names links through a pull request of its repository whose own Inbox item says it closes the issue (`Closes`/`Fixes`/`Resolves #N`), without a request to GitHub. Only a unique task is linked, and an existing link is kept while its task is open; a closed task's link moves to the one open task that continues it (#6423), on handled items too, which raise no signal (#6546). This step needs neither a model nor the AI twin. Linking old content does not bypass the twin's age limit when it is later enabled. With the twin enabled, an unmatched or ambiguous item still goes to the Inbox's judge (`inbox/judge.md`), which sees active tasks and may return `task_id` (only an ID shown to it), with `evidence` copied verbatim (at least 4 characters, white space and case folded) from that task's title or notes; an answer without such evidence links nothing (#6424).
   Before the judge, the candidates are narrowed deterministically (`inbox_task_scope.go`): a GitHub item (its `repo` tag or an `owner/repo#N` thread) is offered only tasks whose title, notes or PR URL name that `owner/repo`, or whose Agent's working directory or space has a directory named after the repository (`repo` or `repo-…`); with none, the judge is not called and the item stays unlinked. A chat-thread item (`…:chat:<id>:thread:<id>`, its `chat` tag) is offered only the tasks that name its thread or chat id when any does, and every task otherwise. On every pass, an existing link of an open GitHub item to an open task that does not name its repository is cleared and persisted (logged, nothing sent); a link to a closed task is left alone.
   The AI twin's first message includes that task's progress (`inbox/agent.md`), so the draft states actual progress. Draft submission
   (`inbox_draft`) inserts a `message` entry into the chat that started the task. The App renders `MessageCard`: original message, attached task (live), draft (Edit inline), Send (Inbox sending; send by ID if the item is not local), Later (collapse for now).
