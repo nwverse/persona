@@ -53,4 +53,32 @@ struct ExtensionMediaTests {
         #expect(ExtensionImageItem.payload(Data([0x47, 0x49, 0x46, 0x38]))?.mime == "image/gif")
         #expect(ExtensionImageItem.payload(Data("<svg".utf8)) == nil, "never SVG")
     }
+
+    /// The home showcase's camera section is its picture, drawn under its title.
+    @Test func theCamerasSectionHasItsPicture() throws {
+        let showcase = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appending(path: "schema/extension/examples/showcase/home-demo.json")
+        let v = try JSONDecoder().decode(ExtensionView.self, from: Data(contentsOf: showcase))
+        let cameras = try #require(ExtensionParts.of(v).first { $0.title == "摄像头" }) // i18n-ignore: the showcase's title
+        #expect(cameras.items.contains { if case .image = $0.component { true } else { false } })
+    }
+
+    /// A section whose components this app all leaves out is not drawn as its title alone (#827); one with a footer, or
+    /// sent with no components, keeps it.
+    @Test func aTitleNeverStandsAloneOverNothing() throws {
+        let v = try JSONDecoder().decode(ExtensionView.self, from: Data(#"""
+        {"sections": [
+          {"title": "Future", "items": [{"type": "hologram"}, {"type": "divider"}, {"type": "hologram"}]},
+          {"title": "Code", "items": [{"type": "code", "path": "a.go", "text": "package a"}]},
+          {"title": "With a footer", "footer": "Shown on newer apps.", "items": [{"type": "hologram"}]},
+          {"title": "Empty on purpose", "items": []},
+          {"title": "Rows", "items": [{"type": "hologram"}, {"type": "row", "title": "One"}]}
+        ]}
+        """#.utf8))
+        #expect(ExtensionParts.of(v).map(\.title) == ["With a footer", "Empty on purpose", "Rows"])
+        #expect(ExtensionParts.of(v).last?.items.count == 1, "the row, without the unknown component")
+        // The page's heading goes to the first section drawn.
+        #expect(ExtensionParts.of(ExtensionView(sections: [v.sections[0], ExtensionSection(items: v.sections[4].items)]),
+                                  heading: "Page").first?.title == "Page")
+    }
 }

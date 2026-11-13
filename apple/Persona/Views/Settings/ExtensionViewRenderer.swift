@@ -70,22 +70,39 @@ struct ExtensionParts: Identifiable {
         var out: [ExtensionParts] = []
         for (i, s) in view.sections.enumerated() {
             var parts: [[Item]] = [[]]
+            var leftOut = false
             for (j, c) in s.items.enumerated() {
                 if case .divider = c { parts.append([]); continue }
-                if case .unknown = c { continue }
-                if case .html = c, !includeHTML { continue } // Extensions never receive the assistant sandbox context.
+                guard drawn(c, includeHTML: includeHTML) else { leftOut = true; continue }
                 parts[parts.count - 1].append(Item(id: Item.id(c, section: i, index: j), component: c))
             }
             parts = parts.filter { !$0.isEmpty }
-            if parts.isEmpty { parts = [[]] }
+            if parts.isEmpty {
+                // Every component left out: the title would stand alone over nothing (#827), unless the footer or `more`
+                // has something to say. A section sent with no components at all keeps its title.
+                if leftOut, s.footer?.isEmpty != false, s.more == nil { continue }
+                parts = [[]]
+            }
             for (j, part) in parts.enumerated() {
-                let title = j == 0 ? (s.title?.isEmpty == false ? s.title : (i == 0 ? heading : nil)) : nil
+                let title = j == 0 ? (s.title?.isEmpty == false ? s.title : (out.isEmpty ? heading : nil)) : nil
                 let last = j == parts.count - 1
                 out.append(ExtensionParts(id: s.key.map { "k:" + $0 + ".part:\(j)" } ?? "\(out.count)", title: title, footer: last ? s.footer : nil, more: last ? s.more : nil,
                                           items: part))
             }
         }
         return out
+    }
+
+    /// Whether a page's rows draw `c`: not a component this app doesn't know, not the assistant's HTML outside its chat
+    /// (extensions never receive the assistant sandbox context), not UI version 4's code-hosting components (the code page
+    /// draws a View with them, `ExtensionCodePage`).
+    static func drawn(_ c: ExtensionComponent, includeHTML: Bool) -> Bool {
+        switch c {
+        case .unknown, .divider: false
+        case .html: includeHTML
+        case .header, .breadcrumb, .fileTree, .code, .diff, .commentThread, .composer: false
+        default: true
+        }
     }
 }
 
