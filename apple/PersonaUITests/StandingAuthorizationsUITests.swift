@@ -80,6 +80,10 @@ final class StandingAuthorizationsUITests: XCTestCase {
         let weather = element(app, "standing.sa_mock_weather")
         XCTAssertTrue(weather.waitForExistence(timeout: 20), "no standing authorizations:\n\(app.debugDescription)")
         XCTAssertTrue(element(app, "standing.sa_mock_blog").exists)
+        // `-openAssistantPage` opens the page under the Persona tab as well as in Settings: count the row's copies, and
+        // wait for the one on screen to go.
+        let copies = app.descendants(matching: .any).matching(identifier: "standing.sa_mock_weather")
+        let before = copies.count
         try shot(app, "list")
 
         // Its page: what, where, when, how long, and Revoke at the end.
@@ -98,7 +102,8 @@ final class StandingAuthorizationsUITests: XCTestCase {
         confirm(app).tap()
 
         // The page closes and the row is gone at once; the hub has revoked it.
-        XCTAssertTrue(weather.waitForNonExistence(timeout: 10), "the revoked row stayed")
+        for _ in 0..<40 where copies.count >= before { try await Task.sleep(for: .milliseconds(250)) }
+        XCTAssertEqual(copies.count, before - 1, "the revoked row stayed")
         XCTAssertTrue(element(app, "standing.sa_mock_blog").exists)
         var listed = try await grants()
         for _ in 0..<20 where listed.contains("sa_mock_weather") {
