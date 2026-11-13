@@ -1065,7 +1065,7 @@ private struct AgentsList: View {
             }
             if !needsYou.isEmpty && query.isEmpty {
                 listSection {
-                    ForEach(needsYou) { row in needsYouRow(row) }
+                    ForEach(needsYou) { row in needsYouRow(row).modifier(NeedsAnchor(unified: unified)) }
                 } header: {
                     SectionHeader(title: StateName.needsYou.text, count: needsYou.count, tone: StatusPalette.needsYou)
                         .searchTraceMark("needs")
@@ -4504,16 +4504,16 @@ private struct UnifiedFront: ViewModifier {
     }
 }
 
-/// The Agents' Needs You heading in the Sidebar layout (#6332): whether it is on screen and which way it went, for the
-/// foot's jump (`SidebarNeedsJump`). Nothing elsewhere.
+/// The Agents' Needs You heading and rows in the Sidebar layout (#6332): whether any is on screen and which way they
+/// went, for the foot's jump (`SidebarNeedsJump`). Nothing elsewhere.
 private struct NeedsAnchor: ViewModifier {
     let unified: UnifiedSidebar?
 
     func body(content: Content) -> some View {
         if let unified {
             content
-                .onAppear { unified.needsShown = true }
-                .onDisappear { unified.needsShown = false }
+                .onAppear { unified.needsAppeared() }
+                .onDisappear { unified.needsGone() }
                 .onGeometryChange(for: CGFloat.self) { $0.frame(in: .scrollView).minY } action: { unified.needsMoved($0) }
         } else {
             content

@@ -31,6 +31,7 @@ final class SidebarLayoutTests: XCTestCase {
         // `-holdChromeOpen`: an Agent's chat keeps its header open (its title), as the other chat tests do.
         let layout = layoutPinned ? ["-app.navigation", "sidebar"] : []
         app.launchArguments = ["-pairURL", pair, "-dev.openChat", "", "-holdChromeOpen", "YES"] + layout + extra
+        app.launchEnvironment["PERSONA_UI_TEST_SESSION"] = "1" // the chat's title carries its session (`chat.title`'s value)
         app.launchPinned()
     }
 
