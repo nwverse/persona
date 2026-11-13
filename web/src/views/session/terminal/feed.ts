@@ -13,6 +13,7 @@ import { openLink } from "../../../lib/links";
 import { getSession, getState, isOpen, onHubEvent, send } from "../../../lib/store";
 import { passesToApp } from "../../../lib/shortcuts";
 import {
+  ANSWER_LIMIT_MS,
   FrameOrder,
   HISTORY_PAGE,
   NO_MODIFIERS,
@@ -180,6 +181,13 @@ export class TerminalFeed {
   private nextTry = 0;
   /** When the wait for the first screen started. */
   private since: number | null = Date.now();
+  /** When the subscription still waiting for its answer went out (its first frame, and the hub's word on taking the
+   * terminal over when it asked to); null: answered, or nothing asked. Past ANSWER_LIMIT_MS it is given up (#6327). */
+  private asked: number | null = null;
+  /** The screen the last subscription builds on is there: its first frame came, or it continues the frames the page has. */
+  private framed = false;
+  /** The computer was offline at the last tick: once it is back, subscribe again at once. */
+  private computerWasOffline = false;
   /** The grid that fits the panel: what driving asks for. */
   private grid: { cols: number; rows: number } | null = null;
   private gridTimer = 0;
@@ -480,7 +488,17 @@ export class TerminalFeed {
         if (!v.failure) this.patch({ failure: LINK_DOWN });
       } else {
         if (v.failure === LINK_DOWN) this.patch({ failure: null }); // back: an idle pane sends nothing, that is not a failure
-        if (!this.subscribed && now >= this.nextTry) this.subscribeNow(true);
+        const offline = this.machine()?.online === false;
+        if (offline !== this.computerWasOffline) {
+          this.computerWasOffline = offline;
+          if (!offline) {
+            // its node is back: subscribe (and take the terminal over) again now, not at the backoff's turn
+            this.failures = 0;
+            this.nextTry = 0;
+          }
+        }
+        if (this.asked !== null && now - this.asked > ANSWER_LIMIT_MS) this.unanswered();
+        else if (!this.subscribed && now >= this.nextTry) this.subscribeNow(true);
         else if (this.subscribed && this.view.loaded && !this.view.failure) this.lastOK = now;
       }
     } else if (now >= this.nextTry && !this.polling && !v.paused) {
@@ -497,7 +515,8 @@ export class TerminalFeed {
   private subscribeNow(continuing: boolean) {
     this.subscribed = this.everSubscribed = true;
     const msg: Record<string, unknown> = { type: "terminal_subscribe", ...this.ids() };
-    if (continuing && this.order.epoch) {
+    const fresh = !(continuing && this.order.epoch);
+    if (!fresh) {
       msg.epoch = this.order.epoch;
       msg.after_seq = this.order.seq;
     } else {
@@ -507,10 +526,48 @@ export class TerminalFeed {
       msg.control = { cols: this.grid.cols, rows: this.grid.rows };
       if (this.view.control === "off") this.patch({ control: "starting" });
     }
+    // Answered for sure: a stream from its whole frame, and taking it over (terminal_control). One continuing from the
+    // frame it has may hear nothing of an idle pane, which is no failure.
+    if (this.asked === null && (fresh || this.view.control === "starting")) this.asked = Date.now();
+    this.framed = !fresh;
     if (this.takeover) msg.takeover = true;
     this.takeover = false;
     send(msg);
     this.inputMode();
+  }
+
+  /** The subscription's answer is in: a frame, and the hub's word on taking the terminal over when it asked to. */
+  private answeredIfSo() {
+    if (this.framed && this.view.control !== "starting") this.asked = null;
+  }
+
+  /** Nothing answered the subscription within ANSWER_LIMIT_MS: it goes, at the hub too, and the terminal says why; the
+   * next one goes at the backoff's turn, or at once when the computer comes back. */
+  private unanswered() {
+    this.drop();
+    const c = this.view.control;
+    this.patch({ loaded: true, control: c === "starting" ? "off" : c }); // the reason, not a spinner
+    this.failed(this.notAnswering());
+    this.inputMode();
+  }
+
+  /** Unsubscribes at the hub (the next subscription has it ask the node again) and starts over from a whole frame. */
+  private drop() {
+    send({ type: "terminal_unsubscribe", ...this.ids() });
+    this.subscribed = false;
+    this.asked = null;
+    this.order.reset();
+  }
+
+  private machine() {
+    return getState().machines.find((m) => m.id === this.mid);
+  }
+
+  /** Why the terminal hasn't come: its computer is offline, or isn't answering. */
+  private notAnswering() {
+    const m = this.machine();
+    if (!m) return t("lib-terminal.not_answered_yet");
+    return m.online ? t("lib-terminal.not_answering", { name: m.name }) : t("lib-terminal.offline", { name: m.name });
   }
 
   private onHello = () => {
@@ -545,6 +602,8 @@ export class TerminalFeed {
         else this.draw(p.frame, bytes);
         this.healthy(now);
         this.patch({ offline: false, loaded: true });
+        this.framed = true;
+        this.answeredIfSo();
         break;
       case "gap":
         this.subscribeNow(false);
@@ -578,6 +637,7 @@ export class TerminalFeed {
 
   private ended(error: string, unsupported: boolean) {
     this.subscribed = false;
+    this.asked = null;
     this.order.reset();
     const c = this.view.control;
     const control: Control = c === "active" || c === "starting" ? "off" : c; // it asks again when it subscribes again
@@ -588,7 +648,8 @@ export class TerminalFeed {
     } else {
       const offline = error.includes("not running");
       this.patch({ offline, loaded: true, control });
-      this.failed(offline ? t("session-terminal-feed.not_in_herdr") : error);
+      // An offline computer in the page's words, whatever the hub's error says (it may name the machine by id).
+      this.failed(offline ? t("session-terminal-feed.not_in_herdr") : this.machine()?.online === false ? this.notAnswering() : error);
     }
     this.inputMode();
   }
@@ -619,6 +680,7 @@ export class TerminalFeed {
       default: // lost: the node let go on its own
         this.patch({ control: "declined", why: "lost", note: why || t("session-terminal-feed.lost") });
     }
+    this.answeredIfSo();
     this.inputMode();
   };
 
@@ -1113,11 +1175,15 @@ export class TerminalFeed {
     this.term?.focus();
   }
 
-  /** "Reconnect": a fresh subscription (a whole screen to start from), or a read now. */
+  /** "Reconnect": a fresh subscription (a whole screen to start from), or a read now. One still unanswered goes first,
+   * at the hub too, so this one has it ask the node again (the same subscription again would only be told what it has). */
   retry() {
     this.nextTry = 0;
     if (this.view.mode === "stream") {
-      if (this.live()) this.subscribeNow(false);
+      if (this.live()) {
+        if (this.asked !== null && this.subscribed) this.drop();
+        this.subscribeNow(false);
+      }
     } else {
       this.polling?.abort();
       this.polling = null;
