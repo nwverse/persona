@@ -8,8 +8,6 @@
   "offline": "离线",
   "reconnect": "重新连接",
   "memory": "内存",
-  "disk": "磁盘",
-  "disk_free": "剩 {size}",
   "waiting_node": "等待这台电脑重新连接",
   "unreachable": "连不上这台电脑",
   "agents_other": "{count} 个 Agent",

@@ -170,7 +170,7 @@ function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
                   {openURL(item)!.startsWith("https://applink.larksuite.com/") ? t("inbox-inboxdetail.open_in_lark") : t("inbox-inboxdetail.open_in_feishu")}
                 </Button>
               )}
-              <Button tone="secondary" icon="spark" onClick={() => setDialog("handoff")}>{t("inbox-inboxdetail.hand_to_ai")}</Button>
+              {item.source !== "assistant" && <Button tone="secondary" icon="spark" onClick={() => setDialog("handoff")}>{t("inbox-inboxdetail.hand_to_ai")}</Button>}
               {event && !embed && (showEvent ? (
                 <Button tone="quiet" icon={item.mail ? "mail" : "chat"} onClick={() => setSource({})}>{t("inbox-inboxdetail.view_source")}</Button>
               ) : (
