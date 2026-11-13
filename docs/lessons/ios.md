@@ -24,6 +24,10 @@ before the fix and 448 KB after.
 - `StackPeak.measure` (in `AgentsListStackTests`) paints the unused stack, runs the render, and finds the lowest word
   overwritten. Keep a page under half the device's stack (512 KB).
 
+## Keep a control's accessibility identifier off its surrounding container (#7033)
+
+A SwiftUI container's `accessibilityIdentifier` can replace the identifiers on a nested `Menu` and `ScrollView`, while the buttons inside the scroll view keep theirs. The Agents capsule looked correct and its filters remained queryable, but its grouping icon was exposed under the capsule's identifier instead of `agents.grouping`. Put identifiers on the actionable controls, not on their surrounding capsule, and test both the menu's identity and its fixed frame after a horizontal drag.
+
 ## Words cut off by a clip still take touches, over the rows below them (2026-11-13, #6645)
 
 - `.clipped()`, `.clipShape` and `.mask` hide what is drawn, not what takes touches. A long message folded with
@@ -31,7 +35,7 @@ before the fix and 448 KB after.
   The chat's list is drawn upside down (newest first, flipped back), so an older row is drawn over the newer rows under
   it: the message from another session folded to three lines (`LineFold`) took the taps meant for the work line right
   under it, which never opened, and its long-press recognizer took the long presses on the answer under that, so the
-  card lifted instead. A 2 KB message hid about a screen of words.
+  card lifted instead. A message of about 2 KB can hide a screen of words.
 - Anything that cuts its content off by a clip takes `.contentShape(.rect)` right after the clip (`BubbleFold`,
   `CardFold`, `LineFold`, `ReplyQuote`). Leave the words' accessibility alone while doing it: wrapping them in
   `.accessibilityElement(children: .contain)` made the lifted copy of an open card (`MessageLift` combines a short
