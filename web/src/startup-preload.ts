@@ -254,11 +254,12 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // #6295: Paseo's workspaces add 11 B (ja 478,937 B on main at 8919ac022 to 478,948 B; en 475,240 B to 475,251 B,
 // zh-Hans 476,227 B to 476,238 B): New worktree on a Paseo Git row, the engine sent with an agent's worktree status, add
 // and remove, and no herdr ID to copy on a runtime's space. The budget moves by the same 11 B, keeping that 31 B room.
-// #6240: Fast on a new conversation adds 180 B to each language, measured in one environment against main at
-// a8db36f9a (ja 478,898 B to 479,078 B; en 475,201 B to 475,381 B, zh-Hans 476,188 B to 476,368 B): the draft, its
+// #6240: Fast on a new conversation adds 304 B to each language, measured in one environment against main at
+// 113c7ab780 (ja 478,900 B to 479,204 B; en 475,203 B to 475,507 B, zh-Hans 476,190 B to 476,494 B): the draft, its
 // place in the first request, and dropping it when the manager, the hub or the model can no longer honor it, which
-// has to run while the model panel (loaded on intent) is closed. The budget moves by the same 180 B.
-export const FIRST_SCREEN_BUDGET = 479_159;
+// has to run while the model panel (loaded on intent) is closed. The same 675 B of code measured 180 B against main
+// at a8db36f9a: what it costs compressed depends on the code around it. The budget moves by the 304 B.
+export const FIRST_SCREEN_BUDGET = 479_283;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
